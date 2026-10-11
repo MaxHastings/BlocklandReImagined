@@ -489,7 +489,7 @@ pub struct SoundDef {
     pub stock: bool,
 }
 /// How bots use an image (`Image::bot`).
-#[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct BotUse {
     #[serde(default)]
@@ -507,6 +507,56 @@ pub struct BotUse {
     /// effects are never inferred from an item's name or command string.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub manipulation: Option<BotManipulation>,
+    /// Where the package's rules keep this image's ammunition, for an image
+    /// they fire (`command`) and reload themselves. Bots read it to see
+    /// whether the gun still has rounds to give, as they read a native
+    /// magazine, and fire it by the ordinary controls. They never top it up.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ammo: Option<BotAmmo>,
+}
+/// Rounds a package's rules keep in its per-player state (`state.player` of
+/// its behaviour). The package stays the authority over firing, reloading
+/// and what a shot costs; this only says where to read the count.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BotAmmo {
+    /// The Add-On whose state it is (the rules companion, often).
+    pub package: String,
+    /// Where the rounds ready to fire are kept.
+    pub loaded: StateRef,
+    /// Where rounds a reload brings are kept: each a number, or a list of
+    /// numbers such as spare magazines. A bot treats the sum as rounds
+    /// still to be had once the loaded ones are gone.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub spare: Vec<StateRef>,
+}
+/// A number in a package's per-player state: a key, and the field of its
+/// value when the value is an object (empty: the value itself).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct StateRef {
+    pub key: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub field: String,
+}
+impl StateRef {
+    fn validate(&self) -> bool {
+        let name = |s: &str| {
+            s.len() <= 64
+                && s.bytes()
+                    .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_')
+        };
+        !self.key.is_empty() && name(&self.key) && name(&self.field)
+    }
+}
+impl BotAmmo {
+    fn validate(&self) -> bool {
+        !self.package.is_empty()
+            && self.package.len() <= 128
+            && self.loaded.validate()
+            && self.spare.len() <= 4
+            && self.spare.iter().all(StateRef::validate)
+    }
 }
 /// Experimental bot affordances for ordinary image-trigger mechanics.
 /// This describes the executor's limits; it is not an object-transport action.
@@ -2860,7 +2910,7 @@ impl Pack {
                 "Invalid image mount/timing"
             );
             ensure!(
-                image.bot.is_none_or(|b| [b.reach, b.near]
+                image.bot.as_ref().is_none_or(|b| [b.reach, b.near]
                     .into_iter()
                     .flatten()
                     .all(|r| { r.is_finite() && (0.0..=2000.0).contains(&r) })
@@ -2868,9 +2918,20 @@ impl Pack {
                     && b.near.is_none_or(|n| b.reach.is_none_or(|r| n < r))),
                 "Invalid image bot reach or near"
             );
+            ensure!(
+                image
+                    .bot
+                    .as_ref()
+                    .and_then(|b| b.ammo.as_ref())
+                    .is_none_or(|a| {
+                        a.validate()
+                            && (image.command.is_some() || !image.commands.states.is_empty())
+                    }),
+                "Invalid image bot ammo: it names a package state key, and only a rule-fired image has one"
+            );
             if let Some(BotManipulation::Hold {
                 near, reach, force, ..
-            }) = image.bot.and_then(|b| b.manipulation)
+            }) = image.bot.as_ref().and_then(|b| b.manipulation)
             {
                 ensure!(
                     near.is_finite()
@@ -2880,7 +2941,7 @@ impl Pack {
                         && near < reach
                         && reach <= 2000.0
                         && force > 0.0
-                        && image.bot.is_some_and(|b| b.fire == BotFire::Hold)
+                        && image.bot.as_ref().is_some_and(|b| b.fire == BotFire::Hold)
                         && (image.command.is_some() || !image.commands.states.is_empty())
                         && image.projectile.is_none()
                         && !image.melee,

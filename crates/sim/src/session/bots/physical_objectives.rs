@@ -529,7 +529,7 @@ pub(super) fn candidates(
                     descriptor @ BotManipulation::Hold {
                         near, reach, force, ..
                     },
-                ) = image.bot.and_then(|b| b.manipulation)
+                ) = image.bot.as_ref().and_then(|b| b.manipulation)
                 else {
                     continue;
                 };
@@ -876,7 +876,8 @@ impl Choice {
                     .and_then(|i| session.weapons.pack.items.get(i))
                     .and_then(|i| session.weapons.pack.images.get(&i.image));
                 if live.is_none_or(|i| {
-                    i.id != *image || i.bot.and_then(|b| b.manipulation) != Some(*descriptor)
+                    i.id != *image
+                        || i.bot.as_ref().and_then(|b| b.manipulation) != Some(*descriptor)
                 }) {
                     return Err(Rejection::Changed);
                 }

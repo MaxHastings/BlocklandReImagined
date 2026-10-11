@@ -383,9 +383,32 @@ v0.2.8's existing bot executor read flight, range and blast. Use
 `"bot": {"fire": "hold"}` for an authored automatic cycle, or `"tap"`
 for a semi-automatic cycle. The package still owns ammo and reloads through
 the ordinary image states. This supplies basic use of an assigned gun;
-package-owned ammo does not supply native ammo-aware inventory switching,
-and the native attack planner does not model arbitrary package commands.
+the native attack planner does not model arbitrary package commands.
 Variable-charge shots and cooked grenades require richer descriptions.
+
+To let bots see that such a gun is empty, say where the package keeps its
+rounds, in per-player state the behaviour declares:
+
+```json
+"bot": {
+  "fire": "hold",
+  "ammo": {
+    "package": "rallypack-rules",
+    "loaded": { "key": "rounds" },
+    "spare": [{ "key": "spares" }]
+  }
+}
+```
+
+`loaded` is a number, or the field of an object value (`"field": "n"`);
+each `spare` entry is a number or a list of numbers (spare magazines). A
+bot with no loaded and no spare rounds treats the gun as no weapon: it
+takes up another one it holds, or does not attack, and never fires the
+empty one. With spare rounds left it still fires, since the gun's own
+dry-fire and reload states fetch them; the bot never reloads or tops up
+anything itself. A count the package has not stored yet is unknown, never
+empty. `bot.ammo` is only valid on an image the package fires (`command`),
+and it makes the downloaded weapons data newer than older clients read.
 
 More moments can run commands through the image's `commands`:
 
@@ -524,3 +547,19 @@ package, as v20's re-declaration did; the same declaration twice is one.
 Everyone in a
 game needs the same weapons, so give the Add-On to the people you play
 with.
+
+## Timing the check reports before the game runs
+
+`bri-addon-check` (and the port tool) reads each weapon image's state machine
+in the order the game runs it (loaded, ammo, trigger, then timeout once the
+time is up) and names what would misbehave in play:
+
+| Code | Meaning |
+|---|---|
+| `weapon.zero_time_cycle` | a loop of zero-time states longer than the 16-transition budget: the game unmounts the image mid-use |
+| `weapon.idle_cycle` | a loop through package-command states that never waits, so the command fires every tick |
+| `weapon.callback_timing` | a state's command runs in the same step as the transition that reads what it changes; package operations commit after the weapon step, so the transition sees the old value |
+| `state.value_too_big` / `state.value_large` | a declared per-value default over (or near) the 4096-byte limit |
+| `state.scope_too_big` / `state.scope_large` | declared player (64 KiB) or global (256 KiB) state over (or near) its limit |
+
+Each message names the image or key and the states involved.

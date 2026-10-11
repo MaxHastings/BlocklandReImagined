@@ -225,6 +225,10 @@ pub fn plan(library: &Library, state: &State, importer: &str) -> Vec<Step> {
                 stamp: now,
             }),
             (None, Some(r)) if current(r) && r.error.is_some() => {}
+            // A zip already in the game's own format keeps its own
+            // provenance, so the record is what ties it to its package.
+            (None, Some(r))
+                if current(r) && r.id.as_ref().is_some_and(|id| library.get(id).is_some()) => {}
             (imported, _) => rest.push(Step::Import {
                 name: legacy.name.clone(),
                 path: legacy.path.clone(),
@@ -264,6 +268,105 @@ pub fn plan(library: &Library, state: &State, importer: &str) -> Vec<Step> {
     }
     removals.extend(rest);
     removals
+}
+
+/// A native Add-On zip may hold at most this many files and bytes.
+const NATIVE_MAX_FILES: usize = 20_000;
+const NATIVE_MAX_BYTES: u64 = 1 << 30;
+
+/// Whether the zip at `path` is an Add-On already in this game's own format
+/// (a folder at its top holding a `package.json`), not a classic Blockland
+/// one for the importer. A file that cannot be read as a zip is not.
+pub fn is_native_zip(path: &Path) -> bool {
+    let Ok(file) = std::fs::File::open(path) else {
+        return false;
+    };
+    let Ok(archive) = zip::ZipArchive::new(file) else {
+        return false;
+    };
+    archive
+        .file_names()
+        .any(|n| n.replace('\\', "/").split('/').count() == 2 && n.ends_with("/package.json"))
+}
+
+/// Unpack a native Add-On zip ([`is_native_zip`]) the way the importer
+/// leaves a conversion: the Add-On's folder at `out`, and its host rules
+/// folder (`<name>-rules`) at `<out>-rules`. Nothing is run; every path is
+/// checked to stay inside the folder, and the file count and size are
+/// capped. Errors leave no promise about `out`, which the caller removes.
+pub fn unpack_native_zip(zip_path: &Path, out: &Path) -> Result<()> {
+    let file =
+        std::fs::File::open(zip_path).with_context(|| format!("Opening {}", zip_path.display()))?;
+    let mut archive = zip::ZipArchive::new(file).context("Reading the zip")?;
+    anyhow::ensure!(
+        archive.len() <= NATIVE_MAX_FILES,
+        "The zip holds more than {NATIVE_MAX_FILES} files"
+    );
+    let mut tops: BTreeMap<String, bool> = BTreeMap::new();
+    let mut total = 0u64;
+    for i in 0..archive.len() {
+        let entry = archive.by_index(i).context("Reading the zip")?;
+        if entry.is_dir() {
+            continue;
+        }
+        let name = entry.name().replace('\\', "/");
+        let parts: Vec<&str> = name.split('/').collect();
+        anyhow::ensure!(
+            !name.starts_with('/')
+                && !parts[0].contains(':')
+                && parts
+                    .iter()
+                    .all(|p| !p.is_empty() && *p != ".." && *p != "."),
+            "The zip holds an unsafe path: {name}"
+        );
+        anyhow::ensure!(
+            parts.len() >= 2,
+            "The zip holds a file outside its Add-On folders: {name}"
+        );
+        total += entry.size();
+        anyhow::ensure!(total <= NATIVE_MAX_BYTES, "The zip is over the size limit");
+        let manifest = tops.entry(parts[0].to_string()).or_default();
+        *manifest |= parts.len() == 2 && parts[1] == "package.json";
+    }
+    let mut main = None;
+    let mut rules = None;
+    for (top, has_manifest) in &tops {
+        anyhow::ensure!(*has_manifest, "{top} in the zip has no package.json");
+        let slot = if top.ends_with("-rules") {
+            &mut rules
+        } else {
+            &mut main
+        };
+        anyhow::ensure!(
+            slot.replace(top.clone()).is_none(),
+            "The zip holds more than one Add-On"
+        );
+    }
+    let main = main.context("The zip holds no Add-On folder with a package.json")?;
+    for i in 0..archive.len() {
+        let mut entry = archive.by_index(i).context("Reading the zip")?;
+        if entry.is_dir() {
+            continue;
+        }
+        let name = entry.name().replace('\\', "/");
+        let (top, rest) = name.split_once('/').expect("checked above");
+        let base = if top == main {
+            out.to_path_buf()
+        } else {
+            let mut os = out.as_os_str().to_owned();
+            os.push("-rules");
+            std::path::PathBuf::from(os)
+        };
+        let target = base.join(rest);
+        if let Some(dir) = target.parent() {
+            std::fs::create_dir_all(dir).with_context(|| format!("Creating {}", dir.display()))?;
+        }
+        let mut written = std::fs::File::create(&target)
+            .with_context(|| format!("Writing {}", target.display()))?;
+        std::io::copy(&mut entry, &mut written)
+            .with_context(|| format!("Writing {}", target.display()))?;
+    }
+    Ok(())
 }
 
 /// The drop folder of the content root `root`.
@@ -312,6 +415,65 @@ mod tests {
                 Step::Included { name, id, .. } => format!("included {name} {id}"),
             })
             .collect()
+    }
+
+    #[test]
+    fn a_native_zip_unpacks_with_its_rules_and_refuses_unsafe_or_stray_paths() {
+        use std::io::Write;
+        let root = temp("native-zip");
+        let zip_of = |name: &str, files: &[(&str, &str)]| {
+            let path = root.join(name);
+            let mut w = zip::ZipWriter::new(std::fs::File::create(&path).unwrap());
+            for (n, body) in files {
+                w.start_file(*n, zip::write::SimpleFileOptions::default())
+                    .unwrap();
+                w.write_all(body.as_bytes()).unwrap();
+            }
+            w.finish().unwrap();
+            path
+        };
+        let good = zip_of(
+            "good.zip",
+            &[
+                ("Gun/package.json", "{}"),
+                ("Gun/sub/a.json", "1"),
+                ("Gun-rules/package.json", "{}"),
+            ],
+        );
+        assert!(is_native_zip(&good));
+        let out = root.join("out/Gun");
+        unpack_native_zip(&good, &out).unwrap();
+        assert!(out.join("package.json").is_file() && out.join("sub/a.json").is_file());
+        assert!(root.join("out/Gun-rules/package.json").is_file());
+        let classic = zip_of("classic.zip", &[("Weapon_Gun/description.txt", "x")]);
+        assert!(!is_native_zip(&classic));
+        assert!(!is_native_zip(&root.join("missing.zip")));
+        for (name, files, why) in [
+            (
+                "up.zip",
+                vec![("Gun/package.json", "{}"), ("../evil.txt", "x")],
+                "unsafe",
+            ),
+            (
+                "stray.zip",
+                vec![("Gun/package.json", "{}"), ("loose.txt", "x")],
+                "outside",
+            ),
+            (
+                "two.zip",
+                vec![("A/package.json", "{}"), ("B/package.json", "{}")],
+                "more than one",
+            ),
+            ("none.zip", vec![("A/readme.txt", "x")], "no package.json"),
+        ] {
+            let bad = zip_of(name, &files);
+            let error = format!(
+                "{:#}",
+                unpack_native_zip(&bad, &root.join("bad/X")).unwrap_err()
+            );
+            assert!(error.contains(why), "{name}: {error}");
+        }
+        assert!(!root.join("evil.txt").exists());
     }
 
     #[test]

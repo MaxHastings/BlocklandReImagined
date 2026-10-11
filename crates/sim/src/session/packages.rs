@@ -996,6 +996,20 @@ impl Session {
             self.package_revision += 1;
         }
     }
+    /// A value a package keeps for `owner` (`state.player` of its behaviour),
+    /// for readers that act on what its rules keep, as a bot reads the
+    /// ammunition of a gun they fire. None until the package has stored one.
+    pub(super) fn package_player_value(
+        &self,
+        owner: OwnerId,
+        package: &str,
+        key: &str,
+    ) -> Option<&serde_json::Value> {
+        self.packages
+            .as_ref()?
+            .store
+            .player(package, &self.player_key(owner), key)
+    }
     fn player_key(&self, owner: OwnerId) -> PlayerKey {
         match self.peers.get(&owner).and_then(|p| p.principal) {
             Some(principal) => PlayerKey::principal(&principal.0),
@@ -3657,11 +3671,7 @@ impl Session {
         owner: OwnerId,
         key: &str,
     ) -> Option<serde_json::Value> {
-        self.packages
-            .as_ref()?
-            .store
-            .player(package, &self.player_key(owner), key)
-            .cloned()
+        self.package_player_value(owner, package, key).cloned()
     }
     /// Everything a host saves to resume this package world.
     pub fn package_save(&self) -> Option<PackageSave> {

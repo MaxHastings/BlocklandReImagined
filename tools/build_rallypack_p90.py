@@ -11,7 +11,7 @@ import shutil
 import subprocess
 import struct
 import tempfile
-from rallypack_bot_use import describe
+from rallypack_bot_use import describe, state_ref
 
 NS = "weapon_rallypack_p90"
 RULES = NS + "-rules"
@@ -129,7 +129,8 @@ def build(args):
             model["sha256"] = hashlib.sha256(shape_path.read_bytes()).hexdigest()
         for key, image in weapons["images"].items():
             # Firing is authoritative package policy, including the authored spray pattern.
-            describe(image, projectile)
+            describe(image, projectile, {"package": RULES, "loaded": state_ref("rounds"),
+                                         "spare": [state_ref("spares")]})
             image["command"] = RULES + ":shot"
             image["commands"] = {"mount": RULES + ":mount", "unmount": RULES + ":unmount",
                                  "light": RULES + ":reload", "jet": RULES + ":aim",

@@ -515,7 +515,8 @@ pub fn native_capability(
         // available; do not authorize a different ray from the one traced.
         return Err(DescriptorRequired::StateDependentLaunch);
     }
-    let using = image.bot.unwrap_or_default();
+    let default_use = bri_weapons::BotUse::default();
+    let using = image.bot.as_ref().unwrap_or(&default_use);
     let splash = p.explosion.radius > 0.0 && p.explosion.damage > 0.0;
     // Goes off on its own clock: lit in the hand, or bouncing until armed.
     let timed = ray.is_none()
@@ -1497,6 +1498,7 @@ mod tests {
             reach: None,
             near: None,
             manipulation: None,
+            ammo: None,
         });
         image.states = vec![
             bri_weapons::State {
