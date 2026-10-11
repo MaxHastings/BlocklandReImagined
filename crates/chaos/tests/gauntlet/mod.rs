@@ -52,11 +52,34 @@ impl Arena {
         Self::custom(&[], &[], vehicle_kinds)
     }
 
+    /// [`Arena::custom`] with whole brick definitions of the scenario's
+    /// own shapes added first.
+    pub fn with_definitions(
+        definitions: Vec<bri_sim::definitions::Definition>,
+        bricks: &[(&str, &str)],
+        items: &[(&str, &str)],
+        vehicle_kinds: &[&str],
+    ) -> Self {
+        Self::build(definitions, bricks, items, vehicle_kinds)
+    }
+
     /// The synthetic session with extra bricks (`(id, copied from)`) and
     /// extra items (`(item id, image id)`, copies of the gun) for a
     /// scenario's own package.
     pub fn custom(bricks: &[(&str, &str)], items: &[(&str, &str)], vehicle_kinds: &[&str]) -> Self {
+        Self::build(Vec::new(), bricks, items, vehicle_kinds)
+    }
+
+    fn build(
+        definitions: Vec<bri_sim::definitions::Definition>,
+        bricks: &[(&str, &str)],
+        items: &[(&str, &str)],
+        vehicle_kinds: &[&str],
+    ) -> Self {
         let mut simulation = fixture::synthetic_simulation(&[]).unwrap();
+        for d in definitions {
+            simulation.definitions.entries.insert(d.mesh.id.clone(), d);
+        }
         for (id, base) in bricks {
             let mut d = simulation.definitions.entries[*base].clone();
             d.mesh.id = id.to_string();

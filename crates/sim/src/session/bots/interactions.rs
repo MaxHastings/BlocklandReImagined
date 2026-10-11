@@ -1283,9 +1283,17 @@ impl Session {
     }
 
     /// Whether a chassis whose middle reaches `at`, rolling `way`, would
-    /// have its leading end over a drop deeper than it is tall (the edge
-    /// of the world, a cliff): the drive's own "never off a fall" rule,
-    /// as a walker's is (`bot_safe_walk`).
+    /// meet a drop on the way there or under its leading end (the edge of
+    /// the world, a cliff): the drive's own "never off a fall" rule, as a
+    /// walker's is (`bot_safe_walk`).
+    ///
+    /// A drop is the floor falling away faster than a slope can: the floor
+    /// is followed from under the hull in steps of half its length (a gap
+    /// shorter than that it bridges). Each step's floor may rise or fall
+    /// by the step's run (no chassis drives a grade steeper than one in
+    /// one, and a wall is the path check's), and fall a further step as
+    /// deep as the chassis is tall, a kerb it rolls off. So a hill, up or
+    /// down, is floor, and a cliff past it is still a drop.
     fn bot_vehicle_edge(&self, v: &VehicleSnapshot, at: Vec3, way: Vec3) -> bool {
         let Some(d) = self
             .vehicles
@@ -1302,9 +1310,25 @@ impl Session {
             .iter()
             .map(|w| (w.position[1] - w.radius - w.rest_length) * v.scale)
             .fold(d.bounds_min[1] * v.scale, f32::min);
-        let from = Vec3::new(lead.x, at.y + support + size.y, lead.z);
-        super::super::admin_players::world_ray(&self.simulation, from, Vec3::NEG_Y, size.y * 2.0)
-            .is_none()
+        let hull = Vec3::from(v.transform.position);
+        let run = flat(lead - hull);
+        let steps = (run.length() / (size.z * 0.5).max(0.1)).ceil().max(1.0);
+        let step = run.length() / steps;
+        let mut floor = hull.y + support;
+        for i in 1..=steps as usize {
+            let over = hull + run * (i as f32 / steps);
+            let top = floor + step + size.y;
+            let Some(down) = super::super::admin_players::world_ray(
+                &self.simulation,
+                Vec3::new(over.x, top, over.z),
+                Vec3::NEG_Y,
+                2.0 * (step + size.y),
+            ) else {
+                return true;
+            };
+            floor = top - down;
+        }
+        false
     }
 
     fn bot_vehicle_clear(

@@ -61,6 +61,8 @@ struct Spec {
     /// Arena brick and item definitions for a package.
     brick_defs: Vec<(&'static str, &'static str)>,
     item_defs: Vec<(&'static str, &'static str)>,
+    /// Bricks of the scenario's own shapes.
+    definitions: Vec<bri_sim::definitions::Definition>,
 }
 impl Spec {
     fn new(name: &'static str, red: Vec<Vec3>, blue: Vec<Vec3>, items: &[&str]) -> Self {
@@ -80,6 +82,7 @@ impl Spec {
             },
             brick_defs: Vec::new(),
             item_defs: Vec::new(),
+            definitions: Vec::new(),
         }
     }
 }
@@ -100,7 +103,12 @@ struct Battle {
 /// Two builders' bots in one mini-game; `package` runs before anyone
 /// joins.
 fn battle(spec: Spec, package: impl FnOnce(&mut Arena)) -> Battle {
-    let mut arena = Arena::custom(&spec.brick_defs, &spec.item_defs, &spec.vehicle_kinds);
+    let mut arena = Arena::with_definitions(
+        spec.definitions,
+        &spec.brick_defs,
+        &spec.item_defs,
+        &spec.vehicle_kinds,
+    );
     arena.kinds(spec.extra_kinds, &spec.vehicle_kinds);
     package(&mut arena);
     let red = arena.join("Red builder", FAR_A);
@@ -475,6 +483,79 @@ fn a_jeep_on_each_side() {
     assert!(
         r.progress["mounted_ticks"] > 0,
         "the jeeps were used: {:?}",
+        r.progress
+    );
+}
+
+const HILL: &str = "gauntlet:brick/hill";
+
+/// A long hill between the sides, a jeep on each: red's at its foot,
+/// blue's on the plateau at its top, which ends in cliffs. A driver on the
+/// slope sees the floor ahead rise or fall, which is not a drop: it keeps
+/// its speed up or down the hill, and still stops short of the cliffs.
+#[test]
+fn a_jeep_on_a_hill() {
+    let car = bri_vehicles::testing::CAR;
+    // 64 units wide, a 40-unit slope rising 6.4 units (about 9 degrees),
+    // then a 40-unit plateau.
+    let (studs, plates) = ([128, 160], 32);
+    let [hy, hz] = [f32::from(plates) * 0.1, f32::from(studs[1]) * 0.25];
+    let (x, z) = (-60.0, 10.0);
+    let top = 2.0 * hy;
+    let mut spec = Spec::new(
+        "a_jeep_on_a_hill",
+        line(x - 6.0, 0.0, z - hz - 6.0, 2),
+        line(x - 6.0, top, z + 4.0, 2),
+        &[],
+    );
+    spec.kinds = [BRAWLER, BRAWLER];
+    spec.extra_kinds = vec![brawler()];
+    spec.vehicle_kinds = vec![car];
+    spec.definitions = vec![bri_sim::testing::ramp(HILL, studs, plates)];
+    spec.bricks = vec![
+        brick(HILL, Vec3::new(x, hy, z)),
+        spawner(car, Vec3::new(x + 6.0, 0.0, z - hz - 4.0)),
+    ];
+    spec.blue_bricks = vec![spawner(car, Vec3::new(x + 6.0, top, z + 8.0))];
+    let mut b = battle(spec, |_| {});
+    // Ticks a seated bot spent on the slope, and how far it went there.
+    let (mut on_slope, mut travel) = (0u64, 0.0f32);
+    let mut last: BTreeMap<OwnerId, Vec3> = BTreeMap::new();
+    let r = b.play(0.0, 60, |s, report| {
+        let vitals = s.vitals();
+        for (p, _) in s.motion_states() {
+            let feet = Vec3::from(p.feet);
+            let was = last.remove(&p.owner);
+            let seated = vitals
+                .get(&p.owner)
+                .is_some_and(|v| v.alive && v.mounted.is_some());
+            if !seated {
+                continue;
+            }
+            if let Some(was) = was
+                && (z - hz..z).contains(&feet.z)
+            {
+                on_slope += 1;
+                travel += (feet - was).length();
+            }
+            last.insert(p.owner, feet);
+        }
+        report
+            .progress
+            .insert("slope_seated_ticks".into(), on_slope as i64);
+        report.progress.insert(
+            "slope_speed_dm".into(),
+            (travel / (on_slope.max(1) as f32 / TICKS_PER_SECOND as f32) * 10.0) as i64,
+        );
+        for (why, n) in s.bot_seat_leaves() {
+            report.progress.insert(format!("left_{why}"), *n as i64);
+        }
+    });
+    sane(&r);
+    assert_eq!(r.fell, 0, "{}: nobody drove or fell off a cliff", r.name);
+    assert!(
+        r.progress["slope_seated_ticks"] > 0,
+        "the hill was driven: {:?}",
         r.progress
     );
 }

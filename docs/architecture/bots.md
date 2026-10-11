@@ -295,11 +295,14 @@ person presses:
   followed in the seat. A wreck, or a wheeled hull on its side or roof,
   ends the drive at once, and so does a hull the next hit would wreck: the
   last hit it took is at least the damage it has left (bail out). A
-  driver brakes where a ray from its leading end, a stopping distance and
-  half its width ahead (a slanting edge meets a corner first), finds no
-  floor (a drop or the map's edge), and keeps braking
-  until it stops, and a stalled explore drive forgets its place. A
-  passenger rides only with a driver going its way: one whose intent leads
+  driver brakes for a drop within a stopping distance and half its width
+  ahead (a slanting edge meets a corner first), and keeps braking until it
+  stops. It follows the floor out to there in steps of half its length:
+  each step may rise or fall by its run (a hill, up or down, is floor), and
+  fall a further step as deep as the chassis is tall (a kerb); past that,
+  or with no floor at all, is a drop (a cliff or the map's edge). A
+  stalled explore drive forgets its place. A passenger rides only with a
+  driver going its way: one whose intent leads
   nearer the passenger's enemy, or none known; it gets out when the driver
   turns the other way and it would rather walk, and when no driver is in
   the seat or coming to it.
