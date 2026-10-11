@@ -1931,10 +1931,7 @@ fn render_scale_draws_the_world_smaller_and_fills_the_window() -> anyhow::Result
         readback
             .slice(..)
             .map_async(wgpu::MapMode::Read, move |r| drop(send.send(r)));
-        gpu.device.poll(wgpu::PollType::Wait {
-            submission_index: None,
-            timeout: Some(Duration::from_secs(60)),
-        })?;
+        gpu.device.poll(wgpu::PollType::wait_indefinitely())?;
         receive.recv_timeout(Duration::from_secs(60))??;
         let pixels = readback.slice(..).get_mapped_range()?.to_vec();
         readback.unmap();
