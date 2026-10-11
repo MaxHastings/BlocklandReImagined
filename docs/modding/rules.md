@@ -1056,6 +1056,14 @@ anything):
 | `set_rounds` | the player does not carry the item, or it has no magazine of its own |
 | `set_score` | the player is gone, or the score is out of range |
 | `spawn_entity` | the kind is unknown or its `max_alive`, the server's entity limit or the package's share is reached (room for the body is only known when it is placed) |
+| mini-game rules: `set_teams`, `set_team`, `set_score`, `add_score`, `set_team_points`, `add_team_points`, `reset_minigame`, `end_round`, `create_minigame`, `place_member`, `hold_respawn`, `set_default_minigame`, `set_minigame`, `set_minigame_color`, `set_minigame_region`, `set_keep_scores`, `set_cleanup_on_leave`, `set_claims_bricks`, `set_name_distance` and `end_minigame` | the mini-games would refuse it: the check runs the same rule on a copy of them, so the reason is the one the operation itself gives (no such game, team or player, settings it does not accept, every colour taken) |
+| `set_respawn_time` | the player is gone |
+| `add_bot` | the server is at its bot limit or full, the bot kind's Add-On is not enabled, or the game or team does not exist (being given a body and joining the game happen only as it joins) |
+| `remove_bot`, `bot_tool`, `rest_bot` | the bot is not one this package added (for `rest_bot`, nor of a kind it provides); `bot_tool` also when the bot is dead |
+| `spawn_vehicle` | the vehicle is not this package's, the package has its 64 out, or a server or per-player vehicle limit is reached (whether the spot is clear is only known as it spawns) |
+| `remove_vehicle` | the vehicle is gone, or is neither one this package spawned nor one of its kind that is the caller's or the caller administers |
+| `place_voxel` | no generated world runs, it has no such material, the spot is outside it or taken, the brick limit is reached, or no world-edit share is left |
+| copy work: `copy_build`, `copy_box`, `cut_copy`, `paint_copy`, `load_copy`, `plant_copy` and the other copy, ghost, fill and super-cut operations | the command did not come from the player the copy is for (an administrator may also cancel or drop anyone's); `load_copy` also when its tool is not an item of this server. What the copy work then finds (nothing to copy, no room) is told to the player and the Add-On as it happens, so `require` cannot foresee it |
 
 The checks all look at the world as it is before the call; two required
 operations that compete for the same last slot or share are not told apart,
