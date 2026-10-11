@@ -82,7 +82,9 @@ fn actual_gui_defaults_and_timer_units() {
             s.points_plant_brick,
             s.points_break_brick
         ),
-        (1, -1, 0, 0, 0)
+        // v20's form had Kill Self -1; Max (v0.2.10) wants a kill to be the
+        // only thing that scores until a game says otherwise.
+        (1, 0, 0, 0, 0)
     );
     assert_eq!(
         (s.respawn_ms, s.vehicle_respawn_ms, s.brick_respawn_ms),
@@ -370,7 +372,10 @@ fn death_scores_are_once_per_life_and_respawn_is_manual_strict_deadline() {
     let b = connect(&mut w, 2);
     let g = create(&mut w, a, 0);
     w.execute(Command::Join { actor: b, game: g }).unwrap();
-    configure(&mut w, a, |s| s.points_die = -2);
+    configure(&mut w, a, |s| {
+        s.points_die = -2;
+        s.points_kill_self = -1;
+    });
     let old = life(&w, b);
     w.died(b, old, Some(a)).unwrap();
     assert_eq!(
