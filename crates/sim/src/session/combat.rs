@@ -2464,7 +2464,7 @@ impl Session {
                 .map(|(_, distance)| distance)
         };
         let other = simulation
-            .brick_ray(start, Vec3::NEG_Y, SPAWN_RAY, |other, _| other != id)
+            .brick_ray(start, Vec3::NEG_Y, SPAWN_RAY, |other, _, _| other != id)
             .ok()
             .flatten()
             .map(|hit| hit.distance);
@@ -2480,7 +2480,7 @@ impl Session {
         // thin enough for Torque to lift a player out of, but a spawn plate
         // (Slayer's team spawns) would hold feet inside it.
         let own = simulation
-            .brick_ray(start, Vec3::NEG_Y, SPAWN_RAY, |other, _| other == id)
+            .brick_ray(start, Vec3::NEG_Y, SPAWN_RAY, |other, _, _| other == id)
             .ok()
             .flatten()
             .map(|hit| hit.position.y);

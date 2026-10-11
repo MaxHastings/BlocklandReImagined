@@ -1747,7 +1747,7 @@ impl Simulation {
     /// up to four times player scale.
     pub const MAX_TARGET_DISTANCE: f32 = 2000.0;
     pub fn target(&self, origin: Vec3, direction: Vec3, max_distance: f32) -> Result<Option<Hit>> {
-        self.target_filtered(origin, direction, max_distance, |brick| brick.raycast)
+        self.target_filtered(origin, direction, max_distance, |brick, _| brick.raycast)
     }
     /// [`Self::target`] on through the openings of linked bricks
     /// (portals), as the player sees: the hit, its distance along the whole
@@ -1813,12 +1813,10 @@ impl Simulation {
                         origin,
                         direction,
                         length.min(Self::MAX_TARGET_DISTANCE),
-                        |brick| {
+                        |brick, definition| {
                             brick.raycast
                                 && opaque(brick)
-                                && self.definitions.get(brick).is_ok_and(|definition| {
-                                    definition.special != crate::definitions::Special::Water
-                                })
+                                && definition.special != crate::definitions::Special::Water
                         },
                     )
                     .ok()
@@ -1860,14 +1858,14 @@ impl Simulation {
         direction: Vec3,
         max_distance: f32,
     ) -> Result<Option<Hit>> {
-        self.target_filtered(origin, direction, max_distance, |_| true)
+        self.target_filtered(origin, direction, max_distance, |_, _| true)
     }
     fn target_filtered(
         &self,
         origin: Vec3,
         direction: Vec3,
         max_distance: f32,
-        accept: impl Fn(&Brick) -> bool,
+        accept: impl Fn(&Brick, &Definition) -> bool,
     ) -> Result<Option<Hit>> {
         ensure!(
             origin.is_finite()
@@ -1907,21 +1905,26 @@ impl Simulation {
                 distance,
             });
         }
-        self.walk_bricks(origin, direction, max_distance, &mut nearest, |_, brick| {
-            accept(brick)
-        })?;
+        self.walk_bricks(
+            origin,
+            direction,
+            max_distance,
+            &mut nearest,
+            |_, brick, d| accept(brick, d),
+        )?;
         Ok(nearest)
     }
     /// The nearest brick `accept` takes along a ray (normalized direction),
     /// by each brick's own collision: what projectiles and sight lines hit.
     /// Bricks share chunk colliders, so rays that must tell bricks apart or
-    /// skip some come here rather than to the physics world.
+    /// skip some come here rather than to the physics world. `accept` is
+    /// given the brick's definition, resolved once per candidate.
     pub fn brick_ray(
         &self,
         origin: Vec3,
         direction: Vec3,
         max_distance: f32,
-        accept: impl Fn(BrickId, &Brick) -> bool,
+        accept: impl Fn(BrickId, &Brick, &Definition) -> bool,
     ) -> Result<Option<Hit>> {
         let mut nearest = None;
         self.walk_bricks(origin, direction, max_distance, &mut nearest, accept)?;
@@ -1965,7 +1968,7 @@ impl Simulation {
         direction: Vec3,
         max_distance: f32,
         nearest: &mut Option<Hit>,
-        accept: impl Fn(BrickId, &Brick) -> bool,
+        accept: impl Fn(BrickId, &Brick, &Definition) -> bool,
     ) -> Result<()> {
         // This set is only a per-ray duplicate guard for bricks registered in
         // more than one spatial bucket. A fast non-cryptographic hasher keeps
@@ -1975,23 +1978,27 @@ impl Simulation {
             grid::ray_buckets(origin.to_array(), direction.to_array(), max_distance)
         {
             for &(id, bounds) in self.index.bucket_bounds(bucket) {
-                if !tested.insert(id) {
-                    continue;
-                }
                 // Most of a bucket's bricks lie off the ray: the slab test
                 // on the bounds the bucket holds rules them out before the
-                // world lookup and `accept`, which cost far more.
+                // duplicate guard, the world lookup and `accept`, which
+                // cost far more.
                 let Some(enter) = slab(bounds, origin, direction, max_distance) else {
                     continue;
                 };
                 if nearest.as_ref().is_some_and(|hit| enter > hit.distance) {
                     continue;
                 }
-                let brick = &self.state().bricks[&id];
-                if !accept(id, brick) {
+                if !tested.insert(id) {
                     continue;
                 }
-                self.ray_brick(id, brick, origin, direction, max_distance, nearest)?;
+                let brick = &self.state().bricks[&id];
+                // One string-keyed definition lookup per candidate, shared
+                // by `accept` and the collision test.
+                let d = self.definitions.get(brick)?;
+                if !accept(id, brick, d) {
+                    continue;
+                }
+                self.ray_brick(id, brick, d, origin, direction, max_distance, nearest)?;
             }
             if nearest
                 .as_ref()
@@ -2002,18 +2009,20 @@ impl Simulation {
         }
         Ok(())
     }
+    #[allow(clippy::too_many_arguments)]
     fn ray_brick(
         &self,
         id: BrickId,
         brick: &Brick,
+        d: &Definition,
         origin: Vec3,
         direction: Vec3,
         max_distance: f32,
         nearest: &mut Option<Hit>,
     ) -> Result<()> {
-        // The caller already fetched this brick for the acceptance check and
-        // passed it the slab test on its grid bounds ([`slab`]).
-        let d = self.definitions.get(brick)?;
+        // The caller already fetched this brick and its definition for the
+        // acceptance check and passed it the slab test on its grid bounds
+        // ([`slab`]).
         let inverse = brick.transform().inverse();
         let o = inverse.transform_point3(origin);
         let dir = inverse.transform_vector3(direction);

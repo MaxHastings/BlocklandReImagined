@@ -65,12 +65,8 @@ fn target(tag: u128) -> Option<TargetId> {
 }
 
 /// `ray_hits` for a brick, which rays test by its own collision.
-fn brick_ray_hits(simulation: &Simulation, brick: &bri_world::Brick) -> bool {
-    brick.raycast
-        && simulation
-            .definitions
-            .get(brick)
-            .is_ok_and(|d| d.special != crate::definitions::Special::Water)
+fn brick_ray_hits(brick: &bri_world::Brick, d: &crate::definitions::Definition) -> bool {
+    brick.raycast && d.special != crate::definitions::Special::Water
 }
 
 /// Whether projectiles and explosion sight lines hit this collider. For a
@@ -127,9 +123,12 @@ impl WeaponQuery<'_> {
                 .is_none()
             && self
                 .simulation
-                .brick_ray(from + direction * advance, direction, reach, |_, brick| {
-                    brick_ray_hits(simulation, brick)
-                })
+                .brick_ray(
+                    from + direction * advance,
+                    direction,
+                    reach,
+                    |_, brick, d| brick_ray_hits(brick, d),
+                )
                 .is_ok_and(|hit| hit.is_none())
     }
 }
@@ -231,8 +230,8 @@ impl Query for WeaponQuery<'_> {
         // the brick's centre).
         let brick = self
             .simulation
-            .brick_ray(start, direction, distance, |id, brick| {
-                brick_ray_hits(simulation, brick)
+            .brick_ray(start, direction, distance, |id, brick, d| {
+                brick_ray_hits(brick, d)
                     && !(filter.projectile_age_ticks.is_some()
                         && simulation.brick_contains(id, start))
             })
