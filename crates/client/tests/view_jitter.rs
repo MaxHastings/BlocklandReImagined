@@ -70,10 +70,7 @@ fn render(
         "App did not render a session camera"
     );
     gpu.queue.submit([encoder.finish()]);
-    gpu.device.poll(wgpu::PollType::Wait {
-        submission_index: None,
-        timeout: Some(Duration::from_secs(30)),
-    })?;
+    support::gpu::wait(&gpu.device, "the frame")?;
     Ok(())
 }
 

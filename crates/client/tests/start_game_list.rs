@@ -100,10 +100,7 @@ fn start_game_lists_and_draws_every_loadable_map(f: &ContentRoot) -> Result<()> 
     readback.slice(..).map_async(wgpu::MapMode::Read, move |r| {
         let _ = tx.send(r);
     });
-    gpu.device.poll(wgpu::PollType::Wait {
-        submission_index: None,
-        timeout: Some(Duration::from_secs(30)),
-    })?;
+    support::gpu::wait(&gpu.device, "the frame")?;
     rx.recv_timeout(Duration::from_secs(5))??;
     let mapped = readback
         .slice(..)
