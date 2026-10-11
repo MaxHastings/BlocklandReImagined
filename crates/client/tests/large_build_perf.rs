@@ -584,26 +584,71 @@ fn add_bot_spawners(world: &mut bri_world::World, bots: usize) {
 /// A content root at `overlay` that reads `root`'s content through links
 /// and holds its own copy of the Add-On lists, with the Blockhead Bot
 /// Add-On turned on there. `root` is never written.
+///
+/// Package discovery skips links (a Windows junction reads as a symlink),
+/// so the folders it walks, down to each package's own folder, are real
+/// folders here; only what lies below them is linked.
 fn with_bots(root: &Path, overlay: &Path) -> Result<PathBuf> {
-    let lists = [
+    mirror(root, overlay, 0)?;
+    for list in [
         bri_package::packages::PACKAGES_FILE,
         bri_package::library::DISABLED_FILE,
-    ];
-    std::fs::create_dir_all(overlay)?;
-    for entry in std::fs::read_dir(root)? {
-        let entry = entry?;
-        let name = entry.file_name();
-        let to = overlay.join(&name);
-        if lists.iter().any(|l| name == *l) {
-            std::fs::copy(entry.path(), &to)?;
-        } else if entry.file_type()?.is_dir() {
-            link_dir(&entry.path(), &to)?;
-        } else if std::fs::hard_link(entry.path(), &to).is_err() {
-            std::fs::copy(entry.path(), &to)?;
+    ] {
+        let to = overlay.join(list);
+        if to.exists() {
+            std::fs::remove_file(&to)?;
+            std::fs::copy(root.join(list), &to)?;
         }
     }
     bri_client::add_ons::set_enabled(overlay, "blockhead_bot", true)?;
     Ok(overlay.to_path_buf())
+}
+/// Recreates `from` at `to` as real folders as deep as package discovery
+/// looks, and links everything else.
+fn mirror(from: &Path, to: &Path, depth: usize) -> Result<()> {
+    use bri_package::library::{MANIFEST_FILE, MAX_SCAN_DEPTH};
+    std::fs::create_dir_all(to)?;
+    let package = from.join(MANIFEST_FILE).is_file();
+    for entry in std::fs::read_dir(from)? {
+        let entry = entry?;
+        let (path, into) = (entry.path(), to.join(entry.file_name()));
+        if !path.is_dir() {
+            if std::fs::hard_link(&path, &into).is_err() {
+                std::fs::copy(&path, &into)?;
+            }
+        } else if package || depth + 1 >= MAX_SCAN_DEPTH {
+            link_dir(&path, &into)?;
+        } else {
+            mirror(&path, &into, depth + 1)?;
+        }
+    }
+    Ok(())
+}
+/// Removes `dir`'s links without following them, then the folders left.
+fn unmirror(dir: &Path) {
+    if let Ok(entries) = std::fs::read_dir(dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let link = std::fs::symlink_metadata(&path).is_ok_and(|m| {
+                m.file_type().is_symlink() || {
+                    #[cfg(windows)]
+                    {
+                        use std::os::windows::fs::MetadataExt;
+                        // FILE_ATTRIBUTE_REPARSE_POINT: a junction.
+                        m.file_attributes() & 0x400 != 0
+                    }
+                    #[cfg(not(windows))]
+                    false
+                }
+            });
+            if link {
+                let _ = std::fs::remove_dir(&path).or_else(|_| std::fs::remove_file(&path));
+            } else if path.is_dir() {
+                unmirror(&path);
+            }
+        }
+    }
+    let _ = std::fs::remove_dir_all(dir);
 }
 #[cfg(windows)]
 fn link_dir(from: &Path, to: &Path) -> Result<()> {
@@ -622,6 +667,38 @@ fn link_dir(from: &Path, to: &Path) -> Result<()> {
 #[cfg(not(windows))]
 fn link_dir(from: &Path, to: &Path) -> Result<()> {
     Ok(std::os::unix::fs::symlink(from, to)?)
+}
+
+/// The bot overlay finds an Add-On that sits below linked folders, turns it
+/// on in the overlay only, and its removal leaves the real content whole.
+#[test]
+fn bot_overlay_turns_the_add_on_on_without_touching_the_content() -> Result<()> {
+    let workspace = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let scratch = std::env::temp_dir().join(format!("bri-bot-overlay-{}", std::process::id()));
+    let (root, overlay) = (scratch.join("content"), scratch.join("state/content"));
+    let _ = std::fs::remove_dir_all(&scratch);
+    let bot = root.join("addons/blockhead_bot");
+    std::fs::create_dir_all(bot.join("assets"))?;
+    for file in ["package.json", "assets/bots.json"] {
+        std::fs::copy(
+            workspace.join("packages/blockhead_bot").join(file),
+            bot.join(file),
+        )?;
+    }
+    with_bots(&root, &overlay)?;
+    let on = |at: &Path| {
+        bri_package::library::Library::scan(at)
+            .ok()
+            .and_then(|l| l.get("blockhead_bot").map(|e| e.enabled))
+    };
+    let (in_overlay, in_root) = (on(&overlay), on(&root));
+    unmirror(&overlay);
+    let kept = bot.join("assets/bots.json").is_file();
+    let _ = std::fs::remove_dir_all(&scratch);
+    assert_eq!(in_overlay, Some(true));
+    assert_eq!(in_root, Some(false));
+    assert!(kept, "removing the overlay reached the real content");
+    Ok(())
 }
 
 #[test]
@@ -1061,17 +1138,7 @@ fn large_build_frame_times() -> Result<()> {
     println!("{}", serde_json::to_string_pretty(&result)?);
     // The content overlay's links go first, so nothing can reach through
     // them into the real content.
-    if let Ok(entries) = std::fs::read_dir(state.join("content")) {
-        for entry in entries.flatten() {
-            if entry
-                .file_type()
-                .is_ok_and(|t| t.is_symlink() || t.is_dir())
-            {
-                let _ = std::fs::remove_dir(entry.path())
-                    .or_else(|_| std::fs::remove_file(entry.path()));
-            }
-        }
-    }
+    unmirror(&state.join("content"));
     let _ = std::fs::remove_dir_all(&state);
     if let Some(limit) = std::env::var("BRI_PERF_MAX_MS")
         .ok()
