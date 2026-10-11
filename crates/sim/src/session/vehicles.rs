@@ -2133,6 +2133,14 @@ impl Session {
                     if !hurts && !shoves {
                         continue;
                     }
+                    // Its driver pushed them, as a weapon's impulse does
+                    // (`pushed_by`).
+                    if owner != victim {
+                        let tick = self.simulation.state().tick;
+                        if let Some(peer) = self.peers.get_mut(&victim) {
+                            peer.combat.pushed = Some((owner, tick));
+                        }
+                    }
                     if hurts && damage > 0.0 {
                         self.damage_player(
                             victim,

@@ -20,6 +20,9 @@ use glam::Vec3;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 pub const TICKS_PER_SECOND: usize = 120;
+/// How long after an enemy's push a body still on the floor counts as
+/// pressed on by it when it goes over an edge.
+const PRESSED_TICKS: u64 = 2 * TICKS_PER_SECOND as u64;
 
 /// Extra rounds for long soak runs: `BRI_GAUNTLET_ROUNDS=4` plays every
 /// scenario four times as long. The default is one round.
@@ -747,7 +750,7 @@ impl Scorer {
             for (bot, t) in &thoughts {
                 let Some(st) = states.get(bot) else { continue };
                 eprintln!(
-                    "T{tick} bot{bot} side={:?} alive={} at=({:.1},{:.1},{:.1}) yaw={:.2} {} vis={:?} goal={:?} next={:?} steps={} obj={:?} {:?}",
+                    "T{tick} bot{bot} side={:?} alive={} at=({:.1},{:.1},{:.1}) yaw={:.2} {} vis={:?} goal={:?} next={:?} steps={} obj={:?} {:?} seat={:?}",
                     sides.get(bot),
                     alive(bot),
                     st.feet[0],
@@ -765,6 +768,7 @@ impl Scorer {
                     t.objective_detail
                         .as_ref()
                         .map(|d| (d.action.clone(), d.phase)),
+                    s.mounted(*bot),
                 );
             }
         }
@@ -833,10 +837,13 @@ impl Scorer {
             }
             if feet.y < self.floor - 2.0 {
                 if !std::mem::replace(&mut track.fallen, true) {
-                    // Knocked off when an enemy's weapon pushed it after it
-                    // last stood on something; otherwise its own doing.
+                    // Knocked off when an enemy pushed it after it last
+                    // stood on something, or a chassis that ran into it
+                    // went on pressing it along the floor until it went
+                    // over (contact is counted once, as it begins);
+                    // otherwise its own doing.
                     if s.pushed_by(*bot).is_some_and(|(by, at)| {
-                        at >= track.grounded_at && sides.get(&by) != sides.get(bot)
+                        at + PRESSED_TICKS >= track.grounded_at && sides.get(&by) != sides.get(bot)
                     }) {
                         self.report.knocked_off += 1;
                     } else {

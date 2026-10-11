@@ -72,9 +72,16 @@ bot does through the same code.
    an enemy behind is left, as walking backwards is slow.
 
    An on-foot bot's leash is its brick and `chase_radius`; a rules bot on
-   foot has none and plays the whole map. A driver's leash is measured from
-   where it took the controls, 96 units long. So a bot that boards a vehicle 40 m out keeps
-   pursuing a target 60 m out rather than turning back at its walking leash.
+   foot has none and plays the whole map, from a seat as well. A brick
+   bot's drive leash is measured from where it took the controls, 96
+   units long. So a bot that boards a vehicle 40 m out keeps pursuing a
+   target 60 m out rather than turning back at its walking leash.
+
+   A seat is a body the bot plays from, not a leg it takes. A driver with
+   no fight known explores like a walker, with its chassis as the body: an
+   explore place needs floor a footprint beyond it, faces the hull's
+   heading, and is reached within the footprint. A passenger goes where its
+   driver takes it.
 3. **Goal and path.** The behaviour sets the goal; the route planner (see
    [Routes](#routes-one-planner-for-every-way-of-getting-about)) over the
    walk grid (`crate::nav`, shared by every bot of a body size, updated as
@@ -192,7 +199,7 @@ Edges are the ways the bot's body can actually move between them now:
 | portal | the body's middle goes in through a linked brick's opening | one cell |
 | swim | the floor lies under liquid that would float the body (`swim_coverage`) | distance x walk speed / swim speed + entry |
 | jet | the body's jets lift it (measured), the kind's `fly` weight is above 0, the full-width column up from the launch cell, the crossing at the apex and the descent are clear, and its energy holds the leg's measured jetting | the leg's measured flight time (`reach::JetReach`), plus takeoff |
-| board, drive, leave | a free, permitted wheeled vehicle in sight whose drive beats the walk (`route::drive_serves`; one that runs over an enemy on foot the rules let the bot hurt is costed at its top speed, since the drive is the blow), or an armed one; never while the bot has a grounded objective of its own (its objective plan decides what it drives) | walk to the seat + boarding + chassis distance / cruise speed |
+| board, drive, leave | a free, permitted wheeled vehicle in sight whose drive beats the walk to where the bot is going (`route::drive_serves`: the enemy it knows, else, for a rules bot, the place it would explore, else, idle, the player it plays near; one that runs over an enemy on foot the rules let the bot hurt is costed at its top speed, since the drive is the blow), or an armed one; never while the bot has a grounded objective of its own (its objective plan decides what it drives) | walk to the seat + boarding + chassis distance / cruise speed |
 
 **Measured reach** (`crate::reach`). What a body can jump onto and how
 long a jet leg takes, and how high a crawlspace it can jump into, are
@@ -212,7 +219,11 @@ goes wrong all the same is given up by what really happens
 Edge costs come from the body's and vehicle's own numbers (`PlayerTuning`
 speeds, jet acceleration and lift, gravity, energy drain; a vehicle's
 `max_speed`, `max_steering`, wheelbase and `brake_force`), never from
-content names. Kinds keep one data knob per mode: the `fly` weight in
+content names. A chassis's stopping distance is measured on a test stand
+(`reach::Handling`): it is driven up from rest to each of several speeds,
+braked fresh there, and measured from where the brake went on to where it
+no longer rolls, so the tyres' brake build-up is in it (a jeep at 27
+units/s rolls about 24). Kinds keep one data knob per mode: the `fly` weight in
 `behaviours` (0: never takes a jet leg) scales how willing a kind is to
 jet, and `interact` (0: never) whether it may take a vehicle.
 
@@ -269,7 +280,8 @@ person presses:
   sooner, at the definition's cruise speeds, than turning round, and, for
   a pursued target, only within 16 units. Speed is no more than the tyres hold on the arc pure
   pursuit takes, manoeuvring speed while backing or pulling out, and what
-  it can still brake from by the point. A chassis is at a waypoint, or a
+  it can still brake from by the route's end, or by an obstacle ahead; a
+  chassis driving at an enemy it runs over does not brake for them. A chassis is at a waypoint, or a
   search probe, within half its footprint.
 - board: the ordinary seat approach, claim and mount. The seat claim's
   progress is measured afresh once the bot is seated (the drive's own
@@ -281,7 +293,23 @@ person presses:
   gets out, if on foot it would still close on them (`route::walk_closes`:
   they draw away slower than it walks); one outrunning a walker is
   followed in the seat. A wreck, or a wheeled hull on its side or roof,
-  ends the drive at once.
+  ends the drive at once, and so does a hull the next hit would wreck: the
+  last hit it took is at least the damage it has left (bail out). A
+  driver brakes where a ray from its leading end, a stopping distance and
+  half its width ahead (a slanting edge meets a corner first), finds no
+  floor (a drop or the map's edge), and keeps braking
+  until it stops, and a stalled explore drive forgets its place. A
+  passenger rides only with a driver going its way: one whose intent leads
+  nearer the passenger's enemy, or none known; it gets out when the driver
+  turns the other way and it would rather walk, and when no driver is in
+  the seat or coming to it.
+
+  Each time a bot gets out it says why (`interactions::Leave`), and the
+  gauntlet counts the reasons: `wrecked`, `bail_out`, `stalled` (no
+  headway after backing up and replanning), `walk_the_rest`,
+  `got_off_to_fight`, `no_driver`, `other_way`, `gun_lost` and
+  `nothing_to_do` (no enemy, task or place from the seat, and no ally
+  driving it).
 
 **Replanning from outcomes.** Each leg watches what really happened: a walk
 leg that makes no headway hops, then plans again, then gives up as
@@ -296,7 +324,8 @@ bot at work beside its objective, a seat or an arming point is
 not judged by it; a jet leg that
 runs out of time or lands below where it took off plans again from where
 the bot came down, and the cells that failed are forgotten; a drive leg
-that makes no headway backs up, plans again and finally gives up the seat.
+that makes no headway backs up (only when the way behind is clear of
+allies, things and drops), plans again and finally gives up the seat.
 A plan is never trusted past what the world shows. When the best route to
 an enemy ends where the bot cannot hurt them (farther across than its
 band, or higher than a jump brings within it), chasing them, or searching
@@ -765,7 +794,9 @@ everything else (`bots/team.rs`). Nothing names a game, item or vehicle.
 
 Each bot publishes its current choice as an *intent* beside the claims
 (`claims::Intent`, lapsing three ticks after it stops): where it goes or
-stands, its target, a vehicle whose free seats it controls while it waits for crew, the space its
+stands, its target, a vehicle whose free seats it controls (an offer
+that lasts while a seat is free; the driver stops and waits while an
+ally's seat claim on it lives, so the claim's lease bounds the wait), the space its
 weapon will hit (`claims::Space`, from real reach, splash and aim error,
 the same test the hold-fire check uses) and, from a seat it does not drive,
 the line its mount needs. Allies' intents enter each option's score as

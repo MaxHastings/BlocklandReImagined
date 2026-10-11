@@ -165,7 +165,8 @@ pub(super) struct Combat {
     /// tick of the last emote let through and the quick ones counted.
     pub voice: Option<u64>,
     pub voice_count: u32,
-    /// Who last pushed this body with a weapon's impulse, and the tick.
+    /// Who last pushed this body with a weapon's impulse, or drove a
+    /// vehicle over it, and the tick.
     pub pushed: Option<(OwnerId, u64)>,
 }
 
@@ -866,8 +867,8 @@ impl Session {
         }
     }
 
-    /// Who last pushed `owner`'s body with a weapon's impulse, and the tick
-    /// it landed. Not stable until the modding API freeze.
+    /// Who last pushed `owner`'s body with a weapon's impulse, or drove a
+    /// vehicle over it, and the tick it landed. Not stable until the modding API freeze.
     pub fn pushed_by(&self, owner: OwnerId) -> Option<(OwnerId, u64)> {
         self.peers.get(&owner)?.combat.pushed
     }
