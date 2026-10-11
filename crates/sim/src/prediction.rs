@@ -576,6 +576,9 @@ pub struct Predictor {
     /// Other players' bodies at their latest poses: the motor bumps into
     /// and pushes off them as it does on the host.
     others: BTreeMap<u64, Player>,
+    /// How many [`Self::set_others`] calls refreshed the collision world
+    /// because a body was added, removed or moved.
+    others_refreshes: u64,
 }
 impl Predictor {
     /// Begin predicting from an authoritative state (normally the join pose).
@@ -601,6 +604,7 @@ impl Predictor {
             frame: Default::default(),
             server_tick: None,
             others: BTreeMap::new(),
+            others_refreshes: 0,
         })
     }
     pub fn passage_frame(&self, driving: bool) -> bri_content::passage::PassageFrame {
@@ -663,12 +667,21 @@ impl Predictor {
     }
     /// Mirror the other players the host collides with (alive and on foot)
     /// at these states; anyone left out stops colliding.
+    ///
+    /// The client calls this every frame with the newest poses it holds,
+    /// which change at most at the pose rate (and never with nobody else
+    /// there), so a body already at its state is left alone and the
+    /// collision world is refreshed only when a body was added, removed or
+    /// moved. The refresh is a short physics step over the whole mirror
+    /// ([`bri_physics::detect_collisions`]), which on a large build costs
+    /// more than the rest of the call put together.
     pub fn set_others<'a>(
         &mut self,
         states: impl IntoIterator<Item = &'a PlayerState>,
     ) -> Result<()> {
         let own = self.player.state().owner;
         let mut seen = BTreeSet::new();
+        let mut changed = false;
         for state in states {
             // A body no player state may hold (a host fault) is left out:
             // the copy stops colliding with it rather than failing.
@@ -677,7 +690,18 @@ impl Predictor {
             }
             let tuning = self.archetypes.tuning(state.archetype, state.scale);
             let physics = &mut self.world.physics;
+            // The body's pose is its feet, crouch and (for a mount) yaw at
+            // its tuning; the rest of the state (its Torque tick phase,
+            // velocity, energy) moves nothing here.
+            let same_pose = |other: &Player| {
+                let held = other.state();
+                held.feet == state.feet
+                    && held.crouched == state.crouched
+                    && held.yaw == state.yaw
+                    && *other.tuning() == tuning
+            };
             match self.others.get_mut(&state.owner) {
+                Some(other) if same_pose(other) => continue,
                 Some(other) => other.restore(physics, state.clone(), tuning)?,
                 None => {
                     let other = Player::attach(physics, state.clone(), tuning)?;
@@ -685,6 +709,7 @@ impl Predictor {
                 }
             }
             self.others[&state.owner].place_now(&mut self.world.physics);
+            changed = true;
         }
         let gone: Vec<_> = self
             .others
@@ -695,10 +720,19 @@ impl Predictor {
         for owner in gone {
             if let Some(other) = self.others.remove(&owner) {
                 other.despawn(&mut self.world.physics);
+                changed = true;
             }
         }
-        bri_physics::detect_collisions(&mut self.world.physics);
+        if changed {
+            self.others_refreshes += 1;
+            bri_physics::detect_collisions(&mut self.world.physics);
+        }
         Ok(())
+    }
+    /// How many [`Self::set_others`] calls so far refreshed the collision
+    /// world (a work count for tests and the frame trace).
+    pub fn others_refreshes(&self) -> u64 {
+        self.others_refreshes
     }
     /// Advance one fixed tick. Returns the input's sequence number, which the
     /// caller sends on the movement channel, and the local motion events.
