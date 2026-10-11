@@ -1003,6 +1003,11 @@ pub struct GpuScene {
     /// Opaque/alpha/additive, double sided, background, alpha-masked.
     /// (blend, double sided, sky/cloud background, alpha mask, water plane)
     material_modes: Vec<(usize, bool, bool, bool, bool)>,
+    /// Whether any of its surfaces can be emissive (unlit materials, or a
+    /// brick with the Glow colour FX): only those scenes draw into the
+    /// ambient occlusion exclusion mask, so the mask pass skips the rest
+    /// of the world instead of drawing it a second time.
+    pub(crate) emissive: bool,
     /// World-space bounds of static chunk geometry; unbounded scenes always draw.
     pub(crate) bounds: Option<(Vec3, Vec3)>,
     /// The bounds of the scene's own vertices (model space for instanced
@@ -1256,6 +1261,7 @@ impl GpuScene {
             queue.write_buffer(&self.vertices, 0, bytemuck::cast_slice(vertices));
         }
         self.extent = vertex_extent(vertices);
+        self.emissive = emissive_geometry(&self.material_descriptors, vertices);
         self.sky_revision
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         for (batch, center) in self.batches.iter_mut().zip(centers) {
@@ -1339,6 +1345,7 @@ impl GpuScene {
             materials: self.materials.clone(),
             batches: vec![selected],
             material_modes: self.material_modes.clone(),
+            emissive: self.emissive,
             bounds: self.bounds,
             extent: self.extent,
             slot: self.slot.clone(),
@@ -1355,6 +1362,19 @@ impl GpuScene {
 
 /// The bounds of `vertices`, widened by what brick shape FX move them in
 /// the shader (up to 0.1 units); None when there are none.
+/// Whether `vertices` drawn with `materials` can show an emissive surface:
+/// an unlit material, or a brick vertex carrying the Glow colour FX (code
+/// bits 0..3 of `BrickFx::encode`, colour 3).
+fn emissive_geometry(materials: &[Material], vertices: &[SceneVertex]) -> bool {
+    materials
+        .iter()
+        .any(|m| matches!(m.kind, MaterialKind::Unlit | MaterialKind::UnlitOverlay))
+        || vertices.iter().any(glow_vertex)
+}
+fn glow_vertex(v: &SceneVertex) -> bool {
+    let code = v.fx[3];
+    code >= 1.0 && ((code as u32 - 1) & 7) == 3
+}
 fn vertex_extent(vertices: &[SceneVertex]) -> Option<(Vec3, Vec3)> {
     let (min, max) = vertices.iter().fold(
         (Vec3::splat(f32::INFINITY), Vec3::splat(f32::NEG_INFINITY)),
@@ -1480,6 +1500,32 @@ fn split_batches(data: &SceneData, second: impl Fn(&MeshBatch) -> bool) -> [Spli
 }
 
 /// Clip-space planes (a, b, c, d) with inside meaning ax+by+cz+d >= 0.
+/// The world bounds of `casters`' geometry: every scene's own extent, and
+/// each instanced scene's extent under its transforms. None without any.
+fn world_bounds(casters: ShadowCasters<'_>) -> Option<(Vec3, Vec3)> {
+    let mut bounds: Option<(Vec3, Vec3)> = None;
+    let mut extend = |scene: &GpuScene, model: Mat4| {
+        if let Some((min, max)) = scene.extent {
+            for i in 0..8 {
+                let p = model.transform_point3(Vec3::new(
+                    if i & 1 == 0 { min.x } else { max.x },
+                    if i & 2 == 0 { min.y } else { max.y },
+                    if i & 4 == 0 { min.z } else { max.z },
+                ));
+                bounds = Some(bounds.map_or((p, p), |(a, b)| (a.min(p), b.max(p))));
+            }
+        }
+    };
+    for scene in casters.scenes {
+        extend(scene, Mat4::IDENTITY);
+    }
+    for (scene, instances) in casters.instances {
+        for t in &instances.transforms {
+            extend(scene, t.transform);
+        }
+    }
+    bounds.filter(|(a, b)| a.is_finite() && b.is_finite())
+}
 pub(crate) fn frustum_planes(view_projection: Mat4) -> [glam::Vec4; 6] {
     let (r0, r1, r2, r3) = (
         view_projection.row(0),
@@ -2422,6 +2468,10 @@ pub struct SceneRenderer {
     /// Each sun cascade's kept brick layer, while bricks cast sun shadows
     /// (`crate::kept_shadows`).
     kept: std::cell::RefCell<Option<crate::kept_shadows::KeptShadows>>,
+    /// Directions of a skylight field drawn a frame while a new one is
+    /// staged (`crate::sky_exposure`): one, unless `sky_exposure_budget`
+    /// raises it.
+    sky_budget: std::cell::Cell<usize>,
     /// Whether bricks keep their sun shadow depth (on unless
     /// `BRI_KEPT_SHADOWS=0`, for comparing frame times).
     keep_brick_shadows: std::cell::Cell<bool>,
@@ -2677,6 +2727,7 @@ impl SceneRenderer {
             stats: Default::default(),
             timer: Default::default(),
             kept: Default::default(),
+            sky_budget: std::cell::Cell::new(1),
             keep_brick_shadows: std::cell::Cell::new(
                 std::env::var("BRI_KEPT_SHADOWS").map_or(true, |v| v != "0"),
             ),
@@ -3117,6 +3168,7 @@ impl SceneRenderer {
                     )
                 })
                 .collect(),
+            emissive: emissive_geometry(&data.materials, &data.vertices),
             bounds: None,
             extent: vertex_extent(&data.vertices),
             slot: None,
@@ -3179,6 +3231,7 @@ impl SceneRenderer {
                 data.batches.clone(),
                 bounds,
                 (data.vertices.len(), data.indices.len()),
+                emissive_geometry(&palette.material_descriptors, &data.vertices),
             ));
         };
         // Translucent batches live in a pool of their own: sorted back to
@@ -3202,6 +3255,7 @@ impl SceneRenderer {
                 part.2,
                 bounds,
                 (part.0.len(), part.1.len()),
+                emissive_geometry(&palette.material_descriptors, &part.0),
             );
             scene.vertex_runs = part.3;
             parts.push(scene);
@@ -3218,8 +3272,10 @@ impl SceneRenderer {
         batches: Vec<MeshBatch>,
         bounds: Option<(Vec3, Vec3)>,
         (vertex_count, index_count): (usize, usize),
+        emissive: bool,
     ) -> GpuScene {
         GpuScene {
+            emissive,
             sky_revision: Arc::new(std::sync::atomic::AtomicU64::new(0)),
             vertices,
             indices,
@@ -3289,6 +3345,7 @@ impl SceneRenderer {
             image_signatures: base.image_signatures.clone(),
             textures: base.textures.clone(),
             batches: data.batches.clone(),
+            emissive: emissive_geometry(&data.materials, &data.vertices),
             bounds: None,
             extent: vertex_extent(&data.vertices),
             slot: None,
@@ -3538,6 +3595,13 @@ impl SceneRenderer {
             .set((lights.len() as u32, grid.most_per_cell()));
         Ok(())
     }
+    /// How many of a staged skylight field's nine directions draw a frame
+    /// (`crate::sky_exposure`): one by default, so a move or a build change
+    /// never redraws the whole world nine times in one frame; nine makes a
+    /// change show the same frame (tests).
+    pub fn sky_exposure_budget(&self, directions_per_frame: usize) {
+        self.sky_budget.set(directions_per_frame.max(1));
+    }
     /// Keep static bricks' sun shadow depth between frames (the default) or
     /// draw them into every cascade each frame.
     pub fn keep_brick_shadows(&self, on: bool) {
@@ -3624,19 +3688,7 @@ impl SceneRenderer {
             return;
         };
         let mut key = Vec::new();
-        let mut bounds: Option<(Vec3, Vec3)> = None;
-        let mut extend = |scene: &GpuScene, model: Mat4| {
-            if let Some((min, max)) = scene.extent {
-                for i in 0..8 {
-                    let p = model.transform_point3(Vec3::new(
-                        if i & 1 == 0 { min.x } else { max.x },
-                        if i & 2 == 0 { min.y } else { max.y },
-                        if i & 4 == 0 { min.z } else { max.z },
-                    ));
-                    bounds = Some(bounds.map_or((p, p), |(a, b)| (a.min(p), b.max(p))));
-                }
-            }
-        };
+        let bounds = world_bounds(geometry);
         let signature = |scene: &GpuScene| {
             let mut hash = std::collections::hash_map::DefaultHasher::new();
             (std::ptr::from_ref(scene) as usize).hash(&mut hash);
@@ -3651,7 +3703,6 @@ impl SceneRenderer {
         };
         for scene in geometry.scenes {
             key.push(signature(scene));
-            extend(scene, Mat4::IDENTITY);
         }
         for (scene, instances) in geometry.instances {
             let mut hash = std::collections::hash_map::DefaultHasher::new();
@@ -3660,7 +3711,6 @@ impl SceneRenderer {
                 for f in t.transform.to_cols_array().into_iter().chain(t.tint) {
                     f.to_bits().hash(&mut hash);
                 }
-                extend(scene, t.transform);
             }
             for clip in &instances.clips {
                 for f in clip {
@@ -3669,9 +3719,23 @@ impl SceneRenderer {
             }
             key.push(hash.finish());
         }
-        let changed = v.sky.plan(&queue, v.eye, key, bounds);
-        if let Some(matrices) = changed {
-            self.record_sky_depths(encoder, &v.sky, &v.sky.layers, matrices, geometry, false);
+        // One direction of a new field a frame, into the pending maps; the
+        // field changes only once all nine are drawn.
+        let mut changed = false;
+        if let Some(directions) = v
+            .sky
+            .plan(&queue, v.eye, key, bounds, self.sky_budget.get())
+        {
+            let layers: Vec<(&wgpu::TextureView, u32)> = directions
+                .map(|i| {
+                    (
+                        &v.sky.pending_layers[i],
+                        crate::sky_exposure::SkyExposure::pending_offset(i),
+                    )
+                })
+                .collect();
+            self.record_sky_depths(encoder, &v.sky, &layers, geometry, false);
+            changed = v.sky.finish(&queue, encoder);
         }
         let has_moving = !moving.scenes.is_empty()
             || moving
@@ -3680,39 +3744,41 @@ impl SceneRenderer {
                 .any(|(_, i)| !i.transforms.is_empty());
         if has_moving {
             v.sky.merge(encoder);
-            self.record_sky_depths(
-                encoder,
-                &v.sky,
-                &v.sky.working_layers,
-                v.sky.matrices.get(),
-                moving,
-                true,
-            );
+            let layers: Vec<(&wgpu::TextureView, u32)> = v
+                .sky
+                .working_layers
+                .iter()
+                .enumerate()
+                .map(|(i, layer)| (layer, crate::sky_exposure::SkyExposure::offset(i)))
+                .collect();
+            self.record_sky_depths(encoder, &v.sky, &layers, moving, true);
         }
-        if changed.is_some() || has_moving || v.sky.had_moving.get() {
+        if changed || has_moving || v.sky.had_moving.get() {
             v.sky.copy(encoder, has_moving);
             self.mark(encoder, "sky exposure");
         }
         v.sky.had_moving.set(has_moving);
     }
 
-    #[allow(clippy::too_many_arguments)]
+    /// Draws `geometry` into each of `layers` (a depth layer and the byte
+    /// offset of its projector in the sky's caster buffer), over what the
+    /// layer holds (`load`) or from clear.
     fn record_sky_depths(
         &self,
         encoder: &mut wgpu::CommandEncoder,
         sky: &crate::sky_exposure::SkyExposure,
-        layers: &[wgpu::TextureView],
-        matrices: [Mat4; crate::sky_exposure::DIRECTIONS],
+        layers: &[(&wgpu::TextureView, u32)],
         geometry: ShadowCasters<'_>,
         load: bool,
     ) {
-        for (i, matrix) in matrices.iter().enumerate() {
-            let planes = frustum_planes(*matrix);
+        for &(layer, offset) in layers {
+            let matrix = sky.projector(offset);
+            let planes = frustum_planes(matrix);
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("sky exposure"),
                 color_attachments: &[],
                 depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-                    view: &layers[i],
+                    view: layer,
                     depth_ops: Some(wgpu::Operations {
                         load: if load {
                             wgpu::LoadOp::Load
@@ -3727,11 +3793,7 @@ impl SceneRenderer {
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
-            pass.set_bind_group(
-                0,
-                &sky.group,
-                &[crate::sky_exposure::SkyExposure::offset(i)],
-            );
+            pass.set_bind_group(0, &sky.group, &[offset]);
             let mut items: Vec<(&GpuScene, &wgpu::Buffer, Range<u32>, bool)> = geometry
                 .scenes
                 .iter()
@@ -4024,6 +4086,59 @@ impl SceneRenderer {
                 ));
             }
         }
+        // The map's identity this frame: its scenes' geometry and the
+        // terrain instances' placement (the lamps' map faces, the Dynamic
+        // light cubes and the far map layer are drawn from it once).
+        let map_key: Vec<usize> = if map_drawn && player {
+            map.scenes
+                .iter()
+                .flat_map(|s| {
+                    use std::hash::{Hash, Hasher};
+                    let mut hash = std::collections::hash_map::DefaultHasher::new();
+                    for batch in &s.batches {
+                        batch.indices.hash(&mut hash);
+                    }
+                    [
+                        std::ptr::from_ref::<GpuScene>(*s) as usize,
+                        hash.finish() as usize,
+                    ]
+                })
+                .chain(map.instances.iter().map(|(scene, instances)| {
+                    use std::hash::{Hash, Hasher};
+                    let mut hash = std::collections::hash_map::DefaultHasher::new();
+                    (std::ptr::from_ref(*scene) as usize).hash(&mut hash);
+                    for transform in &instances.transforms {
+                        for v in transform.transform.to_cols_array() {
+                            v.to_bits().hash(&mut hash);
+                        }
+                    }
+                    hash.finish() as usize
+                }))
+                .collect()
+        } else {
+            Vec::new()
+        };
+        // The far map layer, drawn again only for a new map or sun.
+        if player && let Some(queue) = self.queue.borrow().as_ref() {
+            let bounds = map_drawn.then(|| world_bounds(map)).flatten();
+            if let (Some(matrix), Some(settings)) = (
+                self.shadows.far_map(queue, &map_key, bounds),
+                self.shadows.settings,
+            ) {
+                targets.push((
+                    &self.shadows.layer_views[settings.far_layer() as usize],
+                    None,
+                    matrix,
+                    map,
+                    &self.shadows.caster_group,
+                    &self.shadows.pipelines,
+                    crate::shadow::ShadowMaps::far_offset(),
+                    false,
+                    true,
+                ));
+                extras.push(TargetExtra::default());
+            }
+        }
         // Everything before is the sun's (casters, occluders, map layer).
         let sun_targets = targets.len();
         let mut total_targets = 0;
@@ -4053,35 +4168,6 @@ impl SceneRenderer {
             // The lamps' map faces: drawn once per lamp slot while the map
             // stays, with only its surfaces (as the map layer), so they tell
             // whether a lamp's light reaches a point past the map's own walls.
-            let map_key: Vec<usize> = if map_drawn {
-                map.scenes
-                    .iter()
-                    .flat_map(|s| {
-                        use std::hash::{Hash, Hasher};
-                        let mut hash = std::collections::hash_map::DefaultHasher::new();
-                        for batch in &s.batches {
-                            batch.indices.hash(&mut hash);
-                        }
-                        [
-                            std::ptr::from_ref::<GpuScene>(*s) as usize,
-                            hash.finish() as usize,
-                        ]
-                    })
-                    .chain(map.instances.iter().map(|(scene, instances)| {
-                        use std::hash::{Hash, Hasher};
-                        let mut hash = std::collections::hash_map::DefaultHasher::new();
-                        (std::ptr::from_ref(*scene) as usize).hash(&mut hash);
-                        for transform in &instances.transforms {
-                            for v in transform.transform.to_cols_array() {
-                                v.to_bits().hash(&mut hash);
-                            }
-                        }
-                        hash.finish() as usize
-                    }))
-                    .collect()
-            } else {
-                Vec::new()
-            };
             let stale_map = self.shadows.stale_map_faces(&map_key);
             // The Dynamic mode's light cubes: the view of the map's surfaces from
             // every recovered map light. Same-projector geometry refreshes keep
@@ -4605,7 +4691,15 @@ impl SceneRenderer {
             }
         }
         drop(pipelines);
-        self.record_world(encoder, target, scenes, instances, None, true);
+        // Only scenes that can show an emissive surface draw; the pass still
+        // begins (and clears the mask) with none.
+        let scenes: Vec<&GpuScene> = scenes.iter().copied().filter(|s| s.emissive).collect();
+        let instances: Vec<(&GpuScene, &GpuInstances)> = instances
+            .iter()
+            .copied()
+            .filter(|(s, _)| s.emissive)
+            .collect();
+        self.record_world(encoder, target, &scenes, &instances, None, true);
     }
     #[allow(clippy::too_many_arguments)]
     fn record_world(
@@ -5043,6 +5137,31 @@ pub fn create_depth_samples(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_glow_bricks_and_unlit_materials_count_as_emissive() {
+        let vertex = |fx: [f32; 4]| SceneVertex {
+            position: [0.; 3],
+            normal: [0., 1., 0.],
+            uv: [0.; 2],
+            lightmap_uv: [0.; 2],
+            color: [1.; 4],
+            fx,
+        };
+        let plain = vertex([0.; 4]);
+        let glow = vertex(BrickFx::new(3, 0).unwrap().encode([1.; 3], 2, 3).unwrap());
+        let pearl = vertex(BrickFx::new(1, 2).unwrap().encode([1.; 3], 3, 1).unwrap());
+        let bricks = [Material::brick_overlay("brick", 0)];
+        assert!(!emissive_geometry(&bricks, &[plain, pearl]));
+        assert!(emissive_geometry(&bricks, &[plain, glow]));
+        let mut unlit = Material::surface("unlit", 0, 0);
+        unlit.kind = MaterialKind::Unlit;
+        assert!(emissive_geometry(&[unlit], &[plain]));
+        assert!(!emissive_geometry(
+            &[Material::surface("wall", 0, 0)],
+            &[plain]
+        ));
+    }
 
     #[test]
     fn sky_ambient_is_off_unless_asked_and_never_adds_light() {

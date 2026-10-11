@@ -494,6 +494,8 @@ fn roofs_block_sky_tint_and_moving_roofs_do_not_leave_cached_shade() -> Result<(
     let target = color_target(&device, format, 128, 128);
     for mode in [1.0, 3.0] {
         let mut renderer = SceneRenderer::new(&device, format);
+        // A change (the roof) must show the same frame here.
+        renderer.sky_exposure_budget(9);
         let floor = renderer.upload(
             &device,
             &queue,

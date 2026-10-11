@@ -3,6 +3,15 @@
 //! receivers sample the same world-space field; geometry edits invalidate it.
 //! Depth is copied to a storage buffer to stay within the renderer's existing
 //! sixteen sampled-texture limit. No authored map names or indoor flags.
+//!
+//! The field is rebuilt when the eye crosses into another `STEP`-unit cell or
+//! the static geometry changes. Drawing all nine maps of a large build in
+//! one frame was a hitch every few steps, so the rebuild is staged as
+//! engines stage their cached shadow and probe updates: one direction a
+//! frame into a pending set of maps, which replaces the field (maps,
+//! matrices and receiver uniform together) only once all nine are drawn.
+//! Until then receivers keep reading the previous field, whose fade region
+//! still covers the eye's surroundings.
 use crate::buffer_init::BufferInit;
 use glam::{Mat4, Vec3};
 
@@ -21,20 +30,33 @@ struct Receiver {
     params: [f32; 4],
 }
 
+/// A field being drawn: where it is centred and from what, its matrices
+/// and receiver data, and how many directions are drawn so far.
+struct Pending {
+    target: (Vec3, Vec<u64>),
+    matrices: [Mat4; DIRECTIONS],
+    receiver: Receiver,
+    done: usize,
+}
+
 pub(crate) struct SkyExposure {
     texture: wgpu::Texture,
-    pub layers: Vec<wgpu::TextureView>,
+    /// The field being drawn, a direction a frame (`plan`).
+    pending_texture: wgpu::Texture,
+    pub pending_layers: Vec<wgpu::TextureView>,
     working: wgpu::Texture,
     pub working_layers: Vec<wgpu::TextureView>,
     pub matrices: std::cell::Cell<[Mat4; DIRECTIONS]>,
     pub had_moving: std::cell::Cell<bool>,
     pub depths: wgpu::Buffer,
     pub receiver: wgpu::Buffer,
+    /// The current field's projectors, then the pending field's.
     caster: wgpu::Buffer,
     pub group: wgpu::BindGroup,
     pub enabled: bool,
     pub prepared: std::cell::Cell<bool>,
     cache: std::cell::RefCell<Option<(Vec3, Vec<u64>)>>,
+    pending: std::cell::RefCell<Option<Pending>>,
 }
 
 impl SkyExposure {
@@ -51,41 +73,41 @@ impl SkyExposure {
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
             format: wgpu::TextureFormat::Depth32Float,
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
-            view_formats: &[],
-        });
-        let layers = (0..DIRECTIONS)
-            .map(|i| {
-                texture.create_view(&wgpu::TextureViewDescriptor {
-                    dimension: Some(wgpu::TextureViewDimension::D2),
-                    base_array_layer: i as u32,
-                    array_layer_count: Some(1),
-                    ..Default::default()
-                })
-            })
-            .collect();
-        let working = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("moving sky exposure depth"),
-            size: texture.size(),
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Depth32Float,
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT
                 | wgpu::TextureUsages::COPY_SRC
                 | wgpu::TextureUsages::COPY_DST,
             view_formats: &[],
         });
-        let working_layers = (0..DIRECTIONS)
-            .map(|i| {
-                working.create_view(&wgpu::TextureViewDescriptor {
-                    dimension: Some(wgpu::TextureViewDimension::D2),
-                    base_array_layer: i as u32,
-                    array_layer_count: Some(1),
-                    ..Default::default()
+        let layer_views = |texture: &wgpu::Texture| -> Vec<wgpu::TextureView> {
+            (0..DIRECTIONS)
+                .map(|i| {
+                    texture.create_view(&wgpu::TextureViewDescriptor {
+                        dimension: Some(wgpu::TextureViewDimension::D2),
+                        base_array_layer: i as u32,
+                        array_layer_count: Some(1),
+                        ..Default::default()
+                    })
                 })
+                .collect()
+        };
+        let scratch = |label| {
+            device.create_texture(&wgpu::TextureDescriptor {
+                label: Some(label),
+                size: texture.size(),
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Depth32Float,
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                    | wgpu::TextureUsages::COPY_SRC
+                    | wgpu::TextureUsages::COPY_DST,
+                view_formats: &[],
             })
-            .collect();
+        };
+        let pending_texture = scratch("pending sky exposure depth");
+        let pending_layers = layer_views(&pending_texture);
+        let working = scratch("moving sky exposure depth");
+        let working_layers = layer_views(&working);
         let depths = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("sky exposure depths"),
             size: u64::from(size * size) * DIRECTIONS as u64 * 4,
@@ -99,7 +121,7 @@ impl SkyExposure {
         });
         let caster = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("sky exposure projectors"),
-            size: STRIDE * DIRECTIONS as u64,
+            size: STRIDE * 2 * DIRECTIONS as u64,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
@@ -131,7 +153,8 @@ impl SkyExposure {
         });
         Self {
             texture,
-            layers,
+            pending_texture,
+            pending_layers,
             working,
             working_layers,
             matrices: std::cell::Cell::new([Mat4::IDENTITY; DIRECTIONS]),
@@ -143,32 +166,96 @@ impl SkyExposure {
             enabled,
             prepared: std::cell::Cell::new(false),
             cache: Default::default(),
+            pending: Default::default(),
         }
     }
 
-    /// Conservative depth along each direction includes distant ceilings and
-    /// walls. The cached receiver cube stays fixed as the camera rotates.
+    /// The directions to draw this frame into `pending_layers` (each with
+    /// the projector at its `pending_offset`), while the field the eye needs
+    /// is not the one held: none while it is. At most `budget` a frame,
+    /// except the first field (nothing stands in for it), which draws
+    /// whole. Conservative depth along each direction includes distant
+    /// ceilings and walls. The cached receiver cube stays fixed as the
+    /// camera rotates. Call `finish` after drawing.
     pub fn plan(
         &self,
         queue: &wgpu::Queue,
         eye: Vec3,
         mut key: Vec<u64>,
         bounds: Option<(Vec3, Vec3)>,
-    ) -> Option<[Mat4; DIRECTIONS]> {
+        budget: usize,
+    ) -> Option<std::ops::Range<usize>> {
         self.prepared.set(true);
         if !self.enabled {
             return None;
         }
         key.sort_unstable();
         let centre = (eye / STEP).floor() * STEP;
-        if self
-            .cache
-            .borrow()
-            .as_ref()
-            .is_some_and(|(c, k)| *c == centre && *k == key)
-        {
+        let target = (centre, key);
+        if self.cache.borrow().as_ref() == Some(&target) {
+            *self.pending.borrow_mut() = None;
             return None;
         }
+        let mut pending = self.pending.borrow_mut();
+        if pending.as_ref().is_none_or(|p| p.target != target) {
+            let (matrices, receiver) = Self::fit(centre, bounds);
+            for (i, matrix) in matrices.iter().enumerate() {
+                let mut caster = [0.0f32; 20];
+                caster[..16].copy_from_slice(&matrix.to_cols_array());
+                queue.write_buffer(
+                    &self.caster,
+                    u64::from(Self::pending_offset(i)),
+                    bytemuck::cast_slice(&caster),
+                );
+            }
+            *pending = Some(Pending {
+                target,
+                matrices,
+                receiver,
+                done: 0,
+            });
+        }
+        let pending = pending.as_mut().expect("set above");
+        let budget = if self.cache.borrow().is_none() {
+            DIRECTIONS
+        } else {
+            budget.clamp(1, DIRECTIONS)
+        };
+        let first = pending.done;
+        pending.done = (first + budget).min(DIRECTIONS);
+        Some(first..pending.done)
+    }
+    /// After the direction `plan` gave was drawn: once every direction of
+    /// the pending field is, it becomes the field receivers read (its maps
+    /// copied over the current ones on `encoder`, its matrices and receiver
+    /// data written), and this returns true.
+    pub fn finish(&self, queue: &wgpu::Queue, encoder: &mut wgpu::CommandEncoder) -> bool {
+        let mut pending = self.pending.borrow_mut();
+        let Some(done) = pending.take_if(|p| p.done >= DIRECTIONS) else {
+            return false;
+        };
+        encoder.copy_texture_to_texture(
+            self.pending_texture.as_image_copy(),
+            self.texture.as_image_copy(),
+            self.texture.size(),
+        );
+        queue.write_buffer(&self.receiver, 0, bytemuck::bytes_of(&done.receiver));
+        for (i, matrix) in done.matrices.iter().enumerate() {
+            let mut caster = [0.0f32; 20];
+            caster[..16].copy_from_slice(&matrix.to_cols_array());
+            queue.write_buffer(
+                &self.caster,
+                u64::from(Self::offset(i)),
+                bytemuck::cast_slice(&caster),
+            );
+        }
+        *self.cache.borrow_mut() = Some(done.target);
+        self.matrices.set(done.matrices);
+        true
+    }
+    /// The nine projectors around `centre`, reaching past `bounds`, and the
+    /// receiver data that reads them.
+    fn fit(centre: Vec3, bounds: Option<(Vec3, Vec3)>) -> ([Mat4; DIRECTIONS], Receiver) {
         let directions: [Vec3; DIRECTIONS] = std::array::from_fn(|i| {
             if i == 0 {
                 Vec3::Y
@@ -201,23 +288,28 @@ impl SkyExposure {
             centre: [centre.x, centre.y, centre.z, RADIUS],
             params: [SIZE as f32, span * 2.0 / SIZE as f32, 1.0, 0.0],
         };
-        queue.write_buffer(&self.receiver, 0, bytemuck::bytes_of(&receiver));
-        for (i, matrix) in matrices.iter().enumerate() {
-            let mut caster = [0.0f32; 20];
-            caster[..16].copy_from_slice(&matrix.to_cols_array());
-            queue.write_buffer(
-                &self.caster,
-                i as u64 * STRIDE,
-                bytemuck::cast_slice(&caster),
-            );
-        }
-        *self.cache.borrow_mut() = Some((centre, key));
-        self.matrices.set(matrices);
-        Some(matrices)
+        (matrices, receiver)
     }
 
     pub fn offset(i: usize) -> u32 {
         (i as u64 * STRIDE) as u32
+    }
+    pub fn pending_offset(i: usize) -> u32 {
+        ((DIRECTIONS + i) as u64 * STRIDE) as u32
+    }
+    /// The projector at a caster buffer `offset` (`offset` or
+    /// `pending_offset`), for culling what it draws.
+    pub fn projector(&self, offset: u32) -> Mat4 {
+        let slot = u64::from(offset) / STRIDE;
+        let i = slot as usize % DIRECTIONS;
+        if slot as usize >= DIRECTIONS {
+            self.pending
+                .borrow()
+                .as_ref()
+                .map_or(Mat4::IDENTITY, |p| p.matrices[i])
+        } else {
+            self.matrices.get()[i]
+        }
     }
 
     pub fn merge(&self, encoder: &mut wgpu::CommandEncoder) {

@@ -26,7 +26,8 @@
 //! (Graphics.soft_shading), ao (Graphics.ambient_occlusion),
 //! sun (sun height -1..1 on a day cycle; this
 //! applies a live environment, otherwise the map draws as authored).
-//! `BRI_WIDTH=2560` and `BRI_HEIGHT=1440` set the image size.
+//! `BRI_SHADOWS=best|high|medium|low` picks the Shadow Quality level (Best
+//! unless set). `BRI_WIDTH=2560` and `BRI_HEIGHT=1440` set the image size.
 //! `BRI_MSAA=4` the client's default samples (1 otherwise), `BRI_FRAMES=n`,
 //! `BRI_TIME=1` adds the GPU time of each stretch of the frame to the report.
 //! `BRI_OFF=i,j,...` switches those recovered lights off, as a broken bulb
@@ -1219,9 +1220,18 @@ fn main() -> Result<()> {
     // BRI_LAMPS=0: no lamp shadows (the sun's alone); BRI_SUN=0 below: no
     // sun (the lamps' alone).
     let lamps = std::env::var("BRI_LAMPS").map_or(true, |v| v != "0");
+    // BRI_SHADOWS=best|high|medium|low: the Shadow Quality level (Best
+    // unless set), as the client's graphics options pick it.
+    let quality = match std::env::var("BRI_SHADOWS").as_deref() {
+        Ok("high") => ShadowSettings::HIGH,
+        Ok("medium") => ShadowSettings::MEDIUM,
+        Ok("low") => ShadowSettings::LOW,
+        Ok("best") | Err(_) => ShadowSettings::BEST,
+        Ok(other) => anyhow::bail!("BRI_SHADOWS: unknown level {other:?}"),
+    };
     let settings = ShadowSettings {
-        lamps: if lamps { ShadowSettings::BEST.lamps } else { 0 },
-        ..ShadowSettings::BEST
+        lamps: if lamps { quality.lamps } else { 0 },
+        ..quality
     };
     // Unified's switchable sheets on maps with breakable bulbs or tubes.
     if let Some(u) = unified.as_ref().filter(|_| !light_shapes.is_empty()) {

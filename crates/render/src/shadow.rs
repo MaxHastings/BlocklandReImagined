@@ -114,6 +114,14 @@ const RECEIVER_STRIDE: u64 = (std::mem::size_of::<ShadowUniform>() as u64).div_c
 /// Occluders must lie this many world units past a caster to stop its
 /// shadow, so the brick a player stands on still receives it.
 const OCCLUDER_GAP: f32 = 0.1;
+/// World units the far map layer reaches past the map's bounds on every
+/// side, so its edge texels and depth range never cut a wall.
+const FAR_MARGIN: f32 = 4.0;
+/// Caster slot of the far map layer's matrix, after every other slot.
+const FAR_SLOT: usize = MAX_CASCADES * 2
+    + MAX_LAMPS * FACES
+    + crate::map_lighting::MAX_LIGHTS * FACES
+    + 2 * MAX_CASCADES * (FITTED_VIEWS - 1);
 
 /// Sun shadow quality: how many cascades, their square resolution, and how
 /// far from the eye shadows reach before fading out.
@@ -213,6 +221,19 @@ impl ShadowSettings {
     pub fn cascade_layers(&self) -> u32 {
         self.cascades * 3
     }
+    /// The far map layer: one orthographic sun depth map of the whole map's
+    /// opaque geometry (the map's bounds, so a texel is coarse), drawn once
+    /// per map and sun direction. Receivers past the last cascade read it,
+    /// as engines keep a static far shadow map behind their cascades, so
+    /// the far side of a large interior stays in the shade the walls give
+    /// it instead of turning sunlit where the cascades end. Its layer
+    /// comes after every other.
+    pub fn far_layer(&self) -> u32 {
+        self.cascade_layers() + self.lamp_layers() + self.cube_layers()
+    }
+    pub fn far_layers(&self) -> u32 {
+        1
+    }
     /// Brick faces' layers, then moving casters' layers, then the map's.
     pub fn lamp_layers(&self) -> u32 {
         self.layers_of(self.lamp_resolution) + 2 * self.layers_of(self.lamp_dynamic_resolution())
@@ -260,7 +281,10 @@ impl ShadowSettings {
                             .resolution
                             .is_multiple_of(self.lamp_dynamic_resolution())))
                 && self.resolution.is_multiple_of(self.cube_resolution())
-                && self.cascade_layers() + self.lamp_layers() + self.cube_layers()
+                && self.cascade_layers()
+                    + self.lamp_layers()
+                    + self.cube_layers()
+                    + self.far_layers()
                     <= device.limits().max_texture_array_layers,
             "Invalid shadow settings {self:?}"
         );
@@ -305,6 +329,11 @@ pub(crate) struct ShadowUniform {
     /// x: 1 when the map layers (and the lamps' map faces) hold the map
     /// this frame; y: the lamps' first map layer (laid out as `lamp_dynamic`).
     map_params: [f32; 4],
+    /// The far map layer (`ShadowSettings::far_layer`): its matrix; then
+    /// x 1 while it holds the map, y its layer, z the world size of one of
+    /// its texels, w one texel in map coordinates.
+    far_matrix: [f32; 16],
+    far_params: [f32; 4],
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -633,6 +662,57 @@ impl CubeCache {
     }
 }
 
+type FarFields = ([f32; 16], [f32; 4]);
+/// The far map layer's state: the map, sun and matrix it was drawn with,
+/// and the receiver fields last written.
+struct FarMap {
+    drawn: Option<(Vec<usize>, Vec3, Mat4)>,
+    fields: FarFields,
+}
+impl Default for FarMap {
+    fn default() -> Self {
+        Self {
+            drawn: None,
+            fields: (Mat4::IDENTITY.to_cols_array(), [0.0; 4]),
+        }
+    }
+}
+
+/// The far map layer's view-projection over the map `bounds` (world) from
+/// sun direction `sun`, square so its texels are, at `resolution` texels
+/// across; and the world size of one texel. Margins on every side keep the
+/// map's extreme surfaces off its edges and inside its depth range.
+pub(crate) fn far_fit(bounds: (Vec3, Vec3), sun: Vec3, resolution: u32) -> (Mat4, f32) {
+    let sun = sun.normalize_or_zero();
+    let rotation = light_rotation(if sun == Vec3::ZERO { Vec3::NEG_Y } else { sun });
+    let (lo, hi) = bounds;
+    let mut min = Vec3::splat(f32::INFINITY);
+    let mut max = Vec3::splat(f32::NEG_INFINITY);
+    for i in 0..8 {
+        let corner = Vec3::new(
+            if i & 1 == 0 { lo.x } else { hi.x },
+            if i & 2 == 0 { lo.y } else { hi.y },
+            if i & 4 == 0 { lo.z } else { hi.z },
+        );
+        let light = rotation.transform_point3(corner);
+        min = min.min(light);
+        max = max.max(light);
+    }
+    let centre = (min + max) * 0.5;
+    let half = ((max.x - min.x).max(max.y - min.y)) * 0.5 + FAR_MARGIN;
+    let texel = 2.0 * half / resolution.max(1) as f32;
+    // Right-handed view looks down -Z: depth along the sun is -z.
+    let projection = glam::camera::rh::proj::directx::orthographic(
+        centre.x - half,
+        centre.x + half,
+        centre.y - half,
+        centre.y + half,
+        -max.z - FAR_MARGIN,
+        -min.z + FAR_MARGIN,
+    );
+    (projection * rotation, texel)
+}
+
 /// Shadow map textures, uniforms and caster pipelines. Disabled shadows keep
 /// a 1x1 map and a zero cascade count so receivers need no variant.
 pub(crate) struct ShadowMaps {
@@ -683,6 +763,8 @@ pub(crate) struct ShadowMaps {
     /// Per map light face (Dynamic mode): the matrix its cube face was
     /// drawn with, and the map it was drawn from.
     cubes: std::cell::RefCell<CubeCache>,
+    /// The far map layer: what it was drawn from and with.
+    far: std::cell::RefCell<FarMap>,
 }
 impl ShadowMaps {
     pub fn new(
@@ -696,7 +778,7 @@ impl ShadowMaps {
         let (size, layers) = settings.map_or((1, 3), |s| {
             (
                 s.resolution,
-                s.cascade_layers() + s.lamp_layers() + s.cube_layers(),
+                s.cascade_layers() + s.lamp_layers() + s.cube_layers() + s.far_layers(),
             )
         });
         let texture = device.create_texture(&wgpu::TextureDescriptor {
@@ -752,11 +834,7 @@ impl ShadowMaps {
         });
         let caster = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("sun shadow caster matrices"),
-            size: CASTER_STRIDE
-                * (MAX_CASCADES * 3
-                    + MAX_LAMPS * FACES
-                    + crate::map_lighting::MAX_LIGHTS * FACES
-                    + 2 * MAX_CASCADES * (FITTED_VIEWS - 1)) as u64,
+            size: CASTER_STRIDE * (FAR_SLOT + 1) as u64,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
@@ -1006,6 +1084,7 @@ impl ShadowMaps {
             kept_casters: Default::default(),
             clear_pipeline,
             map_faces: Default::default(),
+            far: Default::default(),
             cubes: Default::default(),
         }
     }
@@ -1137,6 +1216,7 @@ impl ShadowMaps {
             uniform.origin = eye.extend(1.0).to_array();
         }
         self.lamps = slots;
+        (uniform.far_matrix, uniform.far_params) = self.far_fields();
         // Every view reads the player's shadows until it fits its own.
         for view in 0..FITTED_VIEWS {
             queue.write_buffer(
@@ -1218,6 +1298,7 @@ impl ShadowMaps {
             return false;
         };
         let mut uniform = self.player;
+        (uniform.far_matrix, uniform.far_params) = self.far_fields();
         self.write_cascades(
             queue,
             view,
@@ -1287,6 +1368,10 @@ impl ShadowMaps {
     pub fn cube_offset(light: usize, face: usize) -> u32 {
         ((MAX_CASCADES * 2 + MAX_LAMPS * FACES + light * FACES + face) as u64 * CASTER_STRIDE)
             as u32
+    }
+    /// The far map layer's matrix, after every other slot.
+    pub fn far_offset() -> u32 {
+        (FAR_SLOT as u64 * CASTER_STRIDE) as u32
     }
     /// Writes a map light's cube face matrix for its draw.
     pub fn set_cube_matrix(&self, queue: &wgpu::Queue, light: usize, face: usize, matrix: Mat4) {
@@ -1383,6 +1468,69 @@ impl ShadowMaps {
     pub fn forget_map_faces(&self) {
         self.map_faces.borrow_mut().1.clear();
         *self.cubes.borrow_mut() = CubeCache::default();
+        *self.far.borrow_mut() = FarMap::default();
+    }
+    /// The far map layer's draw this frame, if it must be drawn again: the
+    /// map `key` (empty: no map) within `bounds` changed, or the sun
+    /// turned since it was drawn. Writes its matrix for the draw and the
+    /// receivers' far fields (every view's) either way, so the layer is
+    /// read only while it holds the current map from the current sun.
+    pub fn far_map(
+        &self,
+        queue: &wgpu::Queue,
+        key: &[usize],
+        bounds: Option<(Vec3, Vec3)>,
+    ) -> Option<Mat4> {
+        let mut far = self.far.borrow_mut();
+        let settings = self.settings.filter(|_| !key.is_empty());
+        let fit = settings.and_then(|s| bounds.map(|b| far_fit(b, self.sun, s.resolution)));
+        let current = fit.map(|(matrix, _)| (key.to_vec(), self.sun, matrix));
+        let draw = if current.is_some() && far.drawn != current {
+            fit.map(|(matrix, _)| matrix)
+        } else {
+            None
+        };
+        far.drawn = current;
+        let fields = match (settings, fit) {
+            (Some(s), Some((matrix, texel))) if far.drawn.is_some() => (
+                matrix.to_cols_array(),
+                [1.0, s.far_layer() as f32, texel, 1.0 / s.resolution as f32],
+            ),
+            _ => (Mat4::IDENTITY.to_cols_array(), [0.0; 4]),
+        };
+        if far.fields != fields {
+            far.fields = fields;
+            self.write_far_fields(queue, fields);
+        }
+        if let Some(matrix) = draw {
+            let mut caster = [0.0f32; 20];
+            caster[..16].copy_from_slice(&matrix.to_cols_array());
+            queue.write_buffer(
+                &self.caster,
+                u64::from(Self::far_offset()),
+                bytemuck::bytes_of(&caster),
+            );
+        }
+        draw
+    }
+    fn write_far_fields(&self, queue: &wgpu::Queue, (matrix, params): FarFields) {
+        for view in 0..FITTED_VIEWS {
+            let base = view as u64 * RECEIVER_STRIDE;
+            queue.write_buffer(
+                &self.receiver,
+                base + std::mem::offset_of!(ShadowUniform, far_matrix) as u64,
+                bytemuck::bytes_of(&matrix),
+            );
+            queue.write_buffer(
+                &self.receiver,
+                base + std::mem::offset_of!(ShadowUniform, far_params) as u64,
+                bytemuck::bytes_of(&params),
+            );
+        }
+    }
+    /// The far fields every receiver uniform carries this frame.
+    fn far_fields(&self) -> FarFields {
+        self.far.borrow().fields
     }
     /// The map lights' cube faces to draw this frame from `map` (identified
     /// by `key`), at most `budget`, lights in order, marking them drawn; and
@@ -1422,6 +1570,8 @@ impl ShadowUniform {
             map_scale: [1.0; 4],
             map_offset: [0.0; 4],
             map_params: [0.0; 4],
+            far_matrix: Mat4::IDENTITY.to_cols_array(),
+            far_params: [0.0; 4],
         }
     }
 }
@@ -1433,6 +1583,37 @@ mod tests {
     fn camera(eye: Vec3, target: Vec3) -> Mat4 {
         crate::scene::perspective(1.5, 16.0 / 9.0, 0.05, 4000.0)
             * glam::camera::rh::view::look_at_mat4(eye, target, Vec3::Y)
+    }
+
+    #[test]
+    fn far_fit_holds_every_corner_of_the_map_with_room_to_spare() {
+        let bounds = (
+            Vec3::new(-700.0, -20.0, -500.0),
+            Vec3::new(900.0, 400.0, 650.0),
+        );
+        for sun in [
+            Vec3::new(0.3, -1.0, 0.2),
+            Vec3::new(-0.9, -0.1, 0.4),
+            Vec3::NEG_Y,
+        ] {
+            let (matrix, texel) = far_fit(bounds, sun, 2048);
+            let (lo, hi) = bounds;
+            for i in 0..8 {
+                let corner = Vec3::new(
+                    if i & 1 == 0 { lo.x } else { hi.x },
+                    if i & 2 == 0 { lo.y } else { hi.y },
+                    if i & 4 == 0 { lo.z } else { hi.z },
+                );
+                let clip = matrix.project_point3(corner);
+                assert!(
+                    clip.x.abs() < 1.0 && clip.y.abs() < 1.0 && clip.z > 0.0 && clip.z < 1.0,
+                    "{sun:?} {corner:?} -> {clip:?}"
+                );
+            }
+            // Square and no coarser than the map's longest side plus margins.
+            let span = (hi - lo).max_element() * 3f32.sqrt() + 2.0 * FAR_MARGIN;
+            assert!(texel > 0.0 && texel <= span / 2048.0, "{texel}");
+        }
     }
 
     #[test]
