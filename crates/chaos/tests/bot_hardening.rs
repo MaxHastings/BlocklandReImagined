@@ -264,22 +264,63 @@ fn thirty_two_bots_set_off_across_a_walled_map_without_waiting_to_find_a_way() {
 /// does not hurt is walked off) the four layouts lose five bots between them.
 #[test]
 fn allies_stepping_round_each_other_stay_on_a_deck() {
+    let falls = deck_file_falls(&[
+        (1.0, 54.5, 0.0),
+        (1.0, 55.0, 0.0),
+        (1.25, 55.0, 0.0),
+        (2.0, 55.0, 0.0),
+    ]);
+    // A bot stepping off an ally's head can still carry its speed past the
+    // edge, and where that happens differs between machines (physics floats):
+    // one such fall in the four layouts is allowed. The bug cost 5 on the
+    // machine it was found on.
+    assert!(falls <= 1, "{falls} bots walked off the deck");
+}
+
+/// The same file nearer the edge: a bot the stall judge finds going nowhere
+/// while it still moves (wobbling between two spots) jumped as if standing
+/// still, and the jump carried it on over the edge. Now that jump is judged
+/// where it comes down, as any hop. And a bot held at the edge that jumps
+/// in place steered its footwork out over the edge in the air, where the
+/// edge check measured the drop from its feet in the air (a drop that does
+/// not hurt) rather than from the deck it left. Before the fixes the first
+/// four layouts lost five bots on Linux and two on Windows CI after the
+/// first, and the last two (the file and its enemy shifted a little) one
+/// each on Linux; one is allowed for the machine-to-machine spread above.
+#[test]
+fn a_stalled_bot_on_the_move_does_not_jump_off_a_deck() {
+    let falls = deck_file_falls(&[
+        (0.75, 54.5, 0.0),
+        (0.75, 55.5, 0.0),
+        (1.25, 55.5, 0.0),
+        (2.0, 55.5, 0.0),
+        (2.0, 55.5, 0.185),
+        (2.0, 55.5, 0.222),
+    ]);
+    assert!(falls <= 1, "{falls} bots went over the deck's edge");
+}
+
+/// Four allied brawlers in a file along the south edge of a 24 x 16 deck
+/// six up, `spacing` apart at `z` (the edge is z = 56), and one enemy, the
+/// file and the enemy moved by `shift` (the enemy seven times as far east
+/// and three times as far north): the bots that went over the edge in 40 s
+/// of each layout, summed.
+fn deck_file_falls(layouts: &[(f32, f32, f32)]) -> u64 {
     let mut falls = 0;
-    for (spacing, z) in [(1.0, 54.5), (1.0, 55.0), (1.25, 55.0), (2.0, 55.0)] {
+    for &(spacing, z, shift) in layouts {
         let mut arena = Arena::custom(&[], &[], &[]);
         arena.kinds(vec![brawler()], &[]);
         let red = arena.join("Red builder", FAR_A);
         let blue = arena.join("Blue builder", FAR_B);
-        // A 24 x 16 deck six up, no rails; its south edge is z = 56.
         let mut bricks = floor(Vec3::new(-79.0, 0.0, 40.0), [3, 2], 6.0);
         let file: Vec<Vec3> = (0..4)
-            .map(|i| Vec3::new(-76.0 + i as f32 * spacing, 6.0, z))
+            .map(|i| Vec3::new(-76.0 + shift + i as f32 * spacing, 6.0, z))
             .collect();
         for at in &file {
             bricks.push(spawner(BRAWLER, *at));
         }
         arena.load(red, bricks);
-        let enemy = Vec3::new(-58.0, 6.0, 47.0);
+        let enemy = Vec3::new(-58.0 + shift * 7.0, 6.0, 47.0 - shift * 3.0);
         arena.load(blue, vec![spawner(BRAWLER, enemy)]);
         let settings = Settings {
             loadout: Default::default(),
@@ -306,12 +347,11 @@ fn allies_stepping_round_each_other_stay_on_a_deck() {
         }
         let r = scorer.report;
         falls += r.fell;
-        eprintln!("deck_file spacing {spacing} z {z}: fell {}", r.fell);
+        eprintln!(
+            "deck_file spacing {spacing} z {z} shift {shift}: fell {}",
+            r.fell
+        );
         assert!(r.kills > 0, "a real fight: {}", r.kills);
     }
-    // A bot stepping off an ally's head can still carry its speed past the
-    // edge, and where that happens differs between machines (physics floats):
-    // one such fall in the four layouts is allowed. The bug cost 5 on the
-    // machine it was found on.
-    assert!(falls <= 1, "{falls} bots walked off the deck");
+    falls
 }

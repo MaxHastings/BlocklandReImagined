@@ -210,10 +210,11 @@ impl Proposal {
 }
 
 /// Buttons pressed on top of whatever the movers set: a crouch, the jets,
-/// a hop (a goof's, a dodge's, one into a body), which safety lets through
-/// only where it comes down on floor along the walk it takes, and the
-/// stall judge's jump in place (over what its shins catch, off a body it
-/// stands on), which goes as it is: its walk is already checked.
+/// a hop (a goof's, a dodge's, one into a body, the stall judge's taken on
+/// the move), which safety lets through only where it comes down on floor
+/// along the walk it takes, and the stall judge's jump in place (over what
+/// its shins catch, off a body it stands on), which goes as it is: its
+/// walk is already checked.
 #[derive(Clone, Copy, Debug, Default)]
 pub(super) struct Press {
     pub hop: bool,
@@ -287,9 +288,9 @@ impl Session {
     /// into a live blast that would catch it, nor deeper into one it stands
     /// in; and never off an edge whose fall would hurt it. What it wants
     /// beyond is not worth the fall: it stands at the edge and gets
-    /// nowhere, so it plans again. Off its route on its feet it does not
-    /// step down where it could not walk back up; in the air (footwork, a
-    /// goof, a hop) it does not steer out over a fall that hurts. Its
+    /// nowhere, so it plans again. Off its route it does not step down
+    /// where it could not walk back up, on its feet or in the air
+    /// (footwork, a goof, a hop or a jump in place). Its
     /// route's own way through the air, and its jets, it keeps. A hop
     /// pressed goes only where it comes down on floor along the walk it
     /// takes. The walk, whether an edge held it back, and the jump.
@@ -332,7 +333,8 @@ impl Session {
                 feet,
                 body,
                 flat(walk).normalize_or_zero(),
-                off_route && state.grounded,
+                off_route,
+                state.grounded,
             );
         if held_back {
             walk = Vec3::ZERO;
