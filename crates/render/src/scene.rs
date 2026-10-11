@@ -992,6 +992,9 @@ impl Default for Camera {
 
 pub struct GpuScene {
     sky_revision: Arc<std::sync::atomic::AtomicU64>,
+    /// Unique to this scene value (a batch view gets its own), so a shadow
+    /// layer can name it without a pointer that a later scene may reuse.
+    unique: u64,
     material_descriptors: Vec<Material>,
     image_signatures: Vec<([u32; 2], bool, [u8; 32])>,
     /// The images' textures, for `patch_images`.
@@ -1134,7 +1137,7 @@ impl GpuInstances {
             transforms: Vec::new(),
             clips: Vec::new(),
             capacity,
-            revision: next_instances_revision(),
+            revision: next_unique(),
         })
     }
     pub fn len(&self) -> usize {
@@ -1192,7 +1195,7 @@ impl GpuInstances {
         }
         self.transforms = transforms.to_vec();
         self.clips = clips.to_vec();
-        self.revision = next_instances_revision();
+        self.revision = next_unique();
         Ok(true)
     }
     /// Whether some instance is cut by a clip plane.
@@ -1234,6 +1237,8 @@ impl GpuScene {
         }
     }
     pub fn hide_indices(&mut self, ranges: &[Range<u32>]) {
+        self.sky_revision
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         self.batches.retain(|b| {
             !ranges
                 .iter()
@@ -1342,6 +1347,7 @@ impl GpuScene {
             .clone();
         Ok(GpuScene {
             sky_revision: self.sky_revision.clone(),
+            unique: next_unique(),
             material_descriptors: self.material_descriptors.clone(),
             image_signatures: self.image_signatures.clone(),
             textures: self.textures.clone(),
@@ -1705,7 +1711,7 @@ pub(crate) fn kept_casters_key<'a>(scenes: impl Iterator<Item = &'a GpuScene>) -
 }
 /// A new scene's revision counter: unique among every scene's, so a scene
 /// uploaded where a dropped one lay never reads as that one.
-fn next_instances_revision() -> u64 {
+fn next_unique() -> u64 {
     static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
     NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
 }
@@ -1724,7 +1730,8 @@ pub(crate) fn casters_signature(casters: ShadowCasters<'_>) -> u64 {
     use std::hash::{Hash, Hasher};
     let mut hash = std::collections::hash_map::DefaultHasher::new();
     let scene = |scene: &GpuScene, hash: &mut std::collections::hash_map::DefaultHasher| {
-        (std::ptr::from_ref(scene) as usize).hash(hash);
+        scene.unique.hash(hash);
+        // Batches change only with `hide_indices`, which counts here too.
         scene
             .sky_revision
             .load(std::sync::atomic::Ordering::Relaxed)
@@ -1736,9 +1743,6 @@ pub(crate) fn casters_signature(casters: ShadowCasters<'_>) -> u64 {
             scene.vertex_count,
         )
             .hash(hash);
-        for batch in &scene.batches {
-            (batch.indices.clone(), batch.material).hash(hash);
-        }
     };
     casters.scenes.len().hash(&mut hash);
     for s in casters.scenes {
@@ -3243,6 +3247,7 @@ impl SceneRenderer {
         }
         Ok(GpuScene {
             sky_revision: fresh_revision(),
+            unique: next_unique(),
             material_descriptors: data.materials.clone(),
             image_signatures: image_signatures(data),
             textures: Arc::new(textures),
@@ -3376,6 +3381,7 @@ impl SceneRenderer {
         GpuScene {
             emissive,
             sky_revision: fresh_revision(),
+            unique: next_unique(),
             vertices,
             indices,
             base_vertex: slot.as_ref().map_or(0, |s| s.vertices.start as i32),
@@ -3436,6 +3442,7 @@ impl SceneRenderer {
         let (vertices, indices) = geometry_buffers(device, "shared-material posed vertices", data);
         Ok(GpuScene {
             sky_revision: fresh_revision(),
+            unique: next_unique(),
             vertices,
             indices,
             materials: base.materials.clone(),

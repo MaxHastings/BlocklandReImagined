@@ -111,6 +111,8 @@ on a still frame are the caster layer, which redraws because the idle
 player's body moves. `shadow_layers_kept` is 4 in every view, which matches two cascades each of occluders and map.
 
 The bot runs' main-thread record time rose 0.1 to 0.4 ms in two views. The
-layer signature hashed every instance's transform each frame, so it now
-hashes one revision per instance set instead (`GpuInstances::revision`,
-renewed on every change).
+layer signature hashed every instance's transform and every scene's batch
+list each frame. It now hashes one id and one revision per scene and per
+instance set: `GpuInstances::revision` is renewed on every change,
+`hide_indices` (the only batch change) bumps the scene's revision, and each
+scene value has a unique id instead of its address.
