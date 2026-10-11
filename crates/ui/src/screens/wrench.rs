@@ -87,7 +87,7 @@ enum Operation {
 /// The vehicle spawn wrench's Team menu: a bot spawn brick's team.
 const TEAM_ROW: i32 = 30;
 /// Width of the Item Respawn Time seconds field once the reset box shares its row.
-const ITEM_TIMER_W: i32 = 64;
+const ITEM_TIMER_W: i32 = 40;
 
 /// Add the vehicle spawn wrench's Team row under its recovered fields, above
 /// the footer actions, styled as its Vehicles menu and that menu's label.
@@ -177,7 +177,7 @@ fn add_team_row(window: &mut Control, layout: &str, prefix: &str) {
     window.children.push(team);
 }
 
-/// The "Mini-game reset" tick box for bricks with a recovered item respawn
+/// The "On reset" tick box for bricks with a recovered item respawn
 /// time. It sits on the Item Respawn Time row itself: the seconds field
 /// shrinks to make room, and ticking the box greys the field out (see
 /// [`Wrench::refresh`]), so the choice between a timer and "only on reset"
@@ -215,7 +215,7 @@ fn add_item_restore_row(window: &mut Control, prefix: &str) {
         ),
         node,
     );
-    tick.text = Some("Mini-game reset".into());
+    tick.text = Some("On reset".into());
     window.children.push(tick);
 }
 
