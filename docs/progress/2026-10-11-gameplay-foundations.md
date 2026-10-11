@@ -33,8 +33,10 @@ behaviour; `BUILD_SCHEMA` unchanged, the field is left out of saves when it
 is `Timer`). `Reset` sets `available_at` to `item_spawners::NEVER` on pickup:
 the item stays a ghost until the mini-game resets (the existing reveal) or
 an event restores it. The wrench dialog gets a "Respawn only on mini-game
-reset" box under the respawn time (`WrenchField::ItemRestore`, added to the
-recovered layout like the Team row), the fill wrench carries it
+reset" box (`WrenchField::ItemRestore`, a row of its own above the footer
+buttons like the Team row, so every authored v20 control keeps its place;
+the first version shifted the rows below the respawn time and failed
+`region_row_preserves_fallback_controls`), the fill wrench carries it
 (`WrenchFill::item_restore`), and `crates/net/protocol-changes/item-restore-mode.md`
 records the wire change.
 
