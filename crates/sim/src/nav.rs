@@ -818,30 +818,77 @@ impl Nav {
     }
     /// Forget samples a change inside `min..max` could alter.
     pub fn invalidate(&mut self, min: Vec3, max: Vec3, body: &Body) {
+        self.invalidate_all(&[(min, max)], body);
+    }
+    /// Forget samples any of the `changes` (boxes) could alter. A rocket
+    /// knocks out a crowd of neighbouring bricks in one tick: boxes within
+    /// a body's reach of each other are taken as their union first, and
+    /// each cache is walked once for them all, not once a brick.
+    pub fn invalidate_all(&mut self, changes: &[(Vec3, Vec3)], body: &Body) {
+        if changes.is_empty() {
+            return;
+        }
         let reach = body.width + CELL;
-        let (x0, z0) = cell_of(min - Vec3::splat(reach));
-        let (x1, z1) = cell_of(max + Vec3::splat(reach));
+        let mut boxes: Vec<(Vec3, Vec3)> = Vec::with_capacity(changes.len());
+        for &(min, max) in changes {
+            let (mut min, mut max) = (min, max);
+            // Absorb every kept box it touches, then any the grown box
+            // touches in turn.
+            loop {
+                let before = boxes.len();
+                boxes.retain(|&(lo, hi)| {
+                    let touches = (lo - Vec3::splat(reach)).cmple(max).all()
+                        && (hi + Vec3::splat(reach)).cmpge(min).all();
+                    if touches {
+                        min = min.min(lo);
+                        max = max.max(hi);
+                    }
+                    !touches
+                });
+                if boxes.len() == before {
+                    break;
+                }
+            }
+            boxes.push((min, max));
+        }
         // A sample's ray starts up to a jump plus a body above its hint.
-        let low = min.y - body.height - body.jump - HINT_BAND * 2.0;
-        let high = max.y + body.drop + HINT_BAND * 2.0;
+        let cells: Vec<_> = boxes
+            .iter()
+            .map(|&(min, max)| {
+                let (x0, z0) = cell_of(min - Vec3::splat(reach));
+                let (x1, z1) = cell_of(max + Vec3::splat(reach));
+                let low = min.y - body.height - body.jump - HINT_BAND * 2.0;
+                let high = max.y + body.drop + HINT_BAND * 2.0;
+                (x0..=x1, z0..=z1, low, high)
+            })
+            .collect();
         self.floors.retain(|(x, z, band), _| {
             let hint = *band as f32 * HINT_BAND;
-            !((x0..=x1).contains(x) && (z0..=z1).contains(z) && hint >= low && hint <= high)
+            !cells.iter().any(|(xs, zs, low, high)| {
+                xs.contains(x) && zs.contains(z) && hint >= *low && hint <= *high
+            })
         });
         // An arc's box: from its takeoff to its landing, a body wide, up to
         // the top of its jump and a body over.
-        let (min, max) = (min - Vec3::splat(reach), max + Vec3::splat(reach));
+        let grown: Vec<_> = boxes
+            .iter()
+            .map(|&(min, max)| (min - Vec3::splat(reach), max + Vec3::splat(reach)))
+            .collect();
         let above = body.motion.apex() + body.height;
         // A node's leaps reach as far as its farthest leap.
         let far = Vec3::new(body.leaps.farthest(), above, body.leaps.farthest());
         self.leapt.retain(|node, _| {
             let at = node.feet();
-            !((at + far).cmpge(min).all() && (at - far).cmple(max).all())
+            !grown
+                .iter()
+                .any(|(min, max)| (at + far).cmpge(*min).all() && (at - far).cmple(*max).all())
         });
         self.arcs.retain(|(a, b), _| {
             let (a, b) = (a.feet(), b.feet());
             let (low, high) = (a.min(b), a.max(b) + Vec3::Y * above);
-            !(low.cmple(max).all() && high.cmpge(min).all())
+            !grown
+                .iter()
+                .any(|(min, max)| low.cmple(*max).all() && high.cmpge(*min).all())
         });
     }
     /// Leaps from `node` ([`crate::reach::Leaps`]) off an edge: along each
