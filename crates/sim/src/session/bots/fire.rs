@@ -268,6 +268,12 @@ impl Session {
             return Some(gun);
         }
         let (image, _) = self.weapons.image_state(ActorId(bot), 0)?;
+        // An image whose rules say the bot has no rounds left for it is not
+        // a weapon to it now (a reload the gun's own states fetch counts as
+        // rounds: `rules_rounds` adds the spare ones).
+        if hand_combat::rules_rounds(self, bot, image) == Some(0) {
+            return None;
+        }
         let scale = self.peers.get(&bot).map_or(1.0, |p| p.player.state().scale);
         self.image_weapon(image, scale)
     }
@@ -275,7 +281,8 @@ impl Session {
     /// reader, which `hand_combat::has_possible_attack` asks too, so a bot
     /// never goes after someone with what it cannot use.
     pub(super) fn image_weapon(&self, image: &bri_weapons::Image, scale: f32) -> Option<Weapon> {
-        let using = image.bot.unwrap_or_default();
+        let default_use = bri_weapons::BotUse::default();
+        let using = image.bot.as_ref().unwrap_or(&default_use);
         let hold = using.fire == bri_weapons::BotFire::Hold;
         let spread = image_spread(image);
         let projectile = image

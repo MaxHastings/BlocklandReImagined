@@ -469,6 +469,11 @@ pub fn outside_a_game(library: &Library, steps: Vec<Step>) -> (Vec<Step>, Vec<St
 }
 
 fn run_importer(importer: &Path, input: &Path, out: &Path, reference: &Path) -> Result<()> {
+    // A zip already in this game's own format (a ported Add-On, from
+    // `tools/port_addon.py` or another player) is unpacked, not converted.
+    if classic::is_native_zip(input) {
+        return classic::unpack_native_zip(input, out);
+    }
     let output = std::process::Command::new(importer)
         .arg(input)
         .arg(out)
@@ -515,6 +520,8 @@ fn sync(
     send: &std::sync::mpsc::Sender<SyncNote>,
 ) -> String {
     let (mut converted, mut failed, mut removed, mut included) = (vec![], vec![], vec![], vec![]);
+    // Dropped zips that were already in the game's own format.
+    let mut installed = vec![];
     // Converted again only because an older game made them: they keep
     // their place, on or off.
     let mut updated = vec![];
@@ -571,8 +578,12 @@ fn sync(
                 stamp,
                 replaces,
             } => {
+                let native = classic::is_native_zip(&path);
                 let _ = send.send(SyncNote {
-                    notice: format!("Converting {name}..."),
+                    notice: format!(
+                        "{} {name}...",
+                        if native { "Installing" } else { "Converting" }
+                    ),
                     finished: false,
                 });
                 let for_this_version = replaces.is_some()
@@ -594,6 +605,8 @@ fn sync(
                         record.dir = Some(dir);
                         if for_this_version {
                             updated.push(name);
+                        } else if native {
+                            installed.push(name);
                         } else {
                             converted.push(name);
                         }
@@ -629,6 +642,14 @@ fn sync(
         n => notice.push(format!(
             "Converted {n} classic Add-Ons: {}. They start off.",
             list(&converted)
+        )),
+    }
+    match installed.len() {
+        0 => {}
+        1 => notice.push(format!("Installed {}. It starts off.", installed[0])),
+        n => notice.push(format!(
+            "Installed {n} Add-Ons: {}. They start off.",
+            list(&installed)
         )),
     }
     match updated.len() {
@@ -1105,6 +1126,49 @@ mod tests {
         let gun = library.get("weapon_gun").unwrap();
         assert!(gun.enabled);
         assert_eq!(sync_now(&root).last().unwrap().notice, "");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// A ported Add-On zip (the game's own format, with host rules beside
+    /// it) dropped in the folder is installed without the importer, starts
+    /// off, is left alone by the next sync, and goes when the zip does.
+    #[test]
+    fn a_dropped_native_zip_installs_with_its_rules_and_goes_with_its_zip() {
+        use std::io::Write;
+        let root = std::env::temp_dir().join(format!("bri-add-ons-native-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let drop = classic::folder(&root);
+        std::fs::create_dir_all(&drop).unwrap();
+        let manifest = |id: &str| {
+            json!({ "schema_version": 1, "id": id, "version": "1.0.0", "api": 1,
+                "provides": [], "provenance": { "source": "original" } })
+            .to_string()
+        };
+        let mut w = zip::ZipWriter::new(std::fs::File::create(drop.join("Ported.zip")).unwrap());
+        for (name, body) in [
+            ("ported/package.json", manifest("ported")),
+            ("ported-rules/package.json", manifest("ported-rules")),
+        ] {
+            w.start_file(name, zip::write::SimpleFileOptions::default())
+                .unwrap();
+            w.write_all(body.as_bytes()).unwrap();
+        }
+        w.finish().unwrap();
+        let run =
+            |i: &Path, o: &Path, r: &Path| run_importer(Path::new("no-such-importer"), i, o, r);
+        let go = |root: &Path| {
+            let steps = classic::plan(&Library::scan(root).unwrap(), &State::load(root), &reads());
+            let (send, _receive) = std::sync::mpsc::channel();
+            sync(root, &run, steps, &send)
+        };
+        assert_eq!(go(&root), "Installed Ported. It starts off.");
+        let library = Library::scan(&root).unwrap();
+        assert!(library.get("ported").is_some_and(|e| !e.enabled));
+        assert!(library.get("ported-rules").is_some());
+        assert_eq!(go(&root), "", "a settled zip is not installed again");
+        std::fs::remove_file(drop.join("Ported.zip")).unwrap();
+        assert!(go(&root).starts_with("Removed Ported"));
+        assert!(Library::scan(&root).unwrap().get("ported").is_none());
         let _ = std::fs::remove_dir_all(&root);
     }
 

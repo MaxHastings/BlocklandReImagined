@@ -8,7 +8,7 @@ import shutil
 import struct
 import subprocess
 import zipfile
-from rallypack_bot_use import describe
+from rallypack_bot_use import ammo_in_bank, describe
 
 NS = "weapon_rallypack"
 RULES = NS + "-rules"
@@ -200,7 +200,7 @@ def build(args):
         # The command intercepts native firing; this reference describes the
         # actual package-launched shot for the existing bot executor.
         if projectile and category not in ("bow", "grenade"):
-            describe(image, projectile)
+            describe(image, projectile, ammo_in_bank(RULES, bank, mag))
         image["command"] = RULES + ":shot"
         commands = {"mount": RULES + ":mount", "unmount": RULES + ":unmount",
             "light": RULES + ":reload", "jet": RULES + ":aim", "states": {}}

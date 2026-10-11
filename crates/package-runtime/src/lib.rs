@@ -45,6 +45,7 @@ pub mod package;
 pub mod report;
 pub mod script;
 pub mod state;
+pub mod timing;
 
 pub use bri_package::diag::Diagnostic;
 pub use ops::Op;

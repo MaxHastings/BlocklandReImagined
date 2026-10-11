@@ -10,7 +10,8 @@ use serde_json::Value;
 use std::collections::BTreeMap;
 
 pub const STORE_SCHEMA: u32 = 1;
-const MAX_VALUE_BYTES: usize = 4096;
+/// The most bytes one state value may hold.
+pub const MAX_VALUE_BYTES: usize = 4096;
 const MAX_STORE_BYTES: usize = 64 * 1024 * 1024;
 /// State one player may hold in one package.
 pub const MAX_PLAYER_STATE_BYTES: usize = 64 * 1024;
