@@ -319,16 +319,28 @@ impl App {
             self.net.attempt.is_none(),
             "Leave the game before changing Add-Ons"
         );
-        if let Some(ref resume) = resume {
-            let id = match resume {
-                ReloadResume::Action { id, .. } | ReloadResume::Downloaded { id, .. } => *id,
-            };
-            self.ui.apply_session(
-                id,
-                UiUpdate::Connection(ConnectionState::Connecting {
-                    text: "Loading Add-Ons…".into(),
-                }),
-            );
+        match &resume {
+            Some(ReloadResume::Action { id, .. }) => {
+                self.ui.apply_session(
+                    *id,
+                    UiUpdate::Connection(ConnectionState::Connecting {
+                        text: "Loading Add-Ons…".into(),
+                    }),
+                );
+            }
+            // A join that downloaded the host's Add-Ons stays on the
+            // loading screen while they load, then while it joins again.
+            Some(ReloadResume::Downloaded { id, map, .. }) => {
+                let screen = self.loading_screen(
+                    map,
+                    &bri_progress::Snapshot {
+                        stage: bri_progress::Stage::LoadingAddOns,
+                        ..Default::default()
+                    },
+                );
+                self.ui.apply_session(*id, UiUpdate::Connection(screen));
+            }
+            None => {}
         }
         let downloaded_for = match &resume {
             Some(ReloadResume::Downloaded { id, .. }) => Some(*id),
@@ -421,7 +433,7 @@ impl App {
                     self.answer(id, Err(error));
                 }
             }
-            Some(ReloadResume::Downloaded { id, address }) => {
+            Some(ReloadResume::Downloaded { id, address, map }) => {
                 self.addons.packages_from_tools = false;
                 if let Some(error) = error {
                     let text = format!(
@@ -431,7 +443,8 @@ impl App {
                     self.net.join_notices.push(text);
                     self.addons.skip_add_on_reload = true;
                 }
-                if let Err(error) = self.join(id, address, String::new()) {
+                if let Err(error) = self.join_resuming(id, address, String::new(), None, Some(map))
+                {
                     self.net.join_notices.clear();
                     self.answer(id, Err(error));
                 }
@@ -604,6 +617,8 @@ pub(super) enum ReloadResume {
     Downloaded {
         id: RequestId,
         address: String,
+        /// What the loading screen names: the host's map, or its name.
+        map: String,
     },
 }
 pub(super) struct ReloadRequest {
@@ -819,6 +834,7 @@ mod tests {
             Some(ReloadResume::Downloaded {
                 id,
                 address: "localhost:28000".into(),
+                map: "Slate".into(),
             }),
         );
         app.ui.core.request(UiAction::CancelConnect);
@@ -1058,6 +1074,7 @@ mod tests {
             Some(ReloadResume::Downloaded {
                 id,
                 address: "localhost:28000".into(),
+                map: "Slate".into(),
             }),
         );
         rename_map(&app, "Server's content")?;
@@ -1139,6 +1156,7 @@ mod tests {
             Some(ReloadResume::Downloaded {
                 id: remote,
                 address: "localhost:28000".into(),
+                map: "Slate".into(),
             }),
         );
         app.ui.core.request(UiAction::CancelConnect);
@@ -1185,12 +1203,19 @@ mod tests {
             Some(ReloadResume::Downloaded {
                 id,
                 address: "127.0.0.1:9".into(),
+                map: "Slate".into(),
             }),
         );
         tx.send(Err("damaged downloaded asset".into())).ok();
         app.poll_package_reload();
         assert_eq!(app.content.maps[0].name, original);
         assert!(app.net.attempt.is_some());
+        // The join again stays on the loading screen naming the host's map.
+        assert!(
+            matches!(&app.ui.core.conn, ConnectionState::Loading { map, .. } if map == "Slate"),
+            "{:?}",
+            app.ui.core.conn
+        );
         assert!(!app.addons.packages_from_tools);
         assert!(
             app.net
@@ -1200,6 +1225,35 @@ mod tests {
                     && line.contains("damaged downloaded asset"))
         );
         app.disconnect();
+        Ok(())
+    }
+    /// Loading the Add-Ons a join downloaded keeps the loading screen up,
+    /// naming the host's map and the stage, rather than going back to a
+    /// Connecting dialog.
+    #[test]
+    fn loading_downloaded_add_ons_stays_on_the_loading_screen() -> Result<()> {
+        let (_content, _state, mut app) = app()?;
+        let id = app.ui.core.request(UiAction::JoinServer {
+            address: "127.0.0.1:9".into(),
+            password: String::new(),
+        });
+        let set = app.content.paths.packages.clone();
+        app.queue_package_reload(
+            set,
+            None,
+            Some(ReloadResume::Downloaded {
+                id,
+                address: "127.0.0.1:9".into(),
+                map: "Slate".into(),
+            }),
+        )?;
+        let ConnectionState::Loading { map, status, .. } = &app.ui.core.conn else {
+            panic!("{:?}", app.ui.core.conn);
+        };
+        assert_eq!(
+            (map.as_str(), status.as_str()),
+            ("Slate", "LOADING ADD-ONS")
+        );
         Ok(())
     }
     #[test]
