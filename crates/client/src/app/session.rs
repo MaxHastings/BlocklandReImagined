@@ -911,6 +911,10 @@ impl App {
                 &cache,
                 reporting.clone(),
                 |fetched, dropped| {
+                    // Logged here, before a join that must reload for the
+                    // server's Add-Ons ends this pass; the rejoin after it
+                    // already has them loaded and fetches nothing.
+                    log_fetched(fetched);
                     reporting.begin(
                         bri_progress::Stage::LoadingAddOns,
                         bri_progress::Unit::Steps,
@@ -952,9 +956,6 @@ impl App {
                 },
             )
             .await;
-            if let Ok((_, fetched, _)) = &joined {
-                log_fetched(fetched);
-            }
             let client = match joined {
                 Ok((client, fetched, dropped)) if !fetched.is_empty() || !dropped.is_empty() => {
                     let set =
@@ -1439,11 +1440,14 @@ fn log_fetched(fetched: &[bri_net::packages::Fetched]) {
     for f in fetched {
         let package = &f.package;
         if f.downloaded > 0 {
+            let size = if f.downloaded < 1024 * 1024 {
+                format!("{} KB", f.downloaded.div_ceil(1024))
+            } else {
+                format!("{:.1} MB", f.downloaded as f64 / (1024.0 * 1024.0))
+            };
             bri_console::echo(format!(
-                "Downloaded Add-On {} {} ({:.1} MB)",
-                package.id,
-                package.version,
-                f.downloaded as f64 / (1024.0 * 1024.0)
+                "Downloaded Add-On {} {} ({size})",
+                package.id, package.version
             ));
         } else {
             bri_console::echo(format!(
