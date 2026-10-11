@@ -56,6 +56,38 @@ fn what(p, name, t) {
     if name == "place" { return place_brick("v20/brick/plate", 30.0, 0.1, 30.25, 1.0, 1.0, 1.0); }
     if name == "place_unknown" { return place_brick("v20/brick/nothing", 30.0, 0.1, 30.0, 1.0, 1.0, 1.0); }
     if name == "remove_missing" { return remove_brick(987654); }
+    // Mini-game rules; game `t` (nobody's number is no game either).
+    if name == "set_team" { return set_team(t, ()); }
+    if name == "team_points" { return add_team_points(t, 1, 5); }
+    if name == "end_round" { return end_round(t, #{}); }
+    if name == "reset_game" { return reset_minigame(t); }
+    if name == "game_color" { return set_minigame_color(t, 0); }
+    if name == "end_game" { return end_minigame(t); }
+    if name == "place_member" { return place_member(t, ()); }
+    if name == "hold_respawn" { return hold_respawn(t, true); }
+    if name == "respawn_time" { return set_respawn_time(t, 2000); }
+    if name == "create_game" { return create_minigame((), #{ loadout: [(), (), (), (), ()] }); }
+    if name == "create_game_bad" { return create_minigame((), #{ no_such_setting: 1 }); }
+    if name == "game_color_1" { return set_minigame_color(1, 0); }
+    if name == "reset_game_1" { return reset_minigame(1); }
+    if name == "join_game_1" { return place_member(t, 1); }
+    if name == "end_game_1" { return end_minigame(1); }
+    // Bots.
+    if name == "add_bot" { return add_bot(t, #{ kind: "kit:bot/none", name: "Bob" }); }
+    if name == "remove_bot" { return remove_bot(t); }
+    if name == "bot_tool" { return bot_tool(t, 0); }
+    if name == "rest_bot" { return rest_bot(t, true); }
+    // Vehicles.
+    if name == "spawn_vehicle" { return spawn_vehicle("kit:vehicle/none", 0.0, 1.0, 0.0, 0.0, [0.0, 0.0, 0.0], ()); }
+    if name == "remove_vehicle" { return remove_vehicle(t); }
+    // The generated world.
+    if name == "place_voxel" { return place_voxel(1, 2, 3, "kit:material/stone"); }
+    // Copy work, which is the asking player's own.
+    if name == "plant_copy_other" { return plant_copy(t); }
+    if name == "load_copy_other" { return load_copy(t, "castle", 10, "kit:weapon/mine"); }
+    if name == "load_copy_bad_tool" { return load_copy(p, "castle", 10, "kit:weapon/nope"); }
+    if name == "cut_copy_other" { return cut_copy(t); }
+    if name == "plant_copy" { return plant_copy(p); }
     ()
 }
 fn cmd_pay(p, name, t) {
@@ -164,7 +196,7 @@ fn catalog() -> Arc<Catalog> {
         json!({
             "schema_version": 1, "id": "kit", "version": "1.0.0", "api": 1,
             "name": "kit", "license": "CC0-1.0",
-            "capabilities": ["damage", "player", "world.edit", "entity", "minigame"],
+            "capabilities": ["damage", "player", "world.edit", "entity", "minigame", "bots", "physics", "build"],
             "dependencies": { "kitmodel": "^1.0.0" },
             "provides": [
                 { "kind": "behaviour", "id": "kit:behaviour/main", "file": "behaviour.json" },
@@ -341,6 +373,30 @@ fn a_required_operation_the_engine_cannot_do_charges_nobody() {
         ("plant_colour", "not in the world's palette"),
         ("place_unknown", "No brick `v20/brick/nothing` is loaded"),
         ("remove_missing", "No such brick"),
+        ("set_team", "No such player"),
+        ("team_points", "Team points rejected"),
+        ("end_round", "Round end rejected"),
+        ("reset_game", "Reset rejected"),
+        ("game_color", "Mini-game rule rejected"),
+        ("end_game", "Mini-game rule rejected"),
+        ("place_member", "No such player"),
+        ("hold_respawn", "No such player"),
+        ("respawn_time", "No such player"),
+        ("create_game_bad", "have no `no_such_setting`"),
+        ("add_bot", "No bot kind `kit:bot/none`"),
+        ("remove_bot", "is not one `kit` added"),
+        ("bot_tool", "is not one `kit` added"),
+        ("rest_bot", "was not added by `kit`"),
+        ("spawn_vehicle", "no vehicles"),
+        ("remove_vehicle", "No vehicle 4242"),
+        ("place_voxel", "No generated world is running"),
+        (
+            "plant_copy_other",
+            "only for the player whose command asked",
+        ),
+        ("load_copy_other", "only for the player whose command asked"),
+        ("load_copy_bad_tool", "not an item on this server"),
+        ("cut_copy_other", "only for the player whose command asked"),
     ];
     for (name, reason) in impossible {
         let (mut g, buyer, _) = game();
@@ -392,6 +448,15 @@ fn a_required_operation_the_engine_can_do_is_kept_and_happens() {
         "spawn_cow",
         "plant",
         "place",
+        "create_game",
+        "game_color_1",
+        "reset_game_1",
+        "join_game_1",
+        "hold_respawn",
+        "respawn_time",
+        "set_team",
+        "plant_copy",
+        "end_game_1",
     ];
     for (n, name) in possible.into_iter().enumerate() {
         g.call(buyer, "pay", name, other)

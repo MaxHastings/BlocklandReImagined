@@ -9,6 +9,7 @@ pub use persistence::Preset;
 pub use policy::*;
 use std::collections::{BTreeMap, BTreeSet};
 
+#[derive(Clone)]
 pub struct MinigamesWorld {
     pub(crate) catalog: Catalog,
     pub(crate) mode: PolicyMode,

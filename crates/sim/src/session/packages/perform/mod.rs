@@ -68,6 +68,29 @@ pub(in crate::session) trait Perform: Sized {
     fn perform(self, session: &mut Session, cx: OpCall<'_>) -> Result<()>;
 }
 
+/// A copy is the work of the player whose command asked for it, taken
+/// with their trust: a rule cannot start or steer one for someone else.
+/// What the copy work then finds (nothing to copy, no room to plant) is
+/// told to the player and the Add-On as it happens, not foreseen here.
+fn asked_by(cx: OpCall<'_>, player: OwnerId, refusal: &str) -> Result<()> {
+    ensure!(cx.caller == Some(player), "{refusal}");
+    Ok(())
+}
+/// [`asked_by`], or an administrator's command (`/ClearDups`).
+fn asked_by_or_admin(
+    session: &Session,
+    cx: OpCall<'_>,
+    player: OwnerId,
+    refusal: &str,
+) -> Result<()> {
+    let admin = cx
+        .caller
+        .and_then(|c| session.peers.get(&c))
+        .is_some_and(|p| p.actor.administrator);
+    ensure!(cx.caller == Some(player) || admin, "{refusal}");
+    Ok(())
+}
+
 macro_rules! dispatch {
     ($($op:ident = $module:ident,)*) => {
         /// The package entity `op` acts on ([`Perform::entity`]).

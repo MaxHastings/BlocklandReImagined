@@ -716,16 +716,6 @@ impl Session {
         }
         Ok(())
     }
-
-    /// The mini-game player of connected player `owner`.
-    pub(super) fn minigame_player(&self, owner: u64) -> Result<mg::PlayerId> {
-        Ok(self
-            .peers
-            .get(&owner)
-            .context("No such player")?
-            .combat
-            .player)
-    }
 }
 
 impl Session {

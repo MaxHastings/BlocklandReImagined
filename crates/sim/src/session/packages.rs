@@ -1977,6 +1977,39 @@ impl Session {
         host.shares.edits.spend(&origin, tick, 1);
         Ok(())
     }
+    /// Whether `package_place_voxel` can put a voxel of `material` at
+    /// `position`: a generated world with that material and that spot in
+    /// it, an edit share left, and nothing in the way.
+    pub(super) fn package_check_place_voxel(
+        &self,
+        package: &str,
+        position: [i64; 3],
+        material: &str,
+    ) -> Result<()> {
+        let host = self.packages.as_ref().context("No packages are enabled")?;
+        let world = host
+            .world
+            .as_ref()
+            .context("No generated world is running")?;
+        let m = world
+            .material(material)
+            .with_context(|| format!("The world has no material `{material}`"))?;
+        let chunk = world.chunk_of_voxel(position);
+        ensure!(
+            world.in_bounds(chunk) && world.chunks.contains(&chunk),
+            "Voxel {position:?} is outside the generated world"
+        );
+        self.package_check_edit_share(package, "used")?;
+        ensure!(
+            self.simulation.state().bricks.len() < bri_world::MAX_BRICKS,
+            "Brick limit reached"
+        );
+        ensure!(
+            self.simulation.fits(&world.brick(position, m)),
+            "Voxel {position:?} is not free"
+        );
+        Ok(())
+    }
     /// Put a voxel into the generated world: a world-owned brick of the
     /// material, recorded as a world edit and saved with the world.
     fn package_place_voxel(
