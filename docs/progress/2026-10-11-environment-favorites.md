@@ -1,4 +1,4 @@
-# 2026-10-11 Environment favorites
+# 2026-10-11 Environment favorites and live apply
 
 Max asked (item 3 of his 2026-10-10 list) to save favourite environments
 customised through the Admin Menu's Environment window, consistent with how
@@ -33,6 +33,19 @@ holds it. The Simple and Advanced pages and the colour picker are untouched,
 as is the Enhanced Sky setting (still hidden). No renderer or shader files
 changed.
 
+## Live apply
+
+Max's follow-up: changing a setting should show at once rather than needing
+Apply after every nudge. The window now sends a change to the host by
+itself once the rows have been still for 250 ms (`LIVE_DELAY_MS`): a
+slider's steps become one request with the last value, a change made while
+a request is in flight goes once the host answers, and a rejected change is
+not sent again until the rows change (`sent_revision`). The host still
+checks the rank and every value, and every player sees each applied step,
+as they would after Apply. Apply stays as "send now" (a retry after a
+rejection, or for anyone who prefers it); Reset and Load go live the same
+way. The Simple tab's hint says everyone sees the look as it changes.
+
 ## Decisions
 
 - Slots in the settings file, not named files: brick, avatar, mini-game and
@@ -49,7 +62,10 @@ changed.
 empty slot, Store, list label, SaveSettings action, Load after Reset,
 anchor tick, Apply, JSON round trip) and
 `a_favorite_keeps_the_time_of_day_and_starts_its_cycle_from_now` (model)
-pass with the existing environment tests. Full `cargo test -p bri-ui` and
+pass with the existing environment tests, as does
+`environment_changes_go_to_the_host_live_once_they_settle` (no request on
+opening, one request after three slider steps, a change during a pending
+request waits, a rejection is not retried, the next change goes). Full `cargo test -p bri-ui` and
 `clippy -D warnings` results are in the PR.
 
 ## Not done

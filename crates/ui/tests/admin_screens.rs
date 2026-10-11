@@ -977,6 +977,139 @@ fn the_environment_window_applies_a_draft_through_the_host() {
     assert!(!ui.stack().contains(&ScreenId::AdminEnvironment));
 }
 
+/// The Environment window applies a change by itself once the rows have
+/// been still for a moment: a slider's steps become one request, a change
+/// made while one is in flight goes once it is answered, and a rejected
+/// change is not sent again until the rows change.
+#[test]
+fn environment_changes_go_to_the_host_live_once_they_settle() {
+    use bri_content::atmosphere::{Authored, Settings, light_direction};
+    use bri_ui::{
+        api::{ConnectionState, Settings as UiSettings, UiUpdate},
+        binds::Platform,
+        geom::Rect,
+        models::environment::{EnvironmentView, NumberField},
+        pack::Pack,
+        schema::UiPack,
+        screens::{ScreenId, ctrl},
+        ui::{Ui, UiConfig},
+    };
+    use std::{path::PathBuf, rc::Rc};
+    let mut pack = UiPack::default();
+    for name in [
+        "MainMenuGui",
+        "PlayGui",
+        "LoadingGui",
+        "escapeMenu",
+        "adminGui",
+    ] {
+        pack.layouts.insert(
+            name.into(),
+            ctrl("GuiControl", "GuiDefaultProfile", Rect::new(0, 0, 640, 480)),
+        );
+    }
+    let mut ui = Ui::new(
+        Rc::new(Pack::from_parts(pack, PathBuf::new())),
+        UiConfig {
+            size: (640, 480),
+            scale: Some(1.0),
+            platform: Platform::Windows,
+        },
+        UiSettings {
+            binds: Some(vec![]),
+            ..Default::default()
+        },
+    );
+    ui.apply(UiUpdate::Connection(ConnectionState::InGame {
+        server_name: "Test".into(),
+        max_players: 8,
+        local: false,
+        single_player: false,
+        admin: true,
+    }));
+    let view = |settings: Settings| EnvironmentView {
+        authored: Authored {
+            sun_direction: light_direction(90.0, 45.0),
+            direct_light: [0.6; 3],
+            ambient_light: [0.3; 3],
+            fog_start: 0.0,
+            fog_end: 0.0,
+            fog_color: [0.5; 3],
+        },
+        settings,
+        tick: 0,
+    };
+    ui.apply(UiUpdate::Environment(view(Settings::default())));
+    let mut snapshot = state(AdminRole::Admin, false);
+    snapshot.supported.insert(AdminFeature::Environment);
+    ui.apply(UiUpdate::Admin(AdminUpdate::State(snapshot)));
+    ui.core.push(ScreenId::AdminEnvironment);
+    ui.update(0);
+    assert_eq!(ui.top_id(), ScreenId::AdminEnvironment);
+    ui.drain_actions();
+    let sent = |ui: &Ui| -> Vec<Settings> {
+        ui.core
+            .admin
+            .pending
+            .values()
+            .filter_map(|a| match a {
+                AdminAction::SetEnvironment { settings } => Some((**settings).clone()),
+                _ => None,
+            })
+            .collect()
+    };
+    let request = |ui: &Ui| *ui.core.admin.pending.keys().next().unwrap();
+    // Opening sends nothing, however long the window sits.
+    ui.update(1000);
+    assert!(sent(&ui).is_empty());
+    // A slider's steps: nothing until the rows settle, then one request
+    // with the last value.
+    for azimuth in [100.0, 150.0, 200.0] {
+        ui.core
+            .environment
+            .set_number(NumberField::SunAzimuth, azimuth);
+        ui.update(100);
+        assert!(sent(&ui).is_empty(), "sent while still moving at {azimuth}");
+    }
+    ui.update(200);
+    let first = sent(&ui);
+    assert_eq!(first.len(), 1);
+    assert_eq!(first[0].sun_azimuth, Some(200.0));
+    assert_eq!(ui.core.admin.status, "Waiting for host...");
+    // A change while that is in flight waits for the answer.
+    ui.core
+        .environment
+        .set_number(NumberField::SunElevation, 30.0);
+    ui.update(1000);
+    assert_eq!(sent(&ui).len(), 1, "a second request went out unanswered");
+    let id = request(&ui);
+    ui.apply(UiUpdate::ActionResult { id, result: Ok(()) });
+    ui.apply(UiUpdate::Environment(view(first[0].clone())));
+    // (The host's answer is a change to the rows too, so the delay runs
+    // again from it.)
+    ui.update(300);
+    let second = sent(&ui);
+    assert_eq!(second.len(), 1, "the waiting change goes once answered");
+    assert_eq!(second[0].sun_elevation, Some(30.0));
+    assert_eq!(second[0].sun_azimuth, Some(200.0));
+    // The host rejects it: no retry until the rows change again.
+    let id = request(&ui);
+    ui.apply(UiUpdate::ActionResult {
+        id,
+        result: Err("no".into()),
+    });
+    ui.update(2000);
+    assert!(sent(&ui).is_empty(), "a rejected change was sent again");
+    assert!(ui.core.admin.status.starts_with("Rejected"));
+    assert!(ui.core.environment.changed());
+    ui.core
+        .environment
+        .set_number(NumberField::SunElevation, 40.0);
+    ui.update(300);
+    assert_eq!(sent(&ui).len(), 1);
+    assert_eq!(sent(&ui)[0].sun_elevation, Some(40.0));
+}
+
 /// The Environment window's favourites: Store keeps the rows in a slot
 /// (saved with the player's settings), Load fills the rows from one, and
 /// nothing reaches the host until Apply.
@@ -1128,7 +1261,7 @@ fn environment_favorites_store_and_load_the_rows_without_applying() {
     assert_eq!(draft.day_cycle.unwrap().anchor_tick, 2400);
     assert_eq!(draft.day_cycle.unwrap().time, cycle.time);
     assert!(ui.core.environment.changed());
-    assert_eq!(ui.core.admin.status, "Loaded slot 3. Not applied yet.");
+    assert_eq!(ui.core.admin.status, "Loaded slot 3.");
     assert!(ui.core.admin.pending.is_empty());
     click(&mut ui, ScreenId::AdminEnvironment, "EnvApply");
     let sent = ui.core.admin.pending.values().find_map(|a| match a {
