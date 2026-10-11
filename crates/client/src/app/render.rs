@@ -1476,9 +1476,7 @@ impl App {
                     r.samples() != self.graphics.samples || r.shadow_settings() != effective.shadows
                 })
         {
-            crate::frame_trace::note(
-                "graphics rebuilt (anti-aliasing, shadows, colour vision or map)",
-            );
+            crate::frame_trace::note("renderers rebuilt for a graphics option or a new map");
             let _span = crate::frame_trace::span("graphics rebuild");
             self.gpu_ready(frame.device, frame.queue, frame.format)?;
         }

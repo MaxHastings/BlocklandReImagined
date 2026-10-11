@@ -110,7 +110,9 @@ pub struct FrameLog {
 /// How often a summary line is written.
 pub const PERIOD: Duration = Duration::from_secs(60);
 
-/// A focused frame at least this long gets its own log line.
+/// A focused frame whose work (its length less the event loop's idle wait,
+/// which a frame cap spends on purpose) is at least this long gets its own
+/// log line.
 pub const LONG_FRAME: Duration = Duration::from_millis(50);
 /// At most this many long-frame lines per period, at least
 /// [`LONG_FRAME_GAP`] apart; the rest are counted in the summary.
@@ -145,7 +147,8 @@ impl LongFrames {
             }
             self.recent.push_back(ms);
         }
-        if record.background || record.total < LONG_FRAME {
+        let busy = record.total.saturating_sub(record.top("idle"));
+        if record.background || busy < LONG_FRAME {
             return None;
         }
         let spaced = self
@@ -467,6 +470,19 @@ mod tests {
                     .to_string()
             ]
         );
+        // A frame cap's wait is not work.
+        let capped = FrameRecord {
+            total: Duration::from_millis(66),
+            background: false,
+            spans: vec![crate::frame_trace::SpanTime {
+                name: "idle",
+                parent: None,
+                time: Duration::from_millis(60),
+                count: 1,
+            }],
+            notes: Vec::new(),
+        };
+        assert!(log.frame(&capped).is_empty());
         // A burst of long frames: a line a second at most, the rest counted.
         let mut logged = 1;
         let lines = run(&mut log, |i| frame(if i < 10 { 390.0 } else { 6.0 }, false));
