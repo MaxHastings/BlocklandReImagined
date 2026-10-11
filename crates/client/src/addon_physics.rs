@@ -1141,6 +1141,97 @@ mod tests {
         assert!(torso.x > 0.3, "carried on as it fell: {torso}");
     }
 
+    #[test]
+    fn the_ragdoll_add_on_blasted_then_respawned_at_165_fps_lets_its_bodies_go() {
+        // The v0.2.8 soccer crash as the real Ragdoll plays it, with bots
+        // dying round the pitch: a corpse blasted (every limb pushed), then
+        // its player respawning (every limb removed) on the next frame,
+        // while another corpse still lies there, at Max's 6.1 ms frames,
+        // where about one frame in four holds no 120 Hz step. Each start
+        // frame lands the blast on a different step phase.
+        use bri_client_sandbox::{AddOnCode, Budgets, FrameInput, Sandbox, TrustLevel, World};
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../packages/showcase/ragdoll");
+        let code = AddOnCode::load(&dir).unwrap().unwrap();
+        let building = floor();
+        let dt = 0.0061;
+        let feet = [0.0, 0.0, 0.0];
+        let other = [6.0, 0.0, 0.0];
+        let player = |alive: bool, life: u64, velocity: [f32; 3]| {
+            Arc::new(World {
+                local: 1,
+                players: vec![
+                    bri_client_sandbox::world::Player {
+                        id: 7,
+                        alive,
+                        feet,
+                        velocity,
+                        life,
+                        ..Default::default()
+                    },
+                    bri_client_sandbox::world::Player {
+                        id: 8,
+                        alive: false,
+                        feet: other,
+                        life: 1,
+                        ..Default::default()
+                    },
+                ],
+                skeletons: [
+                    (7, blockhead::blockhead(feet)),
+                    (8, blockhead::blockhead(other)),
+                ]
+                .into(),
+                ..Default::default()
+            })
+        };
+        let mut pushed_without_a_step = 0;
+        for start in 40..48 {
+            let mut addon = Sandbox::new()
+                .unwrap()
+                .start_in(&code, Budgets::untimed(), TrustLevel::Sandboxed, 0)
+                .unwrap();
+            let mut physics = AddOnPhysics::default();
+            let mut frame = |physics: &mut AddOnPhysics, world: Arc<World>| {
+                let out = addon
+                    .frame(FrameInput {
+                        dt,
+                        world,
+                        bodies: physics.snapshot(),
+                        ..Default::default()
+                    })
+                    .unwrap()
+                    .clone();
+                physics.apply(&out.physics);
+                let before = physics.accumulator;
+                physics.advance(dt, &building, &[], &[]).unwrap();
+                let stepped = before + dt >= STEP;
+                let pushes = out
+                    .physics
+                    .iter()
+                    .filter(|c| matches!(c, PhysicsCommand::Push { .. }))
+                    .count();
+                (pushes, stepped)
+            };
+            for _ in 0..start {
+                frame(&mut physics, player(false, 1, [0.0; 3]));
+            }
+            assert_eq!(physics.len(), 18, "start {start}: both ragdolls are up");
+            let (pushes, stepped) = frame(&mut physics, player(false, 1, [0.0, 25.0, 15.0]));
+            assert_eq!(pushes, 9, "start {start}: the blast pushed every limb");
+            if !stepped {
+                pushed_without_a_step += 1;
+            }
+            frame(&mut physics, player(true, 2, [0.0; 3]));
+            assert_eq!(physics.len(), 9, "start {start}: the respawn removed one");
+            assert_consistent(&physics, "ragdoll");
+        }
+        assert!(
+            pushed_without_a_step > 0,
+            "some blast landed on a frame with no step"
+        );
+    }
+
     /// How far apart each joint's two halves are now, for the Ragdoll's
     /// joints as made (`joints`: first body, second body, anchor), given
     /// where the bodies were made (`made`).
