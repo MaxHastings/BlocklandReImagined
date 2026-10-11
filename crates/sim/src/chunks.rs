@@ -155,10 +155,40 @@ impl Chunks {
                     }
                 }
             }
-            if parts.is_empty() {
-                if let (Some(changed), Some(handle)) = (&mut self.changed, chunk.handle) {
-                    changed.push(aabb(&physics.colliders[handle].compute_aabb()));
+            // Only the parts that differ from the chunk's last build are
+            // changes: a brick knocked out of a crowded chunk forgets the
+            // bots' samples over its own box, not over the whole chunk.
+            if let Some(changed) = &mut self.changed {
+                let mut before = BTreeMap::new();
+                if let Some(handle) = chunk.handle
+                    && let Some(compound) = physics.colliders[handle].shared_shape().as_compound()
+                {
+                    for (&id, (pose, part)) in chunk.parts.iter().zip(compound.shapes()) {
+                        before
+                            .entry(id)
+                            .or_insert_with(Vec::new)
+                            .push(aabb(&part.compute_aabb(pose)));
+                    }
                 }
+                let mut after = BTreeMap::new();
+                for (&id, (pose, part)) in owners.iter().zip(&parts) {
+                    after
+                        .entry(id)
+                        .or_insert_with(Vec::new)
+                        .push(aabb(&part.compute_aabb(pose)));
+                }
+                for (id, boxes) in &before {
+                    if after.get(id) != Some(boxes) {
+                        changed.extend(boxes.iter().copied());
+                    }
+                }
+                for (id, boxes) in &after {
+                    if before.get(id) != Some(boxes) {
+                        changed.extend(boxes.iter().copied());
+                    }
+                }
+            }
+            if parts.is_empty() {
                 if let Some(handle) = chunk.handle.take() {
                     retired.push(handle);
                 }
@@ -168,12 +198,6 @@ impl Chunks {
                 continue;
             }
             let shape = SharedShape::compound(parts);
-            if let Some(changed) = &mut self.changed {
-                if let Some(handle) = chunk.handle {
-                    changed.push(aabb(&physics.colliders[handle].compute_aabb()));
-                }
-                changed.push(aabb(&shape.compute_aabb(&Pose::IDENTITY)));
-            }
             match chunk.handle {
                 Some(handle) => {
                     let collider = &mut physics.colliders[handle];
