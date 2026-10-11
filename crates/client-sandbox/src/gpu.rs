@@ -909,17 +909,34 @@ const CALIBRATION_SIZE: u32 = 128;
 /// Calibration stops raising the work once a pass takes this long.
 const CALIBRATION_MS: f64 = 10.0;
 
-/// Times a pass that seems long enough up to this many times, keeping the
-/// fastest.
+/// A pass long enough to stop at is timed again until the fastest time has
+/// held for this many passes in a row.
 const CALIBRATION_SAMPLES: u32 = 3;
+
+/// A pass at least this much faster than the fastest so far means the GPU is
+/// still speeding up.
+const CALIBRATION_STEADY: f64 = 0.97;
+
+/// Calibration keeps the GPU busy for at least this long (GPU time) before
+/// it believes a speed. A GPU idling at low clocks (entering a game after
+/// menus) takes on the order of 100 ms of steady load to raise them, and
+/// v0.2.8 session logs read up to 13 times slower at join than after a
+/// graphics change on the same card.
+const CALIBRATION_WARM_UP_MS: f64 = 150.0;
+
+/// Calibration stops after this much GPU time whatever it has seen, and
+/// after this many passes at one loop cap.
+const CALIBRATION_MOST_MS: f64 = 500.0;
+const CALIBRATION_MOST_PASSES: u32 = 64;
 
 /// Measure how much Add-On shader work the GPU does per millisecond, by
 /// timing a small offscreen pass at rising loop caps (4 to 4096 iterations
 /// over 128x128 pixels) until one takes about 10 ms. Passes are timed on the
 /// GPU where it has timestamps, so waiting behind other programs' work or
 /// for this thread to be scheduled is not counted; otherwise by the clock.
-/// Takes well under a second on any GPU that can run the game. `None` when
-/// the pass fails.
+/// The GPU is kept busy long enough to leave idle clocks first. Takes well
+/// under a second on any GPU that can run the game. `None` when the pass
+/// fails.
 pub fn calibrate(device: &wgpu::Device, queue: &wgpu::Queue) -> Option<GpuSpeed> {
     let shader = crate::shader::compile("calibration.wgsl", CALIBRATION).ok()?;
     let cost = f64::from(shader.fragment_cost);
@@ -1087,25 +1104,45 @@ pub fn calibrate(device: &wgpu::Device, queue: &wgpu::Queue) -> Option<GpuSpeed>
 /// on the machine only ever adds time, and one pass slowed by it at a low
 /// cap would make the GPU look many times slower than it is (and stop
 /// Add-Ons that fit easily), so a pass long enough to stop at is timed again
-/// and the fastest time counts.
+/// and the fastest time counts. A GPU at idle clocks is just as slow, so the
+/// passes go on until the GPU has been busy for [`CALIBRATION_WARM_UP_MS`]
+/// and the fastest time holds for [`CALIBRATION_SAMPLES`] passes.
 fn speed_from_passes(work: f64, mut run: impl FnMut(u32) -> Option<f64>) -> Option<GpuSpeed> {
+    let busy = Cell::new(0.0);
+    let mut timed = |limit: u32| -> Option<f64> {
+        let ms = run(limit)?;
+        busy.set(busy.get() + ms);
+        Some(ms)
+    };
     // Warm up, then the cost of a pass that runs no loop at all.
-    run(0)?;
-    let empty = run(0)?.min(run(0)?);
+    timed(0)?;
+    let mut empty = timed(0)?.min(timed(0)?);
     let mut limit = 3;
     loop {
-        let mut ms = run(limit)? - empty;
+        let mut fastest = timed(limit)?;
         let last = limit >= MAX_LOOP_LIMIT;
-        for _ in 1..CALIBRATION_SAMPLES {
-            if ms < CALIBRATION_MS && !last {
-                break;
-            }
-            ms = ms.min(run(limit)? - empty);
+        let (mut steady, mut passes) = (1, 1);
+        while (fastest - empty >= CALIBRATION_MS || last)
+            && (steady < CALIBRATION_SAMPLES || busy.get() < CALIBRATION_WARM_UP_MS)
+            && busy.get() < CALIBRATION_MOST_MS
+            && passes < CALIBRATION_MOST_PASSES
+        {
+            let ms = timed(limit)?;
+            passes += 1;
+            steady = if ms < fastest * CALIBRATION_STEADY {
+                1
+            } else {
+                steady + 1
+            };
+            fastest = fastest.min(ms);
         }
-        if ms >= CALIBRATION_MS || last {
+        if fastest - empty >= CALIBRATION_MS || last {
+            // The empty pass was first timed cold; a warm one is faster,
+            // which only makes the speed lower.
+            empty = empty.min(timed(0)?);
             // Timer noise on a very fast GPU only makes this lower.
             return Some(GpuSpeed {
-                work_per_ms: work * f64::from(limit + 1) / ms.max(0.5),
+                work_per_ms: work * f64::from(limit + 1) / (fastest - empty).max(0.5),
             });
         }
         limit = (limit + 1) * 4 - 1;
@@ -1397,6 +1434,65 @@ mod tests {
         assert!(!busy, "the slow pass was taken");
         let error = measured.work_per_ms / speed - 1.0;
         assert!(error.abs() < 0.05, "measured {measured:?}");
+    }
+
+    /// [`speed_from_passes`] on a GPU whose speed after `busy` ms of
+    /// calibration work is `speed(busy)`; the measured speed and the GPU time
+    /// calibration took.
+    fn calibrate_on(work: f64, speed: impl Fn(f64) -> f64) -> (f64, f64) {
+        let mut busy = 0.0;
+        let measured = speed_from_passes(work, |limit| {
+            let ms = pass_ms(speed(busy), work, limit);
+            busy += ms;
+            Some(ms)
+        })
+        .unwrap();
+        (measured.work_per_ms, busy)
+    }
+
+    /// v0.2.8 on an RTX 4070 SUPER: 3.7e8 at join, 4.8e9 after a graphics
+    /// change.
+    const COLD: f64 = 3.7e8;
+    const WARM: f64 = 4.8e9;
+
+    #[test]
+    fn a_gpu_at_idle_clocks_is_measured_once_it_has_sped_up() {
+        let work = 128.0 * 128.0 * 100.0;
+        // Clocks rise steadily over the first 120 ms of load.
+        let (measured, busy) =
+            calibrate_on(work, |busy| COLD + (WARM - COLD) * (busy / 120.0).min(1.0));
+        let error = measured / WARM - 1.0;
+        assert!(
+            error.abs() < 0.05,
+            "measured {measured:.2e} for a GPU of {WARM:.2e} ({:.0}x low), in {busy:.0} ms",
+            WARM / measured
+        );
+        assert!(busy <= CALIBRATION_MOST_MS + 50.0, "took {busy:.0} ms");
+        // Clocks that jump all at once after 120 ms.
+        let (measured, _) = calibrate_on(work, |busy| if busy < 120.0 { COLD } else { WARM });
+        assert!(
+            (measured / WARM - 1.0).abs() < 0.05,
+            "measured {measured:.2e}"
+        );
+    }
+
+    #[test]
+    fn a_warm_gpu_is_measured_in_about_the_warm_up() {
+        let work = 128.0 * 128.0 * 100.0;
+        // Fast enough that the highest cap is short, as on the RTX 4070
+        // SUPER, and slow enough that the cap stops at 10 ms.
+        for speed in [WARM, COLD / 10.0] {
+            let (measured, busy) = calibrate_on(work, |_| speed);
+            assert!(
+                (measured / speed - 1.0).abs() < 0.05,
+                "measured {measured:.2e} for {speed:.2e}"
+            );
+            assert!(
+                busy < CALIBRATION_WARM_UP_MS
+                    + 4.0 * CALIBRATION_MS * f64::from(CALIBRATION_SAMPLES),
+                "took {busy:.0} ms at {speed:.2e}"
+            );
+        }
     }
 
     #[test]

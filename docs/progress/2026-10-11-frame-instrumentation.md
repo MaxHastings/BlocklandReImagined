@@ -40,9 +40,8 @@ From the log tail in `crash-20261010-214554.txt` (session
   inference, not measured). With calibration now once per adapter, a
   session keeps its join-time figure after a graphics change, where v0.2.8
   happened to re-measure; Add-On shader loop caps were already set from the
-  join-time figure in every session without a rebuild. Passed to the Add-On
-  scripting owner: warm the GPU (or measure after a few game frames) before
-  calibrating.
+  join-time figure in every session without a rebuild. Fixed here (see
+  "Calibration warms the GPU first" below).
 - A rebuild does all of this on the main thread in the next frame: waits
   for the world's pipelines (`Building::wait`, 47 ms in that log, seconds
   with FXC), uploads the map and every brick chunk again (about 188k bricks
@@ -90,6 +89,22 @@ From the log tail in `crash-20261010-214554.txt` (session
   forgets it. Regression test
   `the_gpu_is_measured_once_per_adapter_not_per_renderer` failed against the
   old `gpu_stopped` ("measured again on the same GPU") and passes now.
+- **Calibration warms the GPU first.** `speed_from_passes` keeps timing
+  passes until the GPU has been busy for 150 ms of GPU time and the fastest
+  pass has held for three passes in a row (a pass 3% faster resets that),
+  raising the loop cap whenever the GPU speeds up enough that a pass drops
+  under 10 ms. It stops after 500 ms of GPU time or 64 passes at one cap.
+  The empty-pass cost is timed again at the end, warm, which can only lower
+  the speed. Cost: on a warm RTX 4070 SUPER the highest loop cap is a
+  1.4 ms pass, so calibration now runs 64 short passes (about 90 ms of GPU
+  time) where it ran about 6; once per adapter, at join, and only when
+  client Add-On code is running. Regression test
+  `a_gpu_at_idle_clocks_is_measured_once_it_has_sped_up` models the v0.2.8
+  figures (3.7e8 cold, 4.8e9 warm, clocks rising over 120 ms of load, and
+  a jump at 120 ms); against the old loop it measures 2.53e9, half the real
+  speed, in 69 ms, and passes now within 5%.
+  `a_warm_gpu_is_measured_in_about_the_warm_up` bounds the time on a GPU
+  that is already warm.
 - **`large_build_perf` benchmark**: `BRI_PERF_EYE`/`BRI_PERF_AT` add a view
   (a corner of the Bedroom), `BRI_PERF_SHADOWS=0,2` switches Shadow Quality
   as Options does and reports the change frame with its breakdown, then
@@ -103,7 +118,9 @@ From the log tail in `crash-20261010-214554.txt` (session
   counted as slow (the v0.2.8 50.3 ms pattern); long-frame lines, rate limit
   and the frame-cap exclusion; GPU and main-thread averages; calibration
   once per adapter (on llvmpipe here).
-- `cargo clippy -p bri-client -p bri-render --all-targets -D warnings`.
+- `cargo test -p bri-client-sandbox -- --include-ignored`: all pass,
+  including the two calibration tests and the llvmpipe render tests.
+- `cargo clippy -p bri-client -p bri-render -p bri-client-sandbox --all-targets -D warnings`.
 - `large_build_perf` compiles; it needs content, a save and a real GPU, so it
   has not run in this container.
 
