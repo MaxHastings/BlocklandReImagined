@@ -157,7 +157,11 @@ impl Session {
             .collect();
         let owners: Vec<OwnerId> = self.peers.keys().copied().collect();
         for owner in owners {
-            let peer = &self.peers[&owner];
+            // A rule run for an earlier player may have removed this one
+            // (`remove_bot` from `on_pickup`).
+            let Some(peer) = self.peers.get(&owner) else {
+                continue;
+            };
             if !peer.combat.alive {
                 continue;
             }
@@ -173,7 +177,11 @@ impl Session {
                 }
             }
             for id in self.item_spawners.contacts(contact) {
-                let item = &self.item_spawners.items[&id];
+                // A rule run for an earlier item may have removed this
+                // one's brick.
+                let Some(item) = self.item_spawners.items.get(&id) else {
+                    continue;
+                };
                 if locked || tick < item.available_at {
                     continue;
                 }
@@ -183,7 +191,12 @@ impl Session {
                 let decision = if sport {
                     Pickup::Take
                 } else {
-                    self.package_pickup(owner, &item, None, Some(id))
+                    let decision = self.package_pickup(owner, &item, None, Some(id));
+                    // The rule's edits applied as it ran: a spawner it
+                    // removed (this one, used up for good) offers nothing
+                    // to anyone after.
+                    self.reconcile_items()?;
+                    decision
                 };
                 let picked = match decision {
                     Pickup::Leave => continue,
@@ -194,10 +207,11 @@ impl Session {
                 // Full inventory, duplicate item or occupied hands leave the item
                 // available. Neither circumstance starts its respawn timer.
                 if picked.is_ok() {
-                    let respawn = self.simulation.state().bricks[&id]
-                        .item_spawn
-                        .respawn_ticks();
-                    self.item_spawners.picked_up(id, tick, respawn)?;
+                    // A spawner the rule removed has no respawn to start.
+                    if let Some(brick) = self.simulation.state().bricks.get(&id) {
+                        let respawn = brick.item_spawn.respawn_ticks();
+                        self.item_spawners.picked_up(id, tick, respawn)?;
+                    }
                     if !sport && decision == Pickup::Take {
                         self.notify(owner, Notice::Sound(ITEM_SOUND.into()));
                     }
