@@ -240,7 +240,7 @@ fn bot_duel(loadout: [Option<String>; 5]) -> Result<(Session, u64, u64, tempfile
     std::fs::write(
         probe.path().join("probe.rhai"),
         "fn cmd_spawn(p) { add_bot(player(p).minigame, #{kind:\"probe\",name:\"Gunner\"}); }\n\
-         fn cmd_arm(p) { for b in bots() { give_item(b, \"v20.weapon.gunitem\", false); } }\n\
+         fn cmd_arm(p) { for b in bots() { give_item(b.id, \"v20.weapon.gunitem\", false); } }\n\
          fn on_damage(p,a,n,i) { if !player(p).bot {set_player(p,\"hits\",get_player(p,\"hits\")+1);0.0} else {()} }",
     )?;
     let mut packages = set();
