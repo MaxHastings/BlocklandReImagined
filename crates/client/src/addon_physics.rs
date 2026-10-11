@@ -577,6 +577,157 @@ mod tests {
         assert!(physics.snapshot().is_empty() && physics.is_empty());
     }
 
+    /// The world simulates exactly the bodies listed, each by a live
+    /// handle: nothing outlives its body.
+    fn assert_consistent(physics: &AddOnPhysics, case: &str) {
+        assert_eq!(
+            physics.world.bodies.len(),
+            physics.bodies.len(),
+            "{case}: every simulated body is listed"
+        );
+        for (id, body) in &physics.bodies {
+            assert!(
+                physics.world.bodies.get(body.handle).is_some(),
+                "{case}: body {id} is simulated"
+            );
+        }
+    }
+
+    fn create(body: u32, position: Vec3) -> PhysicsCommand {
+        PhysicsCommand::Create {
+            body,
+            spec: spec(position, 0),
+        }
+    }
+
+    #[test]
+    fn a_push_or_hold_on_a_body_removed_before_the_step_is_dropped_with_it() {
+        // Max, v0.2.8 soccer with bots: the host crashed ("No element at
+        // index", addon_physics.rs:281) and took the server with it. A push
+        // waits for the next step holding the body's simulation handle; the
+        // Add-On removed the body first (in the same frame, or on the next
+        // one when its frame was too short for a step, as most are at
+        // 165 fps against a 120 Hz step), and the step looked it up.
+        let building = floor();
+        let push = PhysicsCommand::Push {
+            body: 1,
+            velocity: [0.0, 10.0, 0.0],
+        };
+        let hold = PhysicsCommand::Hold {
+            body: 1,
+            point: [0.0; 3],
+            target: [0.0, 5.0, 0.0],
+            velocity: [0.0; 3],
+            max_accel: 400.0,
+        };
+        let remove = PhysicsCommand::Remove { body: 1 };
+        // Frames: the requests, then how long the frame was. One too short
+        // for a step leaves what was asked waiting for one.
+        let (step, none) = (1.0 / 60.0, 0.0);
+        for (case, frames) in [
+            ("push then remove", vec![(vec![push, remove], step)]),
+            ("hold then remove", vec![(vec![hold, remove], step)]),
+            (
+                "push, a frame with no step, remove",
+                vec![(vec![push], none), (vec![remove], step)],
+            ),
+            (
+                "hold, a frame with no step, remove",
+                vec![(vec![hold], none), (vec![remove], step)],
+            ),
+        ] {
+            let mut physics = AddOnPhysics::default();
+            physics.apply(&[
+                create(1, Vec3::new(0.0, 0.3, 0.0)),
+                create(2, Vec3::new(3.0, 0.3, 0.0)),
+            ]);
+            run(&mut physics, &building, 1.0);
+            for (commands, dt) in frames {
+                physics.apply(&commands);
+                physics.advance(dt, &building, &[], &[]).unwrap();
+            }
+            let bodies = physics.snapshot();
+            assert!(!bodies.contains_key(&1), "{case}: removed");
+            assert!(
+                bodies[&2].velocity[1].abs() < 0.5,
+                "{case}: the other body is left alone: {:?}",
+                bodies[&2]
+            );
+            assert_consistent(&physics, case);
+        }
+    }
+
+    #[test]
+    fn a_shot_through_a_body_removed_before_the_step_is_dropped_with_it() {
+        // A projectile's hit, like a push, waits for the next step. Another
+        // body stays, so the world is not simply emptied.
+        let building = floor();
+        for removed in [false, true] {
+            let mut physics = AddOnPhysics::default();
+            physics.apply(&[
+                create(1, Vec3::new(0.0, 0.3, 0.0)),
+                create(2, Vec3::new(0.0, 0.3, 3.0)),
+            ]);
+            run(&mut physics, &building, 1.0);
+            let shot = |x: f32| Shot {
+                id: 7,
+                position: Vec3::new(x, 0.3, 0.0),
+                velocity: Vec3::new(100.0, 0.0, 0.0),
+            };
+            physics.advance(0.0, &building, &[], &[shot(-2.0)]).unwrap();
+            // Through the body, in a frame with no step.
+            physics.advance(0.0, &building, &[], &[shot(2.0)]).unwrap();
+            if removed {
+                physics.apply(&[PhysicsCommand::Remove { body: 1 }]);
+            }
+            physics.advance(1.0 / 60.0, &building, &[], &[]).unwrap();
+            if removed {
+                assert!(!physics.snapshot().contains_key(&1), "removed");
+            } else {
+                let hit = physics.snapshot()[&1];
+                assert!(hit.velocity[0] > 1.0, "the shot hit it: {hit:?}");
+            }
+            assert_consistent(&physics, "shot");
+        }
+    }
+
+    #[test]
+    fn a_push_for_a_removed_body_never_moves_the_body_made_in_its_place() {
+        // The simulation reuses a removed body's slot for the next body
+        // made, and an Add-On may make a body under a handle it had: what
+        // was asked of the old body must not land on the new one.
+        let building = floor();
+        for (case, replace, new) in [
+            (
+                "removed, then another made",
+                vec![
+                    PhysicsCommand::Remove { body: 1 },
+                    create(2, Vec3::new(0.0, 0.3, 0.0)),
+                ],
+                2,
+            ),
+            (
+                "made again under its handle",
+                vec![create(1, Vec3::new(0.0, 0.3, 0.0))],
+                1,
+            ),
+        ] {
+            let mut physics = AddOnPhysics::default();
+            physics.apply(&[create(1, Vec3::new(0.0, 0.3, 0.0))]);
+            run(&mut physics, &building, 1.0);
+            physics.apply(&[PhysicsCommand::Push {
+                body: 1,
+                velocity: [0.0, 20.0, 0.0],
+            }]);
+            physics.advance(0.0, &building, &[], &[]).unwrap();
+            physics.apply(&replace);
+            physics.advance(1.0 / 60.0, &building, &[], &[]).unwrap();
+            let made = physics.snapshot()[&new];
+            assert!(made.velocity[1] < 2.0, "{case}: not pushed: {made:?}");
+            assert_consistent(&physics, case);
+        }
+    }
+
     #[test]
     fn a_body_at_top_speed_stops_on_a_thin_brick() {
         // Soft CCD (no swept clamping, which tore ragdoll joints apart)
