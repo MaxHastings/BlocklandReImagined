@@ -54,6 +54,21 @@ class CiShards(unittest.TestCase):
         self.assertEqual(sorted(sum(parts, [])), sorted(labels))
         self.assertTrue(all(5 <= len(p) <= 6 for p in parts))
 
+    def test_the_pr_tier_leaves_the_nightly_targets_out_and_full_runs_them(self):
+        data = {"ci_skip_target": [{"target": "a/content"}],
+                "ci_nightly_target": [{"target": "b/render"}]}
+        self.assertEqual(gate.ci_left_out(data, "pr"), {"a/content", "b/render"})
+        self.assertEqual(gate.ci_left_out(data, "full"), {"a/content"})
+
+    def test_every_nightly_target_is_named_once_with_a_reason(self):
+        import tomllib
+        path = Path(__file__).with_name("gate-known-failures.toml")
+        nightly = tomllib.loads(path.read_text(encoding="utf-8")).get("ci_nightly_target", [])
+        self.assertTrue(nightly)
+        targets = [entry["target"] for entry in nightly]
+        self.assertEqual(len(targets), len(set(targets)))
+        self.assertTrue(all(entry.get("reason") for entry in nightly))
+
     def test_one_shard_is_all_of_them(self):
         self.assertEqual(gate.shard(["b", "a"], (0, 1)), ["a", "b"])
 

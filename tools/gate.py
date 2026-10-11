@@ -8,6 +8,7 @@
     python tools/gate.py --history-range BASE TIP   (history check only; CI)
     python tools/gate.py --ci-test       content-free tests only (CI)
     python tools/gate.py --ci-test --shard K/N   the Kth of N even shares of them
+    python tools/gate.py --ci-test --tier pr     without the slow render targets (PR CI)
 
 Checks, cheapest first, on the exact commit being pushed:
   1. the commit already contains the latest origin/main (rebase first)
@@ -1163,13 +1164,15 @@ def parse_shard(text):
     return k, n
 
 
-def ci_test(part=(0, 1)):
+def ci_test(part=(0, 1), tier="full"):
     """Run every test binary except targets that need generated v20 content,
     or one even share of them (`part`, see `shard`).
 
     GitHub runners have no v20 content. Those targets are listed as
     [[ci_skip_target]] in tools/gate-known-failures.toml; the local gate still
-    runs them all.
+    runs them all. The "pr" tier also leaves out [[ci_nightly_target]]s, the
+    offscreen renders the runner's software GPU takes minutes over; the
+    nightly "full" run and the local gate (on a real GPU) run them.
     """
     top = Path(git("rev-parse", "--show-toplevel").strip())
     data = tomllib.loads((top / "tools" / "gate-known-failures.toml").read_text(encoding="utf-8"))
@@ -1177,10 +1180,15 @@ def ci_test(part=(0, 1)):
     binaries = test_binaries(top)
     if binaries is None:
         return False
-    unknown = skipped - {label for label, _, _, _ in binaries}
+    nightly = {entry["target"] for entry in data.get("ci_nightly_target", [])}
+    unknown = (skipped | nightly) - {label for label, _, _, _ in binaries}
     if unknown:
-        say(f"ci_skip_target entries match no test target: {', '.join(sorted(unknown))}")
+        say(f"ci_skip_target/ci_nightly_target entries match no test target: "
+            f"{', '.join(sorted(unknown))}")
         return False
+    if tier == "pr":
+        say(f"pr tier: {len(nightly)} slow render targets are left to the nightly run")
+    skipped = ci_left_out(data, tier)
     known = {entry["test"]: entry for entry in data.get("failure", [])}
     skip_args = [arg for entry in data.get("skip", []) + data.get("nightly", [])
                  for arg in ("--skip", entry["test"])]
@@ -1188,6 +1196,8 @@ def ci_test(part=(0, 1)):
     mine = set(shard([label for label, _, _, _ in binaries if label not in skipped], part))
     say(f"shard {part[0]}/{part[1]}: {len(mine)} of {len(binaries) - len(skipped)} test targets")
     for label, executable, cwd, _ in sorted(binaries):
+        if label in nightly and tier == "pr":
+            continue
         if label in skipped:
             say(f"skipping {label} (needs generated content)")
             continue
@@ -1213,6 +1223,15 @@ def ci_test(part=(0, 1)):
         return False
     say("all content-free test targets passed")
     return True
+
+
+def ci_left_out(data, tier):
+    """Targets a CI run of `tier` does not run, from the known-failures
+    table `data`: content targets always, nightly targets on the pr tier."""
+    left_out = {entry["target"] for entry in data.get("ci_skip_target", [])}
+    if tier == "pr":
+        left_out |= {entry["target"] for entry in data.get("ci_nightly_target", [])}
+    return left_out
 
 
 def ci_tolerated(label, output, known):
@@ -1300,6 +1319,8 @@ def main():
                         help="run the tests that need no generated content (used by CI)")
     parser.add_argument("--shard", type=parse_shard, default=(0, 1), metavar="K/N",
                         help="with --ci-test, run only the Kth of N even shares (from 0)")
+    parser.add_argument("--tier", choices=("pr", "full"), default="full",
+                        help="with --ci-test: 'pr' leaves out the [[ci_nightly_target]]s")
     parser.add_argument("--push", action="store_true",
                         help="rebase onto origin/main, gate and push to main under the lock")
     parser.add_argument("--history-range", nargs=2, metavar=("BASE", "TIP"),
@@ -1333,7 +1354,7 @@ def main():
             say("history check " + ("FAILED" if problems else "ok"))
             return 1 if problems else 0
         if args.ci_test:
-            return 0 if ci_test(args.shard) else 1
+            return 0 if ci_test(args.shard, args.tier) else 1
         if args.push:
             return 0 if push_main() else 1
         if args.hook is not None:
