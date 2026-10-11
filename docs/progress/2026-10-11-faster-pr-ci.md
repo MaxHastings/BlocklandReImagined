@@ -27,8 +27,15 @@ A pull request took 65-82 minutes from push to green, on five runners:
   is unchanged: it still runs every target, with `--include-ignored`, on a
   real GPU before anything reaches main.
 - `ci.yml`: sccache (`mozilla-actions/sccache-action`, Actions cache backend)
-  wraps rustc in every job, so a workspace crate compiled by one runner or an
-  earlier run is reused instead of compiled again by each of the five.
+  wraps rustc in every job, so a workspace library crate compiled by one
+  runner or an earlier run is reused instead of compiled again by each of
+  the five.
+- `gate.py --ci-test --shard K/N` lists the test targets from
+  `cargo metadata` (no compile), picks its share, and builds only those
+  with `cargo test --workspace --no-run --lib/--bin/--test ...`. Before, all
+  four shards compiled and linked all ~390 test binaries. A shard fails if a
+  target assigned to it was not built, so nothing drops out silently. The
+  check job still builds every target, nightly ones included.
 
 ## Evidence
 
@@ -42,6 +49,14 @@ A pull request took 65-82 minutes from push to green, on five runners:
 - sccache's end-of-job stats read zero on the shards: its server stops after
   ten idle minutes, and the shards test for longer than that.
   `SCCACHE_IDLE_TIMEOUT=0` keeps it up so the second run reports hits.
+- Second run of #83 (warm caches), all green: check 25 min (build 21,
+  clippy 2); shards 27-46 min, of which compiling 17-27 and tests 9-18.
+  sccache hit all 34 library crates, but 440 of the 474 compiler calls per
+  shard were test or binary executables, which sccache cannot cache
+  ("crate-type"), so the shards' compile barely moved. That led to the
+  per-shard build above. The labels `cargo metadata` gives match the 386
+  targets the full build ran, one for one (checked against the four shards'
+  logs plus the skipped and nightly lists).
 
 ## Duplicate candidates (not removed)
 

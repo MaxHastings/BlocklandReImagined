@@ -23,10 +23,11 @@ concurrency:
 env:
   CARGO_TERM_COLOR: always
   CARGO_INCREMENTAL: 0
-  # The check job and the four test shards compile the same workspace
-  # crates; sccache keeps them in the Actions cache, so each crate compiles
-  # once across jobs and runs, not once per runner. rust-cache still keeps
-  # the crates.io dependencies.
+  # sccache keeps the workspace's library crates in the Actions cache, so a
+  # library compiles once across jobs and runs; rust-cache keeps the
+  # crates.io dependencies. Test and binary targets are linked executables,
+  # which sccache cannot cache, so each shard builds only its own share of
+  # them (tools/gate.py --ci-test --shard).
   SCCACHE_GHA_ENABLED: 'true'
   # The shards build first and test for up to half an hour; a server that
   # outlives its idle limit reports nothing at the end of the job.

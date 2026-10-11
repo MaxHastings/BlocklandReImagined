@@ -69,6 +69,28 @@ class CiShards(unittest.TestCase):
         self.assertEqual(len(targets), len(set(targets)))
         self.assertTrue(all(entry.get("reason") for entry in nightly))
 
+    def test_the_test_targets_come_from_cargo_metadata_labelled_like_the_build(self):
+        def target(name, *kind, test=True):
+            return {"name": name, "kind": list(kind), "test": test}
+        metadata = {
+            "workspace_members": ["a-id", "b-id"],
+            "packages": [
+                {"id": "a-id", "name": "bri-a", "targets": [
+                    target("bri_a", "lib"), target("bri-a", "bin"), target("flow", "test"),
+                    target("build-script-build", "custom-build", test=False),
+                    target("probe", "example", test=False)]},
+                {"id": "b-id", "name": "bri-b", "targets": [
+                    target("bri_b", "rlib", "cdylib"), target("flow", "test")]},
+                {"id": "dep-id", "name": "serde", "targets": [target("serde", "lib")]},
+            ],
+        }
+        labels = gate.labels_from_metadata(metadata)
+        self.assertEqual(labels, {"bri-a/lib": "lib", "bri-a/bri-a": "bin", "bri-a/flow": "test",
+                                  "bri-b/lib": "lib", "bri-b/flow": "test"})
+        self.assertEqual(gate.target_filters({"bri-a/flow", "bri-b/flow", "bri-a/bri-a"}, labels),
+                         ["--bin", "bri-a", "--test", "flow"])
+        self.assertEqual(gate.target_filters({"bri-b/lib"}, labels), ["--lib"])
+
     def test_one_shard_is_all_of_them(self):
         self.assertEqual(gate.shard(["b", "a"], (0, 1)), ["a", "b"])
 

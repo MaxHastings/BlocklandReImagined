@@ -1176,12 +1176,11 @@ def ci_test(part=(0, 1), tier="full"):
     """
     top = Path(git("rev-parse", "--show-toplevel").strip())
     data = tomllib.loads((top / "tools" / "gate-known-failures.toml").read_text(encoding="utf-8"))
-    skipped = {entry["target"] for entry in data.get("ci_skip_target", [])}
-    binaries = test_binaries(top)
-    if binaries is None:
+    labels = test_labels(top)
+    if labels is None:
         return False
     nightly = {entry["target"] for entry in data.get("ci_nightly_target", [])}
-    unknown = (skipped | nightly) - {label for label, _, _, _ in binaries}
+    unknown = ({entry["target"] for entry in data.get("ci_skip_target", [])} | nightly) - set(labels)
     if unknown:
         say(f"ci_skip_target/ci_nightly_target entries match no test target: "
             f"{', '.join(sorted(unknown))}")
@@ -1189,18 +1188,28 @@ def ci_test(part=(0, 1), tier="full"):
     if tier == "pr":
         say(f"pr tier: {len(nightly)} slow render targets are left to the nightly run")
     skipped = ci_left_out(data, tier)
+    for label in sorted(labels):
+        if label in skipped and label not in nightly:
+            say(f"skipping {label} (needs generated content)")
+    mine = set(shard([label for label in labels if label not in skipped], part))
+    say(f"shard {part[0]}/{part[1]}: {len(mine)} of {len(labels) - len(skipped)} test targets")
+    if not mine:
+        return True
+    # Each shard compiles only its own targets (and whatever shares their
+    # names in other packages), not the whole workspace's ~390 test binaries:
+    # compiling and linking those took 17-27 of a shard's 28-47 minutes.
+    binaries = test_binaries(top, extra=target_filters(mine, labels))
+    if binaries is None:
+        return False
+    unbuilt = mine - {label for label, _, _, _ in binaries}
+    if unbuilt:
+        say(f"test targets this shard should run were not built: {', '.join(sorted(unbuilt))}")
+        return False
     known = {entry["test"]: entry for entry in data.get("failure", [])}
     skip_args = [arg for entry in data.get("skip", []) + data.get("nightly", [])
                  for arg in ("--skip", entry["test"])]
     failed = []
-    mine = set(shard([label for label, _, _, _ in binaries if label not in skipped], part))
-    say(f"shard {part[0]}/{part[1]}: {len(mine)} of {len(binaries) - len(skipped)} test targets")
     for label, executable, cwd, _ in sorted(binaries):
-        if label in nightly and tier == "pr":
-            continue
-        if label in skipped:
-            say(f"skipping {label} (needs generated content)")
-            continue
         if label not in mine:
             continue
         say(f"running {label}")
@@ -1223,6 +1232,52 @@ def ci_test(part=(0, 1), tier="full"):
         return False
     say("all content-free test targets passed")
     return True
+
+
+LIB_KINDS = {"lib", "rlib", "dylib", "cdylib", "staticlib", "proc-macro"}
+
+
+def test_labels(top):
+    """Every test target `cargo test --workspace` builds, as test_binaries
+    labels them, read from `cargo metadata` without compiling anything."""
+    result = subprocess.run(["cargo", "metadata", "--no-deps", "--format-version", "1", "--locked"],
+                            cwd=top, stdout=subprocess.PIPE, text=True, errors="replace")
+    if result.returncode:
+        return None
+    return labels_from_metadata(json.loads(result.stdout))
+
+
+def labels_from_metadata(metadata):
+    """{label: kind} for the test targets of the workspace members in
+    `metadata`: label as test_binaries makes it ("<package>/<target>", "lib"
+    for unit tests), kind the cargo test flag that selects it (lib, bin,
+    test, example or bench)."""
+    members = set(metadata["workspace_members"])
+    labels = {}
+    for package in metadata["packages"]:
+        if package["id"] not in members:
+            continue
+        for target in package["targets"]:
+            if not target.get("test") or "custom-build" in target["kind"]:
+                continue
+            if LIB_KINDS & set(target["kind"]):
+                labels[f"{package['name']}/lib"] = "lib"
+            else:
+                labels[f"{package['name']}/{target['name']}"] = target["kind"][0]
+    return labels
+
+
+def target_filters(labels, kinds):
+    """cargo test arguments that build at least the targets `labels` name
+    (`kinds` as labels_from_metadata gives them). The filters apply across the
+    whole workspace, so features stay unified as in a full build and a name
+    another package shares is built there too."""
+    selected = {(kinds[label], label.split("/", 1)[1]) for label in labels}
+    args = ["--lib"] if any(kind == "lib" for kind, _ in selected) else []
+    for kind, name in sorted(selected):
+        if kind != "lib":
+            args += [f"--{kind}", name]
+    return args
 
 
 def ci_left_out(data, tier):
