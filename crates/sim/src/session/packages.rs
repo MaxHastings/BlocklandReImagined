@@ -1191,6 +1191,8 @@ impl Session {
         }
     }
     fn package_snapshot(&self) -> Snapshot {
+        self.package_snapshots
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let host = self.packages.as_ref();
         Snapshot {
             tick: self.simulation.state().tick,
@@ -2952,10 +2954,20 @@ impl Session {
             .map(|(id, e)| (e.next_think, *id, e.package.clone(), e.think.clone()))
             .collect();
         due.sort_unstable_by_key(|d| (d.0, d.1));
-        let view = self.tick_view();
-        let snapshot = view.snapshot.clone();
-        self.packages.as_mut().expect("checked").view = Some(view);
+        // The tick view (a snapshot of every player, bot and entity, plus
+        // each package's entity variables) is built only when a think will
+        // read it; most ticks have none due, and a game with no package
+        // entities never does.
+        let snapshot = if due.is_empty() {
+            None
+        } else {
+            let view = self.tick_view();
+            let snapshot = view.snapshot.clone();
+            self.packages.as_mut().expect("checked").view = Some(view);
+            Some(snapshot)
+        };
         for (_, id, package, think) in due {
+            let snapshot = snapshot.as_ref().expect("a due think has the tick view");
             // Past its share this tick, a package's thinks wait (and yield to
             // its due hook); they are not dropped.
             let host = self.packages.as_mut().expect("checked");
@@ -3948,6 +3960,12 @@ impl Session {
             removed_voxels: host.world.as_ref().map_or(0, |w| w.removed.len()),
             diagnostics: host.diagnostics.len(),
         }
+    }
+    /// How many script snapshots (the tick view or a hook's own) the
+    /// session has built so far: a work count for tests.
+    pub fn package_snapshots(&self) -> u64 {
+        self.package_snapshots
+            .load(std::sync::atomic::Ordering::Relaxed)
     }
     /// Script time per package since the last call, then start again. Only
     /// packages whose scripts ran appear.

@@ -138,6 +138,30 @@ const DOWN: Option<ActionAim> = Some(ActionAim {
     pitch: -1.5,
 });
 
+/// The tick view (a snapshot of every player and entity) is built only on
+/// ticks where a package entity's think will read it, not on every tick.
+#[test]
+fn idle_ticks_build_no_script_snapshot() {
+    let (mut s, spawns) = session(None);
+    let a = s.join("Miner".into(), spawns[0], false).unwrap();
+    for _ in 0..30 {
+        s.step().unwrap();
+    }
+    let entities = s.package_stats().entities;
+    let before = s.package_snapshots();
+    for _ in 0..240 {
+        s.step().unwrap();
+    }
+    let built = s.package_snapshots() - before;
+    // With no entity thinking, nothing needs a snapshot; the creeper's
+    // `tick_interval` of 1200 cannot fall inside 240 ticks more than once.
+    assert!(
+        built <= 1 + 240 * entities as u64 / 10,
+        "{built} snapshots in 240 idle ticks with {entities} entities"
+    );
+    let _ = a;
+}
+
 #[test]
 fn generated_world_mines_into_server_owned_currency() {
     let (mut s, spawns) = session(None);
