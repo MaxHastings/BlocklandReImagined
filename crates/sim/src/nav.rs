@@ -37,6 +37,7 @@ use rapier3d::prelude::*;
 use rustc_hash::{FxHashMap, FxHashSet};
 use std::cmp::Ordering;
 use std::collections::BinaryHeap;
+use std::ops::RangeInclusive;
 
 /// Grid spacing, in world units: one brick stud.
 pub const CELL: f32 = 0.5;
@@ -688,6 +689,9 @@ pub struct Nav {
     expansions: u32,
     /// Samples taken so far, for tests and probes.
     pub sampled: u64,
+    /// Floor samples forgotten so far (`Nav::invalidate_all`), for tests
+    /// and probes.
+    pub forgotten: u64,
     /// Whether the arc of a leap from one node onto another is clear, as
     /// swept ([`Ground::sweep_arc`]), and how many more it sweeps this
     /// tick.
@@ -881,12 +885,39 @@ impl Nav {
                 (x0..=x1, z0..=z1, low, high)
             })
             .collect();
-        self.floors.retain(|(x, z, band), _| {
-            let hint = *band as f32 * HINT_BAND;
-            !cells.iter().any(|(xs, zs, low, high)| {
-                xs.contains(x) && zs.contains(z) && hint >= *low && hint <= *high
-            })
-        });
+        // A brick's box names a few dozen keys; a walk over the cache (up
+        // to hundreds of thousands of columns) is for the big changes.
+        let keys = |(xs, zs, low, high): &(RangeInclusive<i32>, RangeInclusive<i32>, f32, f32)| {
+            let bands = (low / HINT_BAND).ceil() as i64..=(high / HINT_BAND).floor() as i64;
+            let count =
+                |r: &RangeInclusive<i32>| (i64::from(*r.end()) - i64::from(*r.start()) + 1).max(0);
+            (
+                count(xs) * count(zs) * (bands.end() - bands.start() + 1).max(0),
+                bands,
+            )
+        };
+        let named: i64 = cells.iter().map(|c| keys(c).0).sum();
+        let before = self.floors.len();
+        if named < before as i64 {
+            for cell in &cells {
+                let bands = keys(cell).1;
+                for x in cell.0.clone() {
+                    for z in cell.1.clone() {
+                        for band in bands.clone() {
+                            self.floors.remove(&(x, z, band as i32));
+                        }
+                    }
+                }
+            }
+        } else {
+            self.floors.retain(|(x, z, band), _| {
+                let hint = *band as f32 * HINT_BAND;
+                !cells.iter().any(|(xs, zs, low, high)| {
+                    xs.contains(x) && zs.contains(z) && hint >= *low && hint <= *high
+                })
+            });
+        }
+        self.forgotten += (before - self.floors.len()) as u64;
         // An arc's box: from its takeoff to its landing, a body wide, up to
         // the top of its jump and a body over.
         let grown: Vec<_> = boxes
@@ -2241,6 +2272,40 @@ mod tests {
             }
         };
         assert!(matches!(found, Found::Path(_)), "{found:?}");
+    }
+
+    /// One brick's box forgets the columns over it, whatever the cache
+    /// holds: the keys it names are removed one by one rather than by a
+    /// walk over every column (v0.2.10 performance waste audit, finding
+    /// 10).
+    #[test]
+    fn a_small_change_forgets_only_its_own_columns() {
+        let mut nav = Nav::default();
+        for x in -150..150 {
+            for z in -150..150 {
+                nav.floors.insert((x, z, 0), Floors::from([]));
+            }
+        }
+        let before = nav.len();
+        nav.invalidate(
+            Vec3::new(20.0, -1.0, 20.0),
+            Vec3::new(21.0, 0.0, 21.0),
+            &body(),
+        );
+        let body = body();
+        let reach = body.width + CELL;
+        let (x0, z0) = cell_of(Vec3::new(20.0 - reach, 0.0, 20.0 - reach));
+        let (x1, z1) = cell_of(Vec3::new(21.0 + reach, 0.0, 21.0 + reach));
+        let columns = ((x1 - x0 + 1) * (z1 - z0 + 1)) as u64;
+        assert_eq!(
+            nav.forgotten, columns,
+            "forgot {} of {before}",
+            nav.forgotten
+        );
+        assert_eq!(nav.len() as u64, before as u64 - columns);
+        // A change over everything still empties the cache.
+        nav.invalidate(Vec3::splat(-100.0), Vec3::splat(100.0), &body);
+        assert!(nav.is_empty());
     }
 
     /// A wall with a window up it too low to stand in: the only way on is
