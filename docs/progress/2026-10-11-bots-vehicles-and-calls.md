@@ -170,6 +170,56 @@ Team kills were 0 everywhere on both. One of main's rooftop runs (seed 0)
 failed its own check ("no bot strafed off the deck"), and none of the
 branch's did.
 
+## Code-read fixes
+
+The coordinator's code read of PR #85 raised two medium items and some low
+ones.
+
+- **Rising slopes read as drops.** True in geometry: the one ray started a
+  chassis height above the floor under the hull, so a floor rising faster
+  than that started it inside the hill. In play, the misfire I saw was the
+  mirror case: a jeep rolling back down a slope saw the floor fall past the
+  ray's reach. In one run on a 9 degree hill the old check fired 8 times in a run and
+  the new one never did; on a 17 degree hill, 41 times against none. The
+  check now follows the floor in steps of half the chassis's length. Each
+  step may rise or fall by its run and fall a further chassis height (a
+  kerb), so hills are floor and cliffs are still drops. The new case
+  `a_jeep_on_a_hill` (a jeep at the foot and one on a plateau that ends in
+  cliffs) passes on seeds 0 to 5, with no falls. On a longer 9 degree
+  hill, seated speed on the slope is the same with either check (5.9 against
+  6.0 units/s over 8 seeds), so the old check rarely cost speed there.
+  Speed matters on steeper hills, where the test car cannot climb anyway.
+- **The parked sweep fought "Get in!".** Now only a bot whose seat claim is
+  on the vehicle ignores its crew's harm; every other ally is still asked
+  clear. Turning the sweep off while waiting measured the same.
+- Low items: `undrivable` (its stop could not be measured) and
+  `overturned` are separated from `wrecked`; the edge-stop latch is cleared
+  on leaving the seat and on death; `CREW_WAIT` is now `DISMOUNT_BEAT`.
+
+Jeep gauntlet, seeds 0 to 7, 3x:
+
+| | stuck mean (worst) | team kills | kills | own falls | knocked off by an enemy |
+|---|---|---|---|---|---|
+| before the fixes | 2.2% (4.5%) | 25 | 338 | 0 | 3 |
+| floor-following check only | 2.1% (4.5%) | 24 | 338 | 0 | |
+| both fixes | 3.4% (8.1%) | 18 | 338 | 0 | 2 |
+
+The rise is in seeds 0 (2.0% to 4.1%) and 6 (1.2% to 8.1%). It is walkers
+stuck in chase, not allies boarding, so I read it as runs diverging once
+who steps aside changes. It is under the 5% bound, and main is at 2.0%.
+I have not found a defect behind it, and it is the first thing to look at
+if Max's playtest shows walkers jammed around a jeep.
+
+Team deathmatch, seeds 0 to 3, 3x, both fixes: 149 rides, 11 under 5 s,
+1125 s crewed, 1009 s at a gun, 3 team kills. Exits:
+
+- stalled 59, walk_the_rest 26, overturned 11;
+- bail_out 11, wrecked 6, gun_lost 3;
+- no_driver 3, nothing_to_do 3.
+
+Seed 1 failed the `bad_plans` check once, the rare tank-gunner scorer race
+noted below. Seed 0, which CI runs, passes.
+
 ## Commands
 
 ```sh
