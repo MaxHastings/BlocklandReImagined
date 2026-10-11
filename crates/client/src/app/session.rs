@@ -374,15 +374,19 @@ impl App {
         // This game's recovery snapshot takes the slot: a build an earlier
         // game left there that the player has not answered for is kept as
         // a save first, never overwritten.
-        if crate::recovery::left(&state_dir, &self.files.saves).is_some() {
-            match crate::recovery::keep(&state_dir, &self.files.saves) {
-                Ok(name) => bri_console::echo(format!(
-                    "The build an earlier game left unsaved is in Load Bricks as {name}."
-                )),
-                Err(error) => bri_console::warn(format!(
-                    "Could not keep the build an earlier game left unsaved: {error:#}"
-                )),
-            }
+        match crate::recovery::make_room(&state_dir, &self.files.saves) {
+            Ok(crate::recovery::Room::Free) => {}
+            Ok(crate::recovery::Room::Kept(name)) => bri_console::echo(format!(
+                "The build an earlier game left unsaved is in Load Bricks as {name}."
+            )),
+            Ok(crate::recovery::Room::SetAside(aside)) => bri_console::warn(format!(
+                "The build an earlier game left unsaved is damaged and cannot be loaded; \
+                 it was moved to {}.",
+                aside.display()
+            )),
+            Err(error) => bri_console::warn(format!(
+                "Could not keep the build an earlier game left unsaved: {error:#}"
+            )),
         }
         let copies = Arc::new(crate::copies::CopyFiles::new(self.files.old_saves.clone()));
         let load_limit = self.load_limit.clone();
