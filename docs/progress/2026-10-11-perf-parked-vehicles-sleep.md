@@ -62,3 +62,18 @@ checks its position is unchanged to 1e-3 over 2 s).
 PC numbers on the v0.2.10 baseline are recorded in the audit report's
 status column; `bot_combined_perf` with vehicle spawns is the host-side
 check.
+
+## CI follow-up
+
+The first Windows CI run of the PR failed the deterministic bot test
+`a_chassis_replans_or_stops_at_a_gap_only_a_pedestrian_can_fit` (the
+driven chassis took longer than 12 s to get round the wall), while the
+same test passed on Linux and on the PRs without this change. Cause: every
+force, torque and velocity write had been switched to `wake_up = false`
+for all vehicles, so a driven car held against a wall could let Rapier's
+sleep timer run out, doze for a step, and lose its velocity; Windows
+floating point sat on the other side of the sleep threshold. Fixed by
+keeping the old `wake_up = true` writes for a driven or jetting vehicle
+(`Drive::wake`) and using `false` only for an empty one, which is the
+only case the fix is for. Tests, clippy and fmt pass locally; the parked
+work counts are unchanged.

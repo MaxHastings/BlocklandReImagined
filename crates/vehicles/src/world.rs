@@ -1605,7 +1605,13 @@ impl VehiclesWorld {
             // push or a brick removed from under it (`wake_resting`) to
             // wake it. Every force below is applied without waking, or
             // the sleep timer would restart every tick.
-            if (driven || v.jetting) && world.bodies[v.body].is_sleeping() {
+            // A driven or jetting vehicle keeps its body awake with every
+            // force, as before: Rapier's sleep timer restarts each tick, so
+            // a car held against a wall never dozes off and loses its
+            // velocity mid-manoeuvre. Only an empty vehicle's forces leave
+            // the timer alone.
+            let wake = driven || v.jetting;
+            if wake && world.bodies[v.body].is_sleeping() {
                 world.bodies[v.body].wake_up(true);
             }
             let resting = world.bodies[v.body].is_sleeping();
@@ -1807,20 +1813,20 @@ impl VehiclesWorld {
             let b = &mut world.bodies[v.body];
             b.reset_forces(false);
             b.reset_torques(false);
-            b.add_force(hull_friction, false);
+            b.add_force(hull_friction, wake);
             if buoyancy > 0. || drag > 0. {
                 // `WheeledVehicle::updateForces` and FlyingVehicle's: lift of
                 // buoyancy x gravity x mass, and drag straight on the velocity,
                 // not scaled by mass.
                 b.add_force(
                     Vec3::Y * (buoyancy * gravity * d.mass) - velocity * drag,
-                    false,
+                    wake,
                 );
                 // Wheeled vehicles also take `torque -= angMomentum * mDrag`,
                 // which decays spin at `drag` per second whatever the inertia.
                 if matches!(d.family, Family::Wheeled | Family::Skis | Family::Ball) {
                     let spin = b.angvel() * (1. - drag * FIXED_DT).max(0.);
-                    b.set_angvel(spin, false);
+                    b.set_angvel(spin, wake);
                 }
             }
             if alive {
@@ -1856,7 +1862,7 @@ impl VehiclesWorld {
                                 (-right * (pitch * d.pitch_force) - up * (yaw * d.yaw_force)
                                     + forward * (roll * d.roll_force))
                                     * bite,
-                                false,
+                                wake,
                             );
                             // Wings: sideways and roof-wise air is resisted
                             // with the square of speed once above stall. A
@@ -1867,10 +1873,10 @@ impl VehiclesWorld {
                                     * (right.dot(velocity) * air * f.horizontal_surface_force)
                                     + up * (up.dot(velocity) * air * f.vertical_surface_force);
                             }
-                            b.add_force(force, false);
+                            b.add_force(force, wake);
                             if velocity.length() > WHEELED_SPEED_CAP {
                                 let capped = velocity.normalize() * (WHEELED_SPEED_CAP - 1.);
-                                b.set_linvel(capped, false);
+                                b.set_linvel(capped, wake);
                             }
                         }
                     }
@@ -1898,7 +1904,7 @@ impl VehiclesWorld {
                                 + right * (f.auto_linear_force * auto * right.dot(velocity));
                             b.add_torque(
                                 -right * (f.auto_angular_force * auto * forward.dot(Vec3::Y)),
-                                false,
+                                wake,
                             );
                         }
                         // Damping surfaces: straight on the sideways and roof
@@ -1924,8 +1930,8 @@ impl VehiclesWorld {
                                 * (steer * steer.abs() * f.steering_roll_force
                                     + f.auto_angular_force * right.dot(Vec3::Y)
                                     - d.roll_force * right.dot(velocity));
-                        b.add_force(force, false);
-                        b.add_torque(torque, false);
+                        b.add_force(force, wake);
+                        b.add_torque(torque, wake);
                     }
                     Family::Tumble | Family::Ball => {}
                     Family::Horse | Family::Rowboat | Family::Cannon | Family::Turret => {
@@ -1947,6 +1953,7 @@ impl VehiclesWorld {
                         throttle: c.throttle,
                         braking: c.brake,
                         jetting: v.jetting,
+                        wake,
                     },
                     FIXED_DT,
                 );
