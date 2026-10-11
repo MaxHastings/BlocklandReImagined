@@ -15,7 +15,7 @@ use super::claims::GIVE_UP_TICKS;
 /// a farther one is turned toward.
 const REVERSE_DEGREES: f32 = 103.0;
 const REVERSE_DISTANCE: f32 = 16.0;
-const CREW_WAIT: u64 = 360;
+const DISMOUNT_BEAT: u64 = 360;
 const OBJECTS_PER_BOT: usize = 8;
 const LOOKAHEAD_POINTS: usize = 24;
 /// How far past its own half-length a driver that only carries its bot to
@@ -1419,7 +1419,7 @@ impl Session {
         let since = self.bots.brains[&bot]
             .vehicle_since
             .map_or(tick, |(_, since)| since);
-        if tick >= since + CREW_WAIT {
+        if tick >= since + DISMOUNT_BEAT {
             return true;
         }
         !self.bots.brains.keys().any(|other| {
@@ -1517,21 +1517,29 @@ impl Session {
         let d = w
             .definition(&v.definition)
             .context("No vehicle definition")?;
-        // An affordance lost: a wreck, or a wheeled hull on its side or its
-        // roof, ends the drive (and any ride in it) at once.
+        // An affordance lost ends the drive (and any ride in it) at once: a
+        // wreck, a wheeled hull on its side or its roof, or a chassis whose
+        // stop could not be measured.
         let handling = (d.family == Family::Wheeled)
             .then(|| crate::reach::Handling::of(w, d, v.scale))
             .flatten();
-        if v.destroyed
-            || d.family == Family::Wheeled
-                && (handling.is_none()
-                    || d.wheeled_flight.is_none() && !crate::route::upright(v.transform.rotation))
-        {
+        let lost = if v.destroyed {
+            Some(Leave::Wrecked)
+        } else if d.family != Family::Wheeled {
+            None
+        } else if handling.is_none() {
+            Some(Leave::Undrivable)
+        } else if d.wheeled_flight.is_none() && !crate::route::upright(v.transform.rotation) {
+            Some(Leave::Overturned)
+        } else {
+            None
+        };
+        if let Some(why) = lost {
             let brain = self.bots.brains.get_mut(&bot).unwrap();
             brain.next_interaction = tick + GIVE_UP_TICKS;
             brain.plan.clear();
             brain.search = None;
-            self.bot_leave_seat(bot, Leave::Wrecked);
+            self.bot_leave_seat(bot, why);
             return Ok(MoveInput {
                 yaw: self.bots.brains[&bot].yaw,
                 ..Default::default()
@@ -1937,7 +1945,7 @@ impl Session {
         // to go) and no ally driving it: it gets out, looked at on a beat
         // so a moment's lull between choices is not taken for it.
         if behaviour == Behaviour::Wander
-            && super::cadence::beat(bot, super::cadence::salt::DISMOUNT, tick, CREW_WAIT)
+            && super::cadence::beat(bot, super::cadence::salt::DISMOUNT, tick, DISMOUNT_BEAT)
             && !riding_along
             // Carried to an enemy now in its band: it gets off to fight.
             || carried_only && behaviour == Behaviour::Fight
@@ -1958,8 +1966,13 @@ impl Session {
 /// Why a bot leaves its seat: each an outcome it observed, never a timer.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Leave {
-    /// A wreck, or a wheeled hull on its side or roof.
+    /// The hull is destroyed.
     Wrecked,
+    /// A wheeled hull on its side or its roof.
+    Overturned,
+    /// A wheeled chassis whose stop could not be measured
+    /// ([`crate::reach::Handling`]), so it cannot be driven safely.
+    Undrivable,
     /// The next hit like the last would wreck it.
     BailOut,
     /// Its drive made no headway, backing up and replanning included.
@@ -1983,6 +1996,8 @@ impl Leave {
     pub(super) fn name(self) -> &'static str {
         match self {
             Self::Wrecked => "wrecked",
+            Self::Overturned => "overturned",
+            Self::Undrivable => "undrivable",
             Self::BailOut => "bail_out",
             Self::Stalled => "stalled",
             Self::WalkTheRest => "walk_the_rest",

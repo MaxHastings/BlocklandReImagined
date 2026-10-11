@@ -308,7 +308,8 @@ person presses:
   the seat or coming to it.
 
   Each time a bot gets out it says why (`interactions::Leave`), and the
-  gauntlet counts the reasons: `wrecked`, `bail_out`, `stalled` (no
+  gauntlet counts the reasons: `wrecked`, `overturned`, `undrivable` (its
+  stop could not be measured), `bail_out`, `stalled` (no
   headway after backing up and replanning), `walk_the_rest`,
   `got_off_to_fight`, `no_driver`, `other_way`, `gun_lost` and
   `nothing_to_do` (no enemy, task or place from the seat, and no ally

@@ -759,6 +759,8 @@ fn vehicles_are_driven_and_crewed_in_a_team_deathmatch() {
     assert!(
         rides.leaves.keys().all(|why| [
             "wrecked",
+            "overturned",
+            "undrivable",
             "bail_out",
             "stalled",
             "walk_the_rest",

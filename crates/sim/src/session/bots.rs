@@ -1271,8 +1271,9 @@ impl Session {
         (self.bots.failed_steps, &self.bots.failures)
     }
     /// Seats bots left since the session began, by why: `wrecked`,
-    /// `bail_out`, `stalled`, `walk_the_rest`, `got_off_to_fight`,
-    /// `no_driver`, `other_way`, `gun_lost`, `nothing_to_do`.
+    /// `overturned`, `undrivable`, `bail_out`, `stalled`, `walk_the_rest`,
+    /// `got_off_to_fight`, `no_driver`, `other_way`, `gun_lost`,
+    /// `nothing_to_do`.
     pub fn bot_seat_leaves(&self) -> &BTreeMap<&'static str, u64> {
         &self.bots.leaves
     }
@@ -1351,6 +1352,7 @@ impl Session {
             brain.vehicle_since = None;
             brain.hull = None;
             brain.sweep = None;
+            brain.edge_stop = false;
             brain.vehicle_headway.clear();
             brain.fire_down = false;
             brain.objective_tool = false;
@@ -1987,6 +1989,7 @@ impl Session {
             brain.vehicle_since = None;
             brain.hull = None;
             brain.sweep = None;
+            brain.edge_stop = false;
             brain.vehicle_headway.clear();
             brain.mount_anchor = None;
         }
