@@ -30,6 +30,9 @@ pub struct GpuTimer {
     /// The slot this frame writes, and the stretches marked so far.
     writing: Option<(usize, Vec<&'static str>)>,
     latest: Option<(Duration, Vec<(&'static str, Duration)>)>,
+    /// Frames read back so far: a caller that sees it change knows `latest`
+    /// is a new frame, not the one it already counted.
+    readings: u64,
 }
 
 impl GpuTimer {
@@ -68,6 +71,7 @@ impl GpuTimer {
             period_ns: queue.get_timestamp_period(),
             writing: None,
             latest: None,
+            readings: 0,
         })
     }
     fn stamp(&self, encoder: &mut wgpu::CommandEncoder, index: u32) {
@@ -119,6 +123,10 @@ impl GpuTimer {
         slot.labels = labels;
         slot.state.store(COPIED, Ordering::Release);
     }
+    /// How many frames have been read back (see `collect`).
+    pub fn readings(&self) -> u64 {
+        self.readings
+    }
     /// After submitting: start reading submitted slots and take any that
     /// finished. The latest frame known: its whole time and each stretch.
     pub fn collect(
@@ -161,6 +169,7 @@ impl GpuTimer {
                     .collect();
                 let whole = span(ticks[0], ticks.last().copied().unwrap_or(ticks[0]));
                 self.latest = Some((whole, stretches));
+                self.readings += 1;
             }
             slot.buffer.unmap();
             slot.state.store(FREE, Ordering::Release);

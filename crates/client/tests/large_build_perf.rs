@@ -11,6 +11,12 @@
 //!   cargo test -p bri-client --release --test large_build_perf -- --ignored --nocapture
 //! Optional: BRI_PERF_OUT (report folder), BRI_PERF_SIZE ("2560x1440"),
 //! BRI_PERF_FRAMES (per view), BRI_PERF_MAX_MS (fail above this p95 frame).
+//! BRI_PERF_EYE="x y z" (and BRI_PERF_AT="x y z", default the build's
+//! middle) adds a view from there, such as a corner of the Bedroom.
+//! BRI_PERF_SHADOWS="0,2" then switches Shadow Quality to each level in turn
+//! (0 Best, 1 High, 2 Medium, 3 Low, 4 off) at the last view, as Options
+//! does: it reports the frame the change costs (the renderer rebuild, with
+//! the frame trace's breakdown) and steady frames at that level.
 //! Stacked saves: `BRI_PERF_SAVE="a.bls;b.bls;c.bls" BRI_PERF_MAP=Bedroom`
 //! loads them all onto one map. Each view reports GPU ms per world pass
 //! (`gpu_passes`) beside the frame's whole GPU time.
@@ -22,6 +28,7 @@ use anyhow::{Context, Result, ensure};
 use bri_client::{
     app::App,
     content::ClientContent,
+    frame_trace::{self, FrameRecord},
     perf::GpuFrameTimer,
     platform::{PlatformApp, RenderContext},
 };
@@ -368,8 +375,82 @@ fn screenshot(gpu: &Gpu, target: &wgpu::Texture, path: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Frames as the platform loop runs them: update, record the scene and the
-/// HUD, submit, then wait for the GPU as a synchronized present would.
+/// One frame as the platform loop runs it: update, record the scene and
+/// the HUD, submit, then wait for the GPU as a synchronized present would.
+/// Returns the update, recording and whole-frame times, the GPU time read
+/// back by now (a few frames late) and the frame trace's record.
+fn frame_once(
+    app: &mut App,
+    gpu: &Gpu,
+    ui: &mut UiRenderer,
+    timer: &mut Option<GpuFrameTimer>,
+    target: &wgpu::TextureView,
+    size: (u32, u32),
+    previous: &mut Instant,
+) -> Result<(Duration, Duration, Duration, Option<Duration>, FrameRecord)> {
+    let format = wgpu::TextureFormat::Bgra8Unorm;
+    let start = Instant::now();
+    let update_span = frame_trace::span("update");
+    step(app, start.duration_since(*previous))?;
+    drop(update_span);
+    *previous = start;
+    let updated = Instant::now();
+    let mut encoder = gpu.device.create_command_encoder(&Default::default());
+    if let Some(t) = timer.as_mut() {
+        t.begin(&mut encoder);
+    }
+    let draw_span = frame_trace::span("draw");
+    ensure!(
+        app.render_scene(&mut RenderContext {
+            device: &gpu.device,
+            queue: &gpu.queue,
+            encoder: &mut encoder,
+            target,
+            format,
+            size,
+            ui_renderer: ui,
+        })?,
+        "App did not render the world"
+    );
+    drop(draw_span);
+    let hud = app.ui();
+    ui.render(
+        &gpu.device,
+        &gpu.queue,
+        &mut encoder,
+        target,
+        format,
+        size,
+        hud.scale(),
+        &hud.core.pack,
+        &hud.draw(),
+        None,
+    );
+    if let Some(t) = timer.as_mut() {
+        t.end(&mut encoder);
+    }
+    gpu.queue.submit([encoder.finish()]);
+    let recorded = Instant::now();
+    let wait_span = frame_trace::span("GPU wait");
+    gpu.device.poll(wgpu::PollType::Wait {
+        submission_index: None,
+        timeout: Some(Duration::from_secs(10)),
+    })?;
+    drop(wait_span);
+    let done = Instant::now();
+    let measured = timer.as_mut().and_then(|t| t.collect(&gpu.device));
+    let record = frame_trace::finish(done - start, false);
+    Ok((
+        updated - start,
+        recorded - updated,
+        done - start,
+        measured,
+        record,
+    ))
+}
+
+/// Frames as the platform loop runs them ([`frame_once`]), after 20 to
+/// settle; the slowest frame keeps the frame trace's breakdown.
 fn frames(
     app: &mut App,
     gpu: &Gpu,
@@ -379,62 +460,23 @@ fn frames(
     size: (u32, u32),
     count: usize,
 ) -> Result<serde_json::Value> {
-    let format = wgpu::TextureFormat::Bgra8Unorm;
     let (mut update, mut record, mut gpu_ms, mut frame) = (vec![], vec![], vec![], vec![]);
     // GPU ms per world pass, in frame order.
     let mut passes: Vec<(&'static str, Vec<f64>)> = Vec::new();
+    let mut slowest: Option<FrameRecord> = None;
     app.time_gpu_passes(true);
     let mut previous = Instant::now();
     let mut last_gpu = None;
     for i in 0..count + 20 {
-        let start = Instant::now();
-        step(app, start.duration_since(previous))?;
-        previous = start;
-        let updated = Instant::now();
-        let mut encoder = gpu.device.create_command_encoder(&Default::default());
-        if let Some(t) = timer.as_mut() {
-            t.begin(&mut encoder);
-        }
-        ensure!(
-            app.render_scene(&mut RenderContext {
-                device: &gpu.device,
-                queue: &gpu.queue,
-                encoder: &mut encoder,
-                target,
-                format,
-                size,
-                ui_renderer: ui,
-            })?,
-            "App did not render the world"
-        );
-        let hud = app.ui();
-        ui.render(
-            &gpu.device,
-            &gpu.queue,
-            &mut encoder,
-            target,
-            format,
-            size,
-            hud.scale(),
-            &hud.core.pack,
-            &hud.draw(),
-            None,
-        );
-        if let Some(t) = timer.as_mut() {
-            t.end(&mut encoder);
-        }
-        gpu.queue.submit([encoder.finish()]);
-        let recorded = Instant::now();
-        gpu.device.poll(wgpu::PollType::Wait {
-            submission_index: None,
-            timeout: Some(Duration::from_secs(10)),
-        })?;
-        let done = Instant::now();
-        let measured = timer.as_mut().and_then(|t| t.collect(&gpu.device));
+        let (updated, recorded, done, measured, trace) =
+            frame_once(app, gpu, ui, timer, target, size, &mut previous)?;
         if i >= 20 {
-            update.push(ms(updated - start));
-            record.push(ms(recorded - updated));
-            frame.push(ms(done - start));
+            update.push(ms(updated));
+            record.push(ms(recorded));
+            frame.push(ms(done));
+            if slowest.as_ref().is_none_or(|s| trace.total > s.total) {
+                slowest = Some(trace);
+            }
             if measured != last_gpu
                 && let Some(g) = measured
             {
@@ -456,6 +498,10 @@ fn frames(
     Ok(json!({
         "render": app.render_stats(),
         "entities": app.entity_counts(),
+        "slowest_frame": slowest.map(|s| json!({
+            "ms": ms(s.total),
+            "where": s.describe(),
+        })),
         "gpu_passes": passes,
         "update": stats(&mut update),
         "record": stats(&mut record),
@@ -728,7 +774,17 @@ fn large_build_frame_times() -> Result<()> {
         let d = (to - from).normalize();
         (d.x.atan2(-d.z), d.y.asin())
     };
-    for (view, eye) in [
+    let point = |name: &str| -> Option<Vec3> {
+        let text = std::env::var(name).ok()?;
+        let v: Vec<f32> = text
+            .split(|c: char| c == ',' || c.is_whitespace())
+            .filter(|s| !s.is_empty())
+            .map(|s| s.parse().ok())
+            .collect::<Option<_>>()?;
+        (v.len() == 3).then(|| Vec3::new(v[0], v[1], v[2]))
+    };
+    let below_middle = center - Vec3::new(0.0, extent.y * 0.25, 0.0);
+    let mut views = vec![
         (
             "overview",
             // Above one corner of the build, near enough to stay inside the
@@ -736,10 +792,15 @@ fn large_build_frame_times() -> Result<()> {
             center
                 + Vec3::new(1.0, 0.7, 1.0).normalize()
                     * (Vec3::new(extent.x, 0.0, extent.z).length() * 0.6).clamped(30.0, 150.0),
+            below_middle,
         ),
-        ("inside", center + Vec3::new(0.0, 2.0, 0.0)),
-    ] {
-        let (yaw, pitch) = look(eye, center - Vec3::new(0.0, extent.y * 0.25, 0.0));
+        ("inside", center + Vec3::new(0.0, 2.0, 0.0), below_middle),
+    ];
+    if let Some(eye) = point("BRI_PERF_EYE") {
+        views.push(("custom", eye, point("BRI_PERF_AT").unwrap_or(center)));
+    }
+    for (view, eye, at) in views {
+        let (yaw, pitch) = look(eye, at);
         camera_at(&mut app, eye, yaw, pitch)?;
         // Settle first, so the profile holds only steady frames.
         frames(&mut app, &gpu, &mut ui, &mut timer, &target, size, 10)?;
@@ -757,6 +818,54 @@ fn large_build_frame_times() -> Result<()> {
             &out.join(format!("{stem}-{view}.png")),
         )?;
     }
+    // Shadow Quality switched as Options saves it, at the last view.
+    let levels: Vec<u8> = std::env::var("BRI_PERF_SHADOWS")
+        .unwrap_or_default()
+        .split(',')
+        .filter_map(|s| s.trim().parse().ok())
+        .filter(|level| *level <= 4)
+        .collect();
+    let mut shadows = serde_json::Map::new();
+    for level in levels {
+        app.ui.apply(UiUpdate::SetPrefs(vec![(
+            "$pref::ShadowQuality".into(),
+            level.to_string(),
+        )]));
+        let settings = app.ui.settings();
+        app.ui
+            .core
+            .request(UiAction::SaveSettings(Box::new(settings)));
+        pump(&mut app)?;
+        frame_trace::reset();
+        let mut previous = Instant::now();
+        let (.., change) = frame_once(
+            &mut app,
+            &gpu,
+            &mut ui,
+            &mut timer,
+            &target,
+            size,
+            &mut previous,
+        )?;
+        eprintln!(
+            "Shadow Quality {level}: the change took a {:.1} ms frame: {}",
+            ms(change.total),
+            change.describe()
+        );
+        let steady = frames(&mut app, &gpu, &mut ui, &mut timer, &target, size, count)?;
+        screenshot(
+            &gpu,
+            &target_texture,
+            &out.join(format!("{stem}-shadows-{level}.png")),
+        )?;
+        shadows.insert(
+            level.to_string(),
+            json!({
+                "change_frame": { "ms": ms(change.total), "where": change.describe() },
+                "steady": steady,
+            }),
+        );
+    }
     app.gpu_stopped();
     let ghost = ghost_cost(&content, map_id, &gpu)?;
     let result = json!({
@@ -772,6 +881,7 @@ fn large_build_frame_times() -> Result<()> {
         "convert_ms": convert_ms,
         "load_ms": load_ms,
         "views": report,
+        "shadow_quality": shadows,
     });
     let path = out.join(format!(
         "{}.json",

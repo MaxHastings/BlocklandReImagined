@@ -3579,6 +3579,11 @@ impl SceneRenderer {
             timer.end(encoder, label);
         }
     }
+    /// Frames timed and read back so far; it changes when `pass_times`
+    /// has a new frame.
+    pub fn pass_readings(&self) -> u64 {
+        self.timer.borrow().as_ref().map_or(0, |t| t.readings())
+    }
     /// After submitting: the latest timed frame, whole and per stretch.
     pub fn pass_times(
         &self,

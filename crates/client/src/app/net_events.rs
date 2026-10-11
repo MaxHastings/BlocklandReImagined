@@ -265,6 +265,7 @@ impl App {
         if let Some(job) = &mut self.scene.world_job
             && let Ok((source, revision, log, result)) = job.receiver.try_recv()
         {
+            let _span = crate::frame_trace::span("chunks applied");
             let left_out = std::mem::take(&mut job.left_out);
             self.scene.world_job = None;
             match result {
@@ -821,6 +822,8 @@ impl App {
     /// Takes the map scene the loader prepared and sets up the world for it.
     fn take_prepared_scene(&mut self, a: &mut Attempt) -> Result<()> {
         if let Ok(prepared) = a.scene.try_recv() {
+            crate::frame_trace::note(format!("set up map {}", prepared.map_id));
+            let _span = crate::frame_trace::span("map setup");
             a.progress.begin(
                 bri_progress::Stage::LoadingGraphics,
                 bri_progress::Unit::Steps,
