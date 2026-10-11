@@ -958,6 +958,8 @@ pub struct Session {
     death_results: VecDeque<DeathResult>,
     damage_results: VecDeque<DamageResult>,
     damage_recorded: u64,
+    /// Script snapshots built so far (a work count for tests).
+    package_snapshots: std::sync::atomic::AtomicU64,
     spawn_points: Vec<Vec3>,
     spawn_seed: u64,
     private_notices: VecDeque<(OwnerId, Notice)>,
@@ -1116,6 +1118,7 @@ impl Session {
             death_results: VecDeque::new(),
             damage_results: VecDeque::new(),
             damage_recorded: 0,
+            package_snapshots: std::sync::atomic::AtomicU64::new(0),
             spawn_points: Vec::new(),
             spawn_seed: 0x9E37_79B9_7F4A_7C15,
             private_notices: VecDeque::new(),
