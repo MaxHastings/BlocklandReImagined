@@ -144,10 +144,10 @@ fn capture(app: &mut App, gpu: &Headless, renderer: &mut UiRenderer) -> Result<V
     readback.slice(..).map_async(wgpu::MapMode::Read, move |r| {
         let _ = tx.send(r);
     });
-    gpu.device.poll(wgpu::PollType::Wait {
-        submission_index: None,
-        timeout: Some(Duration::from_secs(30)),
-    })?;
+    // Not a wall-clock deadline: a software adapter can spend over half a
+    // minute on a frame with the soft-shading passes, and a frame that
+    // finishes ends the wait at once.
+    support::gpu::wait(&gpu.device, "the multiplayer frame")?;
     rx.recv_timeout(Duration::from_secs(5))??;
     let mapped = readback
         .slice(..)
