@@ -86,6 +86,8 @@ enum Operation {
 
 /// The vehicle spawn wrench's Team menu: a bot spawn brick's team.
 const TEAM_ROW: i32 = 30;
+/// Width of the Item Respawn Time seconds field once the reset box shares its row.
+const ITEM_TIMER_W: i32 = 64;
 
 /// Add the vehicle spawn wrench's Team row under its recovered fields, above
 /// the footer actions, styled as its Vehicles menu and that menu's label.
@@ -175,21 +177,14 @@ fn add_team_row(window: &mut Control, layout: &str, prefix: &str) {
     window.children.push(team);
 }
 
-/// A "Respawn only on mini-game reset" tick box for bricks with a
-/// recovered item respawn time: the brick's item then stays gone until a
-/// mini-game reset or a `restoreItem` event brings it back. Like the Team
-/// row it takes a row of its own above the footer buttons, so every
-/// authored control keeps its place and only the footer moves down.
-fn add_item_restore_row(window: &mut Control, layout: &str, prefix: &str) {
+/// The "Mini-game reset" tick box for bricks with a recovered item respawn
+/// time. It sits on the Item Respawn Time row itself: the seconds field
+/// shrinks to make room, and ticking the box greys the field out (see
+/// [`Wrench::refresh`]), so the choice between a timer and "only on reset"
+/// reads from what the row does. The row's Copy box covers both.
+fn add_item_restore_row(window: &mut Control, prefix: &str) {
     let node = format!("{prefix}_ItemRestore");
     let respawn = format!("{prefix}_ItemRespawnTime");
-    if !window
-        .children
-        .iter()
-        .any(|c| c.name.as_deref() == Some(respawn.as_str()))
-    {
-        return;
-    }
     if window
         .children
         .iter()
@@ -197,50 +192,30 @@ fn add_item_restore_row(window: &mut Control, layout: &str, prefix: &str) {
     {
         return;
     }
-    let footer_commands = [
-        format!("{layout}.send();"),
-        format!("{layout}.respawn();"),
-        format!("canvas.popDialog({layout});"),
-        "canvas.pushDialog(WrenchEventsDlg);".into(),
-    ];
-    let top = window
+    let Some(field) = window
         .children
-        .iter()
-        .filter(|c| {
-            c.command
-                .as_ref()
-                .is_some_and(|command| footer_commands.contains(command))
-        })
-        .map(|c| c.position[1])
-        .min()
-        .unwrap_or(window.extent[1]);
-    for control in &mut window.children {
-        if control.position[1] >= top {
-            control.position[1] += TEAM_ROW;
-        } else if control
-            .name
-            .as_deref()
-            .is_some_and(|name| name.ends_with("Blocker"))
-            && control.position[1] + control.extent[1] > top
-        {
-            control.extent[1] += TEAM_ROW;
-        }
-    }
-    window.extent[1] += TEAM_ROW;
+        .iter_mut()
+        .find(|c| c.name.as_deref() == Some(respawn.as_str()))
+    else {
+        return;
+    };
+    let (x, y, h, right) = (
+        field.position[0],
+        field.position[1],
+        field.extent[1],
+        field.position[0] + field.extent[0],
+    );
+    field.extent[0] = ITEM_TIMER_W.min(field.extent[0]);
+    let tick_x = x + field.extent[0] + 10;
     let mut tick = named(
         ctrl(
             "GuiCheckBoxCtrl",
             "GuiCheckBoxProfile",
-            Rect::new(
-                14,
-                top + (TEAM_ROW - 22) / 2,
-                (window.extent[0] - 28).max(120),
-                22,
-            ),
+            Rect::new(tick_x, y, (right - tick_x).max(60), h),
         ),
         node,
     );
-    tick.text = Some("Respawn only on mini-game reset".into());
+    tick.text = Some("Mini-game reset".into());
     window.children.push(tick);
 }
 
@@ -270,7 +245,7 @@ fn region_view(core: &Core, layout: &str, prefix: &str, expanded: bool) -> View 
         .find(|c| c.name.as_deref() == Some(&format!("{prefix}_Window")))
     {
         add_team_row(window, layout, prefix);
-        add_item_restore_row(window, layout, prefix);
+        add_item_restore_row(window, prefix);
         let old_height = window.extent[1];
         // Share an existing action row when its neighboring space is free.
         // Imported layouts with a crowded footer still receive a separate row.
@@ -597,6 +572,14 @@ impl Wrench {
                     ready && core.wrench.open.as_ref().is_some_and(|o| o.events_allowed),
                 );
             }
+        }
+        // Reset-only items have no timer: grey the seconds field out.
+        if let (Some(timer), Some(reset)) = (
+            self.view.id(&format!("{}_ItemRespawnTime", self.prefix)),
+            self.view.id(&format!("{}_ItemRestore", self.prefix)),
+        ) {
+            let reset_only = self.view.bool_value(reset);
+            self.view.set_active(timer, ready && !reset_only);
         }
         // Pending actions must finish/reject before an edit can be resubmitted.
         if let Some(n) = self.view.id("Wrench_RegionPanel") {
@@ -3642,6 +3625,52 @@ mod tests {
         assert!(ui.drain_actions().iter().any(
             |(_, a)| matches!(a, UiAction::SendWrench { data, .. } if !data.item_restore_on_reset)
         ));
+    }
+
+    /// On a recovered layout the reset box joins the timer's own row.
+    #[test]
+    fn item_reset_box_is_added_beside_the_timer_field() {
+        let mut win = ctrl(
+            "GuiWindowCtrl",
+            "GuiDefaultProfile",
+            Rect::new(0, 0, 400, 470),
+        );
+        win.children.push(named(
+            ctrl(
+                "GuiTextEditCtrl",
+                "GuiDefaultProfile",
+                Rect::new(100, 300, 240, 22),
+            ),
+            "Wrench_ItemRespawnTime".to_string(),
+        ));
+        add_item_restore_row(&mut win, "Wrench");
+        let timer = win.children[0].clone();
+        let tick = win.children[1].clone();
+        assert_eq!(tick.position[1], timer.position[1]);
+        assert!(tick.position[0] >= timer.position[0] + timer.extent[0]);
+        assert!(tick.position[0] + tick.extent[0] <= 340);
+        assert_eq!(win.extent, [400, 470], "no extra row");
+    }
+
+    /// The reset box shares the timer's row and greys the seconds field out.
+    #[test]
+    fn item_reset_box_sits_on_the_timer_row_and_disables_it() {
+        let mut ui = fixture();
+        ui.core.wrench.open(
+            10,
+            WrenchVariant::Normal,
+            "Owner".into(),
+            WrenchData::default(),
+            false,
+            true,
+        );
+        let mut s = Wrench::new(&ui.core, WrenchVariant::Normal);
+        let timer = s.view.id("Wrench_ItemRespawnTime").unwrap();
+        assert!(s.view.node(timer).state.active);
+        click(&mut s, "Wrench_ItemRestore", &mut ui.core);
+        assert!(!s.view.node(timer).state.active);
+        click(&mut s, "Wrench_ItemRestore", &mut ui.core);
+        assert!(s.view.node(timer).state.active);
     }
 
     #[test]
