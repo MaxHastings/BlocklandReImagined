@@ -54,6 +54,43 @@ class CiShards(unittest.TestCase):
         self.assertEqual(sorted(sum(parts, [])), sorted(labels))
         self.assertTrue(all(5 <= len(p) <= 6 for p in parts))
 
+    def test_the_pr_tier_leaves_the_nightly_targets_out_and_full_runs_them(self):
+        data = {"ci_skip_target": [{"target": "a/content"}],
+                "ci_nightly_target": [{"target": "b/render"}]}
+        self.assertEqual(gate.ci_left_out(data, "pr"), {"a/content", "b/render"})
+        self.assertEqual(gate.ci_left_out(data, "full"), {"a/content"})
+
+    def test_every_nightly_target_is_named_once_with_a_reason(self):
+        import tomllib
+        path = Path(__file__).with_name("gate-known-failures.toml")
+        nightly = tomllib.loads(path.read_text(encoding="utf-8")).get("ci_nightly_target", [])
+        self.assertTrue(nightly)
+        targets = [entry["target"] for entry in nightly]
+        self.assertEqual(len(targets), len(set(targets)))
+        self.assertTrue(all(entry.get("reason") for entry in nightly))
+
+    def test_the_test_targets_come_from_cargo_metadata_labelled_like_the_build(self):
+        def target(name, *kind, test=True):
+            return {"name": name, "kind": list(kind), "test": test}
+        metadata = {
+            "workspace_members": ["a-id", "b-id"],
+            "packages": [
+                {"id": "a-id", "name": "bri-a", "targets": [
+                    target("bri_a", "lib"), target("bri-a", "bin"), target("flow", "test"),
+                    target("build-script-build", "custom-build", test=False),
+                    target("probe", "example", test=False)]},
+                {"id": "b-id", "name": "bri-b", "targets": [
+                    target("bri_b", "rlib", "cdylib"), target("flow", "test")]},
+                {"id": "dep-id", "name": "serde", "targets": [target("serde", "lib")]},
+            ],
+        }
+        labels = gate.labels_from_metadata(metadata)
+        self.assertEqual(labels, {"bri-a/lib": "lib", "bri-a/bri-a": "bin", "bri-a/flow": "test",
+                                  "bri-b/lib": "lib", "bri-b/flow": "test"})
+        self.assertEqual(gate.target_filters({"bri-a/flow", "bri-b/flow", "bri-a/bri-a"}, labels),
+                         ["--bin", "bri-a", "--test", "flow"])
+        self.assertEqual(gate.target_filters({"bri-b/lib"}, labels), ["--lib"])
+
     def test_one_shard_is_all_of_them(self):
         self.assertEqual(gate.shard(["b", "a"], (0, 1)), ["a", "b"])
 

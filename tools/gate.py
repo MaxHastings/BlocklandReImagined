@@ -8,6 +8,7 @@
     python tools/gate.py --history-range BASE TIP   (history check only; CI)
     python tools/gate.py --ci-test       content-free tests only (CI)
     python tools/gate.py --ci-test --shard K/N   the Kth of N even shares of them
+    python tools/gate.py --ci-test --tier pr     without the slow render targets (PR CI)
 
 Checks, cheapest first, on the exact commit being pushed:
   1. the commit already contains the latest origin/main (rebase first)
@@ -1163,34 +1164,52 @@ def parse_shard(text):
     return k, n
 
 
-def ci_test(part=(0, 1)):
+def ci_test(part=(0, 1), tier="full"):
     """Run every test binary except targets that need generated v20 content,
     or one even share of them (`part`, see `shard`).
 
     GitHub runners have no v20 content. Those targets are listed as
     [[ci_skip_target]] in tools/gate-known-failures.toml; the local gate still
-    runs them all.
+    runs them all. The "pr" tier also leaves out [[ci_nightly_target]]s, the
+    offscreen renders the runner's software GPU takes minutes over; the
+    nightly "full" run and the local gate (on a real GPU) run them.
     """
     top = Path(git("rev-parse", "--show-toplevel").strip())
     data = tomllib.loads((top / "tools" / "gate-known-failures.toml").read_text(encoding="utf-8"))
-    skipped = {entry["target"] for entry in data.get("ci_skip_target", [])}
-    binaries = test_binaries(top)
+    labels = test_labels(top)
+    if labels is None:
+        return False
+    nightly = {entry["target"] for entry in data.get("ci_nightly_target", [])}
+    unknown = ({entry["target"] for entry in data.get("ci_skip_target", [])} | nightly) - set(labels)
+    if unknown:
+        say(f"ci_skip_target/ci_nightly_target entries match no test target: "
+            f"{', '.join(sorted(unknown))}")
+        return False
+    if tier == "pr":
+        say(f"pr tier: {len(nightly)} slow render targets are left to the nightly run")
+    skipped = ci_left_out(data, tier)
+    for label in sorted(labels):
+        if label in skipped and label not in nightly:
+            say(f"skipping {label} (needs generated content)")
+    mine = set(shard([label for label in labels if label not in skipped], part))
+    say(f"shard {part[0]}/{part[1]}: {len(mine)} of {len(labels) - len(skipped)} test targets")
+    if not mine:
+        return True
+    # Each shard compiles only its own targets (and whatever shares their
+    # names in other packages), not the whole workspace's ~390 test binaries:
+    # compiling and linking those took 17-27 of a shard's 28-47 minutes.
+    binaries = test_binaries(top, extra=target_filters(mine, labels))
     if binaries is None:
         return False
-    unknown = skipped - {label for label, _, _, _ in binaries}
-    if unknown:
-        say(f"ci_skip_target entries match no test target: {', '.join(sorted(unknown))}")
+    unbuilt = mine - {label for label, _, _, _ in binaries}
+    if unbuilt:
+        say(f"test targets this shard should run were not built: {', '.join(sorted(unbuilt))}")
         return False
     known = {entry["test"]: entry for entry in data.get("failure", [])}
     skip_args = [arg for entry in data.get("skip", []) + data.get("nightly", [])
                  for arg in ("--skip", entry["test"])]
     failed = []
-    mine = set(shard([label for label, _, _, _ in binaries if label not in skipped], part))
-    say(f"shard {part[0]}/{part[1]}: {len(mine)} of {len(binaries) - len(skipped)} test targets")
     for label, executable, cwd, _ in sorted(binaries):
-        if label in skipped:
-            say(f"skipping {label} (needs generated content)")
-            continue
         if label not in mine:
             continue
         say(f"running {label}")
@@ -1213,6 +1232,61 @@ def ci_test(part=(0, 1)):
         return False
     say("all content-free test targets passed")
     return True
+
+
+LIB_KINDS = {"lib", "rlib", "dylib", "cdylib", "staticlib", "proc-macro"}
+
+
+def test_labels(top):
+    """Every test target `cargo test --workspace` builds, as test_binaries
+    labels them, read from `cargo metadata` without compiling anything."""
+    result = subprocess.run(["cargo", "metadata", "--no-deps", "--format-version", "1", "--locked"],
+                            cwd=top, stdout=subprocess.PIPE, text=True, errors="replace")
+    if result.returncode:
+        return None
+    return labels_from_metadata(json.loads(result.stdout))
+
+
+def labels_from_metadata(metadata):
+    """{label: kind} for the test targets of the workspace members in
+    `metadata`: label as test_binaries makes it ("<package>/<target>", "lib"
+    for unit tests), kind the cargo test flag that selects it (lib, bin,
+    test, example or bench)."""
+    members = set(metadata["workspace_members"])
+    labels = {}
+    for package in metadata["packages"]:
+        if package["id"] not in members:
+            continue
+        for target in package["targets"]:
+            if not target.get("test") or "custom-build" in target["kind"]:
+                continue
+            if LIB_KINDS & set(target["kind"]):
+                labels[f"{package['name']}/lib"] = "lib"
+            else:
+                labels[f"{package['name']}/{target['name']}"] = target["kind"][0]
+    return labels
+
+
+def target_filters(labels, kinds):
+    """cargo test arguments that build at least the targets `labels` name
+    (`kinds` as labels_from_metadata gives them). The filters apply across the
+    whole workspace, so features stay unified as in a full build and a name
+    another package shares is built there too."""
+    selected = {(kinds[label], label.split("/", 1)[1]) for label in labels}
+    args = ["--lib"] if any(kind == "lib" for kind, _ in selected) else []
+    for kind, name in sorted(selected):
+        if kind != "lib":
+            args += [f"--{kind}", name]
+    return args
+
+
+def ci_left_out(data, tier):
+    """Targets a CI run of `tier` does not run, from the known-failures
+    table `data`: content targets always, nightly targets on the pr tier."""
+    left_out = {entry["target"] for entry in data.get("ci_skip_target", [])}
+    if tier == "pr":
+        left_out |= {entry["target"] for entry in data.get("ci_nightly_target", [])}
+    return left_out
 
 
 def ci_tolerated(label, output, known):
@@ -1300,6 +1374,8 @@ def main():
                         help="run the tests that need no generated content (used by CI)")
     parser.add_argument("--shard", type=parse_shard, default=(0, 1), metavar="K/N",
                         help="with --ci-test, run only the Kth of N even shares (from 0)")
+    parser.add_argument("--tier", choices=("pr", "full"), default="full",
+                        help="with --ci-test: 'pr' leaves out the [[ci_nightly_target]]s")
     parser.add_argument("--push", action="store_true",
                         help="rebase onto origin/main, gate and push to main under the lock")
     parser.add_argument("--history-range", nargs=2, metavar=("BASE", "TIP"),
@@ -1333,7 +1409,7 @@ def main():
             say("history check " + ("FAILED" if problems else "ok"))
             return 1 if problems else 0
         if args.ci_test:
-            return 0 if ci_test(args.shard) else 1
+            return 0 if ci_test(args.shard, args.tier) else 1
         if args.push:
             return 0 if push_main() else 1
         if args.hook is not None:

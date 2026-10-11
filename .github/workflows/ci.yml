@@ -1,6 +1,9 @@
 # Content-free checks. Tests that need the generated v20 content are
 # #[ignore]d or listed as ci_skip_target in tools/gate-known-failures.toml;
-# the local push gate (tools/gate.py) runs them all.
+# the local push gate (tools/gate.py) runs them all. Pull requests and pushes
+# run the "pr" tier, which leaves the slow offscreen renders
+# (ci_nightly_target) to the nightly and manual runs; the push gate runs
+# those too, on a real GPU, before anything reaches main.
 name: ci
 
 on:
@@ -8,8 +11,10 @@ on:
     branches: [main]
   pull_request:
   workflow_dispatch:
+  schedule:
+    - cron: '0 7 * * *'
 
-# Superseded PR runs are cancelled; every push to main gets a full run so
+# Superseded PR runs are cancelled; every push to main gets its own run so
 # main's history shows which commit broke it.
 concurrency:
   group: ci-${{ github.ref }}-${{ github.event_name == 'push' && github.sha || 'pr' }}
@@ -18,6 +23,17 @@ concurrency:
 env:
   CARGO_TERM_COLOR: always
   CARGO_INCREMENTAL: 0
+  # sccache keeps the workspace's library crates in the Actions cache, so a
+  # library compiles once across jobs and runs; rust-cache keeps the
+  # crates.io dependencies. Test and binary targets are linked executables,
+  # which sccache cannot cache, so each shard builds only its own share of
+  # them (tools/gate.py --ci-test --shard).
+  SCCACHE_GHA_ENABLED: 'true'
+  # The shards build first and test for up to half an hour; a server that
+  # outlives its idle limit reports nothing at the end of the job.
+  SCCACHE_IDLE_TIMEOUT: '0'
+  RUSTC_WRAPPER: sccache
+  TEST_TIER: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && 'full' || 'pr' }}
 
 jobs:
   check:
@@ -33,6 +49,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           cache-on-failure: true
+      - uses: mozilla-actions/sccache-action@v0.0.9
       - name: History check (push)
         if: github.event_name == 'push' && github.event.before != '0000000000000000000000000000000000000000'
         run: python tools/gate.py --history-range ${{ github.event.before }} ${{ github.sha }}
@@ -69,10 +86,11 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           cache-on-failure: true
+      - uses: mozilla-actions/sccache-action@v0.0.9
       - name: Provision software graphics for offscreen tests
         run: ./tools/setup_ci_gpu.ps1
-      - name: Test (shard ${{ matrix.shard }} of 4)
-        run: python tools/gate.py --ci-test --shard ${{ matrix.shard }}/4 --binary-timeout 30
+      - name: Test (${{ env.TEST_TIER }} tier, shard ${{ matrix.shard }} of 4)
+        run: python tools/gate.py --ci-test --tier ${{ env.TEST_TIER }} --shard ${{ matrix.shard }}/4 --binary-timeout 30
         env:
           WGPU_BACKEND: dx12
           WGPU_DX12_COMPILER: dxc

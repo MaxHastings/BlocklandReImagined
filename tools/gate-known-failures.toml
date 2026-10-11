@@ -66,6 +66,84 @@ reason = "Needs Max's privately converted P90 (BRI_P90_TEST_ROOT); run by hand a
 # whole target here only when all of it needs content. Format:
 # "<package>/<test target>", or "<package>/lib" for unit tests.
 
+# Offscreen render targets the GitHub runner's software GPU (WARP) takes 1.5
+# minutes or more over. Pull-request CI (`--tier pr`) leaves them out; the
+# nightly CI run and the local push gate, on a real GPU, run every one. The
+# minutes are the slowest of two pull-request runs on 2026-10-11 (#55, #72).
+# Format: "<package>/<test target>".
+
+[[ci_nightly_target]]
+target = "bri-render/mirrors"
+reason = "21.7 min on WARP"
+
+[[ci_nightly_target]]
+target = "bri-render/lighting_environment"
+reason = "13.8 min on WARP"
+
+[[ci_nightly_target]]
+target = "bri-client/view_jitter"
+reason = "11.0 min on WARP"
+
+[[ci_nightly_target]]
+target = "bri-render/persistent_scene"
+reason = "9.3 min on WARP"
+
+[[ci_nightly_target]]
+target = "bri-render/dynamic_unlit"
+reason = "9.0 min on WARP"
+
+[[ci_nightly_target]]
+target = "bri-client/graphics_rebuild"
+reason = "4.0 min on WARP"
+
+[[ci_nightly_target]]
+target = "bri-client/sky_shading_scene"
+reason = "3.1 min on WARP"
+
+[[ci_nightly_target]]
+target = "bri-client/item_rendering"
+reason = "3.0 min on WARP"
+
+[[ci_nightly_target]]
+target = "bri-render/metal"
+reason = "2.9 min on WARP"
+
+[[ci_nightly_target]]
+target = "bri-client/item_ghost"
+reason = "2.9 min on WARP"
+
+[[ci_nightly_target]]
+target = "bri-render/unified_lamp_updates"
+reason = "2.8 min on WARP"
+
+[[ci_nightly_target]]
+target = "bri-client/brick_fx"
+reason = "2.7 min on WARP"
+
+[[ci_nightly_target]]
+target = "bri-render/unified_lamp_quality"
+reason = "2.5 min on WARP"
+
+[[ci_nightly_target]]
+target = "bri-render/shadow_occluders"
+reason = "2.4 min on WARP"
+
+[[ci_nightly_target]]
+target = "bri-client/avatar_animation_render"
+reason = "2.3 min on WARP"
+
+[[ci_nightly_target]]
+target = "bri-client/app_item_render"
+reason = "2.2 min on WARP"
+
+[[ci_nightly_target]]
+target = "bri-client/mirror_render"
+reason = "1.8 min on WARP"
+
+[[ci_nightly_target]]
+target = "bri-render/unified_lamp_geometry"
+reason = "1.7 min on WARP"
+
 # Test targets that host a game on the fixed ports (UDP 28000/28050). The gate
 # runs them one at a time, after one another, instead of in parallel. Prefer
 # BRI_TEST_HOST_PORT / BRI_TEST_DISCOVERY_PORT (see multiplayer.rs) so a test
