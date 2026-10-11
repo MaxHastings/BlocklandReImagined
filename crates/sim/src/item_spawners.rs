@@ -220,7 +220,12 @@ impl ItemSpawners {
     /// or never on its own when that is `None` (a reset or `restoreItem`
     /// brings it back). Refused when the item is already gone, so one take
     /// is one pickup however many players touch it in the same tick.
-    pub fn picked_up(&mut self, brick: BrickId, tick: u64, available_again: Option<u64>) -> Result<()> {
+    pub fn picked_up(
+        &mut self,
+        brick: BrickId,
+        tick: u64,
+        available_again: Option<u64>,
+    ) -> Result<()> {
         let item = self.items.get_mut(&brick).context("Missing static item")?;
         ensure!(tick >= item.available_at, "Static item has not respawned");
         item.available_at = available_again.unwrap_or(NEVER);
@@ -235,7 +240,9 @@ impl ItemSpawners {
     }
     /// Whether the brick's item is there to be taken this tick.
     pub fn available(&self, brick: BrickId, tick: u64) -> bool {
-        self.items.get(&brick).is_some_and(|i| tick >= i.available_at)
+        self.items
+            .get(&brick)
+            .is_some_and(|i| tick >= i.available_at)
     }
 }
 

@@ -429,7 +429,11 @@ fn on_collected_runs_once_per_item_really_taken() {
     assert_eq!(g.value("collected"), json!(1), "the ammo box, used up");
     assert_eq!(g.value("collected_from"), json!("drop"));
     g.steps(4);
-    assert_eq!(g.value("collected"), json!(1), "the mine is left, not collected");
+    assert_eq!(
+        g.value("collected"),
+        json!(1),
+        "the mine is left, not collected"
+    );
     // A full set of tools: the gun lying there is touched, not taken.
     g.run(a, "fill", vec![]).unwrap();
     g.steps(1);
@@ -466,10 +470,17 @@ fn a_required_operation_that_cannot_be_done_keeps_the_call_from_taking_effect() 
     g.steps(1);
     // The refusal is the command's reply, so the player hears why.
     let refusal = g.run(a, "buy", vec![text("kit:weapon/gun")]).unwrap_err();
-    assert!(refusal.to_string().contains("tools are full"), "{refusal:#}");
+    assert!(
+        refusal.to_string().contains("tools are full"),
+        "{refusal:#}"
+    );
     g.steps(1);
     g.run(a, "bits", vec![]).unwrap();
-    assert_eq!(g.value("bits"), json!(10), "not charged for a gun never received");
+    assert_eq!(
+        g.value("bits"),
+        json!(10),
+        "not charged for a gun never received"
+    );
     assert_eq!(g.value("sales"), json!(0));
     assert!(!g.holds(a, "kit:weapon/gun"));
     let refused: Vec<String> = g

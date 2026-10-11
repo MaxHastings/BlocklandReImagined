@@ -816,12 +816,10 @@ fn wrench_item_catalog_ranges_and_clear_are_authoritative_and_atomic(f: &Fixture
         },
         bri_world::ItemSpawn {
             respawn_ms: 0,
-            restore: Default::default(),
             ..Default::default()
         },
         bri_world::ItemSpawn {
             respawn_ms: 300001,
-            restore: Default::default(),
             ..Default::default()
         },
     ]

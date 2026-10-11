@@ -5,7 +5,9 @@ use bri_content::{brick::Catalog, brick_materials::Bundle, effects::Library};
 use bri_net::protocol::PublicWorld;
 use bri_sim::session::{Command, InspectMode, Reply, ToolAction, ToolCatalog, WrenchProperties};
 use bri_ui::{api::*, models::events::NAMED_BRICK, pack::Pack, schema::ParamSpec};
-use bri_world::{Brick, ContentRef, EventRow as Row, EventTarget, EventValue, ItemRestore, ItemSpawn};
+use bri_world::{
+    Brick, ContentRef, EventRow as Row, EventTarget, EventValue, ItemRestore, ItemSpawn,
+};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 

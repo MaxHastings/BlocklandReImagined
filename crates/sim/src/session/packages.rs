@@ -1552,7 +1552,9 @@ impl Session {
             ),
         )
         .at(package.to_string())
-        .hint("check player(p).tools or the brick before charging, or require earlier operations too");
+        .hint(
+            "check player(p).tools or the brick before charging, or require earlier operations too",
+        );
         note(self.packages.as_mut().expect("installed"), d.clone());
         Err(d)
     }

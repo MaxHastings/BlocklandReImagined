@@ -3600,6 +3600,33 @@ mod tests {
         ));
     }
 
+    /// The "Respawn only on mini-game reset" box shows the brick's restore
+    /// mode and sends the change with the rest of the wrench.
+    #[test]
+    fn item_restore_box_round_trips() {
+        let mut ui = fixture();
+        ui.core.wrench.open(
+            10,
+            WrenchVariant::Normal,
+            "Owner".into(),
+            WrenchData {
+                item_restore_on_reset: true,
+                ..Default::default()
+            },
+            false,
+            true,
+        );
+        let mut s = Wrench::new(&ui.core, WrenchVariant::Normal);
+        let n = s.view.id("Wrench_ItemRestore").unwrap();
+        assert!(s.view.bool_value(n));
+        click(&mut s, "Wrench_ItemRestore", &mut ui.core);
+        assert!(!s.view.bool_value(n));
+        click(&mut s, "Wrench_Send", &mut ui.core);
+        assert!(ui.drain_actions().iter().any(
+            |(_, a)| matches!(a, UiAction::SendWrench { data, .. } if !data.item_restore_on_reset)
+        ));
+    }
+
     #[test]
     fn live_music_event_choices_preserve_the_row_until_explicit_recovery() {
         let mut ui = fixture();

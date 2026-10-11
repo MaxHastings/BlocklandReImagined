@@ -471,7 +471,9 @@ pub fn action_hint(name: &str) -> &'static str {
             "Start tracing this brick; repeat to see the latest conditions and actions."
         }
         "restoreItem" => "Bring this brick's item back now, whether it was picked up or hidden.",
-        "hideItem" => "Take this brick's item away until restoreItem or a mini-game reset brings it back.",
+        "hideItem" => {
+            "Take this brick's item away until restoreItem or a mini-game reset brings it back."
+        }
         _ => "",
     }
 }

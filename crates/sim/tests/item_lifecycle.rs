@@ -104,7 +104,8 @@ impl Game {
         .unwrap();
         s.set_event_catalog(bri_events::testing::catalog_extended(), Vec::new())
             .unwrap();
-        s.set_spawn_points(vec![Vec3::new(-20.0, 0.05, -20.0)]).unwrap();
+        s.set_spawn_points(vec![Vec3::new(-20.0, 0.05, -20.0)])
+            .unwrap();
         Self { s, seq: 0 }
     }
     fn join(&mut self, name: &str, at: Vec3) -> OwnerId {
@@ -260,7 +261,10 @@ fn a_reset_item_stays_gone_until_the_minigame_resets() {
     // `MiniGameSO::Reset` brings every item of the game's builders back.
     g.send(host, Command::MiniGame(MiniGameRequest::Reset))
         .unwrap();
-    assert!(g.available_at(brick) < NEVER, "the reset brought the item back");
+    assert!(
+        g.available_at(brick) < NEVER,
+        "the reset brought the item back"
+    );
     // The reset respawned both members with fresh tools over the brick:
     // one of them takes the item, once, and it is gone again.
     g.steps(3);
@@ -320,15 +324,24 @@ fn pickup_fires_once_per_item_taken_and_events_hide_and_restore_it() {
     assert_eq!(g.color(brick), 0, "a hidden item is not picked up");
     // Deleting the brick takes its item with it, and the restore outputs
     // on a brick that spawns nothing are refused quietly.
-    g.s.edit_brick(host, brick, Edit::Properties(WrenchProperties {
-        raycast: true,
-        colliding: true,
-        visible: true,
-        ..Default::default()
-    }))
+    g.s.edit_brick(
+        host,
+        brick,
+        Edit::Properties(WrenchProperties {
+            raycast: true,
+            colliding: true,
+            visible: true,
+            ..Default::default()
+        }),
+    )
     .unwrap();
     g.steps(2);
-    assert!(g.s.weapon_view().static_items.iter().all(|i| i.brick != brick));
+    assert!(
+        g.s.weapon_view()
+            .static_items
+            .iter()
+            .all(|i| i.brick != brick)
+    );
     g.s.fire_brick_input(brick, "onToolBreak", Some(host));
     g.steps(2);
     assert!(g.s.weapon_view().static_items.is_empty());
