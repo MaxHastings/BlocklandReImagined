@@ -194,10 +194,10 @@ pub(super) fn update(
             let ground = b.velocity_at_point(surface.point);
             let (xv, yv) = (across.dot(ground), along.dot(ground));
             let dy = (tire.spin * radius - yv)
-                - t.longitudinal_relaxation * tire.spin.abs() * tire.longitudinal;
+                - relax_rate(t.longitudinal_relaxation, tire.spin, dt) * tire.longitudinal;
             tire.longitudinal += dy * dt;
             fy = t.longitudinal_force * tire.longitudinal + t.longitudinal_damping * dy;
-            let dx = xv - t.lateral_relaxation * tire.spin.abs() * tire.lateral;
+            let dx = xv - relax_rate(t.lateral_relaxation, tire.spin, dt) * tire.lateral;
             tire.lateral += dx * dt;
             let mut fx = -(t.lateral_force * tire.lateral + t.lateral_damping * dx);
             let grip = load.max(0.)
@@ -224,8 +224,8 @@ pub(super) fn update(
             // In the air the stretch relaxes as the wheel spins.
             tire.slipping = true;
             tire.longitudinal -=
-                t.longitudinal_relaxation * tire.spin.abs() * tire.longitudinal * dt;
-            tire.lateral -= t.lateral_relaxation * tire.spin.abs() * tire.lateral * dt;
+                relax_rate(t.longitudinal_relaxation, tire.spin, dt) * tire.longitudinal * dt;
+            tire.lateral -= relax_rate(t.lateral_relaxation, tire.spin, dt) * tire.lateral * dt;
         }
         // The engine turns powered wheels, less as they near maxWheelSpeed;
         // the tyre's pull turns every wheel back.
@@ -248,6 +248,16 @@ pub(super) fn update(
         }
         s.rotation = (s.rotation + tire.spin * dt).rem_euclid(std::f32::consts::TAU);
     }
+}
+/// How fast a tyre's stretch relaxes as its wheel spins: Torque's
+/// `relaxation * |avel|`, at most `1 / dt`. Torque steps it explicitly, so
+/// past `2 / dt` every step overshoots zero by more than it started and the
+/// stretch grows without bound: a wheel left spinning fast in the air
+/// reached infinity in a few ticks and the vehicle's pose went non-finite.
+/// Capped, one step relaxes the stretch at most to zero; below the cap
+/// (every ordinary drive) the result is Torque's exactly.
+fn relax_rate(relaxation: f32, spin: f32, dt: f32) -> f32 {
+    (relaxation * spin.abs()).min(1. / dt)
 }
 #[cfg(test)]
 mod tests {
@@ -467,6 +477,51 @@ mod tests {
         assert_eq!(a.wheel_tire.len(), 4);
         for (a, b) in a.wheel_tire.iter().zip(&b.wheel_tire) {
             assert!((a.spin - b.spin).abs() < 1e-2, "{a:?} {b:?}");
+        }
+    }
+
+    /// A wheel spinning fast in the air relaxes its tyre's stretch to zero
+    /// and no further. Torque's explicit step overshot zero by more each
+    /// tick once `relaxation * spin * dt` passed 2, so a jeep whose wheels
+    /// spun up in a tumble carried an infinite stretch into its next pose
+    /// (chaos seed 0x1daa66d2b0), and every client dropped it as invalid.
+    #[test]
+    fn a_fast_spinning_wheel_in_the_air_keeps_its_tyre_stretch_finite() {
+        let (mut v, mut w) = driven(crate::testing::pack(), crate::testing::TANK);
+        let s = v.snapshot(&w).vehicles.remove(0);
+        let stretched = TireState {
+            spin: 400.,
+            lateral: 0.2,
+            longitudinal: -0.2,
+            slipping: true,
+        };
+        let motion = Motion {
+            passage_frame: Default::default(),
+            transform: Transform {
+                position: [0., 200., 0.],
+                ..s.transform.clone()
+            },
+            velocity: [0.; 3],
+            angular_velocity: [0.; 3],
+            mouse_steering: s.mouse_steering,
+            steering: s.steering,
+            steering_quiet: s.steering_quiet,
+            wheel_suspension: s.wheel_suspension.clone(),
+            wheel_rotation: s.wheel_rotation.clone(),
+            wheel_contact: vec![false; s.wheel_contact.len()],
+            wheel_tire: vec![stretched; s.wheel_tire.len()],
+            actor: None,
+        };
+        v.restore_motion(&mut w, VehicleId(1), &motion).unwrap();
+        for _ in 0..30 {
+            drive(&mut v, &mut w, Controls::default());
+            for tire in &v.snapshot(&w).vehicles[0].wheel_tire {
+                assert!(tire.is_finite(), "{tire:?}");
+                assert!(
+                    tire.lateral.abs() <= 0.2 && tire.longitudinal.abs() <= 0.2,
+                    "{tire:?}"
+                );
+            }
         }
     }
 
