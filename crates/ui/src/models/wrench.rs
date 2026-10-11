@@ -121,6 +121,12 @@ impl WrenchState {
         self.values.insert(vkey(v), d);
     }
     pub fn locked(&self, v: WrenchVariant, f: WrenchField) -> bool {
+        // The reset box shares the Item Respawn Time row and its Copy box.
+        let f = if f == WrenchField::ItemRestore {
+            WrenchField::ItemRespawn
+        } else {
+            f
+        };
         self.locks.contains(&(vkey(v), f))
     }
     pub fn set_lock(&mut self, v: WrenchVariant, f: WrenchField, on: bool) {
