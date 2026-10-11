@@ -316,6 +316,15 @@ pub(super) struct Bots {
     noises: Vec<(OwnerId, Vec3, f32)>,
     /// The tick's shared sight-ray budget (`sightlines`).
     sightlines: std::sync::Mutex<sightlines::Sightlines>,
+    /// Who sides with whom, as answered this tick (`sight::bot_allies`):
+    /// cleared every tick before the bots step, since every bot asks the
+    /// same pairs thousands of times a tick.
+    relations: std::sync::Mutex<rustc_hash::FxHashMap<(OwnerId, OwnerId), bool>>,
+    /// Work counts for tests: relation asks, relations derived from the
+    /// live state, and goof look-arounds (`surprise::LOOK_TICKS`).
+    relation_asks: std::sync::atomic::AtomicU64,
+    relation_answers: std::sync::atomic::AtomicU64,
+    goof_looks: u64,
     /// Live dials (`/botset`) and where overrides are kept.
     tuning: tuning::Tuning,
     /// CPU time spent in `step_bots` ([`crate::cpu_time`]), for the bot
@@ -434,6 +443,10 @@ struct Brain {
     native_combat_tick: Option<u64>,
     /// What the fire gate last said of a press of its trigger, and when.
     gate: Option<(u64, &'static str)>,
+    /// The tick it last looked around for a player to goof at, and whom it
+    /// found (`surprise::surprise_pause`): looked up again every
+    /// [`surprise::LOOK_TICKS`], not every tick.
+    surprise_player: (u64, Option<OwnerId>),
     /// The selected objective owns the ordinary hand trigger this tick.
     objective_tool: bool,
     /// Actual damage evidence can interrupt a noncombat goal. Merely seeing
@@ -642,6 +655,7 @@ impl Brain {
             objective: objectives::State::default(),
             combat: hand_combat::State::default(),
             native_combat_tick: None,
+            surprise_player: (0, None),
             gate: None,
             objective_tool: false,
             objective_threat: None,
@@ -1168,6 +1182,8 @@ impl Session {
         if tick.is_multiple_of(30) {
             self.sync_bot_minigames()?;
         }
+        // Relations are answered afresh each tick (`sight::bot_allies`).
+        self.bots.relations.lock().unwrap().clear();
         self.bots.objective_candidate = objectives::next_turn(
             self.bots.objective_cursor,
             self.bots
@@ -1251,6 +1267,16 @@ impl Session {
     /// first few failures as (bot, tick, error): a bot's step should not
     /// fail in ordinary play, so tests read this to say none did.
     #[doc(hidden)]
+    /// Work counts for tests: (relation asks, relations derived from the
+    /// live state, goof look-arounds) since the session began.
+    pub fn bot_work_counts(&self) -> (u64, u64, u64) {
+        use std::sync::atomic::Ordering::Relaxed;
+        (
+            self.bots.relation_asks.load(Relaxed),
+            self.bots.relation_answers.load(Relaxed),
+            self.bots.goof_looks,
+        )
+    }
     pub fn bot_step_failures(&self) -> (u64, &[(OwnerId, u64, String)]) {
         (self.bots.failed_steps, &self.bots.failures)
     }
@@ -2904,11 +2930,15 @@ impl Session {
                 )
             })
             .flatten();
-        let mut pause = self.surprise_pause(bot, natural, idle, pause_gate, eye);
+        let mut pause = self.surprise_pause(bot, natural, idle, pause_gate, eye, tick);
         pause.play = play;
         pause.perched = on_body;
         (pause.pull, pause.copy) = self.team_mood_now(bot, (feet, eye), threat.is_some(), tick);
         let brain = self.bots.brains.get_mut(&bot).unwrap();
+        if tick >= brain.surprise_player.0 + surprise::LOOK_TICKS {
+            brain.surprise_player = (tick, pause.player);
+            self.bots.goof_looks += 1;
+        }
         let moment = brain
             .surprise
             .goof(&brain.kind.surprise, brain.kind.hold(), &pause, tick);

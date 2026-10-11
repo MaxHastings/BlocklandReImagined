@@ -411,6 +411,9 @@ pub(super) enum Moment {
     End(Interrupt),
 }
 
+/// How often a bot looks around for a player to goof at
+/// (`Session::surprise_pause`): every tenth of a second, not every tick.
+pub(super) const LOOK_TICKS: u64 = 12;
 /// A bot's surprise state: its own random streams, its drives, what each
 /// choice point holds, and its last decision at each.
 #[derive(Clone, Debug, Default)]
@@ -1318,30 +1321,45 @@ impl Session {
         idle: bool,
         gate: Gate,
         eye: Vec3,
+        tick: u64,
     ) -> Pause {
-        let on = self
-            .bots
-            .brains
-            .get(&bot)
-            .is_some_and(|b| b.kind.surprise.strength > 0.0);
-        if !natural || !on {
+        let Some(brain) = self.bots.brains.get(&bot) else {
+            return Pause {
+                gate,
+                ..Default::default()
+            };
+        };
+        if !natural || brain.kind.surprise.strength <= 0.0 {
             return Pause {
                 gate,
                 ..Default::default()
             };
         }
-        let player = self
-            .peers
-            .iter()
-            .filter(|(o, p)| **o != bot && p.combat.alive)
-            .map(|(o, p)| (*o, p.player.eye()))
-            .filter(|(_, at)| at.distance(eye) < 24.0)
-            .filter(|(o, _)| {
-                self.bot_sees_player(bot, *o, eye, 24.0, sightlines::Urgency::Ordinary)
-                    .is_some()
+        // Who it could goof at: the nearest player it sees within 24 units.
+        // A sight ray to every player near it is looked up every
+        // `LOOK_TICKS` (the caller keeps the answer in
+        // `Brain::surprise_player`); between looks the last one stands
+        // while that player is still alive and near.
+        let (looked, last) = brain.surprise_player;
+        let player = if tick < looked + LOOK_TICKS {
+            last.filter(|o| {
+                self.peers
+                    .get(o)
+                    .is_some_and(|p| p.combat.alive && p.player.eye().distance(eye) < 24.0)
             })
-            .min_by(|a, b| a.1.distance(eye).total_cmp(&b.1.distance(eye)))
-            .map(|(o, _)| o);
+        } else {
+            self.peers
+                .iter()
+                .filter(|(o, p)| **o != bot && p.combat.alive)
+                .map(|(o, p)| (*o, p.player.eye()))
+                .filter(|(_, at)| at.distance(eye) < 24.0)
+                .filter(|(o, _)| {
+                    self.bot_sees_player(bot, *o, eye, 24.0, sightlines::Urgency::Ordinary)
+                        .is_some()
+                })
+                .min_by(|a, b| a.1.distance(eye).total_cmp(&b.1.distance(eye)))
+                .map(|(o, _)| o)
+        };
         let spare_weapon = self.weapons.actor(ActorId(bot)).is_some_and(|a| {
             let scale = self.peers.get(&bot).map_or(1.0, |p| p.player.state().scale);
             let attacks = |item: &Option<String>| {
