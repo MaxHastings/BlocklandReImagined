@@ -750,10 +750,14 @@ pub(crate) struct ShadowMaps {
     drawn: Vec<Option<Mat4>>,
     /// Per kept brick face: draw it this frame.
     pub stale: Vec<bool>,
-    /// The kept face refreshed last, in turn.
-    refresh: usize,
     /// Per kept brick face: what it was last drawn from (`kept_casters`).
     kept_casters: std::cell::RefCell<Vec<Option<u64>>>,
+    /// Per whole sun layer (casters, occluders, map; by layer index), what
+    /// the player's view last drew into it (`render_view_shadows` skips a
+    /// layer that would be drawn the same again).
+    pub(crate) kept_layers: std::cell::RefCell<std::collections::HashMap<usize, u64>>,
+    /// What the lamps' moving-caster tiles were last drawn from.
+    pub(crate) dynamic_tiles: std::cell::Cell<Option<u64>>,
     /// Clears one tile of a layer (depth 1) before a kept face redraws.
     pub clear_pipeline: wgpu::RenderPipeline,
     /// Per lamp face: the matrix its kept map face was drawn with, and the
@@ -1080,8 +1084,9 @@ impl ShadowMaps {
             lamps: Vec::new(),
             drawn: Vec::new(),
             stale: Vec::new(),
-            refresh: 0,
             kept_casters: Default::default(),
+            kept_layers: Default::default(),
+            dynamic_tiles: Default::default(),
             clear_pipeline,
             map_faces: Default::default(),
             far: Default::default(),
@@ -1184,15 +1189,6 @@ impl ShadowMaps {
                 }
                 uniform.light_slots[lamp.light / 4][lamp.light % 4] = slot as f32;
                 uniform.lamp_centers[slot] = l.position.extend(l.outer).to_array();
-            }
-            // One kept face a frame is drawn again in turn, so a changed
-            // build reaches its lamp shadows within a few dozen frames.
-            let kept: Vec<usize> = (0..count * FACES)
-                .filter(|&i| self.drawn[i].is_some())
-                .collect();
-            if !kept.is_empty() {
-                self.refresh = (self.refresh + 1) % kept.len();
-                self.stale[kept[self.refresh]] = true;
             }
             let half = 1.0 + 2.0 * LAMP_MARGIN_TEXELS / dynamic as f32;
             uniform.lamp_atlas = [
@@ -1327,6 +1323,16 @@ impl ShadowMaps {
             },
         }
     }
+    /// Every view's sun cascades this frame: the player's, then each plane
+    /// fitting its own.
+    pub(crate) fn every_cascade(&self) -> impl Iterator<Item = &Cascade> {
+        self.cascades.iter().chain(
+            self.views
+                .iter()
+                .filter(|(fitted, _)| *fitted)
+                .flat_map(|(_, cascades)| cascades),
+        )
+    }
     /// `view`'s receiver uniform (views past the planes read the player's).
     pub fn receiver_binding(&self, view: usize) -> wgpu::BindingResource<'_> {
         let region = if view < FITTED_VIEWS { view } else { 0 };
@@ -1448,7 +1454,7 @@ impl ShadowMaps {
         stale
     }
     /// Whether kept brick face `index` must be drawn this frame: it is
-    /// stale (a new lamp or view, or its turn to refresh), or the static
+    /// stale (a new lamp or a moved face), or the static
     /// casters inside it (identified by `casters`, from the chunks' own
     /// geometry) differ from those it was drawn with: a brick placed or
     /// removed there reaches the lamp's shadow the same frame. Marks the

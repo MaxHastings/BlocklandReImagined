@@ -540,9 +540,6 @@ impl App {
         // With shadows the first-person body is posed too: it casts a
         // shadow without being drawn.
         let casts = renderer.shadow_settings().is_some();
-        for mesh in self.avatar.mount_meshes.values_mut() {
-            mesh.upload(renderer, frame.device, frame.queue)?;
-        }
         self.world_items
             .upload(renderer, frame.device, frame.queue)?;
         crate::vehicles::ClientVehicles::upload(
@@ -732,39 +729,78 @@ impl App {
             metal,
             settings.distance,
         );
-        // Bodies build their mesh here, once the view is known. Without
-        // shadows one out of view draws nothing, so it is not built; with
-        // shadows or a live mirror every body may show. A mirror shows the
+        // Bodies build their mesh here, once the view is known, and only
+        // where they can show: in the player's view, another view (a
+        // mirror plane, a probe face) or a shadow one of them reads. A
+        // moving body is skinned and uploaded every frame it is built, so
+        // bodies far behind the camera cost nothing. A mirror shows the
         // player's own body in first person too.
+        let span = crate::frame_trace::span("avatar meshes");
         let in_view =
             crate::culling::Frustum::new(glam::Mat4::from_cols_array(&camera.view_projection));
-        let probing = self
+        let reflecting_planes: Vec<glam::Mat4> = self
+            .lighting
+            .reflections
+            .as_ref()
+            .filter(|_| reflecting)
+            .map(|r| r.plan().planes.iter().map(|p| p.view_projection).collect())
+            .unwrap_or_default();
+        let probe_faces = self
             .lighting
             .environment_probe
             .as_ref()
-            .is_some_and(|p| !p.faces().is_empty());
-        let anywhere = casts || reflecting || probing;
+            .map(|p| p.face_views())
+            .unwrap_or_default();
+        let elsewhere = crate::culling::Elsewhere::new(
+            reflecting_planes
+                .into_iter()
+                .chain(probe_faces.iter().map(|f| f.view_projection)),
+            renderer.shadow_reach(),
+        );
+        let others_see = casts || reflecting || !probe_faces.is_empty();
         let mut bodies_drawn = BTreeSet::new();
         let passages = self.motion.passages();
         for (owner, avatar) in &mut self.avatar.avatars {
-            if (*owner != view.owner || third_person || anywhere) && !hidden.contains(owner) {
-                let (center, radius) = avatar.bounding_sphere();
-                // A body part way through an opening draws on both sides.
-                avatar.straddle = body_straddle(&self.vehicles, view, &passages, *owner, avatar);
-                let seen = |c: Vec3| in_view.sees_sphere(c, radius);
-                if !anywhere
-                    && !seen(center)
-                    && avatar
-                        .straddle
-                        .is_none_or(|s| !seen(s.carry.transform_point3(center)))
-                {
-                    continue;
-                }
-                avatar.build_pending(&self.avatar.avatar_assets)?;
-                avatar.upload(renderer, frame.device, frame.queue)?;
-                bodies_drawn.insert(*owner);
+            if hidden.contains(owner) {
+                continue;
             }
+            let own_hidden = *owner == view.owner && !third_person;
+            if own_hidden && !others_see {
+                continue;
+            }
+            let (center, radius) = avatar.bounding_sphere();
+            // A body part way through an opening draws on both sides.
+            avatar.straddle = body_straddle(&self.vehicles, view, &passages, *owner, avatar);
+            let through = avatar.straddle.map(|s| s.carry.transform_point3(center));
+            let seen = |c: Vec3| {
+                (!own_hidden && in_view.sees_sphere(c, radius))
+                    || (others_see && elsewhere.sees_sphere(c, radius))
+            };
+            if !seen(center) && through.is_none_or(|c| !seen(c)) {
+                continue;
+            }
+            avatar.build_pending(&self.avatar.avatar_assets)?;
+            avatar.upload(renderer, frame.device, frame.queue)?;
+            bodies_drawn.insert(*owner);
         }
+        // Horses likewise: posed every frame (riders sit on their nodes),
+        // their mesh built and drawn only where it can show.
+        let mut mounts_drawn = BTreeSet::new();
+        for (id, mesh) in &mut self.avatar.mount_meshes {
+            let (center, radius) = mesh.bounding_sphere();
+            let through = mesh.straddle.map(|s| s.carry.transform_point3(center));
+            let seen = |c: Vec3| {
+                in_view.sees_sphere(c, radius) || (others_see && elsewhere.sees_sphere(c, radius))
+            };
+            if !seen(center) && through.is_none_or(|c| !seen(c)) {
+                continue;
+            }
+            mesh.build_pending(&self.avatar.avatar_assets)?;
+            mesh.upload(renderer, frame.device, frame.queue)?;
+            mounts_drawn.insert(*id);
+        }
+        self.avatar.meshes_built = (bodies_drawn.len(), mounts_drawn.len());
+        drop(span);
         let effects_camera = bri_fx_runtime::Camera {
             view_projection: glam::Mat4::from_cols_array(&camera.view_projection),
             position: eye,
@@ -1110,8 +1146,9 @@ impl App {
         let mount_draws: Vec<_> = self
             .avatar
             .mount_meshes
-            .values()
-            .filter_map(|mesh| Some((mesh.gpu.as_ref()?, mesh.instance.as_ref()?)))
+            .iter()
+            .filter(|(id, _)| mounts_drawn.contains(*id))
+            .filter_map(|(_, mesh)| Some((mesh.gpu.as_ref()?, mesh.instance.as_ref()?)))
             .collect();
         scenes.extend(self.fx.fade_models.scenes());
         // Models every view draws; the player's own body and held items

@@ -1090,6 +1090,8 @@ impl App {
                 self.avatar.avatars.get_mut(owner).unwrap().set_skis(skis);
                 let dead = life.is_some_and(|life| life.dead);
                 self.avatar.avatars.get_mut(owner).unwrap().set_dead(dead);
+                // Only the player's own first-person image follows the arm.
+                self.avatar.avatars.get_mut(owner).unwrap().wants_unacted = *owner == view.owner;
                 // `Armor::onMount` applies the mount's look limits; the Tank's
                 // gunner rides TankTurretPlayer, so it takes that datablock's.
                 let look_limits = view
