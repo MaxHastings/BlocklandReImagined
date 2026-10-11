@@ -47,7 +47,7 @@ EXE = '.exe' if os.name == 'nt' else ''
 RECEIPT_SCHEMA = 1
 # The release the build is made for. A package that uses a newer engine seam
 # needs the matching game; downloading it cannot update an older executable.
-TARGET_GAME = 'v0.2.9'
+TARGET_GAME = 'v0.2.10'
 RECEIPT = 'BUILD-RECEIPT.json'
 MANIFEST = 'package.json'
 STAMP = (1980, 1, 1, 0, 0, 0)
@@ -561,6 +561,10 @@ def default_vanilla():
 
 
 def main(argv=None):
+    # Checker messages carry arrows; a redirected Windows console is cp1252.
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, 'reconfigure'):
+            stream.reconfigure(encoding='utf-8', errors='replace')
     args = parser().parse_args(argv)
     try:
         if args.command == 'install':
