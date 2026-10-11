@@ -40,7 +40,7 @@ impl App {
                 self.net.reconnects += 1;
                 let resume = a.view.as_ref().map(|view| view.resume.clone());
                 if self
-                    .join_resuming(id, target, String::new(), resume)
+                    .join_resuming(id, target, String::new(), resume, None)
                     .is_ok()
                 {
                     return Ok(());
@@ -58,6 +58,7 @@ impl App {
                     Some(addons::ReloadResume::Downloaded {
                         id,
                         address: a.join_target.clone().unwrap_or_default(),
+                        map: a.progress.subject().unwrap_or_else(|| a.name.clone()),
                     }),
                 )?;
                 return Ok(());
@@ -1173,7 +1174,8 @@ impl App {
 /// Closes the load's trail in the session log (`App::show_progress`) with
 /// how long its last stage took.
 fn log_entered(a: &mut Attempt) {
-    if let (Some((_, since)), Some(map)) = (a.logged_stage.take(), a.progress.subject()) {
+    if let Some((_, since)) = a.logged_stage.take() {
+        let map = a.progress.subject().unwrap_or_else(|| a.name.clone());
         bri_console::echo(format!(
             "Loading {map}: IN GAME (after {} ms)",
             since.elapsed().as_millis()
