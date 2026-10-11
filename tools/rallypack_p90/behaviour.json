@@ -1,0 +1,27 @@
+{
+  "schema_version": 1,
+  "script": "p90.rhai",
+  "commands": [
+    {"name":"shot","tool_only":true},
+    {"name":"mount","tool_only":true},
+    {"name":"unmount","tool_only":true,"while_dead":true},
+    {"name":"ready","tool_only":true},
+    {"name":"check","tool_only":true},
+    {"name":"reload","tool_only":true},
+    {"name":"finish","tool_only":true},
+    {"name":"dry","tool_only":true},
+    {"name":"aim","tool_only":true}
+  ],
+  "on_loadout": true,
+  "on_death": true,
+  "on_drop": true,
+  "on_pickup": true,
+  "tick_interval": 1,
+  "state": {
+    "player": {
+      "gun":{"default":{},"persist":false},
+      "rounds":{"default":50,"visible":"owner","persist":false},
+      "spares":{"default":[50,50],"visible":"owner","persist":false}
+    }
+  }
+}

@@ -9,6 +9,7 @@
 //! Findings: `docs/audits/spike-addon-import.md`.
 use bri_console::Clamp;
 pub mod behaviour;
+pub mod coverage;
 mod help;
 mod hole_bots;
 mod player_types;
@@ -124,7 +125,7 @@ const VEHICLE_CLASSES: &[(&str, bri_vehicles::schema::Family)] = &[
     ("FlyingVehicleData", bri_vehicles::schema::Family::Flying),
 ];
 /// Fields that name another datablock. Keys are lower-case, without `[n]`.
-const REFERENCE_FIELDS: &[&str] = &[
+pub(crate) const REFERENCE_FIELDS: &[&str] = &[
     "image",
     "item",
     "projectile",
@@ -845,6 +846,8 @@ fn inventory(cx: &mut Ctx, scripts: &[Script]) -> Option<BTreeSet<String>> {
             output: None,
             id: None,
             notes,
+            gaps: vec![],
+            missing: vec![],
         });
     }
     for (member, why) in &cx.src.refused {
@@ -1413,7 +1416,8 @@ fn convert_files(cx: &mut Ctx) -> Result<()> {
                             None,
                         );
                         if let Some(a) = cx.report.assets.iter_mut().find(|a| a.source == f.path) {
-                            a.notes.extend(provenance.warnings);
+                            a.notes.extend(provenance.faithful);
+                            a.gaps.extend(provenance.warnings);
                         }
                     }
                     Err(e) => set_asset(
@@ -1964,16 +1968,36 @@ fn presentation(cx: &mut Ctx, pack: &bri_weapons::Pack, weapons_sha256: &str) ->
                             format!("base/data/shapes/{}.{ext}", m.name).to_ascii_lowercase()
                         })
                         .find(|path| cx.reference.files.contains(path));
-                    cx.report.diagnostics.push(match stock {
-                        Some(path) => format!(
-                            "presentation: {key} material {} uses v20's {path}, which is not among the installed game's item textures (or no --installed was given); drawn in the colour shift (white without one) instead",
-                            m.name
-                        ),
-                        None => format!(
-                            "presentation: {key} material {} has no texture; drawn in the colour shift (white without one), as Torque drew it",
-                            m.name
-                        ),
-                    });
+                    let asset = cx
+                        .report
+                        .assets
+                        .iter_mut()
+                        .find(|a| a.source.eq_ignore_ascii_case(&f.path));
+                    let note = match stock {
+                        Some(path) => {
+                            let note = format!(
+                                "material {} uses v20's {path}, which is not among the installed game's item textures (or no --installed was given); drawn in the colour shift (white without one) instead",
+                                m.name
+                            );
+                            if let Some(a) = asset {
+                                a.missing.push(note.clone());
+                            }
+                            note
+                        }
+                        None => {
+                            let note = format!(
+                                "material {} has no texture; drawn in the colour shift (white without one), as Torque drew it",
+                                m.name
+                            );
+                            if let Some(a) = asset {
+                                a.notes.push(note.clone());
+                            }
+                            note
+                        }
+                    };
+                    cx.report
+                        .diagnostics
+                        .push(format!("presentation: {key} {note}"));
                     bindings.push(flat_texture(cx, &mut textures, Flat::Clear)?);
                 }
             }
@@ -3564,7 +3588,7 @@ fn behaviours(cx: &mut Ctx, scripts: &[Script]) {
 }
 
 /// `state Fire calls script onFire` → (`Fire`, `onFire`).
-fn state_script(note: &str) -> Option<(&str, &str)> {
+pub(crate) fn state_script(note: &str) -> Option<(&str, &str)> {
     note.strip_prefix("state ")?.split_once(" calls script ")
 }
 
@@ -4186,6 +4210,12 @@ fn finish(mut cx: Ctx, opts: &Options, ports: &ports::Ports, code: &ports::Code)
         }
         cx.report.ports.push(port);
     }
+    let datablocks: coverage::Datablocks = cx
+        .owned
+        .iter()
+        .map(|(k, o)| (k.clone(), (o.d.class.clone(), o.fields.clone())))
+        .collect();
+    cx.report.items = coverage::items(&datablocks, &cx.report);
     cx.report.summarise();
     let mut files = vec![];
     let mut stack = vec![cx.out.clone()];
