@@ -1914,9 +1914,10 @@ impl WeaponsWorld {
     pub fn reserve(&self, id: ActorId, ammo: &str) -> Option<Reserve> {
         self.actors.get(&id)?.reserve.get(ammo).copied()
     }
-    /// Set a holder's reserve of `ammo` (an ammo box, an endless-ammo
-    /// rule), capped at 100000 rounds.
-    pub fn set_reserve(&mut self, id: ActorId, ammo: &str, reserve: Reserve) -> Result<()> {
+    /// Whether a holder could have a reserve of `ammo` now (`set_reserve`,
+    /// `give_ammo`): the holder is here, the name is valid and they carry
+    /// fewer than 64 kinds already, or this one. Changes nothing.
+    pub fn check_reserve(&self, id: ActorId, ammo: &str) -> Result<()> {
         ensure!(
             (1..=32).contains(&ammo.len())
                 && ammo
@@ -1924,11 +1925,33 @@ impl WeaponsWorld {
                     .all(|b| b.is_ascii_alphanumeric() || b"._-".contains(&b)),
             "Invalid ammo name"
         );
-        let a = self.actors.get_mut(&id).context("Unknown actor")?;
+        let a = self.actors.get(&id).context("Unknown actor")?;
         ensure!(
             a.reserve.len() < 64 || a.reserve.contains_key(ammo),
             "Too many ammo types"
         );
+        Ok(())
+    }
+    /// Whether `set_rounds` of `item` would change a magazine: the holder
+    /// carries it and it has a magazine of its own. Changes nothing.
+    pub fn check_set_rounds(&self, id: ActorId, item: &str) -> Result<()> {
+        let a = self.actors.get(&id).context("Unknown actor")?;
+        let slot = (0..a.inventory.len())
+            .find(|s| a.inventory.get(*s).and_then(Option::as_deref) == Some(item))
+            .context("They carry no such item")?;
+        self.pack
+            .items
+            .get(&a.inventory[slot].clone().expect("held"))
+            .and_then(|i| self.pack.images.get(&i.image)?.magazine.as_ref())
+            .filter(|m| !m.from_reserve)
+            .context("That item has no magazine")?;
+        Ok(())
+    }
+    /// Set a holder's reserve of `ammo` (an ammo box, an endless-ammo
+    /// rule), capped at 100000 rounds.
+    pub fn set_reserve(&mut self, id: ActorId, ammo: &str, reserve: Reserve) -> Result<()> {
+        self.check_reserve(id, ammo)?;
+        let a = self.actors.get_mut(&id).context("Unknown actor")?;
         let reserve = match reserve {
             Reserve::Rounds(n) => Reserve::Rounds(n.min(100_000)),
             Reserve::Endless => Reserve::Endless,

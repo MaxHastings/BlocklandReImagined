@@ -1039,10 +1039,28 @@ fn cmd_buy(p, item) {
 ```
 
 Before anything of the call is kept, the engine checks each required
-operation (for `give_item`: the player is here, the item is one this
-server has, and they carry it already, have a free slot or `equip` makes
-room; for `take_item`: they carry it; for `remove_brick`: the brick is
-there and may be removed). If one cannot be done, the call takes no
+operation. It can check these (what each looks at, without changing
+anything):
+
+| Operation | Refused when |
+|---|---|
+| `give_item` | the player is gone, the item is not this server's, or no free slot and no `equip` |
+| `take_item` | the player does not carry it |
+| `remove_brick` | the brick is gone, indestructible, not the caller's to remove, or the package used its world-edit share |
+| `plant_brick`, `place_brick` | the brick kind is not loaded, the colour is not in the palette, the build is not the caller's, the brick is off the grid or does not fit, or no world-edit share is left. An unrequired plant that does not fit is skipped without a report, as v20's `plant()` was; a required one is refused |
+| `drop_item` | the item is not this server's, the package already has its limit lying about, or the data is too big |
+| `remove_drop`, `name_drop` | the item is not one this package put in the world and that still lies there |
+| `damage` | the damage type does not exist, or the player, vehicle or entity is gone |
+| `heal`, `teleport` | the player is gone or dead |
+| `give_ammo`, `set_reserve` | the player is gone or already carries 64 kinds of ammo |
+| `set_rounds` | the player does not carry the item, or it has no magazine of its own |
+| `set_score` | the player is gone, or the score is out of range |
+| `spawn_entity` | the kind is unknown or its `max_alive`, the server's entity limit or the package's share is reached (room for the body is only known when it is placed) |
+
+The checks all look at the world as it is before the call; two required
+operations that compete for the same last slot or share are not told apart,
+so the second is caught as described next. Every other operation is not
+checked: it is carried out, and a failure there is caught the same way. If one cannot be done, the call takes no
 effect: its state changes are dropped, none of its operations run, and a
 command's player hears why ("P's tools are full"); the host log gets an
 `op.required` report. A required operation that still fails as it is

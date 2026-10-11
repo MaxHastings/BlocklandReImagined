@@ -5,7 +5,8 @@ use super::*;
 impl Perform for ops::RemoveBrick {
     /// Whether the brick is there and the caller may remove it.
     fn check(&self, session: &Session, cx: OpCall<'_>) -> Result<()> {
-        session.package_may_remove_brick(self.brick, cx.caller)
+        session.package_may_remove_brick(self.brick, cx.caller)?;
+        session.package_check_edit_share(cx.package, "destroyed")
     }
     fn perform(self, session: &mut Session, cx: OpCall<'_>) -> Result<()> {
         let OpCall {
@@ -16,6 +17,10 @@ impl Perform for ops::RemoveBrick {
     }
 }
 impl Perform for ops::PlaceBrick {
+    /// Whether the package has an edit to spend and the brick fits.
+    fn check(&self, session: &Session, cx: OpCall<'_>) -> Result<()> {
+        session.package_check_place_brick(cx.package, &self.shape, self.position)
+    }
     fn perform(self, session: &mut Session, cx: OpCall<'_>) -> Result<()> {
         let OpCall { package, .. } = cx;
         let ops::PlaceBrick {
@@ -27,6 +32,20 @@ impl Perform for ops::PlaceBrick {
     }
 }
 impl Perform for ops::PlantBrick {
+    /// Whether the brick would really be planted. Without `require` a brick
+    /// that does not fit is skipped without a report, as v20's `plant()`
+    /// was; a script that charges for it asks to hear.
+    fn check(&self, session: &Session, cx: OpCall<'_>) -> Result<()> {
+        session.package_check_plant_brick(
+            cx.package,
+            &self.kind,
+            self.position,
+            self.turns,
+            self.color,
+            self.owner,
+            cx.caller,
+        )
+    }
     fn perform(self, session: &mut Session, cx: OpCall<'_>) -> Result<()> {
         let OpCall {
             package, caller, ..
