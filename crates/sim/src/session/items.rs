@@ -157,11 +157,7 @@ impl Session {
             .collect();
         let owners: Vec<OwnerId> = self.peers.keys().copied().collect();
         for owner in owners {
-            // A rule run for an earlier player may have removed this one
-            // (`remove_bot` from `on_pickup`).
-            let Some(peer) = self.peers.get(&owner) else {
-                continue;
-            };
+            let peer = &self.peers[&owner];
             if !peer.combat.alive {
                 continue;
             }
@@ -177,8 +173,7 @@ impl Session {
                 }
             }
             for id in self.item_spawners.contacts(contact) {
-                // A rule run for an earlier item may have removed this
-                // one's brick.
+                // A hook earlier in this loop may have removed this spawner.
                 let Some(item) = self.item_spawners.items.get(&id) else {
                     continue;
                 };
@@ -220,6 +215,10 @@ impl Session {
                     }
                     self.fire_input(id, "onItemPickup", Some(owner));
                     self.package_collected(owner, &item, None, Some(id));
+                    // The result hooks edit the world too: a spawner they
+                    // removed must not hand its item to a later contact in
+                    // this same tick.
+                    self.reconcile_items()?;
                 }
             }
             for id in dynamic.query(contact) {
