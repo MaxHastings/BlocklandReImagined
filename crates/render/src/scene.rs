@@ -2768,6 +2768,26 @@ impl SceneRenderer {
             self.views[i].group = self.view_group(device, i, &self.views[i].camera);
         }
     }
+    /// Draw the scenes `old` uploaded, so a renderer rebuilt on the same
+    /// device for other settings (sample count, shadows, colour vision)
+    /// needs no upload of the world again. Their material bind groups stay
+    /// valid: both renderers' material layouts have one descriptor, which
+    /// wgpu treats as one layout. This renderer takes `old`'s chunk pools,
+    /// so later chunks share its blocks, and its environment probe map,
+    /// which Metal materials sample. Call before uploading anything to
+    /// this renderer, whose own probe then goes with `old`.
+    pub fn adopt_scenes(&mut self, old: &mut SceneRenderer) -> Result<()> {
+        ensure!(
+            self.device == old.device && self.color_format == old.color_format,
+            "Scenes uploaded for another device or format"
+        );
+        std::mem::swap(&mut self.pool, &mut old.pool);
+        std::mem::swap(&mut self.translucent_pool, &mut old.translucent_pool);
+        std::mem::swap(&mut self.probe, &mut old.probe);
+        let device = self.device.clone();
+        self.rebuild_view_groups(&device);
+        Ok(())
+    }
     /// Before uploading many chunks at once (a load): room for all of them
     /// in one shared block per pool.
     pub fn reserve_chunks(&self, chunks: &[&SceneData]) -> Result<()> {

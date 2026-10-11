@@ -5,6 +5,10 @@ use super::*;
 pub(super) struct GpuState {
     pub(super) weather_renderer: Option<bri_weather::gpu::WeatherRenderer>,
     pub(super) renderer: Option<crate::gpu_build::Building<SceneRenderer>>,
+    /// The renderer that uploaded the world's scenes, kept from a rebuild
+    /// for other settings until `renderer` takes them over
+    /// (`SceneRenderer::adopt_scenes`) on its first world frame.
+    pub(super) retired_renderer: Option<SceneRenderer>,
     pub(super) shell_gpu: Option<(GpuScene, bri_render::scene::GpuInstances)>,
     /// Outlines of non-rendering bricks, drawn only while a building tool is
     /// out, and whether the uploaded lines are the shown ones (None: stale).
