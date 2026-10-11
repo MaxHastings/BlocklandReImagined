@@ -31,6 +31,7 @@
       "Bash(git merge origin/main:*)",
       "Bash(git push -u origin claude/*)",
       "Bash(git push origin claude/*)",
+      "Bash(git push origin --delete claude/*)",
       "Bash(git tag v*)",
       "Bash(git push origin v*)",
       "Bash(gh workflow run *)",
@@ -90,7 +91,6 @@
       "Bash(git clean:*)",
       "Bash(git branch -D:*)",
       "Bash(git branch -d:*)",
-      "Bash(git push origin --delete:*)",
       "Bash(git push origin :*)"
     ]
   }
