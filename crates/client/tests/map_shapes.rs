@@ -118,10 +118,7 @@ fn capture(app: &mut App, gpu: &Headless, renderer: &mut UiRenderer) -> Result<V
     );
     gpu.queue.submit([encoder.finish()]);
     readback.slice(..).map_async(wgpu::MapMode::Read, |_| {});
-    gpu.device.poll(wgpu::PollType::Wait {
-        submission_index: None,
-        timeout: Some(Duration::from_secs(30)),
-    })?;
+    support::gpu::wait(&gpu.device, "the frame")?;
     let mapped = readback
         .slice(..)
         .get_mapped_range()
