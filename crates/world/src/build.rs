@@ -538,6 +538,7 @@ mod item_spawn_tests {
                 position: 1,
                 direction: 5,
                 respawn_ms: 300000,
+                restore: Default::default(),
             };
             b.source_records.push(SourceRecord {
                 line: 1,

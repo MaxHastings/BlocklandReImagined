@@ -112,6 +112,30 @@ pub struct ItemSpawn {
     pub position: u8,
     pub direction: u8,
     pub respawn_ms: u32,
+    /// How a picked-up item comes back. Saves written before this field
+    /// existed read as [`ItemRestore::Timer`], v20's behaviour.
+    #[serde(default, skip_serializing_if = "ItemRestore::is_timer")]
+    pub restore: ItemRestore,
+}
+/// When a spawn brick's item comes back after a player takes it.
+///
+/// Whatever the choice, `MiniGameSO::Reset` brings every item of the
+/// game's builders back (v20's `Item.fadeIn(0)` on reset), and the wrench
+/// outputs `setItem` and `restoreItem` bring one back at once.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ItemRestore {
+    /// v20: the item fades back in after `respawn_ms`.
+    #[default]
+    Timer,
+    /// The item stays gone until the mini-game resets or an event restores
+    /// it: a coin collected once a round, a key that opens one door.
+    Reset,
+}
+impl ItemRestore {
+    pub fn is_timer(&self) -> bool {
+        *self == Self::Timer
+    }
 }
 impl Default for ItemSpawn {
     fn default() -> Self {
@@ -120,6 +144,7 @@ impl Default for ItemSpawn {
             position: 0,
             direction: 2,
             respawn_ms: 4000,
+            restore: ItemRestore::Timer,
         }
     }
 }
@@ -177,6 +202,14 @@ impl ItemSpawn {
     }
     pub fn respawn_ticks(&self) -> u64 {
         (u64::from(self.respawn_ms) * TICKS_PER_SECOND).div_ceil(1000)
+    }
+    /// The tick a taken item comes back on its own, or `None` when only a
+    /// reset or an event brings it back ([`ItemRestore::Reset`]).
+    pub fn available_again(&self, taken: u64) -> Option<u64> {
+        match self.restore {
+            ItemRestore::Timer => taken.checked_add(self.respawn_ticks()),
+            ItemRestore::Reset => None,
+        }
     }
 }
 /// A package block drawn on this brick in place of its colour: per-face

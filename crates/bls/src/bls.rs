@@ -75,6 +75,7 @@ fn extension(brick: &mut Brick, line: &str) -> Result<Option<String>> {
                 },
                 direction: direction.clamp(2, 5) as u8,
                 respawn_ms: respawn.clamp(1000, 300000) as u32,
+                restore: Default::default(),
             };
             item_spawn.validate()?;
             let unresolved = item_spawn.item.is_some();
@@ -666,6 +667,7 @@ mod tests {
                     position: 4,
                     direction: 3,
                     respawn_ms: 12000,
+                    restore: Default::default(),
                 },
             ),
             (
@@ -675,6 +677,7 @@ mod tests {
                     position: 1,
                     direction: 5,
                     respawn_ms: 300000,
+                    restore: Default::default(),
                 },
             ),
             (
@@ -717,7 +720,8 @@ mod tests {
                 item: None,
                 position: 5,
                 direction: 2,
-                respawn_ms: 1000
+                respawn_ms: 1000,
+                restore: Default::default(),
             }
         );
         let records = &world.bricks[&1].source_records;

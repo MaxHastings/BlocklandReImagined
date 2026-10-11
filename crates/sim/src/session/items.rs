@@ -205,16 +205,21 @@ impl Session {
                     Pickup::Take => self.weapons.give(actor, &item).map(|_| ()),
                 };
                 // Full inventory, duplicate item or occupied hands leave the item
-                // available. Neither circumstance starts its respawn timer.
+                // available. Neither circumstance starts its respawn timer,
+                // and neither counts as a pickup: `onItemPickup` and
+                // `on_collected` fire only once the item is really gone from
+                // its brick, so a builder's reward row runs once per take.
                 if picked.is_ok() {
                     // A spawner the rule removed has no respawn to start.
                     if let Some(brick) = self.simulation.state().bricks.get(&id) {
-                        let respawn = brick.item_spawn.respawn_ticks();
-                        self.item_spawners.picked_up(id, tick, respawn)?;
+                        let again = brick.item_spawn.available_again(tick);
+                        self.item_spawners.picked_up(id, tick, again)?;
                     }
                     if !sport && decision == Pickup::Take {
                         self.notify(owner, Notice::Sound(ITEM_SOUND.into()));
                     }
+                    self.fire_input(id, "onItemPickup", Some(owner));
+                    self.package_collected(owner, &item, None, Some(id));
                 }
             }
             for id in dynamic.query(contact) {
@@ -238,10 +243,12 @@ impl Session {
                         Pickup::Leave => {}
                         Pickup::UseUp => {
                             self.weapons.remove_drop(id);
+                            self.package_collected(owner, &item, Some(id), None);
                         }
                         Pickup::Take => {
                             if self.weapons.pickup(actor, id).is_ok() {
                                 self.notify(owner, Notice::Sound(ITEM_SOUND.into()));
+                                self.package_collected(owner, &item, Some(id), None);
                             }
                         }
                     }

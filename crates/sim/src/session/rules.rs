@@ -531,6 +531,19 @@ impl Session {
                     .context("Explain needs a player")?;
                 self.explain_rules(owner, d.target.id.index)?;
             }
+            RuleOp::RestoreItem | RuleOp::HideItem => {
+                let brick = d.target.id.index;
+                ensure!(
+                    self.item_spawners.items.contains_key(&brick),
+                    "Brick spawns no item"
+                );
+                let tick = self.simulation.state().tick;
+                if *op == RuleOp::RestoreItem {
+                    self.item_spawners.restock(brick, tick);
+                } else {
+                    self.item_spawners.hide(brick);
+                }
+            }
             RuleOp::AddScore(value) => {
                 self.rule_game(d)?;
                 let player = self

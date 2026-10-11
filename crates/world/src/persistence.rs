@@ -77,6 +77,7 @@ mod tests {
             position: 5,
             direction: 3,
             respawn_ms: 12001,
+            restore: Default::default(),
         };
         brick.source_records.push(SourceRecord {
             line: 1,

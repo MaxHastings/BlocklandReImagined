@@ -15,10 +15,10 @@ use crate::ops::{FillPaint, ObjectRef, Op, SoundAt, TempLook, VehiclePaint, Worl
 use crate::state::{Namespace, PlayerKey, check_value};
 use bri_console::Clamp;
 use bri_package::diag::Diagnostic;
-use rhai::{AST, Array, Dynamic, Engine, EvalAltResult, Map};
+use rhai::{AST, Array, Dynamic, Engine, EvalAltResult, INT, Map};
 use serde::{Deserialize, Serialize};
 use std::cell::RefCell;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 mod bots;
@@ -569,6 +569,11 @@ pub type EntityVars = BTreeMap<u64, BTreeMap<String, serde_json::Value>>;
 pub struct Outcome {
     pub returned: Dynamic,
     pub ops: Vec<Op>,
+    /// Indices into `ops` the script marked with `require`: the call's
+    /// state is kept only if every one of them is carried out. The host
+    /// checks what it can before keeping anything, and keeps nothing when
+    /// one fails anyway.
+    pub required: BTreeSet<usize>,
     pub state: Namespace,
     /// The complete variables of each entity the call wrote to.
     pub entity_vars: EntityVars,
@@ -585,6 +590,7 @@ struct Invocation {
     /// Entities this call wrote, with all their variables.
     written: EntityVars,
     ops: Vec<Op>,
+    required: BTreeSet<usize>,
     output: Vec<String>,
     read_only: bool,
     write_attempted: bool,
@@ -696,7 +702,9 @@ fn id(value: &Dynamic) -> Fallible<u64> {
         _ => fail(format!("expected an id, got {}", value.type_name())),
     }
 }
-fn push(op: Op) -> Fallible<()> {
+/// Queue an operation for the host to carry out after the call, and
+/// return its handle: the number `require` takes.
+fn push(op: Op) -> Fallible<INT> {
     with(|i| {
         permit_write(i)?;
         if i.ops.len() >= MAX_OPS_PER_CALL {
@@ -705,6 +713,18 @@ fn push(op: Op) -> Fallible<()> {
             ));
         }
         i.ops.push(op);
+        Ok((i.ops.len() - 1) as INT)
+    })
+}
+/// `require(op)`: the call's state changes are kept only if this operation
+/// is carried out. `op` is what an operation function returned.
+fn require(op: INT) -> Fallible<()> {
+    with(|i| {
+        let index = usize::try_from(op)
+            .ok()
+            .filter(|index| *index < i.ops.len())
+            .ok_or("require takes what an operation function returned, such as give_item")?;
+        i.required.insert(index);
         Ok(())
     })
 }
@@ -985,7 +1005,7 @@ fn environment_map(e: &bri_content::atmosphere::Settings, tick: u64) -> Dynamic 
 }
 /// `set_environment(#{ ... })`: each key sets one setting, `()` puts it
 /// back to the map's own (see docs/modding/rules.md, "Environment").
-fn set_environment(options: Map) -> Fallible<()> {
+fn set_environment(options: Map) -> Fallible<INT> {
     use bri_content::atmosphere::{DEFAULT_DAY_LENGTH, DayCycle, Settings, SunFlare, Vignette};
     let (current, tick) = with(|i| Ok((i.snapshot.environment.clone(), i.snapshot.tick)))?;
     let mut changes = Settings::default();
@@ -1319,6 +1339,7 @@ fn player_key(i: &Invocation, player: &Dynamic) -> Fallible<PlayerKey> {
 fn register_api(engine: &mut Engine) {
     engine.register_fn("tick", || with(|i| Ok(i.snapshot.tick as i64)));
     engine.register_fn("seed", || with(|i| Ok(i.snapshot.seed)));
+    engine.register_fn("require", require);
     engine.register_fn("caller", || {
         with(|i| {
             Ok(i.caller
@@ -1779,7 +1800,7 @@ fn register_api(engine: &mut Engine) {
         reach: &str,
         tool: &str,
         options: Map,
-    ) -> Result<(), Box<EvalAltResult>> {
+    ) -> Fallible<INT> {
         let (rule, limited, hold) = copy_rule(&options)?;
         let limited = limited.unwrap_or(false);
         push(Op::CopyBuild(ops::CopyBuild {
@@ -1813,7 +1834,7 @@ fn register_api(engine: &mut Engine) {
         limit: i64,
         tool: &str,
         options: Map,
-    ) -> Result<(), Box<EvalAltResult>> {
+    ) -> Fallible<INT> {
         let (rule, limited, hold) = copy_rule(&options)?;
         push(Op::CopyBox(ops::CopyBox {
             player: id(&player)?,
@@ -1885,7 +1906,7 @@ fn register_api(engine: &mut Engine) {
         limit: i64,
         tool: &str,
         options: Map,
-    ) -> Result<(), Box<EvalAltResult>> {
+    ) -> Fallible<INT> {
         let mut partial = false;
         let mut whole = false;
         for (key, value) in &options {
@@ -2003,7 +2024,7 @@ fn register_api(engine: &mut Engine) {
             direction: if direction < 0 { -1 } else { 1 },
         }))
     });
-    fn plant_copy(player: Dynamic, options: Map) -> Result<(), Box<EvalAltResult>> {
+    fn plant_copy(player: Dynamic, options: Map) -> Fallible<INT> {
         let mut float = false;
         for (key, value) in &options {
             match key.as_str() {
@@ -2572,7 +2593,7 @@ fn damage_op(
     amount: &Dynamic,
     by: &Dynamic,
     damage_type: Option<String>,
-) -> Fallible<()> {
+) -> Fallible<INT> {
     push(Op::Damage(ops::Damage {
         target: target(target_value)?,
         amount: float(amount)?,
@@ -2740,7 +2761,7 @@ fn register_queries(engine: &mut Engine) {
 
 /// The `effects` operations, and the player view and image operations.
 fn register_presentation(engine: &mut Engine) {
-    fn beam(from: Array, to: Array, options: Map) -> Fallible<()> {
+    fn beam(from: Array, to: Array, options: Map) -> Fallible<INT> {
         let mut color = [1.0, 0.9, 0.6, 1.0];
         let mut width = 0.05;
         let mut seconds = 0.1;
@@ -2781,7 +2802,7 @@ fn register_presentation(engine: &mut Engine) {
     engine.register_fn("beam", beam);
     // `%player.playThread(thread, sequence)`, or its `schedule(ms, ...)`
     // `after` seconds later.
-    fn play_thread(player: Dynamic, thread: i64, sequence: &str, after: f64) -> Fallible<()> {
+    fn play_thread(player: Dynamic, thread: i64, sequence: &str, after: f64) -> Fallible<INT> {
         push(Op::PlayThread(ops::PlayThread {
             player: id(&player)?,
             thread: u8::try_from(thread).map_err(|_| "thread is 0 to 3")?,
@@ -2797,7 +2818,7 @@ fn register_presentation(engine: &mut Engine) {
     // Every map light within `radius` of `at`: `on` (true), `color`
     // ([1.0, 1.0, 1.0], times the recovered colour) and `brightness` (1.0);
     // an empty map puts them back as the map was lit.
-    fn set_map_lights(at: Array, radius: Dynamic, options: Map) -> Fallible<()> {
+    fn set_map_lights(at: Array, radius: Dynamic, options: Map) -> Fallible<INT> {
         let mut on = true;
         let mut color = [1.0f32; 3];
         let mut brightness = 1.0f32;
@@ -3159,7 +3180,7 @@ fn register_presentation(engine: &mut Engine) {
         max: Dynamic,
         distance: Dynamic,
         body: crate::ops::OrbitBody,
-    ) -> Fallible<()> {
+    ) -> Fallible<INT> {
         let range = crate::ops::ORBIT_DISTANCE;
         let units = |v: &Dynamic| -> Fallible<u8> {
             let v = float(v)?;
@@ -3281,7 +3302,7 @@ fn fire_op(
     at: [Dynamic; 3],
     velocity: [Dynamic; 3],
     by: Dynamic,
-) -> Fallible<()> {
+) -> Fallible<INT> {
     let [x, y, z] = at;
     let [vx, vy, vz] = velocity;
     push(Op::Fire(ops::Fire {
@@ -3291,14 +3312,14 @@ fn fire_op(
         by: credit(&by)?,
     }))
 }
-fn push_op(target: Dynamic, x: Dynamic, y: Dynamic, z: Dynamic, by: Dynamic) -> Fallible<()> {
+fn push_op(target: Dynamic, x: Dynamic, y: Dynamic, z: Dynamic, by: Dynamic) -> Fallible<INT> {
     push(Op::Push(ops::Push {
         target: object_ref(&target)?,
         velocity: [float(&x)?, float(&y)?, float(&z)?],
         by: credit(&by)?,
     }))
 }
-fn tumble_op(player: Dynamic, x: Dynamic, y: Dynamic, z: Dynamic, by: Dynamic) -> Fallible<()> {
+fn tumble_op(player: Dynamic, x: Dynamic, y: Dynamic, z: Dynamic, by: Dynamic) -> Fallible<INT> {
     tumble_for(player, x, y, z, by, Dynamic::UNIT)
 }
 fn tumble_for(
@@ -3308,7 +3329,7 @@ fn tumble_for(
     z: Dynamic,
     by: Dynamic,
     seconds: Dynamic,
-) -> Fallible<()> {
+) -> Fallible<INT> {
     let player = match object_ref(&player) {
         Ok(ObjectRef::Player(p)) => p,
         Ok(other) => return fail(format!("only players tumble, not {other}")),
@@ -3326,7 +3347,7 @@ fn tumble_for(
     }))
 }
 
-fn tether_op(player: Dynamic, anchor: Array, length: Dynamic, options: rhai::Map) -> Fallible<()> {
+fn tether_op(player: Dynamic, anchor: Array, length: Dynamic, options: rhai::Map) -> Fallible<INT> {
     for key in options.keys() {
         if !matches!(
             key.as_str(),
@@ -3616,6 +3637,9 @@ impl Runtime {
             if behaviour.on_drop {
                 need("on_drop".into(), 3, "on_drop");
             }
+            if behaviour.on_collected {
+                need("on_collected".into(), 3, "on_collected");
+            }
             if behaviour.on_projectile_hit {
                 need("on_projectile_hit".into(), 1, "on_projectile_hit");
             }
@@ -3765,6 +3789,7 @@ impl Runtime {
                 entity_vars: call.entity_vars,
                 written: BTreeMap::new(),
                 ops: Vec::new(),
+                required: BTreeSet::new(),
                 output: Vec::new(),
                 read_only,
                 write_attempted: false,
@@ -3802,6 +3827,7 @@ impl Runtime {
                 // What leaves the script holds plain maps, not views.
                 returned: view::plain(&returned),
                 ops: invocation.ops,
+                required: invocation.required,
                 state: invocation.state,
                 entity_vars: invocation.written,
                 output: invocation.output,
