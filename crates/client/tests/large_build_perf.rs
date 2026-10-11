@@ -18,7 +18,9 @@
 //! does: it reports the frame the change costs (the renderer rebuild, with
 //! the frame trace's breakdown) and steady frames at that level.
 //! Stacked saves: `BRI_PERF_SAVE="a.bls;b.bls;c.bls" BRI_PERF_MAP=Bedroom`
-//! loads them all onto one map. Each view reports GPU ms per world pass
+//! loads them all onto one map. A save may also be one of the game's own
+//! builds (`….world.json` from the saves folder), loaded on its own map
+//! unless BRI_PERF_MAP says otherwise. Each view reports GPU ms per world pass
 //! (`gpu_passes`) beside the frame's whole GPU time.
 use bri_console::Clamp;
 
@@ -550,15 +552,30 @@ fn large_build_frame_times() -> Result<()> {
         .ok()
         .and_then(|s| s.parse().ok())
         .unwrap_or(300);
+    // The game's own builds, as Save Bricks writes them.
+    let native = |path: &Path| path.to_string_lossy().ends_with(".world.json");
     let name = save
         .file_stem()
         .context("save name")?
         .to_string_lossy()
+        .trim_end_matches(".world")
         .to_string();
     // BRI_PERF_MAP (a save folder name such as "Bedroom") loads every
     // save onto that map instead of the first save's own.
     let folder = match std::env::var("BRI_PERF_MAP") {
         Ok(map) => map,
+        // A native build's folder is named after its map's hash: the map
+        // comes from the build itself.
+        Err(_) if native(&save) => {
+            let (world, _) = bri_world::build::decode_header(&std::fs::read(&save)?)?;
+            ["Bedroom", "Kitchen", "Slopes", "Slate"]
+                .into_iter()
+                .find(|folder| {
+                    bri_client::content::map_for_save_folder(folder) == Some(&world.map_id)
+                })
+                .with_context(|| format!("no save folder for map {}", world.map_id))?
+                .to_string()
+        }
         Err(_) => save
             .parent()
             .and_then(Path::file_name)
@@ -612,9 +629,19 @@ fn large_build_frame_times() -> Result<()> {
             synthetic_world(n, map_id, palette)
         }
         None => {
-            let mut world = converter.convert(&std::fs::read(&save)?, &name, map_id)?;
+            let read = |path: &Path| -> Result<bri_world::World> {
+                let bytes = std::fs::read(path)?;
+                if native(path) {
+                    let mut world = bri_world::build::decode(&bytes)?.world;
+                    world.map_id = map_id.into();
+                    Ok(world)
+                } else {
+                    converter.convert(&bytes, &name, map_id)
+                }
+            };
+            let mut world = read(&save)?;
             for more in &stacked[1..] {
-                let part = converter.convert(&std::fs::read(more)?, &name, map_id)?;
+                let part = read(more)?;
                 for brick in part.bricks.values() {
                     world.bricks.insert(world.next_brick_id, brick.clone());
                     world.next_brick_id += 1;
