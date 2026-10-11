@@ -45,7 +45,11 @@ fn suicide_death_message_score_and_click_respawn() {
         1,
         Command::MiniGame(MiniGameRequest::Create {
             color: 0,
-            settings: Settings::default(),
+            // A suicide costs nothing by default; this game charges one.
+            settings: Settings {
+                points_kill_self: -1,
+                ..Settings::default()
+            },
         }),
     )
     .unwrap();

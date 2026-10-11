@@ -1247,7 +1247,7 @@ impl Default for ModeMiniGame {
             brick_respawn_seconds: 30.0,
             vehicle_respawn_seconds: 5.0,
             points_kill_player: 1,
-            points_kill_self: -1,
+            points_kill_self: 0,
             points_die: 0,
             points_break_brick: 0,
             points_plant_brick: 0,

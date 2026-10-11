@@ -1235,7 +1235,7 @@ impl Default for MiniGameRules {
             points_break_brick: 0,
             points_plant_brick: 0,
             points_kill_player: 1,
-            points_kill_self: -1,
+            points_kill_self: 0,
             points_die: 0,
             respawn_seconds: 1,
             vehicle_respawn_seconds: 5,
