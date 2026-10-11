@@ -611,3 +611,118 @@ fn read(device: &wgpu::Device, queue: &wgpu::Queue, target: &wgpu::Texture) -> R
         .flat_map(|line| line[..width as usize * 4].to_vec())
         .collect())
 }
+
+/// Sun shadow layers are drawn again only when something they are drawn
+/// from changed. Still frames record no sun shadow draws and look exactly
+/// as the first did; a moved player and a brick hidden in place (a dead
+/// brick) are drawn the same frame, matching a renderer drawing them fresh.
+#[test]
+fn still_frames_keep_their_shadow_layers() -> Result<()> {
+    let (device, queue) = gpu()?;
+    let format = wgpu::TextureFormat::Rgba8UnormSrgb;
+    let (width, height) = (256u32, 256u32);
+    let settings = ShadowSettings {
+        lamps: 0,
+        ..ShadowSettings::MEDIUM
+    };
+    let floor_data = cuboid(Vec3::new(-20., -0.5, -20.), Vec3::new(20., 0., 20.));
+    let wall_data = cuboid(Vec3::new(-6., 0., -8.), Vec3::new(-5., 7., 8.));
+    let tower_data = cuboid(Vec3::new(-1., 0., -1.), Vec3::new(1., 4., 1.));
+    let player_data = cuboid(Vec3::new(-0.3, 0.0, -0.3), Vec3::new(0.3, 1.8, 0.3));
+    struct Uploaded {
+        floor: GpuScene,
+        wall: GpuScene,
+        tower: GpuScene,
+        player: GpuScene,
+    }
+    let upload = |renderer: &SceneRenderer| -> Result<Uploaded> {
+        let palette = renderer.upload(&device, &queue, &tower_data)?;
+        Ok(Uploaded {
+            floor: renderer.upload(&device, &queue, &floor_data)?,
+            wall: renderer.upload(&device, &queue, &wall_data)?,
+            tower: renderer.upload_chunk(&device, &queue, &tower_data, &palette)?,
+            player: renderer.upload(&device, &queue, &player_data)?,
+        })
+    };
+    let mut camera = Camera::perspective(
+        [9., 8., 7.],
+        [0., 1., 0.],
+        width as f32 / height as f32,
+        1.0,
+        0.05,
+        400.0,
+    );
+    camera.sun_direction = [0.4, -1.0, 0.2, 0.0];
+    camera.sun_color = [0.7, 0.7, 0.7, 0.];
+    camera.ambient = [0.3, 0.3, 0.3, 1.];
+    let target = color_target(&device, format, width, height);
+    let frame = |renderer: &mut SceneRenderer, scenes: &Uploaded, player_at: Vec3| {
+        renderer.update_camera(&queue, &camera);
+        let mut instances = GpuInstances::new(&device, 1)?;
+        instances.update(
+            &queue,
+            &[SceneTransform {
+                transform: Mat4::from_translation(player_at),
+                tint: [1.0; 4],
+            }],
+        )?;
+        let view = target.create_view(&Default::default());
+        let depth = create_depth(&device, width, height).create_view(&Default::default());
+        let mut encoder = device.create_command_encoder(&Default::default());
+        // Brick Shadows off: the tower only stops the player's shadow; the
+        // wall is the map, which shades through the map layer.
+        renderer.render_shadows_with_map(
+            &mut encoder,
+            ShadowCasters {
+                scenes: &[],
+                instances: &[(&scenes.player, &instances)],
+            },
+            ShadowCasters {
+                scenes: &[&scenes.tower],
+                instances: &[],
+            },
+            &[&scenes.wall],
+        );
+        renderer.render_with_instances(
+            &mut encoder,
+            &view,
+            &depth,
+            &[&scenes.floor, &scenes.wall, &scenes.tower],
+            &[(&scenes.player, &instances)],
+            Some(wgpu::Color::BLACK),
+        );
+        queue.submit([encoder.finish()]);
+        let pixels = read(&device, &queue, &target)?;
+        anyhow::Ok((pixels, renderer.stats()))
+    };
+    let fresh = |player_at: Vec3, hide_tower: bool| -> Result<Vec<u8>> {
+        let mut renderer = SceneRenderer::with_settings(&device, format, 1, Some(settings));
+        let scenes = upload(&renderer)?;
+        if hide_tower {
+            scenes.tower.hide_vertices(&queue, 0..24);
+        }
+        Ok(frame(&mut renderer, &scenes, player_at)?.0)
+    };
+    let mut renderer = SceneRenderer::with_settings(&device, format, 1, Some(settings));
+    let scenes = upload(&renderer)?;
+    let near = Vec3::new(1.5, 0.0, 1.5);
+    let (first, drawn) = frame(&mut renderer, &scenes, near)?;
+    assert!(drawn.shadow_draws > 0 && drawn.shadow_layers_kept == 0);
+    for still in 0..3 {
+        let (pixels, stats) = frame(&mut renderer, &scenes, near)?;
+        assert_eq!(stats.shadow_draws, 0, "still frame {still}: {stats:?}");
+        assert!(stats.shadow_layers_kept > 0, "still frame {still}");
+        assert!(pixels == first, "still frame {still} looks different");
+    }
+    // The player moves: drawn again, as a fresh renderer draws it.
+    let moved = Vec3::new(-2.5, 0.0, 2.0);
+    let (pixels, stats) = frame(&mut renderer, &scenes, moved)?;
+    assert!(stats.shadow_draws > 0, "{stats:?}");
+    assert!(pixels == fresh(moved, false)?, "moved player");
+    // The tower dies in place: its occluder goes the same frame.
+    scenes.tower.hide_vertices(&queue, 0..24);
+    let (pixels, stats) = frame(&mut renderer, &scenes, moved)?;
+    assert!(stats.shadow_draws > 0, "{stats:?}");
+    assert!(pixels == fresh(moved, true)?, "hidden tower");
+    Ok(())
+}
