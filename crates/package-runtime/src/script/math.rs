@@ -15,8 +15,12 @@
 //! `clamp`. Rhai's own names keep working; nothing is renamed.
 use rhai::{Dynamic, Engine, EvalAltResult, FLOAT, INT};
 
+/// A named float function of one number, and of two.
+type Unary = (&'static str, fn(FLOAT) -> FLOAT);
+type Binary = (&'static str, fn(FLOAT, FLOAT) -> FLOAT);
+
 /// Float functions of one number that also take a whole number.
-const UNARY: [(&str, fn(FLOAT) -> FLOAT); 20] = [
+const UNARY: [Unary; 20] = [
     ("sin", FLOAT::sin),
     ("cos", FLOAT::cos),
     ("tan", FLOAT::tan),
@@ -43,7 +47,7 @@ const UNARY: [(&str, fn(FLOAT) -> FLOAT); 20] = [
 /// Rounding: Rhai's name, or an alias, and what it does to a float. Each is
 /// a function and a property (`x.floor`), as Rhai's own are, and a whole
 /// number rounds to itself.
-const ROUNDING: [(&str, fn(FLOAT) -> FLOAT); 7] = [
+const ROUNDING: [Unary; 7] = [
     ("floor", FLOAT::floor),
     ("ceiling", FLOAT::ceil),
     ("ceil", FLOAT::ceil),
@@ -56,7 +60,7 @@ const ROUNDING: [(&str, fn(FLOAT) -> FLOAT); 7] = [
 /// Float functions of two numbers: Rhai's `atan(y, x)`, `hypot(x, y)` and
 /// `log(x, base)`, and `pow(x, y)` (always a float, as in C and TorqueScript;
 /// `x ** y` keeps a whole number whole).
-const BINARY: [(&str, fn(FLOAT, FLOAT) -> FLOAT); 4] = [
+const BINARY: [Binary; 4] = [
     ("atan", FLOAT::atan2),
     ("hypot", FLOAT::hypot),
     ("log", FLOAT::log),
