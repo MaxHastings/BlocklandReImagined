@@ -20,6 +20,9 @@ use glam::Vec3;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 pub const TICKS_PER_SECOND: usize = 120;
+/// How long after an enemy's push a body still on the floor counts as
+/// pressed on by it when it goes over an edge.
+const PRESSED_TICKS: u64 = 2 * TICKS_PER_SECOND as u64;
 
 /// Extra rounds for long soak runs: `BRI_GAUNTLET_ROUNDS=4` plays every
 /// scenario four times as long. The default is one round.
@@ -49,11 +52,34 @@ impl Arena {
         Self::custom(&[], &[], vehicle_kinds)
     }
 
+    /// [`Arena::custom`] with whole brick definitions of the scenario's
+    /// own shapes added first.
+    pub fn with_definitions(
+        definitions: Vec<bri_sim::definitions::Definition>,
+        bricks: &[(&str, &str)],
+        items: &[(&str, &str)],
+        vehicle_kinds: &[&str],
+    ) -> Self {
+        Self::build(definitions, bricks, items, vehicle_kinds)
+    }
+
     /// The synthetic session with extra bricks (`(id, copied from)`) and
     /// extra items (`(item id, image id)`, copies of the gun) for a
     /// scenario's own package.
     pub fn custom(bricks: &[(&str, &str)], items: &[(&str, &str)], vehicle_kinds: &[&str]) -> Self {
+        Self::build(Vec::new(), bricks, items, vehicle_kinds)
+    }
+
+    fn build(
+        definitions: Vec<bri_sim::definitions::Definition>,
+        bricks: &[(&str, &str)],
+        items: &[(&str, &str)],
+        vehicle_kinds: &[&str],
+    ) -> Self {
         let mut simulation = fixture::synthetic_simulation(&[]).unwrap();
+        for d in definitions {
+            simulation.definitions.entries.insert(d.mesh.id.clone(), d);
+        }
         for (id, base) in bricks {
             let mut d = simulation.definitions.entries[*base].clone();
             d.mesh.id = id.to_string();
@@ -434,8 +460,15 @@ pub struct Report {
     /// doing.
     pub fell: u64,
     /// Lives knocked off the arena: an enemy's weapon pushed them after
-    /// they last stood on something (a shove that worked).
+    /// they last stood on something (a shove that worked), or its chassis
+    /// ran into them and pressed them over (a run-over that worked).
     pub knocked_off: u64,
+    /// Lives an ally knocked off the arena the same ways: an own-side
+    /// kill the rules do not count.
+    pub knocked_off_by_ally: u64,
+    /// Bot-ticks on foot pressed against the vehicle the enemy it sees
+    /// sits in (never counted as stuck).
+    pub pressing: u64,
     pub shots: u64,
     /// Bots' launches of projectiles that only push (a shove, a push
     /// broom): no damage of their own.
@@ -529,14 +562,15 @@ impl Report {
             return;
         }
         eprintln!(
-            "GAUNTLET {}: bots={} bot-min={:.1} stuck={:.1}% idle={:.1}% circling={:.1}% \
+            "GAUNTLET {}: bots={} bot-min={:.1} stuck={:.1}% pressing={:.1}% idle={:.1}% circling={:.1}% \
              switches/min={:.1} reversals/min={:.1} clumped={:.1}% kills={} team_kills={} \
-             self_kills={} accidents={} fell={} knocked_off={} deaths={} shots={} push_fired={} push_planned={} planned_push_fired={} off_target={} at_ally={}              team_damage={:.0} enemy_damage={:.0} \
+             self_kills={} accidents={} fell={} knocked_off={} knocked_off_by_ally={} deaths={} shots={} push_fired={} push_planned={} planned_push_fired={} off_target={} at_ally={}              team_damage={:.0} enemy_damage={:.0} \
              progress={:?}",
             self.name,
             self.bots,
             self.bot_ticks as f32 / 7200.0,
             100.0 * self.share(self.stuck),
+            100.0 * self.share(self.pressing),
             100.0 * self.share(self.idle),
             100.0 * self.share(self.circling),
             self.per_bot_minute(self.switches),
@@ -548,6 +582,7 @@ impl Report {
             self.accidents,
             self.fell,
             self.knocked_off,
+            self.knocked_off_by_ally,
             self.deaths,
             self.shots,
             self.push_fired,
@@ -747,7 +782,7 @@ impl Scorer {
             for (bot, t) in &thoughts {
                 let Some(st) = states.get(bot) else { continue };
                 eprintln!(
-                    "T{tick} bot{bot} side={:?} alive={} at=({:.1},{:.1},{:.1}) yaw={:.2} {} vis={:?} goal={:?} next={:?} steps={} obj={:?} {:?}",
+                    "T{tick} bot{bot} side={:?} alive={} at=({:.1},{:.1},{:.1}) yaw={:.2} {} vis={:?} goal={:?} next={:?} steps={} obj={:?} {:?} seat={:?}",
                     sides.get(bot),
                     alive(bot),
                     st.feet[0],
@@ -765,6 +800,7 @@ impl Scorer {
                     t.objective_detail
                         .as_ref()
                         .map(|d| (d.action.clone(), d.phase)),
+                    s.mounted(*bot),
                 );
             }
         }
@@ -833,14 +869,21 @@ impl Scorer {
             }
             if feet.y < self.floor - 2.0 {
                 if !std::mem::replace(&mut track.fallen, true) {
-                    // Knocked off when an enemy's weapon pushed it after it
-                    // last stood on something; otherwise its own doing.
-                    if s.pushed_by(*bot).is_some_and(|(by, at)| {
-                        at >= track.grounded_at && sides.get(&by) != sides.get(bot)
-                    }) {
-                        self.report.knocked_off += 1;
-                    } else {
-                        self.report.fell += 1;
+                    // Knocked off when another pushed it after it last
+                    // stood on something, or a chassis that ran into it
+                    // went on pressing it along the floor until it went
+                    // over (contact is counted once, as it begins): by an
+                    // enemy or an ally. Otherwise its own doing.
+                    let pusher = s
+                        .pushed_by(*bot)
+                        .filter(|&(by, at)| by != *bot && at + PRESSED_TICKS >= track.grounded_at)
+                        .map(|(by, _)| by);
+                    match pusher {
+                        Some(by) if sides.get(&by) != sides.get(bot) => {
+                            self.report.knocked_off += 1
+                        }
+                        Some(_) => self.report.knocked_off_by_ally += 1,
+                        None => self.report.fell += 1,
                     }
                 }
                 track.window.clear();
@@ -858,7 +901,16 @@ impl Scorer {
             if track.window.len() > TICKS_PER_SECOND {
                 track.window.pop_front();
             }
-            if track.window.len() == TICKS_PER_SECOND
+            // On foot against the vehicle the enemy it chases sits in, it
+            // is pressing in to hit them through the hull, as a player
+            // does: a fight, not a bot that cannot get anywhere.
+            let pressing = thought
+                .visible
+                .and_then(|v| s.mounted(v))
+                .is_some_and(|(vehicle, _)| s.touching_vehicles(*bot).any(|t| t == vehicle));
+            if pressing {
+                self.report.pressing += 1;
+            } else if track.window.len() == TICKS_PER_SECOND
                 && track.window.iter().all(|(_, w)| *w)
                 && track.window.front().unwrap().0.distance(flat) < 0.5
             {

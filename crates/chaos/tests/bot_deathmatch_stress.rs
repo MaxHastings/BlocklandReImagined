@@ -28,19 +28,29 @@
 //!   base game (default the bots, Slayer and the HE grenade).
 //! - `BRI_STRESS_DUMP`: a file to write each measured tick's step and bot
 //!   think nanoseconds to, one tick a line.
+//! - `BRI_STRESS_TEAMS`: a number of teams (2 or more) makes it Slayer's
+//!   Team Deathmatch, each team filled with an equal share of the bots
+//!   (its Preferred Player Count), instead of a free-for-all.
+//! - `BRI_STRESS_VEHICLE`: `to`, or `from=to`: every vehicle spawn brick
+//!   (or each whose vehicle's id or name contains `from`) spawns the
+//!   vehicle `to` instead (enable its Add-On with `BRI_STRESS_ADDONS`).
+//!   For playing a map with a vehicle it was not built with, the tank in
+//!   Afghanistan DM say.
 //!
 //! What it prints: the host's step time (percentiles, how many ticks ran
 //! over the 8.3 ms a 120 Hz tick has, the worst one-second window), the
 //! bots' share of it, failed bot steps, and per-bot motion faults: ticks a
 //! living bot on foot ran no input (it stood frozen for that tick) and
-//! jumps no walk or fall explains (a teleport on the host itself).
+//! jumps no walk or fall explains (a teleport on the host itself). With
+//! vehicles in the world, how the bots used them: rides, the time a
+//! vehicle carried two or more, and kills made from a seat.
 use anyhow::{Context, Result, ensure};
 use bri_chaos::fixture;
 use bri_minigames::SettingValue as Value;
 use bri_net::protocol::{Datagram, POSE_INTERVAL};
 use bri_net::stream::StateStream;
 use bri_package::packages::{PackageEntry, PackageSet, Side};
-use bri_sim::session::{Command, MiniGameRequest, SettingEdit};
+use bri_sim::session::{Command, MiniGameRequest, SettingEdit, TeamEdit};
 use bri_world::{OwnerId, World};
 use glam::Vec3;
 use std::collections::BTreeMap;
@@ -189,7 +199,9 @@ fn bots_fight_a_free_for_all_on_real_content() -> Result<()> {
         "BRI_STRESS_BOTS={count}, but Slayer adds at most {cap} free-for-all bots"
     );
     let seconds = env_num("BRI_STRESS_SECONDS", if stress { 60 } else { 5 })?;
-    let world = if let Some(path) = std::env::var_os("BRI_STRESS_WORLD") {
+    let teams = env_num("BRI_STRESS_TEAMS", 0)?;
+    ensure!(teams != 1, "BRI_STRESS_TEAMS is 2 or more teams");
+    let mut world = if let Some(path) = std::env::var_os("BRI_STRESS_WORLD") {
         let bytes = std::fs::read(&path)?;
         // A saved build (Save Bricks, a converted v20 save) or a world.
         if bytes.starts_with(bri_world::build::MAGIC) {
@@ -213,6 +225,25 @@ fn bots_fight_a_free_for_all_on_real_content() -> Result<()> {
             }
         }
     };
+    if let Ok(swap) = std::env::var("BRI_STRESS_VEHICLE") {
+        let (from, to) = swap.split_once('=').unwrap_or(("", &swap));
+        let mut swapped: BTreeMap<String, usize> = BTreeMap::new();
+        let ids: Vec<u64> = world.bricks.keys().copied().collect();
+        for id in ids {
+            let Some(spawn) = world.bricks.get_mut(&id).and_then(|b| b.vehicle.as_mut()) else {
+                continue;
+            };
+            let was = match &spawn.vehicle {
+                bri_world::ContentRef::Resolved(id) => id.clone(),
+                bri_world::ContentRef::Unresolved(u) => u.name.clone(),
+            };
+            if was.to_lowercase().contains(&from.to_lowercase()) {
+                spawn.vehicle = bri_world::ContentRef::Resolved(to.into());
+                *swapped.entry(was).or_default() += 1;
+            }
+        }
+        eprintln!("vehicle spawns now spawning {to}: {swapped:?}");
+    }
     let name = world.name.clone();
     let bricks = world.bricks.len();
     let map = world.map_id.clone();
@@ -263,20 +294,61 @@ fn bots_fight_a_free_for_all_on_real_content() -> Result<()> {
         s.step()?;
     }
     let game = s.minigame_views()[0].id;
-    s.command(
-        host,
-        2,
-        Command::MiniGame(MiniGameRequest::AddOnSettings {
-            quiet: true,
-            reset: false,
-            game,
-            settings: vec![SettingEdit {
-                key: format!("{SLAYER}:ffa_bots"),
-                value: Some(Value::Int(count as i64)),
-            }],
-            teams: None,
-        }),
-    )?;
+    if teams == 0 {
+        s.command(
+            host,
+            2,
+            Command::MiniGame(MiniGameRequest::AddOnSettings {
+                quiet: true,
+                reset: false,
+                game,
+                settings: vec![SettingEdit {
+                    key: format!("{SLAYER}:ffa_bots"),
+                    value: Some(Value::Int(count as i64)),
+                }],
+                teams: None,
+            }),
+        )?;
+    } else {
+        // Team Deathmatch, the host on no team: twice, as a mode that
+        // needs teams is refused until the teams exist.
+        let setting = |key: &str, value| SettingEdit {
+            key: format!("{SLAYER}:{key}"),
+            value: Some(value),
+        };
+        let mut settings = vec![setting("mode", Value::Text("Slayer_TeamDeathmatch".into()))];
+        for key in ["auto_sort", "balance_teams", "balance_new_teams"] {
+            settings.push(setting(key, Value::Bool(false)));
+        }
+        for sequence in [2, 3] {
+            let view = s.minigame_views()[0].clone();
+            let edits = (0..teams)
+                .map(|i| TeamEdit {
+                    id: view.teams.get(i).map(|t| t.id.0),
+                    name: format!("Team {}", i + 1),
+                    color: i as u8,
+                    settings: vec![setting(
+                        "team_bot_fill",
+                        Value::Int((count / teams + usize::from(i < count % teams)) as i64),
+                    )],
+                })
+                .collect();
+            s.command(
+                host,
+                sequence,
+                Command::MiniGame(MiniGameRequest::AddOnSettings {
+                    quiet: true,
+                    reset: false,
+                    game,
+                    settings: settings.clone(),
+                    teams: Some(edits),
+                }),
+            )?;
+            for _ in 0..8 {
+                s.step()?;
+            }
+        }
+    }
     // The host watches from where they joined; bots spawn and get past
     // their spawn protection.
     for _ in 0..120 * 4 {
@@ -302,6 +374,7 @@ fn bots_fight_a_free_for_all_on_real_content() -> Result<()> {
     let mut stream = StateStream::default();
     let mut sent: Vec<Sent> = Vec::new();
     let first_tick = s.simulation().state().tick + 1;
+    let mut rides = Rides::default();
     // Each bot's body every tick: (feet, alive, spawn tick).
     let mut truth: BTreeMap<OwnerId, Vec<(Vec3, bool, u64)>> = BTreeMap::new();
     for i in 0..ticks {
@@ -354,6 +427,7 @@ fn bots_fight_a_free_for_all_on_real_content() -> Result<()> {
             }
         }
         let vitals = s.vitals();
+        rides.sample(&s, &bots);
         for (state, processed) in s.motion_states() {
             let owner = state.owner;
             if !s.is_bot(owner) {
@@ -437,6 +511,7 @@ fn bots_fight_a_free_for_all_on_real_content() -> Result<()> {
             .collect();
         std::fs::write(path, lines)?;
     }
+    rides.print(&s, &bots);
     let living: u64 = motion.values().map(|m| m.living).sum();
     let held: u64 = motion.values().map(|m| m.held).sum();
     let teleports: u64 = motion.values().map(|m| m.teleports).sum();
@@ -506,6 +581,100 @@ fn bots_fight_a_free_for_all_on_real_content() -> Result<()> {
         failed - failed_before
     );
     Ok(())
+}
+
+/// How the bots used the vehicles: each seat taken and for how long, the
+/// ticks a vehicle carried two or more bots, and the seat each killer sat
+/// in when its kill landed.
+#[derive(Default)]
+struct Rides {
+    /// Each bot's ride under way: its vehicle, since when, and whether
+    /// another bot rode with it at some point.
+    open: BTreeMap<OwnerId, (u64, u64, bool)>,
+    /// Finished rides: ticks, and whether crewed.
+    done: Vec<(u64, bool)>,
+    crewed: u64,
+    /// Kills by a bot in a seat, and by its own side, with the tick of the
+    /// last death counted.
+    from_seat: u64,
+    team_kills: u64,
+    kills: u64,
+    last_death: u64,
+}
+impl Rides {
+    fn sample(&mut self, s: &bri_sim::session::Session, bots: &[OwnerId]) {
+        let tick = s.simulation().state().tick;
+        let mut aboard: BTreeMap<u64, usize> = BTreeMap::new();
+        for bot in bots {
+            if let Some((vehicle, _)) = s.mounted(*bot) {
+                *aboard.entry(vehicle).or_default() += 1;
+            }
+        }
+        for bot in bots {
+            match s.mounted(*bot) {
+                Some((vehicle, _)) => {
+                    let crewed = aboard[&vehicle] >= 2;
+                    let ride = self.open.entry(*bot).or_insert((vehicle, tick, false));
+                    if ride.0 != vehicle {
+                        self.done.push((tick - ride.1, ride.2));
+                        *ride = (vehicle, tick, false);
+                    }
+                    ride.2 |= crewed;
+                }
+                None => {
+                    if let Some((_, since, crewed)) = self.open.remove(bot) {
+                        self.done.push((tick - since, crewed));
+                    }
+                }
+            }
+        }
+        self.crewed += aboard.values().filter(|n| **n >= 2).count() as u64;
+        let vitals = s.vitals();
+        let deaths: Vec<_> = s
+            .death_results()
+            .filter(|d| d.tick > self.last_death)
+            .cloned()
+            .collect();
+        for d in deaths {
+            self.last_death = self.last_death.max(d.tick);
+            let Some(killer) = d.killer.filter(|k| *k != d.victim && bots.contains(k)) else {
+                continue;
+            };
+            let team = |o: OwnerId| vitals.get(&o).and_then(|v| v.team);
+            if team(killer).is_some() && team(killer) == team(d.victim) {
+                self.team_kills += 1;
+            } else {
+                self.kills += 1;
+                self.from_seat += u64::from(s.mounted(killer).is_some());
+            }
+        }
+    }
+
+    fn print(&self, s: &bri_sim::session::Session, bots: &[OwnerId]) {
+        let tick = s.simulation().state().tick;
+        let mut all = self.done.clone();
+        all.extend(
+            self.open
+                .values()
+                .map(|(_, since, crewed)| (tick - since, *crewed)),
+        );
+        let crewed_rides = all.iter().filter(|(_, crewed)| *crewed).count();
+        let mut rides: Vec<u64> = all.iter().map(|(t, _)| *t).collect();
+        rides.sort_unstable();
+        let seconds = |t: u64| t as f64 / 120.0;
+        eprintln!(
+            "vehicles rides={} crewed_rides={crewed_rides} median_s={:.1} under_5s={} riding_s={:.1} crewed_s={:.1} kills={} from_seat={} team_kills={} bots={}",
+            rides.len(),
+            rides.get(rides.len() / 2).map_or(0.0, |t| seconds(*t)),
+            rides.iter().filter(|t| seconds(**t) < 5.0).count(),
+            seconds(rides.iter().sum()),
+            seconds(self.crewed),
+            self.kills,
+            self.from_seat,
+            self.team_kills,
+            bots.len(),
+        );
+    }
 }
 
 /// A bot pose the host's client was sent: at which measured step.

@@ -15,7 +15,7 @@ use super::claims::GIVE_UP_TICKS;
 /// a farther one is turned toward.
 const REVERSE_DEGREES: f32 = 103.0;
 const REVERSE_DISTANCE: f32 = 16.0;
-pub(super) const CREW_WAIT: u64 = 360;
+const DISMOUNT_BEAT: u64 = 360;
 const OBJECTS_PER_BOT: usize = 8;
 const LOOKAHEAD_POINTS: usize = 24;
 /// How far past its own half-length a driver that only carries its bot to
@@ -104,6 +104,18 @@ pub(super) struct Opportunity {
     pub(super) resource: Resource,
     pub point: Vec3,
     pub utility: f32,
+}
+
+/// What a bot wants an object for: the same seat serves a fight, a look
+/// for one, or idle play, and a body is pushed only at a player.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Want {
+    /// Going after an enemy it knows of.
+    Fight,
+    /// Going to look for one (`explore`): a seat is a way there.
+    Explore,
+    /// Idle play near a player in sight (`extras`).
+    Play,
 }
 
 /// The space a shot from `origin` at `target` sweeps: on `past` beyond,
@@ -236,6 +248,26 @@ impl Session {
         }
     }
 
+    /// Whether an ally holding `vehicle`'s controls offers its free seats
+    /// (`team_seats`): a call heard as far as the bot sees, as its alerts
+    /// are.
+    fn bot_offered(&self, bot: OwnerId, vehicle: u64, tick: u64) -> bool {
+        self.bots
+            .claims
+            .intents(tick)
+            .any(|(o, i)| i.seats == Some(vehicle) && o != bot && self.bot_allies(bot, o))
+    }
+
+    /// How far off `bot` looks for an object to use: near by, or as far
+    /// as it sees for a seat an ally offers.
+    fn bot_object_reach(&self, bot: OwnerId, offered: bool) -> f32 {
+        if offered {
+            self.bot_sight_reach(&self.bots.brains[&bot].kind)
+        } else {
+            DISCOVER
+        }
+    }
+
     fn bot_claimed(&self, resource: Resource, except: OwnerId, tick: u64) -> bool {
         self.bots
             .claims
@@ -271,6 +303,48 @@ impl Session {
                     .owner_claim(*other, tick)
                     .is_some_and(|c| c.resource.vehicle() == v.id.0)
         })
+    }
+
+    /// Whether an ally of `bot` is on its way aboard `vehicle`: its claim
+    /// on a seat lives (it keeps closing on it, `claims`) and taking it up
+    /// is still what it does. A claim left over from a choice since
+    /// changed holds nobody up.
+    fn bot_coming_aboard(&self, bot: OwnerId, vehicle: u64, tick: u64) -> bool {
+        self.bots.claims.intents(tick).any(|(other, intent)| {
+            other != bot
+                && intent.option == Behaviour::Interact as u8
+                && self.bot_allies(bot, other)
+                && self
+                    .bots
+                    .claims
+                    .owner_claim(other, tick)
+                    .is_some_and(|c| c.resource.vehicle() == vehicle)
+        })
+    }
+
+    /// Whether the teammate bot at `v`'s controls goes `bot`'s way: where
+    /// its intent takes it (its target, else its place) is nearer `to`
+    /// than the vehicle is now. None when no bot drives it, or its intent
+    /// says nowhere: a person at the wheel is trusted to.
+    fn bot_driver_goes_toward(&self, v: &VehicleSnapshot, to: Vec3, tick: u64) -> Option<bool> {
+        let world = self.vehicles.world.as_ref()?;
+        let d = world.definition(&v.definition)?;
+        let driver = world.seat_occupant(v.id, d.control_seat()?)?.owner.0;
+        let (_, intent) = self.bots.claims.intents(tick).find(|(o, _)| *o == driver)?;
+        let heads = match intent.target {
+            Some(super::claims::Target::Player(p)) => {
+                Some(Vec3::from(self.peers.get(&p)?.player.state().feet))
+            }
+            Some(super::claims::Target::Object(id)) => self
+                .bots
+                .objects
+                .iter()
+                .find(|o| o.id.0 == id)
+                .map(|o| Vec3::from(o.transform.position)),
+            None => intent.place,
+        }?;
+        let at = Vec3::from(v.transform.position);
+        Some(flat(heads - to).length() < flat(at - to).length())
     }
 
     /// The same oriented hull-side approach for all ordinary boarding intents.
@@ -327,16 +401,18 @@ impl Session {
         v: &VehicleSnapshot,
         resource: Resource,
         (subject, enemy): (OwnerId, Vec3),
-        idle: bool,
+        want: Want,
         tick: u64,
     ) -> Option<Opportunity> {
+        let idle = want == Want::Play;
         let peer = self.peers.get(&bot)?;
         let feet = Vec3::from(peer.player.state().feet);
         let world = self.vehicles.world.as_ref()?;
         let d = world.definition(&v.definition)?;
+        let offered = self.bot_offered(bot, v.id.0, tick);
         if v.destroyed
             || self.bot_claimed(resource, bot, tick)
-            || feet.distance(Vec3::from(v.transform.position)) > DISCOVER
+            || feet.distance(Vec3::from(v.transform.position)) > self.bot_object_reach(bot, offered)
             || self.bots.claims.cooling_down(bot, resource, tick)
         {
             return None;
@@ -349,7 +425,10 @@ impl Session {
                     || d.family != Family::Wheeled
                     || d.wheeled_flight.is_some()
                     || d.max_speed <= 0.0
+                    // A moving one is boarded once it stops: one its
+                    // driver offers stops for whoever claims a seat.
                     || Vec3::from(v.velocity).length() > 2.0
+                        && !offered
                         && self.bots.claims.owner_claim(bot, tick).is_none()
                     || !self.can_ride(bot, v.owner.0)
                     || !self
@@ -385,7 +464,12 @@ impl Session {
                     0.84
                 } else if crew && role.weapon && d.weapon.is_some() {
                     0.88
-                } else if crew && feet.distance(enemy) > 12.0 {
+                } else if crew
+                    && feet.distance(enemy) > 12.0
+                    // A passenger goes where its driver takes it: only a
+                    // driver going its way is worth riding with.
+                    && self.bot_driver_goes_toward(v, enemy, tick) != Some(false)
+                {
                     0.72
                 } else {
                     return None;
@@ -398,7 +482,8 @@ impl Session {
                 // rules let this bot hurt (`can_damage_player`) is the
                 // blow itself, so it is driven at them flat out, not
                 // eased up to at cruise.
-                let runs_over = d.runover_damage > 0.0
+                let runs_over = want == Want::Fight
+                    && d.runover_damage > 0.0
                     && self.mounted(subject).is_none()
                     && self.can_damage_player(bot, subject, false);
                 let cruise = if runs_over {
@@ -428,7 +513,8 @@ impl Session {
                 })
             }
             Resource::Body { .. } => {
-                if d.is_actor()
+                if want == Want::Explore
+                    || d.is_actor()
                     || !v.seats.is_empty()
                     || !(d.shove
                         || d.runover_damage > 0.0
@@ -511,11 +597,15 @@ impl Session {
             self.bots.claims.release_owner(bot);
             return None;
         }
-        // With no enemy about, idle play toward a player in sight (`extras`).
-        let (subject, toward, idle) = match enemy {
-            Some(enemy) => (enemy.subject, enemy.at, false),
-            None => match self.bot_idle_mark(bot, tick) {
-                Some((mark, at)) => (mark, at, true),
+        // With no enemy known, a seat is a way to where it would look for
+        // one (`explore`, its own subject); with no enemy about, idle play
+        // toward a player in sight (`extras`).
+        let exploring = brain.explore.to.filter(|_| seats && !brain.tethered());
+        let (subject, toward, want) = match (enemy, exploring) {
+            (Some(enemy), _) => (enemy.subject, enemy.at, Want::Fight),
+            (None, Some(to)) => (bot, to, Want::Explore),
+            (None, None) => match self.bot_idle_mark(bot, tick) {
+                Some((mark, at)) => (mark, at, Want::Play),
                 None => {
                     self.bots.claims.release_owner(bot);
                     return None;
@@ -525,18 +615,22 @@ impl Session {
         let brain = &self.bots.brains[&bot];
         let feet = Vec3::from(self.peers[&bot].player.state().feet);
         if let Some(claim) = self.bots.claims.owner_claim(bot, tick) {
-            let opportunity = (claim.subject == subject
-                && (seats || matches!(claim.resource, Resource::Body { .. })))
-            .then(|| {
-                self.bots
-                    .objects
-                    .iter()
-                    .find(|v| v.id.0 == claim.resource.vehicle())
-                    .and_then(|v| {
-                        self.bot_opportunity(bot, v, claim.resource, (subject, toward), idle, tick)
-                    })
-            })
-            .flatten();
+            // Wanted for something else now (another enemy, a look round,
+            // an objective's step): handed back, not failed.
+            let seat = matches!(claim.resource, Resource::Seat { .. });
+            if claim.subject != subject || seat && !seats || !seat && want == Want::Explore {
+                self.bots.claims.release_owner(bot);
+            }
+        }
+        if let Some(claim) = self.bots.claims.owner_claim(bot, tick) {
+            let opportunity = self
+                .bots
+                .objects
+                .iter()
+                .find(|v| v.id.0 == claim.resource.vehicle())
+                .and_then(|v| {
+                    self.bot_opportunity(bot, v, claim.resource, (subject, toward), want, tick)
+                });
             if let Some(mut o) = opportunity {
                 self.bots
                     .claims
@@ -563,7 +657,8 @@ impl Session {
             visited += 1;
             let v = &self.bots.objects[(start + offset) % len];
             let at = Vec3::from(v.transform.position);
-            if v.destroyed || feet.distance(at) > DISCOVER {
+            let reach = self.bot_object_reach(bot, self.bot_offered(bot, v.id.0, tick));
+            if v.destroyed || feet.distance(at) > reach {
                 continue;
             }
             self.bots.interaction_budget -= 1;
@@ -592,7 +687,7 @@ impl Session {
                 .filter(|r| seats || matches!(r, Resource::Body { .. }))
             {
                 if let Some(mut o) =
-                    self.bot_opportunity(bot, v, resource, (subject, toward), idle, tick)
+                    self.bot_opportunity(bot, v, resource, (subject, toward), want, tick)
                 {
                     if brain.kind.weight("chase") == 0.0 && feet.distance(o.point) > 2.0 {
                         continue;
@@ -755,7 +850,7 @@ impl Session {
                     v,
                     claim.resource,
                     (claim.subject, enemy),
-                    idle,
+                    if idle { Want::Play } else { Want::Fight },
                     tick,
                 ) else {
                     return Ok(None);
@@ -1211,6 +1306,55 @@ impl Session {
             })
     }
 
+    /// Whether a chassis whose middle reaches `at`, rolling `way`, would
+    /// meet a drop on the way there or under its leading end (the edge of
+    /// the world, a cliff): the drive's own "never off a fall" rule, as a
+    /// walker's is (`bot_safe_walk`).
+    ///
+    /// A drop is the floor falling away faster than a slope can: the floor
+    /// is followed from under the hull in steps of half its length (a gap
+    /// shorter than that it bridges). Each step's floor may rise or fall
+    /// by the step's run (no chassis drives a grade steeper than one in
+    /// one, and a wall is the path check's), and fall a further step as
+    /// deep as the chassis is tall, a kerb it rolls off. So a hill, up or
+    /// down, is floor, and a cliff past it is still a drop.
+    fn bot_vehicle_edge(&self, v: &VehicleSnapshot, at: Vec3, way: Vec3) -> bool {
+        let Some(d) = self
+            .vehicles
+            .world
+            .as_ref()
+            .and_then(|w| w.definition(&v.definition))
+        else {
+            return false;
+        };
+        let size = (Vec3::from(d.bounds_max) - Vec3::from(d.bounds_min)) * v.scale;
+        let lead = at + way.normalize_or_zero() * size.z * 0.5;
+        let support = d
+            .wheels
+            .iter()
+            .map(|w| (w.position[1] - w.radius - w.rest_length) * v.scale)
+            .fold(d.bounds_min[1] * v.scale, f32::min);
+        let hull = Vec3::from(v.transform.position);
+        let run = flat(lead - hull);
+        let steps = (run.length() / (size.z * 0.5).max(0.1)).ceil().max(1.0);
+        let step = run.length() / steps;
+        let mut floor = hull.y + support;
+        for i in 1..=steps as usize {
+            let over = hull + run * (i as f32 / steps);
+            let top = floor + step + size.y;
+            let Some(down) = super::super::admin_players::world_ray(
+                &self.simulation,
+                Vec3::new(over.x, top, over.z),
+                Vec3::NEG_Y,
+                2.0 * (step + size.y),
+            ) else {
+                return true;
+            };
+            floor = top - down;
+        }
+        false
+    }
+
     fn bot_vehicle_clear(
         &self,
         bot: OwnerId,
@@ -1299,7 +1443,7 @@ impl Session {
         let since = self.bots.brains[&bot]
             .vehicle_since
             .map_or(tick, |(_, since)| since);
-        if tick >= since + CREW_WAIT {
+        if tick >= since + DISMOUNT_BEAT {
             return true;
         }
         !self.bots.brains.keys().any(|other| {
@@ -1397,21 +1541,54 @@ impl Session {
         let d = w
             .definition(&v.definition)
             .context("No vehicle definition")?;
-        // An affordance lost: a wreck, or a wheeled hull on its side or its
-        // roof, ends the drive (and any ride in it) at once.
+        // An affordance lost ends the drive (and any ride in it) at once: a
+        // wreck, a wheeled hull on its side or its roof, or a chassis whose
+        // stop could not be measured.
         let handling = (d.family == Family::Wheeled)
             .then(|| crate::reach::Handling::of(w, d, v.scale))
             .flatten();
-        if v.destroyed
-            || d.family == Family::Wheeled
-                && (handling.is_none()
-                    || d.wheeled_flight.is_none() && !crate::route::upright(v.transform.rotation))
-        {
+        let lost = if v.destroyed {
+            Some(Leave::Wrecked)
+        } else if d.family != Family::Wheeled {
+            None
+        } else if handling.is_none() {
+            Some(Leave::Undrivable)
+        } else if d.wheeled_flight.is_none() && !crate::route::upright(v.transform.rotation) {
+            Some(Leave::Overturned)
+        } else {
+            None
+        };
+        if let Some(why) = lost {
             let brain = self.bots.brains.get_mut(&bot).unwrap();
             brain.next_interaction = tick + GIVE_UP_TICKS;
             brain.plan.clear();
             brain.search = None;
-            let _ = self.dismount_vehicle(bot);
+            self.bot_leave_seat(bot, why);
+            return Ok(MoveInput {
+                yaw: self.bots.brains[&bot].yaw,
+                ..Default::default()
+            });
+        }
+        // A hull the next hit like the last would wreck is got out of, as
+        // people bail out of a smoking tank: what it has left against the
+        // last hit it was seen to take.
+        let brain = self.bots.brains.get_mut(&bot).unwrap();
+        let last_hit = match brain.hull {
+            Some((id, seen, hit)) if id == vehicle => {
+                if v.damage > seen {
+                    v.damage - seen
+                } else {
+                    hit
+                }
+            }
+            _ => 0.0,
+        };
+        brain.hull = Some((vehicle, v.damage, last_hit));
+        if last_hit > 0.0 && d.max_damage - v.damage <= last_hit {
+            brain.next_interaction = tick + GIVE_UP_TICKS;
+            brain.plan.clear();
+            brain.search = None;
+            self.bot_leave_seat(bot, Leave::BailOut);
             return Ok(MoveInput {
                 yaw: self.bots.brains[&bot].yaw,
                 ..Default::default()
@@ -1430,9 +1607,8 @@ impl Session {
                 .any(|i| hand_combat::item_attacks_from_afar(self, i, scale))
         });
         let carried_only = !role.controls && !role.weapon && !armed;
-        // Idle play: a passenger rides along while a teammate drives.
+        // A passenger or gunner rides along while a teammate drives.
         let riding_along = !role.controls
-            && !role.weapon
             && d.control_seat()
                 .and_then(|s| w.seat_occupant(v.id, s))
                 .is_some_and(|o| self.bot_allies(bot, o.owner.0));
@@ -1455,14 +1631,10 @@ impl Session {
         input.jet = false;
         input.crouch = false;
         let brain = self.bots.brains.get_mut(&bot).unwrap();
-        let since = match brain.vehicle_since {
-            Some((id, since)) if id == vehicle => since,
-            _ => {
-                brain.vehicle_since = Some((vehicle, tick));
-                brain.vehicle_headway.clear();
-                tick
-            }
-        };
+        if brain.vehicle_since.is_none_or(|(id, _)| id != vehicle) {
+            brain.vehicle_since = Some((vehicle, tick));
+            brain.vehicle_headway.clear();
+        }
         if let Some(handling) = handling.filter(|_| role.controls) {
             let hull = super::super::vehicles::heading(v.transform.rotation);
             let at = Vec3::from(v.transform.position);
@@ -1560,15 +1732,9 @@ impl Session {
             input.yaw = wrap(previous + (desired_steer - v.mouse_steering[0]).clamp(-0.04, 0.04));
             input.pitch = 0.0;
             input.right = 0.0;
-            let crew_waiting = self.bots.brains.keys().any(|other| {
-                *other != bot
-                    && self.bot_allies(bot, *other)
-                    && self
-                        .bots
-                        .claims
-                        .owner_claim(*other, tick)
-                        .is_some_and(|c| c.resource.vehicle() == vehicle)
-            });
+            // An ally coming for a seat is waited for as long as its claim
+            // lives: while it keeps closing on the seat (`claims`).
+            let waiting = self.bot_coming_aboard(bot, vehicle, tick);
             // Where it rolls before it can stop (`Handling::stopping`),
             // along the arc it is turning on now: a hull in the way, or an
             // ally on foot, is braked for.
@@ -1592,7 +1758,40 @@ impl Session {
                 stopping,
                 (nose + stopping + ALLY_ROOM, radius),
             );
-            let waiting = crew_waiting && tick < since + CREW_WAIT && speed < 2.0;
+            // A chassis that runs people over is a blow on its way: where
+            // it is about to drive, and what it sweeps before it can stop,
+            // is its harm, for its side to keep out of as of any shot
+            // (`team`). Parked with somewhere to go, the way it would pull
+            // out is asked clear too: an ally standing there is told. The
+            // ally coming aboard is not (`bot_in_the_way`): its way to the
+            // seat runs through there, and the driver waits for it.
+            self.bots.brains.get_mut(&bot).unwrap().sweep = (d.runover_damage > 0.0
+                && (speed > STOPPED_SPEED || toward.is_some()))
+            .then(|| super::claims::Harmed {
+                way: super::claims::Space {
+                    from: at,
+                    to: at + travel * (nose + stopping + ALLY_ROOM),
+                    radius,
+                    spread: 0.0,
+                },
+                burst: None,
+            });
+            // A drop ahead of the way it rolls, within its stop or at its
+            // end (`bot_vehicle_edge`), is braked for in a straight line,
+            // as the stop was measured: braking on full lock slides on
+            // toward it. A stop begun is carried through to rest: the stop
+            // shrinks as it slows, and letting off then rolls it on over.
+            // Half its width is added: met at a slant, an edge is reached
+            // by a front corner before the middle of the nose.
+            let rolling = hull_forward * response_sign;
+            let ahead = self.bot_vehicle_edge(&v, at + rolling * (stopping + radius), rolling);
+            let brain = self.bots.brains.get_mut(&bot).unwrap();
+            let edge = ahead || brain.edge_stop && speed > STOPPED_SPEED;
+            brain.edge_stop = edge && speed > STOPPED_SPEED;
+            if edge {
+                input.yaw = wrap(previous - v.mouse_steering[0].clamp(-0.04, 0.04));
+            }
+            let hazard = hazard || edge;
             let distance = toward.map_or(0.0, |delta| delta.length());
             // The leave leg (`route`): a chassis that cannot hurt the one it
             // chases (no gun, and no runover for someone not on foot) only
@@ -1621,8 +1820,19 @@ impl Session {
             let gap = carried.map(|(_, enemy, _)| flat(enemy - at).length() - standoff);
             let corner_speed =
                 crate::route::pace(&handling, &drive, gear, heading_error, distance).max(2.0);
+            // It stops where its route ends, not at each point it steers
+            // by; a chassis that runs its quarry over is the blow, and is
+            // not braked short of them.
+            let end = if strike.is_some() {
+                f32::INFINITY
+            } else {
+                self.bots.brains[&bot]
+                    .plan
+                    .last()
+                    .map_or(distance, |p| flat(p.feet - at).length().max(distance))
+            };
             let arrival_speed = handling
-                .stopping_speed(gap.map_or(distance, |g| distance.min(g)).max(0.0))
+                .stopping_speed(gap.map_or(end, |g| end.min(g)).max(0.0))
                 .max(2.0);
             let brake = signed_speed * travel_sign < -0.5
                 || speed > corner_speed.min(arrival_speed)
@@ -1646,7 +1856,10 @@ impl Session {
             // chassis also gives up instead of permanently holding a seat.
             let brain = self.bots.brains.get_mut(&bot).unwrap();
             let pursuing = brain.memory.is_some()
-                || matches!(behaviour, Behaviour::Return | Behaviour::Objective);
+                || matches!(
+                    behaviour,
+                    Behaviour::Return | Behaviour::Objective | Behaviour::Explore
+                );
             // Headway is getting somewhere: a chassis rocking back and
             // forth against what blocks it keeps moving but goes nowhere.
             // Braking for an impassable route is also no headway; throttle
@@ -1659,19 +1872,39 @@ impl Session {
                 });
             }
             let stuck = brain.vehicle_headway.idle(tick);
-            if backing_up(stuck) && !hazard {
+            // It backs up from what holds it up ahead (an ally, a hull, a
+            // drop) where the way behind is clear of each.
+            let rear = if travel_sign > 0.0 {
+                d.bounds_max[2]
+            } else {
+                -d.bounds_min[2]
+            } * v.scale;
+            let behind_clear = backing_up(stuck)
+                && !self.bot_vehicle_path_blocked(
+                    bot,
+                    &v,
+                    -travel,
+                    0.0,
+                    ALLY_ROOM,
+                    (rear + ALLY_ROOM, radius),
+                )
+                && !self.bot_vehicle_edge(&v, at - travel * radius, -travel);
+            if behind_clear {
                 input.forward = -0.5;
                 input.jump = false;
             }
+            let brain = self.bots.brains.get_mut(&bot).unwrap();
             if stuck >= VEHICLE_STALLED && stuck.is_multiple_of(120) {
                 brain.plan.clear();
                 brain.search = None;
                 brain.settled = false;
+                // A place it cannot drive to is looked for elsewhere.
+                brain.explore.to = None;
             }
             if stuck >= VEHICLE_GIVE_UP {
                 brain.next_interaction = tick + GIVE_UP_TICKS;
                 brain.vehicle_headway.restart(tick);
-                let _ = self.dismount_vehicle(bot);
+                self.bot_leave_seat(bot, Leave::Stalled);
                 input = MoveInput {
                     yaw: self.bots.brains[&bot].yaw,
                     ..Default::default()
@@ -1682,7 +1915,7 @@ impl Session {
                 brain.next_interaction = tick + GIVE_UP_TICKS;
                 brain.plan.clear();
                 brain.search = None;
-                let _ = self.dismount_vehicle(bot);
+                self.bot_leave_seat(bot, Leave::WalkTheRest);
                 return Ok(MoveInput {
                     yaw: self.bots.brains[&bot].yaw,
                     ..Default::default()
@@ -1697,12 +1930,27 @@ impl Session {
                 Behaviour::Chase | Behaviour::Search | Behaviour::Return | Behaviour::Objective
             );
             let unusable_gun = role.weapon && !w.weapon_available(v.id);
+            let driver_coming = self.bot_coming_aboard(bot, vehicle, tick);
+            // Carried only, by a teammate driving away from where it goes.
+            let goal = self.bots.brains[&bot]
+                .goal
+                .map(|g| g.point(self.bots.brains[&bot].home));
+            let other_way = carried_only
+                && needs_travel
+                && goal.is_some_and(|g| self.bot_driver_goes_toward(&v, g, tick) == Some(false));
             input.forward = 0.0;
             input.right = 0.0;
             input.jump = false;
-            if unusable_gun || needs_travel && !has_driver && tick >= since + CREW_WAIT {
+            if unusable_gun || needs_travel && !has_driver && !driver_coming || other_way {
                 self.bots.brains.get_mut(&bot).unwrap().next_interaction = tick + GIVE_UP_TICKS;
-                let _ = self.dismount_vehicle(bot);
+                let why = if unusable_gun {
+                    Leave::GunLost
+                } else if other_way {
+                    Leave::OtherWay
+                } else {
+                    Leave::NoDriver
+                };
+                self.bot_leave_seat(bot, why);
                 return Ok(MoveInput {
                     yaw: self.bots.brains[&bot].yaw,
                     ..Default::default()
@@ -1717,21 +1965,81 @@ impl Session {
                 );
             }
         }
-        // Once no enemy or remembered task remains, safely relinquish the
-        // vehicle. A stationary gunner without a driver need not sit forever.
+        // Nothing to do from the seat (it wanders: no enemy, task or place
+        // to go) and no ally driving it: it gets out, looked at on a beat
+        // so a moment's lull between choices is not taken for it.
         if behaviour == Behaviour::Wander
-            && super::cadence::beat(bot, super::cadence::salt::DISMOUNT, tick, CREW_WAIT)
+            && super::cadence::beat(bot, super::cadence::salt::DISMOUNT, tick, DISMOUNT_BEAT)
             && !riding_along
             // Carried to an enemy now in its band: it gets off to fight.
             || carried_only && behaviour == Behaviour::Fight
         {
-            if carried_only && behaviour == Behaviour::Fight {
+            let why = if carried_only && behaviour == Behaviour::Fight {
                 // Not straight back on board for the fight it got off for.
                 self.bots.brains.get_mut(&bot).unwrap().next_interaction = tick + GIVE_UP_TICKS;
-            }
-            let _ = self.dismount_vehicle(bot);
+                Leave::GotOffToFight
+            } else {
+                Leave::NothingToDo
+            };
+            self.bot_leave_seat(bot, why);
         }
         Ok(input)
+    }
+}
+
+/// Why a bot leaves its seat: each an outcome it observed, never a timer.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Leave {
+    /// The hull is destroyed.
+    Wrecked,
+    /// A wheeled hull on its side or its roof.
+    Overturned,
+    /// A wheeled chassis whose stop could not be measured
+    /// ([`crate::reach::Handling`]), so it cannot be driven safely.
+    Undrivable,
+    /// The next hit like the last would wreck it.
+    BailOut,
+    /// Its drive made no headway, backing up and replanning included.
+    Stalled,
+    /// The leave leg: a chassis that cannot hurt its quarry carried it
+    /// there, and on foot it closes the rest.
+    WalkTheRest,
+    /// Carried to an enemy now in its fighting band.
+    GotOffToFight,
+    /// A seat that needs a driver to get anywhere, with none on its way.
+    NoDriver,
+    /// Carried only, by a teammate driving away from where it goes.
+    OtherWay,
+    /// A gun seat whose gun is gone.
+    GunLost,
+    /// Nothing to do from the seat: no enemy, task or place to go, and no
+    /// ally driving it.
+    NothingToDo,
+}
+impl Leave {
+    pub(super) fn name(self) -> &'static str {
+        match self {
+            Self::Wrecked => "wrecked",
+            Self::Overturned => "overturned",
+            Self::Undrivable => "undrivable",
+            Self::BailOut => "bail_out",
+            Self::Stalled => "stalled",
+            Self::WalkTheRest => "walk_the_rest",
+            Self::GotOffToFight => "got_off_to_fight",
+            Self::NoDriver => "no_driver",
+            Self::OtherWay => "other_way",
+            Self::GunLost => "gun_lost",
+            Self::NothingToDo => "nothing_to_do",
+        }
+    }
+}
+
+impl Session {
+    /// Gets `bot` out of its seat for `why`, counted for the reports
+    /// ([`Session::bot_seat_leaves`]).
+    fn bot_leave_seat(&mut self, bot: OwnerId, why: Leave) {
+        *self.bots.leaves.entry(why.name()).or_default() += 1;
+        let _ = self.dismount_vehicle(bot);
     }
 }
 
@@ -1740,6 +2048,8 @@ impl Session {
 /// at cell centres, so a drop it plans can measure a little deeper from
 /// where the body stands at the edge.
 const ROUTE_DROP_SLACK: f32 = 0.5;
+/// Slower than this a chassis is at rest: a stop for a drop is over.
+const STOPPED_SPEED: f32 = 0.5;
 /// How far a driven chassis must get from where it last made headway for
 /// that to count as headway again.
 const VEHICLE_PROGRESS: f32 = 3.0;

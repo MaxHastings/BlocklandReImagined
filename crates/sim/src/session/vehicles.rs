@@ -471,6 +471,16 @@ impl Session {
             self.crossed(bri_package_runtime::ops::ObjectRef::Player(owner), carry);
         }
     }
+    /// The vehicles `owner` touched on the last step without boarding
+    /// (`WheeledVehicleData::onCollision`'s contact). Not stable until the
+    /// modding API freeze.
+    pub fn touching_vehicles(&self, owner: OwnerId) -> impl Iterator<Item = u64> + '_ {
+        self.vehicles
+            .touching
+            .iter()
+            .filter(move |(o, _)| *o == owner)
+            .map(|(_, v)| v.0)
+    }
     pub fn vehicle_poses(&self) -> Vec<VehiclePose> {
         let Some(world) = &self.vehicles.world else {
             return Vec::new();
@@ -2132,6 +2142,14 @@ impl Session {
                     let hurts = may_harm && self.can_damage_player(owner, victim, false);
                     if !hurts && !shoves {
                         continue;
+                    }
+                    // Its driver pushed them, as a weapon's impulse does
+                    // (`pushed_by`).
+                    if owner != victim {
+                        let tick = self.simulation.state().tick;
+                        if let Some(peer) = self.peers.get_mut(&victim) {
+                            peer.combat.pushed = Some((owner, tick));
+                        }
                     }
                     if hurts && damage > 0.0 {
                         self.damage_player(

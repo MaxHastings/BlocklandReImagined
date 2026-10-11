@@ -31,9 +31,9 @@ const STOPPED: f32 = 0.1;
 /// together: settling, the straight run and every turning run. Past it, the
 /// measurement keeps what it has (the turns it read so far), so an odd
 /// chassis costs a bounded, deterministic amount once. The stock test car
-/// takes about half of it (58 s); a chassis twice as slow to speed up or
+/// takes under half of it (70 s); a chassis twice as slow to speed up or
 /// stop still measures whole.
-const BUDGET_SECONDS: f32 = 120.0;
+const BUDGET_SECONDS: f32 = 160.0;
 /// The longest it is given to settle on its wheels once dropped.
 const SETTLE_SECONDS: f32 = 2.0;
 /// The shares of its full lock it is measured turning at: the turns
@@ -323,6 +323,26 @@ impl Run {
             upright: (rotation * Vec3::Y).y >= 0.5,
         })
     }
+    /// The brake on until it no longer rolls the way it was rolling: a
+    /// heavy chassis rocks back off its springs after the stop, and a stop
+    /// read later would be where it rocked back to, short of its run.
+    fn stop(&mut self, budget: &mut Budget) -> Option<State> {
+        let mut ahead: Option<Vec3> = None;
+        loop {
+            if !budget.spend() {
+                return None;
+            }
+            let state = self.step(Controls {
+                brake: true,
+                ..Default::default()
+            })?;
+            let flat_velocity = Vec3::new(state.velocity.x, 0.0, state.velocity.z);
+            let way = *ahead.get_or_insert(flat_velocity.normalize_or_zero());
+            if flat_velocity.dot(way) < STOPPED {
+                return Some(state);
+            }
+        }
+    }
     /// A driver's throttle straight ahead until its speed stops rising:
     /// its top speed, unless it tipped over.
     fn top_speed(&mut self, budget: &mut Budget) -> Option<f32> {
@@ -347,8 +367,14 @@ impl Run {
     }
 }
 
-/// Its top speed driving straight, then braking from it: each speed it
-/// fell through and how far it rolled from there to a stop.
+/// The speeds it is braked from, as shares of its top speed.
+const BRAKED_FROM: [f32; 6] = [0.15, 0.3, 0.45, 0.6, 0.75, 0.9];
+
+/// Its top speed driving straight, and how far it rolls braking from each
+/// of [`BRAKED_FROM`]'s speeds: driven up to it from rest, then braked. A
+/// brake takes a moment to bite (the tyres' stretch builds), so a stop is
+/// measured from where the brake went on, not read off a braking run
+/// passing through that speed, which would leave that moment out.
 fn straight(
     definition: &Definition,
     scale: f32,
@@ -357,33 +383,30 @@ fn straight(
     let (vehicles, world) = stand(definition, scale, budget)?;
     let mut run = Run::new(vehicles, world)?;
     let top = run.top_speed(budget)?;
-    let mut trail: Vec<(f32, Vec3)> = vec![];
-    let mut stopped = None;
-    while budget.spend() {
-        let state = run.step(Controls {
-            brake: true,
-            ..Default::default()
-        })?;
-        trail.push((state.speed, state.at));
-        if state.speed < STOPPED {
-            stopped = Some(state.at);
-            break;
+    let mut stops: Vec<(f32, f32)> = vec![];
+    let mut state = run.stop(budget)?;
+    for share in BRAKED_FROM {
+        // Up to the speed from rest.
+        while state.speed < top * share {
+            if !budget.spend() {
+                return None;
+            }
+            state = run.step(Controls {
+                throttle: crate::route::DRIVE_THROTTLE,
+                ..Default::default()
+            })?;
         }
+        let (speed, from) = (state.speed, state.at);
+        state = run.stop(budget)?;
+        stops.push((speed, flat(state.at - from).length()));
     }
-    let end = stopped?;
-    let mut stops: Vec<(f32, f32)> = trail
-        .iter()
-        .map(|&(speed, at)| (speed, flat(end - at).length()))
-        .collect();
-    stops.reverse();
     // By speed, never shorter from faster.
+    stops.sort_by(|a, b| a.0.total_cmp(&b.0));
     let mut longest: f32 = 0.0;
-    stops.retain_mut(|(speed, d)| {
-        longest = longest.max(*d);
-        *d = longest;
-        *speed >= STOPPED
-    });
-    stops.dedup_by(|a, b| a.0 <= b.0);
+    for stop in &mut stops {
+        longest = longest.max(stop.1);
+        stop.1 = longest;
+    }
     Some((top, stops))
 }
 

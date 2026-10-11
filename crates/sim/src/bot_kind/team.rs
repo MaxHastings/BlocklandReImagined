@@ -9,6 +9,11 @@ use std::collections::BTreeMap;
 /// template may be keyed by each.
 pub const TERMS: [&str; 2] = ["overlap", "uses"];
 
+/// What a callout template may be keyed by: a term ([`TERMS`]), or a call
+/// the bot makes of its side: `offer`, as it starts offering a vehicle's
+/// free seats, and `blocked`, as it holds fire for an ally in its shot.
+pub const CALLOUTS: [&str; 4] = ["overlap", "uses", "offer", "blocked"];
+
 /// What each term is worth at `teamwork` 1, on the 0-1 scale behaviour
 /// scores use. Fixed in code: their ratio is the mechanism, the dial is
 /// how much of it a kind shows. An ally on the same target or spot costs
@@ -36,7 +41,8 @@ pub struct BotTeam {
     /// Seeing a teammate's option work (a hit) makes the same option score
     /// up to this much more, fading over the surprise `effectiveness_seconds`.
     pub copy: f32,
-    /// Team chat lines by the term that changed its choice ([`TERMS`]).
+    /// Team chat lines by the term that changed its choice, or the call
+    /// it makes ([`CALLOUTS`]).
     pub callouts: BTreeMap<String, String>,
 }
 impl Default for BotTeam {
@@ -73,9 +79,9 @@ impl BotTeam {
         );
         for (term, line) in &self.callouts {
             ensure!(
-                TERMS.contains(&term.as_str()),
+                CALLOUTS.contains(&term.as_str()),
                 "Unknown team callout `{term}`; one of {}",
-                TERMS.join(", ")
+                CALLOUTS.join(", ")
             );
             ensure!(
                 !line.trim().is_empty()

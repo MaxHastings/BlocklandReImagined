@@ -43,6 +43,17 @@ pub(super) const HOP_TICKS: u64 = 30;
 const STRAFE_TICKS: u64 = 40;
 const CHARGE_TICKS: u64 = 10;
 const DODGE_REST: u64 = 72;
+/// How often a bot standing in an ally's planned harm judges it again: a
+/// call it declined is made again, as a player would shout twice.
+const ASK_AGAIN: u64 = 240;
+
+/// A threat the dodge reflex judged: a projectile coming, or an ally's
+/// planned harm the bot stands in (judged again each `ASK_AGAIN`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Threat {
+    Shot(u64),
+    Ally(OwnerId, u64),
+}
 /// Seconds of jetting a jet dodge takes (`route::Jets::seconds`).
 const JET_SECONDS: f32 = 0.5;
 /// Activation reach (`Command::Activate` reaches five units).
@@ -82,8 +93,8 @@ pub(super) struct State {
     /// steps to, and since when.
     dodge: Option<(u32, Vec3, u64)>,
     next_dodge: u64,
-    /// The last projectile judged.
-    judged: Option<u64>,
+    /// The last threat judged.
+    judged: Option<Threat>,
     click: Option<Click>,
     next_click: u64,
     /// The tool to take out again after an empty-hand click.
@@ -147,6 +158,26 @@ const KEEP: f32 = 1.0;
 const CROUCH: f32 = 1.05;
 const DODGE: f32 = 1.0;
 const HARM: f32 = 0.3;
+
+/// The flat way out of `harm` for a body of half-size `margin` centred at
+/// `centre`: out of the blast from its middle, else square to the line,
+/// toward the side the body already stands to. None outside it.
+fn way_out(harm: &super::claims::Harmed, centre: Vec3, margin: f32) -> Option<Vec3> {
+    let side = match harm.burst {
+        Some(b) if b.holds(centre, margin) => flat(centre - b.from),
+        _ if harm.way.holds(centre, margin) => {
+            let line = harm.way.to - harm.way.from;
+            let across = Vec3::new(-line.z, 0.0, line.x);
+            if across.dot(centre - harm.way.from) >= 0.0 {
+                across
+            } else {
+                -across
+            }
+        }
+        _ => return None,
+    };
+    Some(side.normalize_or_zero()).filter(|s| *s != Vec3::ZERO)
+}
 
 /// The earliest time, within `horizon` seconds, a point starting at
 /// `from` with `velocity`, falling at `fall` units/s², comes within
@@ -266,6 +297,46 @@ impl Session {
         Some((mark, Vec3::from(p.player.state().feet)))
     }
 
+    /// An ally's planned harm (`claims::Intent::harm`: its shot, or the
+    /// sweep of a chassis that runs people over) holding the bot: "get out
+    /// of the way", judged by the same reflex as a shot coming (keep or
+    /// dodge, so it may decline), once each `ASK_AGAIN`. No share of its
+    /// health is at stake (the shooter holds fire), and the way off is out
+    /// of the blast, else off the line. Its id, and the ally whose harm it
+    /// is.
+    fn bot_in_the_way(
+        &self,
+        bot: OwnerId,
+        feet: Vec3,
+        tick: u64,
+    ) -> Option<(Threat, OwnerId, Vec3)> {
+        if self.bots.deaf_to_allies {
+            return None;
+        }
+        let peer = self.peers.get(&bot)?;
+        let (scale, width) = (peer.player.state().scale, peer.player.tuning().width);
+        let centre = feet + Vec3::Y * scale;
+        // The vehicle it is on its way aboard: its crew's harm is what it
+        // walks into on purpose, and the crew waits for it.
+        let boarding = self
+            .bots
+            .claims
+            .owner_claim(bot, tick)
+            .and_then(|c| match c.resource {
+                super::claims::Resource::Seat { vehicle, .. } => Some(vehicle),
+                super::claims::Resource::Body { .. } => None,
+            });
+        self.team_intents(bot, tick)
+            .into_iter()
+            .find_map(|(ally, intent)| {
+                if boarding.is_some() && self.mounted(ally).map(|(v, _)| v) == boarding {
+                    return None;
+                }
+                let side = way_out(&intent.harm?, centre, width)?;
+                Some((Threat::Ally(ally, tick / ASK_AGAIN), ally, side))
+            })
+    }
+
     /// The soonest projectile, not its own or an ally's, whose path is
     /// predicted to meet the bot's body (or put it inside its splash): its
     /// id, the share of the bot's health it would take, and the flat way
@@ -382,16 +453,25 @@ impl Session {
             && state.grounded
             && brain.extras.dodge.is_none()
             && tick >= brain.extras.next_dodge)
-            .then(|| self.bot_incoming(bot, feet))
+            .then(|| {
+                self.bot_incoming(bot, feet)
+                    .map(|(id, harm, side)| (Threat::Shot(id), harm, side, None))
+                    .filter(|(id, ..)| brain.extras.judged != Some(*id))
+                    .or_else(|| {
+                        self.bot_in_the_way(bot, feet, tick)
+                            .map(|(id, ally, side)| (id, 0.0, side, Some(ally)))
+                    })
+            })
             .flatten()
-            .filter(|(id, _, _)| brain.extras.judged != Some(*id));
+            .filter(|(id, ..)| brain.extras.judged != Some(*id));
         // The ways a dodge may go: up where it comes down on floor (a hop,
         // or a jet while its fuel holds a jet's worth), or aside where
-        // floor lies under the step, never into an ally's line of fire.
+        // floor lies under the step, never into an ally's line of fire. Out
+        // of an ally's harm only a step aside goes: a hop comes down in it.
         let velocity = Vec3::from(state.velocity);
         // What its jets can do now, by its kind's `fly` weight and fuel.
         let jets = crate::route::Jets::of(&tuning, state.energy, brain.kind.weight("fly"));
-        let ways = incoming.map(|(_, _, side)| {
+        let ways = incoming.map(|(_, _, side, from)| {
             use super::surprise::{DODGE_HOP, DODGE_JET, DODGE_STRAFE};
             // A hop fires its jets too while it has them (a jet dodge
             // after a crouch): judged over that jetted flight.
@@ -400,13 +480,15 @@ impl Session {
             } else {
                 0.0
             };
-            let up = super::hop_lands(&self.simulation, feet, velocity, &tuning, jetted);
+            let up = from.is_none()
+                && super::hop_lands(&self.simulation, feet, velocity, &tuning, jetted);
             let fuel = jets.as_ref().is_some_and(|j| j.seconds >= JET_SECONDS);
             let to = feet + side * tuning.forward * STRAFE_TICKS as f32 / 120.0;
             let aside =
                 super::hop_lands(&self.simulation, feet, side * tuning.forward, &tuning, 0.0)
                     && !self.bots.claims.intents(tick).any(|(o, i)| {
                         o != bot
+                            && Some(o) != from
                             && self.bot_allies(bot, o)
                             && i.harm.is_some_and(|h| h.holds(to + Vec3::Y, tuning.width))
                     });
@@ -446,7 +528,7 @@ impl Session {
                     brain.extras.crouch_until = tick + CROUCH_TICKS;
                 }
             }
-            if let Some(((id, harm, side), ways)) = incoming.zip(ways)
+            if let Some(((id, harm, side, _), ways)) = incoming.zip(ways)
                 && ways.iter().any(|(_, s)| *s > 0.0)
             {
                 brain.extras.judged = Some(id);
@@ -803,6 +885,34 @@ mod tests {
             predicted_hit(from, Vec3::new(0.0, 0.0, -5.0), 0.0, centre, 0.9, 0.75),
             None
         );
+    }
+
+    #[test]
+    fn the_way_out_of_an_allys_harm_leaves_the_blast_else_the_line() {
+        use super::super::claims::{Harmed, Space};
+        let line = Space {
+            from: Vec3::ZERO,
+            to: Vec3::new(0.0, 0.0, -20.0),
+            radius: 0.3,
+            spread: 0.0,
+        };
+        let shot = Harmed {
+            way: line,
+            burst: Some(Space {
+                from: Vec3::new(0.0, 0.0, -20.0),
+                to: Vec3::new(0.0, 0.0, -20.0),
+                radius: 4.0,
+                spread: 0.0,
+            }),
+        };
+        // On the line, a little to its right: aside, to the right.
+        let out = way_out(&shot, Vec3::new(0.2, 0.0, -10.0), 0.5).unwrap();
+        assert!(out.x > 0.99, "{out}");
+        // In the blast beyond the line's end: away from its middle.
+        let out = way_out(&shot, Vec3::new(-1.0, 0.0, -22.0), 0.5).unwrap();
+        assert!(out.z < -0.8 && out.x < 0.0, "{out}");
+        // Clear of both: nothing to get out of.
+        assert_eq!(way_out(&shot, Vec3::new(5.0, 0.0, -10.0), 0.5), None);
     }
 
     #[test]

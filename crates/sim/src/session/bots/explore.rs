@@ -63,8 +63,9 @@ fn cell(at: Vec3) -> (i32, i32) {
 
 impl Explore {
     /// It is at `feet` at `tick`, knowing `memory`: the cell is visited, a
-    /// known enemy is a lead, and a place reached is done.
-    pub(super) fn note(&mut self, feet: Vec3, memory: Option<Knowledge>, tick: u64) {
+    /// known enemy is a lead, and a place within `arrive` (its body's
+    /// width at least, a chassis's included) is reached and done.
+    pub(super) fn note(&mut self, feet: Vec3, memory: Option<Knowledge>, arrive: f32, tick: u64) {
         let here = cell(feet);
         if !self.visited.contains_key(&here)
             && self.visited.len() >= CELLS
@@ -85,7 +86,10 @@ impl Explore {
             }
             self.leads.push((k.at, k.observed));
         }
-        if self.to.is_some_and(|to| flat(to - feet).length() < ARRIVED) {
+        if self
+            .to
+            .is_some_and(|to| flat(to - feet).length() < ARRIVED.max(arrive))
+        {
             self.to = None;
         }
     }
@@ -169,7 +173,14 @@ impl Session {
         let brain = self.bots.brains.get(&bot)?;
         // The way it faces: a person looking about keeps on more often than
         // they turn back the way they came.
-        let facing = Vec3::new(brain.yaw.sin(), 0.0, -brain.yaw.cos());
+        // A driver faces the way its hull points.
+        let yaw = self
+            .mounted(bot)
+            .and_then(|(id, _)| self.bots.objects.iter().find(|v| v.id.0 == id))
+            .map_or(brain.yaw, |v| {
+                super::super::vehicles::heading(v.transform.rotation)
+            });
+        let facing = Vec3::new(yaw.sin(), 0.0, -yaw.cos());
         let turn = self.bots.brains.get_mut(&bot)?.random() * std::f32::consts::TAU;
         let mut best: Option<(f32, Vec3)> = None;
         for i in 0..DIRECTIONS {
@@ -184,6 +195,11 @@ impl Session {
             let Some(down) = floor_below(&self.simulation, at, body) else {
                 continue;
             };
+            // Room for the body past it, a chassis's whole footprint
+            // included: not a place at the edge of a drop.
+            if floor_below(&self.simulation, at + way * body.width, body).is_none() {
+                continue;
+            }
             let at = at - Vec3::Y * (down - 0.5).max(0.0);
             let variety = self.bots.brains.get_mut(&bot)?.random() * VARIETY;
             let brain = &self.bots.brains[&bot];
@@ -213,7 +229,7 @@ mod tests {
     #[test]
     fn a_place_not_seen_lately_or_near_a_lead_is_worth_more() {
         let mut e = Explore::default();
-        e.note(Vec3::ZERO, None, 0);
+        e.note(Vec3::ZERO, None, 0.0, 0);
         let here = Vec3::new(1.0, 0.0, 1.0);
         let away = Vec3::new(100.0, 0.0, 100.0);
         assert!(
@@ -227,7 +243,7 @@ mod tests {
             observed: 5,
             expires: 10,
         };
-        e.note(Vec3::ZERO, Some(lead), 6);
+        e.note(Vec3::ZERO, Some(lead), 0.0, 6);
         assert!(e.worth(lead.at, 20) > e.worth(away, 20), "a lead draws it");
     }
 }

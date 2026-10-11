@@ -8,6 +8,8 @@ pub(super) struct Shot {
     /// No body has stepped into what the planned shot sweeps since it was
     /// planned (`harm::Shape`).
     pub attack_clear: bool,
+    /// An ally standing in it, if one is (`team`: it is told to move).
+    pub ally_in_way: bool,
     /// What it will sweep, for its side to keep out of (`team`).
     pub harm: Option<claims::Harmed>,
     pub mounted_charging: bool,
@@ -76,12 +78,12 @@ impl Session {
         // A body its blast cannot hurt (a teammate with friendly fire off,
         // one under spawn protection) is no harm to price: it stops a shot
         // only by being in the way, not by standing in the blast.
-        let attack_clear = shape.as_ref().is_none_or(|shape| {
-            !self.peers.iter().any(|(o, p)| {
-                if *o == bot
+        let in_way = shape.as_ref().and_then(|shape| {
+            self.peers.iter().find(|&(&o, p)| {
+                if o == bot
                     || !p.combat.alive
-                    || shape.priced.contains(o)
-                    || (mount(*o).is_some() && mount(*o) == mount(bot))
+                    || shape.priced.contains(&o)
+                    || (mount(o).is_some() && mount(o) == mount(bot))
                 {
                     return false;
                 }
@@ -90,10 +92,12 @@ impl Session {
                 let half = p.player.tuning().stand_height * 0.5;
                 shape.on_way(at, half, wander)
                     || (shape.in_burst(at, half)
-                        && !self.spawn_protected(*o)
-                        && self.can_damage_player(bot, *o, true))
+                        && !self.spawn_protected(o)
+                        && self.can_damage_player(bot, o, true))
             })
         });
+        let attack_clear = in_way.is_none();
+        let ally_in_way = in_way.is_some_and(|(o, _)| self.bot_allies(bot, *o));
         // What it will sweep, for its side to keep out of (`team`).
         let harm = shape.and_then(|shape| {
             let end = shape.end()?;
@@ -130,6 +134,7 @@ impl Session {
         Shot {
             crew_ready,
             attack_clear,
+            ally_in_way,
             harm,
             mounted_charging,
             charged_ready,

@@ -56,6 +56,8 @@ pub(super) struct State {
     pub allies: usize,
     pub next_callout: u64,
     pub said: Option<String>,
+    /// The vehicle whose seats it offered last tick (`Intent::seats`).
+    pub offered: Option<u64>,
 }
 
 /// Whether a body standing at `feet`, `body` high, is in what a shot
@@ -167,6 +169,22 @@ pub(super) fn callout<'a>(
     ];
     let (term, by) = pulls.into_iter().max_by(|a, b| a.1.total_cmp(&b.1))?;
     (by > 0.0).then(|| cfg.callouts.get(term).map(String::as_str))?
+}
+
+/// The call for what the bot asks of its side: its `offer` line when it
+/// starts offering a vehicle's free seats ("get in"), else its `blocked`
+/// line while it holds fire for an ally in its shot ("get out of the
+/// way"). Allies read the intent itself, not the words (`Intent::seats`,
+/// `Intent::harm`); the line is what a person on the team hears.
+pub(super) fn call(cfg: &BotTeam, offering: bool, blocked: bool) -> Option<&str> {
+    let term = if offering {
+        "offer"
+    } else if blocked {
+        "blocked"
+    } else {
+        return None;
+    };
+    cfg.callouts.get(term).map(String::as_str)
 }
 
 /// What a player it sees is visibly doing, for the mood.
@@ -342,24 +360,15 @@ impl Session {
         behind / (behind + 1.0)
     }
 
-    /// The vehicle whose controls `bot` holds while one of its seats is free
-    /// and it would wait for crew: still at rest, within the driver's wait
-    /// for crew (`interactions::CREW_WAIT`). A seat on a vehicle already
-    /// under way is no offer.
-    pub(super) fn team_seats(&self, bot: OwnerId, tick: u64) -> Option<u64> {
+    /// The vehicle whose controls `bot` holds while one of its seats is
+    /// free: an offer, moving or not, for as long as a seat stays free. An
+    /// ally that takes it up claims the seat, and the driver waits for it
+    /// while that claim lives (`bot_seated_input`).
+    pub(super) fn team_seats(&self, bot: OwnerId) -> Option<u64> {
         let (vehicle, seat) = self.mounted(bot)?;
         let w = self.vehicles.world.as_ref()?;
         let d = w.definition_of(bri_vehicles::VehicleId(vehicle))?;
-        let v = self.bots.objects.iter().find(|v| v.id.0 == vehicle)?;
-        let waits = self
-            .bots
-            .brains
-            .get(&bot)?
-            .vehicle_since
-            .is_none_or(|(id, since)| id != vehicle || tick < since + interactions::CREW_WAIT);
-        (waits
-            && Vec3::from(v.velocity).length() < 2.0
-            && d.seats.get(usize::from(seat))?.controls
+        (d.seats.get(usize::from(seat))?.controls
             && (0..d.seats.len()).any(|s| {
                 w.seat_occupant(bri_vehicles::VehicleId(vehicle), s)
                     .is_none()
@@ -935,7 +944,7 @@ mod tests {
     }
 
     /// Coordination reads data, never names: outside comments the module's
-    /// only text is its own term names.
+    /// only text is its own term and call names.
     #[test]
     fn the_module_names_no_game_item_or_vehicle() {
         let source = include_str!("team.rs");
@@ -943,11 +952,27 @@ mod tests {
         for line in code.lines().map(str::trim).filter(|l| !l.starts_with("//")) {
             for text in line.split('"').skip(1).step_by(2) {
                 assert!(
-                    crate::bot_kind::TERMS.contains(&text),
+                    crate::bot_kind::CALLOUTS.contains(&text),
                     "text `{text}` in: {line}"
                 );
             }
         }
+    }
+
+    #[test]
+    fn a_call_says_an_offer_first_then_a_blocked_shot() {
+        let cfg = BotTeam {
+            callouts: [
+                ("offer".to_string(), "Get in!".to_string()),
+                ("blocked".to_string(), "Move!".to_string()),
+            ]
+            .into(),
+            ..Default::default()
+        };
+        assert_eq!(call(&cfg, true, true), Some("Get in!"));
+        assert_eq!(call(&cfg, false, true), Some("Move!"));
+        assert_eq!(call(&cfg, false, false), None);
+        assert_eq!(call(&BotTeam::default(), true, false), None, "no line set");
     }
 
     #[test]
