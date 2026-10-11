@@ -1151,9 +1151,10 @@ impl Session {
         self.simulation.track_collision_changes(true);
         let changes = self.simulation.take_collision_changes();
         let tick = self.simulation.state().tick;
+        let crowd = self.bots.brains.len();
         for (body, nav) in &mut self.bots.navs {
             nav.invalidate_all(&changes, body);
-            nav.begin_tick();
+            nav.begin_tick_for(crowd);
             nav.set_now(tick);
         }
         self.observe_bot_objects();

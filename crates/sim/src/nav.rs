@@ -49,6 +49,9 @@ const LANDING_RING: i32 = 4;
 pub(crate) const ARRIVAL_RADIUS: f32 = CELL * 1.5;
 /// New ground samples all bots together may take in one tick.
 pub const SAMPLES_PER_TICK: u32 = 96;
+/// Bots the per-tick budgets below serve; more bots bring a budget each
+/// group of this many ([`Nav::begin_tick_for`]).
+pub const BOTS_PER_BUDGET: usize = 16;
 /// Nodes all searches together expand in one tick, remembered ground or not.
 pub const EXPANSIONS_PER_TICK: u32 = 384;
 /// New leap arcs all searches together sweep in one tick, each a handful
@@ -704,9 +707,20 @@ pub struct Nav {
 impl Nav {
     /// Start a tick's sampling budget.
     pub fn begin_tick(&mut self) {
-        self.budget = SAMPLES_PER_TICK;
-        self.expansions = EXPANSIONS_PER_TICK;
-        self.arc_budget = ARCS_PER_TICK;
+        self.begin_tick_for(1);
+    }
+    /// Start a tick's budget for `bots` searching together: the budget is
+    /// for [`BOTS_PER_BUDGET`] of them, and each further group of that many
+    /// brings another. One shared budget over a crowd leaves most of its
+    /// searches waiting tens of seconds, their bots standing at their
+    /// spawns (32 bots on a map of walls: a fifth of all bot time stuck
+    /// with no route yet; with the budget grown by the crowd, under 1%).
+    /// It is a ceiling, spent only on demand.
+    pub fn begin_tick_for(&mut self, bots: usize) {
+        let groups = bots.div_ceil(BOTS_PER_BUDGET).max(1) as u32;
+        self.budget = SAMPLES_PER_TICK * groups;
+        self.expansions = EXPANSIONS_PER_TICK * groups;
+        self.arc_budget = ARCS_PER_TICK * groups;
     }
     /// The tick it is: what it avoids lapses by it.
     pub fn set_now(&mut self, tick: u64) {
@@ -2421,6 +2435,17 @@ mod tests {
         assert_eq!(floors.len(), 2, "{floors:?}");
         assert!(!floors[0].low && (floors[0].y - (roof + 0.2)).abs() < 0.01);
         assert!(floors[1].low && floors[1].y.abs() < 0.01);
+    }
+
+    #[test]
+    fn the_tick_budget_grows_with_the_crowd_in_groups() {
+        let mut nav = Nav::default();
+        for (bots, groups) in [(0, 1), (1, 1), (16, 1), (17, 2), (32, 2), (64, 4)] {
+            nav.begin_tick_for(bots);
+            assert_eq!(nav.budget, SAMPLES_PER_TICK * groups, "{bots} bots");
+            assert_eq!(nav.expansions, EXPANSIONS_PER_TICK * groups, "{bots} bots");
+            assert_eq!(nav.arc_budget, ARCS_PER_TICK * groups, "{bots} bots");
+        }
     }
 
     #[test]
