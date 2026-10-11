@@ -12,7 +12,10 @@ real save through the dedicated-server loader, enables `blockhead_bot`,
 bots, times every `Session::step` and replays what the host's client would
 draw of each bot (the server's own pose stream, the client's interpolation
 rules from `crates/client/src/motion.rs`, 120 Hz wakeups and 8-step
-catch-up).
+catch-up). With content, the gate runs it as a short round: 8 bots (held to
+Slayer's own cap) fight for 5 s in the bundled Afghanistan DM save, and every
+bot turn must complete (about 12 s in a debug build). `BRI_STRESS=1` makes it
+the measurement below. Without content or that save it says so and passes.
 
 ```sh
 BRI_STRESS=1 BRI_CONTENT=<content> BRI_STRESS_WORLD=<afghan.world> BRI_STRESS_BOTS=32 \

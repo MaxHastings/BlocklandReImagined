@@ -7,18 +7,21 @@
 //! through the ordinary loader, Slayer's free-for-all bots filling the
 //! game, everyone on the mini-game's loadout.
 //!
-//! It runs only when asked, with `BRI_STRESS=1` beside `BRI_CONTENT`: it
-//! takes minutes of host time, measures rather than checks, and its default
-//! 32 bots are more than unmodified Slayer adds (16). The gate's
-//! `--include-ignored` run passes over it. The turn failures it guards
-//! against have their own content-free tests (`bot_interactions`,
-//! `bot_knowledge`).
+//! Without `BRI_STRESS` it is the gate's short real-content round: a few
+//! bots fight for a few seconds in a bundled v20 save, and every bot turn
+//! must complete. `BRI_STRESS=1` makes it the measurement: 32 bots (or as
+//! many as Slayer allows) for a game minute. Without generated content, or
+//! with no such save in it, it says so and passes: it has nothing to run.
 //!
 //! - `BRI_STRESS_WORLD`: a saved world (`.world.json` or a converted save)
-//!   to fight in; without it, an empty `BRI_STRESS_MAP` (default Slate).
-//! - `BRI_STRESS_BOTS`: how many bots (default 32, at most the host's
-//!   Max bots).
-//! - `BRI_STRESS_SECONDS`: game seconds of fighting (default 60).
+//!   to fight in. Otherwise `BRI_STRESS_MAP`, an empty map, or else the
+//!   worlds pack's save named `BRI_STRESS_WORLD_NAME` (default Afghanistan
+//!   DM, 14,091 bricks).
+//! - `BRI_STRESS_BOTS`: how many bots (default 8, or 32 with `BRI_STRESS`;
+//!   the default is held to what Slayer's own setting allows, and more
+//!   asked for is an error).
+//! - `BRI_STRESS_SECONDS`: game seconds of fighting (default 5, or 60 with
+//!   `BRI_STRESS`).
 //! - `BRI_STRESS_LOADOUT`: comma-separated item ids (default the v20 gun,
 //!   rocket launcher and the HE grenade).
 //! - `BRI_STRESS_ADDONS`: comma-separated Add-On ids to enable beside the
@@ -70,6 +73,52 @@ fn env_num(name: &str, default: usize) -> Result<usize> {
         .map(|v| v.unwrap_or(default))
 }
 
+/// The most free-for-all bots Slayer's own setting lets a game have.
+fn slayer_bot_cap(root: &std::path::Path, packages: &PackageSet) -> Result<usize> {
+    let entry = packages
+        .packages
+        .iter()
+        .find(|p| p.id == SLAYER)
+        .with_context(|| format!("{SLAYER} is not enabled"))?;
+    let behaviour: serde_json::Value = serde_json::from_slice(&std::fs::read(
+        root.join(&entry.dir).join("behaviour.json"),
+    )?)?;
+    behaviour["settings"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .find(|s| s["key"] == "ffa_bots")
+        .and_then(|s| s["max"].as_u64())
+        .map(|max| max as usize)
+        .context("Slayer has no free-for-all bot setting")
+}
+
+/// The worlds pack's save called `name` (names are trimmed: v20 save
+/// names often end in a space), if the content has it.
+fn bundled_world(
+    root: &std::path::Path,
+    packages: &PackageSet,
+    name: &str,
+) -> Result<Option<World>> {
+    let Ok(dir) = packages.role_dir(root, "worlds") else {
+        return Ok(None);
+    };
+    let Ok(report) = std::fs::read(dir.join("report.json")) else {
+        return Ok(None);
+    };
+    let report: serde_json::Value = serde_json::from_slice(&report)?;
+    let worlds = report["event_binding"]["worlds"].as_array();
+    let Some(file) = worlds
+        .into_iter()
+        .flatten()
+        .find(|w| w["name"].as_str().is_some_and(|n| n.trim() == name.trim()))
+        .and_then(|w| w["file"].as_str())
+    else {
+        return Ok(None);
+    };
+    Ok(Some(bri_world::persistence::load(&dir.join(file))?))
+}
+
 fn packages(root: &std::path::Path, addons: &[String]) -> Result<PackageSet> {
     let mut packages = PackageSet::load_root(root)?;
     for id in addons {
@@ -109,13 +158,13 @@ fn percentile(sorted: &[u128], p: f64) -> f64 {
 }
 
 #[test]
-#[ignore = "diagnostic: runs with BRI_STRESS=1 and generated v20 content (BRI_CONTENT); timing is machine-specific"]
+#[ignore = "needs generated v20 content (BRI_CONTENT); the gate runs it"]
 fn bots_fight_a_free_for_all_on_real_content() -> Result<()> {
-    if std::env::var_os("BRI_STRESS").is_none() {
-        eprintln!("skipped: a measurement, not a check; set BRI_STRESS=1 to run it");
+    let Some(root) = fixture::content_root() else {
+        eprintln!("skipped: content not found (BRI_CONTENT is not set)");
         return Ok(());
-    }
-    let root = fixture::content_root().context("set BRI_CONTENT to generated content")?;
+    };
+    let stress = std::env::var_os("BRI_STRESS").is_some();
     let addons = env_list(
         "BRI_STRESS_ADDONS",
         &["blockhead_bot", "gamemode_slayer", "weapon_hegrenade"],
@@ -129,25 +178,40 @@ fn bots_fight_a_free_for_all_on_real_content() -> Result<()> {
         ],
     );
     ensure!(loadout.len() <= 5, "a loadout has five slots");
-    let count = env_num("BRI_STRESS_BOTS", 32)?;
-    let seconds = env_num("BRI_STRESS_SECONDS", 60)?;
     let packages = packages(&root, &addons)?;
-    let world = match std::env::var_os("BRI_STRESS_WORLD") {
-        Some(path) => {
-            let bytes = std::fs::read(&path)?;
-            // A saved build (Save Bricks, a converted v20 save) or a world.
-            if bytes.starts_with(bri_world::build::MAGIC) {
-                bri_world::build::decode(&bytes)?.world
-            } else {
-                bri_world::persistence::decode(&bytes)?
+    let cap = slayer_bot_cap(&root, &packages)?;
+    let count = match std::env::var_os("BRI_STRESS_BOTS") {
+        Some(_) => env_num("BRI_STRESS_BOTS", 0)?,
+        None => (if stress { 32 } else { 8 }).min(cap),
+    };
+    ensure!(
+        count <= cap,
+        "BRI_STRESS_BOTS={count}, but Slayer adds at most {cap} free-for-all bots"
+    );
+    let seconds = env_num("BRI_STRESS_SECONDS", if stress { 60 } else { 5 })?;
+    let world = if let Some(path) = std::env::var_os("BRI_STRESS_WORLD") {
+        let bytes = std::fs::read(&path)?;
+        // A saved build (Save Bricks, a converted v20 save) or a world.
+        if bytes.starts_with(bri_world::build::MAGIC) {
+            bri_world::build::decode(&bytes)?.world
+        } else {
+            bri_world::persistence::decode(&bytes)?
+        }
+    } else if let Ok(map) = std::env::var("BRI_STRESS_MAP") {
+        World::new("Bot deathmatch".into(), map, vec![[1.0; 4]])
+    } else {
+        let wanted =
+            std::env::var("BRI_STRESS_WORLD_NAME").unwrap_or_else(|_| "Afghanistan DM".into());
+        match bundled_world(&root, &packages, &wanted)? {
+            Some(world) => world,
+            None => {
+                eprintln!(
+                    "skipped: content not found (no save named {wanted:?} in {}'s worlds pack)",
+                    root.display()
+                );
+                return Ok(());
             }
         }
-        None => World::new(
-            "Bot deathmatch".into(),
-            std::env::var("BRI_STRESS_MAP")
-                .unwrap_or_else(|_| "v20/add-ons/map_slate/slate.mis".into()),
-            vec![[1.0; 4]],
-        ),
     };
     let name = world.name.clone();
     let bricks = world.bricks.len();
