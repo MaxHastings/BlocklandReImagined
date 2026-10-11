@@ -61,6 +61,11 @@ const MAX_SAMPLES: usize = 1 << 18;
 /// How far over a body's step a rise still counts as a step: a floor found
 /// by a ray can sit a hair above the brick top it stands for.
 const STEP_SLACK: f32 = 0.05;
+/// How far under the crouched step measured in open air a crawlspace floor
+/// must be to be walked up: the measure has no roof over the lip, and at the
+/// limit the motor under one does not climb it (a bot pressed against it
+/// until its stall judge hopped). Higher floors are jumped onto.
+const CRAWL_MARGIN: f32 = 0.1;
 /// Height quantum of a sample's source hint.
 const HINT_BAND: f32 = 0.25;
 
@@ -1214,7 +1219,7 @@ fn edge(body: &Body, from: f32, to: Floor) -> Option<bool> {
     // Into a crawlspace it steps up crouched, and a jump crouches in the
     // air, each as high as it was measured to.
     let (step, jump) = if to.low {
-        (body.crawl_step, body.crawl_jump)
+        ((body.crawl_step - CRAWL_MARGIN).max(0.0), body.crawl_jump)
     } else {
         (body.step, body.jump)
     };
@@ -2280,6 +2285,31 @@ mod tests {
         ]);
         let p = path(search(&physics, Vec3::ZERO, Vec3::new(10.0, 0.0, 0.0)).0);
         assert!(p.iter().all(|w| !w.crouch), "walked the gap: {p:?}");
+    }
+
+    /// A crawlspace floor as high as the crouched step was measured to
+    /// climb in open air is not trusted to be walked up under a roof: it is
+    /// jumped onto (crouching in the air), while a low one is still walked.
+    #[test]
+    fn a_crawlspace_floor_at_the_step_limit_is_jumped_not_walked() {
+        let onto = |rise: f32| {
+            // A block `rise` high from x = 4 to 12, a roof 2 over it.
+            let physics = world(&[
+                floor(),
+                (Vec3::new(4.0, -1.0, -40.0), Vec3::new(12.0, rise, 40.0)),
+                (
+                    Vec3::new(4.0, rise + 2.0, -40.0),
+                    Vec3::new(12.0, rise + 6.0, 40.0),
+                ),
+            ]);
+            let p = path(search(&physics, Vec3::ZERO, Vec3::new(8.0, rise, 0.0)).0);
+            p.into_iter()
+                .find(|w| w.crouch)
+                .unwrap_or_else(|| panic!("no crawl onto a {rise} high block"))
+        };
+        let limit = body().step;
+        assert!(onto(limit).jump, "a block {limit} high is jumped onto");
+        assert!(!onto(0.4).jump, "a low block is walked up");
     }
 
     /// The search with a body of its own.
