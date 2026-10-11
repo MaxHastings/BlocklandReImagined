@@ -559,6 +559,15 @@ fn a_weapon_in_a_cubby_a_step_up_is_fetched() {
         "a bot armed: {:?}",
         r.progress
     );
+    // The step into the crawlspace is jumped, not walked up crouched (the
+    // route grid, `nav::edge`): a bot pressed against it waiting for the
+    // stall judge's hop stood still 3.4% of this run (7.8% at three rounds).
+    assert!(
+        r.share(r.stuck) < 0.02,
+        "stuck at the step: {:.3} {:?}",
+        r.share(r.stuck),
+        r.stuck_in
+    );
 }
 
 #[test]
