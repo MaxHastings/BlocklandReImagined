@@ -375,6 +375,9 @@ struct Instance {
     /// Jumps instead of travel: host teleports and openings that carried
     /// it ([`VehiclesWorld::relocations`]).
     relocations: u64,
+    /// The aim the turret collider was last posed at, so a still turret
+    /// is not re-posed (a collider update) every tick.
+    turret_aim: Option<f32>,
 }
 impl Instance {
     fn weapon_available(&self, d: &Definition) -> bool {
@@ -501,6 +504,10 @@ pub struct VehiclesWorld {
     /// Vehicles the host is holding up (a held object): a held tumble
     /// body never counts as settled.
     held: BTreeSet<VehicleId>,
+    /// Work counts for tests and benchmarks: wheel rays cast, and vehicle
+    /// steps skipped because the body was asleep.
+    wheel_rays: u64,
+    resting_skips: u64,
 }
 fn pose(t: &Transform) -> Pose {
     Pose::from_parts(Vec3::from_array(t.position), Quat::from_array(t.rotation))
@@ -579,7 +586,17 @@ impl VehiclesWorld {
             respawns: vec![],
             prediction: false,
             held: BTreeSet::new(),
+            wheel_rays: 0,
+            resting_skips: 0,
         })
+    }
+    /// Wheel rays cast so far (one per wheel per vehicle step while awake).
+    pub fn wheel_rays(&self) -> u64 {
+        self.wheel_rays
+    }
+    /// Vehicle steps skipped so far because the body was asleep.
+    pub fn resting_skips(&self) -> u64 {
+        self.resting_skips
     }
     /// The vehicles the host holds this tick (see `held`), replacing the
     /// last set.
@@ -831,6 +848,7 @@ impl VehiclesWorld {
                 steering_quiet: AUTO_RETURN_QUIET,
                 actor,
                 relocations: 0,
+                turret_aim: None,
             },
         );
         Ok(())
@@ -1581,6 +1599,16 @@ impl VehiclesWorld {
                     }
                 }
             }
+            // A vehicle nobody drives sleeps like any resting body once it
+            // has settled (Rapier's own threshold and timer): its wheel
+            // rays, suspension and drag then wait for a driver, a hit, a
+            // push or a brick removed from under it (`wake_resting`) to
+            // wake it. Every force below is applied without waking, or
+            // the sleep timer would restart every tick.
+            if (driven || v.jetting) && world.bodies[v.body].is_sleeping() {
+                world.bodies[v.body].wake_up(true);
+            }
+            let resting = world.bodies[v.body].is_sleeping();
             let b = &world.bodies[v.body];
             let p = b.translation();
             let rot = *b.rotation();
@@ -1730,6 +1758,31 @@ impl VehiclesWorld {
                 }
                 continue;
             }
+            if v.turret_damage
+                .is_some_and(|damage| damage >= TURRET_MAX_DAMAGE)
+                && let Some(collider) = v.turret_collider.take()
+            {
+                world.remove_collider(collider);
+            }
+            if let (Some(collider), Some(mount)) = (v.turret_collider, &d.attachment_mount) {
+                let aim = d
+                    .weapon_seat()
+                    .map_or_else(Controls::default, |seat| v.controls[seat]);
+                if v.turret_aim != Some(aim.aim_yaw) {
+                    let mut p = local_pose(mount, v.spawn.scale);
+                    p.rotation *= Quat::from_rotation_y(aim.aim_yaw);
+                    world.colliders[collider].set_position_wrt_parent(p);
+                    v.turret_aim = Some(aim.aim_yaw);
+                }
+            }
+            if resting {
+                self.resting_skips += 1;
+                v.jump_held = c.jump;
+                if alive {
+                    weapon_step(self.tick, *id, v, d, world, &mut self.intents);
+                }
+                continue;
+            }
             let hover_distance = d.flight.as_ref().map(|f| {
                 let desired = f.hover_height * v.spawn.scale;
                 let range = 10. * v.spawn.scale + desired;
@@ -1754,20 +1807,20 @@ impl VehiclesWorld {
             let b = &mut world.bodies[v.body];
             b.reset_forces(false);
             b.reset_torques(false);
-            b.add_force(hull_friction, true);
+            b.add_force(hull_friction, false);
             if buoyancy > 0. || drag > 0. {
                 // `WheeledVehicle::updateForces` and FlyingVehicle's: lift of
                 // buoyancy x gravity x mass, and drag straight on the velocity,
                 // not scaled by mass.
                 b.add_force(
                     Vec3::Y * (buoyancy * gravity * d.mass) - velocity * drag,
-                    true,
+                    false,
                 );
                 // Wheeled vehicles also take `torque -= angMomentum * mDrag`,
                 // which decays spin at `drag` per second whatever the inertia.
                 if matches!(d.family, Family::Wheeled | Family::Skis | Family::Ball) {
                     let spin = b.angvel() * (1. - drag * FIXED_DT).max(0.);
-                    b.set_angvel(spin, true);
+                    b.set_angvel(spin, false);
                 }
             }
             if alive {
@@ -1803,7 +1856,7 @@ impl VehiclesWorld {
                                 (-right * (pitch * d.pitch_force) - up * (yaw * d.yaw_force)
                                     + forward * (roll * d.roll_force))
                                     * bite,
-                                true,
+                                false,
                             );
                             // Wings: sideways and roof-wise air is resisted
                             // with the square of speed once above stall. A
@@ -1814,10 +1867,10 @@ impl VehiclesWorld {
                                     * (right.dot(velocity) * air * f.horizontal_surface_force)
                                     + up * (up.dot(velocity) * air * f.vertical_surface_force);
                             }
-                            b.add_force(force, true);
+                            b.add_force(force, false);
                             if velocity.length() > WHEELED_SPEED_CAP {
                                 let capped = velocity.normalize() * (WHEELED_SPEED_CAP - 1.);
-                                b.set_linvel(capped, true);
+                                b.set_linvel(capped, false);
                             }
                         }
                     }
@@ -1845,7 +1898,7 @@ impl VehiclesWorld {
                                 + right * (f.auto_linear_force * auto * right.dot(velocity));
                             b.add_torque(
                                 -right * (f.auto_angular_force * auto * forward.dot(Vec3::Y)),
-                                true,
+                                false,
                             );
                         }
                         // Damping surfaces: straight on the sideways and roof
@@ -1871,8 +1924,8 @@ impl VehiclesWorld {
                                 * (steer * steer.abs() * f.steering_roll_force
                                     + f.auto_angular_force * right.dot(Vec3::Y)
                                     - d.roll_force * right.dot(velocity));
-                        b.add_force(force, true);
-                        b.add_torque(torque, true);
+                        b.add_force(force, false);
+                        b.add_torque(torque, false);
                     }
                     Family::Tumble | Family::Ball => {}
                     Family::Horse | Family::Rowboat | Family::Cannon | Family::Turret => {
@@ -1882,6 +1935,7 @@ impl VehiclesWorld {
             }
             v.jump_held = c.jump;
             if !v.wheels.is_empty() {
+                self.wheel_rays += v.wheels.len() as u64;
                 tires::update(
                     world,
                     v.body,
@@ -1896,20 +1950,6 @@ impl VehiclesWorld {
                     },
                     FIXED_DT,
                 );
-            }
-            if v.turret_damage
-                .is_some_and(|damage| damage >= TURRET_MAX_DAMAGE)
-                && let Some(collider) = v.turret_collider.take()
-            {
-                world.remove_collider(collider);
-            }
-            if let (Some(collider), Some(mount)) = (v.turret_collider, &d.attachment_mount) {
-                let aim = d
-                    .weapon_seat()
-                    .map_or_else(Controls::default, |seat| v.controls[seat]);
-                let mut p = local_pose(mount, v.spawn.scale);
-                p.rotation *= Quat::from_rotation_y(aim.aim_yaw);
-                world.colliders[collider].set_position_wrt_parent(p);
             }
             if alive {
                 weapon_step(self.tick, *id, v, d, world, &mut self.intents);

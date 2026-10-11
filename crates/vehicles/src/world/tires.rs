@@ -173,7 +173,7 @@ pub(super) fn update(
                 if n >= 0. {
                     let r = at - com;
                     let zero = 1. / (1. / mass + (inverse_inertia * r.cross(Vec3::Y)).cross(r).y);
-                    b.add_force(Vec3::Y * (n * (1. + d.restitution) * zero), true);
+                    b.add_force(Vec3::Y * (n * (1. + d.restitution) * zero), false);
                 }
             }
             // The damper only resists compression.
@@ -182,7 +182,7 @@ pub(super) fn update(
                 .and_then(|o| extensions[o])
                 .map_or(0., |other| ((other - s.extension) * w.anti_sway).max(0.));
             let load = spring + damping + anti_sway;
-            b.add_force_at_point(up * load, at, true);
+            b.add_force_at_point(up * load, at, false);
             // The tyre's own axes along the ground.
             let axle = right * cos + forward * (sin * w.steering);
             let along = surface.normal.cross(axle).normalize_or_zero();
@@ -215,7 +215,7 @@ pub(super) fn update(
             }
             // Tyre forces act at the hub.
             let hub = at - up * (length * s.extension);
-            b.add_force_at_point(across * fx + along * fy, hub, true);
+            b.add_force_at_point(across * fx + along * fy, hub, false);
         } else {
             // In the air the stretch relaxes as the wheel spins.
             tire.slipping = true;

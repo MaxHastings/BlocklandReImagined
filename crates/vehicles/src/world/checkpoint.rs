@@ -170,6 +170,8 @@ impl VehiclesWorld {
         // synchronous and no callbacks or physics step observe the intermediate set.
         let mut next = Self {
             held: BTreeSet::new(),
+            wheel_rays: self.wheel_rays,
+            resting_skips: self.resting_skips,
             catalog: self.catalog.clone(),
             catalog_fingerprint: self.catalog_fingerprint.clone(),
             instances: BTreeMap::new(),
@@ -278,6 +280,7 @@ impl VehiclesWorld {
                     steering_quiet: saved.steering_quiet.min(AUTO_RETURN_QUIET),
                     actor,
                     relocations: 0,
+                    turret_aim: None,
                 },
             );
         }
