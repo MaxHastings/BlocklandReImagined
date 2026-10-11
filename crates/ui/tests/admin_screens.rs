@@ -1110,6 +1110,169 @@ fn environment_changes_go_to_the_host_live_once_they_settle() {
     assert_eq!(sent(&ui)[0].sun_elevation, Some(40.0));
 }
 
+/// Live apply with a day cycle on: the settled change carries the cycle,
+/// the host's answer (its own anchor tick) shows as applied and is not
+/// sent again, a favourite of it loads anchored at the host's tick and
+/// goes live, and a later change keeps the running cycle rather than
+/// restarting it.
+#[test]
+fn environment_day_cycle_goes_live_and_keeps_turning_through_a_favorite() {
+    use bri_content::atmosphere::{Authored, DayCycle, Settings, light_direction};
+    use bri_ui::{
+        api::{ConnectionState, Settings as UiSettings, UiUpdate},
+        binds::Platform,
+        geom::Rect,
+        input::{InputEvent, MouseButton},
+        models::environment::{EnvironmentView, NumberField},
+        pack::Pack,
+        schema::UiPack,
+        screens::{ScreenId, ctrl},
+        ui::{Ui, UiConfig},
+    };
+    use std::{path::PathBuf, rc::Rc};
+    let mut pack = UiPack::default();
+    for name in [
+        "MainMenuGui",
+        "PlayGui",
+        "LoadingGui",
+        "escapeMenu",
+        "adminGui",
+    ] {
+        pack.layouts.insert(
+            name.into(),
+            ctrl("GuiControl", "GuiDefaultProfile", Rect::new(0, 0, 640, 480)),
+        );
+    }
+    let mut ui = Ui::new(
+        Rc::new(Pack::from_parts(pack, PathBuf::new())),
+        UiConfig {
+            size: (640, 480),
+            scale: Some(1.0),
+            platform: Platform::Windows,
+        },
+        UiSettings {
+            binds: Some(vec![]),
+            ..Default::default()
+        },
+    );
+    ui.apply(UiUpdate::Connection(ConnectionState::InGame {
+        server_name: "Test".into(),
+        max_players: 8,
+        local: false,
+        single_player: false,
+        admin: true,
+    }));
+    let view = |settings: Settings, tick: u64| EnvironmentView {
+        authored: Authored {
+            sun_direction: light_direction(90.0, 45.0),
+            direct_light: [0.6; 3],
+            ambient_light: [0.3; 3],
+            fog_start: 0.0,
+            fog_end: 0.0,
+            fog_color: [0.5; 3],
+        },
+        settings,
+        tick,
+    };
+    ui.apply(UiUpdate::Environment(view(Settings::default(), 1000)));
+    let mut snapshot = state(AdminRole::Admin, false);
+    snapshot.supported.insert(AdminFeature::Environment);
+    ui.apply(UiUpdate::Admin(AdminUpdate::State(snapshot)));
+    ui.core.push(ScreenId::AdminEnvironment);
+    ui.update(0);
+    ui.drain_actions();
+    let click = |ui: &mut Ui, key: &str| {
+        let (x, y) = ui.control_center(ScreenId::AdminEnvironment, key).unwrap();
+        ui.handle_input(InputEvent::MouseMove { x, y });
+        ui.handle_input(InputEvent::MouseDown {
+            button: MouseButton::Left,
+            x,
+            y,
+        });
+        ui.handle_input(InputEvent::MouseUp {
+            button: MouseButton::Left,
+            x,
+            y,
+        });
+        ui.update(16);
+    };
+    let sent = |ui: &Ui| -> Vec<Settings> {
+        ui.core
+            .admin
+            .pending
+            .values()
+            .filter_map(|a| match a {
+                AdminAction::SetEnvironment { settings } => Some((**settings).clone()),
+                _ => None,
+            })
+            .collect()
+    };
+    // The host answers a request: accepted, and its view of the settings
+    // with the cycle stamped at its own tick.
+    let answer = |ui: &mut Ui, tick: u64| -> Settings {
+        let id = *ui.core.admin.pending.keys().next().unwrap();
+        let mut applied = sent(ui).remove(0);
+        if let Some(d) = applied.day_cycle.as_mut() {
+            d.anchor_tick = tick;
+        }
+        ui.apply(UiUpdate::ActionResult { id, result: Ok(()) });
+        ui.apply(UiUpdate::Environment(view(applied.clone(), tick)));
+        ui.update(300);
+        applied
+    };
+    // Cycle on, 18:00, a ten minute day: one request once it settles.
+    click(&mut ui, "EnvDayCycleSimple");
+    ui.core.environment.set_number(NumberField::TimeOfDay, 18.0);
+    ui.core
+        .environment
+        .set_number(NumberField::DayLength, 600.0);
+    ui.update(300);
+    let first = sent(&ui);
+    assert_eq!(first.len(), 1);
+    assert_eq!(
+        first[0].day_cycle,
+        Some(DayCycle {
+            length_seconds: 600.0,
+            time: 0.75,
+            anchor_tick: 1000,
+        })
+    );
+    let applied = answer(&mut ui, 1300);
+    assert!(sent(&ui).is_empty(), "the host's answer was sent back");
+    assert!(
+        !ui.core.environment.changed(),
+        "the window still shows the cycle as not applied"
+    );
+    // Store it, Reset (which goes live too), then Load: the favourite's
+    // cycle is anchored at the host's tick with the saved time of day.
+    click(&mut ui, "EnvFavSave");
+    let saved = ui.core.settings.environment_favorites[&0].clone();
+    assert_eq!(saved.day_cycle.map(|d| d.anchor_tick), Some(0));
+    click(&mut ui, "EnvReset");
+    ui.update(300);
+    assert_eq!(sent(&ui), vec![Settings::default()]);
+    answer(&mut ui, 1600);
+    click(&mut ui, "EnvFavLoad");
+    ui.update(300);
+    let loaded = sent(&ui);
+    assert_eq!(loaded.len(), 1);
+    let cycle = loaded[0].day_cycle.unwrap();
+    assert_eq!(cycle.anchor_tick, 1600);
+    assert_eq!(cycle.length_seconds, 600.0);
+    assert!((cycle.time - applied.day_cycle.unwrap().time).abs() < 0.01);
+    let running = answer(&mut ui, 1900);
+    assert!(!ui.core.environment.changed());
+    // A later sun change rides along without restarting the cycle.
+    ui.core
+        .environment
+        .set_number(NumberField::SunAzimuth, 90.0);
+    ui.update(300);
+    let next = sent(&ui);
+    assert_eq!(next.len(), 1);
+    assert_eq!(next[0].sun_azimuth, Some(90.0));
+    assert_eq!(next[0].day_cycle, running.day_cycle, "the cycle restarted");
+}
+
 /// The Environment window's favourites: Store keeps the rows in a slot
 /// (saved with the player's settings), Load fills the rows from one, and
 /// nothing reaches the host until Apply.

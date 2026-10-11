@@ -68,6 +68,32 @@ opening, one request after three slider steps, a change during a pending
 request waits, a rejection is not retried, the next change goes). Full `cargo test -p bri-ui` and
 `clippy -D warnings` results are in the PR.
 
+## Checks in place of a playtest
+
+Max decided (2026-10-11) there is no playtest before v0.2.9, so the checks
+he would have done by hand run as tests instead:
+
+- Slider settle: `environment_changes_go_to_the_host_live_once_they_settle`
+  (three azimuth steps become one request with the last value; a change
+  during a pending request waits; a rejection is not retried).
+- Store and Load across a restart:
+  `environment_favorites_store_and_load_the_rows_without_applying` (the
+  window) and `settings::tests::environment_favorites_survive_a_restart`
+  in `bri-client` (the favourite with a day cycle written by `save` and
+  read back by `recover` and `load`, the client's own file path).
+- Live apply with a day cycle on:
+  `environment_day_cycle_goes_live_and_keeps_turning_through_a_favorite`
+  (cycle on at 18:00 with a ten minute day settles into one request; the
+  host's stamped answer shows as applied and is not sent back; Reset goes
+  live; a loaded favourite's cycle is anchored at the host's tick with the
+  saved time; a later sun change keeps the running cycle).
+- The host side is `admins_set_the_environment_and_a_changed_day_restarts_from_now` in
+  `crates/sim/tests/session.rs` (unchanged): it stamps the cycle's tick
+  whatever a request says and keeps a re-sent cycle running.
+
+No scripted client run: the container has no GPU or content packs, so the
+headless client fixtures cannot start here.
+
 ## Not done
 
 No interactive check: Max playtests. The favourites are per player
