@@ -94,7 +94,7 @@ Without bots:
 | overview | 11.41/13.68 -> 11.39/13.55 | 3.93/4.20 -> 3.79/4.17 | 0.44 -> 0.27 | 163 -> 95 | 376,864 -> 182,648 |
 | inside | 10.74/11.66 -> 10.45/11.80 | 3.81/4.04 -> 3.62/4.37 | 0.41 -> 0.23 | 163 -> 95 | 450,616 -> 256,400 |
 
-With 32 Blockhead Bots (all joined):
+With 32 Blockhead Bots (all joined), first at `23a59a5`:
 
 | View | Frame | GPU | Record | Shadow draws | Shadow triangles |
 |---|---|---|---|---|---|
@@ -116,3 +116,18 @@ list each frame. It now hashes one id and one revision per scene and per
 instance set: `GpuInstances::revision` is renewed on every change,
 `hide_indices` (the only batch change) bumps the scene's revision, and each
 scene value has a unique id instead of its address.
+
+Rerun at `844fcbb` (after the signature changes below), 3440x1440, 32 bots:
+frame 8.74/9.47 spawn, 15.01/16.70 overview, 14.42/15.65 inside. Record
+p50 3.26 / 6.87 / 6.69 ms, below before's 4.18 / 7.63 / 7.01, and the
+"record passes" span is back at before's level (0.87 / 1.62 / 1.52 ms).
+GPU p50 3.08 / 5.26 / 4.85 is at or below before (3.33 / 5.71 / 5.29); it
+moves about 0.5 ms between after runs as the bots move differently. Shadow
+level 2 change frame 489 -> 193 ms.
+
+At 2560x1440 (`3f7c7a9`), 32 bots: frame p50 9.91 -> 8.73 spawn,
+16.90 -> 15.18 overview, 15.61 -> 15.42 inside; record p50 0.37 to 0.63 ms
+lower; shadow level 2 change frame 493 -> 195 ms. Without bots: 6.56 -> 6.23,
+11.94 -> 11.49, 11.27 -> 11.83 (inside GPU 3.69 -> 4.22, inside the run to
+run spread; the same view at 3440 went 3.81 -> 3.62). Shadow draws drop about
+40% everywhere.
