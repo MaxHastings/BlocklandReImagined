@@ -44,6 +44,27 @@ operation that needs a capability.
 | `getRandom()` | `hash3(tick(), a, b, c)`, `noise(...)` | Deterministic, so a replay agrees. |
 | `getSimTime()` | `tick()` | 120 ticks a second. |
 
+## Math
+
+TorqueScript has one number type; Rhai has whole numbers and floats. Every
+math function below takes either, and rounding a whole number gives it
+back unchanged, so a value read from state or a player map works whatever
+it holds. Rhai's own names (`ceiling`, `int`, `fraction`) work too.
+
+| TorqueScript | Here | Notes |
+|---|---|---|
+| `mFloor(%x)`, `mCeil(%x)` | `floor(x)`, `ceil(x)` (or `x.floor()`, `x.ceil`) | A float for a float, `to_int()` for a whole number. |
+| `mFloatLength(%x, 0)` | `round(x)` | |
+| `mAbs`, `mSqrt`, `mPow(%x, %y)` | `abs(x)`, `sqrt(x)`, `pow(x, y)` | `pow` is always a float; `x ** y` keeps whole numbers whole. |
+| `mClamp(%x, %lo, %hi)`, `getMax`, `getMin` | `clamp(x, lo, hi)`, `max(a, b)`, `min(a, b)` | |
+| `mSin`, `mCos`, `mTan`, `mASin`, `mACos`, `mATan(%y, %x)` | `sin(x)` .. `atan(y, x)` | Radians; `to_radians(deg)`, `to_degrees(rad)`. |
+| `mLog(%x)` | `ln(x)` | `log(x)` is base 10, `log(x, base)`, `log2(x)`. |
+| `vectorLen`, `vectorDist` | `hypot(x, y)`, or `(x*x + y*y + z*z).sqrt()` | |
+
+A call to a function that exists nowhere (a misspelt name, or one from a
+newer game) is a `script.unknown_function` warning when the Add-On loads,
+with its line, rather than a failure the first time the line runs.
+
 ## Changing the world
 
 | TorqueScript | Here | Capability |

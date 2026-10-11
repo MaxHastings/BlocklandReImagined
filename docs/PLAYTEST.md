@@ -81,7 +81,11 @@ weak PC, try these in order:
 6. Start on a small map (Slate, Bedroom) before big builds.
 
 Every minute of play the session log records frame times ("Frame times over
-60 s: ... fps average, median ... ms, 1% slowest ... ms"). Send the session
+60 s: ... fps average, median ... ms, 1% slowest ... ms"), counting frames
+while the game window is unfocused or hidden separately (the game draws at
+most 20 fps in the background on purpose). It also logs the main thread's
+work and the GPU time per world pass each minute, and a "Long frame" line
+naming the work behind any focused frame of 50 ms or more. Send the session
 log with any "it's slow" report; the console's `stats` command shows the
 current numbers.
 

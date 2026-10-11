@@ -1570,3 +1570,89 @@ fn a_drivers_free_seats_are_read_from_the_vehicles_own_seat_data() {
     }
     assert!(used, "no seat offer was read: {}", g.diagnostics());
 }
+
+/// A gunner chooses its seat's shot before it acts; acting can lose the
+/// seat (a wheeled hull tipped past upright ends the ride at once). The
+/// choice is then a plan that failed, seen, not a weapon slot to take out
+/// on foot: its turn goes on and nothing is lost but the shot ("could not
+/// think this tick: Empty slot", v0.2.8).
+#[test]
+fn a_gunner_thrown_from_a_tipped_seat_drops_its_seat_shot_without_failing() {
+    let mut s = session(1.0);
+    s.install_packages(rules_catalog(), None).unwrap();
+    let mut g = Game::with_session(s, ROVER, 2, false);
+    g.send(g.human, rules_command("teams", vec![]));
+    g.steps(1);
+    let game = g.s.minigame_views()[0].id;
+    let team = g.s.minigame_views()[0].teams[0].id.0;
+    for ally in [g.human].into_iter().chain(g.bots()) {
+        g.send(
+            g.human,
+            Command::MiniGame(MiniGameRequest::SetTeam {
+                game,
+                target: ally,
+                team: Some(team),
+            }),
+        );
+    }
+    // The human takes the controls and holds the chassis still; the bots
+    // fill the gun seat themselves.
+    g.send(
+        g.human,
+        Command::DropPlayerAtCamera(Some(bri_sim::session::CameraView {
+            eye: (g.position() + Vec3::Y * 4.0).to_array(),
+            yaw: 0.0,
+            pitch: 0.0,
+        })),
+    );
+    for _ in 0..120 {
+        g.steps(1);
+        if g.s.mounted(g.human).is_some() {
+            break;
+        }
+    }
+    g.send(g.human, Command::SwitchSeat(1));
+    g.send(g.human, Command::SwitchSeat(1));
+    assert_eq!(g.s.mounted(g.human), Some((g.vehicle, 2)));
+    let brake = MoveInput {
+        jump: true,
+        ..Default::default()
+    };
+    let target = g.s.join("Hostile target".into(), ENEMY, false).unwrap();
+    g.send(target, Command::MiniGame(MiniGameRequest::Join { game }));
+    let mut gunner = None;
+    for _ in 0..120 * 20 {
+        g.steps_with_input(1, brake);
+        if let Some(bot) = g.occupants()[0].filter(|b| g.s.is_bot(*b))
+            && g.s.weapon_view().fired().any(|shot| shot.source.0 == bot)
+        {
+            gunner = Some(bot);
+            break;
+        }
+    }
+    let gunner =
+        gunner.unwrap_or_else(|| panic!("a bot gunner fired its seat gun; {}", g.diagnostics()));
+    // Mid-fight the hull is stood on its tail (a rider's vehicle takes the
+    // camera's whole transform). The gunner's next turn plans its shot from
+    // the seat it is still in, then the tipped hull throws it out.
+    let at = g.position() + Vec3::Y * 3.0;
+    g.send(
+        g.human,
+        Command::DropPlayerAtCamera(Some(bri_sim::session::CameraView {
+            eye: at.to_array(),
+            yaw: 0.0,
+            pitch: 1.3,
+        })),
+    );
+    for _ in 0..120 {
+        g.steps(1);
+        if g.s.mounted(gunner).is_none() {
+            break;
+        }
+    }
+    assert_eq!(g.s.mounted(gunner), None, "the tipped hull ends the ride");
+    g.steps(120);
+    let (failed, failures) = g.s.bot_step_failures();
+    assert_eq!(failed, 0, "every bot turn completed: {failures:?}");
+    assert!(g.s.vitals()[&gunner].alive);
+}

@@ -31,6 +31,12 @@ pub enum Stage {
     Connecting,
     /// Fetching the server's packages this client lacks into its cache.
     DownloadingPackages,
+    /// Checking the downloaded packages' files against the hashes the
+    /// server promised, and installing them into the cache.
+    VerifyingPackages,
+    /// Loading the server's Add-Ons into this game: their bricks, weapons,
+    /// vehicles and bots.
+    LoadingAddOns,
     /// Joined; the host is preparing the world to send.
     WaitingForServer,
     /// Receiving the world checkpoint.
@@ -48,6 +54,24 @@ pub enum Stage {
 }
 
 impl Stage {
+    /// Every stage, in the order a join visits them.
+    pub const ALL: [Self; 14] = [
+        Self::Starting,
+        Self::CheckingContent,
+        Self::LoadingMap,
+        Self::StartingServer,
+        Self::Connecting,
+        Self::DownloadingPackages,
+        Self::VerifyingPackages,
+        Self::LoadingAddOns,
+        Self::WaitingForServer,
+        Self::ReceivingWorld,
+        Self::BuildingBricks,
+        Self::LoadingGraphics,
+        Self::CompilingShaders,
+        Self::Spawning,
+    ];
+
     /// Whether this stage waits on the other end of the connection (or on
     /// the network itself), rather than on this computer's own work. A load
     /// that stops advancing in such a stage has a dead or stuck peer; one
@@ -64,6 +88,8 @@ impl Stage {
             Self::CheckingContent
             | Self::LoadingMap
             | Self::StartingServer
+            | Self::VerifyingPackages
+            | Self::LoadingAddOns
             | Self::BuildingBricks
             | Self::LoadingGraphics
             | Self::CompilingShaders => false,
@@ -114,7 +140,9 @@ impl Snapshot {
             Stage::LoadingMap => "LOADING MAP",
             Stage::StartingServer => "STARTING SERVER",
             Stage::Connecting => "CONNECTING",
-            Stage::DownloadingPackages => "DOWNLOADING PACKAGES",
+            Stage::DownloadingPackages => "DOWNLOADING ADD-ONS",
+            Stage::VerifyingPackages => "VERIFYING ADD-ONS",
+            Stage::LoadingAddOns => "LOADING ADD-ONS",
             Stage::WaitingForServer => "WAITING FOR SERVER",
             Stage::ReceivingWorld => "RECEIVING WORLD",
             Stage::BuildingBricks => "BUILDING BRICKS",
@@ -125,7 +153,7 @@ impl Snapshot {
         match (self.unit, self.total) {
             (_, None) | (_, Some(0)) | (Unit::Steps, _) => label.into(),
             (Unit::Bytes, Some(total)) => {
-                format!("{label}  {} OF {}", megabytes(self.done), megabytes(total))
+                format!("{label}  {}", bytes_of(self.done, total))
             }
             (Unit::Bricks, Some(total)) => format!(
                 "{label}  {} OF {} BRICKS",
@@ -137,8 +165,16 @@ impl Snapshot {
     }
 }
 
-fn megabytes(bytes: u64) -> String {
-    format!("{:.1} MB", bytes as f64 / (1024.0 * 1024.0))
+/// `done` of `total` bytes, in megabytes, or kilobytes when the total is
+/// under one megabyte (many Add-Ons are a few kilobytes, which would read
+/// "0.0 MB OF 0.0 MB").
+fn bytes_of(done: u64, total: u64) -> String {
+    const MB: f64 = 1024.0 * 1024.0;
+    if total < 1024 * 1024 {
+        format!("{} KB OF {} KB", done.div_ceil(1024), total.div_ceil(1024))
+    } else {
+        format!("{:.1} MB OF {:.1} MB", done as f64 / MB, total as f64 / MB)
+    }
 }
 
 fn grouped(n: u64) -> String {
@@ -160,7 +196,18 @@ fn grouped(n: u64) -> String {
 pub struct Progress {
     state: Arc<Mutex<Snapshot>>,
     subject: Arc<Mutex<Option<String>>>,
+    trail: Arc<Mutex<Trail>>,
 }
+
+/// Finished stages, newest last, and how many have ever finished.
+#[derive(Debug, Default)]
+struct Trail {
+    ended: std::collections::VecDeque<Snapshot>,
+    count: u64,
+}
+
+/// Finished stages a [`Progress`] remembers; a load visits far fewer.
+const TRAIL: usize = 64;
 
 impl Progress {
     pub fn new() -> Self {
@@ -176,6 +223,14 @@ impl Progress {
     /// yet known).
     pub fn begin(&self, stage: Stage, unit: Unit, total: Option<u64>) {
         let mut s = self.state();
+        if s.stage != Stage::Starting {
+            let mut trail = self.trail.lock().unwrap_or_else(|e| e.into_inner());
+            if trail.ended.len() == TRAIL {
+                trail.ended.pop_front();
+            }
+            trail.ended.push_back(*s);
+            trail.count += 1;
+        }
         *s = Snapshot {
             stage,
             unit,
@@ -222,6 +277,25 @@ impl Progress {
         *self.state()
     }
 
+    /// The last reading of each stage this load has left, oldest first: a
+    /// stage too quick for the loading screen to poll still shows here.
+    pub fn trail(&self) -> Vec<Snapshot> {
+        self.ended_since(0).0
+    }
+
+    /// The stages that finished after the first `seen` (as far as the
+    /// trail still holds them), and how many have finished in all: pass
+    /// that back as `seen` next time to get only newer ones.
+    pub fn ended_since(&self, seen: u64) -> (Vec<Snapshot>, u64) {
+        let trail = self.trail.lock().unwrap_or_else(|e| e.into_inner());
+        let held = trail.count - trail.ended.len() as u64;
+        let skip = seen.saturating_sub(held).min(trail.ended.len() as u64) as usize;
+        (
+            trail.ended.iter().skip(skip).copied().collect(),
+            trail.count,
+        )
+    }
+
     /// Name what is loading once it is known (a joiner learns the map from
     /// the host's first message), so the loading screen can show it.
     pub fn set_subject(&self, subject: impl Into<String>) {
@@ -256,6 +330,85 @@ mod tests {
         assert_eq!(p.snapshot().fraction(), 0.25);
         p.set_in(Stage::ReceivingWorld, 7);
         assert_eq!(p.snapshot().done, 2);
+    }
+
+    #[test]
+    fn every_stage_is_listed_once_and_names_itself() {
+        // Adding a stage fails this match until it is listed in `ALL`.
+        let position = |stage: Stage| match stage {
+            Stage::Starting => 0,
+            Stage::CheckingContent => 1,
+            Stage::LoadingMap => 2,
+            Stage::StartingServer => 3,
+            Stage::Connecting => 4,
+            Stage::DownloadingPackages => 5,
+            Stage::VerifyingPackages => 6,
+            Stage::LoadingAddOns => 7,
+            Stage::WaitingForServer => 8,
+            Stage::ReceivingWorld => 9,
+            Stage::BuildingBricks => 10,
+            Stage::LoadingGraphics => 11,
+            Stage::CompilingShaders => 12,
+            Stage::Spawning => 13,
+        };
+        let mut labels = std::collections::BTreeSet::new();
+        for (i, stage) in Stage::ALL.into_iter().enumerate() {
+            assert_eq!(position(stage), i, "{stage:?} out of place in Stage::ALL");
+            let label = Snapshot {
+                stage,
+                ..Snapshot::default()
+            }
+            .status();
+            assert!(!label.is_empty() && labels.insert(label), "{stage:?}");
+        }
+    }
+
+    #[test]
+    fn a_download_reads_as_add_ons_in_megabytes() {
+        let p = Progress::new();
+        p.begin(
+            Stage::DownloadingPackages,
+            Unit::Bytes,
+            Some(30 * 1024 * 1024),
+        );
+        p.set_in(Stage::DownloadingPackages, 12 * 1024 * 1024 + 400 * 1024);
+        assert_eq!(
+            p.snapshot().status(),
+            "DOWNLOADING ADD-ONS  12.4 MB OF 30.0 MB"
+        );
+        assert!((p.snapshot().fraction() - 0.413).abs() < 0.001);
+        p.begin(
+            Stage::DownloadingPackages,
+            Unit::Bytes,
+            Some(48 * 1024 + 10),
+        );
+        p.set(12 * 1024);
+        assert_eq!(p.snapshot().status(), "DOWNLOADING ADD-ONS  12 KB OF 49 KB");
+    }
+
+    #[test]
+    fn the_trail_keeps_each_finished_stage_as_it_ended() {
+        let p = Progress::new();
+        p.set_subject("Slate");
+        p.begin(Stage::Connecting, Unit::Steps, None);
+        p.begin(Stage::DownloadingPackages, Unit::Bytes, Some(10));
+        p.set(10);
+        p.begin(Stage::VerifyingPackages, Unit::Steps, Some(2));
+        let trail = p.trail();
+        let stages: Vec<_> = trail.iter().map(|s| s.stage).collect();
+        assert_eq!(stages, [Stage::Connecting, Stage::DownloadingPackages]);
+        assert_eq!((trail[1].done, trail[1].total), (10, Some(10)));
+        let (newer, seen) = p.ended_since(1);
+        assert_eq!(newer.len(), 1);
+        assert_eq!((newer[0].stage, seen), (Stage::DownloadingPackages, 2));
+        assert!(p.ended_since(seen).0.is_empty());
+        for _ in 0..2 * TRAIL {
+            p.begin(Stage::LoadingMap, Unit::Steps, None);
+        }
+        assert_eq!(p.trail().len(), TRAIL);
+        let (newer, all) = p.ended_since(seen + TRAIL as u64);
+        assert_eq!((newer.len(), all), (TRAIL, seen + 2 * TRAIL as u64));
+        assert_eq!(p.ended_since(all - 1).0.len(), 1);
     }
 
     #[test]

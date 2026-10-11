@@ -71,8 +71,9 @@ checks do not replace your playtest.
 - **Lighting, shadows, water and sky** aren't final. Dynamic uses live geometry
   lighting and shadows; Classic and Unified retain their legacy appearance.
   Recovered map lamps approximate lost source metadata, and Dynamic has no
-  general indirect lighting. Sun-shadow distance and the number of shadowed
-  moving lights remain bounded. Dark interiors need your visual playtest.
+  general indirect lighting. Detailed sun shadows are bounded by the shadow
+  distance (a coarse whole-map sun map takes over past it) and the number of
+  shadowed moving lights is bounded. Dark interiors need your visual playtest.
 - **Knocked-out brick visuals** tumble differently on each player's screen.
   They never affect play. Explosion debris lasts up to 13 seconds (ten opaque,
   three fading); Physics Quality and load limits can retire older pieces early.

@@ -4,7 +4,7 @@
 use bri_chaos::fixture;
 use bri_minigames::Settings;
 use bri_sim::{
-    bot_kind::{BotHold, BotPack},
+    bot_kind::{BotHold, BotMelee, BotPack},
     player::MoveInput,
     session::{
         ActionAim, BotTask, BotThought, CameraView, Command, MiniGameRequest, PackageArg,
@@ -123,7 +123,10 @@ impl Game {
     }
 
     fn setup(memory: f32, hitscan: bool, rules: bool, item: Option<&str>) -> Self {
-        let mut s = session(memory, hitscan);
+        Self::setup_in(session(memory, hitscan), rules, item)
+    }
+
+    fn setup_in(mut s: Session, rules: bool, item: Option<&str>) -> Self {
         if rules {
             s.install_packages(rules_catalog(), None).unwrap();
         }
@@ -355,7 +358,9 @@ fn rules_catalog() -> Arc<bri_package_runtime::Catalog> {
         json!({
             "schema_version": 1, "script": "main.rhai",
             "commands": [{"name": "teams", "args": []}, {"name": "add", "args": []},
-                {"name": "remove", "args": ["int"]}]
+                {"name": "remove", "args": ["int"]}, {"name": "on_hit", "args": ["int"]}],
+            "on_damage": true,
+            "state": { "global": { "on_hit": { "default": 0, "visible": "everyone" } } }
         })
         .to_string(),
     )
@@ -370,6 +375,18 @@ fn cmd_add(p) {
     add_bot(player(p).minigame, #{ kind: "bot.blockhead", name: "Rules observer" });
 }
 fn cmd_remove(p, bot) { remove_bot(bot); }
+fn cmd_on_hit(p, mode) { set("on_hit", mode); }
+// A hit takes this package's bots away, as it happens: with mode 1 every
+// one but the one that hit, with mode 2 the one that hit.
+fn on_damage(victim, attacker, amount, info) {
+    let mode = get("on_hit");
+    if mode == 0 || attacker == () { return; }
+    for b in bots() {
+        if (mode == 1 && b.id != attacker) || (mode == 2 && b.id == attacker) {
+            try { remove_bot(b.id); } catch (e) { }
+        }
+    }
+}
 "#,
     )
     .unwrap();
@@ -717,5 +734,95 @@ fn becoming_an_ally_cancels_an_armed_hand_spear_without_throwing_it() {
     assert!(
         thrown,
         "cancellation preserves subsequent legitimate combat"
+    );
+}
+
+/// A rule's hook runs inside a bot's turn (a hit it lands calls
+/// `on_damage` as it happens) and may take bots away at once: the others
+/// the tick has still to step, or the one whose turn it is. The tick goes
+/// on with the bots that remain (PR #40's hand-off: `step_bot` looked a
+/// removed bot's brain up by the id the tick began with, and panicked).
+fn hook_removes_bots(mode: i64) -> (Game, Vec<OwnerId>) {
+    // Bare-handed bots that hit with their bodies: the hit is made, and
+    // its hook run, in the hitter's own turn.
+    let mut s = session(8.0, false);
+    let mut kinds = BotPack::from_json(include_bytes!(
+        "../../../packages/blockhead_bot/assets/bots.json"
+    ))
+    .unwrap()
+    .bots;
+    kinds[0].sight = 32.0;
+    kinds[0].chase_radius = 128.0;
+    kinds[0].wander_radius = 0.0;
+    kinds[0].reaction_seconds = 0.0;
+    kinds[0].behaviours.insert("interact".into(), 0.0);
+    kinds[0].behaviours.insert("fly".into(), 0.0);
+    kinds[0].melee = Some(BotMelee {
+        damage: 1.0,
+        reach: 2.5,
+        seconds: 0.5,
+        action: None,
+        name: "Fists".into(),
+        // A zombie's bite: only brick bots of another side ever turn, so
+        // here it never does, but the hit still asks.
+        converts_below: Some(0.5),
+    });
+    s.set_bot_kinds(kinds).unwrap();
+    let mut g = Game::setup_in(s, true, None);
+    for _ in 0..3 {
+        g.send(g.human, rules("add"));
+    }
+    g.steps(1);
+    let added: Vec<_> =
+        g.s.names()
+            .keys()
+            .copied()
+            .filter(|o| g.s.is_bot(*o) && *o != g.bot)
+            .collect();
+    assert_eq!(added.len(), 3, "the rules added their bots");
+    g.send(
+        g.human,
+        Command::Package(PackageCommand {
+            package: "knowledge-test".into(),
+            command: "on_hit".into(),
+            args: vec![PackageArg::Int(mode)],
+        }),
+    );
+    for _ in 0..120 * 30 {
+        g.steps(1);
+        let left = added.iter().filter(|b| g.s.names().contains_key(b)).count();
+        if mode == 1 && left <= 1 || mode == 2 && left < added.len() {
+            break;
+        }
+    }
+    (g, added)
+}
+
+#[test]
+fn a_hook_inside_a_bots_turn_may_remove_the_bots_still_to_step() {
+    let (mut g, added) = hook_removes_bots(1);
+    let left = added.iter().filter(|b| g.s.names().contains_key(b)).count();
+    assert!(left <= 1, "a hit took the other rules bots away");
+    g.steps(120);
+    assert_eq!(
+        g.s.bot_step_failures().0,
+        0,
+        "{:?}",
+        g.s.bot_step_failures()
+    );
+    assert!(g.s.names().contains_key(&g.bot), "the brick's bot stays");
+}
+
+#[test]
+fn a_hook_inside_a_bots_turn_may_remove_that_bot() {
+    let (mut g, added) = hook_removes_bots(2);
+    let left = added.iter().filter(|b| g.s.names().contains_key(b)).count();
+    assert!(left < added.len(), "a rules bot's own hit took it away");
+    g.steps(120);
+    assert_eq!(
+        g.s.bot_step_failures().0,
+        0,
+        "{:?}",
+        g.s.bot_step_failures()
     );
 }

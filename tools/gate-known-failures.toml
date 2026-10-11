@@ -36,6 +36,30 @@ reason = "Bot tuning tool (fair metric against the alertness dial); opt-in only.
 test = "a_new_player_plays_the_tutorial_through_target_practice"
 reason = "Scripted three-minute walkthrough; opt-in only (Max, 2026-09-29). Run it by hand with cargo test -p bri-client --test tutorial_walkthrough -- --ignored."
 
+[[skip]]
+test = "principal_weapon_families_mount_fire_and_reload_without_script_errors"
+reason = "Needs Max's privately converted Rallypack (BRI_RALLYPACK_TEST_ROOT, BRI_P90_CONTENT_ROOT); run by hand after tools/build_rallypack.py."
+
+[[skip]]
+test = "p90_fires_reloads_preserves_magazines_and_resets_on_respawn"
+reason = "Needs Max's privately converted P90 (BRI_P90_TEST_ROOT); run by hand after tools/build_rallypack_p90.py."
+
+[[skip]]
+test = "p90_exhausted_ammo_stays_idle_after_trigger_release"
+reason = "Needs Max's privately converted P90 (BRI_P90_TEST_ROOT); run by hand after tools/build_rallypack_p90.py."
+
+[[skip]]
+test = "bot_fires_package_p90_and_reloads_through_ordinary_controls"
+reason = "Needs Max's privately converted P90 (BRI_P90_TEST_ROOT); run by hand after tools/build_rallypack_p90.py."
+
+[[skip]]
+test = "p90_rounds_hurt_an_enemy_in_a_minigame"
+reason = "Needs Max's privately converted P90 (BRI_P90_TEST_ROOT); run by hand after tools/build_rallypack_p90.py."
+
+[[skip]]
+test = "p90_downloads_to_a_clean_cache_and_equipment_reaches_a_late_joiner"
+reason = "Needs Max's privately converted P90 (BRI_P90_TEST_ROOT); run by hand after tools/build_rallypack_p90.py."
+
 # Test targets GitHub Actions skips because they load generated v20 content,
 # which the runner cannot have. The local gate still runs them. Prefer
 # #[ignore = "requires generated ... content"] on individual tests; list a

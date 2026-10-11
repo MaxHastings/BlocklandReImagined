@@ -1496,6 +1496,12 @@ datablock AudioProfile(JingleBell) { fileName = "./bell.wav"; description = Audi
 /// The smallest DTS (v24) Torque reads: no nodes, objects or meshes, the
 /// box `lo` to `hi`, and these materials. Written here; ours (CC0).
 fn tiny_dts(lo: [f32; 3], hi: [f32; 3], materials: &[&str]) -> Vec<u8> {
+    let materials: Vec<_> = materials.iter().map(|m| (*m, 3)).collect();
+    tiny_dts_flags(lo, hi, &materials)
+}
+
+/// [`tiny_dts`] with each material's `TSMaterialList` flags.
+fn tiny_dts_flags(lo: [f32; 3], hi: [f32; 3], materials: &[(&str, u32)]) -> Vec<u8> {
     let mut wide: Vec<u32> = vec![0; 17]; // every count zero
     wide.extend([0, 0]);
     let guards = 17u32;
@@ -1531,12 +1537,12 @@ fn tiny_dts(lo: [f32; 3], hi: [f32; 3], materials: &[&str]) -> Vec<u8> {
     out.extend(0u32.to_le_bytes()); // no sequences
     out.push(1); // material list version
     out.extend((materials.len() as u32).to_le_bytes());
-    for m in materials {
+    for (m, _) in materials {
         out.push(m.len() as u8);
         out.extend(m.as_bytes());
     }
-    for _ in materials {
-        out.extend(3u32.to_le_bytes()); // wrap u and v
+    for (_, flags) in materials {
+        out.extend(flags.to_le_bytes());
     }
     for _ in 0..3 {
         for _ in materials {
@@ -1549,6 +1555,74 @@ fn tiny_dts(lo: [f32; 3], hi: [f32; 3], materials: &[&str]) -> Vec<u8> {
         }
     }
     out
+}
+
+/// A solid surface whose exporter set the additive bit without the
+/// translucent one imports opaque, as Torque draws it (the Rallypack P90's
+/// black body vanished as additive in v0.2.8), and the report says so; a
+/// real additive surface (both bits, as v20's rocket trail) stays additive.
+#[test]
+fn additive_without_translucent_imports_opaque_and_is_noted() {
+    let source = fresh("blend-source").with_file_name("Weapon_Blend");
+    std::fs::create_dir_all(&source).unwrap();
+    std::fs::write(
+        source.join("description.txt"),
+        "Title: Blend\nAuthor: Tester\nA test.",
+    )
+    .unwrap();
+    std::fs::write(source.join("server.cs"), "exec(\"./blend.cs\");\n").unwrap();
+    std::fs::write(
+        source.join("gun.dts"),
+        tiny_dts_flags(
+            [-0.1, -0.2, -0.3],
+            [0.1, 0.4, 0.3],
+            &[("body", 0x4b), ("trail", 0x4f)],
+        ),
+    )
+    .unwrap();
+    for name in ["body", "trail"] {
+        let mut png = std::io::Cursor::new(Vec::new());
+        image::RgbaImage::from_pixel(2, 2, image::Rgba([0, 0, 0, 255]))
+            .write_to(&mut png, image::ImageFormat::Png)
+            .unwrap();
+        std::fs::write(source.join(format!("{name}.png")), png.into_inner()).unwrap();
+    }
+    std::fs::write(
+        source.join("blend.cs"),
+        r#"
+datablock ItemData(blendGunItem) { shapeFile = "./gun.dts"; uiName = "Blend Gun"; image = blendGunImage; };
+datablock ShapeBaseImageData(blendGunImage) { shapeFile = "./gun.dts"; item = blendGunItem; stateName[0] = "Ready"; };
+"#,
+    )
+    .unwrap();
+    let out = fresh("blend-out").join("weapon_blend");
+    let report = import(&Options {
+        input: source.clone(),
+        out: out.clone(),
+        ..Default::default()
+    })
+    .unwrap();
+    let presentation: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(out.join("assets/presentation.json")).unwrap())
+            .unwrap();
+    let file = presentation["models"]["add-ons/weapon_blend/gun.dts"]["file"]
+        .as_str()
+        .unwrap();
+    let shape: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(out.join("assets").join(file)).unwrap()).unwrap();
+    let blends: Vec<_> = shape["materials"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|m| m["blend"].as_str().unwrap().to_owned())
+        .collect();
+    assert_eq!(blends, ["opaque", "additive"]);
+    let notes = serde_json::to_string(&report.assets).unwrap();
+    assert!(
+        notes.contains("material body marks additive without translucent (0x4b): drawn opaque"),
+        "{notes}"
+    );
+    assert!(!notes.contains("material trail marks"), "{notes}");
 }
 
 /// A model material whose texture is nowhere (not in the Add-On, not in
@@ -1681,4 +1755,96 @@ datablock ShapeBaseImageData(pathGunImage) { shapeFile = $PG::ModelPath @ "gun.d
     let model = &presentation["models"]["add-ons/weapon_pathglobal/models/gun.dts"];
     assert_ne!(model["source"], "placeholder", "{model}");
     assert!(!model.is_null(), "{}", presentation["models"]);
+}
+
+/// Each item a player can pick gets one coverage level, the worst of what
+/// it is made of, with the reasons: a gun of plain data is preserved, one
+/// whose firing is a script with no port is unsupported, one whose model
+/// file is missing is missing its source, and one whose projectile names a
+/// damage type nobody declares is approximate. A sound offered to events
+/// is an item too; a datablock without a `uiName` (an image, a projectile)
+/// is part of its item. A material Torque found no texture for either is
+/// drawn as Torque drew it, so the plain gun stays preserved.
+#[test]
+fn each_item_gets_the_worst_coverage_of_what_it_is_made_of() {
+    let source = fresh("coverage-source").with_file_name("Weapon_Coverage");
+    std::fs::create_dir_all(&source).unwrap();
+    std::fs::write(
+        source.join("description.txt"),
+        "Title: Coverage\nAuthor: Tester\nA test.",
+    )
+    .unwrap();
+    std::fs::write(source.join("server.cs"), "exec(\"./guns.cs\");\n").unwrap();
+    std::fs::write(
+        source.join("gun.dts"),
+        tiny_dts([-0.1, -0.2, -0.3], [0.1, 0.4, 0.3], &["nowhere"]),
+    )
+    .unwrap();
+    std::fs::write(source.join("beep.wav"), wav()).unwrap();
+    std::fs::write(
+        source.join("guns.cs"),
+        r#"
+datablock AudioProfile(beepSound) { fileName = "./beep.wav"; preload = true; uiName = "Beep"; };
+datablock ProjectileData(zapProjectile) { directDamage = 10; directDamageType = $DamageType::Zap; muzzleVelocity = 50; lifetime = 1000; };
+datablock ItemData(zapGunItem) { shapeFile = "./gun.dts"; uiName = "Zap Gun"; image = zapGunImage; };
+datablock ShapeBaseImageData(zapGunImage) { shapeFile = "./gun.dts"; item = zapGunItem; projectile = zapProjectile; stateName[0] = "Ready"; };
+datablock ItemData(plainGunItem) { shapeFile = "./gun.dts"; uiName = "Plain Gun"; image = plainGunImage; };
+datablock ShapeBaseImageData(plainGunImage) { shapeFile = "./gun.dts"; item = plainGunItem; stateName[0] = "Ready"; };
+datablock ItemData(scriptGunItem) { shapeFile = "./gun.dts"; uiName = "Script Gun"; image = scriptGunImage; };
+datablock ShapeBaseImageData(scriptGunImage) { shapeFile = "./gun.dts"; item = scriptGunItem; stateName[0] = "Ready"; stateTransitionOnTriggerDown[0] = "Fire"; stateName[1] = "Fire"; stateScript[1] = "onFire"; stateTimeoutValue[1] = 0.2; stateTransitionOnTimeout[1] = "Ready"; };
+datablock ItemData(lostGunItem) { shapeFile = "./lost.dts"; uiName = "Lost Gun"; image = lostGunImage; };
+datablock ShapeBaseImageData(lostGunImage) { shapeFile = "./lost.dts"; item = lostGunItem; stateName[0] = "Ready"; };
+function scriptGunImage::onFire(%this, %obj, %slot)
+{
+    %obj.setWhiteOut(1);
+    %obj.client.score += 5;
+}
+"#,
+    )
+    .unwrap();
+    let out = fresh("coverage-out").join("weapon_coverage");
+    let report = import(&Options {
+        input: source.clone(),
+        out: out.clone(),
+        ..Default::default()
+    })
+    .unwrap();
+    let coverage: Vec<(&str, &str)> = report
+        .items
+        .iter()
+        .map(|i| (i.ui_name.as_str(), i.coverage.as_str()))
+        .collect();
+    assert_eq!(
+        coverage,
+        [
+            ("Lost Gun", "missing_source"),
+            ("Plain Gun", "preserved"),
+            ("Script Gun", "unsupported"),
+            ("Zap Gun", "approximate"),
+            ("Beep", "preserved"),
+        ],
+        "{:#?}",
+        report.items
+    );
+    let item = |name: &str| report.items.iter().find(|i| i.ui_name == name).unwrap();
+    assert!(item("Plain Gun").reasons.is_empty());
+    assert_eq!(item("Plain Gun").uses, ["plainGunItem", "plainGunImage"]);
+    assert!(
+        item("Script Gun").reasons[0]
+            .starts_with("unsupported: scriptGunImage::onFire needs native behaviour"),
+        "{:?}",
+        item("Script Gun").reasons
+    );
+    assert!(
+        item("Lost Gun").reasons[0].contains("lost.dts is not in this Add-On"),
+        "{:?}",
+        item("Lost Gun").reasons
+    );
+    assert_eq!(report.summary.items, 5);
+    assert_eq!(report.summary.items_by_coverage["missing_source"], 1);
+    let markdown = report.markdown();
+    assert!(
+        markdown.contains("| Lost Gun | `lostGunItem` | missing source | missing_source: "),
+        "{markdown}"
+    );
 }

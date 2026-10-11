@@ -460,7 +460,10 @@ impl Session {
         let worn = self.is_alive(target)
             && self.bots.is_brick_bot(target)
             && self.peers[&target].combat.health <= self.max_health(target) * below;
-        let kind = self.bots.brains[&bot].kind.clone();
+        // The hit's hooks may have taken the biter away.
+        let Some(kind) = self.bots.brains.get(&bot).map(|b| b.kind.clone()) else {
+            return Ok(());
+        };
         let other = self.bots.brains.get(&target).map(|b| b.kind.side.clone());
         if !worn || other.is_none() || other == Some(kind.side.clone()) {
             return Ok(());

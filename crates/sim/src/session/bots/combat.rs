@@ -29,6 +29,11 @@ impl State {
     pub(super) fn movement_hint(&self) -> Option<Weapon> {
         self.movement
     }
+    /// The tick's attack will not be made (what it was planned with is
+    /// gone): nothing fires on it.
+    pub(super) fn forget_intent(&mut self) {
+        self.intent = None;
+    }
 }
 /// One shared allowance, with a queue of observed fighters rather than owner
 /// residues. A temporarily absent owner costs one turn; stale entries expire.

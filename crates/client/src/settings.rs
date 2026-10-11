@@ -351,6 +351,34 @@ mod tests {
         assert_eq!(backups(&dir).len(), 1);
         std::fs::remove_dir_all(dir).unwrap();
     }
+    /// An environment favourite stored in one run (Admin > Environment,
+    /// Store) is there after a restart, through the same file the client
+    /// writes and reads, day cycle included.
+    #[test]
+    fn environment_favorites_survive_a_restart() {
+        use bri_content::atmosphere::{DayCycle, Settings as Environment};
+        let dir = scratch("env-favs");
+        let path = dir.join("settings.json");
+        let mut s = load(&path).unwrap();
+        let look = Environment {
+            day_cycle: Some(DayCycle {
+                length_seconds: 600.0,
+                time: 0.75,
+                anchor_tick: 0,
+            }),
+            sun_azimuth: Some(200.0),
+            sky_color: Some([0.2, 0.3, 0.9]),
+            ..Default::default()
+        };
+        s.environment_favorites.insert(2, look.clone());
+        save(&path, &s).unwrap();
+        // The next run.
+        let restored = recover(&path);
+        assert!(restored.notice.is_none());
+        assert_eq!(restored.settings.environment_favorites[&2], look);
+        assert_eq!(load(&path).unwrap(), s);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
     #[test]
     fn older_files_missing_newer_fields_load_without_a_notice() {
         let dir = scratch("older");

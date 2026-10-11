@@ -1884,8 +1884,17 @@ impl Simulation {
         for (bucket, exit) in
             grid::ray_buckets(origin.to_array(), direction.to_array(), max_distance)
         {
-            for id in self.index.bucket(bucket) {
+            for &(id, bounds) in self.index.bucket_bounds(bucket) {
                 if !tested.insert(id) {
+                    continue;
+                }
+                // Most of a bucket's bricks lie off the ray: the slab test
+                // on the bounds the bucket holds rules them out before the
+                // world lookup and `accept`, which cost far more.
+                let Some(enter) = slab(bounds, origin, direction, max_distance) else {
+                    continue;
+                };
+                if nearest.as_ref().is_some_and(|hit| enter > hit.distance) {
                     continue;
                 }
                 let brick = &self.state().bricks[&id];
@@ -1912,34 +1921,8 @@ impl Simulation {
         max_distance: f32,
         nearest: &mut Option<Hit>,
     ) -> Result<()> {
-        // The caller already fetched this brick for the acceptance check;
-        // keep it instead of repeating the persistent world-map lookup.
-        // Cheap slab test against the padded grid bounds first.
-        let bounds = self.index.bounds(id);
-        let low = Vec3::from_array(std::array::from_fn(|a| {
-            bounds.min[a] as f32 * grid::CELL[a]
-        })) - 0.01;
-        let high = Vec3::from_array(std::array::from_fn(|a| {
-            bounds.max()[a] as f32 * grid::CELL[a]
-        })) + 0.01;
-        let (mut enter, mut leave) = (0.0f32, max_distance);
-        for a in 0..3 {
-            if direction[a] == 0.0 {
-                if origin[a] < low[a] || origin[a] > high[a] {
-                    return Ok(());
-                }
-            } else {
-                let (t0, t1) = (
-                    (low[a] - origin[a]) / direction[a],
-                    (high[a] - origin[a]) / direction[a],
-                );
-                enter = enter.max(t0.min(t1));
-                leave = leave.min(t0.max(t1));
-            }
-        }
-        if enter > leave || nearest.as_ref().is_some_and(|hit| enter > hit.distance) {
-            return Ok(());
-        }
+        // The caller already fetched this brick for the acceptance check and
+        // passed it the slab test on its grid bounds ([`slab`]).
         let d = self.definitions.get(brick)?;
         let inverse = brick.transform().inverse();
         let o = inverse.transform_point3(origin);
@@ -1965,6 +1948,32 @@ impl Simulation {
         }
         Ok(())
     }
+}
+/// Where a ray (normalized direction) enters a brick's padded grid bounds
+/// within `max_distance`, or None when it misses them.
+fn slab(bounds: Bounds, origin: Vec3, direction: Vec3, max_distance: f32) -> Option<f32> {
+    let low = Vec3::from_array(std::array::from_fn(|a| {
+        bounds.min[a] as f32 * grid::CELL[a]
+    })) - 0.01;
+    let high = Vec3::from_array(std::array::from_fn(|a| {
+        bounds.max()[a] as f32 * grid::CELL[a]
+    })) + 0.01;
+    let (mut enter, mut leave) = (0.0f32, max_distance);
+    for a in 0..3 {
+        if direction[a] == 0.0 {
+            if origin[a] < low[a] || origin[a] > high[a] {
+                return None;
+            }
+        } else {
+            let (t0, t1) = (
+                (low[a] - origin[a]) / direction[a],
+                (high[a] - origin[a]) / direction[a],
+            );
+            enter = enter.max(t0.min(t1));
+            leave = leave.min(t0.max(t1));
+        }
+    }
+    (enter <= leave).then_some(enter)
 }
 /// v20 `plant()` error 1: the brick shares a build-grid cell with a brick
 /// already in the world. Planting and loading a save use this one rule.
