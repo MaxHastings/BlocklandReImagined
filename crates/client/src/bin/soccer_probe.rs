@@ -254,14 +254,12 @@ fn run(root: &Path, state: &Path, name: &str, slot: u8, seconds: u64, temp: &Pat
     let mut ball_moving = 0u64;
     let mut ball_was: BTreeMap<u64, (Vec3, Vec3)> = BTreeMap::new();
     let mut respawns = 0u64;
-    let team_scores = |s: &bri_sim::session::Session| {
-        let mut out: BTreeMap<u32, i64> = BTreeMap::new();
-        for v in s.vitals().values() {
-            if let Some(t) = v.team {
-                *out.entry(t).or_default() += v.score;
-            }
-        }
-        out
+    // Each team's own points (a goal's IncScore) and its members' scores.
+    let team_scores = |s: &bri_sim::session::Session| -> BTreeMap<u32, i64> {
+        team_name
+            .keys()
+            .map(|t| (*t, s.team_total(game, *t).unwrap_or(0)))
+            .collect()
     };
     let start = team_scores(&s);
     // Every point that moves, with what happened the same tick: who died
@@ -313,6 +311,10 @@ fn run(root: &Path, state: &Path, name: &str, slot: u8, seconds: u64, temp: &Pat
             .filter_map(|v| poses.get(&v.id).map(|(p, vel)| (v.id, *p, *vel)))
             .collect();
         for (id, at, vel) in &ball_now {
+            // A goal's resetObject brings a new ball in place of the old.
+            if !ball_was.is_empty() && !ball_was.contains_key(id) {
+                respawns += 1;
+            }
             if let Some((was, was_vel)) = ball_was.get(id) {
                 {
                     let moved = (*at - *was).length();
@@ -486,21 +488,30 @@ impl Trace {
             self.chat = l.id;
         }
         let infos = s.vehicle_infos();
-        for p in s.vehicle_poses() {
+        let def = |id: u64| {
+            infos
+                .iter()
+                .find(|v| v.id == id)
+                .map_or("?", |v| v.definition.as_str())
+        };
+        let first = self.vehicles.is_empty();
+        let poses = s.vehicle_poses();
+        for p in &poses {
             let now = Vec3::from(p.position);
-            if let Some(was) = self.vehicles.insert(p.id, now)
-                && (now - was).length() > 4.0
-            {
-                let def = infos
-                    .iter()
-                    .find(|v| v.id == p.id)
-                    .map_or("?", |v| v.definition.as_str());
-                lines.push(format!(
-                    "vehicle {} ({def}) jumped {was:.1} -> {now:.1}",
-                    p.id
-                ));
+            match self.vehicles.insert(p.id, now) {
+                Some(was) if (now - was).length() > 4.0 => lines.push(format!(
+                    "vehicle {} ({}) jumped {was:.1} -> {now:.1}",
+                    p.id,
+                    def(p.id)
+                )),
+                None if !first => {
+                    lines.push(format!("vehicle {} ({}) new at {now:.1}", p.id, def(p.id)))
+                }
+                _ => {}
             }
         }
+        self.vehicles
+            .retain(|id, _| poses.iter().any(|p| p.id == *id));
         let rounds: Vec<_> = s.round_results().collect();
         for r in rounds.iter().skip(self.rounds) {
             let teams: Vec<_> = r

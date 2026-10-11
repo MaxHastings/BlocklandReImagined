@@ -43,3 +43,22 @@ No migration (alpha rule):
 `soccer_probe` now traces every player and team score change with that
 tick's deaths (and killers), chat lines, vehicle jumps and round results,
 to find what scores in a saved ball game with an Add-On favourite.
+
+## What scored without goals in Max's soccer
+
+`soccer_probe` on Max's PC, save "Soccer Field Goo" (Skylands) with Add-On
+favourite 1 (Slayer Team Deathmatch, Points 3), 300 s, 8 bots:
+
+- The favourite has Slayer's Kill Bot 0 but the Mini-Game window's Kill
+  Player 1 and Kill Self -1. Kill Bot only replaces Kill Player when a
+  Slayer bot dies, so every kill of a human (the host) still paid the
+  killer's team a point, and every suicide or fall cost one. With Points 3
+  to win, bots killing Max three times won a round with no goal. Bot kills
+  showed +1 then -1 a tick later (Slayer's correction); Slayer's own
+  victory check runs after the correction, so that flicker never won.
+- The three team points with no death attached were real goals: a goal's
+  resetObject brings a new ball, which the probe counted as no reset.
+  The probe now counts a replaced ball and prints new vehicles, and its
+  final team scores include the team's own points.
+
+With this change, Kill Player 0 alone stops every kill from scoring.
