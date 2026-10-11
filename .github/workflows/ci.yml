@@ -28,6 +28,9 @@ env:
   # once across jobs and runs, not once per runner. rust-cache still keeps
   # the crates.io dependencies.
   SCCACHE_GHA_ENABLED: 'true'
+  # The shards build first and test for up to half an hour; a server that
+  # outlives its idle limit reports nothing at the end of the job.
+  SCCACHE_IDLE_TIMEOUT: '0'
   RUSTC_WRAPPER: sccache
   TEST_TIER: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && 'full' || 'pr' }}
 

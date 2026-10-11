@@ -34,7 +34,14 @@ A pull request took 65-82 minutes from push to green, on five runners:
 
 - `python -m unittest discover -s tools -p "test_*.py"` passes, including new
   tests for the tier filter and the nightly list.
-- Before/after CI minutes are in the PR description once its runs finish.
+- First run of #83 (cold compile cache), all green. Per job: check 37 min
+  (build 30, clippy 5); shards 28-47 min, of which compiling 17-27 and
+  tests 11-18 (before: 14-50). The four shards together ran about 57 test
+  minutes, down from 128-155. Push to green took two hours, almost all of
+  it waiting for free Windows runners while other PRs ran.
+- sccache's end-of-job stats read zero on the shards: its server stops after
+  ten idle minutes, and the shards test for longer than that.
+  `SCCACHE_IDLE_TIMEOUT=0` keeps it up so the second run reports hits.
 
 ## Duplicate candidates (not removed)
 
