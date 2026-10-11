@@ -323,7 +323,10 @@ async fn two_players_rejoin_a_killed_modded_host_with_their_builds_and_add_ons()
     seen(&mut a, 6).await?;
     seen(&mut b, 6).await?;
     ensure!(sorted(ran_a.clone()) == served, "Ann runs {ran_a:?}");
-    ensure!(sorted(ran_b.clone()) == served, "Ben runs {ran_b:?}, fetched {fetched_b:?}");
+    ensure!(
+        sorted(ran_b.clone()) == served,
+        "Ben runs {ran_b:?}, fetched {fetched_b:?}"
+    );
     ensure!(
         fetched_a.iter().all(|f| f.downloaded == 0),
         "Ann's intact cache was downloaded again"
