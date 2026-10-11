@@ -470,6 +470,19 @@ impl<K: Ord + Clone> Allowance<K> {
         *at = tick;
         level.div_euclid(window)
     }
+    /// [`Self::available`] without recording the refill: for a check that
+    /// must change nothing.
+    fn peek(&self, key: &K, tick: u64) -> i64 {
+        let window = self.window as i64;
+        let Some((level, at)) = self.levels.get(key) else {
+            return self.capacity;
+        };
+        let elapsed = tick.saturating_sub(*at).min(self.window * 1024) as i64;
+        level
+            .saturating_add(self.refill.saturating_mul(elapsed))
+            .min(self.capacity * window)
+            .div_euclid(window)
+    }
     fn spend(&mut self, key: &K, tick: u64, amount: i64) {
         self.available(key, tick);
         let window = self.window as i64;
@@ -1592,6 +1605,49 @@ impl Session {
             .map_or_else(|| name.to_owned(), |(_, t)| format!("{prefix}{}", t.name))
     }
 
+    /// Whether `damage` could be dealt now ([`perform::Perform::check`]):
+    /// the damage type exists and the target is still there.
+    fn package_check_damage(
+        &self,
+        package: &str,
+        target: &ObjectRef,
+        damage_type: Option<&str>,
+    ) -> Result<()> {
+        if let Some(name) = damage_type {
+            let name = self.package_damage_type(package, name);
+            ensure!(
+                self.weapons.pack.damage_type(&name).is_some(),
+                "No damage type `{name}`"
+            );
+        }
+        match *target {
+            ObjectRef::Player(player) => {
+                ensure!(self.peers.contains_key(&player), "No such player");
+            }
+            ObjectRef::Vehicle(vehicle) => {
+                self.vehicles
+                    .world
+                    .as_ref()
+                    .and_then(|world| {
+                        world.vehicle_snapshot(
+                            &self.simulation.physics,
+                            bri_vehicles::VehicleId(vehicle),
+                        )
+                    })
+                    .filter(|v| !v.destroyed)
+                    .context("No such vehicle")?;
+            }
+            ObjectRef::Entity(entity) => {
+                ensure!(
+                    self.packages
+                        .as_ref()
+                        .is_some_and(|h| h.entities.contains_key(&entity)),
+                    "No such entity"
+                );
+            }
+        }
+        Ok(())
+    }
     fn package_damage_op(
         &mut self,
         package: &str,
@@ -1689,6 +1745,70 @@ impl Session {
             "Chat line dropped: more than {PACKAGE_REPLY_LINES} lines a second to one player"
         );
         host.shares.replies.spend(&origin, tick, 1);
+        Ok(())
+    }
+    /// Whether `package` still has a world edit to spend this tick.
+    pub(super) fn package_check_edit_share(&self, package: &str, what: &str) -> Result<()> {
+        let tick = self.simulation.state().tick;
+        let host = self.packages.as_ref().context("No packages are enabled")?;
+        ensure!(
+            host.shares.edits.peek(&package.to_string(), tick) >= 1,
+            "`{package}` {what} its share of world edits for now"
+        );
+        Ok(())
+    }
+    /// Whether `place_brick` could add a world brick of `shape` there now:
+    /// the package has an edit to spend, the shape is defined and it fits.
+    pub(super) fn package_check_place_brick(
+        &self,
+        package: &str,
+        shape: &str,
+        position: [f32; 3],
+    ) -> Result<()> {
+        self.package_check_edit_share(package, "used")?;
+        let brick = Brick::new(ContentRef::Resolved(shape.into()), position, 0);
+        let brick = self
+            .simulation
+            .definitions
+            .get(&brick)
+            .map(|_| brick)
+            .with_context(|| format!("No brick `{shape}` is loaded"))?;
+        ensure!(
+            self.simulation.fits_grid(&brick),
+            "`{shape}` is off the stud and plate grid there"
+        );
+        ensure!(self.simulation.fits(&brick), "No room for `{shape}` there");
+        Ok(())
+    }
+    /// Whether `plant_brick` would place the brick: the colour exists, the
+    /// caller may edit the build, the kind is loaded, the package has an
+    /// edit to spend and the brick fits. Without `require`, a brick that
+    /// does not fit is skipped without a report ([`Self::package_plant_brick`]);
+    /// a script that charges for it asks to hear.
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn package_check_plant_brick(
+        &self,
+        package: &str,
+        kind: &str,
+        position: [f32; 3],
+        turns: u8,
+        color: u8,
+        owner: OwnerId,
+        caller: Option<OwnerId>,
+    ) -> Result<()> {
+        ensure!(
+            usize::from(color) < self.simulation.state().palette.len(),
+            "Colour {color} is not in the world's palette"
+        );
+        ensure!(
+            self.rule_may_edit(caller, owner),
+            "Build {owner} is not one the caller has trust on"
+        );
+        let brick = self
+            .planted_brick(kind, position, turns, color, owner)
+            .with_context(|| format!("No brick `{kind}` is loaded"))?;
+        self.package_check_edit_share(package, "used")?;
+        ensure!(self.simulation.fits(&brick), "No room for `{kind}` there");
         Ok(())
     }
     /// Add a world-owned brick through the same load path as a build, so
@@ -2154,7 +2274,9 @@ impl Session {
     }
     /// Spawn a package entity with a character body, lifting it until it
     /// fits. Returns its id.
-    pub fn spawn_package_entity(&mut self, kind: &str, position: Vec3) -> Result<u64> {
+    /// Whether an entity of `kind` could be spawned now as far as the
+    /// server's limits go (the room for its body is only known at spawn).
+    pub(super) fn check_spawn_entity(&self, kind: &str) -> Result<()> {
         let host = self.packages.as_ref().context("No packages are enabled")?;
         let (package, def) = host
             .catalog
@@ -2189,6 +2311,15 @@ impl Session {
             "`{}` has {mine} entities, its share of the server's {MAX_ENTITIES}",
             package.id()
         );
+        Ok(())
+    }
+    pub fn spawn_package_entity(&mut self, kind: &str, position: Vec3) -> Result<u64> {
+        self.check_spawn_entity(kind)?;
+        let host = self.packages.as_ref().context("No packages are enabled")?;
+        let (package, def) = host
+            .catalog
+            .entity(kind)
+            .with_context(|| format!("Unknown entity kind `{kind}`"))?;
         let id = host.next_entity;
         let (package, def) = (package.id().to_string(), def.clone());
         let tuning = match &def.archetype {
@@ -3816,4 +3947,32 @@ fn required_failed(
     )
     .at(package.to_string())
     .hint("check player(p).tools or the brick before charging, or tell the player why not")
+}
+
+#[cfg(test)]
+mod allowance_tests {
+    use super::Allowance;
+
+    /// A check peeks at a share without recording the refill, and must see
+    /// what the spend that follows it will.
+    #[test]
+    fn peeking_agrees_with_asking_and_changes_nothing() {
+        let mut a = Allowance::<String>::new(4, 4, 10);
+        let key = "kit".to_string();
+        assert_eq!(a.peek(&key, 0), 4);
+        for tick in [0, 3, 40] {
+            a.spend(&key, tick, 3);
+            for later in [tick, tick + 1, tick + 7, tick + 500] {
+                let peeked = a.peek(&key, later);
+                let before = a.levels.clone();
+                assert_eq!(a.peek(&key, later), peeked);
+                assert_eq!(a.levels, before, "peeking recorded something");
+                let mut copy = Allowance::<String> {
+                    levels: before,
+                    ..Allowance::new(4, 4, 10)
+                };
+                assert_eq!(copy.available(&key, later), peeked, "tick {later}");
+            }
+        }
+    }
 }

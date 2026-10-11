@@ -3,6 +3,11 @@
 use super::*;
 
 impl Perform for ops::SpawnEntity {
+    /// Whether the server's limits allow the entity. Room for its body is
+    /// only known when it is placed.
+    fn check(&self, session: &Session, _cx: OpCall<'_>) -> Result<()> {
+        session.check_spawn_entity(&self.kind)
+    }
     fn perform(self, session: &mut Session, _cx: OpCall<'_>) -> Result<()> {
         let ops::SpawnEntity {
             kind,

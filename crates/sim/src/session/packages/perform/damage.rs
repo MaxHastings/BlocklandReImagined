@@ -26,6 +26,11 @@ impl Perform for ops::Explode {
     }
 }
 impl Perform for ops::Damage {
+    /// Whether there is something to hurt: the damage type exists and the
+    /// player, vehicle or entity is still here.
+    fn check(&self, session: &Session, cx: OpCall<'_>) -> Result<()> {
+        session.package_check_damage(cx.package, &self.target, self.damage_type.as_deref())
+    }
     fn perform(self, session: &mut Session, cx: OpCall<'_>) -> Result<()> {
         let OpCall { package, .. } = cx;
         let ops::Damage {
@@ -114,6 +119,11 @@ impl Perform for ops::SpawnExplosion {
     }
 }
 impl Perform for ops::Heal {
+    fn check(&self, session: &Session, _cx: OpCall<'_>) -> Result<()> {
+        let peer = session.peers.get(&self.player).context("No such player")?;
+        ensure!(peer.combat.alive, "Only the living heal");
+        Ok(())
+    }
     fn perform(self, session: &mut Session, _cx: OpCall<'_>) -> Result<()> {
         let ops::Heal { player, amount } = self;
         let max = {

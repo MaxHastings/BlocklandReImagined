@@ -103,6 +103,11 @@ impl Perform for ops::SetTeam {
     }
 }
 impl Perform for ops::SetScore {
+    fn check(&self, session: &Session, _cx: OpCall<'_>) -> Result<()> {
+        session.minigame_player(self.player)?;
+        i32::try_from(self.value).context("Score out of range")?;
+        Ok(())
+    }
     fn perform(self, session: &mut Session, _cx: OpCall<'_>) -> Result<()> {
         let ops::SetScore { player, value, add } = self;
         let effects = {
