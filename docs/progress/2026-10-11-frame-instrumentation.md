@@ -161,6 +161,19 @@ environment probe redrawn, as before. A map change or a new device still
 uploads everything; a failed adoption falls back to a full upload with a
 console warning.
 
+Measured on Max's PC (run A2, this commit, otherwise run A's setup):
+
+| Change frame | Run A, before | Run A2, after |
+| --- | --- | --- |
+| Shadow Quality 0 to 2 | 764.2 ms: chunk uploads 414.4, world upload 182.3, prepare 33.4, pipelines wait 25.7 | 87.2 ms: pipelines wait 27.4, prepare 12.1, GPU wait 5.1 |
+| Shadow Quality 2 to 0 | 962.2 ms: chunk uploads 509.1, world upload 235.9, prepare 48.4, pipelines wait 39.0 | 90.8 ms: pipelines wait 38.9, prepare 10.4, GPU wait 5.5 |
+
+The "uploaded the map" and "uploaded 316 brick chunks" events are gone
+from the change frame. Steady frames are unchanged (custom view p50
+6.5 ms against 6.6 ms in B2 on the same warm shader cache). What remains is
+the pipelines wait for the new renderer (27-39 ms) and the first frame of
+the new shadow maps.
+
 Regression test `graphics_rebuild.rs`
 (`a_shadow_quality_change_keeps_the_world_uploaded`, made-up content; an
 ignored variant on v20 content): a 864-brick block, Shadow Quality 0 to 3.
@@ -189,8 +202,6 @@ pixels differ).
 
 ## Next
 
-- Re-measure the Shadow Quality change frame on Max's PC with this branch.
-- The pipelines wait (25-39 ms there, seconds with FXC or a software
-  adapter) and the new shadow maps' first frames remain in the change frame;
-  drawing the old renderer until the new one compiles would remove the
-  first if it matters.
+- The pipelines wait (27-39 ms on Max's PC, seconds with FXC or a
+  software adapter) remains in the change frame; drawing with the old
+  renderer until the new one compiles would remove it if it matters.
