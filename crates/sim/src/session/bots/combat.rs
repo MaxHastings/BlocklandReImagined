@@ -2040,6 +2040,12 @@ pub(super) fn validate_fire(
     let contact = (choice.capability.delivery == Delivery::Contact).then_some(Some(seen.owner));
     let bodies = Bodies::of(session, bot, Vec3::ZERO);
     let strike = hand_strike(session, bot, image, choice.capability, contact);
+    // The shot leaves after the press's wind-up (a swing's PreFire): the
+    // bodies about keep moving meanwhile, an ally into the swing's way.
+    let lead = launch_lead(image);
+    for c in &mut chords {
+        c.seconds += lead;
+    }
     let (harm, _) = assess(session, bot, strike, &chords, origin, &bodies);
     // Its side's harm as really fired, its enemies' and its push's as
     // planned (`Session::bot_shove` flies the push on the planning turn),
@@ -2054,6 +2060,30 @@ pub(super) fn validate_fire(
         .get(&seen.owner)
         .map_or(0.0, |p| p.combat.health.max(1.0));
     tactics::trade(fired, target_health, peer.combat.health).is_some_and(|net| net > 0.0)
+}
+
+/// Seconds from a press of `image`'s trigger to its shot leaving: the
+/// states the press leads through (a swing's PreFire) before the one that
+/// fires. Nothing for one that fires as it is pressed.
+fn launch_lead(image: &Image) -> f32 {
+    let Some(mut at) = image.states.iter().find_map(|s| s.down) else {
+        return 0.0;
+    };
+    let mut ticks = 0;
+    for _ in 0..image.states.len() {
+        let Some(state) = image.states.get(at) else {
+            break;
+        };
+        if state.script.eq_ignore_ascii_case("onfire") {
+            return ticks as f32 / bri_weapons::TICK_HZ as f32;
+        }
+        ticks += state.ticks;
+        let Some(next) = state.timeout else {
+            break;
+        };
+        at = next;
+    }
+    0.0
 }
 
 /// A press of `bot`'s held attack that no plan made (an objective's tool
@@ -2821,6 +2851,19 @@ mod tests {
             !known_noncombat_manipulation(&image),
             "an opaque command tool needs explicit capability semantics"
         );
+    }
+
+    /// A swing's shot leaves after its PreFire, so the fire gate judges
+    /// where the bodies about will be by then; a gun fires as it is pressed.
+    #[test]
+    fn a_swing_is_judged_from_its_wind_up_and_a_gun_from_its_press() {
+        let pack = bri_weapons::testing::pack();
+        let lead = |id: &str| launch_lead(&pack.images[id]);
+        assert_eq!(
+            lead(bri_weapons::testing::SWORD_IMAGE),
+            4.0 / bri_weapons::TICK_HZ as f32
+        );
+        assert_eq!(lead(bri_weapons::testing::GUN_IMAGE), 0.0);
     }
 
     /// A press no plan made (an objective's tool, a goof's click) is
