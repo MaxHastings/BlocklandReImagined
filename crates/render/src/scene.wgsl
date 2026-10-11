@@ -281,11 +281,15 @@ fn object_sun(position:vec3<f32>,normal:vec3<f32>,vis:MapVisibility)->f32 {
     let c=shadow_coord(position,normal);
     if lighting_mode()==3 {return dynamic_sun(position,normal);}
     let n=normal/max(length(normal),0.0001);
-    var map=far_map_lit(position,n,vis.low.x);
+    var map=vis.low.x;
     if c.near.cascade>=0 && shadows.map_params.x>0.0 {
         var lit=map_cascade_lit(c.near);
         if c.blend>0.0 {lit=mix(lit,map_cascade_lit(c.far),c.blend);}
+        // Only receivers fading out of the last cascade pay for the far map.
+        if c.strength<1.0 {map=far_map_lit(position,n,map);}
         map=mix(map,lit,c.strength);
+    } else {
+        map=far_map_lit(position,n,map);
     }
     if map<=0.0 {return 0.0;}
     return min(map,shadow_lit(c));
@@ -528,11 +532,14 @@ fn relit_sun(baked:f32,position:vec3<f32>,n:vec3<f32>)->f32 {
         return min(baked,sun_visibility(position,n));
     }
     let c=shadow_coord(position,n);
-    var map=far_map_lit(position,n,baked);
+    var map=baked;
     if c.near.cascade>=0 && shadows.map_params.x>0.0 {
         var lit=map_cascade_lit(c.near);
         if c.blend>0.0 {lit=mix(lit,map_cascade_lit(c.far),c.blend);}
+        if c.strength<1.0 {map=far_map_lit(position,n,map);}
         map=mix(map,lit,c.strength);
+    } else {
+        map=far_map_lit(position,n,map);
     }
     if map<=0.0 {return 0.0;}
     return min(map,shadow_lit(c));
@@ -635,11 +642,14 @@ fn map_light_total(position:vec3<f32>,n:vec3<f32>,visibility:MapVisibility)->vec
 fn dynamic_sun(position:vec3<f32>,normal:vec3<f32>)->f32 {
     let c=shadow_coord(position,normal);
     let n=normal/max(length(normal),0.0001);
-    var map=far_map_lit(position,n,1.0);
+    var map=1.0;
     if c.near.cascade>=0 && shadows.map_params.x>0.0 {
         var lit=map_cascade_lit(c.near);
         if c.blend>0.0 {lit=mix(lit,map_cascade_lit(c.far),c.blend);}
+        if c.strength<1.0 {map=far_map_lit(position,n,map);}
         map=mix(map,lit,c.strength);
+    } else {
+        map=far_map_lit(position,n,map);
     }
     return min(map,shadow_lit(c));
 }
