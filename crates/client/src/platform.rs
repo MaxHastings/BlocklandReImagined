@@ -404,6 +404,9 @@ pub trait PlatformApp {
     }
     /// A presented frame's timing.
     fn frame_timed(&mut self, _timing: crate::perf::FrameTiming) {}
+    /// Where the last frame's time went on the main thread
+    /// (`crate::frame_trace`), every frame, before the next `tick`.
+    fn frame_finished(&mut self, _record: crate::frame_trace::FrameRecord) {}
 }
 
 pub struct RenderContext<'a> {
@@ -587,6 +590,7 @@ impl Graphics {
         }
         self.config.width = size.width;
         self.config.height = size.height;
+        let _span = crate::frame_trace::span("display reconfigure");
         self.surface.configure(&self.device, &self.config);
         self.reconfigure = false;
     }
@@ -718,6 +722,11 @@ struct Runner {
     /// Main-thread work since the last presented frame (update and pump).
     frame_cpu: Duration,
     last_present: Option<Instant>,
+    /// The frame now running was paced by the background timer at some
+    /// point: the window was unfocused or hidden when it began or since.
+    frame_background: bool,
+    /// When the event loop went to sleep, for the frame trace's "idle".
+    idle_from: Option<Instant>,
 }
 
 /// Launch only from an explicitly requested interactive execution path. This
@@ -761,6 +770,8 @@ pub fn run(config: PlatformConfig) -> Result<()> {
         screenshots: Screenshots::default(),
         frame_cpu: Duration::ZERO,
         last_present: None,
+        frame_background: true,
+        idle_from: None,
     };
     crate::winit_log::install();
     let event_loop = EventLoop::new().context("creating the native event loop")?;
@@ -1012,6 +1023,7 @@ impl Runner {
         }
     }
     fn pump(&mut self, event_loop: &ActiveEventLoop) -> Result<()> {
+        let _span = crate::frame_trace::span("commands");
         // Acknowledgments may produce persistence actions. Bound re-entrant
         // pumping so a faulty app cannot starve native window events forever.
         for _ in 0..8 {
@@ -1057,6 +1069,7 @@ impl Runner {
         bri_console::warn(format!(
             "GPU device lost ({reason}); restarting the renderer."
         ));
+        crate::frame_trace::note("GPU device lost");
         let (Some(window), Some(lost)) = (self.window.clone(), self.graphics.take()) else {
             return Ok(());
         };
@@ -1093,6 +1106,7 @@ impl Runner {
         }
         let timing = self.config.app.wants_frame_timing();
         let acquiring = Instant::now();
+        let acquire_span = crate::frame_trace::span("acquire");
         let surface = match g.surface.get_current_texture() {
             wgpu::CurrentSurfaceTexture::Success(frame) => frame,
             wgpu::CurrentSurfaceTexture::Suboptimal(frame) => {
@@ -1118,6 +1132,7 @@ impl Runner {
                 bail!("GPU validation failed while acquiring the native surface")
             }
         };
+        drop(acquire_span);
         let acquired = Instant::now();
         let target = surface.texture.create_view(&Default::default());
         let mut encoder = g
@@ -1139,6 +1154,7 @@ impl Runner {
         if let Some(timer) = timer {
             timer.begin(&mut encoder);
         }
+        let draw_span = crate::frame_trace::span("draw");
         let scene = self.config.app.render_scene(&mut RenderContext {
             device: &g.device,
             queue: &g.queue,
@@ -1148,6 +1164,8 @@ impl Runner {
             size: (size.width, size.height),
             ui_renderer: &mut g.renderer,
         })?;
+        drop(draw_span);
+        let interface_span = crate::frame_trace::span("interface draw");
         let screenshot = self.screenshot.take();
         let scene_capture = match &screenshot {
             Some((shot, false)) => Some((
@@ -1184,6 +1202,8 @@ impl Runner {
         if let Some(Some(timer)) = &mut g.frame_timer {
             timer.end(&mut encoder);
         }
+        drop(interface_span);
+        let submit_span = crate::frame_trace::span("submit");
         if let Some((shot, capture)) = scene_capture.or(hud_capture) {
             self.screenshots.copied(shot, capture);
         }
@@ -1202,9 +1222,12 @@ impl Runner {
                     hide_bar: false,
                 });
         }
+        drop(submit_span);
         window.pre_present_notify();
         let presenting = Instant::now();
+        let present_span = crate::frame_trace::span("present");
         g.queue.present(surface);
+        drop(present_span);
         let now = Instant::now();
         let frame = self
             .last_present
@@ -1637,6 +1660,7 @@ impl ApplicationHandler for Runner {
                 }
             }
             WindowEvent::Resized(size) => {
+                crate::frame_trace::note("window resized");
                 self.regrab = true;
                 if let Some(w) = &self.window
                     && w.fullscreen().is_none()
@@ -1650,6 +1674,7 @@ impl ApplicationHandler for Runner {
                 self.resize(size)
             }
             WindowEvent::Moved(_) => {
+                crate::frame_trace::note("window moved");
                 self.regrab = true;
                 self.report_modes();
             }
@@ -1669,10 +1694,22 @@ impl ApplicationHandler for Runner {
                 self.report_modes();
             }
             WindowEvent::Occluded(hidden) => {
+                crate::frame_trace::note(if hidden {
+                    "window hidden"
+                } else {
+                    "window shown"
+                });
+                self.frame_background |= hidden;
                 self.regrab |= !hidden;
                 self.occluded = hidden
             }
             WindowEvent::Focused(focused) => {
+                crate::frame_trace::note(if focused {
+                    "window focused"
+                } else {
+                    "window lost focus"
+                });
+                self.frame_background |= !focused;
                 self.focused = focused;
                 self.config.app.focus_changed(focused);
                 self.regrab = true;
@@ -1814,6 +1851,13 @@ impl ApplicationHandler for Runner {
             }
         }
     }
+    fn new_events(&mut self, _event_loop: &ActiveEventLoop, _cause: winit::event::StartCause) {
+        // Asleep in the event loop: waiting for the background timer or a
+        // frame cap's deadline, or for Windows to deliver events.
+        if let Some(from) = self.idle_from.take() {
+            crate::frame_trace::add("idle", from.elapsed());
+        }
+    }
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
         let now = Instant::now();
         // A focused, visible window renders continuously so simulation ticks
@@ -1840,19 +1884,30 @@ impl ApplicationHandler for Runner {
             }
             let elapsed = now.saturating_duration_since(self.last_tick);
             self.last_tick = now;
+            // The frame that just ended was paced by the background timer
+            // if the window was inactive when it began or at any point since.
+            let background = std::mem::replace(&mut self.frame_background, !active);
+            self.config
+                .app
+                .frame_finished(crate::frame_trace::finish(elapsed, background));
             let working = Instant::now();
             // Avoid minutes of UI repeat catch-up after suspension/debug pauses.
             let dt_ms = elapsed.as_millis().min(250) as u64;
+            let interface_span = crate::frame_trace::span("interface");
             self.gamepads
                 .poll(self.config.app.ui_mut(), dt_ms, self.focused);
             self.config.app.ui_mut().update(dt_ms);
+            drop(interface_span);
             if let Some(recorder) = &mut self.recorder
                 && let Err(error) = recorder.frame(elapsed)
             {
                 bri_console::warn(format!("Input recording stopped: {error:#}"));
                 self.recorder = None;
             }
-            if let Err(e) = self.config.app.tick(elapsed) {
+            let update_span = crate::frame_trace::span("update");
+            let ticked = self.config.app.tick(elapsed);
+            drop(update_span);
+            if let Err(e) = ticked {
                 self.fail(event_loop, e);
                 return;
             }
@@ -1880,6 +1935,7 @@ impl ApplicationHandler for Runner {
                 return;
             }
         }
+        self.idle_from = Some(Instant::now());
         event_loop.set_control_flow(if period.is_some() {
             ControlFlow::WaitUntil(self.next_frame)
         } else if active {

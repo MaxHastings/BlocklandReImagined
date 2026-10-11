@@ -90,9 +90,14 @@ pub struct ClientCode {
     time: f32,
     last: Option<f64>,
     messages: Vec<String>,
-    /// This device's measured speed, once calibrated (`Some(None)` when
-    /// calibration failed and the low default cap stays).
-    speed: Option<Option<GpuSpeed>>,
+    /// The GPU's measured speed, once calibrated, and the adapter it was
+    /// measured on (`None` speed when calibration failed and the low
+    /// default cap stays). Renderer rebuilds on the same GPU (a graphics
+    /// option, a map change) keep it: calibrating waits for the GPU to
+    /// finish everything queued, several times, on the main thread.
+    speed: Option<(wgpu::AdapterInfo, Option<GpuSpeed>)>,
+    /// How many times the GPU was calibrated, for tests.
+    calibrations: u32,
     /// The trust question on screen for the server entered, and that
     /// server's name when it was asked.
     asking: Option<(Box<TrustPrompt>, String)>,
@@ -521,7 +526,15 @@ impl ClientCode {
         if self.running.is_empty() {
             return;
         }
-        let speed = *self.speed.get_or_insert_with(|| {
+        let adapter = device.adapter_info();
+        if self.speed.as_ref().is_some_and(|(on, _)| *on != adapter) {
+            self.speed = None;
+        }
+        let calibrations = &mut self.calibrations;
+        let (_, speed) = self.speed.get_or_insert_with(|| {
+            crate::frame_trace::note("measured the GPU for Add-On code");
+            let _span = crate::frame_trace::span("Add-On GPU calibration");
+            *calibrations += 1;
             let speed = bri_client_sandbox::gpu::calibrate(device, queue);
             match speed {
                 Some(speed) => bri_console::echo(format!(
@@ -532,8 +545,9 @@ impl ClientCode {
                     "Add-On code: could not measure the GPU; shader loops stay at the low default",
                 ),
             }
-            speed
+            (adapter, speed)
         });
+        let speed = *speed;
         let time = self.time;
         self.running.retain_mut(|r| {
             let renderer = r.renderer.get_or_insert_with(|| {
@@ -607,8 +621,9 @@ impl ClientCode {
         }
     }
 
+    /// The renderers go (a new device, a graphics option or a map change);
+    /// the GPU's measured speed stays for the same adapter.
     pub fn gpu_stopped(&mut self) {
-        self.speed = None;
         for r in &mut self.running {
             r.renderer = None;
         }
@@ -618,6 +633,8 @@ impl ClientCode {
     /// Add-On's code stops until the next join; the game rebuilds its
     /// renderer as usual.
     pub fn device_lost(&mut self) {
+        // A driver reset may come back slower (or as another adapter).
+        self.speed = None;
         for r in self.running.drain(..) {
             bri_console::warn(format!(
                 "{} stopped: the graphics card reset, so Add-On code is off until you rejoin",
@@ -910,6 +927,58 @@ mod tests {
             Default::default(),
         );
         assert!(code.is_started());
+    }
+
+    /// Calibrating waits on the GPU several times on the main thread; a
+    /// graphics option or map change rebuilds renderers on the same GPU and
+    /// must not measure it again (v0.2.8 logged it after every change).
+    /// Needs a GPU adapter (software is fine); skipped without one.
+    #[test]
+    fn the_gpu_is_measured_once_per_adapter_not_per_renderer() {
+        let Ok((adapter, device, queue)) = bri_client_sandbox::gpu::headless_device() else {
+            eprintln!("no GPU adapter; skipping");
+            return;
+        };
+        let (root, set) = sample_set();
+        let mut code = ClientCode::load(&root, &set);
+        let state = tempfile::tempdir().unwrap();
+        code.start(Host::Local, state.path());
+        assert_eq!(code.running(), ["Spinning Cube"]);
+        let frame = |code: &mut ClientCode| {
+            code.run_frame(
+                0.0,
+                glam::Vec3::ZERO,
+                glam::Vec3::X,
+                Default::default(),
+                Default::default(),
+            );
+            code.prepare(
+                &device,
+                &queue,
+                wgpu::TextureFormat::Rgba8Unorm,
+                bri_render::scene::DEPTH_FORMAT,
+                1,
+                glam::Mat4::IDENTITY,
+                glam::Vec3::ZERO,
+                [64, 64],
+            );
+        };
+        frame(&mut code);
+        assert_eq!(code.calibrations, 1, "{adapter}");
+        assert!(code.running[0].renderer.is_some());
+        // A graphics option or map change: renderers rebuild, speed stays.
+        code.gpu_stopped();
+        assert!(code.running[0].renderer.is_none());
+        frame(&mut code);
+        frame(&mut code);
+        assert_eq!(code.calibrations, 1, "measured again on the same GPU");
+        assert!(code.running[0].renderer.is_some());
+        // A driver reset forgets it (and stops the code until rejoining).
+        code.device_lost();
+        assert!(code.speed.is_none());
+        code.start(Host::Local, state.path());
+        frame(&mut code);
+        assert_eq!(code.calibrations, 2);
     }
 
     #[test]

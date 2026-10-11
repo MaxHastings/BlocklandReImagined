@@ -1524,6 +1524,14 @@ impl PlatformApp for App {
     fn frame_timed(&mut self, timing: crate::perf::FrameTiming) {
         self.ui.apply(UiUpdate::PerfFrame(timing.sample()));
     }
+    fn frame_finished(&mut self, record: crate::frame_trace::FrameRecord) {
+        if let Some(log) = &mut self.perf.frame_log {
+            // Session log only: players send it, the console stays quiet.
+            for line in log.frame(&record) {
+                eprintln!("{line}");
+            }
+        }
+    }
     fn ui_mut(&mut self) -> &mut Ui {
         &mut self.ui
     }

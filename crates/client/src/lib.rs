@@ -29,6 +29,7 @@ pub mod explosion_debris;
 pub mod explosion_shapes;
 pub mod firewall;
 pub mod foliage;
+pub mod frame_trace;
 pub mod gamepad;
 pub mod ghosts;
 pub mod gpu_build;
