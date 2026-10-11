@@ -569,7 +569,8 @@ const HOST_CORNER: Vec3 = Vec3::new(-92.0, 0.05, -92.0);
 /// adds them, with no brick to keep near): what people do with vehicles
 /// there is get in, drive about looking for a fight, crew the tank
 /// together, and get out when the vehicle is wrecked or stuck.
-fn vehicles_in_a_team_deathmatch() -> (Report, Rides) {
+/// `deaf`: bots ignore allies' planned harm (no "get out of the way").
+fn vehicles_in_a_team_deathmatch(deaf: bool) -> (Report, Rides) {
     const PACKAGE: &str = "gauntlet-tdm";
     let car = bri_vehicles::testing::CAR;
     let tank = bri_vehicles::testing::TANK;
@@ -583,7 +584,7 @@ fn vehicles_in_a_team_deathmatch() -> (Report, Rides) {
         }),
         r#"
 fn cmd_teams(p) {
-    set_teams(player(p).minigame, [#{ name: "Red", color: 0 }, #{ name: "Blue", color: 1 }]);
+    set_teams(player(p).minigame, [#{ name: "Red", color: 0 }, #{ name: "Blue", color: 1 }], #{ friendly_fire: true });
 }
 // The host plays for Red from its far corner, as a host in the game does.
 fn cmd_add(p) {
@@ -655,6 +656,7 @@ fn on_pick_spawn(p) {
         arena,
         sides,
     };
+    b.arena.s.set_bots_deaf_to_allies(deaf);
     let mut rides = Rides::default();
     let sides = b.sides.clone();
     let r = b.play(0.0, 90, |s, _| rides.sample(s, &sides));
@@ -664,7 +666,7 @@ fn on_pick_spawn(p) {
 
 #[test]
 fn vehicles_are_driven_and_crewed_in_a_team_deathmatch() {
-    let (r, rides) = vehicles_in_a_team_deathmatch();
+    let (r, rides) = vehicles_in_a_team_deathmatch(false);
     sane(&r);
     assert!(
         !rides.done.is_empty() || !rides.open.is_empty(),
@@ -689,6 +691,38 @@ fn vehicles_are_driven_and_crewed_in_a_team_deathmatch() {
         "{:?}",
         rides.leaves
     );
+}
+
+/// What "get out of the way" is worth: the team deathmatch (friendly fire
+/// on) over seeds with bots that step out of an ally's planned harm (its
+/// shot, its blast, a moving chassis's sweep) and with bots deaf to it,
+/// printed side by side.
+/// `cargo test --release -p bri-chaos --test bot_gauntlet heeding_allies -- --ignored --nocapture`
+#[test]
+#[ignore = "measurement: eight matches"]
+fn heeding_allies_harm_against_ignoring_it() {
+    for deaf in [false, true] {
+        let mut total = [0.0f64; 6];
+        for seed in 0..4 {
+            let (r, _) = gauntlet::tuning::with_seed(seed, || vehicles_in_a_team_deathmatch(deaf));
+            let row = [
+                r.team_kills as f64,
+                r.team_damage as f64,
+                r.enemy_damage as f64,
+                r.kills as f64,
+                r.at_ally as f64,
+                r.shots as f64,
+            ];
+            eprintln!("HEED deaf={deaf} seed={seed}: {row:?}");
+            for (t, v) in total.iter_mut().zip(row) {
+                *t += v;
+            }
+        }
+        eprintln!(
+            "HEED deaf={deaf} total: team_kills={} team_damage={:.0} enemy_damage={:.0} kills={} at_ally={} shots={}",
+            total[0], total[1], total[2], total[3], total[4], total[5]
+        );
+    }
 }
 
 #[test]

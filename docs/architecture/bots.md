@@ -199,7 +199,7 @@ Edges are the ways the bot's body can actually move between them now:
 | portal | the body's middle goes in through a linked brick's opening | one cell |
 | swim | the floor lies under liquid that would float the body (`swim_coverage`) | distance x walk speed / swim speed + entry |
 | jet | the body's jets lift it (measured), the kind's `fly` weight is above 0, the full-width column up from the launch cell, the crossing at the apex and the descent are clear, and its energy holds the leg's measured jetting | the leg's measured flight time (`reach::JetReach`), plus takeoff |
-| board, drive, leave | a free, permitted wheeled vehicle in sight whose drive beats the walk to where the bot is going (`route::drive_serves`: the enemy it knows, else, for a rules bot, the place it would explore, else, idle, the player it plays near; one that runs over an enemy on foot the rules let the bot hurt is costed at its top speed, since the drive is the blow), or an armed one; never while the bot has a grounded objective of its own (its objective plan decides what it drives) | walk to the seat + boarding + chassis distance / cruise speed |
+| board, drive, leave | a free, permitted wheeled vehicle in sight whose drive beats the walk to where the bot is going (`route::drive_serves`: the enemy it knows, else, for a rules bot, the place it would explore, else, idle, the player it plays near; one that runs over an enemy on foot the rules let the bot hurt is costed at its top speed, since the drive is the blow), or an armed one; a seat an ally offers is seen as far as the bot sees, and taken while it moves; never while the bot has a grounded objective of its own (its objective plan decides what it drives) | walk to the seat + boarding + chassis distance / cruise speed |
 
 **Measured reach** (`crate::reach`). What a body can jump onto and how
 long a jet leg takes, and how high a crawlspace it can jump into, are
@@ -698,6 +698,14 @@ is DOMINANT; one never offered is `-`. Only an `enforced` edge (`floor`,
 matching a prefix). It runs with the gauntlet:
 `cargo test -p bri-chaos --test bot_gauntlet -- --nocapture`.
 
+The gauntlet scores play, not caution. A walker pressed against the
+vehicle its enemy sits in is `pressing` (pushing in to hit them through the
+hull), never `stuck`. A fall is the bot's own (`fell`) unless another
+pushed it after it last stood on something, or within 2 s while it was
+still on the floor (a chassis's contact counts once, as it begins, and then
+presses on). An enemy's push is `knocked_off`, a shove or run-over that
+worked, and an ally's is `knocked_off_by_ally`, an own-side kill.
+
 **Off-switch check** (`off_switches`): each dial at 0, one at a time
 (a dial shipped at 0 is turned on to its `on` value instead, and marked
 OFF AT BASE), over every scenario, against the shipped values. It reports
@@ -798,7 +806,9 @@ stands, its target, a vehicle whose free seats it controls (an offer
 that lasts while a seat is free; the driver stops and waits while an
 ally's seat claim on it lives, so the claim's lease bounds the wait), the space its
 weapon will hit (`claims::Space`, from real reach, splash and aim error,
-the same test the hold-fire check uses) and, from a seat it does not drive,
+the same test the hold-fire check uses; a driver whose chassis runs people
+over publishes what it sweeps before it can stop, the stop it brakes by)
+and, from a seat it does not drive,
 the line its mount needs. Allies' intents enter each option's score as
 **overlap** (an earlier ally on the same target, or doing the same option
 at the same spot, costs, each further ally half the one before: the first keeps it, and a choice among places or
@@ -818,7 +828,15 @@ moving with purpose, attacking or holding something; and an option it saw work f
 teammate (a hit) scores a little more for a while (`copy`, fading over
 the surprise `effectiveness_seconds`), with boredom as the brake. A choice
 the terms changed may be said in team chat, keyed by the term that moved
-it (`callouts`). `BotThought::team` shows what it read and each option's
+it (`callouts`). Two calls are said the same way: `offer` ("Get in!") as a
+driver starts offering its free seats, and `blocked` ("Move!") while a
+bot holds fire for an ally standing in its shot. A call is the visible half
+of an intent allies already read, never an order: an ally takes an offered
+seat by its own scores, and one standing in an ally's planned harm (its
+shot's way or blast, or the sweep of a chassis that runs people over,
+below) judges it with the dodge reflex it uses for a shot coming (keep or
+dodge, by surprise; a step aside out of the blast, else off the line), so
+it may decline, and is asked again every 2 s. One line at most every 30 s. `BotThought::team` shows what it read and each option's
 terms.
 
 A kind sets `team.teamwork` (0-1, scales overlap and interaction
@@ -884,7 +902,8 @@ its kind and team label. See `bots/looks.rs`.
     strings. `/botset` and the tuning tools turn these and the other
     `SETTABLE` paths below.
   - `surprise.flavours`: a goof's weight, to turn one off for a kind (each
-    has its usual weight in code). `team.callouts`: its team chat lines.
+    has its usual weight in code). `team.callouts`: its team chat lines,
+    by term (`overlap`, `uses`) or call (`offer`, `blocked`).
   - `body`: the archetype it plays in (an Add-On's player type: its model,
     speeds and health). It keeps it through respawns and mini-games, which
     otherwise give their own player type. A body no enabled Add-On has is

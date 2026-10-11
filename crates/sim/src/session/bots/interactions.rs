@@ -248,6 +248,26 @@ impl Session {
         }
     }
 
+    /// Whether an ally holding `vehicle`'s controls offers its free seats
+    /// (`team_seats`): a call heard as far as the bot sees, as its alerts
+    /// are.
+    fn bot_offered(&self, bot: OwnerId, vehicle: u64, tick: u64) -> bool {
+        self.bots
+            .claims
+            .intents(tick)
+            .any(|(o, i)| i.seats == Some(vehicle) && o != bot && self.bot_allies(bot, o))
+    }
+
+    /// How far off `bot` looks for an object to use: near by, or as far
+    /// as it sees for a seat an ally offers.
+    fn bot_object_reach(&self, bot: OwnerId, offered: bool) -> f32 {
+        if offered {
+            self.bot_sight_reach(&self.bots.brains[&bot].kind)
+        } else {
+            DISCOVER
+        }
+    }
+
     fn bot_claimed(&self, resource: Resource, except: OwnerId, tick: u64) -> bool {
         self.bots
             .claims
@@ -389,9 +409,10 @@ impl Session {
         let feet = Vec3::from(peer.player.state().feet);
         let world = self.vehicles.world.as_ref()?;
         let d = world.definition(&v.definition)?;
+        let offered = self.bot_offered(bot, v.id.0, tick);
         if v.destroyed
             || self.bot_claimed(resource, bot, tick)
-            || feet.distance(Vec3::from(v.transform.position)) > DISCOVER
+            || feet.distance(Vec3::from(v.transform.position)) > self.bot_object_reach(bot, offered)
             || self.bots.claims.cooling_down(bot, resource, tick)
         {
             return None;
@@ -404,7 +425,10 @@ impl Session {
                     || d.family != Family::Wheeled
                     || d.wheeled_flight.is_some()
                     || d.max_speed <= 0.0
+                    // A moving one is boarded once it stops: one its
+                    // driver offers stops for whoever claims a seat.
                     || Vec3::from(v.velocity).length() > 2.0
+                        && !offered
                         && self.bots.claims.owner_claim(bot, tick).is_none()
                     || !self.can_ride(bot, v.owner.0)
                     || !self
@@ -633,7 +657,8 @@ impl Session {
             visited += 1;
             let v = &self.bots.objects[(start + offset) % len];
             let at = Vec3::from(v.transform.position);
-            if v.destroyed || feet.distance(at) > DISCOVER {
+            let reach = self.bot_object_reach(bot, self.bot_offered(bot, v.id.0, tick));
+            if v.destroyed || feet.distance(at) > reach {
                 continue;
             }
             self.bots.interaction_budget -= 1;
@@ -1677,6 +1702,22 @@ impl Session {
                 stopping,
                 (nose + stopping + ALLY_ROOM, radius),
             );
+            // A chassis that runs people over is a blow on its way: where
+            // it is about to drive, and what it sweeps before it can stop,
+            // is its harm, for its side to keep out of as of any shot
+            // (`team`). Parked with somewhere to go, the way it would pull
+            // out is asked clear too: an ally standing there is told.
+            self.bots.brains.get_mut(&bot).unwrap().sweep = (d.runover_damage > 0.0
+                && (speed > STOPPED_SPEED || toward.is_some()))
+            .then(|| super::claims::Harmed {
+                way: super::claims::Space {
+                    from: at,
+                    to: at + travel * (nose + stopping + ALLY_ROOM),
+                    radius,
+                    spread: 0.0,
+                },
+                burst: None,
+            });
             // A drop ahead of the way it rolls, within its stop or at its
             // end (`bot_vehicle_edge`), is braked for in a straight line,
             // as the stop was measured: braking on full lock slides on

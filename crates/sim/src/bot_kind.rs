@@ -12,7 +12,7 @@ mod surprise;
 mod team;
 pub mod tuning;
 pub use surprise::{BotSurprise, FLAVOURS};
-pub use team::{BotTeam, TERMS};
+pub use team::{BotTeam, CALLOUTS, TERMS};
 
 pub const SCHEMA_VERSION: u32 = 1;
 /// Bot kinds one server knows, over every Add-On.

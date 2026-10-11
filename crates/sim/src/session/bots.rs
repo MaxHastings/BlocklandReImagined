@@ -323,6 +323,9 @@ pub(super) struct Bots {
     pub(super) think_nanos: u64,
     /// Seats left since the session began, by why ([`interactions::Leave`]).
     leaves: BTreeMap<&'static str, u64>,
+    /// Bots ignore allies' planned harm (no "get out of the way"), for
+    /// tests that measure what heeding it is worth.
+    deaf_to_allies: bool,
 }
 /// A bot that saw an enemy, or was hurt, tells its side where.
 struct Alert {
@@ -473,6 +476,9 @@ struct Brain {
     /// The hull it rides: the damage it last saw on it and the last hit
     /// it saw it take (`bot_seated_input` gets out before the next).
     hull: Option<(u64, f32, f32)>,
+    /// What the chassis it drives sweeps before it can stop, while that
+    /// runs people over: published as its harm (`team`), taken each tick.
+    sweep: Option<claims::Harmed>,
     /// Its chassis is braking to rest for a drop ahead (`bot_seated_input`).
     edge_stop: bool,
     /// The jet leg of its route it is flying, if any.
@@ -669,6 +675,7 @@ impl Brain {
             vehicle_headway: Default::default(),
             vehicle_since: None,
             hull: None,
+            sweep: None,
             edge_stop: false,
             jet_leg: None,
             footing: home,
@@ -1269,6 +1276,12 @@ impl Session {
     pub fn bot_seat_leaves(&self) -> &BTreeMap<&'static str, u64> {
         &self.bots.leaves
     }
+    /// Make bots ignore their allies' planned harm (`true`), to measure
+    /// what stepping out of it is worth.
+    #[doc(hidden)]
+    pub fn set_bots_deaf_to_allies(&mut self, deaf: bool) {
+        self.bots.deaf_to_allies = deaf;
+    }
     /// Make every step of `bot` fail (None: none), to test that one bot's
     /// failure leaves the others thinking.
     #[doc(hidden)]
@@ -1337,6 +1350,7 @@ impl Session {
             self.bots.claims.forget(bot);
             brain.vehicle_since = None;
             brain.hull = None;
+            brain.sweep = None;
             brain.vehicle_headway.clear();
             brain.fire_down = false;
             brain.objective_tool = false;
@@ -1972,6 +1986,7 @@ impl Session {
             let brain = self.bots.brains.get_mut(&bot).unwrap();
             brain.vehicle_since = None;
             brain.hull = None;
+            brain.sweep = None;
             brain.vehicle_headway.clear();
             brain.mount_anchor = None;
         }
@@ -2133,6 +2148,7 @@ impl Session {
         let Shot {
             crew_ready,
             attack_clear,
+            ally_in_way,
             harm,
             mounted_charging,
             charged_ready,
@@ -2524,17 +2540,25 @@ impl Session {
             gate,
             tick,
         );
-        // A choice the terms changed is called out (`team`).
-        let callout = (behaviour != brain.behaviour
-            && behaviour as usize != plain_before
-            && tick >= brain.team.next_callout)
+        // A choice the terms changed is called out, else a vehicle's seats
+        // newly offered, or a shot held for an ally in its way (`team`).
+        let offering = seats.is_some() && seats != brain.team.offered;
+        brain.team.offered = seats;
+        let callout = (tick >= brain.team.next_callout)
             .then(|| {
-                team::callout(
-                    &kind.team,
-                    &brain.team.terms,
-                    plain_before,
-                    behaviour as usize,
-                )
+                (behaviour != brain.behaviour && behaviour as usize != plain_before)
+                    .then(|| {
+                        team::callout(
+                            &kind.team,
+                            &brain.team.terms,
+                            plain_before,
+                            behaviour as usize,
+                        )
+                    })
+                    .flatten()
+                    .or_else(|| {
+                        team::call(&kind.team, offering, ally_in_way && sight.target.is_some())
+                    })
             })
             .flatten()
             .map(str::to_owned);
@@ -2542,6 +2566,8 @@ impl Session {
             brain.behaviour_since = tick;
         }
         brain.behaviour = behaviour;
+        // A driver's harm is its shot's, else what its chassis sweeps.
+        let harm = harm.or(brain.sweep.take());
         let chosen = choices[behaviour as usize];
         self.bots.claims.publish(
             bot,
