@@ -49,9 +49,13 @@ Setup: BEFORE `d557cd5` (origin/main `b650033` plus only the probe
 switches) vs AFTER `59aa99e`, real "Crazy Collage Madness" save in the
 Bedroom (about 250k bricks), 1920x1080, MSAA 4, `BRI_FRAMES=400`, two corner
 cameras at 90% room height (roomA eye (-40,405,200), roomB eye (180,405,200),
-both looking at (95,330,98)), branches alternated per cell. Sheets are in
-`docs/progress/assets/2026-10-11-shading/` (BEFORE left, AFTER right) and
-the full table in `real-summary.txt` there.
+both looking at (95,330,98)), branches alternated per cell. The labelled
+sheets (BEFORE left, AFTER right) and the full table stayed on Maxwell's PC:
+`C:\Users\Maxwell\Desktop\Games\BlocklandReImagined-worktrees\shading-after\probe-out\sheets\roomA-dynamic-medium-off.png`
+(plus `roomB-dynamic-medium-off.png`, `roomA-dynamic-best-off.png`) and
+`...\shading-after\probe-out\real-summary.txt`. The `shading-before`
+worktree beside it holds the baseline build and its `target/` can be deleted
+with `python tools/clean_targets.py --apply --keep shading-after`.
 
 Picture (Dynamic, Medium shadows, roomA): mean luminance of the far half of
 the frame 100.2 before, 76.0 after; the near half 100.5 to 90.8. The far wall,
