@@ -143,7 +143,7 @@ fn p90_fires_reloads_preserves_magazines_and_resets_on_respawn() -> Result<()> {
     fire(&mut game, host, &mut seq, 20)?;
     let left = value(&game, host, "rounds").as_i64().unwrap();
     assert!(
-        left < 50 && left >= 46,
+        (46..50).contains(&left),
         "rounds after 20 held ticks: {left}"
     );
     assert!(
@@ -257,8 +257,10 @@ fn bot_fires_package_p90_and_reloads_through_ordinary_controls() -> Result<()> {
     game.set_bot_kinds(vec![kind])?;
     game.set_spawn_points(vec![Vec3::new(0.0, 0.05, -10.0)])?;
     let host = game.join("Target".into(), Vec3::new(0.0, 0.05, -10.0), true)?;
-    let mut settings = bri_minigames::Settings::default();
-    settings.loadout = [Some(ITEM.into()), None, None, None, None];
+    let settings = bri_minigames::Settings {
+        loadout: [Some(ITEM.into()), None, None, None, None],
+        ..Default::default()
+    };
     game.command(
         host,
         1,
