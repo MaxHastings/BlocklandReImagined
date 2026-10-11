@@ -155,6 +155,43 @@ impl Session {
         Pickup::Take
     }
 
+    /// `on_collected(player, item, info)` once `owner` has really taken
+    /// `item`: from world drop `drop` or spawn brick `spawner`. The attempt
+    /// was `on_pickup`; this is the confirmed result, after the item left
+    /// the world, so it runs once per item taken.
+    pub(in crate::session) fn package_collected(
+        &mut self,
+        owner: OwnerId,
+        item: &str,
+        drop: Option<u64>,
+        spawner: Option<BrickId>,
+    ) {
+        let hooks = self.hooked(|b| b.on_collected, item);
+        if hooks.is_empty() {
+            return;
+        }
+        let id = |v: Option<u64>| v.map_or(Dynamic::UNIT, |v| Dynamic::from_int(v as i64));
+        let mut info = bri_package_runtime::rhai::Map::new();
+        info.insert("drop".into(), id(drop));
+        info.insert("spawner".into(), id(spawner));
+        for package in hooks {
+            let _ = self.run_package(
+                &package,
+                "on_collected",
+                vec![
+                    Dynamic::from_int(owner as i64),
+                    item.into(),
+                    Dynamic::from_map(info.clone()),
+                ],
+                Budget::Command,
+                Some(owner),
+                None,
+                None,
+            );
+            self.charge_work(&package);
+        }
+    }
+
     /// `on_drop(player, item, slot)` as `owner` drops `item` from `slot` as
     /// world drop `drop`; what the hook returns is kept with the drop.
     pub(in crate::session) fn package_drop(

@@ -1475,10 +1475,32 @@ impl Session {
                 return Err(d);
             }
         }
+        // Operations the script marked `require` are checked before the
+        // call takes effect: a shop that charges for an item it cannot hand
+        // out charges nobody. What a check cannot see is caught below.
+        let tick = self.simulation.state().tick;
+        let cx = perform::OpCall {
+            package,
+            caller,
+            tick,
+        };
+        let required = |index: usize| outcome.required.contains(&index);
+        for (index, op) in outcome.ops.iter().enumerate() {
+            if required(index)
+                && let Err(error) = perform::check(self, op, cx)
+            {
+                let d = required_failed(package, function, op, &error);
+                note(self.packages.as_mut().expect("installed"), d.clone());
+                return Err(d);
+            }
+        }
+        let host = self.packages.as_mut().expect("installed");
+        let bytes_before = host.state_bytes;
         host.state_bytes = total;
         let namespace = host.store.namespace_mut(package);
-        if *namespace != outcome.state {
-            *namespace = outcome.state;
+        let state_changed = *namespace != outcome.state;
+        if state_changed {
+            *namespace = outcome.state.clone();
             self.package_revision += 1;
         }
         for (id, vars) in outcome.entity_vars {
@@ -1487,22 +1509,52 @@ impl Session {
             }
         }
         let returned = outcome.returned;
-        for op in outcome.ops {
-            let tick = self.simulation.state().tick;
-            let cx = perform::OpCall {
-                package,
-                caller,
-                tick,
-            };
+        let mut refused = None;
+        for (index, op) in outcome.ops.into_iter().enumerate() {
+            let name = bri_package_runtime::ops::op_name(&op);
             if let Err(error) = perform::perform(self, op, cx) {
                 let host = self.packages.as_mut().expect("installed");
-                note(
-                    host,
-                    Diagnostic::warning("op.failed", format!("{error:#}")).at(package.to_string()),
-                );
+                if required(index) && refused.is_none() {
+                    refused = Some((name, format!("{error:#}")));
+                } else {
+                    note(
+                        host,
+                        Diagnostic::warning("op.failed", format!("{error:#}"))
+                            .at(package.to_string()),
+                    );
+                }
             }
         }
-        Ok(returned)
+        let Some((name, error)) = refused else {
+            return Ok(returned);
+        };
+        // A required operation failed where its check could not see it
+        // coming: the state the call wrote goes back to what it was, as
+        // long as nothing else wrote it meanwhile (an output the operations
+        // fired may have run this package again).
+        let host = self.packages.as_mut().expect("installed");
+        let namespace = host.store.namespace_mut(package);
+        let rolled_back = state_changed && *namespace == outcome.state;
+        if rolled_back {
+            *namespace = input;
+            host.state_bytes = bytes_before;
+            self.package_revision += 1;
+        }
+        let d = Diagnostic::error(
+            "op.required",
+            format!(
+                "{function}: required {name} failed ({error}); {}",
+                if rolled_back || !state_changed {
+                    "the state it wrote was not kept"
+                } else {
+                    "its state was written again meanwhile and is kept"
+                }
+            ),
+        )
+        .at(package.to_string())
+        .hint("check player(p).tools or the brick before charging, or require earlier operations too");
+        note(self.packages.as_mut().expect("installed"), d.clone());
+        Err(d)
     }
     /// `%obj.damage` from a script, with the same scaling and hooks as a
     /// weapon's hit of that damage type.
@@ -1845,11 +1897,11 @@ impl Session {
     /// A blast breaks it as `killBrick` does; `remove_brick` deletes it
     /// silently, as `%brick.delete()` did, so a rule that splits or merges
     /// bricks (Trench Digging's dirt) swaps them without breaking any.
-    fn package_remove_brick(
-        &mut self,
-        package: &str,
+    /// Whether `remove_brick` would be allowed: the brick is there, the
+    /// caller may edit its build and nothing marks it indestructible.
+    pub(super) fn package_may_remove_brick(
+        &self,
         brick: BrickId,
-        blast: Option<super::debris::BrickBlast>,
         caller: Option<OwnerId>,
     ) -> Result<()> {
         let b = self
@@ -1877,6 +1929,16 @@ impl Session {
                 world.def.materials[voxel.material].name
             );
         }
+        Ok(())
+    }
+    fn package_remove_brick(
+        &mut self,
+        package: &str,
+        brick: BrickId,
+        blast: Option<super::debris::BrickBlast>,
+        caller: Option<OwnerId>,
+    ) -> Result<()> {
+        self.package_may_remove_brick(brick, caller)?;
         // Destruction draws on the package's share, so one call cannot
         // level a world (W1).
         let tick = self.simulation.state().tick;
@@ -3725,4 +3787,23 @@ pub struct PackageStats {
     pub voxels: usize,
     pub removed_voxels: usize,
     pub diagnostics: usize,
+}
+
+/// The diagnostic for a `require`d operation the engine will not carry out
+/// before the call takes effect: nothing of the call is kept.
+fn required_failed(
+    package: &str,
+    function: &str,
+    op: &bri_package_runtime::Op,
+    error: &anyhow::Error,
+) -> Diagnostic {
+    Diagnostic::error(
+        "op.required",
+        format!(
+            "{function}: required {} cannot be done ({error:#}); nothing of this call was kept",
+            bri_package_runtime::ops::op_name(op)
+        ),
+    )
+    .at(package.to_string())
+    .hint("check player(p).tools or the brick before charging, or tell the player why not")
 }

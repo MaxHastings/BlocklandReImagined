@@ -52,8 +52,19 @@ pub(in crate::session) trait Perform: Sized {
     fn entity(&self) -> Option<u64> {
         None
     }
+    /// Whether it can be carried out now, for an operation the script
+    /// marked `require`: a refusal here keeps the whole call from taking
+    /// effect (no state kept, nothing performed), so a script that charges
+    /// for an item it then hands out charges nobody it cannot serve. Only
+    /// what the engine can tell without changing anything; the default
+    /// answers yes and leaves the decision to `perform`.
+    fn check(&self, session: &Session, cx: OpCall<'_>) -> Result<()> {
+        let _ = (session, cx);
+        Ok(())
+    }
     /// Carry it out. An error is reported as `op.failed` and does not undo
-    /// the call's other operations.
+    /// the call's other operations, unless the script marked the operation
+    /// `require`: then the call's state changes are dropped as well.
     fn perform(self, session: &mut Session, cx: OpCall<'_>) -> Result<()>;
 }
 
@@ -63,6 +74,13 @@ macro_rules! dispatch {
         pub(super) fn entity(op: &Op) -> Option<u64> {
             match op {
                 $(Op::$op(op) => Perform::entity(op),)*
+            }
+        }
+        /// Whether an authorized operation can be carried out now
+        /// ([`Perform::check`]).
+        pub(super) fn check(session: &Session, op: &Op, cx: OpCall<'_>) -> Result<()> {
+            match op {
+                $(Op::$op(op) => Perform::check(op, session, cx),)*
             }
         }
         /// Carry out an authorized operation ([`Perform::perform`]).

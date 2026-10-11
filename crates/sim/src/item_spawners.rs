@@ -6,6 +6,9 @@ use glam::{Quat, Vec3};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 pub const MAX_STATIC_ITEMS: usize = 4096;
+/// An `available_at` no tick reaches: the item stays gone until a reset or
+/// an event restores it ([`bri_world::ItemRestore::Reset`], `hideItem`).
+pub const NEVER: u64 = u64::MAX;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -213,14 +216,26 @@ impl ItemSpawners {
         }
     }
     /// `Item::Respawn`: the picked-up static item fades out, cannot be picked
-    /// up, and fades back in after the brick's respawn time.
-    pub fn picked_up(&mut self, brick: BrickId, tick: u64, respawn_ticks: u64) -> Result<()> {
+    /// up, and fades back in at `available_again` (the brick's respawn time),
+    /// or never on its own when that is `None` (a reset or `restoreItem`
+    /// brings it back). Refused when the item is already gone, so one take
+    /// is one pickup however many players touch it in the same tick.
+    pub fn picked_up(&mut self, brick: BrickId, tick: u64, available_again: Option<u64>) -> Result<()> {
         let item = self.items.get_mut(&brick).context("Missing static item")?;
         ensure!(tick >= item.available_at, "Static item has not respawned");
-        item.available_at = tick
-            .checked_add(respawn_ticks)
-            .context("Item respawn clock overflow")?;
+        item.available_at = available_again.unwrap_or(NEVER);
         Ok(())
+    }
+    /// `hideItem`: take the item away until a reset or `restoreItem` brings
+    /// it back. Nothing picks it up meanwhile; nobody is credited.
+    pub fn hide(&mut self, brick: BrickId) {
+        if let Some(item) = self.items.get_mut(&brick) {
+            item.available_at = NEVER;
+        }
+    }
+    /// Whether the brick's item is there to be taken this tick.
+    pub fn available(&self, brick: BrickId, tick: u64) -> bool {
+        self.items.get(&brick).is_some_and(|i| tick >= i.available_at)
     }
 }
 

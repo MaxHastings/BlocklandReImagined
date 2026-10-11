@@ -5,7 +5,7 @@ use bri_content::{brick::Catalog, brick_materials::Bundle, effects::Library};
 use bri_net::protocol::PublicWorld;
 use bri_sim::session::{Command, InspectMode, Reply, ToolAction, ToolCatalog, WrenchProperties};
 use bri_ui::{api::*, models::events::NAMED_BRICK, pack::Pack, schema::ParamSpec};
-use bri_world::{Brick, ContentRef, EventRow as Row, EventTarget, EventValue, ItemSpawn};
+use bri_world::{Brick, ContentRef, EventRow as Row, EventTarget, EventValue, ItemRestore, ItemSpawn};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -564,6 +564,13 @@ impl ToolUi {
                 F::ItemPos => fill.item_position = Some(data.item_pos),
                 F::ItemDir => fill.item_direction = Some(data.item_dir),
                 F::ItemRespawn => fill.item_respawn_ms = Some(data.item_respawn_ms),
+                F::ItemRestore => {
+                    fill.item_restore = Some(if data.item_restore_on_reset {
+                        ItemRestore::Reset
+                    } else {
+                        ItemRestore::Timer
+                    })
+                }
                 F::RayCasting => fill.raycast = Some(data.raycasting),
                 F::Colliding => fill.colliding = Some(data.colliding),
                 F::Rendering => fill.visible = Some(data.rendering),
@@ -647,6 +654,11 @@ impl ToolUi {
                     position: data.item_pos,
                     direction: data.item_dir,
                     respawn_ms: data.item_respawn_ms,
+                    restore: if data.item_restore_on_reset {
+                        ItemRestore::Reset
+                    } else {
+                        ItemRestore::Timer
+                    },
                 };
                 item_spawn.validate()?;
                 ensure!(data.emitter_dir <= 5, "Unknown emitter direction");
@@ -780,6 +792,7 @@ fn wrench_data(brick: &Brick) -> Result<WrenchData> {
         item_pos: brick.item_spawn.position,
         item_dir: brick.item_spawn.direction,
         item_respawn_ms: brick.item_spawn.respawn_ms,
+        item_restore_on_reset: brick.item_spawn.restore == ItemRestore::Reset,
         raycasting: brick.raycast,
         colliding: brick.colliding,
         rendering: brick.visible,
@@ -1477,6 +1490,7 @@ mod tests {
             position: 4,
             direction: 5,
             respawn_ms: 17000,
+            restore: Default::default(),
         };
         let updates = open(&mut ui, &b, InspectMode::Wrench);
         let UiUpdate::OpenWrench { data, .. } = &updates[0] else {

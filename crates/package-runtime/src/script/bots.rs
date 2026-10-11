@@ -29,7 +29,7 @@ fn kind_map(k: &BotKindView) -> Dynamic {
     ])
 }
 
-fn add_bot(game: Dynamic, options: Map) -> Fallible<()> {
+fn add_bot(game: Dynamic, options: Map) -> Fallible<INT> {
     for key in options.keys() {
         if !["kind", "team", "name"].contains(&key.as_str()) {
             return fail(format!(

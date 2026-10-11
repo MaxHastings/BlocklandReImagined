@@ -3,6 +3,10 @@
 use super::*;
 
 impl Perform for ops::RemoveBrick {
+    /// Whether the brick is there and the caller may remove it.
+    fn check(&self, session: &Session, cx: OpCall<'_>) -> Result<()> {
+        session.package_may_remove_brick(self.brick, cx.caller)
+    }
     fn perform(self, session: &mut Session, cx: OpCall<'_>) -> Result<()> {
         let OpCall {
             package, caller, ..

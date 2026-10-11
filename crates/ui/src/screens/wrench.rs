@@ -56,6 +56,7 @@ fn suffix(field: WrenchField) -> &'static str {
         ItemPos => "ItemPos",
         ItemDir => "ItemDir",
         ItemRespawn => "ItemRespawnTime",
+        ItemRestore => "ItemRestore",
         RayCasting => "RayCasting",
         Colliding => "Collision",
         Rendering => "Rendering",
@@ -174,6 +175,58 @@ fn add_team_row(window: &mut Control, layout: &str, prefix: &str) {
     window.children.push(team);
 }
 
+/// A "Respawn only on reset" tick box under the recovered item respawn
+/// time: the brick's item then stays gone until a mini-game reset or a
+/// `restoreItem` event brings it back. Everything below moves down a row.
+fn add_item_restore_row(window: &mut Control, prefix: &str) {
+    let node = format!("{prefix}_ItemRestore");
+    let respawn = format!("{prefix}_ItemRespawnTime");
+    let Some(respawn) = window
+        .children
+        .iter()
+        .find(|c| c.name.as_deref() == Some(respawn.as_str()))
+        .cloned()
+    else {
+        return;
+    };
+    if window
+        .children
+        .iter()
+        .any(|c| c.name.as_deref() == Some(node.as_str()))
+    {
+        return;
+    }
+    let top = respawn.position[1] + respawn.extent[1];
+    for control in &mut window.children {
+        if control.position[1] >= top {
+            control.position[1] += TEAM_ROW;
+        } else if control
+            .name
+            .as_deref()
+            .is_some_and(|name| name.ends_with("Blocker"))
+            && control.position[1] + control.extent[1] > top
+        {
+            control.extent[1] += TEAM_ROW;
+        }
+    }
+    window.extent[1] += TEAM_ROW;
+    let mut tick = named(
+        ctrl(
+            "GuiCheckBoxCtrl",
+            "GuiCheckBoxProfile",
+            Rect::new(
+                14,
+                top + (TEAM_ROW - 22) / 2,
+                (window.extent[0] - 28).max(120),
+                22,
+            ),
+        ),
+        node,
+    );
+    tick.text = Some("Respawn only on mini-game reset".into());
+    window.children.push(tick);
+}
+
 /// The teams of the mini-game `builder` plays in (`None`: the local
 /// player's).
 fn builder_teams(core: &Core, builder: Option<u64>) -> Vec<crate::api::MiniGameTeam> {
@@ -200,6 +253,7 @@ fn region_view(core: &Core, layout: &str, prefix: &str, expanded: bool) -> View 
         .find(|c| c.name.as_deref() == Some(&format!("{prefix}_Window")))
     {
         add_team_row(window, layout, prefix);
+        add_item_restore_row(window, prefix);
         let old_height = window.extent[1];
         // Share an existing action row when its neighboring space is free.
         // Imported layouts with a crowded footer still receive a separate row.
@@ -446,6 +500,7 @@ impl Wrench {
                 ItemRespawn => self
                     .view
                     .set_text(n, (data.item_respawn_ms / 1000).to_string()),
+                ItemRestore => self.view.set_bool(n, data.item_restore_on_reset),
                 RayCasting => self.view.set_bool(n, data.raycasting),
                 Colliding => self.view.set_bool(n, data.colliding),
                 Rendering => self.view.set_bool(n, data.rendering),
@@ -615,6 +670,7 @@ impl Wrench {
                 Item => data.item = resource(),
                 Sound => data.sound = resource(),
                 Vehicle => data.vehicle = resource(),
+                ItemRestore => data.item_restore_on_reset = self.view.bool_value(n),
                 RayCasting => data.raycasting = self.view.bool_value(n),
                 Colliding => data.colliding = self.view.bool_value(n),
                 Rendering => data.rendering = self.view.bool_value(n),

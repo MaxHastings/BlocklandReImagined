@@ -1432,6 +1432,7 @@ fn a_copy_carries_its_bricks_settings_and_turns_them_with_it() {
                 position: 2,
                 direction: 2,
                 respawn_ms: 4000,
+                restore: Default::default(),
             },
             raycast: true,
             colliding: true,

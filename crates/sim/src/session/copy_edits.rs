@@ -74,6 +74,8 @@ pub struct WrenchFill {
     #[serde(default)]
     pub item_respawn_ms: Option<u32>,
     #[serde(default)]
+    pub item_restore: Option<bri_world::ItemRestore>,
+    #[serde(default)]
     pub raycast: Option<bool>,
     #[serde(default)]
     pub colliding: Option<bool>,
@@ -140,6 +142,9 @@ impl WrenchFill {
         }
         if let Some(direction) = self.item_direction {
             next.item_spawn.direction = direction;
+        }
+        if let Some(restore) = self.item_restore {
+            next.item_spawn.restore = restore;
         }
         if let Some(ms) = self.item_respawn_ms {
             next.item_spawn.respawn_ms = ms;

@@ -260,6 +260,11 @@ pub struct WrenchData {
     /// 2..=5 North East South West.
     pub item_dir: u8,
     pub item_respawn_ms: u32,
+    /// The item stays gone until a mini-game reset or an event restores it,
+    /// instead of respawning after `item_respawn_ms`
+    /// (`bri_world::ItemRestore::Reset`).
+    #[serde(default)]
+    pub item_restore_on_reset: bool,
     pub raycasting: bool,
     pub colliding: bool,
     pub rendering: bool,

@@ -222,6 +222,12 @@ pub enum RuleOp {
     ResetObject,
     RegionSize(glam::Vec3),
     Explain,
+    /// Brick `restoreItem`: bring this brick's item back now, however it
+    /// was taken or hidden.
+    RestoreItem,
+    /// Brick `hideItem`: take this brick's item away until a reset or
+    /// `restoreItem` brings it back; nobody is credited with it.
+    HideItem,
 }
 
 /// One catalog supplies runtime, editor and documentation, including Add-On
@@ -236,6 +242,27 @@ pub fn workshop_catalog(catalog: &Catalog) -> Result<Catalog> {
         ("Instigator", "Player"),
         ("Object", "Vehicle"),
     ];
+    // A player took the item this brick spawns: the confirmed result, after
+    // the item is gone from the brick, never a touch that found no room.
+    // v20 has no such input; a catalog that declares one keeps its own.
+    if out.input("onItemPickup").is_none() {
+        out.inputs.push(InputDef {
+            id: "core:fact/onItemPickup".into(),
+            class_name: "fxDTSBrick".into(),
+            name: "onItemPickup".into(),
+            targets: [
+                ("Self", "fxDTSBrick"),
+                ("Player", "Player"),
+                ("Client", "GameConnection"),
+                ("MiniGame", "MiniGame"),
+            ]
+            .iter()
+            .map(|(a, b)| (a.to_string(), b.to_string()))
+            .collect(),
+            source: "core:rules".into(),
+            source_line: 0,
+        });
+    }
     for name in [
         "onRegionEnter",
         "onRegionLeave",
@@ -326,6 +353,8 @@ pub fn workshop_catalog(catalog: &Catalog) -> Result<Catalog> {
         ],
     );
     add("fxDTSBrick", "explainRules", vec![]);
+    add("fxDTSBrick", "restoreItem", vec![]);
+    add("fxDTSBrick", "hideItem", vec![]);
     for class in ["Player", "GameConnection"] {
         add(class, "addPlayerScore", vec![number()]);
         add(class, "addTeamScore", vec![number()]);
@@ -410,6 +439,8 @@ pub(crate) fn compile(output: &OutputDef, p: &[Value]) -> Result<Action> {
             RuleOp::RegionSize(size)
         }
         "explainRules" => RuleOp::Explain,
+        "restoreItem" => RuleOp::RestoreItem,
+        "hideItem" => RuleOp::HideItem,
         _ => anyhow::bail!("Unknown core rule action"),
     };
     Ok(Action::Intent(Intent::Rule(op)))
@@ -439,6 +470,8 @@ pub fn action_hint(name: &str) -> &'static str {
         "explainRules" => {
             "Start tracing this brick; repeat to see the latest conditions and actions."
         }
+        "restoreItem" => "Bring this brick's item back now, whether it was picked up or hidden.",
+        "hideItem" => "Take this brick's item away until restoreItem or a mini-game reset brings it back.",
         _ => "",
     }
 }

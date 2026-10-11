@@ -51,6 +51,29 @@ fn cmd_facts(p) {
 }
 fn cmd_fire(p) { set("fired", get("fired") + 1); }
 fn cmd_mode(p) { set("mode", get("mode") + 1); }
+fn on_collected(p, item, info) {
+    set("collected", get("collected") + 1);
+    set("collected_from", if info.drop != () { "drop" } else { "spawner" });
+}
+// A shop: the charge is kept only if the item really reaches the player.
+fn cmd_buy(p, item) {
+    add_player(p, "bits", -5);
+    require(give_item(p, item, false));
+    set("sales", get("sales") + 1);
+}
+// Buying back: paid only if there was an item to take.
+fn cmd_sell(p, item) {
+    add_player(p, "bits", 5);
+    require(take_item(p, item));
+}
+fn cmd_fill(p) {
+    for item in ["kit:weapon/f1", "kit:weapon/f2", "kit:weapon/f3", "kit:weapon/f4",
+                 "kit:weapon/f5", "kit:weapon/f6", "kit:weapon/f7", "kit:weapon/f8"] {
+        give_item(p, item, false);
+    }
+}
+fn cmd_bits(p) { set("bits", get_player(p, "bits")); }
+fn cmd_bad_require(p) { require(99); }
 "#;
 
 fn behaviour() -> Value {
@@ -61,6 +84,7 @@ fn behaviour() -> Value {
         "script": "main.rhai",
         "on_pickup": true,
         "on_drop": true,
+        "on_collected": true,
         "on_projectile_hit": true,
         "commands": [
             command("shoot", &[]),
@@ -69,15 +93,25 @@ fn behaviour() -> Value {
             command("take", &["string"]),
             command("give", &["string"]),
             command("facts", &[]),
+            command("buy", &["string"]),
+            command("sell", &["string"]),
+            command("fill", &[]),
+            command("bits", &[]),
+            command("bad_require", &[]),
             { "name": "fire", "tool_only": true },
             { "name": "mode", "tool_only": true }
         ],
-        "state": { "global": {
-            "touches": counter, "rounds": counter, "mag": counter,
-            "tools": counter, "gun_slot": counter, "muzzle": { "default": 0.0, "visible": "everyone" },
-            "fired": counter, "mode": counter,
-            "hit": { "default": "", "visible": "everyone" }
-        } }
+        "state": {
+            "player": { "bits": { "default": 10, "visible": "everyone" } },
+            "global": {
+                "touches": counter, "rounds": counter, "mag": counter,
+                "tools": counter, "gun_slot": counter, "muzzle": { "default": 0.0, "visible": "everyone" },
+                "fired": counter, "mode": counter, "collected": counter, "sales": counter,
+                "bits": counter,
+                "collected_from": { "default": "", "visible": "everyone" },
+                "hit": { "default": "", "visible": "everyone" }
+            }
+        }
     })
 }
 
@@ -90,7 +124,15 @@ fn weapons() -> bri_weapons::Pack {
         "items": {
             "kit:weapon/gun": { "ui_name": "Kit Gun", "image": "kit:image/gun" },
             "kit:weapon/ammo": { "ui_name": "Kit Ammo" },
-            "kit:weapon/mine": { "ui_name": "Kit Mine" }
+            "kit:weapon/mine": { "ui_name": "Kit Mine" },
+            "kit:weapon/f1": { "ui_name": "Filler 1" },
+            "kit:weapon/f2": { "ui_name": "Filler 2" },
+            "kit:weapon/f3": { "ui_name": "Filler 3" },
+            "kit:weapon/f4": { "ui_name": "Filler 4" },
+            "kit:weapon/f5": { "ui_name": "Filler 5" },
+            "kit:weapon/f6": { "ui_name": "Filler 6" },
+            "kit:weapon/f7": { "ui_name": "Filler 7" },
+            "kit:weapon/f8": { "ui_name": "Filler 8" }
         },
         "images": {
             "kit:image/gun": {
@@ -371,4 +413,97 @@ fn an_item_a_rule_drops_is_one_every_client_accepts() {
     view.validate(&g.s.names()).unwrap();
     g.steps(4);
     g.s.weapon_view().validate(&g.s.names()).unwrap();
+}
+
+/// `on_pickup` is the attempt and `on_collected` the result: an ammo box
+/// used up where it lies and a dropped gun taken are collected once each;
+/// a mine left alone, and a touch with no room, are not.
+#[test]
+fn on_collected_runs_once_per_item_really_taken() {
+    let mut g = Game::new();
+    let a = g.join(Vec3::new(0.0, 0.05, 0.0));
+    g.steps(2);
+    g.run(a, "toss", toss("kit:weapon/ammo", 0.0, 0.0)).unwrap();
+    g.run(a, "toss", toss("kit:weapon/mine", 0.0, 0.0)).unwrap();
+    g.steps(4);
+    assert_eq!(g.value("collected"), json!(1), "the ammo box, used up");
+    assert_eq!(g.value("collected_from"), json!("drop"));
+    g.steps(4);
+    assert_eq!(g.value("collected"), json!(1), "the mine is left, not collected");
+    // A full set of tools: the gun lying there is touched, not taken.
+    g.run(a, "fill", vec![]).unwrap();
+    g.steps(1);
+    assert!(g.s.tool_inventories()[&a].slots.iter().all(Option::is_some));
+    g.run(a, "toss", toss("kit:weapon/gun", 0.0, 0.0)).unwrap();
+    g.steps(4);
+    assert!(!g.holds(a, "kit:weapon/gun"));
+    assert_eq!(g.value("collected"), json!(1));
+    // Someone with room takes a gun lying elsewhere: collected once more.
+    g.run(a, "toss", toss("kit:weapon/gun", 4.0, 4.0)).unwrap();
+    let b = g.join(Vec3::new(4.0, 0.05, 4.0));
+    g.steps(4);
+    assert!(g.holds(b, "kit:weapon/gun"));
+    assert_eq!(g.value("collected"), json!(2));
+    // `fill` gave more than fits: those warnings are the only ones.
+    assert!(
+        g.diagnostics()
+            .iter()
+            .all(|d| d == "op.failed: Inventory full"),
+        "{:?}",
+        g.diagnostics()
+    );
+}
+
+/// A shop charges only for what it hands over: with no room for the item
+/// the `require`d give is refused before anything is kept, so the player
+/// keeps their bits and the sale is not counted; with room both happen.
+#[test]
+fn a_required_operation_that_cannot_be_done_keeps_the_call_from_taking_effect() {
+    let mut g = Game::new();
+    let a = g.join(Vec3::new(0.0, 0.05, 0.0));
+    g.steps(2);
+    g.run(a, "fill", vec![]).unwrap();
+    g.steps(1);
+    // The refusal is the command's reply, so the player hears why.
+    let refusal = g.run(a, "buy", vec![text("kit:weapon/gun")]).unwrap_err();
+    assert!(refusal.to_string().contains("tools are full"), "{refusal:#}");
+    g.steps(1);
+    g.run(a, "bits", vec![]).unwrap();
+    assert_eq!(g.value("bits"), json!(10), "not charged for a gun never received");
+    assert_eq!(g.value("sales"), json!(0));
+    assert!(!g.holds(a, "kit:weapon/gun"));
+    let refused: Vec<String> = g
+        .diagnostics()
+        .into_iter()
+        .filter(|d| d.starts_with("op.required"))
+        .collect();
+    assert_eq!(refused.len(), 1, "{:?}", g.diagnostics());
+    assert!(refused[0].contains("give_item") && refused[0].contains("tools are full"));
+    // Selling what you do not have pays nothing.
+    assert!(g.run(a, "sell", vec![text("kit:weapon/gun")]).is_err());
+    g.run(a, "bits", vec![]).unwrap();
+    assert_eq!(g.value("bits"), json!(10));
+    // With room, the purchase goes through and is counted.
+    let b = g.join(Vec3::new(5.0, 0.05, 0.0));
+    g.steps(2);
+    g.run(b, "buy", vec![text("kit:weapon/gun")]).unwrap();
+    g.steps(1);
+    g.run(b, "bits", vec![]).unwrap();
+    assert_eq!(g.value("bits"), json!(5));
+    assert_eq!(g.value("sales"), json!(1));
+    assert!(g.holds(b, "kit:weapon/gun"));
+    // Selling it back pays, and takes it.
+    g.run(b, "sell", vec![text("kit:weapon/gun")]).unwrap();
+    g.steps(1);
+    g.run(b, "bits", vec![]).unwrap();
+    assert_eq!(g.value("bits"), json!(10));
+    assert!(!g.holds(b, "kit:weapon/gun"));
+    // `require` of something no operation returned is a script error.
+    let error = g.run(b, "bad_require", vec![]).unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("require takes what an operation function returned"),
+        "{error:#}"
+    );
 }

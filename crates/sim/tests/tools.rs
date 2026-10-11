@@ -816,10 +816,12 @@ fn wrench_item_catalog_ranges_and_clear_are_authoritative_and_atomic(f: &Fixture
         },
         bri_world::ItemSpawn {
             respawn_ms: 0,
+            restore: Default::default(),
             ..Default::default()
         },
         bri_world::ItemSpawn {
             respawn_ms: 300001,
+            restore: Default::default(),
             ..Default::default()
         },
     ]
@@ -848,6 +850,7 @@ fn wrench_item_catalog_ranges_and_clear_are_authoritative_and_atomic(f: &Fixture
         position: 5,
         direction: 3,
         respawn_ms: 12000,
+        restore: Default::default(),
     };
     tool(
         &mut s,
@@ -896,6 +899,7 @@ fn a_wrench_send_replaces_a_faded_item_with_a_fresh_one(f: &Fixture) {
         position: 2,
         direction: 2,
         respawn_ms: 5000,
+        restore: Default::default(),
     };
     let set = |s: &mut Session, seq| {
         tool(

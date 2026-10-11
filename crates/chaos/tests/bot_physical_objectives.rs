@@ -422,6 +422,7 @@ impl Game {
             supply.item_spawn = ItemSpawn {
                 item: Some(ContentRef::Resolved(bri_weapons::testing::GUN_ITEM.into())),
                 respawn_ms: 60_000,
+                restore: Default::default(),
                 ..Default::default()
             };
             world.bricks.insert(4 + bodies as u64, supply);

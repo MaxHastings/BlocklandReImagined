@@ -19,6 +19,9 @@ pub enum WrenchField {
     ItemPos,
     ItemDir,
     ItemRespawn,
+    /// "Respawn only on reset": the item comes back on a mini-game reset
+    /// or an event, not on a timer.
+    ItemRestore,
     RayCasting,
     Colliding,
     Rendering,
@@ -41,6 +44,7 @@ impl WrenchField {
                 ItemPos,
                 ItemDir,
                 ItemRespawn,
+                ItemRestore,
                 RayCasting,
                 Colliding,
                 Rendering,
@@ -171,6 +175,9 @@ impl WrenchState {
         }
         if !l(ItemRespawn) {
             cur.item_respawn_ms = data.item_respawn_ms;
+        }
+        if !l(ItemRestore) {
+            cur.item_restore_on_reset = data.item_restore_on_reset;
         }
         if !l(RayCasting) {
             cur.raycasting = data.raycasting;

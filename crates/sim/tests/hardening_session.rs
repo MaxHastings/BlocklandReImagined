@@ -601,6 +601,7 @@ fn wrench_asset_assignments_must_come_from_the_host_catalog() {
         WrenchProperties {
             item_spawn: bri_world::ItemSpawn {
                 respawn_ms: 0,
+                restore: Default::default(),
                 ..Default::default()
             },
             ..base.clone()
@@ -1476,6 +1477,7 @@ fn minigame_management_requires_ownership_and_valid_settings() {
             1,
             Settings {
                 respawn_ms: 0,
+                restore: Default::default(),
                 ..Settings::default()
             },
         ),
