@@ -2426,7 +2426,17 @@ impl Ui {
                 }
                 if self.cursor_visible() {
                     let t = self.mouse_target();
-                    if self.with_target(t, |s, _| s.view_mut().wheel(steps as i32)) {
+                    // Ctrl alone pages; Shift, Alt or Cmd leave the plain wheel.
+                    let page =
+                        self.mods.ctrl && !(self.mods.shift || self.mods.alt || self.mods.cmd);
+                    let taken = self.with_target(t, |s, _| {
+                        if page {
+                            s.view_mut().wheel_page(steps as i32)
+                        } else {
+                            s.view_mut().wheel(steps as i32)
+                        }
+                    });
+                    if taken {
                         return;
                     }
                 }
@@ -2556,6 +2566,31 @@ impl Ui {
         let used = self.with_target(top, |s, _| s.view_mut().key(key, mods, &mut out));
         if used {
             self.dispatch(top, out);
+            return;
+        }
+        // 4b. The chat keys open the chat box over the overlays a player has
+        // up while talking (F1 help, F2 player list, Esc menu). The key is
+        // consumed here, before accelerators, so it can never also press one
+        // of their buttons, and its character is not typed into the box.
+        if !repeat
+            && !self.text_focus()
+            && self.game_input_active()
+            && matches!(
+                self.top_id(),
+                ScreenId::Help | ScreenId::PlayerList | ScreenId::EscapeMenu
+            )
+            && let Some(cmd) = self
+                .core
+                .binds
+                .command_for_key(key, mods)
+                .filter(|c| {
+                    c.eq_ignore_ascii_case("globalChat") || c.eq_ignore_ascii_case("teamChat")
+                })
+                .map(str::to_string)
+        {
+            self.core.run_command(&cmd, true);
+            self.swallow_char = true;
+            self.flush();
             return;
         }
         // 5. Accelerators, topmost screen first (fire on repeat too).

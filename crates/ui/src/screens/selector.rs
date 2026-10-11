@@ -106,6 +106,14 @@ impl BrickSelector {
             ),
         );
         self.view.set_text(search, core.selector.search.clone());
+        self.view.add(
+            parent,
+            text(
+                "GuiTextProfile",
+                Rect::new(300, 58, 335, 18),
+                "Ctrl + mouse wheel scrolls a page",
+            ),
+        );
         for (i, tab) in layout.tabs.iter().enumerate() {
             let b = self.view.add(
                 parent,

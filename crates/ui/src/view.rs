@@ -2687,6 +2687,31 @@ impl View {
         }
     }
 
+    /// Ctrl+wheel: the nearest scroll control under the cursor moves a page
+    /// per notch (its height less one row, so the last row stays in view).
+    /// Returns false when nothing under the cursor scrolls; an open popup
+    /// keeps the plain wheel.
+    pub fn wheel_page(&mut self, delta: i32) -> bool {
+        if self.popup.is_some() {
+            return self.wheel(delta);
+        }
+        let Some(mut id) = self.hit(self.mouse.0, self.mouse.1) else {
+            return false;
+        };
+        loop {
+            if self.nodes[id].ctrl.class == "GuiScrollCtrl" {
+                let step = self.scroll_step(id);
+                let page = (self.nodes[id].rect.h - step).max(step);
+                self.scroll_by(id, -delta * page);
+                return true;
+            }
+            match self.nodes[id].parent {
+                Some(p) => id = p,
+                None => return false,
+            }
+        }
+    }
+
     /// Keyboard for the focused edit control. Returns true if consumed.
     pub fn key(&mut self, key: Key, mods: Modifiers, out: &mut Vec<ViewEvent>) -> bool {
         if let Some(p) = self.popup {

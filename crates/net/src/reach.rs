@@ -47,14 +47,18 @@ pub enum Verdict {
     Likely,
     /// Behind a shared public address: outside players cannot connect.
     SharedAddress,
-    /// The router did not open the port; the player must forward it.
+    /// The router did not open the port for us. This is not proof that
+    /// friends cannot join: the port may already be forwarded by hand, and
+    /// the game has no outside helper to test it.
     NeedsForward,
     /// This computer is not on a network that leads anywhere.
     Unknown,
 }
 
-/// Everything the check learned, for the host player and logs.
-#[derive(Debug, Clone)]
+/// Everything the check learned, for the host player and logs. Its `Debug`
+/// output is safe to log and to paste into a bug report: addresses and
+/// invites show only whether they exist.
+#[derive(Clone)]
 pub struct Report {
     pub verdict: Verdict,
     pub port: u16,
@@ -74,6 +78,57 @@ pub struct Report {
     /// network (and friends once the port is forwarded, with the public
     /// address swapped in).
     pub lan_invite: Option<String>,
+}
+
+impl std::fmt::Debug for Report {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let set = |present: bool| if present { "<set>" } else { "none" };
+        f.debug_struct("Report")
+            .field("verdict", &self.verdict)
+            .field("port", &self.port)
+            .field("local_ip", &set(self.local_ip.is_some()))
+            .field("public", &set(self.public.is_some()))
+            .field("router_ip", &set(self.router_ip.is_some()))
+            .field("method", &self.method)
+            .field(
+                "forward_error",
+                &self.forward_error.as_deref().map(redact_addresses),
+            )
+            .field("invite", &set(self.invite.is_some()))
+            .field("lan_invite", &set(self.lan_invite.is_some()))
+            .finish()
+    }
+}
+
+/// Replaces every IPv4 address in `text` with `<ip>`; router errors often
+/// quote the router's own address.
+pub fn redact_addresses(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut run = String::new();
+    let flush = |run: &mut String, out: &mut String| {
+        let parts: Vec<&str> = run.trim_matches('.').split('.').collect();
+        let address = parts.len() == 4
+            && parts
+                .iter()
+                .all(|p| !p.is_empty() && p.len() <= 3 && p.bytes().all(|b| b.is_ascii_digit()));
+        if address {
+            out.push_str("<ip>");
+            out.extend(run.chars().rev().take_while(|c| *c == '.'));
+        } else {
+            out.push_str(run);
+        }
+        run.clear();
+    };
+    for ch in text.chars() {
+        if ch.is_ascii_digit() || ch == '.' {
+            run.push(ch);
+        } else {
+            flush(&mut run, &mut out);
+            out.push(ch);
+        }
+    }
+    flush(&mut run, &mut out);
+    out
 }
 
 impl Report {
@@ -116,15 +171,15 @@ impl Report {
             ],
             Verdict::NeedsForward => {
                 let mut lines = vec![format!(
-                    "Your router did not open port {port} automatically, so friends outside your home cannot join yet."
+                    "The game could not open port {port} on your router by itself: it asked over UPnP and then NAT-PMP, and your router did not agree. Friends may still be able to join if you already forwarded this port; the game cannot test that from here."
                 )];
                 lines.push(format!(
-                    "Turn on UPnP in your router's settings and host again, or forward UDP port {port} to {here}."
+                    "If friends cannot connect: turn on UPnP in your router's settings and host again, or forward UDP port {port} to {here} in the router, and allow Blockland ReImagined through Windows Firewall."
                 ));
                 lines.push(if invite.is_empty() {
-                    format!("Then give friends your public IP address (your router's status page shows it) and port {port}.")
+                    format!("Friends then need your public IP address (your router's status page shows it) and port {port}.")
                 } else {
-                    format!("Once that is done, share your invite: {invite}")
+                    format!("Share your invite: {invite}")
                 });
                 lines
             }
@@ -285,6 +340,58 @@ mod tests {
                 _ => assert!(!text.contains("bri://"), "{text}"),
             }
         }
+    }
+    fn report(verdict: Verdict) -> Report {
+        Report {
+            verdict,
+            port: 28000,
+            local_ip: Some(ip("192.168.1.23")),
+            public: Some("203.0.113.10:28000".parse().unwrap()),
+            router_ip: Some(ip("203.0.113.10")),
+            method: None,
+            forward_error: Some("UPnP: no gateway at http://192.168.1.1:5000/rootDesc.xml".into()),
+            invite: Some("bri://203.0.113.10:28000/SECRETKEY".into()),
+            lan_invite: Some("bri://192.168.1.23:28000/SECRETKEY".into()),
+        }
+    }
+    /// A router that refuses UPnP and NAT-PMP (the blocked condition) gets
+    /// manual steps, and no sentence claims the host is unreachable.
+    #[test]
+    fn a_blocked_router_gets_manual_steps_without_a_false_unreachable_claim() {
+        let text = report(Verdict::NeedsForward).lines().join(" ");
+        assert!(text.contains("UPnP") && text.contains("NAT-PMP"), "{text}");
+        assert!(text.contains("forward UDP port 28000"), "{text}");
+        assert!(text.contains("Windows Firewall"), "{text}");
+        assert!(text.contains("may still be able to join"), "{text}");
+        assert!(!text.contains("cannot join yet"), "{text}");
+        // A normally working router says so plainly instead.
+        let ok = report(Verdict::Reachable).lines().join(" ");
+        assert!(ok.contains("Friends can join"), "{ok}");
+        assert!(!ok.contains("forward UDP"), "{ok}");
+    }
+    /// What goes to the console, logs and bug reports carries no address or
+    /// invite key.
+    #[test]
+    fn the_logged_report_leaks_no_address_or_invite() {
+        let logged = format!("{:?}", report(Verdict::NeedsForward));
+        for secret in [
+            "SECRETKEY",
+            "203.0.113.10",
+            "192.168.1.23",
+            "192.168.1.1",
+            "bri://",
+        ] {
+            assert!(!logged.contains(secret), "{secret} leaked: {logged}");
+        }
+        assert!(
+            logged.contains("NeedsForward") && logged.contains("28000"),
+            "{logged}"
+        );
+        assert!(
+            logged.contains("no gateway at http://<ip>:5000"),
+            "{logged}"
+        );
+        assert_eq!(redact_addresses("v1.2.3 at 10.0.0.1."), "v1.2.3 at <ip>.");
     }
     #[test]
     fn without_a_public_address_the_host_still_gets_a_home_network_invite() {
