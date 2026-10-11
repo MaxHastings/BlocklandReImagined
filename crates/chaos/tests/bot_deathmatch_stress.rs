@@ -603,7 +603,7 @@ fn replay(
                 DELAY_SLEW_DOWN
             };
             let step = rate * 120.0 / FPS;
-            *delay += error.clamp(-step, step);
+            *delay += error.max(-step).min(step);
             let tick = server - *delay;
             let (shown, extrapolating, frozen) = sample(history, tick);
             let Some((real, _)) = at(*owner, tick) else {
