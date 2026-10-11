@@ -1701,25 +1701,36 @@ async fn swing(
     let press = client
         .request(Command::WeaponTrigger { down: true })
         .await?;
-    let opened = tokio::time::timeout(Duration::from_millis(750), async {
-        loop {
-            match client.receive().await? {
-                ClientEvent::Reply {
-                    sequence,
-                    result: Err(error),
-                } if sequence == press => anyhow::bail!("{error}"),
-                ClientEvent::Notice(Notice::Inspected {
-                    brick_id,
-                    brick,
-                    mode,
-                }) => return Ok((brick_id, brick, mode)),
-                _ => {}
+    // The host answers the press and, when it opens a dialog, sends the notice
+    // around the same time; on a loaded runner either can be late. Wait for the
+    // answer (up to LIMIT), then keep listening for the notice for GRACE more.
+    // A swing that opens nothing therefore ends GRACE after the answer, and one
+    // that opens a dialog ends as soon as the notice lands.
+    const LIMIT: Duration = Duration::from_secs(15);
+    const GRACE: Duration = Duration::from_secs(5);
+    let started = tokio::time::Instant::now();
+    let mut answered = None;
+    let opened = loop {
+        let deadline = answered.map_or(started + LIMIT, |at| at + GRACE);
+        let Ok(event) = tokio::time::timeout_at(deadline, client.receive()).await else {
+            break None;
+        };
+        match event? {
+            ClientEvent::Reply {
+                sequence,
+                result: Err(error),
+            } if sequence == press => anyhow::bail!("{error}"),
+            ClientEvent::Reply { sequence, .. } if sequence == press => {
+                answered = Some(tokio::time::Instant::now());
             }
+            ClientEvent::Notice(Notice::Inspected {
+                brick_id,
+                brick,
+                mode,
+            }) => break Some((brick_id, brick, mode)),
+            _ => {}
         }
-    })
-    .await
-    .ok()
-    .transpose()?;
+    };
     client
         .command(Command::WeaponTrigger { down: false })
         .await?;

@@ -1226,10 +1226,7 @@ fn capture(app: &mut App, path: &Path) -> Result<()> {
     buffer.slice(..).map_async(wgpu::MapMode::Read, move |r| {
         let _ = tx.send(r);
     });
-    gpu.device.poll(wgpu::PollType::Wait {
-        submission_index: None,
-        timeout: Some(Duration::from_secs(30)),
-    })?;
+    gpu.device.poll(wgpu::PollType::wait_indefinitely())?;
     rx.recv_timeout(Duration::from_secs(5))??;
     let mapped = buffer
         .slice(..)
