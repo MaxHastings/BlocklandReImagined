@@ -656,9 +656,12 @@ fn still_frames_keep_their_shadow_layers() -> Result<()> {
     camera.sun_color = [0.7, 0.7, 0.7, 0.];
     camera.ambient = [0.3, 0.3, 0.3, 1.];
     let target = color_target(&device, format, width, height);
-    let frame = |renderer: &mut SceneRenderer, scenes: &Uploaded, player_at: Vec3| {
+    // The player's instance set lives across frames, as a game's does.
+    let frame = |renderer: &mut SceneRenderer,
+                 scenes: &Uploaded,
+                 instances: &mut GpuInstances,
+                 player_at: Vec3| {
         renderer.update_camera(&queue, &camera);
-        let mut instances = GpuInstances::new(&device, 1)?;
         instances.update(
             &queue,
             &[SceneTransform {
@@ -675,7 +678,7 @@ fn still_frames_keep_their_shadow_layers() -> Result<()> {
             &mut encoder,
             ShadowCasters {
                 scenes: &[],
-                instances: &[(&scenes.player, &instances)],
+                instances: &[(&scenes.player, &*instances)],
             },
             ShadowCasters {
                 scenes: &[&scenes.tower],
@@ -688,7 +691,7 @@ fn still_frames_keep_their_shadow_layers() -> Result<()> {
             &view,
             &depth,
             &[&scenes.floor, &scenes.wall, &scenes.tower],
-            &[(&scenes.player, &instances)],
+            &[(&scenes.player, &*instances)],
             Some(wgpu::Color::BLACK),
         );
         queue.submit([encoder.finish()]);
@@ -701,27 +704,29 @@ fn still_frames_keep_their_shadow_layers() -> Result<()> {
         if hide_tower {
             scenes.tower.hide_vertices(&queue, 0..24);
         }
-        Ok(frame(&mut renderer, &scenes, player_at)?.0)
+        let mut instances = GpuInstances::new(&device, 1)?;
+        Ok(frame(&mut renderer, &scenes, &mut instances, player_at)?.0)
     };
     let mut renderer = SceneRenderer::with_settings(&device, format, 1, Some(settings));
     let scenes = upload(&renderer)?;
+    let mut instances = GpuInstances::new(&device, 1)?;
     let near = Vec3::new(1.5, 0.0, 1.5);
-    let (first, drawn) = frame(&mut renderer, &scenes, near)?;
+    let (first, drawn) = frame(&mut renderer, &scenes, &mut instances, near)?;
     assert!(drawn.shadow_draws > 0 && drawn.shadow_layers_kept == 0);
     for still in 0..3 {
-        let (pixels, stats) = frame(&mut renderer, &scenes, near)?;
+        let (pixels, stats) = frame(&mut renderer, &scenes, &mut instances, near)?;
         assert_eq!(stats.shadow_draws, 0, "still frame {still}: {stats:?}");
         assert!(stats.shadow_layers_kept > 0, "still frame {still}");
         assert!(pixels == first, "still frame {still} looks different");
     }
     // The player moves: drawn again, as a fresh renderer draws it.
     let moved = Vec3::new(-2.5, 0.0, 2.0);
-    let (pixels, stats) = frame(&mut renderer, &scenes, moved)?;
+    let (pixels, stats) = frame(&mut renderer, &scenes, &mut instances, moved)?;
     assert!(stats.shadow_draws > 0, "{stats:?}");
     assert!(pixels == fresh(moved, false)?, "moved player");
     // The tower dies in place: its occluder goes the same frame.
     scenes.tower.hide_vertices(&queue, 0..24);
-    let (pixels, stats) = frame(&mut renderer, &scenes, moved)?;
+    let (pixels, stats) = frame(&mut renderer, &scenes, &mut instances, moved)?;
     assert!(stats.shadow_draws > 0, "{stats:?}");
     assert!(pixels == fresh(moved, true)?, "hidden tower");
     Ok(())

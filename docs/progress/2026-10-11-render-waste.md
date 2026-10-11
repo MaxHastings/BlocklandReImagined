@@ -80,5 +80,37 @@ files). Each fix is its own commit.
 
 ## Measurements
 
-Pending: `large_build_perf` before (main `cf9c761` with this benchmark file)
-and after, on Max's PC. These runs are queued behind the release thread's.
+`large_build_perf` on Max's PC, run by the release thread: the Bedroom
+four-save stack (199,051 bricks), 3440x1440, 200 frames per view,
+`BRI_PERF_SHADOWS=4,2`. Before is main `cf9c761` with this branch's
+benchmark file; after is this branch (`d4573f2` without bots, `23a59a5`
+with). p50/p95 ms.
+
+Without bots:
+
+| View | Frame | GPU | Sun shadows | Shadow draws | Shadow triangles |
+|---|---|---|---|---|---|
+| spawn | 6.79/7.42 -> 6.54/7.09 | 3.06/3.27 -> 2.94/3.16 | 0.38 -> 0.25 | 164 -> 96 | 540,906 -> 346,690 |
+| overview | 11.41/13.68 -> 11.39/13.55 | 3.93/4.20 -> 3.79/4.17 | 0.44 -> 0.27 | 163 -> 95 | 376,864 -> 182,648 |
+| inside | 10.74/11.66 -> 10.45/11.80 | 3.81/4.04 -> 3.62/4.37 | 0.41 -> 0.23 | 163 -> 95 | 450,616 -> 256,400 |
+
+With 32 Blockhead Bots (all joined):
+
+| View | Frame | GPU | Record | Shadow draws | Shadow triangles |
+|---|---|---|---|---|---|
+| spawn | 10.05/11.13 -> 9.52/10.36 | 3.33/3.60 -> 3.70/4.16 | 4.18 -> 3.38 | 304 -> 148 | 594,938 -> 366,970 |
+| overview | 16.45/17.79 -> 15.99/19.04 | 5.71/6.04 -> 5.60/5.83 | 7.63 -> 7.72 | 295 -> 147 | 414,446 -> 189,590 |
+| inside | 15.42/17.41 -> 14.39/16.80 | 5.29/5.77 -> 4.18/5.43 | 7.01 -> 7.38 | 295 -> 179 | 491,866 -> 279,146 |
+
+Shadow level 2 with bots, steady frame: 16.11/18.26 -> 13.68/17.24 ms, GPU
+6.05 -> 3.49 ms; its change frame 489 -> 209 ms. After the change, 14 to 22
+of the 33 bodies are built in a frame (the rest are out of sight and out of
+shadow reach), costing 0.29 to 0.46 ms in the new "avatar meshes" span.
+Every other render count is identical without bots. The shadow draws left
+on a still frame are the caster layer, which redraws because the idle
+player's body moves. `shadow_layers_kept` is 4 in every view, which matches two cascades each of occluders and map.
+
+The bot runs' main-thread record time rose 0.1 to 0.4 ms in two views. The
+layer signature hashed every instance's transform each frame, so it now
+hashes one revision per instance set instead (`GpuInstances::revision`,
+renewed on every change).

@@ -1109,6 +1109,9 @@ pub struct GpuInstances {
     /// Per instance, or empty when none is cut.
     clips: Vec<ClipPlane>,
     capacity: usize,
+    /// Unique to these contents: a new value at creation and at every
+    /// change, so a shadow layer can tell them apart without rereading them.
+    revision: u64,
 }
 impl GpuInstances {
     pub fn new(device: &wgpu::Device, capacity: usize) -> Result<Self> {
@@ -1131,6 +1134,7 @@ impl GpuInstances {
             transforms: Vec::new(),
             clips: Vec::new(),
             capacity,
+            revision: next_instances_revision(),
         })
     }
     pub fn len(&self) -> usize {
@@ -1188,6 +1192,7 @@ impl GpuInstances {
         }
         self.transforms = transforms.to_vec();
         self.clips = clips.to_vec();
+        self.revision = next_instances_revision();
         Ok(true)
     }
     /// Whether some instance is cut by a clip plane.
@@ -1700,6 +1705,10 @@ pub(crate) fn kept_casters_key<'a>(scenes: impl Iterator<Item = &'a GpuScene>) -
 }
 /// A new scene's revision counter: unique among every scene's, so a scene
 /// uploaded where a dropped one lay never reads as that one.
+fn next_instances_revision() -> u64 {
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+    NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+}
 fn fresh_revision() -> Arc<std::sync::atomic::AtomicU64> {
     static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
     Arc::new(std::sync::atomic::AtomicU64::new(
@@ -1708,8 +1717,9 @@ fn fresh_revision() -> Arc<std::sync::atomic::AtomicU64> {
 }
 /// Everything `casters` would draw into a depth map: each scene's geometry
 /// as uploaded (its revision moves with every in-place rewrite, a posed
-/// body's included), its batches, and each instance's transform, tint and
-/// clip planes. Equal signatures draw equal depth under equal matrices.
+/// body's included), its batches, and each instance set's revision (its
+/// transforms, tints and clip planes). Equal signatures draw equal depth
+/// under equal matrices.
 pub(crate) fn casters_signature(casters: ShadowCasters<'_>) -> u64 {
     use std::hash::{Hash, Hasher};
     let mut hash = std::collections::hash_map::DefaultHasher::new();
@@ -1737,17 +1747,7 @@ pub(crate) fn casters_signature(casters: ShadowCasters<'_>) -> u64 {
     casters.instances.len().hash(&mut hash);
     for (s, instances) in casters.instances {
         scene(s, &mut hash);
-        instances.transforms.len().hash(&mut hash);
-        for t in &instances.transforms {
-            for f in t.transform.to_cols_array().into_iter().chain(t.tint) {
-                f.to_bits().hash(&mut hash);
-            }
-        }
-        for clip in &instances.clips {
-            for f in clip {
-                f.to_bits().hash(&mut hash);
-            }
-        }
+        instances.revision.hash(&mut hash);
     }
     hash.finish()
 }
