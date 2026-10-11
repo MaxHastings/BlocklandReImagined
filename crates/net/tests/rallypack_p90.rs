@@ -205,9 +205,11 @@ fn p90_exhausted_ammo_stays_idle_after_trigger_release() -> Result<()> {
     Ok(())
 }
 
-#[test]
-#[ignore = "requires Maxwell's privately converted P90 assets"]
-fn bot_fires_package_p90_and_reloads_through_ordinary_controls() -> Result<()> {
+/// A mini-game with one bot armed with `loadout` and the host as its
+/// target; the probe package spawns the bot and counts its hits on the host
+/// (the host takes no damage). Returns the game, the host, the bot and the
+/// probe folder, which must outlive the game.
+fn bot_duel(loadout: [Option<String>; 5]) -> Result<(Session, u64, u64, tempfile::TempDir)> {
     use bri_sim::{bot_kind::BotKind, session::PackageCommand};
     let root = root()?;
     let probe = tempfile::Builder::new()
@@ -261,7 +263,7 @@ fn bot_fires_package_p90_and_reloads_through_ordinary_controls() -> Result<()> {
     game.set_spawn_points(vec![Vec3::new(0.0, 0.05, -10.0)])?;
     let host = game.join("Target".into(), Vec3::new(0.0, 0.05, -10.0), true)?;
     let settings = bri_minigames::Settings {
-        loadout: [Some(ITEM.into()), None, None, None, None],
+        loadout,
         ..Default::default()
     };
     game.command(
@@ -286,6 +288,13 @@ fn bot_fires_package_p90_and_reloads_through_ordinary_controls() -> Result<()> {
         .copied()
         .find(|p| game.is_bot(*p))
         .context("spawned bot")?;
+    Ok((game, host, bot, probe))
+}
+
+#[test]
+#[ignore = "requires Maxwell's privately converted P90 assets"]
+fn bot_fires_package_p90_and_reloads_through_ordinary_controls() -> Result<()> {
+    let (mut game, host, bot, _probe) = bot_duel([Some(ITEM.into()), None, None, None, None])?;
     let mut fired = false;
     let mut reloaded = false;
     for _ in 0..4200 {
@@ -436,5 +445,68 @@ async fn p90_downloads_to_a_clean_cache_and_equipment_reaches_a_late_joiner() ->
     drop(guest);
     drop(host);
     server.stop().await?;
+    Ok(())
+}
+
+#[test]
+#[ignore = "requires Maxwell's privately converted P90 assets"]
+fn bot_switches_from_an_empty_p90_to_its_other_gun_and_never_fires_it_dry() -> Result<()> {
+    let (mut game, _host, bot, _probe) = bot_duel([
+        Some(ITEM.into()),
+        Some("v20.weapon.gunitem".into()),
+        None,
+        None,
+        None,
+    ])?;
+    let p90_shot = |game: &Session| {
+        game.weapon_view()
+            .projectiles
+            .iter()
+            .any(|p| p.definition.ends_with("r_assaultrifleprojectile"))
+    };
+    let other_shot = |game: &Session| {
+        game.weapon_view()
+            .projectiles
+            .iter()
+            .any(|p| !p.definition.ends_with("r_assaultrifleprojectile"))
+    };
+    let mut dry_at = None;
+    let mut other_after_dry = false;
+    for tick in 0..40_000 {
+        game.step()?;
+        let dry = value(&game, bot, "rounds") == 0
+            && value(&game, bot, "spares")
+                .as_array()
+                .is_some_and(Vec::is_empty);
+        if dry && dry_at.is_none() {
+            dry_at = Some(tick);
+        }
+        if let Some(at) = dry_at {
+            // Rounds already in the air may still be flying for a moment.
+            if tick > at + 300 {
+                assert!(
+                    !p90_shot(&game),
+                    "the bot fired the P90 with no rounds left: {:?}",
+                    game.bot_why()
+                );
+            }
+            other_after_dry |= other_shot(&game);
+            if other_after_dry && tick > at + 600 {
+                break;
+            }
+        }
+    }
+    assert!(
+        dry_at.is_some(),
+        "the bot never emptied the P90: rounds {} spares {}: {:?}",
+        value(&game, bot, "rounds"),
+        value(&game, bot, "spares"),
+        game.bot_why()
+    );
+    assert!(
+        other_after_dry,
+        "the bot never took up its other gun once the P90 was empty: {:?}",
+        game.bot_why()
+    );
     Ok(())
 }
