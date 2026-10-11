@@ -253,7 +253,10 @@ fn stress_large_builds_save_load_host_and_edit_without_blowing_up() -> Result<()
     let (small, large) = (rows.first().unwrap(), rows.last().unwrap());
     if large.bricks >= small.bricks * 5 {
         let growth = large.bricks as f64 / small.bricks as f64;
-        let ratio = |a: Duration, b: Duration| b.as_secs_f64() / a.as_secs_f64().max(0.001);
+        // Thread CPU time on Windows moves in ~15.6 ms steps, so a release
+        // build's small timings read 0; floor at two steps so a ratio never
+        // divides by a reading the clock could not resolve.
+        let ratio = |a: Duration, b: Duration| b.as_secs_f64() / a.as_secs_f64().max(0.032);
         // Saving, loading and hosting grow with the build; three times the
         // growth means something is worse than linear.
         for (what, a, b) in [
