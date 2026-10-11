@@ -308,10 +308,9 @@ impl Gpu {
         readback.slice(..).map_async(wgpu::MapMode::Read, move |r| {
             let _ = tx.send(r);
         });
-        self.device.poll(wgpu::PollType::Wait {
-            submission_index: None,
-            timeout: Some(std::time::Duration::from_secs(30)),
-        })?;
+        // Wait for the copy itself, not a wall-clock deadline: a software
+        // adapter is slow on a loaded runner, not wrong.
+        self.device.poll(wgpu::PollType::wait_indefinitely())?;
         rx.recv_timeout(std::time::Duration::from_secs(30))??;
         let mapped = readback.slice(..).get_mapped_range()?;
         let i = 32 * 256 + 32 * 4;
@@ -699,10 +698,9 @@ fn lamp_render(map: &bri_render::scene_loader::MapScene, bulb: Vec3, name: &str)
         readback.slice(..).map_async(wgpu::MapMode::Read, move |r| {
             let _ = tx.send(r);
         });
-        gpu.device.poll(wgpu::PollType::Wait {
-            submission_index: None,
-            timeout: Some(std::time::Duration::from_secs(30)),
-        })?;
+        // Wait for the copy itself, not a wall-clock deadline: a software
+        // adapter is slow on a loaded runner, not wrong.
+        gpu.device.poll(wgpu::PollType::wait_indefinitely())?;
         rx.recv_timeout(std::time::Duration::from_secs(30))??;
         let pixels = readback.slice(..).get_mapped_range()?.to_vec();
         Ok(pixels)
