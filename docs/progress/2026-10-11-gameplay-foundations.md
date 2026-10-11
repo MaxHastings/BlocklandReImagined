@@ -105,8 +105,15 @@ Headless, in this container (no v20 content):
   bri-bls, bri-minigames and the sim suites items, tools,
   hardening_session, v20_events, script_api, packages, samples, showcase,
   session, package_brick_outputs and package_brick_inputs: all pass.
-- `cargo check --workspace --tests` passes; clippy on the changed crates in
-  the PR description.
+- `cargo test -p bri-client --lib`: 491 pass; the 6 that fail here
+  (`a_save_picture_is_drawn...`, `installed_effects_replace_the_atlas...`,
+  `render_scale_draws...`, `original_hud_icons_upload...`, `a_restructured_body...`,
+  `a_game_entered_before_the_world_pipelines_compile...`) all open
+  `bri_ui::gpu::Headless` and this container has no graphics adapter; they
+  touch nothing this branch changes.
+- `cargo check --workspace --tests` and `cargo clippy --tests -D warnings`
+  over bri-sim, bri-package-runtime, bri-events, bri-world, bri-ui,
+  bri-client, bri-bls and bri-chaos: clean.
 
 Not run here: the full gate (`tools/gate.py`) and `bri-client --check` need
 the content packs on Max's PC.
