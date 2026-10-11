@@ -117,8 +117,22 @@ From the log tail in `crash-20261010-214554.txt` (session
 at 1920x1080, on Crazy Collage Madness (187,762 bricks, the game's own
 `.world.json` save, which the benchmark now loads), at two fixed Bedroom
 views agreed with the shadows thread (`roomA`, `roomB`). Runs A and D;
-runs B and C were contaminated by other builds on the PC and are being
-rerun.
+runs B and C were contaminated by other builds on the PC and were rerun
+as B2 and C2 below.
+
+Clean reruns on a quiet PC (warm pipeline cache; run A had a cold
+42 s pipeline compile before measuring):
+
+| Run | Settings | Steady frame p50 / max (ms) | GPU p50 (ms) | Pass p50 at the custom view (ms) |
+| --- | --- | --- | --- | --- |
+| B2 | Max's settings at 2560x1440 (Classic, render scale 50) | 3.4-6.6 / 8.5 | 1.4-2.4 | sun shadows 1.0, world 1.3 |
+| C2 | Unified, AO and soft shading, MSAA 4, scale 100, 1080p | 4.4-12.3 / 16.0 | 1.8-6.4 | occlusion 1.2, sun shadows 1.3, world 3.3 |
+
+Sun shadows cost 1.0-2.0 ms of GPU time per frame in every view and AO
+(occlusion) up to 1.2 ms; the world pass is the largest at 3.3 ms in the
+heaviest view. The Shadow Quality change frames were 673-679 ms (B2) and
+899-907 ms (C2): chunk uploads 365-380 ms, world upload 154-279 ms,
+prepare 24-44 ms, pipelines wait 7-30 ms, GPU wait 62-104 ms.
 
 - **Outside renderer rebuilds there are no long frames.** The slowest
   steady frame in every view was 5-12 ms.
@@ -180,5 +194,3 @@ pixels differ).
   adapter) and the new shadow maps' first frames remain in the change frame;
   drawing the old renderer until the new one compiles would remove the
   first if it matters.
-- B and C reruns (1440p, AO and soft shading) for per-pass GPU costs; shadow
-  and AO costs go to the shadows thread.
