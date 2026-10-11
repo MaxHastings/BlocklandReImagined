@@ -33,11 +33,17 @@ struct Body {
     extent: f32,
     shared: bool,
     group: u32,
+    /// Pushes and hits waiting for the next step. They wait here, on the
+    /// body, so they go when it goes: one kept apart by its simulation
+    /// handle outlived a body removed before the step, and the step's
+    /// lookup crashed the host (v0.2.8 soccer with bots).
+    kicks: Vec<Kick>,
+    /// Holds for this frame's steps.
+    holds: Vec<Hold>,
 }
 
 /// A hold for this frame's steps ([`PhysicsCommand::Hold`]).
 struct Hold {
-    handle: RigidBodyHandle,
     point: Vec3,
     target: Vec3,
     velocity: Vec3,
@@ -46,7 +52,6 @@ struct Hold {
 /// A push not yet given: an impulse, at a point or through the centre,
 /// given as a force over the next step.
 struct Kick {
-    handle: RigidBodyHandle,
     impulse: Vec3,
     point: Option<Vec3>,
 }
@@ -98,8 +103,6 @@ pub struct AddOnPhysics {
     pushers: Pushers,
     shots: Shots,
     accumulator: f32,
-    holds: Vec<Hold>,
-    kicks: Vec<Kick>,
     snapshot: Arc<BTreeMap<u32, BodyState>>,
 }
 
@@ -119,8 +122,6 @@ impl Default for AddOnPhysics {
             pushers: Pushers::default(),
             shots: Shots::default(),
             accumulator: 0.0,
-            holds: Vec::new(),
-            kicks: Vec::new(),
             snapshot: Arc::default(),
         }
     }
@@ -151,18 +152,13 @@ impl AddOnPhysics {
             match *command {
                 PhysicsCommand::Create { body, spec } => self.create(body, &spec),
                 PhysicsCommand::Joint { a, b, spec } => self.join(a, b, &spec),
-                PhysicsCommand::Remove { body } => {
-                    if let Some(b) = self.bodies.remove(&body) {
-                        self.world.remove_body_with_colliders(b.handle, true);
-                    }
-                }
+                PhysicsCommand::Remove { body } => self.remove(body),
                 PhysicsCommand::Push { body, velocity } => {
-                    if let Some(b) = self.bodies.get(&body) {
+                    if let Some(b) = self.bodies.get_mut(&body) {
                         let rb = &self.world.bodies[b.handle];
                         let change = Vec3::from(velocity)
                             .clamp_length_max(bri_client_sandbox::bodies::MAX_SPEED);
-                        self.kicks.push(Kick {
-                            handle: b.handle,
+                        b.kicks.push(Kick {
                             impulse: change * rb.mass(),
                             point: None,
                         });
@@ -175,10 +171,9 @@ impl AddOnPhysics {
                     velocity,
                     max_accel,
                 } => {
-                    if let Some(b) = self.bodies.get(&body) {
+                    if let Some(b) = self.bodies.get_mut(&body) {
                         self.world.wake_up(b.handle, true);
-                        self.holds.push(Hold {
-                            handle: b.handle,
+                        b.holds.push(Hold {
                             point: Vec3::from(point),
                             target: Vec3::from(target),
                             velocity: Vec3::from(velocity),
@@ -189,10 +184,20 @@ impl AddOnPhysics {
             }
         }
     }
+    /// Take body `id` out of the world, with its joints and everything
+    /// still asked of it. Every removal goes through here.
+    fn remove(&mut self, id: u32) {
+        if let Some(b) = self.bodies.remove(&id) {
+            self.world.remove_body_with_colliders(b.handle, true);
+        }
+    }
     /// `handle` and every body jointed to it, directly or through others
     /// (a whole ragdoll from one limb).
-    fn jointed(&self, handle: RigidBodyHandle) -> std::collections::HashSet<RigidBodyHandle> {
-        let joints = &self.world.impulse_joints;
+    fn jointed(
+        world: &PhysicsWorld,
+        handle: RigidBodyHandle,
+    ) -> std::collections::HashSet<RigidBodyHandle> {
+        let joints = &world.impulse_joints;
         let mut seen = std::collections::HashSet::from([handle]);
         let mut next = vec![handle];
         while let Some(body) = next.pop() {
@@ -208,10 +213,10 @@ impl AddOnPhysics {
     }
     /// The mass a force on `handle` moves: every body jointed to it (a
     /// ragdoll held by one hand), itself included.
-    fn carried_mass(&self, handle: RigidBodyHandle) -> f32 {
-        self.jointed(handle)
+    fn carried_mass(world: &PhysicsWorld, handle: RigidBodyHandle) -> f32 {
+        Self::jointed(world, handle)
             .iter()
-            .map(|h| self.world.bodies[*h].mass())
+            .map(|h| world.bodies[*h].mass())
             .sum()
     }
     /// Whether any body of `group` lies on the world (the map, a brick,
@@ -261,7 +266,7 @@ impl AddOnPhysics {
             if seen.contains(&handle) || self.world.bodies[handle].is_sleeping() {
                 continue;
             }
-            let group = self.jointed(handle);
+            let group = Self::jointed(&self.world, handle);
             seen.extend(group.iter().copied());
             if self.lies_on_world(&group) {
                 for handle in group {
@@ -277,29 +282,31 @@ impl AddOnPhysics {
     /// to clear after the step.
     fn forces(&mut self, dt: f32) -> Vec<RigidBodyHandle> {
         let mut touched = Vec::new();
-        for kick in std::mem::take(&mut self.kicks) {
-            let rb = &mut self.world.bodies[kick.handle];
-            let force = vector(kick.impulse / dt);
-            match kick.point {
-                Some(point) => rb.add_force_at_point(force, vector(point), true),
-                None => rb.add_force(force, true),
+        for body in self.bodies.values_mut() {
+            if body.kicks.is_empty() && body.holds.is_empty() {
+                continue;
             }
-            touched.push(kick.handle);
-        }
-        for i in 0..self.holds.len() {
-            let hold = &self.holds[i];
-            let mass = self.carried_mass(hold.handle);
-            let hold = &self.holds[i];
-            let rb = &mut self.world.bodies[hold.handle];
-            let point = vec3(rb.position().transform_point(vector(hold.point)));
-            let at = vec3(rb.velocity_at_point(vector(point)));
-            let w = HOLD_FREQUENCY;
-            let accel = ((hold.target - point) * (w * w) + (hold.velocity - at) * (2.0 * w))
-                .clamp_length_max(hold.max_accel);
-            // Cancel gravity too, so a held body hangs where it is held.
-            let accel = accel + Vec3::Y * crate::local_physics::GRAVITY;
-            rb.add_force_at_point(vector(accel * mass), vector(point), true);
-            touched.push(hold.handle);
+            for kick in body.kicks.drain(..) {
+                let rb = &mut self.world.bodies[body.handle];
+                let force = vector(kick.impulse / dt);
+                match kick.point {
+                    Some(point) => rb.add_force_at_point(force, vector(point), true),
+                    None => rb.add_force(force, true),
+                }
+            }
+            for hold in &body.holds {
+                let mass = Self::carried_mass(&self.world, body.handle);
+                let rb = &mut self.world.bodies[body.handle];
+                let point = vec3(rb.position().transform_point(vector(hold.point)));
+                let at = vec3(rb.velocity_at_point(vector(point)));
+                let w = HOLD_FREQUENCY;
+                let accel = ((hold.target - point) * (w * w) + (hold.velocity - at) * (2.0 * w))
+                    .clamp_length_max(hold.max_accel);
+                // Cancel gravity too, so a held body hangs where it is held.
+                let accel = accel + Vec3::Y * crate::local_physics::GRAVITY;
+                rb.add_force_at_point(vector(accel * mass), vector(point), true);
+            }
+            touched.push(body.handle);
         }
         touched
     }
@@ -336,18 +343,21 @@ impl AddOnPhysics {
             // instead of moving it back along its sweep, which would pull
             // one limb away from the rest.
             .soft_ccd_prediction(SOFT_CCD);
+        // A body made under a handle it had replaces it, and nothing asked
+        // of the old one moves the new.
+        self.remove(id);
         let (handle, _) = self.world.insert(body, collider);
-        if let Some(old) = self.bodies.insert(
+        self.bodies.insert(
             id,
             Body {
                 handle,
                 extent: extent + offset.length(),
                 shared: spec.shared,
                 group: spec.group,
+                kicks: Vec::new(),
+                holds: Vec::new(),
             },
-        ) {
-            self.world.remove_body_with_colliders(old.handle, true);
-        }
+        );
     }
 
     /// A ball joint pinned at the spec's world anchor, its twist axis along
@@ -389,8 +399,6 @@ impl AddOnPhysics {
             "Invalid Add-On physics frame time"
         );
         if self.bodies.is_empty() {
-            self.holds.clear();
-            self.kicks.clear();
             self.accumulator = 0.0;
             self.surroundings.clear(&mut self.world);
             self.pushers.clear(&mut self.world);
@@ -416,12 +424,17 @@ impl AddOnPhysics {
             .map(|(id, b)| (b.handle, u64::from(*id)))
             .collect();
         for strike in self.shots.strike(&self.world, shots, &owners) {
+            let Some(body) = u32::try_from(strike.body)
+                .ok()
+                .and_then(|id| self.bodies.get_mut(&id))
+            else {
+                continue;
+            };
             // No faster than a hit can make it, however light the body.
-            let mass = self.world.bodies[strike.handle].mass();
+            let mass = self.world.bodies[body.handle].mass();
             let impulse = (strike.direction * PROJECTILE_MASS * strike.speed)
                 .clamp_length_max(MAX_SPEED * mass);
-            self.kicks.push(Kick {
-                handle: strike.handle,
+            body.kicks.push(Kick {
                 impulse,
                 point: Some(strike.point),
             });
@@ -485,7 +498,9 @@ impl AddOnPhysics {
             self.pushers.settle();
         }
         // Holds last one frame: an Add-On holding sends them every frame.
-        self.holds.clear();
+        for body in self.bodies.values_mut() {
+            body.holds.clear();
+        }
         // A body the solver threw to infinity is gone.
         let lost: Vec<u32> = self
             .bodies
@@ -494,9 +509,7 @@ impl AddOnPhysics {
             .map(|(id, _)| *id)
             .collect();
         for id in lost {
-            if let Some(b) = self.bodies.remove(&id) {
-                self.world.remove_body_with_colliders(b.handle, true);
-            }
+            self.remove(id);
         }
         self.snapshot = Arc::new(
             self.bodies
