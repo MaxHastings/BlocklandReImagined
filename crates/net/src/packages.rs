@@ -315,12 +315,25 @@ pub async fn fetch_missing_pinned(
         // what this server needs stays. Failing to prune is not a failed
         // fetch.
         let _ = cache.prune(bri_package::sync::CACHE_BYTES, &offered);
+        // Installing copies and re-hashes every file: on a big Add-On that
+        // takes long enough to need its own stage.
+        if !listings.is_empty() {
+            progress.begin(
+                Stage::VerifyingPackages,
+                Unit::Steps,
+                Some(listings.len() as u64),
+            );
+        }
         let mut fetched = Vec::new();
         for package in offered {
             let installed = match listings.iter().find(|l| l.package == package) {
-                Some(listing) => cache
-                    .install(listing)
-                    .with_context(|| format!("Installing package {package}")),
+                Some(listing) => {
+                    let installed = cache
+                        .install(listing)
+                        .with_context(|| format!("Installing package {package}"));
+                    progress.advance(1);
+                    installed
+                }
                 None => cache
                     .installed(&package)
                     .context("Cached package disappeared"),

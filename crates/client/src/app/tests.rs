@@ -1609,6 +1609,116 @@ fn a_lost_connection_rejoins_the_address_not_the_server_name() -> anyhow::Result
     Ok(())
 }
 
+/// Every stage a join reports is on screen. Until the host answers, the
+/// Connecting dialog says what the join waits on; from then on the loading
+/// screen shows the stage and its bar, even before the host names its map,
+/// and never falls back to the dialog. Regression for v0.2.8, where the
+/// host's Add-Ons downloaded behind "Connecting to ..." because the loading
+/// screen waited for the map's name, which came only after the download.
+#[test]
+fn every_stage_of_a_join_is_on_screen() -> anyhow::Result<()> {
+    use super::*;
+    use bri_progress::{Stage, Unit};
+    // The order a join visits the stages in. StartingServer is a host's.
+    const JOIN: [Stage; 14] = [
+        Stage::Starting,
+        Stage::CheckingContent,
+        Stage::Connecting,
+        Stage::DownloadingPackages,
+        Stage::VerifyingPackages,
+        Stage::LoadingAddOns,
+        Stage::Connecting,
+        Stage::WaitingForServer,
+        Stage::ReceivingWorld,
+        Stage::LoadingMap,
+        Stage::BuildingBricks,
+        Stage::LoadingGraphics,
+        Stage::CompilingShaders,
+        Stage::Spawning,
+    ];
+    for stage in Stage::ALL {
+        assert!(
+            stage == Stage::StartingServer || JOIN.contains(&stage),
+            "{stage:?} is missing from the join's stages"
+        );
+    }
+    let content = ContentRoot::synthetic()?;
+    let state = content.state()?;
+    let mut app = App::load(&content.root, state.path(), (320, 240))?;
+    let known = app.content.maps[0].clone();
+    // The host's listing names its map by id, or by name once advertised;
+    // a host that names none shows its address.
+    for named in [None, Some(known.id.clone()), Some(known.name.clone())] {
+        let id = app.ui.core.request(UiAction::JoinServer {
+            address: "127.0.0.1:9".into(),
+            password: String::new(),
+        });
+        app.join(id, "127.0.0.1:9".into(), String::new())?;
+        let progress = bri_progress::Progress::new();
+        let attempt = app
+            .net
+            .attempt
+            .as_mut()
+            .context("join started no attempt")?;
+        attempt.worker = network::Worker::start(
+            app.runtime.handle(),
+            progress.clone(),
+            std::future::pending(),
+        );
+        attempt.progress = progress.clone();
+        let mut loading = false;
+        for (step, stage) in JOIN.into_iter().enumerate() {
+            // The host answers the first Connecting with its listing.
+            if step == 3
+                && let Some(map) = &named
+            {
+                progress.set_subject(map);
+            }
+            progress.begin(stage, Unit::Bytes, Some(4 << 20));
+            progress.set(1 << 20);
+            app.poll_network()?;
+            let snapshot = progress.snapshot();
+            match &app.ui.core.conn {
+                ConnectionState::Connecting { text } => {
+                    assert!(!loading, "{stage:?} went back to the Connecting dialog");
+                    assert!(
+                        named.is_none() || step < 3,
+                        "{stage:?} hid behind Connecting after the host named its map"
+                    );
+                    assert!(
+                        session::in_connecting_dialog(stage),
+                        "{stage:?} hid behind Connecting: {text}"
+                    );
+                    assert_eq!(*text, session::connecting_text(stage, "127.0.0.1:9", 0));
+                }
+                ConnectionState::Loading {
+                    map,
+                    preview,
+                    status,
+                    progress: fraction,
+                } => {
+                    loading = true;
+                    assert_eq!(*status, snapshot.status(), "{stage:?}");
+                    assert_eq!(*fraction, 0.25, "{stage:?}");
+                    match &named {
+                        Some(name) if step >= 3 => {
+                            assert_eq!(map, name);
+                            assert_eq!(*preview, known.preview);
+                        }
+                        _ => assert_eq!(map, "127.0.0.1:9"),
+                    }
+                }
+                other => panic!("{stage:?} showed {other:?}"),
+            }
+        }
+        assert!(loading, "the join never reached the loading screen");
+        app.ui.core.request(UiAction::CancelConnect);
+        app.disconnect();
+        app.net.attempt = None;
+    }
+    Ok(())
+}
+
 /// The world's pipelines can take many seconds to compile (FXC on Windows,
 /// about 20 s on an RTX 4070). Hosting before they finish keeps the loading
 /// screen up, drawing and responsive, and enters once they have compiled,

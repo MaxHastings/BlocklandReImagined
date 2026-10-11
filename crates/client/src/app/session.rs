@@ -781,17 +781,21 @@ impl App {
         saved.save(&path)
     }
     pub(super) fn join(&mut self, id: RequestId, address: String, password: String) -> Result<()> {
-        self.join_resuming(id, address, password, None)
+        self.join_resuming(id, address, password, None, None)
     }
     /// [`App::join`] presenting `resume`, the lost connection's ticket, so
     /// the host gives the player back their number (and so their bricks)
-    /// even before it has timed the old connection out.
+    /// even before it has timed the old connection out. `shown` is the map
+    /// the loading screen already names when the join resumes from it (the
+    /// host's Add-Ons were downloaded and loaded): it stays on that screen
+    /// instead of going back to the Connecting dialog.
     pub(super) fn join_resuming(
         &mut self,
         id: RequestId,
         address: String,
         password: String,
         resume: Option<bri_net::protocol::ResumeToken>,
+        shown: Option<String>,
     ) -> Result<()> {
         ensure!(
             self.addons.reload.is_none(),
@@ -828,18 +832,18 @@ impl App {
         let joined_list = Arc::new(std::sync::Mutex::new(None));
         let joined_add_ons = joined_list.clone();
         self.disconnect();
-        self.ui.apply_session(
-            id,
-            UiUpdate::Connection(ConnectionState::Connecting {
-                text: if self.net.reconnects > 0 {
-                    format!("Connection lost. Reconnecting to {typed}…")
-                } else {
-                    format!("Connecting to {typed}…")
-                },
-            }),
-        );
-        let pin_key = typed.clone();
         let progress = bri_progress::Progress::new();
+        let screen = match &shown {
+            Some(map) => {
+                progress.set_subject(map);
+                self.loading_screen(map, &bri_progress::Snapshot::default())
+            }
+            None => ConnectionState::Connecting {
+                text: connecting_text(bri_progress::Stage::Starting, &typed, self.net.reconnects),
+            },
+        };
+        self.ui.apply_session(id, UiUpdate::Connection(screen));
+        let pin_key = typed.clone();
         let reporting = progress.clone();
         // A saved server's invite carries the key it had when joined.
         let saved_invite = crate::servers::SavedServers::load(&servers_file)
@@ -871,6 +875,13 @@ impl App {
             .await??;
             let identity_paths = paths.clone();
             let (package_root, package_set) = (paths.root.clone(), paths.packages.clone());
+            // Hashing this player's content is local work: the Connecting
+            // dialog says so rather than blaming the host.
+            reporting.begin(
+                bri_progress::Stage::CheckingContent,
+                bri_progress::Unit::Steps,
+                None,
+            );
             let permit = load_limit.clone().acquire_owned().await?;
             let identity = tokio::task::spawn_blocking(move || {
                 let _permit = permit;
@@ -899,6 +910,11 @@ impl App {
                 &cache,
                 reporting.clone(),
                 |fetched, dropped| {
+                    reporting.begin(
+                        bri_progress::Stage::LoadingAddOns,
+                        bri_progress::Unit::Steps,
+                        None,
+                    );
                     let (catalog, packages) = crate::mods::load_fetched(
                         &package_root,
                         &package_set,
@@ -935,6 +951,9 @@ impl App {
                 },
             )
             .await;
+            if let Ok((_, fetched, _)) = &joined {
+                log_fetched(fetched);
+            }
             let client = match joined {
                 Ok((client, fetched, dropped)) if !fetched.is_empty() || !dropped.is_empty() => {
                     let set =
@@ -1268,24 +1287,25 @@ impl App {
         );
     }
     /// Put the load's progress on screen: the loading screen for a host
-    /// start, a join once the host has named its map, and a map change once
-    /// the new world starts arriving. Nothing changes once in game.
+    /// start, a join once the host has answered (or anything but connecting
+    /// has begun), and a map change once the new world starts arriving.
+    /// Until the host answers, a join is in the Connecting dialog, which
+    /// names what it waits on. Nothing changes once in game.
     pub(super) fn show_progress(&mut self, a: &mut Attempt) {
         let snapshot = a.progress.snapshot();
         if snapshot.revision == a.progress_seen {
             return;
         }
         a.progress_seen = snapshot.revision;
-        let Some(map) = a.progress.subject() else {
-            return;
-        };
+        let subject = a.progress.subject();
         let showing = match &self.ui.core.conn {
             ConnectionState::Connecting { .. } | ConnectionState::Loading { .. } => true,
             // A map change: the host's new world has started to arrive.
             ConnectionState::InGame { .. } => {
-                a.reloading
-                    || (snapshot.stage == bri_progress::Stage::ReceivingWorld
-                        && self.scene.scene_map.as_deref() != Some(map.as_str()))
+                subject.is_some()
+                    && (a.reloading
+                        || (snapshot.stage == bri_progress::Stage::ReceivingWorld
+                            && self.scene.scene_map.as_deref() != subject.as_deref()))
             }
             _ => false,
         };
@@ -1294,9 +1314,9 @@ impl App {
         {
             return;
         }
-        // Each stage the loading screen shows goes to the session log with
-        // how long the one before took, so a player's log says where a
-        // slow or stuck load sat.
+        // Each stage the screen shows goes to the session log with how long
+        // the one before took, so a player's log says where a slow or stuck
+        // load sat.
         if a.logged_stage
             .is_none_or(|(stage, _)| stage != snapshot.stage)
         {
@@ -1304,24 +1324,50 @@ impl App {
             let previous = a.logged_stage.map_or(String::new(), |(_, since)| {
                 format!(" (after {} ms)", now.duration_since(since).as_millis())
             });
-            bri_console::echo(format!("Loading {map}: {}{previous}", snapshot.status()));
+            let what = subject.as_ref().map_or_else(
+                || format!("Joining {}", a.name),
+                |map| format!("Loading {map}"),
+            );
+            bri_console::echo(format!("{what}: {}{previous}", snapshot.status()));
             a.logged_stage = Some((snapshot.stage, now));
         }
+        let screen = match subject {
+            Some(map) => self.loading_screen(&map, &snapshot),
+            // Downloading the host's Add-Ons, or anything else after the
+            // host answered, is never hidden behind "Connecting": it gets
+            // the loading screen's bar even if the host never named its map.
+            None if !in_connecting_dialog(snapshot.stage)
+                || matches!(self.ui.core.conn, ConnectionState::Loading { .. }) =>
+            {
+                self.loading_screen(&a.name, &snapshot)
+            }
+            None => ConnectionState::Connecting {
+                text: connecting_text(snapshot.stage, &a.name, self.net.reconnects),
+            },
+        };
+        if self.ui.core.conn != screen {
+            self.ui.apply_session(a.id, UiUpdate::Connection(screen));
+        }
+    }
+    /// The loading screen for `map` (a map id, the host's listed map name,
+    /// or the server's name when it named no map) at `snapshot`.
+    pub(super) fn loading_screen(
+        &self,
+        map: &str,
+        snapshot: &bri_progress::Snapshot,
+    ) -> ConnectionState {
         let preview = self
             .content
             .maps
             .iter()
-            .find(|m| m.id == map)
+            .find(|m| m.id == map || m.name == map)
             .map_or(IconRef::None, |m| m.preview.clone());
-        self.ui.apply_session(
-            a.id,
-            UiUpdate::Connection(ConnectionState::Loading {
-                map,
-                preview,
-                status: snapshot.status(),
-                progress: snapshot.fraction(),
-            }),
-        );
+        ConnectionState::Loading {
+            map: map.to_string(),
+            preview,
+            status: snapshot.status(),
+            progress: snapshot.fraction(),
+        }
     }
     /// Everything the HUD takes from the map and the building controller.
     /// First entry sends it, and every map change sends it again, since the
@@ -1353,5 +1399,44 @@ impl App {
             preview: map.map(|m| m.preview.clone()).unwrap_or(IconRef::None),
         });
         Ok(updates)
+    }
+}
+/// Stages a join spends in the Connecting dialog before the host answers:
+/// this player's own content check, and reaching the host. Everything
+/// after is on the loading screen.
+pub(super) fn in_connecting_dialog(stage: bri_progress::Stage) -> bool {
+    matches!(
+        stage,
+        bri_progress::Stage::Starting
+            | bri_progress::Stage::CheckingContent
+            | bri_progress::Stage::Connecting
+    )
+}
+/// The Connecting dialog's text for a join to `server` in `stage`.
+pub(super) fn connecting_text(stage: bri_progress::Stage, server: &str, reconnects: u8) -> String {
+    match stage {
+        bri_progress::Stage::CheckingContent => "Checking your game content…".into(),
+        _ if reconnects > 0 => format!("Connection lost. Reconnecting to {server}…"),
+        _ => format!("Connecting to {server}…"),
+    }
+}
+/// The host's Add-Ons a join needed, each either downloaded now or already
+/// in the download cache from an earlier visit, for the session log.
+fn log_fetched(fetched: &[bri_net::packages::Fetched]) {
+    for f in fetched {
+        let package = &f.package;
+        if f.downloaded > 0 {
+            bri_console::echo(format!(
+                "Downloaded Add-On {} {} ({:.1} MB)",
+                package.id,
+                package.version,
+                f.downloaded as f64 / (1024.0 * 1024.0)
+            ));
+        } else {
+            bri_console::echo(format!(
+                "Add-On {} {} was already downloaded",
+                package.id, package.version
+            ));
+        }
     }
 }
