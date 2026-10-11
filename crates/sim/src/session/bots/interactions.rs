@@ -1730,7 +1730,9 @@ impl Session {
             // it is about to drive, and what it sweeps before it can stop,
             // is its harm, for its side to keep out of as of any shot
             // (`team`). Parked with somewhere to go, the way it would pull
-            // out is asked clear too: an ally standing there is told.
+            // out is asked clear too: an ally standing there is told. The
+            // ally coming aboard is not (`bot_in_the_way`): its way to the
+            // seat runs through there, and the driver waits for it.
             self.bots.brains.get_mut(&bot).unwrap().sweep = (d.runover_damage > 0.0
                 && (speed > STOPPED_SPEED || toward.is_some()))
             .then(|| super::claims::Harmed {

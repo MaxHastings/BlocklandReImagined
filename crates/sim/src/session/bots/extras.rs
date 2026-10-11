@@ -316,9 +316,22 @@ impl Session {
         let peer = self.peers.get(&bot)?;
         let (scale, width) = (peer.player.state().scale, peer.player.tuning().width);
         let centre = feet + Vec3::Y * scale;
+        // The vehicle it is on its way aboard: its crew's harm is what it
+        // walks into on purpose, and the crew waits for it.
+        let boarding = self
+            .bots
+            .claims
+            .owner_claim(bot, tick)
+            .and_then(|c| match c.resource {
+                super::claims::Resource::Seat { vehicle, .. } => Some(vehicle),
+                super::claims::Resource::Body { .. } => None,
+            });
         self.team_intents(bot, tick)
             .into_iter()
             .find_map(|(ally, intent)| {
+                if boarding.is_some() && self.mounted(ally).map(|(v, _)| v) == boarding {
+                    return None;
+                }
                 let side = way_out(&intent.harm?, centre, width)?;
                 Some((Threat::Ally(ally, tick / ASK_AGAIN), ally, side))
             })
