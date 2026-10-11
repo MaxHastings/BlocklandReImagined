@@ -1290,7 +1290,7 @@ def forget_hook_repository():
 
 
 def main():
-    global TEST_JOBS
+    global TEST_JOBS, BINARY_TIMEOUT
     forget_hook_repository()
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     parser.add_argument("--hook", nargs="*", help=argparse.SUPPRESS)
@@ -1306,8 +1306,14 @@ def main():
                         help="only run the history check on BASE..TIP (used by CI)")
     parser.add_argument("--jobs", type=int, default=None, metavar="N",
                         help=f"test processes at once (default: every logical CPU, {TEST_JOBS})")
+    parser.add_argument("--binary-timeout", type=int, default=None, metavar="MINUTES",
+                        help="stop a test binary still running after this long "
+                        f"(default {BINARY_TIMEOUT // 60}; CI passes more, since its "
+                        "software renderer draws a frame far slower than a GPU)")
     parser.add_argument("commit", nargs="?", default="HEAD")
     args = parser.parse_args()
+    if args.binary_timeout:
+        BINARY_TIMEOUT = args.binary_timeout * 60
     if args.jobs:
         TEST_JOBS = max(HEAVY_JOBS + 1, args.jobs)
     try:
