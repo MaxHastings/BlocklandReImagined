@@ -111,6 +111,10 @@ struct Shadows {
     // The map layer (layer cascade + 2 * count): per cascade, caster depth
     // to map-layer depth as depth * scale + offset; x 1 when drawn.
     map_scale:vec4<f32>, map_offset:vec4<f32>, map_params:vec4<f32>,
+    // The far map layer (shadow.rs): the whole map's opaque geometry from
+    // the sun, read past the cascades. x 1 while drawn, y its layer, z the
+    // world size of one texel, w one texel in map coordinates.
+    far_matrix:mat4x4<f32>, far_params:vec4<f32>,
 };
 @group(0) @binding(6) var shadow_map:texture_depth_2d_array;
 @group(0) @binding(7) var shadow_sampler:sampler_comparison;
@@ -255,10 +259,29 @@ fn map_cascade_lit(c:CascadeCoord)->f32 {
 // it lights the walls and floor beside it; past it (and while the map layer
 // is not drawn) the visibility volume's coarse sun stands in. Live casters
 // shade it as everywhere.
+// Sun reaching a receiver past the map's own surfaces far from the eye,
+// from the far map layer: coarse texels over the whole map, filtered as
+// the cascades' map layer is. 1 (unshadowed) outside it or while it is not
+// drawn. `fallback` stands in then, as it did before the layer existed.
+fn far_map_lit(position:vec3<f32>,n:vec3<f32>,fallback:f32)->f32 {
+    if shadows.far_params.x<=0.0 {return fallback;}
+    let clip=shadows.far_matrix*vec4<f32>(position+n*shadows.far_params.z*1.5,1.0);
+    let uv=clip.xy*vec2<f32>(0.5,-0.5)+vec2<f32>(0.5);
+    if any(uv<vec2<f32>(0.0)) || any(uv>vec2<f32>(1.0)) || clip.z<=0.0 || clip.z>=1.0 {return fallback;}
+    let layer=i32(shadows.far_params.y);
+    let step=0.5*shadows.far_params.w;
+    var lit=0.0;
+    lit+=textureSampleCompareLevel(shadow_map,shadow_sampler,uv+vec2<f32>(-step,-step),layer,clip.z);
+    lit+=textureSampleCompareLevel(shadow_map,shadow_sampler,uv+vec2<f32>(step,-step),layer,clip.z);
+    lit+=textureSampleCompareLevel(shadow_map,shadow_sampler,uv+vec2<f32>(-step,step),layer,clip.z);
+    lit+=textureSampleCompareLevel(shadow_map,shadow_sampler,uv+vec2<f32>(step,step),layer,clip.z);
+    return lit*0.25;
+}
 fn object_sun(position:vec3<f32>,normal:vec3<f32>,vis:MapVisibility)->f32 {
     let c=shadow_coord(position,normal);
     if lighting_mode()==3 {return dynamic_sun(position,normal);}
-    var map=vis.low.x;
+    let n=normal/max(length(normal),0.0001);
+    var map=far_map_lit(position,n,vis.low.x);
     if c.near.cascade>=0 && shadows.map_params.x>0.0 {
         var lit=map_cascade_lit(c.near);
         if c.blend>0.0 {lit=mix(lit,map_cascade_lit(c.far),c.blend);}
@@ -505,7 +528,7 @@ fn relit_sun(baked:f32,position:vec3<f32>,n:vec3<f32>)->f32 {
         return min(baked,sun_visibility(position,n));
     }
     let c=shadow_coord(position,n);
-    var map=baked;
+    var map=far_map_lit(position,n,baked);
     if c.near.cascade>=0 && shadows.map_params.x>0.0 {
         var lit=map_cascade_lit(c.near);
         if c.blend>0.0 {lit=mix(lit,map_cascade_lit(c.far),c.blend);}
@@ -611,11 +634,12 @@ fn map_light_total(position:vec3<f32>,n:vec3<f32>,visibility:MapVisibility)->vec
 // Beyond the bounded cascade range it fades to unshadowed, never old masks.
 fn dynamic_sun(position:vec3<f32>,normal:vec3<f32>)->f32 {
     let c=shadow_coord(position,normal);
-    var map=1.0;
+    let n=normal/max(length(normal),0.0001);
+    var map=far_map_lit(position,n,1.0);
     if c.near.cascade>=0 && shadows.map_params.x>0.0 {
         var lit=map_cascade_lit(c.near);
         if c.blend>0.0 {lit=mix(lit,map_cascade_lit(c.far),c.blend);}
-        map=mix(1.0,lit,c.strength);
+        map=mix(map,lit,c.strength);
     }
     return min(map,shadow_lit(c));
 }

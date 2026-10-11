@@ -5,6 +5,11 @@
 // undersides of ledges deepen. Written as a multiply over the frame; the sky
 // (depth 0) and distant pixels are left alone.
 //
+// Under MSAA the pass runs once per pixel from the first sample's depth (as
+// screen-space occlusion is computed everywhere: it is low-frequency shade,
+// not an edge), and its shade covers every sample of the pixel. Shading per
+// sample would multiply the whole pass by the sample count.
+//
 // view_projection and inverse map to and from clip space (reversed 0..1
 // depth); eye.xyz is the camera; params is radius (world units), strength,
 // fade start and fade end (distance from the eye); size.xy is the target in
@@ -18,6 +23,8 @@ struct Occlusion {
 @group(0) @binding(1) var depth_texture:DEPTH_TEXTURE;
 @group(0) @binding(2) var exclusion_mask:MASK_TEXTURE;
 const TAPS:u32=12u;
+// The sample (or mip level, without MSAA) every depth and mask read uses.
+const SAMPLE:i32=0;
 struct VertexOut { @builtin(position) position:vec4<f32> };
 @vertex
 fn vs_main(@builtin(vertex_index) index:u32)->VertexOut {
@@ -26,9 +33,9 @@ fn vs_main(@builtin(vertex_index) index:u32)->VertexOut {
     out.position=vec4<f32>(uv*2.0-1.0,0.0,1.0);
     return out;
 }
-fn depth_at(pixel:vec2<i32>,sample:u32)->f32 {
+fn depth_at(pixel:vec2<i32>)->f32 {
     let size=vec2<i32>(occlusion.size.xy);
-    return textureLoad(depth_texture,clamp(pixel,vec2<i32>(0),size-vec2<i32>(1)),i32(sample));
+    return textureLoad(depth_texture,clamp(pixel,vec2<i32>(0),size-vec2<i32>(1)),SAMPLE);
 }
 fn world_at(pixel:vec2<i32>,depth:f32)->vec3<f32> {
     let uv=(vec2<f32>(pixel)+0.5)/occlusion.size.xy;
@@ -41,10 +48,10 @@ fn noise(pixel:vec2<f32>)->f32 {
     return fract(52.9829189*fract(dot(pixel,vec2<f32>(0.06711056,0.00583715))));
 }
 @fragment
-fn fs_main(in:VertexOut,@builtin(sample_index) sample:u32)->@location(0) vec4<f32> {
+fn fs_main(in:VertexOut)->@location(0) vec4<f32> {
     let pixel=vec2<i32>(in.position.xy);
-    let depth=depth_at(pixel,sample);
-    if depth<=0.0 || textureLoad(exclusion_mask,pixel,i32(sample)).r>0.5 {return vec4<f32>(1.0);}
+    let depth=depth_at(pixel);
+    if depth<=0.0 || textureLoad(exclusion_mask,pixel,SAMPLE).r>0.5 {return vec4<f32>(1.0);}
     let p=world_at(pixel,depth);
     let range=distance(p,occlusion.eye.xyz);
     let fog=fog_along(p-occlusion.eye.xyz,occlusion.atmosphere,occlusion.size.z);
@@ -52,10 +59,10 @@ fn fs_main(in:VertexOut,@builtin(sample_index) sample:u32)->@location(0) vec4<f3
     if fade<=0.0 {return vec4<f32>(1.0);}
     // The normal from the nearer neighbour on each axis, so an edge does
     // not bend it.
-    let px=world_at(pixel+vec2<i32>(1,0),depth_at(pixel+vec2<i32>(1,0),sample));
-    let nx=world_at(pixel-vec2<i32>(1,0),depth_at(pixel-vec2<i32>(1,0),sample));
-    let py=world_at(pixel+vec2<i32>(0,1),depth_at(pixel+vec2<i32>(0,1),sample));
-    let ny=world_at(pixel-vec2<i32>(0,1),depth_at(pixel-vec2<i32>(0,1),sample));
+    let px=world_at(pixel+vec2<i32>(1,0),depth_at(pixel+vec2<i32>(1,0)));
+    let nx=world_at(pixel-vec2<i32>(1,0),depth_at(pixel-vec2<i32>(1,0)));
+    let py=world_at(pixel+vec2<i32>(0,1),depth_at(pixel+vec2<i32>(0,1)));
+    let ny=world_at(pixel-vec2<i32>(0,1),depth_at(pixel-vec2<i32>(0,1)));
     let dx=select(p-nx,px-p,abs(distance(px,occlusion.eye.xyz)-range)<abs(distance(nx,occlusion.eye.xyz)-range));
     let dy=select(p-ny,py-p,abs(distance(py,occlusion.eye.xyz)-range)<abs(distance(ny,occlusion.eye.xyz)-range));
     var n=normalize(cross(dy,dx));
@@ -82,7 +89,7 @@ fn fs_main(in:VertexOut,@builtin(sample_index) sample:u32)->@location(0) vec4<f3
         let screen=vec2<f32>(ndc.x*0.5+0.5,0.5-ndc.y*0.5)*occlusion.size.xy;
         if any(screen<vec2<f32>(0.0)) || any(screen>=occlusion.size.xy) {continue;}
         let sample_pixel=vec2<i32>(screen);
-        let found=depth_at(sample_pixel,sample);
+        let found=depth_at(sample_pixel);
         if found<=0.0 {continue;}
         let seen=distance(world_at(sample_pixel,found),occlusion.eye.xyz);
         let wanted=distance(at,occlusion.eye.xyz);
