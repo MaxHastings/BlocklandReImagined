@@ -203,7 +203,7 @@ impl Session {
         way != Vec3::ZERO
             && self
                 .simulation
-                .brick_ray(end + Vec3::Y, way, CLICK_REACH, |_, b| b.colliding)
+                .brick_ray(end + Vec3::Y, way, CLICK_REACH, |_, b, _| b.colliding)
                 .ok()
                 .flatten()
                 .and_then(|hit| hit.brick)
@@ -559,7 +559,7 @@ impl Session {
             let from = feet + Vec3::Y * state.scale;
             if let Some(hit) = self
                 .simulation
-                .brick_ray(from, way, ROUTE_LOOK, |_, b| b.colliding)?
+                .brick_ray(from, way, ROUTE_LOOK, |_, b, _| b.colliding)?
                 && let Some(brick) = hit.brick
                 && hit.distance + 0.5 < flat(goal - feet).length()
                 && self.bot_activatable(brick)
