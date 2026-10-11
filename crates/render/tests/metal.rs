@@ -326,10 +326,7 @@ impl Gpu {
         readback.slice(..).map_async(wgpu::MapMode::Read, move |r| {
             let _ = tx.send(r);
         });
-        device.poll(wgpu::PollType::Wait {
-            submission_index: None,
-            timeout: Some(std::time::Duration::from_secs(60)),
-        })?;
+        device.poll(wgpu::PollType::wait_indefinitely())?;
         rx.recv_timeout(std::time::Duration::from_secs(60))??;
         let mapped = readback.slice(..).get_mapped_range()?;
         Ok(mapped

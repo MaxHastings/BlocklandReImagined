@@ -544,12 +544,7 @@ fn gpu_preserves_atlas_alpha_and_reads_without_writing_host_depth() {
             read.slice(..).map_async(wgpu::MapMode::Read, move |r| {
                 tx.send(r).unwrap();
             });
-            device
-                .poll(wgpu::PollType::Wait {
-                    submission_index: None,
-                    timeout: Some(std::time::Duration::from_secs(30)),
-                })
-                .unwrap();
+            device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
             rx.recv_timeout(std::time::Duration::from_secs(30))
                 .unwrap()
                 .unwrap();

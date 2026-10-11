@@ -102,10 +102,7 @@ impl Gpu {
         read.slice(..).map_async(wgpu::MapMode::Read, move |r| {
             let _ = tx.send(r);
         });
-        self.device.poll(wgpu::PollType::Wait {
-            submission_index: None,
-            timeout: Some(std::time::Duration::from_secs(30)),
-        })?;
+        self.device.poll(wgpu::PollType::wait_indefinitely())?;
         rx.recv_timeout(std::time::Duration::from_secs(30))??;
         let bytes = read.slice(..).get_mapped_range()?.to_vec();
         Ok(bytes)
