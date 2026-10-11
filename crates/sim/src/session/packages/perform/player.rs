@@ -204,6 +204,35 @@ impl Perform for ops::SetTempLook {
     }
 }
 impl Perform for ops::GiveItem {
+    /// Whether the player can take the item: they are here, the item is
+    /// one this server has, and they carry it already, have a free slot,
+    /// or `equip` will drop the held tool to make room (`give_tool`).
+    fn check(&self, session: &Session, _cx: OpCall<'_>) -> Result<()> {
+        ensure!(session.peers.contains_key(&self.player), "No such player");
+        ensure!(
+            session.weapons.contains_item(&self.item),
+            "`{}` is not an item of this server",
+            self.item
+        );
+        let actor = session
+            .weapons
+            .actor(bri_weapons::ActorId(self.player))
+            .context("Unknown connection")?;
+        let holds = actor
+            .inventory
+            .iter()
+            .any(|held| held.as_deref() == Some(self.item.as_str()));
+        let room = actor.inventory.iter().any(Option::is_none);
+        ensure!(
+            holds || room || self.equip,
+            "{}'s tools are full",
+            session
+                .peers
+                .get(&self.player)
+                .map_or("The player", |p| p.name.as_str())
+        );
+        Ok(())
+    }
     fn perform(self, session: &mut Session, _cx: OpCall<'_>) -> Result<()> {
         let ops::GiveItem {
             player,
@@ -221,6 +250,21 @@ impl Perform for ops::SetTools {
     }
 }
 impl Perform for ops::TakeItem {
+    /// Whether there is an item to take: `take_item` of an item the player
+    /// does not carry does nothing, which a `require` counts as failure.
+    fn check(&self, session: &Session, _cx: OpCall<'_>) -> Result<()> {
+        ensure!(session.peers.contains_key(&self.player), "No such player");
+        let carries = session
+            .weapons
+            .actor(bri_weapons::ActorId(self.player))
+            .is_some_and(|a| {
+                a.inventory
+                    .iter()
+                    .any(|held| held.as_deref() == Some(self.item.as_str()))
+            });
+        ensure!(carries, "The player does not carry `{}`", self.item);
+        Ok(())
+    }
     fn perform(self, session: &mut Session, _cx: OpCall<'_>) -> Result<()> {
         let ops::TakeItem { player, item } = self;
         session.package_take_item(player, &item)

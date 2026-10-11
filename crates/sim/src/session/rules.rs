@@ -531,6 +531,19 @@ impl Session {
                     .context("Explain needs a player")?;
                 self.explain_rules(owner, d.target.id.index)?;
             }
+            RuleOp::RestoreItem | RuleOp::HideItem => {
+                let brick = d.target.id.index;
+                ensure!(
+                    self.item_spawners.items.contains_key(&brick),
+                    "Brick spawns no item"
+                );
+                let tick = self.simulation.state().tick;
+                if *op == RuleOp::RestoreItem {
+                    self.item_spawners.restock(brick, tick);
+                } else {
+                    self.item_spawners.hide(brick);
+                }
+            }
             RuleOp::AddScore(value) => {
                 self.rule_game(d)?;
                 let player = self
@@ -618,44 +631,44 @@ impl Session {
                 self.apply_minigame_effects(effects)?;
             }
             RuleOp::ObjectVelocity(velocity) => {
+                self.rule_may_handle_object(d)?;
                 let object = ObjectRef::Vehicle(d.target.id.index);
-                let source = self
-                    .simulation
-                    .state()
-                    .bricks
-                    .get(&d.source.index)
-                    .context("Source is gone")?
-                    .owner;
-                ensure!(
-                    self.may_move(source, object),
-                    "Rule owner may not move this object"
-                );
                 let delta = *velocity - self.object_velocity(object).context("Object is gone")?;
                 self.push_object(object, delta)?;
             }
             RuleOp::ResetObject => {
-                let brick = self
-                    .vehicle_spawn_brick(VehicleId(d.target.id.index))
-                    .context("Object has no spawn brick")?;
-                let owner = self
-                    .simulation
-                    .state()
-                    .bricks
-                    .get(&d.source.index)
-                    .context("Source is gone")?
-                    .owner;
-                ensure!(
-                    self.simulation
-                        .state()
-                        .bricks
-                        .get(&brick)
-                        .is_some_and(|b| self.may_edit_events_of(b.owner, owner)),
-                    "The object's spawner is neither the rule owner's nor trusted to edit its events"
-                );
+                let brick = self.rule_may_handle_object(d)?;
                 self.respawn_vehicle_brick(brick)?;
             }
         }
         Ok(())
+    }
+    /// The spawn brick of the object a rule acts on, when the rule's brick
+    /// may act on it: the object comes from the builder's spawn bricks or
+    /// from those of someone who may edit the builder's events, the objects
+    /// the builder's regions see (Rule Workshop design, authority rule 8).
+    /// Whether the builder is alive, connected or holding anything does not
+    /// matter: v0.2.8 checked setObjectVelocity as if the builder held the
+    /// ball with a physics gun, so a goal's push failed whenever its builder
+    /// was dead or away ("Rule owner may not move this object").
+    fn rule_may_handle_object(&self, d: &Dispatch) -> Result<BrickId> {
+        let state = self.simulation.state();
+        let owner = state
+            .bricks
+            .get(&d.source.index)
+            .context("Source is gone")?
+            .owner;
+        let brick = self
+            .vehicle_spawn_brick(VehicleId(d.target.id.index))
+            .context("Object has no spawn brick")?;
+        ensure!(
+            state
+                .bricks
+                .get(&brick)
+                .is_some_and(|b| self.may_edit_events_of(b.owner, owner)),
+            "The object's spawner is neither the rule owner's nor trusted to edit its events"
+        );
+        Ok(brick)
     }
     pub(super) fn fire_rule_game_fact(
         &mut self,
@@ -3226,6 +3239,44 @@ mod tests {
         s.step().unwrap();
         assert!(s.is_administrator(p));
         assert!(goal_reacts(&mut s, &ids, goal, p));
+    }
+    /// A goal that throws the ball (Object setObjectVelocity): whether the
+    /// ball, placed at rest in the goal, flew from where it was put.
+    fn goal_lifts(s: &mut Session, ids: &[BrickId], goal: Vec3, by: OwnerId) -> bool {
+        let ball = ball_of(s, ids[2]);
+        place_ball(s, ball, goal, by);
+        let at = s.object_centre(ObjectRef::Vehicle(ball)).unwrap();
+        (at - goal).length() > 1.0
+    }
+    fn lift_goal() -> Vec<ev::Row> {
+        vec![goal_row(
+            ev::Target::Slot(Slot::Object),
+            "setObjectVelocity",
+            vec![ev::Value::Vector(Vec3::new(0.0, 20.0, 0.0))],
+        )]
+    }
+    /// v0.2.8 soccer with bots: "host rejected setObjectVelocity: Rule owner
+    /// may not move this object" each time the goal's builder was dead. A
+    /// brick's push follows the objects rule, not whether its builder is
+    /// alive.
+    #[test]
+    fn a_goal_pushes_the_ball_while_its_builder_is_dead() {
+        let (mut s, p, ids, _, goal) = lone_goal(lift_goal());
+        s.kill(p, None, super::super::combat::DamageKind::Suicide)
+            .unwrap();
+        assert!(goal_lifts(&mut s, &ids, goal, p));
+    }
+    /// A loaded build's goal, its builder absent, pushes an administrator's
+    /// ball, as it resets one.
+    #[test]
+    fn a_loaded_goal_pushes_the_ball_of_an_administrator_who_may_edit_it() {
+        let (mut s, p, ids, _, goal) = lone_goal(lift_goal());
+        s.set_lan_host(false);
+        s.simulation.mutate(ids[0], |b| b.owner = 4242).unwrap();
+        s.dirty.insert(ids[0]);
+        s.step().unwrap();
+        assert!(s.is_administrator(p));
+        assert!(goal_lifts(&mut s, &ids, goal, p));
     }
     /// A stranger's ball leaves another builder's goal alone until the
     /// builder trusts them enough to edit its events.

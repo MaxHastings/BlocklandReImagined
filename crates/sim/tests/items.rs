@@ -204,7 +204,7 @@ fn placement_preserves_asymmetric_pivot_world_axes_and_reconciliation_clock() {
     let mut s = ItemSpawners::new(bounds());
     let mut b = brick();
     s.reconcile(1, Some(&b), &definitions(), 7).unwrap();
-    s.picked_up(1, 7, 120).unwrap();
+    s.picked_up(1, 7, Some(127)).unwrap();
     b.item_spawn.respawn_ms = 3000;
     b.item_spawn.direction = 3;
     s.reconcile(1, Some(&b), &definitions(), 10).unwrap();

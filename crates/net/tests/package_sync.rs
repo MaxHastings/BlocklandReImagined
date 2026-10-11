@@ -86,9 +86,17 @@ async fn a_clean_client_fetches_verifies_and_reuses_the_servers_packages() -> Re
     let total: u64 = fetched.iter().map(|f| f.downloaded).sum();
     let unique = 16 + 300_000 + 1_500_000 + 16 + 24;
     assert_eq!(total, unique as u64, "the shared texture downloads once");
+    // The download reported every byte, then installing reported each
+    // package it checked.
+    let download = progress
+        .trail()
+        .into_iter()
+        .rfind(|s| s.stage == Stage::DownloadingPackages)
+        .expect("the download reported progress");
+    assert_eq!((download.done, download.total), (total, Some(total)));
     let snapshot = progress.snapshot();
-    assert_eq!(snapshot.stage, Stage::DownloadingPackages);
-    assert_eq!((snapshot.done, snapshot.total), (total, Some(total)));
+    assert_eq!(snapshot.stage, Stage::VerifyingPackages);
+    assert_eq!((snapshot.done, snapshot.total), (3, Some(3)));
     let again = fetch_missing(server.address, &server.certificate, &cache, &progress).await?;
     assert!(again.iter().all(|f| f.downloaded == 0), "cache reused");
     server.stop().await?;
@@ -516,6 +524,73 @@ async fn a_package_edited_while_hosting_is_reported_not_served() -> Result<()> {
         .find(|p| p.id == "creeper")
         .unwrap();
     assert!(cache.installed(creeper).is_none());
+    server.stop().await?;
+    Ok(())
+}
+
+/// A join that downloads the host's Add-Ons knows the host's map before
+/// the download starts, so the loading screen shows the download (not a
+/// Connecting dialog that looks stalled), and every step between the host
+/// answering and the world arriving reports a stage of its own. Regression
+/// for a friend who sat 20 seconds on "Connecting to ..." while Add-Ons
+/// downloaded.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_join_names_the_map_before_downloading_and_reports_each_step() -> Result<()> {
+    let root = tempfile::tempdir()?;
+    let (set, environment) = content(root.path())?;
+    let shelf = PackageShelf::new(root.path(), &set, &environment)?;
+    let server = server::start(
+        fixture::session(),
+        ServerOptions {
+            environment: environment.clone(),
+            packages: Some(Arc::new(shelf)),
+            ..fixture::options()
+        },
+    )?;
+    let identity_dir = tempfile::tempdir()?;
+    let identity =
+        bri_identity::ClientIdentity::load_or_create(identity_dir.path().join("client.identity"))?;
+    let cache_dir = tempfile::tempdir()?;
+    let cache = Cache::open(cache_dir.path())?;
+    let progress = Progress::new();
+    let mut named_at_load = None;
+    let (client, fetched, _) = bri_net::client::Client::connect_fetching(
+        server.address,
+        bri_net::client::HostPin::from(&server.certificate[..]),
+        "Fetcher".into(),
+        Vec::new(),
+        None,
+        &identity,
+        &cache,
+        progress.clone(),
+        |fetched, _| {
+            named_at_load = progress.subject();
+            Ok(fetched.iter().map(|f| f.package.clone()).collect())
+        },
+    )
+    .await?;
+    let map = client.replica.world.map_id.clone();
+    assert_eq!(named_at_load.as_deref(), Some(map.as_str()));
+    let stages: Vec<_> = progress.trail().iter().map(|s| s.stage).collect();
+    assert_eq!(
+        stages,
+        [
+            Stage::Connecting,
+            Stage::DownloadingPackages,
+            Stage::VerifyingPackages,
+            Stage::Connecting,
+            Stage::WaitingForServer,
+        ]
+    );
+    let downloaded: u64 = fetched.iter().map(|f| f.downloaded).sum();
+    let trail = progress.trail();
+    assert_eq!(
+        (trail[1].done, trail[1].total),
+        (downloaded, Some(downloaded))
+    );
+    assert_eq!((trail[2].done, trail[2].total), (3, Some(3)));
+    assert_eq!(progress.snapshot().stage, Stage::ReceivingWorld);
+    drop(client);
     server.stop().await?;
     Ok(())
 }

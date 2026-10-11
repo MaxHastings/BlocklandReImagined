@@ -44,6 +44,11 @@ impl<T: Send + 'static> Building<T> {
         }
         Some(self.wait())
     }
+    /// The object itself, if its build has finished. Never blocks.
+    pub fn into_ready(mut self) -> Option<T> {
+        self.ready()?;
+        self.done.take()
+    }
     /// The object, if it was already collected by `ready` or `wait`.
     pub fn finished(&self) -> Option<&T> {
         self.done.as_ref()

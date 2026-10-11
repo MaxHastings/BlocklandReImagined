@@ -208,6 +208,9 @@ struct Attempt {
     progress_seen: u64,
     /// The stage last written to the session log, and when it began.
     logged_stage: Option<(bri_progress::Stage, std::time::Instant)>,
+    /// How many of the load's stages had finished at the last look, so the
+    /// log also names those that began and ended between two frames.
+    stages_ended: u64,
     /// Hosts: the world revision last saved under a name (or entered, or
     /// loaded). `None` takes the next revision seen.
     saved_revision: Option<u64>,
@@ -1524,6 +1527,14 @@ impl PlatformApp for App {
     fn frame_timed(&mut self, timing: crate::perf::FrameTiming) {
         self.ui.apply(UiUpdate::PerfFrame(timing.sample()));
     }
+    fn frame_finished(&mut self, record: crate::frame_trace::FrameRecord) {
+        if let Some(log) = &mut self.perf.frame_log {
+            // Session log only: players send it, the console stays quiet.
+            for line in log.frame(&record) {
+                eprintln!("{line}");
+            }
+        }
+    }
     fn ui_mut(&mut self) -> &mut Ui {
         &mut self.ui
     }
@@ -1637,6 +1648,7 @@ impl PlatformApp for App {
         self.shapes_uploaded = None;
         self.gpu.hidden_uploaded = None;
         self.rebuild_effects_renderer(device, queue, format)?;
+        self.gpu.retired_renderer = None;
         self.gpu.gpu_scene = None;
         self.gpu.gpu_terrain.clear();
         self.gpu.gpu_palette = None;
@@ -1691,6 +1703,7 @@ impl PlatformApp for App {
         self.gpu.shell_gpu = None;
         self.avatar.gpu_stopped();
         self.gpu.renderer = None;
+        self.gpu.retired_renderer = None;
         self.lighting.reflections = None;
         self.lighting.environment_probe = None;
         self.foliage.gpu_stopped();

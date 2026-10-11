@@ -75,6 +75,7 @@ fn extension(brick: &mut Brick, line: &str) -> Result<Option<String>> {
                 },
                 direction: direction.clamp(2, 5) as u8,
                 respawn_ms: respawn.clamp(1000, 300000) as u32,
+                restore: Default::default(),
             };
             item_spawn.validate()?;
             let unresolved = item_spawn.item.is_some();
@@ -347,9 +348,10 @@ fn read_with_header(
                 .ok()
                 .filter(|c| usize::from(*c) < palette_len)
                 .unwrap_or(0);
+            // `NOPRINT` is v20's "nothing printed here", not a print.
             brick.print = words
                 .get(6)
-                .filter(|p| !p.is_empty() && **p != "/")
+                .filter(|p| !bri_content::brick_materials::is_no_print(p))
                 .map(|p| reference("print", p));
             brick.color_effect = u8::try_from(integer(words.get(7)))
                 .ok()
@@ -523,6 +525,29 @@ mod tests {
         );
         assert_eq!(world.bricks[&2].name.as_deref(), Some("_door"));
     }
+    /// v20 writes `NOPRINT` for a print brick nobody printed on: no print,
+    /// not an unknown print named NOPRINT; the source line keeps the word.
+    #[test]
+    fn noprint_is_no_print_and_named_prints_are_kept() {
+        let source = header("Prints", true)
+            + "1x2 Plate\" 0 0 0.3 0 1 5 NOPRINT 0 0 1 1 1\n"
+            + "1x2 Plate\" 2 0 0.3 0 1 5 noprint 0 0 1 1 1\n"
+            + "1x2 Plate\" 4 0 0.3 0 1 5 Letters/A 0 0 1 1 1\n"
+            + "1x2 Plate\" 6 0 0.3 0 1 5 Community/unknown 0 0 1 1 1\n";
+        let (world, skipped) = read_counting(source.as_bytes(), &stock(), "t", "map/t").unwrap();
+        assert_eq!(skipped, Skipped::default());
+        let prints: Vec<_> = world.bricks.values().map(|b| b.print.clone()).collect();
+        assert_eq!(
+            prints,
+            vec![
+                None,
+                None,
+                Some(reference("print", "Letters/A")),
+                Some(reference("print", "Community/unknown")),
+            ]
+        );
+        assert!(world.bricks[&1].source_records[0].text.contains("NOPRINT"));
+    }
     #[test]
     fn older_saves_with_fewer_fields_load_with_defaults() {
         // Saves from before events wrote no raycast/collision/rendering
@@ -642,6 +667,7 @@ mod tests {
                     position: 4,
                     direction: 3,
                     respawn_ms: 12000,
+                    restore: Default::default(),
                 },
             ),
             (
@@ -651,6 +677,7 @@ mod tests {
                     position: 1,
                     direction: 5,
                     respawn_ms: 300000,
+                    restore: Default::default(),
                 },
             ),
             (
@@ -693,7 +720,8 @@ mod tests {
                 item: None,
                 position: 5,
                 direction: 2,
-                respawn_ms: 1000
+                respawn_ms: 1000,
+                restore: Default::default(),
             }
         );
         let records = &world.bricks[&1].source_records;

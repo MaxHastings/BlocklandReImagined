@@ -173,7 +173,10 @@ impl Session {
                 }
             }
             for id in self.item_spawners.contacts(contact) {
-                let item = &self.item_spawners.items[&id];
+                // A hook earlier in this loop may have removed this spawner.
+                let Some(item) = self.item_spawners.items.get(&id) else {
+                    continue;
+                };
                 if locked || tick < item.available_at {
                     continue;
                 }
@@ -183,7 +186,12 @@ impl Session {
                 let decision = if sport {
                     Pickup::Take
                 } else {
-                    self.package_pickup(owner, &item, None, Some(id))
+                    let decision = self.package_pickup(owner, &item, None, Some(id));
+                    // The rule's edits applied as it ran: a spawner it
+                    // removed (this one, used up for good) offers nothing
+                    // to anyone after.
+                    self.reconcile_items()?;
+                    decision
                 };
                 let picked = match decision {
                     Pickup::Leave => continue,
@@ -192,15 +200,25 @@ impl Session {
                     Pickup::Take => self.weapons.give(actor, &item).map(|_| ()),
                 };
                 // Full inventory, duplicate item or occupied hands leave the item
-                // available. Neither circumstance starts its respawn timer.
+                // available. Neither circumstance starts its respawn timer,
+                // and neither counts as a pickup: `onItemPickup` and
+                // `on_collected` fire only once the item is really gone from
+                // its brick, so a builder's reward row runs once per take.
                 if picked.is_ok() {
-                    let respawn = self.simulation.state().bricks[&id]
-                        .item_spawn
-                        .respawn_ticks();
-                    self.item_spawners.picked_up(id, tick, respawn)?;
+                    // A spawner the rule removed has no respawn to start.
+                    if let Some(brick) = self.simulation.state().bricks.get(&id) {
+                        let again = brick.item_spawn.available_again(tick);
+                        self.item_spawners.picked_up(id, tick, again)?;
+                    }
                     if !sport && decision == Pickup::Take {
                         self.notify(owner, Notice::Sound(ITEM_SOUND.into()));
                     }
+                    self.fire_input(id, "onItemPickup", Some(owner));
+                    self.package_collected(owner, &item, None, Some(id));
+                    // The result hooks edit the world too: a spawner they
+                    // removed must not hand its item to a later contact in
+                    // this same tick.
+                    self.reconcile_items()?;
                 }
             }
             for id in dynamic.query(contact) {
@@ -224,10 +242,12 @@ impl Session {
                         Pickup::Leave => {}
                         Pickup::UseUp => {
                             self.weapons.remove_drop(id);
+                            self.package_collected(owner, &item, Some(id), None);
                         }
                         Pickup::Take => {
                             if self.weapons.pickup(actor, id).is_ok() {
                                 self.notify(owner, Notice::Sound(ITEM_SOUND.into()));
+                                self.package_collected(owner, &item, Some(id), None);
                             }
                         }
                     }

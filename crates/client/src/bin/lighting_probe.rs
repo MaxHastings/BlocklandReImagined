@@ -7,6 +7,7 @@
 //!
 //! Usage: lighting_probe <content-root> <out-dir> <world-name-substring>
 //!        lighting_probe <content-root> <out-dir> synthetic:<map-substring>:<bricks>
+//!        lighting_probe <content-root> <out-dir> save:<path to a .world.json>
 //! Optional views follow as `name=ex,ey,ez,tx,ty,tz` (native Y-up).
 //! `BRI_LIGHT_AT=x,y,z[;x,y,z]` also prints what each recovered light gives
 //! those points: falloff, visibility channel and the volume's verdict.
@@ -26,7 +27,8 @@
 //! (Graphics.soft_shading), ao (Graphics.ambient_occlusion),
 //! sun (sun height -1..1 on a day cycle; this
 //! applies a live environment, otherwise the map draws as authored).
-//! `BRI_WIDTH=2560` and `BRI_HEIGHT=1440` set the image size.
+//! `BRI_SHADOWS=best|high|medium|low` picks the Shadow Quality level (Best
+//! unless set). `BRI_WIDTH=2560` and `BRI_HEIGHT=1440` set the image size.
 //! `BRI_MSAA=4` the client's default samples (1 otherwise), `BRI_FRAMES=n`,
 //! `BRI_TIME=1` adds the GPU time of each stretch of the frame to the report.
 //! `BRI_OFF=i,j,...` switches those recovered lights off, as a broken bulb
@@ -526,13 +528,23 @@ fn main() -> Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
     ensure!(
         args.len() >= 3,
-        "Usage: lighting_probe <content-root> <out-dir> <world-substring | synthetic:<map>:<bricks>> [name=ex,ey,ez,tx,ty,tz ...]"
+        "Usage: lighting_probe <content-root> <out-dir> <world-substring | synthetic:<map>:<bricks> | save:<path>> [name=ex,ey,ez,tx,ty,tz ...]"
     );
     let root = PathBuf::from(&args[0]);
     let out = PathBuf::from(&args[1]);
     std::fs::create_dir_all(&out)?;
     let content = ClientContent::load(&root)?;
     let paths = content.paths.clone();
+    // save:<path>: a build saved by this game (a `.world.json` from the
+    // saves folder), drawn on its own map, so a player's real stress build
+    // can be measured rather than a content world or a synthetic scatter.
+    let saved = match args[2].strip_prefix("save:") {
+        Some(path) => {
+            let bytes = std::fs::read(path).with_context(|| format!("reading {path}"))?;
+            Some(bri_world::build::decode(&bytes)?.world)
+        }
+        None => None,
+    };
     let (entry, synthetic_count) = match args[2].strip_prefix("synthetic:") {
         Some(rest) => {
             let (map, count) = rest.split_once(':').context("synthetic:<map>:<bricks>")?;
@@ -544,18 +556,35 @@ fn main() -> Result<()> {
                 .context("No world on that map to take bricks from")?;
             (entry.clone(), Some(count.parse::<usize>()?))
         }
-        None => (
-            content
-                .worlds
-                .iter()
-                .filter(|w| w.loadable && w.name.contains(args[2].as_str()))
-                .max_by_key(|w| w.brick_count)
-                .with_context(|| format!("No loadable world matches {:?}", args[2]))?
-                .clone(),
-            None,
-        ),
+        None => match &saved {
+            Some(world) => (
+                bri_client::content::WorldEntry {
+                    id: String::new(),
+                    name: world.name.clone(),
+                    map_id: world.map_id.clone(),
+                    file: String::new(),
+                    brick_count: world.bricks.len(),
+                    loadable: true,
+                    picture: None,
+                },
+                None,
+            ),
+            None => (
+                content
+                    .worlds
+                    .iter()
+                    .filter(|w| w.loadable && w.name.contains(args[2].as_str()))
+                    .max_by_key(|w| w.brick_count)
+                    .with_context(|| format!("No loadable world matches {:?}", args[2]))?
+                    .clone(),
+                None,
+            ),
+        },
     };
-    let loaded = paths.load_map(&entry.map_id, Some(&entry.id))?;
+    let loaded = paths.load_map(
+        &entry.map_id,
+        (!entry.id.is_empty()).then_some(entry.id.as_str()),
+    )?;
     let definitions = loaded.simulation.definitions.clone();
     let meshes: BTreeMap<_, _> = definitions
         .entries
@@ -563,7 +592,32 @@ fn main() -> Result<()> {
         .map(|(id, def)| (id.clone(), def.mesh.clone()))
         .collect();
     let spawn = loaded.spawn_points[0];
-    let mut world = loaded.simulation.state().clone();
+    let mut world = match saved {
+        Some(mut world) => {
+            // Bricks of Add-Ons this content does not carry are kept in a
+            // save but cannot draw here; the client also leaves them out.
+            let before = world.bricks.len();
+            let unknown: Vec<u64> = world
+                .bricks
+                .iter()
+                .filter(|(_, b)| {
+                    !matches!(&b.definition, bri_world::ContentRef::Resolved(d) if meshes.contains_key(d.as_str()))
+                })
+                .map(|(id, _)| *id)
+                .collect();
+            for id in unknown {
+                world.bricks.remove(&id);
+            }
+            if world.bricks.len() < before {
+                println!(
+                    "{} bricks left out: no definition in this content",
+                    before - world.bricks.len()
+                );
+            }
+            world
+        }
+        None => loaded.simulation.state().clone(),
+    };
     if let Some(count) = synthetic_count {
         world = synthetic(&meshes, &world, count, spawn)?;
     }
@@ -1219,9 +1273,18 @@ fn main() -> Result<()> {
     // BRI_LAMPS=0: no lamp shadows (the sun's alone); BRI_SUN=0 below: no
     // sun (the lamps' alone).
     let lamps = std::env::var("BRI_LAMPS").map_or(true, |v| v != "0");
+    // BRI_SHADOWS=best|high|medium|low: the Shadow Quality level (Best
+    // unless set), as the client's graphics options pick it.
+    let quality = match std::env::var("BRI_SHADOWS").as_deref() {
+        Ok("high") => ShadowSettings::HIGH,
+        Ok("medium") => ShadowSettings::MEDIUM,
+        Ok("low") => ShadowSettings::LOW,
+        Ok("best") | Err(_) => ShadowSettings::BEST,
+        Ok(other) => anyhow::bail!("BRI_SHADOWS: unknown level {other:?}"),
+    };
     let settings = ShadowSettings {
-        lamps: if lamps { ShadowSettings::BEST.lamps } else { 0 },
-        ..ShadowSettings::BEST
+        lamps: if lamps { quality.lamps } else { 0 },
+        ..quality
     };
     // Unified's switchable sheets on maps with breakable bulbs or tubes.
     if let Some(u) = unified.as_ref().filter(|_| !light_shapes.is_empty()) {

@@ -260,6 +260,11 @@ pub struct WrenchData {
     /// 2..=5 North East South West.
     pub item_dir: u8,
     pub item_respawn_ms: u32,
+    /// The item stays gone until a mini-game reset or an event restores it,
+    /// instead of respawning after `item_respawn_ms`
+    /// (`bri_world::ItemRestore::Reset`).
+    #[serde(default)]
+    pub item_restore_on_reset: bool,
     pub raycasting: bool,
     pub colliding: bool,
     pub rendering: bool,
@@ -1790,6 +1795,10 @@ pub struct Settings {
     /// Add-On Settings favourites by slot 0..=9 (Slayer's
     /// `config/client/Slayer/config_saved`): every setting and the teams.
     pub addon_favorites: BTreeMap<u8, AddOnFavorite>,
+    /// Environment window favourites by slot 0..=9: the host's settings
+    /// over the map's own look, saved from the window's rows (a day cycle
+    /// keeps its length and time of day, not the tick it was set at).
+    pub environment_favorites: BTreeMap<u8, bri_content::atmosphere::Settings>,
 }
 
 /// One Add-On Settings favourite: the settings by `namespace:key` and the

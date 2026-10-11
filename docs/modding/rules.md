@@ -43,6 +43,7 @@ refused. The engine calls:
 | `on_entity_death(entity, killer, info)` | one of your creatures ran out of health, just before it is removed, when `"on_entity_death": true` |
 | `on_pickup(player, item, info)` | a living player touches an item of your Add-On (or one it depends on) lying in the world, before they pick it up, whether or not they have room, when `"on_pickup": true`: return `false` to leave it, `"take"` to use it up without giving it (a spawn brick's item then starts its respawn), `()` for the usual pickup, or `#{ rounds }` to set what a dropped gun's magazine holds and then pick it up as usual (it keeps that count if they have no room). `info` is `#{ drop, spawner, data, rounds }`: the dropped item's id or the spawn brick's, what `on_drop` kept with it, and the rounds in a dropped gun's magazine (`()` for one that has none). Called as it happens, so keep it quick |
 | `on_drop(player, item, slot)` | a player drops a tool of your Add-On (or one it depends on), when `"on_drop": true`. What it returns (a number, a map such as `#{ rounds: 7 }`) is kept with the dropped item and handed to `on_pickup` as `info.data` |
+| `on_collected(player, item, info)` | a player has really taken an item of your Add-On (or one it depends on), when `"on_collected": true`: it is in their tools or was used up, and a spawn brick's item is gone until it comes back. `on_pickup` is the attempt and this the result, so a point or a coin awarded here is awarded once per item taken and never for a touch that found no room. `info` is `#{ drop, spawner }`: the dropped item's id or the spawn brick's. What it returns is ignored |
 | `on_projectile_hit(hit)` | a projectile of your weapons (or a dependency's) struck something, delivered at the start of the next tick, when `"on_projectile_hit": true`. `hit` is `#{ projectile, by, kind, id, ref, x, y, z, nx, ny, nz, vx, vy, vz }`: `kind` is `player`, `vehicle`, `entity`, `brick` or `map`, `by` the shooter or `()`; a player hit also has `region` |
 | `on_activate(player)` | a living player clicks with nothing in their hand (v20's `Player::activateStuff`), when `"on_activate": true`: return `true` to take the click, or anything else to pass it on. Add-Ons are asked in load order, and a click nobody takes does the usual thing (opens doors, presses buttons, flips vehicles) |
 | `on_path_node(player, knot)` | a camera path the rules gave (`follow_path`) reaches knot `knot`, from 0, when `"on_path_node": true` |
@@ -1023,6 +1024,42 @@ player sees how many bricks turned, and how many touching ones were not
 theirs to paint. A fill tool is one command around it; the test's own
 ([`crates/sim/tests/fixtures/fill-can`](../../crates/sim/tests/fixtures/fill-can))
 shows one.
+
+**Required operations.** A call's operations are carried out after it
+returns, so a script cannot see whether `give_item` found room. Every
+operation function returns a handle; `require(handle)` makes the call
+depend on that operation:
+
+```rhai
+fn cmd_buy(p, item) {
+    add_player(p, "bits", -5);
+    require(give_item(p, item, false));
+    tell(p, "Sold!");
+}
+```
+
+Before anything of the call is kept, the engine checks each required
+operation (for `give_item`: the player is here, the item is one this
+server has, and they carry it already, have a free slot or `equip` makes
+room; for `take_item`: they carry it; for `remove_brick`: the brick is
+there and may be removed). If one cannot be done, the call takes no
+effect: its state changes are dropped, none of its operations run, and a
+command's player hears why ("P's tools are full"); the host log gets an
+`op.required` report. A required operation that still fails as it is
+carried out drops the call's state changes too (operations already done
+stay done, so put required ones first). Operations you do not `require`
+behave as before: a failure is an `op.failed` warning and the rest of the
+call stands, which is right for a message to a player who just left.
+Read `player(p).tools` first when you want to tell the player before
+they pay.
+
+**Spawn-brick items.** A brick's item comes back after its wrench respawn
+time, or, with the wrench's "Respawn only on mini-game reset" box ticked,
+stays gone until the mini-game resets or a `restoreItem` event row brings
+it back (`hideItem` takes it away); `set_brick_item(brick, item)` brings it
+back from a script. The brick's `onItemPickup` input fires once per item
+really taken, with `Player`, `Client` and `MiniGame` targets, so a coin
+brick can award a point itself: `onItemPickup → Client → incScore 1`.
 
 **Capabilities** in `package.json` are the only permission gate. If your
 script calls `tell` without `"chat"` in `capabilities`, the call is refused

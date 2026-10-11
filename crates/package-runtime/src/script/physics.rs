@@ -264,7 +264,7 @@ pub(super) fn register(engine: &mut Engine) {
         node: i64,
         can_dismount: bool,
         turn: Dynamic,
-    ) -> Fallible<()> {
+    ) -> Fallible<INT> {
         push(Op::MountObject(ops::MountObject {
             mount: id(&mount)?,
             rider: id(&rider)?,

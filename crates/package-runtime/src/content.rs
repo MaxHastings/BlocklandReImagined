@@ -263,6 +263,15 @@ pub struct Behaviour {
     /// `on_pickup` as `info.data`.
     #[serde(default)]
     pub on_drop: bool,
+    /// `on_collected(player, item, info)` once a player has really taken
+    /// an item of this package (or one it depends on): it is in their tools
+    /// or used up, and a spawn brick's item is gone until it comes back.
+    /// `on_pickup` is the attempt; this is the result, so a reward given
+    /// here is given once per item taken, never for a touch that failed
+    /// (full tools, hands busy). `info` is `#{ drop, spawner }`: the
+    /// dropped item's id or the spawn brick's. What it returns is ignored.
+    #[serde(default)]
+    pub on_collected: bool,
     /// `on_projectile_hit(hit)` after a projectile of this package's
     /// weapons (or one it depends on) strikes something. `hit` is
     /// `#{ projectile, by, kind, id, ref, x, y, z, nx, ny, nz, vx, vy,

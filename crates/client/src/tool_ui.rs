@@ -5,7 +5,9 @@ use bri_content::{brick::Catalog, brick_materials::Bundle, effects::Library};
 use bri_net::protocol::PublicWorld;
 use bri_sim::session::{Command, InspectMode, Reply, ToolAction, ToolCatalog, WrenchProperties};
 use bri_ui::{api::*, models::events::NAMED_BRICK, pack::Pack, schema::ParamSpec};
-use bri_world::{Brick, ContentRef, EventRow as Row, EventTarget, EventValue, ItemSpawn};
+use bri_world::{
+    Brick, ContentRef, EventRow as Row, EventTarget, EventValue, ItemRestore, ItemSpawn,
+};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -450,33 +452,28 @@ impl ToolUi {
                     .find(|s| s.eq_ignore_ascii_case(aspect))
                     .unwrap_or(aspect)
                     .clone();
-                let current = brick
-                    .print
-                    .as_ref()
-                    .map(|reference| {
-                        let token = match reference {
-                            ContentRef::Resolved(id) => id,
-                            ContentRef::Unresolved(u)
-                                if u.namespace.eq_ignore_ascii_case("print") =>
-                            {
-                                &u.name
-                            }
-                            _ => anyhow::bail!(
-                                "Current brick print has an unsupported source namespace"
-                            ),
-                        };
-                        self.print_aliases
-                            .get(&token.to_ascii_lowercase())
-                            .cloned()
-                            .context("Current brick print is not bound to native content")
-                    })
-                    .transpose()?;
-                if let Some(id) = &current {
-                    ensure!(
-                        self.catalog.prints.contains_key(id),
-                        "Current brick print is not bound to native content"
-                    );
-                }
+                // The print to highlight, when this client knows it. A save
+                // may name one it does not (`NOPRINT`, an older texture path,
+                // an Add-On print not installed here): the selector still
+                // opens, with nothing highlighted, and the brick keeps its
+                // print until the player picks another, as v20's printer did.
+                let current = brick.print.as_ref().and_then(|reference| {
+                    let token = match reference {
+                        ContentRef::Resolved(id) => id,
+                        ContentRef::Unresolved(u) if u.namespace.eq_ignore_ascii_case("print") => {
+                            &u.name
+                        }
+                        ContentRef::Unresolved(_) => return None,
+                    };
+                    let find = |token: &str| self.print_aliases.get(&token.to_ascii_lowercase());
+                    find(token)
+                        .or_else(|| {
+                            bri_content::brick_materials::legacy_print_alias(token)
+                                .and_then(|alias| find(&alias))
+                        })
+                        .filter(|id| self.catalog.prints.contains_key(*id))
+                        .cloned()
+                });
                 UiUpdate::OpenPrintSelector { aspect, current }
             }
             InspectMode::Events => {
@@ -564,6 +561,13 @@ impl ToolUi {
                 F::ItemPos => fill.item_position = Some(data.item_pos),
                 F::ItemDir => fill.item_direction = Some(data.item_dir),
                 F::ItemRespawn => fill.item_respawn_ms = Some(data.item_respawn_ms),
+                F::ItemRestore => {
+                    fill.item_restore = Some(if data.item_restore_on_reset {
+                        ItemRestore::Reset
+                    } else {
+                        ItemRestore::Timer
+                    })
+                }
                 F::RayCasting => fill.raycast = Some(data.raycasting),
                 F::Colliding => fill.colliding = Some(data.colliding),
                 F::Rendering => fill.visible = Some(data.rendering),
@@ -647,6 +651,11 @@ impl ToolUi {
                     position: data.item_pos,
                     direction: data.item_dir,
                     respawn_ms: data.item_respawn_ms,
+                    restore: if data.item_restore_on_reset {
+                        ItemRestore::Reset
+                    } else {
+                        ItemRestore::Timer
+                    },
                 };
                 item_spawn.validate()?;
                 ensure!(data.emitter_dir <= 5, "Unknown emitter direction");
@@ -780,6 +789,7 @@ fn wrench_data(brick: &Brick) -> Result<WrenchData> {
         item_pos: brick.item_spawn.position,
         item_dir: brick.item_spawn.direction,
         item_respawn_ms: brick.item_spawn.respawn_ms,
+        item_restore_on_reset: brick.item_spawn.restore == ItemRestore::Reset,
         raycasting: brick.raycast,
         colliding: brick.colliding,
         rendering: brick.visible,
@@ -1477,6 +1487,7 @@ mod tests {
             position: 4,
             direction: 5,
             respawn_ms: 17000,
+            restore: Default::default(),
         };
         let updates = open(&mut ui, &b, InspectMode::Wrench);
         let UiUpdate::OpenWrench { data, .. } = &updates[0] else {
@@ -2087,22 +2098,41 @@ mod tests {
         assert!(
             matches!(ui.action_command(&UiAction::SetPrint { print: "print/A".into() }).unwrap(), Some(Command::Tool(ToolAction::SetPrint { brick: 7, print: Some(id) })) if id == "print/A")
         );
-        b.print = Some(ContentRef::unresolved("print", "Community/unknown"));
-        assert!(
-            ui.accept_inspection(
-                &Reply::Inspected {
-                    brick_id: 7,
-                    brick: Box::new(b.clone()),
-                    mode: InspectMode::Printer
-                },
-                InspectMode::Printer,
-                None,
-                &world(&b),
-                &BTreeMap::new(),
-                1
-            )
-            .is_err()
-        );
+    }
+    /// A brick from an older save opens the printer whatever its print is
+    /// named (v0.2.8 refused with "Current brick print is not bound to
+    /// native content"): a stock print by its texture path is highlighted;
+    /// `NOPRINT`, an Add-On print not installed here or another source's
+    /// print highlights nothing, and the brick keeps it until a print is
+    /// picked.
+    #[test]
+    fn the_printer_opens_on_any_print_an_older_save_names() {
+        let cases = [
+            (
+                ContentRef::unresolved("print", "base/data/prints/Letters/A.png"),
+                Some("print/A"),
+            ),
+            (ContentRef::unresolved("print", "NOPRINT"), None),
+            (ContentRef::unresolved("print", "Community/unknown"), None),
+            (ContentRef::unresolved("decal", "Letters/A"), None),
+            (ContentRef::Resolved("print/gone".into()), None),
+        ];
+        for (print, highlighted) in cases {
+            let mut ui = fixture();
+            let mut b = brick();
+            b.print = Some(print.clone());
+            let original = b.clone();
+            let updates = open(&mut ui, &b, InspectMode::Printer);
+            assert!(
+                matches!(&updates[0], UiUpdate::OpenPrintSelector { current, .. } if current.as_deref() == highlighted),
+                "{print:?}: {updates:?}"
+            );
+            assert_eq!(ui.inspection.as_ref().unwrap().brick, original, "{print:?}");
+            assert!(
+                matches!(ui.action_command(&UiAction::SetPrint { print: "print/A".into() }).unwrap(), Some(Command::Tool(ToolAction::SetPrint { brick: 7, print: Some(id) })) if id == "print/A"),
+                "{print:?}"
+            );
+        }
     }
     #[test]
     #[ignore = "requires generated native stock content, no window"]

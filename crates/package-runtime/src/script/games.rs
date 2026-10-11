@@ -151,7 +151,7 @@ fn minigame_map(g: &MinigameView) -> Dynamic {
         ),
     ])
 }
-fn game_rule(game: &Dynamic, rule: GameRule) -> Fallible<()> {
+fn game_rule(game: &Dynamic, rule: GameRule) -> Fallible<INT> {
     push(Op::SetGameRule(ops::SetGameRule {
         game: id(game)?,
         rule,
@@ -224,7 +224,7 @@ fn teams(value: Array) -> Fallible<Vec<TeamOp>> {
         })
         .collect()
 }
-fn set_teams(game: Dynamic, list: Array, options: Map) -> Fallible<()> {
+fn set_teams(game: Dynamic, list: Array, options: Map) -> Fallible<INT> {
     let flag = |key: &str| -> Fallible<bool> {
         options.get(key).map_or(Ok(false), |v| {
             v.as_bool()
@@ -280,7 +280,7 @@ fn write_setting(
     team: Option<&Dynamic>,
     key: &str,
     value: Dynamic,
-) -> Fallible<()> {
+) -> Fallible<INT> {
     if !bri_package::setting::is_setting_ref(key) {
         return fail(format!("`{key}` is not a setting key"));
     }
@@ -291,7 +291,7 @@ fn write_setting(
         value: setting_value(value)?,
     }))
 }
-fn score(player: &Dynamic, value: &Dynamic, add: bool) -> Fallible<()> {
+fn score(player: &Dynamic, value: &Dynamic, add: bool) -> Fallible<INT> {
     let value = value.as_int().map_err(|_| "a score is a whole number")?;
     if value.abs() > MAX_SCORE {
         return fail(format!("a score is at most {MAX_SCORE} either way"));
@@ -303,7 +303,7 @@ fn score(player: &Dynamic, value: &Dynamic, add: bool) -> Fallible<()> {
     }))
 }
 
-fn team_points(game: &Dynamic, team: &Dynamic, value: &Dynamic, add: bool) -> Fallible<()> {
+fn team_points(game: &Dynamic, team: &Dynamic, value: &Dynamic, add: bool) -> Fallible<INT> {
     let value = value.as_int().map_err(|_| "points are a whole number")?;
     if value.abs() > MAX_SCORE {
         return fail(format!("points are at most {MAX_SCORE} either way"));
@@ -384,7 +384,7 @@ fn report_from(mut report: Map) -> Fallible<Report> {
         .map_err(|e| format!("show_report: {e}").into())
 }
 /// `drop_item(item, #{ at, velocity, paint, data, seconds })`.
-fn drop_with(item: &str, options: Map) -> Fallible<()> {
+fn drop_with(item: &str, options: Map) -> Fallible<INT> {
     for key in options.keys() {
         if !["at", "velocity", "paint", "data", "seconds"].contains(&key.as_str()) {
             return fail(format!(
@@ -427,7 +427,7 @@ fn wear(
     slot: Dynamic,
     paint: Option<u8>,
     keep: bool,
-) -> Fallible<()> {
+) -> Fallible<INT> {
     let slot = match slot.as_int() {
         Ok(s @ 2..=3) => s as u8,
         _ => {

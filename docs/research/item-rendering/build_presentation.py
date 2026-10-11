@@ -216,6 +216,16 @@ def main():
     for resource in pack['resources']:
         if resource.get('native_file', '').startswith('shapes/'):
             model(resource['path'], weapons_root / resource['native_file'], resource['sha256'])
+    # Every stock texture in base/data/shapes, not only those the stock
+    # models draw: an Add-On model may name one (`red`, `black25`), and the
+    # importer binds it by this key only when the installed game carries
+    # it. With only some here, black75 resolved and black25 fell back to a
+    # stand-in. (That v20 drew Add-On materials from base/data/shapes is
+    # inferred from the Add-Ons that rely on it, not measured.)
+    shapes = args.original / 'base/data/shapes'
+    for stock in sorted(shapes.iterdir() if shapes.is_dir() else []):
+        if stock.is_file() and stock.suffix.lower() in ('.png', '.jpg', '.jpeg'):
+            texture('base/data/shapes/' + stock.stem)
     defs = {d['name'].lower(): d for d in pack['definitions']}
 
     def fields(name, seen=()):

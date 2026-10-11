@@ -279,6 +279,11 @@ impl Client {
         // The existing probe stops before Hello, so no player is admitted.
         progress.begin(Stage::Connecting, Unit::Steps, None);
         let found = probe(address, &pin, Duration::from_secs(10)).await?;
+        // The host's listing names its map, so the loading screen can show
+        // it while the Add-Ons download, before the Welcome confirms it.
+        if !found.listing.map.trim().is_empty() {
+            progress.set_subject(&found.listing.map);
+        }
         let pin = HostPin::Certificate(found.certificate);
         let (mut fetched, fetch_failure) =
             match crate::packages::fetch_missing_pinned(address, &pin, cache, &progress, &have)

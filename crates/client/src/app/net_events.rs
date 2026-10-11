@@ -40,7 +40,7 @@ impl App {
                 self.net.reconnects += 1;
                 let resume = a.view.as_ref().map(|view| view.resume.clone());
                 if self
-                    .join_resuming(id, target, String::new(), resume)
+                    .join_resuming(id, target, String::new(), resume, None)
                     .is_ok()
                 {
                     return Ok(());
@@ -58,6 +58,7 @@ impl App {
                     Some(addons::ReloadResume::Downloaded {
                         id,
                         address: a.join_target.clone().unwrap_or_default(),
+                        map: a.progress.subject().unwrap_or_else(|| a.name.clone()),
                     }),
                 )?;
                 return Ok(());
@@ -265,6 +266,7 @@ impl App {
         if let Some(job) = &mut self.scene.world_job
             && let Ok((source, revision, log, result)) = job.receiver.try_recv()
         {
+            let _span = crate::frame_trace::span("chunks applied");
             let left_out = std::mem::take(&mut job.left_out);
             self.scene.world_job = None;
             match result {
@@ -821,6 +823,8 @@ impl App {
     /// Takes the map scene the loader prepared and sets up the world for it.
     fn take_prepared_scene(&mut self, a: &mut Attempt) -> Result<()> {
         if let Ok(prepared) = a.scene.try_recv() {
+            crate::frame_trace::note(format!("set up map {}", prepared.map_id));
+            let _span = crate::frame_trace::span("map setup");
             a.progress.begin(
                 bri_progress::Stage::LoadingGraphics,
                 bri_progress::Unit::Steps,
@@ -1173,7 +1177,8 @@ impl App {
 /// Closes the load's trail in the session log (`App::show_progress`) with
 /// how long its last stage took.
 fn log_entered(a: &mut Attempt) {
-    if let (Some((_, since)), Some(map)) = (a.logged_stage.take(), a.progress.subject()) {
+    if let Some((_, since)) = a.logged_stage.take() {
+        let map = a.progress.subject().unwrap_or_else(|| a.name.clone());
         bri_console::echo(format!(
             "Loading {map}: IN GAME (after {} ms)",
             since.elapsed().as_millis()
