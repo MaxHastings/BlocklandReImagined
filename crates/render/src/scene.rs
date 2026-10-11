@@ -1927,6 +1927,15 @@ pub struct ShadowCasters<'a> {
     pub instances: &'a [(&'a GpuScene, &'a GpuInstances)],
 }
 
+/// Where a moving caster changes a shadow this frame
+/// ([`SceneRenderer::shadow_reach`]): orthographic boxes as the
+/// view-projection matrices that draw into them, and spheres.
+#[derive(Clone, Debug, Default)]
+pub struct ShadowReach {
+    pub boxes: Vec<Mat4>,
+    pub spheres: Vec<(Vec3, f32)>,
+}
+
 pub const MAX_POINT_LIGHTS: usize = 256;
 /// The point light uniform's header before the lights: their count, then
 /// the grid's placement (`LightGrid::header`).
@@ -3380,6 +3389,33 @@ impl SceneRenderer {
     }
     pub fn samples(&self) -> u32 {
         self.samples
+    }
+    /// Where a moving caster (a body, a vehicle) can change a shadow some
+    /// view reads this frame: every view's sun cascades, the casting lamps'
+    /// reach and the skylight fields' projectors. Something outside all of
+    /// them and outside every view's frustum shows nowhere, so its mesh need
+    /// not be built. Call after `update_camera` and the planes'
+    /// `fit_view_shadows`. Empty with shadows and Soft Shading off.
+    pub fn shadow_reach(&self) -> ShadowReach {
+        let mut reach = ShadowReach::default();
+        if self.shadows.settings.is_some() {
+            reach.boxes.extend(
+                self.shadows
+                    .every_cascade()
+                    .map(|cascade| cascade.view_projection),
+            );
+            reach.spheres.extend(
+                self.shadows
+                    .lamps
+                    .iter()
+                    .flatten()
+                    .map(|lamp| (lamp.center, lamp.reach)),
+            );
+        }
+        for view in self.views.iter().filter(|v| v.sky_on && v.sky.enabled) {
+            reach.boxes.extend(view.sky.matrices.get());
+        }
+        reach
     }
     pub fn shadow_settings(&self) -> Option<crate::shadow::ShadowSettings> {
         self.shadows.settings

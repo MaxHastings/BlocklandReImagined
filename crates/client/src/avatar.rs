@@ -704,6 +704,7 @@ impl AvatarAssets {
             animated_nodes: Vec::new(),
             node_bounds: None,
             unacted_nodes: Vec::new(),
+            wants_unacted: true,
             model_transform: Mat4::IDENTITY,
         }
     }
@@ -739,6 +740,10 @@ pub struct AvatarMesh {
     /// `posed_nodes` without the thread-2/3 action layers, while one plays;
     /// empty otherwise (`mount_action`).
     unacted_nodes: Vec<Mat4>,
+    /// Sample `unacted_nodes` while an action plays. Only a first-person
+    /// image reads them, so the game asks for them for the player's own
+    /// body alone: a second skeleton sample per acting body otherwise.
+    pub wants_unacted: bool,
     model_transform: Mat4,
     pub appearance: Appearance,
     pub data: SceneData,
@@ -1584,7 +1589,7 @@ impl AvatarMesh {
         });
         let (pose, channels) = sample_layers_with_transition(&assets.rig.shape, &layers, at, from)?;
         self.unacted_nodes.clear();
-        if acted {
+        if acted && self.wants_unacted {
             let (rest, _) = sample_layers_with_transition(
                 &assets.rig.shape,
                 &unacted,

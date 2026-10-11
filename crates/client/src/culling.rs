@@ -31,6 +31,35 @@ impl Frustum {
     }
 }
 
+/// Every place a body can show this frame besides the player's own view:
+/// the other views' frusta (mirror planes, probe faces) and where its
+/// shadow can fall ([`bri_render::scene::ShadowReach`]).
+#[derive(Clone, Debug, Default)]
+pub struct Elsewhere {
+    frusta: Vec<Frustum>,
+    spheres: Vec<(Vec3, f32)>,
+}
+
+impl Elsewhere {
+    pub fn new(
+        views: impl IntoIterator<Item = Mat4>,
+        shadows: bri_render::scene::ShadowReach,
+    ) -> Self {
+        Self {
+            frusta: views.into_iter().chain(shadows.boxes).map(Frustum::new).collect(),
+            spheres: shadows.spheres,
+        }
+    }
+    /// Whether any of the sphere may show in another view or a shadow.
+    pub fn sees_sphere(&self, center: Vec3, radius: f32) -> bool {
+        self.frusta.iter().any(|f| f.sees_sphere(center, radius))
+            || self
+                .spheres
+                .iter()
+                .any(|(c, r)| c.distance(center) <= r + radius)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

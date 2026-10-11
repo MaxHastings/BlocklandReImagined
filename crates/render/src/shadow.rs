@@ -1327,6 +1327,16 @@ impl ShadowMaps {
             },
         }
     }
+    /// Every view's sun cascades this frame: the player's, then each plane
+    /// fitting its own.
+    pub(crate) fn every_cascade(&self) -> impl Iterator<Item = &Cascade> {
+        self.cascades.iter().chain(
+            self.views
+                .iter()
+                .filter(|(fitted, _)| *fitted)
+                .flat_map(|(_, cascades)| cascades),
+        )
+    }
     /// `view`'s receiver uniform (views past the planes read the player's).
     pub fn receiver_binding(&self, view: usize) -> wgpu::BindingResource<'_> {
         let region = if view < FITTED_VIEWS { view } else { 0 };

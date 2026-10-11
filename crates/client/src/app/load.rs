@@ -334,6 +334,7 @@ impl App {
                 preview_request: None,
                 preview_dirty: false,
                 preview_time: 0.0,
+                meshes_built: (0, 0),
             },
             splash_checked: false,
             motion: Default::default(),
