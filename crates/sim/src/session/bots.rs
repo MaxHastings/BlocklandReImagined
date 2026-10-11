@@ -3180,6 +3180,13 @@ impl Session {
                         && flat(next.feet - feet).length() < crate::route::PRESS_NEAR
                         && !(next.jump && state.grounded),
                 ),
+                // Bent round a body in the way, its walk is no longer
+                // the route's own: a step off the route's line is judged
+                // by an unplanned step's rules at an edge.
+                plan: next
+                    .through
+                    .is_none()
+                    .then(|| flat(next.feet - feet).normalize_or_zero()),
                 ..act::Proposal::walk(
                     act::Mover::Route,
                     if let Some(through) = next.through {
