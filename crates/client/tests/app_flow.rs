@@ -76,6 +76,10 @@ fn action(app: &mut App, action: UiAction) -> Result<()> {
     Ok(())
 }
 
+/// The frames the staged skylight field takes to draw (`bri-render`'s
+/// `sky_exposure::DIRECTIONS`, one a frame).
+const SKY_DIRECTIONS: usize = 9;
+
 fn capture(
     app: &mut App,
     gpu: &Headless,
@@ -232,6 +236,13 @@ fn native_weather_map_settings_render_and_disconnect(f: &ContentRoot) -> Result<
         assert_eq!(diagnostics.invalid_hits, 0);
         if drops > 0 {
             assert!(diagnostics.collision_queries >= drops as u64);
+        }
+        // Skylight visibility is redrawn one direction a frame (nine in all)
+        // after the scene or the eye's cell changes, and swapped in when the
+        // last is drawn. Render until it has settled, so the two captures
+        // below differ by precipitation alone.
+        for _ in 0..SKY_DIRECTIONS + 1 {
+            capture(&mut app, &gpu, &mut ui_renderer, false)?;
         }
         let wet = capture(&mut app, &gpu, &mut ui_renderer, false)?;
         image::save_buffer(
