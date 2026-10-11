@@ -203,13 +203,14 @@ impl Session {
             .into_iter()
             .partition(|b| placeable(b));
         unloaded.extend(still);
+        let prints = crate::simulation::unresolved_prints(world.bricks.values());
         let bricks = Queue {
             left: world.bricks.len() + extra.len(),
             next: 0,
             saved: world.bricks,
             extra: extra.into(),
         };
-        let skipped = crate::simulation::unloaded_summary(&unloaded);
+        let missing = crate::simulation::missing_content(&unloaded, &prints);
         if !unloaded.is_empty() {
             let unloaded = unloaded
                 .into_iter()
@@ -241,8 +242,17 @@ impl Session {
                 },
             );
         }
-        if let Some(skipped) = skipped {
-            self.system_chat(skipped);
+        // One short chat line for everyone; the grouped lists go to the
+        // loader as a box they can read and dismiss.
+        if let Some(missing) = missing {
+            self.system_chat(missing.summary);
+            self.notify(
+                owner,
+                Notice::MessageBox {
+                    title: "Content this server does not have".into(),
+                    text: missing.details,
+                },
+            );
         }
         Ok(total)
     }

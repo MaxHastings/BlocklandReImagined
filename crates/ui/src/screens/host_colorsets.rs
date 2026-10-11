@@ -461,6 +461,35 @@ mod tests {
         );
     }
 
+    /// Ctrl+wheel (P2-01) pages a scroll control by its height less one
+    /// row; the plain wheel keeps its one-row step.
+    #[test]
+    fn ctrl_wheel_pages_a_long_list_and_plain_wheel_steps_a_row() {
+        let mut ui = fixture();
+        ui.core.host_colorsets.extend((0..60).map(|i| HostColorset {
+            id: format!("user:{i}.txt"),
+            name: format!("Custom {i}"),
+            divisions: vec![],
+        }));
+        let mut screen = HostColorsets::new(&ui.core);
+        let list = screen.view.id("HC_List").unwrap();
+        let r = screen.view.node(list).rect;
+        screen.view.mouse = (r.x + r.w / 2, r.y + r.h / 2);
+        let at = |s: &HostColorsets| s.view.node(list).state.scroll_y;
+        assert!(screen.view.wheel(-1));
+        let row = at(&screen);
+        assert!(row > 0 && row < r.h, "one notch is one row, got {row}");
+        screen.view.scroll_to(list, 0);
+        assert!(screen.view.wheel_page(-1));
+        let page = at(&screen);
+        assert!(
+            page > r.h / 2 && page < r.h,
+            "a page is the height less a row, got {page}"
+        );
+        assert!(screen.view.wheel_page(1));
+        assert_eq!(at(&screen), 0, "scrolling back a page returns to the top");
+    }
+
     #[test]
     fn compact_catalog_fits_sixty_four_swatches_and_large_catalog_stays_bounded() {
         let mut ui = fixture();

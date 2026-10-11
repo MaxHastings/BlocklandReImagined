@@ -1209,3 +1209,61 @@ fn a_trigger_held_when_the_game_ends_is_not_released_to_the_gone_host() {
     u.handle_input(InputEvent::MouseUp { button, x, y });
     assert_eq!(actions(&mut u), vec![]);
 }
+
+/// v0.2.9 brief P2-02: the chat key opens the chat box over the Esc menu,
+/// and F2's player list; it neither presses one of their buttons nor types
+/// its own letter; Escape then closes only the chat and Enter sends.
+#[test]
+fn chat_opens_over_the_escape_menu_and_player_list_and_returns_to_them() {
+    let mut u = ui();
+    play(&mut u);
+    u.core
+        .binds
+        .bind(BindInput::Key(Chord::plain(Key::F(2))), "showPlayerList");
+    down(&mut u, Key::Escape);
+    u.update(16);
+    assert_eq!(u.top_id(), ScreenId::EscapeMenu);
+    down(&mut u, Key::Letter('t'));
+    u.handle_input(InputEvent::Char('t'));
+    assert_eq!(u.top_id(), ScreenId::MessageInput(ChatChannel::Say));
+    for ch in "hi".chars() {
+        u.handle_input(InputEvent::Char(ch));
+    }
+    down(&mut u, Key::Return);
+    let a = actions(&mut u);
+    assert!(a.contains(&UiAction::Chat {
+        channel: ChatChannel::Say,
+        text: "hi".into()
+    }));
+    assert!(!a.contains(&UiAction::Disconnect), "no button was pressed");
+    assert_eq!(u.top_id(), ScreenId::EscapeMenu, "the menu stays up");
+    // Escape in the chat closes the chat only.
+    down(&mut u, Key::Letter('t'));
+    assert_eq!(u.top_id(), ScreenId::MessageInput(ChatChannel::Say));
+    down(&mut u, Key::Escape);
+    u.update(16);
+    assert_eq!(u.top_id(), ScreenId::EscapeMenu);
+    // The same over the player list.
+    down(&mut u, Key::Escape);
+    u.update(16);
+    down(&mut u, Key::F(2));
+    u.update(16);
+    assert_eq!(u.top_id(), ScreenId::PlayerList);
+    down(&mut u, Key::Letter('t'));
+    assert_eq!(u.top_id(), ScreenId::MessageInput(ChatChannel::Say));
+}
+
+/// Other dialogs keep their old behavior: the chat key opens nothing over
+/// a confirmation.
+#[test]
+fn chat_key_stays_out_of_confirmations() {
+    let mut u = ui();
+    play(&mut u);
+    down(&mut u, Key::Escape);
+    click(&mut u, ScreenId::EscapeMenu, "disconnect");
+    let over = u.top_id();
+    assert_ne!(over, ScreenId::EscapeMenu);
+    down(&mut u, Key::Letter('t'));
+    assert_eq!(u.top_id(), over);
+    assert!(actions(&mut u).is_empty());
+}
