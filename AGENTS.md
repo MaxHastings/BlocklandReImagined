@@ -101,6 +101,14 @@ new file in `docs/progress/` (one file per entry; see its README).
 `docs/progress.md` holds the history before 2026-10-01. Check off acceptance items only with evidence. Keep the
 active goal incomplete until the full alpha contract and handoff are satisfied.
 
+## Test tiers
+Do not run the full gate after every edit. `python tools/check.py quick`
+(format and unit tests of the changed crates) after edits, `focused`
+(clippy and integration tests of the changed crates and their dependents)
+before a commit, and `python tools/gate.py` once per integrated candidate.
+A tier skips work you did not touch; it never skips a test. Details and the
+`stress_`/`endurance_`/`soak_` labels for long cases: `docs/testing-tiers.md`.
+
 ## Before you push
 A pre-push hook runs `tools/gate.py` on every push to main. It refuses the
 push unless the commit contains the latest origin/main, no pushed commit undoes
