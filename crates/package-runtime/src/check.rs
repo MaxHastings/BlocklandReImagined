@@ -228,11 +228,10 @@ pub fn check(folder: &Path) -> Report {
     }
     // As the host loads it (and compiles its scripts), then as a player does.
     match Catalog::load(&parent, &set, true) {
-        Ok(catalog) => {
-            if let Err(mut problems) = Runtime::compile(&catalog) {
-                diagnostics.append(&mut problems);
-            }
-        }
+        Ok(catalog) => match Runtime::compile(&catalog) {
+            Ok(runtime) => diagnostics.extend(runtime.unknown_calls()),
+            Err(mut problems) => diagnostics.append(&mut problems),
+        },
         Err(mut problems) => diagnostics.append(&mut problems),
     }
     if let Err(mut problems) = Catalog::load(&parent, &set, false) {
