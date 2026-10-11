@@ -636,6 +636,9 @@ impl Session {
             "Packages are enabled before players join"
         );
         let runtime = Runtime::compile(&catalog).map_err(diagnostics_error)?;
+        // A call to a function that exists nowhere fails only when its line
+        // runs, mid-game; told to the host's admins and log at load instead.
+        let unknown_calls = runtime.unknown_calls();
         let mut archetypes = crate::archetype::Archetypes::default();
         // Adjustments to v20's player types first, so archetypes built on
         // one start from it as adjusted. Two Add-Ons setting one constant:
@@ -751,6 +754,11 @@ impl Session {
             hooks_paused: BTreeMap::new(),
             view: None,
         }));
+        if let Some(host) = self.packages.as_deref_mut() {
+            for diagnostic in unknown_calls {
+                note(host, diagnostic);
+            }
+        }
         self.load_host_data();
         // Their wrench event inputs join the host's catalog.
         if let Err(error) = self.refresh_event_bindings() {

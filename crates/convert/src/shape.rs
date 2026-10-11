@@ -608,6 +608,31 @@ fn mesh(
 /// Bytes after a DTS file's material list that are ignored, as Torque
 /// never reads them; more is a damaged file.
 const MAX_TRAILING_BYTES: usize = 16;
+/// `TSMaterialList` flags that choose how a surface blends.
+const TRANSLUCENT: u32 = 4;
+const ADDITIVE: u32 = 8;
+const SUBTRACTIVE: u32 = 16;
+
+/// How a DTS material blends, as Torque's `TSMesh::setMaterial` draws it:
+/// only a translucent material blends at all, additively or subtractively
+/// when it says so, otherwise by its alpha. The additive and subtractive bits
+/// on a material without the translucent bit choose nothing, and it draws
+/// opaque. Every additive surface in v20 sets both bits (its rocket trails,
+/// explosion sphere, bullet trails and glass, `0x4f`/`0x6f`); some community
+/// exporters set additive on solid surfaces, and read as additive those drew
+/// nothing where they were black (the Rallypack P90's body, v0.2.8).
+fn blend(flags: u32) -> &'static str {
+    if flags & TRANSLUCENT == 0 {
+        "opaque"
+    } else if flags & ADDITIVE != 0 {
+        "additive"
+    } else if flags & SUBTRACTIVE != 0 {
+        "subtractive"
+    } else {
+        "alpha"
+    }
+}
+
 pub fn read_dts(data: &[u8], id: String) -> Result<(Shape, Provenance)> {
     let mut file = Reader::new(data);
     let version = file.u32()?;
@@ -800,16 +825,7 @@ pub fn read_dts(data: &[u8], id: String) -> Result<(Shape, Provenance)> {
             name: n,
             wrap_u: f & 1 != 0,
             wrap_v: f & 2 != 0,
-            blend: if f & 8 != 0 {
-                "additive"
-            } else if f & 16 != 0 {
-                "subtractive"
-            } else if f & 4 != 0 {
-                "alpha"
-            } else {
-                "opaque"
-            }
-            .into(),
+            blend: blend(f).into(),
             unlit: f & 32 != 0,
             environment: f & 64 == 0,
             mipmaps: f & 128 == 0,
@@ -820,6 +836,15 @@ pub fn read_dts(data: &[u8], id: String) -> Result<(Shape, Provenance)> {
             reflectance: reflection[i],
             metal: None,
         });
+    }
+    for (material, f) in materials.iter().zip(&flags) {
+        if f & (ADDITIVE | SUBTRACTIVE) != 0 && f & TRANSLUCENT == 0 {
+            provenance.warnings.push(format!(
+                "material {} marks {} without translucent ({f:#x}): drawn opaque, as Torque draws it",
+                material.name,
+                if f & ADDITIVE != 0 { "additive" } else { "subtractive" }
+            ));
+        }
     }
     provenance.material_flags = flags;
     // `TSShape::read` stops after the material list, so a few stray bytes
@@ -954,6 +979,26 @@ mod tests {
             .collect();
         let q = glam::Quat::from_array(rotation(&mut Reader::new(&bytes)).unwrap());
         assert!((q * Vec3::X).distance(Vec3::Z) < 1e-5);
+    }
+    /// v20's own flags keep their look; additive or subtractive without
+    /// translucent is a solid surface, as Torque draws it.
+    #[test]
+    fn only_translucent_materials_blend() {
+        for (flags, expected) in [
+            (0x43, "opaque"),
+            (0xc3, "opaque"),
+            (0x63, "opaque"),
+            (0x47, "alpha"),
+            (0xc7, "alpha"),
+            (0x4f, "additive"),
+            (0x6f, "additive"),
+            (0x57, "subtractive"),
+            (0x4b, "opaque"),
+            (0x08, "opaque"),
+            (0x53, "opaque"),
+        ] {
+            assert_eq!(blend(flags), expected, "{flags:#x}");
+        }
     }
     #[test]
     fn a_zero_quaternion_is_no_rotation() {

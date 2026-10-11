@@ -23,6 +23,8 @@ use std::sync::Arc;
 
 mod bots;
 mod games;
+mod lint;
+mod math;
 mod physics;
 pub mod view;
 pub use bots::BotKindView;
@@ -3432,6 +3434,7 @@ fn sandbox() -> Engine {
     BasicMapPackage::new().register_into_engine(&mut engine);
     BasicStringPackage::new().register_into_engine(&mut engine);
     MoreStringPackage::new().register_into_engine(&mut engine);
+    math::register(&mut engine);
     engine.disable_symbol("eval");
     // TorqueScript's colour escapes: `\c0`..`\c9`, `\cr`, `\cp` and `\co`
     // in a string literal are the codes chat and prints colour by, as
@@ -3697,6 +3700,21 @@ impl Runtime {
         } else {
             Err(problems)
         }
+    }
+    /// Calls in the compiled scripts to functions that exist nowhere, as
+    /// warnings at their lines: each fails whenever its line runs, which a
+    /// load alone never shows (see [`lint`]).
+    pub fn unknown_calls(&self) -> Vec<Diagnostic> {
+        let natives = lint::natives(&self.engine);
+        let mut out = Vec::new();
+        for (id, ast) in &self.scripts {
+            let script = self.sources.get(id).map_or("", String::as_str);
+            let at = location(id, script);
+            for unknown in lint::unknown_calls(ast, &natives) {
+                out.push(lint::warning(&unknown, &at, &natives, ast));
+            }
+        }
+        out
     }
     pub fn has_script(&self, package: &str) -> bool {
         self.scripts.contains_key(package)

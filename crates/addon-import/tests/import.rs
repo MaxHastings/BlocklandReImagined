@@ -1496,6 +1496,12 @@ datablock AudioProfile(JingleBell) { fileName = "./bell.wav"; description = Audi
 /// The smallest DTS (v24) Torque reads: no nodes, objects or meshes, the
 /// box `lo` to `hi`, and these materials. Written here; ours (CC0).
 fn tiny_dts(lo: [f32; 3], hi: [f32; 3], materials: &[&str]) -> Vec<u8> {
+    let materials: Vec<_> = materials.iter().map(|m| (*m, 3)).collect();
+    tiny_dts_flags(lo, hi, &materials)
+}
+
+/// [`tiny_dts`] with each material's `TSMaterialList` flags.
+fn tiny_dts_flags(lo: [f32; 3], hi: [f32; 3], materials: &[(&str, u32)]) -> Vec<u8> {
     let mut wide: Vec<u32> = vec![0; 17]; // every count zero
     wide.extend([0, 0]);
     let guards = 17u32;
@@ -1531,12 +1537,12 @@ fn tiny_dts(lo: [f32; 3], hi: [f32; 3], materials: &[&str]) -> Vec<u8> {
     out.extend(0u32.to_le_bytes()); // no sequences
     out.push(1); // material list version
     out.extend((materials.len() as u32).to_le_bytes());
-    for m in materials {
+    for (m, _) in materials {
         out.push(m.len() as u8);
         out.extend(m.as_bytes());
     }
-    for _ in materials {
-        out.extend(3u32.to_le_bytes()); // wrap u and v
+    for (_, flags) in materials {
+        out.extend(flags.to_le_bytes());
     }
     for _ in 0..3 {
         for _ in materials {
@@ -1549,6 +1555,74 @@ fn tiny_dts(lo: [f32; 3], hi: [f32; 3], materials: &[&str]) -> Vec<u8> {
         }
     }
     out
+}
+
+/// A solid surface whose exporter set the additive bit without the
+/// translucent one imports opaque, as Torque draws it (the Rallypack P90's
+/// black body vanished as additive in v0.2.8), and the report says so; a
+/// real additive surface (both bits, as v20's rocket trail) stays additive.
+#[test]
+fn additive_without_translucent_imports_opaque_and_is_noted() {
+    let source = fresh("blend-source").with_file_name("Weapon_Blend");
+    std::fs::create_dir_all(&source).unwrap();
+    std::fs::write(
+        source.join("description.txt"),
+        "Title: Blend\nAuthor: Tester\nA test.",
+    )
+    .unwrap();
+    std::fs::write(source.join("server.cs"), "exec(\"./blend.cs\");\n").unwrap();
+    std::fs::write(
+        source.join("gun.dts"),
+        tiny_dts_flags(
+            [-0.1, -0.2, -0.3],
+            [0.1, 0.4, 0.3],
+            &[("body", 0x4b), ("trail", 0x4f)],
+        ),
+    )
+    .unwrap();
+    for name in ["body", "trail"] {
+        let mut png = std::io::Cursor::new(Vec::new());
+        image::RgbaImage::from_pixel(2, 2, image::Rgba([0, 0, 0, 255]))
+            .write_to(&mut png, image::ImageFormat::Png)
+            .unwrap();
+        std::fs::write(source.join(format!("{name}.png")), png.into_inner()).unwrap();
+    }
+    std::fs::write(
+        source.join("blend.cs"),
+        r#"
+datablock ItemData(blendGunItem) { shapeFile = "./gun.dts"; uiName = "Blend Gun"; image = blendGunImage; };
+datablock ShapeBaseImageData(blendGunImage) { shapeFile = "./gun.dts"; item = blendGunItem; stateName[0] = "Ready"; };
+"#,
+    )
+    .unwrap();
+    let out = fresh("blend-out").join("weapon_blend");
+    let report = import(&Options {
+        input: source.clone(),
+        out: out.clone(),
+        ..Default::default()
+    })
+    .unwrap();
+    let presentation: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(out.join("assets/presentation.json")).unwrap())
+            .unwrap();
+    let file = presentation["models"]["add-ons/weapon_blend/gun.dts"]["file"]
+        .as_str()
+        .unwrap();
+    let shape: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(out.join("assets").join(file)).unwrap()).unwrap();
+    let blends: Vec<_> = shape["materials"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|m| m["blend"].as_str().unwrap().to_owned())
+        .collect();
+    assert_eq!(blends, ["opaque", "additive"]);
+    let notes = serde_json::to_string(&report.assets).unwrap();
+    assert!(
+        notes.contains("material body marks additive without translucent (0x4b): drawn opaque"),
+        "{notes}"
+    );
+    assert!(!notes.contains("material trail marks"), "{notes}");
 }
 
 /// A model material whose texture is nowhere (not in the Add-On, not in

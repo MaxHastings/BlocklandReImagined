@@ -78,6 +78,15 @@ pub struct Bundle {
 /// `Print_2x2r_Default` set (monitor1, medical1, radar1, vent).
 const RENAMED_CLASSES: [(&str, &str); 3] = [("2x2", "2x2f"), ("2x1", "1x2f"), ("1x1r", "2x2r")];
 
+/// Whether a save's print token means no print at all: v20 writes
+/// `NOPRINT` for a print brick nobody printed on, and older saves leave the
+/// field empty or `/`. Such a brick draws its blank print surface, and
+/// neither the renderer nor the printer treats the token as missing content.
+pub fn is_no_print(token: &str) -> bool {
+    let token = token.trim();
+    token.is_empty() || token == "/" || token.eq_ignore_ascii_case("NOPRINT")
+}
+
 /// The v20 `<class>/<name>` alias an older save's print token means, when it
 /// differs from the token. Older saves store the texture path
 /// (`base/data/prints/Letters/A.png`), v20 Add-On paths

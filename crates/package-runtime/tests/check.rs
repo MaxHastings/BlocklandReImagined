@@ -259,3 +259,46 @@ fn an_items_own_model_checks_and_a_missing_texture_is_named() {
         "{report}"
     );
 }
+
+/// A script calling a function that exists nowhere is named at its line, as
+/// a warning: the rest of the Add-On still loads and runs.
+#[test]
+fn a_call_to_no_function_is_a_warning_at_its_line() {
+    let dir = tempfile::tempdir().unwrap();
+    let typo = dir.path().join("typo");
+    write(
+        &typo,
+        "package.json",
+        manifest(
+            "typo",
+            json!({ "provides": [
+                { "kind": "behaviour", "id": "typo:behaviour/main", "file": "behaviour.json" },
+                { "kind": "script", "id": "typo:script/main", "file": "main.rhai" }
+            ] }),
+        ),
+    );
+    write(
+        &typo,
+        "behaviour.json",
+        json!({ "schema_version": 1, "script": "main.rhai",
+                "commands": [{ "name": "shot", "args": ["float"] }] }),
+    );
+    std::fs::write(
+        typo.join("main.rhai"),
+        "fn cmd_shot(p, d) {\n    let due = (d * 0.6).ceil().to_int() + sqrt(4);\n    let n = d.roundd();\n}",
+    )
+    .unwrap();
+    let report = check(&typo);
+    assert!(report.ok, "{report}");
+    let unknown: Vec<_> = report
+        .diagnostics
+        .iter()
+        .filter(|d| d.code == "script.unknown_function")
+        .collect();
+    assert_eq!(unknown.len(), 1, "{report}");
+    assert_eq!(unknown[0].location.as_deref(), Some("typo/main.rhai:3"));
+    assert!(
+        unknown[0].hint.as_deref().unwrap_or("").contains("`round`"),
+        "{report}"
+    );
+}

@@ -78,6 +78,10 @@ fn cmd_show(p) {
     play_thread(p, 3, "activate2");
 }
 fn cmd_reload(p) { note("reloads", get("reloads") + 1); }
+fn cmd_far(p, distance, whole) {
+    note("due", 10 + (distance * 0.6).ceil().to_int());
+    note("root", sqrt(whole) + whole.floor() + clamp(whole, 0, 3));
+}
 fn cmd_lamp(p, x, radius, on) { set_map_lights([x, 2.0, 0.0], radius, #{ on: on, color: [1.0, 0.5, 0.25], brightness: 2.0 }); }
 fn cmd_lamp_reset(p, x, radius) { set_map_lights([x, 2.0, 0.0], radius, #{}); }
 fn cmd_env_set(p) {
@@ -182,6 +186,7 @@ fn behaviour() -> Value {
             command("fov", &["float"]),
             command("show", &[]),
             command("reload", &[]),
+            command("far", &["float", "int"]),
             command("lamp", &["float", "float", "bool"]),
             command("lamp_reset", &["float", "float"]),
             command("region", &["int", "float"]),
@@ -231,6 +236,8 @@ fn behaviour() -> Value {
             "facts": { "default": "", "visible": "everyone" },
             "center": { "default": 0.0, "visible": "everyone" },
             "reloads": { "default": 0, "visible": "everyone" },
+            "due": { "default": 0, "visible": "everyone" },
+            "root": { "default": 0.0, "visible": "everyone" },
             "env": { "default": "", "visible": "everyone" },
             "struck": { "default": "", "visible": "everyone" },
             "mag": { "default": "", "visible": "everyone" },
@@ -306,6 +313,9 @@ impl Drop for Root {
     }
 }
 fn catalog() -> Arc<Catalog> {
+    catalog_with(SCRIPT)
+}
+fn catalog_with(script: &str) -> Arc<Catalog> {
     static NEXT: AtomicUsize = AtomicUsize::new(0);
     let root = Root(std::env::temp_dir().join(format!(
         "bri-script-api-{}-{}",
@@ -325,7 +335,7 @@ fn catalog() -> Arc<Catalog> {
     });
     std::fs::write(dir.join("package.json"), manifest.to_string()).unwrap();
     std::fs::write(dir.join("behaviour.json"), behaviour().to_string()).unwrap();
-    std::fs::write(dir.join("main.rhai"), SCRIPT).unwrap();
+    std::fs::write(dir.join("main.rhai"), script).unwrap();
     // Another Add-On built on the probe's images, to change what a player
     // wears behind the probe's back.
     let rival = root.0.join("rival");
@@ -377,6 +387,9 @@ impl Game {
         Self::with_definitions(Definitions::default())
     }
     fn with_definitions(definitions: Definitions) -> Self {
+        Self::with(definitions, catalog())
+    }
+    fn with(definitions: Definitions, catalog: Arc<Catalog>) -> Self {
         let ground = ColliderBuilder::cuboid(100.0, 0.5, 100.0)
             .translation(Vector::new(0.0, -0.5, 0.0))
             .user_data(u128::MAX);
@@ -389,7 +402,7 @@ impl Game {
             .unwrap(),
         );
         s.set_weapon_pack(weapons()).unwrap();
-        s.install_packages(catalog(), None).unwrap();
+        s.install_packages(catalog, None).unwrap();
         Self { s, seq: 0 }
     }
     fn join(&mut self, at: Vec3) -> OwnerId {
@@ -2024,4 +2037,49 @@ fn saved_build_keeps_current_data_when_a_present_saved_value_is_malformed() {
         g.diagnostics()
     );
     g.s.package_state().validate().unwrap();
+}
+
+/// Rallypack's shot heard from afar (`(distance * 0.6).ceil()`), and whole
+/// numbers in float math, run when fired: v0.2.8 threw "Function not found:
+/// ceil (f64)" from `cmd_shot` the first time a shot was heard far away.
+#[test]
+fn ceil_and_whole_numbers_in_float_math_run_when_a_command_fires() {
+    let mut g = Game::new();
+    let a = g.join(Vec3::new(0.0, 0.05, 0.0));
+    g.steps(1);
+    g.run(
+        a,
+        "far",
+        vec![PackageArg::Float(100.0), PackageArg::Int(16)],
+    );
+    assert!(g.diagnostics().is_empty(), "{:?}", g.diagnostics());
+    assert_eq!(g.value("due").as_i64(), Some(70));
+    assert_eq!(g.value("root").as_f64(), Some(23.0));
+}
+
+/// A call to a function that exists nowhere is told at load, with its
+/// line, not first found when the line runs mid-game.
+#[test]
+fn a_call_to_no_function_is_told_when_the_add_on_loads() {
+    let script = format!("{SCRIPT}\nfn cmd_typo(p) {{ frobnicate(p); }}");
+    let g = Game::with(Definitions::default(), catalog_with(&script));
+    let told: Vec<_> =
+        g.s.package_diagnostics()
+            .into_iter()
+            .filter(|d| d.code == "script.unknown_function")
+            .collect();
+    assert_eq!(told.len(), 1, "{told:?}");
+    assert!(
+        told[0].message.contains("`frobnicate` with 1 argument"),
+        "{told:?}"
+    );
+    let line = script
+        .lines()
+        .position(|l| l.contains("frobnicate"))
+        .unwrap()
+        + 1;
+    assert_eq!(
+        told[0].location.as_deref(),
+        Some(format!("probe/main.rhai:{line}").as_str())
+    );
 }

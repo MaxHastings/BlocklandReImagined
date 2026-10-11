@@ -301,6 +301,11 @@ fn print_material(
     if print_namespace && materials.bundle.resolve(name).is_some() {
         return materials.print_material(scene, name).map(Some);
     }
+    // v20's "nothing printed here", in a world converted before the import
+    // read it as no print: blank, and not an unknown print.
+    if print_namespace && bri_content::brick_materials::is_no_print(name) {
+        return Ok(None);
+    }
     // Every brick of a save may carry the same unknown name: log it once,
     // without allocating per brick.
     static LOGGED: std::sync::Mutex<std::collections::BTreeSet<String>> =

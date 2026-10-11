@@ -1955,10 +1955,25 @@ fn presentation(cx: &mut Ctx, pack: &bri_weapons::Pack, weapons_sha256: &str) ->
                     // one), and kept the rest of the model. A clear texture
                     // shows the tint through, as a colour-shift model's
                     // clear texels do.
-                    cx.report.diagnostics.push(format!(
-                        "presentation: {key} material {} has no texture; drawn in the colour shift (white without one), as Torque drew it",
-                        m.name
-                    ));
+                    // Stock art the reference has but the installed game
+                    // does not carry is a different repair from art that
+                    // exists nowhere.
+                    let stock = ["png", "jpg"]
+                        .iter()
+                        .map(|ext| {
+                            format!("base/data/shapes/{}.{ext}", m.name).to_ascii_lowercase()
+                        })
+                        .find(|path| cx.reference.files.contains(path));
+                    cx.report.diagnostics.push(match stock {
+                        Some(path) => format!(
+                            "presentation: {key} material {} uses v20's {path}, which is not among the installed game's item textures (or no --installed was given); drawn in the colour shift (white without one) instead",
+                            m.name
+                        ),
+                        None => format!(
+                            "presentation: {key} material {} has no texture; drawn in the colour shift (white without one), as Torque drew it",
+                            m.name
+                        ),
+                    });
                     bindings.push(flat_texture(cx, &mut textures, Flat::Clear)?);
                 }
             }

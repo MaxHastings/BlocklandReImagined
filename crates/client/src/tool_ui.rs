@@ -450,33 +450,28 @@ impl ToolUi {
                     .find(|s| s.eq_ignore_ascii_case(aspect))
                     .unwrap_or(aspect)
                     .clone();
-                let current = brick
-                    .print
-                    .as_ref()
-                    .map(|reference| {
-                        let token = match reference {
-                            ContentRef::Resolved(id) => id,
-                            ContentRef::Unresolved(u)
-                                if u.namespace.eq_ignore_ascii_case("print") =>
-                            {
-                                &u.name
-                            }
-                            _ => anyhow::bail!(
-                                "Current brick print has an unsupported source namespace"
-                            ),
-                        };
-                        self.print_aliases
-                            .get(&token.to_ascii_lowercase())
-                            .cloned()
-                            .context("Current brick print is not bound to native content")
-                    })
-                    .transpose()?;
-                if let Some(id) = &current {
-                    ensure!(
-                        self.catalog.prints.contains_key(id),
-                        "Current brick print is not bound to native content"
-                    );
-                }
+                // The print to highlight, when this client knows it. A save
+                // may name one it does not (`NOPRINT`, an older texture path,
+                // an Add-On print not installed here): the selector still
+                // opens, with nothing highlighted, and the brick keeps its
+                // print until the player picks another, as v20's printer did.
+                let current = brick.print.as_ref().and_then(|reference| {
+                    let token = match reference {
+                        ContentRef::Resolved(id) => id,
+                        ContentRef::Unresolved(u) if u.namespace.eq_ignore_ascii_case("print") => {
+                            &u.name
+                        }
+                        ContentRef::Unresolved(_) => return None,
+                    };
+                    let find = |token: &str| self.print_aliases.get(&token.to_ascii_lowercase());
+                    find(token)
+                        .or_else(|| {
+                            bri_content::brick_materials::legacy_print_alias(token)
+                                .and_then(|alias| find(&alias))
+                        })
+                        .filter(|id| self.catalog.prints.contains_key(*id))
+                        .cloned()
+                });
                 UiUpdate::OpenPrintSelector { aspect, current }
             }
             InspectMode::Events => {
@@ -2087,22 +2082,41 @@ mod tests {
         assert!(
             matches!(ui.action_command(&UiAction::SetPrint { print: "print/A".into() }).unwrap(), Some(Command::Tool(ToolAction::SetPrint { brick: 7, print: Some(id) })) if id == "print/A")
         );
-        b.print = Some(ContentRef::unresolved("print", "Community/unknown"));
-        assert!(
-            ui.accept_inspection(
-                &Reply::Inspected {
-                    brick_id: 7,
-                    brick: Box::new(b.clone()),
-                    mode: InspectMode::Printer
-                },
-                InspectMode::Printer,
-                None,
-                &world(&b),
-                &BTreeMap::new(),
-                1
-            )
-            .is_err()
-        );
+    }
+    /// A brick from an older save opens the printer whatever its print is
+    /// named (v0.2.8 refused with "Current brick print is not bound to
+    /// native content"): a stock print by its texture path is highlighted;
+    /// `NOPRINT`, an Add-On print not installed here or another source's
+    /// print highlights nothing, and the brick keeps it until a print is
+    /// picked.
+    #[test]
+    fn the_printer_opens_on_any_print_an_older_save_names() {
+        let cases = [
+            (
+                ContentRef::unresolved("print", "base/data/prints/Letters/A.png"),
+                Some("print/A"),
+            ),
+            (ContentRef::unresolved("print", "NOPRINT"), None),
+            (ContentRef::unresolved("print", "Community/unknown"), None),
+            (ContentRef::unresolved("decal", "Letters/A"), None),
+            (ContentRef::Resolved("print/gone".into()), None),
+        ];
+        for (print, highlighted) in cases {
+            let mut ui = fixture();
+            let mut b = brick();
+            b.print = Some(print.clone());
+            let original = b.clone();
+            let updates = open(&mut ui, &b, InspectMode::Printer);
+            assert!(
+                matches!(&updates[0], UiUpdate::OpenPrintSelector { current, .. } if current.as_deref() == highlighted),
+                "{print:?}: {updates:?}"
+            );
+            assert_eq!(ui.inspection.as_ref().unwrap().brick, original, "{print:?}");
+            assert!(
+                matches!(ui.action_command(&UiAction::SetPrint { print: "print/A".into() }).unwrap(), Some(Command::Tool(ToolAction::SetPrint { brick: 7, print: Some(id) })) if id == "print/A"),
+                "{print:?}"
+            );
+        }
     }
     #[test]
     #[ignore = "requires generated native stock content, no window"]
