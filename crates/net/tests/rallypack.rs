@@ -1,4 +1,7 @@
 //! Main weapon-family smoke check using privately owned converted content.
+//! BRI_P90_CONTENT_ROOT needs the `packages.json` an installed game has; a
+//! checkout's generated `content/` has none (copy
+//! `crates/package/base-packages.json` there as `packages.json` for the run).
 use anyhow::{Context, Result, ensure};
 use bri_package::packages::{PackageEntry, PackageSet, Side};
 use bri_package_runtime::Catalog;

@@ -101,6 +101,32 @@ P90 test are fixed.
   `build_presentation.py` against the v20 reference (needs the originals),
   and the Rallypack/P90 recipes and their tests (need Max's ZIPs on E:).
 
+## Verified on Max's PC (headless, 2026-10-11)
+
+Run through Remote Control in a worktree of this branch; no window, main
+checkout untouched, no push from the PC.
+
+- `python tools/bootstrap.py --v20 <reference>` exit 0, `bri-client --check`
+  passed. It rebuilt item-presentation-pack-010 and also weapons-pack-009,
+  vehicles-pack-012 and worlds-pass-006: their steps hash bri-convert's
+  sources, which the shape `faithful` split changed. The new presentation has
+  93 textures, all 25 `base/data/shapes` keys among them.
+- `build_rallypack_p90.py` and `build_rallypack.py` built into fresh folders
+  (48 items, 207 images, no unresolved materials); `rallypack` 1/1 and
+  `rallypack_p90` 5/5 passed with the private packs (with
+  `base-packages.json` copied into the content folder as `packages.json`;
+  the tests' headers now say so).
+- `bri-import-addon` on the real ZIPs with `--reference` and `--installed`:
+  Weapon_Rallypack 6 preserved, 4 unsupported, 45 missing_source (each names
+  an icon file absent from the Add-On and the reference); no asset `missing`.
+  Weapon_Rallypack_P90: the P90 is unsupported (`onFire`, `onDryFire`,
+  `onPreAmmoCheck` need native behaviour: the recipe's host rules, not a
+  catalog port, carry them). Seven of `p90.dts`'s eight materials import
+  opaque; `red` stays additive (it sets translucent too, so Torque blends it).
+- `script_api` 28, sim `rules` 43, `bri-bls` 14, client `tool_ui`/`world_scene`
+  27 passed against the real content. The 35 v20 `.bls` saves contain no
+  NOPRINT, so the print fix is covered by the unit tests, not those saves.
+
 ## Uncertain
 
 - That v20 drew Add-On materials from base/data/shapes is inferred (the
@@ -114,7 +140,6 @@ P90 test are fixed.
 
 ## Next
 
-- Max: rerun `python tools/bootstrap.py` (rebuilds item presentation), then
-  the P90 recipe, and look at the P90's red sight and yellow shell, and the
-  goal pushing the ball after the host dies in soccer.
+- Max does no playtest before v0.2.9 (2026-10-11); the release gate is the
+  integration thread's automated run.
 - Retire the P90 recipe's own stock-texture copy once the rebuilt pack is in.
