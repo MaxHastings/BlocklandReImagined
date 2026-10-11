@@ -5,15 +5,6 @@ use bri_console::Clamp;
 impl App {
     pub(super) fn frame(&mut self, elapsed: Duration) -> Result<()> {
         self.perf.frame_stats.push(elapsed);
-        if let Some(line) = self
-            .perf
-            .frame_log
-            .as_mut()
-            .and_then(|log| log.frame(elapsed))
-        {
-            // Session log only: players send it, the console stays quiet.
-            eprintln!("{line}");
-        }
         // Tell the player about a newer release outside a game, not as a
         // dialog over play.
         if !self.ui.core.in_game()
@@ -44,7 +35,9 @@ impl App {
         let game_elapsed = elapsed.mul_f32(scale);
         self.avatar.animation_time += game_elapsed.as_secs_f64().min(0.25);
         self.avatar.preview_time += elapsed.as_secs_f64().min(0.25);
+        let span = crate::frame_trace::span("network");
         let polled = self.poll_network();
+        drop(span);
         self.end_session_on_fault(polled);
         // The server's settings decide some weapon fields: play the pack
         // they make, and the authored one outside a game.
@@ -76,6 +69,7 @@ impl App {
             }
             Err(error) => bri_console::warn(format!("The server's weapon settings: {error:#}")),
         }
+        let span = crate::frame_trace::span("files");
         self.poll_files();
         if let Some((map, name)) = self.files.save_previews.poll() {
             self.ui.apply(UiUpdate::SavePreview {
@@ -85,6 +79,7 @@ impl App {
             });
         }
         self.poll_old_saves();
+        drop(span);
         self.update_package_hud();
         if let Some(a) = self.net.attempt.as_ref().filter(|a| a.entered) {
             for text in self.addons.client_code.take_messages() {
@@ -137,13 +132,19 @@ impl App {
             .set_third_person_only(third_person_only.unwrap_or(false));
         self.controls.advance_view(elapsed.as_secs_f32());
         self.controls.advance_head(elapsed.as_secs_f32());
+        let span = crate::frame_trace::span("local game");
         let advanced = self.advance_local_game(alive, game_elapsed);
+        drop(span);
         self.end_session_on_fault(advanced);
+        let span = crate::frame_trace::span("combat");
         self.update_combat_presentation();
+        drop(span);
         self.update_perf();
         self.update_lag();
         self.update_host_problems();
+        let span = crate::frame_trace::span("background jobs");
         self.poll_background_jobs();
+        drop(span);
         // Build macro playback: one recorded building action per frame so the
         // server's action budget is never exceeded.
         if let Some(action) = self.build.macro_playback.pop_front() {
@@ -168,9 +169,13 @@ impl App {
         if let Some(building) = &mut self.build.building {
             building.set_passages(&self.motion.passages());
         }
+        let span = crate::frame_trace::span("world presentation");
         let presented = self.advance_world_presentation(game_elapsed, third_person, &mut listener);
+        drop(span);
         self.end_session_on_fault(presented);
+        let span = crate::frame_trace::span("audio");
         self.audio.tick(elapsed.as_secs_f32(), listener);
+        drop(span);
         self.view.drawn_controls = Some(self.controls.clone());
         Ok(())
     }
@@ -969,6 +974,7 @@ impl App {
                 .retain(|owner, _| view.poses.contains_key(owner));
             // Corpses past their timeout are no longer drawn.
             let gone = self.combat.hidden_bodies(&view.vitals);
+            let avatars_span = crate::frame_trace::span("avatars");
             for (owner, player) in presented {
                 let appearance = view
                     .avatars
@@ -1177,6 +1183,7 @@ impl App {
                 avatar.remember_drawn_offset(gone.contains(owner));
                 self.cosmetic_faults.absorb("avatar pose", posed);
             }
+            drop(avatars_span);
             self.mounts.posed_eye = Self::posed_eye(
                 &self.avatar.avatars,
                 &self.avatar.avatar_assets,
@@ -1429,6 +1436,7 @@ impl App {
             if limit != self.fx.brick_debris.limit() {
                 self.fx.brick_debris.set_limit(limit);
             }
+            let debris_span = crate::frame_trace::span("brick debris");
             let kills = std::mem::take(&mut self.fx.brick_kills);
             let thrown = self.fx.brick_debris.cues(&kills, building);
             // A kill announced after its brick started fading out stops the
@@ -1488,7 +1496,9 @@ impl App {
                 .brick_debris
                 .advance(game_elapsed.as_secs_f32().min(0.25), building);
             self.cosmetic_faults.absorb("brick debris", moved);
+            drop(debris_span);
             if bodies {
+                let _span = crate::frame_trace::span("Add-On bodies");
                 // A corpse does not shove bodies: it may be the one lying in
                 // them (a ragdoll drawn over it).
                 let alive: Vec<_> = pushers
@@ -1512,13 +1522,16 @@ impl App {
             // The avatar/image shell and sequence playback APIs are still a host
             // boundary. Retain requests in the adapter and expose its queue-drop
             // diagnostics; do not claim these have been rendered or played.
+            let effects_span = crate::frame_trace::span("effects");
             let advanced = self.fx.effects.advance(
                 game_elapsed.as_secs_f32(),
                 eye,
                 Vec3::ZERO,
                 |id, from, to| building.effect_visible(id, from, to),
             );
+            drop(effects_span);
             self.cosmetic_faults.absorb("world effects", advanced);
+            let _weather_span = crate::frame_trace::span("weather");
             let weather = self.weather.advance(
                 game_elapsed.as_secs_f32(),
                 bri_weather::CameraState {

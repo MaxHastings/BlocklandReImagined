@@ -522,6 +522,8 @@ impl ClientCode {
             return;
         }
         let speed = *self.speed.get_or_insert_with(|| {
+            crate::frame_trace::note("measured the GPU for Add-On code");
+            let _span = crate::frame_trace::span("Add-On GPU calibration");
             let speed = bri_client_sandbox::gpu::calibrate(device, queue);
             match speed {
                 Some(speed) => bri_console::echo(format!(

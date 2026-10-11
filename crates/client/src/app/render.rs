@@ -4,7 +4,9 @@ use bri_console::Clamp;
 
 impl App {
     pub(super) fn render_frame(&mut self, frame: &mut RenderContext<'_>) -> Result<bool> {
+        let span = crate::frame_trace::span("prepare");
         self.prepare_render(frame)?;
+        drop(span);
         let Some(a) = self.net.attempt.as_ref().filter(|a| a.entered) else {
             return Ok(false);
         };
@@ -49,17 +51,31 @@ impl App {
         // loading screen (`scene_pipelines_ready`), so a frame of a game
         // that is in reaches here with them compiled; only a GPU opened
         // after entering (a lost device, an offscreen capture) waits here.
-        let renderer = self
+        let building = self
             .gpu
             .renderer
             .as_mut()
-            .context("Scene GPU not initialized")?
-            .wait();
+            .context("Scene GPU not initialized")?;
+        if building.ready().is_none() {
+            crate::frame_trace::note("waited for the world's pipelines to compile");
+        }
+        let span = crate::frame_trace::span("pipelines wait");
+        let renderer = building.wait();
+        drop(span);
         renderer.set_filtering(frame.device, self.graphics.filtering);
-        let timing = self.gpu.time_passes || self.ui.core.perf.wants_net();
+        // Player sessions time the passes all the time, for the session
+        // log's GPU line (`crate::quality::FrameLog::gpu`).
+        let timing =
+            self.gpu.time_passes || self.ui.core.perf.wants_net() || self.perf.frame_log.is_some();
         renderer.time_passes(frame.device, frame.queue, timing);
+        let readings = renderer.pass_readings();
         match renderer.pass_times(frame.device) {
-            Some((_, passes)) => {
+            Some((whole, passes)) => {
+                if renderer.pass_readings() != readings
+                    && let Some(log) = &mut self.perf.frame_log
+                {
+                    log.gpu(whole, &passes);
+                }
                 self.gpu.gpu_passes = passes
                     .iter()
                     .map(|(pass, time)| (*pass, time.as_secs_f32() * 1000.0))
@@ -68,6 +84,8 @@ impl App {
             None => self.gpu.gpu_passes.clear(),
         }
         if self.gpu.gpu_scene.is_none() {
+            let _span = crate::frame_trace::span("world upload");
+            crate::frame_trace::note("uploaded the map");
             self.gpu.gpu_broken.clear();
             self.gpu.gpu_scene = Some(renderer.upload(frame.device, frame.queue, scene)?);
             self.lighting.light_volume.uploaded = false;
@@ -87,12 +105,14 @@ impl App {
                 .collect::<Result<_>>()?;
         }
         let previous_lighting = self.lighting.light_volume.bound_mode;
+        let span = crate::frame_trace::span("light volume");
         self.lighting.light_volume.upload(
             renderer,
             frame.device,
             frame.queue,
             self.graphics.lighting,
         )?;
+        drop(span);
         if previous_lighting != self.lighting.light_volume.bound_mode {
             // A cached reflection/probe must never carry illumination from
             // another mode into modern pixels (or back into compatibility).
@@ -110,6 +130,7 @@ impl App {
                 &view.map_lights,
             );
         }
+        let span = crate::frame_trace::span("chunk uploads");
         if self.gpu.gpu_palette.is_none()
             && let Some(palette) = &self.scene.palette
         {
@@ -126,7 +147,11 @@ impl App {
                 .iter()
                 .filter_map(|key| self.scene.cpu_chunks.get(key))
                 .collect();
-            if pending.iter().map(|c| c.vertices.len()).sum::<usize>() > 1 << 16 {
+            let vertices: usize = pending.iter().map(|c| c.vertices.len()).sum();
+            if !pending.is_empty() {
+                note_chunk_uploads(pending.len(), vertices);
+            }
+            if vertices > 1 << 16 {
                 renderer.reserve_chunks(&pending)?;
             }
             for key in std::mem::take(&mut self.gpu.chunk_uploads) {
@@ -147,6 +172,7 @@ impl App {
                 }
             }
         }
+        drop(span);
         // Dead bricks leave their drawn chunks now, not when the rebuilt
         // chunks land. A hide ends once the brick is back (respawned) or
         // the uploaded chunk no longer holds it.
@@ -783,6 +809,7 @@ impl App {
                 aiming: self.controls.aiming(),
                 alive: view.vitals.get(&view.owner).is_none_or(|v| v.alive),
             };
+            let span = crate::frame_trace::span("Add-On code");
             self.addons.client_code.run_frame(
                 self.avatar.animation_time,
                 eye,
@@ -790,6 +817,7 @@ impl App {
                 world,
                 player_view,
             );
+            drop(span);
             for (asset, at, volume) in self.addons.client_code.take_sounds() {
                 let placement = match at {
                     Some(at) => bri_audio::Placement::World(bri_audio::Vec3::from(at)),
@@ -797,6 +825,7 @@ impl App {
                 };
                 self.audio.play_asset(asset, placement, volume);
             }
+            let _span = crate::frame_trace::span("Add-On draw setup");
             self.addons.client_code.prepare(
                 frame.device,
                 frame.queue,
@@ -1196,6 +1225,7 @@ impl App {
                 },
             );
         };
+        let _recording = crate::frame_trace::span("record passes");
         renderer.begin_timing(frame.encoder);
         // Live mirror and window planes record the player's shadows
         // themselves, after those with their own.
@@ -1446,6 +1476,10 @@ impl App {
                     r.samples() != self.graphics.samples || r.shadow_settings() != effective.shadows
                 })
         {
+            crate::frame_trace::note(
+                "graphics rebuilt (anti-aliasing, shadows, colour vision or map)",
+            );
+            let _span = crate::frame_trace::span("graphics rebuild");
             self.gpu_ready(frame.device, frame.queue, frame.format)?;
         }
         // A successful Add-On reload replaces the CPU effects worlds without
@@ -1554,5 +1588,15 @@ impl App {
             && !self.lighting.light_volume.switchable_equipped
             && self.lighting.light_volume.map.is_some()
             && self.scene.cpu_scene.is_some()
+    }
+}
+
+/// A frame trace note for chunk uploads: how many and how big.
+fn note_chunk_uploads(chunks: usize, vertices: usize) {
+    if chunks >= 8 || vertices >= 1 << 16 {
+        crate::frame_trace::note(format!(
+            "uploaded {chunks} brick chunks ({:.1}k vertices)",
+            vertices as f64 / 1000.0
+        ));
     }
 }
