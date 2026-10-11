@@ -1783,6 +1783,10 @@ fn scenarios() -> Vec<Scenario> {
                     "Wrench_ItemRespawnTime",
                     Sent(&["actions.SendWrench.data.item_respawn_ms"]),
                 ),
+                (
+                    "Wrench_ItemRestore",
+                    Sent(&["actions.SendWrench.data.item_restore_on_reset"]),
+                ),
                 ("WrenchLock_RayCasting", NotSent(COPY)),
                 (
                     "Wrench_RayCasting",
