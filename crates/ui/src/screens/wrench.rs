@@ -175,20 +175,21 @@ fn add_team_row(window: &mut Control, layout: &str, prefix: &str) {
     window.children.push(team);
 }
 
-/// A "Respawn only on reset" tick box under the recovered item respawn
-/// time: the brick's item then stays gone until a mini-game reset or a
-/// `restoreItem` event brings it back. Everything below moves down a row.
-fn add_item_restore_row(window: &mut Control, prefix: &str) {
+/// A "Respawn only on mini-game reset" tick box for bricks with a
+/// recovered item respawn time: the brick's item then stays gone until a
+/// mini-game reset or a `restoreItem` event brings it back. Like the Team
+/// row it takes a row of its own above the footer buttons, so every
+/// authored control keeps its place and only the footer moves down.
+fn add_item_restore_row(window: &mut Control, layout: &str, prefix: &str) {
     let node = format!("{prefix}_ItemRestore");
     let respawn = format!("{prefix}_ItemRespawnTime");
-    let Some(respawn) = window
+    if !window
         .children
         .iter()
-        .find(|c| c.name.as_deref() == Some(respawn.as_str()))
-        .cloned()
-    else {
+        .any(|c| c.name.as_deref() == Some(respawn.as_str()))
+    {
         return;
-    };
+    }
     if window
         .children
         .iter()
@@ -196,7 +197,23 @@ fn add_item_restore_row(window: &mut Control, prefix: &str) {
     {
         return;
     }
-    let top = respawn.position[1] + respawn.extent[1];
+    let footer_commands = [
+        format!("{layout}.send();"),
+        format!("{layout}.respawn();"),
+        format!("canvas.popDialog({layout});"),
+        "canvas.pushDialog(WrenchEventsDlg);".into(),
+    ];
+    let top = window
+        .children
+        .iter()
+        .filter(|c| {
+            c.command
+                .as_ref()
+                .is_some_and(|command| footer_commands.contains(command))
+        })
+        .map(|c| c.position[1])
+        .min()
+        .unwrap_or(window.extent[1]);
     for control in &mut window.children {
         if control.position[1] >= top {
             control.position[1] += TEAM_ROW;
@@ -253,7 +270,7 @@ fn region_view(core: &Core, layout: &str, prefix: &str, expanded: bool) -> View 
         .find(|c| c.name.as_deref() == Some(&format!("{prefix}_Window")))
     {
         add_team_row(window, layout, prefix);
-        add_item_restore_row(window, prefix);
+        add_item_restore_row(window, layout, prefix);
         let old_height = window.extent[1];
         // Share an existing action row when its neighboring space is free.
         // Imported layouts with a crowded footer still receive a separate row.
