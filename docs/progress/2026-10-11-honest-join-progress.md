@@ -117,3 +117,31 @@ and picture. No game window was opened. The bar text was not rendered
 with the real v20 pack: the longest new text ("DOWNLOADING ADD-ONS
 12.4 MB OF 30.0 MB", 39 characters) is shorter than the existing
 "RECEIVING WORLD  187,123 OF 187,123 BRICKS".
+
+## Gate failure on the PC: no VERIFYING ADD-ONS with real content
+
+The integration gate (2edf850) failed the content variant of
+`a_guest_without_a_vehicle_add_on_downloads_it_and_can_spawn_it`: "no
+Loading Slate: VERIFYING ADD-ONS in the session log". The synthetic variant
+passed. The download cache lives in the content folder (`.downloads`), so
+on the PC an earlier run had left the test plane installed. That join has
+nothing to install, so the verify stage never begins (`fetch_missing`
+starts it only for packages it must install). That is the right behaviour,
+and the test's premise was wrong.
+
+- The test notes which packages are installed in the cache before the
+  join. It requires VERIFYING ADD-ONS only when the join installed one.
+  DOWNLOADING ADD-ONS and LOADING ADD-ONS are always required, and so is a
+  log line listing the plane as downloaded or already downloaded.
+- That last check found that a join which reloads for the server's Add-Ons
+  never listed them: `log_fetched` ran only after a successful join, and
+  the rejoin after the reload fetches nothing. The list is now written when
+  the Add-Ons are handed over to load, before the reload. Its sizes read
+  in KB under 1 MB, like the bar.
+
+Checked in the cloud with a throwaway second join from the same cached
+folder, as on the PC: the cache showed no new package, the test took the
+cached path and passed, and the log read "Add-On test_plane 1.0.0 was
+already downloaded". `add_on_join` 6/6 and `package_sync` 16/16 pass.
+Clippy `-D warnings` and fmt are clean for `bri-client`. `bri-client
+--lib`: 493 passed, and the same 6 failed with "no wgpu adapter".

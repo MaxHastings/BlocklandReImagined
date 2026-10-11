@@ -378,6 +378,18 @@ fn add_ons_the_host_turns_off_are_not_required_and_ones_it_runs_download(
     Ok(())
 }
 
+/// The packages installed in `app`'s download cache, by hash.
+fn installed_packages(app: &App) -> std::collections::BTreeSet<String> {
+    let dir = app.content.paths.root.join(".downloads").join("packages");
+    std::fs::read_dir(dir)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter(|e| e.path().is_dir())
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .collect()
+}
+
 fn guest_cache_ids(app: &App) -> Vec<String> {
     walk(&app.content.paths.root.join(".downloads"))
 }
@@ -734,6 +746,9 @@ fn a_guest_without_a_vehicle_add_on_downloads_it_and_can_spawn_it(f: &ContentRoo
         spawnable(&host_app),
         "the host's vehicle list lacks {VEHICLE}"
     );
+    // The download cache lives in the content folder, so with the real
+    // content an earlier run may have left the plane installed there.
+    let installed_before = installed_packages(&guest);
     join(&mut guest, &host_app)?;
     let screens = std::cell::RefCell::new(vec![screen(&guest.ui.core.conn)]);
     until(
@@ -749,7 +764,11 @@ fn a_guest_without_a_vehicle_add_on_downloads_it_and_can_spawn_it(f: &ContentRoo
             in_game(a[1])
         },
     )?;
-    join_screens_are_honest(&screens.into_inner(), &host_app)?;
+    let installed = installed_packages(&guest)
+        .difference(&installed_before)
+        .next()
+        .is_some();
+    join_screens_are_honest(&screens.into_inner(), &host_app, PLANE, installed)?;
     let cache = guest_cache_ids(&guest);
     ensure!(
         cache.iter().any(|id| id == PLANE),
@@ -777,8 +796,15 @@ fn screen(conn: &ConnectionState) -> String {
 /// v0.2.8: a friend sat 20 s on "Connecting to ..." while the host's
 /// Add-Ons downloaded. A join that downloads and loads Add-Ons shows each
 /// of those steps on the loading screen, naming the host's map, and never
-/// goes back to the Connecting dialog once there.
-fn join_screens_are_honest(screens: &[String], host: &App) -> Result<()> {
+/// goes back to the Connecting dialog once there. Verifying runs only when
+/// the join `installed` a package; one already installed from an earlier
+/// join has nothing to verify.
+fn join_screens_are_honest(
+    screens: &[String],
+    host: &App,
+    add_on: &str,
+    installed: bool,
+) -> Result<()> {
     eprintln!("Join screens:\n  {}", screens.join("\n  "));
     let first_loading = screens
         .iter()
@@ -813,17 +839,33 @@ fn join_screens_are_honest(screens: &[String], host: &App) -> Result<()> {
         .into_iter()
         .map(|l| l.text)
         .collect();
-    for stage in [
-        "DOWNLOADING ADD-ONS",
-        "VERIFYING ADD-ONS",
-        "LOADING ADD-ONS",
-    ] {
+    let stages: &[&str] = if !installed {
+        &["DOWNLOADING ADD-ONS", "LOADING ADD-ONS"]
+    } else {
+        &[
+            "DOWNLOADING ADD-ONS",
+            "VERIFYING ADD-ONS",
+            "LOADING ADD-ONS",
+        ]
+    };
+    for stage in stages {
         let line = format!("Loading {}: {stage}", map.name);
         ensure!(
             log.iter().any(|l| l.starts_with(&line)),
-            "no {line} in the session log; screens: {screens:?}"
+            "no {line} in the session log (the join installed a package: \
+             {installed}); screens: {screens:?}"
         );
     }
+    // The join lists each of the host's Add-Ons as downloaded or cached.
+    let listed = |l: &String| {
+        l.starts_with(&format!("Downloaded Add-On {add_on} "))
+            || (l.starts_with(&format!("Add-On {add_on} "))
+                && l.ends_with("was already downloaded"))
+    };
+    ensure!(
+        log.iter().any(listed),
+        "the session log does not list {add_on} as downloaded or cached"
+    );
     Ok(())
 }
 
