@@ -205,10 +205,9 @@ fn frame(mirrored: bool) -> Result<Vec<u8>> {
     readback.slice(..).map_async(wgpu::MapMode::Read, move |r| {
         let _ = tx.send(r);
     });
-    device.poll(wgpu::PollType::Wait {
-        submission_index: None,
-        timeout: Some(std::time::Duration::from_secs(30)),
-    })?;
+    // Wait for the copy itself, not a wall-clock deadline: a software
+    // adapter is slow on a loaded runner, not wrong.
+    device.poll(wgpu::PollType::wait_indefinitely())?;
     rx.recv_timeout(std::time::Duration::from_secs(30))??;
     let mapped = readback.slice(..).get_mapped_range()?;
     Ok(mapped
