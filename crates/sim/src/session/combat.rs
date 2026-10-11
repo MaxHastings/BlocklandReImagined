@@ -915,6 +915,13 @@ impl Session {
             })
             .collect()
     }
+    /// `team`'s score in `game` as rules read it: its own points and its
+    /// members' scores together (headless probes and tests).
+    pub fn team_total(&self, game: u64, team: u32) -> Option<i64> {
+        self.minigames
+            .team_score(mg::GameId(game), mg::TeamId(team))
+            .ok()
+    }
     pub fn minigame_views(&self) -> Vec<MiniGameView> {
         self.minigames
             .games()
