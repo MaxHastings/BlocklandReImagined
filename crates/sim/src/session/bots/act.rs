@@ -210,10 +210,11 @@ impl Proposal {
 }
 
 /// Buttons pressed on top of whatever the movers set: a crouch, the jets,
-/// a hop (a goof's, a dodge's, one into a body), which safety lets through
-/// only where it comes down on floor along the walk it takes, and the
-/// stall judge's jump in place (over what its shins catch, off a body it
-/// stands on), which goes as it is: its walk is already checked.
+/// a hop (a goof's, a dodge's, one into a body, the stall judge's taken on
+/// the move), which safety lets through only where it comes down on floor
+/// along the walk it takes, and the stall judge's jump in place (over what
+/// its shins catch, off a body it stands on), which goes as it is: its
+/// walk is already checked.
 #[derive(Clone, Copy, Debug, Default)]
 pub(super) struct Press {
     pub hop: bool,

@@ -1065,6 +1065,10 @@ fn at_work(goal: Option<Goal>, feet: Vec3, body: &Body, routed: bool) -> bool {
     }
 }
 
+/// Horizontal speed, units a second, under which the stall judge's jump is
+/// a jump in place (over what its shins catch): faster, it carries the bot
+/// on and is judged as a hop.
+const STILL_HOP: f32 = 1.0;
 /// Seconds a hop from level ground is in the air ([`crate::route::hop_flight`]).
 fn hop_flight(tuning: &crate::player::PlayerTuning, jets: f32) -> f32 {
     crate::route::Motion::of(tuning).hop(jets, 0.0)
@@ -3450,11 +3454,15 @@ impl Session {
         // on, over what its shins catch); the next plans again.
         let into_body = selected_objective.is_some_and(|v| v.jump);
         let stall_hop = stalled && brain.progress.stalls() == 1;
+        // Stalled while still moving (wobbling between two spots, not
+        // pressed against what it cannot pass): its jump carries it on the
+        // way it moves, so safety judges where it comes down, as a hop's.
+        let in_place = flat(Vec3::from(state.velocity)).length() <= STILL_HOP;
         let controls = act::resolve(
             &mut proposals,
             act::Press {
-                hop: act.jump || extra.jump || into_body,
-                jump: stall_hop,
+                hop: act.jump || extra.jump || into_body || stall_hop && !in_place,
+                jump: stall_hop && in_place,
                 crouch: act.crouch || extra.crouch,
                 jet: extra.jet,
             },
