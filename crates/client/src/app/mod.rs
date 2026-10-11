@@ -208,6 +208,9 @@ struct Attempt {
     progress_seen: u64,
     /// The stage last written to the session log, and when it began.
     logged_stage: Option<(bri_progress::Stage, std::time::Instant)>,
+    /// How many of the load's stages had finished at the last look, so the
+    /// log also names those that began and ended between two frames.
+    stages_ended: u64,
     /// Hosts: the world revision last saved under a name (or entered, or
     /// loaded). `None` takes the next revision seen.
     saved_revision: Option<u64>,

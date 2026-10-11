@@ -73,8 +73,47 @@ left as is. The bar text names the stage and bytes, not each Add-On (one
 line of upper-case text, like v20's `LoadingProgressTxt`); each Add-On's
 name and size go to the console and session log.
 
-## Playtest
+## End-to-end check in place of a playtest
 
-Maxwell joins (or has a friend join) a server running Add-Ons the joiner
-does not have, over the internet, once with a clean download cache and once
-again (warm cache).
+Maxwell decided on 2026-10-11 not to playtest before v0.2.9, so the join
+was checked end to end headlessly instead. `add_on_join.rs`
+`a_guest_without_a_vehicle_add_on_downloads_it_and_can_spawn_it` runs two
+real `App`s: a host on a loopback port running the test plane Add-On, and
+a guest with it off. The guest joins over QUIC, downloads and installs the
+plane, loads it (the Add-On reload path), joins again and spawns it. The
+test now records every screen the guest shows and fails if the dialog shows
+anything but "Checking your game content…" or "Connecting to …", if the
+join goes back to the dialog after the loading screen, or if downloading,
+verifying and loading the Add-Ons are missing from the session log for the
+host's map. Three runs in a row (synthetic content) each showed:
+
+```
+dialog: Connecting to 127.0.0.1:49459…
+dialog: Checking your game content…
+dialog: Connecting to 127.0.0.1:49459…
+loading Fixture Room 4: CONNECTING
+loading Fixture Room 4: DOWNLOADING ADD-ONS  0.0 MB OF 0.0 MB
+loading Fixture Room 4: LOADING ADD-ONS
+loading Fixture Room 4: LOADING
+loading Fixture Room 4: CHECKING CONTENT
+loading Fixture Room 4: CONNECTING
+loading v20/add-ons/map_slate/slate.mis: RECEIVING WORLD
+loading v20/add-ons/map_slate/slate.mis: LOADING MAP
+in game
+```
+
+The check found two more problems, both fixed:
+
+- Over loopback the install finished between two frames, so it never
+  showed and the session log never named it. The log now also names any
+  stage that began and ended between frames (`Progress::ended_since`),
+  marked "(between frames)".
+- Many Add-Ons are a few kilobytes and read "0.0 MB OF 0.0 MB". A download
+  under one megabyte now reads in kilobytes ("12 KB OF 49 KB").
+
+The map shows as the host's listed name ("Fixture Room 4") until the
+Welcome names it by id; the loading screen looks both up to the same name
+and picture. No game window was opened. The bar text was not rendered
+with the real v20 pack: the longest new text ("DOWNLOADING ADD-ONS
+12.4 MB OF 30.0 MB", 39 characters) is shorter than the existing
+"RECEIVING WORLD  187,123 OF 187,123 BRICKS".
