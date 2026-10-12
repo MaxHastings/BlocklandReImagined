@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "id": "playground-runner",
+  "version": "1.0.0",
+  "api": 1,
+  "name": "Runner",
+  "description": "A playable body: a short, quick runner who jumps high and steers in the air, with no jet. Part of the Mixed Add-On Playground; it knows nothing about any weapon, vehicle or game mode.",
+  "authors": ["Blockland ReImagined"],
+  "license": "CC0-1.0",
+  "provenance": { "source": "original" },
+  "dependencies": { "playground-runner-look": "^1.0.0" },
+  "provides": [
+    { "kind": "archetype", "id": "playground-runner:archetype/runner", "file": "runner.json" }
+  ]
+}

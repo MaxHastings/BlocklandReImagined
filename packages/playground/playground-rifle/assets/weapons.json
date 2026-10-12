@@ -1,0 +1,60 @@
+{
+  "schema_version": 5,
+  "id": "playground-rifle",
+  "items": {
+    "playground-rifle:weapon/carbine": {
+      "ui_name": "Pulse Carbine",
+      "image": "playground-rifle:image/carbine",
+      "model": "models/carbine.shape.json"
+    }
+  },
+  "images": {
+    "playground-rifle:image/carbine": {
+      "projectile": "playground-rifle:projectile/pulse",
+      "model": "models/carbine.shape.json",
+      "arm_ready": true,
+      "correct_muzzle": true,
+      "magazine": {
+        "size": 24,
+        "ammo": "pulse-cell",
+        "reload_ticks": 180,
+        "reserve": 96,
+        "max_reserve": 192,
+        "reload_sound": "playground-rifle:reload",
+        "empty_sound": "playground-rifle:empty",
+        "display": "Pulse Cells"
+      },
+      "states": [
+        { "name": "Activate", "ticks": 24, "timeout": 1, "sound": "playground-rifle:equip" },
+        { "name": "Ready", "down": 2 },
+        { "name": "Fire", "ticks": 18, "script": "onFire", "sound": "playground-rifle:shot", "timeout": 3 },
+        { "name": "Hold", "up": 1 }
+      ]
+    }
+  },
+  "projectiles": {
+    "playground-rifle:projectile/pulse": {
+      "speed": 160.0,
+      "lifetime_ticks": 240,
+      "fade_ticks": 240,
+      "damage": 25.0,
+      "damage_type": "$DamageType::PulseCarbine",
+      "impulse": 120.0
+    }
+  },
+  "damage_types": {
+    "pulsecarbine": {
+      "name": "PulseCarbine",
+      "suicide_message": "%1 zapped themselves",
+      "murder_message": "%2 zapped %1",
+      "vehicle_scale": 1.0,
+      "direct": true
+    }
+  },
+  "sounds": {
+    "playground-rifle:shot": { "file": "sounds/shot.wav" },
+    "playground-rifle:equip": { "file": "sounds/equip.wav", "volume": 0.6, "local": true },
+    "playground-rifle:reload": { "file": "sounds/reload.wav", "volume": 0.7 },
+    "playground-rifle:empty": { "file": "sounds/empty.wav", "local": true }
+  }
+}

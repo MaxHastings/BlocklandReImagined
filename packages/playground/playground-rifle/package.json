@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "id": "playground-rifle",
+  "version": "1.0.0",
+  "api": 1,
+  "name": "Pulse Carbine",
+  "description": "A weapon: a 24-round energy carbine with its own model, sounds and reload. Part of the Mixed Add-On Playground; it knows nothing about any body, vehicle or game mode.",
+  "authors": ["Blockland ReImagined"],
+  "license": "CC0-1.0",
+  "provenance": { "source": "original" },
+  "provides": [
+    { "kind": "weapons", "id": "playground-rifle:weapons/main", "file": "assets/weapons.json" }
+  ]
+}
