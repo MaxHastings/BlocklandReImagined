@@ -23,6 +23,7 @@ labels are retained so earlier progress notes remain traceable.
 | Add-On content preparation | One worker and latest pending choice; owned UI schema crosses threads, caches and audio device stay on the UI thread; host/join continuations preserve cancellation and explicit tool choices | Content reload cleanup | on main |
 | Native framework dependency ports | `handles` dependency declarations paired with manifest removal; only applied ports settle source requirements, with evidence retained | Content reload cleanup | on main |
 | Click swaps | `CatalogEntry::swap` (front/back brick ids), `ToolCatalog::swaps` and `swap_sounds`; swaps replace bounds and collision, including wider open doors, with optional positional sound, at most every 250 ms | Bundled originals (doors, coffins) | on main |
+| Movement controllers | `controller` kind, `Archetype::controller`, `bri_motor::controller` (tick record, sweeps, 16-byte memory, animation intent), `bri-controller` Wasmtime host on host and client | v0.3.0 movement controllers (W3) | branch `claude/v030-movement-controllers-w3puoe` |
 | Hit regions | `info.region` on damage: head, torso, legs | Bushido's Adventure Pack | on main |
 | HUD "holding" line | per-gun HUD text while an item is held | Bushido's Adventure Pack | on main |
 | Scope zoom | zoom, `hide_nodes`, `both_arms` | Kaje's Sniper Rifle | on main |

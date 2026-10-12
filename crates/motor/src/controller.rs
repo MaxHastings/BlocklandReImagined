@@ -14,6 +14,7 @@
 //! same steps again. The engine implements controllers from Add-On
 //! WebAssembly (`bri-controller`); this crate only defines the seam, so the
 //! motor never depends on a WebAssembly runtime.
+use bri_console::Clamp;
 use glam::Vec3;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -133,7 +134,7 @@ impl Probe {
         )
         .map(|(t, normal)| SweepHit {
             fraction: ((t * (distance + SWEEP_BACK_OFF) - SWEEP_BACK_OFF) / distance)
-                .clamp(0.0, 1.0),
+                .clamped(0.0, 1.0),
             normal,
         }))
     }
