@@ -66,7 +66,9 @@ fn vanilla_save_events_install_and_run() -> anyhow::Result<()> {
         if !path.to_string_lossy().ends_with(".world.json") {
             continue;
         }
-        let world = bri_world::persistence::load(&path)?;
+        // The worlds pack holds JSON worlds and binary builds under the
+        // same .world.json name; decode reads both, as the game does.
+        let world = bri_world::build::decode(&std::fs::read(&path)?)?.world;
         if !world.bricks.values().any(|b| !b.events.is_empty()) {
             continue;
         }

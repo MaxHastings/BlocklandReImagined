@@ -285,7 +285,7 @@ impl App {
     /// How many cosmetic entities this client simulates and draws, for the
     /// headless performance probes.
     pub fn entity_counts(&self) -> serde_json::Value {
-        let world = |w: &bri_fx_runtime::EffectsWorld| serde_json::json!({ "sources": w.source_count(), "particles": w.particle_count() });
+        let world = |w: &bri_fx_runtime::EffectsWorld| serde_json::json!({ "sources": w.source_count(), "dormant": w.dormant_count(), "particles": w.particle_count() });
         let drawn = self.gpu.effects_renderer.as_ref().map(|r| r.stats());
         serde_json::json!({
             "brick_effects": world(&self.fx.effects.world),
@@ -297,6 +297,9 @@ impl App {
             "particle_draw_calls": drawn.map_or(0, |s| s.draw_calls),
             "particle_upload_bytes": drawn.map_or(0, |s| s.uploaded_bytes),
             "avatars": self.avatar.avatars.len(),
+            "avatar_meshes_built": self.avatar.meshes_built.0,
+            "horses": self.avatar.mount_meshes.len(),
+            "horse_meshes_built": self.avatar.meshes_built.1,
             "vehicles": self.network_view().map_or(0, |v| v.vehicles.len()),
             "projectiles": self.network_view().map_or(0, |v| v.weapons.projectiles.len()),
             "explosion_debris": self.fx.explosion_debris.models().count(),

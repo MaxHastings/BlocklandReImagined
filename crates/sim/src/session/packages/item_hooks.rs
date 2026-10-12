@@ -346,18 +346,14 @@ impl Session {
         Ok(())
     }
 
-    /// `drop_item(item, x, y, z, vx, vy, vz)`: a pickup anyone may take at
-    /// once, popping after ten seconds.
-    #[allow(clippy::too_many_arguments)]
-    pub(super) fn package_drop_item(
-        &mut self,
+    /// Whether `drop_item` would put the item in the world now: the server
+    /// has the item, `package` has room for another lying about, and its
+    /// data fits. Shared by the check and the drop itself.
+    pub(super) fn package_check_drop_item(
+        &self,
         package: &str,
         item: &str,
-        position: [f32; 3],
-        velocity: [f32; 3],
-        paint: Option<u8>,
-        data: Option<serde_json::Value>,
-        seconds: Option<u32>,
+        data: Option<&serde_json::Value>,
     ) -> Result<()> {
         ensure!(
             self.weapons.contains_item(item),
@@ -374,13 +370,30 @@ impl Session {
             lying < MAX_PACKAGE_DROPS,
             "`{package}` already has {MAX_PACKAGE_DROPS} items lying in the world"
         );
-        if let Some(data) = &data {
+        if let Some(data) = data {
             state::check_value(data)?;
             ensure!(
                 host.item_hooks.drop_data.len() < MAX_DROP_DATA,
                 "too many dropped items carry data"
             );
         }
+        Ok(())
+    }
+
+    /// `drop_item(item, x, y, z, vx, vy, vz)`: a pickup anyone may take at
+    /// once, popping after ten seconds.
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn package_drop_item(
+        &mut self,
+        package: &str,
+        item: &str,
+        position: [f32; 3],
+        velocity: [f32; 3],
+        paint: Option<u8>,
+        data: Option<serde_json::Value>,
+        seconds: Option<u32>,
+    ) -> Result<()> {
+        self.package_check_drop_item(package, item, data.as_ref())?;
         let look = bri_weapons::DropLook {
             paint,
             lifetime: seconds.map_or(bri_weapons::DropLook::default().lifetime, |s| {
@@ -398,13 +411,20 @@ impl Session {
         Ok(())
     }
 
-    /// `remove_drop`: take back an item this package put in the world.
-    pub(super) fn package_remove_drop(&mut self, package: &str, drop: u64) -> Result<()> {
+    /// Whether `drop` is an item `package` put in the world and that still
+    /// lies there (`remove_drop`, `name_drop`).
+    pub(super) fn package_check_drop(&self, package: &str, drop: u64) -> Result<()> {
         let host = self.packages.as_ref().context("No packages are enabled")?;
         ensure!(
             host.item_hooks.package_drops.get(&drop).map(String::as_str) == Some(package),
             "Item {drop} is not one `{package}` put in the world"
         );
+        Ok(())
+    }
+
+    /// `remove_drop`: take back an item this package put in the world.
+    pub(super) fn package_remove_drop(&mut self, package: &str, drop: u64) -> Result<()> {
+        self.package_check_drop(package, drop)?;
         self.weapons.remove_drop(drop);
         self.forget_drop(drop);
         Ok(())
@@ -418,11 +438,7 @@ impl Session {
         text: Option<String>,
         color: u8,
     ) -> Result<()> {
-        let host = self.packages.as_ref().context("No packages are enabled")?;
-        ensure!(
-            host.item_hooks.package_drops.get(&drop).map(String::as_str) == Some(package),
-            "Item {drop} is not one `{package}` put in the world"
-        );
+        self.package_check_drop(package, drop)?;
         self.weapons
             .set_drop_name(drop, text.map(|text| bri_weapons::DropName { text, color }))
     }

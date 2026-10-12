@@ -266,7 +266,75 @@ impl Perform for ops::Untether {
         Ok(())
     }
 }
+impl Session {
+    /// Whether `package` may spawn `definition` for `owner` (a player in
+    /// the game, or nobody): its own kind, under its own limit and the
+    /// server's vehicle limits. The spot itself is only tried by the spawn.
+    fn check_spawn_vehicle(
+        &self,
+        package: &str,
+        definition: &str,
+        owner: Option<OwnerId>,
+    ) -> std::result::Result<(), String> {
+        if !self.owns_kind(package, definition) {
+            return Err(format!(
+                "`{definition}` is not a vehicle of `{package}` or an Add-On it depends on"
+            ));
+        }
+        let count = self
+            .movables
+            .spawned
+            .values()
+            .filter(|p| p.as_str() == package)
+            .count();
+        if count >= MAX_PACKAGE_VEHICLES {
+            return Err(format!(
+                "`{package}` already has {MAX_PACKAGE_VEHICLES} vehicles out"
+            ));
+        }
+        // Add-On vehicles count toward the server's vehicle limits.
+        self.vehicle_room(owner.unwrap_or(0), definition)
+    }
+    /// Whether `package` (asked by `caller`) may remove `vehicle`: one it
+    /// spawned, or one of its own kind that is the caller's or the caller
+    /// administers.
+    fn check_remove_vehicle(
+        &self,
+        package: &str,
+        caller: Option<OwnerId>,
+        vehicle: u64,
+    ) -> Result<()> {
+        if self.movables.spawned.get(&vehicle).map(String::as_str) == Some(package) {
+            return Ok(());
+        }
+        // One of the Add-On's own kind from elsewhere (a spawn brick): put
+        // away for the player it belongs to, or an administrator.
+        let found = self
+            .vehicles
+            .world
+            .as_ref()
+            .and_then(|w| w.vehicle_snapshot(&self.simulation.physics, VehicleId(vehicle)));
+        let found = found.with_context(|| format!("No vehicle {vehicle}"))?;
+        ensure!(
+            self.owns_kind(package, &found.definition),
+            "Vehicle {vehicle} is not `{package}`'s to remove"
+        );
+        let by = caller.context("Only a player's request removes a built vehicle")?;
+        ensure!(
+            found.owner.0 == by || self.is_administrator(by),
+            "Vehicle {vehicle} is not player {by}'s"
+        );
+        Ok(())
+    }
+}
+
 impl Perform for ops::SpawnVehicle {
+    fn check(&self, session: &Session, cx: OpCall<'_>) -> Result<()> {
+        let owner = self.owner.filter(|o| session.peers.contains_key(o));
+        session
+            .check_spawn_vehicle(cx.package, &self.definition, owner)
+            .map_err(|text| anyhow::anyhow!("{}", text.trim_start_matches('\u{E000}')))
+    }
     fn perform(self, session: &mut Session, cx: OpCall<'_>) -> Result<()> {
         let OpCall { package, .. } = cx;
         let ops::SpawnVehicle {
@@ -276,24 +344,10 @@ impl Perform for ops::SpawnVehicle {
             velocity,
             owner,
         } = self;
-        ensure!(
-            session.owns_kind(package, &definition),
-            "`{definition}` is not a vehicle of `{package}` or an Add-On it depends on"
-        );
-        let count = session
-            .movables
-            .spawned
-            .values()
-            .filter(|p| p.as_str() == package)
-            .count();
-        ensure!(
-            count < MAX_PACKAGE_VEHICLES,
-            "`{package}` already has {MAX_PACKAGE_VEHICLES} vehicles out"
-        );
         let owner = owner.filter(|o| session.peers.contains_key(o));
-        // Add-On vehicles count toward the server's vehicle limits.
-        if let Err(text) = session.vehicle_room(owner.unwrap_or(0), &definition) {
-            if let Some(owner) = owner {
+        if let Err(text) = session.check_spawn_vehicle(package, &definition, owner) {
+            // A server limit is the player's to hear, as at a spawn brick.
+            if let Some(owner) = owner.filter(|_| text.starts_with('\u{E000}')) {
                 session.notify(
                     owner,
                     Notice::Center {
@@ -325,30 +379,15 @@ impl Perform for ops::SpawnVehicle {
     }
 }
 impl Perform for ops::RemoveVehicle {
+    fn check(&self, session: &Session, cx: OpCall<'_>) -> Result<()> {
+        session.check_remove_vehicle(cx.package, cx.caller, self.vehicle)
+    }
     fn perform(self, session: &mut Session, cx: OpCall<'_>) -> Result<()> {
         let OpCall {
             package, caller, ..
         } = cx;
         let ops::RemoveVehicle { vehicle } = self;
-        if session.movables.spawned.get(&vehicle).map(String::as_str) != Some(package) {
-            // One of the Add-On's own kind from elsewhere (a spawn
-            // brick): put away for the player it belongs to, or an
-            // administrator.
-            let found =
-                session.vehicles.world.as_ref().and_then(|w| {
-                    w.vehicle_snapshot(&session.simulation.physics, VehicleId(vehicle))
-                });
-            let found = found.with_context(|| format!("No vehicle {vehicle}"))?;
-            ensure!(
-                session.owns_kind(package, &found.definition),
-                "Vehicle {vehicle} is not `{package}`'s to remove"
-            );
-            let by = caller.context("Only a player's request removes a built vehicle")?;
-            ensure!(
-                found.owner.0 == by || session.is_administrator(by),
-                "Vehicle {vehicle} is not player {by}'s"
-            );
-        }
+        session.check_remove_vehicle(package, caller, vehicle)?;
         session.movables.spawned.remove(&vehicle);
         session.remove_vehicle(VehicleId(vehicle))
     }

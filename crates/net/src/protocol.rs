@@ -133,6 +133,30 @@ pub struct Hello {
     /// host cleans them like names (`Clan::cleaned`).
     #[serde(default)]
     pub clan: bri_sim::session::Clan,
+    /// With `resume`: the world the dropped connection still holds, so
+    /// the host can send only the bricks that changed since
+    /// ([`Checkpoint::kept`]) instead of the whole world. Without it, or
+    /// when the host can no longer match it (another map, a cursor older
+    /// than the changes it keeps), the join downloads the world as a fresh
+    /// one does.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kept: Option<KeptWorld>,
+}
+/// What a resuming client still holds of the world: the map and the
+/// replication cursor its bricks are current to.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct KeptWorld {
+    pub map_id: String,
+    pub cursor: u64,
+}
+/// A Welcome to a resume that keeps its world: the bricks removed since
+/// the cursor the client offered. The `WorldChunk` frames after it carry
+/// only the bricks added or changed since, over the kept ones.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct KeptChanges {
+    pub removed: Vec<BrickId>,
 }
 /// The name a client joins as: its player name and clan tags.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -249,6 +273,12 @@ impl Hello {
         );
         bri_package::environment::Environment::validate_refs(&self.packages)
             .map_err(|e| anyhow::anyhow!("Invalid package list: {e}"))?;
+        anyhow::ensure!(
+            self.kept
+                .as_ref()
+                .is_none_or(|k| k.map_id.len() <= MAX_HELLO_NAME),
+            "Invalid kept world"
+        );
         if let Some(proof) = &self.identity {
             anyhow::ensure!(
                 proof.signature.len() == 64,
@@ -599,6 +629,12 @@ pub struct Checkpoint {
     /// Add-On world shapes (`show_shapes`), by key.
     #[serde(default)]
     pub world_shapes: BTreeMap<String, Vec<bri_package_runtime::ops::WorldShape>>,
+    /// Set when this Welcome answers a resume that kept its world
+    /// ([`Hello::kept`]): `world_bricks` and the chunks then carry only
+    /// the bricks added or changed since the client's cursor, and this
+    /// names the ones removed. Absent, the chunks carry the whole world.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kept: Option<KeptChanges>,
 }
 impl Checkpoint {
     /// Everything but the bricks, plus an O(1) snapshot of the authoritative
@@ -648,8 +684,26 @@ impl Checkpoint {
                 .into_iter()
                 .map(|(k, s)| (k, s.to_vec()))
                 .collect(),
+            kept: None,
         };
         (checkpoint, world.bricks.clone())
+    }
+    /// Turn a full transfer into a kept-world one: the chunks carry only
+    /// `changes`' bricks and the removals ride in the head.
+    pub fn keep_world(&mut self, changes: BTreeMap<BrickId, Option<Brick>>) -> bri_world::Bricks {
+        let mut removed = Vec::new();
+        let mut bricks = bri_world::Bricks::new();
+        for (id, brick) in changes {
+            match brick {
+                Some(brick) => {
+                    bricks.insert(id, brick);
+                }
+                None => removed.push(id),
+            }
+        }
+        self.world_bricks = bricks.len() as u64;
+        self.kept = Some(KeptChanges { removed });
+        bricks
     }
 }
 /// Most bricks per `WorldChunk` frame. A world of any size streams as bounded
@@ -786,34 +840,80 @@ fn encode_chunks(chunks: Vec<Vec<(BrickId, Brick)>>) -> anyhow::Result<Vec<Vec<u
 /// chunks that follow it, exactly as many bricks as it announced.
 pub struct WorldAssembly {
     checkpoint: Checkpoint,
+    /// Bricks the chunks have brought so far.
+    received: u64,
+    /// A resume over a kept world: a chunk may replace a kept brick.
+    kept: bool,
 }
 impl WorldAssembly {
     pub fn new(checkpoint: Checkpoint) -> anyhow::Result<Self> {
         anyhow::ensure!(
+            checkpoint.world.bricks.is_empty() && checkpoint.kept.is_none(),
+            "Invalid world transfer"
+        );
+        Self::check(&checkpoint)?;
+        Ok(Self {
+            checkpoint,
+            received: 0,
+            kept: false,
+        })
+    }
+    /// A resume's transfer over the bricks the client kept
+    /// ([`Checkpoint::kept`]): the removals apply now and the chunks that
+    /// follow add or replace bricks.
+    pub fn kept(mut checkpoint: Checkpoint, bricks: bri_world::Bricks) -> anyhow::Result<Self> {
+        let changes = checkpoint
+            .kept
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("Not a kept world transfer"))?;
+        anyhow::ensure!(
             checkpoint.world.bricks.is_empty()
-                && checkpoint.world_bricks <= bri_world::MAX_BRICKS as u64
+                && bricks.len() <= bri_world::MAX_BRICKS
+                && changes.removed.len() <= bri_world::MAX_BRICKS,
+            "Invalid world transfer"
+        );
+        Self::check(&checkpoint)?;
+        let mut world = bricks;
+        for id in &changes.removed {
+            world.remove(id);
+        }
+        checkpoint.world.bricks = world;
+        Ok(Self {
+            checkpoint,
+            received: 0,
+            kept: true,
+        })
+    }
+    fn check(checkpoint: &Checkpoint) -> anyhow::Result<()> {
+        anyhow::ensure!(
+            checkpoint.world_bricks <= bri_world::MAX_BRICKS as u64
                 && checkpoint.world_chunks <= checkpoint.world_bricks
                 && checkpoint.world_near_chunks <= checkpoint.world_chunks
                 && (checkpoint.world_chunks > 0) == (checkpoint.world_bricks > 0),
             "Invalid world transfer"
         );
-        Ok(Self { checkpoint })
+        Ok(())
     }
     pub fn complete(&self) -> bool {
-        self.checkpoint.world.bricks.len() as u64 == self.checkpoint.world_bricks
+        self.received == self.checkpoint.world_bricks
     }
     pub fn add(&mut self, chunk: Vec<(BrickId, Brick)>) -> anyhow::Result<()> {
-        let remaining = self.checkpoint.world_bricks - self.checkpoint.world.bricks.len() as u64;
+        let remaining = self.checkpoint.world_bricks - self.received;
         anyhow::ensure!(
             !chunk.is_empty() && chunk.len() <= WORLD_CHUNK && chunk.len() as u64 <= remaining,
             "Invalid world chunk"
         );
+        self.received += chunk.len() as u64;
         for (id, brick) in chunk {
             anyhow::ensure!(
-                self.checkpoint.world.bricks.insert(id, brick).is_none(),
+                self.checkpoint.world.bricks.insert(id, brick).is_none() || self.kept,
                 "Duplicate brick in world transfer"
             );
         }
+        anyhow::ensure!(
+            self.checkpoint.world.bricks.len() <= bri_world::MAX_BRICKS,
+            "Invalid world transfer"
+        );
         Ok(())
     }
     pub fn finish(self) -> anyhow::Result<Checkpoint> {
@@ -825,11 +925,12 @@ impl WorldAssembly {
     pub fn split(self, chunks: u64) -> anyhow::Result<(Checkpoint, WorldRest)> {
         let checkpoint = self.checkpoint;
         let rest = WorldRest {
-            bricks: checkpoint.world_bricks - checkpoint.world.bricks.len() as u64,
+            bricks: checkpoint.world_bricks - self.received,
             chunks: checkpoint
                 .world_chunks
                 .checked_sub(chunks)
                 .ok_or_else(|| anyhow::anyhow!("Invalid world transfer"))?,
+            kept: self.kept,
         };
         anyhow::ensure!(
             (rest.bricks > 0) == (rest.chunks > 0) && rest.chunks <= rest.bricks,
@@ -844,6 +945,7 @@ impl WorldAssembly {
 pub struct WorldRest {
     bricks: u64,
     chunks: u64,
+    kept: bool,
 }
 impl WorldRest {
     pub fn done(&self) -> bool {
@@ -869,11 +971,15 @@ impl WorldRest {
             anyhow::ensure!(id > 0, "Invalid brick identity");
             brick.validate(world.palette.len())?;
             anyhow::ensure!(
-                world.bricks.insert(id, brick).is_none(),
+                world.bricks.insert(id, brick).is_none() || self.kept,
                 "Duplicate brick in world transfer"
             );
             ids.push(id);
         }
+        anyhow::ensure!(
+            world.bricks.len() <= bri_world::MAX_BRICKS,
+            "Invalid world transfer"
+        );
         self.bricks -= ids.len() as u64;
         self.chunks -= 1;
         Ok(ids)

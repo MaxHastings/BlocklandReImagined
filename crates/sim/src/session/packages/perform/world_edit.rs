@@ -5,7 +5,8 @@ use super::*;
 impl Perform for ops::RemoveBrick {
     /// Whether the brick is there and the caller may remove it.
     fn check(&self, session: &Session, cx: OpCall<'_>) -> Result<()> {
-        session.package_may_remove_brick(self.brick, cx.caller)
+        session.package_may_remove_brick(self.brick, cx.caller)?;
+        session.package_check_edit_share(cx.package, "destroyed")
     }
     fn perform(self, session: &mut Session, cx: OpCall<'_>) -> Result<()> {
         let OpCall {
@@ -16,6 +17,10 @@ impl Perform for ops::RemoveBrick {
     }
 }
 impl Perform for ops::PlaceBrick {
+    /// Whether the package has an edit to spend and the brick fits.
+    fn check(&self, session: &Session, cx: OpCall<'_>) -> Result<()> {
+        session.package_check_place_brick(cx.package, &self.shape, self.position)
+    }
     fn perform(self, session: &mut Session, cx: OpCall<'_>) -> Result<()> {
         let OpCall { package, .. } = cx;
         let ops::PlaceBrick {
@@ -27,6 +32,20 @@ impl Perform for ops::PlaceBrick {
     }
 }
 impl Perform for ops::PlantBrick {
+    /// Whether the brick would really be planted. Without `require` a brick
+    /// that does not fit is skipped without a report, as v20's `plant()`
+    /// was; a script that charges for it asks to hear.
+    fn check(&self, session: &Session, cx: OpCall<'_>) -> Result<()> {
+        session.package_check_plant_brick(
+            cx.package,
+            &self.kind,
+            self.position,
+            self.turns,
+            self.color,
+            self.owner,
+            cx.caller,
+        )
+    }
     fn perform(self, session: &mut Session, cx: OpCall<'_>) -> Result<()> {
         let OpCall {
             package, caller, ..
@@ -42,6 +61,9 @@ impl Perform for ops::PlantBrick {
     }
 }
 impl Perform for ops::PlaceVoxel {
+    fn check(&self, session: &Session, cx: OpCall<'_>) -> Result<()> {
+        session.package_check_place_voxel(cx.package, self.position, &self.material)
+    }
     fn perform(self, session: &mut Session, cx: OpCall<'_>) -> Result<()> {
         let OpCall { package, .. } = cx;
         let ops::PlaceVoxel { position, material } = self;
@@ -85,48 +107,66 @@ impl Perform for ops::SetBlockState {
     }
 }
 impl Perform for ops::CutCopy {
+    fn check(&self, _session: &Session, cx: OpCall<'_>) -> Result<()> {
+        asked_by(
+            cx,
+            self.player,
+            "A copy's bricks are cut only for the player whose command asked",
+        )
+    }
     fn perform(self, session: &mut Session, cx: OpCall<'_>) -> Result<()> {
-        let OpCall {
-            package, caller, ..
-        } = cx;
+        let OpCall { package, .. } = cx;
         let ops::CutCopy { player, each } = self;
         // Bricks go with the trust of the player who asked.
-        ensure!(
-            caller == Some(player),
-            "A copy's bricks are cut only for the player whose command asked"
-        );
+        asked_by(
+            cx,
+            player,
+            "A copy's bricks are cut only for the player whose command asked",
+        )?;
         session.start_cut(player, package, each);
         Ok(())
     }
 }
 impl Perform for ops::PaintCopy {
+    fn check(&self, _session: &Session, cx: OpCall<'_>) -> Result<()> {
+        asked_by(
+            cx,
+            self.player,
+            "A copy's bricks are painted only for the player whose command asked",
+        )
+    }
     fn perform(self, session: &mut Session, cx: OpCall<'_>) -> Result<()> {
-        let OpCall {
-            package, caller, ..
-        } = cx;
+        let OpCall { package, .. } = cx;
         let ops::PaintCopy {
             player,
             paint,
             each,
         } = self;
-        ensure!(
-            caller == Some(player),
-            "A copy's bricks are painted only for the player whose command asked"
-        );
+        asked_by(
+            cx,
+            player,
+            "A copy's bricks are painted only for the player whose command asked",
+        )?;
         session.start_paint(player, package, paint, each);
         Ok(())
     }
 }
 impl Perform for ops::WrenchCopy {
+    fn check(&self, _session: &Session, cx: OpCall<'_>) -> Result<()> {
+        asked_by(
+            cx,
+            self.player,
+            "A copy's bricks are wrenched only for the player whose command asked",
+        )
+    }
     fn perform(self, session: &mut Session, cx: OpCall<'_>) -> Result<()> {
-        let OpCall {
-            package, caller, ..
-        } = cx;
+        let OpCall { package, .. } = cx;
         let ops::WrenchCopy { player } = self;
-        ensure!(
-            caller == Some(player),
-            "A copy's bricks are wrenched only for the player whose command asked"
-        );
+        asked_by(
+            cx,
+            player,
+            "A copy's bricks are wrenched only for the player whose command asked",
+        )?;
         if let Err(error) = session.open_copy_wrench(player) {
             let outcome = crate::session::copy_store::CopyOutcome::failed(
                 "wrench",
@@ -139,41 +179,59 @@ impl Perform for ops::WrenchCopy {
     }
 }
 impl Perform for ops::SuperCut {
+    fn check(&self, _session: &Session, cx: OpCall<'_>) -> Result<()> {
+        asked_by(
+            cx,
+            self.player,
+            "Bricks are cut only for the player whose command asked",
+        )
+    }
     fn perform(self, session: &mut Session, cx: OpCall<'_>) -> Result<()> {
-        let OpCall {
-            package, caller, ..
-        } = cx;
+        let OpCall { package, .. } = cx;
         let ops::SuperCut { player, min, max } = self;
-        ensure!(
-            caller == Some(player),
-            "Bricks are cut only for the player whose command asked"
-        );
+        asked_by(
+            cx,
+            player,
+            "Bricks are cut only for the player whose command asked",
+        )?;
         session.start_super_cut(player, package, (min, max));
         Ok(())
     }
 }
 impl Perform for ops::FillBox {
+    fn check(&self, _session: &Session, cx: OpCall<'_>) -> Result<()> {
+        asked_by(
+            cx,
+            self.player,
+            "Bricks are filled only for the player whose command asked",
+        )
+    }
     fn perform(self, session: &mut Session, cx: OpCall<'_>) -> Result<()> {
-        let OpCall {
-            package, caller, ..
-        } = cx;
+        let OpCall { package, .. } = cx;
         let ops::FillBox {
             player,
             min,
             max,
             color,
         } = self;
-        ensure!(
-            caller == Some(player),
-            "Bricks are filled only for the player whose command asked"
-        );
+        asked_by(
+            cx,
+            player,
+            "Bricks are filled only for the player whose command asked",
+        )?;
         session.start_fill(player, package, (min, max), color);
         Ok(())
     }
 }
 impl Perform for ops::PaintFill {
+    fn check(&self, _session: &Session, cx: OpCall<'_>) -> Result<()> {
+        asked_by(
+            cx,
+            self.player,
+            "Bricks are filled only for the player whose command or shot asked",
+        )
+    }
     fn perform(self, session: &mut Session, cx: OpCall<'_>) -> Result<()> {
-        let OpCall { caller, .. } = cx;
         let ops::PaintFill {
             player,
             brick,
@@ -185,10 +243,11 @@ impl Perform for ops::PaintFill {
             refusal_seconds,
             limit_error,
         } = self;
-        ensure!(
-            caller == Some(player),
-            "Bricks are filled only for the player whose command or shot asked"
-        );
+        asked_by(
+            cx,
+            player,
+            "Bricks are filled only for the player whose command or shot asked",
+        )?;
         let rules = super::FillRules {
             limit: limit as usize,
             reach,
@@ -218,8 +277,14 @@ impl Perform for ops::PaintFill {
     }
 }
 impl Perform for ops::PaintVehicle {
+    fn check(&self, _session: &Session, cx: OpCall<'_>) -> Result<()> {
+        asked_by(
+            cx,
+            self.player,
+            "Vehicles are painted only for the player whose command or shot asked",
+        )
+    }
     fn perform(self, session: &mut Session, cx: OpCall<'_>) -> Result<()> {
-        let OpCall { caller, .. } = cx;
         let ops::PaintVehicle {
             player,
             vehicle,
@@ -227,10 +292,11 @@ impl Perform for ops::PaintVehicle {
             riders_seconds,
             refusal_seconds,
         } = self;
-        ensure!(
-            caller == Some(player),
-            "Vehicles are painted only for the player whose command or shot asked"
-        );
+        asked_by(
+            cx,
+            player,
+            "Vehicles are painted only for the player whose command or shot asked",
+        )?;
         match session.paint_vehicle(player, vehicle, paint) {
             Ok(color) => {
                 let seconds = riders_seconds.unwrap_or(0.0);

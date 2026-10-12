@@ -48,6 +48,7 @@ fn checkpoint() -> Checkpoint {
         package_state: Default::default(),
         projectile_falls: Default::default(),
         world_shapes: Default::default(),
+        kept: None,
     }
 }
 fn pose(tick: u64, x: f32, yaw: f32) -> Pose {

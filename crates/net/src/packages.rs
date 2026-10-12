@@ -263,77 +263,97 @@ pub async fn fetch_missing_pinned(
             }
         }
         offered.retain(|p| !skipped.contains(p));
-        // Objects are shared between packages; each downloads once.
-        let total: u64 = listings
-            .iter()
-            .flat_map(|l| cache.missing(l))
-            .map(|f| (&f.sha256, f.size))
-            .collect::<BTreeMap<_, _>>()
-            .values()
-            .sum();
-        ensure!(
-            total <= MAX_FETCH_BYTES,
-            "This server's Add-Ons need {} MB of downloads, over the {} MB limit",
-            total / (1024 * 1024),
-            MAX_FETCH_BYTES / (1024 * 1024)
-        );
-        progress.begin(Stage::DownloadingPackages, Unit::Bytes, Some(total));
-        let mut done = 0_u64;
         let mut downloaded = BTreeMap::<String, u64>::new();
-        for listing in &listings {
-            for file in cache.missing(listing) {
-                let mut writer = cache.receive(file)?;
-                while writer.remaining() > 0 {
-                    let length = writer.remaining().min(MAX_OBJECT_CHUNK.into()) as u32;
-                    let DownloadReply::Object(bytes) = ask(DownloadRequest::Object {
-                        sha256: file.sha256.clone(),
-                        offset: writer.written(),
-                        length,
-                    })
-                    .await?
-                    else {
-                        bail!("Expected bytes of {}", file.path);
-                    };
-                    ensure!(
-                        bytes.len() == length as usize,
-                        "{}: the server sent the wrong range",
-                        file.path
-                    );
-                    writer.write(&bytes).with_context(|| {
-                        format!("Package {} file {}", listing.package, file.path)
-                    })?;
-                    done += bytes.len() as u64;
-                    progress.set_in(Stage::DownloadingPackages, done);
-                }
-                writer
-                    .finish()
-                    .with_context(|| format!("Package {}", listing.package))?;
-                *downloaded.entry(listing.package.hash.clone()).or_default() += file.size;
-            }
-        }
-        // Keep the cache bounded across every server this client visits;
-        // what this server needs stays. Failing to prune is not a failed
-        // fetch.
-        let _ = cache.prune(bri_package::sync::CACHE_BYTES, &offered);
-        // Installing copies and re-hashes every file: on a big Add-On that
-        // takes long enough to need its own stage.
-        if !listings.is_empty() {
-            progress.begin(
-                Stage::VerifyingPackages,
-                Unit::Steps,
-                Some(listings.len() as u64),
+        let mut installs = BTreeMap::<String, Result<std::path::PathBuf>>::new();
+        let mut pending: Vec<&Listing> = listings.iter().collect();
+        // Installing re-hashes every file and discards a cached object that
+        // no longer matches (a bad sector, a crash mid-write). One more round
+        // downloads what was discarded, so a damaged cache heals on the next
+        // join instead of leaving the Add-On out.
+        for round in 0..2 {
+            // Objects are shared between packages; each downloads once.
+            let total: u64 = pending
+                .iter()
+                .flat_map(|l| cache.missing(l))
+                .map(|f| (&f.sha256, f.size))
+                .collect::<BTreeMap<_, _>>()
+                .values()
+                .sum();
+            ensure!(
+                total <= MAX_FETCH_BYTES,
+                "This server's Add-Ons need {} MB of downloads, over the {} MB limit",
+                total / (1024 * 1024),
+                MAX_FETCH_BYTES / (1024 * 1024)
             );
+            progress.begin(Stage::DownloadingPackages, Unit::Bytes, Some(total));
+            let mut done = 0_u64;
+            for listing in &pending {
+                for file in cache.missing(listing) {
+                    let mut writer = cache.receive(file)?;
+                    while writer.remaining() > 0 {
+                        let length = writer.remaining().min(MAX_OBJECT_CHUNK.into()) as u32;
+                        let DownloadReply::Object(bytes) = ask(DownloadRequest::Object {
+                            sha256: file.sha256.clone(),
+                            offset: writer.written(),
+                            length,
+                        })
+                        .await?
+                        else {
+                            bail!("Expected bytes of {}", file.path);
+                        };
+                        ensure!(
+                            bytes.len() == length as usize,
+                            "{}: the server sent the wrong range",
+                            file.path
+                        );
+                        writer.write(&bytes).with_context(|| {
+                            format!("Package {} file {}", listing.package, file.path)
+                        })?;
+                        done += bytes.len() as u64;
+                        progress.set_in(Stage::DownloadingPackages, done);
+                    }
+                    writer
+                        .finish()
+                        .with_context(|| format!("Package {}", listing.package))?;
+                    *downloaded.entry(listing.package.hash.clone()).or_default() += file.size;
+                }
+            }
+            if round == 0 {
+                // Keep the cache bounded across every server this client
+                // visits; what this server needs stays. Failing to prune is
+                // not a failed fetch.
+                let _ = cache.prune(bri_package::sync::CACHE_BYTES, &offered);
+            }
+            // Installing copies and re-hashes every file: on a big Add-On
+            // that takes long enough to need its own stage.
+            if !pending.is_empty() {
+                progress.begin(
+                    Stage::VerifyingPackages,
+                    Unit::Steps,
+                    Some(pending.len() as u64),
+                );
+            }
+            let mut again = Vec::new();
+            for listing in pending {
+                let installed = cache
+                    .install(listing)
+                    .with_context(|| format!("Installing package {}", listing.package));
+                if installed.is_err() && round == 0 && !cache.missing(listing).is_empty() {
+                    again.push(listing);
+                    continue;
+                }
+                progress.advance(1);
+                installs.insert(listing.package.hash.clone(), installed);
+            }
+            if again.is_empty() {
+                break;
+            }
+            pending = again;
         }
         let mut fetched = Vec::new();
         for package in offered {
-            let installed = match listings.iter().find(|l| l.package == package) {
-                Some(listing) => {
-                    let installed = cache
-                        .install(listing)
-                        .with_context(|| format!("Installing package {package}"));
-                    progress.advance(1);
-                    installed
-                }
+            let installed = match installs.remove(&package.hash) {
+                Some(installed) => installed,
                 None => cache
                     .installed(&package)
                     .context("Cached package disappeared"),

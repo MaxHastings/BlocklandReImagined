@@ -299,6 +299,35 @@ the Add-On defines it twice, as Torque keeps. A definition inside a
 `package` wraps that one (it calls `Parent::`), so it is read only when
 there is no plain one.
 
+## Build, check, package and install in one command
+
+From a checkout, `tools/port_addon.py` runs a ported Add-On end to end and
+stops at the first stage that fails:
+
+```sh
+python tools/port_addon.py build "Weapon_Rallypack.zip" --out build/rallypack \
+    --install content
+```
+
+It hashes the inputs, imports with the registered recipe for a known
+framework (`rallypack`, `rallypack-p90`, or `plain` for anything else; give
+`--recipe` to override the guess from the ZIP's name), runs `bri-addon-check`
+on every Add-On the way the game loads them, writes one deterministic ZIP and
+`BUILD-RECEIPT.json` beside it, and with `--install` puts the folders into
+the content folder without changing which Add-Ons are on. `--needs` adds ZIPs
+a framework depends on.
+
+`--only ITEM...` keeps just those items and what they need (`tools/addon_closure.py`
+follows the datablock parents, projectiles, particles, sounds and textures
+their data names) and reports anything they need that the Add-On does not
+define, so a framework's next weapon needs no new recipe.
+
+`python tools/port_addon.py install PORTED.zip --content DIR` installs a ZIP
+alone. The game does the same when a ported Add-On's ZIP (folders at its
+top, each with a `package.json`) is dropped in the Add-Ons folder: it is
+unpacked, not run through the classic importer, starts off, and goes when the
+ZIP is taken out.
+
 ## Handing it to an agent
 
 `AGENT.md` in the work folder holds the prompt, filled in for the Add-On.

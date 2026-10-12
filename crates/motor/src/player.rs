@@ -1159,11 +1159,18 @@ impl Player {
             self.state.owner
         );
         state.check_bounds()?;
+        // The collider's shape follows the tuning and the crouch flag (the
+        // motor swaps it as the flag changes), so it is replaced only when
+        // one of them did: a new shape marks the collider modified and the
+        // broad and narrow phases redo its pairs on the next step.
+        let reshape = tuning != self.tuning || state.crouched != self.state.crouched;
         if tuning != self.tuning {
             tuning.validate()?;
             self.tuning = tuning;
         }
-        physics.colliders[self.collider].set_shape(self.tuning.shape(state.crouched));
+        if reshape {
+            physics.colliders[self.collider].set_shape(self.tuning.shape(state.crouched));
+        }
         self.state = state;
         self.contacts.clear();
         self.synchronize_pose(physics);

@@ -398,15 +398,19 @@ fn a_saved_build_brings_its_teams_back_in_the_slots_its_rules_name() {
 
 /// After Save & Reset the bots play: the round is won by a bot through the
 /// goal its own team scores in (the ball is in that goal's region), never
-/// through the goal it defends.
+/// through the goal it defends. Two bots contest one ball, so when the goal
+/// comes is how the match happens to go: it came at 116 s on Linux, where
+/// the earlier 90 s bound failed, and under 90 s on Windows. The bound
+/// leaves twice the Linux time.
 #[test]
 fn a_bot_scores_in_its_own_teams_goal_after_save_and_reset() {
+    const SECONDS: usize = 240;
     let mut p = Pitch::new(true, true);
     let bots = p.set_up();
     let (blue, red) = (p.team("Blue"), p.team("Red"));
     p.save_teams(vec![(Some(blue), "Blue", 0), (Some(red), "Red", 1)], true);
     let mut trace = Vec::new();
-    for _ in 0..120 * 90 {
+    for _ in 0..120 * SECONDS {
         p.steps(1);
         for t in p.s.bot_thoughts() {
             let line = format!(
@@ -452,7 +456,7 @@ fn a_bot_scores_in_its_own_teams_goal_after_save_and_reset() {
         return;
     }
     panic!(
-        "no goal in 90 s: {trace:#?}; poses {:?}",
+        "no goal in {SECONDS} s: {trace:#?}; poses {:?}",
         p.s.vehicle_poses()
     );
 }

@@ -513,6 +513,7 @@ dependencies = [
  "wgpu",
  "windows-sys 0.61.2",
  "winit",
+ "zip",
 ]
 
 [[package]]
@@ -748,6 +749,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
+ "zip",
 ]
 
 [[package]]

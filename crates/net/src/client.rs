@@ -79,6 +79,24 @@ pub fn unavailable_notice(missing: &[bri_package::environment::Mismatch]) -> Str
     )
 }
 
+/// The bricks a client still holds after its connection dropped, offered
+/// with its resume so the host sends only what changed since
+/// ([`crate::protocol::Hello::kept`]). Cheap to take: the world is a
+/// persistent map.
+#[derive(Debug, Clone)]
+pub struct KeptBricks {
+    pub map_id: String,
+    pub cursor: u64,
+    pub bricks: bri_world::Bricks,
+}
+impl KeptBricks {
+    fn offer(&self) -> crate::protocol::KeptWorld {
+        crate::protocol::KeptWorld {
+            map_id: self.map_id.clone(),
+            cursor: self.cursor,
+        }
+    }
+}
 pub struct Client {
     endpoint: quinn::Endpoint,
     connection: quinn::Connection,
@@ -179,6 +197,33 @@ impl Client {
             resume,
             host,
             None,
+            None,
+            Progress::default(),
+            false,
+        )
+        .await
+    }
+    /// [`Client::connect`] back into a game with `resume`, offering the
+    /// bricks the lost connection kept ([`Client::kept_bricks`]) so the
+    /// host sends only what changed since; it sends the whole world when
+    /// it cannot match them.
+    pub async fn connect_resuming(
+        address: SocketAddr,
+        certificate: &[u8],
+        name: String,
+        packages: Vec<bri_package::environment::PackageRef>,
+        resume: ResumeToken,
+        kept: Option<KeptBricks>,
+    ) -> Result<Self> {
+        Self::connect_inner(
+            address,
+            HostPin::from(certificate),
+            name.into(),
+            packages,
+            Some(resume),
+            None,
+            None,
+            kept,
             Progress::default(),
             false,
         )
@@ -243,7 +288,7 @@ impl Client {
         Vec<bri_package::environment::PackageRef>,
     )> {
         Self::connect_fetching_resuming(
-            address, pin, name, packages, None, host, identity, cache, progress, load,
+            address, pin, name, packages, None, None, host, identity, cache, progress, load,
         )
         .await
     }
@@ -252,7 +297,9 @@ impl Client {
     /// host gives the player their owner number back, and a connection of
     /// theirs it has not yet timed out is replaced. A host that no longer
     /// knows the ticket (it restarted) refuses it, and the join is made
-    /// afresh.
+    /// afresh. `kept` is the world that connection held
+    /// ([`Client::kept_bricks`]): with it, the host sends only the bricks
+    /// that changed since the drop when it can, the whole world otherwise.
     #[allow(clippy::too_many_arguments)]
     pub async fn connect_fetching_resuming(
         address: SocketAddr,
@@ -260,6 +307,7 @@ impl Client {
         name: JoinName,
         packages: Vec<bri_package::environment::PackageRef>,
         mut resume: Option<ResumeToken>,
+        mut kept: Option<KeptBricks>,
         host: Option<ResumeToken>,
         identity: &ClientIdentity,
         cache: &bri_package::sync::Cache,
@@ -308,15 +356,17 @@ impl Client {
                 }
             }
         }
-        let mut joined = Self::connect_pinned(
+        let mut joined = Self::connect_inner(
             address,
             pin.clone(),
             name.clone(),
             packages.clone(),
             resume.clone(),
             host.clone(),
-            identity,
+            Some(identity),
+            kept.clone(),
             progress.clone(),
+            false,
         )
         .await;
         if resume.is_some()
@@ -327,15 +377,18 @@ impl Client {
             )
         {
             resume = None;
-            joined = Self::connect_pinned(
+            kept = None;
+            joined = Self::connect_inner(
                 address,
                 pin.clone(),
                 name.clone(),
                 packages,
                 None,
                 host.clone(),
-                identity,
+                Some(identity),
+                None,
                 progress.clone(),
+                false,
             )
             .await;
         }
@@ -381,6 +434,7 @@ impl Client {
             resume,
             host,
             Some(identity),
+            kept,
             progress,
             true,
         )
@@ -451,6 +505,7 @@ impl Client {
             resume,
             host,
             Some(identity),
+            None,
             progress,
             false,
         )
@@ -465,6 +520,7 @@ impl Client {
         resume: Option<ResumeToken>,
         host: Option<ResumeToken>,
         identity: Option<&ClientIdentity>,
+        kept: Option<KeptBricks>,
         progress: Progress,
         accept_differences: bool,
     ) -> Result<Self> {
@@ -479,6 +535,9 @@ impl Client {
             listing,
         } = open(address, &pin, Duration::from_secs(10)).await?;
         let JoinName { name, clan } = name;
+        // Kept bricks mean nothing without the ticket that names the game
+        // they came from.
+        let kept = kept.filter(|_| resume.is_some());
         let mut hello = Hello {
             version: VERSION,
             name,
@@ -488,6 +547,7 @@ impl Client {
             host,
             identity: None,
             accept_differences,
+            kept: kept.as_ref().map(KeptBricks::offer),
         };
         if let Some(identity) = identity {
             let server_fingerprint: [u8; 32] = sha2::Sha256::digest(&certificate).into();
@@ -536,7 +596,18 @@ impl Client {
         // The bricks around this player arrive first; they play once those
         // are in, and the rest stream in behind them.
         let chunks = checkpoint.world_near_chunks;
-        let mut world = WorldAssembly::new(checkpoint)?;
+        let mut world = if checkpoint.kept.is_some() {
+            // The host matched the kept world: the chunks carry only what
+            // changed since the drop.
+            let kept = kept
+                .filter(|k| k.map_id == checkpoint.world.map_id)
+                .ok_or_else(|| {
+                    anyhow::anyhow!("Welcome keeps a world this client did not offer")
+                })?;
+            WorldAssembly::kept(checkpoint, kept.bricks)?
+        } else {
+            WorldAssembly::new(checkpoint)?
+        };
         // Frames are read as they arrive and decoded on blocking threads,
         // several at once, then added in order.
         let parallel = std::thread::available_parallelism().map_or(1, |n| n.get().min(8));
@@ -681,6 +752,16 @@ impl Client {
     /// stream in after the join).
     pub fn world_complete(&self) -> bool {
         self.joining.is_none()
+    }
+    /// The world this client holds, to resume over after a network drop
+    /// ([`Client::connect_fetching_resuming`]): none while a join's or a
+    /// map change's bricks are still streaming in.
+    pub fn kept_bricks(&self) -> Option<KeptBricks> {
+        (self.joining.is_none() && self.changing_map.is_none()).then(|| KeptBricks {
+            map_id: self.replica.world.map_id.clone(),
+            cursor: self.replica.cursor,
+            bricks: self.replica.world.bricks.clone(),
+        })
     }
     /// Receive until the joined world has fully arrived.
     pub async fn await_world(&mut self) -> Result<()> {

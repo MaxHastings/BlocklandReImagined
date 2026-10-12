@@ -179,6 +179,9 @@ impl Acted {
 pub(super) struct Proposal {
     pub mover: Mover,
     pub walk: Option<Vec3>,
+    /// Where the route alone would walk, when `walk` is that bent round a
+    /// body in the way: the steps off it are no planned drop (`routed`).
+    pub plan: Option<Vec3>,
     pub jump: Option<bool>,
     pub crouch: Option<bool>,
     pub jet: Option<bool>,
@@ -188,6 +191,7 @@ impl Proposal {
         Self {
             mover,
             walk: Some(walk),
+            plan: None,
             jump: None,
             crouch: None,
             jet: None,
@@ -197,6 +201,7 @@ impl Proposal {
         Self {
             mover,
             walk: None,
+            plan: None,
             jump: None,
             crouch: None,
             jet: None,
@@ -205,10 +210,11 @@ impl Proposal {
 }
 
 /// Buttons pressed on top of whatever the movers set: a crouch, the jets,
-/// a hop (a goof's, a dodge's, one into a body), which safety lets through
-/// only where it comes down on floor along the walk it takes, and the
-/// stall judge's jump in place (over what its shins catch, off a body it
-/// stands on), which goes as it is: its walk is already checked.
+/// a hop (a goof's, a dodge's, one into a body, the stall judge's taken on
+/// the move), which safety lets through only where it comes down on floor
+/// along the walk it takes, and the stall judge's jump in place (over what
+/// its shins catch, off a body it stands on), which goes as it is: its
+/// walk is already checked.
 #[derive(Clone, Copy, Debug, Default)]
 pub(super) struct Press {
     pub hop: bool,
@@ -242,7 +248,7 @@ pub(super) fn resolve(proposals: &mut [Proposal], press: Press) -> Controls {
             out.walk = walk;
             out.by = Some(p.mover);
             if p.mover == Mover::Route {
-                out.routed = walk;
+                out.routed = p.plan.unwrap_or(walk);
             }
         }
         out.jump = p.jump.unwrap_or(out.jump);
@@ -254,6 +260,13 @@ pub(super) fn resolve(proposals: &mut [Proposal], press: Press) -> Controls {
     out.crouch |= press.crouch;
     out.jet |= press.jet;
     out
+}
+
+/// Whether `walk` heads elsewhere than `routed`, where its route alone
+/// would take it (the same way slower is still the route's).
+fn off_the_route(walk: Vec3, routed: Vec3) -> bool {
+    let (walk, routed) = (walk.normalize_or_zero(), routed.normalize_or_zero());
+    walk.dot(routed) < 0.99
 }
 
 /// What the safety stage needs to know of how the bot gets about now.
@@ -275,9 +288,9 @@ impl Session {
     /// into a live blast that would catch it, nor deeper into one it stands
     /// in; and never off an edge whose fall would hurt it. What it wants
     /// beyond is not worth the fall: it stands at the edge and gets
-    /// nowhere, so it plans again. Off its route on its feet it does not
-    /// step down where it could not walk back up; in the air (footwork, a
-    /// goof, a hop) it does not steer out over a fall that hurts. Its
+    /// nowhere, so it plans again. Off its route it does not step down
+    /// where it could not walk back up, on its feet or in the air
+    /// (footwork, a goof, a hop or a jump in place). Its
     /// route's own way through the air, and its jets, it keeps. A hop
     /// pressed goes only where it comes down on floor along the walk it
     /// takes. The walk, whether an edge held it back, and the jump.
@@ -302,14 +315,14 @@ impl Session {
         {
             walk = Vec3::ZERO;
         }
-        if walk != controls.routed && !ground.driving && walk != Vec3::ZERO {
+        if off_the_route(walk, controls.routed) && !ground.driving && walk != Vec3::ZERO {
             let from = feet + Vec3::Y * 0.9;
             let to = from + flat(walk).normalize_or_zero() * PORTAL_REACH;
             if self.simulation.passages().first(from, to).is_some() {
                 walk = Vec3::ZERO;
             }
         }
-        let off_route = walk != controls.routed;
+        let off_route = off_the_route(walk, controls.routed);
         let held_back = !ground.driving
             && !ground.swimming
             && (state.grounded || off_route && !controls.jet && !state.jetting)
@@ -320,7 +333,8 @@ impl Session {
                 feet,
                 body,
                 flat(walk).normalize_or_zero(),
-                off_route && state.grounded,
+                off_route,
+                state.grounded,
             );
         if held_back {
             walk = Vec3::ZERO;
@@ -539,5 +553,53 @@ mod tests {
         };
         assert_eq!(walk_out(true), Vec3::ZERO, "not off the edge");
         assert!(walk_out(false).x > 0.9, "out of the blast onto the floor");
+    }
+
+    /// A bot stepping round an ally in its way at a deck's edge: the step
+    /// aside is no part of its route, so a drop the route could plan (one
+    /// that does not hurt) is not one it takes round a body; the same
+    /// step as the route's own walk is its route's.
+    #[test]
+    fn a_step_round_an_ally_does_not_go_over_the_edge() {
+        use rapier3d::prelude::*;
+        let world = bri_world::World::new("Deck".into(), "fixture".into(), vec![[1.0; 4]]);
+        let colliders = vec![
+            ColliderBuilder::cuboid(10.0, 0.5, 10.0).translation(Vector::new(0.0, -0.5, 0.0)),
+            ColliderBuilder::cuboid(40.0, 0.5, 40.0).translation(Vector::new(0.0, -6.5, 0.0)),
+        ];
+        let sim =
+            crate::simulation::Simulation::new(world, crate::testing::definitions(), colliders)
+                .unwrap();
+        let mut s = Session::new(sim);
+        s.set_weapon_pack(bri_weapons::testing::pack()).unwrap();
+        let bot = s
+            .join("Walker".into(), Vec3::new(0.0, 0.05, 9.6), false)
+            .unwrap();
+        for _ in 0..30 {
+            s.step().unwrap();
+        }
+        let state = s.peers[&bot].player.state().clone();
+        let feet = Vec3::from(state.feet);
+        let body = crate::nav::Body::of(s.peers[&bot].player.tuning(), 1.0);
+        let ground = Ground {
+            driving: false,
+            swimming: false,
+            air_leg: false,
+        };
+        let walk = |proposal: Proposal| {
+            let controls = resolve(&mut [proposal], Press::default());
+            s.bot_safe_walk(bot, &body, feet, &state, controls, ground)
+        };
+        // Its route runs east along the edge; an ally in the way bends the
+        // walk toward the drop.
+        let bent = Proposal {
+            plan: Some(Vec3::X),
+            ..Proposal::walk(Mover::Route, Vec3::Z)
+        };
+        let (walked, held, _) = walk(bent);
+        assert!(held && walked == Vec3::ZERO, "held at the edge: {walked}");
+        // The route's own walk over the same edge is a drop it planned.
+        let (walked, held, _) = walk(Proposal::walk(Mover::Route, Vec3::Z));
+        assert!(!held && walked == Vec3::Z, "its own drop: {walked}");
     }
 }

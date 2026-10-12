@@ -244,25 +244,10 @@ impl Session {
         kind: &str,
         name: &str,
     ) -> Result<()> {
-        let limit = self.bot_limit();
-        ensure!(
-            self.bots.brains.len() < limit,
-            "Server is limited to {limit} bots"
-        );
-        let kind = self
-            .bots
-            .kind(kind)
-            .with_context(|| format!("No bot kind `{kind}`: its Add-On is not enabled"))?
-            .clone();
+        self.check_rules_bot(game, team, kind)?;
+        let kind = self.bots.kind(kind).expect("checked").clone();
         let game = bri_minigames::GameId(game);
-        self.minigames
-            .game(game)
-            .map_err(|_| anyhow::anyhow!("No mini-game {}", game.0))?;
-        let team = team
-            .map(|t| u32::try_from(t).map(bri_minigames::TeamId))
-            .transpose()
-            .ok()
-            .context("No such team")?;
+        let team = team.map(|t| bri_minigames::TeamId(t as u32));
         let drop = self.spawn_points.first().copied().unwrap_or(Vec3::Y);
         let bot = self.join_inner(name.to_owned(), drop, false, true, None)?;
         if let Err(e) = self.embody_bot(bot, &kind) {
@@ -303,8 +288,41 @@ impl Session {
         }
         placed
     }
+    /// Whether `add_bot` can add a bot of `kind` to `game` now: room on
+    /// the server and under the bot limit, a kind an enabled Add-On
+    /// provides, a mini-game that exists and, when given, a team of it.
+    /// What only happens as it joins (being given a body, being placed in
+    /// the game) is not foreseen.
+    pub(in crate::session) fn check_rules_bot(
+        &self,
+        game: u64,
+        team: Option<u64>,
+        kind: &str,
+    ) -> Result<()> {
+        let limit = self.bot_limit();
+        ensure!(
+            self.bots.brains.len() < limit,
+            "Server is limited to {limit} bots"
+        );
+        ensure!(self.peers.len() < 64, "Server is full");
+        self.bots
+            .kind(kind)
+            .with_context(|| format!("No bot kind `{kind}`: its Add-On is not enabled"))?;
+        let found = self
+            .minigames
+            .game(bri_minigames::GameId(game))
+            .map_err(|_| anyhow::anyhow!("No mini-game {game}"))?;
+        if let Some(team) = team {
+            let team = u32::try_from(team)
+                .ok()
+                .map(bri_minigames::TeamId)
+                .context("No such team")?;
+            found.teams.get(team).context("No such team")?;
+        }
+        Ok(())
+    }
     /// The bot, if `package`'s rules added it.
-    pub(super) fn own_bot(&self, package: &str, bot: OwnerId) -> Result<()> {
+    pub(in crate::session) fn own_bot(&self, package: &str, bot: OwnerId) -> Result<()> {
         ensure!(
             self.bots.rules_package(bot) == Some(package),
             "Bot {bot} is not one `{package}` added"
@@ -325,9 +343,18 @@ impl Session {
         bot: OwnerId,
         slot: Option<u8>,
     ) -> Result<()> {
+        self.check_rules_bot_tool(package, bot)?;
+        self.equip_tool(bot, slot.map(usize::from))
+    }
+    /// Whether `bot_tool` can reach `bot`: one `package` added, alive.
+    pub(in crate::session) fn check_rules_bot_tool(
+        &self,
+        package: &str,
+        bot: OwnerId,
+    ) -> Result<()> {
         self.own_bot(package, bot)?;
         ensure!(self.is_alive(bot), "Only a living bot holds things");
-        self.equip_tool(bot, slot.map(usize::from))
+        Ok(())
     }
     /// Trigger release is a shot for a charged image. Abandoning hostile
     /// intent instead clears queued input and restarts the held image safely.
@@ -351,11 +378,12 @@ impl Session {
             Ok(true)
         }
     }
-    pub(in crate::session) fn rest_rules_bot(
-        &mut self,
+    /// Whether `rest_bot` may rest or wake `bot`: a bot `package` added,
+    /// or one of a kind it (or an Add-On it is a companion of) provides.
+    pub(in crate::session) fn check_rest_rules_bot(
+        &self,
         package: &str,
         bot: OwnerId,
-        rest: bool,
     ) -> Result<()> {
         let own_kind = self.bots.brains.get(&bot).is_some_and(|brain| {
             let Some((owner, _)) = brain.kind.id.split_once(':') else {
@@ -372,6 +400,16 @@ impl Session {
             self.bots.rules_package(bot) == Some(package) || own_kind,
             "Bot {bot} was not added by `{package}` and its kind is not owned by that package or its companion"
         );
+        ensure!(self.bots.brains.contains_key(&bot), "No such bot");
+        Ok(())
+    }
+    pub(in crate::session) fn rest_rules_bot(
+        &mut self,
+        package: &str,
+        bot: OwnerId,
+        rest: bool,
+    ) -> Result<()> {
+        self.check_rest_rules_bot(package, bot)?;
         let brain = self.bots.brains.get_mut(&bot).context("No such bot")?;
         if rest && !brain.resting {
             brain.objective_threat = None;

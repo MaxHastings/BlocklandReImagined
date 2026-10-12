@@ -152,6 +152,11 @@ impl EnvironmentModel {
         );
         self.picking = None;
     }
+    /// Put the rows back as they were (a colour picker cancelled).
+    pub fn restore_draft(&mut self, draft: Option<Settings>) {
+        self.revision += 1;
+        self.draft = draft;
+    }
     pub fn end(&mut self) {
         self.revision += 1;
         self.draft = None;

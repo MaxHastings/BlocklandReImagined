@@ -1282,3 +1282,157 @@ fn a_bot_throws_an_unfamiliar_grenade_that_goes_off_near_its_enemy_not_itself() 
         "no canister went off near the enemy ({thrown} thrown)"
     );
 }
+
+/// A gun whose package rules fire and reload it: `ruled:shot` counts each
+/// shot in a package global, and the rules keep the rounds in per-player
+/// state, where the image's `bot.ammo` says to read them.
+fn rule_fired_gun(
+    rounds: u32,
+    spares: &[u32],
+) -> (Pack, std::sync::Arc<bri_package_runtime::Catalog>) {
+    use bri_package::packages::{PackageEntry, PackageSet, Side};
+    let mut weapons = pack();
+    alias(
+        &mut weapons,
+        testing::GUN_ITEM,
+        testing::GUN_IMAGE,
+        testing::GUN_PROJECTILE,
+        "tactics:weapon/ruled",
+    );
+    let image = weapons.images.get_mut("tactics:image/ruled").unwrap();
+    image.command = Some("ruled:shot".into());
+    image.bot = Some(
+        serde_json::from_value(serde_json::json!({
+            "fire": "hold",
+            "ammo": {
+                "package": "ruled",
+                "loaded": { "key": "rounds" },
+                "spare": [{ "key": "spares" }]
+            }
+        }))
+        .unwrap(),
+    );
+    let root = std::env::temp_dir().join(format!(
+        "bri-bot-ruled-{}-{rounds}-{}",
+        std::process::id(),
+        spares.len()
+    ));
+    let dir = root.join("ruled");
+    std::fs::create_dir_all(&dir).unwrap();
+    let write = |name: &str, value: serde_json::Value| {
+        std::fs::write(dir.join(name), value.to_string()).unwrap();
+    };
+    write(
+        "package.json",
+        serde_json::json!({
+            "schema_version": 1, "id": "ruled", "version": "1.0.0", "api": 1,
+            "name": "Ruled gun", "license": "CC0-1.0",
+            "provenance": { "source": "original" },
+            "capabilities": [],
+            "provides": [
+                { "kind": "behaviour", "id": "ruled:behaviour/main", "file": "behaviour.json" },
+                { "kind": "script", "id": "ruled:script/main", "file": "main.rhai" }
+            ]
+        }),
+    );
+    write(
+        "behaviour.json",
+        serde_json::json!({
+            "schema_version": 1, "script": "main.rhai",
+            "commands": [{ "name": "shot", "tool_only": true }],
+            "state": {
+                "player": {
+                    "rounds": { "default": rounds, "persist": false },
+                    "spares": { "default": spares, "persist": false }
+                },
+                "global": { "shots": { "default": 0 } }
+            }
+        }),
+    );
+    std::fs::write(
+        dir.join("main.rhai"),
+        "fn cmd_shot(p) { set(\"shots\", get(\"shots\") + 1); }",
+    )
+    .unwrap();
+    let catalog = bri_package_runtime::Catalog::load(
+        &root,
+        &PackageSet {
+            schema_version: 1,
+            packages: vec![PackageEntry {
+                id: "ruled".into(),
+                version: "1.0.0".into(),
+                side: Side::Server,
+                dir: "ruled".into(),
+                role: None,
+            }],
+        },
+        true,
+    )
+    .unwrap_or_else(|e| panic!("{e:#?}"));
+    (weapons, std::sync::Arc::new(catalog))
+}
+
+fn shots(s: &Session) -> i64 {
+    s.package_save()
+        .and_then(|save| save.store.namespace("ruled")?.global.get("shots").cloned())
+        .and_then(|v| v.as_i64())
+        .unwrap_or(0)
+}
+
+fn rule_fired_duel(loadout: &[&str], rounds: u32, spares: &[u32]) -> (Session, BTreeSet<String>) {
+    let (weapons, catalog) = rule_fired_gun(rounds, spares);
+    let (mut s, human, bot, mut seq) = game_scene_kind_with_packages(
+        weapons,
+        loadout,
+        Vec3::new(-25.0, 0.05, 35.0),
+        [-24.75, 0.1, 21.25],
+        vec![],
+        None,
+        Some(catalog),
+    );
+    let mut held = BTreeSet::new();
+    for _ in 0..120 * 12 {
+        ticks(&mut s, human, &mut seq, 1);
+        if let Some(image) = held_image(&s, bot) {
+            held.insert(image);
+        }
+    }
+    (s, held)
+}
+
+#[test]
+fn a_bot_fires_a_rule_fired_gun_that_has_rounds() {
+    let (s, held) = rule_fired_duel(&["tactics:weapon/ruled"], 30, &[30]);
+    assert!(held.contains("tactics:image/ruled"), "{held:?}");
+    assert!(
+        shots(&s) > 0,
+        "the bot never fired the gun: {:?}",
+        s.bot_thoughts()
+    );
+}
+
+#[test]
+fn a_bot_out_of_rounds_for_a_rule_fired_gun_uses_another_and_never_fires_it() {
+    let (s, held) = rule_fired_duel(&["tactics:weapon/ruled", A], 0, &[]);
+    assert!(
+        held.contains("tactics:image/orbit"),
+        "the usable gun was never taken up: {held:?} {:?}",
+        s.bot_thoughts()
+    );
+    assert_eq!(
+        shots(&s),
+        0,
+        "an empty gun was fired by a bot that had another"
+    );
+    let (s, _) = rule_fired_duel(&["tactics:weapon/ruled"], 0, &[]);
+    assert_eq!(shots(&s), 0, "a bot fired a gun with no rounds anywhere");
+}
+
+#[test]
+fn spare_rounds_keep_a_rule_fired_gun_in_play() {
+    // Nothing loaded but a magazine to bring: the gun's own dry-fire and
+    // reload states fetch it, so the bot still treats the gun as usable.
+    let (s, held) = rule_fired_duel(&["tactics:weapon/ruled"], 0, &[30]);
+    assert!(held.contains("tactics:image/ruled"), "{held:?}");
+    assert!(shots(&s) > 0, "{:?}", s.bot_thoughts());
+}

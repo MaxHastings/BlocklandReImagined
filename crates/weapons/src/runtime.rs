@@ -1914,9 +1914,10 @@ impl WeaponsWorld {
     pub fn reserve(&self, id: ActorId, ammo: &str) -> Option<Reserve> {
         self.actors.get(&id)?.reserve.get(ammo).copied()
     }
-    /// Set a holder's reserve of `ammo` (an ammo box, an endless-ammo
-    /// rule), capped at 100000 rounds.
-    pub fn set_reserve(&mut self, id: ActorId, ammo: &str, reserve: Reserve) -> Result<()> {
+    /// Whether a holder could have a reserve of `ammo` now (`set_reserve`,
+    /// `give_ammo`): the holder is here, the name is valid and they carry
+    /// fewer than 64 kinds already, or this one. Changes nothing.
+    pub fn check_reserve(&self, id: ActorId, ammo: &str) -> Result<()> {
         ensure!(
             (1..=32).contains(&ammo.len())
                 && ammo
@@ -1924,11 +1925,33 @@ impl WeaponsWorld {
                     .all(|b| b.is_ascii_alphanumeric() || b"._-".contains(&b)),
             "Invalid ammo name"
         );
-        let a = self.actors.get_mut(&id).context("Unknown actor")?;
+        let a = self.actors.get(&id).context("Unknown actor")?;
         ensure!(
             a.reserve.len() < 64 || a.reserve.contains_key(ammo),
             "Too many ammo types"
         );
+        Ok(())
+    }
+    /// Whether `set_rounds` of `item` would change a magazine: the holder
+    /// carries it and it has a magazine of its own. Changes nothing.
+    pub fn check_set_rounds(&self, id: ActorId, item: &str) -> Result<()> {
+        let a = self.actors.get(&id).context("Unknown actor")?;
+        let slot = (0..a.inventory.len())
+            .find(|s| a.inventory.get(*s).and_then(Option::as_deref) == Some(item))
+            .context("They carry no such item")?;
+        self.pack
+            .items
+            .get(&a.inventory[slot].clone().expect("held"))
+            .and_then(|i| self.pack.images.get(&i.image)?.magazine.as_ref())
+            .filter(|m| !m.from_reserve)
+            .context("That item has no magazine")?;
+        Ok(())
+    }
+    /// Set a holder's reserve of `ammo` (an ammo box, an endless-ammo
+    /// rule), capped at 100000 rounds.
+    pub fn set_reserve(&mut self, id: ActorId, ammo: &str, reserve: Reserve) -> Result<()> {
+        self.check_reserve(id, ammo)?;
+        let a = self.actors.get_mut(&id).context("Unknown actor")?;
         let reserve = match reserve {
             Reserve::Rounds(n) => Reserve::Rounds(n.min(100_000)),
             Reserve::Endless => Reserve::Endless,
@@ -2721,9 +2744,13 @@ impl WeaponsWorld {
     /// Advances exactly one 1/120s tick. Drain every returned event before the next tick.
     pub fn step(&mut self, q: &mut impl Query) -> Vec<Event> {
         self.tick += 1;
+        // The pack is immutable behind its `Arc`: a definition is read in
+        // place, never cloned per tick (an `Image` or `ProjectileDef` is
+        // tens of heap allocations).
+        let pack = Arc::clone(&self.pack);
         for p in std::mem::take(&mut self.explosions) {
-            if let Some(d) = self.pack.projectiles.get(&p.definition).cloned() {
-                self.explode(&p, &d, q, None);
+            if let Some(d) = pack.projectiles.get(&p.definition) {
+                self.explode(&p, d, q, None);
             }
         }
         let ids: Vec<_> = self.actors.keys().copied().collect();
@@ -2883,7 +2910,8 @@ impl WeaponsWorld {
         e: &mut Equipped,
         q: &mut impl Query,
     ) -> Advance {
-        let image = self.pack.images[&e.image].clone();
+        let pack = Arc::clone(&self.pack);
+        let image = &pack.images[&e.image];
         if image.states.is_empty() {
             return Advance::Keep;
         }
@@ -3024,7 +3052,7 @@ impl WeaponsWorld {
                     .scripts
                     .get(&state.script.to_ascii_lowercase())
                     .is_some_and(|s| s.use_up);
-                if !self.callback(id, a, e, &image, &state.script, q) || use_up {
+                if !self.callback(id, a, e, image, &state.script, q) || use_up {
                     if use_up
                         && let Some(slot) = a.selected
                         && let Some(tool) = a.inventory.get_mut(slot)
@@ -3272,7 +3300,8 @@ impl WeaponsWorld {
                     .or(image.shot.as_ref())
                     .and_then(|s| s.projectile_for(a.frame.velocity.length(), idle_ticks))
                     .unwrap_or(projectile);
-                let p = self.pack.projectiles[projectile].clone();
+                let pack = Arc::clone(&self.pack);
+                let p = &pack.projectiles[projectile];
                 let sport = p.sport_image.is_some();
                 if sport && self.tick < a.ball_ready {
                     return true;
@@ -3686,11 +3715,12 @@ impl WeaponsWorld {
     /// One tick of a projectile's flight. [`coast`] is the same motion when
     /// it hits nothing.
     fn projectile_step(&mut self, p: &mut Projectile, q: &mut impl Query) -> bool {
-        let d = self.pack.projectiles[&p.definition].clone();
+        let pack = Arc::clone(&self.pack);
+        let d = &pack.projectiles[&p.definition];
         p.age += 1;
-        if let Some(bursts) = expires(&d, p.age, self.fuses.get(&p.id).copied()) {
+        if let Some(bursts) = expires(d, p.age, self.fuses.get(&p.id).copied()) {
             if bursts {
-                self.explode(p, &d, q, None);
+                self.explode(p, d, q, None);
             }
             return false;
         }
@@ -3702,7 +3732,7 @@ impl WeaponsWorld {
             && (aura.max_pulses == 0
                 || flown / u64::from(aura.every_ticks) <= u64::from(aura.max_pulses))
         {
-            self.aura(p, &d, aura, q);
+            self.aura(p, d, aura, q);
         }
         for (set, c) in d.children.iter().enumerate() {
             if c.every_ticks > 0
@@ -3716,7 +3746,7 @@ impl WeaponsWorld {
         if p.stuck {
             return true;
         }
-        p.velocity.y -= fall_per_tick(&d);
+        p.velocity.y -= fall_per_tick(d);
         let mut remaining = 1.0 / 120.0;
         for _ in 0..4 {
             let end = p.position + p.velocity * remaining;
@@ -3779,7 +3809,7 @@ impl WeaponsWorld {
                 ContactResponse::Continue => {}
                 ContactResponse::Delete => return false,
                 ContactResponse::Explode => {
-                    self.explode(p, &d, q, Some(normal));
+                    self.explode(p, d, q, Some(normal));
                     return false;
                 }
                 response => match redirect_projectile(p, contact.normal, response) {
@@ -3822,7 +3852,7 @@ impl WeaponsWorld {
                     } else if q.can_catch(p.source, target)
                         && let Some(image) = self.mount_ball(target, image)
                     {
-                        self.football_catch(p, &d, target);
+                        self.football_catch(p, d, target);
                         self.events.push(Event::BallCaught {
                             actor: target,
                             projectile: p.id,
@@ -3832,13 +3862,13 @@ impl WeaponsWorld {
                     }
                 }
             } else if allowed {
-                stopped = self.direct_hit(p, &d, hit.target, hit.position, false);
+                stopped = self.direct_hit(p, d, hit.target, hit.position, false);
             }
             for (set, c) in d.children.iter().enumerate().filter(|(_, c)| c.on_hit) {
                 self.children(p, c, set);
             }
-            if hit_bursts(&d, p.age, matches!(hit.target, TargetId::Actor(_))) {
-                self.explode(p, &d, q, Some(normal));
+            if hit_bursts(d, p.age, matches!(hit.target, TargetId::Actor(_))) {
+                self.explode(p, d, q, Some(normal));
                 return false;
             }
             // Kai's shield deleted a projectile it stopped (`%obj.schedule(10,
@@ -3846,7 +3876,7 @@ impl WeaponsWorld {
             if stopped {
                 return false;
             }
-            let (velocity, last) = match rebound(&d, p.velocity, normal, p.bounces) {
+            let (velocity, last) = match rebound(d, p.velocity, normal, p.bounces) {
                 Rebound::Stuck => {
                     p.stuck = true;
                     p.heading = p.velocity.try_normalize();
@@ -3861,7 +3891,7 @@ impl WeaponsWorld {
             p.bounced = true;
             p.bounces += 1;
             if last {
-                self.explode(p, &d, q, Some(normal));
+                self.explode(p, d, q, Some(normal));
                 return false;
             }
             self.events.push(Event::Bounced {

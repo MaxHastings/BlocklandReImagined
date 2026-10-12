@@ -267,6 +267,8 @@ pub struct ServerReport {
     pub dropped_cues: u64,
     pub joins: u64,
     pub resumes: u64,
+    /// Resumes that downloaded only the bricks changed since the drop.
+    pub kept_resumes: u64,
     pub commands: u64,
     pub rejected: u64,
     pub final_world: PublicWorld,
@@ -471,6 +473,47 @@ fn encode_transfer(transfer: WorldTransfer, traffic: Arc<Traffic>, recipients: u
             done: true,
             error: result.err().map(|error| format!("{error:#}")),
         }));
+    });
+    Frame::Pending(frames)
+}
+/// Finish a deferred build save on a blocking thread and reply with it,
+/// in place in the peer's stream.
+fn encode_save_reply(
+    save: bri_sim::session::DeferredSave,
+    sequence: u64,
+    traffic: Arc<Traffic>,
+) -> Frame {
+    let (ready, frames) = watch::channel(Arc::new(EncodedTransfer::default()));
+    tokio::task::spawn_blocking(move || {
+        use bri_sim::session::{Rejection, Reply};
+        let result = save
+            .finish()
+            .map(|build| Reply::Saved(Box::new(build)))
+            .map_err(|e| Rejection::from_error(&e));
+        let encoded = codec::encode(&Message::Reply { sequence, result }).or_else(|error| {
+            codec::encode(&Message::Reply {
+                sequence,
+                result: Err(Rejection::message(format!(
+                    "Could not transfer reply: {error}"
+                ))),
+            })
+        });
+        let done = match encoded {
+            Ok(bytes) => {
+                traffic.add(Kind::Reply, bytes.len(), 1);
+                EncodedTransfer {
+                    frames: vec![Arc::new(bytes)],
+                    done: true,
+                    error: None,
+                }
+            }
+            Err(error) => EncodedTransfer {
+                frames: Vec::new(),
+                done: true,
+                error: Some(format!("{error:#}")),
+            },
+        };
+        ready.send_replace(Arc::new(done));
     });
     Frame::Pending(frames)
 }
@@ -712,6 +755,7 @@ fn start_stepping(
     // the first tick it would hold the server's loop, and the handshakes
     // waiting behind it, for as long as a big world takes.
     session.prepare_events();
+    session.set_deferred_saves(true);
     // Recording starts from the session as it is served.
     let recorder = match recording {
         None => Recorder::off(),
@@ -1423,6 +1467,9 @@ async fn run(
     // the ticket so a reconnect cannot claim a role through its Hello payload.
     let mut tickets = Tickets::default();
     let mut cursor = 0_u64;
+    // Recent updates' brick changes, for players resuming over the bricks
+    // they kept through a network drop.
+    let mut backlog = crate::backlog::Backlog::new(cursor);
     let mut names = BTreeMap::new();
     let mut avatars = BTreeMap::new();
     let mut tools = BTreeMap::new();
@@ -1467,6 +1514,7 @@ async fn run(
         mpsc::channel::<(OwnerId, String, Result<(Session, Option<Vec<u8>>)>)>(1);
     let mut joins = 0;
     let mut resumes = 0;
+    let mut kept_resumes = 0;
     let mut commands = 0;
     let mut rejected = 0;
     let mut ticker = tokio::time::interval(Duration::from_secs_f64(1.0 / 120.0));
@@ -1503,6 +1551,7 @@ async fn run(
                     spawn_points=session.spawn_points().to_vec();
                     names=session.names();avatars=session.avatars();tools=session.tool_inventories();weapons.reset(session.weapon_view(),session.simulation().state().tick,session.projectile_falls());
                     palette=session.simulation().state().palette.clone();vitals=session.vitals();minigames=session.minigame_views();vehicles=session.vehicle_infos();broken_shapes=session.broken_shapes();targets=session.tutorial_targets();map_lights=session.map_light_rules();world_shapes=(session.world_shapes_revision(),session.world_shapes());environment=session.environment();weapon_settings=session.weapon_settings().clone();entities=session.package_entities().into_iter().map(|e|(e.id,e)).collect();joined_entities.clear();
+                    backlog.reset(cursor);
                     let (checkpoint,bricks)=Checkpoint::from_session(&session,cursor);
                     let transfer=encode_transfer(WorldTransfer{head:Message::MapChanged(checkpoint),bricks,focus:None},traffic.clone(),peers.len());
                     for peer in peers.values(){peer.send(transfer.clone());}
@@ -1518,7 +1567,7 @@ async fn run(
                     ensure!(hello.version==VERSION,"Incompatible protocol version");let differences=check_packages(&options.environment,&hello.packages,hello.accept_differences)?;
                     ensure!(peers.len()<max_players,"Server is full");
                     let supplied_host=if let Some(host)=&hello.host {ensure!(token_key(host)==host_key,"Invalid host credential");true}else{false};
-                    let (owner,token)=if let Some(token)=hello.resume {
+                    let (owner,token,kept)=if let Some(token)=hello.resume {
                         let Ticket{owner,host:ticket_host,principal:ticket_principal,..}=tickets.get(&token_key(&token)).context("Invalid resume credential")?;
                         ensure!(ticket_principal==principal,"Resume identity does not match authenticated ticket");
                         // The ticket's own connection is still here: the player's
@@ -1529,14 +1578,18 @@ async fn run(
                         let administrator=ticket_host || supplied_host;
                         let mut error=None;let mut found=false;for spawn in &spawn_points {match recorder.resume_verified(&mut session,owner,*spawn,administrator,principal){Ok(())=>{found=true;break},Err(e)=>error=Some(e)}}ensure!(found,"{}",error.context("No spawn points")?);
                         tickets.insert(token_key(&token),Ticket{owner,host:administrator,principal,issued:0},|o|peers.contains_key(&o))?;
-                        resumes+=1;(owner,token)
+                        // The bricks they kept are current to a cursor the
+                        // backlog still reaches: they get only the changes since.
+                        let kept=hello.kept.as_ref().filter(|k|k.map_id==session.simulation().state().map_id).and_then(|k|backlog.changes_since(k.cursor,cursor));
+                        if kept.is_some(){kept_resumes+=1;}
+                        resumes+=1;(owner,token,kept)
                     }else{
                         let mut bytes=[0;32];getrandom::fill(&mut bytes).map_err(|e|anyhow::anyhow!("OS randomness failed: {e}"))?;let token=ResumeToken(bytes);
                         let administrator=supplied_host;
                         let mut owner=None;let mut error=None;for spawn in &spawn_points {match recorder.join_verified(&mut session,hello.name.clone(),*spawn,administrator,principal){Ok(id)=>{owner=Some(id);break},Err(e)=>error=Some(e)}}
                         let owner=owner.ok_or_else(||error.unwrap_or_else(||anyhow::anyhow!("No spawn points")))?;
                         if let Err(error)=tickets.insert(token_key(&token),Ticket{owner,host:administrator,principal,issued:0},|o|peers.contains_key(&o)){let _=recorder.disconnect(&mut session,owner);return Err(error)}
-                        joins+=1;(owner,token)
+                        joins+=1;(owner,token,None)
                     };
                     // `onConnectRequest` takes the clan tags with the name.
                     if let Err(error)=recorder.set_clan(&mut session,owner,&hello.clan){eprintln!("Player {owner}: clan tags not taken: {error:#}");}
@@ -1544,6 +1597,7 @@ async fn run(
                     if !differences.cosmetic.is_empty(){recorder.private_chat(&mut session,owner,format!("Some presentation packages differ from the server's, so things may look or sound different: {}",bri_package::environment::describe(&differences.cosmetic)));}
                     // O(1) on the loop; the world is chunked and encoded off it.
                     let (mut checkpoint,bricks)=Checkpoint::from_session(&session,cursor);
+                    let bricks=match kept {Some(changes)=>checkpoint.keep_world(changes),None=>bricks};
                     let view=session.package_state_for(owner);checkpoint.package_state=view.clone();
                     // The next update brings the joiner in line with everyone else.
                     weapons.joined(&checkpoint.weapons);joined_entities.push(checkpoint.entities.clone());
@@ -1563,9 +1617,17 @@ async fn run(
                     let old_admin_revision=session.admin_revision();
                     let result=match fuse.guard("a player's request",||recorder.command(&mut session,owner,request.sequence,request.command,request.aim,|state|match admin_store.as_mut(){Some(store)=>store.persist(state),None=>anyhow::bail!("Persistent administration storage is not configured")}))? {Ok(result)=>result,Err(fault)=>Err(anyhow::anyhow!("{fault}"))};
                     if result.is_err(){rejected+=1;}
+                    if let Some(save)=session.take_deferred_save(){
+                        // A save's strip, validation and encoding (hundreds of
+                        // milliseconds on a big build) run off the tick; the
+                        // pending frame keeps the reply in its place in the
+                        // peer's stream.
+                        peer.send(encode_save_reply(save,request.sequence,peer.traffic.clone()));
+                    } else {
                     match codec::encode(&Message::Reply{sequence:request.sequence,result:result.map_err(|e|bri_sim::session::Rejection::from_error(&e))}) {
                         Ok(bytes)=>{traffic.add(Kind::Reply,bytes.len(),1);peer.send(Frame::Ready(Arc::new(bytes)))},
                         Err(error)=>peer.send_message(Kind::Reply,&Message::Reply{sequence:request.sequence,result:Err(bri_sim::session::Rejection::message(format!("Could not transfer reply: {error}")))}),
+                    }
                     }
                     close_admin_disconnects(&mut session,&mut recorder,&mut peers);
                     if old_admin_revision!=session.admin_revision(){broadcast_admin_snapshots(&session,&peers);}
@@ -1573,7 +1635,7 @@ async fn run(
                         match options.map_loader.clone() {
                             Some(loader)=>{let tx=map_tx.clone();tokio::task::spawn_blocking(move||{
                                 // A loader that panics still answers the administrator.
-                                let loaded=std::panic::catch_unwind(std::panic::AssertUnwindSafe(||loader.load_with_save(&map).map(|(mut new,save)|{new.prepare_events();(new,save)}))).unwrap_or_else(|panic|Err(anyhow::anyhow!("Loading the map failed: {}",panic_message(&*panic))));
+                                let loaded=std::panic::catch_unwind(std::panic::AssertUnwindSafe(||loader.load_with_save(&map).map(|(mut new,save)|{new.prepare_events();new.set_deferred_saves(true);(new,save)}))).unwrap_or_else(|panic|Err(anyhow::anyhow!("Loading the map failed: {}",panic_message(&*panic))));
                                 let _=tx.blocking_send((admin,map,loaded));});}
                             None=>recorder.map_change_failed(&mut session,admin,"This host cannot change maps"),
                         }
@@ -1630,6 +1692,7 @@ async fn run(
                 // Clients coast projectiles on each update's tick, so they keep 20 Hz.
                 if !delta.is_empty() || dropped_cues!=sent_dropped_cues || weapons.in_flight() || tick.is_multiple_of(HEARTBEAT_INTERVAL) {
                     sent_dropped_cues=dropped_cues;
+                    backlog.record(next,&delta.bricks);
                     broadcast(peers.values(),Kind::Update,&Message::Update(delta));cursor=next;
                 }
                 send_package_views(&session,&peers,&mut package_views);
@@ -1686,6 +1749,7 @@ async fn run(
         dropped_cues: session.dropped_cues(),
         joins,
         resumes,
+        kept_resumes,
         commands,
         rejected,
         final_world: {

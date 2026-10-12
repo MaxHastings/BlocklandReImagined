@@ -316,11 +316,25 @@ pub(super) struct Bots {
     noises: Vec<(OwnerId, Vec3, f32)>,
     /// The tick's shared sight-ray budget (`sightlines`).
     sightlines: std::sync::Mutex<sightlines::Sightlines>,
+    /// Who sides with whom, as answered this tick (`sight::bot_allies`):
+    /// cleared every tick before the bots step, since every bot asks the
+    /// same pairs thousands of times a tick.
+    relations: std::sync::Mutex<rustc_hash::FxHashMap<(OwnerId, OwnerId), bool>>,
+    /// Work counts for tests: relation asks, relations derived from the
+    /// live state, and goof look-arounds (`surprise::LOOK_TICKS`).
+    relation_asks: std::sync::atomic::AtomicU64,
+    relation_answers: std::sync::atomic::AtomicU64,
+    goof_looks: u64,
     /// Live dials (`/botset`) and where overrides are kept.
     tuning: tuning::Tuning,
     /// CPU time spent in `step_bots` ([`crate::cpu_time`]), for the bot
     /// performance bar.
     pub(super) think_nanos: u64,
+    /// Seats left since the session began, by why ([`interactions::Leave`]).
+    leaves: BTreeMap<&'static str, u64>,
+    /// Bots ignore allies' planned harm (no "get out of the way"), for
+    /// tests that measure what heeding it is worth.
+    deaf_to_allies: bool,
 }
 /// A bot that saw an enemy, or was hurt, tells its side where.
 struct Alert {
@@ -434,6 +448,10 @@ struct Brain {
     native_combat_tick: Option<u64>,
     /// What the fire gate last said of a press of its trigger, and when.
     gate: Option<(u64, &'static str)>,
+    /// The tick it last looked around for a player to goof at, and whom it
+    /// found (`surprise::surprise_pause`): looked up again every
+    /// [`surprise::LOOK_TICKS`], not every tick.
+    surprise_player: (u64, Option<OwnerId>),
     /// The selected objective owns the ordinary hand trigger this tick.
     objective_tool: bool,
     /// Actual damage evidence can interrupt a noncombat goal. Merely seeing
@@ -468,6 +486,14 @@ struct Brain {
     /// Headway of the chassis it drives: where it last got somewhere.
     vehicle_headway: crate::route::Headway<Vec3>,
     vehicle_since: Option<(u64, u64)>,
+    /// The hull it rides: the damage it last saw on it and the last hit
+    /// it saw it take (`bot_seated_input` gets out before the next).
+    hull: Option<(u64, f32, f32)>,
+    /// What the chassis it drives sweeps before it can stop, while that
+    /// runs people over: published as its harm (`team`), taken each tick.
+    sweep: Option<claims::Harmed>,
+    /// Its chassis is braking to rest for a drop ahead (`bot_seated_input`).
+    edge_stop: bool,
     /// The jet leg of its route it is flying, if any.
     jet_leg: Option<crate::route::JetLeg>,
     /// Where its feet last stood on something: where a walk it got nowhere
@@ -580,16 +606,17 @@ impl Brain {
     fn tethered(&self) -> bool {
         self.brick.is_some()
     }
-    /// Its chase leash. A driver keeps within `DRIVE_CHASE_RADIUS` of where
-    /// it took the controls (a mount covers ground a walker does not); on
-    /// foot a tethered bot keeps near its brick, and an untethered one has
-    /// no bound (a leash to where it spawned had it drop a chase at the
-    /// edge and wander back, then see them and chase again).
+    /// Its chase leash. An untethered bot has no bound, on foot or in a
+    /// seat (a leash to where it spawned had it drop a chase at the edge
+    /// and wander back, then see them and chase again). A tethered driver
+    /// keeps within `DRIVE_CHASE_RADIUS` of where it took the controls (a
+    /// mount covers ground a walker does not); on foot it keeps near its
+    /// brick.
     fn leash(&self, driving: bool) -> Leash {
         let (at, radius) = match (driving, self.mount_anchor) {
+            _ if !self.tethered() => (self.leash, f32::INFINITY),
             (true, Some((_, at))) => (at, DRIVE_CHASE_RADIUS),
             (true, None) => (self.leash, DRIVE_CHASE_RADIUS),
-            (false, _) if !self.tethered() => (self.leash, f32::INFINITY),
             (false, _) => (self.leash, self.kind.chase_radius),
         };
         Leash { at, radius }
@@ -642,6 +669,7 @@ impl Brain {
             objective: objectives::State::default(),
             combat: hand_combat::State::default(),
             native_combat_tick: None,
+            surprise_player: (0, None),
             gate: None,
             objective_tool: false,
             objective_threat: None,
@@ -660,6 +688,9 @@ impl Brain {
             push_anchor: None,
             vehicle_headway: Default::default(),
             vehicle_since: None,
+            hull: None,
+            sweep: None,
+            edge_stop: false,
             jet_leg: None,
             footing: home,
             leap_leg: None,
@@ -1065,6 +1096,10 @@ fn at_work(goal: Option<Goal>, feet: Vec3, body: &Body, routed: bool) -> bool {
     }
 }
 
+/// Horizontal speed, units a second, under which the stall judge's jump is
+/// a jump in place (over what its shins catch): faster, it carries the bot
+/// on and is judged as a hop.
+const STILL_HOP: f32 = 1.0;
 /// Seconds a hop from level ground is in the air ([`crate::route::hop_flight`]).
 fn hop_flight(tuning: &crate::player::PlayerTuning, jets: f32) -> f32 {
     crate::route::Motion::of(tuning).hop(jets, 0.0)
@@ -1151,9 +1186,10 @@ impl Session {
         self.simulation.track_collision_changes(true);
         let changes = self.simulation.take_collision_changes();
         let tick = self.simulation.state().tick;
+        let crowd = self.bots.brains.len();
         for (body, nav) in &mut self.bots.navs {
             nav.invalidate_all(&changes, body);
-            nav.begin_tick();
+            nav.begin_tick_for(crowd);
             nav.set_now(tick);
         }
         self.observe_bot_objects();
@@ -1167,6 +1203,8 @@ impl Session {
         if tick.is_multiple_of(30) {
             self.sync_bot_minigames()?;
         }
+        // Relations are answered afresh each tick (`sight::bot_allies`).
+        self.bots.relations.lock().unwrap().clear();
         self.bots.objective_candidate = objectives::next_turn(
             self.bots.objective_cursor,
             self.bots
@@ -1250,8 +1288,31 @@ impl Session {
     /// first few failures as (bot, tick, error): a bot's step should not
     /// fail in ordinary play, so tests read this to say none did.
     #[doc(hidden)]
+    /// Work counts for tests: (relation asks, relations derived from the
+    /// live state, goof look-arounds) since the session began.
+    pub fn bot_work_counts(&self) -> (u64, u64, u64) {
+        use std::sync::atomic::Ordering::Relaxed;
+        (
+            self.bots.relation_asks.load(Relaxed),
+            self.bots.relation_answers.load(Relaxed),
+            self.bots.goof_looks,
+        )
+    }
     pub fn bot_step_failures(&self) -> (u64, &[(OwnerId, u64, String)]) {
         (self.bots.failed_steps, &self.bots.failures)
+    }
+    /// Seats bots left since the session began, by why: `wrecked`,
+    /// `overturned`, `undrivable`, `bail_out`, `stalled`, `walk_the_rest`,
+    /// `got_off_to_fight`, `no_driver`, `other_way`, `gun_lost`,
+    /// `nothing_to_do`.
+    pub fn bot_seat_leaves(&self) -> &BTreeMap<&'static str, u64> {
+        &self.bots.leaves
+    }
+    /// Make bots ignore their allies' planned harm (`true`), to measure
+    /// what stepping out of it is worth.
+    #[doc(hidden)]
+    pub fn set_bots_deaf_to_allies(&mut self, deaf: bool) {
+        self.bots.deaf_to_allies = deaf;
     }
     /// Make every step of `bot` fail (None: none), to test that one bot's
     /// failure leaves the others thinking.
@@ -1320,6 +1381,9 @@ impl Session {
             self.bots.claims.release_owner(bot);
             self.bots.claims.forget(bot);
             brain.vehicle_since = None;
+            brain.hull = None;
+            brain.sweep = None;
+            brain.edge_stop = false;
             brain.vehicle_headway.clear();
             brain.fire_down = false;
             brain.objective_tool = false;
@@ -1954,6 +2018,9 @@ impl Session {
         if !self.seated(bot) {
             let brain = self.bots.brains.get_mut(&bot).unwrap();
             brain.vehicle_since = None;
+            brain.hull = None;
+            brain.sweep = None;
+            brain.edge_stop = false;
             brain.vehicle_headway.clear();
             brain.mount_anchor = None;
         }
@@ -2076,17 +2143,18 @@ impl Session {
                 .is_none_or(|target| sight.target.is_none_or(|seen| seen.owner == target))
         });
         // Objective reservations use the bot itself as their subject. Hand a
-        // completed or invalidated action back before combat discovery sees
-        // that reservation and mistakes its different subject for a failure.
-        // Successful policy progress must not cool down the next action on
-        // the same physical resource.
+        // reservation the objective moved on from back before combat
+        // discovery sees it and mistakes it for a failure. Successful policy
+        // progress must not cool down the next action on the same physical
+        // resource. One left when the objective ended is the opportunity's
+        // to judge (`bot_interaction` hands back what it no longer wants).
         if self
             .bots
             .claims
             .owner_claim(bot, tick)
             .is_some_and(|claim| {
                 claim.subject == bot
-                    && objective.and_then(|view| view.resource) != Some(claim.resource)
+                    && objective.is_some_and(|view| view.resource != Some(claim.resource))
             })
         {
             self.bots.claims.release_owner(bot);
@@ -2114,6 +2182,7 @@ impl Session {
         let Shot {
             crew_ready,
             attack_clear,
+            ally_in_way,
             harm,
             mounted_charging,
             charged_ready,
@@ -2192,7 +2261,7 @@ impl Session {
         });
         // Teammates' intents, and what this bot exposes to them (`team`).
         let intents = self.team_intents(bot, tick);
-        let seats = self.team_seats(bot, tick);
+        let seats = self.team_seats(bot);
         let mount = self.mounted(bot).map(|(v, _)| v);
         let sightline = if driving.is_none() {
             self.team_sightline(
@@ -2215,14 +2284,15 @@ impl Session {
             .get_mut(&bot)
             .unwrap()
             .explore
-            .note(feet, memory, tick);
+            .note(feet, memory, body.width, tick);
         let explore_to = (!self.bots.brains[&bot].tethered()
             && sight.target.is_none()
             && memory.is_none()
             && threat.is_none()
             && objective.is_none()
-            && driving.is_none()
             && swim.is_none()
+            // A passenger goes where its driver takes it.
+            && (driving.is_some() || !self.seated(bot))
             && self.bot_enemies_about(bot, &self.bots.brains[&bot].kind))
         .then(|| self.bot_explore_target(bot, feet, eye, &body, &intents, tick))
         .flatten();
@@ -2504,17 +2574,25 @@ impl Session {
             gate,
             tick,
         );
-        // A choice the terms changed is called out (`team`).
-        let callout = (behaviour != brain.behaviour
-            && behaviour as usize != plain_before
-            && tick >= brain.team.next_callout)
+        // A choice the terms changed is called out, else a vehicle's seats
+        // newly offered, or a shot held for an ally in its way (`team`).
+        let offering = seats.is_some() && seats != brain.team.offered;
+        brain.team.offered = seats;
+        let callout = (tick >= brain.team.next_callout)
             .then(|| {
-                team::callout(
-                    &kind.team,
-                    &brain.team.terms,
-                    plain_before,
-                    behaviour as usize,
-                )
+                (behaviour != brain.behaviour && behaviour as usize != plain_before)
+                    .then(|| {
+                        team::callout(
+                            &kind.team,
+                            &brain.team.terms,
+                            plain_before,
+                            behaviour as usize,
+                        )
+                    })
+                    .flatten()
+                    .or_else(|| {
+                        team::call(&kind.team, offering, ally_in_way && sight.target.is_some())
+                    })
             })
             .flatten()
             .map(str::to_owned);
@@ -2522,6 +2600,8 @@ impl Session {
             brain.behaviour_since = tick;
         }
         brain.behaviour = behaviour;
+        // A driver's harm is its shot's, else what its chassis sweeps.
+        let harm = harm.or(brain.sweep.take());
         let chosen = choices[behaviour as usize];
         self.bots.claims.publish(
             bot,
@@ -2903,11 +2983,15 @@ impl Session {
                 )
             })
             .flatten();
-        let mut pause = self.surprise_pause(bot, natural, idle, pause_gate, eye);
+        let mut pause = self.surprise_pause(bot, natural, idle, pause_gate, eye, tick);
         pause.play = play;
         pause.perched = on_body;
         (pause.pull, pause.copy) = self.team_mood_now(bot, (feet, eye), threat.is_some(), tick);
         let brain = self.bots.brains.get_mut(&bot).unwrap();
+        if tick >= brain.surprise_player.0 + surprise::LOOK_TICKS {
+            brain.surprise_player = (tick, pause.player);
+            self.bots.goof_looks += 1;
+        }
         let moment = brain
             .surprise
             .goof(&brain.kind.surprise, brain.kind.hold(), &pause, tick);
@@ -3180,6 +3264,13 @@ impl Session {
                         && flat(next.feet - feet).length() < crate::route::PRESS_NEAR
                         && !(next.jump && state.grounded),
                 ),
+                // Bent round a body in the way, its walk is no longer
+                // the route's own: a step off the route's line is judged
+                // by an unplanned step's rules at an edge.
+                plan: next
+                    .through
+                    .is_none()
+                    .then(|| flat(next.feet - feet).normalize_or_zero()),
                 ..act::Proposal::walk(
                     act::Mover::Route,
                     if let Some(through) = next.through {
@@ -3443,11 +3534,15 @@ impl Session {
         // on, over what its shins catch); the next plans again.
         let into_body = selected_objective.is_some_and(|v| v.jump);
         let stall_hop = stalled && brain.progress.stalls() == 1;
+        // Stalled while still moving (wobbling between two spots, not
+        // pressed against what it cannot pass): its jump carries it on the
+        // way it moves, so safety judges where it comes down, as a hop's.
+        let in_place = flat(Vec3::from(state.velocity)).length() <= STILL_HOP;
         let controls = act::resolve(
             &mut proposals,
             act::Press {
-                hop: act.jump || extra.jump || into_body,
-                jump: stall_hop,
+                hop: act.jump || extra.jump || into_body || stall_hop && !in_place,
+                jump: stall_hop && in_place,
                 crouch: act.crouch || extra.crouch,
                 jet: extra.jet,
             },

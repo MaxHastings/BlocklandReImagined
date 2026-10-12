@@ -272,7 +272,7 @@ pub(super) fn capability(
         tactics::native_capability(&native, projectile, scale, cadence(image), projectiles).ok()?;
     let mut cap = cap;
     cap.family = Family::Melee;
-    cap.near = image.bot.and_then(|b| b.near).unwrap_or(0.0);
+    cap.near = image.bot.as_ref().and_then(|b| b.near).unwrap_or(0.0);
     Some(cap)
 }
 
@@ -305,11 +305,15 @@ pub(super) fn has_possible_attack(session: &Session, bot: OwnerId) -> bool {
         match attack_of(session, image, scale) {
             Some(Some(cap)) => {
                 let ammo = session.weapons.ammo_on_equip(ActorId(bot), slot);
-                if ammo.as_ref().is_none_or(|a| {
-                    available_rounds(a) >= cap.rounds_per_attack
-                        || matches!(a.reserve, bri_weapons::Reserve::Endless)
-                        || matches!(a.reserve,bri_weapons::Reserve::Rounds(n) if n > 0)
-                }) {
+                let rules_empty = ammo.is_none()
+                    && rules_rounds(session, bot, image).is_some_and(|n| n < cap.rounds_per_attack);
+                if !rules_empty
+                    && ammo.as_ref().is_none_or(|a| {
+                        available_rounds(a) >= cap.rounds_per_attack
+                            || matches!(a.reserve, bri_weapons::Reserve::Endless)
+                            || matches!(a.reserve,bri_weapons::Reserve::Rounds(n) if n > 0)
+                    })
+                {
                     return true;
                 }
             }
@@ -467,7 +471,12 @@ pub(super) fn item_worth(session: &Session, item: &str, scale: f32) -> f32 {
                 let splash = projectile.map_or(0.0, |p| p.explosion.damage.max(0.0));
                 let reach = ray.map(|r| r.range * scale).or(projectile
                     .map(|p| p.speed * p.lifetime_ticks as f32 / bri_weapons::TICK_HZ as f32));
-                let reach = image.bot.and_then(|b| b.reach).or(reach).unwrap_or(3.0);
+                let reach = image
+                    .bot
+                    .as_ref()
+                    .and_then(|b| b.reach)
+                    .or(reach)
+                    .unwrap_or(3.0);
                 (count * direct + splash * SPLASH_WORTH, reach)
             }
         };
@@ -481,7 +490,7 @@ pub(super) fn item_worth(session: &Session, item: &str, scale: f32) -> f32 {
 }
 
 fn known_noncombat_manipulation(image: &bri_weapons::Image) -> bool {
-    image.bot.and_then(|b| b.manipulation).is_some()
+    image.bot.as_ref().and_then(|b| b.manipulation).is_some()
         && image.projectile.is_none()
         && !image.melee
         && image.shot.is_none()
@@ -491,6 +500,38 @@ fn known_noncombat_manipulation(image: &bri_weapons::Image) -> bool {
         && image.scripts.is_empty()
         && image.left_image.is_none()
         && image.cook.is_none()
+}
+
+/// Rounds the package that fires `image` says `owner` still has for it, when
+/// the image says where its rules keep them (`BotUse::ammo`): the loaded
+/// ones, which fire now, and the spare ones a reload brings, which the
+/// gun's own dry-fire and reload states fetch. None when the image names no
+/// ammunition, or the package has stored nothing yet: an unknown count is
+/// never read as empty.
+pub(super) fn rules_rounds(session: &Session, owner: OwnerId, image: &Image) -> Option<u32> {
+    let ammo = image.bot.as_ref()?.ammo.as_ref()?;
+    let count = |v: &serde_json::Value| -> f64 {
+        match v {
+            serde_json::Value::Number(n) => n.as_f64().unwrap_or(0.0).max(0.0),
+            serde_json::Value::Array(items) => items
+                .iter()
+                .filter_map(serde_json::Value::as_f64)
+                .map(|n| n.max(0.0))
+                .sum(),
+            _ => 0.0,
+        }
+    };
+    let read = |at: &bri_weapons::StateRef| {
+        let value = session.package_player_value(owner, &ammo.package, &at.key)?;
+        if at.field.is_empty() {
+            Some(count(value))
+        } else {
+            value.get(&at.field).map(count)
+        }
+    };
+    let loaded = read(&ammo.loaded)?;
+    let spare: f64 = ammo.spare.iter().filter_map(read).sum();
+    Some((loaded + spare).min(f64::from(u32::MAX)) as u32)
 }
 
 fn available_rounds(a: &bri_weapons::runtime::AmmoView) -> u32 {
@@ -635,7 +676,10 @@ pub(super) fn choose(
         }
         let distance = origin.distance(target_point);
         let ammo = session.weapons.ammo_on_equip(ActorId(bot), slot);
-        let ready_rounds = ammo.as_ref().map(available_rounds);
+        let ready_rounds = ammo
+            .as_ref()
+            .map(available_rounds)
+            .or_else(|| rules_rounds(session, bot, image));
         if ready_rounds.is_some_and(|n| n < cap.rounds_per_attack) {
             continue;
         }
@@ -1996,6 +2040,12 @@ pub(super) fn validate_fire(
     let contact = (choice.capability.delivery == Delivery::Contact).then_some(Some(seen.owner));
     let bodies = Bodies::of(session, bot, Vec3::ZERO);
     let strike = hand_strike(session, bot, image, choice.capability, contact);
+    // The shot leaves after the press's wind-up (a swing's PreFire): the
+    // bodies about keep moving meanwhile, an ally into the swing's way.
+    let lead = launch_lead(image);
+    for c in &mut chords {
+        c.seconds += lead;
+    }
     let (harm, _) = assess(session, bot, strike, &chords, origin, &bodies);
     // Its side's harm as really fired, its enemies' and its push's as
     // planned (`Session::bot_shove` flies the push on the planning turn),
@@ -2010,6 +2060,30 @@ pub(super) fn validate_fire(
         .get(&seen.owner)
         .map_or(0.0, |p| p.combat.health.max(1.0));
     tactics::trade(fired, target_health, peer.combat.health).is_some_and(|net| net > 0.0)
+}
+
+/// Seconds from a press of `image`'s trigger to its shot leaving: the
+/// states the press leads through (a swing's PreFire) before the one that
+/// fires. Nothing for one that fires as it is pressed.
+fn launch_lead(image: &Image) -> f32 {
+    let Some(mut at) = image.states.iter().find_map(|s| s.down) else {
+        return 0.0;
+    };
+    let mut ticks = 0;
+    for _ in 0..image.states.len() {
+        let Some(state) = image.states.get(at) else {
+            break;
+        };
+        if state.script.eq_ignore_ascii_case("onfire") {
+            return ticks as f32 / bri_weapons::TICK_HZ as f32;
+        }
+        ticks += state.ticks;
+        let Some(next) = state.timeout else {
+            break;
+        };
+        at = next;
+    }
+    0.0
 }
 
 /// A press of `bot`'s held attack that no plan made (an objective's tool
@@ -2132,6 +2206,10 @@ pub(super) fn validate_intent(
         if usable < intent.choice.capability.rounds_per_attack {
             return (FireAdmission::Abort, "out of ammo");
         }
+    } else if rules_rounds(session, bot, image)
+        .is_some_and(|n| n < intent.choice.capability.rounds_per_attack)
+    {
+        return (FireAdmission::Abort, "out of ammo");
     }
     // An unauthorized release stays held. A proven harmless recovery can
     // advance normally; indirect trigger-up paths need the same critical
@@ -2188,7 +2266,11 @@ pub(super) fn trigger(
     }
     let down = if image.charges() {
         !image.fires_on_release(current) || !release_authorized
-    } else if image.bot.unwrap_or_default().fire == bri_weapons::BotFire::Hold {
+    } else if image
+        .bot
+        .as_ref()
+        .is_some_and(|b| b.fire == bri_weapons::BotFire::Hold)
+    {
         true
     } else {
         !last_down && current.down.is_some()
@@ -2769,6 +2851,19 @@ mod tests {
             !known_noncombat_manipulation(&image),
             "an opaque command tool needs explicit capability semantics"
         );
+    }
+
+    /// A swing's shot leaves after its PreFire, so the fire gate judges
+    /// where the bodies about will be by then; a gun fires as it is pressed.
+    #[test]
+    fn a_swing_is_judged_from_its_wind_up_and_a_gun_from_its_press() {
+        let pack = bri_weapons::testing::pack();
+        let lead = |id: &str| launch_lead(&pack.images[id]);
+        assert_eq!(
+            lead(bri_weapons::testing::SWORD_IMAGE),
+            4.0 / bri_weapons::TICK_HZ as f32
+        );
+        assert_eq!(lead(bri_weapons::testing::GUN_IMAGE), 0.0);
     }
 
     /// A press no plan made (an objective's tool, a goof's click) is

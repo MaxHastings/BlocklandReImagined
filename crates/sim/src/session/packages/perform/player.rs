@@ -25,6 +25,11 @@ impl Perform for ops::SetAvatarParts {
     }
 }
 impl Perform for ops::Teleport {
+    fn check(&self, session: &Session, _cx: OpCall<'_>) -> Result<()> {
+        let peer = session.peers.get(&self.player).context("No such player")?;
+        ensure!(peer.combat.alive, "Only living players can be moved");
+        Ok(())
+    }
     fn perform(self, session: &mut Session, _cx: OpCall<'_>) -> Result<()> {
         let ops::Teleport { player, position } = self;
         let peer = session.peers.get_mut(&player).context("No such player")?;
@@ -271,6 +276,11 @@ impl Perform for ops::TakeItem {
     }
 }
 impl Perform for ops::DropItem {
+    /// Whether the item can be put in the world: this server has it and
+    /// the package has room for another lying about.
+    fn check(&self, session: &Session, cx: OpCall<'_>) -> Result<()> {
+        session.package_check_drop_item(cx.package, &self.item, self.data.as_ref())
+    }
     fn perform(self, session: &mut Session, cx: OpCall<'_>) -> Result<()> {
         let OpCall { package, .. } = cx;
         let ops::DropItem {
@@ -285,6 +295,9 @@ impl Perform for ops::DropItem {
     }
 }
 impl Perform for ops::RemoveDrop {
+    fn check(&self, session: &Session, cx: OpCall<'_>) -> Result<()> {
+        session.package_check_drop(cx.package, self.drop)
+    }
     fn perform(self, session: &mut Session, cx: OpCall<'_>) -> Result<()> {
         let OpCall { package, .. } = cx;
         let ops::RemoveDrop { drop } = self;
@@ -292,6 +305,9 @@ impl Perform for ops::RemoveDrop {
     }
 }
 impl Perform for ops::NameDrop {
+    fn check(&self, session: &Session, cx: OpCall<'_>) -> Result<()> {
+        session.package_check_drop(cx.package, self.drop)
+    }
     fn perform(self, session: &mut Session, cx: OpCall<'_>) -> Result<()> {
         let OpCall { package, .. } = cx;
         let ops::NameDrop { drop, text, color } = self;
@@ -371,6 +387,12 @@ impl Perform for ops::SetSpeedScale {
     }
 }
 impl Perform for ops::GiveAmmo {
+    fn check(&self, session: &Session, _cx: OpCall<'_>) -> Result<()> {
+        ensure!(session.peers.contains_key(&self.player), "No such player");
+        session
+            .weapons
+            .check_reserve(bri_weapons::ActorId(self.player), &self.ammo)
+    }
     fn perform(self, session: &mut Session, _cx: OpCall<'_>) -> Result<()> {
         let ops::GiveAmmo {
             player,
@@ -384,6 +406,12 @@ impl Perform for ops::GiveAmmo {
     }
 }
 impl Perform for ops::SetReserve {
+    fn check(&self, session: &Session, _cx: OpCall<'_>) -> Result<()> {
+        ensure!(session.peers.contains_key(&self.player), "No such player");
+        session
+            .weapons
+            .check_reserve(bri_weapons::ActorId(self.player), &self.ammo)
+    }
     fn perform(self, session: &mut Session, _cx: OpCall<'_>) -> Result<()> {
         let ops::SetReserve {
             player,
@@ -400,6 +428,12 @@ impl Perform for ops::SetReserve {
     }
 }
 impl Perform for ops::SetRounds {
+    fn check(&self, session: &Session, _cx: OpCall<'_>) -> Result<()> {
+        ensure!(session.peers.contains_key(&self.player), "No such player");
+        session
+            .weapons
+            .check_set_rounds(bri_weapons::ActorId(self.player), &self.item)
+    }
     fn perform(self, session: &mut Session, _cx: OpCall<'_>) -> Result<()> {
         let ops::SetRounds {
             player,

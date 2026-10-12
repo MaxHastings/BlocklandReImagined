@@ -1,6 +1,7 @@
 //! QUIC transport and bounded replication for native game sessions.
 mod admin_store;
 pub mod allocator;
+pub mod backlog;
 pub mod client;
 pub mod codec;
 pub mod content_identity;

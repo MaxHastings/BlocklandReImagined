@@ -205,9 +205,11 @@ fn p90_exhausted_ammo_stays_idle_after_trigger_release() -> Result<()> {
     Ok(())
 }
 
-#[test]
-#[ignore = "requires Maxwell's privately converted P90 assets"]
-fn bot_fires_package_p90_and_reloads_through_ordinary_controls() -> Result<()> {
+/// A mini-game with one bot armed with `loadout` and the host as its
+/// target; the probe package spawns the bot and counts its hits on the host
+/// (the host takes no damage). Returns the game, the host, the bot and the
+/// probe folder, which must outlive the game.
+fn bot_duel(loadout: [Option<String>; 5]) -> Result<(Session, u64, u64, tempfile::TempDir)> {
     use bri_sim::{bot_kind::BotKind, session::PackageCommand};
     let root = root()?;
     let probe = tempfile::Builder::new()
@@ -222,7 +224,7 @@ fn bot_fires_package_p90_and_reloads_through_ordinary_controls() -> Result<()> {
         serde_json::json!({
             "schema_version":1,"api":1,"id":"bot_probe","version":"0.1.0",
             "name":"Private bot probe","authors":[],"license":"proprietary",
-            "dependencies":{},"capabilities":["bots","damage"],
+            "dependencies":{},"capabilities":["bots","damage","player"],
             "provides":[
                 {"kind":"behaviour","id":"bot_probe:behaviour/main","file":"behaviour.json"},
                 {"kind":"script","id":"bot_probe:script/main","file":"probe.rhai"}]
@@ -231,13 +233,14 @@ fn bot_fires_package_p90_and_reloads_through_ordinary_controls() -> Result<()> {
     write(
         "behaviour.json",
         serde_json::json!({
-            "schema_version":1,"script":"probe.rhai","commands":[{"name":"spawn"}],
+            "schema_version":1,"script":"probe.rhai","commands":[{"name":"spawn"},{"name":"arm"}],
             "on_damage":true,"state":{"player":{"hits":{"default":0,"persist":false}}}
         }),
     )?;
     std::fs::write(
         probe.path().join("probe.rhai"),
         "fn cmd_spawn(p) { add_bot(player(p).minigame, #{kind:\"probe\",name:\"Gunner\"}); }\n\
+         fn cmd_arm(p) { for b in bots() { give_item(b.id, \"v20.weapon.gunitem\", false); } }\n\
          fn on_damage(p,a,n,i) { if !player(p).bot {set_player(p,\"hits\",get_player(p,\"hits\")+1);0.0} else {()} }",
     )?;
     let mut packages = set();
@@ -261,7 +264,7 @@ fn bot_fires_package_p90_and_reloads_through_ordinary_controls() -> Result<()> {
     game.set_spawn_points(vec![Vec3::new(0.0, 0.05, -10.0)])?;
     let host = game.join("Target".into(), Vec3::new(0.0, 0.05, -10.0), true)?;
     let settings = bri_minigames::Settings {
-        loadout: [Some(ITEM.into()), None, None, None, None],
+        loadout,
         ..Default::default()
     };
     game.command(
@@ -286,6 +289,13 @@ fn bot_fires_package_p90_and_reloads_through_ordinary_controls() -> Result<()> {
         .copied()
         .find(|p| game.is_bot(*p))
         .context("spawned bot")?;
+    Ok((game, host, bot, probe))
+}
+
+#[test]
+#[ignore = "requires Maxwell's privately converted P90 assets"]
+fn bot_fires_package_p90_and_reloads_through_ordinary_controls() -> Result<()> {
+    let (mut game, host, bot, _probe) = bot_duel([Some(ITEM.into()), None, None, None, None])?;
     let mut fired = false;
     let mut reloaded = false;
     for _ in 0..4200 {
@@ -436,5 +446,97 @@ async fn p90_downloads_to_a_clean_cache_and_equipment_reaches_a_late_joiner() ->
     drop(guest);
     drop(host);
     server.stop().await?;
+    Ok(())
+}
+
+#[test]
+#[ignore = "requires Maxwell's privately converted P90 assets"]
+fn bot_switches_from_an_empty_p90_to_its_other_gun_and_never_fires_it_dry() -> Result<()> {
+    use bri_sim::session::PackageCommand;
+    // The P90 alone until it is dry (a bot given both prefers the v20 gun),
+    // then the probe hands the bot a second gun.
+    let (mut game, host, bot, _probe) = bot_duel([Some(ITEM.into()), None, None, None, None])?;
+    // Rounds fired before the gun went dry keep flying for their lifetime;
+    // only a round newer than the last one at that moment is a dry shot.
+    let newest_p90 = |game: &Session| {
+        game.weapon_view()
+            .projectiles
+            .iter()
+            .filter(|p| p.definition.ends_with("r_assaultrifleprojectile"))
+            .map(|p| p.id)
+            .max()
+    };
+    let other_shot = |game: &Session| {
+        game.weapon_view()
+            .projectiles
+            .iter()
+            .any(|p| !p.definition.ends_with("r_assaultrifleprojectile"))
+    };
+    let is_dry = |game: &Session| {
+        value(game, bot, "rounds") == 0
+            && value(game, bot, "spares")
+                .as_array()
+                .is_some_and(Vec::is_empty)
+    };
+    let mut dry_at = None;
+    for tick in 0..60_000 {
+        game.step()?;
+        if tick % 5000 == 0 {
+            eprintln!(
+                "tick {tick}: rounds {} spares {} {:?}",
+                value(&game, bot, "rounds"),
+                value(&game, bot, "spares"),
+                game.bot_why()
+            );
+        }
+        if is_dry(&game) {
+            dry_at = Some(tick);
+            break;
+        }
+    }
+    ensure!(
+        dry_at.is_some(),
+        "the bot never emptied the P90: rounds {} spares {}: {:?}",
+        value(&game, bot, "rounds"),
+        value(&game, bot, "spares"),
+        game.bot_why()
+    );
+    let last = newest_p90(&game).unwrap_or(0);
+    let dry_shot = |game: &Session| newest_p90(game).is_some_and(|id| id > last);
+    for _ in 0..900 {
+        game.step()?;
+        ensure!(
+            !dry_shot(&game),
+            "a bot with only an empty P90 fired it: {:?}",
+            game.bot_why()
+        );
+    }
+    game.command(
+        host,
+        3,
+        Command::Package(PackageCommand {
+            package: "bot_probe".into(),
+            command: "arm".into(),
+            args: vec![],
+        }),
+    )?;
+    let mut other = false;
+    for tick in 0..6000 {
+        game.step()?;
+        ensure!(
+            !dry_shot(&game),
+            "the bot fired the empty P90 with another gun to hand: {:?}",
+            game.bot_why()
+        );
+        other |= other_shot(&game);
+        if other && tick > 600 {
+            break;
+        }
+    }
+    ensure!(
+        other,
+        "the bot never took up its other gun once the P90 was empty: {:?}",
+        game.bot_why()
+    );
     Ok(())
 }

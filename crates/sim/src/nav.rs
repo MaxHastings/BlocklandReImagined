@@ -37,6 +37,7 @@ use rapier3d::prelude::*;
 use rustc_hash::{FxHashMap, FxHashSet};
 use std::cmp::Ordering;
 use std::collections::BinaryHeap;
+use std::ops::RangeInclusive;
 
 /// Grid spacing, in world units: one brick stud.
 pub const CELL: f32 = 0.5;
@@ -49,6 +50,9 @@ const LANDING_RING: i32 = 4;
 pub(crate) const ARRIVAL_RADIUS: f32 = CELL * 1.5;
 /// New ground samples all bots together may take in one tick.
 pub const SAMPLES_PER_TICK: u32 = 96;
+/// Bots the per-tick budgets below serve; more bots bring a budget each
+/// group of this many ([`Nav::begin_tick_for`]).
+pub const BOTS_PER_BUDGET: usize = 16;
 /// Nodes all searches together expand in one tick, remembered ground or not.
 pub const EXPANSIONS_PER_TICK: u32 = 384;
 /// New leap arcs all searches together sweep in one tick, each a handful
@@ -61,6 +65,11 @@ const MAX_SAMPLES: usize = 1 << 18;
 /// How far over a body's step a rise still counts as a step: a floor found
 /// by a ray can sit a hair above the brick top it stands for.
 const STEP_SLACK: f32 = 0.05;
+/// How far under the crouched step measured in open air a crawlspace floor
+/// must be to be walked up: the measure has no roof over the lip, and at the
+/// limit the motor under one does not climb it (a bot pressed against it
+/// until its stall judge hopped). Higher floors are jumped onto.
+const CRAWL_MARGIN: f32 = 0.1;
 /// Height quantum of a sample's source hint.
 const HINT_BAND: f32 = 0.25;
 
@@ -680,6 +689,9 @@ pub struct Nav {
     expansions: u32,
     /// Samples taken so far, for tests and probes.
     pub sampled: u64,
+    /// Floor samples forgotten so far (`Nav::invalidate_all`), for tests
+    /// and probes.
+    pub forgotten: u64,
     /// Whether the arc of a leap from one node onto another is clear, as
     /// swept ([`Ground::sweep_arc`]), and how many more it sweeps this
     /// tick.
@@ -704,9 +716,20 @@ pub struct Nav {
 impl Nav {
     /// Start a tick's sampling budget.
     pub fn begin_tick(&mut self) {
-        self.budget = SAMPLES_PER_TICK;
-        self.expansions = EXPANSIONS_PER_TICK;
-        self.arc_budget = ARCS_PER_TICK;
+        self.begin_tick_for(1);
+    }
+    /// Start a tick's budget for `bots` searching together: the budget is
+    /// for [`BOTS_PER_BUDGET`] of them, and each further group of that many
+    /// brings another. One shared budget over a crowd leaves most of its
+    /// searches waiting tens of seconds, their bots standing at their
+    /// spawns (32 bots on a map of walls: a fifth of all bot time stuck
+    /// with no route yet; with the budget grown by the crowd, under 1%).
+    /// It is a ceiling, spent only on demand.
+    pub fn begin_tick_for(&mut self, bots: usize) {
+        let groups = bots.div_ceil(BOTS_PER_BUDGET).max(1) as u32;
+        self.budget = SAMPLES_PER_TICK * groups;
+        self.expansions = EXPANSIONS_PER_TICK * groups;
+        self.arc_budget = ARCS_PER_TICK * groups;
     }
     /// The tick it is: what it avoids lapses by it.
     pub fn set_now(&mut self, tick: u64) {
@@ -862,12 +885,39 @@ impl Nav {
                 (x0..=x1, z0..=z1, low, high)
             })
             .collect();
-        self.floors.retain(|(x, z, band), _| {
-            let hint = *band as f32 * HINT_BAND;
-            !cells.iter().any(|(xs, zs, low, high)| {
-                xs.contains(x) && zs.contains(z) && hint >= *low && hint <= *high
-            })
-        });
+        // A brick's box names a few dozen keys; a walk over the cache (up
+        // to hundreds of thousands of columns) is for the big changes.
+        let keys = |(xs, zs, low, high): &(RangeInclusive<i32>, RangeInclusive<i32>, f32, f32)| {
+            let bands = (low / HINT_BAND).ceil() as i64..=(high / HINT_BAND).floor() as i64;
+            let count =
+                |r: &RangeInclusive<i32>| (i64::from(*r.end()) - i64::from(*r.start()) + 1).max(0);
+            (
+                count(xs) * count(zs) * (bands.end() - bands.start() + 1).max(0),
+                bands,
+            )
+        };
+        let named: i64 = cells.iter().map(|c| keys(c).0).sum();
+        let before = self.floors.len();
+        if named < before as i64 {
+            for cell in &cells {
+                let bands = keys(cell).1;
+                for x in cell.0.clone() {
+                    for z in cell.1.clone() {
+                        for band in bands.clone() {
+                            self.floors.remove(&(x, z, band as i32));
+                        }
+                    }
+                }
+            }
+        } else {
+            self.floors.retain(|(x, z, band), _| {
+                let hint = *band as f32 * HINT_BAND;
+                !cells.iter().any(|(xs, zs, low, high)| {
+                    xs.contains(x) && zs.contains(z) && hint >= *low && hint <= *high
+                })
+            });
+        }
+        self.forgotten += (before - self.floors.len()) as u64;
         // An arc's box: from its takeoff to its landing, a body wide, up to
         // the top of its jump and a body over.
         let grown: Vec<_> = boxes
@@ -1214,7 +1264,7 @@ fn edge(body: &Body, from: f32, to: Floor) -> Option<bool> {
     // Into a crawlspace it steps up crouched, and a jump crouches in the
     // air, each as high as it was measured to.
     let (step, jump) = if to.low {
-        (body.crawl_step, body.crawl_jump)
+        ((body.crawl_step - CRAWL_MARGIN).max(0.0), body.crawl_jump)
     } else {
         (body.step, body.jump)
     };
@@ -2224,6 +2274,40 @@ mod tests {
         assert!(matches!(found, Found::Path(_)), "{found:?}");
     }
 
+    /// One brick's box forgets the columns over it, whatever the cache
+    /// holds: the keys it names are removed one by one rather than by a
+    /// walk over every column (v0.2.10 performance waste audit, finding
+    /// 10).
+    #[test]
+    fn a_small_change_forgets_only_its_own_columns() {
+        let mut nav = Nav::default();
+        for x in -150..150 {
+            for z in -150..150 {
+                nav.floors.insert((x, z, 0), Floors::from([]));
+            }
+        }
+        let before = nav.len();
+        nav.invalidate(
+            Vec3::new(20.0, -1.0, 20.0),
+            Vec3::new(21.0, 0.0, 21.0),
+            &body(),
+        );
+        let body = body();
+        let reach = body.width + CELL;
+        let (x0, z0) = cell_of(Vec3::new(20.0 - reach, 0.0, 20.0 - reach));
+        let (x1, z1) = cell_of(Vec3::new(21.0 + reach, 0.0, 21.0 + reach));
+        let columns = ((x1 - x0 + 1) * (z1 - z0 + 1)) as u64;
+        assert_eq!(
+            nav.forgotten, columns,
+            "forgot {} of {before}",
+            nav.forgotten
+        );
+        assert_eq!(nav.len() as u64, before as u64 - columns);
+        // A change over everything still empties the cache.
+        nav.invalidate(Vec3::splat(-100.0), Vec3::splat(100.0), &body);
+        assert!(nav.is_empty());
+    }
+
     /// A wall with a window up it too low to stand in: the only way on is
     /// a jump that crouches in the air, as high as the body was measured to
     /// get into one; set higher than that, there is no way.
@@ -2280,6 +2364,31 @@ mod tests {
         ]);
         let p = path(search(&physics, Vec3::ZERO, Vec3::new(10.0, 0.0, 0.0)).0);
         assert!(p.iter().all(|w| !w.crouch), "walked the gap: {p:?}");
+    }
+
+    /// A crawlspace floor as high as the crouched step was measured to
+    /// climb in open air is not trusted to be walked up under a roof: it is
+    /// jumped onto (crouching in the air), while a low one is still walked.
+    #[test]
+    fn a_crawlspace_floor_at_the_step_limit_is_jumped_not_walked() {
+        let onto = |rise: f32| {
+            // A block `rise` high from x = 4 to 12, a roof 2 over it.
+            let physics = world(&[
+                floor(),
+                (Vec3::new(4.0, -1.0, -40.0), Vec3::new(12.0, rise, 40.0)),
+                (
+                    Vec3::new(4.0, rise + 2.0, -40.0),
+                    Vec3::new(12.0, rise + 6.0, 40.0),
+                ),
+            ]);
+            let p = path(search(&physics, Vec3::ZERO, Vec3::new(8.0, rise, 0.0)).0);
+            p.into_iter()
+                .find(|w| w.crouch)
+                .unwrap_or_else(|| panic!("no crawl onto a {rise} high block"))
+        };
+        let limit = body().step;
+        assert!(onto(limit).jump, "a block {limit} high is jumped onto");
+        assert!(!onto(0.4).jump, "a low block is walked up");
     }
 
     /// The search with a body of its own.
@@ -2421,6 +2530,17 @@ mod tests {
         assert_eq!(floors.len(), 2, "{floors:?}");
         assert!(!floors[0].low && (floors[0].y - (roof + 0.2)).abs() < 0.01);
         assert!(floors[1].low && floors[1].y.abs() < 0.01);
+    }
+
+    #[test]
+    fn the_tick_budget_grows_with_the_crowd_in_groups() {
+        let mut nav = Nav::default();
+        for (bots, groups) in [(0, 1), (1, 1), (16, 1), (17, 2), (32, 2), (64, 4)] {
+            nav.begin_tick_for(bots);
+            assert_eq!(nav.budget, SAMPLES_PER_TICK * groups, "{bots} bots");
+            assert_eq!(nav.expansions, EXPANSIONS_PER_TICK * groups, "{bots} bots");
+            assert_eq!(nav.arc_budget, ARCS_PER_TICK * groups, "{bots} bots");
+        }
     }
 
     #[test]

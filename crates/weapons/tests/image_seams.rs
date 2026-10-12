@@ -112,12 +112,13 @@ fn bot_use_is_read_and_limited() {
             .and_then(|p| p.validate().map(|_| p).map_err(|e| e.to_string()))
     };
     let pack = with(serde_json::json!({"fire": "hold", "reach": 8.0})).unwrap();
-    let bot = pack.images[IMAGE].bot.unwrap();
+    let bot = pack.images[IMAGE].bot.clone().unwrap();
     assert_eq!(bot.fire, BotFire::Hold);
     assert_eq!(bot.reach, Some(8.0));
     assert_eq!(
         with(serde_json::json!({})).unwrap().images[IMAGE]
             .bot
+            .clone()
             .unwrap()
             .fire,
         BotFire::Tap
@@ -127,7 +128,7 @@ fn bot_use_is_read_and_limited() {
     assert!(with(serde_json::json!({"reach": 5000.0})).is_err());
     assert!(with(serde_json::json!({"aim": 1})).is_err());
     let near = with(serde_json::json!({"reach": 30.0, "near": 2.5})).unwrap();
-    assert_eq!(near.images[IMAGE].bot.unwrap().near, Some(2.5));
+    assert_eq!(near.images[IMAGE].bot.clone().unwrap().near, Some(2.5));
     assert!(with(serde_json::json!({"reach": 3.0, "near": 3.0})).is_err());
     assert!(with(serde_json::json!({"near": -1.0})).is_err());
 }

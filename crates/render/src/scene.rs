@@ -992,6 +992,9 @@ impl Default for Camera {
 
 pub struct GpuScene {
     sky_revision: Arc<std::sync::atomic::AtomicU64>,
+    /// Unique to this scene value (a batch view gets its own), so a shadow
+    /// layer can name it without a pointer that a later scene may reuse.
+    unique: u64,
     material_descriptors: Vec<Material>,
     image_signatures: Vec<([u32; 2], bool, [u8; 32])>,
     /// The images' textures, for `patch_images`.
@@ -1109,6 +1112,9 @@ pub struct GpuInstances {
     /// Per instance, or empty when none is cut.
     clips: Vec<ClipPlane>,
     capacity: usize,
+    /// Unique to these contents: a new value at creation and at every
+    /// change, so a shadow layer can tell them apart without rereading them.
+    revision: u64,
 }
 impl GpuInstances {
     pub fn new(device: &wgpu::Device, capacity: usize) -> Result<Self> {
@@ -1131,6 +1137,7 @@ impl GpuInstances {
             transforms: Vec::new(),
             clips: Vec::new(),
             capacity,
+            revision: next_unique(),
         })
     }
     pub fn len(&self) -> usize {
@@ -1188,6 +1195,7 @@ impl GpuInstances {
         }
         self.transforms = transforms.to_vec();
         self.clips = clips.to_vec();
+        self.revision = next_unique();
         Ok(true)
     }
     /// Whether some instance is cut by a clip plane.
@@ -1229,6 +1237,8 @@ impl GpuScene {
         }
     }
     pub fn hide_indices(&mut self, ranges: &[Range<u32>]) {
+        self.sky_revision
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         self.batches.retain(|b| {
             !ranges
                 .iter()
@@ -1337,6 +1347,7 @@ impl GpuScene {
             .clone();
         Ok(GpuScene {
             sky_revision: self.sky_revision.clone(),
+            unique: next_unique(),
             material_descriptors: self.material_descriptors.clone(),
             image_signatures: self.image_signatures.clone(),
             textures: self.textures.clone(),
@@ -1581,6 +1592,9 @@ struct TargetExtra {
     footprint: Option<Footprints>,
     scissor: Option<[u32; 4]>,
     blit: Option<usize>,
+    /// A whole sun layer (its index) and what it is drawn from: skipped
+    /// while the layer still holds exactly that (`ShadowMaps::kept_layers`).
+    keep: Option<(usize, u64)>,
 }
 /// Where a cascade's casters fall in its clip space: each caster's xy
 /// rectangle (min x, min y, max x, max y), widened by a few texels for the
@@ -1687,8 +1701,65 @@ pub(crate) fn kept_casters_key<'a>(scenes: impl Iterator<Item = &'a GpuScene>) -
             scene.vertex_count,
         )
             .hash(&mut hash);
+        // A dead brick hidden in place (`hide_vertices`) changes it too.
+        scene
+            .sky_revision
+            .load(std::sync::atomic::Ordering::Relaxed)
+            .hash(&mut hash);
     }
     hash.finish()
+}
+/// A new scene's revision counter: unique among every scene's, so a scene
+/// uploaded where a dropped one lay never reads as that one.
+fn next_unique() -> u64 {
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+    NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+}
+fn fresh_revision() -> Arc<std::sync::atomic::AtomicU64> {
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+    Arc::new(std::sync::atomic::AtomicU64::new(
+        NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed) << 32,
+    ))
+}
+/// Everything `casters` would draw into a depth map: each scene's geometry
+/// as uploaded (its revision moves with every in-place rewrite, a posed
+/// body's included), its batches, and each instance set's revision (its
+/// transforms, tints and clip planes). Equal signatures draw equal depth
+/// under equal matrices.
+pub(crate) fn casters_signature(casters: ShadowCasters<'_>) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hash = std::collections::hash_map::DefaultHasher::new();
+    let scene = |scene: &GpuScene, hash: &mut std::collections::hash_map::DefaultHasher| {
+        scene.unique.hash(hash);
+        // Batches change only with `hide_indices`, which counts here too.
+        scene
+            .sky_revision
+            .load(std::sync::atomic::Ordering::Relaxed)
+            .hash(hash);
+        (
+            scene.first_index,
+            scene.base_vertex,
+            scene.index_count,
+            scene.vertex_count,
+        )
+            .hash(hash);
+    };
+    casters.scenes.len().hash(&mut hash);
+    for s in casters.scenes {
+        scene(s, &mut hash);
+    }
+    casters.instances.len().hash(&mut hash);
+    for (s, instances) in casters.instances {
+        scene(s, &mut hash);
+        instances.revision.hash(&mut hash);
+    }
+    hash.finish()
+}
+fn matrix_key(matrix: Mat4, hash: &mut impl std::hash::Hasher) {
+    use std::hash::Hash;
+    for f in matrix.to_cols_array() {
+        f.to_bits().hash(hash);
+    }
 }
 pub(crate) fn aabb_visible(planes: &[glam::Vec4; 6], (min, max): (Vec3, Vec3)) -> bool {
     planes.iter().all(|plane| {
@@ -1925,6 +1996,15 @@ fn camera_group(
 pub struct ShadowCasters<'a> {
     pub scenes: &'a [&'a GpuScene],
     pub instances: &'a [(&'a GpuScene, &'a GpuInstances)],
+}
+
+/// Where a moving caster changes a shadow this frame
+/// ([`SceneRenderer::shadow_reach`]): orthographic boxes as the
+/// view-projection matrices that draw into them, and spheres.
+#[derive(Clone, Debug, Default)]
+pub struct ShadowReach {
+    pub boxes: Vec<Mat4>,
+    pub spheres: Vec<(Vec3, f32)>,
 }
 
 pub const MAX_POINT_LIGHTS: usize = 256;
@@ -2328,6 +2408,9 @@ pub struct RenderStats {
     /// drawn (whole or a changed region) this frame.
     pub kept_cascades: u32,
     pub kept_redraws: u32,
+    /// Shadow layers and lamp tile sets left as the last frame drew them,
+    /// since nothing they are drawn from changed.
+    pub shadow_layers_kept: u32,
     /// Triangles submitted by the world pass.
     pub triangles: u64,
     /// World-pass batches of blended geometry, sorted back to front.
@@ -3163,7 +3246,8 @@ impl SceneRenderer {
             }));
         }
         Ok(GpuScene {
-            sky_revision: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+            sky_revision: fresh_revision(),
+            unique: next_unique(),
             material_descriptors: data.materials.clone(),
             image_signatures: image_signatures(data),
             textures: Arc::new(textures),
@@ -3296,7 +3380,8 @@ impl SceneRenderer {
     ) -> GpuScene {
         GpuScene {
             emissive,
-            sky_revision: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+            sky_revision: fresh_revision(),
+            unique: next_unique(),
             vertices,
             indices,
             base_vertex: slot.as_ref().map_or(0, |s| s.vertices.start as i32),
@@ -3356,7 +3441,8 @@ impl SceneRenderer {
         // does, because wgpu panics on slicing an empty buffer.
         let (vertices, indices) = geometry_buffers(device, "shared-material posed vertices", data);
         Ok(GpuScene {
-            sky_revision: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+            sky_revision: fresh_revision(),
+            unique: next_unique(),
             vertices,
             indices,
             materials: base.materials.clone(),
@@ -3380,6 +3466,33 @@ impl SceneRenderer {
     }
     pub fn samples(&self) -> u32 {
         self.samples
+    }
+    /// Where a moving caster (a body, a vehicle) can change a shadow some
+    /// view reads this frame: every view's sun cascades, the casting lamps'
+    /// reach and the skylight fields' projectors. Something outside all of
+    /// them and outside every view's frustum shows nowhere, so its mesh need
+    /// not be built. Call after `update_camera` and the planes'
+    /// `fit_view_shadows`. Empty with shadows and Soft Shading off.
+    pub fn shadow_reach(&self) -> ShadowReach {
+        let mut reach = ShadowReach::default();
+        if self.shadows.settings.is_some() {
+            reach.boxes.extend(
+                self.shadows
+                    .every_cascade()
+                    .map(|cascade| cascade.view_projection),
+            );
+            reach.spheres.extend(
+                self.shadows
+                    .lamps
+                    .iter()
+                    .flatten()
+                    .map(|lamp| (lamp.center, lamp.reach)),
+            );
+        }
+        for view in self.views.iter().filter(|v| v.sky_on && v.sky.enabled) {
+            reach.boxes.extend(view.sky.matrices.get());
+        }
+        reach
     }
     pub fn shadow_settings(&self) -> Option<crate::shadow::ShadowSettings> {
         self.shadows.settings
@@ -3767,6 +3880,18 @@ impl SceneRenderer {
                 .instances
                 .iter()
                 .any(|(_, i)| !i.transforms.is_empty());
+        let moving_key = has_moving.then(|| casters_signature(moving));
+        let kept = !changed && moving_key.is_some() && v.sky.moving_key.get() == moving_key;
+        v.sky.moving_key.set(moving_key);
+        if kept {
+            // The receivers' depths already hold this field with these
+            // moving casters in it.
+            let mut stats = self.stats.get();
+            stats.shadow_layers_kept += 1;
+            self.stats.set(stats);
+            v.sky.had_moving.set(true);
+            return;
+        }
         if has_moving {
             v.sky.merge(encoder);
             let layers: Vec<(&wgpu::TextureView, u32)> = v
@@ -3948,6 +4073,21 @@ impl SceneRenderer {
         if player && let Some(queue) = self.queue.borrow().as_ref() {
             self.shadows.set_map_drawn(queue, map_drawn);
         }
+        // What the sun layers are drawn from this frame. The player's whole
+        // layers are skipped while they still hold exactly this (a still
+        // camera and nothing moving: the matrices are texel-snapped, so
+        // they repeat bit for bit). A plane fitting its own cascades draws
+        // into the same layers, so after it nothing is known to be kept.
+        let (caster_signature, occluder_signature, map_signature) = if player {
+            (
+                casters_signature(casters),
+                casters_signature(occluders),
+                casters_signature(map),
+            )
+        } else {
+            self.shadows.kept_layers.borrow_mut().clear();
+            (0, 0, 0)
+        };
         // Every map this frame draws: its layer, view, casters, bind group
         // and pipelines, and caster matrix offset. Casters before occluders
         // (which read their cascade's caster layer), then lamp faces.
@@ -4053,6 +4193,28 @@ impl SceneRenderer {
                 let from_kept = group == 0
                     && matches!(uses.get(index), Some(crate::kept_shadows::Use::Kept { .. }));
                 kept_cascades += u32::from(from_kept);
+                let layer = group * cascades.len() + index;
+                let keep = player.then(|| {
+                    use std::hash::{Hash, Hasher};
+                    let mut hash = std::collections::hash_map::DefaultHasher::new();
+                    matrix_key(cascade.view_projection, &mut hash);
+                    // Occluders read their cascade's caster layer.
+                    (caster_signature, occluder_signature, from_kept).hash(&mut hash);
+                    if from_kept {
+                        // A kept layer redrawn (whole or a region) changes
+                        // what the cascade copies; one only reused does not.
+                        let redrawn = matches!(
+                            uses.get(index),
+                            Some(crate::kept_shadows::Use::Kept { redraw: Some(_) })
+                        );
+                        (redrawn, self.keep_from.get()).hash(&mut hash);
+                        if redrawn {
+                            u64::MAX.hash(&mut hash);
+                            self.shadows.kept_layers.borrow_mut().remove(&layer);
+                        }
+                    }
+                    (layer, hash.finish())
+                });
                 extras.push(TargetExtra {
                     footprint: if group == 1 {
                         Footprints::of(
@@ -4065,6 +4227,7 @@ impl SceneRenderer {
                     },
                     scissor: None,
                     blit: from_kept.then_some(index),
+                    keep,
                 });
                 // Copied from the kept layer: only moving casters draw.
                 let casters = if from_kept {
@@ -4109,6 +4272,17 @@ impl SceneRenderer {
                     false,
                     true,
                 ));
+                let layer = 2 * cascades.len() + index;
+                extras.push(TargetExtra {
+                    keep: player.then(|| {
+                        use std::hash::{Hash, Hasher};
+                        let mut hash = std::collections::hash_map::DefaultHasher::new();
+                        matrix_key(cascade.map_view_projection, &mut hash);
+                        map_signature.hash(&mut hash);
+                        (layer, hash.finish())
+                    }),
+                    ..Default::default()
+                });
             }
         }
         // The map's identity this frame: its scenes' geometry and the
@@ -4254,6 +4428,35 @@ impl SceneRenderer {
                         true,
                     ));
                 }
+                // The moving casters' tiles hold what they held last frame
+                // while those casters and every lamp face stand still: all
+                // of them are skipped together, since a layer of tiles
+                // clears before its first.
+                let moving_key = {
+                    use std::hash::{Hash, Hasher};
+                    let mut hash = std::collections::hash_map::DefaultHasher::new();
+                    casters_signature(ShadowCasters {
+                        scenes: &moving_scenes,
+                        instances: casters.instances,
+                    })
+                    .hash(&mut hash);
+                    for (slot, lamp) in self.shadows.lamps.iter().enumerate() {
+                        if let Some(lamp) = lamp {
+                            slot.hash(&mut hash);
+                            for face in &lamp.faces {
+                                matrix_key(*face, &mut hash);
+                            }
+                        }
+                    }
+                    hash.finish()
+                };
+                let moving_kept =
+                    self.shadows.dynamic_tiles.replace(Some(moving_key)) == Some(moving_key);
+                if moving_kept && self.shadows.lamps.iter().any(Option::is_some) {
+                    let mut stats = self.stats.get();
+                    stats.shadow_layers_kept += 1;
+                    self.stats.set(stats);
+                }
                 for (slot, lamp) in self.shadows.lamps.iter().enumerate() {
                     let Some(lamp) = lamp else { continue };
                     let near = &near_lamps[slot];
@@ -4282,6 +4485,9 @@ impl SceneRenderer {
                                 true,
                                 false,
                             ));
+                        }
+                        if moving_kept {
+                            continue;
                         }
                         let (layer, tile) = settings.lamp_dynamic_tile(index);
                         targets.push((
@@ -4323,6 +4529,16 @@ impl SceneRenderer {
                 // caster, inside the casters' rectangle.
                 let extra = extras.get(target);
                 let footprint = extra.and_then(|e| e.footprint.as_ref());
+                if let Some((layer, key)) = extra.and_then(|e| e.keep) {
+                    let mut kept_layers = self.shadows.kept_layers.borrow_mut();
+                    if kept_layers.get(&layer) == Some(&key) {
+                        let mut stats = self.stats.get();
+                        stats.shadow_layers_kept += 1;
+                        self.stats.set(stats);
+                        continue;
+                    }
+                    kept_layers.insert(layer, key);
+                }
                 // Kept faces share layers with other kept faces: never clear
                 // a whole layer under them.
                 let load =

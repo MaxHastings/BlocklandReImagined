@@ -541,17 +541,30 @@ impl Feeder {
         Ok(())
     }
     /// Run at the vehicle, hopping, until mounted (v20 mounts only from above).
+    /// Each try backs off first: a player pressed against the body, perched
+    /// on its bumper or a wheel, is never grounded long enough to jump.
     fn board(&mut self, s: &mut Session, yaw: f32) -> anyhow::Result<()> {
-        for i in 0..60 {
-            let input = MoveInput {
-                forward: 1.0,
-                jump: i % 3 == 0,
-                yaw,
-                ..Default::default()
-            };
-            self.feed(s, input, 10)?;
-            if s.mounted(self.owner).is_some() {
-                return Ok(());
+        for _ in 0..30 {
+            self.feed(
+                s,
+                MoveInput {
+                    forward: -1.0,
+                    yaw,
+                    ..Default::default()
+                },
+                20,
+            )?;
+            for i in 0..30 {
+                let input = MoveInput {
+                    forward: 1.0,
+                    jump: i < 3,
+                    yaw,
+                    ..Default::default()
+                };
+                self.feed(s, input, 1)?;
+                if s.mounted(self.owner).is_some() {
+                    return Ok(());
+                }
             }
         }
         anyhow::bail!("never boarded")

@@ -57,6 +57,37 @@ pub fn create_new_private(path: &Path, bytes: &[u8]) -> io::Result<()> {
     write(path, bytes, Publish::CreateNew, true)
 }
 
+/// Delete the staging files a killed writer left beside `path`: those named
+/// for it (`.<name>.<pid>.<n>.tmp`) and untouched for at least `min_age`.
+/// A write in progress is younger than that, so it is never disturbed.
+/// Returns how many were removed; failures to remove one are skipped.
+pub fn sweep_stale(path: &Path, min_age: std::time::Duration) -> usize {
+    let (Some(parent), Some(name)) = (path.parent(), path.file_name()) else {
+        return 0;
+    };
+    let prefix = format!(".{}.", name.to_string_lossy());
+    let Ok(entries) = fs::read_dir(parent) else {
+        return 0;
+    };
+    let mut removed = 0;
+    for entry in entries.flatten() {
+        let file = entry.file_name().to_string_lossy().into_owned();
+        if !(file.starts_with(&prefix) && file.ends_with(".tmp")) {
+            continue;
+        }
+        let old = entry
+            .metadata()
+            .and_then(|m| m.modified())
+            .ok()
+            .and_then(|t| t.elapsed().ok())
+            .is_some_and(|age| age >= min_age);
+        if old && fs::remove_file(entry.path()).is_ok() {
+            removed += 1;
+        }
+    }
+    removed
+}
+
 fn context(path: &Path, what: &str, error: io::Error) -> io::Error {
     io::Error::new(
         error.kind(),
@@ -166,6 +197,36 @@ mod tests {
         let nested = dir.join("new/folder/state.bin");
         replace(&nested, b"x").unwrap();
         assert_eq!(fs::read(nested).unwrap(), b"x");
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn sweep_removes_only_old_staging_files_of_that_target() {
+        use std::time::{Duration, SystemTime};
+        let dir = folder("sweep");
+        let path = dir.join("slot.build");
+        replace(&path, b"kept").unwrap();
+        let old = SystemTime::now() - Duration::from_secs(600);
+        let stale = dir.join(".slot.build.4242.0.tmp");
+        let other = dir.join(".other.json.4242.0.tmp");
+        let fresh = dir.join(".slot.build.4242.1.tmp");
+        for f in [&stale, &other, &fresh] {
+            fs::write(f, b"half").unwrap();
+        }
+        for f in [&stale, &other] {
+            File::options()
+                .write(true)
+                .open(f)
+                .unwrap()
+                .set_modified(old)
+                .unwrap();
+        }
+        assert_eq!(sweep_stale(&path, Duration::from_secs(60)), 1);
+        assert!(!stale.exists(), "the old staging file stays");
+        assert!(other.exists(), "another target's file was removed");
+        assert!(fresh.exists(), "a write in progress was removed");
+        assert_eq!(fs::read(&path).unwrap(), b"kept");
+        assert_eq!(sweep_stale(&dir.join("missing/x"), Duration::ZERO), 0);
         fs::remove_dir_all(dir).unwrap();
     }
 

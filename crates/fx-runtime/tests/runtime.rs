@@ -617,3 +617,132 @@ fn in_view_snapshot_leaves_out_only_sprites_the_camera_cannot_see() {
     assert_eq!(seen.len(), 1);
     assert!(seen[0].position.x.abs() < 0.001);
 }
+
+/// Two still emitters 200 units apart, in two worlds alike but for
+/// [`EffectsWorld::cull_sources`], and a camera on each.
+fn far_apart() -> (EffectsWorld, EffectsWorld, Camera, Camera) {
+    let pack = fixture(|l| {
+        l.emitters[0].period = 0.05;
+        l.emitters[0].period_variance = 0.02;
+        l.emitters[0].theta_degrees = [0., 60.];
+        l.particles[0].lifetime_variance = 0.5;
+        l.particles[0].drag = 0.4;
+        l.particles[0].gravity = 0.2;
+    });
+    let start = |w: &mut EffectsWorld| {
+        for x in [0., 200.] {
+            w.start_emitter(
+                "emitter",
+                SourceTransform {
+                    position: Vec3::new(x, 0., -10.),
+                    ..Default::default()
+                },
+                SourceOptions::default(),
+            )
+            .unwrap();
+        }
+    };
+    let (mut culled, mut reference) = (world(pack.clone()), world(pack));
+    start(&mut culled);
+    start(&mut reference);
+    let camera = |x: f32| Camera {
+        view_projection: bri_render::scene::perspective(70f32.to_radians(), 1., 0.1, 500.)
+            * glam::camera::rh::view::look_at_mat4(
+                Vec3::new(x, 1., 0.),
+                Vec3::new(x, 1., -10.),
+                Vec3::Y,
+            ),
+        position: Vec3::new(x, 1., 0.),
+        right: Vec3::X,
+        up: Vec3::Y,
+    };
+    (culled, reference, camera(0.), camera(200.))
+}
+
+#[test]
+fn unseen_emitters_sleep_and_what_is_seen_stays_identical() {
+    let (mut culled, mut reference, near, _) = far_apart();
+    for _ in 0..300 {
+        culled.advance(1. / 100., Vec3::ZERO).unwrap();
+        reference.advance(1. / 100., Vec3::ZERO).unwrap();
+        culled.cull_sources(&[near.view_projection]);
+    }
+    // The far emitter is stepped no more: it has no particles at all.
+    assert_eq!(culled.dormant_count(), 1);
+    assert_eq!(reference.dormant_count(), 0);
+    let near_only = culled.particle_count();
+    assert!(near_only > 20 && near_only * 3 < reference.particle_count() * 2);
+    // What the camera sees is the very same sprites, in the same order.
+    let (a, b) = (
+        culled.snapshot_in_view(&near).particles,
+        reference.snapshot_in_view(&near).particles,
+    );
+    assert!(!a.is_empty());
+    assert_eq!(a.len(), b.len());
+    for (a, b) in a.iter().zip(&b) {
+        assert_eq!(a.position, b.position);
+        assert_eq!(a.color, b.color);
+        assert_eq!(a.size, b.size);
+    }
+}
+
+#[test]
+fn a_waking_emitter_refills_its_cloud_before_it_is_seen() {
+    let (mut culled, mut reference, near, far) = far_apart();
+    for _ in 0..300 {
+        culled.advance(1. / 100., Vec3::ZERO).unwrap();
+        reference.advance(1. / 100., Vec3::ZERO).unwrap();
+        culled.cull_sources(&[near.view_projection]);
+    }
+    // Turning to the far emitter wakes it with a full cloud in the same
+    // frame: as many sprites show as from one that never slept.
+    culled.cull_sources(&[far.view_projection]);
+    assert_eq!(culled.dormant_count(), 0);
+    assert_eq!(culled.diagnostics().wakes, 1);
+    let woken = culled.snapshot_in_view(&far).particles.len() as f32;
+    let steady = reference.snapshot_in_view(&far).particles.len() as f32;
+    assert!(steady > 20., "{steady}");
+    assert!(
+        (woken - steady).abs() <= steady * 0.15,
+        "{woken} vs {steady}"
+    );
+    // And it keeps emitting from there, with no burst.
+    for _ in 0..50 {
+        culled.advance(1. / 100., Vec3::ZERO).unwrap();
+        reference.advance(1. / 100., Vec3::ZERO).unwrap();
+        culled.cull_sources(&[far.view_projection, near.view_projection]);
+    }
+    let woken = culled.snapshot_in_view(&far).particles.len() as f32;
+    let steady = reference.snapshot_in_view(&far).particles.len() as f32;
+    assert!(
+        (woken - steady).abs() <= steady * 0.15,
+        "{woken} vs {steady}"
+    );
+}
+
+#[test]
+fn lights_moving_sources_and_portal_worlds_never_sleep() {
+    let mut w = world(fixture(|_| {}));
+    let away = SourceTransform {
+        position: Vec3::new(500., 0., 500.),
+        ..Default::default()
+    };
+    w.start_light("light", away, SourceOptions::default())
+        .unwrap();
+    w.start_emitter(
+        "emitter",
+        SourceTransform {
+            velocity: Vec3::X,
+            ..away
+        },
+        SourceOptions::default(),
+    )
+    .unwrap();
+    let nowhere = bri_render::scene::perspective(70f32.to_radians(), 1., 0.1, 10.)
+        * glam::camera::rh::view::look_at_mat4(Vec3::ZERO, Vec3::NEG_Z, Vec3::Y);
+    for _ in 0..200 {
+        w.advance(0.01, Vec3::ZERO).unwrap();
+        w.cull_sources(&[nowhere]);
+    }
+    assert_eq!(w.dormant_count(), 0);
+}

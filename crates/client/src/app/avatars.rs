@@ -20,6 +20,9 @@ pub(super) struct Avatars {
     pub(super) preview_dirty: bool,
     /// The editor keeps walking even when the server pauses game time.
     pub(super) preview_time: f64,
+    /// Bodies and horses whose mesh the last frame built, where they can
+    /// show (`render_frame`).
+    pub(super) meshes_built: (usize, usize),
 }
 
 impl Avatars {

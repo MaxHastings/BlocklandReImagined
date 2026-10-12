@@ -69,6 +69,24 @@ impl Session {
     /// that explicit relation: `minigames.allied` holds only for two players
     /// of one game who both have teams, which the relation has answered.
     pub(super) fn bot_allies(&self, bot: OwnerId, other: OwnerId) -> bool {
+        // Asked for the same pair by every stage of every bot's step:
+        // answered once a tick (`Bots::relations`, cleared in `step_bots`).
+        use std::sync::atomic::Ordering::Relaxed;
+        self.bots.relation_asks.fetch_add(1, Relaxed);
+        if let Some(known) = self.bots.relations.lock().unwrap().get(&(bot, other)) {
+            return *known;
+        }
+        self.bots.relation_answers.fetch_add(1, Relaxed);
+        let allied = self.bot_allies_now(bot, other);
+        self.bots
+            .relations
+            .lock()
+            .unwrap()
+            .insert((bot, other), allied);
+        allied
+    }
+    /// [`Self::bot_allies`] answered from the live state.
+    fn bot_allies_now(&self, bot: OwnerId, other: OwnerId) -> bool {
         let player = |o: OwnerId| {
             let peer = self.peers.get(&o)?;
             self.minigames.player(peer.combat.player).ok()

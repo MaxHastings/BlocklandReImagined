@@ -34,6 +34,10 @@ pub struct View {
     /// The host's ticket for this connection: a rejoin after the network
     /// dropped presents it to come back as the same player.
     pub resume: bri_net::protocol::ResumeToken,
+    /// The bricks held when this view was published, offered with the
+    /// ticket on a rejoin so the host sends only what changed since; none
+    /// while the world is still streaming in.
+    pub kept: Option<bri_net::client::KeptBricks>,
     pub administrator: bool,
     pub world: Arc<PublicWorld>,
     /// Increments with every replica world change; `world_log` says what changed.
@@ -406,6 +410,7 @@ fn publish(
         tools: client.replica.tools.clone(),
         owner: client.owner,
         resume: client.resume.clone(),
+        kept: client.kept_bricks(),
         administrator: client.administrator,
         world: world.world.clone(),
         world_revision: world.revision,

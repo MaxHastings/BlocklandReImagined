@@ -70,6 +70,7 @@ windows-sys = { workspace = true, features = ["Win32_Foundation", "Win32_System_
 
 [dev-dependencies]
 tempfile.workspace = true
+zip.workspace = true
 # Paused clocks for the loading watchdog tests.
 tokio = { workspace = true, features = ["test-util"] }
 bri-addon-import = { path = "../addon-import" }

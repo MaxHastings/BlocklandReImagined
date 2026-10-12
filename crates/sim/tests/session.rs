@@ -1,7 +1,7 @@
 use bri_sim::{
     definitions::{Definitions, Special},
     player::MoveInput,
-    session::{Command, Reply, Session, Snapshot},
+    session::{Command, Notice, Reply, Session, Snapshot},
     simulation::Simulation,
 };
 use bri_weapons::testing::{BRICK_IMAGE, GUN_IMAGE, HAMMER_IMAGE, HORSE_BRICK_IMAGE};
@@ -478,9 +478,24 @@ fn build_load_keeps_unknown_bricks_aside_and_preserves_existing_players() {
     assert!(
         s.chat()
             .iter()
-            .any(|l| l.text.starts_with("1 bricks were not loaded") && l.text.contains("1 missing")),
-        "The load says what it skipped"
+            .any(|l| l.text.starts_with("1 bricks were not loaded") && !l.text.contains("missing")),
+        "The load says in one short line what it skipped"
     );
+    // The loader, and only the loader, gets the grouped lists to read.
+    let notices = s.take_private_notices();
+    let box_text = |who| {
+        notices.iter().find_map(|(o, n)| match n {
+            Notice::MessageBox { text, .. } if *o == who => Some(text.clone()),
+            _ => None,
+        })
+    };
+    let details = box_text(host).expect("the loader gets a message box");
+    assert!(details.contains("missing: 1 (missing x1)"), "{details}");
+    assert!(
+        details.contains("Add-Ons to install or enable: missing"),
+        "{details}"
+    );
+    assert!(box_text(guest).is_none());
     let newcomer = s
         .join("Newcomer".into(), Vec3::new(6.0, 0.05, 0.0), false)
         .unwrap();
@@ -2591,4 +2606,53 @@ fn the_native_brick_image_is_the_grey_brick_weapon_model() {
     let image = &pack.images[BRICK_IMAGE];
     assert_eq!(image.color, [0.647, 0.647, 0.647, 1.0]);
     assert_eq!(image.model, "base/data/shapes/brickWeapon.dts");
+}
+
+/// P2-04: missing bricks group by Add-On, prints list apart, and nothing
+/// is reported when nothing is missing.
+#[test]
+fn missing_content_groups_bricks_by_addon_and_lists_prints_apart() {
+    use bri_sim::simulation::{missing_content, unresolved_prints};
+    use bri_world::{Brick, ContentRef};
+    let brick = |id: &str| Brick::new(ContentRef::Resolved(id.into()), [0.0; 3], 1);
+    let unloaded = vec![
+        brick("pack_a:brick/one"),
+        brick("pack_a:brick/one"),
+        brick("pack_a:brick/two"),
+        brick("pack_b:brick/x"),
+        brick("v20/brick/old"),
+    ];
+    let mut printed = brick("v20/brick/ok");
+    printed.print = Some(ContentRef::unresolved("print", "Custom/face"));
+    let prints = unresolved_prints([&printed, &brick("v20/brick/ok")].into_iter());
+    assert_eq!(prints.len(), 1);
+    let m = missing_content(&unloaded, &prints).unwrap();
+    assert!(
+        m.summary.starts_with("5 bricks were not loaded"),
+        "{}",
+        m.summary
+    );
+    assert!(m.summary.contains("1 bricks use prints"), "{}", m.summary);
+    assert!(m.summary.len() < 200, "the chat line stays short");
+    assert!(
+        m.details
+            .contains("pack_a: 3 (pack_a:brick/one x2, pack_a:brick/two x1)"),
+        "{}",
+        m.details
+    );
+    assert!(m.details.contains("pack_b: 1"), "{}", m.details);
+    assert!(
+        m.details
+            .contains("Prints not found (1):\n  print/Custom/face x1"),
+        "{}",
+        m.details
+    );
+    // The original game is not an Add-On to install.
+    assert!(
+        m.details
+            .contains("Add-Ons to install or enable: pack_a, pack_b\n"),
+        "{}",
+        m.details
+    );
+    assert!(missing_content(&[], &Default::default()).is_none());
 }

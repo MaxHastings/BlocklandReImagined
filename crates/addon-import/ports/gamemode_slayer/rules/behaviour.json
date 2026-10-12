@@ -301,13 +301,22 @@
       "max": 999
     },
     {
+      "key": "points_bot_as_player",
+      "title": "Bots Worth Kill Player",
+      "category": "Points",
+      "type": "bool",
+      "default": true,
+      "help": "Not in Slayer itself (a Blockland ReImagined addition): killing one of the game's bots is worth the mini-game's Kill Player points, like killing anyone else, so setting Kill Player to 0 makes every kill worth nothing. Turn it off to give bots their own Kill Bot points."
+    },
+    {
       "key": "points_kill_bot",
       "title": "Kill Bot",
       "category": "Points",
       "type": "int",
       "default": {{pref_points_kill_bot}},
       "min": -999,
-      "max": 999
+      "max": 999,
+      "shown_when": { "setting": "points_bot_as_player", "is": [false] }
     },
     {
       "key": "bot_damage",
@@ -1266,7 +1275,7 @@
       "title": "Friendly Fire",
       "category": "Points",
       "type": "int",
-      "default": {{pref_points_friendly_fire}},
+      "default": 0,
       "min": -999,
       "max": 999
     },
@@ -1392,37 +1401,41 @@
     },
     {
       "key": "bk_enable",
-      "title": "Enable",
-      "category": "Bonus Kills",
+      "title": "Bonus Kills",
+      "category": "Points",
       "type": "bool",
-      "default": {{pref_bk_enable|bool}}
+      "default": false,
+      "help": "Kill sprees and quick kills in a row get a line in the kill feed and their bonus points. The bonus only adds to a kill that is worth points, so with Kill Player at 0 Bonus Kills give nothing."
     },
     {
       "key": "bk_spree_start",
       "title": "Kill Spree Start",
-      "category": "Bonus Kills",
+      "category": "Points",
       "type": "int",
       "default": {{pref_bk_spree_start}},
       "min": 2,
-      "max": 30
+      "max": 30,
+      "shown_when": { "setting": "bk_enable", "is": [true] }
     },
     {
       "key": "bk_points_spree",
       "title": "Bonus Points per Kill Spree",
-      "category": "Bonus Kills",
+      "category": "Points",
       "type": "int",
       "default": {{pref_bk_points_spree}},
       "min": -999,
-      "max": 999
+      "max": 999,
+      "shown_when": { "setting": "bk_enable", "is": [true] }
     },
     {
       "key": "bk_points_multi",
       "title": "Bonus Points per Multi-Kill",
-      "category": "Bonus Kills",
+      "category": "Points",
       "type": "int",
       "default": {{pref_bk_points_multi}},
       "min": -999,
-      "max": 999
+      "max": 999,
+      "shown_when": { "setting": "bk_enable", "is": [true] }
     },
     {
       "key": "captain_player_type",

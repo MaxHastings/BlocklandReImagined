@@ -181,7 +181,7 @@ impl Default for Settings {
             points_break_brick: 0,
             points_plant_brick: 0,
             points_kill_player: 1,
-            points_kill_self: -1,
+            points_kill_self: 0,
             points_die: 0,
             respawn_ms: 1000,
             vehicle_respawn_ms: 5000,

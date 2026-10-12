@@ -163,14 +163,16 @@ impl App {
             let Some(frame) = vehicles.frame(info.id).cloned() else {
                 continue;
             };
-            let mut appearance = avatar_assets.package.defaults.clone();
             let color = info.color.map_or([1.0; 4], |[r, g, b, _]| [r, g, b, 1.0]);
-            appearance.colors.insert("chest".into(), color);
             if mount_meshes
                 .get(&info.id)
-                .is_none_or(|m| m.appearance != appearance)
+                .is_none_or(|m| m.appearance.colors.get("chest") != Some(&color))
             {
-                let mesh = avatar_assets.horse_mesh(appearance)?;
+                let mut appearance = avatar_assets.package.defaults.clone();
+                appearance.colors.insert("chest".into(), color);
+                let mut mesh = avatar_assets.horse_mesh(appearance)?;
+                // Built at render time, only where it can show.
+                mesh.defer_mesh = true;
                 mount_meshes.insert(info.id, mesh);
             }
             let forward = frame.rotation * Vec3::NEG_Z;

@@ -254,18 +254,36 @@ fn run(root: &Path, state: &Path, name: &str, slot: u8, seconds: u64, temp: &Pat
     let mut ball_moving = 0u64;
     let mut ball_was: BTreeMap<u64, (Vec3, Vec3)> = BTreeMap::new();
     let mut respawns = 0u64;
-    let team_scores = |s: &bri_sim::session::Session| {
-        let mut out: BTreeMap<u32, i64> = BTreeMap::new();
-        for v in s.vitals().values() {
-            if let Some(t) = v.team {
-                *out.entry(t).or_default() += v.score;
-            }
-        }
-        out
+    // Each team's own points (a goal's IncScore) and its members' scores.
+    let team_scores = |s: &bri_sim::session::Session| -> BTreeMap<u32, i64> {
+        team_name
+            .keys()
+            .map(|t| (*t, s.team_total(game, *t).unwrap_or(0)))
+            .collect()
     };
     let start = team_scores(&s);
+    // Every point that moves, with what happened the same tick: who died
+    // and who killed them, chat lines (Slayer's kill feed and its round
+    // messages), and vehicles that jumped (a goal's resetObject, a respawn).
+    println!("favourite rules: {:?}", favourite.rules);
+    println!("favourite settings: {:?}", favourite.settings);
+    for t in &favourite.teams {
+        println!("favourite team {:?}: {:?}", t.name, t.settings);
+    }
+    let mut trace = Trace {
+        scores: s.vitals().iter().map(|(o, v)| (*o, v.score)).collect(),
+        teams: team_name
+            .keys()
+            .map(|t| (*t, s.team_total(game, *t).unwrap_or(0)))
+            .collect(),
+        chat: s.chat_after(0).last().map_or(0, |l| l.id),
+        deaths: s.death_results().last().map_or(0, |d| d.tick),
+        rounds: s.round_results().count(),
+        vehicles: BTreeMap::new(),
+    };
     for tick in 0..seconds * TICKS {
         step(&mut s)?;
+        trace.step(&s, game, tick, &team_name);
         // What the first bot's objective planner sees, a few seconds in
         // and again later: why it does or does not go for the ball.
         if (tick == 5 * TICKS || tick == 60 * TICKS)
@@ -293,6 +311,10 @@ fn run(root: &Path, state: &Path, name: &str, slot: u8, seconds: u64, temp: &Pat
             .filter_map(|v| poses.get(&v.id).map(|(p, vel)| (v.id, *p, *vel)))
             .collect();
         for (id, at, vel) in &ball_now {
+            // A goal's resetObject brings a new ball in place of the old.
+            if !ball_was.is_empty() && !ball_was.contains_key(id) {
+                respawns += 1;
+            }
             if let Some((was, was_vel)) = ball_was.get(id) {
                 {
                     let moved = (*at - *was).length();
@@ -408,4 +430,105 @@ fn run(root: &Path, state: &Path, name: &str, slot: u8, seconds: u64, temp: &Pat
 
 fn vitals_team(s: &bri_sim::session::Session, owner: OwnerId) -> Option<u32> {
     s.vitals().get(&owner).and_then(|v| v.team)
+}
+
+struct Trace {
+    scores: BTreeMap<OwnerId, i64>,
+    teams: BTreeMap<u32, i64>,
+    chat: u64,
+    deaths: u64,
+    rounds: usize,
+    vehicles: BTreeMap<u64, Vec3>,
+}
+impl Trace {
+    fn step(
+        &mut self,
+        s: &bri_sim::session::Session,
+        game: u64,
+        tick: u64,
+        team_name: &BTreeMap<u32, String>,
+    ) {
+        let names = s.names();
+        let who = |o: OwnerId| {
+            format!(
+                "{}{}",
+                names.get(&o).cloned().unwrap_or_else(|| format!("{o:?}")),
+                if s.is_bot(o) { " (bot)" } else { "" }
+            )
+        };
+        let at = format!("{:7.2}s", tick as f32 / TICKS as f32);
+        let mut lines = vec![];
+        for (o, v) in s.vitals() {
+            let was = self.scores.insert(o, v.score).unwrap_or(0);
+            if v.score != was {
+                lines.push(format!("player {} {was} -> {}", who(o), v.score));
+            }
+        }
+        for (t, name) in team_name {
+            let now = s.team_total(game, *t).unwrap_or(0);
+            let was = self.teams.insert(*t, now).unwrap_or(0);
+            if now != was {
+                lines.push(format!("TEAM {name} {was} -> {now}"));
+            }
+        }
+        let scored = !lines.is_empty();
+        for d in s.death_results().filter(|d| d.tick > self.deaths) {
+            lines.push(format!(
+                "death: {} killed by {}",
+                who(d.victim),
+                d.killer.map_or("nobody".into(), &who)
+            ));
+        }
+        self.deaths = s
+            .death_results()
+            .last()
+            .map_or(self.deaths, |d| d.tick.max(self.deaths));
+        for l in s.chat_after(self.chat) {
+            lines.push(format!("chat: {}", l.text));
+            self.chat = l.id;
+        }
+        let infos = s.vehicle_infos();
+        let def = |id: u64| {
+            infos
+                .iter()
+                .find(|v| v.id == id)
+                .map_or("?", |v| v.definition.as_str())
+        };
+        let first = self.vehicles.is_empty();
+        let poses = s.vehicle_poses();
+        for p in &poses {
+            let now = Vec3::from(p.position);
+            match self.vehicles.insert(p.id, now) {
+                Some(was) if (now - was).length() > 4.0 => lines.push(format!(
+                    "vehicle {} ({}) jumped {was:.1} -> {now:.1}",
+                    p.id,
+                    def(p.id)
+                )),
+                None if !first => {
+                    lines.push(format!("vehicle {} ({}) new at {now:.1}", p.id, def(p.id)))
+                }
+                _ => {}
+            }
+        }
+        self.vehicles
+            .retain(|id, _| poses.iter().any(|p| p.id == *id));
+        let rounds: Vec<_> = s.round_results().collect();
+        for r in rounds.iter().skip(self.rounds) {
+            let teams: Vec<_> = r
+                .teams
+                .iter()
+                .map(|t| team_name.get(&t.0).cloned().unwrap_or_default())
+                .collect();
+            lines.push(format!(
+                "ROUND {} won by teams {teams:?} players {:?}",
+                r.round, r.owners
+            ));
+        }
+        self.rounds = rounds.len();
+        // Only ticks where something scored or a round ended are worth a
+        // line; deaths and chat alone are context, not news.
+        if scored || lines.iter().any(|l| l.starts_with("ROUND")) {
+            println!("{at} {}", lines.join(" | "));
+        }
+    }
 }

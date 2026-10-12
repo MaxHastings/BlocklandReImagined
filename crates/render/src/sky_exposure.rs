@@ -48,6 +48,9 @@ pub(crate) struct SkyExposure {
     pub working_layers: Vec<wgpu::TextureView>,
     pub matrices: std::cell::Cell<[Mat4; DIRECTIONS]>,
     pub had_moving: std::cell::Cell<bool>,
+    /// What the moving casters in `depths` were last drawn from: while they
+    /// and the field stand still, nothing is drawn or copied again.
+    pub moving_key: std::cell::Cell<Option<u64>>,
     pub depths: wgpu::Buffer,
     pub receiver: wgpu::Buffer,
     /// The current field's projectors, then the pending field's.
@@ -159,6 +162,7 @@ impl SkyExposure {
             working_layers,
             matrices: std::cell::Cell::new([Mat4::IDENTITY; DIRECTIONS]),
             had_moving: std::cell::Cell::new(false),
+            moving_key: Default::default(),
             depths,
             receiver,
             caster,

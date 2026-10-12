@@ -165,7 +165,8 @@ pub(super) struct Combat {
     /// tick of the last emote let through and the quick ones counted.
     pub voice: Option<u64>,
     pub voice_count: u32,
-    /// Who last pushed this body with a weapon's impulse, and the tick.
+    /// Who last pushed this body with a weapon's impulse, or drove a
+    /// vehicle over it, and the tick.
     pub pushed: Option<(OwnerId, u64)>,
 }
 
@@ -866,8 +867,8 @@ impl Session {
         }
     }
 
-    /// Who last pushed `owner`'s body with a weapon's impulse, and the tick
-    /// it landed. Not stable until the modding API freeze.
+    /// Who last pushed `owner`'s body with a weapon's impulse, or drove a
+    /// vehicle over it, and the tick it landed. Not stable until the modding API freeze.
     pub fn pushed_by(&self, owner: OwnerId) -> Option<(OwnerId, u64)> {
         self.peers.get(&owner)?.combat.pushed
     }
@@ -914,6 +915,13 @@ impl Session {
                 )
             })
             .collect()
+    }
+    /// `team`'s score in `game` as rules read it: its own points and its
+    /// members' scores together (headless probes and tests).
+    pub fn team_total(&self, game: u64, team: u32) -> Option<i64> {
+        self.minigames
+            .team_score(mg::GameId(game), mg::TeamId(team))
+            .ok()
     }
     pub fn minigame_views(&self) -> Vec<MiniGameView> {
         self.minigames
@@ -2457,7 +2465,7 @@ impl Session {
                 .map(|(_, distance)| distance)
         };
         let other = simulation
-            .brick_ray(start, Vec3::NEG_Y, SPAWN_RAY, |other, _| other != id)
+            .brick_ray(start, Vec3::NEG_Y, SPAWN_RAY, |other, _, _| other != id)
             .ok()
             .flatten()
             .map(|hit| hit.distance);
@@ -2473,7 +2481,7 @@ impl Session {
         // thin enough for Torque to lift a player out of, but a spawn plate
         // (Slayer's team spawns) would hold feet inside it.
         let own = simulation
-            .brick_ray(start, Vec3::NEG_Y, SPAWN_RAY, |other, _| other == id)
+            .brick_ray(start, Vec3::NEG_Y, SPAWN_RAY, |other, _, _| other == id)
             .ok()
             .flatten()
             .map(|hit| hit.position.y);

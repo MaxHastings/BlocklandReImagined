@@ -3,6 +3,9 @@
 use super::*;
 
 impl Perform for ops::AddBot {
+    fn check(&self, session: &Session, _cx: OpCall<'_>) -> Result<()> {
+        session.check_rules_bot(self.game, self.team, &self.kind)
+    }
     fn perform(self, session: &mut Session, cx: OpCall<'_>) -> Result<()> {
         let OpCall { package, .. } = cx;
         let ops::AddBot {
@@ -15,6 +18,9 @@ impl Perform for ops::AddBot {
     }
 }
 impl Perform for ops::RemoveBot {
+    fn check(&self, session: &Session, cx: OpCall<'_>) -> Result<()> {
+        session.own_bot(cx.package, self.bot)
+    }
     fn perform(self, session: &mut Session, cx: OpCall<'_>) -> Result<()> {
         let OpCall { package, .. } = cx;
         let ops::RemoveBot { bot } = self;
@@ -22,6 +28,9 @@ impl Perform for ops::RemoveBot {
     }
 }
 impl Perform for ops::RestBot {
+    fn check(&self, session: &Session, cx: OpCall<'_>) -> Result<()> {
+        session.check_rest_rules_bot(cx.package, self.bot)
+    }
     fn perform(self, session: &mut Session, cx: OpCall<'_>) -> Result<()> {
         let OpCall { package, .. } = cx;
         let ops::RestBot { bot, rest } = self;
@@ -29,6 +38,9 @@ impl Perform for ops::RestBot {
     }
 }
 impl Perform for ops::BotTool {
+    fn check(&self, session: &Session, cx: OpCall<'_>) -> Result<()> {
+        session.check_rules_bot_tool(cx.package, self.bot)
+    }
     fn perform(self, session: &mut Session, cx: OpCall<'_>) -> Result<()> {
         let OpCall { package, .. } = cx;
         let ops::BotTool { bot, slot } = self;

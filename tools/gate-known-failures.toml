@@ -60,11 +60,93 @@ reason = "Needs Max's privately converted P90 (BRI_P90_TEST_ROOT); run by hand a
 test = "p90_downloads_to_a_clean_cache_and_equipment_reaches_a_late_joiner"
 reason = "Needs Max's privately converted P90 (BRI_P90_TEST_ROOT); run by hand after tools/build_rallypack_p90.py."
 
+[[skip]]
+test = "bot_switches_from_an_empty_p90_to_its_other_gun_and_never_fires_it_dry"
+reason = "Needs Max's privately converted P90 (BRI_P90_TEST_ROOT); run by hand after tools/build_rallypack_p90.py."
+
 # Test targets GitHub Actions skips because they load generated v20 content,
 # which the runner cannot have. The local gate still runs them. Prefer
 # #[ignore = "requires generated ... content"] on individual tests; list a
 # whole target here only when all of it needs content. Format:
 # "<package>/<test target>", or "<package>/lib" for unit tests.
+
+# Offscreen render targets the GitHub runner's software GPU (WARP) takes 1.5
+# minutes or more over. Pull-request CI (`--tier pr`) leaves them out; the
+# nightly CI run and the local push gate, on a real GPU, run every one. The
+# minutes are the slowest of two pull-request runs on 2026-10-11 (#55, #72).
+# Format: "<package>/<test target>".
+
+[[ci_nightly_target]]
+target = "bri-render/mirrors"
+reason = "21.7 min on WARP"
+
+[[ci_nightly_target]]
+target = "bri-render/lighting_environment"
+reason = "13.8 min on WARP"
+
+[[ci_nightly_target]]
+target = "bri-client/view_jitter"
+reason = "11.0 min on WARP"
+
+[[ci_nightly_target]]
+target = "bri-render/persistent_scene"
+reason = "9.3 min on WARP"
+
+[[ci_nightly_target]]
+target = "bri-render/dynamic_unlit"
+reason = "9.0 min on WARP"
+
+[[ci_nightly_target]]
+target = "bri-client/graphics_rebuild"
+reason = "4.0 min on WARP"
+
+[[ci_nightly_target]]
+target = "bri-client/sky_shading_scene"
+reason = "3.1 min on WARP"
+
+[[ci_nightly_target]]
+target = "bri-client/item_rendering"
+reason = "3.0 min on WARP"
+
+[[ci_nightly_target]]
+target = "bri-render/metal"
+reason = "2.9 min on WARP"
+
+[[ci_nightly_target]]
+target = "bri-client/item_ghost"
+reason = "2.9 min on WARP"
+
+[[ci_nightly_target]]
+target = "bri-render/unified_lamp_updates"
+reason = "2.8 min on WARP"
+
+[[ci_nightly_target]]
+target = "bri-client/brick_fx"
+reason = "2.7 min on WARP"
+
+[[ci_nightly_target]]
+target = "bri-render/unified_lamp_quality"
+reason = "2.5 min on WARP"
+
+[[ci_nightly_target]]
+target = "bri-render/shadow_occluders"
+reason = "2.4 min on WARP"
+
+[[ci_nightly_target]]
+target = "bri-client/avatar_animation_render"
+reason = "2.3 min on WARP"
+
+[[ci_nightly_target]]
+target = "bri-client/app_item_render"
+reason = "2.2 min on WARP"
+
+[[ci_nightly_target]]
+target = "bri-client/mirror_render"
+reason = "1.8 min on WARP"
+
+[[ci_nightly_target]]
+target = "bri-render/unified_lamp_geometry"
+reason = "1.7 min on WARP"
 
 # Test targets that host a game on the fixed ports (UDP 28000/28050). The gate
 # runs them one at a time, after one another, instead of in parallel. Prefer
@@ -79,7 +161,3 @@ test = "steady_play_builds_and_uploads_nothing_whole::content"
 owner = "v0.2.7 stabilization sweep"
 reason = "The soak's rocket knocks none of its floating test wall out after the v0.2.4 merge; check the wall against the new brick-damage rules."
 
-[[failure]]
-test = "the_bundled_soccer_field_loads_whole_from_load_bricks"
-owner = "v0.2.7 stabilization sweep"
-reason = "Passes once the worlds pack is regenerated (worlds recipe 2); the gate reads the main checkout's content, which still has the old pack."

@@ -378,6 +378,119 @@ fn mirror_sync_timing() {
     );
 }
 
+/// The client hands the predictor the newest poses every frame; between
+/// pose arrivals they are the same states, which must not cost a physics
+/// refresh of the whole mirror.
+#[test]
+fn unchanged_others_do_not_refresh_the_mirror() {
+    let mut session = server();
+    let a = session
+        .join("a".into(), Vec3::new(0.0, 0.05, 0.0), false)
+        .unwrap();
+    let b = session
+        .join("b".into(), Vec3::new(0.0, 0.05, -3.0), false)
+        .unwrap();
+    let state = |session: &Session, owner| {
+        session
+            .motion_states()
+            .into_iter()
+            .find(|(s, _)| s.owner == owner)
+            .unwrap()
+            .0
+    };
+    let mirror = CollisionMirror::new(Definitions::default(), map(), vec![]);
+    let mut prediction = Predictor::new(mirror, state(&session, a), Default::default()).unwrap();
+    assert_eq!(prediction.others_refreshes(), 0);
+    // Nobody else there: no refresh at all.
+    for _ in 0..10 {
+        prediction.set_others([]).unwrap();
+    }
+    assert_eq!(prediction.others_refreshes(), 0);
+    // A newcomer refreshes once; the same pose again does not.
+    let other = state(&session, b);
+    for _ in 0..10 {
+        prediction.set_others([&other]).unwrap();
+    }
+    assert_eq!(prediction.others_refreshes(), 1);
+    // A moved pose refreshes again, once.
+    let mut moved = other.clone();
+    moved.feet[2] -= 0.5;
+    for _ in 0..10 {
+        prediction.set_others([&moved]).unwrap();
+    }
+    assert_eq!(prediction.others_refreshes(), 2);
+    // Leaving refreshes once more; an empty set after that is free.
+    for _ in 0..10 {
+        prediction.set_others([]).unwrap();
+    }
+    assert_eq!(prediction.others_refreshes(), 3);
+    // The refresh still happens when it matters: the walker is stopped by
+    // the other body exactly as before.
+    let walk = MoveInput {
+        forward: 1.0,
+        ..Default::default()
+    };
+    for tick in 1..=240_u64 {
+        prediction.set_others([&state(&session, b)]).unwrap();
+        let (sequence, _) = prediction.step(walk).unwrap();
+        session.movement(a, sequence, walk).unwrap();
+        session.movement(b, tick, MoveInput::default()).unwrap();
+        session.step().unwrap();
+    }
+    assert!(Vec3::from(prediction.state().feet).z > -3.0);
+    assert!(
+        prediction.others_refreshes() < 10,
+        "a standing body kept refreshing the mirror ({} times)",
+        prediction.others_refreshes()
+    );
+}
+
+/// `cargo test --release -p bri-sim --test prediction others_refresh_timing -- --ignored --nocapture`
+///
+/// What one frame's `set_others` costs on a large mirror when nobody moved
+/// (the common case between pose arrivals, and every frame alone).
+#[test]
+#[ignore = "timing probe"]
+fn others_refresh_timing() {
+    let bricks = plates(44_000);
+    let mut mirror = CollisionMirror::new(plate_definitions(), map(), vec![]);
+    mirror.sync(&bricks).unwrap();
+    let mut session = server();
+    let a = session
+        .join("a".into(), Vec3::new(0.0, 0.05, 0.0), false)
+        .unwrap();
+    let names = ["b", "c", "d", "e", "f", "g", "h", "i"];
+    for (i, name) in names.iter().enumerate() {
+        session
+            .join((*name).into(), Vec3::new(i as f32 * 2.0, 0.05, -3.0), false)
+            .unwrap();
+    }
+    let states: Vec<_> = session
+        .motion_states()
+        .into_iter()
+        .map(|(s, _)| s)
+        .collect();
+    let own = states.iter().find(|s| s.owner == a).unwrap().clone();
+    let others: Vec<_> = states.iter().filter(|s| s.owner != a).collect();
+    let mut prediction = Predictor::new(mirror, own, Default::default()).unwrap();
+    let time = |prediction: &mut Predictor, others: &[&bri_sim::player::PlayerState]| {
+        let mut samples = Vec::new();
+        for _ in 0..200 {
+            let start = std::time::Instant::now();
+            prediction.set_others(others.iter().copied()).unwrap();
+            samples.push(start.elapsed().as_secs_f64() * 1e6);
+        }
+        samples.sort_by(f64::total_cmp);
+        samples[samples.len() / 2]
+    };
+    let alone = time(&mut prediction, &[]);
+    let eight = time(&mut prediction, &others);
+    println!(
+        "44k bricks, set_others per frame with unchanged poses: alone {alone:.1} us, 8 others {eight:.1} us (median of 200); refreshes {}",
+        prediction.others_refreshes()
+    );
+}
+
 /// A tool that takes the jet button: the prediction sends the press (the
 /// host runs the tool's command from it) but its motor, like the host's,
 /// never jets, and a correction replays exactly that.

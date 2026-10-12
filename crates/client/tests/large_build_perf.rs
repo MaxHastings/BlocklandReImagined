@@ -21,7 +21,12 @@
 //! loads them all onto one map. A save may also be one of the game's own
 //! builds (`….world.json` from the saves folder), loaded on its own map
 //! unless BRI_PERF_MAP says otherwise. Each view reports GPU ms per world pass
-//! (`gpu_passes`) beside the frame's whole GPU time.
+//! (`gpu_passes`) beside the frame's whole GPU time, and the main thread's
+//! average ms per frame-trace span (`spans`).
+//! BRI_PERF_BOTS=<n> (1 to 32) adds n Blockhead Bots strolling on spawn
+//! bricks spread over the top of the build, most of them out of each view:
+//! the Blockhead Bot Add-On turned on in a copy of the content root's
+//! Add-On lists only (the content itself is linked, never changed).
 use bri_console::Clamp;
 
 #[path = "support/sampler.rs"]
@@ -466,6 +471,8 @@ fn frames(
     // GPU ms per world pass, in frame order.
     let mut passes: Vec<(&'static str, Vec<f64>)> = Vec::new();
     let mut slowest: Option<FrameRecord> = None;
+    // Main-thread ms per span, summed over the measured frames.
+    let mut spans: Vec<(&'static str, f64)> = Vec::new();
     app.time_gpu_passes(true);
     let mut previous = Instant::now();
     let mut last_gpu = None;
@@ -476,6 +483,12 @@ fn frames(
             update.push(ms(updated));
             record.push(ms(recorded));
             frame.push(ms(done));
+            for span in &trace.spans {
+                match spans.iter_mut().find(|(name, _)| *name == span.name) {
+                    Some((_, total)) => *total += ms(span.time),
+                    None => spans.push((span.name, ms(span.time))),
+                }
+            }
             if slowest.as_ref().is_none_or(|s| trace.total > s.total) {
                 slowest = Some(trace);
             }
@@ -497,8 +510,13 @@ fn frames(
         .iter_mut()
         .map(|(pass, times)| ((*pass).to_string(), stats(times)))
         .collect();
+    let spans: serde_json::Map<String, serde_json::Value> = spans
+        .into_iter()
+        .map(|(name, total)| (name.to_string(), json!(total / count.max(1) as f64)))
+        .collect();
     Ok(json!({
         "render": app.render_stats(),
+        "spans": spans,
         "entities": app.entity_counts(),
         "slowest_frame": slowest.map(|s| json!({
             "ms": ms(s.total),
@@ -510,6 +528,151 @@ fn frames(
         "gpu": stats(&mut gpu_ms),
         "frame": stats(&mut frame),
     }))
+}
+
+const BOT_SPAWN_BRICK: &str = "v20/brick/brickvehiclespawndata";
+
+/// `bots` Blockhead Bot spawn bricks on a grid over the build's middle 90%,
+/// above its top, so the bots stroll across the roofs, most out of view.
+fn add_bot_spawners(world: &mut bri_world::World, bots: usize) {
+    if bots == 0 {
+        return;
+    }
+    let mut axes: [Vec<f32>; 3] = Default::default();
+    for b in world.bricks.values() {
+        for (axis, v) in axes.iter_mut().zip(b.position) {
+            axis.push(v);
+        }
+    }
+    for axis in &mut axes {
+        axis.sort_by(f32::total_cmp);
+    }
+    let at = |axis: &[f32], p: f32| {
+        axis.get(((axis.len().max(1) - 1) as f32 * p) as usize)
+            .copied()
+            .unwrap_or(0.0)
+    };
+    let (low, high) = (
+        Vec3::new(at(&axes[0], 0.05), 0.0, at(&axes[2], 0.05)),
+        Vec3::new(at(&axes[0], 0.95), at(&axes[1], 1.0), at(&axes[2], 0.95)),
+    );
+    let side = (bots as f32).sqrt().ceil() as usize;
+    for i in 0..bots {
+        let (gx, gz) = (i % side, i / side);
+        let t = |g: usize| (g as f32 + 0.5) / side as f32;
+        let x = low.x + (high.x - low.x) * t(gx);
+        let z = low.z + (high.z - low.z) * t(gz);
+        let mut brick = bri_world::Brick::new(
+            bri_world::ContentRef::Resolved(BOT_SPAWN_BRICK.into()),
+            [
+                (x * 2.0).round() / 2.0,
+                ((high.y + 8.0) / 0.2).round() * 0.2 + 0.1,
+                (z * 2.0).round() / 2.0,
+            ],
+            0,
+        );
+        brick.vehicle = Some(Box::new(bri_world::VehicleSpawn {
+            vehicle: bri_world::ContentRef::Resolved("bot.blockhead".into()),
+            recolor: false,
+            team: None,
+        }));
+        world.bricks.insert(world.next_brick_id, brick);
+        world.next_brick_id += 1;
+    }
+}
+
+/// A content root at `overlay` with `root`'s content and its own copy of
+/// the Add-On lists, with the Blockhead Bot Add-On turned on there. `root`
+/// is never written.
+///
+/// The overlay is real folders of hard-linked files: package discovery
+/// skips links (a Windows junction reads as a symlink), and a package's
+/// files must resolve inside the package. Hard links keep both true
+/// without copying gigabytes. Dropping the returned guard removes it.
+fn with_bots(root: &Path, overlay: &Path) -> Result<Overlay> {
+    let guard = Overlay(overlay.to_path_buf());
+    mirror(root, overlay)?;
+    for list in [
+        bri_package::packages::PACKAGES_FILE,
+        bri_package::library::DISABLED_FILE,
+    ] {
+        // Replaced, not written through, so the link's other side stays.
+        let to = overlay.join(list);
+        if to.exists() {
+            std::fs::remove_file(&to)?;
+            std::fs::copy(root.join(list), &to)?;
+        }
+    }
+    bri_client::add_ons::set_enabled(overlay, "blockhead_bot", true)?;
+    Ok(guard)
+}
+/// Recreates `from` at `to`, hard-linking each file (copying when the two
+/// are on different volumes).
+fn mirror(from: &Path, to: &Path) -> Result<()> {
+    std::fs::create_dir_all(to)?;
+    for entry in std::fs::read_dir(from)? {
+        let entry = entry?;
+        let (path, into) = (entry.path(), to.join(entry.file_name()));
+        if path.is_dir() {
+            mirror(&path, &into)?;
+        } else if std::fs::hard_link(&path, &into).is_err() {
+            std::fs::copy(&path, &into)?;
+        }
+    }
+    Ok(())
+}
+/// A content overlay, removed on drop, on success or failure alike.
+/// Removing a hard link leaves the content it shares.
+struct Overlay(PathBuf);
+impl Overlay {
+    fn path(&self) -> PathBuf {
+        self.0.clone()
+    }
+}
+impl Drop for Overlay {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+/// The bot overlay finds an Add-On that sits below linked folders, turns it
+/// on in the overlay only, and its removal leaves the real content whole.
+#[test]
+fn bot_overlay_turns_the_add_on_on_without_touching_the_content() -> Result<()> {
+    let workspace = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let scratch = std::env::temp_dir().join(format!("bri-bot-overlay-{}", std::process::id()));
+    let (root, overlay) = (scratch.join("content"), scratch.join("state/content"));
+    let _ = std::fs::remove_dir_all(&scratch);
+    let bot = root.join("addons/blockhead_bot");
+    std::fs::create_dir_all(bot.join("assets"))?;
+    for file in ["package.json", "assets/bots.json"] {
+        std::fs::copy(
+            workspace.join("packages/blockhead_bot").join(file),
+            bot.join(file),
+        )?;
+    }
+    let guard = with_bots(&root, &overlay)?;
+    let on = |at: &Path| {
+        bri_package::library::Library::scan(at)
+            .ok()
+            .and_then(|l| l.get("blockhead_bot").map(|e| e.enabled))
+    };
+    let (in_overlay, in_root) = (on(&overlay), on(&root));
+    // A package's files must resolve inside it (`content::contained`).
+    let inside = overlay
+        .join("addons/blockhead_bot/assets/bots.json")
+        .canonicalize()?
+        .starts_with(overlay.canonicalize()?);
+    drop(guard);
+    let gone = !overlay.exists();
+    let kept = bot.join("assets/bots.json").is_file();
+    let _ = std::fs::remove_dir_all(&scratch);
+    assert_eq!(in_overlay, Some(true));
+    assert_eq!(in_root, Some(false));
+    assert!(kept, "removing the overlay reached the real content");
+    assert!(gone, "the overlay outlived its guard");
+    assert!(inside, "an overlay file resolves into the real content");
+    Ok(())
 }
 
 #[test]
@@ -539,8 +702,16 @@ fn large_build_frame_times() -> Result<()> {
         .context("BRI_PERF_SAVE lists no save")?
         .clone();
     let workspace = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let content_root =
+    let mut content_root =
         std::env::var_os("BRI_CONTENT").map_or_else(|| workspace.join("content"), PathBuf::from);
+    let bots: usize = std::env::var("BRI_PERF_BOTS")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(0);
+    ensure!(
+        bots <= 32,
+        "BRI_PERF_BOTS is at most 32 (the host's bot limit)"
+    );
     let size = std::env::var("BRI_PERF_SIZE")
         .ok()
         .and_then(|s| {
@@ -606,6 +777,18 @@ fn large_build_frame_times() -> Result<()> {
             std::fs::write(&path, serde_json::to_vec(&value)?)?;
         }
     }
+    let mut overlay = None;
+    if bots > 0 {
+        let path = state.join("settings.json");
+        if path.is_file() {
+            let mut value: serde_json::Value = serde_json::from_slice(&std::fs::read(&path)?)?;
+            value["settings"]["prefs"]["$Pref::Server::MaxBots"] = json!(bots.to_string());
+            std::fs::write(&path, serde_json::to_vec(&value)?)?;
+        }
+        let guard = with_bots(&content_root, &state.join("content"))?;
+        content_root = guard.path();
+        overlay = Some(guard);
+    }
 
     // Convert as a dropped save converts, into the Load Bricks folder.
     let started = Instant::now();
@@ -650,6 +833,8 @@ fn large_build_frame_times() -> Result<()> {
             world
         }
     };
+    let mut world = world;
+    add_bot_spawners(&mut world, bots);
     let bricks = world.bricks.len();
     let lights = world.bricks.values().filter(|b| b.light.is_some()).count();
     let emitters = world
@@ -716,6 +901,17 @@ fn large_build_frame_times() -> Result<()> {
     }
     let load_ms = ms(loading);
     let placed = app.network_view().map_or(0, |v| v.world.bricks.len());
+    if bots > 0 {
+        // Bricks over others are refused, so fewer may spawn; most do.
+        let wait = until(&mut app, "bots", Duration::from_secs(60), |a| {
+            a.network_view().is_some_and(|v| v.poses.len() > bots)
+        });
+        let joined = app.network_view().map_or(0, |v| v.poses.len() - 1);
+        eprintln!("{joined} of {bots} bots joined");
+        if joined == 0 {
+            wait?;
+        }
+    }
 
     let gpu = gpu()?;
     let mut ui = UiRenderer::new(&gpu.device, &gpu.queue);
@@ -903,6 +1099,7 @@ fn large_build_frame_times() -> Result<()> {
         "bricks_placed": placed,
         "light_bricks": lights,
         "emitter_bricks": emitters,
+        "bots": bots,
         "adapter": gpu.name,
         "resolution": [size.0, size.1],
         "convert_ms": convert_ms,
@@ -916,6 +1113,7 @@ fn large_build_frame_times() -> Result<()> {
     ));
     std::fs::write(&path, serde_json::to_vec_pretty(&result)?)?;
     println!("{}", serde_json::to_string_pretty(&result)?);
+    drop(overlay);
     let _ = std::fs::remove_dir_all(&state);
     if let Some(limit) = std::env::var("BRI_PERF_MAX_MS")
         .ok()

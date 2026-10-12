@@ -137,6 +137,16 @@ fn team_by_id(g, id) {
 // counts only connections (`numMembers["GameConnection"]`): sorting,
 // balancing and greetings.
 fn own_bot(p) { p.bot && p.spawner == "{{rules}}" }
+// What killing `victim` is worth: the game's Kill Player, or Kill Bot for
+// these rules' bots while Bots Worth Kill Player is off (ours, not
+// Slayer's: there bots always had their own points).
+fn kill_worth(g, victim) {
+    if own_bot(victim) && !setting(g.id, "points_bot_as_player") {
+        setting(g.id, "points_kill_bot")
+    } else {
+        g.points_kill_player
+    }
+}
 // Every member that plays: players and these rules' bots
 // (`%mini.member[%i]`).
 fn game_bots(g) {
@@ -2079,13 +2089,14 @@ fn on_death(victim, killer) {
     }
     if killer != () && killer != victim && !(g != () && is_teamkill(g, me, k)) {
         set_player(killer, "kills", get_player(killer, "kills") + 1);
-        // Killing a bot is worth Kill Bot, not Kill Player, whoever does
-        // it (`incScore(%mini.points_killBot)`, and the correction for
-        // double bot scoring); the engine gave the killer Kill Player.
+        // With Bots Worth Kill Player off, killing a bot is worth Kill Bot,
+        // not Kill Player, whoever does it (`incScore(%mini.points_killBot)`,
+        // and the correction for double bot scoring); the engine gave the
+        // killer Kill Player.
         let k = player(killer);
         if own_bot(me) && k != () && k.minigame == me.minigame {
             let g = minigame(me.minigame);
-            let extra = setting(g.id, "points_kill_bot") - g.points_kill_player;
+            let extra = kill_worth(g, me) - g.points_kill_player;
             if extra != 0 {
                 add_score(killer, extra);
             }
@@ -4524,7 +4535,9 @@ fn bk_line(lines, n, killer, victim) {
     line
 }
 // `isSpecialKill_Slayer_BK`: the killer's spree and quick kills grow (a
-// new body starts both afresh), each worth its bonus points.
+// new body starts both afresh), each worth its bonus points. Ours, not
+// Slayer's: a bonus only adds to a kill worth points, so a game whose
+// kills score nothing (a ball game) gets the lines and no points.
 fn bonus_kills(g, me, k, info) {
     if !setting(g.id, "bk_enable") || k == () || k.id == me.id {
         return "";
@@ -4535,11 +4548,14 @@ fn bonus_kills(g, me, k, info) {
     let killer = if info.killer_name == () { k.name } else { info.killer_name };
     let victim = if info.victim_name == () { me.name } else { info.victim_name };
     let msg = "";
+    let pays = kill_worth(g, me) > 0;
     let spree = get_player(k.id, "spree") + 1;
     set_player(k.id, "spree", spree);
     if spree >= setting(g.id, "bk_spree_start") {
         msg = bk_line(bk_spree_lines(), spree, killer, victim);
-        add_score(k.id, setting(g.id, "bk_points_spree"));
+        if pays {
+            add_score(k.id, setting(g.id, "bk_points_spree"));
+        }
     }
     let now = tick();
     let last = get_player(k.id, "last_kill");
@@ -4550,7 +4566,9 @@ fn bonus_kills(g, me, k, info) {
     if quick > 1 {
         let qk = bk_line(bk_quick_lines(), quick, killer, victim);
         msg = if msg == "" { qk } else { `${msg} ${qk}` };
-        add_score(k.id, setting(g.id, "bk_points_multi"));
+        if pays {
+            add_score(k.id, setting(g.id, "bk_points_multi"));
+        }
     }
     msg
 }

@@ -1090,6 +1090,8 @@ impl App {
                 self.avatar.avatars.get_mut(owner).unwrap().set_skis(skis);
                 let dead = life.is_some_and(|life| life.dead);
                 self.avatar.avatars.get_mut(owner).unwrap().set_dead(dead);
+                // Only the player's own first-person image follows the arm.
+                self.avatar.avatars.get_mut(owner).unwrap().wants_unacted = *owner == view.owner;
                 // `Armor::onMount` applies the mount's look limits; the Tank's
                 // gunner rides TankTurretPlayer, so it takes that datablock's.
                 let look_limits = view
@@ -1193,7 +1195,9 @@ impl App {
                 local,
                 self.motion.local_eye(),
             );
+            let sync_span = crate::frame_trace::span("effects sync");
             let synced = self.fx.effects.sync(view.world.clone(), meshes);
+            drop(sync_span);
             self.cosmetic_faults.absorb("world effects", synced);
             self.foliage.advance(game_elapsed);
             // Match the actual view for flare occlusion, including third-person camera collision.

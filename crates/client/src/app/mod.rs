@@ -1440,7 +1440,7 @@ pub(crate) fn combine_effect_frames(
 ) -> (bri_fx_runtime::FrameEffects, EffectFrameCuts) {
     let eye = eyes.first().copied().unwrap_or_default();
     let [weapon, actor] = others;
-    let lists = [
+    let mut lists = [
         std::mem::take(&mut world.particles),
         weapon.particles,
         actor.particles,
@@ -1448,26 +1448,33 @@ pub(crate) fn combine_effect_frames(
     let total: usize = lists.iter().map(Vec::len).sum();
     // The merge is far-first, so the sprites past the budget are its first.
     let cut = total.saturating_sub(budget);
-    let mut heads = [0usize; 3];
-    let mut merged = Vec::with_capacity(total - cut);
-    for taken in 0..total {
-        let mut best: Option<(usize, f32)> = None;
-        for (i, list) in lists.iter().enumerate() {
-            if let Some(p) = list.get(heads[i]) {
-                let d = eye.distance_squared(p.position);
-                // Strictly farther wins; a tie keeps the earlier list.
-                if best.is_none_or(|(_, b)| d.total_cmp(&b).is_gt()) {
-                    best = Some((i, d));
+    world.particles = if let Some(only) = lists.iter().position(|l| l.len() == total) {
+        // One world has every sprite (usually the bricks'): it is the merge.
+        let mut only = std::mem::take(&mut lists[only]);
+        only.drain(..cut);
+        only
+    } else {
+        let mut heads = [0usize; 3];
+        let mut merged = Vec::with_capacity(total - cut);
+        for taken in 0..total {
+            let mut best: Option<(usize, f32)> = None;
+            for (i, list) in lists.iter().enumerate() {
+                if let Some(p) = list.get(heads[i]) {
+                    let d = eye.distance_squared(p.position);
+                    // Strictly farther wins; a tie keeps the earlier list.
+                    if best.is_none_or(|(_, b)| d.total_cmp(&b).is_gt()) {
+                        best = Some((i, d));
+                    }
                 }
             }
+            let (i, _) = best.expect("a list with sprites left");
+            if taken >= cut {
+                merged.push(lists[i][heads[i]]);
+            }
+            heads[i] += 1;
         }
-        let (i, _) = best.expect("a list with sprites left");
-        if taken >= cut {
-            merged.push(lists[i][heads[i]]);
-        }
-        heads[i] += 1;
-    }
-    world.particles = merged;
+        merged
+    };
     world.lights.extend(weapon.lights);
     world.lights.extend(actor.lights);
     let nearest = |at: Vec3| {

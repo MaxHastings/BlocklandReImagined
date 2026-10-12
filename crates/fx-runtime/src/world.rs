@@ -158,6 +158,10 @@ pub struct Diagnostics {
     pub source_capacity_rejections: u64,
     pub peak_particles: usize,
     pub advances: u64,
+    /// Emitters woken by [`EffectsWorld::cull_sources`] and the particles
+    /// refilled into their clouds.
+    pub wakes: u64,
+    pub refilled: u64,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum StopMode {
@@ -248,6 +252,11 @@ struct Source {
     next: f64,
     lifetime: f64,
     flare: f32,
+    /// Asleep: no view can see its particles ([`EffectsWorld::cull_sources`]),
+    /// so it has none and emits none until one can.
+    dormant: bool,
+    /// Its age when a view last could see it.
+    seen: f64,
 }
 struct Particle {
     owner: EffectHandle,
@@ -292,6 +301,10 @@ pub struct EffectsWorld {
     /// The world's portals: a particle that flies in through one goes on
     /// out of its partner (see [`Self::set_passages`]).
     passages: Passages,
+    /// The world wind of the last advance, for refilled particles.
+    wind: Vec3,
+    /// Scratch for [`Self::advance`]: each particle definition's drag decay.
+    decays: Vec<Option<(f32, f32)>>,
 }
 impl EffectsWorld {
     /// The world's portals ([`bri_content::passage`]), as the player's game
@@ -375,6 +388,8 @@ impl EffectsWorld {
             emitter_alpha,
             flare_texture,
             passages: Passages::default(),
+            wind: Vec3::ZERO,
+            decays: Vec::new(),
         })
     }
     /// The limits this world was made with.
@@ -471,6 +486,8 @@ impl EffectsWorld {
                 age: 0.,
                 next,
                 lifetime,
+                dormant: false,
+                seen: 0.,
             },
         );
         Ok(handle)
@@ -608,6 +625,116 @@ impl EffectsWorld {
         }
         Ok(handle)
     }
+    /// Emitters asleep because no view could see their particles
+    /// ([`Self::cull_sources`]).
+    pub fn dormant_count(&self) -> usize {
+        self.sources.values().filter(|s| s.dormant).count()
+    }
+    /// Put to sleep the still emitters whose particles no view in `views`
+    /// (view-projection matrices) can show, and wake the ones a view can
+    /// show again. A sleeping emitter keeps its clock but has no particles
+    /// to step, sort or draw; waking refills its cloud as it would be had
+    /// it never slept, so nothing any view shows changes. An emitter sleeps
+    /// only after [`SLEEP_UNSEEN`] seconds unseen, so a camera turning back
+    /// and forth does not refill it every frame. Lights, moving or paused
+    /// sources, sources with emitter sizes, and every source while the
+    /// world has portals never sleep. Call it with every view a frame
+    /// draws, after [`Self::advance`] and before their snapshots.
+    pub fn cull_sources(&mut self, views: &[Mat4]) {
+        let frusta: Vec<Frustum> = views.iter().map(|v| Frustum::new(*v)).collect();
+        let portals = !self.passages.list.is_empty();
+        // Refills restore clouds that existed, so they are bounded by the
+        // particle limit, not the per-advance emission budget.
+        let mut budget = self.limits.particles;
+        let mut slept = Vec::new();
+        // Set aside, as in `advance`, so a waking source refills in place.
+        let mut sources = std::mem::take(&mut self.sources);
+        for (&handle, source) in sources.iter_mut() {
+            let seen = portals
+                || self.reach(source).is_none_or(|reach| {
+                    frusta
+                        .iter()
+                        .any(|f| f.sees_sphere(source.transform.position, reach))
+                });
+            if seen {
+                source.seen = source.age;
+                if source.dormant {
+                    source.dormant = false;
+                    self.refill(handle, source, &mut budget);
+                }
+            } else if !source.dormant && source.age - source.seen >= SLEEP_UNSEEN {
+                source.dormant = true;
+                slept.push(handle);
+            }
+        }
+        self.sources = sources;
+        if !slept.is_empty() {
+            // Handles iterate in order, so `slept` is sorted.
+            self.particles
+                .retain(|p| slept.binary_search(&p.owner).is_err());
+        }
+    }
+    /// How far from a still, emitting source any of its particles can be
+    /// drawn; None when it may not sleep (see [`Self::cull_sources`]). The
+    /// farthest a particle travels is bounded by its top speed and its
+    /// largest acceleration over its longest life (drag only slows it),
+    /// plus its placement, offset and largest sprite.
+    fn reach(&self, s: &Source) -> Option<f32> {
+        let e = &self.pack.library.emitters[s.definition];
+        if s.light
+            || !s.options.emitting
+            || s.transform.velocity != Vec3::ZERO
+            || (e.use_emitter_sizes && s.options.sizes.is_some())
+        {
+            return None;
+        }
+        let speed = e.speed.abs() + e.speed_variance.abs();
+        let wind = (self.wind + s.options.wind).length();
+        let travel = self.emitter_particles[s.definition]
+            .iter()
+            .map(|&i| {
+                let p = &self.pack.library.particles[i];
+                let life = (p.lifetime + p.lifetime_variance.abs()).max(0.);
+                let acceleration =
+                    p.acceleration.abs() * speed + wind * p.wind.abs() + 9.81 * p.gravity.abs();
+                speed * life + 0.5 * acceleration * life * life + self.particle_reach[i]
+            })
+            .fold(0f32, f32::max);
+        let reach = travel
+            + s.options.half_extents.length()
+            + e.offset.abs()
+            + e.offset_variance.abs()
+            + 1.;
+        reach.is_finite().then_some(reach)
+    }
+    /// Refill a waking emitter's cloud: what it would have emitted over its
+    /// particles' longest life before now, each particle aged to now.
+    fn refill(&mut self, handle: EffectHandle, s: &mut Source, budget: &mut usize) {
+        self.diagnostics.wakes += 1;
+        let e = &self.pack.library.emitters[s.definition];
+        let (period, variance) = (e.period, e.period_variance);
+        let longest = self.emitter_particles[s.definition]
+            .iter()
+            .map(|&i| {
+                let p = &self.pack.library.particles[i];
+                (p.lifetime + p.lifetime_variance.abs()).max(0.)
+            })
+            .fold(0f32, f32::max);
+        let scale = f64::from(s.options.time_scale);
+        let now = s.age;
+        let at = s.transform;
+        let wind = self.wind;
+        let emitted = self.diagnostics.emitted;
+        let mut t = (now - f64::from(longest) * scale).max(0.) + f64::from(s.rng.unit() * period);
+        while t <= now && t <= s.lifetime && *budget > 0 {
+            s.next = t;
+            self.emit(handle, s, at, ((now - t) / scale) as f32, wind);
+            t += f64::from(s.rng.variance(period, variance));
+            *budget -= 1;
+        }
+        s.next = if t <= now { now + f64::from(period) } else { t };
+        self.diagnostics.refilled += self.diagnostics.emitted - emitted;
+    }
     /// Host supplies elapsed cosmetic time and a native Y-up world wind vector.
     /// Dead particles expire at full elapsed time. Work on overdue emissions is bounded.
     pub fn advance(&mut self, dt: f32, wind: Vec3) -> Result<()> {
@@ -618,6 +745,7 @@ impl EffectsWorld {
         if dt == 0. {
             return Ok(());
         }
+        self.wind = wind;
         self.diagnostics.advances += 1;
         // Particles follow their source's current options; only look the
         // sources up when some source's options changed.
@@ -640,9 +768,28 @@ impl EffectsWorld {
                 }
             }
         }
+        // Drag's decay over this step is one exponential per particle
+        // definition, not per particle.
+        let mut decays = std::mem::take(&mut self.decays);
+        decays.clear();
+        decays.extend(
+            self.pack
+                .library
+                .particles
+                .iter()
+                .map(|def| Self::decay(def.drag, dt)),
+        );
         for p in &mut self.particles {
-            Self::integrate(&self.pack, &self.passages, p, dt, wind);
+            Self::integrate_with(
+                &self.pack,
+                &self.passages,
+                p,
+                dt,
+                wind,
+                decays[p.definition],
+            );
         }
+        self.decays = decays;
         self.particles
             .retain(|p| p.age < p.lifetime && p.position.is_finite());
         let mut budget = self.limits.emissions_per_advance;
@@ -659,7 +806,7 @@ impl EffectsWorld {
                 let step = if fade > 0. { dt / fade } else { 1. };
                 source.flare +=
                     (source.options.flare_visibility - source.flare).clamped(-step, step);
-            } else if source.options.emitting {
+            } else if source.options.emitting && !source.dormant {
                 while source.next <= end && source.next <= source.lifetime && budget > 0 {
                     let t =
                         ((source.next - source.age) / (end - source.age)).clamped(0., 1.) as f32;
@@ -785,7 +932,26 @@ impl EffectsWorld {
         self.diagnostics.emitted += 1;
         self.diagnostics.peak_particles = self.diagnostics.peak_particles.max(self.particles.len());
     }
+    /// Drag's velocity decay over `dt` and the factor that carries the
+    /// velocity's excess over terminal into distance; None without drag.
+    fn decay(drag: f32, dt: f32) -> Option<(f32, f32)> {
+        (drag > 1e-5).then(|| {
+            let decay = (-drag * dt).exp();
+            (decay, (1. - decay) / drag)
+        })
+    }
     fn integrate(pack: &EffectsPack, passages: &Passages, p: &mut Particle, dt: f32, wind: Vec3) {
+        let decay = Self::decay(pack.library.particles[p.definition].drag, dt);
+        Self::integrate_with(pack, passages, p, dt, wind, decay);
+    }
+    fn integrate_with(
+        pack: &EffectsPack,
+        passages: &Passages,
+        p: &mut Particle,
+        dt: f32,
+        wind: Vec3,
+        decay: Option<(f32, f32)>,
+    ) {
         p.age += dt;
         if p.age >= p.lifetime {
             return;
@@ -795,10 +961,9 @@ impl EffectsWorld {
         let acceleration =
             p.acceleration - (wind + p.wind) * def.wind - Vec3::Y * (9.81 * def.gravity);
         // Closed-form constant-force linear drag, stable for stalls and arbitrary frame partitioning.
-        if def.drag > 1e-5 {
-            let decay = (-def.drag * dt).exp();
+        if let Some((decay, carry)) = decay {
             let terminal = acceleration / def.drag;
-            p.position += terminal * dt + (p.velocity - terminal) * ((1. - decay) / def.drag);
+            p.position += terminal * dt + (p.velocity - terminal) * carry;
             p.velocity = terminal + (p.velocity - terminal) * decay;
         } else {
             p.position += p.velocity * dt + acceleration * (0.5 * dt * dt);
@@ -842,28 +1007,32 @@ impl EffectsWorld {
         let def = &self.pack.library.particles[p.definition];
         let age = p.age / p.lifetime;
         let (mut color, mut size) = def.sample(age);
-        let index = def
-            .keys
-            .windows(2)
-            .position(|k| age <= k[1].time)
-            .unwrap_or(def.keys.len() - 2);
-        let a = &def.keys[index];
-        let b = &def.keys[index + 1];
-        let weight = if b.time > a.time {
-            (age - a.time) / (b.time - a.time)
-        } else {
-            0.
-        };
-        if let Some(colors) = p.colors {
-            color = std::array::from_fn(|c| {
-                colors[index][c] + (colors[index + 1][c] - colors[index][c]) * weight
-            });
+        // Emitter keys share the particle's key times: find its span again
+        // only for a particle that has them.
+        if p.colors.is_some() || p.sizes.is_some() {
+            let index = def
+                .keys
+                .windows(2)
+                .position(|k| age <= k[1].time)
+                .unwrap_or(def.keys.len() - 2);
+            let a = &def.keys[index];
+            let b = &def.keys[index + 1];
+            let weight = if b.time > a.time {
+                (age - a.time) / (b.time - a.time)
+            } else {
+                0.
+            };
+            if let Some(colors) = p.colors {
+                color = std::array::from_fn(|c| {
+                    colors[index][c] + (colors[index + 1][c] - colors[index][c]) * weight
+                });
+            }
+            if let Some(sizes) = p.sizes {
+                size = sizes[index] + (sizes[index + 1] - sizes[index]) * weight;
+            }
         }
         if let Some(rgb) = p.rgb {
             color[..3].copy_from_slice(&rgb);
-        }
-        if let Some(sizes) = p.sizes {
-            size = sizes[index] + (sizes[index + 1] - sizes[index]) * weight;
         }
         let axis = if p.orient {
             if p.orient_velocity {
@@ -1014,6 +1183,10 @@ impl EffectsWorld {
     }
 }
 
+/// Seconds an emitter goes unseen before [`EffectsWorld::cull_sources`]
+/// puts it to sleep.
+pub const SLEEP_UNSEEN: f64 = 1.;
+
 /// Particles below which one thread samples them all.
 const PARALLEL_PARTICLES: usize = 4096;
 
@@ -1071,6 +1244,12 @@ impl Frustum {
     fn sees(&self, center: Vec3, size: f32) -> bool {
         // The quad's corners lie size / 2 along two axes: within size * 0.71.
         let radius = size.abs() * std::f32::consts::FRAC_1_SQRT_2;
+        self.0
+            .iter()
+            .all(|p| !p.is_finite() || p.truncate().dot(center) + p.w >= -radius)
+    }
+    /// Whether any of a sphere can show.
+    fn sees_sphere(&self, center: Vec3, radius: f32) -> bool {
         self.0
             .iter()
             .all(|p| !p.is_finite() || p.truncate().dot(center) + p.w >= -radius)

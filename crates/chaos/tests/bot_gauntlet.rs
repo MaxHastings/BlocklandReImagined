@@ -61,6 +61,8 @@ struct Spec {
     /// Arena brick and item definitions for a package.
     brick_defs: Vec<(&'static str, &'static str)>,
     item_defs: Vec<(&'static str, &'static str)>,
+    /// Bricks of the scenario's own shapes.
+    definitions: Vec<bri_sim::definitions::Definition>,
 }
 impl Spec {
     fn new(name: &'static str, red: Vec<Vec3>, blue: Vec<Vec3>, items: &[&str]) -> Self {
@@ -80,6 +82,7 @@ impl Spec {
             },
             brick_defs: Vec::new(),
             item_defs: Vec::new(),
+            definitions: Vec::new(),
         }
     }
 }
@@ -100,7 +103,12 @@ struct Battle {
 /// Two builders' bots in one mini-game; `package` runs before anyone
 /// joins.
 fn battle(spec: Spec, package: impl FnOnce(&mut Arena)) -> Battle {
-    let mut arena = Arena::custom(&spec.brick_defs, &spec.item_defs, &spec.vehicle_kinds);
+    let mut arena = Arena::with_definitions(
+        spec.definitions,
+        &spec.brick_defs,
+        &spec.item_defs,
+        &spec.vehicle_kinds,
+    );
     arena.kinds(spec.extra_kinds, &spec.vehicle_kinds);
     package(&mut arena);
     let red = arena.join("Red builder", FAR_A);
@@ -466,6 +474,10 @@ fn a_jeep_on_each_side() {
             .filter(|(o, v)| s.is_bot(**o) && v.mounted.is_some())
             .count() as i64;
         report.progress.insert("mounted_ticks".into(), driving);
+        // Every seat left, by the reason the bot saw.
+        for (why, n) in s.bot_seat_leaves() {
+            report.progress.insert(format!("left_{why}"), *n as i64);
+        }
     });
     sane(&r);
     assert!(
@@ -473,6 +485,327 @@ fn a_jeep_on_each_side() {
         "the jeeps were used: {:?}",
         r.progress
     );
+}
+
+const HILL: &str = "gauntlet:brick/hill";
+
+/// A long hill between the sides, a jeep on each: red's at its foot,
+/// blue's on the plateau at its top, which ends in cliffs. A driver on the
+/// slope sees the floor ahead rise or fall, which is not a drop: it keeps
+/// its speed up or down the hill, and still stops short of the cliffs.
+#[test]
+fn a_jeep_on_a_hill() {
+    let car = bri_vehicles::testing::CAR;
+    // 64 units wide, a 40-unit slope rising 6.4 units (about 9 degrees),
+    // then a 40-unit plateau.
+    let (studs, plates) = ([128, 160], 32);
+    let [hy, hz] = [f32::from(plates) * 0.1, f32::from(studs[1]) * 0.25];
+    let (x, z) = (-60.0, 10.0);
+    let top = 2.0 * hy;
+    let mut spec = Spec::new(
+        "a_jeep_on_a_hill",
+        line(x - 6.0, 0.0, z - hz - 6.0, 2),
+        line(x - 6.0, top, z + 4.0, 2),
+        &[],
+    );
+    spec.kinds = [BRAWLER, BRAWLER];
+    spec.extra_kinds = vec![brawler()];
+    spec.vehicle_kinds = vec![car];
+    spec.definitions = vec![bri_sim::testing::ramp(HILL, studs, plates)];
+    spec.bricks = vec![
+        brick(HILL, Vec3::new(x, hy, z)),
+        spawner(car, Vec3::new(x + 6.0, 0.0, z - hz - 4.0)),
+    ];
+    spec.blue_bricks = vec![spawner(car, Vec3::new(x + 6.0, top, z + 8.0))];
+    let mut b = battle(spec, |_| {});
+    // Ticks a seated bot spent on the slope, and how far it went there.
+    let (mut on_slope, mut travel) = (0u64, 0.0f32);
+    let mut last: BTreeMap<OwnerId, Vec3> = BTreeMap::new();
+    let r = b.play(0.0, 60, |s, report| {
+        let vitals = s.vitals();
+        for (p, _) in s.motion_states() {
+            let feet = Vec3::from(p.feet);
+            let was = last.remove(&p.owner);
+            let seated = vitals
+                .get(&p.owner)
+                .is_some_and(|v| v.alive && v.mounted.is_some());
+            if !seated {
+                continue;
+            }
+            if let Some(was) = was
+                && (z - hz..z).contains(&feet.z)
+            {
+                on_slope += 1;
+                travel += (feet - was).length();
+            }
+            last.insert(p.owner, feet);
+        }
+        report
+            .progress
+            .insert("slope_seated_ticks".into(), on_slope as i64);
+        report.progress.insert(
+            "slope_speed_dm".into(),
+            (travel / (on_slope.max(1) as f32 / TICKS_PER_SECOND as f32) * 10.0) as i64,
+        );
+        for (why, n) in s.bot_seat_leaves() {
+            report.progress.insert(format!("left_{why}"), *n as i64);
+        }
+    });
+    sane(&r);
+    assert_eq!(r.fell, 0, "{}: nobody drove or fell off a cliff", r.name);
+    assert!(
+        r.progress["slope_seated_ticks"] > 0,
+        "the hill was driven: {:?}",
+        r.progress
+    );
+}
+
+/// How bots use vehicles over a match: each ride (boarding to getting
+/// out) with how long it lasted and how far it went, and the ticks two
+/// allies crewed one vehicle and a gunner sat at a gun.
+#[derive(Default)]
+struct Rides {
+    open: BTreeMap<OwnerId, (u64, (u64, u8), Vec3)>,
+    /// (vehicle, seat, ticks, distance) of each finished ride.
+    done: Vec<(u64, u8, u64, f32)>,
+    /// Each finished ride's bot and the tick it ended, for the trace.
+    ended: Vec<(OwnerId, u64, bool)>,
+    crewed: u64,
+    gunner: u64,
+    /// Seats left, by why (`Session::bot_seat_leaves`).
+    leaves: BTreeMap<&'static str, u64>,
+}
+impl Rides {
+    fn sample(&mut self, s: &bri_sim::session::Session, sides: &BTreeMap<OwnerId, u32>) {
+        self.leaves.clone_from(s.bot_seat_leaves());
+        let tick = s.simulation().state().tick;
+        let vitals = s.vitals();
+        let feet_of: BTreeMap<OwnerId, Vec3> = s
+            .motion_states()
+            .into_iter()
+            .map(|(p, _)| (p.owner, Vec3::from(p.feet)))
+            .collect();
+        let mut crews: BTreeMap<u64, Vec<u32>> = BTreeMap::new();
+        for (bot, side) in sides {
+            let Some(v) = vitals.get(bot) else { continue };
+            let feet = feet_of.get(bot).copied();
+            let mounted = v.mounted.filter(|_| v.alive);
+            match (self.open.get(bot).copied(), mounted) {
+                (Some((_, was, _)), Some(now)) if was == now => {}
+                (open, now) => {
+                    if let Some((since, (vehicle, seat), from)) = open {
+                        let to = feet.unwrap_or(from);
+                        self.done
+                            .push((vehicle, seat, tick - since, (to - from).length()));
+                        self.ended.push((*bot, tick, v.alive));
+                        self.open.remove(bot);
+                    }
+                    if let (Some(now), Some(feet)) = (now, feet) {
+                        self.open.insert(*bot, (tick, now, feet));
+                    }
+                }
+            }
+            if let Some((vehicle, seat)) = mounted {
+                crews.entry(vehicle).or_default().push(*side);
+                if seat == 2 {
+                    self.gunner += 1;
+                }
+            }
+        }
+        self.crewed += crews
+            .values()
+            .filter(|c| c.len() >= 2 && c.iter().all(|s| *s == c[0]))
+            .count() as u64;
+    }
+    fn print(&self, name: &str) {
+        let mut ticks: Vec<u64> = self.done.iter().map(|r| r.2).collect();
+        ticks.sort_unstable();
+        let median = ticks.get(ticks.len() / 2).copied().unwrap_or(0);
+        let short = ticks.iter().filter(|t| **t < 5 * 120).count();
+        let far: f32 = self.done.iter().map(|r| r.3).sum();
+        eprintln!(
+            "RIDES {name}: rides={} median_s={:.1} under_5s={} driven_units={far:.0} crewed_s={:.1} gunner_s={:.1} left={:?}",
+            self.done.len(),
+            median as f32 / 120.0,
+            short,
+            self.crewed as f32 / 120.0,
+            self.gunner as f32 / 120.0,
+            self.leaves,
+        );
+        for ((vehicle, seat, ticks, far), (bot, tick, alive)) in self.done.iter().zip(&self.ended) {
+            eprintln!(
+                "  ride bot{bot} vehicle {vehicle} seat {seat}: {:.1} s, {far:.0} units, ended T{tick}{}",
+                *ticks as f32 / 120.0,
+                if *alive { "" } else { " (died)" }
+            );
+        }
+    }
+}
+
+/// Where the host of the team deathmatch stands, behind Red's spawns.
+const HOST_CORNER: Vec3 = Vec3::new(-92.0, 0.05, -92.0);
+
+/// A team deathmatch across a field too wide to see over, a jeep and a
+/// tank by each team's spawn, played by rules bots (as Slayer's team fill
+/// adds them, with no brick to keep near): what people do with vehicles
+/// there is get in, drive about looking for a fight, crew the tank
+/// together, and get out when the vehicle is wrecked or stuck.
+/// `deaf`: bots ignore allies' planned harm (no "get out of the way").
+fn vehicles_in_a_team_deathmatch(deaf: bool) -> (Report, Rides) {
+    const PACKAGE: &str = "gauntlet-tdm";
+    let car = bri_vehicles::testing::CAR;
+    let tank = bri_vehicles::testing::TANK;
+    let mut arena = Arena::new(&[car, tank]);
+    arena.package(
+        PACKAGE,
+        &["bots", "player", "minigame"],
+        serde_json::json!({
+            "commands": [{"name": "teams", "args": []}, {"name": "add", "args": []}],
+            "on_pick_spawn": true
+        }),
+        r#"
+fn cmd_teams(p) {
+    set_teams(player(p).minigame, [#{ name: "Red", color: 0 }, #{ name: "Blue", color: 1 }], #{ friendly_fire: true });
+}
+// The host plays for Red from its far corner, as a host in the game does.
+fn cmd_add(p) {
+    let g = player(p).minigame;
+    set_team(p, minigame(g).teams[0].id);
+    for t in minigame(g).teams {
+        for i in 0..4 {
+            add_bot(g, #{ kind: "bot.blockhead", name: `${t.name} ${i}`, team: t.id });
+        }
+    }
+}
+// Red's spawns on the west of the field, Blue's on the east.
+fn on_pick_spawn(p) {
+    let me = player(p);
+    if !me.bot { return [-92.0, 0.1, -92.0]; }
+    if me.team == () { return (); }
+    let first = minigame(me.minigame).teams[0].id == me.team;
+    let x = if first { -80.0 } else { 80.0 };
+    [x, 0.1, (p % 4) * 4.0 - 6.0]
+}
+"#,
+    );
+    let host = arena.join("Host", HOST_CORNER);
+    arena.load(
+        host,
+        vec![
+            spawner(car, Vec3::new(-72.0, 0.0, 14.0)),
+            spawner(tank, Vec3::new(-72.0, 0.0, -16.0)),
+            spawner(car, Vec3::new(72.0, 0.0, -14.0)),
+            spawner(tank, Vec3::new(72.0, 0.0, 16.0)),
+        ],
+    );
+    arena.minigame(
+        host,
+        Settings {
+            loadout: loadout(&[GUN]),
+            use_all_players_bricks: true,
+            ..Default::default()
+        },
+    );
+    let rules = |name: &str| {
+        bri_sim::session::Command::Package(bri_sim::session::PackageCommand {
+            package: PACKAGE.into(),
+            command: name.into(),
+            args: vec![],
+        })
+    };
+    arena.command(host, rules("teams"));
+    arena.step(2);
+    arena.command(host, rules("add"));
+    arena.step(TICKS_PER_SECOND);
+    let teams: Vec<_> = arena.s.minigame_views()[0]
+        .teams
+        .iter()
+        .map(|t| t.id)
+        .collect();
+    let vitals = arena.s.vitals();
+    let sides: BTreeMap<OwnerId, u32> = arena
+        .bots()
+        .into_iter()
+        .filter_map(|b| {
+            let team = vitals.get(&b)?.team?;
+            Some((b, teams.iter().position(|t| team == t.0)? as u32))
+        })
+        .collect();
+    assert_eq!(sides.len(), 8, "every rules bot joined a team");
+    let mut b = Battle {
+        name: "vehicles_in_a_team_deathmatch",
+        arena,
+        sides,
+    };
+    b.arena.s.set_bots_deaf_to_allies(deaf);
+    let mut rides = Rides::default();
+    let sides = b.sides.clone();
+    let r = b.play(0.0, 90, |s, _| rides.sample(s, &sides));
+    rides.print(&r.name);
+    (r, rides)
+}
+
+#[test]
+fn vehicles_are_driven_and_crewed_in_a_team_deathmatch() {
+    let (r, rides) = vehicles_in_a_team_deathmatch(false);
+    sane(&r);
+    assert!(
+        !rides.done.is_empty() || !rides.open.is_empty(),
+        "the vehicles were used"
+    );
+    // Two bots crewed a vehicle at once, one of them at its gun.
+    assert!(rides.crewed > 0 && rides.gunner > 0, "a vehicle was crewed");
+    // Every seat left was for a reason the bot saw.
+    assert!(
+        rides.leaves.keys().all(|why| [
+            "wrecked",
+            "overturned",
+            "undrivable",
+            "bail_out",
+            "stalled",
+            "walk_the_rest",
+            "got_off_to_fight",
+            "no_driver",
+            "other_way",
+            "gun_lost",
+            "nothing_to_do"
+        ]
+        .contains(why)),
+        "{:?}",
+        rides.leaves
+    );
+}
+
+/// What "get out of the way" is worth: the team deathmatch (friendly fire
+/// on) over seeds with bots that step out of an ally's planned harm (its
+/// shot, its blast, a moving chassis's sweep) and with bots deaf to it,
+/// printed side by side.
+/// `cargo test --release -p bri-chaos --test bot_gauntlet heeding_allies -- --ignored --nocapture`
+#[test]
+#[ignore = "measurement: eight matches"]
+fn heeding_allies_harm_against_ignoring_it() {
+    for deaf in [false, true] {
+        let mut total = [0.0f64; 6];
+        for seed in 0..4 {
+            let (r, _) = gauntlet::tuning::with_seed(seed, || vehicles_in_a_team_deathmatch(deaf));
+            let row = [
+                r.team_kills as f64,
+                r.team_damage as f64,
+                r.enemy_damage as f64,
+                r.kills as f64,
+                r.at_ally as f64,
+                r.shots as f64,
+            ];
+            eprintln!("HEED deaf={deaf} seed={seed}: {row:?}");
+            for (t, v) in total.iter_mut().zip(row) {
+                *t += v;
+            }
+        }
+        eprintln!(
+            "HEED deaf={deaf} total: team_kills={} team_damage={:.0} enemy_damage={:.0} kills={} at_ally={} shots={}",
+            total[0], total[1], total[2], total[3], total[4], total[5]
+        );
+    }
 }
 
 #[test]
@@ -558,6 +891,15 @@ fn a_weapon_in_a_cubby_a_step_up_is_fetched() {
         r.progress["armed_bots"] >= 1,
         "a bot armed: {:?}",
         r.progress
+    );
+    // The step into the crawlspace is jumped, not walked up crouched (the
+    // route grid, `nav::edge`): a bot pressed against it waiting for the
+    // stall judge's hop stood still 3.4% of this run (7.8% at three rounds).
+    assert!(
+        r.share(r.stuck) < 0.02,
+        "stuck at the step: {:.3} {:?}",
+        r.share(r.stuck),
+        r.stuck_in
     );
 }
 
@@ -970,6 +1312,10 @@ const SCENARIOS: &[gauntlet::tuning::Scenario] = &[
     ("stairs_to_a_deck", stairs_to_a_deck),
     ("water_between_the_sides", water_between_the_sides),
     ("a_jeep_on_each_side", a_jeep_on_each_side),
+    (
+        "vehicles_are_driven_and_crewed_in_a_team_deathmatch",
+        vehicles_are_driven_and_crewed_in_a_team_deathmatch,
+    ),
     ("weapons_lying_on_the_ground", weapons_lying_on_the_ground),
     ("zombie_survival", zombie_survival),
     ("capture_the_flag", capture_the_flag),

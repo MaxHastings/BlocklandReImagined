@@ -2455,10 +2455,24 @@ fn a_teams_preferred_player_count_fills_it_with_bots() {
         }
     }
 
-    // Killing a bot is worth the stand-in's Kill Bot, three (past its
-    // spawn protection).
+    // Killing a bot is worth Kill Player, like anyone (past its spawn
+    // protection).
     g.steps(310);
     let bot = bot_of(&g, BLUE);
+    let before = g.score(red);
+    g.run(red, "probe", "kill", vec![PackageArg::Int(bot as i64)]);
+    g.steps(2);
+    assert!(!g.s.vitals()[&bot].alive);
+    assert_eq!(g.score(red) - before, 1);
+    // With Bots Worth Kill Player off, the stand-in's Kill Bot, three.
+    g.set(
+        owner,
+        &[(&key(SLAYER, "points_bot_as_player"), Value::Bool(false))],
+    );
+    // Back after its respawn time and wait, then past its protection.
+    g.steps(420 + 360);
+    let bot = bot_of(&g, BLUE);
+    assert!(g.s.vitals()[&bot].alive);
     let before = g.score(red);
     g.run(red, "probe", "kill", vec![PackageArg::Int(bot as i64)]);
     g.steps(2);
@@ -3553,6 +3567,14 @@ fn kill_lines_follow_slayers_death_messages_bonus_kills_and_teamkills() {
         g.cmd(who, Command::Respawn).unwrap();
         g.steps(310);
     };
+    // Bonus Kills and the Friendly Fire penalty are off by default.
+    g.set(
+        owner,
+        &[
+            (&key(SLAYER, "bk_enable"), Value::Bool(true)),
+            (&key(SLAYER, "points_friendly_fire"), Value::Int(-3)),
+        ],
+    );
     g.steps(310);
     lines(&mut g);
     // The stand-in's Kill Spree Start is 3, its spree line its own words,
@@ -3575,7 +3597,7 @@ fn kill_lines_follow_slayers_death_messages_bonus_kills_and_teamkills() {
     assert!(!lines(&mut g).iter().any(|(_, t)| t.contains("On a roll")));
     respawn(&mut g, blue);
 
-    // A punished teamkill: Friendly Fire points (the stand-in's -3) instead
+    // A punished teamkill: Friendly Fire points (-3 here) instead
     // of a kill, no kill or death counted, and the killer warned.
     // Unregulated joins: onto a team as big as their own.
     g.set(
@@ -4590,4 +4612,83 @@ fn team_fill_bots_play_slayer_soccer_with_or_without_weapons() {
             share(m.by_tank)
         );
     }
+}
+
+/// Max (v0.2.10): a ball game should need one change, Kill Player to 0,
+/// not a hunt through every menu for point sources. A fresh Slayer team
+/// game scores a kill and nothing else (a suicide costs nothing); with
+/// Kill Player at 0 no kill scores at all: not a player, not a bot, and not
+/// a kill spree or quick kill even with Bonus Kills turned on.
+#[test]
+fn kill_player_at_zero_makes_every_kill_worth_nothing() {
+    let mut g = Game::new("kills-worth-nothing");
+    let (red, blue) = two_teams_as(&mut g, true);
+    let owner = g.s.minigame_views()[0].owner;
+    let kill = |g: &mut Game, by: OwnerId, who: OwnerId| {
+        g.run(by, "probe", "kill", vec![PackageArg::Int(who as i64)]);
+        g.steps(2);
+    };
+    let respawn = |g: &mut Game, who: OwnerId| {
+        g.steps(125 * 5);
+        g.cmd(who, Command::Respawn).unwrap();
+        g.steps(310);
+    };
+    g.steps(310);
+    // The defaults: a kill is worth one, a suicide nothing.
+    let before = g.score(red);
+    kill(&mut g, red, blue);
+    assert_eq!(g.score(red), before + 1);
+    respawn(&mut g, blue);
+    kill(&mut g, red, red);
+    assert_eq!(g.score(red), before + 1, "a suicide costs nothing");
+    respawn(&mut g, red);
+
+    // One change: Kill Player 0. Bonus Kills on, with a spree from the
+    // second kill worth bonus points.
+    let mut settings = g.s.minigame_views()[0].settings.clone();
+    settings.points_kill_player = 0;
+    g.cmd(
+        owner,
+        Command::MiniGame(MiniGameRequest::Configure { settings }),
+    )
+    .unwrap();
+    g.set(
+        owner,
+        &[
+            (&key(SLAYER, "bk_enable"), Value::Bool(true)),
+            (&key(SLAYER, "bk_spree_start"), Value::Int(2)),
+            (&key(SLAYER, "bk_points_spree"), Value::Int(5)),
+            (&key(SLAYER, "bk_points_multi"), Value::Int(7)),
+        ],
+    );
+    g.steps(2);
+    lines(&mut g);
+    let before = g.score(red);
+    for _ in 0..2 {
+        kill(&mut g, red, blue);
+        respawn(&mut g, blue);
+    }
+    assert_eq!(
+        g.score(red),
+        before,
+        "kills and their bonuses score nothing"
+    );
+
+    // The game's bots too.
+    g.s.set_bot_kinds(
+        bri_sim::bot_kind::BotPack::from_json(include_bytes!(
+            "../../../packages/blockhead_bot/assets/bots.json"
+        ))
+        .unwrap()
+        .bots,
+    )
+    .unwrap();
+    let fill = key(SLAYER, "team_bot_fill");
+    g.set_team(owner, BLUE, &[(&fill, Value::Int(2))]);
+    g.steps(4 + 310);
+    let bot = bot_of(&g, BLUE);
+    let before = g.score(red);
+    kill(&mut g, red, bot);
+    assert!(!g.s.vitals()[&bot].alive);
+    assert_eq!(g.score(red), before, "a bot is worth Kill Player, 0");
 }

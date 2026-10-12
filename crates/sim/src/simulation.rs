@@ -345,33 +345,123 @@ pub struct Selection {
 fn may_build_on(actor: &Actor, brick: &Brick) -> bool {
     actor.trusted(brick.owner, bri_world::authority::trust::BUILD)
 }
-/// "3 bricks were not loaded because this server does not have their
-/// definitions: 2 v20/brick/x, 1 other:brick/y. ...", or None when all loaded.
-pub fn unloaded_summary(bricks: &[Brick]) -> Option<String> {
-    if bricks.is_empty() {
+/// What a load could not use here, grouped for people: bricks whose
+/// definitions are not installed, and prints that are not installed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MissingContent {
+    /// One chat line: the counts and that nothing was lost.
+    pub summary: String,
+    /// The grouped lists and what to install, for a dismissible message box.
+    pub details: String,
+}
+const LIST_CAP: usize = 8;
+/// The Add-On (or `v20`) a content ID or unresolved reference comes from:
+/// `pkg:brick/x` and `v20/brick/x` give `pkg` and `v20`.
+fn content_source(id: &str) -> &str {
+    id.split([':', '/']).next().unwrap_or(id)
+}
+fn capped(counts: &BTreeMap<String, usize>) -> String {
+    let mut out: Vec<String> = counts
+        .iter()
+        .take(LIST_CAP)
+        .map(|(name, n)| format!("{name} x{n}"))
+        .collect();
+    if counts.len() > LIST_CAP {
+        out.push(format!("and {} more", counts.len() - LIST_CAP));
+    }
+    out.join(", ")
+}
+/// The prints placed bricks name that this server cannot resolve.
+pub fn unresolved_prints<'a>(bricks: impl Iterator<Item = &'a Brick>) -> BTreeMap<String, usize> {
+    let mut prints: BTreeMap<String, usize> = BTreeMap::new();
+    for brick in bricks {
+        if let Some(bri_world::ContentRef::Unresolved(u)) = &brick.print {
+            *prints
+                .entry(format!("{}/{}", u.namespace, u.name))
+                .or_default() += 1;
+        }
+    }
+    prints
+}
+/// Groups the bricks kept aside (`unloaded`) by Add-On and the unresolved
+/// prints by name; None when nothing is missing.
+pub fn missing_content(
+    unloaded: &[Brick],
+    prints: &BTreeMap<String, usize>,
+) -> Option<MissingContent> {
+    if unloaded.is_empty() && prints.is_empty() {
         return None;
     }
-    let mut counts: BTreeMap<String, usize> = BTreeMap::new();
-    for brick in bricks {
+    let mut by_source: BTreeMap<String, BTreeMap<String, usize>> = BTreeMap::new();
+    for brick in unloaded {
         let name = match &brick.definition {
             bri_world::ContentRef::Resolved(id) => id.clone(),
             bri_world::ContentRef::Unresolved(u) => format!("{}/{}", u.namespace, u.name),
         };
-        *counts.entry(name).or_default() += 1;
+        *by_source
+            .entry(content_source(&name).to_string())
+            .or_default()
+            .entry(name)
+            .or_default() += 1;
     }
-    let mut kinds: Vec<String> = counts
-        .iter()
-        .take(8)
-        .map(|(name, count)| format!("{count} {name}"))
+    let print_total: usize = prints.values().sum();
+    let mut parts = Vec::new();
+    if !unloaded.is_empty() {
+        parts.push(format!(
+            "{} bricks were not loaded because their Add-Ons are not installed here",
+            unloaded.len()
+        ));
+    }
+    if print_total > 0 {
+        parts.push(format!(
+            "{print_total} bricks use prints that are not installed here"
+        ));
+    }
+    let summary = format!(
+        "{}. They are kept and saved with the world.",
+        parts.join(", and ")
+    );
+    let mut details = String::new();
+    if !unloaded.is_empty() {
+        details.push_str(&format!("Bricks not loaded ({}):\n", unloaded.len()));
+        for (source, names) in by_source.iter().take(LIST_CAP) {
+            let total: usize = names.values().sum();
+            details.push_str(&format!("  {source}: {total} ({})\n", capped(names)));
+        }
+        if by_source.len() > LIST_CAP {
+            details.push_str(&format!(
+                "  and {} more sources\n",
+                by_source.len() - LIST_CAP
+            ));
+        }
+    }
+    if !prints.is_empty() {
+        details.push_str(&format!(
+            "Prints not found ({print_total}):\n  {}\n",
+            capped(prints)
+        ));
+    }
+    let addons: Vec<&str> = by_source
+        .keys()
+        .map(String::as_str)
+        .filter(|s| *s != "v20")
+        .take(LIST_CAP)
         .collect();
-    if counts.len() > 8 {
-        kinds.push(format!("and {} more kinds", counts.len() - 8));
+    if !addons.is_empty() {
+        details.push_str(&format!(
+            "Add-Ons to install or enable: {}\n",
+            addons.join(", ")
+        ));
     }
-    Some(format!(
-        "{} bricks were not loaded because this server does not have their definitions: {}. They are kept and saved with the world.",
-        bricks.len(),
-        kinds.join(", ")
-    ))
+    details.push_str(
+        "Install or enable them from Add-Ons in the main menu, then load again. \
+         Until then these bricks and prints are kept exactly as saved and come back with the world.",
+    );
+    Some(MissingContent { summary, details })
+}
+/// The chat line of [`missing_content`] for bricks alone.
+pub fn unloaded_summary(bricks: &[Brick]) -> Option<String> {
+    missing_content(bricks, &BTreeMap::new()).map(|m| m.summary)
 }
 
 impl Simulation {
@@ -1657,7 +1747,7 @@ impl Simulation {
     /// up to four times player scale.
     pub const MAX_TARGET_DISTANCE: f32 = 2000.0;
     pub fn target(&self, origin: Vec3, direction: Vec3, max_distance: f32) -> Result<Option<Hit>> {
-        self.target_filtered(origin, direction, max_distance, |brick| brick.raycast)
+        self.target_filtered(origin, direction, max_distance, |brick, _| brick.raycast)
     }
     /// [`Self::target`] on through the openings of linked bricks
     /// (portals), as the player sees: the hit, its distance along the whole
@@ -1723,12 +1813,10 @@ impl Simulation {
                         origin,
                         direction,
                         length.min(Self::MAX_TARGET_DISTANCE),
-                        |brick| {
+                        |brick, definition| {
                             brick.raycast
                                 && opaque(brick)
-                                && self.definitions.get(brick).is_ok_and(|definition| {
-                                    definition.special != crate::definitions::Special::Water
-                                })
+                                && definition.special != crate::definitions::Special::Water
                         },
                     )
                     .ok()
@@ -1770,14 +1858,14 @@ impl Simulation {
         direction: Vec3,
         max_distance: f32,
     ) -> Result<Option<Hit>> {
-        self.target_filtered(origin, direction, max_distance, |_| true)
+        self.target_filtered(origin, direction, max_distance, |_, _| true)
     }
     fn target_filtered(
         &self,
         origin: Vec3,
         direction: Vec3,
         max_distance: f32,
-        accept: impl Fn(&Brick) -> bool,
+        accept: impl Fn(&Brick, &Definition) -> bool,
     ) -> Result<Option<Hit>> {
         ensure!(
             origin.is_finite()
@@ -1817,21 +1905,26 @@ impl Simulation {
                 distance,
             });
         }
-        self.walk_bricks(origin, direction, max_distance, &mut nearest, |_, brick| {
-            accept(brick)
-        })?;
+        self.walk_bricks(
+            origin,
+            direction,
+            max_distance,
+            &mut nearest,
+            |_, brick, d| accept(brick, d),
+        )?;
         Ok(nearest)
     }
     /// The nearest brick `accept` takes along a ray (normalized direction),
     /// by each brick's own collision: what projectiles and sight lines hit.
     /// Bricks share chunk colliders, so rays that must tell bricks apart or
-    /// skip some come here rather than to the physics world.
+    /// skip some come here rather than to the physics world. `accept` is
+    /// given the brick's definition, resolved once per candidate.
     pub fn brick_ray(
         &self,
         origin: Vec3,
         direction: Vec3,
         max_distance: f32,
-        accept: impl Fn(BrickId, &Brick) -> bool,
+        accept: impl Fn(BrickId, &Brick, &Definition) -> bool,
     ) -> Result<Option<Hit>> {
         let mut nearest = None;
         self.walk_bricks(origin, direction, max_distance, &mut nearest, accept)?;
@@ -1875,7 +1968,7 @@ impl Simulation {
         direction: Vec3,
         max_distance: f32,
         nearest: &mut Option<Hit>,
-        accept: impl Fn(BrickId, &Brick) -> bool,
+        accept: impl Fn(BrickId, &Brick, &Definition) -> bool,
     ) -> Result<()> {
         // This set is only a per-ray duplicate guard for bricks registered in
         // more than one spatial bucket. A fast non-cryptographic hasher keeps
@@ -1885,23 +1978,27 @@ impl Simulation {
             grid::ray_buckets(origin.to_array(), direction.to_array(), max_distance)
         {
             for &(id, bounds) in self.index.bucket_bounds(bucket) {
-                if !tested.insert(id) {
-                    continue;
-                }
                 // Most of a bucket's bricks lie off the ray: the slab test
                 // on the bounds the bucket holds rules them out before the
-                // world lookup and `accept`, which cost far more.
+                // duplicate guard, the world lookup and `accept`, which
+                // cost far more.
                 let Some(enter) = slab(bounds, origin, direction, max_distance) else {
                     continue;
                 };
                 if nearest.as_ref().is_some_and(|hit| enter > hit.distance) {
                     continue;
                 }
-                let brick = &self.state().bricks[&id];
-                if !accept(id, brick) {
+                if !tested.insert(id) {
                     continue;
                 }
-                self.ray_brick(id, brick, origin, direction, max_distance, nearest)?;
+                let brick = &self.state().bricks[&id];
+                // One string-keyed definition lookup per candidate, shared
+                // by `accept` and the collision test.
+                let d = self.definitions.get(brick)?;
+                if !accept(id, brick, d) {
+                    continue;
+                }
+                self.ray_brick(id, brick, d, origin, direction, max_distance, nearest)?;
             }
             if nearest
                 .as_ref()
@@ -1912,18 +2009,20 @@ impl Simulation {
         }
         Ok(())
     }
+    #[allow(clippy::too_many_arguments)]
     fn ray_brick(
         &self,
         id: BrickId,
         brick: &Brick,
+        d: &Definition,
         origin: Vec3,
         direction: Vec3,
         max_distance: f32,
         nearest: &mut Option<Hit>,
     ) -> Result<()> {
-        // The caller already fetched this brick for the acceptance check and
-        // passed it the slab test on its grid bounds ([`slab`]).
-        let d = self.definitions.get(brick)?;
+        // The caller already fetched this brick and its definition for the
+        // acceptance check and passed it the slab test on its grid bounds
+        // ([`slab`]).
         let inverse = brick.transform().inverse();
         let o = inverse.transform_point3(origin);
         let dir = inverse.transform_vector3(direction);

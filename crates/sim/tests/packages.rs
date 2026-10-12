@@ -9,7 +9,9 @@ use bri_package_runtime::Catalog;
 use bri_sim::{
     definitions::{Definition, Definitions},
     player::MoveInput,
-    session::{ActionAim, Command, Notice, PackageArg, PackageCommand, PackageSave, Session},
+    session::{
+        ActionAim, Command, Notice, PackageArg, PackageCommand, PackageSave, Reply, Session,
+    },
     simulation::Simulation,
 };
 use bri_world::World;
@@ -137,6 +139,30 @@ const DOWN: Option<ActionAim> = Some(ActionAim {
     yaw: 0.0,
     pitch: -1.5,
 });
+
+/// The tick view (a snapshot of every player and entity) is built only on
+/// ticks where a package entity's think will read it, not on every tick.
+#[test]
+fn idle_ticks_build_no_script_snapshot() {
+    let (mut s, spawns) = session(None);
+    let a = s.join("Miner".into(), spawns[0], false).unwrap();
+    for _ in 0..30 {
+        s.step().unwrap();
+    }
+    let entities = s.package_stats().entities;
+    let before = s.package_snapshots();
+    for _ in 0..240 {
+        s.step().unwrap();
+    }
+    let built = s.package_snapshots() - before;
+    // With no entity thinking, nothing needs a snapshot; the creeper's
+    // `tick_interval` of 1200 cannot fall inside 240 ticks more than once.
+    assert!(
+        built <= 1 + 240 * entities as u64 / 10,
+        "{built} snapshots in 240 idle ticks with {entities} entities"
+    );
+    let _ = a;
+}
 
 #[test]
 fn generated_world_mines_into_server_owned_currency() {
@@ -376,4 +402,38 @@ fn typed_chat_commands_reach_the_declaring_package() {
     );
     let unknown = s.command(a, 3, typed("nope", &[])).unwrap_err();
     assert!(format!("{unknown:#}").contains("Unknown command: /nope"));
+}
+
+/// A host loop asking for deferred saves gets `Accepted` on the tick and
+/// the same build from `finish` off it (v0.2.10 performance waste audit,
+/// finding 12).
+#[test]
+fn a_deferred_save_is_the_same_build_finished_off_the_tick() {
+    let (mut s, spawns) = session(None);
+    let a = s.join("Saver".into(), spawns[0], true).unwrap();
+    for _ in 0..30 {
+        s.step().unwrap();
+    }
+    let save = Command::SaveBuild {
+        events: true,
+        ownership: false,
+    };
+    let Ok(Reply::Saved(direct)) = s.command(a, 1, save.clone()) else {
+        panic!("a direct save answers with the build");
+    };
+    s.set_deferred_saves(true);
+    assert!(matches!(s.command(a, 2, save), Ok(Reply::Accepted)));
+    let deferred = s
+        .take_deferred_save()
+        .expect("the save is left to finish")
+        .finish()
+        .unwrap();
+    assert!(s.take_deferred_save().is_none());
+    assert_eq!(deferred.world.bricks.len(), direct.world.bricks.len());
+    assert_eq!(deferred.world.owners.len(), direct.world.owners.len());
+    assert_eq!(deferred.minigame, direct.minigame);
+    assert!(
+        deferred.world.bricks.values().all(|b| b.owner == 0),
+        "ownership stripped off the tick too"
+    );
 }
