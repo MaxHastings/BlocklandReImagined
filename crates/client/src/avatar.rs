@@ -537,6 +537,21 @@ impl AvatarAssets {
             .into()
         } else {
             let selected = self.package.resolve(&appearance)?;
+            // An object named as a Blockhead part or colour slot is that
+            // part: painted, or hidden when the outfit leaves it out. Any
+            // other object (an imported model's own) draws with its own
+            // textures, untinted.
+            let part = |name: &str| {
+                selected.nodes.contains_key(name)
+                    || appearance.colors.contains_key(name)
+                    || self.package.defaults.colors.contains_key(name)
+                    || self
+                        .package
+                        .parts
+                        .values()
+                        .flatten()
+                        .any(|p| p.eq_ignore_ascii_case(name))
+            };
             horse
                 .object_names
                 .iter()
@@ -550,7 +565,9 @@ impl AvatarAssets {
                         .colors
                         .get(slot)
                         .or_else(|| selected.nodes.get(name))
-                        .map(|c| (name.clone(), *c))
+                        .copied()
+                        .or_else(|| (!part(name)).then_some([1.0; 4]))
+                        .map(|c| (name.clone(), c))
                 })
                 .collect()
         };
