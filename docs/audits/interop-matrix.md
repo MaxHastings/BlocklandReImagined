@@ -75,6 +75,9 @@ code only; the Mario, Warthog, Goomba and tank Add-Ons themselves are Max's.
 | Rockets blow the brick castle apart | works today: brick damage under mini-game rules | works |
 | Mario stomps a Goomba (a stomp differs from a bump) | W7 contact information on hooks | not started |
 | A Creeper-style NPC walks up, fuses (swells, hisses) and blows itself up, breaking bricks | W7 ability attack mode; the explosion itself works today (`explode` op with a brick radius, any Add-On explosion look and sound) | brain trigger not started |
+| A player picks an NPC's body (a Goomba) as their player type and drives the Warthog in it | works for seats today (any body that can play rides any seat, `the_runner_drives_the_buggy_through_the_fort_and_climbs_out`); picking it without a mini-game is W4's brick event; sitting right on a non-humanoid body is W2 | partial |
+| A Goomba-bodied player or bot holds a rocket launcher and jets | W2 named weapon socket for bodies without hands; jets when the body sets `can_jet` | socket not started |
+| NPCs follow players through buildings and jump or jet onto things their body can reach | shared nav today for the Blockhead's reach; W7 plans with any body's reach | partial |
 | Bots move with the body they have (a Goomba with Mario-style movement still paths sensibly) | W7 (after W3): the bot brain plans with the Blockhead motor's reach, not an Add-On controller's | not started |
 | Everyone sees it all in multiplayer, late joiners included | every workstream extends the Playground network test | Playground proves it for today's seams |
 
