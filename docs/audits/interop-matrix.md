@@ -48,6 +48,33 @@ Five Add-Ons, each standing alone and naming no other except through
 | An Add-On owns the HUD or the camera | gap (W6) | No base-HUD replacement or camera ownership seam |
 | Custom NPCs on the shared bot brain | works for bodies, gap for new behaviours (W7) | Bot kinds pick a body and weapons; new behaviours go into the shared brain |
 
+## Headline scenario: Blockhead, Mario, Warthog, Goombas
+
+Max's own picture of what v0.3.0 is for (2026-10-12): in one multiplayer brick
+world, a player switches between a Blockhead and Mario, jumps into a
+Warthog, and each feels like its own game. Goomba NPCs carry rocket
+launchers and jet around, and a Goomba jumps into a tank to shell Mario
+hiding in a brick castle. "Chaos. Fun. Smooth. Integrated well.
+Multiplayer." The engine must make every beat possible with Add-On data and
+code only; the Mario, Warthog, Goomba and tank Add-Ons themselves are Max's.
+
+| Beat | Owner | State |
+|---|---|---|
+| Mario's run, jump arcs, triple jump, wall kick, ground pound feel like Mario | W3 movement controllers | wall kick and dive working in PR #107; triple jump next |
+| Mario's model animates with its own clips (run, jump, kick, sit) | W2 animation roles; W5 glTF import for a rigged model | W2 in progress |
+| Switch between Blockhead and Mario mid-game, mid-air or seated, no respawn | W4 switching lifecycle | not started |
+| Mario or a Blockhead holds a rocket launcher in his own hand; shots leave its muzzle | W2 sockets and muzzle | in progress |
+| Jump into the Warthog: any body sits in any seat, the passenger keeps their weapon, a gunner seat fires a turret | W2 seats; vehicles (seats, `weapon` seats, turrets already work) | seats for box bodies in W2 |
+| The Warthog drives like a Warthog (loose suspension, drift, chase camera, engine sound) | W8 vehicle feel, W6 camera ownership | not started |
+| The HUD switches with the body and the vehicle (Mario's coins, the Warthog's gun) | W6 HUD regions | not started |
+| Goombas are bots on the one shared brain with their own body (`kind.body`) | W7; bot kinds already pick a body and weapons | works today for box bodies |
+| Goombas use rocket launchers and jet around | works today: bots fight with any weapon and jet when their body `can_jet` | works |
+| A Goomba jumps into a tank and shells Mario | works today: bots drive and crew vehicles, and a gunner fights with its seat's gun (`bots/combat.rs`) | needs a tank Add-On to prove it |
+| Rockets blow the brick castle apart | works today: brick damage under mini-game rules | works |
+| Mario stomps a Goomba (a stomp differs from a bump) | W7 contact information on hooks | not started |
+| Bots move with the body they have (a Goomba with Mario-style movement still paths sensibly) | **no owner yet**: the bot brain plans with the Blockhead motor's reach, not an Add-On controller's | to split out |
+| Everyone sees it all in multiplayer, late joiners included | every workstream extends the Playground network test | Playground proves it for today's seams |
+
 ## Defects found that belong elsewhere
 
 - **A bot that respawns on a player's spawn point freezes.** In the mode,
