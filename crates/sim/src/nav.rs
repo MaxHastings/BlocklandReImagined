@@ -2482,6 +2482,109 @@ mod tests {
         assert_eq!(nav.edged, swept, "a change elsewhere forgets no edge");
     }
 
+    /// How much the edge cache saves over rubble: a floor strewn with
+    /// blocks of every height a body steps, jumps and drops between, and
+    /// a crowd of searches across it sharing one grid, as bots share
+    /// theirs. Prints the edges swept and the time with the cache against
+    /// a grid that forgets its edges before every search (every other
+    /// cache kept), which is what every search did before.
+    /// `cargo test --release -p bri-sim --lib rubble_edge_sweeps -- --ignored --nocapture`
+    #[test]
+    #[ignore = "a measurement, printed"]
+    fn rubble_edge_sweeps_are_shared_between_searches() {
+        // A fixed scatter of blocks: 0.5 to 2.5 high, 1 to 3 across, over
+        // a 60 x 60 floor, from a small linear congruential sequence so
+        // every run sees the same rubble.
+        let mut seed: u64 = 0x9E37_79B9_7F4A_7C15;
+        let mut next = move || {
+            seed = seed
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1_442_695_040_888_963_407);
+            (seed >> 33) as f32 / (1u64 << 31) as f32
+        };
+        let mut boxes = vec![(Vec3::new(-40.0, -1.0, -40.0), Vec3::new(40.0, 0.0, 40.0))];
+        for _ in 0..220 {
+            let at = Vec3::new(next() * 60.0 - 30.0, 0.0, next() * 60.0 - 30.0);
+            let size = Vec3::new(1.0 + next() * 2.0, 0.5 + next() * 2.0, 1.0 + next() * 2.0);
+            boxes.push((
+                at - Vec3::new(size.x, 1.0, size.z) * 0.5,
+                at + Vec3::new(size.x, size.y, size.z) * 0.5,
+            ));
+        }
+        let physics = world(&boxes);
+        let ground = Ground {
+            physics: &physics,
+            terrain: &no_terrain,
+            passages: &NO_PASSAGES,
+            waters: &[],
+            bodies: &[],
+            motions: &[],
+        };
+        let body = body();
+        // Searches between corners and across the middle, as a crowd
+        // would route: 32 of them, each pair both ways.
+        let spots: Vec<Vec3> = (0..8)
+            .map(|k| {
+                let a = k as f32 / 8.0 * std::f32::consts::TAU;
+                Vec3::new(a.cos() * 27.0, 0.0, a.sin() * 27.0)
+            })
+            .collect();
+        let routes: Vec<(Vec3, Vec3)> = (0..32)
+            .map(|k| (spots[k % 8], spots[(k * 3 + 4) % 8]))
+            .collect();
+        let run = |forget: bool| {
+            let mut nav = Nav::default();
+            let started = std::time::Instant::now();
+            let mut found = 0;
+            let mut ticks = 0u64;
+            for &(from, to) in &routes {
+                if forget {
+                    nav.edges.clear();
+                }
+                let mut search = Search::new(from, to, 60.0);
+                loop {
+                    nav.begin_tick_for(32);
+                    ticks += 1;
+                    if let Some(f) = search.step(&mut nav, &ground, &body) {
+                        found += usize::from(matches!(f, Found::Path(_)));
+                        break;
+                    }
+                }
+            }
+            (
+                started.elapsed().as_secs_f64() * 1e3,
+                nav.edged,
+                nav.sampled,
+                nav.swept,
+                found,
+                ticks,
+            )
+        };
+        // Warm the physics once.
+        run(false);
+        for round in 0..3 {
+            let cached = run(false);
+            let forgot = run(true);
+            eprintln!(
+                "round {round}: cached ms={:.1} edge_sweeps={} floor_samples={} arc_sweeps={} paths={}/{} ticks={}; forgetting ms={:.1} edge_sweeps={} floor_samples={} arc_sweeps={} paths={}/{} ticks={}",
+                cached.0,
+                cached.1,
+                cached.2,
+                cached.3,
+                cached.4,
+                routes.len(),
+                cached.5,
+                forgot.0,
+                forgot.1,
+                forgot.2,
+                forgot.3,
+                forgot.4,
+                routes.len(),
+                forgot.5,
+            );
+        }
+    }
+
     /// The search with a body of its own.
     fn search_as(physics: &PhysicsWorld, body: &Body, from: Vec3, to: Vec3) -> Found {
         let ground = Ground {
