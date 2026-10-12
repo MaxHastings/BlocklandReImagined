@@ -1301,6 +1301,22 @@ impl Session {
     pub fn bot_step_failures(&self) -> (u64, &[(OwnerId, u64, String)]) {
         (self.bots.failed_steps, &self.bots.failures)
     }
+    /// Work counts of the route grids, for tests and probes: (floor
+    /// samples, leap arcs swept, drop and jump edges swept, floor samples
+    /// forgotten) since the session began, over every body size.
+    pub fn nav_work_counts(&self) -> (u64, u64, u64, u64) {
+        self.bots
+            .navs
+            .iter()
+            .fold((0, 0, 0, 0), |(a, b, c, d), (_, nav)| {
+                (
+                    a + nav.sampled,
+                    b + nav.swept,
+                    c + nav.edged,
+                    d + nav.forgotten,
+                )
+            })
+    }
     /// Seats bots left since the session began, by why: `wrecked`,
     /// `overturned`, `undrivable`, `bail_out`, `stalled`, `walk_the_rest`,
     /// `got_off_to_fight`, `no_driver`, `other_way`, `gun_lost`,

@@ -696,11 +696,17 @@ pub struct Nav {
     /// swept ([`Ground::sweep_arc`]), and how many more it sweeps this
     /// tick.
     arcs: FxHashMap<(Node, Node), bool>,
+    /// Whether the way off one node onto the next, down a drop or up a
+    /// jump, is clear ([`Nav::edge`]).
+    edges: FxHashMap<(Node, Node), bool>,
     /// The leaps off each node ([`Nav::leaps`]), once searched.
     leapt: FxHashMap<Node, Leapt>,
     arc_budget: u32,
     /// Arcs swept so far, for tests and probes.
     pub swept: u64,
+    /// Drop and jump edges swept so far ([`Nav::edge`]), for tests and
+    /// probes.
+    pub edged: u64,
     /// Floors found only off their cell's centre (settled), for probes.
     pub settled: u64,
     /// Moves, from one cell to another, a body was seen to fail (get
@@ -924,7 +930,7 @@ impl Nav {
             .iter()
             .map(|&(min, max)| (min - Vec3::splat(reach), max + Vec3::splat(reach)))
             .collect();
-        let above = body.motion.apex() + body.height;
+        let above = body.motion.apex().max(body.jump) + body.height;
         // A node's leaps reach as far as its farthest leap.
         let far = Vec3::new(body.leaps.farthest(), above, body.leaps.farthest());
         self.leapt.retain(|node, _| {
@@ -933,13 +939,17 @@ impl Nav {
                 .iter()
                 .any(|(min, max)| (at + far).cmpge(*min).all() && (at - far).cmple(*max).all())
         });
-        self.arcs.retain(|(a, b), _| {
+        let touched = |(a, b): &(Node, Node)| {
             let (a, b) = (a.feet(), b.feet());
             let (low, high) = (a.min(b), a.max(b) + Vec3::Y * above);
-            !grown
+            grown
                 .iter()
                 .any(|(min, max)| low.cmple(*max).all() && high.cmpge(*min).all())
-        });
+        };
+        self.arcs.retain(|pair, _| !touched(pair));
+        // An edge's box: from the node it leaves to the one it lands on, a
+        // body wide, up to the top of its jump and a body over.
+        self.edges.retain(|pair, _| !touched(pair));
     }
     /// Leaps from `node` ([`crate::reach::Leaps`]) off an edge: along each
     /// of [`LEAP_HEADINGS`] headings where the cell beside it is open air
@@ -1059,6 +1069,23 @@ impl Nav {
         self.arcs.insert((from, to), clear);
         Some(clear)
     }
+    /// Whether the way off `from` onto `to`, down a drop or up a jump, is
+    /// clear, as `sweep` finds it ([`Ground::sweep_box`]), remembered: the
+    /// swept volume depends only on the two nodes, the collision and the
+    /// body, so the next search through the same edge, by this bot or
+    /// another, sweeps nothing.
+    fn edge(&mut self, from: Node, to: Node, sweep: impl FnOnce() -> bool) -> bool {
+        if let Some(clear) = self.edges.get(&(from, to)) {
+            return *clear;
+        }
+        self.edged += 1;
+        if self.edges.len() >= MAX_SAMPLES {
+            self.edges.clear();
+        }
+        let clear = sweep();
+        self.edges.insert((from, to), clear);
+        clear
+    }
     /// The floors of cell `x, z` a body standing at height `from` next to
     /// it could reach, highest first: none for a wall, a hole or a drop too
     /// deep. The ceiling over `from` limits how high it looks.
@@ -1166,33 +1193,38 @@ impl Nav {
                 // out over the edge at the height it stands at (crouched,
                 // out of a crawlspace): a rail or a lip between the two
                 // spots, which neither cell's own sample sees, holds it back.
-                if f.y < from - body.step && {
-                    let crouched = !ground.clear(body, node.feet(), false);
-                    let (half_width, _, _) = body.clearance(crouched);
-                    let height = if crouched {
-                        body.crouch_height
-                    } else {
-                        body.height
-                    };
-                    !ground.sweep_box(half_width, height, node.feet(), next.feet().with_y(from))
-                } {
+                if f.y < from - body.step
+                    && !self.edge(node, next, || {
+                        let crouched = !ground.clear(body, node.feet(), false);
+                        let (half_width, _, _) = body.clearance(crouched);
+                        let height = if crouched {
+                            body.crouch_height
+                        } else {
+                            body.height
+                        };
+                        ground.sweep_box(half_width, height, node.feet(), next.feet().with_y(from))
+                    })
+                {
                     continue;
                 }
                 // A jump is taken only where the body rises clear where it
                 // stands to the height it lands at, then over onto it
                 // (crouched, into a crawlspace): a roof over the takeoff, or
                 // an overhang it would come up under, holds it back.
-                if jump && afloat.is_none() && {
-                    let (half_width, _, _) = body.clearance(f.low);
-                    let height = if f.low {
-                        body.crouch_height
-                    } else {
-                        body.height
-                    };
-                    let up = node.feet().with_y(f.y);
-                    !(ground.sweep_box(half_width, height, node.feet(), up)
-                        && ground.sweep_box(half_width, height, up, next.feet()))
-                } {
+                if jump
+                    && afloat.is_none()
+                    && !self.edge(node, next, || {
+                        let (half_width, _, _) = body.clearance(f.low);
+                        let height = if f.low {
+                            body.crouch_height
+                        } else {
+                            body.height
+                        };
+                        let up = node.feet().with_y(f.y);
+                        ground.sweep_box(half_width, height, node.feet(), up)
+                            && ground.sweep_box(half_width, height, up, next.feet())
+                    })
+                {
                     continue;
                 }
                 // The way on level ground, for the diagonals beside it.
@@ -2389,6 +2421,168 @@ mod tests {
         let limit = body().step;
         assert!(onto(limit).jump, "a block {limit} high is jumped onto");
         assert!(!onto(0.4).jump, "a low block is walked up");
+    }
+
+    /// The sweeps that clear a drop or a jump edge are made once per edge
+    /// per grid, not once per search: a second search over the same
+    /// ground, by this bot or another sharing the grid, takes the same
+    /// path with no new sweep, and a change on the edge forgets it.
+    #[test]
+    fn drop_and_jump_edges_are_swept_once_per_grid() {
+        // A block 1.5 high from x = 4 to 12: down off it is a drop, up
+        // onto it a jump.
+        let physics = world(&[
+            floor(),
+            (Vec3::new(4.0, -1.0, -40.0), Vec3::new(12.0, 1.5, 40.0)),
+        ]);
+        let ground = Ground {
+            physics: &physics,
+            terrain: &no_terrain,
+            passages: &NO_PASSAGES,
+            waters: &[],
+            bodies: &[],
+            motions: &[],
+        };
+        let body = body();
+        let mut nav = Nav::default();
+        let route = |nav: &mut Nav, from: Vec3, to: Vec3| {
+            let mut search = Search::new(from, to, 60.0);
+            loop {
+                nav.begin_tick();
+                if let Some(found) = search.step(nav, &ground, &body) {
+                    return path(found);
+                }
+            }
+        };
+        let (top, bottom) = (Vec3::new(8.0, 1.5, 0.0), Vec3::new(-8.0, 0.0, 0.0));
+        let down = route(&mut nav, top, bottom);
+        assert!(down.len() > 1, "{down:?}");
+        let swept = nav.edged;
+        assert!(swept > 0, "a drop off the block is swept");
+        assert_eq!(route(&mut nav, top, bottom), down);
+        assert_eq!(nav.edged, swept, "the same route sweeps no edge again");
+        let up = route(&mut nav, bottom, top);
+        assert!(up.iter().any(|w| w.jump), "{up:?}");
+        let swept = nav.edged;
+        assert!(swept > 0);
+        assert_eq!(route(&mut nav, bottom, top), up);
+        assert_eq!(nav.edged, swept, "the same climb sweeps no edge again");
+        // A brick laid on the block's edge forgets the edges over it.
+        nav.invalidate(Vec3::new(3.0, 1.5, -1.0), Vec3::new(5.0, 2.0, 1.0), &body);
+        route(&mut nav, top, bottom);
+        assert!(nav.edged > swept, "a change on the edge is swept again");
+        // A brick far from the route forgets none.
+        let swept = nav.edged;
+        nav.invalidate(
+            Vec3::new(30.0, 0.0, 30.0),
+            Vec3::new(32.0, 2.0, 32.0),
+            &body,
+        );
+        route(&mut nav, top, bottom);
+        assert_eq!(nav.edged, swept, "a change elsewhere forgets no edge");
+    }
+
+    /// How much the edge cache saves over rubble: a floor strewn with
+    /// blocks of every height a body steps, jumps and drops between, and
+    /// a crowd of searches across it sharing one grid, as bots share
+    /// theirs. Prints the edges swept and the time with the cache against
+    /// a grid that forgets its edges before every search (every other
+    /// cache kept), which is what every search did before.
+    /// `cargo test --release -p bri-sim --lib rubble_edge_sweeps -- --ignored --nocapture`
+    #[test]
+    #[ignore = "a measurement, printed"]
+    fn rubble_edge_sweeps_are_shared_between_searches() {
+        // A fixed scatter of blocks: 0.5 to 2.5 high, 1 to 3 across, over
+        // a 60 x 60 floor, from a small linear congruential sequence so
+        // every run sees the same rubble.
+        let mut seed: u64 = 0x9E37_79B9_7F4A_7C15;
+        let mut next = move || {
+            seed = seed
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1_442_695_040_888_963_407);
+            (seed >> 33) as f32 / (1u64 << 31) as f32
+        };
+        let mut boxes = vec![(Vec3::new(-40.0, -1.0, -40.0), Vec3::new(40.0, 0.0, 40.0))];
+        for _ in 0..220 {
+            let at = Vec3::new(next() * 60.0 - 30.0, 0.0, next() * 60.0 - 30.0);
+            let size = Vec3::new(1.0 + next() * 2.0, 0.5 + next() * 2.0, 1.0 + next() * 2.0);
+            boxes.push((
+                at - Vec3::new(size.x, 1.0, size.z) * 0.5,
+                at + Vec3::new(size.x, size.y, size.z) * 0.5,
+            ));
+        }
+        let physics = world(&boxes);
+        let ground = Ground {
+            physics: &physics,
+            terrain: &no_terrain,
+            passages: &NO_PASSAGES,
+            waters: &[],
+            bodies: &[],
+            motions: &[],
+        };
+        let body = body();
+        // Searches between corners and across the middle, as a crowd
+        // would route: 32 of them, each pair both ways.
+        let spots: Vec<Vec3> = (0..8)
+            .map(|k| {
+                let a = k as f32 / 8.0 * std::f32::consts::TAU;
+                Vec3::new(a.cos() * 27.0, 0.0, a.sin() * 27.0)
+            })
+            .collect();
+        let routes: Vec<(Vec3, Vec3)> = (0..32)
+            .map(|k| (spots[k % 8], spots[(k * 3 + 4) % 8]))
+            .collect();
+        let run = |forget: bool| {
+            let mut nav = Nav::default();
+            let started = std::time::Instant::now();
+            let mut found = 0;
+            let mut ticks = 0u64;
+            for &(from, to) in &routes {
+                if forget {
+                    nav.edges.clear();
+                }
+                let mut search = Search::new(from, to, 60.0);
+                loop {
+                    nav.begin_tick_for(32);
+                    ticks += 1;
+                    if let Some(f) = search.step(&mut nav, &ground, &body) {
+                        found += usize::from(matches!(f, Found::Path(_)));
+                        break;
+                    }
+                }
+            }
+            (
+                started.elapsed().as_secs_f64() * 1e3,
+                nav.edged,
+                nav.sampled,
+                nav.swept,
+                found,
+                ticks,
+            )
+        };
+        // Warm the physics once.
+        run(false);
+        for round in 0..3 {
+            let cached = run(false);
+            let forgot = run(true);
+            eprintln!(
+                "round {round}: cached ms={:.1} edge_sweeps={} floor_samples={} arc_sweeps={} paths={}/{} ticks={}; forgetting ms={:.1} edge_sweeps={} floor_samples={} arc_sweeps={} paths={}/{} ticks={}",
+                cached.0,
+                cached.1,
+                cached.2,
+                cached.3,
+                cached.4,
+                routes.len(),
+                cached.5,
+                forgot.0,
+                forgot.1,
+                forgot.2,
+                forgot.3,
+                forgot.4,
+                routes.len(),
+                forgot.5,
+            );
+        }
     }
 
     /// The search with a body of its own.
