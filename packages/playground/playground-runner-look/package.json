@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "id": "playground-runner-look",
+  "version": "1.0.0",
+  "api": 1,
+  "name": "Runner Look",
+  "description": "How the Runner looks: a short body in a red cap and blue overalls, drawn in place of the Blockhead. Part of the Mixed Add-On Playground.",
+  "authors": ["Blockland ReImagined"],
+  "license": "CC0-1.0",
+  "provenance": { "source": "original" },
+  "provides": [
+    { "kind": "model", "id": "playground-runner-look:model/runner", "file": "models/runner.json" }
+  ]
+}

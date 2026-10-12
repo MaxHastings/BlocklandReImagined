@@ -1,0 +1,371 @@
+{
+ "schema_version": 7,
+ "definitions": [
+  {
+   "id": "playground-buggy:vehicle/buggy",
+   "datablock": "PlaygroundBuggyVehicle",
+   "name": "Dune Buggy",
+   "family": "Wheeled",
+   "energy": {
+    "maximum": 0.0,
+    "minimum_jet": 0.0,
+    "drain_per_32ms": 0.0,
+    "recharge_per_32ms": 0.0,
+    "jet_force": 0.0
+   },
+   "flight": null,
+   "model": "models/buggy.shape.json",
+   "seats": [
+    {
+     "node": "mount0",
+     "transform": {
+      "position": [
+       -0.45,
+       0.9,
+       0.25
+      ],
+      "rotation": [
+       0.0,
+       0.0,
+       0.0,
+       1.0
+      ]
+     },
+     "pose": "sit",
+     "controls": true,
+     "weapon": false
+    },
+    {
+     "node": "mount1",
+     "transform": {
+      "position": [
+       0.45,
+       0.9,
+       0.25
+      ],
+      "rotation": [
+       0.0,
+       0.0,
+       0.0,
+       1.0
+      ]
+     },
+     "pose": "sit",
+     "controls": false,
+     "weapon": false
+    }
+   ],
+   "wheels": [
+    {
+     "position": [
+      -1.15,
+      0.0,
+      -1.45
+     ],
+     "radius": 0.55,
+     "rest_length": 0.35,
+     "spring": 3000.0,
+     "damping": 650.0,
+     "anti_sway": 8.0,
+     "tire": {
+      "static_friction": 4.0,
+      "kinetic_friction": 3.0,
+      "lateral_force": 16000.0,
+      "lateral_damping": 3500.0,
+      "lateral_relaxation": 0.02,
+      "longitudinal_force": 14000.0,
+      "longitudinal_damping": 1800.0,
+      "longitudinal_relaxation": 0.02
+     },
+     "steering": 1.0,
+     "powered": false,
+     "model": "models/tire.shape.json",
+     "model_rotation": [
+      0.0,
+      0.0,
+      0.0,
+      1.0
+     ]
+    },
+    {
+     "position": [
+      1.15,
+      0.0,
+      -1.45
+     ],
+     "radius": 0.55,
+     "rest_length": 0.35,
+     "spring": 3000.0,
+     "damping": 650.0,
+     "anti_sway": 8.0,
+     "tire": {
+      "static_friction": 4.0,
+      "kinetic_friction": 3.0,
+      "lateral_force": 16000.0,
+      "lateral_damping": 3500.0,
+      "lateral_relaxation": 0.02,
+      "longitudinal_force": 14000.0,
+      "longitudinal_damping": 1800.0,
+      "longitudinal_relaxation": 0.02
+     },
+     "steering": 1.0,
+     "powered": false,
+     "model": "models/tire.shape.json",
+     "model_rotation": [
+      0.0,
+      0.0,
+      0.0,
+      1.0
+     ]
+    },
+    {
+     "position": [
+      -1.15,
+      0.0,
+      1.45
+     ],
+     "radius": 0.55,
+     "rest_length": 0.35,
+     "spring": 3000.0,
+     "damping": 650.0,
+     "anti_sway": 8.0,
+     "tire": {
+      "static_friction": 4.0,
+      "kinetic_friction": 3.0,
+      "lateral_force": 16000.0,
+      "lateral_damping": 3500.0,
+      "lateral_relaxation": 0.02,
+      "longitudinal_force": 14000.0,
+      "longitudinal_damping": 1800.0,
+      "longitudinal_relaxation": 0.02
+     },
+     "steering": 0.0,
+     "powered": true,
+     "model": "models/tire.shape.json",
+     "model_rotation": [
+      0.0,
+      0.0,
+      0.0,
+      1.0
+     ]
+    },
+    {
+     "position": [
+      1.15,
+      0.0,
+      1.45
+     ],
+     "radius": 0.55,
+     "rest_length": 0.35,
+     "spring": 3000.0,
+     "damping": 650.0,
+     "anti_sway": 8.0,
+     "tire": {
+      "static_friction": 4.0,
+      "kinetic_friction": 3.0,
+      "lateral_force": 16000.0,
+      "lateral_damping": 3500.0,
+      "lateral_relaxation": 0.02,
+      "longitudinal_force": 14000.0,
+      "longitudinal_damping": 1800.0,
+      "longitudinal_relaxation": 0.02
+     },
+     "steering": 0.0,
+     "powered": true,
+     "model": "models/tire.shape.json",
+     "model_rotation": [
+      0.0,
+      0.0,
+      0.0,
+      1.0
+     ]
+    }
+   ],
+   "weapon": null,
+   "attachment_model": null,
+   "attachment_collision_hulls": [],
+   "attachment_mount": null,
+   "attachment_fallback_seat": null,
+   "collision_hulls": [
+    [
+     [
+      -1.0,
+      -0.1,
+      -2.0
+     ],
+     [
+      -1.0,
+      -0.1,
+      2.0
+     ],
+     [
+      -1.0,
+      1.2,
+      -2.0
+     ],
+     [
+      -1.0,
+      1.2,
+      2.0
+     ],
+     [
+      1.0,
+      -0.1,
+      -2.0
+     ],
+     [
+      1.0,
+      -0.1,
+      2.0
+     ],
+     [
+      1.0,
+      1.2,
+      -2.0
+     ],
+     [
+      1.0,
+      1.2,
+      2.0
+     ]
+    ]
+   ],
+   "bounds_min": [
+    -1.3699999999999999,
+    -0.55,
+    -2.0
+   ],
+   "bounds_max": [
+    1.3699999999999999,
+    2.4,
+    2.0
+   ],
+   "mass": 300.0,
+   "mass_center": [
+    0.0,
+    0.2,
+    0.0
+   ],
+   "inertia_box": [
+    2.6,
+    1.6,
+    4.0
+   ],
+   "density": 4.0,
+   "drag": 0.4,
+   "friction": 0.8,
+   "restitution": 0.2,
+   "max_damage": 150.0,
+   "burn_ticks": 240,
+   "invulnerable_ticks": 60,
+   "initial_explosion": null,
+   "final_explosion": null,
+   "initial_explosion_offset": 0.0,
+   "final_explosion_offset": 0.0,
+   "mount_distance": 3.0,
+   "engine_force": 12000.0,
+   "engine_brake": 1500.0,
+   "brake_force": 4000.0,
+   "max_speed": 30.0,
+   "reverse_speed": 12.0,
+   "max_steering": 0.6,
+   "thrust": 0.0,
+   "reverse_thrust": 0.0,
+   "lift": 0.0,
+   "yaw_force": 0.0,
+   "pitch_force": 0.0,
+   "roll_force": 0.0,
+   "angular_drag": 0.6,
+   "jump_speed": 0.0,
+   "max_side_speed": 0.0,
+   "run_surface_angle": 0.0,
+   "impact_threshold": 15.0,
+   "impact_damage": 0.05,
+   "strafe_steering": false,
+   "look_pitch": [
+    -1.5,
+    1.5
+   ],
+   "underwater_speeds": [
+    5.0,
+    3.0,
+    3.0
+   ],
+   "camera": {
+    "max_dist": 9.0,
+    "offset": 2.5,
+    "tilt": 0.1,
+    "lag": 0.1,
+    "decay": 0.5
+   },
+   "look_limits": [
+    0.0,
+    1.0
+   ],
+   "wheeled_flight": null,
+   "runover_speed": 6.0,
+   "runover_damage": 25.0,
+   "runover_push": 6.0,
+   "protect_direct": false,
+   "protect_radius": false,
+   "protect_burn": false,
+   "smash": {
+    "speed": 12.0,
+    "radius": 1.2,
+    "max_volume": 8.0,
+    "force": 10.0
+   },
+   "harms_only_in_minigames": true,
+   "trails": [],
+   "authored": {},
+   "adaptations": []
+  }
+ ],
+ "assets": [
+  {
+   "virtual_path": "Add-Ons/Vehicle_PlaygroundBuggy/buggy.dts",
+   "path": "models/buggy.shape.json",
+   "sha256": "80d8d7b4ededb27deac88c1a2561b10492b832b70b020a0c95fcb25fb0e84135",
+   "kind": "model",
+   "source_sha256": "80d8d7b4ededb27deac88c1a2561b10492b832b70b020a0c95fcb25fb0e84135"
+  },
+  {
+   "virtual_path": "Add-Ons/Vehicle_PlaygroundBuggy/tire.dts",
+   "path": "models/tire.shape.json",
+   "sha256": "3b2a1fb563875ab97be93e0b3f43d3acda9d848381e709e7f3e297a08ce070f7",
+   "kind": "model",
+   "source_sha256": "3b2a1fb563875ab97be93e0b3f43d3acda9d848381e709e7f3e297a08ce070f7"
+  },
+  {
+   "virtual_path": "Add-Ons/Vehicle_PlaygroundBuggy/buggy_paint.png",
+   "path": "textures/buggy_paint.png",
+   "sha256": "0a683b529a56380547368ae7b81d3656fb57b3d0ecde0e89f7773acb64fe8669",
+   "kind": "texture",
+   "source_sha256": "0a683b529a56380547368ae7b81d3656fb57b3d0ecde0e89f7773acb64fe8669"
+  },
+  {
+   "virtual_path": "Add-Ons/Vehicle_PlaygroundBuggy/buggy_frame.png",
+   "path": "textures/buggy_frame.png",
+   "sha256": "e8cf2e5bd186a45c5f4387dc125ed50a85ee57cabd7bdddd931580af925363cb",
+   "kind": "texture",
+   "source_sha256": "e8cf2e5bd186a45c5f4387dc125ed50a85ee57cabd7bdddd931580af925363cb"
+  },
+  {
+   "virtual_path": "Add-Ons/Vehicle_PlaygroundBuggy/buggy_seat.png",
+   "path": "textures/buggy_seat.png",
+   "sha256": "01dc1a33736b5914cb65e1dee2fc3be3479c9cc7a86ed01acd2f370e3e7a82b2",
+   "kind": "texture",
+   "source_sha256": "01dc1a33736b5914cb65e1dee2fc3be3479c9cc7a86ed01acd2f370e3e7a82b2"
+  },
+  {
+   "virtual_path": "Add-Ons/Vehicle_PlaygroundBuggy/buggy_tire.png",
+   "path": "textures/buggy_tire.png",
+   "sha256": "71f5e93fef52b5214c575d2a5409c2953ab9e9a250d27092aa5118563a2875e0",
+   "kind": "texture",
+   "source_sha256": "71f5e93fef52b5214c575d2a5409c2953ab9e9a250d27092aa5118563a2875e0"
+  }
+ ],
+ "evidence": [],
+ "unresolved": [],
+ "animation_aliases": {}
+}

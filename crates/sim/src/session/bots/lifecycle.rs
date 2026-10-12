@@ -455,8 +455,13 @@ impl Session {
             .map(|(bot, _)| *bot)
             .collect()
     }
-    /// The game a spawn brick's bot plays in: its builder's.
+    /// The game a spawn brick's bot plays in: a game mode's own mini-game,
+    /// which holds everyone on the server (bots of the map's own bricks
+    /// too, which have no builder), and otherwise its builder's.
     pub(super) fn spawn_brick_game(&self, brick: BrickId) -> Option<bri_minigames::GameId> {
+        if let Some(game) = self.minigames.server_game() {
+            return Some(game);
+        }
         let owner = self.simulation.state().bricks.get(&brick)?.owner;
         let player = self.peers.get(&owner)?.combat.player;
         self.minigames.player(player).ok()?.game
@@ -575,8 +580,8 @@ impl Session {
         }
         Ok(())
     }
-    /// Minigame membership follows the spawn brick owner, and team the
-    /// brick's Team choice.
+    /// Minigame membership follows the spawn brick ([`Self::spawn_brick_game`]),
+    /// and team the brick's Team choice.
     pub(super) fn sync_bot_minigames(&mut self) -> Result<()> {
         let bots: Vec<(OwnerId, BrickId)> = self
             .bots
@@ -585,20 +590,16 @@ impl Session {
             .filter_map(|(o, b)| Some((*o, b.brick?)))
             .collect();
         for (bot, brick) in bots {
-            let Some((owner, team)) = self
+            let Some(team) = self
                 .simulation
                 .state()
                 .bricks
                 .get(&brick)
-                .map(|b| (b.owner, b.vehicle.as_ref().and_then(|v| v.team)))
+                .map(|b| b.vehicle.as_ref().and_then(|v| v.team))
             else {
                 continue;
             };
-            let wanted = self
-                .peers
-                .get(&owner)
-                .and_then(|p| self.minigames.player(p.combat.player).ok())
-                .and_then(|p| p.game);
+            let wanted = self.spawn_brick_game(brick);
             let Some(peer) = self.peers.get(&bot) else {
                 continue;
             };
