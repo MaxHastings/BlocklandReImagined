@@ -1112,9 +1112,12 @@ fn rescale(shape: &mut Shape, k: f32) {
     }
 }
 
-/// The model's visible geometry in its bind pose: lowest and highest corners.
+/// The model's visible geometry as players first see it: a body standing
+/// in its idle clip's first frame (a rig's rest pose need not be a pose at
+/// all), anything else at rest.
 fn bounds(shape: &Shape) -> Result<(Vec3, Vec3)> {
-    let pose = bri_content::animation::sample(shape, None, 0.0)?;
+    let idle = shape.animations.iter().find(|a| a.name == "root" && !a.additive);
+    let pose = bri_content::animation::sample(shape, idle, 0.0)?;
     let detail = shape
         .details
         .iter()
