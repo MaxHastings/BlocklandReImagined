@@ -32,8 +32,9 @@ use std::sync::{Arc, Mutex};
 
 const HZ: usize = 120;
 /// Game time a run plays: past the latest any check first held in the
-/// measured runs (a grenade off near an enemy, 37 s), with room.
-const SECONDS: usize = 50;
+/// measured runs (a bot seeing an enemy through the glass, 59 s), with
+/// room.
+const SECONDS: usize = 75;
 /// Bots a side.
 const SIDE: usize = 3;
 const SEEDS: [u64; 3] = [1, 2, 3];
