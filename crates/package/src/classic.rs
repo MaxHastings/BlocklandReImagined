@@ -156,6 +156,18 @@ impl State {
             .then_some(record.error.as_deref())
             .flatten()
     }
+
+    /// The installed package `legacy` became when it was a zip already in
+    /// the game's own format: such a zip keeps its own provenance, so the
+    /// record is what ties it to its package. None once it changes.
+    pub fn installed_as<'a>(&'a self, legacy: &LegacyAddOn, library: &Library) -> Option<&'a str> {
+        let record = self.get(&legacy.name)?;
+        let id = record.id.as_deref()?;
+        (record.error.is_none()
+            && Some(record.stamp) == stamp(&legacy.path)
+            && library.get(id).is_some())
+        .then_some(id)
+    }
 }
 
 /// One thing the game does to bring its conversions in line with the drop
@@ -225,10 +237,7 @@ pub fn plan(library: &Library, state: &State, importer: &str) -> Vec<Step> {
                 stamp: now,
             }),
             (None, Some(r)) if current(r) && r.error.is_some() => {}
-            // A zip already in the game's own format keeps its own
-            // provenance, so the record is what ties it to its package.
-            (None, Some(r))
-                if current(r) && r.id.as_ref().is_some_and(|id| library.get(id).is_some()) => {}
+            (None, Some(r)) if current(r) && state.installed_as(legacy, library).is_some() => {}
             (imported, _) => rest.push(Step::Import {
                 name: legacy.name.clone(),
                 path: legacy.path.clone(),
