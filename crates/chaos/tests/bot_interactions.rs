@@ -30,6 +30,8 @@ const TALL_GUNNER: &str = "test:vehicle/elevated-gunner";
 const PURSUER: &str = "test:vehicle/harmless-pursuer";
 // A gun whose shell bursts: what it would do to its own side counts.
 const BLASTER: &str = "test:vehicle/blast-rover";
+// An unarmed hull two bites wear through, its high seat out of a bite's reach.
+const THIN_HULL: &str = "test:vehicle/thin-hull";
 const CHARGE_TICKS: u64 = 24;
 const CHARGE_STEPS: u8 = 3;
 const ENEMY: Vec3 = Vec3::new(-12.0, 0.05, 8.0);
@@ -56,13 +58,14 @@ fn session(interact: f32) -> Session {
         (TALL_GUNNER, [0, 1, 2], [3.0, 1.4, 5.0]),
         (PURSUER, [2, 1, 0], [2.6, 1.0, 4.8]),
         (BLASTER, [2, 1, 0], [2.6, 1.0, 4.8]),
+        (THIN_HULL, [0, 1, 2], [3.0, 1.4, 5.0]),
     ] {
         let mut d = bri_vehicles::testing::car();
         let seats = bri_vehicles::testing::tank().seats;
         d.id = id.into();
         d.name = id.into();
         d.seats = order.map(|i| seats[i].clone()).into();
-        if id == TALL_GUNNER {
+        if id == TALL_GUNNER || id == THIN_HULL {
             // Ground-level players can board the lower passenger seat, but
             // the gunner is too high to click directly. Players use Next Seat.
             d.seats[2].transform.position[1] = 6.0;
@@ -96,7 +99,10 @@ fn session(interact: f32) -> Session {
         }
         weapon.sound.clear();
         weapon.effect.clear();
-        if id == UNARMED || id == PURSUER {
+        if id == THIN_HULL {
+            d.max_damage = 30.0;
+        }
+        if id == UNARMED || id == PURSUER || id == THIN_HULL {
             d.weapon = None;
             for seat in &mut d.seats {
                 seat.weapon = false;
@@ -123,6 +129,7 @@ fn session(interact: f32) -> Session {
             TALL_GUNNER,
             PURSUER,
             BLASTER,
+            THIN_HULL,
         ]
         .map(String::from)
         .into(),
@@ -640,6 +647,65 @@ fn a_human_occupant_wins_over_intentions_and_hostile_bots_do_not_join_their_crew
             "hostile occupants make the rest of this chassis unsuitable"
         );
     }
+}
+
+#[test]
+fn a_bot_that_bites_wears_down_the_hull_its_seated_enemy_sits_out_of_reach_in() {
+    let mut s = session(0.0);
+    let mut kinds = BotPack::from_json(include_bytes!(
+        "../../../packages/blockhead_bot/assets/bots.json"
+    ))
+    .unwrap()
+    .bots;
+    kinds[0].melee =
+        Some(serde_json::from_value(json!({ "damage": 15.0, "seconds": 1.0 })).unwrap());
+    s.set_bot_kinds(kinds).unwrap();
+    let mut g = Game::with_session(s, THIN_HULL, 1, false);
+    g.steps(15);
+    g.send(
+        g.human,
+        Command::DropPlayerAtCamera(Some(bri_sim::session::CameraView {
+            eye: (g.position() + Vec3::Y * 4.0).to_array(),
+            yaw: 0.0,
+            pitch: 0.0,
+        })),
+    );
+    for _ in 0..120 {
+        g.steps(1);
+        if g.s.mounted(g.human).is_some() {
+            break;
+        }
+    }
+    g.send(g.human, Command::SwitchSeat(1));
+    g.send(g.human, Command::SwitchSeat(1));
+    assert_eq!(
+        g.s.mounted(g.human),
+        Some((g.vehicle, 2)),
+        "up in the high seat"
+    );
+    let mut wrecked = false;
+    for _ in 0..120 * 20 {
+        g.steps(1);
+        assert_eq!(
+            g.s.vitals()[&g.human].health,
+            100.0,
+            "no bite reaches the seat: {}",
+            g.diagnostics()
+        );
+        if g.s
+            .vehicle_infos()
+            .iter()
+            .any(|v| v.id == g.vehicle && v.destroyed)
+        {
+            wrecked = true;
+            break;
+        }
+    }
+    assert!(
+        wrecked,
+        "its bites wore the hull through: {}",
+        g.diagnostics()
+    );
 }
 
 /// A tiny real Add-On exercising the same add/rest commands game rules use.
