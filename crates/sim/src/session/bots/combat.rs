@@ -264,8 +264,10 @@ pub(super) fn capability(
         return tactics::native_capability(image, projectile, scale, cadence(image), projectiles)
             .ok();
     }
-    // Session hand frames currently have muzzle == eye, so native melee's
-    // geometry correction is exactly one. Reject unresolved non-damage tools.
+    // Native melee is planned as if swung from the eye (a geometry
+    // correction of one); the session swings it from the muzzle in the
+    // hand, within arm's length of the eye. Reject unresolved non-damage
+    // tools.
     let mut native = image.clone();
     native.melee = false;
     let cap =

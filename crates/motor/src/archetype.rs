@@ -8,6 +8,7 @@
 use crate::player::PlayerTuning;
 use crate::player_types::PlayerType;
 use anyhow::{Result, ensure};
+use bri_content::body::{Animations, Sockets};
 use serde::{Deserialize, Serialize};
 
 /// Index into an [`Archetypes`] table. `0` is v20's standard player.
@@ -47,6 +48,10 @@ pub struct Archetype {
     /// (Slayer's `PlayerFrozenArmor`) does not.
     #[serde(default = "yes", skip_serializing_if = "is_yes")]
     pub uses_items: bool,
+    /// Where items attach, the eye and the hip ([`Sockets`]); each left out
+    /// is the Blockhead's node.
+    #[serde(default, skip_serializing_if = "Sockets::is_default")]
+    pub sockets: Sockets,
 }
 fn yes() -> bool {
     true
@@ -90,6 +95,10 @@ pub struct Look {
     /// `thirdPersonOnly`: the camera stays behind the body.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub third_person_only: bool,
+    /// The model's clip for each animation role (`idle`, `run`, `sit`...);
+    /// a role left out asks for the Blockhead's clip name.
+    #[serde(default, skip_serializing_if = "Animations::is_empty")]
+    pub animations: Animations,
 }
 /// v20's horse (`horse.dts`): players and entities with this look draw
 /// and carry items as a horse.
@@ -130,6 +139,8 @@ impl Archetype {
             "Invalid archetype {}",
             self.id
         );
+        self.sockets.validate()?;
+        bri_content::body::validate_animations(&self.look.animations)?;
         Ok(())
     }
     fn v20(kind: PlayerType) -> Self {
@@ -151,8 +162,10 @@ impl Archetype {
                 camera_distance: 8.0,
                 first_person_only: false,
                 third_person_only: false,
+                animations: Animations::new(),
             },
             uses_items: true,
+            sockets: Sockets::default(),
         }
     }
 }

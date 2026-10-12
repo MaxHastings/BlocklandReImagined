@@ -172,6 +172,9 @@ pub fn load_packages(
     let rig: bri_content::avatar::Rig = serde_json::from_slice(&bytes)?;
     rig.validate()?;
     let body_mounts = bri_sim::session::shape_mount_points(&rig.shape);
+    let body_grips = bri_sim::session::shape_grips(&rig, &[]);
+    let image_barrels =
+        content_identity::image_barrels(&item_presentation_dir, &weapons, &weapon_extras);
     let setup = HostSetup {
         lan: false,
         content: SessionContent {
@@ -180,6 +183,8 @@ pub fn load_packages(
             item_bounds: item_physics.bounds,
             avatar_catalog: avatar,
             body_mounts,
+            body_grips,
+            image_barrels,
             vehicle_pack,
             bot_kinds,
             event_catalog: bri_events::Catalog::load(events_dir.join("catalog.json"))?,

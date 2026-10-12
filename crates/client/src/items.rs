@@ -1310,6 +1310,23 @@ impl ItemAssets {
             mount_action,
         )
     }
+    /// Each image's muzzle in the frame of the hand holding it, as it is
+    /// drawn there ([`bri_weapons::muzzle::barrel`]): what the host fires
+    /// from.
+    pub fn image_barrels(&self) -> BTreeMap<String, [f32; 3]> {
+        self.presentation
+            .images
+            .iter()
+            .map(|(id, image)| {
+                let shape = (!image.model.is_empty())
+                    .then(|| self.shape(&image.model).ok())
+                    .flatten();
+                let barrel =
+                    bri_weapons::muzzle::barrel(image.offset, image.source_rotation_degrees, shape);
+                (id.clone(), barrel.to_array())
+            })
+            .collect()
+    }
     pub fn node_transform(
         &self,
         model: &str,

@@ -1017,6 +1017,21 @@ impl App {
                     }
                     self.avatar.avatars.insert(*owner, mesh);
                 }
+                // How the archetype fits the drawn mesh: its sockets and
+                // clips, or a box (or no) body the mesh only stands in for.
+                let archetype = view.archetypes.resolve(player.archetype);
+                let stand_in = model.is_none()
+                    && (look.hides_body()
+                        || packages_for(&self.addons.package_catalog, view)
+                            .is_some_and(|catalog| catalog.model(&look.model).is_some()));
+                let mesh = self.avatar.avatars.get_mut(owner).unwrap();
+                mesh.set_body_kind(crate::avatar::BodyKind::of(archetype, stand_in));
+                crate::avatar::report_body(
+                    &archetype.id,
+                    &look.model,
+                    mesh,
+                    &self.avatar.avatar_assets,
+                );
                 // Death and respawn as of the drawn pose, not the newest vitals.
                 let life = view.vitals.get(owner).map(|vitals| {
                     let (tick, spawned) = if *owner == view.owner {
@@ -1280,14 +1295,28 @@ impl App {
                     }?;
                     Some(crate::world_items::MountPose {
                         eye,
-                        // Torque mounts an image whose mount point has no
-                        // `mountN` node (the dribbled basketball's Mount8) at
-                        // the player's own transform.
+                        // The hands are the body's hand sockets, and an
+                        // image for a hand the body has no socket for is not
+                        // drawn. Torque mounts an image whose other mount
+                        // point has no `mountN` node (the dribbled
+                        // basketball's Mount8) at the player's own transform.
                         mounts: (0..32)
-                            .map(|n| {
-                                let node =
-                                    avatar.mount_node(&self.avatar.avatar_assets, n as usize);
-                                (n, node.unwrap_or_else(|| avatar.body_transform()))
+                            .filter_map(|n| {
+                                let aim = if owner == view.owner {
+                                    local_view_pitch
+                                } else {
+                                    player.pitch
+                                };
+                                let node = avatar.mount_socket(
+                                    &self.avatar.avatar_assets,
+                                    n as usize,
+                                    aim,
+                                );
+                                match node {
+                                    Some(node) => Some((n, node)),
+                                    None if n < 2 => None,
+                                    None => Some((n, avatar.body_transform())),
+                                }
                             })
                             .collect(),
                         actions: (0..32)

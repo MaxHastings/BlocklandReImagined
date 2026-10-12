@@ -10,5 +10,11 @@
     "backward": 6,
     "sideways": 7,
     "jump_speed": 9
+  },
+  "sockets": {
+    "right_hand": { "offset": [0.62, 1.0, -0.16] },
+    "left_hand": { "offset": [-0.62, 1.0, -0.16] },
+    "eye": { "offset": [0.0, 2.15, -0.14] },
+    "seat": { "offset": [0.0, 0.9, 0.0] }
   }
 }
