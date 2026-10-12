@@ -246,6 +246,18 @@ impl CollisionMirror {
         bri_physics::detect_collisions(&mut self.physics);
         Ok(true)
     }
+    /// Replace the map's own liquids (the Environment window laid a sea
+    /// over a flat map, or took it away), keeping the water bricks.
+    pub fn set_map_waters(&mut self, waters: Vec<Water>) {
+        self.map_waters = waters;
+        self.waters = self
+            .map_waters
+            .iter()
+            .chain(self.brick_waters.values())
+            .cloned()
+            .collect();
+        self.water_generation = next_water_generation();
+    }
     /// Changes when `tinted_waters` may give different liquids (before paint).
     pub fn water_generation(&self) -> u64 {
         self.water_generation
@@ -271,7 +283,7 @@ impl CollisionMirror {
         });
         let map = self.map_waters.iter().map(|w| crate::water::TintedWater {
             water: w.clone(),
-            color: crate::water::MAP_WATER_COLOR,
+            color: w.tint.unwrap_or(crate::water::MAP_WATER_COLOR),
             brick: false,
         });
         bricks.chain(map).collect()
@@ -650,6 +662,10 @@ impl Predictor {
     }
     pub fn world(&self) -> &CollisionMirror {
         &self.world
+    }
+    /// See [`CollisionMirror::set_map_waters`].
+    pub fn set_map_waters(&mut self, waters: Vec<Water>) {
+        self.world.set_map_waters(waters);
     }
     pub fn sync_world(&mut self, bricks: &bri_world::Bricks) -> Result<bool> {
         self.world.sync(bricks)

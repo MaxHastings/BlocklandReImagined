@@ -64,6 +64,18 @@ class SnapshotTests(unittest.TestCase):
         self.assertEqual(info['files']['renamed/file'], hashlib.sha256(b'fixture').hexdigest())
         self.assertIn('packages.json', info['files'])
 
+    def test_refuses_environments_built_without_steam(self):
+        content = self.root / 'content'
+        (content / 'env').mkdir(parents=True)
+        (content / 'packages.json').write_text(json.dumps({'schema_version': 1, 'packages': [
+            {'dir': 'env', 'role': 'environments'}]}))
+        manifest = content / 'env/environments.json'
+        manifest.write_text(json.dumps({'schema_version': 1, 'skies': [], 'grounds': [], 'waters': []}))
+        with self.assertRaisesRegex(SystemExit, '--steam'):
+            ci_content.pack(content, self.archive)
+        manifest.write_text(json.dumps({'schema_version': 1, 'skies': [{'id': 'sunset'}]}))
+        ci_content.pack(content, self.archive)
+
     def test_refuses_published_release_without_uploading(self):
         with patch('ci_content.shutil.which', return_value='gh'), patch('ci_content.subprocess.run') as run:
             run.return_value.returncode = 0

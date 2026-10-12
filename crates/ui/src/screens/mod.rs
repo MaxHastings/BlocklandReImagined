@@ -108,6 +108,8 @@ pub enum ScreenId {
     AdminEnvironment,
     /// Its colour picker.
     AdminColorPicker,
+    /// Its sky picture picker.
+    AdminEnvironmentChoice,
     BrickSelector,
     PrintSelector,
     Wrench(WrenchVariant),
@@ -238,6 +240,9 @@ pub fn make(id: ScreenId, core: &mut Core) -> Box<dyn Screen> {
         | ScreenId::AdminConfirm => return Box::new(admin::AdminScreen::new(id, core)),
         ScreenId::AdminEnvironment => return Box::new(environment::Environment::new(core)),
         ScreenId::AdminColorPicker => return Box::new(environment::ColorPicker::new(core)),
+        ScreenId::AdminEnvironmentChoice => {
+            return Box::new(environment::ChoicePicker::new(core));
+        }
         ScreenId::Wrench(variant) => return Box::new(wrench::Wrench::new(core, variant)),
         ScreenId::WrenchEvents => return Box::new(wrench::WrenchEvents::new(core)),
         ScreenId::RuleWorkshop => return Box::new(workshop::Workshop::new(core)),

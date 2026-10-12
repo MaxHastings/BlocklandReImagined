@@ -168,6 +168,8 @@ pub(super) struct Combat {
     /// Who last pushed this body with a weapon's impulse, or drove a
     /// vehicle over it, and the tick.
     pub pushed: Option<(OwnerId, u64)>,
+    /// In lava: the tick it burns this body next.
+    pub lava: Option<u64>,
 }
 
 impl Combat {
@@ -525,6 +527,8 @@ pub(super) enum DamageKind {
     Fall,
     Impact,
     Suicide,
+    /// A water that kills (`bri_content::environment_pack::LAVA`).
+    Lava,
     /// Wrench event output (`kill`, negative `addHealth`).
     Event,
     /// A package operation (explosion, direct damage), named by package.
@@ -579,6 +583,7 @@ impl DamageKind {
             Self::Fall => "fall",
             Self::Impact => "impact",
             Self::Suicide => "suicide",
+            Self::Lava => "lava",
             Self::Event => "event",
             Self::Package { .. } => "package",
         }
@@ -589,6 +594,7 @@ impl DamageKind {
             Self::Weapon { name, .. } => name,
             Self::Fall => "Fall",
             Self::Impact => "Impact",
+            Self::Lava => "Lava",
             Self::Suicide | Self::Event => "Suicide",
             Self::Package { name } => name,
         }
@@ -842,6 +848,7 @@ impl Session {
             voice: None,
             voice_count: 0,
             pushed: None,
+            lava: None,
         })
     }
     pub(super) fn combat_disconnect(&mut self, player: mg::PlayerId) {
@@ -1300,7 +1307,16 @@ impl Session {
             // A killer who has left since the shot counts as no killer.
             .and_then(|k| self.peers.get(&k).map(|p| p.name.clone()));
         let pack = &self.weapons.pack;
-        let base = pack.damage_type(kind.type_name()).cloned();
+        // v20 has no Lava type; its line is the suicide's (a skull and the
+        // name), as v21's is.
+        let base = pack
+            .damage_type(kind.type_name())
+            .or_else(|| {
+                matches!(kind, DamageKind::Lava)
+                    .then(|| pack.damage_type("Suicide"))
+                    .flatten()
+            })
+            .cloned();
         // A special kill (Support_SpecialKills) lays its message over the
         // killing type's.
         let special = kind
@@ -2541,6 +2557,35 @@ impl Session {
                     .guard_fall_clang(ActorId(owner), impact.normalize_or_zero());
                 self.damage_player(owner, amount, kind, None)?;
             }
+        }
+        self.step_lava()
+    }
+
+    /// v21's lava (`Armor::onEnterLiquid` with `waterType` 8): a body
+    /// takes [`LAVA_DAMAGE`] on going in, then again every
+    /// [`LAVA_PERIOD_MS`] it stays.
+    fn step_lava(&mut self) -> Result<()> {
+        use bri_content::environment_pack::{LAVA, LAVA_DAMAGE, LAVA_PERIOD_MS};
+        let tick = self.simulation.state().tick;
+        let period = (u64::from(LAVA_PERIOD_MS) * u64::from(bri_weapons::TICK_HZ)).div_ceil(1000);
+        let mut burned = Vec::new();
+        for (&owner, peer) in self.peers.iter_mut() {
+            let state = peer.player.state();
+            let height = crate::water::body_height(state, peer.player.tuning()) * state.scale;
+            let in_lava = peer.combat.alive
+                && self
+                    .simulation
+                    .liquid_at(state.feet, height)
+                    .is_some_and(|(water, _)| water.liquid_type == LAVA);
+            if !in_lava {
+                peer.combat.lava = None;
+            } else if peer.combat.lava.is_none_or(|due| tick >= due) {
+                peer.combat.lava = Some(tick + period);
+                burned.push(owner);
+            }
+        }
+        for owner in burned {
+            self.damage_player(owner, LAVA_DAMAGE, DamageKind::Lava, None)?;
         }
         Ok(())
     }

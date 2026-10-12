@@ -112,7 +112,7 @@ pub fn package_hash(files: &[FileEntry]) -> Result<String> {
 impl Listing {
     /// List `dir`, which must be the package `package` describes.
     pub fn of(dir: &Path, package: &PackageRef) -> Result<Self> {
-        let mut files = Vec::new();
+        let mut found = Vec::new();
         let mut pending = vec![dir.to_path_buf()];
         while let Some(current) = pending.pop() {
             for entry in fs::read_dir(&current)? {
@@ -136,18 +136,26 @@ impl Listing {
                     .to_str()
                     .context("Package file names must be UTF-8")?
                     .replace('\\', "/");
-                let (sha256, size) = hash_file(&path)?;
-                files.push(FileEntry {
-                    path: relative,
-                    size,
-                    sha256,
-                });
+                found.push((relative, path));
                 ensure!(
-                    files.len() <= MAX_PACKAGE_FILES,
+                    found.len() <= MAX_PACKAGE_FILES,
                     "Package has more than {MAX_PACKAGE_FILES} files"
                 );
             }
         }
+        // Every Host lists its Add-Ons: files hashed before (by this
+        // listing or the host's own content check) are not read again.
+        let paths: Vec<_> = found.iter().map(|(_, path)| path.clone()).collect();
+        let hashes = crate::environment::kept_file_hashes(&paths)?;
+        let mut files: Vec<_> = found
+            .into_iter()
+            .zip(hashes)
+            .map(|((path, _), (size, digest))| FileEntry {
+                path,
+                size,
+                sha256: hex(&digest),
+            })
+            .collect();
         files.sort_by(|a, b| a.path.cmp(&b.path));
         let listing = Self {
             schema_version: LISTING_SCHEMA,

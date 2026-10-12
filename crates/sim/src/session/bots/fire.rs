@@ -250,29 +250,38 @@ impl Session {
     }
     /// The held weapon's reach and flight.
     pub(super) fn bot_vehicle_weapon(&self, bot: OwnerId) -> Option<Weapon> {
-        if let Some((vehicle, seat)) = self.mounted(bot)
-            && let Some(w) = &self.vehicles.world
-            && w.weapon_available(bri_vehicles::VehicleId(vehicle))
-            && let Some(d) = w.definition_of(bri_vehicles::VehicleId(vehicle))
-            && d.weapon_seat() == Some(usize::from(seat))
-            && let Some(gun) = &d.weapon
-            && let Some(p) = self.weapons.pack.projectiles.get(&gun.projectile)
-            && let Some(v) = self.bots.objects.iter().find(|v| v.id.0 == vehicle)
-        {
-            let speed = gun.speed * f32::from(gun.charge_steps.max(1)) * v.scale;
-            return Some(Weapon {
-                melee: false,
-                hold: false,
-                charge: gun.charge_ticks > 0,
-                near: None,
-                reach: speed * p.lifetime_ticks as f32 * TICK,
-                speed,
-                fall: bri_weapons::runtime::fall_per_tick(p) * bri_weapons::TICK_HZ as f32,
-                splash: p.explosion.radius,
-                spread: 0.0,
-            });
+        let (vehicle, seat) = self.mounted(bot)?;
+        let d = self
+            .vehicles
+            .world
+            .as_ref()?
+            .definition_of(bri_vehicles::VehicleId(vehicle))?;
+        (d.weapon_seat() == Some(usize::from(seat)))
+            .then(|| self.vehicle_gun(vehicle))
+            .flatten()
+    }
+    /// The reach and flight of `vehicle`'s gun, while it has one to fire.
+    pub(super) fn vehicle_gun(&self, vehicle: u64) -> Option<Weapon> {
+        let w = self.vehicles.world.as_ref()?;
+        let d = w.definition_of(bri_vehicles::VehicleId(vehicle))?;
+        let gun = d.weapon.as_ref()?;
+        let p = self.weapons.pack.projectiles.get(&gun.projectile)?;
+        let v = self.bots.objects.iter().find(|v| v.id.0 == vehicle)?;
+        if !w.weapon_available(bri_vehicles::VehicleId(vehicle)) {
+            return None;
         }
-        None
+        let speed = gun.speed * f32::from(gun.charge_steps.max(1)) * v.scale;
+        Some(Weapon {
+            melee: false,
+            hold: false,
+            charge: gun.charge_ticks > 0,
+            near: None,
+            reach: speed * p.lifetime_ticks as f32 * TICK,
+            speed,
+            fall: bri_weapons::runtime::fall_per_tick(p) * bri_weapons::TICK_HZ as f32,
+            splash: p.explosion.radius,
+            spread: 0.0,
+        })
     }
     /// How it handles what it holds: a natively modelled weapon as the
     /// fight reads it (`hand_combat::weapon_of`), else by its shot or projectile,
@@ -464,8 +473,27 @@ impl Session {
         let height = crate::water::body_height(state, them.player.tuning()) * state.scale;
         let point = Vec3::new(feet.x, eye.y.clamp(feet.y, feet.y + height), feet.z);
         let width = them.player.tuning().width * state.scale * 0.5;
-        if point.distance(eye) > melee.reach + width || !self.can_damage_player(bot, target, false)
-        {
+        if !self.can_damage_player(bot, target, false) {
+            return Ok(());
+        }
+        if point.distance(eye) > melee.reach + width {
+            // Seated out of reach: the hull it sits in is what it lands on.
+            let hull = self
+                .bite_hull(melee, target, eye)
+                .filter(|(_, at)| at.distance(eye) <= melee.reach);
+            if let Some((vehicle, at)) = hull {
+                if let Some(action) = &melee.action {
+                    self.play_thread(tick, bot, MELEE_THREAD, action);
+                }
+                self.damage_vehicle(
+                    vehicle,
+                    melee.damage,
+                    bot,
+                    &melee.name,
+                    at,
+                    crate::session::vehicles::VehicleHarm::Weapon { projectile: None },
+                )?;
+            }
             return Ok(());
         }
         if let Some(action) = &melee.action {
@@ -506,6 +534,36 @@ impl Session {
         let max = self.max_health(target);
         self.peers.get_mut(&target).unwrap().combat.health = max;
         Ok(())
+    }
+    /// Where a bite meets `target` seated: the point of the hull it sits in
+    /// (its bounds as it lies now) nearest `from`, when the bite wears a
+    /// hull down (`DamageType::vehicle_scale`, as any weapon's hit does);
+    /// None on foot, in a wreck, or for a bite a hull shrugs off.
+    pub(super) fn bite_hull(
+        &self,
+        melee: &crate::bot_kind::BotMelee,
+        target: OwnerId,
+        from: Vec3,
+    ) -> Option<(u64, Vec3)> {
+        let wears = self
+            .weapons
+            .pack
+            .damage_type(&melee.name)
+            .map_or(1.0, |t| t.vehicle_scale)
+            > 0.0;
+        let (vehicle, _) = self.mounted(target).filter(|_| wears)?;
+        let world = self.vehicles.world.as_ref()?;
+        let v = world
+            .vehicle_snapshot(&self.simulation.physics, bri_vehicles::VehicleId(vehicle))
+            .filter(|v| !v.destroyed)?;
+        let d = world.definition(&v.definition)?;
+        let at = Vec3::from(v.transform.position);
+        let turn = glam::Quat::from_array(v.transform.rotation);
+        let local = (turn.inverse() * (from - at)).clamp(
+            Vec3::from(d.bounds_min) * v.scale,
+            Vec3::from(d.bounds_max) * v.scale,
+        );
+        Some((vehicle, at + turn * local))
     }
     /// Equip the best weapon in the inventory by its data
     /// (`hand_combat::item_worth`), for a weapon the native chooser does not

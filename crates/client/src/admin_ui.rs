@@ -312,7 +312,7 @@ pub fn command(action: &ui::AdminAction, snapshot: &AdminSnapshot) -> Result<Opt
         ui::AdminAction::SetEnvironment { settings } => (
             Capability::Environment,
             Action::SetEnvironment {
-                settings: (**settings).clone(),
+                settings: settings.clone(),
             },
         ),
         _ => bail!("This administration operation is not connected to gameplay yet"),
@@ -788,7 +788,12 @@ mod tests {
         assert!(state(&s).supported.contains(&ui::AdminFeature::Environment));
         match command(&action, &s)? {
             Some(Command::Admin(request)) => {
-                assert_eq!(request.action, Action::SetEnvironment { settings });
+                assert_eq!(
+                    request.action,
+                    Action::SetEnvironment {
+                        settings: Box::new(settings)
+                    }
+                );
             }
             other => panic!("{other:?}"),
         }

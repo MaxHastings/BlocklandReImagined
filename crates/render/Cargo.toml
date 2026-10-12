@@ -20,3 +20,4 @@ wgpu.workspace = true
 
 [dev-dependencies]
 bri-package = { path = "../package" }
+tempfile.workspace = true

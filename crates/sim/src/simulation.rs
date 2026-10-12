@@ -225,6 +225,12 @@ pub struct Simulation {
     pub physics: PhysicsWorld,
     /// Map liquids. Water bricks add their own volumes (see `liquids`).
     pub waters: Vec<bri_content::water::Water>,
+    /// The map's own liquids, which `waters` holds unless the Environment
+    /// window's water changed them ([`Self::apply_environment_water`]).
+    own_waters: Vec<bri_content::water::Water>,
+    /// The plate a flat map stands on, and the waters that may cover it.
+    plate: Option<bri_content::scene::Plate>,
+    seas: std::sync::Arc<bri_content::environment_pack::Pack>,
     brick_waters: BTreeMap<BrickId, bri_content::water::Water>,
     /// `liquids()` as last built, with the map liquids it was built from
     /// (address and count); water bricks changing clears it.
@@ -371,11 +377,21 @@ fn capped(counts: &BTreeMap<String, usize>) -> String {
     }
     out.join(", ")
 }
-/// The prints placed bricks name that this server cannot resolve.
-pub fn unresolved_prints<'a>(bricks: impl Iterator<Item = &'a Brick>) -> BTreeMap<String, usize> {
+/// The prints placed bricks name that this server cannot resolve. Saves
+/// keep their print names as written (`2x2f/vent`, `Letters/A`), so a name
+/// counts only when `installed` does not know it (`NOPRINT` never does).
+pub fn unresolved_prints<'a>(
+    bricks: impl Iterator<Item = &'a Brick>,
+    installed: impl Fn(&str) -> bool,
+) -> BTreeMap<String, usize> {
     let mut prints: BTreeMap<String, usize> = BTreeMap::new();
     for brick in bricks {
         if let Some(bri_world::ContentRef::Unresolved(u)) = &brick.print {
+            if u.namespace == "print"
+                && (bri_content::brick_materials::is_no_print(&u.name) || installed(&u.name))
+            {
+                continue;
+            }
             *prints
                 .entry(format!("{}/{}", u.namespace, u.name))
                 .or_default() += 1;
@@ -526,6 +542,9 @@ impl Simulation {
             definitions,
             physics,
             waters: Vec::new(),
+            own_waters: Vec::new(),
+            plate: None,
+            seas: Default::default(),
             brick_waters,
             liquids: std::sync::OnceLock::new(),
             index,
@@ -1647,6 +1666,35 @@ impl Simulation {
             .map(|w| (w, w.coverage(feet, height)))
             .filter(|(_, coverage)| *coverage > 0.0)
             .max_by(|a, b| a.1.total_cmp(&b.1))
+    }
+    /// The map's own liquids, the plate it stands on when it is flat, and
+    /// the waters the Environment window may lay over that plate.
+    pub fn set_map_waters(
+        &mut self,
+        waters: Vec<bri_content::water::Water>,
+        plate: Option<bri_content::scene::Plate>,
+        seas: std::sync::Arc<bri_content::environment_pack::Pack>,
+    ) {
+        self.own_waters = waters.clone();
+        self.plate = plate;
+        self.seas = seas;
+        self.set_waters(waters);
+    }
+    /// The plate this map stands on, when it is flat.
+    pub fn plate(&self) -> Option<&bri_content::scene::Plate> {
+        self.plate.as_ref()
+    }
+    /// The water the environment settings give: the map's own, none, or a
+    /// sea over a flat map's plate ([`bri_content::environment_pack::Pack::waters`]).
+    pub fn apply_environment_water(&mut self, settings: &bri_content::atmosphere::Settings) {
+        let waters = self
+            .seas
+            .waters(self.plate.as_ref(), settings, &self.own_waters);
+        self.set_waters(waters);
+    }
+    fn set_waters(&mut self, waters: Vec<bri_content::water::Water>) {
+        self.waters = waters;
+        self.liquids = std::sync::OnceLock::new();
     }
     /// Map liquids plus water bricks, for the player motor. Built once and
     /// shared until a water brick or the map's liquids change, not copied

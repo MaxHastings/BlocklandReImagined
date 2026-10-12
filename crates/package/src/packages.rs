@@ -268,7 +268,7 @@ mod tests {
     #[test]
     fn base_list_is_valid_and_namespaced() {
         let base = PackageSet::base();
-        assert_eq!(base.packages.len(), 18);
+        assert_eq!(base.packages.len(), 19);
         for package in &base.packages {
             assert!(id::is_reserved(&package.id), "{}", package.id);
             assert_eq!(id::content_namespace(&package.id), id::BASE_NAMESPACE);

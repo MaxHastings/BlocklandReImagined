@@ -561,8 +561,9 @@ fn a_jeep_on_a_hill() {
 }
 
 /// How bots use vehicles over a match: each ride (boarding to getting
-/// out) with how long it lasted and how far it went, and the ticks two
-/// allies crewed one vehicle and a gunner sat at a gun.
+/// out; a change of seat inside is the same ride) with how long it lasted
+/// and how far it went, the ticks two allies crewed one vehicle and a
+/// gunner sat at a gun, and how often a rider changed seats.
 #[derive(Default)]
 struct Rides {
     open: BTreeMap<OwnerId, (u64, (u64, u8), Vec3)>,
@@ -572,6 +573,8 @@ struct Rides {
     ended: Vec<(OwnerId, u64, bool)>,
     crewed: u64,
     gunner: u64,
+    /// Changes of seat inside a vehicle.
+    switches: u64,
     /// Seats left, by why (`Session::bot_seat_leaves`).
     leaves: BTreeMap<&'static str, u64>,
 }
@@ -592,6 +595,10 @@ impl Rides {
             let mounted = v.mounted.filter(|_| v.alive);
             match (self.open.get(bot).copied(), mounted) {
                 (Some((_, was, _)), Some(now)) if was == now => {}
+                (Some((since, was, from)), Some(now)) if was.0 == now.0 => {
+                    self.switches += 1;
+                    self.open.insert(*bot, (since, now, from));
+                }
                 (open, now) => {
                     if let Some((since, (vehicle, seat), from)) = open {
                         let to = feet.unwrap_or(from);
@@ -624,12 +631,13 @@ impl Rides {
         let short = ticks.iter().filter(|t| **t < 5 * 120).count();
         let far: f32 = self.done.iter().map(|r| r.3).sum();
         eprintln!(
-            "RIDES {name}: rides={} median_s={:.1} under_5s={} driven_units={far:.0} crewed_s={:.1} gunner_s={:.1} left={:?}",
+            "RIDES {name}: rides={} median_s={:.1} under_5s={} driven_units={far:.0} crewed_s={:.1} gunner_s={:.1} switches={} left={:?}",
             self.done.len(),
             median as f32 / 120.0,
             short,
             self.crewed as f32 / 120.0,
             self.gunner as f32 / 120.0,
+            self.switches,
             self.leaves,
         );
         for ((vehicle, seat, ticks, far), (bot, tick, alive)) in self.done.iter().zip(&self.ended) {

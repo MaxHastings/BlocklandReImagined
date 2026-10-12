@@ -203,6 +203,12 @@ const MAX_REPLANS: u32 = 3;
 const WEAVE_SECONDS: f32 = 0.75;
 /// A goal that moves less than this keeps its route (`Brain::set_goal_near`).
 const GOAL_SLACK: f32 = 0.2;
+/// An enemy that moves less than this from where a chase heads keeps its
+/// route.
+const CHASE_SLACK: f32 = 2.5;
+/// While a chase's route is still being found, the enemy may move this
+/// share of the way there before the search starts over.
+const CHASE_SEARCH_SHARE: f32 = 0.25;
 /// A ranged fighter strafes one way about this long before turning back.
 /// It stands at a ledge or a wall until then, and turns away from an ally
 /// at once. A melee fighter does not strafe: it closes to its band.
@@ -795,9 +801,19 @@ impl Brain {
                 // search to it came back empty well short of it: then the
                 // goal follows the enemy wherever it now stands, so the bot
                 // searches again rather than stand settled out of reach.
+                // While its route there is still being found, a goal the
+                // enemy has moved a little from is kept: starting the
+                // search over for every step it takes, the bot would
+                // stand there and never get a route.
+                let routing = self.search.is_some() && self.plan.is_empty();
                 let moved_on = match self.goal {
                     Some(Goal::Chase(p)) => {
-                        p.distance(to) > 2.5
+                        let slack = if routing {
+                            CHASE_SLACK.max(CHASE_SEARCH_SHARE * p.distance(feet))
+                        } else {
+                            CHASE_SLACK
+                        };
+                        p.distance(to) > slack
                             || self.settled
                                 && self.plan.is_empty()
                                 && flat(p - feet).length() > near
@@ -816,6 +832,9 @@ impl Brain {
                 let failed = matches!(self.goal, Some(Goal::Search(_)))
                     && self.settled
                     && self.plan.is_empty();
+                if self.search.is_some() && self.plan.is_empty() {
+                    self.evidence_search.routing();
+                }
                 let next = self
                     .evidence_search
                     .next(knowledge, feet, tick, failed, reach);
@@ -1300,6 +1319,22 @@ impl Session {
     }
     pub fn bot_step_failures(&self) -> (u64, &[(OwnerId, u64, String)]) {
         (self.bots.failed_steps, &self.bots.failures)
+    }
+    /// Work counts of the route grids, for tests and probes: (floor
+    /// samples, leap arcs swept, drop and jump edges swept, floor samples
+    /// forgotten) since the session began, over every body size.
+    pub fn nav_work_counts(&self) -> (u64, u64, u64, u64) {
+        self.bots
+            .navs
+            .iter()
+            .fold((0, 0, 0, 0), |(a, b, c, d), (_, nav)| {
+                (
+                    a + nav.sampled,
+                    b + nav.swept,
+                    c + nav.edged,
+                    d + nav.forgotten,
+                )
+            })
     }
     /// Seats bots left since the session began, by why: `wrecked`,
     /// `overturned`, `undrivable`, `bail_out`, `stalled`, `walk_the_rest`,
@@ -2075,7 +2110,7 @@ impl Session {
         self.bot_crossed(bot);
         self.surprise_settle(bot, tick);
         let brain = &self.bots.brains[&bot];
-        let sight = self.bot_sight(bot, brain, eye);
+        let mut sight = self.bot_sight(bot, brain, eye);
         // A crossing immediately after direct sight can carry that last
         // observation through the opening. It never reads the hidden body.
         let followed = brain
@@ -2102,6 +2137,19 @@ impl Session {
             bite,
             weapon,
         } = self.bot_hand(bot, sight.target, tick)?;
+        // A bite reaches a seated enemy at the hull it sits in, where the
+        // bite wears that down (`bot_bite`): that is where it goes, what it
+        // looks at, and what it measures its reach to.
+        if let (Some(seen), Some(melee)) = (sight.target.as_mut(), bite.as_ref())
+            && let Some((_, at)) = self.bite_hull(melee, seen.owner, eye)
+        {
+            let floor = Vec3::new(at.x, feet.y.min(at.y), at.z);
+            seen.feet = floor;
+            seen.real = floor;
+            seen.aim = at;
+            // Its attack aims half a unit below an eye (`bot_act`).
+            seen.eye = at + Vec3::Y * 0.5;
+        }
         let (hurt_by, threat) = self.bot_evidence(bot, sight.target, feet, tick);
         // Holding something with its tool: carry it to open space to throw.
         let holding = self.held_by(bot).is_some();
@@ -2119,6 +2167,7 @@ impl Session {
             .filter(|_| leash.holds(feet));
         let vehicle_weapon = self.bot_vehicle_weapon(bot).is_some();
         let can_retaliate = vehicle_weapon
+            || self.bot_spare_gun(bot, tick).is_some()
             || self.bots.brains[&bot]
                 .kind
                 .melee
@@ -2354,6 +2403,17 @@ impl Session {
                 carry.to = to;
             }
         }
+        // Alone at the controls, the free gun a seat away is its weapon,
+        // but for one the chassis runs down before the gun can: inside its
+        // near edge (`bot_runs_over_near`).
+        let spare_band = self
+            .bot_spare_gun(bot, tick)
+            .map(|g| g.band())
+            .filter(|(near, _)| {
+                !sight
+                    .target
+                    .is_some_and(|seen| self.bot_runs_over_near(bot, seen.owner, *near))
+            });
         let brain = self.bots.brains.get_mut(&bot).unwrap();
         if std::mem::take(&mut brain.rehome) {
             brain.home = feet;
@@ -2424,7 +2484,7 @@ impl Session {
             && weapon.is_some_and(|w| !w.melee)
             && objective.is_some_and(|view| view.feet_only());
         let (near, far) = if driving.is_some() && !vehicle_weapon {
-            (0.0, 0.0)
+            spare_band.unwrap_or((0.0, 0.0))
         } else {
             weapon.map_or((2.0, 3.0), |w| w.band())
         };
@@ -2460,9 +2520,13 @@ impl Session {
                 .filter(|w| !w.melee && far > 0.0)
                 .map_or(0.0, |_| far),
             // Nor is searching where it cannot reach them.
-            remembers: brain
-                .memory
-                .is_some_and(|m| brain.out_of_reach.is_none_or(|p| p.distance(m.at) > 2.5)),
+            // Nor once it has looked everywhere that evidence leads: it
+            // gets on with something else rather than stand there until
+            // the memory fades.
+            remembers: brain.memory.is_some_and(|m| {
+                brain.out_of_reach.is_none_or(|p| p.distance(m.at) > 2.5)
+                    && !brain.evidence_search.exhausted_for(m)
+            }),
             // Strayed past where it strolls; while it works a body or a
             // seat (an interaction, idle play's included) its leash is
             // the chase's, as for a fight.
