@@ -53,6 +53,25 @@
      "pose": "sit",
      "controls": false,
      "weapon": false
+    },
+    {
+     "node": "mount2",
+     "transform": {
+      "position": [
+       0.0,
+       0.85,
+       1.75
+      ],
+      "rotation": [
+       0.0,
+       0.0,
+       0.0,
+       1.0
+      ]
+     },
+     "pose": "root",
+     "controls": false,
+     "weapon": true
     }
    ],
    "wheels": [
@@ -181,7 +200,33 @@
      ]
     }
    ],
-   "weapon": null,
+   "weapon": {
+    "projectile": "playground-buggy:projectile/bolt",
+    "muzzle": {
+     "position": [
+      0.0,
+      1.85,
+      0.6
+     ],
+     "rotation": [
+      0.0,
+      0.0,
+      0.0,
+      1.0
+     ]
+    },
+    "pivot": [
+     0.0,
+     1.85,
+     1.5
+    ],
+    "cooldown_ticks": 12,
+    "speed": 140.0,
+    "charge_ticks": 0,
+    "charge_steps": 1,
+    "sound": "playground-buggy:turret",
+    "effect": ""
+   },
    "attachment_model": null,
    "attachment_collision_hulls": [],
    "attachment_mount": null,
@@ -325,9 +370,9 @@
   {
    "virtual_path": "Add-Ons/Vehicle_PlaygroundBuggy/buggy.dts",
    "path": "models/buggy.shape.json",
-   "sha256": "80d8d7b4ededb27deac88c1a2561b10492b832b70b020a0c95fcb25fb0e84135",
+   "sha256": "08f66443f5d2f62454683d050c0a68587691a5d9e08da0cf071a92386e3fb1fd",
    "kind": "model",
-   "source_sha256": "80d8d7b4ededb27deac88c1a2561b10492b832b70b020a0c95fcb25fb0e84135"
+   "source_sha256": "08f66443f5d2f62454683d050c0a68587691a5d9e08da0cf071a92386e3fb1fd"
   },
   {
    "virtual_path": "Add-Ons/Vehicle_PlaygroundBuggy/tire.dts",
