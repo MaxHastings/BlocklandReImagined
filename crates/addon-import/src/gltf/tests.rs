@@ -405,7 +405,7 @@ fn what_a_model_lacks_is_named() {
 }
 
 #[test]
-fn a_vehicle_lists_its_seats_hubs_and_collision_hulls() {
+fn a_vehicle_lists_its_seats_hubs_gun_and_collision_hulls() {
     let mut g = super::testing::Gltf::new();
     let (p, n, uv, i) = super::testing::cuboid(Vec3::new(0.0, 0.5, 0.0), Vec3::new(2.0, 1.0, 4.0));
     let flat = |v: &[Vec3]| v.iter().flat_map(|v| v.to_array()).collect::<Vec<f32>>();
@@ -433,6 +433,14 @@ fn a_vehicle_lists_its_seats_hubs_and_collision_hulls() {
         json!({ "name": "hub0", "translation": [1.0, 0.3, 1.5] }),
         Some(root),
     );
+    g.node(
+        json!({ "name": "pivot", "translation": [0.0, 1.5, -1.0] }),
+        Some(root),
+    );
+    g.node(
+        json!({ "name": "muzzlePoint", "translation": [0.0, 1.6, 0.0] }),
+        Some(root),
+    );
     g.node(json!({ "name": "headlight" }), Some(root));
     let doc = Document::from_bytes(&g.glb(), None).unwrap();
     let c = convert(
@@ -451,7 +459,12 @@ fn a_vehicle_lists_its_seats_hubs_and_collision_hulls() {
         .collect();
     assert_eq!(
         points,
-        [("mount0", [-0.5, 1.0, -0.5]), ("hub0", [-1.0, 0.3, -1.5])]
+        [
+            ("mount0", [-0.5, 1.0, -0.5]),
+            ("hub0", [-1.0, 0.3, -1.5]),
+            ("pivot", [0.0, 1.5, 1.0]),
+            ("muzzlePoint", [0.0, 1.6, 0.0]),
+        ]
     );
     assert_eq!(c.report.hulls.len(), 1);
     assert_eq!(c.report.hulls[0].object, "col_body");

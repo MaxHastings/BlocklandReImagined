@@ -100,7 +100,9 @@ costs.
 **Materials.** Optional: name an object after a Blockhead colour slot
 (`chest`, `pants`, `headskin`, `larm`, `rarm`, `lhand`, `rhand`, `lshoe`,
 `rshoe`) and it is painted with the player's avatar colour for that slot.
-Every other object draws with its own textures, untinted.
+Every other object draws with its own textures, untinted. For team-coloured
+armour (a Spartan), make the plates one object named `chest` with a plain
+white material: the player's chest colour paints it.
 
 ## 3. Weapons and other held items
 
@@ -116,6 +118,14 @@ The barrel points at -Y (toward you in Front view). The output model is named
 from a `weapons.json` item and image `model` (see
 `docs/modding/weapons.md`).
 
+**Sounds and effects** are separate files beside the model in the Add-On
+folder; the importer converts only the model. Sounds are `.wav` or `.ogg`
+under `assets/sounds/`, named in `weapons.json` under `sounds` and played by
+an image state's `sound` (equip, fire, reload, empty). A muzzle flash or
+tracer texture is a PNG under `assets/textures/`, listed in
+`assets/presentation.json` and named by a particle's `texture` in the pack's
+`effects` (see `docs/modding/weapons.md`).
+
 ## 4. Vehicles
 
 The importer converts the model and keeps every node; the vehicle's handling,
@@ -127,8 +137,21 @@ report can list their positions for that file:
 | `mount0`, `mount1`, ... | seats in order: `mount0` is the driver |
 | `hub0`, `hub1`, ... | wheel centres, suspension fully compressed |
 | meshes named `col_...` | simple convex collision hulls (boxes are best); not drawn |
+| `muzzlePoint` | a mounted gun's barrel mouth |
+| `pivot` | the point a mounted gun swivels about |
+| `turret` | where a separate turret model sits on the hull |
 
 Wheels are separate models (one tire `.glb`, axle along X).
+
+**Mounted guns.** The gunner is another seat (`mount2` on a Warthog), marked
+as the weapon seat in `vehicles.json`; the gun fires from `muzzlePoint`
+where the gunner looks, swivelling about `pivot`. A gun fixed to the hull
+needs nothing more. A gun that visibly turns (the Warthog's chain gun) is
+its own `.glb`, imported with `--kind vehicle`, with its own `mount0` (the
+gunner), `muzzlePoint` and `pivot`; the hull gets a `turret` Empty where it
+sits. It turns left and right with the gunner's aim; tilting the barrel up
+and down needs a `look` clip, which glTF turrets do not support yet. The
+gun's sound goes in the vehicle pack's `weapons.json` `sounds`, as above.
 
 ## 5. Textures and materials
 

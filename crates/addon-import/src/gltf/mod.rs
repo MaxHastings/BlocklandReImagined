@@ -1245,13 +1245,20 @@ fn points(shape: &Shape, kind: Kind) -> Vec<Point> {
         match kind {
             Kind::Body => false,
             Kind::Item => matches!(n.as_str(), "mountpoint" | "muzzlepoint" | "ejectpoint"),
-            Kind::Prop => ["mount", "hub", "mountpoint", "muzzlepoint", "eye"]
-                .iter()
-                .any(|p| {
-                    n.strip_prefix(p).is_some_and(|rest| {
-                        rest.is_empty() || rest.bytes().all(|b| b.is_ascii_digit())
-                    })
-                }),
+            Kind::Prop => [
+                "mount",
+                "hub",
+                "mountpoint",
+                "muzzlepoint",
+                "eye",
+                "pivot",
+                "turret",
+            ]
+            .iter()
+            .any(|p| {
+                n.strip_prefix(p)
+                    .is_some_and(|rest| rest.is_empty() || rest.bytes().all(|b| b.is_ascii_digit()))
+            }),
         }
     };
     shape
