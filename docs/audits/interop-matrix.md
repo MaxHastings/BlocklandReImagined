@@ -24,7 +24,7 @@ Five Add-Ons, each standing alone and naming no other except through
 | `playground-runner-look` | model (client) | A box-model character, red cap and blue overalls, 1.9 units tall |
 | `playground-runner` | archetype (host) | The Runner body: own size, eyes, speeds and jump, no jets |
 | `playground-rifle` | weapons | The Pulse Carbine: own `*.shape.json` model, magazine of 24, reload, projectile, sounds |
-| `playground-buggy` | vehicles | A two-seat buggy: own chassis and tires, smashes bricks, driver steers, passenger keeps their weapon |
+| `playground-buggy` | vehicles, weapons | A three-seat buggy: own chassis and tires, smashes bricks; the driver steers, the passenger keeps their weapon, a gunner works its rear gun |
 | `playground-mode` | mode | Plays them together with `blockhead_bot`: Runner body, Carbine loadout, respawn rules |
 
 ## Matrix
@@ -34,7 +34,7 @@ Five Add-Ons, each standing alone and naming no other except through
 | Each Add-On loads alone and depends on no other except as declared | works | `crates/sim/tests/playground.rs` `each_add_on_stands_alone_and_names_no_other` |
 | Joining a mode puts a player in another Add-On's body, holding a third Add-On's weapon, and it fires | works | `a_player_joins_as_the_runner_holding_the_carbine_and_fires` |
 | A custom body drives a custom vehicle through bricks and climbs out | works | `the_runner_drives_the_buggy_through_the_fort_and_climbs_out` |
-| A passenger fires their own weapon from a vehicle seat | works | `a_passenger_fires_the_carbine_from_the_buggy` |
+| A passenger fires their own weapon from a vehicle seat, and a gunner fires the vehicle's own gun, which the vehicle Add-On brings (its projectile and sound in its own weapons file) | works | `a_passenger_fires_the_carbine_and_a_gunner_the_buggy_gun` |
 | A killed custom body respawns as the same body with its loadout | works | `a_runner_killed_by_the_carbine_respawns_as_the_runner_with_it` |
 | A bot from a separate Add-On joins the mode's game and fights custom bodies | fixed here | `a_blockhead_bot_fights_the_runners`; the bot spawned outside the mode's mini-game (`crates/sim/src/session/bots/lifecycle.rs` `spawn_brick_game`) |
 | Brick smashing by a vehicle owned by someone else credits its driver | fixed here | `crates/net/tests/playground.rs`; `vehicle_struck` credited the vehicle's owner, not its driver (`crates/sim/src/session/movables.rs`) |

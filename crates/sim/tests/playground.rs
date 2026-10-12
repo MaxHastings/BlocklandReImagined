@@ -96,9 +96,19 @@ fn catalog(mode: bool) -> Arc<Catalog> {
     Arc::new(catalog)
 }
 
+/// The carbine's weapons and the buggy's gun, merged as a host merges
+/// every package's.
 fn weapons() -> bri_weapons::Pack {
-    let path = packages().join("playground/playground-rifle/assets/weapons.json");
-    bri_weapons::Pack::from_json(&std::fs::read(path).unwrap()).unwrap()
+    let load = |dir: &str| {
+        let path = packages().join(dir).join("weapons.json");
+        bri_weapons::Pack::from_json(&std::fs::read(path).unwrap()).unwrap()
+    };
+    let (pack, problems) = load("playground/playground-rifle/assets").merge(vec![(
+        "playground/playground-buggy/assets".into(),
+        load("playground/playground-buggy/assets"),
+    )]);
+    assert!(problems.is_empty(), "{problems:?}");
+    pack
 }
 
 fn vehicles() -> bri_vehicles::Pack {
@@ -521,7 +531,7 @@ fn the_runner_drives_the_buggy_through_the_fort_and_climbs_out() {
 /// The passenger's seat lets its rider use their weapon: a second Runner
 /// takes it and fires the carbine from the moving buggy.
 #[test]
-fn a_passenger_fires_the_carbine_from_the_buggy() {
+fn a_passenger_fires_the_carbine_and_a_gunner_the_buggy_gun() {
     let mut g = Game::new();
     let driver = g.join("Ann");
     g.steps(40);
@@ -541,6 +551,28 @@ fn a_passenger_fires_the_carbine_from_the_buggy() {
     g.steps(30);
     assert_eq!(g.fire(passenger), 1, "fires from the passenger's seat");
     assert_eq!(g.s.mounted(passenger), Some((buggy, 1)));
+    // A third climbs onto the deck and works the buggy's own gun, which
+    // fires the buggy Add-On's bolt, not anything in their hands.
+    g.looks.get_mut(&driver).unwrap().forward = 0.0;
+    g.steps(240);
+    let gunner = g.join("Cy");
+    g.steps(40);
+    let (vehicle, seat) = g.board(gunner, 0.0);
+    assert_eq!((vehicle, seat), (buggy, 2), "the gunner's post");
+    g.steps(60);
+    // One bolt a click, as v20's turrets fire, a click per cooldown.
+    let before = g.s.weapon_view().fired().count();
+    for _ in 0..3 {
+        g.cmd(gunner, Command::WeaponTrigger { down: true })
+            .unwrap();
+        g.steps(2);
+        g.cmd(gunner, Command::WeaponTrigger { down: false })
+            .unwrap();
+        g.steps(20);
+    }
+    let bolts = g.s.weapon_view().fired().count() - before;
+    assert_eq!(bolts, 3, "a bolt for each click");
+    assert_eq!(g.s.mounted(gunner), Some((buggy, 2)));
 }
 
 /// Two Runners in the mode's mini-game: carbine fire kills, the dead

@@ -102,10 +102,18 @@ fn session() -> (bri_sim::session::Session, u64) {
         }
     }
     let mut session = common::session_with(world);
-    let rifle = packages().join("playground/playground-rifle/assets/weapons.json");
-    session
-        .set_weapon_pack(bri_weapons::Pack::from_json(&std::fs::read(rifle).unwrap()).unwrap())
-        .unwrap();
+    // The carbine's weapons and the buggy's gun, merged as a host merges
+    // every package's.
+    let load = |dir: &str| {
+        let path = packages().join(dir).join("weapons.json");
+        bri_weapons::Pack::from_json(&std::fs::read(path).unwrap()).unwrap()
+    };
+    let (weapons, problems) = load("playground/playground-rifle/assets").merge(vec![(
+        "playground/playground-buggy/assets".into(),
+        load("playground/playground-buggy/assets"),
+    )]);
+    assert!(problems.is_empty(), "{problems:?}");
+    session.set_weapon_pack(weapons).unwrap();
     let bots = packages().join("blockhead_bot/assets/bots.json");
     session
         .set_vehicle_pack(
