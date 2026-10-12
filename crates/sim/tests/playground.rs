@@ -154,19 +154,19 @@ fn definitions() -> Definitions {
     }
 }
 
-/// The fort's front wall: plates 6 wide and 8 high, across the buggy's
+/// The fort's front wall: plates 12 wide and 8 high, across the buggy's
 /// path 16 ahead of the spawn, facing it.
 const WALL_Z: f32 = -16.25;
 const SPAWN: Vec3 = Vec3::new(0.0, 0.05, 8.0);
 fn fort(world: &mut World) {
     for row in 0..8 {
-        for column in 0..6 {
+        for column in 0..12 {
             let id = world.next_brick_id;
             world.bricks.insert(
                 id,
                 Brick::new(
                     ContentRef::Resolved("plate".into()),
-                    [column as f32 - 2.5, 0.1 + 0.2 * row as f32, WALL_Z],
+                    [column as f32 - 5.5, 0.1 + 0.2 * row as f32, WALL_Z],
                     0,
                 ),
             );
