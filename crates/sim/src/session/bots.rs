@@ -2132,6 +2132,7 @@ impl Session {
             .filter(|_| leash.holds(feet));
         let vehicle_weapon = self.bot_vehicle_weapon(bot).is_some();
         let can_retaliate = vehicle_weapon
+            || self.bot_spare_gun(bot, tick).is_some()
             || self.bots.brains[&bot]
                 .kind
                 .melee
@@ -2366,6 +2367,17 @@ impl Session {
                 carry.to = to;
             }
         }
+        // Alone at the controls, the free gun a seat away is its weapon,
+        // but for one the chassis runs down before the gun can: inside its
+        // near edge (`bot_runs_over_near`).
+        let spare_band = self
+            .bot_spare_gun(bot, tick)
+            .map(|g| g.band())
+            .filter(|(near, _)| {
+                !sight
+                    .target
+                    .is_some_and(|seen| self.bot_runs_over_near(bot, seen.owner, *near))
+            });
         let brain = self.bots.brains.get_mut(&bot).unwrap();
         if std::mem::take(&mut brain.rehome) {
             brain.home = feet;
@@ -2436,7 +2448,7 @@ impl Session {
             && weapon.is_some_and(|w| !w.melee)
             && objective.is_some_and(|view| view.feet_only());
         let (near, far) = if driving.is_some() && !vehicle_weapon {
-            (0.0, 0.0)
+            spare_band.unwrap_or((0.0, 0.0))
         } else {
             weapon.map_or((2.0, 3.0), |w| w.band())
         };

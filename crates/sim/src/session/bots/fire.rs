@@ -239,29 +239,38 @@ impl Session {
     }
     /// The held weapon's reach and flight.
     pub(super) fn bot_vehicle_weapon(&self, bot: OwnerId) -> Option<Weapon> {
-        if let Some((vehicle, seat)) = self.mounted(bot)
-            && let Some(w) = &self.vehicles.world
-            && w.weapon_available(bri_vehicles::VehicleId(vehicle))
-            && let Some(d) = w.definition_of(bri_vehicles::VehicleId(vehicle))
-            && d.weapon_seat() == Some(usize::from(seat))
-            && let Some(gun) = &d.weapon
-            && let Some(p) = self.weapons.pack.projectiles.get(&gun.projectile)
-            && let Some(v) = self.bots.objects.iter().find(|v| v.id.0 == vehicle)
-        {
-            let speed = gun.speed * f32::from(gun.charge_steps.max(1)) * v.scale;
-            return Some(Weapon {
-                melee: false,
-                hold: false,
-                charge: gun.charge_ticks > 0,
-                near: None,
-                reach: speed * p.lifetime_ticks as f32 * TICK,
-                speed,
-                fall: bri_weapons::runtime::fall_per_tick(p) * bri_weapons::TICK_HZ as f32,
-                splash: p.explosion.radius,
-                spread: 0.0,
-            });
+        let (vehicle, seat) = self.mounted(bot)?;
+        let d = self
+            .vehicles
+            .world
+            .as_ref()?
+            .definition_of(bri_vehicles::VehicleId(vehicle))?;
+        (d.weapon_seat() == Some(usize::from(seat)))
+            .then(|| self.vehicle_gun(vehicle))
+            .flatten()
+    }
+    /// The reach and flight of `vehicle`'s gun, while it has one to fire.
+    pub(super) fn vehicle_gun(&self, vehicle: u64) -> Option<Weapon> {
+        let w = self.vehicles.world.as_ref()?;
+        let d = w.definition_of(bri_vehicles::VehicleId(vehicle))?;
+        let gun = d.weapon.as_ref()?;
+        let p = self.weapons.pack.projectiles.get(&gun.projectile)?;
+        let v = self.bots.objects.iter().find(|v| v.id.0 == vehicle)?;
+        if !w.weapon_available(bri_vehicles::VehicleId(vehicle)) {
+            return None;
         }
-        None
+        let speed = gun.speed * f32::from(gun.charge_steps.max(1)) * v.scale;
+        Some(Weapon {
+            melee: false,
+            hold: false,
+            charge: gun.charge_ticks > 0,
+            near: None,
+            reach: speed * p.lifetime_ticks as f32 * TICK,
+            speed,
+            fall: bri_weapons::runtime::fall_per_tick(p) * bri_weapons::TICK_HZ as f32,
+            splash: p.explosion.radius,
+            spread: 0.0,
+        })
     }
     /// How it handles what it holds: a natively modelled weapon as the
     /// fight reads it (`hand_combat::weapon_of`), else by its shot or projectile,
