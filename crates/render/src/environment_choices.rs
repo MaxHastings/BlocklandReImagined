@@ -1,12 +1,11 @@
-//! The skies and grounds the Environment window offers over a map's own
-//! (`bri_content::atmosphere::Settings::sky` and `ground`). Both come from
-//! the converted map bundle, so nothing new is imported: every stock map's
-//! sky box, and every texture a map's terrain is painted with. Picking one
-//! changes only what is drawn; the map's fog, light and collision stay.
+//! The skies the Environment window offers over a map's own
+//! (`bri_content::atmosphere::Settings::sky`). They come from the converted
+//! map bundle, so nothing new is imported: every stock map's sky box, and a
+//! plain one. Picking one changes only what is drawn; the map's fog, light
+//! and collision stay.
 use crate::{
     scene::{MaterialKind, SceneData, SceneImage},
     scene_loader::{decode, file, read},
-    terrain_scene::TerrainScene,
 };
 use anyhow::{Context, Result, ensure};
 use bri_content::{
@@ -32,21 +31,12 @@ pub struct SkyChoice {
     /// None for the plain sky.
     environment: Option<Environment>,
 }
-/// A texture to lay over a map's terrain.
-#[derive(Clone, Debug)]
-pub struct GroundChoice {
-    /// Its name in the settings: the texture's source in lower case.
-    pub id: String,
-    pub label: String,
-    file: String,
-}
 
 /// What a map bundle offers, and each map's own sky.
 #[derive(Clone, Debug)]
 pub struct Choices {
     root: PathBuf,
     pub skies: Vec<SkyChoice>,
-    pub grounds: Vec<GroundChoice>,
     /// Each map's own sky, by map ID.
     maps: BTreeMap<String, Environment>,
 }
@@ -78,17 +68,9 @@ fn sky_label(source: &str) -> String {
         |first| first.to_uppercase().chain(chars).collect(),
     )
 }
-/// "Add-Ons/Map_Slopes/TTicefrosty1" reads "TTicefrosty1".
-fn ground_label(source: &str) -> String {
-    let path = source.replace('\\', "/");
-    let name = path.rsplit('/').next().unwrap_or(&path);
-    name.rsplit_once('.')
-        .map_or(name, |(stem, _)| stem)
-        .to_string()
-}
 
 impl Choices {
-    /// The skies and grounds of the map bundle at `root`, in its maps'
+    /// The skies of the map bundle at `root`, in its maps'
     /// order, each once.
     pub fn load(root: &Path) -> Result<Self> {
         let root = root.canonicalize().context("Opening native map bundle")?;
@@ -126,35 +108,7 @@ impl Choices {
             label: "Plain".into(),
             environment: None,
         });
-        let mut grounds: Vec<GroundChoice> = Vec::new();
-        for binding in bundle
-            .get("bindings")
-            .and_then(Value::as_array)
-            .into_iter()
-            .flatten()
-            .filter(|b| b.get("terrain_layer").is_some())
-        {
-            let (Some(source), Some(texture)) =
-                (binding["source"].as_str(), binding["texture"].as_str())
-            else {
-                continue;
-            };
-            // Maps share textures under their own folders; one is enough.
-            if grounds.iter().any(|g| g.file == texture) {
-                continue;
-            }
-            grounds.push(GroundChoice {
-                id: source.replace('\\', "/").to_lowercase(),
-                label: ground_label(source),
-                file: texture.into(),
-            });
-        }
-        Ok(Self {
-            root,
-            skies,
-            grounds,
-            maps,
-        })
+        Ok(Self { root, skies, maps })
     }
     /// The sky `map` draws on its own, by name; None when it has no sky box.
     pub fn map_sky(&self, map: &str) -> Option<String> {
@@ -165,9 +119,6 @@ impl Choices {
     }
     pub fn sky(&self, id: &str) -> Option<&SkyChoice> {
         self.skies.iter().find(|s| s.id == id)
-    }
-    pub fn ground(&self, id: &str) -> Option<&GroundChoice> {
-        self.grounds.iter().find(|g| g.id == id)
     }
     /// A small picture of a sky: the box's first side under its first
     /// cloud layer (a storm is mostly cloud), or plain white.
@@ -198,13 +149,6 @@ impl Choices {
             }
         }
         Ok(picture)
-    }
-    pub fn ground_thumbnail(&self, choice: &GroundChoice) -> Result<SceneImage> {
-        Ok(thumbnail(&decode(
-            &read(&self.root, &choice.file)?,
-            &choice.id,
-            true,
-        )?))
     }
     /// Draw sky `id` in `scene` (map `map`'s) in place of the sky it has:
     /// None, or a sky this bundle lacks, gives the map its own back. The
@@ -242,15 +186,6 @@ impl Choices {
             scene.images.push(SceneImage::white());
             crate::environment_scene::append(scene, &environment, &[white; 6], &[])
         }
-    }
-    /// `terrain` painted all over with ground `id`, without its detail and
-    /// bump passes; None when this bundle lacks that ground.
-    pub fn grounded(&self, terrain: &TerrainScene, id: &str) -> Result<Option<TerrainScene>> {
-        let Some(choice) = self.ground(id) else {
-            return Ok(None);
-        };
-        let image = decode(&read(&self.root, &choice.file)?, &choice.id, true)?;
-        terrain.with_ground(image).map(Some)
     }
 }
 
@@ -443,29 +378,20 @@ mod tests {
             "warnings": [],
         })
     }
-    /// Three maps, two sharing a sky (one drawing it in a plain colour) and
-    /// two sharing a ground texture.
+    /// Three maps, two sharing a sky (one drawing it in a plain colour).
     fn bundle(dir: &Path) -> Choices {
-        let grass = picture(dir, "grass.png", [0, 200, 0, 255], 8);
-        let sand = picture(dir, "sand.png", [200, 200, 0, 255], 8);
         let bundle = json!({
             "environments": {
                 "v20/a.mis": sky(dir, "base/data/skies/Sky_Blue2/resource.dml", [10, 20, 200, 255], true),
                 "v20/b.mis": sky(dir, "base/data/skies/Sky_Blue2/resource.dml", [10, 20, 200, 255], false),
                 "v20/c.mis": sky(dir, "Add-Ons/Map_Slate_Desert/cloudy02.dml", [200, 150, 90, 255], true),
             },
-            "bindings": [
-                {"asset": "a.ter", "source": "Add-Ons/Map_A/TTgrass01", "terrain_layer": 0, "texture": grass["file"]},
-                {"asset": "b.ter", "source": "Add-Ons/Map_B/TTgrass01", "terrain_layer": 0, "texture": grass["file"]},
-                {"asset": "b.ter", "source": "Add-Ons/Map_B/sand1", "terrain_layer": 1, "texture": sand["file"]},
-                {"asset": "a.dif", "source": "Add-Ons/Map_A/carpet", "texture": sand["file"]},
-            ],
         });
         Choices::from_bundle(dir.canonicalize().unwrap(), &bundle).unwrap()
     }
 
     #[test]
-    fn every_stock_sky_and_terrain_texture_is_offered_once() {
+    fn every_stock_sky_is_offered_once() {
         let dir = tempfile::tempdir().unwrap();
         let choices = bundle(dir.path());
         let skies: Vec<_> = choices
@@ -481,18 +407,6 @@ mod tests {
                 ("plain", "Plain"),
             ]
         );
-        let grounds: Vec<_> = choices
-            .grounds
-            .iter()
-            .map(|g| (g.id.as_str(), g.label.as_str()))
-            .collect();
-        assert_eq!(
-            grounds,
-            [
-                ("add-ons/map_a/ttgrass01", "TTgrass01"),
-                ("add-ons/map_b/sand1", "sand1")
-            ]
-        );
         // A map drawing its box in one colour has no sky of its own to show.
         assert_eq!(
             choices.map_sky("v20/a.mis").as_deref(),
@@ -503,8 +417,6 @@ mod tests {
             let t = choices.sky_thumbnail(sky).unwrap();
             assert_eq!((t.width, t.height, t.rgba.len()), (64, 64, 64 * 64 * 4));
         }
-        let t = choices.ground_thumbnail(&choices.grounds[1]).unwrap();
-        assert_eq!(&t.rgba[..4], &[200, 200, 0, 255]);
         let picked = choices
             .sky("base/data/skies/sky_blue2/resource.dml")
             .unwrap();
@@ -617,10 +529,5 @@ mod tests {
         ] {
             assert_eq!(sky_label(source), label);
         }
-        assert_eq!(
-            ground_label("Add-Ons/Map_Slopes/TTicefrosty1"),
-            "TTicefrosty1"
-        );
-        assert_eq!(ground_label("paper05.jpg"), "paper05");
     }
 }

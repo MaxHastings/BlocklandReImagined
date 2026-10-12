@@ -76,7 +76,7 @@ fn color_button(r: Rect, name: &str) -> Control {
     ));
     b
 }
-/// A Sky or Ground button: the picked one's picture, the whole of it
+/// The Sky button: the picked one's picture, the whole of it
 /// clickable, its name beneath (two lines at most).
 fn choice_button(r: Rect, name: &str) -> Vec<Control> {
     let mut b = button("BlockButtonProfile", r, "base/client/ui/button1", "", name);
@@ -103,10 +103,9 @@ fn choice_button(r: Rect, name: &str) -> Vec<Control> {
 fn choice_name(kind: ChoiceKind) -> &'static str {
     match kind {
         ChoiceKind::Sky => "EnvSky",
-        ChoiceKind::Ground => "EnvGround",
     }
 }
-const CHOICE_KINDS: [ChoiceKind; 2] = [ChoiceKind::Sky, ChoiceKind::Ground];
+const CHOICE_KINDS: [ChoiceKind; 1] = [ChoiceKind::Sky];
 
 /// Light and dark squares behind a colour with alpha.
 fn checker(r: Rect) -> Vec<Control> {
@@ -250,21 +249,20 @@ impl Environment {
                 f.range(),
             ));
         }
-        // Sky and Ground: pictures to pick from, as v21's Simple tab has.
-        for (x, kind) in [(215, ChoiceKind::Sky), (315, ChoiceKind::Ground)] {
-            simple.children.push(text(
-                "GuiTextProfile",
-                Rect::new(x, 150, 90, 18),
-                &format!("{}:", kind.label()),
-            ));
-            simple
-                .children
-                .extend(choice_button(Rect::new(x, 170, 68, 68), choice_name(kind)));
-        }
+        // Sky: pictures to pick from, as v21's Simple tab has.
+        simple.children.push(text(
+            "GuiTextProfile",
+            Rect::new(215, 150, 90, 18),
+            &format!("{}:", ChoiceKind::Sky.label()),
+        ));
+        simple.children.extend(choice_button(
+            Rect::new(215, 170, 68, 68),
+            choice_name(ChoiceKind::Sky),
+        ));
         let mut hint = text(
             "GuiMLTextProfile",
             Rect::new(0, 262, 416, 44),
-            "Pick a look, sky or ground: everyone in the server sees it as you \
+            "Pick a look or sky: everyone in the server sees it as you \
              change it. Advanced sets each value; Reset gives the map its own back.",
         );
         hint.class = "GuiMLTextCtrl".into();
@@ -487,8 +485,7 @@ impl Environment {
         }
         for kind in CHOICE_KINDS {
             let name = choice_name(kind);
-            let offered = !m.choices.list(kind).is_empty()
-                && (kind == ChoiceKind::Sky || m.choices.has_ground);
+            let offered = !m.choices.list(kind).is_empty();
             if let Some(n) = v.id(name) {
                 v.set_active(n, offered);
             }
@@ -498,8 +495,6 @@ impl Environment {
             if let Some(n) = v.id(&format!("{name}_Name")) {
                 let label = if offered {
                     m.choice_label(kind)
-                } else if kind == ChoiceKind::Ground {
-                    "No terrain".into()
                 } else {
                     "None".into()
                 };
@@ -857,7 +852,7 @@ impl Screen for ColorPicker {
     }
 }
 
-/// v21's sky and ground pickers: a grid of pictures, the map's own first.
+/// v21's sky picker: a grid of pictures, the map's own first.
 /// A pick goes into the rows at once (and live to the host) and closes it.
 pub struct ChoicePicker {
     view: View,
@@ -879,7 +874,6 @@ impl ChoicePicker {
                 .and_then(|id| m.choices.skies.iter().find(|c| &c.id == id))
                 .map(|c| c.icon.clone())
                 .unwrap_or_default(),
-            ChoiceKind::Ground => Default::default(),
         };
         let mut cells = vec![(None, "Map's own".to_string(), own)];
         cells.extend(

@@ -5,7 +5,7 @@ use super::*;
 pub(super) struct SceneState {
     pub(super) cpu_scene: Option<SceneData>,
     pub(super) cpu_terrain: Vec<Arc<bri_render::terrain_scene::TerrainScene>>,
-    /// The sky and ground drawn over the map's own (the Environment window).
+    /// The sky drawn over the map's own (the Environment window).
     pub(super) scenery: super::scenery::Scenery,
     /// The easing bricks the applied chunks leave out.
     pub(super) chunks_left_out: BTreeSet<u64>,

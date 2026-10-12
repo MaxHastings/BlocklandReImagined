@@ -108,7 +108,7 @@ pub enum ScreenId {
     AdminEnvironment,
     /// Its colour picker.
     AdminColorPicker,
-    /// Its sky and ground picture picker.
+    /// Its sky picture picker.
     AdminEnvironmentChoice,
     BrickSelector,
     PrintSelector,

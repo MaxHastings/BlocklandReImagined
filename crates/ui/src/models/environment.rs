@@ -130,21 +130,20 @@ impl NumberField {
     }
 }
 
-/// Which picture picker is open: the sky's or the ground's.
+/// Which picture picker is open. Only the sky for now: a ground or water
+/// picker fits only maps whose world is a flat plane, and no stock map is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ChoiceKind {
     Sky,
-    Ground,
 }
 impl ChoiceKind {
     pub fn label(self) -> &'static str {
         match self {
             Self::Sky => "Sky",
-            Self::Ground => "Ground",
         }
     }
 }
-/// A sky or ground to pick: its name in the settings, what the picker
+/// A sky to pick: its name in the settings, what the picker
 /// calls it, and its picture.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Choice {
@@ -152,22 +151,18 @@ pub struct Choice {
     pub label: String,
     pub icon: IconRef,
 }
-/// What the Sky and Ground pickers offer on the map being played. The
-/// client fills it from its own content when a map loads.
+/// What the Sky picker offers on the map being played. The client fills it
+/// from its own content when a map loads.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Choices {
     pub skies: Vec<Choice>,
-    pub grounds: Vec<Choice>,
     /// The sky the map draws on its own, when it is one of `skies`.
     pub map_sky: Option<String>,
-    /// The map has terrain for a ground to cover.
-    pub has_ground: bool,
 }
 impl Choices {
     pub fn list(&self, kind: ChoiceKind) -> &[Choice] {
         match kind {
             ChoiceKind::Sky => &self.skies,
-            ChoiceKind::Ground => &self.grounds,
         }
     }
 }
@@ -182,7 +177,7 @@ pub struct EnvironmentModel {
     pub picking: Option<ColorField>,
     /// The picture picker open, if any.
     pub choosing: Option<ChoiceKind>,
-    /// The skies and grounds this map offers.
+    /// The skies this map offers.
     pub choices: Choices,
     /// Counts changes, so open windows know to show them.
     pub revision: u64,
@@ -211,19 +206,18 @@ impl EnvironmentModel {
         self.picking = None;
         self.choosing = None;
     }
-    /// The map's skies and grounds (a new map, or its pictures ready).
+    /// The map's skies (a new map, or its pictures ready).
     pub fn set_choices(&mut self, choices: Choices) {
         if self.choices != choices {
             self.revision += 1;
             self.choices = choices;
         }
     }
-    /// The sky or ground the rows pick; None keeps the map's own.
+    /// The sky the rows pick; None keeps the map's own.
     pub fn choice(&self, kind: ChoiceKind) -> Option<String> {
         let s = self.settings();
         match kind {
             ChoiceKind::Sky => s.sky,
-            ChoiceKind::Ground => s.ground,
         }
     }
     pub fn set_choice(&mut self, kind: ChoiceKind, id: Option<String>) {
@@ -231,15 +225,13 @@ impl EnvironmentModel {
         let s = self.draft.get_or_insert_with(Settings::default);
         match kind {
             ChoiceKind::Sky => s.sky = id,
-            ChoiceKind::Ground => s.ground = id,
         }
     }
     /// The picture a picker's button shows: the picked one's, else the
-    /// map's own sky's (a map's ground has no one picture).
+    /// map's own sky's.
     pub fn choice_icon(&self, kind: ChoiceKind) -> IconRef {
         let id = self.choice(kind).or(match kind {
             ChoiceKind::Sky => self.choices.map_sky.clone(),
-            ChoiceKind::Ground => None,
         });
         id.and_then(|id| {
             self.choices
@@ -451,7 +443,7 @@ impl EnvironmentModel {
         s.vignette = Some(Vignette { color, multiply });
     }
     /// A Simple tab look: its settings, keeping the day/night cycle and
-    /// the picked sky and ground (a look is light, not scenery).
+    /// the picked sky (a look is light, not scenery).
     pub fn preset(&mut self, index: usize) {
         let Some((_, look)) = atmosphere::presets().into_iter().nth(index) else {
             return;
@@ -461,7 +453,6 @@ impl EnvironmentModel {
         self.draft = Some(Settings {
             day_cycle: now.day_cycle,
             sky: now.sky,
-            ground: now.ground,
             ..look
         });
     }
@@ -470,7 +461,6 @@ impl EnvironmentModel {
         let s = Settings {
             day_cycle: None,
             sky: None,
-            ground: None,
             ..self.settings()
         };
         atmosphere::presets()
@@ -611,7 +601,7 @@ mod tests {
     }
 
     #[test]
-    fn a_picked_sky_and_ground_outlast_looks_until_reset() {
+    fn a_picked_sky_outlasts_looks_until_reset() {
         let choice = |id: &str, icon| Choice {
             id: id.into(),
             label: id.to_uppercase(),
@@ -621,30 +611,24 @@ mod tests {
         m.apply(view());
         m.set_choices(Choices {
             skies: vec![choice("blue", 1), choice("plain", 2)],
-            grounds: vec![choice("sand", 3)],
             map_sky: Some("blue".into()),
-            has_ground: true,
         });
         m.begin();
-        // The map's own: its sky's picture, and no one ground picture.
+        // The map's own: its sky's picture.
         assert_eq!(m.choice_icon(ChoiceKind::Sky), IconRef::External(1));
-        assert_eq!(m.choice_icon(ChoiceKind::Ground), IconRef::None);
         assert_eq!(m.choice_label(ChoiceKind::Sky), "Map's own");
         m.set_choice(ChoiceKind::Sky, Some("plain".into()));
-        m.set_choice(ChoiceKind::Ground, Some("sand".into()));
         assert_eq!(m.choice_icon(ChoiceKind::Sky), IconRef::External(2));
-        assert_eq!(m.choice_label(ChoiceKind::Ground), "SAND");
+        assert_eq!(m.choice_label(ChoiceKind::Sky), "PLAIN");
         assert!(m.changed());
         m.preset(2);
         assert_eq!(m.current_preset(), Some(2));
         assert_eq!(m.choice(ChoiceKind::Sky).as_deref(), Some("plain"));
-        assert_eq!(m.choice(ChoiceKind::Ground).as_deref(), Some("sand"));
         m.draft.as_ref().unwrap().validate().unwrap();
         // A favourite keeps them; Reset gives the map its own.
         assert_eq!(m.favorite().sky.as_deref(), Some("plain"));
         m.reset();
         assert_eq!(m.choice(ChoiceKind::Sky), None);
-        assert_eq!(m.choice(ChoiceKind::Ground), None);
     }
 
     #[test]

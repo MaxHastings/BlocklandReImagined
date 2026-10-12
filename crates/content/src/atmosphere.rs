@@ -78,7 +78,7 @@ pub struct Vignette {
 }
 
 /// Every setting's name, as [`Settings::unset`] takes them.
-pub const KEYS: [&str; 14] = [
+pub const KEYS: [&str; 13] = [
     "day_cycle",
     "sun_azimuth",
     "sun_elevation",
@@ -92,9 +92,8 @@ pub const KEYS: [&str; 14] = [
     "sky_color",
     "vignette",
     "sky",
-    "ground",
 ];
-/// Longest sky or ground name, bytes.
+/// Longest sky name, bytes.
 pub const MAX_CHOICE_ID: usize = 160;
 
 /// What the server set. `None` keeps the map's own value.
@@ -141,15 +140,10 @@ pub struct Settings {
     /// map's sky.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub sky: Option<String>,
-    /// A texture laid over the map's whole terrain in place of its own
-    /// layers (a terrain texture's source, lower case). Maps without
-    /// terrain have no ground to change.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub ground: Option<String>,
 }
 /// The sky with one plain colour all round, which Sky Color tints.
 pub const PLAIN_SKY: &str = "plain";
-/// A sky or ground name: lower-case ASCII path characters.
+/// A sky name: lower-case ASCII path characters.
 fn choice_id(id: &str) -> bool {
     !id.is_empty()
         && id.len() <= MAX_CHOICE_ID
@@ -213,10 +207,6 @@ impl Settings {
             self.sky.as_deref().is_none_or(choice_id),
             "Invalid sky name"
         );
-        ensure!(
-            self.ground.as_deref().is_none_or(choice_id),
-            "Invalid ground name"
-        );
         Ok(())
     }
     /// Every setting of `other` that is set replaces this one's.
@@ -237,8 +227,7 @@ impl Settings {
             fog_color,
             sky_color,
             vignette,
-            sky,
-            ground
+            sky
         );
     }
     /// Put setting `name` (a field name, as in [`KEYS`]) back to the map's
@@ -258,7 +247,6 @@ impl Settings {
             "sky_color" => self.sky_color = None,
             "vignette" => self.vignette = None,
             "sky" => self.sky = None,
-            "ground" => self.ground = None,
             _ => return false,
         }
         true
@@ -747,23 +735,18 @@ mod tests {
         }
     }
     #[test]
-    fn skies_and_grounds_are_names_that_merge_and_unset() {
-        let mut s = Settings {
-            sky: Some("base/data/skies/sunset/resource.dml".into()),
-            ..Default::default()
-        };
-        s.validate().unwrap();
+    fn skies_are_names_that_merge_and_unset() {
+        let mut s = Settings::default();
         s.merge(&Settings {
-            ground: Some("add-ons/map_slopes/tticefrosty1".into()),
+            sky: Some("base/data/skies/sunset/resource.dml".into()),
             ..Default::default()
         });
         assert_eq!(
             s.sky.as_deref(),
             Some("base/data/skies/sunset/resource.dml")
         );
-        assert_eq!(s.ground.as_deref(), Some("add-ons/map_slopes/tticefrosty1"));
         s.validate().unwrap();
-        assert!(s.unset("sky") && s.unset("ground") && s.is_empty());
+        assert!(s.unset("sky") && s.is_empty());
         for bad in [
             "",
             "Base/Sky",
@@ -775,17 +758,10 @@ mod tests {
                 sky: Some(bad.into()),
                 ..Default::default()
             };
-            let ground = Settings {
-                ground: Some(bad.into()),
-                ..Default::default()
-            };
-            assert!(
-                sky.validate().is_err() && ground.validate().is_err(),
-                "{bad:?}"
-            );
+            assert!(sky.validate().is_err(), "{bad:?}");
         }
-        // Older settings files and messages without them still read.
+        // Older settings files and messages without it still read.
         let old: Settings = serde_json::from_str(r#"{"sun_azimuth":90.0}"#).unwrap();
-        assert_eq!((old.sky, old.ground), (None, None));
+        assert_eq!(old.sky, None);
     }
 }

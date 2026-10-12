@@ -6,8 +6,7 @@
 //! squares exist only in the primary block, so a tile with holes has a holed
 //! variant (primary copy) and a solid variant (repeated copies).
 use crate::scene::{
-    GpuInstances, GpuScene, MeshBatch, SceneData, SceneImage, SceneRenderer, SceneTransform,
-    SceneVertex,
+    GpuInstances, GpuScene, MeshBatch, SceneData, SceneRenderer, SceneTransform, SceneVertex,
 };
 use anyhow::{Context, Result, ensure};
 use bri_content::terrain_field::TerrainField;
@@ -110,29 +109,6 @@ impl TerrainScene {
             data,
             variants,
             tile_cells,
-        })
-    }
-    /// This terrain painted all over with `image` in place of its own
-    /// layers (the Environment window's Ground), without the detail and
-    /// emboss passes its own textures had. Its lightmap stays.
-    pub fn with_ground(&self, image: SceneImage) -> Result<Self> {
-        let mut data = self.data.clone();
-        let index = data.images.len();
-        data.images.push(image);
-        let material = data
-            .materials
-            .first_mut()
-            .context("Terrain has no material")?;
-        material.images[..8].fill(index);
-        if let Some(parameters) = &mut material.parameters {
-            parameters[1][3] = 0.0;
-        }
-        data.validate()?;
-        Ok(Self {
-            field: self.field.clone(),
-            data,
-            variants: self.variants.clone(),
-            tile_cells: self.tile_cells,
         })
     }
     fn period(&self) -> f32 {
@@ -410,39 +386,6 @@ mod tests {
             ..Default::default()
         };
         TerrainScene::build(field, data).unwrap()
-    }
-
-    #[test]
-    fn a_ground_paints_every_layer_and_keeps_the_mesh() {
-        let mut s = scene(false, vec![]);
-        s.data.images.push(SceneImage::white());
-        s.data.materials[0].images[8] = 0;
-        s.data.materials[0].parameters.as_mut().unwrap()[1][3] = 3.0;
-        let ground = SceneImage {
-            label: "sand".into(),
-            ..SceneImage::white()
-        };
-        let g = s.with_ground(ground).unwrap();
-        let material = &g.data.materials[0];
-        assert!(
-            material.images[..8]
-                .iter()
-                .all(|&i| g.data.images[i].label == "sand")
-        );
-        // No detail or emboss pass over the new ground.
-        assert_eq!(material.parameters.unwrap()[1][3], 0.0);
-        assert_eq!(
-            (
-                g.data.vertices.len(),
-                g.data.batches.len(),
-                g.variants.len()
-            ),
-            (
-                s.data.vertices.len(),
-                s.data.batches.len(),
-                s.variants.len()
-            )
-        );
     }
 
     #[test]

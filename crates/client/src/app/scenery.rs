@@ -1,15 +1,12 @@
-//! The Environment window's Sky and Ground over the map's own: what its
-//! pickers offer (the map bundle's skies and terrain textures, read once on
-//! a worker, with their pictures), and the map scene and terrain redrawn
-//! when the host's settings pick another. Nothing here touches collision or
-//! the host: a sky or ground this game lacks leaves the map's own.
+//! The Environment window's Sky over the map's own: what its picker offers
+//! (the map bundle's skies, read once on a worker, with their pictures), and
+//! the map scene redrawn when the host's settings pick another. Nothing here
+//! touches collision or the host: a sky this game lacks leaves the map's own.
 use super::*;
-use bri_render::{
-    environment_choices::Choices as Offered, scene::SceneImage, terrain_scene::TerrainScene,
-};
+use bri_render::{environment_choices::Choices as Offered, scene::SceneImage};
 use bri_ui::models::environment::{Choice, Choices};
 
-/// UI textures of the pickers' pictures: skies first, then grounds.
+/// UI textures of the picker's pictures, one per sky.
 const PICTURE_BASE: u64 = 0x454E_0000;
 
 type Loaded = (Arc<Offered>, Vec<(u64, SceneImage)>);
@@ -20,25 +17,20 @@ pub(super) struct Scenery {
     /// The bundle could not be read: not asked again this run.
     failed: bool,
     offered: Option<Arc<Offered>>,
-    /// The pickers' pictures, and whether the UI renderer has them.
+    /// The picker's pictures, and whether the UI renderer has them.
     pictures: Vec<(u64, SceneImage)>,
     uploaded: bool,
-    /// What the map scene and terrain draw over the map's own (None: its
-    /// own), since they were loaded.
+    /// The sky the map scene draws over the map's own (None: its own),
+    /// since it was loaded.
     drawn_sky: Option<String>,
-    drawn_ground: Option<String>,
-    /// The map's own terrain, while a ground covers `cpu_terrain`.
-    own_terrain: Vec<Arc<TerrainScene>>,
-    /// The map and whether it has terrain, as the pickers last showed.
-    shown: Option<(String, bool)>,
+    /// The map the picker last showed.
+    shown: Option<String>,
 }
 impl Scenery {
     /// A map scene was loaded (a new map, or its lighting): it draws its
-    /// own sky and ground.
-    pub(super) fn reset(&mut self, terrain: &[Arc<TerrainScene>]) {
+    /// own sky.
+    pub(super) fn reset(&mut self) {
         self.drawn_sky = None;
-        self.drawn_ground = None;
-        self.own_terrain = terrain.to_vec();
     }
     /// The UI renderer went with the device: its pictures go up again.
     pub(super) fn gpu_stopped(&mut self) {
@@ -47,9 +39,9 @@ impl Scenery {
 }
 
 impl App {
-    /// Once a frame before drawing: read what the pickers offer, upload
-    /// their pictures, tell the Environment window, and redraw the sky or
-    /// ground the host picked.
+    /// Once a frame before drawing: read what the picker offers, upload its
+    /// pictures, tell the Environment window, and redraw the sky the host
+    /// picked.
     pub(super) fn update_scenery(&mut self, frame: &mut RenderContext<'_>) {
         let Some(map) = self.scene.cpu_scene.as_ref().map(|s| s.id.clone()) else {
             return;
@@ -74,7 +66,7 @@ impl App {
                 }
                 Ok(Err(error)) => {
                     bri_console::warn(format!(
-                        "The Environment window's skies and grounds are unavailable: {error:#}"
+                        "The Environment window's skies are unavailable: {error:#}"
                     ));
                     scenery.failed = true;
                     scenery.loading = None;
@@ -103,21 +95,19 @@ impl App {
         let Some(offered) = scenery.offered.clone() else {
             return;
         };
-        let has_ground = !scenery.own_terrain.is_empty();
-        if scenery.shown.as_ref() != Some(&(map.clone(), has_ground)) {
-            scenery.shown = Some((map.clone(), has_ground));
+        if scenery.shown.as_ref() != Some(&map) {
+            scenery.shown = Some(map.clone());
             self.ui
                 .core
                 .environment
-                .set_choices(choices(&offered, &map, has_ground));
+                .set_choices(choices(&offered, &map));
         }
-        let (sky, ground) = self
+        let sky = self
             .net
             .attempt
             .as_ref()
             .and_then(|a| a.view.as_ref())
-            .map(|v| (v.environment.sky.clone(), v.environment.ground.clone()))
-            .unwrap_or_default();
+            .and_then(|v| v.environment.sky.clone());
         if sky != self.scene.scenery.drawn_sky {
             self.scene.scenery.drawn_sky = sky.clone();
             if let Some(scene) = self.scene.cpu_scene.as_mut() {
@@ -132,32 +122,10 @@ impl App {
                 self.lighting.environment_probe = None;
             }
         }
-        if ground != self.scene.scenery.drawn_ground {
-            self.scene.scenery.drawn_ground = ground.clone();
-            let own = &self.scene.scenery.own_terrain;
-            self.scene.cpu_terrain = own
-                .iter()
-                .map(|terrain| {
-                    let Some(id) = ground.as_deref() else {
-                        return terrain.clone();
-                    };
-                    match offered.grounded(terrain, id) {
-                        Ok(Some(covered)) => Arc::new(covered),
-                        Ok(None) => terrain.clone(),
-                        Err(error) => {
-                            bri_console::warn(format!("Drawing the picked ground: {error:#}"));
-                            terrain.clone()
-                        }
-                    }
-                })
-                .collect();
-            crate::frame_trace::note("the ground changed");
-            self.gpu.gpu_terrain.clear();
-        }
     }
 }
 
-/// The bundle's skies and grounds, with their pictures as UI textures.
+/// The bundle's skies, with their pictures as UI textures.
 fn load(root: &Path) -> Result<Loaded> {
     let offered = Offered::load(root)?;
     let mut pictures = Vec::new();
@@ -167,19 +135,11 @@ fn load(root: &Path) -> Result<Loaded> {
             Err(error) => bri_console::warn(format!("Sky picture {}: {error:#}", sky.id)),
         }
     }
-    for (i, ground) in offered.grounds.iter().enumerate() {
-        let id = PICTURE_BASE + (offered.skies.len() + i) as u64;
-        match offered.ground_thumbnail(ground) {
-            Ok(image) => pictures.push((id, image)),
-            Err(error) => bri_console::warn(format!("Ground picture {}: {error:#}", ground.id)),
-        }
-    }
     Ok((Arc::new(offered), pictures))
 }
 
-/// What the Environment window's pickers show on `map`.
-fn choices(offered: &Offered, map: &str, has_ground: bool) -> Choices {
-    let skies = offered.skies.len();
+/// What the Environment window's picker shows on `map`.
+fn choices(offered: &Offered, map: &str) -> Choices {
     Choices {
         skies: offered
             .skies
@@ -191,17 +151,6 @@ fn choices(offered: &Offered, map: &str, has_ground: bool) -> Choices {
                 icon: IconRef::External(PICTURE_BASE + i as u64),
             })
             .collect(),
-        grounds: offered
-            .grounds
-            .iter()
-            .enumerate()
-            .map(|(i, g)| Choice {
-                id: g.id.clone(),
-                label: g.label.clone(),
-                icon: IconRef::External(PICTURE_BASE + (skies + i) as u64),
-            })
-            .collect(),
         map_sky: offered.map_sky(map),
-        has_ground,
     }
 }

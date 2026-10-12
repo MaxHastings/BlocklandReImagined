@@ -1597,11 +1597,11 @@ fn change_map_shows_the_picked_maps_picture_content() {
     ));
 }
 
-/// The Simple tab's Sky and Ground buttons show the picked picture and
-/// open a grid of the map's skies or grounds, the map's own first; a pick
-/// goes into the rows and on to the host like any change.
+/// The Simple tab's Sky button shows the picked picture and opens a grid of
+/// the map's skies, the map's own first; a pick goes into the rows and on to
+/// the host like any change.
 #[test]
-fn the_sky_and_ground_pickers_pick_from_pictures() {
+fn the_sky_picker_picks_from_pictures() {
     use bri_content::atmosphere::{Authored, Settings, light_direction};
     use bri_ui::{
         api::{ConnectionState, IconRef, Settings as UiSettings, UiUpdate},
@@ -1664,16 +1664,14 @@ fn the_sky_and_ground_pickers_pick_from_pictures() {
         label: label.into(),
         icon: IconRef::External(icon),
     };
-    let mut choices = Choices {
+    let choices = Choices {
         skies: vec![
             choice("base/data/skies/sky_blue2/resource.dml", "Blue2", 101),
             choice("plain", "Plain", 102),
         ],
-        grounds: vec![choice("add-ons/map_kitchen/sand1", "sand1", 103)],
         map_sky: Some("base/data/skies/sky_blue2/resource.dml".into()),
-        has_ground: false,
     };
-    ui.core.environment.set_choices(choices.clone());
+    ui.core.environment.set_choices(choices);
     let click = |ui: &mut Ui, screen: ScreenId, key: &str| {
         let (x, y) = ui
             .control_center(screen, key)
@@ -1710,14 +1708,10 @@ fn the_sky_and_ground_pickers_pick_from_pictures() {
     ui.update(16);
     let env = ScreenId::AdminEnvironment;
     let picker = ScreenId::AdminEnvironmentChoice;
-    // The map's own sky's picture; a map without terrain has no ground.
+    // The map's own sky's picture.
     assert_eq!(
         shown(&ui, env, "EnvSky"),
         (Some(101), "Map's own".into(), true)
-    );
-    assert_eq!(
-        shown(&ui, env, "EnvGround"),
-        (None, "No terrain".into(), false)
     );
     // The sky picker: the map's own first (drawn now, so not pickable).
     click(&mut ui, env, "EnvSky");
@@ -1734,23 +1728,7 @@ fn the_sky_and_ground_pickers_pick_from_pictures() {
     assert_eq!(ui.top_id(), env);
     assert_eq!(ui.core.environment.choice_label(ChoiceKind::Sky), "Plain");
     assert_eq!(shown(&ui, env, "EnvSky"), (Some(102), "Plain".into(), true));
-    // A map with terrain: its grounds.
-    choices.has_ground = true;
-    ui.core.environment.set_choices(choices);
-    ui.update(16);
-    assert_eq!(
-        shown(&ui, env, "EnvGround"),
-        (None, "Map's own".into(), true)
-    );
-    click(&mut ui, env, "EnvGround");
-    click(&mut ui, picker, "EnvChoice1");
-    assert_eq!(
-        shown(&ui, env, "EnvGround"),
-        (Some(103), "sand1".into(), true)
-    );
-    // The map's own sky back, and the change goes to the host.
-    click(&mut ui, env, "EnvSky");
-    click(&mut ui, picker, "EnvChoice0");
+    // The change goes to the host.
     ui.core.admin.pending.clear();
     click(&mut ui, env, "EnvApply");
     let sent = ui
@@ -1763,9 +1741,9 @@ fn the_sky_and_ground_pickers_pick_from_pictures() {
             _ => None,
         })
         .expect("Apply asks the host");
-    assert_eq!(sent.sky, None);
-    assert_eq!(sent.ground.as_deref(), Some("add-ons/map_kitchen/sand1"));
+    assert_eq!(sent.sky.as_deref(), Some("plain"));
     // Escape closes the picker and leaves the rows as they are.
+    let before = ui.core.environment.choice(ChoiceKind::Sky);
     click(&mut ui, env, "EnvSky");
     ui.handle_input(InputEvent::KeyDown {
         key: bri_ui::input::Key::Escape,
@@ -1774,5 +1752,5 @@ fn the_sky_and_ground_pickers_pick_from_pictures() {
     });
     ui.update(16);
     assert_eq!(ui.top_id(), env);
-    assert_eq!(ui.core.environment.choice(ChoiceKind::Sky), None);
+    assert_eq!(ui.core.environment.choice(ChoiceKind::Sky), before);
 }

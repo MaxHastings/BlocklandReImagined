@@ -1001,10 +1001,8 @@ fn environment_map(e: &bri_content::atmosphere::Settings, tick: u64) -> Dynamic 
         put("vignette_color", color_value(&v.color));
         put("vignette_multiply", v.multiply.into());
     }
-    for (k, name) in [("sky", &e.sky), ("ground", &e.ground)] {
-        if let Some(name) = name {
-            put(k, name.as_str().into());
-        }
+    if let Some(sky) = &e.sky {
+        put("sky", sky.as_str().into());
     }
     Dynamic::from_map(m)
 }
@@ -1054,16 +1052,13 @@ fn set_environment(options: Map) -> Fallible<INT> {
             "shadow_color" => changes.shadow_color = Some(color(value, "shadow_color")?),
             "fog_color" => changes.fog_color = Some(color(value, "fog_color")?),
             "sky_color" => changes.sky_color = Some(color(value, "sky_color")?),
-            "sky" | "ground" if clear => remove(key.as_str()),
-            "sky" | "ground" => {
-                let name = value
-                    .into_string()
-                    .map_err(|_| format!("{key} is a name (a string)"))?;
-                if key.as_str() == "sky" {
-                    changes.sky = Some(name);
-                } else {
-                    changes.ground = Some(name);
-                }
+            "sky" if clear => remove("sky"),
+            "sky" => {
+                changes.sky = Some(
+                    value
+                        .into_string()
+                        .map_err(|_| "sky is a name (a string)")?,
+                )
             }
             "sun_flare_color" | "sun_flare_size" if clear => {
                 flare = None;
@@ -1107,7 +1102,7 @@ fn set_environment(options: Map) -> Fallible<INT> {
                     "set_environment has no setting `{other}` (day_cycle, day_length, time_of_day, \
                      sun_azimuth, sun_elevation, direct_light, ambient_light, shadow_color, \
                      sun_flare_color, sun_flare_size, visible_distance, fog_distance, fog_color, \
-                     sky_color, vignette_color, vignette_multiply, sky, ground)"
+                     sky_color, vignette_color, vignette_multiply, sky)"
                 ));
             }
         }

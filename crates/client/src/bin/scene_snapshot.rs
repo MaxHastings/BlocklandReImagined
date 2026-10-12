@@ -3,8 +3,8 @@
 //!
 //! Usage: scene_snapshot <map-bundle-dir> <map-id> <out.png> [yaw-degrees] [pitch-degrees] [eye-x eye-y eye-z]
 //! The optional eye is in Torque mission coordinates (Z up); the default is the spawn.
-//! `BRI_SKY` and `BRI_GROUND` draw a sky or ground the Environment window
-//! offers (its name in the settings) over the map's own.
+//! `BRI_SKY` draws a sky the Environment window offers (its name in the
+//! settings) over the map's own.
 use anyhow::{Context, Result, ensure};
 use bri_render::{
     scene::{Camera, SceneRenderer, create_depth},
@@ -29,21 +29,10 @@ fn main() -> Result<()> {
         .map_or(Ok(-20.0), |v| v.parse::<f32>())?
         .to_radians();
     let mut map = load_map_bundle(&PathBuf::from(&args[0]), &args[1])?;
-    let sky = std::env::var("BRI_SKY").ok();
-    let ground = std::env::var("BRI_GROUND").ok();
-    if sky.is_some() || ground.is_some() {
+    if let Ok(sky) = std::env::var("BRI_SKY") {
         let choices = bri_render::environment_choices::Choices::load(&PathBuf::from(&args[0]))?;
-        if let Some(sky) = &sky {
-            ensure!(choices.sky(sky).is_some(), "No sky {sky}");
-            choices.set_sky(&mut map.scene, &args[1], Some(sky))?;
-        }
-        if let Some(ground) = &ground {
-            for terrain in &mut map.terrain {
-                *terrain = choices
-                    .grounded(terrain, ground)?
-                    .with_context(|| format!("No ground {ground}"))?;
-            }
-        }
+        ensure!(choices.sky(&sky).is_some(), "No sky {sky}");
+        choices.set_sky(&mut map.scene, &args[1], Some(&sky))?;
     }
     let scene = map.scene;
     let eye = if args.len() == 8 {
