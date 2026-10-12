@@ -81,7 +81,14 @@ bot does through the same code.
    no fight known explores like a walker, with its chassis as the body: an
    explore place needs floor a footprint beyond it, faces the hull's
    heading, and is reached within the footprint. A passenger goes where its
-   driver takes it.
+   driver takes it. A bot crewing a vehicle alone whose controls and gun
+   are separate seats sits where its plan is served, changing seats with
+   the same keys a player uses (`Session::bot_lone_role`): at the gun to
+   fight an enemy the gun reaches, at the controls to go anywhere, and at
+   the controls too for an enemy on foot its chassis runs down from nearer
+   than the gun's near edge (its blast). Alone at the controls, the free gun
+   is its weapon for choosing a fight. A seat someone holds or an ally is
+   on its way to is left free, and with nothing to do it stays put.
 3. **Goal and path.** The behaviour sets the goal; the route planner (see
    [Routes](#routes-one-planner-for-every-way-of-getting-about)) over the
    walk grid (`crate::nav`, shared by every bot of a body size, updated as
@@ -305,7 +312,7 @@ person presses:
   driver going its way: one whose intent leads
   nearer the passenger's enemy, or none known; it gets out when the driver
   turns the other way and it would rather walk, and when no driver is in
-  the seat or coming to it.
+  the seat or coming to it, unless the controls are free for it to take.
 
   Each time a bot gets out it says why (`interactions::Leave`), and the
   gauntlet counts the reasons: `wrecked`, `overturned`, `undrivable` (its

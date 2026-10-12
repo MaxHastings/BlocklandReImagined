@@ -494,8 +494,25 @@ fn a_gunner_never_fires_a_blast_that_hurts_its_crew_or_an_ally() {
 }
 
 #[test]
-fn a_lone_driver_does_not_wait_forever_for_an_absent_gunner() {
+fn a_lone_crew_takes_the_gun_for_an_enemy_in_reach_and_the_controls_for_one_beyond_it() {
     let mut g = Game::new(ROVER, 1, 1.0, false);
+    let bot = g.bots()[0];
+    // In the gun's reach: alone in the chassis, it moves to the gun and
+    // fires it, rather than wait at the controls for a gunner.
+    let mut fired = false;
+    for _ in 0..120 * 15 {
+        g.steps(1);
+        if g.s.weapon_view().fired().any(|shot| shot.source.0 == bot) {
+            fired = true;
+            break;
+        }
+    }
+    assert!(fired, "the lone crew fired the gun: {}", g.diagnostics());
+    assert_eq!(g.s.mounted(bot), Some((g.vehicle, 0)), "at the gun");
+    // Beyond it: back to the controls to go after them, rather than wait
+    // at the gun or get out.
+    let human = g.human;
+    drop_at(&mut g, human, Vec3::new(-30.0, 0.05, 110.0));
     let initial = g.position();
     let mut moved = 0.0f32;
     for _ in 0..120 * 15 {
@@ -507,14 +524,42 @@ fn a_lone_driver_does_not_wait_forever_for_an_absent_gunner() {
     }
     assert!(
         moved > 5.0,
-        "a lone driver left within a bounded time: {moved}; {}",
+        "the lone crew drove after an enemy beyond the gun: {moved}; {}",
         g.diagnostics()
     );
-    assert!(
-        g.occupants()[2].is_some_and(|b| g.s.is_bot(b)),
-        "controls were chosen"
+    assert_eq!(
+        g.s.mounted(bot),
+        Some((g.vehicle, 2)),
+        "at the controls: {}",
+        g.diagnostics()
     );
-    assert_eq!(g.occupants()[0], None, "no phantom gunner");
+}
+
+#[test]
+fn a_lone_crew_at_the_gun_takes_the_controls_to_run_down_an_enemy_too_near_for_its_blast() {
+    let mut g = Game::new(ROVER, 1, 1.0, false);
+    let bot = g.bots()[0];
+    for _ in 0..120 * 15 {
+        g.steps(1);
+        if g.s.mounted(bot) == Some((g.vehicle, 0)) {
+            break;
+        }
+    }
+    assert_eq!(g.s.mounted(bot), Some((g.vehicle, 0)), "at the gun first");
+    // On foot beside the hull, nearer than its shell's blast lets it fire:
+    // the chassis, which runs people over, is the blow.
+    let human = g.human;
+    let beside = g.position() + Vec3::X * 3.5;
+    drop_at(&mut g, human, beside);
+    let mut controls = false;
+    for _ in 0..120 * 3 {
+        g.steps(1);
+        if g.s.mounted(bot) == Some((g.vehicle, 2)) {
+            controls = true;
+            break;
+        }
+    }
+    assert!(controls, "it took the controls: {}", g.diagnostics());
 }
 
 #[test]
@@ -1103,7 +1148,9 @@ fn driver_and_ally(target: Vec3) -> (Game, OwnerId, OwnerId) {
     let mut s = session(1.0);
     s.install_packages(rules_catalog(), None).unwrap();
     s.set_spawn_points(vec![target]).unwrap();
-    let mut g = Game::with_session(s, ROVER, 1, false);
+    // A gunless chassis: a lone crew with a gun that reaches its target
+    // fights from the gun seat rather than drive (`a_lone_crew_takes_...`).
+    let mut g = Game::with_session(s, PURSUER, 1, false);
     let bot = g.bots()[0];
     let friend =
         g.s.join("Crewmate".into(), Vec3::new(90.0, 0.05, 90.0), true)
