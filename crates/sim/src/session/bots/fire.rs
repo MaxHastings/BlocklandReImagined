@@ -450,8 +450,27 @@ impl Session {
         let height = crate::water::body_height(state, them.player.tuning()) * state.scale;
         let point = Vec3::new(feet.x, eye.y.clamp(feet.y, feet.y + height), feet.z);
         let width = them.player.tuning().width * state.scale * 0.5;
-        if point.distance(eye) > melee.reach + width || !self.can_damage_player(bot, target, false)
-        {
+        if !self.can_damage_player(bot, target, false) {
+            return Ok(());
+        }
+        if point.distance(eye) > melee.reach + width {
+            // Seated out of reach: the hull it sits in is what it lands on.
+            let hull = self
+                .bite_hull(melee, target, eye)
+                .filter(|(_, at)| at.distance(eye) <= melee.reach);
+            if let Some((vehicle, at)) = hull {
+                if let Some(action) = &melee.action {
+                    self.play_thread(tick, bot, MELEE_THREAD, action);
+                }
+                self.damage_vehicle(
+                    vehicle,
+                    melee.damage,
+                    bot,
+                    &melee.name,
+                    at,
+                    crate::session::vehicles::VehicleHarm::Weapon { projectile: None },
+                )?;
+            }
             return Ok(());
         }
         if let Some(action) = &melee.action {
@@ -492,6 +511,36 @@ impl Session {
         let max = self.max_health(target);
         self.peers.get_mut(&target).unwrap().combat.health = max;
         Ok(())
+    }
+    /// Where a bite meets `target` seated: the point of the hull it sits in
+    /// (its bounds as it lies now) nearest `from`, when the bite wears a
+    /// hull down (`DamageType::vehicle_scale`, as any weapon's hit does);
+    /// None on foot, in a wreck, or for a bite a hull shrugs off.
+    pub(super) fn bite_hull(
+        &self,
+        melee: &crate::bot_kind::BotMelee,
+        target: OwnerId,
+        from: Vec3,
+    ) -> Option<(u64, Vec3)> {
+        let wears = self
+            .weapons
+            .pack
+            .damage_type(&melee.name)
+            .map_or(1.0, |t| t.vehicle_scale)
+            > 0.0;
+        let (vehicle, _) = self.mounted(target).filter(|_| wears)?;
+        let world = self.vehicles.world.as_ref()?;
+        let v = world
+            .vehicle_snapshot(&self.simulation.physics, bri_vehicles::VehicleId(vehicle))
+            .filter(|v| !v.destroyed)?;
+        let d = world.definition(&v.definition)?;
+        let at = Vec3::from(v.transform.position);
+        let turn = glam::Quat::from_array(v.transform.rotation);
+        let local = (turn.inverse() * (from - at)).clamp(
+            Vec3::from(d.bounds_min) * v.scale,
+            Vec3::from(d.bounds_max) * v.scale,
+        );
+        Some((vehicle, at + turn * local))
     }
     /// Equip the best weapon in the inventory by its data
     /// (`hand_combat::item_worth`), for a weapon the native chooser does not

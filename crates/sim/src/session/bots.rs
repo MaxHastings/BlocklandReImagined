@@ -2091,7 +2091,7 @@ impl Session {
         self.bot_crossed(bot);
         self.surprise_settle(bot, tick);
         let brain = &self.bots.brains[&bot];
-        let sight = self.bot_sight(bot, brain, eye);
+        let mut sight = self.bot_sight(bot, brain, eye);
         // A crossing immediately after direct sight can carry that last
         // observation through the opening. It never reads the hidden body.
         let followed = brain
@@ -2118,6 +2118,19 @@ impl Session {
             bite,
             weapon,
         } = self.bot_hand(bot, sight.target, tick)?;
+        // A bite reaches a seated enemy at the hull it sits in, where the
+        // bite wears that down (`bot_bite`): that is where it goes, what it
+        // looks at, and what it measures its reach to.
+        if let (Some(seen), Some(melee)) = (sight.target.as_mut(), bite.as_ref())
+            && let Some((_, at)) = self.bite_hull(melee, seen.owner, eye)
+        {
+            let floor = Vec3::new(at.x, feet.y.min(at.y), at.z);
+            seen.feet = floor;
+            seen.real = floor;
+            seen.aim = at;
+            // Its attack aims half a unit below an eye (`bot_act`).
+            seen.eye = at + Vec3::Y * 0.5;
+        }
         let (hurt_by, threat) = self.bot_evidence(bot, sight.target, feet, tick);
         // Holding something with its tool: carry it to open space to throw.
         let holding = self.held_by(bot).is_some();
