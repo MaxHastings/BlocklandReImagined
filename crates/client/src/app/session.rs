@@ -644,12 +644,18 @@ impl App {
                         Some(server::HostCertificate::load_or_create(&state_dir)?)
                     },
                     map_loader: Some(map_loader),
-                    // Joiners download the Add-Ons this host runs.
-                    packages: Some(Arc::new(bri_net::packages::PackageShelf::new(
-                        &paths_for_maps.root,
-                        &paths_for_maps.packages,
-                        &identity,
-                    )?)),
+                    // Joiners download the Add-Ons this host runs. Listing
+                    // them reads and hashes every Add-On file, so a single
+                    // player game, which nobody joins, lists none.
+                    packages: if single {
+                        None
+                    } else {
+                        Some(Arc::new(bri_net::packages::PackageShelf::new(
+                            &paths_for_maps.root,
+                            &paths_for_maps.packages,
+                            &identity,
+                        )?))
+                    },
                 },
                 max_players as usize,
                 state_dir.join("administration.json"),
