@@ -1591,9 +1591,19 @@ impl PlatformApp for App {
             .graphics
             .with_lighting(self.lighting.light_volume.mode(self.graphics.lighting));
         let (scene_device, shadows) = (device.clone(), effective.shadows);
+        // Unified and Dynamic lighting draw with more pipelines; built here
+        // too, the first game's first frame no longer compiles them.
+        let modern = self.graphics.lighting != 0;
+        let soft_shading = modern && self.graphics.soft_shading;
+        let occlusion = modern && self.graphics.ambient_occlusion;
         self.gpu.renderer = Some(crate::gpu_build::Building::spawn(
             "scene pipelines",
-            move || SceneRenderer::with_settings(&scene_device, format, samples, shadows),
+            move || {
+                let mut renderer =
+                    SceneRenderer::with_settings(&scene_device, format, samples, shadows);
+                renderer.prepare_lighting_pipelines(soft_shading, occlusion);
+                renderer
+            },
         ));
         self.lighting.reflections = Some(bri_render::reflection::Reflections::new(
             device,
