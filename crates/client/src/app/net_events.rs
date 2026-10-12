@@ -637,7 +637,7 @@ impl App {
                         bri_sim::session::Notice::MessageBox { title, text } => {
                             UiUpdate::MessageBox {
                                 title: plain_chat(&title),
-                                text: plain_chat(&text),
+                                text: plain_lines(&text),
                             }
                         }
                         bri_sim::session::Notice::Question {
@@ -647,7 +647,7 @@ impl App {
                             command,
                         } => UiUpdate::Confirm {
                             title: plain_chat(&title),
-                            text: plain_chat(&text),
+                            text: plain_lines(&text),
                             action: Box::new(UiAction::Game(GameAction::Package {
                                 package,
                                 command,

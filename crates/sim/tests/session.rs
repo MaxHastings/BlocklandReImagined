@@ -2624,7 +2624,16 @@ fn missing_content_groups_bricks_by_addon_and_lists_prints_apart() {
     ];
     let mut printed = brick("v20/brick/ok");
     printed.print = Some(ContentRef::unresolved("print", "Custom/face"));
-    let prints = unresolved_prints([&printed, &brick("v20/brick/ok")].into_iter());
+    // Installed prints and `NOPRINT` are not missing, whatever name the
+    // save gives them.
+    let mut stock = brick("v20/brick/ok");
+    stock.print = Some(ContentRef::unresolved("print", "2x2f/vent"));
+    let mut blank = brick("v20/brick/ok");
+    blank.print = Some(ContentRef::unresolved("print", "NOPRINT"));
+    let prints = unresolved_prints(
+        [&printed, &stock, &blank, &brick("v20/brick/ok")].into_iter(),
+        |name| name == "2x2f/vent",
+    );
     assert_eq!(prints.len(), 1);
     let m = missing_content(&unloaded, &prints).unwrap();
     assert!(

@@ -1095,6 +1095,14 @@ fn plain_chat(text: &str) -> String {
         })
         .collect()
 }
+/// [`plain_chat`] for a message box: the text keeps its line breaks, so a
+/// server's grouped list does not run into the sentence after it.
+fn plain_lines(text: &str) -> String {
+    text.split('\n')
+        .map(plain_chat)
+        .collect::<Vec<_>>()
+        .join("\n")
+}
 /// A score report as the Report window shows it: plain text, each column
 /// in the host's order, team names in their paint.
 fn report_view(
