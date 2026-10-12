@@ -6,7 +6,7 @@
 //! are. The headless half is `crates/sim/tests/playground.rs`.
 mod common;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use bri_net::{
     client::{Client, HostPin},
     packages::PackageShelf,
@@ -399,9 +399,13 @@ async fn two_players_and_a_late_joiner_share_the_playground() -> Result<()> {
         resting.z < WALL_Z + 3.0,
         "the watcher saw it reach the wall: {resting}"
     );
-    let left = standing(&watcher);
-    assert!(left < built, "the watcher saw bricks knocked out: {left}");
-    assert_eq!(left, standing(&driver), "both see the same bricks");
+    // Brick deltas travel apart from vehicle poses, so give the watcher
+    // until it sees the same bricks out as the driver.
+    let left = standing(&driver);
+    assert!(left < built, "the driver saw bricks knocked out: {left}");
+    wait(&mut watcher, |c| standing(c) == left)
+        .await
+        .with_context(|| format!("the watcher never saw {left} bricks standing"))?;
     let seen = Vec3::from(driver.replica.vehicle_poses[&buggy].position);
     assert!(
         seen.distance(resting) < 0.5,
@@ -436,7 +440,7 @@ async fn two_players_and_a_late_joiner_share_the_playground() -> Result<()> {
         RUNNER
     );
     assert!(in_hand(&late), "the late joiner sees the carbine in hand");
-    assert_eq!(standing(&late), standing(&watcher));
+    wait(&mut late, |c| standing(c) == left).await?;
     drop((driver, watcher, late));
     server.stop().await?;
     Ok(())
