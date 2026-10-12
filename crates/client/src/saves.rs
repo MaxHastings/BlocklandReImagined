@@ -176,24 +176,41 @@ impl Store {
         Ok(self.directory.canonicalize()?)
     }
     /// A save's world without its bricks, and how many it holds.
+    /// Reads only the start of a binary save (the magic, the header's
+    /// length and the header): a save list used to read every save in
+    /// full, bricks and all, on every open, after every save and on every
+    /// load. A save from before the split header is still read whole.
     pub fn read_header(entry: &Entry) -> Result<(bri_world::World, u64)> {
-        bri_world::build::decode_header(&Self::bytes(entry)?)
+        let mut file = Self::open(entry)?;
+        let magic = bri_world::build::MAGIC;
+        let mut start = vec![0; magic.len() + 4];
+        let filled = read_up_to(&mut file, &mut start)?;
+        if filled == start.len() && start.starts_with(magic) {
+            let length = u32::from_le_bytes(start[magic.len()..].try_into()?) as u64;
+            ensure!(length <= MAX_BUILD_BYTES, "Truncated native build");
+            (&mut file).take(length).read_to_end(&mut start)?;
+            return bri_world::build::decode_header(&start);
+        }
+        start.truncate(filled);
+        file.take(MAX_BUILD_BYTES + 1 - filled as u64)
+            .read_to_end(&mut start)?;
+        bri_world::build::decode_header(&start)
     }
     pub fn read(entry: &Entry) -> Result<SavedBuild> {
-        bri_world::build::decode(&Self::bytes(entry)?)
+        let mut bytes = vec![];
+        Self::open(entry)?
+            .take(MAX_BUILD_BYTES + 1)
+            .read_to_end(&mut bytes)?;
+        bri_world::build::decode(&bytes)
     }
-    fn bytes(entry: &Entry) -> Result<Vec<u8>> {
+    fn open(entry: &Entry) -> Result<File> {
         let root = entry.root.canonicalize()?;
         let path = entry.path.canonicalize()?;
         ensure!(
             path.starts_with(&root) && path.is_file(),
             "Save path escapes its storage directory"
         );
-        let mut bytes = vec![];
-        File::open(path)?
-            .take(MAX_BUILD_BYTES + 1)
-            .read_to_end(&mut bytes)?;
-        Ok(bytes)
+        Ok(File::open(path)?)
     }
     pub fn list(&self) -> Result<Vec<Entry>> {
         let root = self.root()?;
@@ -593,6 +610,18 @@ pub fn match_colors(world: &[[f32; 4]], build: &mut SavedBuild) {
     }
 }
 
+/// Fills as much of `buffer` as the file holds; how much it filled.
+fn read_up_to(file: &mut File, buffer: &mut [u8]) -> Result<usize> {
+    let mut filled = 0;
+    while filled < buffer.len() {
+        match file.read(&mut buffer[filled..])? {
+            0 => break,
+            read => filled += read,
+        }
+    }
+    Ok(filled)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -869,6 +898,44 @@ mod tests {
         let history: Vec<_> = std::fs::read_dir(good.parent().unwrap().join(".history"))?
             .collect::<std::io::Result<_>>()?;
         assert_eq!(std::fs::read(history[0].path())?, b"{\"truncated");
+        Ok(())
+    }
+    /// A save list reads each save's header, not its bricks: a save grown
+    /// past the size limit after its header (sparse, so it costs no disk)
+    /// still lists, which it cannot if the whole file were read.
+    #[test]
+    fn a_save_list_reads_only_each_saves_header() -> Result<()> {
+        let directory = std::env::temp_dir().join(format!(
+            "bri-save-header-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)?
+                .as_nanos()
+        ));
+        let store = Store {
+            directory: directory.clone(),
+            map_names: [("map".into(), "Map".into())].into(),
+            templates: Vec::new(),
+            old: None,
+        };
+        let world = bri_world::World::new("Big".into(), "map".into(), vec![[1.0; 4]]);
+        let build = SavedBuild::capture(&world, true, true)?;
+        store.save("Big.world.json", "Tall", build, false)?;
+        let entry = store.list()?.remove(0);
+        let saved = std::fs::metadata(&entry.path)?.len();
+        File::options()
+            .write(true)
+            .open(&entry.path)?
+            .set_len(MAX_BUILD_BYTES + 1)?;
+        let (header, bricks) = Store::read_header(&entry)?;
+        assert_eq!((header.name.as_str(), bricks), ("Big", 0));
+        // A header cut short is still caught.
+        File::options()
+            .write(true)
+            .open(&entry.path)?
+            .set_len(saved.min(20))?;
+        assert!(Store::read_header(&entry).is_err());
+        std::fs::remove_dir_all(directory)?;
         Ok(())
     }
 }
