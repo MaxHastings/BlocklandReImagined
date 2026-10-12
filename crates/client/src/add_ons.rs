@@ -281,8 +281,9 @@ pub fn rows(library: &Library, state: &State) -> Vec<AddOnRow> {
         }
     };
     out.sort_by_key(|r| rank(&r.category));
-    // Classic Add-Ons dropped in the Add-Ons folder and not converted yet
-    // come last: converting, or why they could not be.
+    // Add-Ons dropped in the Add-Ons folder and not converted or installed
+    // yet come last: in progress, or why they could not be. A ported
+    // Add-On's ZIP is installed as it is, so it never says converting.
     // A copy of one the game ships is not converted: the shipped one's row
     // says so.
     for l in library
@@ -291,11 +292,20 @@ pub fn rows(library: &Library, state: &State) -> Vec<AddOnRow> {
         .filter(|l| l.imported_as.is_none() && l.included.is_none())
     {
         let failed = state.failed(l);
+        let native = classic::is_native_zip(&l.path);
         out.push(AddOnRow {
             id: format!("{LEGACY}{}", l.name),
             name: l.name.clone(),
-            category: if failed.is_some() { FAILED_CATEGORY } else { LEGACY_CATEGORY }.into(),
+            category: match (native, failed.is_some()) {
+                (true, true) => NATIVE_FAILED_CATEGORY,
+                (true, false) => NATIVE_CATEGORY,
+                (false, true) => FAILED_CATEGORY,
+                (false, false) => LEGACY_CATEGORY,
+            }
+            .into(),
             description: match failed {
+                Some(_) if native => "An Add-On ported for this game, in your Add-Ons folder, that could not be installed. Replace it with a working copy and it installs by itself, or press Retry.".into(),
+                None if native => "An Add-On ported for this game, in your Add-Ons folder, being installed as it is. It starts off; players who join you download it from you.".into(),
                 Some(_) => "A classic Blockland Add-On in your Add-Ons folder that could not be converted. Replace it with a working copy and it converts by itself, or press Retry.".into(),
                 None => "A classic Blockland Add-On in your Add-Ons folder, being converted into an Add-On this game can load. It starts off; players who join you download it from you. Its scripts are never run: the game's own rewrites of them come with it, and its report lists anything still missing.".into(),
             },
@@ -303,6 +313,7 @@ pub fn rows(library: &Library, state: &State) -> Vec<AddOnRow> {
             broken: failed.is_some(),
             importable: failed.is_some(),
             importing: failed.is_none(),
+            ported: native,
             ..Default::default()
         });
     }
@@ -366,6 +377,8 @@ fn palette_only(library: &Library, entry: &LibraryEntry) -> bool {
 pub const LEGACY: &str = "legacy:";
 const LEGACY_CATEGORY: &str = "Converting";
 const FAILED_CATEGORY: &str = "Could Not Convert";
+const NATIVE_CATEGORY: &str = "Installing";
+const NATIVE_FAILED_CATEGORY: &str = "Could Not Install";
 
 /// The importer ships next to the game (`bri-import-addon`). It is a
 /// separate program so conversion tooling stays out of the game itself.
@@ -786,6 +799,7 @@ fn row(library: &Library, e: &LibraryEntry) -> AddOnRow {
             .any(LibraryEntry::has_errors),
         importable: false,
         importing: false,
+        ported: false,
     }
 }
 
@@ -1059,6 +1073,27 @@ mod tests {
         assert_eq!(
             (last.id.as_str(), last.category.as_str(), last.importing),
             ("legacy:Weapon_Shotgun", "Converting", true)
+        );
+        // A ported Add-On's ZIP says it is being installed, not converted.
+        {
+            use std::io::Write;
+            let mut w = zip::ZipWriter::new(
+                std::fs::File::create(root.join("Add-Ons/Ported.zip")).unwrap(),
+            );
+            w.start_file(
+                "ported/package.json",
+                zip::write::SimpleFileOptions::default(),
+            )
+            .unwrap();
+            w.write_all(br#"{"schema_version":1,"id":"ported","version":"1.0.0","api":1}"#)
+                .unwrap();
+            w.finish().unwrap();
+        }
+        let v = view(&root);
+        let ported = v.rows.iter().find(|r| r.id == "legacy:Ported").unwrap();
+        assert_eq!(
+            (ported.category.as_str(), ported.importing, ported.ported),
+            ("Installing", true, true)
         );
         let _ = std::fs::remove_dir_all(&root);
     }
