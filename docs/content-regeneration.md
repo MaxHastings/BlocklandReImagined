@@ -95,6 +95,7 @@ The pack is generated content like the rest: never committed, and shipped in
 the release zip, so players need no Steam copy. Without `--steam` the pack is
 built empty and the Sky picker offers the v20 maps' own skies; rebuild with
 it before `python tools/ci_content.py upload`, so release builds carry it.
+`ci_content.py pack` (and so `upload`) refuses an empty environments pack.
 
 ## Default Add-Ons
 
