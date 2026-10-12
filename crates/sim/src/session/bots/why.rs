@@ -170,13 +170,9 @@ impl Session {
                         own: i.choice.harm.own,
                         push: i.choice.harm.push,
                         kills_ally: i.choice.harm.kills_ally,
-                        net: super::tactics::trade(
-                            i.choice.harm,
-                            self.peers
-                                .get(&i.seen.owner)
-                                .map_or(0.0, |p| p.combat.health.max(1.0)),
-                            self.peers.get(bot).map_or(0.0, |p| p.combat.health),
-                        ),
+                        // Traded by the healths it planned with: one hurt
+                        // since is the fire gate's to weigh again.
+                        net: super::tactics::trade(i.choice.harm, i.healths.1, i.healths.0),
                     }),
                 gate: b.gate,
             })
