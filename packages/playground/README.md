@@ -10,7 +10,7 @@ turned off. What each combination does, and what is still missing, is in
 | `playground-runner-look` | The Runner's box-model body (client) |
 | `playground-runner` | The Runner: its size, eyes, speeds and jump |
 | `playground-rifle` | The Pulse Carbine weapon |
-| `playground-buggy` | A two-seat dune buggy that smashes bricks |
+| `playground-buggy` | A dune buggy with driver, passenger and gunner seats that smashes bricks |
 | `playground-mode` | The mode that plays them together, with Blockhead bots |
 
 The first four name no other Add-On (the Runner depends only on its look).
@@ -34,8 +34,8 @@ a late joiner over the network).
 4. Build a wall of plates, jump onto the buggy from above to take the
    driver's seat, and drive through the wall. Bricks should break, and come
    back after 30 seconds.
-5. With a second player: they board as passenger and fire the Carbine
-   while you drive.
+5. With two more players: one boards as passenger and fires the Carbine,
+   the other stands at the rear gun and clicks to fire it, while you drive.
 6. Let a bot shoot you. You should respawn as the Runner holding the
    Carbine.
 

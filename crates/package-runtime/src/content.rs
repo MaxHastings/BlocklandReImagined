@@ -63,9 +63,14 @@ pub enum Kind {
     /// A screen shown over the main menu on some days of the year
     /// (`splash.json`, Slayer's Happy Holidays). Client side.
     Splash,
+    /// A movement controller: a WebAssembly module an archetype names as
+    /// its `controller` (`bri-controller`). Server side like the archetype:
+    /// clients receive the module with the host's archetype table, so they
+    /// predict with exactly the bytes the host runs.
+    Controller,
 }
 impl Kind {
-    pub const NAMES: [&str; 19] = [
+    pub const NAMES: [&str; 20] = [
         "behaviour",
         "script",
         "world",
@@ -85,6 +90,7 @@ impl Kind {
         "help",
         "image",
         "splash",
+        "controller",
     ];
     pub fn parse(text: &str) -> Option<Self> {
         Some(match text {
@@ -107,6 +113,7 @@ impl Kind {
             "help" => Self::Help,
             "image" => Self::Image,
             "splash" => Self::Splash,
+            "controller" => Self::Controller,
             _ => return None,
         })
     }
@@ -118,7 +125,8 @@ impl Kind {
             | Self::Entity
             | Self::Archetype
             | Self::Mode
-            | Self::Data => Side::Server,
+            | Self::Data
+            | Self::Controller => Side::Server,
             // Shared gameplay data is client-visible: clients load it too.
             Self::Model
             | Self::Hud
@@ -141,6 +149,7 @@ impl Kind {
             Self::Data => 1024 * 1024,
             Self::Image => 4 * 1024 * 1024,
             Self::Weapons | Self::Vehicles | Self::Bricks => 32 * 1024 * 1024,
+            Self::Controller => 64 * 1024,
             _ => 128 * 1024,
         }
     }
@@ -1554,6 +1563,10 @@ pub struct ArchetypeDef {
     /// out asks for the Blockhead's clip name, then falls back.
     #[serde(default)]
     pub animations: Option<bri_content::body::Animations>,
+    /// Its own movement rules: a `controller` this Add-On or one it
+    /// depends on provides (`namespace:controller/name`).
+    #[serde(default)]
+    pub controller: Option<String>,
 }
 /// One rider seat: the model node riders follow, its rest position from
 /// the feet (facing -Z, at scale 1) and the rider's action (`root`, `sit`).
@@ -1592,6 +1605,10 @@ impl ArchetypeDef {
         if let Some(animations) = &self.animations {
             bri_content::body::validate_animations(animations)?;
         }
+        ensure!(
+            self.controller.as_ref().is_none_or(|c| text(c, 160)),
+            "controller must be a controller id"
+        );
         if let Some(stock) = &self.adjusts {
             ensure!(
                 stock.starts_with("v20.player.") && text(stock, 160),

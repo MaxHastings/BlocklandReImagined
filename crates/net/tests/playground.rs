@@ -6,7 +6,7 @@
 //! are. The headless half is `crates/sim/tests/playground.rs`.
 mod common;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use bri_net::{
     client::{Client, HostPin},
     packages::PackageShelf,
@@ -102,10 +102,18 @@ fn session() -> (bri_sim::session::Session, u64) {
         }
     }
     let mut session = common::session_with(world);
-    let rifle = packages().join("playground/playground-rifle/assets/weapons.json");
-    session
-        .set_weapon_pack(bri_weapons::Pack::from_json(&std::fs::read(rifle).unwrap()).unwrap())
-        .unwrap();
+    // The carbine's weapons and the buggy's gun, merged as a host merges
+    // every package's.
+    let load = |dir: &str| {
+        let path = packages().join(dir).join("weapons.json");
+        bri_weapons::Pack::from_json(&std::fs::read(path).unwrap()).unwrap()
+    };
+    let (weapons, problems) = load("playground/playground-rifle/assets").merge(vec![(
+        "playground/playground-buggy/assets".into(),
+        load("playground/playground-buggy/assets"),
+    )]);
+    assert!(problems.is_empty(), "{problems:?}");
+    session.set_weapon_pack(weapons).unwrap();
     let bots = packages().join("blockhead_bot/assets/bots.json");
     session
         .set_vehicle_pack(
@@ -391,9 +399,13 @@ async fn two_players_and_a_late_joiner_share_the_playground() -> Result<()> {
         resting.z < WALL_Z + 3.0,
         "the watcher saw it reach the wall: {resting}"
     );
-    let left = standing(&watcher);
-    assert!(left < built, "the watcher saw bricks knocked out: {left}");
-    assert_eq!(left, standing(&driver), "both see the same bricks");
+    // Brick deltas travel apart from vehicle poses, so give the watcher
+    // until it sees the same bricks out as the driver.
+    let left = standing(&driver);
+    assert!(left < built, "the driver saw bricks knocked out: {left}");
+    wait(&mut watcher, |c| standing(c) == left)
+        .await
+        .with_context(|| format!("the watcher never saw {left} bricks standing"))?;
     let seen = Vec3::from(driver.replica.vehicle_poses[&buggy].position);
     assert!(
         seen.distance(resting) < 0.5,
@@ -428,7 +440,7 @@ async fn two_players_and_a_late_joiner_share_the_playground() -> Result<()> {
         RUNNER
     );
     assert!(in_hand(&late), "the late joiner sees the carbine in hand");
-    assert_eq!(standing(&late), standing(&watcher));
+    wait(&mut late, |c| standing(c) == left).await?;
     drop((driver, watcher, late));
     server.stop().await?;
     Ok(())

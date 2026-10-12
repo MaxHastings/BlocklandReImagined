@@ -358,6 +358,10 @@ protect everyone from a modified client.
 
 ## Prediction: package movement controllers
 
+Built (v0.3.0 W3) as policy over the v20 motor rather than a replacement
+step: see [movement-controllers.md](movement-controllers.md), which
+supersedes the interface sketched below.
+
 PR #1's player archetypes pick a movement controller by name from a built-in
 list because clients predict movement (ledger class W14). Tier 2 removes
 that limit:

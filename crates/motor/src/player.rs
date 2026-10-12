@@ -144,6 +144,11 @@ pub struct PlayerState {
     /// A rope holding the body to a point (`Tether`), or none.
     #[serde(default)]
     pub tether: Option<Tether>,
+    /// The archetype's movement controller's memory and animation intent
+    /// (`crate::controller`); none while it is blank, as for every body
+    /// without a controller.
+    #[serde(default)]
+    pub controller: Option<crate::controller::ControllerState>,
 }
 /// Longest a tether's rope may be, units: a bound on state a host or
 /// player sends, past any v20 rope (the Grapple Rope's hook flies 800).
@@ -647,6 +652,12 @@ pub struct PlayerTuning {
     /// Water coverage from which the underwater speeds apply. A floating
     /// rowboat is always in the water.
     pub swim_coverage: f32,
+    /// The archetype's movement controller, bound from its module by the
+    /// side that runs it (`Archetypes::bind_controllers`). Never data: the
+    /// archetype carries the module, and a table read from data has none
+    /// bound until then.
+    #[serde(skip)]
+    pub controller: Option<crate::controller::Controller>,
 }
 impl Default for PlayerTuning {
     fn default() -> Self {
@@ -710,6 +721,7 @@ impl Default for PlayerTuning {
             min_jet_energy: 0.0,
             jet_drain: 0.0,
             swim_coverage: 0.9,
+            controller: None,
         }
     }
 }
@@ -856,6 +868,9 @@ pub struct MotionEvents {
     /// The body went through an opening this tick: the carry that took it
     /// to the partner's side (a player's view turns with it).
     pub passed: Option<glam::Affine3A>,
+    /// The archetype's movement controller failed this tick (the motor ran
+    /// the tick without it): its id and why.
+    pub controller_fault: Option<String>,
 }
 /// Feet carried through an opening by their body's middle (`middle` above
 /// them), so the body stays upright whichever way the opening turns it.
@@ -973,6 +988,7 @@ impl Player {
                 speed_scale: 1.0,
                 tick: TorqueTick::default(),
                 tether: None,
+                controller: None,
             },
             tuning,
             body,
@@ -1017,6 +1033,7 @@ impl Player {
                 speed_scale: 1.0,
                 tick: TorqueTick::default(),
                 tether: None,
+                controller: None,
             },
             tuning,
             body,
@@ -1124,6 +1141,11 @@ impl Player {
         );
         let tuning = tuning.scaled(scale);
         tuning.validate()?;
+        // A new body's controller starts afresh, never reading what
+        // another controller left.
+        if tuning.controller != self.tuning.controller {
+            self.state.controller = None;
+        }
         self.state.archetype = archetype;
         self.state.scale = scale;
         self.state.energy = self.state.energy.min(tuning.max_energy);
@@ -1402,6 +1424,7 @@ impl Player {
                 hits: vec![],
                 contacts: vec![],
                 passed: None,
+                controller_fault: None,
             }
         };
         self.crouch.update(
@@ -1512,6 +1535,69 @@ impl Player {
         }
         .max(ss * input.right.abs())
             * self.state.speed_scale;
+        // The archetype's own movement rules decide first; the motor then
+        // moves the body as always (`crate::controller`).
+        let mut controller_fault = None;
+        let input = match &t.controller {
+            Some(controller) => {
+                let mut tick = crate::controller::ControllerTick {
+                    dt,
+                    scale: self.state.scale,
+                    feet,
+                    facing: forward,
+                    wish: move_vec,
+                    pitch: input.pitch,
+                    grounded: self.state.grounded,
+                    crouched: self.state.crouched,
+                    submerged: liquid.is_some_and(|(_, c)| c >= t.swim_coverage),
+                    jump: input.jump,
+                    crouch: input.crouch,
+                    jet: input.jet,
+                    velocity: Vec3::from(self.state.velocity),
+                    take_jump: false,
+                    state: self.state.controller.unwrap_or_default(),
+                };
+                let reach = crate::controller::MAX_SWEEP * self.state.scale.max(1.0);
+                let height = t.height(self.state.crouched);
+                let half = t.width * 0.5;
+                let around = torque::Box3 {
+                    min: Vec3::new(feet.x - half, feet.y, feet.z - half),
+                    max: Vec3::new(feet.x + half, feet.y + height, feet.z + half),
+                }
+                .expanded(Vec3::splat(reach + 0.2));
+                let mut probe = crate::controller::Probe::new(
+                    torque::Soup::gather(&query, &physics.bodies, around, feet, parts),
+                    feet,
+                    half,
+                    height,
+                    reach,
+                );
+                match controller.0.step(&mut tick, &mut probe) {
+                    Ok(()) if tick.velocity.is_finite() => {
+                        self.state.velocity = tick.velocity.clamp_length_max(MAX_SPEED).to_array();
+                        self.state.controller = (tick.state
+                            != crate::controller::ControllerState::default())
+                        .then_some(tick.state);
+                        MoveInput {
+                            jump: input.jump && !tick.take_jump,
+                            ..input
+                        }
+                    }
+                    Ok(()) => {
+                        controller_fault = Some(format!(
+                            "{}: a velocity that is not a number",
+                            controller.id()
+                        ));
+                        input
+                    }
+                    Err(why) => {
+                        controller_fault = Some(format!("{}: {why}", controller.id()));
+                        input
+                    }
+                }
+            }
+            None => input,
+        };
         // Torque's convex working list: every solid polygon this tick can reach,
         // including a jump, a step and the contact slab under the feet.
         let half = t.width * 0.5;
@@ -1887,6 +1973,7 @@ impl Player {
             hits: moved.hit,
             contacts: moved.contacts,
             passed,
+            controller_fault,
         })
     }
     /// A swept sphere keeps the third-person camera in front of architecture.

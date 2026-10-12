@@ -684,6 +684,35 @@ fn collide(
     list
 }
 
+/// A box `half_width` either side of `feet` and `height` tall, moved by
+/// `vector` through the soup: the fraction of the move at its first
+/// polygon and that polygon's normal (the most head-on of a tie), or none
+/// within the move. What a movement controller's sweep asks
+/// (`crate::controller::Probe`); the motor's own moves use the same test.
+pub fn sweep_box(
+    soup: &Soup,
+    feet: Vec3,
+    half_width: f32,
+    height: f32,
+    vector: Vec3,
+) -> Option<(f32, Vec3)> {
+    let at = feet - soup.origin;
+    let bounds = Box3 {
+        min: Vec3::new(at.x - half_width, at.y, at.z - half_width),
+        max: Vec3::new(at.x + half_width, at.y + height, at.z + half_width),
+    };
+    let list = collide(soup, bounds, vector, Epsilon::at(1.0), |_| true);
+    if list.t >= 1.0 {
+        return None;
+    }
+    let heading = vector.normalize_or_zero();
+    list.hits
+        .iter()
+        .map(|c| c.normal)
+        .min_by(|a, b| a.dot(heading).total_cmp(&b.dot(heading)))
+        .map(|normal| (list.t, normal))
+}
+
 fn extrude(bounds: Box3, vector: Vec3, epsilon: f32) -> Vec<Face> {
     let (lo, hi) = (bounds.min, bounds.max);
     let mut faces = Vec::with_capacity(3);

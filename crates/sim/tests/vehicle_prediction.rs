@@ -122,6 +122,7 @@ fn a_driven_vehicle_answers_its_own_mouse_at_once_and_agrees_with_the_host() {
         speed_scale: 1.0,
         tick: Default::default(),
         tether: None,
+        controller: None,
     };
     let mut client = Predictor::new(mirror, rider, Default::default()).unwrap();
     client
@@ -203,6 +204,7 @@ fn rider_at(feet: [f32; 3]) -> PlayerState {
         speed_scale: 1.0,
         tick: Default::default(),
         tether: None,
+        controller: None,
     }
 }
 fn predict(definition: &str, motion: Motion) -> anyhow::Result<Predictor> {

@@ -33,6 +33,8 @@ pub struct Package {
     pub help: BTreeMap<String, content::HelpPages>,
     pub splashes: BTreeMap<String, content::Splash>,
     pub archetypes: BTreeMap<String, content::ArchetypeDef>,
+    /// Movement controllers' WebAssembly modules.
+    pub controllers: BTreeMap<String, Vec<u8>>,
     pub textures: BTreeMap<String, content::Texture>,
     pub blocks: BTreeMap<String, content::BlockDef>,
     pub modes: BTreeMap<String, content::GameMode>,
@@ -116,7 +118,8 @@ impl Package {
                 // imported one with weapons and player types) may carry
                 // it. Only the host's table counts; clients receive that
                 // with the checkpoint and ignore the file.
-                (Side::Server, Side::Shared) if kind == Kind::Archetype => {}
+                (Side::Server, Side::Shared)
+                    if matches!(kind, Kind::Archetype | Kind::Controller) => {}
                 (Side::Server, _) => {
                     out.push(
                         Diagnostic::error(
@@ -191,6 +194,7 @@ impl Package {
             help: BTreeMap::new(),
             splashes: BTreeMap::new(),
             archetypes: BTreeMap::new(),
+            controllers: BTreeMap::new(),
             textures: BTreeMap::new(),
             blocks: BTreeMap::new(),
             modes: BTreeMap::new(),
@@ -321,6 +325,20 @@ impl Package {
                         parse::<content::ArchetypeDef>(asset, &id, |a| a.validate(), out)
                     {
                         self.archetypes.insert(asset.id.clone(), a);
+                    }
+                }
+                Kind::Controller => {
+                    if asset.bytes.starts_with(b"\0asm") {
+                        self.controllers
+                            .insert(asset.id.clone(), asset.bytes.clone());
+                    } else {
+                        out.push(
+                            Diagnostic::error(
+                                "content.controller",
+                                "a controller is a WebAssembly binary module (.wasm)",
+                            )
+                            .at(location(&id, &asset.file)),
+                        );
                     }
                 }
                 Kind::Texture => match content::Texture::read(&asset.bytes) {
@@ -1037,6 +1055,14 @@ impl Catalog {
     }
     pub fn block(&self, id: &str) -> Option<&content::BlockDef> {
         self.packages.get(id.split(':').next()?)?.blocks.get(id)
+    }
+    /// A movement controller's module.
+    pub fn controller(&self, id: &str) -> Option<&[u8]> {
+        self.packages
+            .get(id.split(':').next()?)?
+            .controllers
+            .get(id)
+            .map(Vec::as_slice)
     }
     /// Every package's archetypes, in package then id order.
     pub fn archetypes(&self) -> impl Iterator<Item = (&String, &content::ArchetypeDef)> {

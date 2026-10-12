@@ -24,7 +24,7 @@ Five Add-Ons, each standing alone and naming no other except through
 | `playground-runner-look` | model (client) | A box-model character, red cap and blue overalls, 1.9 units tall |
 | `playground-runner` | archetype (host) | The Runner body: own size, eyes, speeds and jump, no jets |
 | `playground-rifle` | weapons | The Pulse Carbine: own `*.shape.json` model, magazine of 24, reload, projectile, sounds |
-| `playground-buggy` | vehicles | A two-seat buggy: own chassis and tires, smashes bricks, driver steers, passenger keeps their weapon |
+| `playground-buggy` | vehicles, weapons | A three-seat buggy: own chassis and tires, smashes bricks; the driver steers, the passenger keeps their weapon, a gunner works its rear gun |
 | `playground-mode` | mode | Plays them together with `blockhead_bot`: Runner body, Carbine loadout, respawn rules |
 
 ## Matrix
@@ -34,12 +34,14 @@ Five Add-Ons, each standing alone and naming no other except through
 | Each Add-On loads alone and depends on no other except as declared | works | `crates/sim/tests/playground.rs` `each_add_on_stands_alone_and_names_no_other` |
 | Joining a mode puts a player in another Add-On's body, holding a third Add-On's weapon, and it fires | works | `a_player_joins_as_the_runner_holding_the_carbine_and_fires` |
 | A custom body drives a custom vehicle through bricks and climbs out | works | `the_runner_drives_the_buggy_through_the_fort_and_climbs_out` |
-| A passenger fires their own weapon from a vehicle seat | works | `a_passenger_fires_the_carbine_from_the_buggy` |
+| A passenger fires their own weapon from a vehicle seat, and a gunner fires the vehicle's own gun, which the vehicle Add-On brings (its projectile and sound in its own weapons file) | works | `a_passenger_fires_the_carbine_and_a_gunner_the_buggy_gun` |
 | A killed custom body respawns as the same body with its loadout | works | `a_runner_killed_by_the_carbine_respawns_as_the_runner_with_it` |
 | A bot from a separate Add-On joins the mode's game and fights custom bodies | fixed here | `a_blockhead_bot_fights_the_runners`; the bot spawned outside the mode's mini-game (`crates/sim/src/session/bots/lifecycle.rs` `spawn_brick_game`) |
 | Brick smashing by a vehicle owned by someone else credits its driver | fixed here | `crates/net/tests/playground.rs`; `vehicle_struck` credited the vehicle's owner, not its driver (`crates/sim/src/session/movables.rs`) |
 | Two networked players see each other's body, held weapon, the driven vehicle and the knocked-out bricks | works | `crates/net/tests/playground.rs` `two_players_and_a_late_joiner_share_the_playground` |
 | A late joiner downloads exactly the missing Add-Ons and sees the same world | works | same test (clean cache; the buggy, its driver, the Carbine in hand and the brick state all match) |
+| With no mode or mini-game, an Add-On weapon spawns from an item brick and an Add-On vehicle from a vehicle spawn brick, both set with the wrench | works | `a_builder_spawns_the_carbine_and_the_buggy_from_bricks_without_a_mini_game` |
+| A brick event switches a player to an Add-On body (`onActivate -> Player -> ChangeDatablock`) | gap (W4) | The event already calls `set_player_archetype`, but its PlayerData list holds only the built-in player types (`crates/sim/src/session/events.rs`), so no Add-On body can be picked |
 | A custom body's held item attaches to its own hand | fixed (W2) | Archetype `sockets` (node or offset); `crates/client/src/avatar.rs` `a_body_with_its_own_nodes_and_two_clips_holds_sits_and_names_what_it_lacks`, `a_box_body_holds_at_its_own_hand_and_sits_with_folded_legs`; `crates/client/tests/body_attachments_render.rs` |
 | Shots leave the weapon's muzzle | fixed (W2) | Every gun, v20's included, fires from its barrel at the hand and converges on the crosshair, the eye inside a wall (`crates/sim/src/session/grips.rs`, `crates/weapons/src/muzzle.rs`); `crates/sim/tests/playground.rs` `the_runners_shot_leaves_the_carbines_muzzle_in_its_hand_and_meets_the_crosshair`, `a_blockhead_bot_fires_the_carbine_from_its_own_hand` |
 | A body missing a Blockhead animation still animates | fixed (W2) | `look.animations` roles with fallbacks; a missing clip is skipped and named once (`crates/content/src/body.rs`); `a_body_with_no_clips_stands_in_its_bind_pose_and_still_holds` |
@@ -47,6 +49,37 @@ Five Add-Ons, each standing alone and naming no other except through
 | A body brings its own movement (Mario-style jumps, wall kicks) | gap (W3) | Movement is the fixed Blockhead motor plus tuning; the controller design is its own thread |
 | An Add-On owns the HUD or the camera | gap (W6) | No base-HUD replacement or camera ownership seam |
 | Custom NPCs on the shared bot brain | works for bodies, gap for new behaviours (W7) | Bot kinds pick a body and weapons; new behaviours go into the shared brain |
+
+## Headline scenario: Blockhead, Mario, Warthog, Goombas
+
+Max's own picture of what v0.3.0 is for (2026-10-12): in one multiplayer brick
+world, a player switches between a Blockhead and Mario, jumps into a
+Warthog, and each feels like its own game. Goomba NPCs carry rocket
+launchers and jet around, and a Goomba jumps into a tank to shell Mario
+hiding in a brick castle. "Chaos. Fun. Smooth. Integrated well.
+Multiplayer." The engine must make every beat possible with Add-On data and
+code only; the Mario, Warthog, Goomba and tank Add-Ons themselves are Max's.
+
+| Beat | Owner | State |
+|---|---|---|
+| Mario's run, jump arcs, triple jump, wall kick, ground pound feel like Mario | W3 movement controllers | wall kick and dive working in PR #107; triple jump next |
+| Mario's model animates with its own clips (run, jump, kick, sit) | W2 animation roles; W5 glTF import for a rigged model | W2 in progress |
+| Switch between Blockhead and Mario mid-game, mid-air or seated, no respawn | W4 switching lifecycle | not started |
+| Mario or a Blockhead holds a rocket launcher in his own hand; shots leave its muzzle | W2 sockets and muzzle | in progress |
+| Jump into the Warthog: any body sits in any seat, the passenger keeps their weapon, a gunner seat fires a turret | W2 seats; vehicles (seats, `weapon` seats, turrets already work) | seats for box bodies in W2 |
+| The Warthog drives like a Warthog (loose suspension, drift, chase camera, engine sound) | W8 vehicle feel, W6 camera ownership | not started |
+| The HUD switches with the body and the vehicle (Mario's coins, the Warthog's gun) | W6 HUD regions | not started |
+| Goombas are bots on the one shared brain with their own body (`kind.body`) | W7; bot kinds already pick a body and weapons | works today for box bodies |
+| Goombas use rocket launchers and jet around | works today: bots fight with any weapon and jet when their body `can_jet` | works |
+| A Goomba jumps into a tank and shells Mario | works today: bots drive and crew vehicles, and a gunner fights with its seat's gun (`bots/combat.rs`) | needs a tank Add-On to prove it |
+| Rockets blow the brick castle apart | works today: brick damage under mini-game rules | works |
+| Mario stomps a Goomba (a stomp differs from a bump) | W7 contact information on hooks | not started |
+| A Creeper-style NPC walks up, fuses (swells, hisses) and blows itself up, breaking bricks | W7 ability attack mode; the explosion itself works today (`explode` op with a brick radius, any Add-On explosion look and sound) | brain trigger not started |
+| A player picks an NPC's body (a Goomba) as their player type and drives the Warthog in it | works for seats today (any body that can play rides any seat, `the_runner_drives_the_buggy_through_the_fort_and_climbs_out`); picking it without a mini-game is W4's brick event; sitting right on a non-humanoid body is W2 | partial |
+| A Goomba-bodied player or bot holds a rocket launcher and jets | W2 named weapon socket for bodies without hands; jets when the body sets `can_jet` | socket not started |
+| NPCs follow players through buildings and jump or jet onto things their body can reach | shared nav today for the Blockhead's reach; W7 plans with any body's reach | partial |
+| Bots move with the body they have (a Goomba with Mario-style movement still paths sensibly) | W7 (after W3): the bot brain plans with the Blockhead motor's reach, not an Add-On controller's | not started |
+| Everyone sees it all in multiplayer, late joiners included | every workstream extends the Playground network test | Playground proves it for today's seams |
 
 ## Defects found that belong elsewhere
 

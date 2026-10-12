@@ -309,8 +309,13 @@ def buggy(root):
         (frame, box([0.9, 1.55, -1.1], [0.1, 1.6, 0.1])),
         (frame, box([0.0, 1.0, -0.6], [0.08, 0.5, 0.08])),      # steering column
         (frame, box([0.0, 1.25, -0.5], [0.4, 0.06, 0.06])),
+        (frame, box([0.0, 1.45, 1.5], [0.12, 0.6, 0.12])),      # gun post
+        (frame, box([0.0, 1.85, 1.35], [0.22, 0.2, 0.5])),      # gun
+        (frame, box([0.0, 1.85, 0.9], [0.08, 0.08, 0.5])),      # barrel
     ]
-    seats = [[-0.45, 0.9, 0.25], [0.45, 0.9, 0.25]]
+    # Driver and passenger side by side; a gunner stands on the engine
+    # deck behind them at the post.
+    seats = [[-0.45, 0.9, 0.25], [0.45, 0.9, 0.25], [0.0, 0.85, 1.75]]
     nodes = [node('root', None, [0, 0, 0])] + [node(f'mount{i}', 0, at) for i, at in enumerate(seats)]
     chassis = write_json(assets / 'models' / 'buggy.shape.json',
                          shape('playground-buggy:file/models/buggy.shape.json', nodes,
@@ -342,12 +347,18 @@ def buggy(root):
         'model': 'models/buggy.shape.json',
         'seats': [
             {'node': f'mount{i}', 'transform': {'position': at, 'rotation': [0.0, 0.0, 0.0, 1.0]},
-             'pose': 'sit', 'controls': i == 0, 'weapon': False}
+             'pose': 'sit' if i < 2 else 'root', 'controls': i == 0, 'weapon': i == 2}
             for i, at in enumerate(seats)
         ],
         'wheels': [wheel(x, z, 1.0 if z < 0 else 0.0, z > 0)
                    for z in (-1.45, 1.45) for x in (-1.15, 1.15)],
-        'weapon': None,
+        # The gunner's post fires bolts where they look, turning about the
+        # post's top.
+        'weapon': {'projectile': 'playground-buggy:projectile/bolt',
+                   'muzzle': {'position': [0.0, 1.85, 0.6], 'rotation': [0.0, 0.0, 0.0, 1.0]},
+                   'pivot': [0.0, 1.85, 1.5], 'cooldown_ticks': 12, 'speed': 140.0,
+                   'charge_ticks': 0, 'charge_steps': 1, 'sound': 'playground-buggy:turret',
+                   'effect': ''},
         'attachment_model': None,
         'attachment_collision_hulls': [],
         'attachment_mount': None,
@@ -427,6 +438,27 @@ def buggy(root):
         'animation_aliases': {},
     }
     write_json(assets / 'vehicles.json', pack)
+    # The gun's bolt and sound, in the buggy's own weapons file: a vehicle
+    # brings what it fires.
+    bolt = mix(decay(tone(0.12, 900, 250), 0.04), [0.3 * x for x in decay(noise(0.1), 0.02)])
+    write(assets / 'sounds' / 'turret.wav', wav(bolt, 0.8))
+    write_json(assets / 'weapons.json', {
+        'schema_version': 5,
+        'id': 'playground-buggy',
+        'items': {},
+        'images': {},
+        'projectiles': {
+            'playground-buggy:projectile/bolt': {
+                'speed': 140.0, 'lifetime_ticks': 180, 'fade_ticks': 180, 'damage': 20.0,
+                'damage_type': '$DamageType::BuggyGun', 'impulse': 150.0,
+            },
+        },
+        'damage_types': {
+            'buggygun': {'name': 'BuggyGun', 'suicide_message': '%1 shot themselves',
+                         'murder_message': '%2 gunned down %1', 'vehicle_scale': 1.0, 'direct': True},
+        },
+        'sounds': {'playground-buggy:turret': {'file': 'sounds/turret.wav'}},
+    })
 
 
 def main():
