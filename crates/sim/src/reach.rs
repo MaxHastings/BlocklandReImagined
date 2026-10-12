@@ -660,11 +660,12 @@ fn ledge(tuning: &PlayerTuning, crawl: bool) -> f32 {
 /// landing), each the vector the session hands its fall rule. `allowance`
 /// is the caller's share of its planning budget: each collider copied for
 /// the flight and each motor tick spends one. Not landed by the time that
-/// runs out (a long drop, a shove off into nothing), its impact is what it
-/// will land with at least: the hardest so far, or how fast it is falling
-/// by then when there is something below to come down on, since that only
-/// grows while it falls on (water deep enough to float it has slowed it
-/// already). `None` when it cannot be flown at all.
+/// runs out (a long drop, a shove off into nothing), its impact is the
+/// hardest so far, or, when there is something straight below to come
+/// down on, the speed gravity brings it to by the time it falls that far
+/// (`v² = vy² + 2·g·h`, the motor's free fall), whichever is harder. Water
+/// it may fall into is not counted, so that is an upper bound there.
+/// `None` when it cannot be flown at all.
 ///
 /// Not covered: the target steering in the air (it is flown with no input),
 /// other bodies and vehicles in the way, and openings it would pass through.
@@ -720,18 +721,17 @@ pub fn shove_landing(
             });
         }
     }
-    // Still falling with something below to come down on: at least that
-    // hard. Into nothing it never lands.
-    let falling = Vec3::from(player.state().velocity);
-    let below = ground
-        .ray(Vec3::from(player.state().feet), Vec3::NEG_Y, f32::MAX)
-        .is_some();
+    // Something below to come down on: the rest of the fall in closed
+    // form. Into nothing it never lands.
+    let vy = player.state().velocity[1];
+    let below = ground.ray(Vec3::from(player.state().feet), Vec3::NEG_Y, f32::MAX);
+    let finish =
+        below.map(|(drop, _)| Vec3::NEG_Y * (vy * vy + 2.0 * tuning.gravity.abs() * drop).sqrt());
     Some(Shoved {
         landed: None,
-        impact: if below && falling.y < 0.0 && falling.length() > hardest.length() {
-            falling
-        } else {
-            hardest
+        impact: match finish {
+            Some(finish) if finish.length() > hardest.length() => finish,
+            _ => hardest,
         },
     })
 }
