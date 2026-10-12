@@ -1,0 +1,51 @@
+# Publishes a semantic-version release the moment its tag is pushed
+# (git push origin v0.2.11, which tools/release.py does once the PC gate
+# passes). The zips come from the build-only release.yml run that
+# tools/release.py started at that exact commit while the gate ran, so
+# publishing takes a minute or two instead of a fresh build. When no such run
+# exists, it starts a publishing release.yml run at the tag instead, which
+# builds all three platforms and publishes them itself.
+name: publish-release
+
+on:
+  push:
+    tags: ['v[0-9]*']
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Existing version tag to publish, such as v0.2.11'
+        required: true
+
+concurrency:
+  group: release-${{ github.event.inputs.version || github.ref_name }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  actions: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      GH_TOKEN: ${{ github.token }}
+      BRI_VERSION: ${{ github.event.inputs.version || github.ref_name }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: refs/tags/${{ github.event.inputs.version || github.ref_name }}
+
+      - name: Publish the zips built at this commit, or build them
+        run: |
+          sha="$(git rev-parse HEAD)"
+          set +e
+          python3 tools/publish_release.py --version "$BRI_VERSION" --sha "$sha" --wait --notes "docs/releases/$BRI_VERSION.md"
+          code=$?
+          set -e
+          if [ "$code" -eq 3 ]; then
+            echo "::notice::No build of $BRI_VERSION at ${sha:0:9}; starting a publishing release.yml run at the tag."
+            gh workflow run release.yml --ref "$BRI_VERSION" -f version="$BRI_VERSION" -f publish=true
+            exit 0
+          fi
+          exit "$code"
