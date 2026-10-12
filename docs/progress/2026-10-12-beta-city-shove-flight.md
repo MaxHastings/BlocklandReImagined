@@ -30,5 +30,8 @@ Changes:
 - Weighing places to stand (`spots`) reads the push the hand flew this
   turn (`State::for_place`) instead of flying one from every place.
 
-Next: a PC timing run of this branch on Beta City 16 (same command as
-above) to compare with 4b4da5e.
+After, 617c6f0 on Maxwell's PC (same command, main has no part timers):
+step p50 1.93 ms, p95 6.19, p99 7.75, max 10.21, 120 ticks over 5 ms,
+evidence `e62211377e7f52f3`. Before (4b4da5e): p50 2.76, p95 26.08, p99
+33.45, max 43.60, 301 over 5 ms. The evidence hash changes because pushes
+are weighed differently.
