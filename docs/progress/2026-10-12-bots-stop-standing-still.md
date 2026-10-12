@@ -42,7 +42,7 @@ seconds had no route (`path_steps 0`, no next waypoint).
 
 ## Evidence
 
-- `cargo test -p bri-sim --lib`: 382 passed. New search-memory tests: waiting for a route does not use up a
+- `cargo test -p bri-sim --lib`: all pass. New search-memory tests: waiting for a route does not use up a
   destination, and exhaustion applies only to the evidence searched.
 - `cargo test --release -p bri-chaos --test bot_gauntlet --test bot_search_objectives`:
   24 and 4 passed.
