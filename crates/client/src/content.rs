@@ -21,6 +21,7 @@ use std::{
     io::Read,
     path::{Path, PathBuf},
     rc::Rc,
+    sync::Arc,
 };
 
 const INDEX_LIMIT: u64 = 32 * 1024 * 1024;
@@ -63,6 +64,23 @@ pub struct ContentPaths {
     pub vehicles: PathBuf,
     pub events: PathBuf,
     pub tutorial: PathBuf,
+    /// What every Host, Join and Change Map of this content builds alike,
+    /// built once and shared by every clone of these paths. Loading
+    /// content again makes new paths, so nothing outlives the packs it
+    /// was built from.
+    pub(crate) shared: Arc<SharedLoads>,
+}
+
+/// See [`ContentPaths::shared`].
+#[derive(Default)]
+pub(crate) struct SharedLoads {
+    map_content: std::sync::Mutex<Option<bri_net::map_content::MapContent>>,
+    materials: std::sync::Mutex<Option<Arc<crate::materials::BrickMaterials>>>,
+}
+impl std::fmt::Debug for SharedLoads {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SharedLoads").finish_non_exhaustive()
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -339,13 +357,25 @@ impl ContentPaths {
             bot_extras: bri_net::content_identity::kind_providers(&root, packages, "bots.json")?,
             packages: packages.clone(),
             root,
+            shared: Default::default(),
         })
     }
 
     /// The base weapons pack merged with every other package's.
     /// Where a game this client hosts loads its maps, Change Map included.
+    /// Built once per content (see [`Self::shared`]): its weapons, brick
+    /// geometry and brick definitions do not depend on the map. Hosting
+    /// and joining still check the weapons on disk against startup's.
     pub fn map_content(&self) -> Result<bri_net::map_content::MapContent> {
-        Ok(bri_net::map_content::MapContent {
+        let mut kept = self
+            .shared
+            .map_content
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some(content) = &*kept {
+            return Ok(content.clone());
+        }
+        let content = bri_net::map_content::MapContent {
             map_bundle: self.map_bundle.clone(),
             brick_catalog: self.brick_catalog.clone(),
             geometry: self.geometry.clone(),
@@ -356,7 +386,27 @@ impl ContentPaths {
                 &self.packages,
             )?,
             weapons: self.weapon_content()?,
-        })
+            definitions: Default::default(),
+        };
+        *kept = Some(content.clone());
+        Ok(content)
+    }
+    /// Every brick surface and print image, decoded once per content (see
+    /// [`Self::shared`]) rather than on every Host, Join and Change Map.
+    pub fn materials(&self) -> Result<Arc<crate::materials::BrickMaterials>> {
+        let mut kept = self
+            .shared
+            .materials
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some(materials) = &*kept {
+            return Ok(materials.clone());
+        }
+        let materials = Arc::new(crate::materials::BrickMaterials::load(
+            &self.brick_materials,
+        )?);
+        *kept = Some(materials.clone());
+        Ok(materials)
     }
     pub fn weapon_content(&self) -> Result<bri_net::content_identity::WeaponContent> {
         bri_net::content_identity::WeaponContent::load_with(&self.weapons, &self.weapon_extras)
@@ -1688,5 +1738,29 @@ mod tutorial_hammer {
                 sim.remove(&actor, free).unwrap();
             }
         }
+    }
+    /// Host, Join and Change Map build the map-independent parts once per
+    /// content: a second ask reads nothing from disk.
+    #[test]
+    fn shared_loads_are_built_once_per_content() -> Result<()> {
+        let content = crate::testing::content_root::ContentRoot::synthetic()?;
+        let paths = ContentPaths::resolve(&content.root, &PackageSet::load_root(&content.root)?)?;
+        let definitions = paths.map_content()?.definitions()?.entries.len();
+        let materials = paths.materials()?;
+        // Take the packs away: only what was kept can answer now.
+        for dir in [
+            &paths.brick_catalog,
+            &paths.geometry,
+            &paths.brick_materials,
+        ] {
+            fs::rename(dir, dir.with_extension("moved"))?;
+        }
+        let again = paths.clone();
+        assert_eq!(
+            again.map_content()?.definitions()?.entries.len(),
+            definitions
+        );
+        assert!(Arc::ptr_eq(&again.materials()?, &materials));
+        Ok(())
     }
 }

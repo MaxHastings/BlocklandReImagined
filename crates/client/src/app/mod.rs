@@ -16,10 +16,7 @@ use bri_render::{
     scene::{Camera, GpuScene, SceneData, SceneRenderer, create_depth_samples},
     scene_loader::load_map_bundle,
 };
-use bri_sim::{
-    definitions::Definitions,
-    session::{Command, InspectMode, Reply, ToolAction},
-};
+use bri_sim::session::{Command, InspectMode, Reply, ToolAction};
 use bri_ui::{
     api::*,
     binds::Platform,
@@ -402,12 +399,7 @@ fn prepare_map(
     let mut light_volume =
         LightVolumeState::start(&visual.scene, light_cache, visual.modern_lights.as_deref());
     // The same definitions the host's session loads, Add-On bricks included.
-    let definitions = Definitions::load_with_geometry(
-        &paths.brick_catalog,
-        &paths.geometry,
-        &paths.brick_extras,
-        &bri_net::content_identity::brick_geometry_assets(&paths.root, &paths.packages)?,
-    )?;
+    let definitions = paths.map_content()?.definitions()?;
     let meshes = Arc::new(
         definitions
             .entries
@@ -417,9 +409,7 @@ fn prepare_map(
     );
     let mirror_shapes = Arc::new(crate::mirrors::shapes(&definitions));
     let native_map = bri_sim::map::NativeMap::load(&paths.map_bundle, &map)?;
-    let materials = Arc::new(crate::materials::BrickMaterials::load(
-        &paths.brick_materials,
-    )?);
+    let materials = paths.materials()?;
     let palette = Arc::new(crate::world_chunks::BrickPalette::new(&materials)?);
     let mut mirror = bri_sim::prediction::CollisionMirror::new(
         definitions.clone(),
