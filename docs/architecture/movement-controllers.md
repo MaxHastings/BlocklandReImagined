@@ -37,10 +37,10 @@ stay engine mechanisms (archetype constants, `set_archetype`, the motor).
 Anything a controller cannot express is the next seam to design, not a
 reason to let it replace the motor.
 
-Two gaps remain before players should meet controllers in a release, both
-recorded under "Next" below: clients run the module without the join
-trust prompt, and other players' bodies do not yet show the animation
-intent.
+One gap remains before players should meet controllers in a release,
+recorded under "Next" below: other players' bodies do not yet show the
+animation intent. Controllers need no join trust prompt (see "Distribution
+and trust").
 
 ## Where it sits
 
@@ -169,11 +169,17 @@ That is ordinary prediction error, corrected as it is now.
   that does not compile there is logged and that body is simply not
   predicted with it; the host's corrections still move it correctly
   (`a_client_without_the_controller_is_corrected_to_the_hosts_kick`).
-- **Gap:** a controller is sandboxed code, so it belongs in the join trust
-  prompt's `CodeSummary` list (`docs/architecture/client-sandbox.md`, "The
-  join flow") with no capabilities. Until it is, the client compiles it
-  without asking. Declining would mean "do not bind": the game stays
-  playable, only less smooth for that body.
+- **No trust prompt.** Maxwell decided on 2026-10-12 that the join trust
+  prompt is for things that can harm the player's computer, such as native
+  code or DLLs, and controllers cannot. A controller is WebAssembly run by
+  Wasmtime with no WASI and one import (`bri.sweep`, which reads the
+  world's collision and writes only into the module's own memory). Its
+  memory is capped, its work is capped by fuel, it gets a fresh instance
+  every step, and all it can hand back is a velocity, a jump flag, 16 bytes
+  of memory and an intent, which the motor still collides. It cannot read
+  files, open sockets or touch anything outside the step. No part of the
+  controller path loads native or otherwise unsandboxed code on a client;
+  if one ever did, that part would need the prompt.
 
 ## Prediction and server correction
 
@@ -250,16 +256,14 @@ allocator would cut instantiation cost several times if it matters.
 
 ## Next
 
-1. Trust prompt: list controllers in the join `CodeSummary`; "Leave" or a
-   decline means the client binds nothing.
-2. Remote intent: carry `intent` in `RemotePose` so other players' clients
+1. Remote intent: carry `intent` in `RemotePose` so other players' clients
    can draw kicks and dives; map intents to W2's animation roles.
-3. Report `controller_fault` once per controller to the host's console and
+2. Report `controller_fault` once per controller to the host's console and
    log (the motor already returns it every tick it happens).
-4. Triple jump (needs a ground timer and jump count in memory; no new
+3. Triple jump (needs a ground timer and jump count in memory; no new
    interface) and a long jump, as the plan's Demo 2 asks.
-5. A Rust guest crate and a doc page in `docs/modding/` for authors.
-6. Sweeps through openings (`Soup::open_passages`), if a controller next
+4. A Rust guest crate and a doc page in `docs/modding/` for authors.
+5. Sweeps through openings (`Soup::open_passages`), if a controller next
    to a portal needs it.
-7. A two-client test over the real network stack (`crates/net/tests`) once
-   the trust prompt exists, to cover the checkpoint path end to end.
+6. A two-client test over the real network stack (`crates/net/tests`) to
+   cover the checkpoint path end to end.
