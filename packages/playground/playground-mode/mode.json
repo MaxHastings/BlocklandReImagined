@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "name": "Mixed Add-On Playground",
+  "description": "A Runner with a Pulse Carbine, a Dune Buggy and Blockhead Bots, all from separate Add-Ons. Build a fort, drive through it, fight the bots.",
+  "add_ons": ["playground-runner", "playground-runner-look", "playground-rifle", "playground-buggy", "blockhead_bot"],
+  "minigame": {
+    "title": "Playground",
+    "loadout": ["playground-rifle:weapon/carbine"],
+    "player_type": "playground-runner:archetype/runner",
+    "respawn_seconds": 3,
+    "brick_respawn_seconds": 30,
+    "vehicle_respawn_seconds": 5,
+    "self_damage": false,
+    "use_all_players_bricks": true
+  }
+}
