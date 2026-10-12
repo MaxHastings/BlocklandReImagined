@@ -40,6 +40,8 @@ Five Add-Ons, each standing alone and naming no other except through
 | Brick smashing by a vehicle owned by someone else credits its driver | fixed here | `crates/net/tests/playground.rs`; `vehicle_struck` credited the vehicle's owner, not its driver (`crates/sim/src/session/movables.rs`) |
 | Two networked players see each other's body, held weapon, the driven vehicle and the knocked-out bricks | works | `crates/net/tests/playground.rs` `two_players_and_a_late_joiner_share_the_playground` |
 | A late joiner downloads exactly the missing Add-Ons and sees the same world | works | same test (clean cache; the buggy, its driver, the Carbine in hand and the brick state all match) |
+| With no mode or mini-game, an Add-On weapon spawns from an item brick and an Add-On vehicle from a vehicle spawn brick, both set with the wrench | works | `a_builder_spawns_the_carbine_and_the_buggy_from_bricks_without_a_mini_game` |
+| A brick event switches a player to an Add-On body (`onActivate -> Player -> ChangeDatablock`) | gap (W4) | The event already calls `set_player_archetype`, but its PlayerData list holds only the built-in player types (`crates/sim/src/session/events.rs`), so no Add-On body can be picked |
 | A custom body's held item attaches to its own hand | gap (W2) | Held items attach to a node named `Mount0` and need a node named `Eye`; box bodies hold items on an invisible Blockhead hand (`crates/client/src/avatar.rs`, `app/frame.rs`) |
 | Shots leave the weapon's muzzle | gap (W2) | The server fires from the eye (`crates/sim/src/session/weapons.rs`) |
 | A body missing a Blockhead animation still animates | gap (W2) | A missing clip fails the whole pose (`crates/client/src/avatar.rs`) |

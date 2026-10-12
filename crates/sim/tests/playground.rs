@@ -83,13 +83,16 @@ fn set(ids: &[&str]) -> PackageSet {
     }
 }
 
-/// Every Add-On, narrowed to the mode as a host starting it would be.
-fn catalog() -> Arc<Catalog> {
+/// Every Add-On, narrowed to the mode as a host starting it would be, or
+/// all of them on a plain building server.
+fn catalog(mode: bool) -> Arc<Catalog> {
     let ids: Vec<&str> = ADD_ONS.iter().map(|(id, _, _)| *id).collect();
     let mut catalog =
         Catalog::load(&packages(), &set(&ids), true).unwrap_or_else(|e| panic!("{e:#?}"));
-    let mode = catalog.for_mode(MODE).unwrap_or_else(|e| panic!("{e:#?}"));
-    catalog.mode = mode.mode;
+    if mode {
+        let mode = catalog.for_mode(MODE).unwrap_or_else(|e| panic!("{e:#?}"));
+        catalog.mode = mode.mode;
+    }
     Arc::new(catalog)
 }
 
@@ -196,6 +199,11 @@ struct Game {
 }
 impl Game {
     fn with(world: World) -> Self {
+        Self::server(world, true)
+    }
+    /// A server running every Add-On, in the mode or (`mode` false) as a
+    /// plain building server with no mini-game.
+    fn server(world: World, mode: bool) -> Self {
         let mut s = Session::new(
             Simulation::new(
                 world,
@@ -208,14 +216,27 @@ impl Game {
             .unwrap(),
         );
         s.set_weapon_pack(weapons()).unwrap();
+        // A host measures these from the item's model as it loads content.
+        s.set_item_bounds(
+            [(
+                CARBINE.to_string(),
+                bri_weapons::ItemBounds {
+                    min: [-0.1, -0.15, -0.9],
+                    max: [0.1, 0.15, 0.4],
+                },
+            )]
+            .into(),
+        )
+        .unwrap();
         s.set_vehicle_pack(vehicles(), bot_kinds()).unwrap();
         s.set_tool_catalog(ToolCatalog {
             items: [CARBINE.to_string()].into(),
             vehicles: [BUGGY.to_string(), BOT.to_string()].into(),
+            vehicle_bricks: ["plate".to_string()].into(),
             ..Default::default()
         })
         .unwrap();
-        s.install_packages(catalog(), None).unwrap();
+        s.install_packages(catalog(mode), None).unwrap();
         // The mode's mini-game spawns everyone here, behind where the
         // tests park the buggy.
         s.set_spawn_points(vec![SPAWN]).unwrap();
@@ -609,4 +630,91 @@ fn a_blockhead_bot_fights_the_runners() {
         }
     }
     assert!(hurt, "the bot hurt the Runner within a minute");
+}
+
+/// With no mode and no mini-game, a builder puts the Add-Ons in the world
+/// as v20 does: the Pulse Carbine on an item spawn brick and the Dune Buggy
+/// on a vehicle spawn brick, each picked with the wrench. A Blockhead walks
+/// over the carbine to take it and drives the buggy away.
+#[test]
+fn a_builder_spawns_the_carbine_and_the_buggy_from_bricks_without_a_mini_game() {
+    use bri_world::{
+        ItemSpawn,
+        authority::{Edit, WrenchProperties},
+    };
+    let mut g = Game::server(
+        World::new("Sandbox".into(), "playground".into(), vec![[1.0; 4]]),
+        false,
+    );
+    let builder = g.join("Builder");
+    assert_eq!(g.s.vitals()[&builder].minigame, None, "no mini-game");
+    let plant = |g: &mut Game, position: [f32; 3], properties: WrenchProperties| {
+        g.cmd(
+            builder,
+            Command::Plant {
+                definition: "plate".into(),
+                position,
+                quarter_turns: 0,
+                color: 0,
+            },
+        )
+        .unwrap();
+        let id = *g.s.simulation().state().bricks.keys().max().unwrap();
+        g.s.edit_brick(builder, id, Edit::Properties(properties))
+            .unwrap_or_else(|e| panic!("{e:#}"));
+        id
+    };
+    let visible = WrenchProperties {
+        raycast: true,
+        colliding: true,
+        visible: true,
+        ..Default::default()
+    };
+    let rack = [6.5, 0.1, 0.25];
+    let rack = plant(
+        &mut g,
+        rack,
+        WrenchProperties {
+            item_spawn: ItemSpawn {
+                item: Some(ContentRef::Resolved(CARBINE.into())),
+                position: 0,
+                direction: 2,
+                respawn_ms: 5000,
+                restore: Default::default(),
+            },
+            ..visible.clone()
+        },
+    );
+    let pad = plant(
+        &mut g,
+        [-7.5, 0.1, 0.25],
+        WrenchProperties {
+            vehicle: Some(BUGGY.into()),
+            ..visible
+        },
+    );
+    g.steps(30);
+    assert!(
+        g.s.weapon_view()
+            .static_items
+            .iter()
+            .any(|i| i.brick == rack),
+        "the item brick shows the carbine"
+    );
+    let buggies = g.s.vehicle_poses();
+    assert_eq!(buggies.len(), 1, "the vehicle brick spawned the buggy");
+    let at = Vec3::from(buggies[0].position);
+    let pad = Vec3::from(g.s.simulation().state().bricks[&pad].position);
+    assert!(
+        Vec3::new(at.x - pad.x, 0.0, at.z - pad.z).length() < 1.0,
+        "on its pad: {at} over {pad}"
+    );
+    // A second player walks onto the rack and takes the carbine.
+    let taker =
+        g.s.join("Taker".into(), Vec3::new(6.5, 0.35, 0.25), false)
+            .unwrap();
+    g.looks.insert(taker, MoveInput::default());
+    g.steps(5);
+    assert!(g.carries(taker, CARBINE), "the Blockhead took the carbine");
+    assert_ne!(g.body(taker), RUNNER, "no mode: the standard body");
 }
