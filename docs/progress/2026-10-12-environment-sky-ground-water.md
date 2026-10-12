@@ -9,7 +9,7 @@ Bedroom or Slopes).
 ## Decisions
 
 - **Steam's content is generated, never committed.** A new required
-  package, `steam-environments` (`environments-001`, role `environments`),
+  package, `v20-environments` (`environments-001`, role `environments`),
   is built by `bin/environment_pack` from a Steam Blockland folder:
   `python tools/bootstrap.py --steam "<Steam Blockland>"`. Players never
   need Steam: the pack ships in the release zip and CI content like every

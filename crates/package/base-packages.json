@@ -19,6 +19,6 @@
     { "id": "v20-weapon-debris", "version": "4.0.0", "side": "client", "dir": "weapon-debris-pack-004", "role": "weapon_debris" },
     { "id": "v20-worlds", "version": "6.0.0", "side": "server", "dir": "worlds-pass-006", "role": "worlds" },
     { "id": "v20-tutorial", "version": "3.0.0", "side": "server", "dir": "tutorial-pack-003", "role": "tutorial" },
-    { "id": "steam-environments", "version": "1.0.0", "side": "shared", "dir": "environments-001", "role": "environments" }
+    { "id": "v20-environments", "version": "1.0.0", "side": "shared", "dir": "environments-001", "role": "environments" }
   ]
 }
