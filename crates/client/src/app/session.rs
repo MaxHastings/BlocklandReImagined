@@ -490,9 +490,7 @@ impl App {
                 );
                 let mirror_shapes =
                     Arc::new(crate::mirrors::shapes(&loaded.simulation.definitions));
-                let materials = Arc::new(crate::materials::BrickMaterials::load(
-                    &paths.brick_materials,
-                )?);
+                let materials = paths.materials()?;
                 let palette = Arc::new(crate::world_chunks::BrickPalette::new(&materials)?);
                 let mut mirror = bri_sim::prediction::CollisionMirror::new(
                     loaded.simulation.definitions.clone(),
