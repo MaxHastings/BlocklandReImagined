@@ -10,11 +10,6 @@ const ARRIVAL: f32 = 1.25;
 const ARRIVAL_RISE: f32 = 1.5;
 const ANCHOR_TICKS: u64 = 360;
 const PROBE_TICKS: u64 = 120;
-/// A destination farther than this gets time to walk the rest of the way,
-/// at [`SEARCH_SPEED`], on top of its fixed bound.
-const NEAR: f32 = 12.0;
-/// Metres a second a searcher is given to walk to a far destination.
-const SEARCH_SPEED: f32 = 4.0;
 
 #[derive(Default)]
 pub(super) struct State {
@@ -125,10 +120,7 @@ impl State {
             } else {
                 PROBE_TICKS
             };
-            let walk = (point.distance(feet) - NEAR).max(0.0) / SEARCH_SPEED;
-            let until = *self
-                .until
-                .get_or_insert(tick + bound + (walk * 120.0) as u64);
+            let until = *self.until.get_or_insert(tick + bound);
             if flat(point - feet).length() <= ARRIVAL.max(reach)
                 && (point.y - feet.y).abs() <= ARRIVAL_RISE.max(reach)
                 || route_failed
@@ -220,17 +212,6 @@ mod tests {
             assert!(s.next(e, Vec3::Z * 8.0, tick, false, 0.0).is_some());
         }
         assert_eq!(s.next(e, Vec3::Z * 8.0, 842, false, 0.0), None);
-    }
-    #[test]
-    fn a_far_destination_gets_time_to_walk_there() {
-        let mut s = State::default();
-        let mut e = evidence(1, Vec3::ZERO);
-        e.expires = 100_000;
-        // 52 m away: 40 m past the near bound, ten seconds at search speed.
-        let feet = Vec3::Z * 52.0;
-        assert_eq!(s.next(e, feet, 0, false, 0.0), Some(Vec3::ZERO));
-        assert_eq!(s.next(e, feet, 360 + 1199, false, 0.0), Some(Vec3::ZERO));
-        assert_ne!(s.next(e, feet, 360 + 1200, false, 0.0), Some(Vec3::ZERO));
     }
     #[test]
     fn waiting_for_a_route_does_not_use_up_a_destination() {

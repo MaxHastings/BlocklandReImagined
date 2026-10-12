@@ -27,8 +27,10 @@ seconds had no route (`path_steps 0`, no next waypoint).
 - While a chase's route is still being found, the enemy may move a quarter
   of the way to the goal (at least 2.5 m) before the search starts over.
 - An enemy-search spot's time starts once its route is found (or found
-  missing). A spot farther than 12 m gets extra time to walk the rest of
-  the way at 4 m/s.
+  missing). An earlier version also gave far spots extra time to walk
+  there. CI's `loss_of_sight_search_reacquires_and_actually_wins_elimination`
+  showed that this kept a bot walking a stalled route to a dead-end anchor
+  for 5 s instead of moving on to the probes, so it was dropped.
 - "Search" no longer fits a bot whose search of the current evidence is
   exhausted. New evidence starts a fresh search.
 - The bot readout's planned-shot trade (`BotThought::planned.net`) now uses
@@ -40,10 +42,10 @@ seconds had no route (`path_steps 0`, no next waypoint).
 
 ## Evidence
 
-- `cargo test -p bri-sim --lib`: 382 passed. New search-memory tests: a
-  far destination gets time to walk, waiting for a route does not use up a
+- `cargo test -p bri-sim --lib`: 382 passed. New search-memory tests: waiting for a route does not use up a
   destination, and exhaustion applies only to the evidence searched.
-- `cargo test --release -p bri-chaos --test bot_gauntlet`: 24 passed.
+- `cargo test --release -p bri-chaos --test bot_gauntlet --test bot_search_objectives`:
+  24 and 4 passed.
 - `cargo test -p bri-sim --test replay`: 10 passed.
 - `cargo clippy -p bri-sim --all-targets -- -D warnings` is clean.
 - The full workspace suite runs in CI. The cloud runner (4 cores) could
