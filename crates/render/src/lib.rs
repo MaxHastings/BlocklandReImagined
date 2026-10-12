@@ -2,6 +2,7 @@ pub mod ambient_occlusion;
 mod buffer_init;
 pub mod color;
 pub mod environment_choices;
+pub mod environment_planes;
 pub mod environment_probe;
 pub mod environment_scene;
 mod kept_shadows;

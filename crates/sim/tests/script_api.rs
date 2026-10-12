@@ -86,15 +86,17 @@ fn cmd_lamp(p, x, radius, on) { set_map_lights([x, 2.0, 0.0], radius, #{ on: on,
 fn cmd_lamp_reset(p, x, radius) { set_map_lights([x, 2.0, 0.0], radius, #{}); }
 fn cmd_env_set(p) {
     set_environment(#{ sun_azimuth: 90.0, fog_color: [0.2, 0.3, 0.4], day_length: 60.0,
-        time_of_day: 0.25, sun_flare_size: 2.0, sky: "plain" });
+        time_of_day: 0.25, sun_flare_size: 2.0, sky: "plain", water: "none", water_height: 8.0,
+        ground_color: [1.0, 0.5, 0.0, 1.0] });
 }
 fn cmd_env_read(p) {
     let e = environment();
-    note("env", `${e.sun_azimuth}|${e.day_length}|${e.sun_flare_size}|${"fog_color" in e}|${"sky_color" in e}|${e.sky}`);
+    note("env", `${e.sun_azimuth}|${e.day_length}|${e.sun_flare_size}|${"fog_color" in e}|${"sky_color" in e}|${e.sky}|${e.water}|${e.water_height}|${e.ground_color[1]}`);
 }
-fn cmd_env_unset(p) { set_environment(#{ sun_azimuth: (), day_cycle: false, sky: () }); }
+fn cmd_env_unset(p) { set_environment(#{ sun_azimuth: (), day_cycle: false, sky: (), water: () }); }
 fn cmd_env_bad(p) { set_environment(#{ sun_elevation: 120.0 }); }
 fn cmd_env_bad_sky(p) { set_environment(#{ sky: "Base\\Sky" }); }
+fn cmd_env_bad_water(p) { set_environment(#{ water_height: 500.0 }); }
 fn cmd_env_reset(p) { reset_environment(); }
 fn cmd_speed(p, scale) { set_speed_scale(p, scale); }
 fn cmd_again(p) { respawn(p); }
@@ -885,15 +887,16 @@ fn scripts_change_the_environment_for_everyone() {
     );
     assert_eq!(e.sky.as_deref(), Some("plain"));
     g.run(a, "env_read", vec![]);
-    assert_eq!(g.text("env"), "90.0|60.0|2.0|true|false|plain");
+    assert_eq!(g.text("env"), "90.0|60.0|2.0|true|false|plain|none|8.0|0.5");
     // `()` puts one setting back to the map's; the rest stay.
     g.run(a, "env_unset", vec![]);
     let e = g.s.environment();
     assert_eq!((e.sun_azimuth, e.day_cycle, e.sky), (None, None, None));
+    assert_eq!((e.water, e.water_height), (None, Some(8.0)));
     assert_eq!(e.fog_color, Some([0.2, 0.3, 0.4]));
     // Out-of-range values and malformed names change nothing.
     let before = g.s.environment();
-    for command in ["env_bad", "env_bad_sky"] {
+    for command in ["env_bad", "env_bad_sky", "env_bad_water"] {
         let _ = g.send(
             a,
             Command::Package(PackageCommand {

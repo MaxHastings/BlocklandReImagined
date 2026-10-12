@@ -1,28 +1,31 @@
 //! The skies the Environment window offers over a map's own
-//! (`bri_content::atmosphere::Settings::sky`). They come from the converted
-//! map bundle, so nothing new is imported: every stock map's sky box, and a
-//! plain one. Picking one changes only what is drawn; the map's fog, light
-//! and collision stay.
+//! (`bri_content::atmosphere::Settings::sky`): Steam's Sky Add-Ons from the
+//! environment pack (each with the look its `.atmosphere` gives), then
+//! every stock map's sky box Steam has no copy of. Without the pack, a
+//! plain one stands in for Steam's White. Picking one changes only what is
+//! drawn; the look is the settings', and collision stays.
 use crate::{
     scene::{MaterialKind, SceneData, SceneImage},
     scene_loader::{decode, file, read},
 };
 use anyhow::{Context, Result, ensure};
 use bri_content::{
-    atmosphere::PLAIN_SKY,
+    atmosphere::{PLAIN_SKY, Settings},
     environment::{Environment, Image},
+    environment_pack::{Pack, Precipitation},
 };
 use serde_json::Value;
 use std::{
     collections::BTreeMap,
     io::Read,
     path::{Path, PathBuf},
+    sync::Arc,
 };
 
 /// Thumbnails are this many pixels square.
 pub const THUMBNAIL: u32 = 64;
 
-/// A sky box to pick: a stock map's sky, or the plain one.
+/// A sky box to pick: a Steam sky, a stock map's, or the plain one.
 #[derive(Clone, Debug)]
 pub struct SkyChoice {
     /// Its name in the settings: the sky's material list in lower case.
@@ -30,15 +33,27 @@ pub struct SkyChoice {
     pub label: String,
     /// None for the plain sky.
     environment: Option<Environment>,
+    /// Where its pictures are: the map bundle or the environment pack.
+    root: PathBuf,
+    /// A Steam sky's own picture for the picker.
+    thumbnail: Option<Image>,
+    /// What a Steam sky brings when picked (empty for the others).
+    pub look: Settings,
+    /// The rain or snow a Steam sky brings.
+    pub precipitation: Option<Precipitation>,
 }
 
-/// What a map bundle offers, and each map's own sky.
+/// What a map bundle and the environment pack offer, and each map's own sky.
 #[derive(Clone, Debug)]
 pub struct Choices {
     root: PathBuf,
     pub skies: Vec<SkyChoice>,
     /// Each map's own sky, by map ID.
     maps: BTreeMap<String, Environment>,
+    /// The Steam skies, grounds and waters (empty without them), and where
+    /// their pictures are.
+    pub pack: Arc<Pack>,
+    pack_root: Option<PathBuf>,
 }
 
 /// A sky's name: its material list, lower case with forward slashes.
@@ -70,12 +85,54 @@ fn sky_label(source: &str) -> String {
 }
 
 impl Choices {
-    /// The skies of the map bundle at `root`, in its maps'
+    /// The skies of the environment pack at `pack` (when there is one),
+    /// then those of the map bundle at `root` Steam lacks, in its maps'
     /// order, each once.
-    pub fn load(root: &Path) -> Result<Self> {
+    pub fn load(root: &Path, pack: Option<&Path>) -> Result<Self> {
         let root = root.canonicalize().context("Opening native map bundle")?;
         let bundle: Value = serde_json::from_slice(&read(&root, "bundle.json")?)?;
-        Self::from_bundle(root, &bundle)
+        let mut choices = Self::from_bundle(root, &bundle)?;
+        if let Some(dir) = pack {
+            let dir = dir.canonicalize().context("Opening the environment pack")?;
+            let pack = Pack::load(&dir)?;
+            choices.add_pack(dir, pack);
+        }
+        Ok(choices)
+    }
+    /// Steam's skies first; a stock sky Steam has a copy of (the same first
+    /// picture) is offered once, as Steam's, and its White stands for Plain.
+    fn add_pack(&mut self, dir: PathBuf, pack: Pack) {
+        if pack.skies.is_empty() {
+            self.pack = Arc::new(pack);
+            self.pack_root = Some(dir);
+            return;
+        }
+        let steam: Vec<SkyChoice> = pack
+            .skies
+            .iter()
+            .map(|s| SkyChoice {
+                id: s.id.clone(),
+                label: s.label.clone(),
+                environment: Some(s.environment.clone()),
+                root: dir.clone(),
+                thumbnail: Some(s.thumbnail.clone()),
+                look: s.look.clone(),
+                precipitation: s.precipitation.clone(),
+            })
+            .collect();
+        let first = |c: &SkyChoice| {
+            c.environment
+                .as_ref()
+                .and_then(|e| e.faces.first())
+                .map(|f| f.sha256.clone())
+        };
+        let copies: std::collections::BTreeSet<String> = steam.iter().filter_map(first).collect();
+        let stock = std::mem::take(&mut self.skies)
+            .into_iter()
+            .filter(|c| c.environment.is_some() && first(c).is_none_or(|f| !copies.contains(&f)));
+        self.skies = steam.into_iter().chain(stock).collect();
+        self.pack = Arc::new(pack);
+        self.pack_root = Some(dir);
     }
     fn from_bundle(root: PathBuf, bundle: &Value) -> Result<Self> {
         let mut maps = BTreeMap::new();
@@ -101,14 +158,43 @@ impl Choices {
                 label: sky_label(&environment.source_materials),
                 id,
                 environment: Some(environment.clone()),
+                root: root.clone(),
+                thumbnail: None,
+                look: Settings::default(),
+                precipitation: None,
             });
         }
         skies.push(SkyChoice {
             id: PLAIN_SKY.into(),
             label: "Plain".into(),
             environment: None,
+            root: root.clone(),
+            thumbnail: None,
+            look: Settings::default(),
+            precipitation: None,
         });
-        Ok(Self { root, skies, maps })
+        Ok(Self {
+            root,
+            skies,
+            maps,
+            pack: Arc::new(Pack {
+                schema_version: bri_content::environment_pack::SCHEMA,
+                ..Default::default()
+            }),
+            pack_root: None,
+        })
+    }
+    /// One of the environment pack's pictures (a ground's or water's
+    /// texture, or a thumbnail), checked against its checksum.
+    pub fn picture(&self, picture: &Image) -> Result<SceneImage> {
+        image(
+            self.pack_root.as_deref().context("No environment pack")?,
+            picture,
+        )
+    }
+    /// One of the pack's pictures at the picker's size.
+    pub fn pack_thumbnail(&self, picture: &Image) -> Result<SceneImage> {
+        Ok(thumbnail(&self.picture(picture)?))
     }
     /// The sky `map` draws on its own, by name; None when it has no sky box.
     pub fn map_sky(&self, map: &str) -> Option<String> {
@@ -123,6 +209,9 @@ impl Choices {
     /// A small picture of a sky: the box's first side under its first
     /// cloud layer (a storm is mostly cloud), or plain white.
     pub fn sky_thumbnail(&self, choice: &SkyChoice) -> Result<SceneImage> {
+        if let Some(picture) = &choice.thumbnail {
+            return Ok(thumbnail(&image(&choice.root, picture)?));
+        }
         let Some(environment) = &choice.environment else {
             return Ok(SceneImage {
                 label: choice.id.clone(),
@@ -133,9 +222,9 @@ impl Choices {
             });
         };
         let face = environment.faces.first().context("Sky has no sides")?;
-        let mut picture = thumbnail(&image(&self.root, face)?);
+        let mut picture = thumbnail(&image(&choice.root, face)?);
         if let Some(cloud) = environment.clouds.first() {
-            let cloud = thumbnail(&image(&self.root, &cloud.image)?);
+            let cloud = thumbnail(&image(&choice.root, &cloud.image)?);
             for (under, over) in picture
                 .rgba
                 .chunks_exact_mut(4)
@@ -151,25 +240,32 @@ impl Choices {
         Ok(picture)
     }
     /// Draw sky `id` in `scene` (map `map`'s) in place of the sky it has:
-    /// None, or a sky this bundle lacks, gives the map its own back. The
-    /// map's fog stays, and the box keeps the map's size.
-    pub fn set_sky(&self, scene: &mut SceneData, map: &str, id: Option<&str>) -> Result<()> {
+    /// None, or a sky this content lacks, gives the map its own back. The
+    /// map's fog stays, and the box keeps the map's size. A Steam sky draws
+    /// its floor unless `ground` (a picked ground that shows) hides it.
+    pub fn set_sky(
+        &self,
+        scene: &mut SceneData,
+        map: &str,
+        id: Option<&str>,
+        ground: bool,
+    ) -> Result<()> {
         let picked = id.and_then(|id| self.sky(id));
         let Some(own) = self.maps.get(map) else {
             // A map without a sky keeps none unless one is picked.
             strip_sky(scene);
             return match picked {
-                Some(choice) => self.append_choice(scene, choice),
+                Some(choice) => self.append_choice(scene, choice, ground),
                 None => Ok(()),
             };
         };
         strip_sky(scene);
         match picked {
-            Some(choice) => self.append_choice(scene, choice),
+            Some(choice) => self.append_choice(scene, choice, ground),
             None => append_sky(&self.root, scene, own),
         }
     }
-    fn append_choice(&self, scene: &mut SceneData, choice: &SkyChoice) -> Result<()> {
+    fn append_choice(&self, scene: &mut SceneData, choice: &SkyChoice, ground: bool) -> Result<()> {
         let mut environment = match &choice.environment {
             Some(environment) => environment.clone(),
             None => plain_sky(),
@@ -179,8 +275,11 @@ impl Choices {
             environment.fog = scene.fog;
         }
         environment.warnings.clear();
+        if choice.thumbnail.is_some() {
+            environment.bottom = !ground;
+        }
         if choice.environment.is_some() {
-            append_sky(&self.root, scene, &environment)
+            append_sky(&choice.root, scene, &environment)
         } else {
             let white = scene.images.len();
             scene.images.push(SceneImage::white());
@@ -487,6 +586,7 @@ mod tests {
                 &mut scene,
                 "v20/a.mis",
                 Some("add-ons/map_slate_desert/cloudy02.dml"),
+                false,
             )
             .unwrap();
         assert_eq!(drawn_sky_colors(&scene), vec![[200, 150, 90, 255]; 5]);
@@ -503,16 +603,86 @@ mod tests {
         );
         // Plain: white sides for Sky Color to tint.
         choices
-            .set_sky(&mut scene, "v20/a.mis", Some(PLAIN_SKY))
+            .set_sky(&mut scene, "v20/a.mis", Some(PLAIN_SKY), false)
             .unwrap();
         assert_eq!(drawn_sky_colors(&scene), vec![[255; 4]; 6]);
         // Unknown, or none: the map's own again.
         for id in [Some("add-ons/map_nowhere/sky.dml"), None] {
-            choices.set_sky(&mut scene, "v20/a.mis", id).unwrap();
+            choices.set_sky(&mut scene, "v20/a.mis", id, false).unwrap();
             assert_eq!(drawn_sky_colors(&scene), vec![[10, 20, 200, 255]; 5]);
         }
         scene.validate().unwrap();
         assert_eq!(scene.batches.len(), 1 + 6 + 5);
+    }
+
+    #[test]
+    fn steam_skies_come_first_and_stand_for_their_stock_copies() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut choices = bundle(dir.path());
+        let pack_dir = dir.path().join("pack");
+        std::fs::create_dir(&pack_dir).unwrap();
+        // Steam's Blue2 is the stock one's pictures; its Storm is new.
+        let blue: Environment = serde_json::from_value(sky(
+            &pack_dir,
+            "Add-Ons/Sky_Blue2/blue2.dml",
+            [10, 20, 200, 255],
+            true,
+        ))
+        .unwrap();
+        let storm: Environment = serde_json::from_value(sky(
+            &pack_dir,
+            "Add-Ons/Sky_Slate_Storm/slate_storm.dml",
+            [60, 60, 70, 255],
+            true,
+        ))
+        .unwrap();
+        let thumb: Image =
+            serde_json::from_value(picture(&pack_dir, "thumb.png", [1, 2, 3, 255], 8)).unwrap();
+        let steam =
+            |id: &str, label: &str, environment: Environment| bri_content::environment_pack::Sky {
+                id: id.into(),
+                label: label.into(),
+                thumbnail: thumb.clone(),
+                environment,
+                look: Settings {
+                    fog_color: Some([0.3; 3]),
+                    ..Default::default()
+                },
+                precipitation: None,
+            };
+        choices.add_pack(
+            pack_dir.canonicalize().unwrap(),
+            Pack {
+                schema_version: bri_content::environment_pack::SCHEMA,
+                source: Some("test".into()),
+                skies: vec![
+                    steam("add-ons/sky_blue2/blue2.dml", "Blue2", blue),
+                    steam(
+                        "add-ons/sky_slate_storm/slate_storm.dml",
+                        "Slate Storm",
+                        storm,
+                    ),
+                ],
+                ..Default::default()
+            },
+        );
+        let labels: Vec<_> = choices.skies.iter().map(|s| s.label.as_str()).collect();
+        assert_eq!(labels, ["Blue2", "Slate Storm", "Slate Desert"]);
+        assert_eq!(choices.skies[1].look.fog_color, Some([0.3; 3]));
+        // Its own picture from the pack.
+        let t = choices.sky_thumbnail(&choices.skies[0]).unwrap();
+        assert_eq!(&t.rgba[..4], &[1, 2, 3, 255]);
+        // Drawn from the pack, with a floor unless a ground hides it.
+        let mut scene = map(&choices);
+        let storm = "add-ons/sky_slate_storm/slate_storm.dml";
+        choices
+            .set_sky(&mut scene, "v20/a.mis", Some(storm), false)
+            .unwrap();
+        assert_eq!(drawn_sky_colors(&scene), vec![[60, 60, 70, 255]; 6]);
+        choices
+            .set_sky(&mut scene, "v20/a.mis", Some(storm), true)
+            .unwrap();
+        assert_eq!(drawn_sky_colors(&scene), vec![[60, 60, 70, 255]; 5]);
     }
 
     #[test]

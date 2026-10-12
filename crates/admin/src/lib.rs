@@ -189,7 +189,7 @@ pub enum Action {
     /// The Environment window's Apply: the whole live environment, each
     /// setting unset to keep the map's own.
     SetEnvironment {
-        settings: bri_content::atmosphere::Settings,
+        settings: Box<bri_content::atmosphere::Settings>,
     },
     SetAdminPassword {
         password: Secret,
@@ -1041,9 +1041,7 @@ impl Administration {
             Action::ClearBots => GameplayCommand::ClearBots,
             Action::Warp => GameplayCommand::Warp,
             Action::TimeScale { scale } => GameplayCommand::TimeScale(scale.clamped(0.2, 2.0)),
-            Action::SetEnvironment { settings } => {
-                GameplayCommand::SetEnvironment(Box::new(settings))
-            }
+            Action::SetEnvironment { settings } => GameplayCommand::SetEnvironment(settings),
             Action::RequestBrickGroups => GameplayCommand::RequestBrickGroups,
             Action::RequestMaps => GameplayCommand::RequestMaps,
         };

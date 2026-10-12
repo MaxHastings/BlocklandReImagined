@@ -943,6 +943,14 @@ impl Motion {
             _ => state,
         }
     }
+    /// The map's liquids changed (the Environment window's water).
+    pub fn set_map_waters(&mut self, waters: Vec<bri_content::water::Water>) {
+        if let Some(p) = self.predictor.as_mut() {
+            p.set_map_waters(waters);
+        } else if let Some(mirror) = self.mirror.as_mut() {
+            mirror.set_map_waters(waters);
+        }
+    }
     /// The local collision mirror, with the liquids prediction swims in.
     pub fn collision(&self) -> Option<&CollisionMirror> {
         self.predictor

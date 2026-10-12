@@ -519,6 +519,7 @@ impl App {
                     )?;
                 }
                 let waters = loaded.simulation.waters.clone();
+                let plate = loaded.plate;
                 let foliage = crate::foliage::PreparedFoliage::load(
                     &paths.foliage,
                     &base_map,
@@ -531,6 +532,7 @@ impl App {
                         foliage,
                         map_id: base_map.clone(),
                         waters,
+                        plate,
                         scene: visual.scene,
                         terrain: visual.terrain.into_iter().map(Arc::new).collect(),
                         meshes,

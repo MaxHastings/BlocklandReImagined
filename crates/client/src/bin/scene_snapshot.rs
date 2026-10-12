@@ -4,7 +4,9 @@
 //! Usage: scene_snapshot <map-bundle-dir> <map-id> <out.png> [yaw-degrees] [pitch-degrees] [eye-x eye-y eye-z]
 //! The optional eye is in Torque mission coordinates (Z up); the default is the spawn.
 //! `BRI_SKY` draws a sky the Environment window offers (its name in the
-//! settings) over the map's own.
+//! settings) over the map's own, with its look; `BRI_GROUND`, `BRI_WATER`
+//! and `BRI_WATER_HEIGHT` lay a ground and water over a flat map's plate.
+//! `BRI_ENV_PACK` names the environment pack they come from.
 use anyhow::{Context, Result, ensure};
 use bri_render::{
     scene::{Camera, SceneRenderer, create_depth},
@@ -29,10 +31,43 @@ fn main() -> Result<()> {
         .map_or(Ok(-20.0), |v| v.parse::<f32>())?
         .to_radians();
     let mut map = load_map_bundle(&PathBuf::from(&args[0]), &args[1])?;
-    if let Ok(sky) = std::env::var("BRI_SKY") {
-        let choices = bri_render::environment_choices::Choices::load(&PathBuf::from(&args[0]))?;
-        ensure!(choices.sky(&sky).is_some(), "No sky {sky}");
-        choices.set_sky(&mut map.scene, &args[1], Some(&sky))?;
+    let var = |name: &str| std::env::var(name).ok();
+    let mut look = None;
+    if var("BRI_SKY").is_some() || var("BRI_GROUND").is_some() || var("BRI_WATER").is_some() {
+        let pack = var("BRI_ENV_PACK").map(PathBuf::from);
+        let choices = bri_render::environment_choices::Choices::load(
+            &PathBuf::from(&args[0]),
+            pack.as_deref(),
+        )?;
+        let settings = bri_content::atmosphere::Settings {
+            sky: var("BRI_SKY"),
+            ground: var("BRI_GROUND"),
+            water: var("BRI_WATER"),
+            water_height: var("BRI_WATER_HEIGHT").map(|h| h.parse()).transpose()?,
+            ..Default::default()
+        };
+        let planes = bri_render::environment_planes::Planes::of(&choices.pack, &settings);
+        if let Some(sky) = &settings.sky {
+            let choice = choices.sky(sky).with_context(|| format!("No sky {sky}"))?;
+            look = Some(choice.look.clone());
+            choices.set_sky(&mut map.scene, &args[1], Some(sky), planes.ground_shows())?;
+        }
+        if settings.ground.is_some() || settings.water.is_some() {
+            let plate = bri_sim::map::NativeMap::load(&PathBuf::from(&args[0]), &args[1])?
+                .plate
+                .context("Not a flat map")?;
+            let ground = planes
+                .ground
+                .map(|(g, _)| choices.picture(&g.texture))
+                .transpose()?;
+            let water = match planes.water {
+                Some(Some((w, ..))) => {
+                    Some((choices.picture(&w.top)?, choices.picture(&w.bottom)?))
+                }
+                _ => None,
+            };
+            bri_render::environment_planes::append(&mut map.scene, &plate, &planes, ground, water);
+        }
     }
     let scene = map.scene;
     let eye = if args.len() == 8 {
@@ -96,6 +131,17 @@ fn main() -> Result<()> {
         4000.0,
     );
     camera.apply_environment(&scene);
+    if let Some(look) = look.filter(|l| !l.is_empty()) {
+        let authored = bri_content::atmosphere::Authored {
+            sun_direction: scene.sun_direction,
+            direct_light: scene.sun_color,
+            ambient_light: scene.ambient,
+            fog_start: scene.fog.start,
+            fog_end: scene.fog.end,
+            fog_color: scene.fog.color,
+        };
+        camera.apply_atmosphere(&bri_content::atmosphere::resolve(&authored, &look, 0.0));
+    }
     renderer.update_camera(&queue, &camera);
     let row = (width * 4).div_ceil(256) * 256;
     let buffer = device.create_buffer(&wgpu::BufferDescriptor {

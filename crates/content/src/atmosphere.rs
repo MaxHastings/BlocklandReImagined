@@ -78,7 +78,7 @@ pub struct Vignette {
 }
 
 /// Every setting's name, as [`Settings::unset`] takes them.
-pub const KEYS: [&str; 13] = [
+pub const KEYS: [&str; 19] = [
     "day_cycle",
     "sun_azimuth",
     "sun_elevation",
@@ -92,8 +92,14 @@ pub const KEYS: [&str; 13] = [
     "sky_color",
     "vignette",
     "sky",
+    "ground",
+    "ground_color",
+    "water",
+    "water_height",
+    "water_color",
+    "underwater_color",
 ];
-/// Longest sky name, bytes.
+/// Longest sky, ground or water name, bytes.
 pub const MAX_CHOICE_ID: usize = 160;
 
 /// What the server set. `None` keeps the map's own value.
@@ -140,10 +146,36 @@ pub struct Settings {
     /// map's sky.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub sky: Option<String>,
+    /// Flat maps only (`bri_content::scene::Plate`): a floor over the
+    /// plate, by its environment pack name.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ground: Option<String>,
+    /// The floor's colour (straight RGBA) in place of the ground's own;
+    /// alpha 0 hides it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ground_color: Option<[f32; 4]>,
+    /// Flat maps only: a sea over the plate, by its environment pack name,
+    /// or [`NO_WATER`] for none (the map's own water drained).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub water: Option<String>,
+    /// The sea's surface, units above the plate, in place of the water's
+    /// own height.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub water_height: Option<f32>,
+    /// The sea surface's colour (straight RGBA) in place of the water's own.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub water_color: Option<[f32; 4]>,
+    /// The colour over the screen under the sea, in place of the water's own.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub underwater_color: Option<[f32; 4]>,
 }
 /// The sky with one plain colour all round, which Sky Color tints.
 pub const PLAIN_SKY: &str = "plain";
-/// A sky name: lower-case ASCII path characters.
+/// The water setting that drains a flat map's sea.
+pub const NO_WATER: &str = "none";
+/// Highest sea surface above the plate, units (v21's `$Water::height`).
+pub const MAX_WATER_HEIGHT: f32 = 100.0;
+/// A sky, ground or water name: lower-case ASCII path characters.
 fn choice_id(id: &str) -> bool {
     !id.is_empty()
         && id.len() <= MAX_CHOICE_ID
@@ -207,6 +239,29 @@ impl Settings {
             self.sky.as_deref().is_none_or(choice_id),
             "Invalid sky name"
         );
+        ensure!(
+            self.ground.as_deref().is_none_or(choice_id),
+            "Invalid ground name"
+        );
+        ensure!(
+            self.water.as_deref().is_none_or(choice_id),
+            "Invalid water name"
+        );
+        ensure!(
+            self.water_height
+                .is_none_or(|h| (0.0..=MAX_WATER_HEIGHT).contains(&h)),
+            "Water height must be 0 to 100"
+        );
+        for c in [
+            &self.ground_color,
+            &self.water_color,
+            &self.underwater_color,
+        ]
+        .into_iter()
+        .flatten()
+        {
+            ensure!(unit(c), "Colours must be 0 to 1");
+        }
         Ok(())
     }
     /// Every setting of `other` that is set replaces this one's.
@@ -227,7 +282,13 @@ impl Settings {
             fog_color,
             sky_color,
             vignette,
-            sky
+            sky,
+            ground,
+            ground_color,
+            water,
+            water_height,
+            water_color,
+            underwater_color
         );
     }
     /// Put setting `name` (a field name, as in [`KEYS`]) back to the map's
@@ -247,6 +308,12 @@ impl Settings {
             "sky_color" => self.sky_color = None,
             "vignette" => self.vignette = None,
             "sky" => self.sky = None,
+            "ground" => self.ground = None,
+            "ground_color" => self.ground_color = None,
+            "water" => self.water = None,
+            "water_height" => self.water_height = None,
+            "water_color" => self.water_color = None,
+            "underwater_color" => self.underwater_color = None,
             _ => return false,
         }
         true
@@ -763,5 +830,52 @@ mod tests {
         // Older settings files and messages without it still read.
         let old: Settings = serde_json::from_str(r#"{"sun_azimuth":90.0}"#).unwrap();
         assert_eq!(old.sky, None);
+    }
+
+    #[test]
+    fn grounds_and_waters_merge_unset_and_stay_in_range() {
+        let mut s = Settings::default();
+        s.merge(&Settings {
+            ground: Some("add-ons/ground_lava/lava.ground".into()),
+            ground_color: Some([1.0, 0.5, 0.0, 1.0]),
+            water: Some(NO_WATER.into()),
+            water_height: Some(12.0),
+            water_color: Some([0.0, 0.0, 1.0, 0.5]),
+            underwater_color: Some([0.0, 0.0, 0.5, 0.5]),
+            ..Default::default()
+        });
+        s.validate().unwrap();
+        assert_eq!(s.water.as_deref(), Some(NO_WATER));
+        for key in [
+            "ground",
+            "ground_color",
+            "water",
+            "water_height",
+            "water_color",
+            "underwater_color",
+        ] {
+            assert!(s.unset(key), "{key}");
+        }
+        assert!(s.is_empty());
+        for bad in [
+            Settings {
+                water_height: Some(MAX_WATER_HEIGHT + 1.0),
+                ..Default::default()
+            },
+            Settings {
+                water_height: Some(-1.0),
+                ..Default::default()
+            },
+            Settings {
+                ground_color: Some([2.0, 0.0, 0.0, 1.0]),
+                ..Default::default()
+            },
+            Settings {
+                water: Some("Water\\x".into()),
+                ..Default::default()
+            },
+        ] {
+            assert!(bad.validate().is_err(), "{bad:?}");
+        }
     }
 }

@@ -1033,6 +1033,20 @@ impl App {
             .context("Effects GPU not initialized")?;
         effects_renderer.set_fog(camera.atmosphere, camera.fog_color);
         effects_renderer.prepare(frame.queue, &effects_camera, &effects_frame)?;
+        // A sky's rain or snow changed the weather pack: its pictures go up.
+        if self.gpu.weather_revision != self.weather.revision {
+            let limits = bri_weather::WeatherLimits::default();
+            self.gpu.weather_renderer = Some(bri_weather::gpu::WeatherRenderer::new(
+                frame.device,
+                frame.queue,
+                self.weather.world.pack(),
+                frame.format,
+                bri_render::scene::DEPTH_FORMAT,
+                self.graphics.samples,
+                limits.drops + limits.splashes,
+            )?);
+            self.gpu.weather_revision = self.weather.revision;
+        }
         let weather_renderer = self
             .gpu
             .weather_renderer

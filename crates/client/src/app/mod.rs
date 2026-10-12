@@ -122,6 +122,8 @@ struct Prepared {
     foliage: crate::foliage::PreparedFoliage,
     map_id: String,
     waters: Vec<bri_content::water::Water>,
+    /// The plate a flat map stands on.
+    plate: Option<bri_content::scene::Plate>,
     scene: SceneData,
     terrain: Vec<Arc<bri_render::terrain_scene::TerrainScene>>,
     meshes: Arc<Meshes>,
@@ -449,6 +451,7 @@ fn prepare_map(
         foliage,
         map_id: map,
         waters: native_map.waters,
+        plate: native_map.plate,
         scene: visual.scene,
         terrain: visual.terrain.into_iter().map(Arc::new).collect(),
         meshes,
@@ -1608,6 +1611,7 @@ impl PlatformApp for App {
         self.addons.client_code.gpu_stopped();
         self.addons.item_skins.gpu_stopped();
         let weather_limits = bri_weather::WeatherLimits::default();
+        self.gpu.weather_revision = self.weather.revision;
         self.gpu.weather_renderer = Some(bri_weather::gpu::WeatherRenderer::new(
             device,
             queue,

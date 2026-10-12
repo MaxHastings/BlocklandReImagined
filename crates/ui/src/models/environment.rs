@@ -26,6 +26,9 @@ pub enum ColorField {
     FogColor,
     SkyColor,
     Vignette,
+    GroundColor,
+    WaterColor,
+    UnderwaterColor,
 }
 impl ColorField {
     pub fn label(self) -> &'static str {
@@ -37,11 +40,31 @@ impl ColorField {
             Self::FogColor => "Fog Color",
             Self::SkyColor => "Sky Color",
             Self::Vignette => "Vignette Color",
+            Self::GroundColor => "Ground Color",
+            Self::WaterColor => "Water Color",
+            Self::UnderwaterColor => "Underwater Color",
         }
     }
-    /// The picker shows an alpha slider (the flare's and vignette's strength).
+    /// The picker shows an alpha slider (a strength, or how much shows
+    /// through).
     pub fn has_alpha(self) -> bool {
-        matches!(self, Self::SunFlare | Self::Vignette)
+        matches!(
+            self,
+            Self::SunFlare
+                | Self::Vignette
+                | Self::GroundColor
+                | Self::WaterColor
+                | Self::UnderwaterColor
+        )
+    }
+    /// The picker this colour belongs to: its row is used only while one
+    /// of that picker's is picked.
+    pub fn scenery(self) -> Option<ChoiceKind> {
+        match self {
+            Self::GroundColor => Some(ChoiceKind::Ground),
+            Self::WaterColor | Self::UnderwaterColor => Some(ChoiceKind::Water),
+            _ => None,
+        }
     }
 }
 
@@ -55,9 +78,10 @@ pub enum NumberField {
     FlareSize,
     VisibleDistance,
     FogDistance,
+    WaterHeight,
 }
 impl NumberField {
-    pub const ALL: [Self; 7] = [
+    pub const ALL: [Self; 8] = [
         Self::DayLength,
         Self::TimeOfDay,
         Self::SunAzimuth,
@@ -65,6 +89,7 @@ impl NumberField {
         Self::FlareSize,
         Self::VisibleDistance,
         Self::FogDistance,
+        Self::WaterHeight,
     ];
     pub fn label(self) -> &'static str {
         match self {
@@ -75,6 +100,7 @@ impl NumberField {
             Self::FlareSize => "Sun Flare Size",
             Self::VisibleDistance => "Visible Distance",
             Self::FogDistance => "Fog Distance",
+            Self::WaterHeight => "Water Height",
         }
     }
     /// Slider range. The day length slider stops at an hour; Add-Ons may
@@ -91,6 +117,7 @@ impl NumberField {
             ),
             Self::VisibleDistance => (atmosphere::MIN_VISIBLE_DISTANCE, atmosphere::MAX_DISTANCE),
             Self::FogDistance => (0.0, atmosphere::MAX_DISTANCE),
+            Self::WaterHeight => (0.0, atmosphere::MAX_WATER_HEIGHT),
         }
     }
     /// Values snap to this.
@@ -102,6 +129,7 @@ impl NumberField {
                 1.0
             }
             Self::FlareSize => 0.05,
+            Self::WaterHeight => 0.5,
         }
     }
     /// The value as the row shows it.
@@ -122,6 +150,7 @@ impl NumberField {
             Self::SunAzimuth | Self::SunElevation => format!("{v:.0}°"),
             Self::FlareSize => format!("{v:.2}x"),
             Self::VisibleDistance | Self::FogDistance => format!("{v:.0}"),
+            Self::WaterHeight => format!("{v:.1}"),
         }
     }
     pub fn snap(self, v: f32) -> f32 {
@@ -130,40 +159,64 @@ impl NumberField {
     }
 }
 
-/// Which picture picker is open. Only the sky for now: a ground or water
-/// picker fits only maps whose world is a flat plane, and no stock map is.
+/// Which picture picker is open. A sky fits every map; a ground or a water
+/// only a flat one (`Choices::flat`), as on Steam, where every map is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ChoiceKind {
     Sky,
+    Ground,
+    Water,
 }
 impl ChoiceKind {
+    pub const ALL: [Self; 3] = [Self::Sky, Self::Ground, Self::Water];
     pub fn label(self) -> &'static str {
         match self {
             Self::Sky => "Sky",
+            Self::Ground => "Ground",
+            Self::Water => "Water",
         }
     }
 }
-/// A sky to pick: its name in the settings, what the picker
-/// calls it, and its picture.
+/// A sky, ground or water to pick: its name in the settings, what the
+/// picker calls it, and its picture.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Choice {
     pub id: String,
     pub label: String,
     pub icon: IconRef,
+    /// What picking it sets besides its name: a Steam sky's look (sun,
+    /// light, fog, day cycle), a ground's colour, a water's height and
+    /// colours. The colours and height are what the Advanced rows show
+    /// until changed.
+    pub look: Settings,
 }
-/// What the Sky picker offers on the map being played. The client fills it
+/// What the pickers offer on the map being played. The client fills it
 /// from its own content when a map loads.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Choices {
     pub skies: Vec<Choice>,
+    pub grounds: Vec<Choice>,
+    /// The waters, "None" (`atmosphere::NO_WATER`) first.
+    pub waters: Vec<Choice>,
     /// The sky the map draws on its own, when it is one of `skies`.
     pub map_sky: Option<String>,
+    /// The map stands on a flat plate, which a ground and a water may cover.
+    pub flat: bool,
 }
 impl Choices {
     pub fn list(&self, kind: ChoiceKind) -> &[Choice] {
         match kind {
             ChoiceKind::Sky => &self.skies,
+            ChoiceKind::Ground => &self.grounds,
+            ChoiceKind::Water => &self.waters,
         }
+    }
+    /// Whether this picker may be used on this map.
+    pub fn offered(&self, kind: ChoiceKind) -> bool {
+        !self.list(kind).is_empty() && (kind == ChoiceKind::Sky || self.flat)
+    }
+    fn find(&self, kind: ChoiceKind, id: &str) -> Option<&Choice> {
+        self.list(kind).iter().find(|c| c.id == id)
     }
 }
 
@@ -213,18 +266,49 @@ impl EnvironmentModel {
             self.choices = choices;
         }
     }
-    /// The sky the rows pick; None keeps the map's own.
+    /// The sky, ground or water the rows pick; None keeps the map's own.
     pub fn choice(&self, kind: ChoiceKind) -> Option<String> {
         let s = self.settings();
         match kind {
             ChoiceKind::Sky => s.sky,
+            ChoiceKind::Ground => s.ground,
+            ChoiceKind::Water => s.water,
         }
     }
+    /// Pick one. A Steam sky brings its look, as Steam's window does: the
+    /// rows take its sun, light, fog and day cycle (the ground and water
+    /// stay). A ground or water starts from its own colours and height.
     pub fn set_choice(&mut self, kind: ChoiceKind, id: Option<String>) {
+        let look = id
+            .as_deref()
+            .and_then(|id| self.choices.find(kind, id))
+            .map(|c| c.look.clone());
+        let tick = self.tick();
         self.revision += 1;
         let s = self.draft.get_or_insert_with(Settings::default);
         match kind {
-            ChoiceKind::Sky => s.sky = id,
+            ChoiceKind::Sky => match look.filter(|l| !l.is_empty()) {
+                Some(mut look) => {
+                    if let Some(d) = look.day_cycle.as_mut() {
+                        d.anchor_tick = tick;
+                    }
+                    *s = Settings {
+                        sky: id,
+                        ..scenery(s, look)
+                    };
+                }
+                None => s.sky = id,
+            },
+            ChoiceKind::Ground => {
+                s.ground = id;
+                s.ground_color = None;
+            }
+            ChoiceKind::Water => {
+                s.water = id;
+                s.water_height = None;
+                s.water_color = None;
+                s.underwater_color = None;
+            }
         }
     }
     /// The picture a picker's button shows: the picked one's, else the
@@ -232,6 +316,7 @@ impl EnvironmentModel {
     pub fn choice_icon(&self, kind: ChoiceKind) -> IconRef {
         let id = self.choice(kind).or(match kind {
             ChoiceKind::Sky => self.choices.map_sky.clone(),
+            _ => None,
         });
         id.and_then(|id| {
             self.choices
@@ -309,7 +394,32 @@ impl EnvironmentModel {
             ColorField::FogColor => rgb(s.fog_color.unwrap_or(a.fog_color)),
             ColorField::SkyColor => rgb(s.sky_color.unwrap_or([1.0; 3])),
             ColorField::Vignette => s.vignette.map_or([0.0, 0.0, 0.0, 0.0], |v| v.color),
+            ColorField::GroundColor => s
+                .ground_color
+                .or_else(|| self.picked_look(ChoiceKind::Ground)?.ground_color)
+                .unwrap_or([1.0; 4]),
+            ColorField::WaterColor => s
+                .water_color
+                .or_else(|| self.picked_look(ChoiceKind::Water)?.water_color)
+                .unwrap_or([1.0; 4]),
+            ColorField::UnderwaterColor => s
+                .underwater_color
+                .or_else(|| self.picked_look(ChoiceKind::Water)?.underwater_color)
+                .unwrap_or([0.0; 4]),
         }
+    }
+    /// What the picked ground or water brings (its own colours and height).
+    fn picked_look(&self, kind: ChoiceKind) -> Option<&Settings> {
+        let id = self.choice(kind)?;
+        self.choices.find(kind, &id).map(|c| &c.look)
+    }
+    /// Whether a colour or number row is used now: the ground's and the
+    /// water's only while one is picked on a flat map.
+    pub fn row_active(&self, kind: ChoiceKind) -> bool {
+        self.choices.flat
+            && self.choice(kind).is_some_and(|id| {
+                id != atmosphere::NO_WATER && self.choices.find(kind, &id).is_some()
+            })
     }
     pub fn set_color(&mut self, field: ColorField, c: [f32; 4]) {
         self.revision += 1;
@@ -336,6 +446,9 @@ impl EnvironmentModel {
                 let multiply = s.vignette.is_some_and(|v| v.multiply);
                 s.vignette = Some(Vignette { color: c, multiply });
             }
+            ColorField::GroundColor => s.ground_color = Some(c),
+            ColorField::WaterColor => s.water_color = Some(c),
+            ColorField::UnderwaterColor => s.underwater_color = Some(c),
         }
     }
     /// A slider's value: the draft's, else what the map and host give now.
@@ -375,6 +488,10 @@ impl EnvironmentModel {
                     atmosphere::MAX_DISTANCE
                 }
             }
+            NumberField::WaterHeight => s
+                .water_height
+                .or_else(|| self.picked_look(ChoiceKind::Water)?.water_height)
+                .unwrap_or(0.0),
         }
         .clamped(field.range().0, field.range().1.max(field.range().0))
     }
@@ -417,6 +534,7 @@ impl EnvironmentModel {
                 }
             }
             NumberField::FogDistance => s.fog_distance = Some(v),
+            NumberField::WaterHeight => s.water_height = Some(v),
         }
     }
     pub fn day_cycle(&self) -> bool {
@@ -443,7 +561,7 @@ impl EnvironmentModel {
         s.vignette = Some(Vignette { color, multiply });
     }
     /// A Simple tab look: its settings, keeping the day/night cycle and
-    /// the picked sky (a look is light, not scenery).
+    /// the picked sky, ground and water (a look is light, not scenery).
     pub fn preset(&mut self, index: usize) {
         let Some((_, look)) = atmosphere::presets().into_iter().nth(index) else {
             return;
@@ -452,8 +570,8 @@ impl EnvironmentModel {
         self.revision += 1;
         self.draft = Some(Settings {
             day_cycle: now.day_cycle,
-            sky: now.sky,
-            ..look
+            sky: now.sky.clone(),
+            ..scenery(&now, look)
         });
     }
     /// The preset the draft is exactly, if any.
@@ -461,7 +579,7 @@ impl EnvironmentModel {
         let s = Settings {
             day_cycle: None,
             sky: None,
-            ..self.settings()
+            ..scenery(&Settings::default(), self.settings())
         };
         atmosphere::presets()
             .iter()
@@ -497,6 +615,19 @@ impl EnvironmentModel {
             Some(d) != self.view.as_ref().map(|v| &v.settings)
                 && !(d.is_empty() && self.view.is_none())
         })
+    }
+}
+
+/// `look` with the ground and water of `now` (the scenery a look keeps).
+fn scenery(now: &Settings, look: Settings) -> Settings {
+    Settings {
+        ground: now.ground.clone(),
+        ground_color: now.ground_color,
+        water: now.water.clone(),
+        water_height: now.water_height,
+        water_color: now.water_color,
+        underwater_color: now.underwater_color,
+        ..look
     }
 }
 
@@ -606,12 +737,14 @@ mod tests {
             id: id.into(),
             label: id.to_uppercase(),
             icon: IconRef::External(icon),
+            look: Settings::default(),
         };
         let mut m = EnvironmentModel::default();
         m.apply(view());
         m.set_choices(Choices {
             skies: vec![choice("blue", 1), choice("plain", 2)],
             map_sky: Some("blue".into()),
+            ..Default::default()
         });
         m.begin();
         // The map's own: its sky's picture.
@@ -629,6 +762,81 @@ mod tests {
         assert_eq!(m.favorite().sky.as_deref(), Some("plain"));
         m.reset();
         assert_eq!(m.choice(ChoiceKind::Sky), None);
+    }
+
+    #[test]
+    fn steam_skies_bring_their_look_and_grounds_and_waters_need_a_flat_map() {
+        use atmosphere::NO_WATER;
+        let choice = |id: &str, look: Settings| Choice {
+            id: id.into(),
+            label: id.into(),
+            icon: IconRef::External(1),
+            look,
+        };
+        let storm = Settings {
+            fog_color: Some([0.3; 3]),
+            visible_distance: Some(300.0),
+            ..Default::default()
+        };
+        let lava = Settings {
+            water_height: Some(5.0),
+            water_color: Some([1.0, 0.3, 0.0, 1.0]),
+            underwater_color: Some([1.0, 0.0, 0.0, 0.5]),
+            ..Default::default()
+        };
+        let mut m = EnvironmentModel::default();
+        m.apply(view());
+        m.set_choices(Choices {
+            skies: vec![choice("storm", storm)],
+            grounds: vec![choice(
+                "tt",
+                Settings {
+                    ground_color: Some([0.5, 0.5, 0.5, 1.0]),
+                    ..Default::default()
+                },
+            )],
+            waters: vec![choice(NO_WATER, Settings::default()), choice("lava", lava)],
+            map_sky: None,
+            flat: false,
+        });
+        assert!(m.choices.offered(ChoiceKind::Sky));
+        assert!(
+            !m.choices.offered(ChoiceKind::Ground),
+            "not on a map with a world of its own"
+        );
+        m.choices.flat = true;
+        assert!(m.choices.offered(ChoiceKind::Water));
+        m.begin();
+        m.set_number(NumberField::SunAzimuth, 10.0);
+        m.set_choice(ChoiceKind::Ground, Some("tt".into()));
+        m.set_choice(ChoiceKind::Water, Some("lava".into()));
+        // The rows show what the picked water and ground bring.
+        assert!(m.row_active(ChoiceKind::Water));
+        assert_eq!(m.number(NumberField::WaterHeight), 5.0);
+        assert_eq!(m.color(ColorField::GroundColor), [0.5, 0.5, 0.5, 1.0]);
+        assert_eq!(m.color(ColorField::UnderwaterColor), [1.0, 0.0, 0.0, 0.5]);
+        m.set_number(NumberField::WaterHeight, 12.3);
+        assert_eq!(m.settings().water_height, Some(12.5));
+        // A Steam sky's look replaces the light, keeping ground and water.
+        m.set_choice(ChoiceKind::Sky, Some("storm".into()));
+        let s = m.settings();
+        assert_eq!(
+            (s.sky.as_deref(), s.sun_azimuth, s.fog_color),
+            (Some("storm"), None, Some([0.3; 3]))
+        );
+        assert_eq!(
+            (s.ground.as_deref(), s.water_height),
+            (Some("tt"), Some(12.5))
+        );
+        // A look keeps them too, and is still recognised.
+        m.preset(1);
+        assert_eq!(m.current_preset(), Some(1));
+        assert_eq!(m.settings().water.as_deref(), Some("lava"));
+        // Another water starts from its own height; None has no rows.
+        m.set_choice(ChoiceKind::Water, Some(NO_WATER.into()));
+        assert_eq!(m.settings().water_height, None);
+        assert!(!m.row_active(ChoiceKind::Water));
+        m.draft.as_ref().unwrap().validate().unwrap();
     }
 
     #[test]

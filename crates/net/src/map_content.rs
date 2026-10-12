@@ -36,6 +36,8 @@ pub struct MapContent {
     pub brick_extras: Vec<(String, PathBuf)>,
     pub brick_geometry: std::collections::BTreeMap<String, bri_content::brick::Brick>,
     pub weapons: WeaponContent,
+    /// The waters the Environment window lays over a flat map's plate.
+    pub environments: Arc<bri_content::environment_pack::Pack>,
 }
 
 /// A map loaded for a session, with what a client hosting it also needs.
@@ -57,6 +59,8 @@ pub struct LoadedMap {
     pub tutorial: Option<TutorialMap>,
     /// Glass shapes a fast player smashes.
     pub breakables: Vec<Breakable>,
+    /// The plate a flat map stands on.
+    pub plate: Option<bri_content::scene::Plate>,
 }
 
 impl LoadedMap {
@@ -87,6 +91,7 @@ impl MapContent {
             brick_extras: crate::content_identity::brick_catalog_providers(content_root, packages)?,
             brick_geometry: crate::content_identity::brick_geometry_assets(content_root, packages)?,
             weapons,
+            environments: Arc::new(environments(content_root, packages)?),
         })
     }
 
@@ -124,7 +129,7 @@ impl MapContent {
         let mut simulation = Simulation::new(world, definitions, native.colliders)
             .context("Building native simulation")?;
         simulation.attach_terrain(native.terrain, anchors)?;
-        simulation.waters = native.waters;
+        simulation.set_map_waters(native.waters, native.plate, self.environments.clone());
         let spawn_points =
             bri_sim::spawn::candidates(&simulation.physics, &native.scene, &Default::default())?;
         let spawn = spawn_points
@@ -169,6 +174,7 @@ impl MapContent {
             terrain,
             tutorial,
             breakables: native.breakables,
+            plate: native.plate,
         })
     }
 
@@ -179,6 +185,23 @@ impl MapContent {
             let world = blank_world(&self.map_bundle, palette.clone(), map)?;
             Ok(self.load(world)?.into_session())
         })
+    }
+}
+
+/// The Environment window's skies, grounds and waters: an empty pack for a
+/// package list without that role.
+pub fn environments(
+    content_root: &Path,
+    packages: &PackageSet,
+) -> Result<bri_content::environment_pack::Pack> {
+    match packages.role_dir(content_root, "environments") {
+        Ok(dir) => {
+            bri_content::environment_pack::Pack::load(&dir).context("Loading the environment pack")
+        }
+        Err(_) => Ok(bri_content::environment_pack::Pack {
+            schema_version: bri_content::environment_pack::SCHEMA,
+            ..Default::default()
+        }),
     }
 }
 

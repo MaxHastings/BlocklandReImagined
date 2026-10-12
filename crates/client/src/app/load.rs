@@ -149,6 +149,7 @@ impl App {
             weather,
             gpu: GpuState {
                 weather_renderer: None,
+                weather_revision: 0,
                 renderer: None,
                 shell_gpu: None,
                 hidden_lines: None,

@@ -1663,13 +1663,26 @@ fn the_sky_picker_picks_from_pictures() {
         id: id.into(),
         label: label.into(),
         icon: IconRef::External(icon),
+        look: Settings::default(),
     };
     let choices = Choices {
         skies: vec![
             choice("base/data/skies/sky_blue2/resource.dml", "Blue2", 101),
             choice("plain", "Plain", 102),
         ],
+        grounds: vec![choice("add-ons/ground_tt/grass.ground", "Grass", 103)],
+        waters: vec![
+            choice("none", "None", 0),
+            Choice {
+                look: Settings {
+                    water_height: Some(5.0),
+                    ..Default::default()
+                },
+                ..choice("add-ons/water_lava/lava.water", "Lava", 104)
+            },
+        ],
         map_sky: Some("base/data/skies/sky_blue2/resource.dml".into()),
+        flat: false,
     };
     ui.core.environment.set_choices(choices);
     let click = |ui: &mut Ui, screen: ScreenId, key: &str| {
@@ -1713,6 +1726,13 @@ fn the_sky_picker_picks_from_pictures() {
         shown(&ui, env, "EnvSky"),
         (Some(101), "Map's own".into(), true)
     );
+    // A ground or water needs a flat map.
+    for name in ["EnvGround", "EnvWater"] {
+        assert_eq!(
+            shown(&ui, env, name),
+            (None, "Flat maps only".into(), false)
+        );
+    }
     // The sky picker: the map's own first (drawn now, so not pickable).
     click(&mut ui, env, "EnvSky");
     assert_eq!(ui.top_id(), picker);
@@ -1753,4 +1773,28 @@ fn the_sky_picker_picks_from_pictures() {
     ui.update(16);
     assert_eq!(ui.top_id(), env);
     assert_eq!(ui.core.environment.choice(ChoiceKind::Sky), before);
+    // On a flat map: the water picker, Map's own then None then Lava.
+    let mut flat = ui.core.environment.choices.clone();
+    flat.flat = true;
+    ui.core.environment.set_choices(flat);
+    ui.update(16);
+    assert_eq!(
+        shown(&ui, env, "EnvWater"),
+        (None, "Map's own".into(), true)
+    );
+    click(&mut ui, env, "EnvWater");
+    assert_eq!(ui.top_id(), picker);
+    assert_eq!(shown(&ui, picker, "EnvChoice1").1, "None");
+    click(&mut ui, picker, "EnvChoice2");
+    assert_eq!(
+        shown(&ui, env, "EnvWater"),
+        (Some(104), "Lava".into(), true)
+    );
+    // Its Advanced row reads the lava's own height.
+    click(&mut ui, env, "EnvTabAdvanced");
+    let view = ui.screen(env).unwrap().view();
+    let height = find(view, "EnvA_WaterHeight_Value").unwrap();
+    assert_eq!(view.text_of(height), "5.0");
+    let ground = find(view, "Env_GroundColor").unwrap();
+    assert!(!view.node(ground).state.active, "no ground picked");
 }

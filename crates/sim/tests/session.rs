@@ -2519,8 +2519,11 @@ fn admins_set_the_environment_and_a_changed_day_restarts_from_now() {
     for _ in 0..10 {
         s.step().unwrap();
     }
-    let set =
-        |settings: Settings| Command::Admin(Request::new(Action::SetEnvironment { settings }));
+    let set = |settings: Settings| {
+        Command::Admin(Request::new(Action::SetEnvironment {
+            settings: Box::new(settings),
+        }))
+    };
     let day = |time: f32, anchor_tick: u64| DayCycle {
         length_seconds: 120.0,
         time,
@@ -2655,4 +2658,118 @@ fn missing_content_groups_bricks_by_addon_and_lists_prints_apart() {
         m.details
     );
     assert!(missing_content(&[], &Default::default()).is_none());
+}
+
+/// A pack water for tests: Steam's Default, or its Lava.
+fn pack_water(id: &str, kill: bool) -> bri_content::environment_pack::Water {
+    let image = bri_content::environment::Image {
+        file: format!("{id}.png"),
+        source: id.into(),
+        sha256: "0".repeat(64),
+        width: 1,
+        height: 1,
+    };
+    bri_content::environment_pack::Water {
+        id: id.into(),
+        label: id.into(),
+        thumbnail: image.clone(),
+        top: image.clone(),
+        bottom: image,
+        loops_per_unit: 0.1,
+        color: [1.0, 1.0, 1.0, 0.5],
+        overlay_color: [0.0, 0.0, 0.5, 0.5],
+        color_multiply: true,
+        height: 5.0,
+        kill,
+        scroll: [0.0; 2],
+    }
+}
+
+#[test]
+fn a_picked_water_floods_a_flat_map_and_lava_burns() {
+    use bri_admin::{Action, Request};
+    use bri_content::atmosphere::{NO_WATER, Settings};
+    let mut simulation = Simulation::new(
+        World::new("Sea".into(), "slate".into(), vec![[1.0; 4]]),
+        Definitions::default(),
+        vec![ColliderBuilder::cuboid(100.0, 0.5, 100.0).translation(Vector::new(0.0, -0.5, 0.0))],
+    )
+    .unwrap();
+    let pack = bri_content::environment_pack::Pack {
+        schema_version: bri_content::environment_pack::SCHEMA,
+        source: Some("test".into()),
+        waters: vec![pack_water("default", false), pack_water("lava", true)],
+        ..Default::default()
+    };
+    simulation.set_map_waters(
+        vec![],
+        Some(bri_content::scene::Plate {
+            top: 0.0,
+            min: [-100.0, -100.0],
+            max: [100.0, 100.0],
+        }),
+        std::sync::Arc::new(pack),
+    );
+    let mut s = Session::new(simulation);
+    let admin = s
+        .join("Admin".into(), Vec3::new(0.0, 0.05, 0.0), true)
+        .unwrap();
+    for _ in 0..10 {
+        s.step().unwrap();
+    }
+    let set = |settings: Settings| {
+        Command::Admin(Request::new(Action::SetEnvironment {
+            settings: Box::new(settings),
+        }))
+    };
+    let water = |name: &str, height: Option<f32>| Settings {
+        water: Some(name.into()),
+        water_height: height,
+        ..Default::default()
+    };
+    let feet = body(&s, admin).feet;
+    assert!(
+        s.simulation().liquid_at(feet, 2.0).is_none(),
+        "dry until picked"
+    );
+    // Default: a sea 5 units over the plate, with its own tint; it reaches
+    // past the plate's edge.
+    s.command(admin, 1, set(water("default", None))).unwrap();
+    let (sea, coverage) = s.simulation().liquid_at(feet, 2.0).unwrap();
+    assert_eq!(
+        (sea.max[1], coverage, sea.tint),
+        (5.0, 1.0, Some([0.0, 0.0, 0.5, 0.5]))
+    );
+    assert!(sea.min[0] < -100.0 && sea.max[2] > 100.0);
+    // Water Height moves the surface.
+    s.command(admin, 2, set(water("default", Some(1.0))))
+        .unwrap();
+    assert_eq!(s.simulation().liquid_at(feet, 2.0).unwrap().0.max[1], 1.0);
+    for _ in 0..40 {
+        s.step().unwrap();
+    }
+    assert_eq!(s.vitals()[&admin].health, 100.0, "water does not hurt");
+    // Past the spawn's protection (v20's three seconds of invulnerability)...
+    for _ in 0..300 {
+        s.step().unwrap();
+    }
+    // ...lava burns 20 on going in, and 20 every 300 ms while in it.
+    s.command(admin, 3, set(water("lava", None))).unwrap();
+    s.step().unwrap();
+    assert_eq!(s.vitals()[&admin].health, 80.0);
+    let period = (300 * u64::from(bri_weapons::TICK_HZ)).div_ceil(1000);
+    for _ in 0..period {
+        s.step().unwrap();
+    }
+    // A swimmer crouches, and a crouching body takes three quarters of
+    // what is not a direct hit, as v21's `Armor::damage` gives it.
+    assert!(body(&s, admin).crouched);
+    assert_eq!(s.vitals()[&admin].health, 65.0);
+    // None takes the water away; the burning stops.
+    s.command(admin, 4, set(water(NO_WATER, None))).unwrap();
+    for _ in 0..period * 2 {
+        s.step().unwrap();
+    }
+    assert!(s.simulation().liquid_at(feet, 2.0).is_none());
+    assert_eq!(s.vitals()[&admin].health, 65.0);
 }
