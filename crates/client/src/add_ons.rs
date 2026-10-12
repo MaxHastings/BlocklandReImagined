@@ -286,11 +286,9 @@ pub fn rows(library: &Library, state: &State) -> Vec<AddOnRow> {
     // Add-On's ZIP is installed as it is, so it never says converting.
     // A copy of one the game ships is not converted: the shipped one's row
     // says so.
-    for l in library
-        .legacy
-        .iter()
-        .filter(|l| l.imported_as.is_none() && l.included.is_none())
-    {
+    for l in library.legacy.iter().filter(|l| {
+        l.imported_as.is_none() && l.included.is_none() && state.installed_as(l, library).is_none()
+    }) {
         let failed = state.failed(l);
         let native = classic::is_native_zip(&l.path);
         out.push(AddOnRow {
@@ -1197,6 +1195,10 @@ mod tests {
             sync(root, &run, steps, &send)
         };
         assert_eq!(go(&root), "Installed Ported. It starts off.");
+        assert!(
+            !view(&root).rows.iter().any(|r| r.id.starts_with(LEGACY)),
+            "an installed zip leaves no row behind"
+        );
         let library = Library::scan(&root).unwrap();
         assert!(library.get("ported").is_some_and(|e| !e.enabled));
         assert!(library.get("ported-rules").is_some());
