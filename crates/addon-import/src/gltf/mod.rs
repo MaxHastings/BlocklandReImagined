@@ -1116,7 +1116,10 @@ fn rescale(shape: &mut Shape, k: f32) {
 /// in its idle clip's first frame (a rig's rest pose need not be a pose at
 /// all), anything else at rest.
 fn bounds(shape: &Shape) -> Result<(Vec3, Vec3)> {
-    let idle = shape.animations.iter().find(|a| a.name == "root" && !a.additive);
+    let idle = shape
+        .animations
+        .iter()
+        .find(|a| a.name == "root" && !a.additive);
     let pose = bri_content::animation::sample(shape, idle, 0.0)?;
     let detail = shape
         .details
