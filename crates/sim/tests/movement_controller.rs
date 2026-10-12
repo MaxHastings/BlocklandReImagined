@@ -3,7 +3,8 @@
 //! a wall, the client predicts the kick under 150 ms of latency each way and
 //! datagram loss, a client that cannot run the controller is corrected to
 //! the host's kick, and a Blockhead beside it moves exactly as it would on
-//! a server without the Add-On.
+//! a server without the Add-On. The Diver and the Trooper
+//! (`sample-dive`, `sample-trooper`) are predicted the same way.
 use bri_package::packages::{PackageEntry, PackageSet, Side};
 use bri_package_runtime::Catalog;
 use bri_sim::{
@@ -21,6 +22,7 @@ use std::{collections::VecDeque, path::PathBuf, sync::Arc};
 
 const KICKER: &str = "sample-wall-kick:archetype/kicker";
 const DIVER: &str = "sample-dive:archetype/diver";
+const TROOPER: &str = "sample-trooper:archetype/trooper";
 /// 150 ms one way, in 120 Hz steps.
 const LATENCY: u64 = 18;
 /// Before inputs arrive the host idles each body (every join and body
@@ -39,7 +41,7 @@ fn map() -> Vec<ColliderBuilder> {
 fn add_on() -> Arc<Catalog> {
     let set = PackageSet {
         schema_version: 1,
-        packages: ["sample-wall-kick", "sample-dive"]
+        packages: ["sample-wall-kick", "sample-dive", "sample-trooper"]
             .into_iter()
             .map(|id| PackageEntry {
                 id: id.into(),
@@ -78,6 +80,7 @@ fn become_body(s: &mut Session, owner: u64, body: Body) {
     let (package, command, archetype) = match body {
         Body::Kicker => ("sample-wall-kick", "wallkick", KICKER),
         Body::Diver => ("sample-dive", "diver", DIVER),
+        Body::Trooper => ("sample-trooper", "trooper", TROOPER),
     };
     s.command(
         owner,
@@ -105,6 +108,7 @@ fn become_kicker(s: &mut Session, owner: u64) {
 enum Body {
     Kicker,
     Diver,
+    Trooper,
 }
 /// The client's copy of the host's table, as the checkpoint carries it:
 /// serialised (modules travel, compiled controllers do not), then bound.
@@ -237,6 +241,27 @@ fn two_clients_predict_two_different_controllers_at_once() {
     assert!(kicker.fastest < 12.0, "{}", kicker.fastest);
 }
 
+/// The Trooper, a heavy shooter's body, runs slower than a Blockhead,
+/// jumps higher, and steers in the air; a client predicts all of it.
+#[test]
+fn the_trooper_is_slower_and_floatier_and_is_predicted() {
+    let [trooper] = networked([Client {
+        body: Body::Trooper,
+        at: Vec3::new(-30.0, 0.05, -20.0),
+        binds: true,
+    }]);
+    assert!(trooper.announced, "it steered in the air");
+    assert!(
+        trooper.worst < 1e-3,
+        "prediction diverged by {}",
+        trooper.worst
+    );
+    assert!(trooper.converged);
+    // A Blockhead runs at 7 and rises 12²/(2·20) = 3.6.
+    assert!(trooper.fastest < 7.0, "{}", trooper.fastest);
+    assert!(trooper.highest > 4.5, "{}", trooper.highest);
+}
+
 struct Client {
     body: Body,
     at: Vec3,
@@ -253,10 +278,13 @@ struct Run {
     converged: bool,
     /// The host's body's fastest speed across the ground.
     fastest: f32,
+    /// The host's body's highest rise above where it joined.
+    highest: f32,
 }
 
 /// One host, one predicting client per entry, each sending `input` with
-/// the Diver pressing crouch where the Kicker presses jump again.
+/// the Diver pressing crouch where the Kicker presses jump again, and the
+/// Trooper jumping once and strafing right in the air.
 fn networked<const N: usize>(clients: [Client; N]) -> [Run; N] {
     let mut s = session(true);
     let owners: Vec<u64> = clients
@@ -273,6 +301,10 @@ fn networked<const N: usize>(clients: [Client; N]) -> [Run; N] {
         if body == Body::Diver {
             i.jump = (20..26).contains(&tick);
             i.crouch = (40..44).contains(&tick);
+        }
+        if body == Body::Trooper {
+            i.jump = (20..26).contains(&tick);
+            i.right = if (30..80).contains(&tick) { 1.0 } else { 0.0 };
         }
         i
     };
@@ -291,6 +323,7 @@ fn networked<const N: usize>(clients: [Client; N]) -> [Run; N] {
             announced: false,
             converged: false,
             fastest: 0.0,
+            highest: 0.0,
         })
         .collect();
     let mut to_server: Vec<VecDeque<(u64, u64, Vec<MoveInput>)>> = vec![VecDeque::new(); N];
@@ -320,6 +353,7 @@ fn networked<const N: usize>(clients: [Client; N]) -> [Run; N] {
             runs[i].announced |= p.controller.is_some_and(|c| c.intent != 0);
             let across = Vec3::from(p.velocity).with_y(0.0).length();
             runs[i].fastest = runs[i].fastest.max(across);
+            runs[i].highest = runs[i].highest.max(p.feet[1] - clients[i].at.y);
             // Each client also bumps into the other bodies where the host
             // last showed them, as the real client does.
             let others: Vec<PlayerState> = owners

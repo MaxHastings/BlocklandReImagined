@@ -43,7 +43,11 @@ fn step(wat: &str, tick: &mut ControllerTick) -> Result<(), String> {
 #[test]
 fn the_samples_are_built_from_their_source() {
     let samples = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../packages/samples");
-    for (package, name) in [("sample-wall-kick", "wall_kick"), ("sample-dive", "dive")] {
+    for (package, name) in [
+        ("sample-wall-kick", "wall_kick"),
+        ("sample-dive", "dive"),
+        ("sample-trooper", "air_steer"),
+    ] {
         let dir = samples.join(package).join("controller");
         let built = wat::parse_file(dir.join(format!("{name}.wat"))).unwrap();
         let path = dir.join(format!("{name}.wasm"));

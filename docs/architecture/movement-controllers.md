@@ -205,6 +205,7 @@ redundancy, poses every third step with some skipped):
 | `a_kick_is_predicted_under_150_ms_of_latency` | Largest correction 0 once inputs flow; client ends bit-identical to the host |
 | `a_client_without_the_controller_is_corrected_to_the_hosts_kick` | A 2.9-unit correction when the client predicted a slide and the host kicked; then bit-identical |
 | `two_clients_predict_two_different_controllers_at_once` | A Wall Kicker and a Diver on one host, each predicted by its own client with no visible correction |
+| `the_trooper_is_slower_and_floatier_and_is_predicted` | A Trooper runs below a Blockhead's 7, rises about 4.9 against a Blockhead's 3.6, steers in the air, and is predicted with no correction |
 | `the_wall_kicker_kicks_off_a_wall_and_the_blockhead_does_not` | Same inputs: the Blockhead slides down the wall; the kicker springs 2 units higher and away at 7.8 units/s |
 | `a_blockhead_beside_a_kicker_moves_exactly_as_without_the_add_on` | Every tick's feet and velocity equal, bit for bit |
 
@@ -249,9 +250,13 @@ allocator would cut instantiation cost several times if it matters.
   `ArchetypeDef::controller`.
 - `crates/sim/src/session/packages.rs`: the host binds when Add-Ons load;
   `crates/net/src/replica.rs`: the client binds when the checkpoint arrives.
-- `packages/samples/sample-wall-kick` and `packages/samples/sample-dive`:
-  two independent Add-Ons, each a body, a `/wallkick` or `/diver` command
-  and a controller (one with sweeps, one without).
+- `packages/samples/sample-wall-kick`, `packages/samples/sample-dive` and
+  `packages/samples/sample-trooper`: three independent Add-Ons, each a
+  body, a `/wallkick`, `/diver` or `/trooper` command and a controller (one
+  with sweeps, two without). The Trooper is a heavy shooter's body: its
+  archetype sets a slower run, a higher jump and lower gravity, and its
+  controller adds air steering capped at its running speed, so constants
+  and a controller combine.
 - `crates/net/protocol-changes/movement-controllers.md`: the wire change.
 
 ## Next
