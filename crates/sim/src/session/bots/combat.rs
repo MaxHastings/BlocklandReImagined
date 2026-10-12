@@ -155,6 +155,9 @@ pub(super) struct Intent {
     release_authorized: bool,
     shooter_spawn: u64,
     target_spawn: u64,
+    /// The shooter's and its target's health as it planned: what the plan
+    /// traded by, for the readout.
+    pub(super) healths: (f32, f32),
 }
 pub(super) enum Decision {
     Unsupported,
@@ -808,6 +811,7 @@ pub(super) fn choose(
                         release_authorized: false,
                         shooter_spawn: peer.combat.spawn_tick,
                         target_spawn: target.combat.spawn_tick,
+                        healths: (peer.combat.health, target.combat.health.max(1.0)),
                     });
                     return Decision::Charging(choice);
                 }
@@ -1049,6 +1053,7 @@ pub(super) fn choose(
                 release_authorized: !session.spawn_protected(seen.owner),
                 shooter_spawn: peer.combat.spawn_tick,
                 target_spawn: target.combat.spawn_tick,
+                healths: (peer.combat.health, target.combat.health.max(1.0)),
             });
             if choice.capability.trigger.charge_on_release && session.spawn_protected(seen.owner) {
                 Decision::Charging(choice)
@@ -1073,6 +1078,7 @@ pub(super) fn choose(
                 release_authorized: false,
                 shooter_spawn: peer.combat.spawn_tick,
                 target_spawn: target.combat.spawn_tick,
+                healths: (peer.combat.health, target.combat.health.max(1.0)),
             });
             Decision::Charging(choice)
         }
@@ -1678,6 +1684,7 @@ fn choose_mounted(
         release_authorized: true,
         shooter_spawn: peer.combat.spawn_tick,
         target_spawn: target.combat.spawn_tick,
+        healths: (peer.combat.health, target.combat.health.max(1.0)),
     });
     Decision::Ready(choice)
 }

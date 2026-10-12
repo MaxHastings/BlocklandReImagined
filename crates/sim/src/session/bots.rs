@@ -203,6 +203,12 @@ const MAX_REPLANS: u32 = 3;
 const WEAVE_SECONDS: f32 = 0.75;
 /// A goal that moves less than this keeps its route (`Brain::set_goal_near`).
 const GOAL_SLACK: f32 = 0.2;
+/// An enemy that moves less than this from where a chase heads keeps its
+/// route.
+const CHASE_SLACK: f32 = 2.5;
+/// While a chase's route is still being found, the enemy may move this
+/// share of the way there before the search starts over.
+const CHASE_SEARCH_SHARE: f32 = 0.25;
 /// A ranged fighter strafes one way about this long before turning back.
 /// It stands at a ledge or a wall until then, and turns away from an ally
 /// at once. A melee fighter does not strafe: it closes to its band.
@@ -795,9 +801,19 @@ impl Brain {
                 // search to it came back empty well short of it: then the
                 // goal follows the enemy wherever it now stands, so the bot
                 // searches again rather than stand settled out of reach.
+                // While its route there is still being found, a goal the
+                // enemy has moved a little from is kept: starting the
+                // search over for every step it takes, the bot would
+                // stand there and never get a route.
+                let routing = self.search.is_some() && self.plan.is_empty();
                 let moved_on = match self.goal {
                     Some(Goal::Chase(p)) => {
-                        p.distance(to) > 2.5
+                        let slack = if routing {
+                            CHASE_SLACK.max(CHASE_SEARCH_SHARE * p.distance(feet))
+                        } else {
+                            CHASE_SLACK
+                        };
+                        p.distance(to) > slack
                             || self.settled
                                 && self.plan.is_empty()
                                 && flat(p - feet).length() > near
@@ -816,6 +832,9 @@ impl Brain {
                 let failed = matches!(self.goal, Some(Goal::Search(_)))
                     && self.settled
                     && self.plan.is_empty();
+                if self.search.is_some() && self.plan.is_empty() {
+                    self.evidence_search.routing();
+                }
                 let next = self
                     .evidence_search
                     .next(knowledge, feet, tick, failed, reach);
@@ -2459,9 +2478,13 @@ impl Session {
                 .filter(|w| !w.melee && far > 0.0)
                 .map_or(0.0, |_| far),
             // Nor is searching where it cannot reach them.
-            remembers: brain
-                .memory
-                .is_some_and(|m| brain.out_of_reach.is_none_or(|p| p.distance(m.at) > 2.5)),
+            // Nor once it has looked everywhere that evidence leads: it
+            // gets on with something else rather than stand there until
+            // the memory fades.
+            remembers: brain.memory.is_some_and(|m| {
+                brain.out_of_reach.is_none_or(|p| p.distance(m.at) > 2.5)
+                    && !brain.evidence_search.exhausted_for(m)
+            }),
             // Strayed past where it strolls; while it works a body or a
             // seat (an interaction, idle play's included) its leash is
             // the chase's, as for a fight.
