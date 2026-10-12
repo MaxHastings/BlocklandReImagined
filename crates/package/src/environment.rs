@@ -73,14 +73,7 @@ impl Environment {
     /// [`Self::load`], also returning how many bytes it had to read.
     pub fn load_counting(root: &Path, set: &PackageSet) -> Result<(Self, u64)> {
         let mut cache = HASH_CACHE.lock().unwrap_or_else(|e| e.into_inner());
-        let file = cache.file.clone();
-        let hashes = cache.hashes.get_or_insert_with(|| match &file {
-            Some(file) => FileHashes::load(file),
-            None => FileHashes {
-                schema_version: FILE_HASHES_SCHEMA,
-                ..FileHashes::default()
-            },
-        });
+        let (file, hashes) = cache.kept();
         hashes.read = 0;
         let mut packages = Vec::with_capacity(set.packages.len());
         for entry in &set.packages {
@@ -488,6 +481,40 @@ struct HashCache {
     hashes: Option<FileHashes>,
 }
 
+impl HashCache {
+    /// The kept hashes, read from their file on first use, and that file.
+    fn kept(&mut self) -> (Option<std::path::PathBuf>, &mut FileHashes) {
+        let file = self.file.clone();
+        let hashes = self.hashes.get_or_insert_with(|| match &file {
+            Some(file) => FileHashes::load(file),
+            None => FileHashes {
+                schema_version: FILE_HASHES_SCHEMA,
+                ..FileHashes::default()
+            },
+        });
+        (file, hashes)
+    }
+}
+
+/// Each file's length and SHA-256, through the hashes [`Environment::load`]
+/// keeps: a file unchanged since it was last hashed is not read. What a
+/// host lists for joiners' downloads; a joiner checking what it downloaded
+/// reads every byte ([`hash_dir`]).
+pub fn kept_file_hashes(paths: &[std::path::PathBuf]) -> Result<Vec<(u64, [u8; 32])>> {
+    let mut cache = HASH_CACHE.lock().unwrap_or_else(|e| e.into_inner());
+    let (file, hashes) = cache.kept();
+    let mut buffer = vec![0u8; 1 << 16];
+    let found = paths
+        .iter()
+        .map(|path| hashes.hash(path, &mut buffer))
+        .collect::<Result<Vec<_>>>();
+    if let Some(file) = &file {
+        // A cache that cannot be written only costs the next run a read.
+        let _ = hashes.save(file);
+    }
+    found
+}
+
 static HASH_CACHE: std::sync::Mutex<HashCache> = std::sync::Mutex::new(HashCache {
     file: None,
     hashes: None,
@@ -571,6 +598,33 @@ mod tests {
                 .files
                 .keys()
                 .any(|k| k.ends_with("b.bin"))
+        );
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// What a host lists for downloads comes from the kept hashes: a file
+    /// whose length and time are unchanged is not read again.
+    #[test]
+    fn kept_file_hashes_answer_unchanged_files_without_reading_them() {
+        let root = std::env::temp_dir().join(format!("bri-kept-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        let path = root.join("texture.png");
+        aged(&path, b"first", 60);
+        let first = kept_file_hashes(std::slice::from_ref(&path)).unwrap();
+        assert_eq!(first[0].0, 5);
+        // Same length and time, other bytes: only a read would notice.
+        let at = fs::metadata(&path).unwrap().modified().unwrap();
+        fs::write(&path, b"other").unwrap();
+        fs::File::options()
+            .write(true)
+            .open(&path)
+            .unwrap()
+            .set_modified(at)
+            .unwrap();
+        assert_eq!(
+            kept_file_hashes(std::slice::from_ref(&path)).unwrap(),
+            first
         );
         let _ = fs::remove_dir_all(&root);
     }
