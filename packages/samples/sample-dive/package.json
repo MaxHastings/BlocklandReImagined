@@ -1,0 +1,18 @@
+{
+  "schema_version": 1,
+  "id": "sample-dive",
+  "version": "1.0.0",
+  "api": 1,
+  "name": "Dive",
+  "description": "A sample movement controller: type /diver to become a Diver, a Blockhead that can throw itself forward once in every jump. Jump, then press crouch while moving to dive. Type /blockhead to go back.",
+  "authors": ["Blockland ReImagined"],
+  "license": "CC0-1.0",
+  "provenance": { "source": "original" },
+  "capabilities": ["player"],
+  "provides": [
+    { "kind": "behaviour", "id": "sample-dive:behaviour/rules", "file": "behaviour.json" },
+    { "kind": "script", "id": "sample-dive:script/rules", "file": "dive.rhai" },
+    { "kind": "archetype", "id": "sample-dive:archetype/diver", "file": "diver-archetype.json" },
+    { "kind": "controller", "id": "sample-dive:controller/dive", "file": "controller/dive.wasm" }
+  ]
+}

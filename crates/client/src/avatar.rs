@@ -1909,6 +1909,7 @@ impl Preview {
                 speed_scale: 1.0,
                 tick: Default::default(),
                 tether: None,
+                controller: None,
             },
             time * 0.85,
             &AvatarAnimationInput {
@@ -2347,6 +2348,7 @@ mod tests {
             speed_scale: 1.0,
             tick: Default::default(),
             tether: None,
+            controller: None,
         }
     }
     fn vitals(alive: bool, spawn_tick: u64, died_tick: Option<u64>) -> bri_sim::session::Vitals {

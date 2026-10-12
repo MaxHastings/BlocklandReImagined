@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "name": "Trooper",
+  "movement": {
+    "can_jet": false,
+    "forward": 6,
+    "backward": 5,
+    "sideways": 5.5,
+    "gravity": 12,
+    "jump_speed": 11
+  },
+  "controller": "sample-trooper:controller/air-steer"
+}

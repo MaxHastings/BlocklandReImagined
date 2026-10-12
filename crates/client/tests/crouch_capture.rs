@@ -34,6 +34,7 @@ fn player(crouched: bool) -> PlayerState {
         speed_scale: 1.0,
         tick: Default::default(),
         tether: None,
+        controller: None,
     }
 }
 

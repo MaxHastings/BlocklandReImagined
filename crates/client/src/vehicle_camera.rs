@@ -402,6 +402,7 @@ mod tests {
                     speed_scale: 1.0,
                     tick: Default::default(),
                     tether: None,
+                    controller: None,
                 };
                 rider.yaw = {
                     let forward = turn * Vec3::NEG_Z;

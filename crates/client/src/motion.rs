@@ -1154,6 +1154,7 @@ mod tests {
             speed_scale: 1.0,
             tick: Default::default(),
             tether: None,
+            controller: None,
         }
     }
     fn pose(tick: u64, x: f32, yaw: f32) -> bri_net::protocol::Pose {

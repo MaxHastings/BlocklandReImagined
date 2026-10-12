@@ -1,0 +1,8 @@
+{
+  "schema_version": 1,
+  "script": "trooper.rhai",
+  "commands": [
+    { "name": "trooper", "cooldown_ticks": 30 },
+    { "name": "blockhead", "cooldown_ticks": 30 }
+  ]
+}
