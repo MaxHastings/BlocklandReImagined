@@ -13,6 +13,7 @@ bri-content = { path = "../content" }
 bri-world = { path = "../world" }
 bri-physics = { path = "../physics" }
 bri-motor = { path = "../motor" }
+bri-controller = { path = "../controller" }
 bri-weapons = { path = "../weapons" }
 bri-admin = { path = "../admin" }
 bri-minigames = { path = "../minigames" }

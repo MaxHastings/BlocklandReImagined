@@ -193,6 +193,7 @@ impl App {
                 speed_scale: 1.0,
                 tick: Default::default(),
                 tether: None,
+                controller: None,
             };
             let input = crate::avatar::AvatarAnimationInput {
                 dead: info.destroyed,

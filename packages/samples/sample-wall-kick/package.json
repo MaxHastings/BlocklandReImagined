@@ -1,0 +1,18 @@
+{
+  "schema_version": 1,
+  "id": "sample-wall-kick",
+  "version": "1.0.0",
+  "api": 1,
+  "name": "Wall Kick",
+  "description": "A sample movement controller: type /wallkick to become a Wall Kicker, a Blockhead that kicks off walls. Run at a wall, jump, and press jump again as you touch it to spring up and away. Type /blockhead to go back.",
+  "authors": ["Blockland ReImagined"],
+  "license": "CC0-1.0",
+  "provenance": { "source": "original" },
+  "capabilities": ["player"],
+  "provides": [
+    { "kind": "behaviour", "id": "sample-wall-kick:behaviour/rules", "file": "behaviour.json" },
+    { "kind": "script", "id": "sample-wall-kick:script/rules", "file": "wall-kick.rhai" },
+    { "kind": "archetype", "id": "sample-wall-kick:archetype/kicker", "file": "kicker-archetype.json" },
+    { "kind": "controller", "id": "sample-wall-kick:controller/wall-kick", "file": "controller/wall_kick.wasm" }
+  ]
+}

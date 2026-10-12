@@ -299,6 +299,46 @@ fn encode_with<T: Serialize>(request: &T, limit: usize, named: bool) -> Result<V
 #[cfg(test)]
 mod tests {
     use super::*;
+    /// The checkpoint's archetype table carries a controller's module as
+    /// MessagePack binary (a byte each, not a number each), and the client
+    /// compiles what arrives.
+    #[test]
+    fn archetype_controllers_travel_as_bytes_and_compile() {
+        let module = std::fs::read(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../packages/samples/sample-wall-kick/controller/wall_kick.wasm"),
+        )
+        .unwrap();
+        let mut table = bri_sim::archetype::Archetypes::default();
+        let mut kicker = table.resolve(bri_sim::archetype::ArchetypeId(0)).clone();
+        kicker.id = "sample-wall-kick:archetype/kicker".into();
+        let mut without = table.clone();
+        without.add(kicker.clone()).unwrap();
+        kicker.controller = Some(bri_sim::archetype::ControllerSource {
+            id: "sample-wall-kick:controller/wall-kick".into(),
+            module: module.clone(),
+        });
+        let id = table.add(kicker).unwrap();
+        let plain = encode_request(&without, MAX_DECODED).unwrap().len();
+        let bytes = encode_request(&table, MAX_DECODED).unwrap();
+        assert!(
+            bytes.len() - plain < module.len() + 96,
+            "{} more bytes for a {}-byte module",
+            bytes.len() - plain,
+            module.len()
+        );
+        let mut back: bri_sim::archetype::Archetypes = from_bytes(&bytes).unwrap();
+        back.validate().unwrap();
+        assert_eq!(back.resolve(id).controller, table.resolve(id).controller);
+        assert!(bri_sim::archetype::bind_controllers(&mut back).is_empty());
+        assert!(back.resolve(id).movement.controller.is_some());
+        assert!(
+            back.resolve(bri_sim::archetype::ArchetypeId(0))
+                .movement
+                .controller
+                .is_none()
+        );
+    }
     #[test]
     fn maximum_native_event_strings_fit_even_with_json_escaping() {
         let event = bri_world::EventRow {
@@ -447,6 +487,10 @@ mod tests {
                     keys: Some([f32::MAX; 2]),
                     winding: i8::MAX,
                     straight: true,
+                }),
+                controller: Some(bri_sim::archetype::ControllerState {
+                    memory: [u8::MAX; 16],
+                    intent: u8::MAX,
                 }),
             },
         });

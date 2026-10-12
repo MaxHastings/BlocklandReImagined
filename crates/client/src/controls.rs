@@ -1539,6 +1539,7 @@ mod tests {
             speed_scale: 1.0,
             tick: Default::default(),
             tether: None,
+            controller: None,
         };
         let mut presented = BTreeMap::from([(1, body(1, 0.0)), (7, body(7, 5.0))]);
         assert_eq!(

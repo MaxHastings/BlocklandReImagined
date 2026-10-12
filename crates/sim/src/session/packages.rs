@@ -571,6 +571,7 @@ fn archetype(
     table: &crate::archetype::Archetypes,
     id: &str,
     def: &bri_package_runtime::content::ArchetypeDef,
+    catalog: &Catalog,
 ) -> Result<crate::archetype::Archetype> {
     let base = match def.adjusts.as_ref().or(def.base.as_ref()) {
         Some(base) => table
@@ -630,6 +631,15 @@ fn archetype(
     if let Some(v) = def.uses_items {
         archetype.uses_items = v;
     }
+    if let Some(controller) = &def.controller {
+        let module = catalog.controller(controller).with_context(|| {
+            format!("controller {controller} is not provided by an Add-On that is on")
+        })?;
+        archetype.controller = Some(crate::archetype::ControllerSource {
+            id: controller.clone(),
+            module: module.to_vec(),
+        });
+    }
     archetype.validate()?;
     Ok(archetype)
 }
@@ -661,17 +671,25 @@ impl Session {
             let index = archetypes
                 .find(stock)
                 .with_context(|| format!("Archetype {id}: {stock} is not a v20 player type"))?;
-            let mut adjusted =
-                archetype(&archetypes, id, def).with_context(|| format!("Archetype {id}"))?;
+            let mut adjusted = archetype(&archetypes, id, def, &catalog)
+                .with_context(|| format!("Archetype {id}"))?;
             let original = archetypes.resolve(index);
             adjusted.id = original.id.clone();
             adjusted.name = original.name.clone();
             archetypes.replace(index, adjusted)?;
         }
         for (id, def) in catalog.archetypes().filter(|(_, d)| d.adjusts.is_none()) {
-            let archetype =
-                archetype(&archetypes, id, def).with_context(|| format!("Archetype {id}"))?;
+            let archetype = archetype(&archetypes, id, def, &catalog)
+                .with_context(|| format!("Archetype {id}"))?;
             archetypes.add(archetype)?;
+        }
+        // A controller that does not load refuses the Add-On now, with its
+        // reason, rather than leaving a body that moves unlike its Add-On.
+        if let Some((id, why)) = crate::archetype::bind_controllers(&mut archetypes)
+            .into_iter()
+            .next()
+        {
+            return Err(why.context(format!("Archetype {id}: its controller")));
         }
         self.archetypes = archetypes;
         self.fill_body_mount_points()?;
