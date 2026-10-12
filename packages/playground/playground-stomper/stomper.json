@@ -1,0 +1,22 @@
+{
+  "schema_version": 1,
+  "name": "Stomper",
+  "model": "playground-stomper-look:model/stomper",
+  "max_health": 40,
+  "energy_bar": false,
+  "movement": {
+    "can_jet": false,
+    "width": 1.2,
+    "stand_height": 1.2,
+    "crouch_height": 1.0,
+    "stand_eye": 0.55,
+    "crouch_eye": 0.45,
+    "eye_forward": 0.3,
+    "sit_eye": 0.5,
+    "forward": 6,
+    "backward": 4,
+    "sideways": 4,
+    "jump_speed": 9,
+    "air_control": 0.1
+  }
+}

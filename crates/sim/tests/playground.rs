@@ -1,8 +1,8 @@
 //! The Mixed Add-On Playground (`packages/playground`), played headless
-//! through the authoritative session. Four Add-Ons written as if by
-//! different people (the Runner body, the Pulse Carbine, the Dune Buggy and
-//! the Blockhead Bot) meet in one game mode, the only package that names
-//! them. Nothing in the engine knows any of them: each test is ordinary
+//! through the authoritative session. Five Add-Ons written as if by
+//! different people (the Runner body, the Pulse Carbine, the Dune Buggy,
+//! the Blockhead Bot and the Stomper) meet in one game mode, the only
+//! package that names them. Nothing in the engine knows any of them: each test is ordinary
 //! commands and movement, and a failure here is a cross-Add-On defect or
 //! a missing seam, recorded in `docs/audits/interop-matrix.md`.
 use bri_content::{
@@ -31,9 +31,11 @@ const RUNNER: &str = "playground-runner:archetype/runner";
 const CARBINE: &str = "playground-rifle:weapon/carbine";
 const BUGGY: &str = "playground-buggy:vehicle/buggy";
 const BOT: &str = "bot.blockhead";
+const STOMPER: &str = "playground-stomper:bot/stomper";
+const STOMPER_BODY: &str = "playground-stomper:archetype/stomper";
 
 /// The Add-Ons, by id: their folder under `packages/` and side.
-const ADD_ONS: [(&str, &str, Side); 6] = [
+const ADD_ONS: [(&str, &str, Side); 8] = [
     (
         "playground-runner",
         "playground/playground-runner",
@@ -55,6 +57,16 @@ const ADD_ONS: [(&str, &str, Side); 6] = [
         Side::Shared,
     ),
     ("blockhead_bot", "blockhead_bot", Side::Shared),
+    (
+        "playground-stomper",
+        "playground/playground-stomper",
+        Side::Shared,
+    ),
+    (
+        "playground-stomper-look",
+        "playground/playground-stomper-look",
+        Side::Client,
+    ),
     (
         "playground-mode",
         "playground/playground-mode",
@@ -116,11 +128,18 @@ fn vehicles() -> bri_vehicles::Pack {
         .unwrap()
 }
 
+/// The Blockhead Bot's kinds and the Stomper's, merged as a host merges
+/// every package's.
 fn bot_kinds() -> Vec<bri_sim::bot_kind::BotKind> {
-    let path = packages().join("blockhead_bot/assets/bots.json");
-    bri_sim::bot_kind::BotPack::from_json(&std::fs::read(path).unwrap())
-        .unwrap()
-        .bots
+    let load = |file: &str| {
+        bri_sim::bot_kind::BotPack::from_json(&std::fs::read(packages().join(file)).unwrap())
+            .unwrap()
+    };
+    bri_sim::bot_kind::BotPack::merge([
+        load("blockhead_bot/assets/bots.json"),
+        load("playground/playground-stomper/bots.json"),
+    ])
+    .unwrap()
 }
 
 /// A plate: 1 wide, 0.2 tall, 0.5 deep.
@@ -190,10 +209,15 @@ fn fort(world: &mut World) {
 
 /// A Vehicle Spawn brick holding a Blockhead Bot, off to the side.
 fn bot_spawn(world: &mut World, at: [f32; 3]) {
+    kind_spawn(world, at, BOT);
+}
+
+/// A Vehicle Spawn brick holding a bot of `kind`.
+fn kind_spawn(world: &mut World, at: [f32; 3], kind: &str) {
     let id = world.next_brick_id;
     let mut brick = Brick::new(ContentRef::Resolved("plate".into()), at, 0);
     brick.vehicle = Some(Box::new(VehicleSpawn {
-        vehicle: ContentRef::Resolved(BOT.into()),
+        vehicle: ContentRef::Resolved(kind.into()),
         recolor: false,
         team: None,
     }));
@@ -241,7 +265,7 @@ impl Game {
         s.set_vehicle_pack(vehicles(), bot_kinds()).unwrap();
         s.set_tool_catalog(ToolCatalog {
             items: [CARBINE.to_string()].into(),
-            vehicles: [BUGGY.to_string(), BOT.to_string()].into(),
+            vehicles: [BUGGY.to_string(), BOT.to_string(), STOMPER.to_string()].into(),
             vehicle_bricks: ["plate".to_string()].into(),
             ..Default::default()
         })
@@ -662,6 +686,55 @@ fn a_blockhead_bot_fights_the_runners() {
         }
     }
     assert!(hurt, "the bot hurt the Runner within a minute");
+}
+
+/// A Stomper, a simple enemy from its own Add-On, is the shared bot brain
+/// with most of it turned off by data alone: no weapons, objectives,
+/// vehicles or teamwork. In the Stomper's own body it walks to a Runner
+/// and stomps them with its body, its hands empty, and never fights
+/// another Stomper.
+#[test]
+fn a_stomper_walks_up_and_stomps_a_runner_with_its_body() {
+    let mut world = World::new("Playground".into(), "playground".into(), vec![[1.0; 4]]);
+    kind_spawn(&mut world, [6.5, 0.1, 2.25], STOMPER);
+    kind_spawn(&mut world, [-6.5, 0.1, 2.25], STOMPER);
+    let mut g = Game::with(world);
+    g.s.set_spawn_points(vec![
+        SPAWN,
+        Vec3::new(8.0, 0.05, 0.0),
+        Vec3::new(-8.0, 0.05, 0.0),
+    ])
+    .unwrap();
+    let p = g.join("Ann");
+    g.steps(60);
+    let bots: Vec<OwnerId> =
+        g.s.names()
+            .keys()
+            .copied()
+            .filter(|o| g.s.is_bot(*o))
+            .collect();
+    assert_eq!(bots.len(), 2, "each spawn brick made a Stomper");
+    for &bot in &bots {
+        assert_eq!(g.body(bot), STOMPER_BODY, "a Stomper plays in its own body");
+    }
+    let mut stomped = false;
+    for _ in 0..60 {
+        g.steps(120);
+        for &bot in &bots {
+            assert_eq!(g.held(bot), None, "a Stomper never takes up a weapon");
+            let v = &g.s.vitals()[&bot];
+            assert!(
+                v.health >= 40.0 || !v.alive,
+                "Stompers never fight each other"
+            );
+        }
+        let v = &g.s.vitals()[&p];
+        if v.health < 100.0 || !v.alive {
+            stomped = true;
+            break;
+        }
+    }
+    assert!(stomped, "a Stomper stomped the Runner within a minute");
 }
 
 /// With no mode and no mini-game, a builder puts the Add-Ons in the world

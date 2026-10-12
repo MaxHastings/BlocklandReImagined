@@ -25,7 +25,9 @@ Five Add-Ons, each standing alone and naming no other except through
 | `playground-runner` | archetype (host) | The Runner body: own size, eyes, speeds and jump, no jets |
 | `playground-rifle` | weapons | The Pulse Carbine: own `*.shape.json` model, magazine of 24, reload, projectile, sounds |
 | `playground-buggy` | vehicles, weapons | A three-seat buggy: own chassis and tires, smashes bricks; the driver steers, the passenger keeps their weapon, a gunner works its rear gun |
-| `playground-mode` | mode | Plays them together with `blockhead_bot`: Runner body, Carbine loadout, respawn rules |
+| `playground-stomper-look` | model (client) | The Stomper's box model: a squat walking mushroom, 1.2 units tall |
+| `playground-stomper` | archetype, bots | A simple enemy: a squat walking mushroom on the shared brain with weapons, objectives, vehicles, teamwork and surprise turned off by data; it stomps with its body. Its body is also a player type |
+| `playground-mode` | mode | Plays them together with `blockhead_bot` and the Stomper: Runner body, Carbine loadout, respawn rules |
 
 ## Matrix
 
@@ -49,6 +51,7 @@ Five Add-Ons, each standing alone and naming no other except through
 | A body brings its own movement (Mario-style jumps, wall kicks) | gap (W3) | Movement is the fixed Blockhead motor plus tuning; the controller design is its own thread |
 | An Add-On owns the HUD or the camera | gap (W6) | No base-HUD replacement or camera ownership seam |
 | Custom NPCs on the shared bot brain | works for bodies, gap for new behaviours (W7) | Bot kinds pick a body and weapons; new behaviours go into the shared brain |
+| A simple enemy: the shared brain cut down by data to wander, chase and hit with its body, hands empty even where the mode hands out guns | works | `a_stomper_walks_up_and_stomps_a_runner_with_its_body`; a kind's `weapons: false` (added for this) keeps its hands empty |
 
 ## Headline scenario: Blockhead, Mario, Warthog, Goombas
 
@@ -69,7 +72,7 @@ code only; the Mario, Warthog, Goomba and tank Add-Ons themselves are Max's.
 | Jump into the Warthog: any body sits in any seat, the passenger keeps their weapon, a gunner seat fires a turret | W2 seats; vehicles (seats, `weapon` seats, turrets already work) | seats for box bodies in W2 |
 | The Warthog drives like a Warthog (loose suspension, drift, chase camera, engine sound) | W8 vehicle feel, W6 camera ownership | not started |
 | The HUD switches with the body and the vehicle (Mario's coins, the Warthog's gun) | W6 HUD regions | not started |
-| Goombas are bots on the one shared brain with their own body (`kind.body`) | W7; bot kinds already pick a body and weapons | works today for box bodies |
+| Goombas are bots on the one shared brain with their own body (`kind.body`) | W7; bot kinds already pick a body and weapons; a plain Goomba is the Stomper's data (`weapons: false`, `melee`, behaviours off) | works for box bodies (`a_stomper_walks_up_and_stomps_a_runner_with_its_body`) |
 | Goombas use rocket launchers and jet around | works today: bots fight with any weapon and jet when their body `can_jet` | works |
 | A Goomba jumps into a tank and shells Mario | works today: bots drive and crew vehicles, and a gunner fights with its seat's gun (`bots/combat.rs`) | needs a tank Add-On to prove it |
 | Rockets blow the brick castle apart | works today: brick damage under mini-game rules | works |

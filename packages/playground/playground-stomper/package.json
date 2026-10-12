@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "id": "playground-stomper",
+  "version": "1.0.0",
+  "api": 1,
+  "name": "Stomper",
+  "description": "A simple enemy: a squat walking mushroom that wanders, chases whoever it sees and stomps them when it reaches them. It has none of the Blockhead Bot's extras: no weapons, objectives, vehicles, teamwork or second thoughts. Its body is also a player type. Part of the Mixed Add-On Playground; it knows nothing about any other Add-On.",
+  "authors": ["Blockland ReImagined"],
+  "license": "CC0-1.0",
+  "provenance": { "source": "original" },
+  "dependencies": { "playground-stomper-look": "^1.0.0" },
+  "provides": [
+    { "kind": "archetype", "id": "playground-stomper:archetype/stomper", "file": "stomper.json" },
+    { "kind": "bots", "id": "playground-stomper:bots/main", "file": "bots.json" }
+  ]
+}

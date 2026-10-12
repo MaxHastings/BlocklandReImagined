@@ -2236,6 +2236,7 @@ impl Session {
         // upgrades in a game with nothing else at stake.
         let wants_arm = driving.is_none()
             && (!can_retaliate || objective.is_none())
+            && self.bots.brains[&bot].kind.weapons
             && self.bots.brains[&bot].kind.weight("arm") > 0.0
             && if can_retaliate {
                 self.game_of(bot).is_some()

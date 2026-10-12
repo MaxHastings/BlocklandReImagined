@@ -158,7 +158,18 @@ impl Session {
         // switching would make the package drop the actual held participant.
         let hold_sequence =
             self.bot_weapon(bot).is_some_and(|w| w.hold) && self.held_by(bot).is_some();
-        let native = if hold_sequence {
+        let weapons = self.bots.brains[&bot].kind.weapons;
+        // A kind without hand weapons puts away any the rules gave it.
+        if !weapons
+            && !hold_sequence
+            && self
+                .weapons
+                .actor(ActorId(bot))
+                .is_some_and(|a| a.selected.is_some())
+        {
+            let _ = self.equip_tool(bot, None);
+        }
+        let native = if hold_sequence || !weapons {
             hand_combat::Decision::Unsupported
         } else if let Some(seen) = target {
             let mut combat = std::mem::take(&mut self.bots.brains.get_mut(&bot).unwrap().combat);
@@ -271,6 +282,9 @@ impl Session {
     pub(super) fn bot_weapon(&self, bot: OwnerId) -> Option<Weapon> {
         if let Some(gun) = self.bot_vehicle_weapon(bot) {
             return Some(gun);
+        }
+        if self.bots.brains.get(&bot).is_some_and(|b| !b.kind.weapons) {
+            return None;
         }
         let (image, _) = self.weapons.image_state(ActorId(bot), 0)?;
         // An image whose rules say the bot has no rounds left for it is not
@@ -499,6 +513,10 @@ impl Session {
     /// one already that is as good (the rules may have put it in its hand).
     /// With none that attacks by its data, the first real tool.
     pub(super) fn bot_arm(&mut self, bot: OwnerId) -> Result<()> {
+        // A kind without hand weapons never draws one.
+        if self.bots.brains.get(&bot).is_some_and(|b| !b.kind.weapons) {
+            return Ok(());
+        }
         // Holding or reaching for something with its tool: the tool stays.
         if self.held_by(bot).is_some() || self.is_reaching(bot) {
             return Ok(());

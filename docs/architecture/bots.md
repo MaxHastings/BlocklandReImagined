@@ -917,6 +917,11 @@ its kind and team label. See `bots/looks.rs`.
     hands it fights with its body, from the band its reach gives, hitting
     once every `seconds` and playing `action` on the arms' thread. Damage
     goes through the same rules as a shot.
+  - `weapons` (default true): false keeps its hands empty. It never takes
+    up, draws or fires a hand weapon, and puts away any the rules hand it
+    (a mini-game loadout), so it fights with its `melee` or a vehicle gun
+    it crews. A simple enemy (the Playground's Stomper) is this, `melee`
+    and the opt-out weights in `behaviours`, on the same brain.
   - `moves`: `walk`, or `swim`. A swimmer in water skips the walk grid and
     heads straight for its goal at any depth (jump rises, crouch dives),
     roams up and down as well as across, and every goal is kept inside its
