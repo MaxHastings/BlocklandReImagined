@@ -74,6 +74,7 @@ code only; the Mario, Warthog, Goomba and tank Add-Ons themselves are Max's.
 | A Goomba jumps into a tank and shells Mario | works today: bots drive and crew vehicles, and a gunner fights with its seat's gun (`bots/combat.rs`) | needs a tank Add-On to prove it |
 | Rockets blow the brick castle apart | works today: brick damage under mini-game rules | works |
 | Mario stomps a Goomba (a stomp differs from a bump) | W7 contact information on hooks | not started |
+| A Creeper-style NPC walks up, fuses (swells, hisses) and blows itself up, breaking bricks | W7 ability attack mode; the explosion itself works today (`explode` op with a brick radius, any Add-On explosion look and sound) | brain trigger not started |
 | Bots move with the body they have (a Goomba with Mario-style movement still paths sensibly) | W7 (after W3): the bot brain plans with the Blockhead motor's reach, not an Add-On controller's | not started |
 | Everyone sees it all in multiplayer, late joiners included | every workstream extends the Playground network test | Playground proves it for today's seams |
 
