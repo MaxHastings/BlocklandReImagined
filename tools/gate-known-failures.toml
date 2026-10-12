@@ -60,6 +60,10 @@ reason = "Needs Max's privately converted P90 (BRI_P90_TEST_ROOT); run by hand a
 test = "p90_downloads_to_a_clean_cache_and_equipment_reaches_a_late_joiner"
 reason = "Needs Max's privately converted P90 (BRI_P90_TEST_ROOT); run by hand after tools/build_rallypack_p90.py."
 
+[[skip]]
+test = "bot_switches_from_an_empty_p90_to_its_other_gun_and_never_fires_it_dry"
+reason = "Needs Max's privately converted P90 (BRI_P90_TEST_ROOT); run by hand after tools/build_rallypack_p90.py."
+
 # Test targets GitHub Actions skips because they load generated v20 content,
 # which the runner cannot have. The local gate still runs them. Prefer
 # #[ignore = "requires generated ... content"] on individual tests; list a
@@ -157,7 +161,3 @@ test = "steady_play_builds_and_uploads_nothing_whole::content"
 owner = "v0.2.7 stabilization sweep"
 reason = "The soak's rocket knocks none of its floating test wall out after the v0.2.4 merge; check the wall against the new brick-damage rules."
 
-[[failure]]
-test = "the_bundled_soccer_field_loads_whole_from_load_bricks"
-owner = "v0.2.7 stabilization sweep"
-reason = "Passes once the worlds pack is regenerated (worlds recipe 2); the gate reads the main checkout's content, which still has the old pack."
