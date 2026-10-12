@@ -396,7 +396,15 @@ impl ContentPaths {
 
     /// Hash every package this content loads. Blocking: run it on a worker.
     pub fn environment(&self) -> Result<Environment> {
-        Environment::load(&self.root, &self.packages)
+        let started = std::time::Instant::now();
+        let (environment, read) = Environment::load_counting(&self.root, &self.packages)?;
+        bri_console::echo(format!(
+            "Content hashes: {} packages checked in {} ms, {:.1} MB read",
+            environment.packages.len(),
+            started.elapsed().as_millis(),
+            read as f64 / 1e6
+        ));
+        Ok(environment)
     }
 
     /// Expensive geometry decoding and collider construction belongs on the host

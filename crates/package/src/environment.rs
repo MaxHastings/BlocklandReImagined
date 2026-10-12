@@ -64,12 +64,29 @@ impl Environment {
     }
 
     /// Hash every package in `set` under `root`.
+    /// Files whose length and modification time match the last hash taken
+    /// of them are not read again ([`remember_file_hashes_in`]).
     pub fn load(root: &Path, set: &PackageSet) -> Result<Self> {
+        Ok(Self::load_counting(root, set)?.0)
+    }
+
+    /// [`Self::load`], also returning how many bytes it had to read.
+    pub fn load_counting(root: &Path, set: &PackageSet) -> Result<(Self, u64)> {
+        let mut cache = HASH_CACHE.lock().unwrap_or_else(|e| e.into_inner());
+        let file = cache.file.clone();
+        let hashes = cache.hashes.get_or_insert_with(|| match &file {
+            Some(file) => FileHashes::load(file),
+            None => FileHashes {
+                schema_version: FILE_HASHES_SCHEMA,
+                ..FileHashes::default()
+            },
+        });
+        hashes.read = 0;
         let mut packages = Vec::with_capacity(set.packages.len());
         for entry in &set.packages {
             let dir = package_dir(root, entry)?;
-            let (hash, size) =
-                hash_dir(&dir).with_context(|| format!("Hashing package `{}`", entry.id))?;
+            let (hash, size) = hash_dir_with(&dir, Some(&mut *hashes))
+                .with_context(|| format!("Hashing package `{}`", entry.id))?;
             packages.push(PackageRef {
                 id: entry.id.clone(),
                 version: entry.version.clone(),
@@ -78,11 +95,19 @@ impl Environment {
                 size,
             });
         }
-        Ok(Self {
-            schema_version: ENVIRONMENT_SCHEMA,
-            api: API_LEVEL,
-            packages,
-        })
+        let read = hashes.read;
+        if let Some(file) = &file {
+            // A cache that cannot be written only costs the next run a read.
+            let _ = hashes.save(file);
+        }
+        Ok((
+            Self {
+                schema_version: ENVIRONMENT_SCHEMA,
+                api: API_LEVEL,
+                packages,
+            },
+            read,
+        ))
     }
 
     /// The packages a client loads (shared and client side), which is what a
@@ -289,8 +314,13 @@ pub fn is_os_litter(name: &str) -> bool {
 
 /// Deterministic identity of a package directory: SHA-256 over each file's
 /// relative path (forward slashes), length and SHA-256, in sorted path order.
-/// Symlinks and junctions are refused rather than followed.
+/// Symlinks and junctions are refused rather than followed. Reads every
+/// file: what checks a download uses.
 pub fn hash_dir(root: &Path) -> Result<(String, u64)> {
+    hash_dir_with(root, None)
+}
+
+fn hash_dir_with(root: &Path, mut known: Option<&mut FileHashes>) -> Result<(String, u64)> {
     let mut files = Vec::new();
     let mut pending = vec![root.to_path_buf()];
     while let Some(dir) = pending.pop() {
@@ -326,29 +356,224 @@ pub fn hash_dir(root: &Path) -> Result<(String, u64)> {
     let mut size = 0u64;
     let mut buffer = vec![0u8; 1 << 16];
     for (relative, path) in files {
-        let mut file = fs::File::open(&path)?;
-        let mut hasher = Sha256::new();
-        let mut length = 0u64;
-        loop {
-            let read = file.read(&mut buffer)?;
-            if read == 0 {
-                break;
-            }
-            hasher.update(&buffer[..read]);
-            length += read as u64;
-        }
+        let (length, digest) = match known.as_deref_mut() {
+            Some(known) => known.hash(&path, &mut buffer)?,
+            None => hash_file(&path, &mut buffer)?,
+        };
         total.update(relative.as_bytes());
         total.update([0]);
         total.update(length.to_le_bytes());
-        total.update(hasher.finalize());
+        total.update(digest);
         size += length;
     }
     Ok((hex(&total.finalize()), size))
 }
 
+fn hash_file(path: &Path, buffer: &mut [u8]) -> Result<(u64, [u8; 32])> {
+    let mut file = fs::File::open(path)?;
+    let mut hasher = Sha256::new();
+    let mut length = 0u64;
+    loop {
+        let read = file.read(buffer)?;
+        if read == 0 {
+            break;
+        }
+        hasher.update(&buffer[..read]);
+        length += read as u64;
+    }
+    Ok((length, hasher.finalize().into()))
+}
+
+/// Schema of the file-hash cache [`remember_file_hashes_in`] keeps. A cache
+/// of another schema is ignored and rewritten.
+const FILE_HASHES_SCHEMA: u32 = 1;
+/// A file changed this recently may change again within its timestamp's
+/// resolution without its length or time moving, so its hash is not kept.
+const SETTLED: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// Each package file's SHA-256 with the length and modification time it
+/// had when read. A file whose length and time are unchanged is not read
+/// again: hashing all content on every Host and Join read about 560 MB,
+/// which took 24-27 s from a cold disk.
+#[derive(Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct FileHashes {
+    schema_version: u32,
+    /// Absolute path -> (length, modified in ns since the epoch, SHA-256 hex).
+    files: BTreeMap<String, (u64, u128, String)>,
+    #[serde(skip)]
+    seen: BTreeSet<String>,
+    #[serde(skip)]
+    changed: bool,
+    #[serde(skip)]
+    read: u64,
+}
+
+impl FileHashes {
+    fn load(path: &Path) -> Self {
+        fs::read(path)
+            .ok()
+            .and_then(|bytes| serde_json::from_slice::<Self>(&bytes).ok())
+            .filter(|c| c.schema_version == FILE_HASHES_SCHEMA)
+            .unwrap_or(Self {
+                schema_version: FILE_HASHES_SCHEMA,
+                ..Self::default()
+            })
+    }
+
+    fn hash(&mut self, path: &Path, buffer: &mut [u8]) -> Result<(u64, [u8; 32])> {
+        let key = path.to_string_lossy().into_owned();
+        let meta = fs::metadata(path)?;
+        let modified = meta
+            .modified()
+            .ok()
+            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok());
+        self.seen.insert(key.clone());
+        if let (Some(modified), Some((length, at, digest))) = (modified, self.files.get(&key))
+            && *length == meta.len()
+            && *at == modified.as_nanos()
+            && let Some(digest) = unhex(digest)
+        {
+            return Ok((*length, digest));
+        }
+        let (length, digest) = hash_file(path, buffer)?;
+        self.read += length;
+        let settled = modified.filter(|m| {
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .is_ok_and(|now| now.saturating_sub(*m) >= SETTLED)
+        });
+        // Kept only when the file did not change while it was read.
+        let after = fs::metadata(path)?;
+        match settled {
+            Some(m) if after.len() == length && after.modified().ok() == meta.modified().ok() => {
+                self.files.insert(key, (length, m.as_nanos(), hex(&digest)));
+            }
+            _ => {
+                self.files.remove(&key);
+            }
+        }
+        self.changed = true;
+        Ok((length, digest))
+    }
+
+    fn save(&mut self, path: &Path) -> Result<()> {
+        let before = self.files.len();
+        self.files.retain(|k, _| self.seen.contains(k));
+        if !self.changed && self.files.len() == before {
+            return Ok(());
+        }
+        let bytes = serde_json::to_vec(self)?;
+        let temp = path.with_extension("tmp");
+        fs::write(&temp, bytes)?;
+        fs::rename(&temp, path)?;
+        self.changed = false;
+        Ok(())
+    }
+}
+
+fn unhex(text: &str) -> Option<[u8; 32]> {
+    let mut out = [0u8; 32];
+    if text.len() != 64 {
+        return None;
+    }
+    for (i, byte) in out.iter_mut().enumerate() {
+        *byte = u8::from_str_radix(text.get(i * 2..i * 2 + 2)?, 16).ok()?;
+    }
+    Some(out)
+}
+
+struct HashCache {
+    file: Option<std::path::PathBuf>,
+    hashes: Option<FileHashes>,
+}
+
+static HASH_CACHE: std::sync::Mutex<HashCache> = std::sync::Mutex::new(HashCache {
+    file: None,
+    hashes: None,
+});
+
+/// Keep package file hashes in `file` across runs, so [`Environment::load`]
+/// reads only files that changed since the last time. Without it the hashes
+/// are still kept for the rest of this process.
+pub fn remember_file_hashes_in(file: std::path::PathBuf) {
+    let mut cache = HASH_CACHE.lock().unwrap_or_else(|e| e.into_inner());
+    cache.file = Some(file);
+    cache.hashes = None;
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn aged(path: &Path, bytes: &[u8], seconds_ago: u64) {
+        fs::write(path, bytes).unwrap();
+        let at = std::time::SystemTime::now() - std::time::Duration::from_secs(seconds_ago);
+        fs::File::options()
+            .write(true)
+            .open(path)
+            .unwrap()
+            .set_modified(at)
+            .unwrap();
+    }
+
+    #[test]
+    fn kept_file_hashes_skip_unchanged_files_and_reread_changed_ones() {
+        let root = std::env::temp_dir().join(format!("bri-hashes-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join("pack/sub")).unwrap();
+        aged(&root.join("pack/a.json"), b"alpha", 60);
+        aged(&root.join("pack/sub/b.bin"), &[7u8; 5000], 60);
+        let pack = root.join("pack");
+        let cache_file = root.join("hashes.json");
+        let mut hashes = FileHashes::load(&cache_file);
+        let first = hash_dir_with(&pack, Some(&mut hashes)).unwrap();
+        assert_eq!(
+            first,
+            hash_dir(&pack).unwrap(),
+            "same identity as a full read"
+        );
+        assert_eq!(hashes.read, 5005);
+        hashes.save(&cache_file).unwrap();
+
+        // A later run reads nothing for the same files.
+        let mut hashes = FileHashes::load(&cache_file);
+        assert_eq!(hash_dir_with(&pack, Some(&mut hashes)).unwrap(), first);
+        assert_eq!(hashes.read, 0);
+
+        // A changed file is read again, even at the same length.
+        aged(&root.join("pack/a.json"), b"bravo", 30);
+        let second = hash_dir_with(&pack, Some(&mut hashes)).unwrap();
+        assert_eq!(second, hash_dir(&pack).unwrap());
+        assert_ne!(second, first);
+        assert_eq!(hashes.read, 5);
+
+        // A file written just now is hashed but not kept: it may change
+        // again inside its timestamp's resolution.
+        fs::write(root.join("pack/a.json"), b"charl").unwrap();
+        hashes.read = 0;
+        assert_eq!(
+            hash_dir_with(&pack, Some(&mut hashes)).unwrap(),
+            hash_dir(&pack).unwrap()
+        );
+        assert_eq!(hashes.read, 5);
+        hashes.read = 0;
+        hash_dir_with(&pack, Some(&mut hashes)).unwrap();
+        assert_eq!(hashes.read, 5);
+
+        // A deleted file leaves the cache when it is next saved.
+        fs::remove_file(root.join("pack/sub/b.bin")).unwrap();
+        hashes.seen.clear();
+        hash_dir_with(&pack, Some(&mut hashes)).unwrap();
+        hashes.save(&cache_file).unwrap();
+        assert!(
+            !FileHashes::load(&cache_file)
+                .files
+                .keys()
+                .any(|k| k.ends_with("b.bin"))
+        );
+        let _ = fs::remove_dir_all(&root);
+    }
 
     fn package(id: &str, side: Side, hash: u8) -> PackageRef {
         PackageRef {
