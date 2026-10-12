@@ -54,11 +54,29 @@ def package_dirs(content):
     return [p['dir'] for p in listing['packages']], own
 
 
+def empty_environments(content):
+    """The environments packs built without a Steam Blockland folder: they
+    offer nothing, and players would miss Steam's skies, grounds and waters."""
+    _, listing, _ = content_packs.package_list(content)
+    empty = []
+    for package in listing['packages']:
+        manifest = content / package['dir'] / 'environments.json'
+        if package.get('role') == 'environments' and manifest.is_file():
+            data = json.loads(manifest.read_text(encoding='utf-8'))
+            if not any(data.get(kind) for kind in ('skies', 'grounds', 'waters')):
+                empty.append(package['dir'])
+    return empty
+
+
 def pack(content, out):
     dirs, has_override = package_dirs(content)
     missing = [d for d in dirs if not (content / d).is_dir()]
     if missing:
         fail(f'{content} is missing {", ".join(missing)}. Run python tools/bootstrap.py first.')
+    empty = empty_environments(content)
+    if empty:
+        fail(f'{", ".join(empty)} has no Steam skies, grounds or waters. Run '
+             'python tools/bootstrap.py --steam "<Steam Blockland folder>" once first.')
     out.parent.mkdir(parents=True, exist_ok=True)
     head = subprocess.run(['git', 'rev-parse', '--short=9', 'HEAD'], cwd=REPO,
                           capture_output=True, text=True).stdout.strip()

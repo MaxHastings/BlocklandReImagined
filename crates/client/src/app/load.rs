@@ -149,6 +149,7 @@ impl App {
             weather,
             gpu: GpuState {
                 weather_renderer: None,
+                weather_revision: 0,
                 renderer: None,
                 shell_gpu: None,
                 hidden_lines: None,
@@ -238,6 +239,7 @@ impl App {
             scene: SceneState {
                 cpu_scene: None,
                 cpu_terrain: Vec::new(),
+                scenery: Default::default(),
                 chunks_left_out: BTreeSet::new(),
                 shape_indices: BTreeMap::new(),
                 meshes: None,

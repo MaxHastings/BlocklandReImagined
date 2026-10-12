@@ -51,6 +51,7 @@ mod probes;
 mod render;
 mod saves;
 mod scene;
+mod scenery;
 mod session;
 mod view;
 use addons::*;
@@ -118,6 +119,8 @@ struct Prepared {
     foliage: crate::foliage::PreparedFoliage,
     map_id: String,
     waters: Vec<bri_content::water::Water>,
+    /// The plate a flat map stands on.
+    plate: Option<bri_content::scene::Plate>,
     scene: SceneData,
     terrain: Vec<Arc<bri_render::terrain_scene::TerrainScene>>,
     meshes: Arc<Meshes>,
@@ -438,6 +441,7 @@ fn prepare_map(
         foliage,
         map_id: map,
         waters: native_map.waters,
+        plate: native_map.plate,
         scene: visual.scene,
         terrain: visual.terrain.into_iter().map(Arc::new).collect(),
         meshes,
@@ -1563,6 +1567,7 @@ impl PlatformApp for App {
         self.gpu.opened = true;
         self.gpu.device = Some((device.clone(), queue.clone(), format));
         self.item_ui.gpu_stopped();
+        self.scene.scenery.gpu_stopped();
         self.world_items.clear_gpu();
         crate::vehicles::ClientVehicles::gpu_stopped(&mut self.vehicle_assets);
         self.fx.explosion_shapes.gpu_stopped();
@@ -1614,6 +1619,7 @@ impl PlatformApp for App {
         self.addons.client_code.gpu_stopped();
         self.addons.item_skins.gpu_stopped();
         let weather_limits = bri_weather::WeatherLimits::default();
+        self.gpu.weather_revision = self.weather.revision;
         self.gpu.weather_renderer = Some(bri_weather::gpu::WeatherRenderer::new(
             device,
             queue,

@@ -845,7 +845,9 @@ impl App {
             }
             self.scene.scene_map = Some(prepared.map_id.clone());
             self.foliage.set_map(prepared.foliage);
-            self.weather.set_map(&prepared.map_id, prepared.waters)?;
+            self.weather
+                .set_map(&prepared.map_id, prepared.waters.clone())?;
+            self.scene.scenery.set_map(prepared.plate, prepared.waters);
             self.lighting.light_volume = prepared.light_volume;
             self.scene.cpu_scene = Some(prepared.scene);
             self.scene.shape_indices = prepared.shape_indices;

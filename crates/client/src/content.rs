@@ -69,6 +69,10 @@ pub struct ContentPaths {
     /// content again makes new paths, so nothing outlives the packs it
     /// was built from.
     pub(crate) shared: Arc<SharedLoads>,
+    /// The Environment window's Steam skies, grounds and waters (empty
+    /// when setup had no Steam release); None for a package list without
+    /// that role.
+    pub environments: Option<PathBuf>,
 }
 
 /// See [`ContentPaths::shared`].
@@ -343,6 +347,7 @@ impl ContentPaths {
             vehicles: role("vehicles")?,
             events: role("events")?,
             tutorial: role("tutorial")?,
+            environments: role("environments").ok(),
             weapon_extras: bri_net::content_identity::kind_providers(
                 &root,
                 packages,
@@ -386,6 +391,10 @@ impl ContentPaths {
                 &self.packages,
             )?,
             weapons: self.weapon_content()?,
+            environments: std::sync::Arc::new(bri_net::map_content::environments(
+                &self.root,
+                &self.packages,
+            )?),
             definitions: Default::default(),
         };
         *kept = Some(content.clone());

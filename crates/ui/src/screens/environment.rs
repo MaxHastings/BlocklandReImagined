@@ -7,7 +7,7 @@
 //! player.
 use super::*;
 use crate::models::admin::{AdminAction, AdminFeature};
-use crate::models::environment::{ColorField, NumberField, hsv, rgb};
+use crate::models::environment::{ChoiceKind, ColorField, NumberField, hsv, rgb};
 use crate::view::EventKind;
 use bri_console::Clamp;
 use bri_content::atmosphere::Settings;
@@ -76,6 +76,39 @@ fn color_button(r: Rect, name: &str) -> Control {
     ));
     b
 }
+/// A Sky, Ground or Water button: the picked one's picture, the whole of
+/// it clickable, its name beneath (two lines at most).
+fn choice_button(r: Rect, name: &str, label_width: i32) -> Vec<Control> {
+    let mut b = button("BlockButtonProfile", r, "base/client/ui/button1", "", name);
+    b.name = Some(name.into());
+    b.children.push(named(
+        ctrl(
+            "GuiBitmapCtrl",
+            "GuiDefaultProfile",
+            Rect::new(4, 4, r.w - 8, r.h - 8),
+        ),
+        &format!("{name}_Icon"),
+    ));
+    let mut label = named(
+        text(
+            "GuiMLTextProfile",
+            Rect::new(r.x, r.y + r.h + 2, label_width, 30),
+            "",
+        ),
+        &format!("{name}_Name"),
+    );
+    label.class = "GuiMLTextCtrl".into();
+    vec![b, label]
+}
+fn choice_name(kind: ChoiceKind) -> &'static str {
+    match kind {
+        ChoiceKind::Sky => "EnvSky",
+        ChoiceKind::Ground => "EnvGround",
+        ChoiceKind::Water => "EnvWater",
+    }
+}
+const CHOICE_KINDS: [ChoiceKind; 3] = ChoiceKind::ALL;
+
 /// Light and dark squares behind a colour with alpha.
 fn checker(r: Rect) -> Vec<Control> {
     const CELL: i32 = 6;
@@ -103,7 +136,7 @@ enum Row {
     Color(ColorField),
     VignetteMultiply,
 }
-const ROWS: [Row; 16] = [
+const ROWS: [Row; 20] = [
     Row::DayCycle,
     Row::Number(NumberField::DayLength),
     Row::Number(NumberField::TimeOfDay),
@@ -120,6 +153,10 @@ const ROWS: [Row; 16] = [
     Row::Color(ColorField::SkyColor),
     Row::Color(ColorField::Vignette),
     Row::VignetteMultiply,
+    Row::Color(ColorField::GroundColor),
+    Row::Number(NumberField::WaterHeight),
+    Row::Color(ColorField::WaterColor),
+    Row::Color(ColorField::UnderwaterColor),
 ];
 const ROW_HEIGHT: i32 = 28;
 /// The favourites slots' list (Add-On Settings keeps its favourites the
@@ -128,7 +165,7 @@ const FAVS: &str = "EnvFavs";
 const FAV_SLOTS: u8 = 10;
 /// How long the rows stay still before a change goes to the host.
 const LIVE_DELAY_MS: u64 = 250;
-const COLOR_FIELDS: [ColorField; 7] = [
+const COLOR_FIELDS: [ColorField; 10] = [
     ColorField::DirectLight,
     ColorField::AmbientLight,
     ColorField::ShadowColor,
@@ -136,6 +173,9 @@ const COLOR_FIELDS: [ColorField; 7] = [
     ColorField::FogColor,
     ColorField::SkyColor,
     ColorField::Vignette,
+    ColorField::GroundColor,
+    ColorField::WaterColor,
+    ColorField::UnderwaterColor,
 ];
 fn number_name(f: NumberField, page: &str) -> String {
     format!("Env{page}_{f:?}")
@@ -218,11 +258,26 @@ impl Environment {
                 f.range(),
             ));
         }
+        // Sky, Ground and Water: pictures to pick from, as v21's Simple
+        // tab has. Ground and Water cover a flat map's plate.
+        for (i, kind) in CHOICE_KINDS.into_iter().enumerate() {
+            let x = 215 + i as i32 * 67;
+            simple.children.push(text(
+                "GuiTextProfile",
+                Rect::new(x, 150, 64, 18),
+                &format!("{}:", kind.label()),
+            ));
+            simple.children.extend(choice_button(
+                Rect::new(x, 170, 60, 60),
+                choice_name(kind),
+                64,
+            ));
+        }
         let mut hint = text(
             "GuiMLTextProfile",
-            Rect::new(0, 232, 416, 60),
-            "Pick a look: everyone in the server sees it as you change it. \
-             Advanced sets each value; Reset gives the map its own look back.",
+            Rect::new(0, 262, 416, 44),
+            "Pick a look, sky, ground or water: everyone in the server sees it as \
+             you change it. Advanced sets each value; Reset gives the map its own back.",
         );
         hint.class = "GuiMLTextCtrl".into();
         simple.children.push(hint);
@@ -422,7 +477,11 @@ impl Environment {
         }
         for f in NumberField::ALL {
             let value = m.number(f);
-            let active = cycle || !matches!(f, NumberField::DayLength | NumberField::TimeOfDay);
+            let active = match f {
+                NumberField::DayLength | NumberField::TimeOfDay => cycle,
+                NumberField::WaterHeight => m.row_active(ChoiceKind::Water),
+                _ => true,
+            };
             for page in ["S", "A"] {
                 let name = number_name(f, page);
                 if let Some(n) = v.id(&name) {
@@ -435,12 +494,47 @@ impl Environment {
             }
         }
         for f in COLOR_FIELDS {
+            let active = f.scenery().is_none_or(|kind| m.row_active(kind));
+            if let Some(n) = v.id(&color_name(f)) {
+                v.set_active(n, active);
+            }
             if let Some(n) = v.id(&format!("{}_Swatch", color_name(f))) {
-                v.state(n).tint = Some(rgba(m.color(f)));
+                let mut c = m.color(f);
+                if !active {
+                    c[3] = 0.0;
+                }
+                v.state(n).tint = Some(rgba(c));
             }
         }
         if let Some(n) = v.id("EnvPresets") {
             v.select(n, m.current_preset().map(|i| i as i64));
+        }
+        for kind in CHOICE_KINDS {
+            let name = choice_name(kind);
+            let offered = m.choices.offered(kind);
+            if let Some(n) = v.id(name) {
+                v.set_active(n, offered);
+            }
+            if let Some(n) = v.id(&format!("{name}_Icon")) {
+                v.set_icon(
+                    n,
+                    &if offered {
+                        m.choice_icon(kind)
+                    } else {
+                        Default::default()
+                    },
+                );
+            }
+            if let Some(n) = v.id(&format!("{name}_Name")) {
+                let label = if offered {
+                    m.choice_label(kind)
+                } else if kind != ChoiceKind::Sky && !m.choices.list(kind).is_empty() {
+                    "Flat maps only".into()
+                } else {
+                    "None".into()
+                };
+                v.set_text(n, label);
+            }
         }
         if let Some(n) = v.id("EnvApply") {
             v.set_active(
@@ -471,6 +565,7 @@ impl Environment {
     fn close(core: &mut Core) {
         core.environment.end();
         core.pop(ScreenId::AdminColorPicker);
+        core.pop(ScreenId::AdminEnvironmentChoice);
         core.pop(ScreenId::AdminEnvironment);
     }
 }
@@ -579,6 +674,12 @@ impl Screen for Environment {
                 if let Some(f) = COLOR_FIELDS.into_iter().find(|f| command == color_name(*f)) {
                     core.environment.picking = Some(f);
                     core.push(ScreenId::AdminColorPicker);
+                } else if let Some(kind) = CHOICE_KINDS
+                    .into_iter()
+                    .find(|k| command == choice_name(*k))
+                {
+                    core.environment.choosing = Some(kind);
+                    core.push(ScreenId::AdminEnvironmentChoice);
                 }
             }
         }
@@ -783,5 +884,133 @@ impl Screen for ColorPicker {
             _ => {}
         }
         self.show();
+    }
+}
+
+/// v21's sky, ground and water pickers: a grid of pictures, the map's own
+/// first.
+/// A pick goes into the rows at once (and live to the host) and closes it.
+pub struct ChoicePicker {
+    view: View,
+    kind: ChoiceKind,
+    /// What each cell picks; None the map's own.
+    cells: Vec<Option<String>>,
+}
+const CHOICE_COLUMNS: usize = 4;
+const CHOICE_CELL: (i32, i32) = (84, 112);
+impl ChoicePicker {
+    pub fn new(core: &mut Core) -> Self {
+        let kind = core.environment.choosing.unwrap_or(ChoiceKind::Sky);
+        let m = &core.environment;
+        let own = match kind {
+            ChoiceKind::Sky => m
+                .choices
+                .map_sky
+                .as_ref()
+                .and_then(|id| m.choices.skies.iter().find(|c| &c.id == id))
+                .map(|c| c.icon.clone())
+                .unwrap_or_default(),
+            // A flat map's own plate draws nothing; its own water is
+            // whatever the map had (Slate Sea's, Slate Storm's, or none).
+            ChoiceKind::Ground | ChoiceKind::Water => Default::default(),
+        };
+        let mut cells = vec![(None, "Map's own".to_string(), own)];
+        cells.extend(
+            m.choices
+                .list(kind)
+                .iter()
+                .map(|c| (Some(c.id.clone()), c.label.clone(), c.icon.clone())),
+        );
+        let rows = cells.len().div_ceil(CHOICE_COLUMNS) as i32;
+        let (mut root, mut win) = dialog(kind.label(), 372, 340);
+        let mut grid_scroll = scroll("EnvChoiceScroll", Rect::new(10, 30, 352, 260));
+        let mut grid = named(
+            ctrl(
+                "GuiControl",
+                "GuiDefaultProfile",
+                Rect::new(0, 0, 336, rows * CHOICE_CELL.1 + 4),
+            ),
+            "EnvChoiceGrid",
+        );
+        for (i, (_, label, _)) in cells.iter().enumerate() {
+            let x = (i % CHOICE_COLUMNS) as i32 * CHOICE_CELL.0 + 2;
+            let y = (i / CHOICE_COLUMNS) as i32 * CHOICE_CELL.1 + 2;
+            let name = format!("EnvChoice{i}");
+            let mut cell = choice_button(Rect::new(x, y, 76, 76), &name, 80);
+            if let Some(n) = cell.get_mut(1) {
+                n.text = Some(label.replace(['<', '>'], ""));
+                n.extent[0] = 80;
+            }
+            grid.children.extend(cell);
+        }
+        grid_scroll.children.push(grid);
+        win.children.push(grid_scroll);
+        win.children.push(push_button(
+            Rect::new(264, 298, 98, 28),
+            "Close",
+            "EnvChoiceClose",
+        ));
+        root.children.push(win);
+        let mut view = View::new(&root);
+        view.measure(&core.pack);
+        let picked = m.choice(kind);
+        for (i, (id, _, icon)) in cells.iter().enumerate() {
+            if let Some(n) = view.id(&format!("EnvChoice{i}_Icon")) {
+                view.set_icon(n, icon);
+            }
+            // The one drawn now cannot be picked again.
+            if let Some(n) = view.id(&format!("EnvChoice{i}")) {
+                view.set_active(n, *id != picked);
+            }
+        }
+        Self {
+            view,
+            kind,
+            cells: cells.into_iter().map(|(id, _, _)| id).collect(),
+        }
+    }
+    fn close(core: &mut Core) {
+        core.environment.choosing = None;
+        core.pop(ScreenId::AdminEnvironmentChoice);
+    }
+}
+impl Screen for ChoicePicker {
+    fn id(&self) -> ScreenId {
+        ScreenId::AdminEnvironmentChoice
+    }
+    fn view(&self) -> &View {
+        &self.view
+    }
+    fn view_mut(&mut self) -> &mut View {
+        &mut self.view
+    }
+    fn on_key(&mut self, key: Key, _mods: Modifiers, core: &mut Core) -> bool {
+        if key == Key::Escape {
+            Self::close(core);
+            return true;
+        }
+        false
+    }
+    fn on_event(&mut self, ev: &ViewEvent, core: &mut Core) {
+        if ev.kind == EventKind::Close {
+            Self::close(core);
+            return;
+        }
+        if ev.kind != EventKind::Click || !self.view.node(ev.node).state.active {
+            return;
+        }
+        let command = command_of(&self.view, ev.node);
+        if command == "EnvChoiceClose" {
+            Self::close(core);
+            return;
+        }
+        if let Some(id) = command
+            .strip_prefix("EnvChoice")
+            .and_then(|i| i.parse::<usize>().ok())
+            .and_then(|i| self.cells.get(i))
+        {
+            core.environment.set_choice(self.kind, id.clone());
+            Self::close(core);
+        }
     }
 }

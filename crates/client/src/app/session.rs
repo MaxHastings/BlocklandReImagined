@@ -139,6 +139,7 @@ impl App {
         self.scene.cpu_scene = None;
         self.lighting.light_volume = LightVolumeState::default();
         self.scene.cpu_terrain.clear();
+        self.scene.scenery.reset();
         self.gpu.gpu_scene = None;
         self.gpu.gpu_terrain.clear();
         self.scene.meshes = None;
@@ -516,6 +517,7 @@ impl App {
                     )?;
                 }
                 let waters = loaded.simulation.waters.clone();
+                let plate = loaded.plate;
                 let foliage = crate::foliage::PreparedFoliage::load(
                     &paths.foliage,
                     &base_map,
@@ -528,6 +530,7 @@ impl App {
                         foliage,
                         map_id: base_map.clone(),
                         waters,
+                        plate,
                         scene: visual.scene,
                         terrain: visual.terrain.into_iter().map(Arc::new).collect(),
                         meshes,

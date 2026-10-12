@@ -126,6 +126,20 @@ def remember_v20(content, v20):
     (folder / 'v20-path.txt').write_text(str(v20) + '\n', encoding='utf-8')
 
 
+def remembered_steam(content):
+    path = content / '_regeneration' / 'steam-path.txt'
+    try:
+        return pathlib.Path(path.read_text(encoding='utf-8').strip())
+    except OSError:
+        return None
+
+
+def remember_steam(content, steam):
+    folder = content / '_regeneration'
+    folder.mkdir(parents=True, exist_ok=True)
+    (folder / 'steam-path.txt').write_text(str(steam) + '\n', encoding='utf-8')
+
+
 def install_originals(v20, content):
     """The bundled original Add-Ons (tools/addon_bundle.py) this machine has
     copies of, imported into content/addons as a release carries them. A
@@ -144,6 +158,9 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('--v20', type=pathlib.Path,
                         help='Blockland v20 folder (default: $BRI_V20, then the last one used)')
+    parser.add_argument('--steam', type=pathlib.Path,
+                        help="Blockland's Steam release folder, for the Environment window's skies, grounds "
+                             'and waters (optional; default: $BRI_STEAM, then the last one used)')
     parser.add_argument('--content', type=pathlib.Path, default=REPO / 'content',
                         help='content directory to fill (default: <repo>/content)')
     parser.add_argument('--keep-stale', action='store_true', help='keep packs whose inputs changed')
@@ -175,7 +192,16 @@ def main():
     if not regen.valid_v20(v20):
         regen.fail(f'{v20} is not a Blockland v20 folder: it needs base/, Add-Ons/ and saves/.')
     remember_v20(content, v20)
-    regen.regenerate(v20, content, regen.STEPS, keep_stale=args.keep_stale, force=args.rebuild)
+    steam = args.steam or (pathlib.Path(os.environ['BRI_STEAM']) if os.environ.get('BRI_STEAM') else None) \
+        or remembered_steam(content)
+    if steam is not None:
+        steam = steam.expanduser().resolve()
+        if not regen.valid_steam(steam):
+            regen.fail(f'{steam} is not a Blockland install: it needs base/ and Add-Ons/.')
+        remember_steam(content, steam)
+    else:
+        print("No Steam Blockland folder given (--steam): the Environment window offers the v20 maps' skies only.")
+    regen.regenerate(v20, content, regen.STEPS, keep_stale=args.keep_stale, force=args.rebuild, steam=steam)
     install_originals(v20, content)
     client = REPO / 'target' / 'release' / ('bri-client' + regen.EXE)
     print('\nSetup complete. Start the game with:')
