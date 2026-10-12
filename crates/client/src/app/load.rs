@@ -238,6 +238,7 @@ impl App {
             scene: SceneState {
                 cpu_scene: None,
                 cpu_terrain: Vec::new(),
+                scenery: Default::default(),
                 chunks_left_out: BTreeSet::new(),
                 shape_indices: BTreeMap::new(),
                 meshes: None,

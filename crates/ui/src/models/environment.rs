@@ -2,6 +2,7 @@
 //! natively): what the host set over the map's own sun, sky and fog, and
 //! the admin's draft of a change. Nothing here has authority: the host
 //! checks the rank and validates every value when the draft is applied.
+use crate::api::IconRef;
 use bri_console::Clamp;
 use bri_content::atmosphere::{self, Authored, DayCycle, Settings, SunFlare, Vignette};
 use serde::{Deserialize, Serialize};
@@ -129,6 +130,48 @@ impl NumberField {
     }
 }
 
+/// Which picture picker is open: the sky's or the ground's.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ChoiceKind {
+    Sky,
+    Ground,
+}
+impl ChoiceKind {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Sky => "Sky",
+            Self::Ground => "Ground",
+        }
+    }
+}
+/// A sky or ground to pick: its name in the settings, what the picker
+/// calls it, and its picture.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Choice {
+    pub id: String,
+    pub label: String,
+    pub icon: IconRef,
+}
+/// What the Sky and Ground pickers offer on the map being played. The
+/// client fills it from its own content when a map loads.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Choices {
+    pub skies: Vec<Choice>,
+    pub grounds: Vec<Choice>,
+    /// The sky the map draws on its own, when it is one of `skies`.
+    pub map_sky: Option<String>,
+    /// The map has terrain for a ground to cover.
+    pub has_ground: bool,
+}
+impl Choices {
+    pub fn list(&self, kind: ChoiceKind) -> &[Choice] {
+        match kind {
+            ChoiceKind::Sky => &self.skies,
+            ChoiceKind::Ground => &self.grounds,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct EnvironmentModel {
     /// The host's environment, once in a game.
@@ -137,6 +180,10 @@ pub struct EnvironmentModel {
     pub draft: Option<Settings>,
     /// The colour the picker is editing.
     pub picking: Option<ColorField>,
+    /// The picture picker open, if any.
+    pub choosing: Option<ChoiceKind>,
+    /// The skies and grounds this map offers.
+    pub choices: Choices,
     /// Counts changes, so open windows know to show them.
     pub revision: u64,
 }
@@ -151,6 +198,7 @@ impl EnvironmentModel {
                 .unwrap_or_default(),
         );
         self.picking = None;
+        self.choosing = None;
     }
     /// Put the rows back as they were (a colour picker cancelled).
     pub fn restore_draft(&mut self, draft: Option<Settings>) {
@@ -161,6 +209,59 @@ impl EnvironmentModel {
         self.revision += 1;
         self.draft = None;
         self.picking = None;
+        self.choosing = None;
+    }
+    /// The map's skies and grounds (a new map, or its pictures ready).
+    pub fn set_choices(&mut self, choices: Choices) {
+        if self.choices != choices {
+            self.revision += 1;
+            self.choices = choices;
+        }
+    }
+    /// The sky or ground the rows pick; None keeps the map's own.
+    pub fn choice(&self, kind: ChoiceKind) -> Option<String> {
+        let s = self.settings();
+        match kind {
+            ChoiceKind::Sky => s.sky,
+            ChoiceKind::Ground => s.ground,
+        }
+    }
+    pub fn set_choice(&mut self, kind: ChoiceKind, id: Option<String>) {
+        self.revision += 1;
+        let s = self.draft.get_or_insert_with(Settings::default);
+        match kind {
+            ChoiceKind::Sky => s.sky = id,
+            ChoiceKind::Ground => s.ground = id,
+        }
+    }
+    /// The picture a picker's button shows: the picked one's, else the
+    /// map's own sky's (a map's ground has no one picture).
+    pub fn choice_icon(&self, kind: ChoiceKind) -> IconRef {
+        let id = self.choice(kind).or(match kind {
+            ChoiceKind::Sky => self.choices.map_sky.clone(),
+            ChoiceKind::Ground => None,
+        });
+        id.and_then(|id| {
+            self.choices
+                .list(kind)
+                .iter()
+                .find(|c| c.id == id)
+                .map(|c| c.icon.clone())
+        })
+        .unwrap_or_default()
+    }
+    /// What a picker's button says: the picked one's name, or that the
+    /// map's own is drawn.
+    pub fn choice_label(&self, kind: ChoiceKind) -> String {
+        match self.choice(kind) {
+            None => "Map's own".into(),
+            Some(id) => self
+                .choices
+                .list(kind)
+                .iter()
+                .find(|c| c.id == id)
+                .map_or(id, |c| c.label.clone()),
+        }
     }
     pub fn apply(&mut self, view: EnvironmentView) {
         self.revision += 1;
@@ -349,15 +450,18 @@ impl EnvironmentModel {
         let color = s.vignette.map_or([0.0, 0.0, 0.0, 0.6], |v| v.color);
         s.vignette = Some(Vignette { color, multiply });
     }
-    /// A Simple tab look: its settings, keeping the day/night cycle.
+    /// A Simple tab look: its settings, keeping the day/night cycle and
+    /// the picked sky and ground (a look is light, not scenery).
     pub fn preset(&mut self, index: usize) {
         let Some((_, look)) = atmosphere::presets().into_iter().nth(index) else {
             return;
         };
-        let cycle = self.settings().day_cycle;
+        let now = self.settings();
         self.revision += 1;
         self.draft = Some(Settings {
-            day_cycle: cycle,
+            day_cycle: now.day_cycle,
+            sky: now.sky,
+            ground: now.ground,
             ..look
         });
     }
@@ -365,6 +469,8 @@ impl EnvironmentModel {
     pub fn current_preset(&self) -> Option<usize> {
         let s = Settings {
             day_cycle: None,
+            sky: None,
+            ground: None,
             ..self.settings()
         };
         atmosphere::presets()
@@ -502,6 +608,43 @@ mod tests {
         assert_eq!(m.draft.as_ref().unwrap().sky_color, Some([1.0, 0.5, 0.0]));
         assert_eq!(m.current_preset(), None);
         m.draft.as_ref().unwrap().validate().unwrap();
+    }
+
+    #[test]
+    fn a_picked_sky_and_ground_outlast_looks_until_reset() {
+        let choice = |id: &str, icon| Choice {
+            id: id.into(),
+            label: id.to_uppercase(),
+            icon: IconRef::External(icon),
+        };
+        let mut m = EnvironmentModel::default();
+        m.apply(view());
+        m.set_choices(Choices {
+            skies: vec![choice("blue", 1), choice("plain", 2)],
+            grounds: vec![choice("sand", 3)],
+            map_sky: Some("blue".into()),
+            has_ground: true,
+        });
+        m.begin();
+        // The map's own: its sky's picture, and no one ground picture.
+        assert_eq!(m.choice_icon(ChoiceKind::Sky), IconRef::External(1));
+        assert_eq!(m.choice_icon(ChoiceKind::Ground), IconRef::None);
+        assert_eq!(m.choice_label(ChoiceKind::Sky), "Map's own");
+        m.set_choice(ChoiceKind::Sky, Some("plain".into()));
+        m.set_choice(ChoiceKind::Ground, Some("sand".into()));
+        assert_eq!(m.choice_icon(ChoiceKind::Sky), IconRef::External(2));
+        assert_eq!(m.choice_label(ChoiceKind::Ground), "SAND");
+        assert!(m.changed());
+        m.preset(2);
+        assert_eq!(m.current_preset(), Some(2));
+        assert_eq!(m.choice(ChoiceKind::Sky).as_deref(), Some("plain"));
+        assert_eq!(m.choice(ChoiceKind::Ground).as_deref(), Some("sand"));
+        m.draft.as_ref().unwrap().validate().unwrap();
+        // A favourite keeps them; Reset gives the map its own.
+        assert_eq!(m.favorite().sky.as_deref(), Some("plain"));
+        m.reset();
+        assert_eq!(m.choice(ChoiceKind::Sky), None);
+        assert_eq!(m.choice(ChoiceKind::Ground), None);
     }
 
     #[test]

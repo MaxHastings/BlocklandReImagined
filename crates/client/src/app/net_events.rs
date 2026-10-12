@@ -850,6 +850,7 @@ impl App {
             self.scene.cpu_scene = Some(prepared.scene);
             self.scene.shape_indices = prepared.shape_indices;
             self.scene.cpu_terrain = prepared.terrain;
+            self.scene.scenery.reset(&self.scene.cpu_terrain);
             self.scene.meshes = Some(prepared.meshes);
             self.scene.mirror_shapes = prepared.mirror_shapes;
             self.scene.mirror_index.clear();

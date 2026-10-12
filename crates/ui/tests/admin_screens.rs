@@ -1596,3 +1596,183 @@ fn change_map_shows_the_picked_maps_picture_content() {
         ),
     ));
 }
+
+/// The Simple tab's Sky and Ground buttons show the picked picture and
+/// open a grid of the map's skies or grounds, the map's own first; a pick
+/// goes into the rows and on to the host like any change.
+#[test]
+fn the_sky_and_ground_pickers_pick_from_pictures() {
+    use bri_content::atmosphere::{Authored, Settings, light_direction};
+    use bri_ui::{
+        api::{ConnectionState, IconRef, Settings as UiSettings, UiUpdate},
+        binds::Platform,
+        geom::Rect,
+        input::{InputEvent, MouseButton},
+        models::environment::{Choice, ChoiceKind, Choices, EnvironmentView},
+        pack::Pack,
+        schema::UiPack,
+        screens::{ScreenId, ctrl, find},
+        ui::{Ui, UiConfig},
+    };
+    use std::{path::PathBuf, rc::Rc};
+    let mut pack = UiPack::default();
+    for name in [
+        "MainMenuGui",
+        "PlayGui",
+        "LoadingGui",
+        "escapeMenu",
+        "adminGui",
+    ] {
+        pack.layouts.insert(
+            name.into(),
+            ctrl("GuiControl", "GuiDefaultProfile", Rect::new(0, 0, 640, 480)),
+        );
+    }
+    let mut ui = Ui::new(
+        Rc::new(Pack::from_parts(pack, PathBuf::new())),
+        UiConfig {
+            size: (640, 480),
+            scale: Some(1.0),
+            platform: Platform::Windows,
+        },
+        UiSettings {
+            binds: Some(vec![]),
+            ..Default::default()
+        },
+    );
+    ui.apply(UiUpdate::Connection(ConnectionState::InGame {
+        server_name: "Test".into(),
+        max_players: 8,
+        local: false,
+        single_player: false,
+        admin: true,
+    }));
+    ui.apply(UiUpdate::Environment(EnvironmentView {
+        authored: Authored {
+            sun_direction: light_direction(90.0, 45.0),
+            direct_light: [0.6; 3],
+            ambient_light: [0.3; 3],
+            fog_start: 0.0,
+            fog_end: 0.0,
+            fog_color: [0.5; 3],
+        },
+        settings: Settings::default(),
+        tick: 0,
+    }));
+    let choice = |id: &str, label: &str, icon| Choice {
+        id: id.into(),
+        label: label.into(),
+        icon: IconRef::External(icon),
+    };
+    let mut choices = Choices {
+        skies: vec![
+            choice("base/data/skies/sky_blue2/resource.dml", "Blue2", 101),
+            choice("plain", "Plain", 102),
+        ],
+        grounds: vec![choice("add-ons/map_kitchen/sand1", "sand1", 103)],
+        map_sky: Some("base/data/skies/sky_blue2/resource.dml".into()),
+        has_ground: false,
+    };
+    ui.core.environment.set_choices(choices.clone());
+    let click = |ui: &mut Ui, screen: ScreenId, key: &str| {
+        let (x, y) = ui
+            .control_center(screen, key)
+            .unwrap_or_else(|| panic!("{key} is not on {screen:?}"));
+        ui.handle_input(InputEvent::MouseMove { x, y });
+        ui.handle_input(InputEvent::MouseDown {
+            button: MouseButton::Left,
+            x,
+            y,
+        });
+        ui.handle_input(InputEvent::MouseUp {
+            button: MouseButton::Left,
+            x,
+            y,
+        });
+        ui.update(16);
+    };
+    // (picture, name, can be clicked) of a picker button.
+    let shown = |ui: &Ui, screen: ScreenId, name: &str| {
+        let view = ui.screen(screen).unwrap().view();
+        let button = find(view, name).unwrap();
+        let icon = find(view, &format!("{name}_Icon")).unwrap();
+        let label = find(view, &format!("{name}_Name")).unwrap();
+        (
+            view.node(icon).state.external_texture,
+            view.text_of(label),
+            view.node(button).state.active,
+        )
+    };
+    let mut snapshot = state(AdminRole::Admin, false);
+    snapshot.supported.insert(AdminFeature::Environment);
+    ui.core.admin.apply(AdminUpdate::State(snapshot)).unwrap();
+    ui.core.push(ScreenId::AdminEnvironment);
+    ui.update(16);
+    let env = ScreenId::AdminEnvironment;
+    let picker = ScreenId::AdminEnvironmentChoice;
+    // The map's own sky's picture; a map without terrain has no ground.
+    assert_eq!(
+        shown(&ui, env, "EnvSky"),
+        (Some(101), "Map's own".into(), true)
+    );
+    assert_eq!(
+        shown(&ui, env, "EnvGround"),
+        (None, "No terrain".into(), false)
+    );
+    // The sky picker: the map's own first (drawn now, so not pickable).
+    click(&mut ui, env, "EnvSky");
+    assert_eq!(ui.top_id(), picker);
+    assert_eq!(
+        shown(&ui, picker, "EnvChoice0"),
+        (Some(101), "Map's own".into(), false)
+    );
+    assert_eq!(
+        shown(&ui, picker, "EnvChoice2"),
+        (Some(102), "Plain".into(), true)
+    );
+    click(&mut ui, picker, "EnvChoice2");
+    assert_eq!(ui.top_id(), env);
+    assert_eq!(ui.core.environment.choice_label(ChoiceKind::Sky), "Plain");
+    assert_eq!(shown(&ui, env, "EnvSky"), (Some(102), "Plain".into(), true));
+    // A map with terrain: its grounds.
+    choices.has_ground = true;
+    ui.core.environment.set_choices(choices);
+    ui.update(16);
+    assert_eq!(
+        shown(&ui, env, "EnvGround"),
+        (None, "Map's own".into(), true)
+    );
+    click(&mut ui, env, "EnvGround");
+    click(&mut ui, picker, "EnvChoice1");
+    assert_eq!(
+        shown(&ui, env, "EnvGround"),
+        (Some(103), "sand1".into(), true)
+    );
+    // The map's own sky back, and the change goes to the host.
+    click(&mut ui, env, "EnvSky");
+    click(&mut ui, picker, "EnvChoice0");
+    ui.core.admin.pending.clear();
+    click(&mut ui, env, "EnvApply");
+    let sent = ui
+        .core
+        .admin
+        .pending
+        .values()
+        .find_map(|a| match a {
+            AdminAction::SetEnvironment { settings } => Some(settings.clone()),
+            _ => None,
+        })
+        .expect("Apply asks the host");
+    assert_eq!(sent.sky, None);
+    assert_eq!(sent.ground.as_deref(), Some("add-ons/map_kitchen/sand1"));
+    // Escape closes the picker and leaves the rows as they are.
+    click(&mut ui, env, "EnvSky");
+    ui.handle_input(InputEvent::KeyDown {
+        key: bri_ui::input::Key::Escape,
+        mods: Default::default(),
+        repeat: false,
+    });
+    ui.update(16);
+    assert_eq!(ui.top_id(), env);
+    assert_eq!(ui.core.environment.choice(ChoiceKind::Sky), None);
+}

@@ -682,12 +682,15 @@ map starts with none set.
 | `visible_distance`, `fog_distance` | units: where fog is complete (20 to 1000) and where it starts (0 to 1000) |
 | `fog_color`, `sky_color` | `[r, g, b]`: the fog, and a tint over the map's sky |
 | `vignette_color`, `vignette_multiply` | `[r, g, b, a]` darkening the screen's edges; `true` multiplies instead of blending |
+| `sky` | a stock map's sky box in place of this map's: its material list in lower case, as the Environment window's Sky picker names it (`"base/data/skies/sunset/resource.dml"`), or `"plain"`, one colour that `sky_color` sets |
+| `ground` | a terrain texture laid over the whole of this map's terrain: its source in lower case (`"add-ons/map_slopes/tticefrosty1"`); maps without terrain keep their floors |
 
 `environment()` reads what is set, as the same keys; unset keys are absent,
 and `time_of_day` is where a cycle is now. A cycle runs on every player's
 clock from the server's tick, so a turning sun sends nothing after it
 starts: use `day_length` for a moving sun rather than setting
-`sun_azimuth` again and again. An Add-On gets 8 changes a second; each is
+`sun_azimuth` again and again. A `sky` or `ground` a player's game does not
+have leaves them the map's own. An Add-On gets 8 changes a second; each is
 sent to every player. Players' own Visible Distance option still caps how
 far they see.
 

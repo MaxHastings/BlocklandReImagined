@@ -99,6 +99,10 @@ impl App {
             self.gpu.gpu_broken.clear();
             self.gpu.gpu_scene = Some(renderer.upload(frame.device, frame.queue, scene)?);
             self.lighting.light_volume.uploaded = false;
+            self.gpu.gpu_terrain.clear();
+        }
+        // The terrain goes up with the map, and again when a ground covers it.
+        if self.gpu.gpu_terrain.is_empty() && !self.scene.cpu_terrain.is_empty() {
             self.gpu.gpu_terrain = self
                 .scene
                 .cpu_terrain
@@ -1498,12 +1502,14 @@ impl App {
             );
             self.scene.cpu_scene = Some(visual.scene);
             self.scene.cpu_terrain = visual.terrain.into_iter().map(Arc::new).collect();
+            self.scene.scenery.reset(&self.scene.cpu_terrain);
             self.scene.shape_indices = visual.shape_indices;
             crate::frame_trace::note("the map's lighting source changed");
             self.gpu.gpu_scene = None;
             self.lighting.reflections = None;
             self.lighting.environment_probe = None;
         }
+        self.update_scenery(frame);
         if self.graphics.lighting != 3 {
             self.lighting
                 .light_volume

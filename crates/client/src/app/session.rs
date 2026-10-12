@@ -139,6 +139,7 @@ impl App {
         self.scene.cpu_scene = None;
         self.lighting.light_volume = LightVolumeState::default();
         self.scene.cpu_terrain.clear();
+        self.scene.scenery.reset(&[]);
         self.gpu.gpu_scene = None;
         self.gpu.gpu_terrain.clear();
         self.scene.meshes = None;
