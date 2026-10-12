@@ -9,7 +9,9 @@ use bri_package_runtime::Catalog;
 use bri_sim::{
     definitions::{Definition, Definitions},
     player::MoveInput,
-    session::{ActionAim, Command, Notice, PackageArg, PackageCommand, PackageSave, Session},
+    session::{
+        ActionAim, Command, Notice, PackageArg, PackageCommand, PackageSave, Reply, Session,
+    },
     simulation::Simulation,
 };
 use bri_world::World;
@@ -400,4 +402,38 @@ fn typed_chat_commands_reach_the_declaring_package() {
     );
     let unknown = s.command(a, 3, typed("nope", &[])).unwrap_err();
     assert!(format!("{unknown:#}").contains("Unknown command: /nope"));
+}
+
+/// A host loop asking for deferred saves gets `Accepted` on the tick and
+/// the same build from `finish` off it (v0.2.10 performance waste audit,
+/// finding 12).
+#[test]
+fn a_deferred_save_is_the_same_build_finished_off_the_tick() {
+    let (mut s, spawns) = session(None);
+    let a = s.join("Saver".into(), spawns[0], true).unwrap();
+    for _ in 0..30 {
+        s.step().unwrap();
+    }
+    let save = Command::SaveBuild {
+        events: true,
+        ownership: false,
+    };
+    let Ok(Reply::Saved(direct)) = s.command(a, 1, save.clone()) else {
+        panic!("a direct save answers with the build");
+    };
+    s.set_deferred_saves(true);
+    assert!(matches!(s.command(a, 2, save), Ok(Reply::Accepted)));
+    let deferred = s
+        .take_deferred_save()
+        .expect("the save is left to finish")
+        .finish()
+        .unwrap();
+    assert!(s.take_deferred_save().is_none());
+    assert_eq!(deferred.world.bricks.len(), direct.world.bricks.len());
+    assert_eq!(deferred.world.owners.len(), direct.world.owners.len());
+    assert_eq!(deferred.minigame, direct.minigame);
+    assert!(
+        deferred.world.bricks.values().all(|b| b.owner == 0),
+        "ownership stripped off the tick too"
+    );
 }
