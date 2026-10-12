@@ -371,11 +371,21 @@ fn capped(counts: &BTreeMap<String, usize>) -> String {
     }
     out.join(", ")
 }
-/// The prints placed bricks name that this server cannot resolve.
-pub fn unresolved_prints<'a>(bricks: impl Iterator<Item = &'a Brick>) -> BTreeMap<String, usize> {
+/// The prints placed bricks name that this server cannot resolve. Saves
+/// keep their print names as written (`2x2f/vent`, `Letters/A`), so a name
+/// counts only when `installed` does not know it (`NOPRINT` never does).
+pub fn unresolved_prints<'a>(
+    bricks: impl Iterator<Item = &'a Brick>,
+    installed: impl Fn(&str) -> bool,
+) -> BTreeMap<String, usize> {
     let mut prints: BTreeMap<String, usize> = BTreeMap::new();
     for brick in bricks {
         if let Some(bri_world::ContentRef::Unresolved(u)) = &brick.print {
+            if u.namespace == "print"
+                && (bri_content::brick_materials::is_no_print(&u.name) || installed(&u.name))
+            {
+                continue;
+            }
             *prints
                 .entry(format!("{}/{}", u.namespace, u.name))
                 .or_default() += 1;

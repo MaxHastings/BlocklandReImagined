@@ -203,7 +203,9 @@ impl Session {
             .into_iter()
             .partition(|b| placeable(b));
         unloaded.extend(still);
-        let prints = crate::simulation::unresolved_prints(world.bricks.values());
+        let prints = crate::simulation::unresolved_prints(world.bricks.values(), |name| {
+            self.tool_catalog.has_print(name)
+        });
         let bricks = Queue {
             left: world.bricks.len() + extra.len(),
             next: 0,
