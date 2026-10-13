@@ -562,6 +562,7 @@ mod tests {
         let costs = crate::route::Costs {
             swim: None,
             jets: None,
+            veer: 0,
         };
         let weapon = s.bot_weapon(bot).unwrap();
         s.bot_stand(bot, seen, weapon, &[seen.owner], feet, &body, &costs, tick)
@@ -596,6 +597,7 @@ mod tests {
         let costs = crate::route::Costs {
             swim: None,
             jets: None,
+            veer: 0,
         };
         let places = s.bot_places(bot, seen, feet, &body, &costs, 1.0, (0.0, 20.0));
         for (option, place) in places.iter().enumerate() {

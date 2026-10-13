@@ -960,4 +960,49 @@ mod tests {
             assert!(!crawls_onto(&t, reach.crawl_step + LEDGE_TOLERANCE * 2.0));
         }
     }
+
+    /// Dropped from `height` over a floor, holding its jets whenever
+    /// `route::brake_fall` says (or never): how fast it meets the floor.
+    fn fall_from(t: &PlayerTuning, height: f32, brake: bool) -> f32 {
+        let mut physics = world(&[]);
+        let mut player = Player::spawn(&mut physics, 1, Vec3::new(0.0, height, 0.0), t.clone())
+            .expect("spawns in the air");
+        let mut down = 0.0;
+        for _ in 0..(TICKS * 30.0) as usize {
+            let state = player.state();
+            if state.grounded {
+                return down;
+            }
+            down = -state.velocity[1];
+            let jet = brake && crate::route::brake_fall(state.feet[1], down, IMPACT, t);
+            step(
+                &mut player,
+                &mut physics,
+                Vec3::ZERO,
+                Press {
+                    jet,
+                    ..Press::default()
+                },
+            );
+        }
+        panic!("never landed from {height}");
+    }
+    /// The speed a fall hurts from (a Blockhead's `minImpactSpeed`).
+    const IMPACT: f32 = 30.0;
+
+    /// A body with jets drops off any height and holds them only near the
+    /// floor, landing slower than a fall hurts; without them it lands hard.
+    #[test]
+    fn jets_held_late_break_a_fall_from_any_height() {
+        let t = standard();
+        assert!(fall_from(&t, 60.0, false) > IMPACT);
+        for height in [16.0, 32.0, 60.0, 150.0] {
+            let landed = fall_from(&t, height, true);
+            assert!(landed < IMPACT, "from {height} it landed at {landed}");
+        }
+        // Nothing to brake: a short drop never fires the jets.
+        assert!(!crate::route::brake_fall(10.0, 5.0, IMPACT, &t));
+        // Far up, the jets wait (energy kept for when they are needed).
+        assert!(!crate::route::brake_fall(100.0, 20.0, IMPACT, &t));
+    }
 }

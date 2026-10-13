@@ -269,8 +269,33 @@ const MELEE_THREAD: u8 = 2;
 /// Emotes a kind may strike: those that are only a look.
 const BOT_EMOTES: [&str; 4] = ["hug", "love", "hate", "confusion"];
 /// Running and gunning, the farthest off its way (cosine) an enemy is shot
-/// at: about 105 degrees, where sideways speed still holds.
-const GUN_BEHIND_COS: f32 = -0.26;
+/// at: about 50 degrees, so a carrier keeps facing (and running) its way
+/// home rather than turning side-on to trade shots.
+const GUN_BEHIND_COS: f32 = 0.64;
+/// The deepest drop a body whose jets break its fall walks off (its walk
+/// grid's `Body::drop`), and the seconds of jetting it must hold for it.
+const JET_DROP: f32 = 32.0;
+const JET_DROP_SECONDS: f32 = 3.0;
+/// Coming down slower than this, no fall is worth braking.
+const BRAKE_FROM: f32 = 8.0;
+/// Farther than this (flat) on foot from an objective's point, a vehicle
+/// may be the way there.
+const OBJECTIVE_DRIVE_FROM: f32 = 32.0;
+/// Nearer than this (flat) to an objective's point that needs only its feet,
+/// it looks at the point; farther, along its way.
+const OBJECTIVE_LOOK_NEAR: f32 = 4.0;
+/// The share of its pace a walker keeps while its facing comes round to the
+/// way it walks: all of it within 45 degrees, falling to `TURN_PACE_LEAST`
+/// facing the other way.
+const TURN_PACE_LEAST: f32 = 0.3;
+fn turn_pace(cos: f32) -> f32 {
+    const FULL: f32 = std::f32::consts::FRAC_1_SQRT_2;
+    if cos >= FULL {
+        1.0
+    } else {
+        TURN_PACE_LEAST + (1.0 - TURN_PACE_LEAST) * ((cos + 1.0) / (FULL + 1.0)).clamp(0.0, 1.0)
+    }
+}
 /// Over how many units past the edge of its stroll a brick bot's urge to
 /// walk home grows to full.
 const STRAY: f32 = 4.0;
@@ -1823,7 +1848,7 @@ impl Session {
         bot: OwnerId,
         feet: Vec3,
         body: &Body,
-        costs: crate::route::Costs,
+        mut costs: crate::route::Costs,
         swim: Option<f32>,
         state: &crate::player::PlayerState,
         tick: u64,
@@ -1851,6 +1876,13 @@ impl Session {
         } else if let Some(goal) = brain.goal {
             let point = goal.point(home);
             if brain.plan.is_empty() && brain.search.is_none() && !brain.settled {
+                // On the way to an objective each bot (each life of it)
+                // leans its own way (`Costs::veer`), so a side spreads over
+                // the ways there instead of filing down one.
+                if matches!(goal, Goal::Objective(_)) {
+                    let life = self.peers.get(&bot).map_or(0, |p| p.combat.spawn_tick);
+                    costs.veer = (bot << 32) ^ life | 1;
+                }
                 brain.search = Some(Search::with(feet, point, SEARCH_BOUND, costs));
             }
             // Where a chase's route ends short of its enemy, and the enemy.
@@ -2101,11 +2133,22 @@ impl Session {
             jets: (walker && !self.seated(bot))
                 .then(|| crate::route::Jets::of(peer.player.tuning(), state.energy, fly_weight))
                 .flatten(),
+            veer: 0,
         };
         let driving = self.bot_vehicle_body(bot);
-        let (feet, body) = driving
+        let (feet, mut body) = driving
             .clone()
             .unwrap_or_else(|| (own_feet, Body::of(peer.player.tuning(), 1.0)));
+        // Jets that break a fall make a high edge a way down, as for a
+        // player: walked off, braked near the floor (`route::brake_fall`).
+        if driving.is_none()
+            && costs
+                .jets
+                .as_ref()
+                .is_some_and(|jets| jets.seconds >= JET_DROP_SECONDS)
+        {
+            body.drop = body.drop.max(JET_DROP);
+        }
         if driving.is_some() {
             let mounted = self.mounted(bot).map(|(vehicle, _)| vehicle);
             let brain = self.bots.brains.get_mut(&bot).unwrap();
@@ -2219,6 +2262,20 @@ impl Session {
             view.enemy
                 .is_none_or(|target| sight.target.is_none_or(|seen| seen.owner == target))
         });
+        // Far on foot from where an objective's next step needs only its
+        // feet (not carrying its delivery yet), a vehicle on the way there is
+        // worth taking as a player would (`bot_interaction`): the
+        // objective's point is where the drive must serve.
+        let objective_to = objective
+            .filter(|view| {
+                view.feet_only()
+                    && !view.committed
+                    && !view.waiting
+                    && driving.is_none()
+                    && !self.seated(bot)
+                    && flat(view.point - feet).length() > OBJECTIVE_DRIVE_FROM
+            })
+            .map(|view| view.point);
         // Objective reservations use the bot itself as their subject. Hand a
         // reservation the objective moved on from back before combat
         // discovery sees it and mistakes it for a failure. Successful policy
@@ -2232,6 +2289,8 @@ impl Session {
             .is_some_and(|claim| {
                 claim.subject == bot
                     && objective.is_some_and(|view| view.resource != Some(claim.resource))
+                    && !(objective_to.is_some()
+                        && matches!(claim.resource, claims::Resource::Seat { .. }))
             })
         {
             self.bots.claims.release_owner(bot);
@@ -2248,7 +2307,13 @@ impl Session {
         let opportunity = if unplanned || objective.is_some_and(|view| view.resource.is_some()) {
             None
         } else {
-            self.bot_interaction(bot, interaction_enemy, objective.is_none(), tick)
+            self.bot_interaction(
+                bot,
+                interaction_enemy,
+                objective.is_none(),
+                objective_to,
+                tick,
+            )
         };
         let objective_holding = objective
             .and_then(|view| view.held)
@@ -3225,14 +3290,33 @@ impl Session {
             && !gunning
             && selected_objective.is_none_or(|view| view.enemy.is_none())
         {
-            let delta = selected_objective
-                .as_ref()
-                .map(|objective| objective.aim - eye);
-            looks.push(act::Look {
-                by: act::Looker::Objective,
-                yaw: delta.map_or(brain.yaw, yaw_to),
-                pitch: delta.map_or(0.0, pitch_to),
-            });
+            // On the way to a step that needs only its feet it faces the
+            // way it walks, as a player does (round a wall, down a stair),
+            // and turns to the point once it is near: not walking sideways
+            // or backwards while it stares at the point through the walls.
+            let along = selected_objective
+                .filter(|view| {
+                    view.feet_only() && flat(view.point - feet).length() > OBJECTIVE_LOOK_NEAR
+                })
+                .and(wanted)
+                .map(|next| flat(next.through.unwrap_or(next.feet) - feet))
+                .filter(|d| d.length() > 0.05);
+            if let Some(d) = along {
+                looks.push(act::Look {
+                    by: act::Looker::Route,
+                    yaw: yaw_to(d),
+                    pitch: 0.0,
+                });
+            } else {
+                let delta = selected_objective
+                    .as_ref()
+                    .map(|objective| objective.aim - eye);
+                looks.push(act::Look {
+                    by: act::Looker::Objective,
+                    yaw: delta.map_or(brain.yaw, yaw_to),
+                    pitch: delta.map_or(0.0, pitch_to),
+                });
+            }
         } else if let Some(seen) = sight.target {
             // A blast hurts all around where it lands: a splash weapon
             // aims at the feet, so a near miss still lands within it.
@@ -3615,6 +3699,32 @@ impl Session {
         if extra.stand {
             proposals.push(act::Proposal::walk(act::Mover::Stand, Vec3::ZERO));
         }
+        // Falling, with jets, too fast to land unhurt: it holds them and
+        // stops walking (they push straight up), as a player breaks a fall.
+        let tuning = self.peers[&bot].player.tuning();
+        if driving.is_none()
+            && swim.is_none()
+            && !wet
+            && !state.grounded
+            && state.velocity[1] < -BRAKE_FROM
+            && kind.weight("fly") > 0.0
+            && tuning.can_jet
+            && state.energy > tuning.min_jet_energy
+            && let Some(safe) = self.bot_safe_drop(bot)
+            && let Some(height) = self.world_ray(feet + Vec3::Y * 0.1, Vec3::NEG_Y, 256.0)
+            && crate::route::brake_fall(
+                height - 0.1,
+                -state.velocity[1],
+                (2.0 * tuning.gravity.max(1.0) * safe).sqrt(),
+                tuning,
+            )
+        {
+            proposals.push(act::Proposal {
+                jet: Some(true),
+                crouch: Some(false),
+                ..act::Proposal::walk(act::Mover::Brake, Vec3::ZERO)
+            });
+        }
         // Walking into something: hop, then plan again, then give up. One
         // judge says whether it is getting anywhere; held back at an edge
         // it is not (safety only takes a walk away, so a walk proposed is
@@ -3707,6 +3817,18 @@ impl Session {
                     .is_some_and(|w| matches!(w.mode, Mode::Jet { .. } | Mode::Leap { .. })),
             },
         );
+        // Facing the way it walks, it turns into a sharp bend (a stair's
+        // landing, a wall's end) before it goes on at full pace, rather than
+        // sidestepping or backing round it while its head comes about.
+        let direction = if controls.by == Some(act::Mover::Route)
+            && self.bots.brains[&bot].acted.look == act::Looker::Route
+            && driving.is_none()
+            && state.grounded
+        {
+            direction * turn_pace(direction.dot(forward))
+        } else {
+            direction
+        };
         let brain = self.bots.brains.get_mut(&bot).unwrap();
         input.forward = direction.dot(forward).clamp(-1.0, 1.0);
         input.right = direction.dot(right).clamp(-1.0, 1.0);

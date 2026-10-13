@@ -45,6 +45,10 @@ pub(super) enum Mover {
     /// Standing still on purpose: a hop straight up, a hand-off, a goof that
     /// stands.
     Stand,
+    /// Falling too fast to land unhurt, with jets that lift it: jets on and
+    /// no walk, so they push straight up and break the fall
+    /// (`route::brake_fall`).
+    Brake,
 }
 
 impl Mover {
@@ -59,6 +63,7 @@ impl Mover {
             Mover::Goof => "goof",
             Mover::Dodge => "dodge",
             Mover::Stand => "stand",
+            Mover::Brake => "brake",
         }
     }
 }

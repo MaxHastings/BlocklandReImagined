@@ -21,6 +21,9 @@ const LOOKAHEAD_POINTS: usize = 24;
 /// How far past its own half-length a driver that only carries its bot to
 /// an enemy stops and gets out: about where the bot fights from on foot.
 const LEAVE_REACH: f32 = 3.0;
+/// How far short of an objective's point (past its standoff) a driver taken
+/// there pulls up and gets out to walk the rest.
+const OBJECTIVE_WALK: f32 = 6.0;
 /// Idle play (`extras`, no enemy about) scores between wandering and
 /// walking home, so any purpose outranks it.
 const IDLE: f32 = 0.2;
@@ -114,6 +117,9 @@ pub(super) enum Want {
     Fight,
     /// Going to look for one (`explore`): a seat is a way there.
     Explore,
+    /// Going where an objective's step needs only its feet: a seat is a way
+    /// there, worth it only when the drive beats the walk.
+    Objective,
     /// Idle play near a player in sight (`extras`).
     Play,
 }
@@ -524,6 +530,10 @@ impl Session {
                 // Complete roles before filling passenger seats. An empty
                 // vehicle needs someone at its controls before a passenger
                 // has a reason to board it.
+                // For an objective only the controls take it there.
+                if want == Want::Objective && !role.controls {
+                    return None;
+                }
                 let utility = if idle {
                     // Idle play: ride along in a teammate's vehicle.
                     let driven = d
@@ -568,7 +578,7 @@ impl Session {
                 // A blow is struck sooner from a seat nearer than the enemy.
                 let strikes = runs_over && feet.distance(point) < feet.distance(enemy);
                 if !idle
-                    && d.weapon.is_none()
+                    && (d.weapon.is_none() || want == Want::Objective)
                     && !strikes
                     && !crate::route::drive_serves(
                         peer.player.tuning().forward,
@@ -587,7 +597,7 @@ impl Session {
                 })
             }
             Resource::Body { .. } => {
-                if want == Want::Explore
+                if matches!(want, Want::Explore | Want::Objective)
                     || d.is_actor()
                     || !v.seats.is_empty()
                     || !(d.shove
@@ -658,27 +668,34 @@ impl Session {
 
     /// `seats`: whether a seat may serve its goal at all (not while it has
     /// a grounded objective, whose own plan decides what it drives).
+    /// `objective_to`: where an objective that needs only its feet takes it;
+    /// a seat is a way there (its own subject, as a place to explore), ahead
+    /// of a fight on the way.
     pub(super) fn bot_interaction(
         &mut self,
         bot: OwnerId,
         enemy: Option<Knowledge>,
         seats: bool,
+        objective_to: Option<Vec3>,
         tick: u64,
     ) -> Option<Opportunity> {
+        let seats = seats || objective_to.is_some();
         let brain = &self.bots.brains[&bot];
         if self.seated(bot) || tick < brain.next_interaction || brain.kind.weight("interact") == 0.0
         {
             self.bots.claims.release_owner(bot);
             return None;
         }
-        // With no enemy known, a seat is a way to where it would look for
-        // one (`explore`, its own subject); with no enemy about, idle play
-        // toward a player in sight (`extras`).
+        // On the way to an objective, a seat is a way there; else with no
+        // enemy known, a way to where it would look for one (`explore`, its
+        // own subject); with no enemy about, idle play toward a player in
+        // sight (`extras`).
         let exploring = brain.explore.to.filter(|_| seats && !brain.tethered());
-        let (subject, toward, want) = match (enemy, exploring) {
-            (Some(enemy), _) => (enemy.subject, enemy.at, Want::Fight),
-            (None, Some(to)) => (bot, to, Want::Explore),
-            (None, None) => match self.bot_idle_mark(bot, tick) {
+        let (subject, toward, want) = match (enemy, exploring, objective_to) {
+            (_, _, Some(to)) => (bot, to, Want::Objective),
+            (Some(enemy), _, None) => (enemy.subject, enemy.at, Want::Fight),
+            (None, Some(to), None) => (bot, to, Want::Explore),
+            (None, None, None) => match self.bot_idle_mark(bot, tick) {
                 Some((mark, at)) => (mark, at, Want::Play),
                 None => {
                     self.bots.claims.release_owner(bot);
@@ -692,7 +709,8 @@ impl Session {
             // Wanted for something else now (another enemy, a look round,
             // an objective's step): handed back, not failed.
             let seat = matches!(claim.resource, Resource::Seat { .. });
-            if claim.subject != subject || seat && !seats || !seat && want == Want::Explore {
+            let seat_only = matches!(want, Want::Explore | Want::Objective);
+            if claim.subject != subject || seat && !seats || !seat && seat_only {
                 self.bots.claims.release_owner(bot);
             }
         }
@@ -759,6 +777,7 @@ impl Session {
                 })
                 .chain(std::iter::once(Resource::Body { vehicle: v.id.0 }))
                 .filter(|r| seats || matches!(r, Resource::Body { .. }))
+                .filter(|r| want != Want::Objective || matches!(r, Resource::Seat { .. }))
             {
                 if let Some(mut o) =
                     self.bot_opportunity(bot, v, resource, (subject, toward), want, tick)
@@ -1085,7 +1104,7 @@ impl Session {
     /// under its whole footprint a step or two ahead.
     /// The deepest fall that does not hurt the bot's body: from its player
     /// type's fall-damage data (the slowest impact that hurts) and gravity.
-    fn bot_safe_drop(&self, bot: OwnerId) -> Option<f32> {
+    pub(super) fn bot_safe_drop(&self, bot: OwnerId) -> Option<f32> {
         let peer = self.peers.get(&bot)?;
         let state = peer.player.state();
         let gravity = peer.player.tuning().gravity.max(1.0);
@@ -1972,10 +1991,19 @@ impl Session {
                     * (1.0 - heading_error.abs() * 0.3).clamp(0.25, crate::route::DRIVE_THROTTLE)
             };
             input.jump = input.forward == 0.0;
-            let leave = carried.is_some_and(|(_, enemy, velocity)| {
-                let toward = flat(enemy - at);
-                toward.length() <= standoff && crate::route::walk_closes(walk, toward, velocity)
-            });
+            // Driven to where its objective's step needs its feet (a flag
+            // to take up): near enough, it pulls up and walks the rest.
+            let brain = &self.bots.brains[&bot];
+            let arrived = behaviour == Behaviour::Objective
+                && brain.goal.is_some_and(|g| {
+                    matches!(g, Goal::Objective(_))
+                        && flat(g.point(brain.home) - at).length() <= standoff + OBJECTIVE_WALK
+                });
+            let leave = arrived
+                || carried.is_some_and(|(_, enemy, velocity)| {
+                    let toward = flat(enemy - at);
+                    toward.length() <= standoff && crate::route::walk_closes(walk, toward, velocity)
+                });
             if leave {
                 input.forward = 0.0;
                 input.jump = true;

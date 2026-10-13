@@ -208,12 +208,18 @@ pub struct Costs {
     pub swim: Option<Swim>,
     /// `None`: no jet legs.
     pub jets: Option<Jets>,
+    /// A seed (0: none) that makes some stretches of the way seem slower
+    /// than they are to this search alone (`nav::Search`), so bots setting
+    /// out from one place to one goal spread over the ways there rather
+    /// than all filing down the shortest. Never cheaper than the truth.
+    pub veer: u64,
 }
 impl Default for Costs {
     fn default() -> Self {
         Self {
             swim: Some(Swim::default()),
             jets: None,
+            veer: 0,
         }
     }
 }
@@ -456,6 +462,38 @@ pub fn jet(
         jump: false,
     }
 }
+
+/// Whether a body coming down at `down` units a second (positive), `height`
+/// above the floor it lands on, must hold its jets now to land no faster
+/// than `safe`: braking from now (its jets push harder the faster it falls,
+/// as the motor's do) would leave it less than a moment's fall to spare.
+/// Braking later saves its energy; a fall that lands unhurt anyway needs
+/// none. False when its jets do not lift it at all.
+pub fn brake_fall(height: f32, down: f32, safe: f32, tuning: &PlayerTuning) -> bool {
+    let g = tuning.gravity;
+    if down <= 0.0 || down * down + 2.0 * g * height.max(0.0) <= safe * safe {
+        return false;
+    }
+    let lift = |v: f32| tuning.jet_acceleration * (1.0 + 0.5 * (v * 0.05).clamp(0.0, 1.0)) - g;
+    if lift(down) <= 0.0 && lift(0.0) <= 0.0 {
+        return false;
+    }
+    // Under what it lands at, with a little to spare.
+    let goal = safe * 0.8;
+    let dt = 1.0 / 120.0;
+    let (mut v, mut h) = (down, height);
+    for _ in 0..1200 {
+        if v <= goal {
+            break;
+        }
+        v -= lift(v) * dt;
+        h -= v * dt;
+    }
+    // A moment of fall in hand: a tenth of a second of it and a unit.
+    h < down * BRAKE_MARGIN_SECONDS + 1.0
+}
+/// Seconds of falling kept in hand when a fall is braked (`brake_fall`).
+const BRAKE_MARGIN_SECONDS: f32 = 0.1;
 
 /// A leap of a route under way: from a standstill at its takeoff, a jump
 /// across open air onto a landing ([`crate::reach::Leaps`]).

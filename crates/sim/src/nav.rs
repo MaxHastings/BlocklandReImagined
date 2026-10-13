@@ -41,6 +41,10 @@ use std::ops::RangeInclusive;
 
 /// Grid spacing, in world units: one brick stud.
 pub const CELL: f32 = 0.5;
+/// A seeded search's most a stretch of way seems slower than it is
+/// ([`Search::veer`]), and the size (in cells) of a patch that seems alike.
+const VEER: f32 = 0.6;
+const VEER_CELLS: i32 = 12;
 /// Moves the grid avoids (`Nav::avoid`) it keeps at most before
 /// forgetting the lapsed ones.
 const MAX_AVOIDED: usize = 4096;
@@ -1553,6 +1557,23 @@ impl Search {
             .fold(Self::estimate(feet, self.goal), f32::min)
             / self.walk_speed
     }
+    /// How much slower than it is the way through `node` seems to this
+    /// search ([`crate::route::Costs::veer`]): a seeded 1 to 1 + [`VEER`],
+    /// alike across a patch of [`VEER_CELLS`] cells, so a whole lane or
+    /// street seems slower or not and different seeds take different ones.
+    fn veer(&self, node: Node) -> f32 {
+        let seed = self.costs.veer;
+        if seed == 0 {
+            return 1.0;
+        }
+        let (x, z) = (node.x.div_euclid(VEER_CELLS), node.z.div_euclid(VEER_CELLS));
+        let mut h = seed ^ ((x as u32 as u64) << 32) ^ (z as u32 as u64);
+        // SplitMix64's finaliser.
+        h = (h ^ (h >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+        h = (h ^ (h >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+        h ^= h >> 31;
+        1.0 + VEER * (h >> 40) as f32 / (1u64 << 24) as f32
+    }
     fn arrived(&self, node: Node) -> bool {
         let d = node.feet() - self.goal;
         let swum = self.came.get(&node).is_some_and(|c| c.mode == Mode::Swim);
@@ -1879,7 +1900,7 @@ impl Search {
                     }
                 };
                 let cost = here.cost
-                    + seconds
+                    + seconds * self.veer(to)
                     // Keeps paths off walls, through the middle of doors.
                     + if floor.snug { body.seconds(SNUG) } else { 0.0 };
                 self.relax(
@@ -2603,6 +2624,77 @@ mod tests {
                 return found;
             }
         }
+    }
+
+    /// Off a roof higher than it walks off, a body is stuck up there; one
+    /// whose jets break the fall (a deep `drop`) walks off its edge.
+    #[test]
+    fn a_body_with_a_deep_drop_walks_off_a_high_roof() {
+        let physics = world(&[
+            floor(),
+            (Vec3::new(-6.0, 0.0, -6.0), Vec3::new(6.0, 20.0, 6.0)),
+        ]);
+        let (from, to) = (Vec3::new(0.0, 20.0, 0.0), Vec3::new(14.0, 0.0, 0.0));
+        assert!(
+            !matches!(search_as(&physics, &body(), from, to), Found::Path(_)),
+            "a walker cannot get down"
+        );
+        let jetter = Body {
+            drop: 32.0,
+            ..body()
+        };
+        let end = path(search_as(&physics, &jetter, from, to))
+            .last()
+            .unwrap()
+            .feet;
+        assert!(end.distance(to) < 1.0, "down by the drop: {end:?}");
+    }
+
+    /// Two equal ways round a wall: a seeded search ([`Costs::veer`]) takes
+    /// one or the other by its seed, the same each time for one seed.
+    #[test]
+    fn seeded_searches_spread_over_equal_ways() {
+        let physics = world(&[
+            floor(),
+            (Vec3::new(-0.5, 0.0, -6.0), Vec3::new(0.5, 4.0, 6.0)),
+        ]);
+        let ground = Ground {
+            physics: &physics,
+            terrain: &no_terrain,
+            passages: &NO_PASSAGES,
+            waters: &[],
+            bodies: &[],
+            motions: &[],
+        };
+        let side = |veer: u64| {
+            let costs = crate::route::Costs {
+                veer,
+                ..Default::default()
+            };
+            let mut nav = Nav::default();
+            let mut search = Search::with(
+                Vec3::new(-10.0, 0.0, 0.0),
+                Vec3::new(10.0, 0.0, 0.0),
+                60.0,
+                costs,
+            );
+            let found = loop {
+                nav.begin_tick();
+                if let Some(found) = search.step(&mut nav, &ground, &body()) {
+                    break found;
+                }
+            };
+            let z: f32 = path(found).iter().map(|w| w.feet.z).sum();
+            z > 0.0
+        };
+        let sides: Vec<bool> = (1..=24u64)
+            .map(|seed| side(seed * 0x9e37_79b9 | 1))
+            .collect();
+        assert!(
+            sides.iter().any(|s| *s) && sides.iter().any(|s| !*s),
+            "{sides:?}"
+        );
+        assert_eq!(side(7), side(7));
     }
 
     /// Every move costs the seconds it takes the body: crawling under a

@@ -68,8 +68,29 @@ bot does through the same code.
    An objective outranks a fight while the bot carries what the objective
    delivers (`View::committed`, read from the step: a package carriage it
    holds, or a held body). On the way to a delivery that needs only its
-   feet it shoots an enemy ahead or to the side as it goes (run and gun);
-   an enemy behind is left, as walking backwards is slow.
+   feet it shoots only an enemy roughly ahead as it goes, within about 50
+   degrees of its way (run and gun); one to the side or behind is left, so
+   a carrier keeps facing and running home instead of turning side-on to
+   trade shots. A carrier whose delivery the rules hold back (Capture the
+   Flag's own flag away) still goes there and waits, stepping out and back
+   in every two seconds so the zone sees it enter again
+   (`package_objectives::Action::Visit`). Package offers are tried nearest
+   first, so a bot beside its own dropped flag recovers it before setting
+   off for the enemy's.
+
+   On the way to a step that needs only its feet it faces the way it walks
+   and looks at the point only within 4 units of it. Any walker looking
+   along its route turns into a sharp bend before going on at full pace
+   (`turn_pace`: full within 45 degrees, down to 0.3 facing the other way),
+   so it turns and walks forward round a wall or up the next flight of a
+   stair rather than sidestepping or backing round it. Each bot's search
+   toward an objective is seeded per life (`route::Costs::veer`): patches
+   of the way seem up to 60% slower to it alone, so a side leaving one
+   spawn for one flag spreads over the streets and lanes there. Farther
+   than 32 units from a feet-only step it has not yet picked up, a
+   vehicle's controls whose drive beats the walk there are an opportunity
+   (`interactions::Want::Objective`); the driver pulls up and gets out
+   within 6 units past its standoff and walks the rest.
 
    An on-foot bot's leash is its brick and `chase_radius`; a rules bot on
    foot has none and plays the whole map, from a seat as well. A brick
@@ -130,13 +151,18 @@ bot does through the same code.
    | Goof | a goof's walk |
    | Dodge | a dodge's step aside |
    | Stand | standing still on purpose (a hop straight up, a hand-off) |
+   | Brake | no walk and its jets, falling faster than it can land unhurt |
 
    `act::resolve` takes the walk of the highest mover that has one, sets
    each button in that order, and adds presses (a goof's or dodge's hop,
    a crouch, a jet) on top. Then safety, which only takes away
    (`Session::bot_safe_walk`): no step into a portal off the route, round
    a vehicle in the way, and never off an edge whose fall would hurt (see
-   Routes). A new mover goes in at its place in that order; nothing runs
+   Routes). A body whose jets lift it and hold 3 s of jetting walks off
+   drops up to 32 units deep (its walk grid's `Body::drop`): falling faster
+   than it can land unhurt, it holds its jets with no walk as late as they
+   still slow it in time (`Mover::Brake`, `route::brake_fall`), as a player
+   breaks a fall. A new mover goes in at its place in that order; nothing runs
    "after" another to win. The look is decided the same way: each that
    wants the bot's eyes proposes an `act::Look`, and the highest
    `act::Looker` has them (hold, sweep, route, glance, target, objective,
