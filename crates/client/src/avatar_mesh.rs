@@ -15,7 +15,7 @@ use std::collections::BTreeMap;
 /// frame, material frame and paint. The same key means the same vertices,
 /// indices and batches in the same order.
 #[derive(Clone, Debug, PartialEq)]
-struct Key(Vec<(usize, usize, usize, [u32; 4])>);
+struct Key(Vec<(usize, usize, usize, usize, [u32; 4])>);
 
 /// One drawn object: where its mesh's vertices come from this frame.
 struct Part {
@@ -71,6 +71,7 @@ fn key(binding: &Binding<'_>, pose: &Pose) -> Result<Key> {
         }
         parts.push((
             i,
+            mesh,
             pose.frames[i],
             pose.material_frames[i],
             color.map(f32::to_bits),
@@ -147,7 +148,7 @@ impl Layout {
         );
         let mut parts = Vec::new();
         let mut groups: BTreeMap<usize, Vec<Corner>> = BTreeMap::new();
-        for &(object, frame, material_frame, color) in &key.0 {
+        for &(object, mesh_index, frame, material_frame, color) in &key.0 {
             let color = color.map(f32::from_bits);
             ensure!(
                 color
@@ -155,8 +156,6 @@ impl Layout {
                     .all(|c| c.is_finite() && (0.0..=1.0).contains(c)),
                 "Invalid avatar paint"
             );
-            let detail = &shape.details[binding.detail];
-            let mesh_index = shape.objects[object].meshes[detail.mesh_offset];
             let mesh = shape.meshes[mesh_index].as_ref().expect("keyed mesh");
             let offset = frame
                 .checked_mul(mesh.frame_vertices)

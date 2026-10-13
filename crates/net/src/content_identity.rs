@@ -797,6 +797,77 @@ fn item_choices(
     Ok((item_choices, aliases))
 }
 
+/// Each image's muzzle in the frame of the hand holding it
+/// (`bri_weapons::muzzle::barrel`), as clients draw it: from the base
+/// presentation (`presentation.json` and its model files), each Add-On's
+/// own presentation, and Add-On images whose model is their own
+/// `*.shape.json`. An image none of these describe is left out and fires
+/// from the hand itself.
+pub fn image_barrels(
+    presentation_root: &Path,
+    weapons: &WeaponContent,
+    extras: &[(String, PathBuf)],
+) -> BTreeMap<String, [f32; 3]> {
+    use serde_json::Value;
+    let read = |root: &Path, file: &str| -> Option<Value> {
+        let path = contained(root, file).ok()?;
+        serde_json::from_slice(&bounded_bytes(&path, 32 << 20).ok()?).ok()
+    };
+    let shape = |root: &Path, file: &str| -> Option<bri_content::shape::Shape> {
+        serde_json::from_value(read(root, file)?).ok()
+    };
+    let triple = |v: &Value| -> [f32; 3] {
+        let a = |i: usize| v.get(i).and_then(Value::as_f64).unwrap_or(0.0) as f32;
+        [a(0), a(1), a(2)]
+    };
+    let mut out = BTreeMap::new();
+    let presented = |root: &Path, out: &mut BTreeMap<String, [f32; 3]>| {
+        let Some(manifest) = read(root, "presentation.json") else {
+            return;
+        };
+        let Some(images) = manifest["images"].as_object() else {
+            return;
+        };
+        for (id, image) in images {
+            let model = image["model"].as_str().unwrap_or_default();
+            let file = manifest["models"][model]["file"].as_str();
+            let shape = file.and_then(|f| shape(root, f));
+            let barrel = bri_weapons::muzzle::barrel(
+                triple(&image["offset"]),
+                triple(&image["source_rotation_degrees"]),
+                shape.as_ref(),
+            );
+            out.insert(id.clone(), barrel.to_array());
+        }
+    };
+    if let Ok(root) = presentation_root.canonicalize() {
+        presented(&root, &mut out);
+    }
+    for (_, abs) in extras {
+        let Ok(abs) = abs.canonicalize() else {
+            continue;
+        };
+        presented(&abs, &mut out);
+        let Some(pack) = read(&abs, "weapons.json") else {
+            continue;
+        };
+        for (id, image) in pack["images"].as_object().into_iter().flatten() {
+            let model = image["model"].as_str().unwrap_or_default();
+            if out.contains_key(id) || !model.ends_with(".shape.json") {
+                continue;
+            }
+            let barrel = bri_weapons::muzzle::barrel(
+                triple(&image["offset"]),
+                triple(&image["source_rotation_degrees"]),
+                shape(&abs, model).as_ref(),
+            );
+            out.insert(id.clone(), barrel.to_array());
+        }
+    }
+    out.retain(|id, _| weapons.pack.images.contains_key(id));
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -16,6 +16,9 @@ writes their generated files:
   playground-buggy/assets/textures/*.png      their paint
   playground-buggy/assets/vehicles.json       the buggy's vehicle entry,
                                               pointing at its files by SHA-256
+  playground-runner-hud/textures/*.png        the Runner's HUD: a power meter
+                                              strip, a sprite font, a cap
+                                              icon and a reticle
   playground-stomper-look/models/stomper.json the Stomper's box body
 
 Everything here is original and generated; run it again after changing the
@@ -58,6 +61,20 @@ def png(width, height, pixel):
     def chunk(kind, data):
         return struct.pack('>I', len(data)) + kind + data + struct.pack('>I', zlib.crc32(kind + data) & 0xFFFFFFFF)
     return (b'\x89PNG\r\n\x1a\n' + chunk(b'IHDR', struct.pack('>IIBBBBB', width, height, 8, 2, 0, 0, 0))
+            + chunk(b'IDAT', zlib.compress(bytes(raw), 9)) + chunk(b'IEND', b''))
+
+
+def png_rgba(width, height, pixel):
+    """A PNG with alpha: `pixel(x, y)` gives four bytes."""
+    raw = bytearray()
+    for y in range(height):
+        raw.append(0)
+        for x in range(width):
+            raw.extend(pixel(x, y))
+
+    def chunk(kind, data):
+        return struct.pack('>I', len(data)) + kind + data + struct.pack('>I', zlib.crc32(kind + data) & 0xFFFFFFFF)
+    return (b'\x89PNG\r\n\x1a\n' + chunk(b'IHDR', struct.pack('>IIBBBBB', width, height, 8, 6, 0, 0, 0))
             + chunk(b'IDAT', zlib.compress(bytes(raw), 9)) + chunk(b'IEND', b''))
 
 
@@ -306,18 +323,22 @@ def carbine(root):
 
 # --- the Dune Buggy ----------------------------------------------------------
 
-# The buggy is the Playground's stand-in for a Warthog-style off-roader:
-# heavy, four-wheel drive and four-wheel steering, long loose springs that
-# soak a landing (rebound damping), rear tyres that step out first so it
-# drifts, an engine that pulls hard to near its top speed, a little less
-# gravity so it hangs off a jump, and steering toward where the driver
-# looks with the lock narrowing at speed. `crates/vehicles/tests/handling.rs`
-# measures each; placeholders shaped by the real vehicle until measured
-# numbers replace them.
+# The buggy is the Playground's stand-in for Halo's Warthog, tuned from the
+# Warthog's own tags (Halo PC `bloodgulch.map`, 4.12 units per Halo world
+# unit; the numbers are in docs/audits/vehicle-handling.md): top speed 34
+# forward and 14.8 back, reached at a steady pull in about 3.3 s, a hard
+# stop in under a second, 30 degree lock, four-wheel drive, 0.62 of
+# suspension travel, the weight a little forward, and per-axle grip along
+# and across the tyre (front 0.75 / 0.45, rear 0.45 / 0.65, times 4 for this
+# tyre model). Halo has no springs, engine torque or gravity in its tags;
+# those, the rear steering and the look steering are this buggy's own.
+# `crates/vehicles/tests/handling.rs` measures each.
 TIRE = dict(lateral_force=42000.0, lateral_damping=9000.0, lateral_relaxation=0.02,
             longitudinal_force=40000.0, longitudinal_damping=5000.0, longitudinal_relaxation=0.02)
-FRONT_GRIP = (3.2, 2.4)
-REAR_GRIP = (2.6, 1.8)
+GRIP_SCALE = 4.0
+# (along, across) per axle, from the Warthog's mass points 11 to 14.
+FRONT_GRIP = (0.75, 0.45)
+REAR_GRIP = (0.45, 0.65)
 WHEEL_RADIUS = 0.55
 
 
@@ -367,12 +388,17 @@ def buggy(root):
 
     def wheel(x, z):
         rear = z > 0
-        grip = REAR_GRIP if rear else FRONT_GRIP
-        tire = dict(static_friction=grip[0], kinetic_friction=grip[1], **TIRE)
+        along, across = REAR_GRIP if rear else FRONT_GRIP
+        tire = dict(static_friction=along * GRIP_SCALE, kinetic_friction=along * GRIP_SCALE * 0.75,
+                    lateral_grip=round(across / along, 4), **TIRE)
         # A quarter of the weight holds each spring near half its travel.
         # The hubs mount high in the wheel wells, so the long travel hangs
         # below and the deck stays low enough to jump onto.
-        return {'position': [x, 0.35, z], 'radius': WHEEL_RADIUS, 'rest_length': 0.7, 'spring': 9000.0,
+        # The springs share the forward weight (57% front) so the deck sits
+        # level, and the hubs mount high enough that a dipping nose clears
+        # the ground through the Warthog's shorter travel.
+        return {'position': [x, 0.43, z], 'radius': WHEEL_RADIUS, 'rest_length': 0.62,
+                'spring': 7700.0 if rear else 10300.0,
                 'damping': 2600.0, 'rebound_damping': 2400.0, 'anti_sway': 6000.0, 'tire': tire,
                 'steering': -0.35 if rear else 1.0, 'powered': True,
                 'model': 'models/tire.shape.json', 'model_rotation': [0.0, 0.0, 0.0, 1.0]}
@@ -408,7 +434,9 @@ def buggy(root):
         'bounds_min': [-1.15 - 0.22, -WHEEL_RADIUS, -2.0],
         'bounds_max': [1.15 + 0.22, 2.4, 2.0],
         'mass': 900.0,
-        'mass_center': [0.0, 0.05, 0.0],
+        # 57% of the weight on the front axle, as the Warthog's centre of
+        # mass sits between its axles.
+        'mass_center': [0.0, 0.05, -0.2],
         'inertia_box': [2.8, 1.6, 4.4],
         'density': 4.0,
         'drag': 0.4,
@@ -422,13 +450,13 @@ def buggy(root):
         'initial_explosion_offset': 0.0,
         'final_explosion_offset': 0.0,
         'mount_distance': 3.0,
-        'engine_force': 22000.0,
-        'engine_curve': [[0.0, 1.0], [0.7, 0.95], [1.0, 0.0]],
+        'engine_force': 5400.0,
+        'engine_curve': [[0.0, 1.0], [0.9, 1.0], [1.0, 0.0]],
         'engine_brake': 4500.0,
-        'brake_force': 12000.0,
-        'max_speed': 36.0,
-        'reverse_speed': 12.0,
-        'max_steering': 0.55,
+        'brake_force': 30000.0,
+        'max_speed': 34.0,
+        'reverse_speed': 14.8,
+        'max_steering': 0.5236,
         'thrust': 0.0,
         'reverse_thrust': 0.0,
         'lift': 0.0,
@@ -442,6 +470,8 @@ def buggy(root):
         'impact_threshold': 15.0,
         'impact_damage': 0.05,
         'strafe_steering': False,
+        'throttle_brakes': True,
+        'reverse_limited': True,
         'steering': {'strafe_rate': 0.25, 'auto_return': True, 'auto_return_rate': 0.9,
                      'auto_return_max_speed': 10.0, 'toward_look': True, 'speed_lock': 0.6},
         'gravity_scale': 0.85,
@@ -506,10 +536,128 @@ def buggy(root):
     })
 
 
+# --- the Runner's HUD ---------------------------------------------------------
+
+CLEAR = bytes([0, 0, 0, 0])
+# Seven-segment digits, then `x` and `*`: which of a b c d e f g each lights.
+SEGMENTS = {
+    '0': 'abcdef', '1': 'bc', '2': 'abdeg', '3': 'abcdg', '4': 'bcfg',
+    '5': 'acdfg', '6': 'acdefg', '7': 'abc', '8': 'abcdefg', '9': 'abcdfg',
+}
+GLYPHS = '0123456789x*'
+
+
+def power_meter(frame, size=64):
+    """One frame of the power meter: a gold-rimmed disc of eight wedges,
+    `frame` of them lit (blue when healthy, yellow, then red)."""
+    lit = (70, 150, 255) if frame >= 6 else (255, 210, 40) if frame >= 3 else (240, 60, 50)
+    half = size / 2
+
+    def pixel(x, y):
+        dx, dy = x + 0.5 - half, y + 0.5 - half
+        r = math.hypot(dx, dy) / half
+        if r > 1.0:
+            return CLEAR
+        if r > 0.86:
+            return bytes([230, 180, 40, 255])
+        if r < 0.22:
+            return bytes([250, 250, 240, 255])
+        # Wedges clockwise from the top, a dark seam between each.
+        turn = (math.atan2(dx, -dy) / math.tau) % 1.0
+        wedge = int(turn * 8)
+        if (turn * 8) % 1.0 < 0.06:
+            return bytes([20, 20, 30, 255])
+        rgb = lit if wedge < frame else (45, 45, 60)
+        return bytes([*rgb, 255])
+    return pixel
+
+
+def glyph(char, size=16):
+    """A white seven-segment character with a dark outline."""
+    def on(x, y):
+        if char == 'x':
+            return abs((x - 7.5) - (y - 7.5)) < 1.6 or abs((x - 7.5) + (y - 7.5)) < 1.6 if 3 <= x <= 12 and 4 <= y <= 13 else False
+        if char == '*':
+            return (abs(x - 7.5) < 1.6 and 2 <= y <= 13) or (abs(y - 7.5) < 1.6 and 2 <= x <= 13) \
+                or (abs(abs(x - 7.5) - abs(y - 7.5)) < 1.2 and 4 <= x <= 11 and 4 <= y <= 11)
+        segs = SEGMENTS[char]
+        left, right, top, mid, bottom = 3, 12, 1, 7.5, 14
+        bar = 1.6
+        hits = {
+            'a': abs(y - top - 0.5) < bar and left <= x <= right,
+            'g': abs(y - mid) < bar and left <= x <= right,
+            'd': abs(y - bottom + 0.5) < bar and left <= x <= right,
+            'f': abs(x - left - 0.5) < bar and top <= y <= mid,
+            'b': abs(x - right + 0.5) < bar and top <= y <= mid,
+            'e': abs(x - left - 0.5) < bar and mid <= y <= bottom,
+            'c': abs(x - right + 0.5) < bar and mid <= y <= bottom,
+        }
+        return any(hits[s] for s in segs)
+
+    def pixel(x, y):
+        if on(x, y):
+            return bytes([255, 255, 255, 255])
+        near = any(on(x + dx, y + dy) for dx in (-1, 0, 1) for dy in (-1, 0, 1))
+        return bytes([20, 20, 40, 255]) if near else CLEAR
+    return pixel
+
+
+def strip(frames, width, height):
+    """Frames side by side, left to right."""
+    return png_rgba(width * len(frames), height, lambda x, y: frames[x // width](x % width, y))
+
+
+def cap_icon(size=32):
+    """The Runner's red cap seen from the front, on a gold disc."""
+    half = size / 2
+
+    def pixel(x, y):
+        dx, dy = x + 0.5 - half, y + 0.5 - half
+        r = math.hypot(dx, dy) / half
+        if r > 1.0:
+            return CLEAR
+        if r > 0.85:
+            return bytes([230, 180, 40, 255])
+        if dy < -2 and abs(dx) < 10:
+            return bytes([210, 30, 25, 255])
+        if -2 <= dy < 2 and abs(dx) < 13:
+            return bytes([170, 20, 18, 255])
+        if dy >= 2 and abs(dx) < 9:
+            return bytes([250, 205, 160, 255])
+        return bytes([30, 40, 90, 255])
+    return png_rgba(size, size, pixel)
+
+
+def reticle(size=32):
+    """A gold ring with four ticks, clear in the middle."""
+    half = size / 2
+
+    def pixel(x, y):
+        dx, dy = x + 0.5 - half, y + 0.5 - half
+        r = math.hypot(dx, dy)
+        ring = abs(r - 11) < 1.3
+        tick = (abs(dx) < 1.0 and 4 < abs(dy) < 8) or (abs(dy) < 1.0 and 4 < abs(dx) < 8)
+        if ring or tick:
+            return bytes([255, 215, 60, 255])
+        if abs(r - 11) < 2.3:
+            return bytes([30, 20, 0, 200])
+        return CLEAR
+    return png_rgba(size, size, pixel)
+
+
+def runner_hud(root):
+    out = root / 'playground-runner-hud' / 'textures'
+    write(out / 'power.png', strip([power_meter(f) for f in range(9)], 64, 64))
+    write(out / 'digits.png', strip([glyph(c) for c in GLYPHS], 16, 16))
+    write(out / 'cap.png', cap_icon())
+    write(out / 'reticle.png', reticle())
+
+
 def main():
     runner(ROOT)
     carbine(ROOT)
     buggy(ROOT)
+    runner_hud(ROOT)
     stomper(ROOT)
 
 

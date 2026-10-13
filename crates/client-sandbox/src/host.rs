@@ -528,6 +528,13 @@ pub struct View {
     /// Aiming down the held weapon's sights (`Image::zoom`).
     pub aiming: bool,
     pub alive: bool,
+    /// The held weapon's sway from the body's camera profile in first
+    /// person: trail yaw and pitch (radians), then its bob offset in view
+    /// space (x right, y up, z back). Zero for the stock camera.
+    pub view_model: [f32; 5],
+    /// The HUD regions this Add-On's layouts own now, one bit each in
+    /// `bri_content::hud::Region::ALL` order.
+    pub hud_owned: u16,
 }
 impl Default for View {
     fn default() -> Self {
@@ -538,15 +545,43 @@ impl Default for View {
             first_person: true,
             aiming: false,
             alive: true,
+            view_model: [0.0; 5],
+            hud_owned: 0,
         }
     }
 }
+/// Floats `hud_region` writes.
+pub const HUD_REGION_RECORD: usize = 8;
 impl View {
+    /// The `hud_region` record for `region` in screen space (y up, -1 to
+    /// 1; x from -aspect to aspect): left, top, width, height, the size of
+    /// one HUD unit, then 1 when this Add-On's layout owns the region now,
+    /// then padding.
+    pub fn hud_region(&self, region: bri_content::hud::Region) -> [f32; HUD_REGION_RECORD] {
+        let aspect = self.aspect();
+        let unit = 2.0 / bri_content::hud::HEIGHT;
+        let [x, y, w, h] = region.rect(bri_content::hud::HEIGHT * aspect);
+        let bit = bri_content::hud::Region::ALL
+            .iter()
+            .position(|r| *r == region)
+            .map_or(0, |i| 1u16 << i);
+        [
+            x * unit - aspect,
+            1.0 - y * unit,
+            w * unit,
+            h * unit,
+            unit,
+            f32::from(u8::from(self.hud_owned & bit != 0)),
+            0.0,
+            0.0,
+        ]
+    }
     pub fn aspect(&self) -> f32 {
         self.size[0].max(1) as f32 / self.size[1].max(1) as f32
     }
     /// The `view` record: fov, normal fov, aspect, width, height, flags
-    /// (1 first person, 2 aiming, 4 alive), then padding.
+    /// (1 first person, 2 aiming, 4 alive), the view model's sway (trail
+    /// yaw and pitch, bob offset xyz), then padding.
     pub fn record(&self) -> [f32; VIEW_RECORD] {
         let flags = u8::from(self.first_person)
             | (u8::from(self.aiming) << 1)
@@ -559,11 +594,11 @@ impl View {
             self.size[0] as f32,
             self.size[1] as f32,
             f32::from(flags),
-            0.0,
-            0.0,
-            0.0,
-            0.0,
-            0.0,
+            finite(self.view_model[0]),
+            finite(self.view_model[1]),
+            finite(self.view_model[2]),
+            finite(self.view_model[3]),
+            finite(self.view_model[4]),
             0.0,
         ]
     }
@@ -1149,6 +1184,25 @@ fn link(linker: &mut Linker<HostState>, declared: &BTreeSet<Capability>) -> wasm
         )?;
         linker.func_wrap(
             m,
+            "hud_region",
+            |mut caller: Host<'_>, ptr: i32, len: i32, out: i32| -> wasmtime::Result<i32> {
+                let name = text(&mut caller, ptr, len, 64)?;
+                let Some(region) = bri_content::hud::Region::parse(&name) else {
+                    return Ok(0);
+                };
+                let bytes: Vec<u8> = caller
+                    .data()
+                    .view
+                    .hud_region(region)
+                    .iter()
+                    .flat_map(|v| v.to_le_bytes())
+                    .collect();
+                write(&mut caller, out, &bytes)?;
+                Ok(1)
+            },
+        )?;
+        linker.func_wrap(
+            m,
             "environment",
             |mut caller: Host<'_>, ptr: i32| -> wasmtime::Result<()> {
                 let bytes: Vec<u8> = caller
@@ -1730,4 +1784,35 @@ fn link_pose(linker: &mut Linker<HostState>) -> wasmtime::Result<()> {
         },
     )?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::View;
+    use bri_content::hud::Region;
+
+    #[test]
+    fn a_hud_region_is_its_box_in_screen_space() {
+        let view = View {
+            size: [640, 480],
+            hud_owned: 1
+                << Region::ALL
+                    .iter()
+                    .position(|r| *r == Region::Crosshair)
+                    .unwrap(),
+            ..View::default()
+        };
+        let aspect = 640.0 / 480.0;
+        // 64 units square in the middle of the screen.
+        let [left, top, w, h, unit, owned, ..] = view.hud_region(Region::Crosshair);
+        assert!((unit - 2.0 / 480.0).abs() < 1e-6);
+        assert!((w - 64.0 * unit).abs() < 1e-5 && (h - w).abs() < 1e-5);
+        assert!((left + w / 2.0).abs() < 1e-5, "centered, left {left}");
+        assert!((top - h / 2.0).abs() < 1e-5, "centered, top {top}");
+        assert_eq!(owned, 1.0);
+        // The top left corner of the screen, not owned.
+        let [left, top, .., owned, _, _] = view.hud_region(Region::TopLeft);
+        assert!((left + aspect).abs() < 1e-5 && (top - 1.0).abs() < 1e-5);
+        assert_eq!(owned, 0.0);
+    }
 }

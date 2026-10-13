@@ -39,6 +39,8 @@ pub(super) struct AddOns {
     )>,
     /// What the enabled Add-Ons name that could not be found or used.
     pub(super) add_on_health: crate::add_on_health::AddOnHealth,
+    /// HUD regions Add-Ons claim, and their textures.
+    pub(super) hud_regions: crate::hud_regions::HudRegions,
 }
 
 impl App {
@@ -569,16 +571,20 @@ impl App {
             .and_then(|a| a.view.as_ref());
         let Some(view) = view else {
             self.ui.core.package_panels.clear();
+            self.ui.core.hud_regions.clear();
             self.ui.core.package_keys.clear();
             self.ui.set_package_binds(Vec::new());
             self.ui.core.addon_help.clear();
+            self.addons.client_code.set_hud_owners(Default::default());
             return;
         };
         let Some(catalog) = packages_for(&self.addons.package_catalog, view) else {
             self.ui.core.package_panels.clear();
+            self.ui.core.hud_regions.clear();
             self.ui.core.package_keys.clear();
             self.ui.set_package_binds(Vec::new());
             self.ui.core.addon_help.clear();
+            self.addons.client_code.set_hud_owners(Default::default());
             return;
         };
         let mac = self.ui.core.platform == Platform::MacOs;
@@ -607,6 +613,49 @@ impl App {
             });
         self.ui.core.package_panels = panels;
         self.ui.core.package_keys = keys;
+        // HUD regions: the viewer's body, held item and seat pick the claims.
+        let presented = self.motion.presented().get(&view.owner);
+        let body = presented.map_or("", |p| view.archetypes.resolve(p.archetype).id.as_str());
+        let vitals = view.vitals.get(&view.owner);
+        let vehicle = vitals
+            .and_then(|v| v.mounted)
+            .and_then(|(vehicle, _)| view.vehicles.get(&vehicle))
+            .map_or("", |info| info.definition.as_str());
+        let viewer = bri_content::hud::Viewer {
+            body,
+            holding: held,
+            vehicle,
+        };
+        let energy = presented
+            .filter(|p| view.archetypes.resolve(p.archetype).energy_bar)
+            .map_or(0.0, |p| {
+                p.energy / view.archetypes.tuning(p.archetype, p.scale).max_energy
+            });
+        let game = crate::hud_regions::GameValues {
+            health: vitals.map_or(0.0, |v| v.health),
+            health_max: presented.map_or(bri_sim::session::MAX_HEALTH, |p| {
+                view.archetypes.resolve(p.archetype).max_health
+            }),
+            energy: if energy.is_finite() { energy } else { 0.0 },
+            alive: vitals.is_none_or(|v| v.alive),
+            center_print: self
+                .ui
+                .core
+                .center_print
+                .as_ref()
+                .map_or_else(String::new, |(t, _)| bri_content::hud::plain(t)),
+            bottom_print: self
+                .ui
+                .core
+                .bottom_print
+                .as_ref()
+                .map_or_else(String::new, |(t, ..)| bri_content::hud::plain(t)),
+        };
+        let regions = &mut self.addons.hud_regions;
+        regions.use_catalog(Some(catalog));
+        self.ui.core.hud_regions = regions.draws(&view.package_state, view.owner, &viewer, &game);
+        let owners = regions.owners(&view.package_state, &viewer);
+        self.addons.client_code.set_hud_owners(owners);
     }
 }
 

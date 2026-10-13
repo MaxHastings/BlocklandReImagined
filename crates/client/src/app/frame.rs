@@ -130,6 +130,28 @@ impl App {
             });
         self.controls
             .set_third_person_only(third_person_only.unwrap_or(false));
+        // The active body's camera profile owns the on-foot view; another
+        // body (or none) hands it over at once.
+        let body = self
+            .net
+            .attempt
+            .as_ref()
+            .filter(|a| a.entered)
+            .and_then(|a| {
+                let view = a.view.as_ref()?;
+                let body = self.motion.presented().get(&view.owner)?;
+                let velocity = glam::Vec3::from(body.velocity);
+                Some((
+                    view.archetypes.resolve(body.archetype).look.camera.clone(),
+                    body.scale,
+                    glam::Vec2::new(velocity.x, velocity.z).length(),
+                    body.grounded,
+                ))
+            });
+        let (camera, scale, ground_speed, grounded) = body.unwrap_or_default();
+        self.controls.set_body_camera(&camera, scale);
+        self.controls
+            .advance_body_camera(elapsed.as_secs_f32(), ground_speed, grounded);
         self.controls.advance_view(elapsed.as_secs_f32());
         self.controls.advance_head(elapsed.as_secs_f32());
         let span = crate::frame_trace::span("local game");
@@ -1021,6 +1043,21 @@ impl App {
                     }
                     self.avatar.avatars.insert(*owner, mesh);
                 }
+                // How the archetype fits the drawn mesh: its sockets and
+                // clips, or a box (or no) body the mesh only stands in for.
+                let archetype = view.archetypes.resolve(player.archetype);
+                let stand_in = model.is_none()
+                    && (look.hides_body()
+                        || packages_for(&self.addons.package_catalog, view)
+                            .is_some_and(|catalog| catalog.model(&look.model).is_some()));
+                let mesh = self.avatar.avatars.get_mut(owner).unwrap();
+                mesh.set_body_kind(crate::avatar::BodyKind::of(archetype, stand_in));
+                crate::avatar::report_body(
+                    &archetype.id,
+                    &look.model,
+                    mesh,
+                    &self.avatar.avatar_assets,
+                );
                 // Death and respawn as of the drawn pose, not the newest vitals.
                 let life = view.vitals.get(owner).map(|vitals| {
                     let (tick, spawned) = if *owner == view.owner {
@@ -1183,6 +1220,17 @@ impl App {
                     }),
                 };
                 let avatar = self.avatar.avatars.get_mut(owner).unwrap();
+                avatar.screen_height = self
+                    .view
+                    .rendered_camera
+                    .zip(self.view.pixels_per_unit)
+                    .map(|((eye, _, _), ppu)| {
+                        let height = bri_sim::water::body_height(
+                            player,
+                            &view.archetypes.tuning(player.archetype, player.scale),
+                        );
+                        height * ppu / eye.distance(Vec3::from(player.feet)).max(0.01)
+                    });
                 let posed = avatar.pose_with_animation(
                     &self.avatar.avatar_assets,
                     player,
@@ -1283,7 +1331,13 @@ impl App {
                     // with any seat, so the image stays where it sits on
                     // screen.
                     let eye = if owner == view.owner && !third_person {
-                        crate::controls::view_frame(eye, yaw, pitch, roll)
+                        // The body's weapon sway and bob ride the view.
+                        crate::controls::view_frame(eye, yaw, pitch, roll).map(|frame| {
+                            match self.controls.view_model_sway() {
+                                Some(sway) => frame * sway,
+                                None => frame,
+                            }
+                        })
                     } else {
                         let (yaw, pitch) = if owner == view.owner {
                             (local_view_yaw, local_view_pitch)
@@ -1294,14 +1348,28 @@ impl App {
                     }?;
                     Some(crate::world_items::MountPose {
                         eye,
-                        // Torque mounts an image whose mount point has no
-                        // `mountN` node (the dribbled basketball's Mount8) at
-                        // the player's own transform.
+                        // The hands are the body's hand sockets, and an
+                        // image for a hand the body has no socket for is not
+                        // drawn. Torque mounts an image whose other mount
+                        // point has no `mountN` node (the dribbled
+                        // basketball's Mount8) at the player's own transform.
                         mounts: (0..32)
-                            .map(|n| {
-                                let node =
-                                    avatar.mount_node(&self.avatar.avatar_assets, n as usize);
-                                (n, node.unwrap_or_else(|| avatar.body_transform()))
+                            .filter_map(|n| {
+                                let aim = if owner == view.owner {
+                                    local_view_pitch
+                                } else {
+                                    player.pitch
+                                };
+                                let node = avatar.mount_socket(
+                                    &self.avatar.avatar_assets,
+                                    n as usize,
+                                    aim,
+                                );
+                                match node {
+                                    Some(node) => Some((n, node)),
+                                    None if n < 2 => None,
+                                    None => Some((n, avatar.body_transform())),
+                                }
                             })
                             .collect(),
                         actions: (0..32)

@@ -25,6 +25,12 @@ pub struct SessionContent {
     pub avatar_catalog: bri_content::avatar::Package,
     /// The Blockhead's mount points (`mountObject`), from its rig.
     pub body_mounts: Vec<bri_sim::archetype::MountPoint>,
+    /// The Blockhead's hand nodes in its aim pose (`shape_grips`), so its
+    /// shots leave the muzzle in its hand.
+    pub body_grips: BTreeMap<String, [f32; 16]>,
+    /// Each image's muzzle in the frame of the hand holding it
+    /// (`bri_weapons::muzzle::barrel`).
+    pub image_barrels: BTreeMap<String, [f32; 3]>,
     pub vehicle_pack: bri_vehicles::Pack,
     pub bot_kinds: Vec<BotKind>,
     pub event_catalog: bri_events::Catalog,
@@ -107,8 +113,10 @@ pub fn hosted(server: Option<&Arc<Catalog>>, map: &str, mode: Option<&str>) -> R
             map.to_owned(),
         ),
     };
-    // Nothing to run: host the plain base game.
-    let catalog = catalog.filter(|c| c.world().is_some() || c.behaviours().next().is_some());
+    // Nothing to run: host the plain base game. A chosen mode always runs:
+    // its mini-game, bodies and loadout need no rules (the Playground's).
+    let catalog = catalog
+        .filter(|c| mode.is_some() || c.world().is_some() || c.behaviours().next().is_some());
     let base_map = catalog
         .as_ref()
         .and_then(|c| c.world().map(|(_, _, w)| w.environment.clone()))
@@ -219,6 +227,8 @@ impl HostSetup {
         session.set_item_bounds(content.item_bounds.clone())?;
         session.set_avatar_catalog(content.avatar_catalog.clone())?;
         session.set_body_mount_points(BLOCKHEAD_MODEL, content.body_mounts.clone())?;
+        session.set_body_grips(BLOCKHEAD_MODEL, content.body_grips.clone())?;
+        session.set_image_barrels(content.image_barrels.clone())?;
         session.set_vehicle_pack(content.vehicle_pack.clone(), content.bot_kinds.clone())?;
         if let Some(tuning) = &self.bot_tuning {
             let problems = match &self.bot_overrides {

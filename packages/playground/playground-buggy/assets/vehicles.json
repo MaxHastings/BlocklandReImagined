@@ -78,18 +78,19 @@
     {
      "position": [
       -1.15,
-      0.35,
+      0.43,
       -1.45
      ],
      "radius": 0.55,
-     "rest_length": 0.7,
-     "spring": 9000.0,
+     "rest_length": 0.62,
+     "spring": 10300.0,
      "damping": 2600.0,
      "rebound_damping": 2400.0,
      "anti_sway": 6000.0,
      "tire": {
-      "static_friction": 3.2,
-      "kinetic_friction": 2.4,
+      "static_friction": 3.0,
+      "kinetic_friction": 2.25,
+      "lateral_grip": 0.6,
       "lateral_force": 42000.0,
       "lateral_damping": 9000.0,
       "lateral_relaxation": 0.02,
@@ -110,18 +111,19 @@
     {
      "position": [
       1.15,
-      0.35,
+      0.43,
       -1.45
      ],
      "radius": 0.55,
-     "rest_length": 0.7,
-     "spring": 9000.0,
+     "rest_length": 0.62,
+     "spring": 10300.0,
      "damping": 2600.0,
      "rebound_damping": 2400.0,
      "anti_sway": 6000.0,
      "tire": {
-      "static_friction": 3.2,
-      "kinetic_friction": 2.4,
+      "static_friction": 3.0,
+      "kinetic_friction": 2.25,
+      "lateral_grip": 0.6,
       "lateral_force": 42000.0,
       "lateral_damping": 9000.0,
       "lateral_relaxation": 0.02,
@@ -142,18 +144,19 @@
     {
      "position": [
       -1.15,
-      0.35,
+      0.43,
       1.45
      ],
      "radius": 0.55,
-     "rest_length": 0.7,
-     "spring": 9000.0,
+     "rest_length": 0.62,
+     "spring": 7700.0,
      "damping": 2600.0,
      "rebound_damping": 2400.0,
      "anti_sway": 6000.0,
      "tire": {
-      "static_friction": 2.6,
-      "kinetic_friction": 1.8,
+      "static_friction": 1.8,
+      "kinetic_friction": 1.35,
+      "lateral_grip": 1.4444,
       "lateral_force": 42000.0,
       "lateral_damping": 9000.0,
       "lateral_relaxation": 0.02,
@@ -174,18 +177,19 @@
     {
      "position": [
       1.15,
-      0.35,
+      0.43,
       1.45
      ],
      "radius": 0.55,
-     "rest_length": 0.7,
-     "spring": 9000.0,
+     "rest_length": 0.62,
+     "spring": 7700.0,
      "damping": 2600.0,
      "rebound_damping": 2400.0,
      "anti_sway": 6000.0,
      "tire": {
-      "static_friction": 2.6,
-      "kinetic_friction": 1.8,
+      "static_friction": 1.8,
+      "kinetic_friction": 1.35,
+      "lateral_grip": 1.4444,
       "lateral_force": 42000.0,
       "lateral_damping": 9000.0,
       "lateral_relaxation": 0.02,
@@ -293,7 +297,7 @@
    "mass_center": [
     0.0,
     0.05,
-    0.0
+    -0.2
    ],
    "inertia_box": [
     2.8,
@@ -312,15 +316,15 @@
    "initial_explosion_offset": 0.0,
    "final_explosion_offset": 0.0,
    "mount_distance": 3.0,
-   "engine_force": 22000.0,
+   "engine_force": 5400.0,
    "engine_curve": [
     [
      0.0,
      1.0
     ],
     [
-     0.7,
-     0.95
+     0.9,
+     1.0
     ],
     [
      1.0,
@@ -328,10 +332,10 @@
     ]
    ],
    "engine_brake": 4500.0,
-   "brake_force": 12000.0,
-   "max_speed": 36.0,
-   "reverse_speed": 12.0,
-   "max_steering": 0.55,
+   "brake_force": 30000.0,
+   "max_speed": 34.0,
+   "reverse_speed": 14.8,
+   "max_steering": 0.5236,
    "thrust": 0.0,
    "reverse_thrust": 0.0,
    "lift": 0.0,
@@ -345,6 +349,8 @@
    "impact_threshold": 15.0,
    "impact_damage": 0.05,
    "strafe_steering": false,
+   "throttle_brakes": true,
+   "reverse_limited": true,
    "steering": {
     "strafe_rate": 0.25,
     "auto_return": true,

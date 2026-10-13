@@ -13,6 +13,9 @@ mod tires;
 pub use tires::{TireState, WheelState};
 /// Torque vehicles and players fall at 20 m/s^2 whatever the shared world uses.
 pub const VEHICLE_GRAVITY: f32 = 20.;
+/// Below this speed a `throttle_brakes` vehicle's reversed throttle drives
+/// it the other way instead of braking.
+const THROTTLE_BRAKE_SPEED: f32 = 0.5;
 pub use checkpoint::*;
 macro_rules! id {
     ($name:ident) => {
@@ -701,13 +704,21 @@ impl VehiclesWorld {
                 .sum::<Vec3>()
                 * sign;
             if impulse.is_finite() && impulse.length_squared() > 0. {
-                kicks.push((body, impulse));
+                kicks.push((body, impulse, v.previous_velocity));
             }
         }
         let mut change = Vec3::ZERO;
-        for (body, impulse) in kicks {
+        for (body, impulse, before) in kicks {
             let b = &mut world.bodies[body];
             let total = b.mass() + mass;
+            // The share never sends the vehicle on into the body faster
+            // than it came: the solver's push out of an overlap is no hit,
+            // and shared with a body that does not give way (a bot holding
+            // its ground) it handed the vehicle back in faster each step,
+            // until the hull flew off at hundreds of units a second.
+            let away = impulse.normalize();
+            let room = (b.linvel().dot(away) + (-before.dot(away)).max(0.)).max(0.);
+            let impulse = impulse.clamp_length_max(room * total);
             b.apply_impulse(-impulse * (b.mass() / total), true);
             change -= impulse / total;
         }
@@ -1971,6 +1982,12 @@ impl VehiclesWorld {
             v.jump_held = c.jump;
             if !v.wheels.is_empty() {
                 self.wheel_rays += v.wheels.len() as u64;
+                // `throttle_brakes`: a throttle against the roll brakes.
+                let against = d.throttle_brakes && {
+                    let b = &world.bodies[v.body];
+                    let rolling = b.linvel().dot(*b.rotation() * Vec3::NEG_Z);
+                    rolling.abs() > THROTTLE_BRAKE_SPEED && c.throttle * rolling < 0.
+                };
                 tires::update(
                     world,
                     v.body,
@@ -1980,7 +1997,7 @@ impl VehiclesWorld {
                     tires::Drive {
                         steering: v.steering,
                         throttle: c.throttle,
-                        braking: c.brake,
+                        braking: c.brake || against,
                         jetting: v.jetting,
                         wake,
                     },

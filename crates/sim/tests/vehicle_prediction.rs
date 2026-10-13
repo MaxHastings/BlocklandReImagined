@@ -389,3 +389,97 @@ fn an_unknown_vehicle_is_refused_cleanly() {
     assert_eq!(client.world().physics().bodies.len(), bodies);
     client.record(MoveInput::default()).unwrap();
 }
+
+/// The Playground buggy (four-wheel drive, its weight forward of the
+/// hull's origin as the Warthog's is) on the ground, weaving at full
+/// throttle by the driver's look: the prediction keeps agreeing with the
+/// host, so a nose-heavy Add-On vehicle does not rubber-band its driver.
+#[test]
+fn a_nose_heavy_buggy_weaving_on_the_ground_agrees_with_the_host() {
+    const BUGGY: &str = "playground-buggy:vehicle/buggy";
+    let buggy = || {
+        Pack::load(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../packages/playground/playground-buggy/assets/vehicles.json"),
+        )
+        .unwrap()
+    };
+    let at = Spawn {
+        definition: BUGGY.into(),
+        transform: Transform {
+            position: [0., 1.5, 0.],
+            ..Default::default()
+        },
+        ..spawn()
+    };
+    let mut v = VehiclesWorld::new(buggy()).unwrap();
+    let mut w = bri_physics::new_world();
+    w.insert(RigidBodyBuilder::fixed(), ground());
+    v.spawn(&mut w, at.clone()).unwrap();
+    w.detect_collisions(&(), &());
+    for _ in 0..240 {
+        v.pre_step(&mut w, &[]).unwrap();
+        w.step();
+        v.post_step(&mut w).unwrap();
+    }
+    let seat = v.seat_position(&w, VehicleId(1), 0).unwrap();
+    v.mount(&w, VehicleId(1), 0, occupant(), seat).unwrap();
+    v.drain_intents();
+    let mirror = CollisionMirror::new(Definitions::default(), vec![ground()], vec![]);
+    let mut client = Predictor::new(mirror, rider_at(seat), Default::default()).unwrap();
+    let start = motion(&v, &w);
+    client
+        .drive(Some((
+            buggy(),
+            DriveSpawn {
+                spawn: Spawn {
+                    transform: start.transform.clone(),
+                    ..at
+                },
+                seat: 0,
+                prefs: (true, true),
+            },
+            start,
+        )))
+        .unwrap();
+    let weave = |tick: u64| {
+        let t = tick as f32 / 120.;
+        MoveInput {
+            forward: 1.0,
+            head_yaw: (t * 0.9).sin() * 0.9,
+            ..Default::default()
+        }
+    };
+    let mut host_after = vec![motion(&v, &w).transform];
+    let mut in_flight: VecDeque<(u64, u64, Motion)> = VecDeque::new();
+    let mut last = weave(0);
+    let mut worst = 0.0_f32;
+    for tick in 1..=1200_u64 {
+        assert_eq!(client.record(weave(tick)).unwrap(), tick);
+        let controls = driver_controls(&weave(tick), (last.yaw, last.pitch), false, (true, true));
+        last = weave(tick);
+        v.set_controls(OwnerId(10), OccupantId(20), controls)
+            .unwrap();
+        v.pre_step(&mut w, &[]).unwrap();
+        w.step();
+        v.post_step(&mut w).unwrap();
+        v.drain_intents();
+        host_after.push(motion(&v, &w).transform);
+        if tick % POSE_EVERY == 0 {
+            in_flight.push_back((tick + DELAY, tick, motion(&v, &w)));
+        }
+        while in_flight
+            .front()
+            .is_some_and(|(arrive, ..)| *arrive <= tick)
+        {
+            let (_, at, pose) = in_flight.pop_front().unwrap();
+            client.drive_pose(at, at, &pose).unwrap();
+        }
+        let (_, _, predicted) = client.driven().unwrap();
+        let host = &host_after[tick as usize];
+        let apart = Vec3::from(predicted.position).distance(Vec3::from(host.position));
+        worst = worst.max(apart);
+    }
+    println!("worst prediction error {worst}");
+    assert!(worst < 0.05, "{worst}");
+}

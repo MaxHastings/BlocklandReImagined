@@ -311,23 +311,55 @@ fn an_empty_engine_curve_is_torques_straight_fall_exactly() {
     assert_eq!(curved.engine_torque(1.01), 0.);
 }
 
+/// Halo's Warthog tags (`docs/audits/vehicle-handling.md`): 0.275 Halo
+/// units a tick (34 here) top speed, gained at a steady 0.0028 a tick per
+/// tick (10.4 a second per second here, about 3.3 s to the top).
 #[test]
-fn the_warthog_pulls_hard_to_its_top_speed_and_tracks_straight() {
+fn the_warthog_pulls_steadily_to_its_tag_top_speed_and_tracks_straight() {
     let run = straight(warthog(|_| {}), 6);
     let linear = straight(warthog(|d| d.engine_curve.clear()), 6);
     eprintln!("warthog {run:?}\nlinear torque {linear:?}");
-    assert!(run.speeds[1] > 22., "quick off the line: {:?}", run.speeds);
-    assert!(run.speeds[5] > 31., "near its top speed: {:?}", run.speeds);
+    let s = &run.speeds;
+    assert!((9.0..12.0).contains(&s[0]), "about 10.4 a second: {s:?}");
     assert!(
-        run.speeds[1] > linear.speeds[1] + 2.,
-        "the curve keeps pulling where a straight fall fades: {:?} {:?}",
-        run.speeds,
+        ((s[1] - s[0]) - s[0]).abs() < s[0] * 0.15,
+        "a steady pull, as Halo's constant acceleration: {s:?}"
+    );
+    assert!(s[2] > 28. && (33.0..34.5).contains(&s[5]), "{s:?}");
+    assert!(
+        linear.speeds[2] < s[2] - 5.,
+        "the flat curve keeps pulling where v20's straight fall fades: {:?}",
         linear.speeds
     );
     assert!(
         run.drift.abs() < 0.05 && run.heading.abs() < 0.005,
         "{run:?}"
     );
+}
+
+/// Halo's Warthog sheds its top speed at 0.011 a tick per tick when the
+/// driver pulls back: under a second. Here pulling back brakes it as hard
+/// as the tyres hold, where v20's reversed engine all but does nothing at
+/// top speed.
+#[test]
+fn pulling_back_stops_it_hard() {
+    let back = Controls {
+        throttle: -1.,
+        ..throttle()
+    };
+    let (_, top, stop) = launch_and_stop(warthog(|_| {}), 5., back, 6.);
+    let (_, _, v20) = launch_and_stop(warthog(|d| d.throttle_brakes = false), 5., back, 6.);
+    let coast = Controls {
+        throttle: 0.,
+        ..throttle()
+    };
+    let (_, _, coasting) = launch_and_stop(warthog(|_| {}), 5., coast, 12.);
+    eprintln!(
+        "from {top}: pulled back stops in {stop} s, v20's reverse {v20} s, coasting {coasting} s"
+    );
+    assert!(stop < 1.3, "{stop}");
+    assert!(v20 > stop * 2., "{v20}");
+    assert!(coasting > stop * 2., "{coasting}");
 }
 
 #[test]
@@ -412,4 +444,101 @@ fn it_stays_on_its_wheels_at_full_lock_and_full_speed() {
     let roll = worst_roll(warthog(|_| {}), 6.);
     eprintln!("worst roll at full lock: {roll}");
     assert!(roll < 0.5, "{roll}");
+}
+
+/// Full throttle `secs`, then `then` until stopped (or `limit` seconds):
+/// seconds to 90% of the top speed, the top speed, and seconds to stop.
+fn launch_and_stop(pack: Pack, secs: f32, then: Controls, limit: f32) -> (f32, f32, f32) {
+    let (mut v, mut w) = spawn(pack, [0., 1.5, 0.]);
+    settle(&mut v, &mut w);
+    board(&mut v, &w);
+    let top = v.definition(BUGGY).unwrap().max_speed;
+    let mut ninety = f32::INFINITY;
+    let mut fastest = 0f32;
+    for i in 0..seconds(secs) {
+        let s = step(&mut v, &mut w, throttle());
+        let speed = Vec3::from(s.velocity).length();
+        fastest = fastest.max(speed);
+        if speed >= top * 0.9 && ninety.is_infinite() {
+            ninety = i as f32 / 120.;
+        }
+    }
+    let mut stopped = f32::INFINITY;
+    for i in 0..seconds(limit) {
+        let s = step(&mut v, &mut w, then);
+        if Vec3::from(s.velocity).length() < 0.5 {
+            stopped = i as f32 / 120.;
+            break;
+        }
+    }
+    (ninety, fastest, stopped)
+}
+
+/// The numbers the buggy takes straight from Halo's Warthog tags, at 4.12
+/// units to a Halo world unit, and its reverse top speed as driven.
+#[test]
+fn the_buggy_carries_the_warthogs_tag_numbers() {
+    let pack = buggy_pack();
+    let d = pack.definitions.iter().find(|d| d.id == BUGGY).unwrap();
+    assert_eq!((d.max_speed, d.reverse_speed), (34., 14.8));
+    assert!((d.max_steering - 30f32.to_radians()).abs() < 1e-4);
+    assert!(d.wheels.iter().all(|w| w.powered && w.rest_length == 0.62));
+    for w in &d.wheels {
+        let (along, across) = if w.position[2] > 0. {
+            (0.45, 0.65)
+        } else {
+            (0.75, 0.45)
+        };
+        assert_eq!(w.tire.static_friction, along * 4.);
+        assert!((w.tire.lateral_grip - across / along).abs() < 1e-3);
+    }
+    let (mut v, mut w) = spawn(pack, [0., 1.5, 0.]);
+    settle(&mut v, &mut w);
+    board(&mut v, &w);
+    let mut s = None;
+    for _ in 0..seconds(5.) {
+        s = Some(step(
+            &mut v,
+            &mut w,
+            Controls {
+                throttle: -1.,
+                ..throttle()
+            },
+        ));
+    }
+    let speed = Vec3::from(s.unwrap().velocity).length();
+    eprintln!("reverse top speed {speed}");
+    assert!((13.5..15.5).contains(&speed), "{speed}");
+}
+
+/// A buggy shoved into someone who holds their ground (here a fixed
+/// body, as the solver sees a walking player) stops against them. Sharing
+/// the hit once handed it back into them faster each step, until it flew
+/// off at hundreds of units a second (390 and 470 for these two).
+#[test]
+fn a_buggy_pinned_against_someone_who_holds_their_ground_never_speeds_up() {
+    use rapier3d::prelude::{ColliderBuilder, RigidBodyBuilder};
+    for (half, gap) in [
+        (Vec3::new(0.6, 1.3, 0.6), 4.3),
+        (Vec3::new(1.0, 1.3, 0.5), 3.0),
+    ] {
+        let (mut v, mut w) = spawn(buggy_pack(), [0., 1.0, 0.]);
+        let (_, someone) = w.insert(
+            RigidBodyBuilder::fixed().translation(Vec3::new(0., half.y + 0.01, -gap)),
+            ColliderBuilder::cuboid(half.x, half.y, half.z),
+        );
+        w.detect_collisions(&(), &());
+        v.set_velocity(&mut w, VehicleId(1), [0., 0., -16.])
+            .unwrap();
+        let mut fastest = 0f32;
+        for _ in 0..seconds(2.) {
+            v.pre_step(&mut w, &[]).unwrap();
+            w.step();
+            v.share_contacts(&mut w, someone, 90.);
+            v.post_step(&mut w).unwrap();
+            let s = v.snapshot(&w).vehicles.remove(0);
+            fastest = fastest.max(Vec3::from(s.velocity).length());
+        }
+        assert!(fastest <= 16.5, "it never sped up ({half}): {fastest}");
+    }
 }

@@ -194,6 +194,7 @@ impl App {
         self.view.observer_eye = None;
         self.view.rendered_camera = None;
         self.view.rendered_roll = 0.0;
+        self.view.pixels_per_unit = None;
         self.view.drawn_controls = None;
         self.scene.liquid_cache = None;
         self.ghosts.clear();
@@ -336,6 +337,9 @@ impl App {
         let avatar_catalog = self.avatar.avatar_assets.package.clone();
         let body_mounts =
             bri_sim::session::shape_mount_points(&self.avatar.avatar_assets.rig.shape);
+        // Shots leave the muzzle each image draws at in the hand.
+        let body_grips = bri_sim::session::shape_grips(&self.avatar.avatar_assets.rig, &[]);
+        let image_barrels = self.world_items.assets().image_barrels();
         let mut catalog = self.build.tool_ui.server_catalog();
         // Start Game's Music Files: the loops this game's music bricks offer.
         let prefs = &self.ui.core.prefs;
@@ -578,6 +582,8 @@ impl App {
                     item_bounds,
                     avatar_catalog,
                     body_mounts,
+                    body_grips,
+                    image_barrels,
                     vehicle_pack,
                     bot_kinds,
                     event_catalog,

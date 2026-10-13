@@ -271,6 +271,7 @@ impl App {
                 observer_eye: None,
                 rendered_camera: None,
                 rendered_roll: 0.0,
+                pixels_per_unit: None,
                 drawn_controls: None,
             },
             fx: Effects {
@@ -311,6 +312,7 @@ impl App {
                 after_sync: None,
                 left_out_add_ons: None,
                 add_on_health: Default::default(),
+                hud_regions: Default::default(),
             },
             world_shapes: None,
             shapes_uploaded: None,
