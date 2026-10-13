@@ -1544,6 +1544,21 @@ pub struct ArchetypeDef {
     /// waits (`PlayerData::onTrigger` doing nothing).
     #[serde(default)]
     pub uses_items: Option<bool>,
+    /// Its own jump, pain and death sounds, each an `AudioProfile` name
+    /// (an empty one plays nothing); one left out keeps the base's.
+    #[serde(default)]
+    pub sounds: ArchetypeSounds,
+}
+/// [`ArchetypeDef::sounds`].
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ArchetypeSounds {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub jump: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pain: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub death: Option<String>,
 }
 /// One rider seat: the model node riders follow, its rest position from
 /// the feet (facing -Z, at scale 1) and the rider's action (`root`, `sit`).
@@ -1575,6 +1590,13 @@ impl ArchetypeDef {
         ensure!(
             self.model.as_ref().is_none_or(|m| text(m, 160)),
             "model must be a model id"
+        );
+        ensure!(
+            [&self.sounds.jump, &self.sounds.pain, &self.sounds.death]
+                .into_iter()
+                .flatten()
+                .all(|s| s.is_empty() || text(s, 128)),
+            "sounds name sound profiles"
         );
         if let Some(stock) = &self.adjusts {
             ensure!(

@@ -50,7 +50,10 @@ fn tap_after(idle: usize) -> (bool, bool) {
     let mut jumped = false;
     for _ in 0..120 {
         s.step().unwrap();
-        jumped |= s.take_cues().iter().any(|c| c.kind == CueKind::Jump);
+        jumped |= s
+            .take_cues()
+            .iter()
+            .any(|c| matches!(c.kind, CueKind::Jump { .. }));
     }
     (jumped, could)
 }

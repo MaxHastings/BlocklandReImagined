@@ -243,3 +243,57 @@ fn the_host_eye_follows_the_crouch_thread_like_the_camera() {
     }
     assert!(dipped);
 }
+
+/// Each player type jumps with its own `jumpSound`: the horse with
+/// `HorseJumpSound`, the Blockhead with the standard jump.
+#[test]
+fn a_player_type_jumps_with_its_own_sound() {
+    use bri_minigames::Settings;
+    use bri_sim::presentation::CueKind;
+    use bri_sim::session::{Command, MiniGameRequest};
+    let jump_sound = |kind: PlayerType| {
+        let mut s = session();
+        let a = s
+            .join("Rider".into(), Vec3::new(0.0, 0.05, 0.0), false)
+            .unwrap();
+        let settings = Settings {
+            player_type: kind.id().into(),
+            ..Settings::default()
+        };
+        s.command(
+            a,
+            1,
+            Command::MiniGame(MiniGameRequest::Create { color: 0, settings }),
+        )
+        .unwrap();
+        for _ in 0..120 {
+            s.step().unwrap();
+        }
+        assert_eq!(datablock(&s, a), kind);
+        s.take_cues();
+        s.movement(
+            a,
+            1,
+            MoveInput {
+                jump: true,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let mut sounds = Vec::new();
+        for _ in 0..60 {
+            s.step().unwrap();
+            sounds.extend(s.take_cues().into_iter().filter_map(|c| match c.kind {
+                CueKind::Jump { sound } => Some(sound),
+                _ => None,
+            }));
+        }
+        assert_eq!(sounds.len(), 1, "{kind:?} jumped once");
+        sounds.remove(0)
+    };
+    assert_eq!(
+        jump_sound(PlayerType::Horse).as_deref(),
+        Some("HorseJumpSound")
+    );
+    assert_eq!(jump_sound(PlayerType::Standard), None);
+}

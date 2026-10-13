@@ -47,6 +47,9 @@ pub struct Archetype {
     /// (Slayer's `PlayerFrozenArmor`) does not.
     #[serde(default = "yes", skip_serializing_if = "is_yes")]
     pub uses_items: bool,
+    /// What it sounds like jumping, hurting and dying.
+    #[serde(default, skip_serializing_if = "Sounds::is_standard")]
+    pub sounds: Sounds,
 }
 fn yes() -> bool {
     true
@@ -71,6 +74,33 @@ impl MountPoint {
     /// The seat in the world for a mount at `feet`, facing `yaw`.
     pub fn seat(&self, feet: glam::Vec3, yaw: f32, scale: f32) -> glam::Vec3 {
         feet + glam::Quat::from_rotation_y(-yaw) * glam::Vec3::from(self.position) * scale
+    }
+}
+/// An archetype's own sounds (`PlayerData.jumpSound`, and `painSound` and
+/// `deathSound` under `useCustomPainEffects`), each an `AudioProfile` name.
+/// None makes the standard player's sound; an empty name makes none, as a
+/// Bot_Hole bot's `jumpSound = ""` did.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Sounds {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub jump: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pain: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub death: Option<String>,
+}
+impl Sounds {
+    /// Longest sound name, as cues carry it.
+    pub const MAX_NAME: usize = 128;
+    pub fn is_standard(&self) -> bool {
+        *self == Self::default()
+    }
+    fn valid(&self) -> bool {
+        [&self.jump, &self.pain, &self.death]
+            .into_iter()
+            .flatten()
+            .all(|s| s.len() <= Self::MAX_NAME && !s.chars().any(char::is_control))
     }
 }
 /// How clients draw an archetype and place its camera.
@@ -119,6 +149,7 @@ impl Archetype {
                 && (1.0..=100_000.0).contains(&self.max_health)
                 && self.look.camera_distance.is_finite()
                 && (0.0..=64.0).contains(&self.look.camera_distance)
+                && self.sounds.valid()
                 && self.mount_points.len() <= MAX_MOUNT_POINTS
                 && self.mount_points.iter().all(|m| {
                     !m.node.is_empty()
@@ -153,6 +184,10 @@ impl Archetype {
                 third_person_only: false,
             },
             uses_items: true,
+            sounds: Sounds {
+                jump: (kind == PlayerType::Horse).then(|| "HorseJumpSound".into()),
+                ..Default::default()
+            },
         }
     }
 }
@@ -305,5 +340,17 @@ mod tests {
         let back: Archetypes = serde_json::from_str(&json).unwrap();
         back.validate().unwrap();
         assert_eq!(back, table);
+    }
+
+    #[test]
+    fn the_horse_jumps_with_its_own_sound() {
+        let table = Archetypes::default();
+        let horse = table.resolve(PlayerType::Horse.archetype());
+        assert_eq!(horse.sounds.jump.as_deref(), Some("HorseJumpSound"));
+        let standard = table.resolve(PlayerType::Standard.archetype());
+        assert!(standard.sounds.is_standard());
+        let mut loud = horse.clone();
+        loud.sounds.pain = Some("x".repeat(Sounds::MAX_NAME + 1));
+        assert!(loud.validate().is_err());
     }
 }

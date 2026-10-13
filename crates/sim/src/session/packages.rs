@@ -630,6 +630,16 @@ fn archetype(
     if let Some(v) = def.uses_items {
         archetype.uses_items = v;
     }
+    let sounds = &mut archetype.sounds;
+    for (to, from) in [
+        (&mut sounds.jump, &def.sounds.jump),
+        (&mut sounds.pain, &def.sounds.pain),
+        (&mut sounds.death, &def.sounds.death),
+    ] {
+        if from.is_some() {
+            to.clone_from(from);
+        }
+    }
     archetype.validate()?;
     Ok(archetype)
 }
