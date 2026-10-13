@@ -280,6 +280,9 @@ const JET_DROP_SECONDS: f32 = 3.0;
 const BRAKE_FROM: f32 = 8.0;
 /// Farther than this (flat) on foot from an objective's point, a vehicle
 /// may be the way there.
+/// How far off an objective must be before a bot's route to it leans its
+/// own way (`Costs::veer`); nearer, every bot takes the straight way.
+const VEER_FROM: f32 = 24.0;
 const OBJECTIVE_DRIVE_FROM: f32 = 32.0;
 /// Nearer than this (flat) to an objective's point that needs only its feet,
 /// it looks at the point; farther, along its way.
@@ -1876,10 +1879,11 @@ impl Session {
         } else if let Some(goal) = brain.goal {
             let point = goal.point(home);
             if brain.plan.is_empty() && brain.search.is_none() && !brain.settled {
-                // On the way to an objective each bot (each life of it)
+                // On a long way to an objective each bot (each life of it)
                 // leans its own way (`Costs::veer`), so a side spreads over
-                // the ways there instead of filing down one.
-                if matches!(goal, Goal::Objective(_)) {
+                // the ways there instead of filing down one. A near one (a
+                // ball it is closing on) it takes straight.
+                if matches!(goal, Goal::Objective(_)) && flat(point - feet).length() > VEER_FROM {
                     let life = self.peers.get(&bot).map_or(0, |p| p.combat.spawn_tick);
                     costs.veer = (bot << 32) ^ life | 1;
                 }
