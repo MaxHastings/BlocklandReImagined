@@ -9,6 +9,7 @@ use crate::player::PlayerTuning;
 use crate::player_types::PlayerType;
 use anyhow::{Result, ensure};
 use bri_content::body::{Animations, Sockets};
+use bri_content::camera::CameraProfile;
 use serde::{Deserialize, Serialize};
 
 /// Index into an [`Archetypes`] table. `0` is v20's standard player.
@@ -106,6 +107,10 @@ pub struct Look {
     /// a role left out asks for the Blockhead's clip name.
     #[serde(default, skip_serializing_if = "Animations::is_empty")]
     pub animations: Animations,
+    /// The body's camera: field of view, first-person offset, bob, weapon
+    /// sway and third-person pivot. The default is the stock camera.
+    #[serde(default, skip_serializing_if = "CameraProfile::is_default")]
+    pub camera: CameraProfile,
 }
 /// v20's horse (`horse.dts`): players and entities with this look draw
 /// and carry items as a horse.
@@ -148,6 +153,7 @@ impl Archetype {
         );
         self.sockets.validate()?;
         bri_content::body::validate_animations(&self.look.animations)?;
+        self.look.camera.validate()?;
         if let Some(source) = &self.controller {
             source.validate()?;
         }
@@ -173,6 +179,7 @@ impl Archetype {
                 first_person_only: false,
                 third_person_only: false,
                 animations: Animations::new(),
+                camera: CameraProfile::default(),
             },
             uses_items: true,
             sockets: Sockets::default(),

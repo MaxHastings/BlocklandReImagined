@@ -149,9 +149,8 @@ pub fn function_capability(name: &str) -> Result<Option<Capability>, UnknownFunc
     Ok(match name {
         "log" | "random" => None,
         "mesh_create" | "material_create" | "material_set" | "material_blend"
-        | "material_space" | "draw" | "draw_with" | "camera" | "environment" | "view" => {
-            Some(Capability::RenderLayer)
-        }
+        | "material_space" | "draw" | "draw_with" | "camera" | "environment" | "view"
+        | "hud_region" => Some(Capability::RenderLayer),
         "shader" => Some(Capability::RenderShader),
         "sound_play" | "sound_at" => Some(Capability::Audio),
         "key_down" => Some(Capability::InputFocused),

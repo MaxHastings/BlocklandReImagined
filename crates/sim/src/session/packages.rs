@@ -635,6 +635,9 @@ fn archetype(
     if let Some(v) = def.third_person_only {
         archetype.look.third_person_only = v;
     }
+    if let Some(camera) = &def.camera {
+        archetype.look.camera = camera.clone();
+    }
     if let Some(v) = def.uses_items {
         archetype.uses_items = v;
     }

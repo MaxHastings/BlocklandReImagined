@@ -11,11 +11,11 @@ visuals depending on the rules. `bri-addon-check` tells you which it is.
 | `behaviour`, `script` | host | a game rule ([Game rules](rules.md)) | `packages/samples/sample-survival-points` |
 | `world` | host | a generated chunk world: materials, a `generate(cx, cz)` function | `packages/stresslab/stresslab-world` |
 | `entity` | host | a scripted creature: model, `think` function, speed, health | `packages/stresslab/stresslab-creeper` |
-| `archetype` | host | a playable body: movement, collision `box` or `ball`, steering, health, riding, model, camera distance | `crates/sim/tests/unlike_modes.rs` |
+| `archetype` | host | a playable body: movement, collision `box` or `ball`, steering, health, riding, model, camera distance and `camera` profile | `crates/sim/tests/unlike_modes.rs` |
 | `controller` | host | a movement controller: a WebAssembly module an archetype names as its `controller`; clients receive it with the archetype table ([Movement controllers](../architecture/movement-controllers.md)) | `packages/samples/sample-wall-kick`, `packages/samples/sample-dive`, `packages/samples/sample-trooper` |
 | `mode` | host | a Start Game game mode: name, the Add-Ons it runs, a map, and its own mini-game | `packages/stresslab/stresslab-mode`, `crates/sim/tests/mode_and_voxels.rs` |
 | `model` | each player | a box model for an entity | `packages/stresslab/stresslab-creeper-model` |
-| `hud` | each player | a HUD panel ([HUD panels](hud.md)) | `packages/samples/sample-points-hud` |
+| `hud` | each player | a HUD panel, or a layout that claims a HUD region and draws textured elements in it ([HUD panels and regions](hud.md)) | `packages/samples/sample-points-hud` |
 | `binds` | each player | keys for an Add-On's commands, under its own heading in Controls (below) | `crates/addon-import/ports/tool_newduplicator/files/binds.json` |
 | `weapons` | everyone | weapons ([Weapons](weapons.md)) | `packages/samples/sample-bubble-blaster` |
 | `bricks`, `vehicles` | everyone | written by Import Add-On ([Old v20 Add-Ons and new bricks](old-addons.md)), or a `vehicles.json` you write (fields below) | `packages/showcase/steel-ball-kit` |
@@ -142,6 +142,44 @@ Commando are two box bodies with their own sockets. Tests:
 `crates/client/src/avatar.rs` (`a_body_with_its_own_nodes_and_two_clips_…`,
 `a_box_body_holds_at_its_own_hand_…`), `crates/sim/tests/playground.rs`
 and `crates/client/tests/body_attachments_render.rs`.
+
+**Camera.** A body owns how its player sees while it is theirs with
+`camera`, so a heavy shooter can feel nothing like a Blockhead:
+
+```json
+"camera": {
+  "fov": 72,
+  "eye_offset": [0, 0.08, 0],
+  "bob": { "height": 0.05, "side": 0.035, "stride": 3.2 },
+  "sway": { "lag": 0.6, "max_degrees": 5, "settle": 6, "bob": 0.8 },
+  "third_person": { "side": 0.9, "height": 0.25 }
+}
+```
+
+- `fov` (30 to 140 degrees) is the body's field of view for a player at the
+  stock 90; a player who set their own FOV gets the same ratio (72 seen at
+  a 110 setting is 88). Aiming and zoom own the FOV while they run, and a
+  rule's `set_fov` wins over the body.
+- `eye_offset` moves only the first-person camera from the `eye` socket,
+  right, up and forward along the heading (units at scale 1, within 2). Aim
+  and shots stay at the eye. Eye height itself is the `eye` socket.
+- `bob` dips the first-person camera `height` at each footfall and rocks it
+  `side` across a cycle of two steps covering `stride` units, while walking
+  on the ground; it eases in and out with speed.
+- `sway` makes the held weapon trail the look by `lag` of each turn (0 to
+  1), never more than `max_degrees`, settling at `settle` per second, and
+  bob against the camera by `bob` times the camera's bob. Client code
+  drawing its own first-person model reads the same sway from `view`.
+- `third_person` puts the on-foot chase camera's pivot over a shoulder
+  (`side`, negative for the left) and higher (`height`); its distance is
+  still `camera_distance`.
+
+All of it scales with the body and applies only while that body is the
+player's, on foot and not observing: a vehicle seat's camera, the
+observer camera and a switch to another body each take over, and a body
+with no `camera` sees exactly as the stock Blockhead does. The
+[Trooper](../../packages/samples/sample-trooper/trooper-archetype.json)
+has one; test `crates/client/tests/hud_regions_render.rs`.
 
 An archetype with `"adjusts": "v20.player.<datablock>"` (and no `base` or
 `name`) is no new body: it changes the constants it names on one of v20's
