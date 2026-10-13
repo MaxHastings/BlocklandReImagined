@@ -81,7 +81,14 @@ bot does through the same code.
    no fight known explores like a walker, with its chassis as the body: an
    explore place needs floor a footprint beyond it, faces the hull's
    heading, and is reached within the footprint. A passenger goes where its
-   driver takes it.
+   driver takes it. A bot crewing a vehicle alone whose controls and gun
+   are separate seats sits where its plan is served, changing seats with
+   the same keys a player uses (`Session::bot_lone_role`): at the gun to
+   fight an enemy the gun reaches, at the controls to go anywhere, and at
+   the controls too for an enemy on foot its chassis runs down from nearer
+   than the gun's near edge (its blast). Alone at the controls, the free gun
+   is its weapon for choosing a fight. A seat someone holds or an ally is
+   on its way to is left free, and with nothing to do it stays put.
 3. **Goal and path.** The behaviour sets the goal; the route planner (see
    [Routes](#routes-one-planner-for-every-way-of-getting-about)) over the
    walk grid (`crate::nav`, shared by every bot of a body size, updated as
@@ -305,7 +312,7 @@ person presses:
   driver going its way: one whose intent leads
   nearer the passenger's enemy, or none known; it gets out when the driver
   turns the other way and it would rather walk, and when no driver is in
-  the seat or coming to it.
+  the seat or coming to it, unless the controls are free for it to take.
 
   Each time a bot gets out it says why (`interactions::Leave`), and the
   gauntlet counts the reasons: `wrecked`, `overturned`, `undrivable` (its
@@ -703,8 +710,8 @@ matching a prefix). It runs with the gauntlet:
 `cargo test -p bri-chaos --test bot_gauntlet -- --nocapture`.
 
 The gauntlet scores play, not caution. A walker pressed against the
-vehicle its enemy sits in is `pressing` (pushing in to hit them through the
-hull), never `stuck`. A fall is the bot's own (`fell`) unless another
+vehicle its enemy sits in is `pressing` (at the hull it bites, or pushing in
+to reach them), never `stuck`. A fall is the bot's own (`fell`) unless another
 pushed it after it last stood on something, or within 2 s while it was
 still on the floor (a chassis's contact counts once, as it begins, and then
 presses on). An enemy's push is `knocked_off`, a shove or run-over that
@@ -865,7 +872,7 @@ Interact opportunity. Nothing reads a content name.
 |---|---|---|
 | `idle_play` | no enemy seen or remembered | Interact offers a push on a loose body toward the nearest player in sight (stopping 3.5 short of them), and a passenger seat in a vehicle a teammate drives; a rider stays while the teammate drives. Scored 0.2, between Wander and Return, so every purpose outranks it. Off while any bot in the same game works an objective and until 10 s after the last one (the start of a round is not calm), and never on a body another bot claims, so play cannot spoil a match. |
 | `crouch` | for 1.5 s after a hit from more than 5 units, while fighting or holding its ground: the move choice weighs a crouch as much as keeping on | crouches (damage already scales with crouching) |
-| `dodge` | a projectile, not its own or an ally's, that can hurt (damage or splash damage) and whose path over the next 0.75 s (velocity, ballistic fall) comes within the body plus its splash radius, where floor lies under the spot 0.8 s of its current drift reaches; each projectile is judged once by the move choice, a hop worth as much as keeping on, more by however much of the health it has left past half the shot would take | goes one of three ways (`Domain::Dodge`, each open way worth the same and growing stale as fast as a goof, so dodges vary): a hop straight up for a quarter second; a strafe square to the shot's flight, away from its line, for a third of a second, where floor lies under the step and never into where an ally's weapon will hit; or a crouch's charge and then the jets straight up, only while its jets lift it with half a second of fuel (`route::Jets`) and its kind flies. A bot carrying an objective keeps to its way and does not dodge |
+| `dodge` | a chassis an enemy drives that runs people over and whose path over the next 0.75 s comes within the body plus half the hull's width (judged again every 2 s; only a step aside, since a hop comes down in its way); or a projectile, not its own or an ally's, that can hurt (damage or splash damage) and whose path over the next 0.75 s (velocity, ballistic fall) comes within the body plus its splash radius, where floor lies under the spot 0.8 s of its current drift reaches; each projectile is judged once by the move choice, a hop worth as much as keeping on, more by however much of the health it has left past half the shot would take | goes one of three ways (`Domain::Dodge`, each open way worth the same and growing stale as fast as a goof, so dodges vary): a hop straight up for a quarter second; a strafe square to the shot's flight, away from its line, for a third of a second, where floor lies under the step and never into where an ally's weapon will hit; or a crouch's charge and then the jets straight up, only while its jets lift it with half a second of fuel (`route::Jets`) and its kind flies. A bot carrying an objective keeps to its way and does not dodge |
 | `activate` | a door within 2.5 units on the straight way to its goal, while not fighting; and the `door` goof: at a natural pause, a door within 8 units in sight (looked for about every half second). A door is a brick whose catalog swap the next click swaps back: the click only opens or closes the brick itself. A brick with only event rows (a reset, win, teleport or blast button) is never clicked, in the way or for fun | aims at it and clicks with the empty hand (`Command::Activate`), putting a tool away first and taking it out again after |
 | `hand_weapon` | wandering, calm, no enemy seen, with two or more attacks and a teammate in sight with none and a free slot, its teamwork above 0 | walks within 2.6 units, faces them and drops a spare (not the one in hand) their way (`Command::DropTool`); the ordinary contact pickup, or their arming, takes it |
 
@@ -916,7 +923,16 @@ its kind and team label. See `bots/looks.rs`.
   - `melee` (`damage`, `reach`, `seconds`, `action`, `name`): with empty
     hands it fights with its body, from the band its reach gives, hitting
     once every `seconds` and playing `action` on the arms' thread. Damage
-    goes through the same rules as a shot.
+    goes through the same rules as a shot. An enemy in a seat is reached
+    at the hull it sits in, when the hit's damage type wears hulls
+    (`vehicle_scale` above 0): the bot goes to the hull's nearest point,
+    looks at it, and a hit that does not reach the rider lands on the hull,
+    scaled as any weapon's.
+  - `weapons` (default true): false keeps its hands empty. It never takes
+    up, draws or fires a hand weapon, and puts away any the rules hand it
+    (a mini-game loadout), so it fights with its `melee` or a vehicle gun
+    it crews. A simple enemy (the Playground's Stomper) is this, `melee`
+    and the opt-out weights in `behaviours`, on the same brain.
   - `moves`: `walk`, or `swim`. A swimmer in water skips the walk grid and
     heads straight for its goal at any depth (jump rises, crouch dives),
     roams up and down as well as across, and every goal is kept inside its

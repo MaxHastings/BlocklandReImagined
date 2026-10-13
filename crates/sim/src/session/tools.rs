@@ -74,6 +74,10 @@ pub struct ToolCatalog {
     pub items: BTreeSet<String>,
     /// Stable print ID -> original print aspect (including universal Letters).
     pub prints: BTreeMap<String, String>,
+    /// Lowercase name a save may give a print (`2x2f/vent`, `Letters/A`)
+    /// -> its stable ID, from the materials bundle's aliases.
+    #[serde(default)]
+    pub print_aliases: BTreeMap<String, String>,
     /// Stable brick definition ID -> original print aspect.
     pub brick_print_aspects: BTreeMap<String, String>,
     /// Stable brick definition ID -> "Category/Subcategory/Name" as the
@@ -139,6 +143,7 @@ impl ToolCatalog {
                 && self.emitters.len() <= 100_000
                 && self.items.len() <= 1024
                 && self.prints.len() <= 100_000
+                && self.print_aliases.len() <= 100_000
                 && self.brick_print_aspects.len() <= 100_000
                 && self.brick_names.len() <= 100_000
                 && self.brick_names.values().all(|n| n.len() <= 256)
@@ -154,6 +159,12 @@ impl ToolCatalog {
         {
             ContentRef::Resolved(id.clone()).validate()?;
         }
+        ensure!(
+            self.print_aliases
+                .values()
+                .all(|id| self.prints.contains_key(id)),
+            "Print alias names an unavailable print"
+        );
         for (definition, profile) in &self.swap_sounds {
             ensure!(
                 self.swaps.contains_key(definition),
@@ -180,6 +191,17 @@ impl ToolCatalog {
             );
         }
         Ok(())
+    }
+    /// Whether a print a save names is installed here: by stable ID, by
+    /// alias, or by the alias an older save's name means
+    /// ([`bri_content::brick_materials::legacy_print_alias`]).
+    pub fn has_print(&self, name: &str) -> bool {
+        let known = |name: &str| {
+            self.prints.contains_key(name)
+                || self.print_aliases.contains_key(&name.to_ascii_lowercase())
+        };
+        known(name)
+            || bri_content::brick_materials::legacy_print_alias(name).is_some_and(|a| known(&a))
     }
     fn print_aspect<'a>(&'a self, brick: &Brick) -> Result<&'a str> {
         let ContentRef::Resolved(id) = &brick.definition else {

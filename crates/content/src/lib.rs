@@ -94,3 +94,4 @@ impl Terrain {
 }
 pub mod brick_materials;
 pub mod environment;
+pub mod environment_pack;

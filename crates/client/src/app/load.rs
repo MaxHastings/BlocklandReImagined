@@ -149,6 +149,7 @@ impl App {
             weather,
             gpu: GpuState {
                 weather_renderer: None,
+                weather_revision: 0,
                 renderer: None,
                 shell_gpu: None,
                 hidden_lines: None,
@@ -238,6 +239,7 @@ impl App {
             scene: SceneState {
                 cpu_scene: None,
                 cpu_terrain: Vec::new(),
+                scenery: Default::default(),
                 chunks_left_out: BTreeSet::new(),
                 shape_indices: BTreeMap::new(),
                 meshes: None,
@@ -380,6 +382,10 @@ impl App {
             }
             app.notify_left_out_add_ons(&left_out);
         } else {
+            // Everything above loaded the list as it is on disk, so the
+            // first Host uses it as it stands; reloading it there redid
+            // this whole startup load (seconds) before the map began.
+            app.addons.packages_from_tools = true;
             app.check_add_ons(&rule_problems);
         }
         Ok(app)

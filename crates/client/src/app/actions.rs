@@ -225,7 +225,7 @@ impl App {
             self.ui.apply_session(
                 id,
                 UiUpdate::Connection(ConnectionState::Connecting {
-                    text: "Converting Add-Ons…".into(),
+                    text: "Getting Add-Ons ready…".into(),
                 }),
             );
             self.addons.after_sync = Some(addons::ReloadResume::Action {
@@ -973,7 +973,11 @@ impl App {
                 crate::add_ons::retry(&root, row).and_then(|()| {
                     self.sync_add_ons()?;
                     let mut view = crate::add_ons::view(&root);
-                    view.notice = "Converting... the game keeps running meanwhile.".into();
+                    let ported = view.rows.iter().any(|r| &r.id == row && r.ported);
+                    view.notice = format!(
+                        "{}... the game keeps running meanwhile.",
+                        if ported { "Installing" } else { "Converting" }
+                    );
                     self.show_add_ons(view);
                     Ok(())
                 })
