@@ -171,7 +171,8 @@ impl FrameRecord {
             .map(|s| s.time)
             .sum()
     }
-    /// The frame's spans, longest first with their longest children, then
+    /// The frame's spans, longest first with their longest children (and
+    /// theirs from 1 ms, in brackets), then
     /// what no span covered and the notes: "update 3.1 ms (network 0.2,
     /// local game 2.6), draw 380.2 ms (world upload 351.0, chunk uploads
     /// 20.3), present 1.0 ms, untraced 0.4 ms; events: graphics rebuilt".
@@ -201,6 +202,24 @@ impl FrameRecord {
                     if child.count > 1 {
                         let _ = write!(out, " x{}", child.count);
                     }
+                    // A child's own long parts, so a slow "world
+                    // presentation" names what inside it was slow.
+                    let mut inner: Vec<&SpanTime> = self
+                        .spans
+                        .iter()
+                        .filter(|s| s.parent == Some(child.name) && s.time >= SHOWN_INNER)
+                        .collect();
+                    inner.sort_by(|a, b| b.time.cmp(&a.time));
+                    if !inner.is_empty() {
+                        out.push_str(" [");
+                        for (j, s) in inner.iter().take(4).enumerate() {
+                            if j > 0 {
+                                out.push_str(", ");
+                            }
+                            let _ = write!(out, "{} {:.1}", s.name, millis(s.time));
+                        }
+                        out.push(']');
+                    }
                 }
                 out.push(')');
             }
@@ -220,6 +239,8 @@ impl FrameRecord {
 }
 
 const SHOWN: Duration = Duration::from_micros(100);
+/// Spans two levels down are listed from this long.
+const SHOWN_INNER: Duration = Duration::from_millis(1);
 
 fn millis(d: Duration) -> f64 {
     d.as_secs_f64() * 1000.0
@@ -337,5 +358,28 @@ mod tests {
             "draw 380.0 ms (world upload 350.0, chunk uploads 20.0), update 3.0 ms, \
              untraced 17.0 ms; events: graphics rebuilt"
         );
+    }
+
+    #[test]
+    fn a_slow_child_names_its_own_slow_parts() {
+        reset();
+        {
+            let _update = span("update");
+            let _presentation = span("world presentation");
+            {
+                let _avatars = span("avatars");
+                wait(3);
+            }
+            let _quick = span("quick");
+        }
+        let frame = finish(Duration::from_millis(10), false);
+        let text = frame.describe();
+        assert!(
+            text.starts_with("update ") && text.contains(" ms (world presentation "),
+            "{text}"
+        );
+        assert!(text.contains("] ") || text.contains("])"), "{text}");
+        assert!(text.contains(" [avatars "), "{text}");
+        assert!(!text.contains("quick"), "{text}");
     }
 }
