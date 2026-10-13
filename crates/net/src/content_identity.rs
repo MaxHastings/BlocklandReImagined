@@ -242,24 +242,75 @@ pub fn brick_geometry_assets(
     }
     Ok(out)
 }
-/// Bot kinds from every package providing `assets/bots.json`, in
-/// `packages.json` order (a later id replaces an earlier one). The base
-/// game provides none.
+/// Bot kinds from every enabled Add-On providing them, in `packages.json`
+/// order (a later id replaces an earlier one). The base game provides none.
 pub fn bot_kinds(
     content_root: &Path,
     packages: &bri_package::packages::PackageSet,
 ) -> Result<Vec<bri_sim::bot_kind::BotKind>> {
-    bot_kinds_from(&kind_providers(content_root, packages, "bots.json")?)
+    bot_kinds_from_files(&bot_providers(content_root, packages)?)
 }
-/// [`bot_kinds`] from already listed providers.
+/// Each enabled Add-On's bot kinds file, as (`<dir>/<file>`, absolute
+/// path): the `file` of the `bots` kind its manifest provides, as it does
+/// for every other kind (the Stomper's and the Fizzer's are `bots.json`
+/// beside the manifest), else `assets/bots.json`.
+pub fn bot_providers(
+    content_root: &Path,
+    packages: &bri_package::packages::PackageSet,
+) -> Result<Vec<(String, PathBuf)>> {
+    let mut out = Vec::new();
+    for entry in packages.packages.iter().filter(|p| p.role.is_none()) {
+        let dir = bri_package::packages::package_dir(content_root, entry)?;
+        let declared = declared_files(&dir, "bots");
+        let files = if declared.is_empty() && dir.join("assets/bots.json").is_file() {
+            vec!["assets/bots.json".to_string()]
+        } else {
+            declared
+        };
+        for file in files {
+            let path = contained(&dir.canonicalize()?, &file)
+                .with_context(|| format!("Add-On {}: {file}", entry.dir))?;
+            out.push((format!("{}/{file}", entry.dir), path));
+        }
+    }
+    Ok(out)
+}
+/// The `file` of each `kind` entry in the manifest's `provides` under
+/// `dir`, in order; none when it has no readable manifest.
+fn declared_files(dir: &Path, kind: &str) -> Vec<String> {
+    let Ok(bytes) = bounded_bytes(&dir.join("package.json"), 256 * 1024) else {
+        return Vec::new();
+    };
+    let Ok(manifest) = serde_json::from_slice::<serde_json::Value>(&bytes) else {
+        return Vec::new();
+    };
+    manifest["provides"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|p| p["kind"] == kind)
+        .filter_map(|p| p["file"].as_str().map(str::to_string))
+        .collect()
+}
+/// [`bot_kinds`] from already listed providers' directories, each holding
+/// a `bots.json`.
 pub fn bot_kinds_from(providers: &[(String, PathBuf)]) -> Result<Vec<bri_sim::bot_kind::BotKind>> {
+    let files = providers
+        .iter()
+        .map(|(dir, abs)| Ok((format!("{dir}/bots.json"), contained(abs, "bots.json")?)))
+        .collect::<Result<Vec<_>>>()?;
+    bot_kinds_from_files(&files)
+}
+/// [`bot_kinds`] from already found files ([`bot_providers`]).
+pub fn bot_kinds_from_files(
+    files: &[(String, PathBuf)],
+) -> Result<Vec<bri_sim::bot_kind::BotKind>> {
     let mut packs = Vec::new();
-    for (dir, abs) in providers {
-        let path = contained(abs, "bots.json")?;
-        let bytes = bounded_bytes(&path, 128 * 1024)?;
+    for (label, path) in files {
+        let bytes = bounded_bytes(path, 128 * 1024)?;
         packs.push(
             bri_sim::bot_kind::BotPack::from_json(&bytes)
-                .with_context(|| format!("Add-On {dir}: bots.json"))?,
+                .with_context(|| format!("Add-On {label}"))?,
         );
     }
     bri_sim::bot_kind::BotPack::merge(packs)
@@ -1648,5 +1699,71 @@ mod tests {
             ),
             21
         );
+    }
+
+    /// A bots Add-On is read where its manifest says (the Stomper's and
+    /// the Fizzer's `bots.json` beside `package.json`), as well as at
+    /// `assets/bots.json` when it names none: each one's kinds reach a
+    /// Vehicle Spawn brick's list on a real host.
+    #[test]
+    fn bot_kinds_follow_the_manifest_file() {
+        let scratch = bri_content::testing::ScratchDir::new("bot-providers").unwrap();
+        let root = scratch.path();
+        crate::testing::write_root(root, &[crate::testing::MAP]).unwrap();
+        let mut set = bri_package::packages::PackageSet::load_root(root).unwrap();
+        let repo = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../packages");
+        for (id, from) in [
+            ("blockhead_bot", "blockhead_bot"),
+            ("playground-stomper", "playground/playground-stomper"),
+            ("playground-fizzer", "playground/playground-fizzer"),
+        ] {
+            let to = root.join("add-ons").join(id);
+            for file in ["package.json", "bots.json", "assets/bots.json"] {
+                let from = repo.join(from).join(file);
+                if from.is_file() {
+                    std::fs::create_dir_all(to.join(file).parent().unwrap()).unwrap();
+                    std::fs::copy(from, to.join(file)).unwrap();
+                }
+            }
+            set.packages.push(bri_package::packages::PackageEntry {
+                id: id.into(),
+                version: "1.0.0".into(),
+                side: bri_package::packages::Side::Shared,
+                dir: format!("add-ons/{id}"),
+                role: None,
+            });
+        }
+        let files: Vec<String> = bot_providers(root, &set)
+            .unwrap()
+            .into_iter()
+            .map(|(label, _)| label)
+            .collect();
+        assert_eq!(
+            files,
+            [
+                "add-ons/blockhead_bot/assets/bots.json",
+                "add-ons/playground-stomper/bots.json",
+                "add-ons/playground-fizzer/bots.json",
+            ]
+        );
+        let kinds: Vec<String> = bot_kinds(root, &set)
+            .unwrap()
+            .into_iter()
+            .map(|k| k.id)
+            .collect();
+        for id in [
+            "playground-stomper:bot/stomper",
+            "playground-fizzer:bot/fizzer",
+        ] {
+            assert!(kinds.iter().any(|k| k == id), "{id} missing from {kinds:?}");
+        }
+        assert!(kinds.len() >= 3, "{kinds:?}");
+        // A manifest naming a file outside its package is refused.
+        std::fs::write(
+            root.join("add-ons/playground-fizzer/package.json"),
+            r#"{"provides": [{"kind": "bots", "file": "../blockhead_bot/assets/bots.json"}]}"#,
+        )
+        .unwrap();
+        assert!(bot_providers(root, &set).is_err());
     }
 }

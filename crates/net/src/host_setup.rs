@@ -244,7 +244,10 @@ impl HostSetup {
             }
         }
         session.set_image_barrels(content.image_barrels.clone())?;
-        session.set_vehicle_pack(content.vehicle_pack.clone(), content.bot_kinds.clone())?;
+        session.set_vehicle_pack(
+            content.vehicle_pack.clone(),
+            playable_bot_kinds(&content.bot_kinds, &session, hosted.catalog.as_deref()),
+        )?;
         if let Some(tuning) = &self.bot_tuning {
             let problems = match &self.bot_overrides {
                 Some(overrides) => {
@@ -350,4 +353,34 @@ impl crate::server::MapHost for HostSetup {
             eprintln!("Could not save the Add-Ons' state: {error:#}");
         }
     }
+}
+
+/// The bot kinds a game can run: each enabled Add-On's, less those whose
+/// body neither the base game nor this game's Add-Ons provide. A game on a
+/// base map leaves out the Add-Ons a game mode claims, the Stomper's body
+/// with them when the Playground mode is on, and its bot goes too (said
+/// once) rather than refusing to host.
+pub fn playable_bot_kinds(
+    kinds: &[BotKind],
+    session: &Session,
+    catalog: Option<&Catalog>,
+) -> Vec<BotKind> {
+    kinds
+        .iter()
+        .filter(|kind| {
+            let Some(body) = kind.body.as_deref() else {
+                return true;
+            };
+            let found = session.archetypes().find(body).is_some()
+                || catalog.is_some_and(|c| c.archetypes().any(|(id, _)| id == body));
+            if !found {
+                bri_console::warn(format!(
+                    "Bot {} left out: its body {body} is in none of this game's Add-Ons",
+                    kind.id
+                ));
+            }
+            found
+        })
+        .cloned()
+        .collect()
 }
