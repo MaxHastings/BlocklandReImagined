@@ -3095,7 +3095,49 @@ fn player_archetype(cx: &Ctx, name: &str) -> Result<(serde_json::Value, Vec<Stri
             None => break format!("v20.player.{}", V20_PLAYERS[0]),
         }
     };
-    let converted = player_types::convert(&fields, Some(base));
+    let mut converted = player_types::convert(&fields, Some(base));
+    // Sounds play by `AudioProfile` name from the game's own bank. One of
+    // this Add-On's own is not in it yet; a name nothing defines played
+    // nothing in v20 either.
+    let profile = |class: &str| class.eq_ignore_ascii_case("AudioProfile");
+    if let Some(sounds) = converted
+        .archetype
+        .get_mut("sounds")
+        .and_then(|s| s.as_object_mut())
+    {
+        for (slot, field) in [
+            ("jump", "jumpsound"),
+            ("pain", "painsound"),
+            ("death", "deathsound"),
+        ] {
+            let Some(name) = sounds.get(slot).and_then(|v| v.as_str()).map(str::to_owned) else {
+                continue;
+            };
+            let key = name.to_ascii_lowercase();
+            if name.is_empty()
+                || cx
+                    .reference
+                    .datablocks
+                    .get(&key)
+                    .is_some_and(|o| profile(&o.datablock.class))
+            {
+                continue;
+            }
+            if cx.owned.get(&key).is_some_and(|o| profile(&o.d.class)) {
+                sounds.remove(slot);
+                converted.left_out.push(field.into());
+            } else {
+                sounds.insert(slot.into(), json!(""));
+            }
+        }
+    }
+    if converted.archetype["sounds"]
+        .as_object()
+        .is_some_and(|s| s.is_empty())
+        && let Some(archetype) = converted.archetype.as_object_mut()
+    {
+        archetype.remove("sounds");
+    }
     let parsed: bri_package_runtime::content::ArchetypeDef =
         serde_json::from_value(converted.archetype.clone()).context("archetype")?;
     parsed.validate()?;

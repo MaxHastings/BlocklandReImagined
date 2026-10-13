@@ -388,7 +388,10 @@ impl ClientAudio {
                 }
                 return;
             }
-            CueKind::Jump => "player.jump",
+            CueKind::Jump { sound } => {
+                self.body_sound(sound.as_deref(), "player.jump", cue.position);
+                return;
+            }
             CueKind::Plant => "brick.plant",
             // One break sound per `BREAK_SOUND_GAP_MS`, at the brick
             // (the event plays at the ghost brick's own transform).
@@ -404,8 +407,16 @@ impl ClientAudio {
                 self.trigger("brick.break", Placement::World(cue.position));
                 return;
             }
-            CueKind::Pain { cry: true, .. } => "player.pain_cry",
-            CueKind::Death { .. } => "player.death_cry",
+            CueKind::Pain {
+                cry: true, sound, ..
+            } => {
+                self.body_sound(sound.as_deref(), "player.pain_cry", cue.position);
+                return;
+            }
+            CueKind::Death { sound, .. } => {
+                self.body_sound(sound.as_deref(), "player.death_cry", cue.position);
+                return;
+            }
             // `mediumSplashSoundVelocity` 10, `hardSplashSoundVelocity` 20.
             CueKind::Water {
                 entered: true,
@@ -440,6 +451,15 @@ impl ClientAudio {
             }
         };
         self.trigger(key, Placement::World(cue.position));
+    }
+    /// A player's jump or cry: its archetype's own `sound`, an empty one
+    /// none, else the standard player's `standard` trigger.
+    fn body_sound(&mut self, sound: Option<&str>, standard: &str, at: [f32; 3]) {
+        match sound {
+            Some("") => {}
+            Some(profile) => self.profile(profile, Placement::World(at)),
+            None => self.trigger(standard, Placement::World(at)),
+        }
     }
     /// Keep one positional loop per music brick in step with the world.
     pub fn sync_music(&mut self, bricks: &bri_world::Bricks) {
@@ -831,6 +851,75 @@ mod tests {
         assert_eq!(breaks(&audio), Some(3));
         assert!(audio.set_volume("master", f32::NAN).is_err());
         assert!(audio.set_volume("unknown", 0.5).is_err());
+        Ok(())
+    }
+
+    /// A player type's own jump and cries play in place of the standard
+    /// player's (the horse's `HorseJumpSound`), and an empty one plays
+    /// nothing (a Bot_Hole bot's `jumpSound = ""`).
+    #[test]
+    fn a_player_types_own_sounds_replace_the_standard_ones() -> Result<()> {
+        let fx = Pack::synthetic()?;
+        let mut audio = ClientAudio::load(&fx.root, &mut Settings::default(), OutputKind::Offline)?;
+        let cue = |id: u64, kind: CueKind| Cue {
+            id,
+            tick: id,
+            position: [1000., 1., 0.],
+            kind,
+        };
+        let own = Some(fx.note.clone());
+        audio.cue(&cue(1, CueKind::Jump { sound: own.clone() }));
+        audio.cue(&cue(
+            2,
+            CueKind::Pain {
+                actor: 1,
+                level: 20.,
+                cry: true,
+                sound: own.clone(),
+            },
+        ));
+        audio.cue(&cue(
+            3,
+            CueKind::Death {
+                actor: 1,
+                sound: own,
+            },
+        ));
+        assert_eq!(audio.requested.get(&fx.note).copied(), Some(3));
+        assert_eq!(audio.pending.len(), 3);
+        let silent = Some(String::new());
+        audio.cue(&cue(
+            4,
+            CueKind::Jump {
+                sound: silent.clone(),
+            },
+        ));
+        audio.cue(&cue(
+            5,
+            CueKind::Death {
+                actor: 1,
+                sound: silent,
+            },
+        ));
+        assert_eq!(audio.pending.len(), 3, "an empty sound plays nothing");
+        // The standard player's jump is the `player.jump` trigger, which
+        // this pack leaves unbound.
+        audio.cue(&cue(6, CueKind::Jump { sound: None }));
+        assert_eq!(audio.pending.len(), 3);
+        assert!(
+            audio
+                .warnings
+                .contains("Unbound audio trigger: player.jump")
+        );
+        let position = [1000., 1., 0.];
+        audio.tick(
+            0.2,
+            Listener {
+                position,
+                ..Default::default()
+            },
+        );
+        assert_eq!(audio.stats().started, 3);
         Ok(())
     }
 
