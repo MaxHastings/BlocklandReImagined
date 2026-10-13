@@ -10,6 +10,7 @@
 use bri_console::Clamp;
 pub mod behaviour;
 pub mod coverage;
+pub mod gltf;
 mod help;
 mod hole_bots;
 mod player_types;

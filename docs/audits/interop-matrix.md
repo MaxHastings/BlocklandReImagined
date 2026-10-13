@@ -66,6 +66,8 @@ Five Add-Ons, each standing alone and naming no other except through
 | A body brings its own movement (Mario-style jumps, wall kicks) | gap (W3) | Movement is the fixed Blockhead motor plus tuning; the controller design is its own thread |
 | An Add-On owns the HUD or the camera | gap (W6) | No base-HUD replacement or camera ownership seam |
 | Custom NPCs on the shared bot brain | works for bodies, gap for new behaviours (W7) | Bot kinds pick a body and weapons; new behaviours go into the shared brain |
+| A body modelled in Blender (glTF) is an Add-On body: its own skeleton, skinning, textures and clips, drawn untinted | works (W5) | `bri-import-addon gltf` ([gltf-models.md](../modding/gltf-models.md)); `crates/client/tests/gltf_body.rs` `an_imported_gltf_body_renders_with_its_own_textures`; `crates/addon-import/src/gltf/tests.rs` (clips posed as a glTF viewer poses them) |
+| An imported glTF body holds a weapon at its own hand socket and sits by its own `sit` clip | works (W5) | `an_imported_gltf_body_draws_untinted_holds_and_animates`: `Mount0` sits at the `socket_right_hand` empty, level with the body, swings with the run clip and drops with the hips when seated |
 | A simple enemy: the shared brain cut down by data to wander, chase and hit with its body, hands empty even where the mode hands out guns | works | `a_stomper_walks_up_and_stomps_a_runner_with_its_body`; a kind's `weapons: false` (added for this) keeps its hands empty |
 
 ## Headline scenario: Blockhead, Mario, Warthog, Goombas

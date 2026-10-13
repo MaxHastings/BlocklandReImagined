@@ -271,6 +271,7 @@ impl App {
                 observer_eye: None,
                 rendered_camera: None,
                 rendered_roll: 0.0,
+                pixels_per_unit: None,
                 drawn_controls: None,
             },
             fx: Effects {
