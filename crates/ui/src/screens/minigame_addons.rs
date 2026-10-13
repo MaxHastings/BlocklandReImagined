@@ -397,8 +397,12 @@ impl AddOnSettings {
             self.status(core, Some(&format!("Slot {} is empty.", slot + 1)));
             return;
         };
+        // The Admin menu's server settings and a game's share the slots: a
+        // favourite only brings what this window edits.
+        let server = self.server;
         let fits = |key: &str, value: &MiniGameSettingValue, team: bool| {
-            Self::setting(core, key).is_some_and(|s| s.team == team && Self::takes(s, value))
+            Self::setting(core, key)
+                .is_some_and(|s| s.team == team && s.server == server && Self::takes(s, value))
         };
         let mut unavailable = Vec::new();
         for (key, value) in &fav.settings {
@@ -419,7 +423,14 @@ impl AddOnSettings {
                 self.values.insert(key.clone(), value.clone());
             }
         }
-        if !self.server {
+        // A favourite stored from the server's settings has no teams and
+        // none of a game's settings: it leaves the game's teams alone.
+        let for_games = !fav.teams.is_empty()
+            || fav
+                .settings
+                .iter()
+                .any(|(key, value)| fits(key, value, false));
+        if !self.server && for_games {
             // Keep the teams the game has, in order, under the favourite's
             // names and settings; more are added, fewer removed.
             let mut teams = Vec::new();
@@ -2268,9 +2279,15 @@ impl Screen for AddOnSettings {
                     .filter(|s| s.team)
                     .map(|s| (s.key.clone(), s.default.clone()))
                     .collect();
+                // The lowest "Team N" no team has: the rules rename a
+                // duplicate with a random number.
+                let name = (1..)
+                    .map(|n| format!("Team {n}"))
+                    .find(|name| !self.teams.iter().any(|t| t.name.eq_ignore_ascii_case(name)))
+                    .expect("a free team name");
                 self.teams.push(DraftTeam {
                     id: None,
-                    name: format!("Team {}", self.teams.len() + 1),
+                    name,
                     color,
                     settings,
                 });

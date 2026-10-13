@@ -1089,6 +1089,19 @@ fn the_mini_game_window_sets_up_teams_and_their_settings() {
         .unwrap();
     assert_eq!(mode.package_name, "Stand-in Slayer");
     assert_eq!(mode.items.len(), 3, "Capture the Flag joins the modes");
+    // A team's own player type and start tools show only with Sync w/
+    // Minigame Loadout off: on (Slayer's default) they are the game's, and
+    // picking a team tool there changed nothing (Slayer's window unticked
+    // Sync when a tool was picked).
+    for k in ["team_player_type", "team_equip_0", "team_equip_4"] {
+        let s = menu.iter().find(|s| s.key() == key(SLAYER, k)).unwrap();
+        let when = s.def.shown_when.as_ref().expect(k);
+        assert_eq!(
+            (when.setting.as_str(), when.is.as_slice()),
+            ("team_sync_loadout", &[Value::Bool(false)][..]),
+            "{k}"
+        );
+    }
     let lives = key(SLAYER, "team_lives");
     let team = |name: &str, color: u8, settings: Vec<SettingEdit>| TeamEdit {
         id: None,
@@ -1119,11 +1132,11 @@ fn the_mini_game_window_sets_up_teams_and_their_settings() {
         ]),
     };
     // Slayer's Edit Rights (the stand-in's Creator) turn Bravo away.
-    g.s.take_private_notices();
-    g.cmd(b, Command::MiniGame(request.clone())).unwrap();
+    // The window hears the refusal as its Save's answer.
+    let refused = g.cmd(b, Command::MiniGame(request.clone())).unwrap_err();
+    assert_eq!(refused.to_string(), "You don't have permission to do that.");
     g.steps(2);
     assert!(g.s.minigame_views()[0].teams.is_empty());
-    assert!(g.heard("You don't have permission to do that."));
     g.cmd(a, Command::MiniGame(request)).unwrap();
     g.steps(13);
     let view = g.s.minigame_views()[0].clone();
@@ -1154,6 +1167,50 @@ fn the_mini_game_window_sets_up_teams_and_their_settings() {
         view.addon_settings.get(&key(SLAYER, "friendly_fire")),
         Some(&Value::Bool(true))
     );
+    g.quiet();
+}
+
+#[test]
+fn a_teams_lives_reach_its_members_when_the_window_saves() {
+    // The window's Save sends every team with its settings, so the rules
+    // hear the teams before the Lives, which are stored by then.
+    let mut g = Game::new("team-lives");
+    let (red, blue) = two_teams(&mut g);
+    let owner = g.s.minigame_views()[0].owner;
+    g.set_team(owner, RED, &[(&key(SLAYER, "team_lives"), Value::Int(1))]);
+    g.steps(2);
+    // Red's one life: out at the first death, and Blue wins the round.
+    g.cmd(red, Command::Suicide).unwrap();
+    g.steps(13);
+    assert!(g.s.vitals()[&red].respawn_held, "Red is out");
+    assert!(g.heard("won this round"));
+    assert!(g.s.vitals()[&blue].alive);
+    g.quiet();
+}
+
+#[test]
+fn saving_a_new_game_mode_resets_the_game() {
+    // Game Mode resets the game once the edit is done (Slayer's
+    // `requiresMiniGameReset`), with Save as with Save & Reset: everyone
+    // starts the new mode's round alive.
+    let mut g = Game::new("mode-reset");
+    let (red, blue) = two_teams(&mut g);
+    let owner = g.s.minigame_views()[0].owner;
+    g.cmd(blue, Command::Suicide).unwrap();
+    g.steps(2);
+    assert!(!g.s.vitals()[&blue].alive);
+    g.set(
+        owner,
+        &[(&key(SLAYER, "mode"), Value::Text(CTF_MODE.into()))],
+    );
+    g.steps(2);
+    assert!(g.s.vitals()[&blue].alive, "a new round");
+    // A setting that does not reset leaves the dead dead.
+    g.cmd(red, Command::Suicide).unwrap();
+    g.steps(2);
+    g.set(owner, &[(&key(SLAYER, "friendly_fire"), Value::Bool(true))]);
+    g.steps(2);
+    assert!(!g.s.vitals()[&red].alive);
     g.quiet();
 }
 
@@ -2617,6 +2674,9 @@ fn host_alone_in_team_deathmatch(g: &mut Game) -> OwnerId {
         max,
         &[(&key(SLAYER, "mode"), Value::Text(TEAM_MODE.into()))],
     );
+    // The new mode reset the game: v20's five seconds before the rules
+    // may reset it again.
+    g.steps(600);
     max
 }
 
