@@ -911,6 +911,9 @@ fn a_buggy_runs_a_stomper_over() {
         g.s.vitals()[&p].minigame,
         "the Stomper plays in the Runner's mini-game"
     );
+    // A fresh spawn takes no damage for its first 2.5 s, so wait that out:
+    // a run-over before then pushes the Stomper but cannot hurt it.
+    g.steps(300);
     let full = g.s.vitals()[&bot].health;
     let mut hit = false;
     for _ in 0..5 {

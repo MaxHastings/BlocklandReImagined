@@ -29,8 +29,11 @@ The audit, measurements and decisions are in
 ## Evidence
 
 - `cargo test -p bri-vehicles --test handling`: 8 pass.
-- `cargo test -p bri-sim --test playground`: 8 pass, including the new
-  `a_bot_drives_the_look_steered_buggy_at_a_runner`.
+- `cargo test -p bri-sim --test playground`: 10 pass, including the new
+  `a_bot_drives_the_look_steered_buggy_at_a_runner`. The merged
+  `a_buggy_runs_a_stomper_over` now waits out the Stomper's 2.5 s of spawn
+  protection: the heavier buggy reached it inside that window, and later
+  launches were credited to the Stomper's own bump.
 - `cargo test -p bri-net --test playground`: passes, steering by look.
 - `cargo test -p bri-client --lib crew_link`: driver 2 corrections (worst
   0.16 units) where it had 6 (worst 0.43); riders 2 of 725 frames past the
