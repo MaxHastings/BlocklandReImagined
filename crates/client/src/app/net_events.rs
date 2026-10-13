@@ -637,7 +637,7 @@ impl App {
                         bri_sim::session::Notice::MessageBox { title, text } => {
                             UiUpdate::MessageBox {
                                 title: plain_chat(&title),
-                                text: plain_chat(&text),
+                                text: plain_lines(&text),
                             }
                         }
                         bri_sim::session::Notice::Question {
@@ -647,7 +647,7 @@ impl App {
                             command,
                         } => UiUpdate::Confirm {
                             title: plain_chat(&title),
-                            text: plain_chat(&text),
+                            text: plain_lines(&text),
                             action: Box::new(UiAction::Game(GameAction::Package {
                                 package,
                                 command,
@@ -845,7 +845,9 @@ impl App {
             }
             self.scene.scene_map = Some(prepared.map_id.clone());
             self.foliage.set_map(prepared.foliage);
-            self.weather.set_map(&prepared.map_id, prepared.waters)?;
+            self.weather
+                .set_map(&prepared.map_id, prepared.waters.clone())?;
+            self.scene.scenery.set_map(prepared.plate, prepared.waters);
             self.lighting.light_volume = prepared.light_volume;
             self.scene.cpu_scene = Some(prepared.scene);
             self.scene.shape_indices = prepared.shape_indices;

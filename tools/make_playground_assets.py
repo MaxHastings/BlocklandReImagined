@@ -16,6 +16,7 @@ writes their generated files:
   playground-buggy/assets/textures/*.png      their paint
   playground-buggy/assets/vehicles.json       the buggy's vehicle entry,
                                               pointing at its files by SHA-256
+  playground-stomper-look/models/stomper.json the Stomper's box body
 
 Everything here is original and generated; run it again after changing the
 numbers below. Only the Python standard library is used, and the output is
@@ -254,6 +255,31 @@ def runner(root):
     write_json(root / 'playground-runner-look' / 'models' / 'runner.json', model)
 
 
+# --- the Stomper -------------------------------------------------------------
+
+def stomper(root):
+    """A squat walking mushroom with a broad brown cap, a pale face, angry
+    brows and two dark feet: an original body 1.2 units tall."""
+    cap, face, dark, white = [0.55, 0.3, 0.12, 1], [0.95, 0.85, 0.68, 1], [0.15, 0.08, 0.05, 1], \
+        [0.97, 0.97, 0.97, 1]
+    boxes = [
+        ([-0.3, 0.1, -0.05], [0.42, 0.2, 0.55], dark),     # feet
+        ([0.3, 0.1, -0.05], [0.42, 0.2, 0.55], dark),
+        ([0.0, 0.42, 0.0], [0.7, 0.46, 0.62], face),       # stem
+        ([0.0, 0.88, 0.0], [1.2, 0.5, 1.1], cap),          # cap
+        ([0.0, 1.13, 0.0], [0.9, 0.1, 0.8], cap),          # its crown
+        ([-0.17, 0.52, -0.32], [0.14, 0.22, 0.04], white),  # eyes
+        ([0.17, 0.52, -0.32], [0.14, 0.22, 0.04], white),
+        ([-0.15, 0.5, -0.345], [0.07, 0.12, 0.02], dark),  # pupils
+        ([0.15, 0.5, -0.345], [0.07, 0.12, 0.02], dark),
+        ([-0.2, 0.68, -0.33], [0.2, 0.05, 0.04], dark),    # brows
+        ([0.2, 0.68, -0.33], [0.2, 0.05, 0.04], dark),
+    ]
+    model = {'schema_version': 1, 'boxes': [
+        {'center': c, 'size': s, 'color': col} for c, s, col in boxes]}
+    write_json(root / 'playground-stomper-look' / 'models' / 'stomper.json', model)
+
+
 # --- the Pulse Carbine -------------------------------------------------------
 
 def carbine(root):
@@ -484,6 +510,7 @@ def main():
     runner(ROOT)
     carbine(ROOT)
     buggy(ROOT)
+    stomper(ROOT)
 
 
 if __name__ == '__main__':

@@ -309,6 +309,10 @@ fn profile(
     eprintln!(
         "{label} objective_searches={objective_searches} objective_reused={objective_reused} windows_10s[objective_ticks,fight_ticks,observed_human_health_loss]={windows:?}"
     );
+    let (sampled, arcs, edges, forgotten) = s.nav_work_counts();
+    eprintln!(
+        "{label} nav_total: floor_samples={sampled} arc_sweeps={arcs} edge_sweeps={edges} forgotten={forgotten}"
+    );
     active_nanos.sort_unstable();
     if !active_nanos.is_empty() {
         let active = |f: f64| {

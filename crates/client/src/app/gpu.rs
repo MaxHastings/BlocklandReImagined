@@ -4,6 +4,8 @@ use super::*;
 /// Everything uploaded to the graphics card, and the renderers that draw it.
 pub(super) struct GpuState {
     pub(super) weather_renderer: Option<bri_weather::gpu::WeatherRenderer>,
+    /// The weather pack revision `weather_renderer` holds the textures of.
+    pub(super) weather_revision: u64,
     pub(super) renderer: Option<crate::gpu_build::Building<SceneRenderer>>,
     /// The renderer that uploaded the world's scenes, kept from a rebuild
     /// for other settings until `renderer` takes them over

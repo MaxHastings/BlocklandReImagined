@@ -17,7 +17,9 @@ pub(super) struct State {
     heading: Vec3,
     points: [Vec3; PROBES + 1],
     next: usize,
-    started: Option<u64>,
+    /// When the current destination times out: set as the bot first heads
+    /// for it, and again whenever it stops waiting for its route.
+    until: Option<u64>,
     expired: bool,
 }
 impl State {
@@ -60,8 +62,28 @@ impl State {
             evidence.at - heading * RADIUS,
         ];
         self.next = 0;
-        self.started = None;
+        self.until = None;
         self.expired = false;
+    }
+
+    /// The bot is still finding its route to the current destination: the
+    /// time it is given there starts once it has one (or none), so a
+    /// search that waits its turn for route finding is not over before it
+    /// takes a step.
+    pub(super) fn routing(&mut self) {
+        self.until = None;
+    }
+
+    /// Whether every destination for this evidence was tried and none
+    /// found it: it searched, and has nowhere left to look.
+    pub(super) fn exhausted_for(&self, evidence: Knowledge) -> bool {
+        !self.expired
+            && self.next > PROBES
+            && self.evidence.is_some_and(|old| {
+                old.subject == evidence.subject
+                    && old.observed == evidence.observed
+                    && old.at.distance_squared(evidence.at) <= 0.0001
+            })
     }
 
     /// Last-known anchor, then at most four unchecked probes. Failure means
@@ -93,19 +115,19 @@ impl State {
         }
         while self.next < self.points.len() {
             let point = self.points[self.next];
-            let started = *self.started.get_or_insert(tick);
-            let timeout = if self.next == 0 {
+            let bound = if self.next == 0 {
                 ANCHOR_TICKS
             } else {
                 PROBE_TICKS
             };
+            let until = *self.until.get_or_insert(tick + bound);
             if flat(point - feet).length() <= ARRIVAL.max(reach)
                 && (point.y - feet.y).abs() <= ARRIVAL_RISE.max(reach)
                 || route_failed
-                || tick.saturating_sub(started) >= timeout
+                || tick >= until
             {
                 self.next += 1;
-                self.started = Some(tick);
+                self.until = None;
                 route_failed = false;
                 continue;
             }
@@ -190,6 +212,34 @@ mod tests {
             assert!(s.next(e, Vec3::Z * 8.0, tick, false, 0.0).is_some());
         }
         assert_eq!(s.next(e, Vec3::Z * 8.0, 842, false, 0.0), None);
+    }
+    #[test]
+    fn waiting_for_a_route_does_not_use_up_a_destination() {
+        let mut s = State::default();
+        let mut e = evidence(1, Vec3::ZERO);
+        e.expires = 100_000;
+        let feet = Vec3::Z * 8.0;
+        assert_eq!(s.next(e, feet, 0, false, 0.0), Some(Vec3::ZERO));
+        // Its route takes ten seconds to find.
+        for tick in 1..1200 {
+            s.routing();
+            assert_eq!(s.next(e, feet, tick, false, 0.0), Some(Vec3::ZERO));
+        }
+        // Then it has the whole bound to walk it, from the last tick it
+        // waited.
+        assert_eq!(s.next(e, feet, 1200, false, 0.0), Some(Vec3::ZERO));
+        assert_eq!(s.next(e, feet, 1199 + 359, false, 0.0), Some(Vec3::ZERO));
+        assert_ne!(s.next(e, feet, 1199 + 360, false, 0.0), Some(Vec3::ZERO));
+    }
+    #[test]
+    fn exhaustion_is_for_the_evidence_it_searched() {
+        let mut s = State::default();
+        let e = evidence(1, Vec3::ZERO);
+        for tick in 2..8 {
+            s.next(e, Vec3::Z * 8.0, tick, tick > 2, 0.0);
+        }
+        assert!(s.exhausted_for(e));
+        assert!(!s.exhausted_for(evidence(9, Vec3::X)));
     }
     #[test]
     fn relayed_evidence_cannot_extend_expiry() {

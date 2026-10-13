@@ -1277,6 +1277,15 @@ fn remote_chat_cannot_inject_color_stack_or_markup() {
         "‹color:ff0000›ABC"
     );
 }
+/// A server's message box keeps its line breaks: a grouped list ends
+/// before the sentence that follows it.
+#[test]
+fn message_box_text_keeps_line_breaks_and_drops_markup() {
+    assert_eq!(
+        super::plain_lines("Prints not found (6):\n  print/x x6\n<b>Install\u{e003}"),
+        "Prints not found (6):\n  print/x x6\n‹b›Install"
+    );
+}
 #[test]
 fn server_prints_keep_ml_markup_for_the_shared_renderer() {
     let binds = bri_ui::binds::BindMap::default();

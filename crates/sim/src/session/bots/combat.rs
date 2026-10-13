@@ -7,6 +7,13 @@ use super::*;
 use bri_weapons::{Filter, Image, Query, State as ImageState, TargetId};
 
 const PATH_TICKS: u32 = 256;
+/// The most motor ticks a push's flight is flown for (`shove`), half a
+/// second at the motor's 120 Hz. Each costs a step of the real player
+/// motor against a copy of the city around the target, a thousand times an
+/// intercept segment, so the flight's own share of the solver budget would
+/// let one shove take a whole frame (30 ms on Beta City). Past it the fall
+/// is finished in closed form (`reach::shove_landing`).
+const SHOVE_TICKS: u32 = 60;
 const SOLVES_PER_TICK: u32 = 2048;
 const RAYS_PER_TICK: u32 = 544;
 const CHEAP_RESERVE: u32 = 32;
@@ -21,8 +28,21 @@ pub(super) struct State {
     /// What a push from a slot does to a target, as last predicted on a
     /// planning turn (`shove`): kept between turns, as a flight is dear.
     shove: Option<(OwnerId, usize, f32, Option<super::shove::Landing>)>,
+    /// Weighing a place to stand (`spots`): pushes are read from the
+    /// flight the hand flew this turn rather than flown again from each place.
+    borrowed_shove: bool,
 }
 impl State {
+    /// A scratch state for weighing a shot from another place to stand:
+    /// the push the hand last predicted carried over, and no flight of its
+    /// own.
+    pub(super) fn for_place(&self) -> Self {
+        Self {
+            shove: self.shove,
+            borrowed_shove: true,
+            ..Self::default()
+        }
+    }
     pub(super) fn intent(&self, tick: u64) -> Option<Intent> {
         self.intent.as_ref().filter(|i| i.tick == tick).cloned()
     }
@@ -155,6 +175,9 @@ pub(super) struct Intent {
     release_authorized: bool,
     shooter_spawn: u64,
     target_spawn: u64,
+    /// The shooter's and its target's health as it planned: what the plan
+    /// traded by, for the readout.
+    pub(super) healths: (f32, f32),
 }
 pub(super) enum Decision {
     Unsupported,
@@ -808,6 +831,7 @@ pub(super) fn choose(
                         release_authorized: false,
                         shooter_spawn: peer.combat.spawn_tick,
                         target_spawn: target.combat.spawn_tick,
+                        healths: (peer.combat.health, target.combat.health.max(1.0)),
                     });
                     return Decision::Charging(choice);
                 }
@@ -872,11 +896,11 @@ pub(super) fn choose(
             let (harm, shape) = assess(session, bot, strike, &chords, origin, &bodies);
             // What its push would do to them (`shove`): flown on the
             // planning turn, on a share of the solver budget no longer
-            // than a shot's path, and kept until the next.
+            // than half a second of flight, and kept until the next.
             let (push_harm, landing) = if !cap.pushes() {
                 (0.0, None)
-            } else if turn {
-                let mut allowance = budget.solves.min(PATH_TICKS);
+            } else if turn && !state.borrowed_shove {
+                let mut allowance = budget.solves.min(SHOVE_TICKS);
                 let spent = allowance;
                 let (harm, landing) =
                     session.bot_shove(bot, seen.owner, choice.direction, cap.push, &mut allowance);
@@ -1049,6 +1073,7 @@ pub(super) fn choose(
                 release_authorized: !session.spawn_protected(seen.owner),
                 shooter_spawn: peer.combat.spawn_tick,
                 target_spawn: target.combat.spawn_tick,
+                healths: (peer.combat.health, target.combat.health.max(1.0)),
             });
             if choice.capability.trigger.charge_on_release && session.spawn_protected(seen.owner) {
                 Decision::Charging(choice)
@@ -1073,6 +1098,7 @@ pub(super) fn choose(
                 release_authorized: false,
                 shooter_spawn: peer.combat.spawn_tick,
                 target_spawn: target.combat.spawn_tick,
+                healths: (peer.combat.health, target.combat.health.max(1.0)),
             });
             Decision::Charging(choice)
         }
@@ -1678,6 +1704,7 @@ fn choose_mounted(
         release_authorized: true,
         shooter_spawn: peer.combat.spawn_tick,
         target_spawn: target.combat.spawn_tick,
+        healths: (peer.combat.health, target.combat.health.max(1.0)),
     });
     Decision::Ready(choice)
 }

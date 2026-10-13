@@ -71,12 +71,31 @@ CI tooling and is best effort.
 | `foliage` | foliage-pack | `bri-foliage-import` (reads the map bundle) |
 | `worlds` | worlds-pass | `import_saves` over v20's `saves/` and, with `--bundled`, the repository's own `saves/<Map>/` builds (copied in unchanged; Load Bricks lists them as "Bundled build"), then `bind_world_events` |
 | `tutorial` | tutorial-pack | Map_Tutorial's saves through `import_saves` and `bind_world_events`, then `tutorial_pack` |
+| `environments` | environments | `environment_pack` over the Steam release's `Sky_*`, `Ground_*` and `Water_*` Add-Ons (empty without `--steam`) |
 | `check` | | `bri-client --check content` |
 
 `item_presentation` also reads the UI and avatar packs, and the
 `weapon_debris` and `weapon-effects` importers live outside the workspace with
 their own `Cargo.lock`, built with `--locked`. Intermediate outputs (the avatar
 rig, the base effects pack, unbound worlds) go to `content/_regeneration/`.
+
+## Steam skies, grounds and waters
+
+The Environment window's Sky, Ground and Water pickers offer what Blockland's
+Steam release ships: its 13 `Sky_*` (each with its `.atmosphere` look, Slate
+Storm's rain and Spooky3 Snow's snow), 15 `Ground_*` and 4 `Water_*`
+Add-Ons. Give that release's folder once:
+
+```sh
+python tools/bootstrap.py --steam "S:/SteamLibrary/steamapps/common/Blockland"
+```
+
+It is remembered beside the v20 path (`BRI_STEAM` also works) and only read.
+The pack is generated content like the rest: never committed, and shipped in
+the release zip, so players need no Steam copy. Without `--steam` the pack is
+built empty and the Sky picker offers the v20 maps' own skies; rebuild with
+it before `python tools/ci_content.py upload`, so release builds carry it.
+`ci_content.py pack` (and so `upload`) refuses an empty environments pack.
 
 ## Default Add-Ons
 

@@ -377,8 +377,12 @@ pub fn details(r: &AddOnRow) -> String {
     if r.locked {
         subtitle.push("Part of the base game".to_string());
     }
-    if r.importable {
+    if r.importable && r.ported {
+        subtitle.push("Ported Add-On, not installed".to_string());
+    } else if r.importable {
         subtitle.push("Classic Blockland Add-On, not converted".to_string());
+    } else if r.importing && r.ported {
+        subtitle.push("Ported Add-On, installing".to_string());
     } else if r.importing {
         subtitle.push("Classic Blockland Add-On, converting".to_string());
     }
@@ -1184,6 +1188,15 @@ mod tests {
         s.on_update(&mut ui.core);
         assert!(!s.view.node(import).state.visible);
         assert!(!s.view.node(s.view.id(ENABLED).unwrap()).state.visible);
+        let details = |s: &AddOns| s.view.text_of(s.view.id(DETAILS).unwrap());
+        assert!(details(&s).contains("Classic Blockland Add-On, converting"));
+        // A ported Add-On's ZIP is installed, not converted.
+        let mut v = ui.core.add_ons.clone();
+        v.rows.last_mut().unwrap().ported = true;
+        ui.apply(UiUpdate::AddOns(v));
+        s.on_update(&mut ui.core);
+        let text = details(&s);
+        assert!(text.contains("Ported Add-On, installing"), "{text}");
     }
 
     #[test]

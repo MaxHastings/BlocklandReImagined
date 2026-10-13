@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "id": "playground-stomper-look",
+  "version": "1.0.0",
+  "api": 1,
+  "name": "Stomper Look",
+  "description": "How the Stomper looks: a squat walking mushroom with a broad brown cap and angry brows, drawn in place of the Blockhead. Part of the Mixed Add-On Playground.",
+  "authors": ["Blockland ReImagined"],
+  "license": "CC0-1.0",
+  "provenance": { "source": "original" },
+  "provides": [
+    { "kind": "model", "id": "playground-stomper-look:model/stomper", "file": "models/stomper.json" }
+  ]
+}

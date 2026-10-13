@@ -493,6 +493,10 @@ fn bots_fight_a_free_for_all_on_real_content() -> Result<()> {
         steps.len(),
         over as f64 * 100.0 / steps.len() as f64,
     );
+    let (sampled, arcs, edges, forgotten) = s.nav_work_counts();
+    eprintln!(
+        "nav_total: floor_samples={sampled} arc_sweeps={arcs} edge_sweeps={edges} forgotten={forgotten}"
+    );
     // The slowest steps, and how much of each was the bots'.
     let mut worst: Vec<usize> = (0..steps.len()).collect();
     worst.sort_unstable_by_key(|i| std::cmp::Reverse(steps[*i]));

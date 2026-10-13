@@ -148,6 +148,9 @@ impl Session {
         let mut budget = self.bots.combat_budget.share();
         let given = budget.allowance();
         let mind = self.bots.brains[&bot].surprise.clone();
+        // What its push does is read from the hand's flight this turn, not
+        // flown again from each place (`State::for_place`).
+        let shot_state = &self.bots.brains[&bot].combat;
         let intents = self.team_intents(bot, tick);
         let reach = self.bot_sight_reach(&self.bots.brains[&bot].kind);
         let weigh = |option: usize, budget: &mut hand_combat::Budget| -> Option<Terms> {
@@ -158,7 +161,7 @@ impl Session {
                 seen,
                 at + eye,
                 tick,
-                &mut hand_combat::State::default(),
+                &mut shot_state.for_place(),
                 budget,
                 &mut mind.clone(),
             ) {

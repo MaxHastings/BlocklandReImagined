@@ -96,6 +96,8 @@ STEP_INPUTS = {
     'foliage': (['map_bundle'], [('cargo', 'bri-foliage-import')], [], 1),
     'worlds': (['brick_catalog', 'effects', 'events', 'audio', 'weapons', 'vehicles'], CONVERT, [BUNDLED_SAVES], 2),
     'tutorial': (['brick_catalog', 'effects', 'events', 'audio', 'weapons', 'vehicles'], CONVERT, [], 2),
+    # Steam Blockland's skies, grounds and waters; empty without --steam.
+    'environments': ([], CONVERT, [], 1),
 }
 PACK_STEPS = list(STEP_INPUTS)
 STEPS = ['decompile', 'build_tools', *PACK_STEPS, 'modern_lighting', 'check']
@@ -107,6 +109,7 @@ STEP_CARGO = {
     'effects': ['bri-convert'], 'weapons': ['bri-weapons-import'], 'effects_runtime': ['bri-fx-import'],
     'audio': ['bri-audio-import'], 'vehicles': ['bri-vehicles-import'], 'weather': ['bri-weather-import'],
     'foliage': ['bri-foliage-import'], 'worlds': ['bri-convert'], 'tutorial': ['bri-convert'],
+    'environments': ['bri-convert'],
 }
 STEP_MANIFESTS = {'weapon_debris': [WEAPON_DEBRIS], 'effects_runtime': [WEAPON_EFFECTS]}
 
@@ -186,6 +189,29 @@ def v20_identity(v20):
         for path in sorted((v20 / top).rglob('*')):
             if path.is_file() and path.suffix.lower() != '.ml':
                 entries.append(f'{path.relative_to(v20).as_posix()}:{path.stat().st_size}')
+    return sha256(*entries)
+
+
+# The Steam release's files the environments step reads.
+STEAM_ADDONS = re.compile(r'(sky|ground|water)_[^/]*\.zip', re.I)
+
+
+def valid_steam(path):
+    return (path / 'Add-Ons').is_dir() and (path / 'base').is_dir()
+
+
+def steam_identity(steam):
+    """The Steam release's Sky_, Ground_ and Water_ Add-Ons and the base
+    textures they may name, by relative path and size; 'none' without one."""
+    if steam is None:
+        return 'none'
+    entries = []
+    for path in sorted((steam / 'Add-Ons').iterdir()):
+        if path.is_file() and STEAM_ADDONS.fullmatch(path.name):
+            entries.append(f'Add-Ons/{path.name}:{path.stat().st_size}')
+    for path in sorted((steam / 'base' / 'data' / 'specialfx').rglob('*')):
+        if path.is_file():
+            entries.append(f'{path.relative_to(steam).as_posix()}:{path.stat().st_size}')
     return sha256(*entries)
 
 
@@ -324,8 +350,9 @@ class Sources:
 
 
 class Pipeline:
-    def __init__(self, v20, content, rebuild_decompiled=False, keep_stale=False, force=()):
+    def __init__(self, v20, content, rebuild_decompiled=False, keep_stale=False, force=(), steam=None):
         self.v20 = v20
+        self.steam = steam
         self.content = content
         self.scratch = content / '_regeneration'
         self.stamps = self.scratch / 'stamps'
@@ -372,6 +399,8 @@ class Pipeline:
                             *(sources.fingerprint(t) for t in tools),
                             *(sources.files(REPO / f) for f in files),
                             *(tokens[u] for u in upstream))
+            if key == 'environments':
+                inputs = sha256(inputs, steam_identity(self.steam))
             path, stamp = self.pack(key), self.read_stamp(key)
             if not path.exists():
                 state = 'missing'
@@ -663,6 +692,9 @@ class Pipeline:
         run(self.bin('prepare_lighting'), self.pack('map_bundle'))
         run(self.bin('prepare_lighting'), self.pack('map_bundle'), '--check')
 
+    def environments(self):
+        run(self.bin('environment_pack'), self.steam or '-', self.pack('environments'))
+
     def check(self):
         run(self.bin('bri-client'), '--check', self.content)
 
@@ -677,7 +709,8 @@ TITLES = {
     'weapon_debris': 'Weapon debris', 'effects_runtime': 'Runtime effects, including weapon effects',
     'item_presentation': 'Held and dropped item presentation', 'audio': 'Audio', 'vehicles': 'Vehicles',
     'events': 'Wrench events', 'weather': 'Weather', 'foliage': 'Foliage', 'worlds': 'Stock saves',
-    'tutorial': 'Tutorial', 'modern_lighting': 'Modern live-light parameters (offline recovery)',
+    'tutorial': 'Tutorial', 'environments': 'Steam skies, grounds and waters',
+    'modern_lighting': 'Modern live-light parameters (offline recovery)',
     'check': 'Startup validation (bri-client --check)',
 }
 
@@ -698,7 +731,7 @@ def valid_v20(path):
     return (path / 'base').is_dir() and (path / 'Add-Ons').is_dir() and (path / 'saves').is_dir()
 
 
-def regenerate(v20, content, steps, rebuild_decompiled=False, keep_stale=False, force=()):
+def regenerate(v20, content, steps, rebuild_decompiled=False, keep_stale=False, force=(), steam=None):
     """Plan and run the selected steps. Returns the pipeline."""
     content.mkdir(parents=True, exist_ok=True)
     override = content / 'packages.json'
@@ -711,7 +744,7 @@ def regenerate(v20, content, steps, rebuild_decompiled=False, keep_stale=False, 
               'the client now loads the current default packs')
     log('Check the v20 folder against the reference')
     v20 = reference_view(v20, content / '_regeneration' / 'v20-reference')
-    pipeline = Pipeline(v20, content, rebuild_decompiled, keep_stale, force)
+    pipeline = Pipeline(v20, content, rebuild_decompiled, keep_stale, force, steam)
     missing = set(PACK_STEPS) - set(pipeline.packs)
     if missing or set(pipeline.packs) - set(PACK_STEPS):
         fail(f'Pipeline steps and base packages disagree: {sorted(missing)} '
@@ -758,10 +791,15 @@ def main():
     parser.add_argument('--keep-stale', action='store_true', help='keep packs whose inputs changed')
     parser.add_argument('--plan', action='store_true', help='print what would be rebuilt and stop')
     parser.add_argument('--redecompile', action='store_true', help='decompile the scripts again')
+    parser.add_argument('--steam', type=pathlib.Path,
+                        help="Blockland's Steam release, for its skies, grounds and waters (read only)")
     args = parser.parse_args()
     v20 = args.v20.resolve()
     if not valid_v20(v20):
         fail(f'{v20} is not a Blockland v20 install (needs base/, Add-Ons/ and saves/)')
+    steam = args.steam.resolve() if args.steam else None
+    if steam and not valid_steam(steam):
+        fail(f'{steam} is not a Blockland install (needs base/ and Add-Ons/)')
     if args.only:
         steps = [s for s in STEPS if s in args.only]
     elif args.start:
@@ -770,11 +808,12 @@ def main():
         steps = STEPS
     if args.plan:
         view = reference_view(v20, args.content.resolve() / '_regeneration' / 'v20-reference')
-        pipeline = Pipeline(view, args.content.resolve(), keep_stale=args.keep_stale, force=args.rebuild)
+        pipeline = Pipeline(view, args.content.resolve(), keep_stale=args.keep_stale, force=args.rebuild,
+                            steam=steam)
         pipeline.make_plan(set(steps))
         pipeline.print_plan()
         return
-    regenerate(v20, args.content.resolve(), steps, args.redecompile, args.keep_stale, args.rebuild)
+    regenerate(v20, args.content.resolve(), steps, args.redecompile, args.keep_stale, args.rebuild, steam)
 
 
 if __name__ == '__main__':

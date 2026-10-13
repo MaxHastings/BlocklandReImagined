@@ -1,6 +1,11 @@
 //! wgpu renderer for a [`DrawList`].
 //!
 //! - Positions are logical pixels × `scale` (UI scaling).
+//! - [`Filter::Nearest`] art (bitmap glyphs, 1:1 pixel art) is sampled
+//!   "sharp": each texel covers exactly its share of the screen and only the
+//!   pixels a texel edge crosses blend with the neighbour. At whole scales this
+//!   is plain nearest sampling; at 125% or 150% it keeps strokes even instead
+//!   of alternating one and two pixels wide.
 //! - Blending is non-premultiplied alpha in the original display (gamma)
 //!   space, like Torque's fixed-function GUI. Render into a **non-sRGB**
 //!   view (`Rgba8Unorm`/`Bgra8Unorm`). With an sRGB swapchain, create the
@@ -23,6 +28,8 @@ struct Vertex {
     pos: [f32; 2],
     uv: [f32; 2],
     color: [u8; 4],
+    /// 1.0 for [`Filter::Nearest`] quads (sharp sampling), else 0.0.
+    sharp: f32,
 }
 
 const SHADER: &str = r#"
@@ -35,21 +42,56 @@ struct VOut {
     @builtin(position) pos: vec4<f32>,
     @location(0) uv: vec2<f32>,
     @location(1) color: vec4<f32>,
+    @location(2) @interpolate(flat) sharp: f32,
 };
 
 @vertex
-fn vs(@location(0) pos: vec2<f32>, @location(1) uv: vec2<f32>, @location(2) color: vec4<f32>) -> VOut {
+fn vs(@location(0) pos: vec2<f32>, @location(1) uv: vec2<f32>, @location(2) color: vec4<f32>, @location(3) sharp: f32) -> VOut {
     var o: VOut;
     let ndc = vec2<f32>(pos.x / screen.size.x * 2.0 - 1.0, 1.0 - pos.y / screen.size.y * 2.0);
     o.pos = vec4<f32>(ndc, 0.0, 1.0);
     o.uv = uv;
     o.color = color;
+    o.sharp = sharp;
     return o;
+}
+
+fn texel(i: vec2<f32>, size: vec2<f32>) -> vec4<f32> {
+    let c = textureLoad(tex, vec2<i32>(clamp(i, vec2<f32>(0.0), size - 1.0)), 0);
+    return vec4<f32>(c.rgb * c.a, c.a);
+}
+
+// Nearest-looking magnification at any scale: inside a texel the sample sits
+// on its centre; only where a texel edge crosses the pixel does it blend with
+// the neighbour, by the share of the pixel each covers. Blends premultiplied,
+// so transparent texels do not darken glyph edges.
+fn sharp_sample(p: vec2<f32>, w: vec2<f32>, size: vec2<f32>) -> vec4<f32> {
+    let fl = floor(p);
+    let g = p - fl - 0.5;
+    let wc = clamp(w, vec2<f32>(1e-6), vec2<f32>(1.0));
+    let k = 0.5 / wc - 0.5;
+    let gw = g / wc;
+    let b = fl + gw - clamp(gw, -k, k);
+    let i = floor(b);
+    let t = b - i;
+    let top = mix(texel(i, size), texel(i + vec2<f32>(1.0, 0.0), size), t.x);
+    let bottom = mix(texel(i + vec2<f32>(0.0, 1.0), size), texel(i + vec2<f32>(1.0, 1.0), size), t.x);
+    let c = mix(top, bottom, t.y);
+    return select(vec4<f32>(0.0), vec4<f32>(c.rgb / c.a, c.a), c.a > 0.0);
 }
 
 @fragment
 fn fs(i: VOut) -> @location(0) vec4<f32> {
-    return textureSample(tex, samp, i.uv) * i.color;
+    let size = vec2<f32>(textureDimensions(tex));
+    let p = i.uv * size;
+    // Derivatives and the filtered sample stay in uniform control flow.
+    let w = fwidth(p);
+    let filtered = textureSample(tex, samp, i.uv);
+    var c = filtered;
+    if i.sharp > 0.5 {
+        c = sharp_sample(p, w, size);
+    }
+    return c * i.color;
 }
 "#;
 
@@ -217,7 +259,7 @@ impl UiRenderer {
                     buffers: &[Some(wgpu::VertexBufferLayout {
                         array_stride: std::mem::size_of::<Vertex>() as u64,
                         step_mode: wgpu::VertexStepMode::Vertex,
-                        attributes: &wgpu::vertex_attr_array![0 => Float32x2, 1 => Float32x2, 2 => Unorm8x4],
+                        attributes: &wgpu::vertex_attr_array![0 => Float32x2, 1 => Float32x2, 2 => Unorm8x4, 3 => Float32],
                     })],
                 },
                 primitive: wgpu::PrimitiveState::default(),
@@ -376,10 +418,12 @@ impl UiRenderer {
             }
             let (x0, y0) = (dst[0] * scale, dst[1] * scale);
             let (x1, y1) = ((dst[0] + dst[2]) * scale, (dst[1] + dst[3]) * scale);
+            let sharp = if filter == Filter::Nearest { 1.0 } else { 0.0 };
             let v = |x, y, u, w| Vertex {
                 pos: [x, y],
                 uv: [u, w],
                 color,
+                sharp,
             };
             let first = verts.len() as u32;
             verts.extend_from_slice(&[
@@ -608,5 +652,76 @@ impl Headless {
         drop(data);
         readback.unmap();
         Ok(out)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::draw::{DrawList, Filter};
+    use crate::pack::{Pack, Pixels};
+
+    /// A one-texel stripe pattern drawn at fractional UI scales covers each
+    /// screen pixel by exactly its share of opaque texels, so a 1-texel stroke
+    /// is 1.25 or 1.5 pixels everywhere instead of alternating 1 and 2. Whole
+    /// scales stay exact nearest sampling, and transparent texels do not
+    /// darken the opaque ones they blend with.
+    #[test]
+    fn nearest_art_keeps_even_strokes_at_fractional_scales() {
+        let gpu = Headless::new().unwrap();
+        let pack = Pack::from_parts(Default::default(), Default::default());
+        let key = TexKey::Image("stripes".into());
+        let rgba: Vec<u8> = (0..8)
+            .flat_map(|i| {
+                if i % 2 == 0 {
+                    [255, 255, 255, 255]
+                } else {
+                    [0, 0, 0, 0]
+                }
+            })
+            .collect();
+        pack.insert_pixels(
+            key.clone(),
+            Pixels {
+                width: 8,
+                height: 1,
+                rgba,
+            },
+        );
+        let mut renderer = UiRenderer::new(&gpu.device, &gpu.queue);
+        for scale in [1.0f32, 1.25, 1.5, 2.0, 2.5, 3.0] {
+            let width = (8.0 * scale) as u32;
+            let size = (width, 4);
+            let mut dl = DrawList::new(Rect::new(0, 0, 8, 4));
+            dl.image(
+                key.clone(),
+                [0.0, 0.0, 8.0, 1.0],
+                [0.0, 0.0, 8.0, 1.0],
+                crate::geom::WHITE,
+                Filter::Nearest,
+            );
+            let out = gpu
+                .render_rgba(&mut renderer, &pack, &dl, size, scale, [0.0, 0.0, 0.0, 1.0])
+                .unwrap();
+            for x in 0..width {
+                // Share of pixel [x, x+1) covered by even (opaque) texels.
+                let covered: f32 = (0..8)
+                    .step_by(2)
+                    .map(|j| {
+                        let (a, b) = (j as f32 * scale, (j + 1) as f32 * scale);
+                        (b.min(x as f32 + 1.0) - a.max(x as f32)).max(0.0)
+                    })
+                    .sum();
+                let want = (covered * 255.0).round() as i32;
+                let got = out[x as usize * 4] as i32;
+                assert!(
+                    (got - want).abs() <= 3,
+                    "scale {scale} pixel {x}: got {got}, want {want}"
+                );
+                if scale.fract() == 0.0 {
+                    assert!(got == 0 || got == 255, "scale {scale} pixel {x}: {got}");
+                }
+            }
+        }
     }
 }
