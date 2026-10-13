@@ -880,6 +880,25 @@ pub struct AvatarAnimationInput {
     /// The fraction of the body in liquid, for `pickActionAnimation`'s
     /// water rules.
     pub water_coverage: f32,
+    /// The clip the body's archetype plays for its movement controller's
+    /// current intent (`Look::intent_clips`): Mario's triple jump or
+    /// skid. It takes the place of the run, jump and fall clips while the
+    /// model has it; death, sitting and swimming still win.
+    pub intent_clip: Option<String>,
+}
+
+/// A clip name as the action thread holds it. Intent clips come from
+/// archetype data, a bounded table, so each distinct name is kept once.
+fn interned(name: &str) -> &'static str {
+    static NAMES: std::sync::Mutex<std::collections::BTreeSet<&'static str>> =
+        std::sync::Mutex::new(std::collections::BTreeSet::new());
+    let mut names = NAMES.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(known) = names.get(name) {
+        return known;
+    }
+    let leaked: &'static str = Box::leak(name.to_owned().into_boxed_str());
+    names.insert(leaked);
+    leaked
 }
 
 /// Which body a drawn player is, and whether it lies dead, at the tick of
@@ -1369,6 +1388,15 @@ impl AvatarMesh {
                         sequence: "swim",
                         forward: true,
                     }
+                } else if let Some(clip) = animation_input
+                    .intent_clip
+                    .as_deref()
+                    .filter(|clip| assets.rig.sequence(clip).is_some())
+                {
+                    LocomotionAction {
+                        sequence: interned(&clip.to_ascii_lowercase()),
+                        forward: true,
+                    }
                 } else {
                     let mut action = locomotion(movement, animation_input.water_coverage);
                     if movement.jump.jet_flight && action.sequence == "jump" {
@@ -1614,7 +1642,7 @@ impl AvatarMesh {
             Vec3::splat(player.scale),
             mount_rotation
                 .filter(|q| q.is_finite() && q.is_normalized())
-                .unwrap_or_else(|| Quat::from_rotation_y(-player.yaw)),
+                .unwrap_or_else(|| Quat::from_rotation_y(-player.body_yaw())),
             Vec3::from(player.feet),
         );
         self.model_transform = model_transform;

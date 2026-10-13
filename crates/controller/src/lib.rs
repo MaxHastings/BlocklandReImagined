@@ -29,7 +29,7 @@
 //! | Offset | Type | In/out | What |
 //! |---|---|---|---|
 //! | 0 | u32 | in | interface version, 1 |
-//! | 4 | u32 | in | flags: 1 grounded, 2 crouched, 4 jump, 8 crouch, 16 jet, 32 submerged |
+//! | 4 | u32 | in | flags: 1 grounded, 2 crouched, 4 jump, 8 crouch, 16 jet, 32 submerged, 64 attack (the primary trigger) |
 //! | 8 | f32 | in | tick length, seconds |
 //! | 12 | f32 | in | body scale |
 //! | 16 | f32×3 | in | feet |
@@ -37,9 +37,14 @@
 //! | 40 | f32×3 | in | facing on the ground plane, unit |
 //! | 52 | f32×3 | in | where the movement keys push, on the ground plane |
 //! | 64 | f32 | in | pitch |
-//! | 68 | u32 | out | flags: 1 the controller took the jump (the motor does not jump) |
+//! | 68 | u32 | out | flags: 1 the controller took the jump (the motor does not jump), 2 no motor gravity this tick, 4 the body faces the heading at 92 |
 //! | 72 | u32 | in/out | animation intent (low 8 bits kept) |
 //! | 76 | 16 bytes | in/out | the controller's memory |
+//! | 92 | f32 | in/out | the body's heading, radians in the look's yaw convention: in, the one set last tick or else the look's; out, read when flag 4 is set (kept to 1/10000 rad); a tick without flag 4 turns the body back to the look |
+//! | 96 | f32 | in | the archetype's gravity, units/s² |
+//!
+//! Bytes 100 to 127 are reserved and read as zero. A module that never sets
+//! out flags 2 or 4 runs exactly as before they existed.
 use anyhow::{Context, Result, ensure};
 use bri_motor::controller::{
     Controller, ControllerSource, ControllerState, ControllerTick, MEMORY_BYTES, MoveController,
@@ -72,7 +77,10 @@ const JUMP: u32 = 4;
 const CROUCH: u32 = 8;
 const JET: u32 = 16;
 const SUBMERGED: u32 = 32;
+const ATTACK: u32 = 64;
 const TOOK_JUMP: u32 = 1;
+const NO_GRAVITY: u32 = 2;
+const FACES: u32 = 4;
 
 fn engine() -> Result<&'static Engine> {
     static ENGINE: OnceLock<std::result::Result<Engine, String>> = OnceLock::new();
@@ -124,8 +132,8 @@ pub fn compile(source: &ControllerSource) -> Result<Controller> {
         .with_context(|| format!("Controller {} does not compile", source.id))?;
     for import in module.imports() {
         ensure!(
-            import.module() == "bri" && import.name() == "sweep",
-            "Controller {} imports {}.{}; a controller may import only bri.sweep",
+            import.module() == "bri" && matches!(import.name(), "sweep" | "sweep_from"),
+            "Controller {} imports {}.{}; a controller may import only bri.sweep and bri.sweep_from",
             source.id,
             import.module(),
             import.name()
@@ -143,37 +151,25 @@ pub fn compile(source: &ControllerSource) -> Result<Controller> {
         .func_wrap(
             "bri",
             "sweep",
-            |mut caller: Caller<'_, Host>, dx: f32, dy: f32, dz: f32, out: i32| -> i32 {
-                let hit = match caller.data_mut().probe.sweep(Vec3::new(dx, dy, dz)) {
-                    Ok(hit) => hit,
-                    Err(why) => {
-                        caller.data_mut().fault.get_or_insert(why);
-                        None
-                    }
-                };
-                let words = match hit {
-                    Some(h) => [h.fraction, h.normal.x, h.normal.y, h.normal.z],
-                    None => [1.0, 0.0, 0.0, 0.0],
-                };
-                let mut bytes = [0u8; 16];
-                for (i, w) in words.iter().enumerate() {
-                    bytes[i * 4..i * 4 + 4].copy_from_slice(&w.to_le_bytes());
-                }
-                let Some(Extern::Memory(memory)) = caller.get_export("memory") else {
-                    return 0;
-                };
-                if u32::try_from(out)
-                    .ok()
-                    .and_then(|at| memory.write(&mut caller, at as usize, &bytes).ok())
-                    .is_none()
-                {
-                    caller
-                        .data_mut()
-                        .fault
-                        .get_or_insert_with(|| "a sweep result outside its memory".into());
-                    return 0;
-                }
-                i32::from(hit.is_some())
+            |caller: Caller<'_, Host>, dx: f32, dy: f32, dz: f32, out: i32| -> i32 {
+                sweep(caller, Vec3::ZERO, Vec3::new(dx, dy, dz), out)
+            },
+        )
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
+    linker
+        .func_wrap(
+            "bri",
+            "sweep_from",
+            |caller: Caller<'_, Host>,
+             ox: f32,
+             oy: f32,
+             oz: f32,
+             dx: f32,
+             dy: f32,
+             dz: f32,
+             out: i32|
+             -> i32 {
+                sweep(caller, Vec3::new(ox, oy, oz), Vec3::new(dx, dy, dz), out)
             },
         )
         .map_err(|e| anyhow::anyhow!("{e}"))?;
@@ -185,6 +181,41 @@ pub fn compile(source: &ControllerSource) -> Result<Controller> {
         id: source.id.clone(),
         pre,
     })))
+}
+
+/// `bri.sweep` and `bri.sweep_from`: sweep the body, write fraction and
+/// normal at `out`, 1 when something is hit.
+fn sweep(mut caller: Caller<'_, Host>, offset: Vec3, delta: Vec3, out: i32) -> i32 {
+    let hit = match caller.data_mut().probe.sweep_from(offset, delta) {
+        Ok(hit) => hit,
+        Err(why) => {
+            caller.data_mut().fault.get_or_insert(why);
+            None
+        }
+    };
+    let words = match hit {
+        Some(h) => [h.fraction, h.normal.x, h.normal.y, h.normal.z],
+        None => [1.0, 0.0, 0.0, 0.0],
+    };
+    let mut bytes = [0u8; 16];
+    for (i, w) in words.iter().enumerate() {
+        bytes[i * 4..i * 4 + 4].copy_from_slice(&w.to_le_bytes());
+    }
+    let Some(Extern::Memory(memory)) = caller.get_export("memory") else {
+        return 0;
+    };
+    if u32::try_from(out)
+        .ok()
+        .and_then(|at| memory.write(&mut caller, at as usize, &bytes).ok())
+        .is_none()
+    {
+        caller
+            .data_mut()
+            .fault
+            .get_or_insert_with(|| "a sweep result outside its memory".into());
+        return 0;
+    }
+    i32::from(hit.is_some())
 }
 
 fn put(record: &mut [u8; RECORD], at: usize, v: u32) {
@@ -274,7 +305,8 @@ impl WasmController {
                 | flag(tick.jump, JUMP)
                 | flag(tick.crouch, CROUCH)
                 | flag(tick.jet, JET)
-                | flag(tick.submerged, SUBMERGED),
+                | flag(tick.submerged, SUBMERGED)
+                | flag(tick.attack, ATTACK),
         );
         put_f(&mut record, 8, tick.dt);
         put_f(&mut record, 12, tick.scale);
@@ -285,6 +317,11 @@ impl WasmController {
         put_f(&mut record, 64, tick.pitch);
         put(&mut record, 72, u32::from(tick.state.intent));
         record[76..76 + MEMORY_BYTES].copy_from_slice(&tick.state.memory);
+        // The body's heading: the controller's own if it set one, else the
+        // look's.
+        let look = tick.facing.x.atan2(-tick.facing.z);
+        put_f(&mut record, 92, tick.state.heading().unwrap_or(look));
+        put_f(&mut record, 96, tick.gravity);
         memory
             .write(&mut *store, at, &record)
             .map_err(|e| e.to_string())?;
@@ -298,13 +335,24 @@ impl WasmController {
         if !tick.velocity.is_finite() {
             return Err("a velocity that is not a number".into());
         }
-        tick.take_jump = get(&record, 68) & TOOK_JUMP != 0;
+        let out = get(&record, 68);
+        tick.take_jump = out & TOOK_JUMP != 0;
+        tick.skip_gravity = out & NO_GRAVITY != 0;
         let mut memory_out = [0u8; MEMORY_BYTES];
         memory_out.copy_from_slice(&record[76..76 + MEMORY_BYTES]);
-        tick.state = ControllerState {
+        let mut state = ControllerState {
             memory: memory_out,
             intent: get(&record, 72) as u8,
+            heading: None,
         };
+        if out & FACES != 0 {
+            let heading = get_f(&record, 92);
+            if !heading.is_finite() {
+                return Err("a heading that is not a number".into());
+            }
+            state.set_heading(Some(heading));
+        }
+        tick.state = state;
         Ok(())
     }
 }

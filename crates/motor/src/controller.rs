@@ -32,13 +32,40 @@ pub const SWEEP_BACK_OFF: f32 = 0.1;
 /// Largest controller module an archetype may carry.
 pub const MAX_MODULE_BYTES: usize = 64 * 1024;
 
-/// A controller's state on a body: its own bytes and the animation intent
-/// it last asked for (0 is none; what other numbers mean is the
-/// controller's, named in its Add-On).
+/// A controller's state on a body: its own bytes, the animation intent it
+/// last asked for (0 is none; what other numbers mean is the controller's,
+/// named in its Add-On and mapped to clips and sounds by its archetype's
+/// [`Look`](crate::archetype::Look)) and the way it turned the body, if it
+/// turns the body itself.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct ControllerState {
     pub memory: [u8; MEMORY_BYTES],
     pub intent: u8,
+    /// The body's own heading in [`HEADING_UNITS`] of a radian (the yaw
+    /// convention of [`MoveInput::yaw`](crate::player::MoveInput)), when the
+    /// controller faces the body away from the camera (Mario turning on his
+    /// own, skidding, kicking off a wall). None: the body faces the look.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub heading: Option<i16>,
+}
+/// Heading steps per radian, so a heading is an exact integer on every side
+/// and replicates as one.
+pub const HEADING_UNITS: f32 = 10_000.0;
+impl ControllerState {
+    /// The heading in radians, if the controller sets one.
+    pub fn heading(&self) -> Option<f32> {
+        self.heading.map(|h| f32::from(h) / HEADING_UNITS)
+    }
+    /// Store a heading in radians, wrapped to -π..π.
+    pub fn set_heading(&mut self, radians: Option<f32>) {
+        self.heading = radians.filter(|r| r.is_finite()).map(|r| {
+            let wrapped =
+                (r + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU) - std::f32::consts::PI;
+            (wrapped * HEADING_UNITS)
+                .round()
+                .clamped(-31_416.0, 31_416.0) as i16
+        });
+    }
 }
 
 /// One tick as a controller sees it. Inputs are read-only by convention;
@@ -63,10 +90,18 @@ pub struct ControllerTick {
     pub jump: bool,
     pub crouch: bool,
     pub jet: bool,
+    /// The primary trigger (`MoveInput::attack`): a move button of the
+    /// controller's own (SM64's B), held whether or not an item is out.
+    pub attack: bool,
+    /// The archetype's gravity, units/s², so a module need not copy it.
+    pub gravity: f32,
     /// In: the body's velocity. Out: the velocity the motor moves it with.
     pub velocity: Vec3,
     /// Out: the motor does not jump this tick (the controller used it).
     pub take_jump: bool,
+    /// Out: the motor adds no gravity this tick (the controller did its
+    /// own, as SM64 moves first and falls after).
+    pub skip_gravity: bool,
     /// In and out.
     pub state: ControllerState,
 }
@@ -113,13 +148,24 @@ impl Probe {
     /// is in the way. Errors when a step asks for more than [`MAX_SWEEPS`]
     /// sweeps or one longer than its reach.
     pub fn sweep(&mut self, delta: Vec3) -> Result<Option<SweepHit>, String> {
+        self.sweep_from(Vec3::ZERO, delta)
+    }
+    /// [`Probe::sweep`] with the box moved `offset` from the feet first:
+    /// is there room above the wall at hand height for a ledge grab, is
+    /// there floor a step ahead. The offset and the sweep together stay
+    /// within the reach.
+    pub fn sweep_from(&mut self, offset: Vec3, delta: Vec3) -> Result<Option<SweepHit>, String> {
         self.sweeps += 1;
         if self.sweeps > MAX_SWEEPS {
             return Err(format!("more than {MAX_SWEEPS} sweeps in one tick"));
         }
         let distance = delta.length();
-        if !distance.is_finite() || distance > self.reach {
-            return Err(format!("a sweep longer than {} units", self.reach));
+        let from = offset.length();
+        if !distance.is_finite() || !from.is_finite() || from + distance > self.reach {
+            return Err(format!(
+                "a sweep longer than {} units from the feet",
+                self.reach
+            ));
         }
         let Some(direction) = delta.try_normalize() else {
             return Ok(None);
@@ -127,7 +173,7 @@ impl Probe {
         let back = direction * SWEEP_BACK_OFF;
         Ok(crate::torque::sweep_box(
             &self.soup,
-            self.feet - back,
+            self.feet + offset - back,
             self.half_width,
             self.height,
             delta + back,

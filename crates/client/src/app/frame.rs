@@ -1125,6 +1125,10 @@ impl App {
                     .filter(|_| !dead)
                     .cloned()
                     .unwrap_or_default();
+                let riding = view
+                    .vitals
+                    .get(owner)
+                    .is_some_and(|v| v.mounted.is_some() || v.ride.is_some());
                 let input = crate::avatar::AvatarAnimationInput {
                     look_limits,
                     mount_rotation: self.mounts.rider_rotations.get(owner).copied(),
@@ -1147,11 +1151,7 @@ impl App {
                     // Riders hold `root` (`Armor::onMount` sets the action
                     // thread to root and mountThread on thread 0); they do
                     // not run, jump or fall with their mount's motion.
-                    tick_state: if view
-                        .vitals
-                        .get(owner)
-                        .is_some_and(|v| v.mounted.is_some() || v.ride.is_some())
-                    {
+                    tick_state: if riding {
                         Some(bri_sim::player::PlayerState {
                             velocity: [0.0; 3],
                             grounded: true,
@@ -1171,6 +1171,16 @@ impl App {
                         ),
                     )
                     .map_or(0.0, |(_, c)| c),
+                    // A rider's controller does not run, so its last
+                    // intent says nothing about the seat.
+                    intent_clip: player.controller.filter(|_| !riding).and_then(|c| {
+                        view.archetypes
+                            .resolve(player.archetype)
+                            .look
+                            .intent_clips
+                            .get(&c.intent)
+                            .cloned()
+                    }),
                 };
                 let avatar = self.avatar.avatars.get_mut(owner).unwrap();
                 let posed = avatar.pose_with_animation(

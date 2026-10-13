@@ -425,6 +425,7 @@ mod tests {
     fn worst_case_datagrams_fit_the_datagram_budget() {
         use crate::protocol::*;
         let input = bri_sim::player::MoveInput {
+            attack: true,
             forward: -1.0,
             right: 1.0,
             yaw: -std::f32::consts::PI,
@@ -491,6 +492,7 @@ mod tests {
                 controller: Some(bri_sim::archetype::ControllerState {
                     memory: [u8::MAX; 16],
                     intent: u8::MAX,
+                    heading: Some(i16::MIN),
                 }),
             },
         });

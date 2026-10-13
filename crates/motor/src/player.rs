@@ -57,6 +57,11 @@ pub struct MoveInput {
     pub jump: bool,
     pub crouch: bool,
     pub jet: bool,
+    /// The primary trigger, for a movement controller's own move button
+    /// (`crate::controller::ControllerTick::attack`). Items fire from
+    /// their own trigger messages as before; the motor ignores this.
+    #[serde(default)]
+    pub attack: bool,
 }
 impl MoveInput {
     pub fn validate(&self) -> Result<()> {
@@ -518,6 +523,13 @@ impl PlayerState {
             .to_array();
         out
     }
+    /// The way the body faces: its movement controller's own heading when
+    /// it turns the body itself (Mario skidding round), else the look's yaw.
+    pub fn body_yaw(&self) -> f32 {
+        self.controller
+            .and_then(|c| c.heading())
+            .unwrap_or(self.yaw)
+    }
     /// Where to draw the body: between the last two Torque ticks, `phase` of
     /// a tick along, so it moves smoothly at 120 Hz and any frame rate.
     pub fn shown_feet(&self) -> [f32; 3] {
@@ -778,16 +790,13 @@ impl PlayerTuning {
             self.swim_acceleration,
             self.swim_rise,
             self.dive_acceleration,
-            self.drag,
             self.gravity,
             self.jet_acceleration,
             self.jet_lift,
             self.horizontal_max_speed,
             self.horizontal_resist_speed,
-            self.horizontal_resist_factor,
             self.up_max_speed,
             self.up_resist_speed,
-            self.up_resist_factor,
         ];
         ensure!(
             values
@@ -816,6 +825,11 @@ impl PlayerTuning {
                     self.crouch_sideways,
                     self.step_height,
                     self.jump_speed,
+                    // No air drag or speed resistance: a controller that
+                    // does its own (Mario's air drag).
+                    self.drag,
+                    self.horizontal_resist_factor,
+                    self.up_resist_factor,
                 ]
                 .iter()
                 .all(|n| n.is_finite() && (0.0..=1000.0).contains(n))
@@ -1538,6 +1552,7 @@ impl Player {
         // The archetype's own movement rules decide first; the motor then
         // moves the body as always (`crate::controller`).
         let mut controller_fault = None;
+        let mut gravity = t.gravity;
         let input = match &t.controller {
             Some(controller) => {
                 let mut tick = crate::controller::ControllerTick {
@@ -1553,8 +1568,11 @@ impl Player {
                     jump: input.jump,
                     crouch: input.crouch,
                     jet: input.jet,
+                    attack: input.attack,
+                    gravity: t.gravity,
                     velocity: Vec3::from(self.state.velocity),
                     take_jump: false,
+                    skip_gravity: false,
                     state: self.state.controller.unwrap_or_default(),
                 };
                 let reach = crate::controller::MAX_SWEEP * self.state.scale.max(1.0);
@@ -1578,6 +1596,9 @@ impl Player {
                         self.state.controller = (tick.state
                             != crate::controller::ControllerState::default())
                         .then_some(tick.state);
+                        if tick.skip_gravity {
+                            gravity = 0.0;
+                        }
                         MoveInput {
                             jump: input.jump && !tick.take_jump,
                             ..input
@@ -1640,7 +1661,7 @@ impl Player {
         // into it and the run force (runForce / mass per tick) steers toward the
         // move along the surface. Steeper than runSurfaceAngle is not a run
         // surface, so gravity slides the player down it.
-        let mut acc = Vec3::new(0.0, -t.gravity * dt, 0.0);
+        let mut acc = Vec3::new(0.0, -gravity * dt, 0.0);
         // The move a jump pushes along: air control rewrites v20's moveVec
         // in place before the jump reads it (0x5AF4B5).
         let mut jump_move = move_vec;

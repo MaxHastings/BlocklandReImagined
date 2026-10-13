@@ -9,6 +9,7 @@ use crate::player::PlayerTuning;
 use crate::player_types::PlayerType;
 use anyhow::{Result, ensure};
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 
 /// Index into an [`Archetypes`] table. `0` is v20's standard player.
 #[derive(
@@ -97,6 +98,18 @@ pub struct Look {
     /// `thirdPersonOnly`: the camera stays behind the body.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub third_person_only: bool,
+    /// The model's clip for each of its movement controller's intents
+    /// (`crate::controller::ControllerState::intent`): `{"11": "triple"}`
+    /// plays the model's `triple` sequence while the controller says 11.
+    /// An intent with no clip, or a clip the model lacks, plays the clip
+    /// the body's motion picks, as for every body.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub intent_clips: BTreeMap<u8, String>,
+    /// A sound (a sound id of the Add-On's packs) heard where the body is
+    /// each time its controller changes to that intent: the jump, the wall
+    /// kick, the ground pound's thud.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub intent_sounds: BTreeMap<u8, String>,
 }
 /// v20's horse (`horse.dts`): players and entities with this look draw
 /// and carry items as a horse.
@@ -126,6 +139,14 @@ impl Archetype {
                 && (1.0..=100_000.0).contains(&self.max_health)
                 && self.look.camera_distance.is_finite()
                 && (0.0..=64.0).contains(&self.look.camera_distance)
+                && self
+                    .look
+                    .intent_clips
+                    .values()
+                    .chain(self.look.intent_sounds.values())
+                    .all(|name| {
+                        !name.is_empty() && name.len() <= 160 && !name.chars().any(char::is_control)
+                    })
                 && self.mount_points.len() <= MAX_MOUNT_POINTS
                 && self.mount_points.iter().all(|m| {
                     !m.node.is_empty()
@@ -161,6 +182,8 @@ impl Archetype {
                 camera_distance: 8.0,
                 first_person_only: false,
                 third_person_only: false,
+                intent_clips: BTreeMap::new(),
+                intent_sounds: BTreeMap::new(),
             },
             uses_items: true,
             controller: None,

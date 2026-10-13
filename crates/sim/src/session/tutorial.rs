@@ -1455,6 +1455,7 @@ mod tests {
     #[test]
     fn abilities_strip_only_what_the_datablock_lacks() {
         let input = MoveInput {
+            attack: false,
             forward: 1.0,
             right: -1.0,
             yaw: 0.5,

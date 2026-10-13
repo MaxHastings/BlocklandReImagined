@@ -2361,6 +2361,7 @@ fn actor_step(
         jump: driven && c.jump,
         crouch: false,
         jet: false,
+        attack: false,
     };
     let motion = actor.step_through(world, input, waters, parts, passages)?;
     if motion.jumped && d.family == Family::Horse {

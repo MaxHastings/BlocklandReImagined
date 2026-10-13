@@ -1136,6 +1136,13 @@ fn blend(a: &PlayerState, b: &PlayerState, t: f32) -> PlayerState {
     out.yaw = lerp_angle(a.yaw, b.yaw, t);
     out.pitch = a.pitch + (b.pitch - a.pitch) * t;
     out.head_yaw = a.head_yaw + (b.head_yaw - a.head_yaw) * t;
+    // A controller's own heading turns smoothly too, from or to the look
+    // when only one side has one.
+    if let Some(controller) = &mut out.controller
+        && controller.heading.is_some()
+    {
+        controller.set_heading(Some(lerp_angle(a.body_yaw(), b.body_yaw(), t)));
+    }
     out
 }
 

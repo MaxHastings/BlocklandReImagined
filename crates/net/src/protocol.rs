@@ -465,6 +465,17 @@ pub struct RemotePose {
     pub archetype: bri_sim::archetype::ArchetypeId,
     /// None for the normal size.
     pub scale: Option<f32>,
+    /// A movement controller's animation intent and the heading it turned
+    /// the body to, so others see Mario's triple jump facing his own way;
+    /// none for a body whose controller state is blank. Its memory stays
+    /// the owner's.
+    pub controller: Option<RemoteController>,
+}
+/// The part of [`bri_sim::archetype::ControllerState`] others draw.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RemoteController {
+    pub intent: u8,
+    pub heading: Option<i16>,
 }
 const CENTIMETRES: f32 = 100.0;
 const LOOK_UNITS: f32 = 10_000.0;
@@ -494,6 +505,13 @@ impl RemotePose {
                 | flag(p.jump.jet_flight, Self::JET_FLIGHT),
             archetype: p.archetype,
             scale: (p.scale != 1.0).then_some(p.scale),
+            controller: p
+                .controller
+                .filter(|c| c.intent != 0 || c.heading.is_some())
+                .map(|c| RemoteController {
+                    intent: c.intent,
+                    heading: c.heading,
+                }),
         }
     }
     /// As a pose, with owner-only state at its defaults and flight history
@@ -526,7 +544,13 @@ impl RemotePose {
                 speed_scale: 1.0,
                 tick: Default::default(),
                 tether: None,
-                controller: None,
+                controller: self
+                    .controller
+                    .map(|c| bri_sim::archetype::ControllerState {
+                        intent: c.intent,
+                        heading: c.heading,
+                        ..Default::default()
+                    }),
             },
         }
     }

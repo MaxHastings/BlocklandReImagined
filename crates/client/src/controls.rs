@@ -887,6 +887,9 @@ impl Controls {
             // (`Zoom::jets`).
             jet: self.held(HeldControl::Jet)
                 && self.aim.as_ref().is_none_or(|a| !a.on_jet || a.jets),
+            // A movement controller's own move button (SM64's B); items
+            // still fire from their trigger messages.
+            attack: self.held(HeldControl::Fire),
         }
     }
     /// The pitch the body's look pose (the arms' `look` thread) shows: a

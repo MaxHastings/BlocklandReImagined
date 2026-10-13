@@ -27,8 +27,11 @@ fn tick() -> ControllerTick {
         jump: false,
         crouch: false,
         jet: false,
+        attack: false,
+        gravity: 20.0,
         velocity: Vec3::new(1.0, 2.0, 3.0),
         take_jump: false,
+        skip_gravity: false,
         state: ControllerState::default(),
     }
 }
@@ -178,6 +181,66 @@ fn sweeps_are_bounded() {
     assert!(error.contains("sweeps"), "{error}");
     let error = step(&sweeps(1, 9.0), &mut tick()).unwrap_err();
     assert!(error.contains("longer"), "{error}");
+    // From an offset, the offset counts toward the reach.
+    let from = |offset: f32, length: f32| {
+        format!(
+            r#"(module
+          (import "bri" "sweep_from" (func $sweep (param f32 f32 f32 f32 f32 f32 i32) (result i32)))
+          (memory (export "memory") 1)
+          (func (export "io") (result i32) (i32.const 0))
+          (func (export "step") (result i32)
+            (drop (call $sweep (f32.const 0) (f32.const {offset}) (f32.const 0)
+              (f32.const {length}) (f32.const 0) (f32.const 0) (i32.const 128)))
+            (i32.const 0)))"#
+        )
+    };
+    step(&from(2.0, 6.0), &mut tick()).unwrap();
+    let error = step(&from(3.0, 6.0), &mut tick()).unwrap_err();
+    assert!(error.contains("longer"), "{error}");
+}
+
+/// The record's newer words: the attack button and the archetype's gravity
+/// in; out, a tick without the motor's gravity and a heading of the body's
+/// own, which comes back in the next tick and lapses when not set again.
+#[test]
+fn a_controller_reads_attack_and_gravity_and_turns_the_body() {
+    // Velocity x = attack flag, y = gravity, z = the heading it was given;
+    // then out: no gravity, and face 1.5 rad round.
+    let wat = r#"(module
+      (memory (export "memory") 1)
+      (func (export "io") (result i32) (i32.const 0))
+      (func (export "step") (result i32)
+        (f32.store (i32.const 28)
+          (f32.convert_i32_u (i32.shr_u (i32.and (i32.load (i32.const 4)) (i32.const 64)) (i32.const 6))))
+        (f32.store (i32.const 32) (f32.load (i32.const 96)))
+        (f32.store (i32.const 36) (f32.load (i32.const 92)))
+        (i32.store (i32.const 68) (i32.const 6))
+        (f32.store (i32.const 92) (f32.const 1.5))
+        (i32.const 0)))"#;
+    let mut t = ControllerTick {
+        attack: true,
+        gravity: 36.0,
+        facing: Vec3::X,
+        ..tick()
+    };
+    step(wat, &mut t).unwrap();
+    assert_eq!(t.velocity.x, 1.0);
+    assert_eq!(t.velocity.y, 36.0);
+    // With no heading of its own, the body's heading is the look's: facing
+    // +X is a quarter turn.
+    assert!((t.velocity.z - std::f32::consts::FRAC_PI_2).abs() < 1e-6);
+    assert!(t.skip_gravity && !t.take_jump);
+    assert_eq!(t.state.heading, Some(15_000));
+    step(wat, &mut t).unwrap();
+    assert_eq!(t.velocity.z, 1.5);
+    // A module that does not set flag 4 hands the body back to the look.
+    let plain = r#"(module
+      (memory (export "memory") 1)
+      (func (export "io") (result i32) (i32.const 0))
+      (func (export "step") (result i32) (i32.const 0)))"#;
+    step(plain, &mut t).unwrap();
+    assert_eq!(t.state.heading, None);
+    assert!(!t.skip_gravity);
 }
 
 /// A module that returns nonzero from `step` leaves the tick to the motor.
