@@ -883,19 +883,21 @@ fn the_environment_window_applies_a_draft_through_the_host() {
     // Nothing changed yet: nothing to apply.
     click(&mut ui, ScreenId::AdminEnvironment, "EnvApply");
     assert!(ui.core.admin.pending.is_empty());
-    // The day/night cycle's check box turns it on (and back off), and
-    // brings its sliders to life.
+    // The time of day works with the cycle off: it holds the sun.
     let cycle = |ui: &Ui| ui.core.environment.draft.as_ref().unwrap().day_cycle;
+    click(&mut ui, ScreenId::AdminEnvironment, "EnvS_TimeOfDay");
+    let held = cycle(&ui).expect("the slider set a time of day");
+    assert!((held.time - 0.5).abs() <= 0.02 && held.paused, "{held:?}");
+    ui.core.environment.reset();
+    // The day/night cycle's check box lets time pass (and holds it again
+    // where it is when turned off).
     click(&mut ui, ScreenId::AdminEnvironment, "EnvDayCycleSimple");
     assert!(
-        cycle(&ui).is_some(),
+        cycle(&ui).is_some_and(|d| !d.paused),
         "the check box did not turn the cycle on"
     );
-    click(&mut ui, ScreenId::AdminEnvironment, "EnvS_TimeOfDay");
-    let at = cycle(&ui).unwrap().time;
-    assert!((at - 0.5).abs() <= 0.02, "{at}");
     click(&mut ui, ScreenId::AdminEnvironment, "EnvDayCycleSimple");
-    assert_eq!(cycle(&ui), None);
+    assert!(cycle(&ui).is_some_and(|d| d.paused));
     click(&mut ui, ScreenId::AdminEnvironment, "EnvDayCycleSimple");
     click(&mut ui, ScreenId::AdminEnvironment, "EnvApply");
     let sent = ui.core.admin.pending.values().find_map(|a| match a {
@@ -911,10 +913,10 @@ fn the_environment_window_applies_a_draft_through_the_host() {
     // The same on the Advanced tab, and Vignette Multiply beside it.
     click(&mut ui, ScreenId::AdminEnvironment, "EnvTabAdvanced");
     click(&mut ui, ScreenId::AdminEnvironment, "EnvDayCycleAdvanced");
-    assert_eq!(cycle(&ui), None);
+    assert!(cycle(&ui).is_some_and(|d| d.paused));
     click(&mut ui, ScreenId::AdminEnvironment, "EnvDayCycleAdvanced");
-    assert!(cycle(&ui).is_some());
-    // Vignette Multiply is the last row, below the page's fold: scroll to it.
+    assert!(cycle(&ui).is_some_and(|d| !d.paused));
+    // Vignette Multiply is low in the list, below the page's fold: scroll to it.
     let (x, y) = ui
         .control_center(ScreenId::AdminEnvironment, "EnvAdvancedPage")
         .unwrap();
@@ -1278,6 +1280,7 @@ fn environment_day_cycle_goes_live_and_keeps_turning_through_a_favorite() {
             length_seconds: 600.0,
             time: 0.75,
             anchor_tick: 1000,
+            paused: false,
         })
     );
     let applied = answer(&mut ui, 1300);

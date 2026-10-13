@@ -1498,6 +1498,7 @@ fn main() -> Result<()> {
                             length_seconds: 1000.0,
                             time: 0.5 + angle / std::f32::consts::TAU,
                             anchor_tick: 0,
+                            paused: false,
                         });
                         host.sun_elevation = Some(elevation);
                     }

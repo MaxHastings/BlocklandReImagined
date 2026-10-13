@@ -273,7 +273,7 @@ pub async fn fetching_join(
         cache,
         progress,
         |fetched, _| {
-            let dirs: Vec<_> = fetched
+            let mut dirs: Vec<_> = fetched
                 .iter()
                 .map(|f| {
                     (
@@ -288,6 +288,33 @@ pub async fn fetching_join(
                     )
                 })
                 .collect();
+            // As the game does (`mods.rs`): a downloaded Add-On may need one
+            // the host runs server-side and never sends; it is listed as a
+            // server package so the client-side checks skip it.
+            let mut needs = Vec::new();
+            for f in fetched {
+                let text = std::fs::read(f.dir.join("package.json"))?;
+                let manifest: serde_json::Value = serde_json::from_slice(&text)?;
+                if let Some(dependencies) = manifest.get("dependencies").and_then(|d| d.as_object())
+                {
+                    needs.extend(dependencies.keys().cloned());
+                }
+            }
+            for id in needs {
+                if dirs.iter().any(|(_, e)| e.id == id) {
+                    continue;
+                }
+                dirs.push((
+                    std::path::PathBuf::from("."),
+                    PackageEntry {
+                        id: id.clone(),
+                        version: "0.0.0".into(),
+                        side: Side::Server,
+                        dir: id,
+                        role: None,
+                    },
+                ));
+            }
             let (_, problems) = bri_package_runtime::Catalog::load_dirs_skipping(&dirs, false);
             anyhow::ensure!(
                 problems.is_empty(),

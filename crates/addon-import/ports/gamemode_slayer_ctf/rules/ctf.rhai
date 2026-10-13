@@ -319,9 +319,10 @@ fn on_minigame(event) {
 // with `gone` none at all, carried and dropped ones included, and this
 // round's captures and tallies cleared.
 fn reset_flags(game, gone) {
-    // Without teams there are no flags (`on_tick`).
+    // Without teams, or in another mode, there are no flags (`on_tick`):
+    // a reset in Team Deathmatch puts none on their stands.
     let g = minigame(game);
-    let gone = gone || g == () || g.teams.is_empty();
+    let gone = gone || g == () || g.teams.is_empty() || !playing(game);
     let flags = flags();
     for b in bricks(flag_spawn()) {
         if b.game == game {

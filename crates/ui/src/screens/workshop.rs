@@ -790,8 +790,10 @@ mod tests {
         for (id, name) in [
             (ScreenId::EscapeMenu, "Pause"),
             (ScreenId::MiniGameSettings, "MiniGame"),
-            (ScreenId::MiniGameAddOns, "Teams"),
+            (ScreenId::MiniGameSettings, "Teams"),
         ] {
+            // The mini-game window opens on its Teams page.
+            ui.core.minigame_addons_teams = name == "Teams";
             let mut s = crate::screens::make(id, &mut ui.core);
             s.layout(640, 480, &mut ui.core);
             let mut dl = DrawList::new(Rect::new(0, 0, 640, 480));
@@ -813,7 +815,8 @@ mod tests {
             )?;
         }
         ui.core.logical = (400, 300);
-        let mut small = crate::screens::make(ScreenId::MiniGameAddOns, &mut ui.core);
+        ui.core.minigame_addons_teams = true;
+        let mut small = crate::screens::make(ScreenId::MiniGameSettings, &mut ui.core);
         small.layout(400, 300, &mut ui.core);
         let mut dl = DrawList::new(Rect::new(0, 0, 400, 300));
         small.draw(&pack, &mut dl, &ui.core);

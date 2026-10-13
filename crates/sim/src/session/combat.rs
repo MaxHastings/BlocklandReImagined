@@ -1666,6 +1666,17 @@ impl Session {
                     None,
                 )
             }
+            // The Mini-Game window waits on its Save: a refusal is its
+            // answer, not a success with a message beside it.
+            super::packages::Answer::Refused { text, .. } if action == "edit" => {
+                // Without its colour codes: the window shows it as is.
+                anyhow::bail!(
+                    "{}",
+                    text.chars()
+                        .filter(|c| !('\u{e000}'..='\u{e00f}').contains(c))
+                        .collect::<String>()
+                )
+            }
             super::packages::Answer::Refused {
                 title: Some(title),
                 text,
@@ -1740,7 +1751,7 @@ impl Session {
                     quiet,
                     reset,
                 } => {
-                    self.edit_settings(
+                    let resets = self.edit_settings(
                         super::packages::Editor::Granted(owner),
                         GameId(game),
                         settings,
@@ -1748,7 +1759,7 @@ impl Session {
                         quiet,
                         false,
                     )?;
-                    if !reset {
+                    if !reset && !resets {
                         return Ok(());
                     }
                     mg::Command::Manage {
@@ -1792,7 +1803,7 @@ impl Session {
                 quiet,
                 reset,
             } => {
-                self.edit_settings(
+                let resets = self.edit_settings(
                     super::packages::Editor::Player(owner),
                     GameId(game),
                     settings,
@@ -1800,7 +1811,9 @@ impl Session {
                     quiet,
                     false,
                 )?;
-                if !reset {
+                // A changed setting that resets the game (Slayer's Game
+                // Mode) resets it as Update & Reset would.
+                if !reset && !resets {
                     return Ok(());
                 }
                 // Update & Reset: whoever may edit the game may reset it
