@@ -804,6 +804,23 @@ pub enum UiAction {
         name: String,
         args: Vec<String>,
     },
+    /// The Tune window: set a body's numbers (field path, value), live for
+    /// everyone in the game.
+    TuneSet {
+        body: String,
+        changes: Vec<(String, f32)>,
+    },
+    /// Put back every number the Tune window changed since it opened or
+    /// last saved.
+    TuneUndo {
+        body: String,
+    },
+    /// Write the Tune window's changes into the body's Add-On file.
+    TuneSave {
+        body: String,
+    },
+    /// The Tune window closed.
+    TuneClosed,
     StartTyping,
     /// `SteeringPrefsEvent`: `$pref::Input::UseStrafeSteering` and
     /// `$pref::Input::UseAutoReturnSteering`, sent on joining and on change.
@@ -1140,6 +1157,42 @@ pub struct AddOnRow {
     /// installed as it is rather than converted.
     #[serde(default)]
     pub ported: bool,
+    /// Why it does not play in every game the player hosts (a game mode
+    /// uses it, or it needs another map), in words; empty when it does.
+    #[serde(default)]
+    pub plays_only: String,
+    /// Its files changed on disk since the game the player is in started,
+    /// which keeps the copy it loaded: the change applies to the next game.
+    #[serde(default)]
+    pub changed_in_game: bool,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct TuneView {
+    /// The body's archetype id.
+    pub body: String,
+    /// Its display name.
+    pub name: String,
+    pub fields: Vec<TuneField>,
+    /// What the last change or save did, or why one failed.
+    pub status: String,
+    /// Changes not yet written to the Add-On's file.
+    pub unsaved: bool,
+    /// Why Save to Add-On is unavailable (no file on this computer);
+    /// empty when it is.
+    pub cannot_save: String,
+}
+
+/// One number a body can tune: its archetype-file path, the part of the
+/// body it belongs to, and the slider's range.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct TuneField {
+    pub group: String,
+    pub path: String,
+    pub label: String,
+    pub value: f32,
+    pub min: f32,
+    pub max: f32,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -1763,6 +1816,8 @@ pub enum UiUpdate {
     AvatarPreview(IconRef),
     /// The installed packages, for the Add-Ons screen.
     AddOns(AddOnsView),
+    /// Open or refresh the Tune window; None closes it.
+    Tune(Option<TuneView>),
     /// The next connection failure is a refused join over differing
     /// add-ons: show these instead of a plain message box.
     AddOnMismatch(AddOnMismatch),

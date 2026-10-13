@@ -25,6 +25,7 @@ pub mod saveload;
 pub mod selector;
 pub mod splash;
 pub mod trust;
+pub mod tune;
 pub mod workshop;
 pub mod wrench;
 
@@ -148,6 +149,8 @@ pub enum ScreenId {
     Report,
     /// An Add-On's splash over the main menu (Slayer's Happy Holidays).
     Splash,
+    /// `/tune`: the host's live numbers for an Add-On body (native).
+    Tune,
 }
 
 pub trait Screen {
@@ -262,6 +265,7 @@ pub fn make(id: ScreenId, core: &mut Core) -> Box<dyn Screen> {
         ScreenId::LoadBricksColor => return Box::new(colorwarn::ColorWarning::new(core)),
         ScreenId::Report => return Box::new(report::Report::new(core)),
         ScreenId::Splash => return Box::new(splash::Splash::new(core)),
+        ScreenId::Tune => return Box::new(tune::Tune::new(core)),
         ScreenId::Options => return Box::new(options::Options::new(core)),
         ScreenId::Remap => return Box::new(options::Remap::new(core)),
         ScreenId::BrickSelector => return Box::new(selector::BrickSelector::new(core)),

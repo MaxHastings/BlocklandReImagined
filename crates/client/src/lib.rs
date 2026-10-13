@@ -1,6 +1,7 @@
 //! Native application boundary. No Torque readers or desktop automation.
 pub mod actor_effects;
 pub mod add_on_choices;
+pub mod add_on_edits;
 pub mod add_on_health;
 pub mod add_ons;
 pub mod addon_physics;
@@ -68,6 +69,7 @@ pub mod system_libraries;
 pub mod testing;
 pub mod tool_ui;
 pub mod trust_list;
+pub mod tune;
 pub mod tutorial_targets;
 pub mod updates;
 pub mod vehicle_camera;

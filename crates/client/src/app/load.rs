@@ -302,6 +302,7 @@ impl App {
                 weapon_animation_cursor: 0,
             },
             cosmetic_faults: Default::default(),
+            tuning: Default::default(),
             addons: AddOns {
                 reload: None,
                 reload_pending: None,
@@ -317,6 +318,7 @@ impl App {
                 left_out_add_ons: None,
                 add_on_health: Default::default(),
                 hud_regions: Default::default(),
+                edits: Default::default(),
             },
             world_shapes: None,
             shapes_uploaded: None,

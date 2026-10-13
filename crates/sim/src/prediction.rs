@@ -643,6 +643,11 @@ impl Predictor {
         self.player.tuning()
     }
     /// Whether the tool in hand takes the jet button ([`motor_input`]).
+    /// The host's archetype table changed (a body tuned live): later ticks
+    /// run the new numbers.
+    pub fn set_archetypes(&mut self, archetypes: Archetypes) {
+        self.archetypes = archetypes;
+    }
     pub fn set_tool_jet(&mut self, takes: bool) {
         self.tool_jet = takes;
     }

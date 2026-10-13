@@ -719,6 +719,26 @@ impl App {
                     Err(error) => Err(error),
                 }
             }
+            // `/tune` and `/tune <body>` open the Tune window; a change
+            // typed out (`/tune <body> <field> <value>`) goes to the host.
+            UiAction::ChatCommand { ref name, ref args }
+                if name.eq_ignore_ascii_case("tune")
+                    && args.last().is_none_or(|a| a.parse::<f32>().is_err()) =>
+            {
+                let args = args.clone();
+                self.open_tune(&args)
+            }
+            UiAction::TuneSet { .. } | UiAction::TuneUndo { .. } | UiAction::TuneSave { .. } => {
+                let result = self.tune_action(id, &action);
+                if result.is_ok() {
+                    return Ok(());
+                }
+                result
+            }
+            UiAction::TuneClosed => {
+                self.close_tune();
+                Ok(())
+            }
             UiAction::ChatCommand { ref name, .. } if name.eq_ignore_ascii_case("invite") => {
                 match self.net.invite.clone() {
                     Some(invite) => {

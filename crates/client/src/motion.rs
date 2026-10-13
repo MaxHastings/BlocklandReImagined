@@ -83,6 +83,9 @@ pub struct Motion {
     pub(crate) drive_state: DriveState,
     mirror: Option<CollisionMirror>,
     predictor: Option<Predictor>,
+    /// The archetype table the predictor runs, so a body the host tunes
+    /// mid-game reaches it.
+    archetypes: Option<Arc<bri_sim::archetype::Archetypes>>,
     /// The replica world the collision mirror matches, with its change log
     /// and revision.
     mirrored: Option<(Arc<PublicWorld>, Arc<crate::network::WorldLog>, u64)>,
@@ -490,6 +493,15 @@ impl Motion {
                 view.world_revision,
             ));
         }
+        if let Some(predictor) = &mut self.predictor
+            && self
+                .archetypes
+                .as_ref()
+                .is_some_and(|seen| !Arc::ptr_eq(seen, &view.archetypes))
+        {
+            predictor.set_archetypes((*view.archetypes).clone());
+        }
+        self.archetypes = Some(view.archetypes.clone());
         match (&mut self.predictor, &mut self.mirror) {
             (Some(predictor), _) => {
                 predictor.set_broken_shapes(&view.broken_shapes)?;

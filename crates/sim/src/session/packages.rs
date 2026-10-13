@@ -570,7 +570,7 @@ fn diagnostics_error(problems: Vec<Diagnostic>) -> anyhow::Error {
 /// A package archetype: its base with the declared overrides. Movement
 /// constants merge by name, so a package names only what it changes and the
 /// motor's own check decides what is valid.
-fn archetype(
+pub(super) fn archetype(
     table: &crate::archetype::Archetypes,
     id: &str,
     def: &bri_package_runtime::content::ArchetypeDef,
@@ -2742,9 +2742,11 @@ impl Session {
         // `serverCmdTripOut`: an administrator's joke.
         let typed_trip_out =
             request.package.is_empty() && request.command.eq_ignore_ascii_case("tripout");
+        // `/tune`: the host changes an Add-On body's numbers.
+        let typed_tune = request.package.is_empty() && request.command.eq_ignore_ascii_case("tune");
         // `/body`: become another body this game lets one pick.
         let typed_body = request.package.is_empty() && request.command.eq_ignore_ascii_case("body");
-        let body_words = typed_body.then(|| {
+        let body_words = (typed_body || typed_tune).then(|| {
             request
                 .args
                 .iter()
@@ -2773,6 +2775,16 @@ impl Session {
             }
             Err(_) if typed_trip_out => {
                 self.trip_out(owner)?;
+                return Ok(Reply::Accepted);
+            }
+            Err(_) if typed_tune => {
+                let words: Vec<String> = body_words
+                    .as_deref()
+                    .unwrap_or_default()
+                    .split_whitespace()
+                    .map(str::to_string)
+                    .collect();
+                self.tune_command(owner, &words);
                 return Ok(Reply::Accepted);
             }
             Err(_) if typed_body => {

@@ -53,6 +53,7 @@ mod saves;
 mod scene;
 mod scenery;
 mod session;
+mod tune;
 mod view;
 use addons::*;
 use avatars::*;
@@ -499,6 +500,8 @@ pub struct App {
     pub cosmetic_faults: crate::cosmetic::CosmeticFaults,
     /// Add-On packages: the catalog, client code, server packages and imports.
     addons: AddOns,
+    /// `/tune`'s window, while open.
+    tuning: tune::Tuning,
     /// Add-On world shapes (`show_shapes`), and the sets last uploaded.
     world_shapes: Option<bri_render::world_shapes::ShapeRenderer>,
     shapes_uploaded:
@@ -1521,6 +1524,10 @@ impl PlatformApp for App {
     }
     fn focus_changed(&mut self, focused: bool) {
         self.audio.set_focused(focused);
+        if focused {
+            // Back from an editor, maybe: look for Add-On edits.
+            self.addons.edits.check();
+        }
         if focused
             && (self.ui.is_open(bri_ui::screens::ScreenId::StartMission)
                 || self.ui.is_open(bri_ui::screens::ScreenId::HostColorsets))

@@ -108,13 +108,22 @@ pub fn check_references(loaded: &Loaded) -> Vec<Problem> {
     for r in loaded.weapons.add_on_references() {
         let (found, effect) = match r.kind {
             Kind::Sound => match loaded.audio {
-                Some(audio) => (audio.has_sound(r.name), "plays silently"),
+                // Say why when the file was tried: a modder fixes the file.
+                Some(audio) => (
+                    audio.has_sound(r.name),
+                    audio.why_missing(r.name).map_or_else(
+                        || "plays silently".to_string(),
+                        |why| format!("plays silently: {why}"),
+                    ),
+                ),
                 None => continue,
             },
-            Kind::Effect | Kind::Explosion => (loaded.effects.knows(r.name), "shows nothing"),
+            Kind::Effect | Kind::Explosion => {
+                (loaded.effects.knows(r.name), "shows nothing".to_string())
+            }
             Kind::DamageType => (
                 loaded.weapons.has_damage_type(r.name),
-                "kills by it read as the default kill message",
+                "kills by it read as the default kill message".to_string(),
             ),
             _ => continue,
         };
