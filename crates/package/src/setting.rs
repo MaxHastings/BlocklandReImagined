@@ -237,7 +237,45 @@ pub struct SettingDef {
     /// waits for the next start.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub restart: bool,
+    /// Where the mini-game window shows it beside v20's own rules; left
+    /// out, only its More Settings page does (where every setting shows).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub place: Option<SettingPlace>,
+    /// A few words after its box: what the number counts (`minutes`,
+    /// `0: no limit`).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub unit: String,
 }
+
+/// A section of the mini-game window a setting joins ([`SettingDef::place`]).
+/// The engine owns the sections; an Add-On says which of its settings
+/// belong in them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SettingPlace {
+    /// Game page, Basics: what kind of game it is (Slayer's Game Mode).
+    Basics,
+    /// Game page, what everyone starts with; a team's own loadout on its
+    /// team.
+    Loadout,
+    /// Game page, How to Win.
+    Win,
+    /// Game page, Rounds.
+    Rounds,
+    /// Teams page: every team's on All Teams, a team's own on its team.
+    Teams,
+    /// Rules page, Scoring.
+    Scoring,
+    /// Rules page, Respawning.
+    Respawn,
+    /// Rules page, Damage.
+    Damage,
+    /// Rules page, Bricks.
+    Bricks,
+}
+
+/// Longest [`SettingDef::unit`].
+const MAX_UNIT: usize = 48;
 
 /// Longest v20 global name a setting stands for.
 pub const MAX_GLOBAL: usize = 96;
@@ -365,8 +403,25 @@ impl SettingDef {
             SettingType::Bool => {
                 extra("min", self.min.is_some())?;
                 extra("max", self.max.is_some())?;
-                extra("items", !self.items.is_empty())?;
                 extra("max_length", self.max_length.is_some())?;
+                // Named choices for on and off show it as a drop-down.
+                let named = |v: bool| {
+                    self.items
+                        .iter()
+                        .filter(|i| i.value == SettingValue::Bool(v))
+                        .count()
+                        == 1
+                };
+                if !self.items.is_empty()
+                    && (self.items.len() != 2
+                        || !named(true)
+                        || !named(false)
+                        || self.items.iter().any(|i| !label(&i.name, MAX_TITLE, false)))
+                {
+                    return Err(format!(
+                        "setting `{what}`: a check box's `items` name its true and false, 1 to {MAX_TITLE} characters each"
+                    ));
+                }
             }
             SettingType::Int => {
                 extra("items", !self.items.is_empty())?;
@@ -465,6 +520,16 @@ impl SettingDef {
             when.validate()
                 .map_err(|e| format!("setting `{what}`: {e}"))?;
         }
+        if self.place.is_some() && self.scope == SettingScope::Server {
+            return Err(format!(
+                "setting `{what}`: a server setting has no place in a mini-game's window"
+            ));
+        }
+        if !label(&self.unit, MAX_UNIT, true) {
+            return Err(format!(
+                "setting `{what}`: unit is at most {MAX_UNIT} characters"
+            ));
+        }
         Ok(())
     }
     /// Whether `value` is one this setting may hold, with `more` items
@@ -553,6 +618,35 @@ mod tests {
 
     fn def(json: &str) -> SettingDef {
         serde_json::from_str(json).unwrap()
+    }
+
+    #[test]
+    fn a_check_box_may_name_its_on_and_off_and_take_a_place() {
+        let sync = def(
+            r#"{ "key": "sync", "title": "Loadout", "scope": "team", "type": "bool",
+                 "default": true, "place": "loadout", "unit": "for the team",
+                 "items": [ { "value": true, "name": "Same as everyone" },
+                            { "value": false, "name": "Own loadout" } ] }"#,
+        );
+        sync.validate().unwrap();
+        assert_eq!(sync.place, Some(SettingPlace::Loadout));
+        assert!(sync.check(&SettingValue::Bool(false), &[]).is_ok());
+        for items in [
+            r#"[ { "value": true, "name": "On" } ]"#,
+            r#"[ { "value": true, "name": "On" }, { "value": true, "name": "Also on" } ]"#,
+            r#"[ { "value": true, "name": "On" }, { "value": 0, "name": "Off" } ]"#,
+        ] {
+            let bad = def(&format!(
+                r#"{{ "key": "sync", "title": "Loadout", "type": "bool", "default": true,
+                     "items": {items} }}"#
+            ));
+            assert!(bad.validate().is_err(), "{items}");
+        }
+        let server = def(
+            r#"{ "key": "max", "title": "Max", "scope": "server", "type": "int",
+                 "default": 1, "min": 0, "max": 9, "place": "teams" }"#,
+        );
+        assert!(server.validate().is_err());
     }
 
     #[test]

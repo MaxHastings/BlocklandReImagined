@@ -1375,6 +1375,26 @@ pub struct MiniGameAddOnSetting {
     /// edited with the others of its category in the avatar editor.
     #[serde(default)]
     pub avatar: Option<String>,
+    /// The section of the window it joins beside the v20 rules; none: only
+    /// More Settings, where every setting shows.
+    #[serde(default)]
+    pub place: Option<MiniGameSettingPlace>,
+    /// Words after its box (`minutes (0: no limit)`).
+    #[serde(default)]
+    pub unit: String,
+}
+/// A section of the Mini-Game window ([`MiniGameAddOnSetting::place`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum MiniGameSettingPlace {
+    Basics,
+    Loadout,
+    Win,
+    Rounds,
+    Teams,
+    Scoring,
+    Respawn,
+    Damage,
+    Bricks,
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MiniGameTeam {
@@ -1838,11 +1858,16 @@ pub struct AddOnFavoriteTeam {
     pub settings: BTreeMap<String, MiniGameSettingValue>,
 }
 
-/// One Create Mini-Game favourite: the form's rules and its colour's name.
+/// One Mini-Game window favourite (v20's Set Favs): the rules, the
+/// colour's name, and the Add-On settings and teams by `namespace:key`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MiniGameFavorite {
     pub rules: MiniGameRules,
     pub color: Option<String>,
+    #[serde(default)]
+    pub settings: BTreeMap<String, MiniGameSettingValue>,
+    #[serde(default)]
+    pub teams: Vec<AddOnFavoriteTeam>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
