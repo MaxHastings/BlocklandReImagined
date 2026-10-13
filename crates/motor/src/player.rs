@@ -66,7 +66,7 @@ pub fn pass_groups(group: u8) -> InteractionGroups {
 }
 /// What a body in pass group `group` moves against: everything but
 /// corpses and the bodies of its own group.
-fn moves_against(group: u8) -> InteractionGroups {
+pub fn moves_against(group: u8) -> InteractionGroups {
     if group == 0 {
         MOVES_AGAINST
     } else {
