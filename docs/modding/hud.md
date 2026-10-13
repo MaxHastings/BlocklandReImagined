@@ -92,10 +92,11 @@ down. Elements may reach outside the box.
 | `crosshair` | centred, 208, 64, 64 | the crosshair |
 | `energy` | right edge, 240, 48, 120 | the jet energy bar |
 | `center_print` | centred, 160, 480, 120 | the center print |
-| `bottom_print` | 0, 400, full width, 80 | the bottom print (ammo) |
+| `bottom_print` | 0, 400, full width, 80 | the bottom print, whatever it shows |
+| `ammo` | right edge, 400, 240, 80 | the bottom print only while it is the ammo display |
 
 A region nobody claims shows the stock HUD as before. Claiming one of the
-last four hides that stock element while the claim applies; a layout with
+last five hides that stock element while the claim applies; a layout with
 no elements just hides it, or saves the region for your client code.
 
 **When.** `when` limits the claim to a body (`body`: archetype ids), a held
@@ -125,8 +126,15 @@ back to the stock HUD when nothing claims a region.
 **Values** (`value`, `max`, `show`): `health`, `health_max`, `energy` (jet
 energy 0 to 1), `alive` (1 or 0), `center_print` and `bottom_print` (the
 stock prints' text, without markup), or a rule's state as a panel binds it,
-`rule-id:player/key` or `rule-id:global/key`. A `max` left out is the
-value's own (`health_max` for `health`, else 1). A layout reading a rule's
+`rule-id:player/key` or `rule-id:global/key`. The held gun gives `ammo`
+(rounds ready to fire; for a gun counted from its reserve, such as
+grenades, the reserve), `ammo_max` (a full magazine), `ammo_reserve`
+(rounds carried beyond it) and `reloading` (1 while it reloads). They are
+missing with no gun that has a magazine, and `ammo` and `ammo_reserve` are
+missing when they never run out. A missing value reads as `-` in text and
+0 in a bar or `show`, so `"show": { "value": "ammo_max", "above": 0 }`
+shows an element only with such a gun out. A `max` left out is the value's
+own (`health_max` for `health`, `ammo_max` for `ammo`, else 1). A layout reading a rule's
 state is not drawn on a server that does not run that rule.
 
 `pixelated: true` draws images with sharp pixels: pixel art and sprite
@@ -136,9 +144,9 @@ fonts.
 vehicle seat beats a held item, which beats a body, which beats no
 condition; they add up), then the higher `priority` (-100 to 100), then the
 package id in alphabetical order. The game names the losing layout once in
-the Add-On's problems; it is not drawn. So a weapon's ammo counter in
-`bottom_right` shows over a body's `bottom_right` while that weapon is out,
-and the body's comes back when it is put away.
+the Add-On's problems; it is not drawn. So a weapon's ammo counter
+claiming `ammo` with `holding` shows over a body's `ammo` claim while that
+weapon is out, and the body's comes back when it is put away.
 
 **Drawing from client code.** An Add-On with client code and
 `render.layer` draws its own HUD in screen space. Its `hud` layout claims
@@ -147,10 +155,11 @@ the region (with no elements, or with some under the code's drawing), and
 one unit and whether this Add-On owns the region now. Draw only while it
 does ([client sandbox](../architecture/client-sandbox.md)).
 
-**Not yet.** There is no ammo value: a weapon's magazine reaches players
-only as its bottom print, which `bottom_print` reads as text. Region boxes
-are fixed; there is no free placement or new region names.
+**Not yet.** Region boxes are fixed; there is no free placement or new
+region names.
 
 Tests: `crates/content/src/hud.rs` (validation, conflict ranking, frames,
 sprite fonts), `crates/client/src/hud_regions.rs`, and the render check
-`crates/client/tests/hud_regions_render.rs`.
+`crates/client/tests/hud_regions_render.rs` (including the Runner's ammo
+counter), and `crates/sim/tests/script_api.rs`
+`a_held_guns_ammo_reaches_its_holder_for_hud_counters`.

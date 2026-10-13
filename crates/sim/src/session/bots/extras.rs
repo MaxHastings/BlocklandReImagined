@@ -312,7 +312,7 @@ impl Session {
         feet: Vec3,
         tick: u64,
     ) -> Option<(Threat, OwnerId, Vec3)> {
-        if self.bots.deaf_to_allies {
+        if self.bots.deaf_to_allies || !self.bots.brains.get(&bot)?.kind.tactics.dodge {
             return None;
         }
         let peer = self.peers.get(&bot)?;
@@ -491,6 +491,7 @@ impl Session {
         let brain = &self.bots.brains[&bot];
         // Carrying an objective it keeps to its way: no dodge holds it up.
         let incoming = (on_foot
+            && brain.kind.tactics.dodge
             && !scene.carrying
             && state.grounded
             && brain.extras.dodge.is_none()

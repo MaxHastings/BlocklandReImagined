@@ -114,6 +114,13 @@ impl App {
         {
             self.ui.apply_session(a.id, update);
         }
+        // So do the Add-On bodies its ChangeDatablock event may name.
+        if let Some(view) = &a.view
+            && let Some(update) = self.build.tool_ui.offer_bodies(&view.archetypes)
+            && a.entered
+        {
+            self.ui.apply_session(a.id, update);
+        }
         if let (Some(building), Some(view)) = (&mut self.build.building, &a.view) {
             building.set_held_brick(view.weapons.images.get(&view.owner).is_some_and(|images| {
                 images.iter().any(|image| {
@@ -591,11 +598,17 @@ impl App {
                             text,
                             seconds,
                             hide_bar,
-                        } => UiUpdate::BottomPrint {
-                            text: print_markup(&self.ui.core.binds, &text),
-                            seconds,
-                            hide_bar,
-                        },
+                        } => {
+                            // The ammo display, which an Add-On's `ammo`
+                            // HUD region replaces.
+                            self.ui.core.bottom_print_ammo =
+                                std::mem::take(&mut self.net.next_print_is_ammo);
+                            UiUpdate::BottomPrint {
+                                text: print_markup(&self.ui.core.binds, &text),
+                                seconds,
+                                hide_bar,
+                            }
+                        }
                         bri_sim::session::Notice::Abilities(abilities) => {
                             self.net.abilities = abilities;
                             continue;
@@ -614,6 +627,11 @@ impl App {
                         }
                         bri_sim::session::Notice::Sound(profile) => {
                             self.audio.profile(&profile, bri_audio::Placement::Listener);
+                            continue;
+                        }
+                        bri_sim::session::Notice::Ammo(held) => {
+                            self.net.next_print_is_ammo = held.as_ref().is_some_and(|h| h.printed);
+                            self.net.held_ammo = held;
                             continue;
                         }
                         bri_sim::session::Notice::Fov(fov) => {

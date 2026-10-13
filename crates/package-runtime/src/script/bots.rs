@@ -67,6 +67,80 @@ fn add_bot(game: Dynamic, options: Map) -> Fallible<INT> {
     }))
 }
 
+/// `bot_intent(bot, #{ guard: [x, y, z], radius })`,
+/// `#{ patrol: [[x, y, z], ...], radius }`, `#{ follow: player, distance }`,
+/// `#{ flee: player or (), seconds }`, or `()` for none.
+fn bot_intent(bot: Dynamic, intent: Dynamic) -> Fallible<INT> {
+    let bot = id(&bot)?;
+    if intent.is_unit() {
+        return push(Op::SetBotIntent(ops::SetBotIntent { bot, intent: None }));
+    }
+    let Some(options) = intent.try_cast::<Map>() else {
+        return fail("bot_intent takes a map of guard, patrol, follow or flee, or ()");
+    };
+    let point = |v: &Dynamic| -> Fallible<[f32; 3]> {
+        let a = v
+            .clone()
+            .try_cast::<Array>()
+            .filter(|a| a.len() == 3)
+            .ok_or("a point is [x, y, z]")?;
+        Ok([float(&a[0])?, float(&a[1])?, float(&a[2])?])
+    };
+    let number =
+        |key: &str, default: f32| -> Fallible<f32> { options.get(key).map_or(Ok(default), float) };
+    let one = |allowed: &[&str]| -> Fallible<()> {
+        match options.keys().find(|k| !allowed.contains(&k.as_str())) {
+            Some(k) => fail(format!(
+                "bot_intent: `{k}` is not one of {}",
+                allowed.join(", ")
+            )),
+            None => Ok(()),
+        }
+    };
+    let intent = if let Some(at) = options.get("guard") {
+        one(&["guard", "radius"])?;
+        ops::BotIntent::Guard {
+            at: point(at)?,
+            radius: number("radius", 6.0)?,
+        }
+    } else if let Some(points) = options.get("patrol") {
+        one(&["patrol", "radius"])?;
+        let points = points
+            .clone()
+            .try_cast::<Array>()
+            .ok_or("a patrol is a list of points")?
+            .iter()
+            .map(point)
+            .collect::<Fallible<Vec<_>>>()?;
+        ops::BotIntent::Patrol {
+            points,
+            radius: number("radius", 12.0)?,
+        }
+    } else if let Some(leader) = options.get("follow") {
+        one(&["follow", "distance"])?;
+        ops::BotIntent::Follow {
+            leader: id(leader)?,
+            distance: number("distance", 4.0)?,
+        }
+    } else if let Some(from) = options.get("flee") {
+        one(&["flee", "seconds"])?;
+        ops::BotIntent::Flee {
+            from: if from.is_unit() {
+                None
+            } else {
+                Some(id(from)?)
+            },
+            seconds: number("seconds", 5.0)?,
+        }
+    } else {
+        return fail("bot_intent takes guard, patrol, follow or flee");
+    };
+    push(Op::SetBotIntent(ops::SetBotIntent {
+        bot,
+        intent: Some(intent),
+    }))
+}
+
 pub(super) fn register(engine: &mut Engine) {
     engine.register_fn("bot_kinds", || {
         with(|i| {
@@ -132,6 +206,7 @@ pub(super) fn register(engine: &mut Engine) {
             slot,
         }))
     });
+    engine.register_fn("bot_intent", bot_intent);
     engine.register_fn("rest_bot", |bot: Dynamic, rest: bool| {
         push(Op::RestBot(ops::RestBot {
             bot: id(&bot)?,

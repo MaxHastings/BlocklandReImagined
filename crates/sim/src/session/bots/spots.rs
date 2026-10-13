@@ -141,7 +141,7 @@ impl Session {
         // (where a blast or a scatter is its own risk), as the behaviour
         // chooser reads it.
         let (near, far) = weapon.band();
-        let places = self.bot_places(seen, feet, body, costs, walk_speed, (near, far));
+        let places = self.bot_places(bot, seen, feet, body, costs, walk_speed, (near, far));
         // The shot from each place: the chooser's own, on a scratch state
         // and a copy of its mind, on its fair share of the shared budget
         // (a place it has no budget left for has no shot this turn).
@@ -291,8 +291,10 @@ impl Session {
     /// straight to, and in or out as far as its weapon's `band` (near, far)
     /// takes it back inside, a body's width at least; a ledge ahead a jump
     /// lands it on, and one higher its jets lift it onto (`reach`).
+    #[allow(clippy::too_many_arguments)]
     fn bot_places(
         &mut self,
+        seen_by: OwnerId,
         seen: Seen,
         feet: Vec3,
         body: &Body,
@@ -331,12 +333,18 @@ impl Session {
                 .map(crate::nav::Node::feet)
         };
         let gap = flat(seen.real - feet).length();
+        // A kind that never gives ground (`tactics.retreat` off) weighs no
+        // place farther from its enemy.
+        let retreat = self.bots.brains[&seen_by].kind.tactics.retreat;
         for (option, way, length) in [
             (LEFT, -right, body.width),
             (RIGHT, right, body.width),
             (IN, toward, gap - far),
             (OUT, -toward, near - gap),
         ] {
+            if option == OUT && !retreat {
+                continue;
+            }
             places[option as usize] = floor(feet + way * length.max(body.width))
                 .filter(|to| ground.walkable(body, feet, *to))
                 .map(|to| (to, flat(to - feet).length() / walk_speed));
@@ -589,7 +597,7 @@ mod tests {
             swim: None,
             jets: None,
         };
-        let places = s.bot_places(seen, feet, &body, &costs, 1.0, (0.0, 20.0));
+        let places = s.bot_places(bot, seen, feet, &body, &costs, 1.0, (0.0, 20.0));
         for (option, place) in places.iter().enumerate() {
             if let Some((at, _)) = place {
                 assert!(at.x > -0.6, "{} at {at} is off the floor", SPOTS[option]);
@@ -644,7 +652,7 @@ mod tests {
         (gun.impulse, gun.vertical) = (0.0, 0.0);
         s.weapons.retune(pack).unwrap();
         let brain = s.bots.brains.get_mut(&bot).unwrap();
-        brain.kind.surprise.strength = 1.0;
+        std::sync::Arc::make_mut(&mut brain.kind).surprise.strength = 1.0;
         stand(&mut s, bot, seen, 10);
         assert_eq!(
             offered(&s, bot),

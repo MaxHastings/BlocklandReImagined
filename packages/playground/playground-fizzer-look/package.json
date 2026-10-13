@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "id": "playground-fizzer-look",
+  "version": "1.0.0",
+  "api": 1,
+  "name": "Fizzer Look",
+  "description": "How the Fizzer looks: a squat slate-blue barrel on stubby feet with a copper band and a short burning wick, drawn in place of the Blockhead. Part of the Mixed Add-On Playground.",
+  "authors": ["Blockland ReImagined"],
+  "license": "CC0-1.0",
+  "provenance": { "source": "original" },
+  "provides": [
+    { "kind": "model", "id": "playground-fizzer-look:model/fizzer", "file": "models/fizzer.json" }
+  ]
+}

@@ -77,6 +77,7 @@ fn what(p, name, t) {
     if name == "remove_bot" { return remove_bot(t); }
     if name == "bot_tool" { return bot_tool(t, 0); }
     if name == "rest_bot" { return rest_bot(t, true); }
+    if name == "bot_intent" { return bot_intent(t, #{ guard: [0.0, 0.0, 0.0] }); }
     // Vehicles.
     if name == "spawn_vehicle" { return spawn_vehicle("kit:vehicle/none", 0.0, 1.0, 0.0, 0.0, [0.0, 0.0, 0.0], ()); }
     if name == "remove_vehicle" { return remove_vehicle(t); }
@@ -387,6 +388,7 @@ fn a_required_operation_the_engine_cannot_do_charges_nobody() {
         ("remove_bot", "is not one `kit` added"),
         ("bot_tool", "is not one `kit` added"),
         ("rest_bot", "was not added by `kit`"),
+        ("bot_intent", "was not added by `kit`"),
         ("spawn_vehicle", "no vehicles"),
         ("remove_vehicle", "No vehicle 4242"),
         ("place_voxel", "No generated world is running"),

@@ -169,6 +169,22 @@ pub struct Settings {
     pub player_type: String,
     pub loadout: [Option<String>; 5],
     pub lives: Lives,
+    /// Bodies members may pick for themselves (`/body`) besides the game's
+    /// and their team's player type. Empty, as in v20: none.
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub bodies: BTreeSet<String>,
+    /// A member who chose a body (a brick's ChangeDatablock, `/body`),
+    /// before joining or in the game, respawns as it rather than as the
+    /// game's or their team's player type. On unless a game turns it off,
+    /// so Mario and Master Chief can fight in one game.
+    #[serde(default = "yes", skip_serializing_if = "is_yes")]
+    pub keep_chosen_body: bool,
+}
+fn yes() -> bool {
+    true
+}
+fn is_yes(b: &bool) -> bool {
+    *b
 }
 impl Default for Settings {
     fn default() -> Self {
@@ -204,6 +220,8 @@ impl Default for Settings {
                 "rocketlauncheritem",
             ]
             .map(|s| Some(format!("v20.weapon.{s}"))),
+            bodies: BTreeSet::new(),
+            keep_chosen_body: true,
         }
     }
 }
@@ -224,6 +242,8 @@ impl Settings {
             return Err(Error::InvalidSettings);
         }
         if !catalog.player_types.contains(&self.player_type)
+            || self.bodies.len() > MAX_BODIES
+            || !self.bodies.iter().all(|b| catalog.player_types.contains(b))
             || self
                 .loadout
                 .iter()
@@ -411,6 +431,8 @@ impl MiniGame {
         }
     }
 }
+/// Most bodies one game lets members pick ([`Settings::bodies`]).
+pub const MAX_BODIES: usize = 256;
 /// Most teams one mini-game has (Slayer's team list has no fixed cap; its
 /// GUI offers colours from the 64-colour palette).
 pub const MAX_TEAMS: usize = 64;
@@ -440,6 +462,9 @@ pub struct Team {
     /// `namespace:key`.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub addon_settings: BTreeMap<String, SettingValue>,
+    /// The body its members spawn as, in place of the game's player type.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub player_type: Option<String>,
 }
 /// Most Add-On settings one game (or one team) holds apart from defaults.
 pub const MAX_ADDON_SETTINGS: usize = 512;
@@ -464,6 +489,8 @@ pub struct TeamSpec {
     pub id: Option<TeamId>,
     pub name: String,
     pub color: u8,
+    /// [`Team::player_type`].
+    pub player_type: Option<String>,
 }
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, default)]
@@ -765,7 +792,7 @@ pub enum Command {
 /// What [`Command::Manage`] does to a game.
 #[derive(Clone, Debug)]
 pub enum Manage {
-    Configure(Settings),
+    Configure(Box<Settings>),
     Invite(PlayerId),
     Kick(PlayerId),
     /// A new round at once, without the five seconds the owner waits
