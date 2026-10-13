@@ -227,6 +227,9 @@ struct Attempt {
     /// from this client's own but brings no content to reload: whose
     /// Add-On code runs.
     joined: Arc<std::sync::Mutex<Option<bri_package::packages::PackageSet>>>,
+    /// Joins: the connection the host announced the player on, handed to
+    /// [`SessionState::arrival`] once open.
+    arrival: Arc<std::sync::Mutex<Option<bri_net::client::Arrival>>>,
 }
 struct PendingAction {
     action: UiAction,

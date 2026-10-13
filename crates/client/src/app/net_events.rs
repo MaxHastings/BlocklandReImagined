@@ -2,7 +2,103 @@
 use super::*;
 
 impl App {
+    /// The loading connection's chat and server lines, while the player
+    /// downloads Add-Ons and loads the map; it ends once they enter the
+    /// game, whose updates carry chat from then on.
+    pub(super) fn poll_arrival(&mut self) {
+        if let Some(a) = &self.net.attempt
+            && let Ok(mut slot) = a.arrival.lock()
+            && let Some(arrival) = slot.take()
+            && let Some(address) = a.join_target.clone()
+        {
+            self.ui.apply_session(a.id, UiUpdate::LoadingChat(true));
+            self.net.arrival = Some(HeldArrival {
+                id: a.id,
+                address: address.trim().to_string(),
+                last_chat: arrival.chat_cursor,
+                arrival,
+            });
+        }
+        let Some(held) = self.net.arrival.as_mut() else {
+            return;
+        };
+        let entered = self.net.attempt.as_ref().is_some_and(|a| a.entered);
+        if self.ui.session_request() != Some(held.id) || entered {
+            // Entered: the game's own chat starts after what was shown here.
+            if let Some(a) = self.net.attempt.as_mut() {
+                a.last_chat = a.last_chat.max(held.last_chat);
+            }
+            self.net.arrival = None;
+            self.ui.apply(UiUpdate::LoadingChat(false));
+            return;
+        }
+        let id = held.id;
+        let mut events = Vec::new();
+        while let Some(event) = held.arrival.try_next() {
+            events.push(event);
+        }
+        for event in events {
+            match event {
+                bri_net::client::ArrivalEvent::Chat(lines) => {
+                    for line in lines {
+                        let shown = self.net.arrival.as_ref().map_or(u64::MAX, |h| h.last_chat);
+                        if line.id > shown {
+                            self.show_chat_line(id, &line);
+                            if let Some(held) = self.net.arrival.as_mut() {
+                                held.last_chat = line.id;
+                            }
+                        }
+                    }
+                }
+                bri_net::client::ArrivalEvent::Notice(bri_sim::session::Notice::Chat(text)) => {
+                    self.ui.apply_session(
+                        id,
+                        UiUpdate::Chat {
+                            text: bri_ui::ml::sanitize(&text),
+                        },
+                    );
+                }
+                bri_net::client::ArrivalEvent::Notice(bri_sim::session::Notice::Sound(profile)) => {
+                    self.audio.profile(&profile, bri_audio::Placement::Listener);
+                }
+                bri_net::client::ArrivalEvent::Notice(_) => {}
+                // The game join spawned the player, or the host is gone:
+                // the join itself says which.
+                bri_net::client::ArrivalEvent::Closed(_) => {}
+            }
+        }
+        if let Some(a) = self.net.attempt.as_mut()
+            && let Some(held) = &self.net.arrival
+        {
+            a.last_chat = a.last_chat.max(held.last_chat);
+        }
+    }
+    /// One chat line in the chat HUD, with its message type's sound.
+    pub(super) fn show_chat_line(&mut self, id: RequestId, line: &bri_sim::session::ChatLine) {
+        // Owner 0 lines are server-authored (death messages) and
+        // may carry ML markup, colour codes and death icons.
+        // Player lines use v20's chat format
+        // `\c7<clan prefix>\c3<name>\c7<clan suffix>\c6: <text>`.
+        let text = if line.owner == 0 {
+            bri_ui::ml::sanitize(&line.text)
+        } else {
+            player_chat(&line.clan, &line.name, &line.text)
+        };
+        self.ui.apply_session(id, UiUpdate::Chat { text });
+        // addMessageCallback: the message type's GUI sound.
+        if let Some(tag) = line.tag {
+            use bri_sim::session::MessageTag;
+            let key = match tag {
+                MessageTag::UploadStart => "ui.upload_start",
+                MessageTag::UploadEnd => "ui.upload_end",
+                MessageTag::ProcessComplete => "ui.process_complete",
+                MessageTag::ClearBricks => "ui.brick_clear",
+            };
+            self.audio.trigger(key, bri_audio::Placement::Listener);
+        }
+    }
     pub(super) fn poll_network(&mut self) -> Result<()> {
+        self.poll_arrival();
         let Some(mut a) = self.net.attempt.take() else {
             return Ok(());
         };
@@ -88,6 +184,8 @@ impl App {
             if let Some(mismatch) = crate::add_ons::mismatch(&self.content.paths.root, &reason) {
                 self.ui.apply_session(id, UiUpdate::AddOnMismatch(mismatch));
             }
+            // The join is over: the host tells everyone this player left.
+            self.net.arrival = None;
             self.ui
                 .apply_session(id, UiUpdate::Connection(ConnectionState::Failed { reason }));
             self.disconnect();
@@ -1089,28 +1187,8 @@ impl App {
             }
             for line in &view.chat {
                 if line.id > a.last_chat {
-                    // Owner 0 lines are server-authored (death messages) and
-                    // may carry ML markup, colour codes and death icons.
-                    // Player lines use v20's chat format
-                    // `\c7<clan prefix>\c3<name>\c7<clan suffix>\c6: <text>`.
-                    let text = if line.owner == 0 {
-                        bri_ui::ml::sanitize(&line.text)
-                    } else {
-                        player_chat(&line.clan, &line.name, &line.text)
-                    };
-                    self.ui.apply_session(a.id, UiUpdate::Chat { text });
+                    self.show_chat_line(a.id, line);
                     a.last_chat = line.id;
-                    // addMessageCallback: the message type's GUI sound.
-                    if let Some(tag) = line.tag {
-                        use bri_sim::session::MessageTag;
-                        let key = match tag {
-                            MessageTag::UploadStart => "ui.upload_start",
-                            MessageTag::UploadEnd => "ui.upload_end",
-                            MessageTag::ProcessComplete => "ui.process_complete",
-                            MessageTag::ClearBricks => "ui.brick_clear",
-                        };
-                        self.audio.trigger(key, bri_audio::Placement::Listener);
-                    }
                 }
             }
             // MsgStartTalking / MsgStopTalking keep WhoTalkSO's order.

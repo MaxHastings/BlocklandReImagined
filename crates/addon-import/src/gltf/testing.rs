@@ -485,6 +485,13 @@ pub fn detailed_character(with_eye: bool, subdivisions: u32) -> Figure {
                 &rot(Quat::from_rotation_x(0.6), Quat::from_rotation_x(-0.6)),
             ),
             (
+                bones[4],
+                "rotation",
+                "LINEAR",
+                &[0.0, 0.5, 1.0],
+                &rot(Quat::from_rotation_x(-0.6), Quat::from_rotation_x(0.6)),
+            ),
+            (
                 hips,
                 "translation",
                 "LINEAR",
@@ -567,13 +574,24 @@ pub fn detailed_character(with_eye: bool, subdivisions: u32) -> Figure {
     );
     g.animation(
         "aim_right",
-        &[(
-            arm_r,
-            "rotation",
-            "LINEAR",
-            &[0.0, 0.2],
-            &[q(i), q(Quat::from_rotation_x(-1.5))].concat(),
-        )],
+        &[
+            (
+                arm_r,
+                "rotation",
+                "LINEAR",
+                &[0.0, 0.2],
+                &[q(i), q(Quat::from_rotation_x(-1.5))].concat(),
+            ),
+            // Holds the left hand still at rest while aiming: the run's
+            // swing must not show through.
+            (
+                bones[4],
+                "rotation",
+                "LINEAR",
+                &[0.0, 0.2],
+                &[q(i), q(i)].concat(),
+            ),
+        ],
     );
     g.animation(
         "Sit",
