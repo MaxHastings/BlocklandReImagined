@@ -785,6 +785,8 @@ fn player_map(p: &PlayerView) -> Dynamic {
     map([
         ("id", Dynamic::from_int(p.id as i64)),
         ("name", p.name.clone().into()),
+        ("uid", p.key.uid().into()),
+        ("durable", p.key.durable().into()),
         x,
         y,
         z,
