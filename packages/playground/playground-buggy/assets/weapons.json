@@ -29,6 +29,11 @@
  "sounds": {
   "playground-buggy:turret": {
    "file": "sounds/turret.wav"
+  },
+  "playground-buggy:engine": {
+   "file": "sounds/engine.wav",
+   "volume": 0.7,
+   "looping": true
   }
  }
 }

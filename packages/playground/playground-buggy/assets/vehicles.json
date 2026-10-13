@@ -432,6 +432,9 @@
    },
    "harms_only_in_minigames": true,
    "trails": [],
+   "engine_sound": {
+    "sound": "playground-buggy:engine"
+   },
    "authored": {},
    "adaptations": []
   }

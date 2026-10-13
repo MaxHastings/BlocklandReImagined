@@ -78,6 +78,12 @@ pub(crate) enum Command {
         handle: SoundHandle,
         position: Vec3,
     },
+    /// A playing voice's gain and pitch multipliers, replacing its own.
+    SetVoiceParams {
+        handle: SoundHandle,
+        gain_scale: f32,
+        pitch_scale: f32,
+    },
     SetListener(Listener),
     /// At most `spatial::MAX_WINDOWS`.
     SetWindows(Box<[crate::spatial::Window]>),

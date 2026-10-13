@@ -90,6 +90,30 @@ impl SoundAsset {
             max_distance,
         ))
     }
+    /// [`SoundAsset::decoded`] for the sound file at `path`, read no
+    /// further than a sound may be long. Both the game and the Add-On
+    /// checker load Add-On sounds through this, so a file the checker
+    /// passes is one the game can play.
+    pub fn decoded_file(
+        id: &str,
+        path: &std::path::Path,
+        reference_distance: f32,
+        max_distance: f32,
+    ) -> Result<Self, String> {
+        use std::io::Read;
+        let mut bytes = Vec::new();
+        std::fs::File::open(path)
+            .and_then(|f| {
+                f.take(MAX_DECODED_CLIP_BYTES as u64 + 1)
+                    .read_to_end(&mut bytes)
+            })
+            .map_err(|e| e.to_string())?;
+        let extension = path
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or_default();
+        Self::decoded(id, &bytes, extension, reference_distance, max_distance)
+    }
     /// A world sound `id` playing `data` (a decoded clip, or one of the
     /// bank's), heard as [`SoundAsset::decoded`] describes.
     pub fn world(id: &str, data: ClipData, reference_distance: f32, max_distance: f32) -> Self {

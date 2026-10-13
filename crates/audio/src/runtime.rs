@@ -294,6 +294,23 @@ impl AudioRuntime {
         self.send(Command::SetSourcePosition { handle, position })
     }
 
+    /// Change a playing sound's volume and pitch, as multiples of its own
+    /// (1.0 is as authored): a vehicle's engine loop rising with its speed.
+    /// The gain glides to its new value over one mix block, as distance
+    /// changes do; gain is at most 4, pitch from 0.25 to 4.
+    pub fn set_voice_params(
+        &mut self,
+        handle: SoundHandle,
+        gain_scale: f32,
+        pitch_scale: f32,
+    ) -> Result<(), AudioError> {
+        self.send(Command::SetVoiceParams {
+            handle,
+            gain_scale,
+            pitch_scale,
+        })
+    }
+
     /// Update the listener (normally the camera) once per frame.
     pub fn set_listener(&mut self, listener: Listener) -> Result<(), AudioError> {
         self.send(Command::SetListener(listener))
