@@ -2858,10 +2858,12 @@ impl Session {
                     impacts.push((owner, motion.impact));
                 }
                 if motion.jumped {
+                    let state = peer.player.state();
+                    let sound = self.archetypes.resolve(state.archetype).sounds.jump.clone();
                     self.cues.emit(
                         tick,
-                        crate::presentation::CueKind::Jump,
-                        peer.player.state().feet,
+                        crate::presentation::CueKind::Jump { sound },
+                        state.feet,
                     );
                 }
             }
