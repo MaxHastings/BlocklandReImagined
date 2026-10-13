@@ -624,6 +624,8 @@ impl App {
             roll,
         );
         let aspect = frame.size.0 as f32 / frame.size.1 as f32;
+        let fov = vertical_fov(controls.fov().to_radians(), aspect);
+        self.view.pixels_per_unit = Some(frame.size.1 as f32 / (2.0 * (fov * 0.5).tan()));
         let mut camera = Camera::oriented(
             eye.to_array(),
             forward.to_array(),

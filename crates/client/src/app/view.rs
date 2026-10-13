@@ -24,6 +24,10 @@ pub(super) struct ViewState {
     /// The rendered camera's roll about its forward axis (a rider's
     /// first-person view tilting with the seat), radians.
     pub(super) rendered_roll: f32,
+    /// Pixels one unit spans one unit in front of the last rendered camera:
+    /// how tall a body draws on screen, divided by its height over its
+    /// distance.
+    pub(super) pixels_per_unit: Option<f32>,
     /// The controls as the last tick sampled them. The tick poses the body,
     /// the held items and the eye from these; the redraw must draw the camera
     /// from them too. Mouse motion the window loop delivers between the tick
