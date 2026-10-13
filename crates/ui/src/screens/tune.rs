@@ -9,6 +9,7 @@
 use super::*;
 use crate::api::{TuneField, TuneView, UiAction};
 use crate::view::EventKind;
+use bri_console::Clamp;
 
 const WINDOW: &str = "TB_Window";
 const GROUP: &str = "TB_Group";
@@ -264,7 +265,7 @@ impl Tune {
             }
             row.value = field.value;
             if let Some(n) = self.view.id(&slider_name(i)) {
-                self.view.set_num(n, field.value.clamp(row.min, row.max));
+                self.view.set_num(n, field.value.clamped(row.min, row.max));
             }
             if let Some(n) = self.view.id(&value_name(i))
                 && self.view.focus != Some(n)
@@ -380,7 +381,7 @@ impl Screen for Tune {
                     if let Some(n) = self.view.id(&slider_name(i))
                         && let Some(row) = self.rows.get(i)
                     {
-                        self.view.set_num(n, value.clamp(row.min, row.max));
+                        self.view.set_num(n, value.clamped(row.min, row.max));
                     }
                     self.idle_ms = LIVE_DELAY_MS;
                     self.send(core);
