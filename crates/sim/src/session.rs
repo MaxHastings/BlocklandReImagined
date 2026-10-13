@@ -755,6 +755,36 @@ impl UniformParts {
     }
 }
 
+/// What [`Session::admit`] decided about a connection.
+struct Admitted {
+    owner: OwnerId,
+    name: String,
+    /// The name as asked for, before cleaning.
+    wanted: String,
+    cleaned: bool,
+    role: bri_admin::Role,
+}
+/// Which of a joining player's announcements a greeting makes.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Greeting {
+    /// Accepted and spawned at once (no loading stage): both.
+    Whole,
+    /// Accepted, still loading: "connected."
+    Connected,
+    /// Done loading: "spawned."
+    Spawned,
+}
+/// A player whose connection is accepted and who is still loading.
+struct Arrival {
+    name: String,
+    clan: Clan,
+    principal: Option<bri_admin::Principal>,
+    trusted_host: bool,
+    role: bri_admin::Role,
+    window_tick: u64,
+    chats: u32,
+    last_chat: Option<(String, u64)>,
+}
 struct Peer {
     player: Player,
     actor: Actor,
@@ -1015,6 +1045,8 @@ pub struct Session {
     cues: crate::presentation::Cues,
     simulation: Simulation,
     peers: BTreeMap<OwnerId, Peer>,
+    /// Players still loading ([`Session::arrive`]).
+    arrivals: BTreeMap<OwnerId, Arrival>,
     next_owner: OwnerId,
     chat: VecDeque<ChatLine>,
     next_chat: u64,
@@ -1170,6 +1202,7 @@ impl Session {
             cues: Default::default(),
             simulation,
             peers: BTreeMap::new(),
+            arrivals: BTreeMap::new(),
             next_owner,
             chat: VecDeque::new(),
             next_chat: 1,
@@ -1363,6 +1396,10 @@ impl Session {
             self.peers
                 .iter()
                 .any(|(id, p)| Some(*id) != except && same_name(&p.name, candidate))
+                || self
+                    .arrivals
+                    .iter()
+                    .any(|(id, a)| Some(*id) != except && same_name(&a.name, candidate))
         };
         if !taken(wanted) {
             return wanted.to_string();
@@ -1459,7 +1496,39 @@ impl Session {
         is_bot: bool,
         principal: Option<bri_admin::Principal>,
     ) -> Result<OwnerId> {
-        ensure!(self.peers.len() < 64, "Server is full");
+        let admitted = self.admit(name, trusted_host, is_bot, principal)?;
+        let owner = admitted.owner;
+        let (player, combat) = match self.embody(owner, &admitted.name, admitted.role, spawn) {
+            Ok(body) => body,
+            Err(error) => {
+                self.admin_disconnect(owner);
+                return Err(error);
+            }
+        };
+        self.settle(
+            admitted,
+            Clan::default(),
+            principal,
+            trusted_host,
+            is_bot,
+            (player, combat),
+            Greeting::Whole,
+        )?;
+        Ok(owner)
+    }
+    /// `GameConnection::onConnectRequest` and `onConnect`: the name, the
+    /// owner number and the administration role a connection plays under.
+    fn admit(
+        &mut self,
+        name: String,
+        trusted_host: bool,
+        is_bot: bool,
+        principal: Option<bri_admin::Principal>,
+    ) -> Result<Admitted> {
+        ensure!(
+            self.peers.len() + self.arrivals.len() < 64,
+            "Server is full"
+        );
         let wanted = name;
         let name = clean_player_name(&wanted);
         let cleaned = name != wanted.trim();
@@ -1477,7 +1546,7 @@ impl Session {
         let returning = record
             .as_ref()
             .and_then(|r| self.simulation.state().owner_of(&r.principal))
-            .filter(|n| !self.peers.contains_key(n));
+            .filter(|n| !self.peers.contains_key(n) && !self.arrivals.contains_key(n));
         let owner = match returning {
             Some(owner) => owner,
             None => {
@@ -1499,50 +1568,79 @@ impl Session {
             }
         }
         let role = self.admin_connect(owner, name.clone(), trusted_host, is_bot, principal)?;
-        let player = match self.place_player(owner, spawn) {
-            Ok(player) => player,
-            Err(error) => {
-                self.admin_disconnect(owner);
-                return Err(error);
-            }
-        };
+        Ok(Admitted {
+            owner,
+            name,
+            wanted,
+            cleaned,
+            role,
+        })
+    }
+    /// A new body for an admitted player at `spawn`, with its inventory
+    /// and combat state. Undone on failure, except the administration
+    /// role, which the caller keeps or lets go.
+    fn embody(
+        &mut self,
+        owner: OwnerId,
+        name: &str,
+        role: bri_admin::Role,
+        spawn: Vec3,
+    ) -> Result<(Player, combat::Combat)> {
+        let player = self.place_player(owner, spawn)?;
         if let Err(error) = self.spawn_inventory(owner) {
             player.despawn(&mut self.simulation.physics);
-            self.admin_disconnect(owner);
             return Err(error);
         }
-        let combat = match self.combat_connect(owner, &name, role.is_admin()) {
-            Ok(combat) => combat,
+        match self.combat_connect(owner, name, role.is_admin()) {
+            Ok(combat) => Ok((player, combat)),
             Err(error) => {
                 self.weapons.remove_actor(bri_weapons::ActorId(owner));
                 player.despawn(&mut self.simulation.physics);
-                self.admin_disconnect(owner);
-                return Err(error);
+                Err(error)
             }
-        };
+        }
+    }
+    /// The embodied player enters the world: `GameConnection::onClientEnterGame`.
+    #[allow(clippy::too_many_arguments)]
+    fn settle(
+        &mut self,
+        admitted: Admitted,
+        clan: Clan,
+        principal: Option<bri_admin::Principal>,
+        trusted_host: bool,
+        is_bot: bool,
+        (player, combat): (Player, combat::Combat),
+        greeting: Greeting,
+    ) -> Result<()> {
+        let Admitted {
+            owner,
+            name,
+            wanted,
+            cleaned,
+            role,
+        } = admitted;
         let tick = self.simulation.state().tick;
         let avatar = self.avatar_catalog.as_ref().map(|c| c.defaults.clone());
-        self.peers.insert(
+        let mut peer = Peer::fresh(
+            player,
             owner,
-            Peer::fresh(
-                player,
-                owner,
-                role.is_admin(),
-                name.clone(),
-                principal,
-                combat,
-                avatar,
-                tick,
-            ),
+            role.is_admin(),
+            name.clone(),
+            principal,
+            combat,
+            avatar,
+            tick,
         );
+        peer.clan = clan;
+        self.peers.insert(owner, peer);
         // A fresh join replaces the dropped connection it took the number from.
         self.departed.remove(&owner);
         self.abandoned_at.remove(&owner);
         self.enter_world(owner)?;
         if !is_bot {
-            self.greet(owner, &name, role, trusted_host);
+            self.greet(owner, &name, role, trusted_host, greeting);
         }
-        if cleaned {
+        if cleaned && greeting == Greeting::Whole {
             eprintln!(
                 "Player {owner}: name {} taken as {name:?}",
                 logged_name(&wanted)
@@ -1562,17 +1660,213 @@ impl Session {
             self.notify_music_tracks(owner);
             self.restore_held_minigame(owner);
         }
+        Ok(())
+    }
+    /// A connection the host accepted while the player still downloads the
+    /// server's Add-Ons and loads the map, as v20's `GameConnection::onConnect`
+    /// runs before the client loads: everyone is told they connected, and
+    /// they read and send chat. They have no body and do nothing else until
+    /// [`Session::enter_arrival`]. Call only with a transport-verified
+    /// principal, as [`Session::join_verified`].
+    pub fn arrive(
+        &mut self,
+        name: String,
+        clan: &Clan,
+        trusted_host: bool,
+        principal: Option<bri_admin::Principal>,
+    ) -> Result<OwnerId> {
+        let admitted = self.admit(name, trusted_host, false, principal)?;
+        let owner = admitted.owner;
+        let wanted_clan = clan;
+        let clan = clan.cleaned();
+        self.arrivals.insert(
+            owner,
+            Arrival {
+                name: admitted.name.clone(),
+                clan: clan.clone(),
+                principal,
+                trusted_host,
+                role: admitted.role,
+                window_tick: self.simulation.state().tick,
+                chats: 0,
+                last_chat: None,
+            },
+        );
+        self.greet(
+            owner,
+            &admitted.name,
+            admitted.role,
+            trusted_host,
+            Greeting::Connected,
+        );
+        if admitted.cleaned {
+            eprintln!(
+                "Player {owner}: name {} taken as {:?}",
+                logged_name(&admitted.wanted),
+                admitted.name
+            );
+            if let Some(note) = name_note(&admitted.wanted, &admitted.name) {
+                self.private_chat(owner, note);
+            }
+        }
+        if clan.prefix != wanted_clan.prefix.trim() || clan.suffix != wanted_clan.suffix.trim() {
+            self.private_chat(
+                owner,
+                format!(
+                    "Your clan tags were changed to \"{}\" and \"{}\".",
+                    clan.prefix, clan.suffix
+                ),
+            );
+        }
         Ok(owner)
+    }
+    /// Players still loading ([`Session::arrive`]), by owner, with their names.
+    pub fn arrivals(&self) -> BTreeMap<OwnerId, String> {
+        self.arrivals
+            .iter()
+            .map(|(owner, a)| (*owner, a.name.clone()))
+            .collect()
+    }
+    /// A loading player has the map and the server's Add-Ons and spawns at
+    /// `spawn`: `GameConnection::onClientEnterGame` and the first
+    /// `spawnPlayer`. Everyone else is told they spawned. On failure the
+    /// player stays loading, so the host can try the next spawn point.
+    pub fn enter_arrival(&mut self, owner: OwnerId, spawn: Vec3) -> Result<()> {
+        let arrival = self
+            .arrivals
+            .get(&owner)
+            .context("That player is not loading")?;
+        let (name, role) = (arrival.name.clone(), arrival.role);
+        let body = self.embody(owner, &name, role, spawn)?;
+        let arrival = self
+            .arrivals
+            .remove(&owner)
+            .context("That player is not loading")?;
+        let admitted = Admitted {
+            owner,
+            wanted: name.clone(),
+            name,
+            cleaned: false,
+            role,
+        };
+        self.settle(
+            admitted,
+            arrival.clan,
+            arrival.principal,
+            arrival.trusted_host,
+            false,
+            body,
+            Greeting::Spawned,
+        )?;
+        // What they said while loading still counts against their pace.
+        if let Some(peer) = self.peers.get_mut(&owner) {
+            peer.window_tick = arrival.window_tick;
+            peer.chats = arrival.chats;
+            peer.last_chat = arrival.last_chat;
+        }
+        Ok(())
+    }
+    /// `serverCmdMessageSent` from a player still loading: the same checks
+    /// and the same line as [`Command::Chat`], without a body to talk with.
+    /// Anything else a loading player asks for is refused.
+    fn arrival_command(&mut self, owner: OwnerId, command: Command) -> Result<Reply> {
+        let Command::Chat(text) = command else {
+            anyhow::bail!("You are still loading");
+        };
+        let tick = self.simulation.state().tick;
+        let arrival = self
+            .arrivals
+            .get_mut(&owner)
+            .context("Unknown connection")?;
+        if tick - arrival.window_tick >= 120 {
+            arrival.window_tick = tick;
+            arrival.chats = 0;
+        }
+        arrival.chats = arrival.chats.saturating_add(1);
+        ensure!(arrival.chats <= CHATS_PER_SECOND, "Chat rate exceeded");
+        ensure!(
+            !text.trim().is_empty() && text.len() <= 256 && !text.chars().any(char::is_control),
+            "Invalid chat message"
+        );
+        let text: String = text
+            .chars()
+            .take(self.admin.settings.max_chat_length as usize)
+            .collect();
+        let trimmed = text.trim().to_string();
+        let repeated = arrival.last_chat.as_ref().is_some_and(|(last, at)| {
+            last.eq_ignore_ascii_case(&trimmed) && tick - at < REPEAT_CHAT_TICKS
+        });
+        arrival.last_chat = Some((trimmed, tick));
+        if repeated {
+            arrival.chats = arrival.chats.max(CHATS_PER_SECOND);
+        }
+        let (name, clan) = (arrival.name.clone(), arrival.clan.clone());
+        if repeated {
+            self.notify(
+                owner,
+                Notice::Chat("\u{E005}Do not repeat yourself.".into()),
+            );
+        }
+        if self.chat_filtered(owner, &text) {
+            return Ok(Reply::Accepted);
+        }
+        self.push_chat(owner, name, clan, text, tick)?;
+        Ok(Reply::Accepted)
+    }
+    fn push_chat(
+        &mut self,
+        owner: OwnerId,
+        name: String,
+        clan: Clan,
+        text: String,
+        tick: u64,
+    ) -> Result<()> {
+        let next = self
+            .next_chat
+            .checked_add(1)
+            .context("Chat IDs exhausted")?;
+        self.chat.push_back(ChatLine {
+            id: self.next_chat,
+            owner,
+            name,
+            clan,
+            text,
+            tick,
+            tag: None,
+        });
+        self.next_chat = next;
+        if self.chat.len() > 100 {
+            self.chat.pop_front();
+        }
+        Ok(())
+    }
+    /// The newest chat line's id: a player joining now has seen nothing
+    /// after it.
+    pub fn chat_cursor(&self) -> u64 {
+        self.next_chat - 1
     }
     /// `GameConnection::startLoad` and `spawnPlayer`'s first spawn: the
     /// default `$Pref::Server::WelcomeMessage` to the joiner, "connected."
-    /// and "spawned." to everyone else, then the auto-admin line to all.
-    fn greet(&mut self, owner: OwnerId, name: &str, role: bri_admin::Role, host: bool) {
-        self.notify(
-            owner,
-            Notice::Chat(format!("\u{E002}Welcome to Blockland {name}.")),
-        );
-        self.announce(owner, "connected.", "ClientJoinSound");
+    /// to everyone else as the connection is accepted; "spawned." when the
+    /// player enters the world, then the auto-admin line to all.
+    fn greet(
+        &mut self,
+        owner: OwnerId,
+        name: &str,
+        role: bri_admin::Role,
+        host: bool,
+        greeting: Greeting,
+    ) {
+        if greeting != Greeting::Spawned {
+            self.notify(
+                owner,
+                Notice::Chat(format!("\u{E002}Welcome to Blockland {name}.")),
+            );
+            self.announce(owner, "connected.", "ClientJoinSound");
+        }
+        if greeting == Greeting::Connected {
+            return;
+        }
         for other in self.human_peers_except(owner) {
             self.notify(other, Notice::Chat(format!("\u{E001}{name} spawned.")));
         }
@@ -1584,12 +1878,16 @@ impl Session {
         };
         self.admin_announce(format!("\u{E002}{name} has become {how}"));
     }
+    /// Every player but `owner` and the bots, those still loading included.
     fn human_peers_except(&self, owner: OwnerId) -> Vec<OwnerId> {
-        self.peers
+        let mut humans: Vec<OwnerId> = self
+            .peers
             .keys()
             .copied()
             .filter(|o| *o != owner && !self.bots.is_bot(*o))
-            .collect()
+            .collect();
+        humans.extend(self.arrivals.keys().copied().filter(|o| *o != owner));
+        humans
     }
     /// `MessageAll('MsgAdminForce', ...)`: a server line for everyone. The
     /// v20 client's `handleAdminForce` plays `AdminSound` with every one.
@@ -1601,7 +1899,12 @@ impl Session {
     }
     /// `MsgClientJoin` / `onDrop` lines and sounds for everyone else.
     fn announce(&mut self, owner: OwnerId, what: &str, sound: &str) {
-        let Some(name) = self.peers.get(&owner).map(|p| p.name.clone()) else {
+        let Some(name) = self
+            .peers
+            .get(&owner)
+            .map(|p| p.name.clone())
+            .or_else(|| self.arrivals.get(&owner).map(|a| a.name.clone()))
+        else {
             return;
         };
         for other in self.human_peers_except(owner) {
@@ -1610,6 +1913,15 @@ impl Session {
         }
     }
     pub fn disconnect(&mut self, owner: OwnerId) -> Result<()> {
+        // Left while still loading: they had nothing in the world to undo.
+        if self.arrivals.contains_key(&owner) {
+            self.announce(owner, "has left the game.", "ClientDropSound");
+            self.arrivals.remove(&owner);
+            self.admin_disconnect(owner);
+            self.abandoned_at
+                .insert(owner, self.simulation.state().tick);
+            return Ok(());
+        }
         if !self.bots.is_bot(owner) {
             self.announce(owner, "has left the game.", "ClientDropSound");
         }
@@ -1673,7 +1985,9 @@ impl Session {
         principal: Option<bri_admin::Principal>,
     ) -> Result<()> {
         ensure!(
-            !self.peers.contains_key(&owner) && self.peers.len() < 64,
+            !self.peers.contains_key(&owner)
+                && !self.arrivals.contains_key(&owner)
+                && self.peers.len() + self.arrivals.len() < 64,
             "Player is connected or server is full"
         );
         let (name, _previous_administrator, avatar, saved_principal) = self
@@ -1916,6 +2230,9 @@ impl Session {
         aim: Option<ActionAim>,
         mut persist: impl FnMut(&bri_admin::DurableState) -> Result<()>,
     ) -> Result<Reply> {
+        if self.arrivals.contains_key(&owner) {
+            return self.arrival_command(owner, command);
+        }
         if let Command::Admin(request) = &command {
             ensure!(
                 aim.is_none(),

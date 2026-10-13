@@ -449,6 +449,7 @@ impl App {
                     self.join_resuming(id, address, String::new(), None, None, Some(map))
                 {
                     self.net.join_notices.clear();
+                    self.net.arrival = None;
                     self.answer(id, Err(error));
                 }
             }

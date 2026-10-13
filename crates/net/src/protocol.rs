@@ -141,6 +141,19 @@ pub struct Hello {
     /// one does.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub kept: Option<KeptWorld>,
+    /// The loading connection ([`Purpose::Lobby`]) this join completes:
+    /// the player it announced spawns, under the name and owner number it
+    /// was given, without being announced again.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub arrival: Option<ResumeToken>,
+}
+/// What a loading client ([`Purpose::Lobby`]) asks of the host after its
+/// Hello. Each is answered only by what it causes.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub enum LobbyRequest {
+    /// `commandToServer('messageSent', ...)`: a chat line.
+    Chat(String),
 }
 /// What a resuming client still holds of the world: the map and the
 /// replication cursor its bricks are current to.
@@ -224,6 +237,11 @@ pub enum Purpose {
     Join,
     /// Fetch packages this client lacks; no identity, no game state.
     Download,
+    /// Identity challenge, Hello, then chat while the player downloads the
+    /// server's Add-Ons and loads the map, as v20's loading screen does.
+    /// The host announces the player as connected ([`Message::Arrived`]);
+    /// the join that follows names it in [`Hello::arrival`] and spawns them.
+    Lobby,
 }
 impl JoinBegin {
     pub fn join() -> Self {
@@ -309,6 +327,7 @@ pub fn identity_transcript(
     )?));
     append_token(&mut transcript, hello.resume.as_ref());
     append_token(&mut transcript, hello.host.as_ref());
+    append_token(&mut transcript, hello.arrival.as_ref());
     Ok(transcript)
 }
 fn append_text(out: &mut Vec<u8>, text: &str) -> anyhow::Result<()> {
@@ -1340,6 +1359,18 @@ pub enum Message {
         result: Result<Reply, bri_sim::session::Rejection>,
     },
     Rejected(String),
+    /// Answer to a loading connection's Hello ([`Purpose::Lobby`]): the
+    /// owner number and name the player was announced under, and the
+    /// ticket the game join presents ([`Hello::arrival`]). Chat lines with
+    /// ids above `chat_cursor` follow as [`Message::LobbyChat`].
+    Arrived {
+        owner: OwnerId,
+        name: String,
+        arrival: ResumeToken,
+        chat_cursor: u64,
+    },
+    /// New chat lines, for a client still loading.
+    LobbyChat(Vec<bri_sim::session::ChatLine>),
     /// The join was refused because these shared packages differ. A client
     /// can fetch what it lacks from the server and join again
     /// ([`crate::client::Client::connect_fetching`]).

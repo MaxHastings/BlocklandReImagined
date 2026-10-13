@@ -570,9 +570,7 @@ fn hud(core: &Core) -> View {
             &names,
         );
     }
-    let chat = chat_text(core);
-    let rect = chat_rect(core, &chat);
-    markup(&mut v, rect, &chat, &chat_profile(core));
+    let rect = add_chat(&mut v, core);
     // MouseToolTip (g:2083, 336x18 at x 2, BlockChatTextProfile): one tip
     // height below the chat text.
     if mouse_tip(core) {
@@ -587,16 +585,37 @@ fn hud(core: &Core) -> View {
             "BlockChatTextProfile",
         );
     }
+    v.layout(w, h);
+    v
+}
+/// NewChatHud's text, and the "VVV" indicator on its last line while
+/// paged up (newChatHud_UpdateIndicatorPosition).
+fn add_chat(v: &mut View, core: &Core) -> Rect {
+    let chat = chat_text(core);
+    let rect = chat_rect(core, &chat);
+    markup(v, rect, &chat, &chat_profile(core));
     if core.chat.scrolled_up() {
         named_text(
-            &mut v,
+            v,
             "MM_LeftProfile",
             Rect::new(4, rect.bottom() - 18, 27, 18),
             "VVV",
         );
     }
+    rect
+}
+/// NewChatHud over LoadingGui: a player the host has accepted reads chat
+/// while they download Add-Ons and load the map.
+pub fn loading_chat(pack: &Pack, dl: &mut DrawList, core: &Core) {
+    let (w, h) = core.logical;
+    let mut v = View::new(&ctrl(
+        "GuiControl",
+        "GuiDefaultProfile",
+        Rect::new(0, 0, w, h),
+    ));
+    add_chat(&mut v, core);
     v.layout(w, h);
-    v
+    v.draw(pack, dl);
 }
 impl Play {
     fn print(&mut self, dialog: &str, text: &str, message: Option<String>) {
