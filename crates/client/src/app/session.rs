@@ -965,6 +965,11 @@ impl App {
                                         || fresh.bot_extras != paths.bot_extras
                                 },
                             )
+                                // A body the host's players may wear (an
+                                // imported Mario) loads with the content.
+                                || fetched.iter().any(|f| {
+                                    !crate::avatar::body_models(&f.dir, &f.package.id).is_empty()
+                                })
                         });
                     if reload {
                         *needs_add_ons.lock().map_err(|_| {

@@ -8,7 +8,7 @@ use bri_client::avatar::AvatarAnimationInput;
 use bri_package::packages::PackageSet;
 use glam::Vec3;
 
-const MODEL: &str = "figure:asset/figure.glb";
+const MODEL: &str = "figure:body/figure";
 
 fn player() -> Result<bri_sim::player::PlayerState> {
     Ok(serde_json::from_value(serde_json::json!({

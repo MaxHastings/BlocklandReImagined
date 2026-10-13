@@ -349,7 +349,7 @@ fn imports_write_a_package_the_runtime_reads() {
     opts.name = Some("Big Figure".into());
     let report = import(&opts).unwrap();
     assert_eq!(report.id, "big_figure");
-    assert_eq!(report.model, "big_figure:asset/big_figure.glb");
+    assert_eq!(report.model, "big_figure:body/big_figure");
     let dir = root.join("addons/big_figure");
     for f in [
         "package.json",
@@ -368,7 +368,7 @@ fn imports_write_a_package_the_runtime_reads() {
     .unwrap();
     assert_eq!(
         archetype.model.as_deref(),
-        Some("big_figure:asset/big_figure.glb")
+        Some("big_figure:body/big_figure")
     );
     // Its collision box is its own size, not the Blockhead's: as tall as
     // the model, as wide for that height as a Blockhead, the eye at its
@@ -387,6 +387,10 @@ fn imports_write_a_package_the_runtime_reads() {
     assert!(get("crouch_height") < get("stand_height") && get("sit_eye") < get("stand_eye"));
     let check = bri_package_runtime::check::check(&dir);
     assert!(check.ok, "{check}");
+    // Everyone draws it, so joiners download it: shared, not host-only.
+    let info: bri_package::library::PackageInfo =
+        serde_json::from_slice(&std::fs::read(dir.join("package.json")).unwrap()).unwrap();
+    assert_eq!(info.side(), Some(bri_package::packages::Side::Shared));
     let md = std::fs::read_to_string(dir.join("IMPORT-REPORT.md")).unwrap();
     assert!(
         md.contains("`Look` → `look` (role `look`)") && md.contains("overlay"),

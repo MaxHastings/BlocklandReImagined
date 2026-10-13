@@ -157,6 +157,8 @@ fn weapons_and_bricks_are_shared_and_the_screen_agrees() {
     assert_eq!(side_for(["weapons"]), Some(Side::Shared));
     assert_eq!(side_for(["bricks"]), Some(Side::Shared));
     assert_eq!(side_for(["archetype"]), Some(Side::Server));
+    // A player type with its body: everyone draws the body.
+    assert_eq!(side_for(["archetype", "body"]), Some(Side::Shared));
     // One rule: a kind the host alone loads is a server kind on the Add-Ons
     // screen too, and the screen's client kinds are ones clients load.
     use bri_package::library::{CLIENT_KINDS, SERVER_KINDS};

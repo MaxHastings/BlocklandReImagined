@@ -24,6 +24,7 @@ synthetic_and_content!(
     a_guest_joins_a_host_running_every_repository_add_on,
     a_guest_without_a_vehicle_add_on_downloads_it_and_can_spawn_it,
     a_host_with_the_blockhead_bot_on_spawns_bots_and_one_without_offers_none,
+    a_guest_downloads_an_imported_body_and_sees_the_host_as_it,
 );
 
 const SIZE: (u32, u32) = (960, 720);
@@ -778,6 +779,114 @@ fn a_guest_without_a_vehicle_add_on_downloads_it_and_can_spawn_it(f: &ContentRoo
         spawnable(&guest),
         "the guest's vehicle list lacks {VEHICLE}"
     );
+    leave(&mut [&mut guest, &mut host_app])?;
+    Ok(())
+}
+
+/// Max's v0.3.0 plan: friends join a host who plays Mario. A body imported
+/// from glTF (`bri-import-addon gltf --kind body`; a made-up figure here) is
+/// the host's player type through a mode. A guest without the Add-On
+/// downloads it, body and textures, and draws the host as it, not as a
+/// Blockhead. The import once listed only its player type, which made the
+/// Add-On host-only: guests never got the body.
+fn a_guest_downloads_an_imported_body_and_sees_the_host_as_it(f: &ContentRoot) -> Result<()> {
+    use bri_addon_import::gltf;
+    const FIGURE: &str = "test_figure";
+    const MODEL: &str = "test_figure:body/test_figure";
+    let content = f.root.clone();
+    let folder = format!(".imported-body-{}-{}", std::process::id(), next_stage());
+    let staged = Staged(content.join(&folder));
+    let _ = std::fs::remove_dir_all(&staged.0);
+    std::fs::create_dir_all(&staged.0)?;
+    let source = staged.0.join(format!("{FIGURE}.glb"));
+    std::fs::write(&source, gltf::testing::character(true).glb)?;
+    let mut opts = gltf::Options::new(&source, staged.0.join(FIGURE), gltf::Kind::Body);
+    opts.height = Some(1.6);
+    ensure!(gltf::import(&opts)?.model == MODEL);
+    std::fs::remove_file(&source)?;
+    // The mode that makes everyone the figure, as a mode Add-On would.
+    let mode = staged.0.join("test_figure_mode");
+    std::fs::create_dir_all(&mode)?;
+    std::fs::write(
+        mode.join("mode.json"),
+        serde_json::to_vec(&serde_json::json!({
+            "schema_version": 1,
+            "name": "Figures",
+            "description": "Everyone plays the imported figure.",
+            "add_ons": [FIGURE],
+            "minigame": { "title": "Figures", "player_type": "test_figure:archetype/test_figure" }
+        }))?,
+    )?;
+    std::fs::write(
+        mode.join("package.json"),
+        serde_json::to_vec(&serde_json::json!({
+            "schema_version": 1, "id": "test_figure_mode", "version": "1.0.0", "api": 1,
+            "name": "Figures", "description": "Everyone plays the imported figure.",
+            "authors": [], "license": "CC0-1.0", "provenance": { "source": "original" },
+            "dependencies": { FIGURE: "^1.0.0" }, "capabilities": [],
+            "provides": [{ "kind": "mode", "id": "test_figure_mode:mode/figures", "file": "mode.json" }]
+        }))?,
+    )?;
+    let listed = bri_package::packages::PackageSet::load_root(&content)?;
+    let mut set = listed.clone();
+    for id in [FIGURE, "test_figure_mode"] {
+        let info: bri_package::library::PackageInfo =
+            serde_json::from_slice(&std::fs::read(staged.0.join(id).join("package.json"))?)?;
+        let side = info.side().context("a side")?;
+        if id == FIGURE {
+            ensure!(
+                side == bri_package::packages::Side::Shared,
+                "the imported body is {side:?}, so guests never download it"
+            );
+        }
+        set.packages.push(bri_package::packages::PackageEntry {
+            id: id.into(),
+            version: info.version,
+            side,
+            dir: format!("{folder}/{id}"),
+            role: None,
+        });
+    }
+    let mut host_app = app(&content, "FigureHost")?;
+    host_app
+        .apply_packages(&set)
+        .context("the host loads the figure")?;
+    let mut guest = app(&content, "FigureGuest")?;
+    guest
+        .apply_packages(&listed)
+        .context("the guest has no figure")?;
+    let mode = host_app
+        .ui
+        .core
+        .game_modes
+        .iter()
+        .find(|m| m.id == "test_figure_mode:mode/figures")
+        .cloned()
+        .context("the figure mode is not listed")?;
+    host_mode(&mut host_app, &mode)?;
+    until(&mut [&mut host_app], "host in game", 180, |a| in_game(a[0]))?;
+    let host_owner = host_app.network_view().context("view")?.owner;
+    until(&mut [&mut host_app], "the host as the figure", 30, |a| {
+        a[0].avatar_model(host_owner) == Some(Some(MODEL))
+    })?;
+    join(&mut guest, &host_app)?;
+    until(
+        &mut [&mut host_app, &mut guest],
+        "guest in game",
+        300,
+        |a| in_game(a[1]),
+    )?;
+    let cache = guest_cache_ids(&guest);
+    ensure!(
+        cache.iter().any(|id| id == FIGURE),
+        "{FIGURE} was not downloaded: {cache:?}"
+    );
+    until(
+        &mut [&mut host_app, &mut guest],
+        "the guest to draw the host as the figure",
+        30,
+        |a| a[1].avatar_model(host_owner) == Some(Some(MODEL)),
+    )?;
     leave(&mut [&mut guest, &mut host_app])?;
     Ok(())
 }

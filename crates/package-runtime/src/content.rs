@@ -68,9 +68,14 @@ pub enum Kind {
     /// clients receive the module with the host's archetype table, so they
     /// predict with exactly the bytes the host runs.
     Controller,
+    /// A player body: a native shape (`.shape.json`) an archetype names as
+    /// its `model`, its textures listed in `assets/content.json`. Client
+    /// side: every player draws it, so an Add-On with a player type and its
+    /// body is shared and joiners download both.
+    Body,
 }
 impl Kind {
-    pub const NAMES: [&str; 20] = [
+    pub const NAMES: [&str; 21] = [
         "behaviour",
         "script",
         "world",
@@ -91,6 +96,7 @@ impl Kind {
         "image",
         "splash",
         "controller",
+        "body",
     ];
     pub fn parse(text: &str) -> Option<Self> {
         Some(match text {
@@ -114,6 +120,7 @@ impl Kind {
             "image" => Self::Image,
             "splash" => Self::Splash,
             "controller" => Self::Controller,
+            "body" => Self::Body,
             _ => return None,
         })
     }
@@ -139,7 +146,8 @@ impl Kind {
             | Self::Binds
             | Self::Help
             | Self::Image
-            | Self::Splash => Side::Client,
+            | Self::Splash
+            | Self::Body => Side::Client,
         }
     }
     /// Largest accepted file of this kind.
@@ -148,7 +156,7 @@ impl Kind {
             Self::Script => 256 * 1024,
             Self::Data => 1024 * 1024,
             Self::Image => 4 * 1024 * 1024,
-            Self::Weapons | Self::Vehicles | Self::Bricks => 32 * 1024 * 1024,
+            Self::Weapons | Self::Vehicles | Self::Bricks | Self::Body => 32 * 1024 * 1024,
             Self::Controller => 64 * 1024,
             _ => 128 * 1024,
         }

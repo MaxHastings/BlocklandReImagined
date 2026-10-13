@@ -408,11 +408,11 @@ fn write(opts: &Options, id: &str, converted: Converted) -> Result<Report> {
         Kind::Body => {
             let ns = crate::namespace_for(id)?;
             report.id = ns.clone();
-            let model = format!("{ns}:asset/{id}.glb");
+            // Provided as `body` beside the archetype, so the Add-On is
+            // shared: joiners download the body with its textures.
+            let model = format!("{ns}:body/{id}");
             report.model = model.clone();
-            let mut content = vec![
-                json!({ "kind": "asset", "id": model, "file": format!("assets/{id}.shape.json") }),
-            ];
+            let mut content = Vec::new();
             put(
                 &format!("assets/{id}.shape.json"),
                 &shape_bytes,
@@ -452,7 +452,10 @@ fn write(opts: &Options, id: &str, converted: Converted) -> Result<Report> {
                 "provenance": { "source": format!("glTF model {}", report.source), "notes": "Imported by bri-import-addon gltf. Set the licence of the original model." },
                 "dependencies": {},
                 "capabilities": [],
-                "provides": [{ "kind": "archetype", "id": format!("{ns}:archetype/{id}"), "file": format!("assets/archetypes/{id}.json") }],
+                "provides": [
+                    { "kind": "archetype", "id": format!("{ns}:archetype/{id}"), "file": format!("assets/archetypes/{id}.json") },
+                    { "kind": "body", "id": model, "file": format!("assets/{id}.shape.json") },
+                ],
             });
             put(
                 "package.json",
