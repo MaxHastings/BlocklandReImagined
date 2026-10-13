@@ -46,3 +46,23 @@ buffer grows to 205 slots and the far layer has its own slot again.
 Max: stand where three mirror or window planes are in view on any map (the
 spot from the crash on map_slate_desert) with sun shadows on; the client
 should keep running and each plane should keep its own shadows.
+
+## Second crash: X11 cursor grab on launch
+
+A Linux player (Pharzedia, X11) hit the same overrun during a flag match
+with bots, then a crash on relaunch reported as an "x11 cursor grab error";
+the third launch worked. `Runner::sync_cursor` (`crates/client/src/platform.rs`)
+turned a refused `set_cursor_grab` into an error, and `resumed` ends the game
+on any error from it. X11 refuses `XGrabPointer` while another client holds
+the pointer (the window manager mapping or focusing the window, a launcher)
+or before the window is viewable, which is a launch-time race.
+
+A refused grab is now a warning in the log: the cursor stays free,
+`grabbed` stays false, and `GrabRetry` lets the next pump (every tick) try
+again after 250 ms, warning once per run of refusals. A refused release is a
+warning too. Unit test:
+`platform::tests::a_refused_cursor_grab_retries_after_a_pause_and_warns_once`.
+
+`cargo clippy -p bri-client --all-targets -- -D warnings` passes;
+`cargo test -p bri-client --lib`: 517 passed, and the same 6 GPU-adapter
+tests that fail in the container on main fail here.
