@@ -78,3 +78,55 @@ impl ScriptOp for BotTool {
         slot.is_none_or(|s| usize::from(s) < MAX_TOOL_SLOTS)
     }
 }
+
+/// Most points a patrol visits.
+pub const MAX_PATROL_POINTS: usize = 16;
+
+/// What a bot's rules want of it, carried out by the shared brain
+/// (`bot_intent`): the brain walks, jumps, rides and fights; the intent
+/// only says where it keeps to and when it runs. A fight still comes
+/// first, within the intent's bounds.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+pub enum BotIntent {
+    /// Keep to `at`: stroll and fight within `radius` of it, and go back.
+    Guard { at: [f32; 3], radius: f32 },
+    /// Walk from point to point in turn, round and round, fighting what
+    /// comes within `radius` of where it is on the round.
+    Patrol { points: Vec<[f32; 3]>, radius: f32 },
+    /// Keep within `distance` of a player or bot, fighting near them.
+    Follow { leader: u64, distance: f32 },
+    /// Run from `from` (or from every enemy it knows, with none) for
+    /// `seconds`.
+    Flee { from: Option<u64>, seconds: f32 },
+}
+impl BotIntent {
+    fn bounded(&self) -> bool {
+        match self {
+            BotIntent::Guard { at, radius } => finite(at) && (0.5..=256.0).contains(radius),
+            BotIntent::Patrol { points, radius } => {
+                (1..=MAX_PATROL_POINTS).contains(&points.len())
+                    && points.iter().all(|p| finite(p))
+                    && (0.5..=256.0).contains(radius)
+            }
+            BotIntent::Follow { distance, .. } => (0.5..=64.0).contains(distance),
+            BotIntent::Flee { seconds, .. } => seconds.is_finite() && (0.0..=600.0).contains(seconds),
+        }
+    }
+}
+
+/// Give a bot this package added, or one of a kind it provides, an
+/// intent, or take its intent away with `None`: what it does when it is
+/// not fighting, and when it runs.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SetBotIntent {
+    pub bot: u64,
+    pub intent: Option<BotIntent>,
+}
+impl ScriptOp for SetBotIntent {
+    const CAPABILITY: &str = "bots";
+    const NAME: &str = "bot_intent";
+    fn bounded(&self) -> bool {
+        self.intent.as_ref().is_none_or(BotIntent::bounded)
+    }
+}

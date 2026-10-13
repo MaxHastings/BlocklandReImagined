@@ -1398,7 +1398,7 @@ impl Session {
     }
 
     /// Who sits in `vehicle`'s driving seat, if they are still here.
-    fn vehicle_driver(&self, vehicle: VehicleId) -> Option<OwnerId> {
+    pub(in crate::session) fn vehicle_driver(&self, vehicle: VehicleId) -> Option<OwnerId> {
         let world = self.vehicles.world.as_ref()?;
         let seat = world.definition_of(vehicle)?.control_seat()?;
         let driver = world

@@ -47,6 +47,10 @@
     { "id": "playground-buggy", "path": "playground/playground-buggy", "enabled": false },
     { "id": "playground-stomper-look", "path": "playground/playground-stomper-look", "enabled": false },
     { "id": "playground-stomper", "path": "playground/playground-stomper", "enabled": false },
+    { "id": "playground-fizzer-look", "path": "playground/playground-fizzer-look", "enabled": false },
+    { "id": "playground-fizzer", "path": "playground/playground-fizzer", "enabled": false },
+    { "id": "playground-fizzer-rules", "path": "playground/playground-fizzer-rules", "enabled": false },
+    { "id": "playground-stomper-rules", "path": "playground/playground-stomper-rules", "enabled": false },
     { "id": "playground-mode", "path": "playground/playground-mode", "enabled": false },
     {
       "id": "bot_hole",

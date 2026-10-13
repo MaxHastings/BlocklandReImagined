@@ -508,6 +508,14 @@ impl Session {
                 if role.weapon && !world.weapon_available(v.id) {
                     return None;
                 }
+                // Only the seats its kind takes (`BotKind::vehicles`).
+                let takes = &self.bots.brains[&bot].kind.vehicles;
+                if role.controls && !takes.drive
+                    || role.weapon && !role.controls && !takes.gun
+                    || !role.controls && !role.weapon && !takes.ride
+                {
+                    return None;
+                }
                 let crew = self.bot_crew(bot, v, tick);
                 // Complete roles before filling passenger seats. An empty
                 // vehicle needs someone at its controls before a passenger
@@ -1006,11 +1014,18 @@ impl Session {
         };
         let side = Vec3::new(-desired.z, 0.0, desired.x);
         let waist = feet + Vec3::Y * own.tuning().stand_height * 0.5;
-        // A gap: something solid close on both sides.
-        let no_room = [side, -side].iter().all(|d| {
-            self.world_ray(waist, *d, own.tuning().width + 0.6)
-                .is_some()
-        });
+        // A gap: something solid close on both sides. Only a kind with
+        // teamwork files through one behind an ally.
+        let teamwork = self
+            .bots
+            .brains
+            .get(&bot)
+            .is_some_and(|b| b.kind.team.teamwork > 0.0);
+        let no_room = teamwork
+            && [side, -side].iter().all(|d| {
+                self.world_ray(waist, *d, own.tuning().width + 0.6)
+                    .is_some()
+            });
         // The pace of an ally ahead going the same way, as a share of its own.
         let follow = self
             .peers

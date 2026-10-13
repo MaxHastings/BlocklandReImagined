@@ -369,6 +369,25 @@ pub struct Behaviour {
     /// it is asked, in load order, until one takes it.
     #[serde(default)]
     pub on_drop_key: bool,
+    /// `on_bot_ability(bot, kind, ability, target)` as a bot whose kind
+    /// has an `ability` (`bots.json`) finishes winding it up: what the
+    /// ability does (a blast, a spit, a heal) is this hook's, the brain
+    /// only decides when. `target` is the enemy it was aimed at, or `()`.
+    /// Every package that declares it hears it, in load order; one checks
+    /// `kind` for its own.
+    #[serde(default)]
+    pub on_bot_ability: bool,
+    /// `on_contact(info)` as two bodies begin to touch: `info` is
+    /// `#{ kind, by, target, vehicle, from, speed, velocity }`. `kind` is
+    /// `"body"` (a player's body meeting another's) or `"vehicle"` (a
+    /// vehicle running into a player); `by` is the one that came down on,
+    /// ran into or drove into `target` (the upper body, the quicker one, the
+    /// vehicle's driver or `()`); `from` is `"above"`, `"below"` or
+    /// `"side"`; `velocity` is `by`'s (the vehicle's) less `target`'s as
+    /// they met, `[x, y, z]`, and `speed` its length. A stomp, a run-over
+    /// or a shove means what the rules make it mean.
+    #[serde(default)]
+    pub on_contact: bool,
     /// `on_tick()` every `tick_interval` ticks, when set.
     #[serde(default)]
     pub tick_interval: Option<u32>,

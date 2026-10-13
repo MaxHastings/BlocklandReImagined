@@ -2714,6 +2714,12 @@ impl Session {
         // Moves of players driving a package entity, for `step_packages`.
         let mut entity_moves = Vec::new();
         let liquids = self.simulation.liquids();
+        // Velocities before movement, for `on_contact` (meeting stops them).
+        let moving: BTreeMap<OwnerId, Vec3> = self
+            .peers
+            .iter()
+            .map(|(o, p)| (*o, Vec3::from(p.player.state().velocity)))
+            .collect();
         let mut riding = Vec::new();
         for (&owner, peer) in self.peers.iter_mut() {
             let on_vehicle = self.vehicles.is_mounted(owner);
@@ -2875,6 +2881,7 @@ impl Session {
             }
         };
         self.push_contacts(push_contacts);
+        self.package_body_contacts(&moving);
         impacts.retain(|(owner, _)| !smashers.contains(owner));
         self.fire_touches(touches);
         for (owner, carry) in crossed {

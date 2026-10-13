@@ -1506,10 +1506,12 @@ impl Session {
                 );
             }
         }
+        let mut struck = Vec::new();
         for (owner, vehicle) in begun {
             let Some(velocity) = self.peers.get(&owner).map(|p| p.player.state().velocity) else {
                 continue;
             };
+            struck.push((vehicle, owner, velocity));
             let _ = world.player_contact(
                 &self.simulation.physics,
                 vehicle,
@@ -1519,6 +1521,9 @@ impl Session {
             if Vec3::from(velocity).length_squared() > 4.0 {
                 credits.push((vehicle, owner));
             }
+        }
+        for (vehicle, owner, velocity) in struck {
+            self.package_vehicle_contact(vehicle.0, owner, Vec3::from(velocity));
         }
         for (vehicle, owner) in credits {
             if self.may_move(

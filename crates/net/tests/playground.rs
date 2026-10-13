@@ -76,6 +76,26 @@ fn set() -> PackageSet {
                 Side::Client,
             ),
             (
+                "playground-fizzer",
+                "playground/playground-fizzer",
+                Side::Shared,
+            ),
+            (
+                "playground-fizzer-look",
+                "playground/playground-fizzer-look",
+                Side::Client,
+            ),
+            (
+                "playground-fizzer-rules",
+                "playground/playground-fizzer-rules",
+                Side::Server,
+            ),
+            (
+                "playground-stomper-rules",
+                "playground/playground-stomper-rules",
+                Side::Server,
+            ),
+            (
                 "playground-mode",
                 "playground/playground-mode",
                 Side::Server,
@@ -291,6 +311,8 @@ async fn two_players_and_a_late_joiner_share_the_playground() -> Result<()> {
         [
             "blockhead_bot",
             "playground-buggy",
+            "playground-fizzer",
+            "playground-fizzer-look",
             "playground-rifle",
             "playground-runner-look",
             "playground-stomper",

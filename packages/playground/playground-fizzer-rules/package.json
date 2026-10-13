@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "id": "playground-fizzer-rules",
+  "version": "1.0.0",
+  "api": 1,
+  "name": "Fizzer Rules",
+  "description": "What the Fizzer's pop does (host only): when its wick has burnt down, it fires its own blast at its feet, which hurts everyone near and breaks bricks where the game allows brick damage, and goes with it. Part of the Mixed Add-On Playground.",
+  "authors": ["Blockland ReImagined"],
+  "license": "CC0-1.0",
+  "provenance": { "source": "original" },
+  "dependencies": { "playground-fizzer": "^1.0.0" },
+  "capabilities": ["damage"],
+  "provides": [
+    { "kind": "behaviour", "id": "playground-fizzer-rules:behaviour/rules", "file": "behaviour.json" },
+    { "kind": "script", "id": "playground-fizzer-rules:script/rules", "file": "fizzer.rhai" }
+  ]
+}

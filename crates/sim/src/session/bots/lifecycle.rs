@@ -20,7 +20,7 @@ impl Session {
         self.bots.kinds = kinds;
         for brain in self.bots.brains.values_mut() {
             if let Some(kind) = self.bots.kinds.iter().find(|k| k.id == brain.kind.id) {
-                brain.kind = kind.clone();
+                brain.kind = kind.clone().into();
             }
         }
         self.vehicles.scanned = false;
@@ -31,6 +31,13 @@ impl Session {
     /// the host's Max bots. Lowering it keeps the bots already running.
     pub fn bot_limit(&self) -> usize {
         (self.admin.settings.max_bots as usize).clamp(1, MAX_BOTS)
+    }
+    /// Whether one more bot of `kind` fits under the bot limit: each bot
+    /// counts what its kind costs (`BotKind::cost`), so a server limited to
+    /// 16 full bots runs 64 minimal creatures.
+    pub(in crate::session) fn bot_room(&self, kind: &BotKind) -> bool {
+        let load: f32 = self.bots.brains.values().map(|b| b.kind.cost()).sum();
+        load + kind.cost() <= self.bot_limit() as f32 + 0.001
     }
     pub fn is_bot_kind(&self, id: &str) -> bool {
         self.bots.kind(id).is_some()
@@ -84,7 +91,7 @@ impl Session {
         // A refused bot is never silent: the brick's builder is told why,
         // as for a vehicle the server has no room for.
         let limit = self.bot_limit();
-        if self.bots.brains.len() >= limit {
+        if !self.bot_room(&kind) {
             self.notify(
                 builder,
                 Notice::Center {
@@ -300,14 +307,12 @@ impl Session {
         kind: &str,
     ) -> Result<()> {
         let limit = self.bot_limit();
-        ensure!(
-            self.bots.brains.len() < limit,
-            "Server is limited to {limit} bots"
-        );
-        ensure!(self.peers.len() < 64, "Server is full");
-        self.bots
+        let kind = self
+            .bots
             .kind(kind)
             .with_context(|| format!("No bot kind `{kind}`: its Add-On is not enabled"))?;
+        ensure!(self.bot_room(kind), "Server is limited to {limit} bots");
+        ensure!(self.peers.len() < 64, "Server is full");
         let found = self
             .minigames
             .game(bri_minigames::GameId(game))

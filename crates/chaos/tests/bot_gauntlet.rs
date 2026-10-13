@@ -1500,7 +1500,7 @@ fn all_dials_on() {
 /// every dial on, against the bar in `bot_tuning.json` (`perf`: one for
 /// debug builds, one for release, set for the default 16 bots and scaled
 /// with the count).
-fn bot_think_time(bots: usize) {
+fn bot_think_time(bots: usize) -> f64 {
     use bri_weapons::testing::*;
     use gauntlet::tuning::{self, Config};
     let config = Config::shipped();
@@ -1544,6 +1544,88 @@ fn bot_think_time(bots: usize) {
         us <= bar,
         "bot think time {us:.0} us/tick over the bar of {bar:.0} us"
     );
+    us
+}
+
+/// A minimal profile, a Goomba-style creature on the shared brain: it
+/// strolls, notices a player near it, walks at them and hurts on touch. No
+/// hand weapons, places to stand, dodges, flanks, objectives, vehicles,
+/// teamwork, glances or second thoughts (`playground-stomper`'s data).
+const CREATURE: &str = "gauntlet:bot/creature";
+fn creature() -> BotKind {
+    let pack = bri_sim::bot_kind::BotPack::from_json(include_bytes!(
+        "../../../packages/playground/playground-stomper/bots.json"
+    ))
+    .unwrap();
+    let mut k = pack.bots.into_iter().next().unwrap();
+    k.id = CREATURE.into();
+    k.name = "Creature".into();
+    // The test arena has no Stomper body: the brain's cost is the point.
+    k.body = None;
+    // Two sides, so each fights the other as two teams of bots do.
+    k.side = None;
+    assert_eq!(
+        k.cost(),
+        bri_sim::bot_kind::MINIMAL_COST,
+        "a minimal profile"
+    );
+    k
+}
+
+/// Think time per tick of `bots` minimal-profile creatures (`creature`)
+/// fighting as two sides, as [`bot_think_time`] times full bots.
+fn creature_think_time(bots: usize) -> f64 {
+    use bri_weapons::testing::*;
+    let side = bots / 2;
+    let mut spec = Spec::new(
+        "creature_think_time",
+        line(-73.0, 0.0, 50.0, side),
+        line(-37.0, 0.0, 50.0, side),
+        &[ROCKET_ITEM, SHOTGUN_ITEM, BOW_ITEM, BOUNCER_ITEM, GUN],
+    );
+    spec.kinds = [CREATURE, CREATURE];
+    spec.extra_kinds = vec![creature()];
+    let mut b = battle(spec, |a| {
+        a.s.set_server_settings(bri_admin::ServerSettings {
+            max_bots: bots as u32,
+            ..a.s.server_settings().clone()
+        })
+        .unwrap();
+    });
+    assert_eq!(b.sides.len(), bots);
+    b.arena.step(5 * TICKS_PER_SECOND);
+    let ticks = 30 * TICKS_PER_SECOND;
+    let before = b.arena.s.bot_think_nanos();
+    b.arena.step(ticks);
+    let think = (b.arena.s.bot_think_nanos() - before) as f64 / 1000.0 / ticks as f64;
+    eprintln!(
+        "PERF {bots} creatures: bot think {think:.0} us/tick ({:.1} us a creature)",
+        think / bots as f64
+    );
+    think
+}
+
+/// A minimal-profile creature costs a small fraction of a full Blockhead
+/// bot (`docs/v0.3.0` W7's acceptance): per bot, at most what the bot limit
+/// counts it as (`bot_kind::MINIMAL_COST`, a quarter).
+/// `cargo test --release -p bri-chaos --test bot_gauntlet creature_think_time_16 -- --ignored --nocapture`
+#[test]
+#[ignore = "timing; run in release"]
+fn creature_think_time_16() {
+    let bots = bri_package_runtime::ops::DEFAULT_BOTS;
+    // Full bots first, so neither run pays for measuring the body's reach
+    // (kept once measured).
+    let full = bot_think_time(bots);
+    let creatures = creature_think_time(bots);
+    eprintln!(
+        "PERF a creature costs {:.0}% of a full bot",
+        creatures / full * 100.0
+    );
+    let share = bri_sim::bot_kind::MINIMAL_COST as f64;
+    assert!(
+        creatures <= full * share,
+        "{bots} creatures think {creatures:.0} us/tick, over {share} of {bots} full bots' {full:.0}"
+    );
 }
 
 /// [`bot_think_time`] at the default Max bots.
@@ -1551,7 +1633,7 @@ fn bot_think_time(bots: usize) {
 #[test]
 #[ignore = "timing; run in release"]
 fn bot_think_time_16() {
-    bot_think_time(bri_package_runtime::ops::DEFAULT_BOTS);
+    let _ = bot_think_time(bri_package_runtime::ops::DEFAULT_BOTS);
 }
 
 /// [`bot_think_time`] at the most a host may set Max bots to.
@@ -1559,7 +1641,7 @@ fn bot_think_time_16() {
 #[test]
 #[ignore = "timing; run in release"]
 fn bot_think_time_32() {
-    bot_think_time(bri_package_runtime::ops::MAX_BOTS);
+    let _ = bot_think_time(bri_package_runtime::ops::MAX_BOTS);
 }
 
 /// Hits and shots (trigger ticks) in one phase of an engagement.
