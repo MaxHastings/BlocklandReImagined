@@ -47,9 +47,13 @@ pub enum Region {
     CenterPrint,
     /// The stock bottom print (rules' `bottom_print`, the ammo display).
     BottomPrint,
+    /// Where the stock ammo display shows: claiming it hides the bottom
+    /// print only while that print is the ammo display, so rules' other
+    /// bottom prints still show.
+    Ammo,
 }
 impl Region {
-    pub const ALL: [Region; 12] = [
+    pub const ALL: [Region; 13] = [
         Region::TopLeft,
         Region::TopCenter,
         Region::TopRight,
@@ -62,6 +66,7 @@ impl Region {
         Region::Energy,
         Region::CenterPrint,
         Region::BottomPrint,
+        Region::Ammo,
     ];
     pub fn name(self) -> &'static str {
         match self {
@@ -77,6 +82,7 @@ impl Region {
             Region::Energy => "energy",
             Region::CenterPrint => "center_print",
             Region::BottomPrint => "bottom_print",
+            Region::Ammo => "ammo",
         }
     }
     pub fn parse(name: &str) -> Option<Self> {
@@ -89,6 +95,7 @@ impl Region {
             Region::Energy => Some("jet energy bar"),
             Region::CenterPrint => Some("center print"),
             Region::BottomPrint => Some("bottom print"),
+            Region::Ammo => Some("ammo display"),
             _ => None,
         }
     }
@@ -114,6 +121,7 @@ impl Region {
             Region::Energy => [w - 48.0, 240.0, 48.0, 120.0],
             Region::CenterPrint => [center(480.0), 160.0, 480.0, 120.0],
             Region::BottomPrint => [0.0, 400.0, w, 80.0],
+            Region::Ammo => [w - 240.0, 400.0, 240.0, 80.0],
         }
     }
 }
@@ -375,6 +383,14 @@ pub enum Source {
     /// The stock prints' text, without markup (`""` when none shows).
     CenterPrint,
     BottomPrint,
+    /// The held gun's rounds ready to fire (for a gun counted from its
+    /// reserve, the reserve), its full magazine, the rounds carried beyond
+    /// it, and 1 while it reloads. Missing with no such gun, and `ammo` and
+    /// `ammo_reserve` when they never run out.
+    Ammo,
+    AmmoMax,
+    AmmoReserve,
+    Reloading,
     /// A rule's public state: `package:player/key` or `package:global/key`,
     /// read as a HUD panel row reads it.
     State(String),
@@ -388,6 +404,10 @@ impl Source {
             "alive" => Source::Alive,
             "center_print" => Source::CenterPrint,
             "bottom_print" => Source::BottomPrint,
+            "ammo" => Source::Ammo,
+            "ammo_max" => Source::AmmoMax,
+            "ammo_reserve" => Source::AmmoReserve,
+            "reloading" => Source::Reloading,
             state => {
                 let (package, rest) = state.split_once(':')?;
                 let (scope, key) = rest.split_once('/')?;
@@ -408,6 +428,7 @@ impl Source {
     pub fn natural_max(&self) -> Amount {
         match self {
             Source::Health => Amount::Source("health_max".into()),
+            Source::Ammo => Amount::Source("ammo_max".into()),
             _ => Amount::Number(1.0),
         }
     }
@@ -438,7 +459,7 @@ fn rect_ok(r: &[f32; 4]) -> bool {
 fn source_ok(s: &str) -> Result<()> {
     ensure!(
         Source::parse(s).is_some(),
-        "`{s}` is not a HUD value: health, health_max, energy, alive, center_print, bottom_print, or a rule's package:player/key or package:global/key"
+        "`{s}` is not a HUD value: health, health_max, energy, alive, center_print, bottom_print, ammo, ammo_max, ammo_reserve, reloading, or a rule's package:player/key or package:global/key"
     );
     Ok(())
 }

@@ -591,11 +591,17 @@ impl App {
                             text,
                             seconds,
                             hide_bar,
-                        } => UiUpdate::BottomPrint {
-                            text: print_markup(&self.ui.core.binds, &text),
-                            seconds,
-                            hide_bar,
-                        },
+                        } => {
+                            // The ammo display, which an Add-On's `ammo`
+                            // HUD region replaces.
+                            self.ui.core.bottom_print_ammo =
+                                std::mem::take(&mut self.net.next_print_is_ammo);
+                            UiUpdate::BottomPrint {
+                                text: print_markup(&self.ui.core.binds, &text),
+                                seconds,
+                                hide_bar,
+                            }
+                        }
                         bri_sim::session::Notice::Abilities(abilities) => {
                             self.net.abilities = abilities;
                             continue;
@@ -614,6 +620,11 @@ impl App {
                         }
                         bri_sim::session::Notice::Sound(profile) => {
                             self.audio.profile(&profile, bri_audio::Placement::Listener);
+                            continue;
+                        }
+                        bri_sim::session::Notice::Ammo(held) => {
+                            self.net.next_print_is_ammo = held.as_ref().is_some_and(|h| h.printed);
+                            self.net.held_ammo = held;
                             continue;
                         }
                         bri_sim::session::Notice::Fov(fov) => {

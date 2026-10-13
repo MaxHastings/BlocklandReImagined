@@ -90,7 +90,8 @@ pub use admin::{
 };
 pub use bri_world::authority::WrenchProperties;
 pub use combat::{
-    DEATH_PROJECTILE, MAX_HEALTH, MiniGameRequest, MiniGameView, Notice, SPAWN_PROJECTILE, Vitals,
+    DEATH_PROJECTILE, HeldAmmo, MAX_HEALTH, MiniGameRequest, MiniGameView, Notice,
+    SPAWN_PROJECTILE, Vitals,
 };
 pub use inventory::{TOOL_SLOTS, ToolInventory};
 pub use packages::{

@@ -667,10 +667,12 @@ impl Screen for Play {
             "CenterPrintText",
             center.map(|t| format!("<just:center>{t}\n")),
         );
+        // An `ammo` claim hides only the ammo display.
+        let ammo = core.bottom_print_ammo && core.hud_claimed(Region::Ammo);
         let bottom = core
             .bottom_print
             .as_ref()
-            .filter(|_| !core.hud_claimed(Region::BottomPrint));
+            .filter(|_| !(core.hud_claimed(Region::BottomPrint) || ammo));
         self.print(
             "bottomPrintDlg",
             "BottomPrintText",

@@ -24,6 +24,8 @@ pub struct GameValues {
     pub alive: bool,
     pub center_print: String,
     pub bottom_print: String,
+    /// The held gun's ammunition (`Notice::Ammo`).
+    pub ammo: Option<bri_sim::session::HeldAmmo>,
 }
 
 /// The layouts of one catalog and their textures.
@@ -150,6 +152,12 @@ impl HudRegions {
                 Source::Alive => Value::Number(if game.alive { 1.0 } else { 0.0 }),
                 Source::CenterPrint => Value::Text(game.center_print.clone()),
                 Source::BottomPrint => Value::Text(game.bottom_print.clone()),
+                Source::Ammo => Value::Number(game.ammo.as_ref()?.rounds? as f32),
+                Source::AmmoMax => Value::Number(game.ammo.as_ref()?.size as f32),
+                Source::AmmoReserve => Value::Number(game.ammo.as_ref()?.reserve? as f32),
+                Source::Reloading => {
+                    Value::Number(f32::from(u8::from(game.ammo.as_ref()?.reloading)))
+                }
                 Source::State(bind) => {
                     let binding = bri_package_runtime::content::Binding::parse(bind)?;
                     match state.get(&binding, owner)? {
@@ -367,5 +375,59 @@ mod tests {
             &GameValues::default(),
         );
         assert!(draws.is_empty(), "the stock crosshair stays");
+    }
+
+    #[test]
+    fn an_ammo_counter_reads_the_held_gun_and_hides_with_none() {
+        let counter = layout(serde_json::json!({ "schema_version": 1, "region": "ammo",
+            "when": { "holding": ["guns"] },
+            "elements": [
+                { "type": "text", "at": [0, 0], "text": "{}", "value": "ammo", "digits": 2 },
+                { "type": "text", "at": [0, 20], "text": "/{}", "value": "ammo_reserve" },
+                { "type": "bar", "rect": [0, 40, 100, 4], "value": "ammo", "fill": { "color": [1, 1, 1, 1] } },
+                { "type": "text", "at": [0, 50], "text": "RELOAD", "show": { "value": "reloading", "above": 0.5 } }
+            ] }));
+        let mut regions = regions(&[("hud", vec![counter])]);
+        let state = PackageStateView::default();
+        let viewer = Viewer {
+            holding: "guns:image/carbine",
+            ..Default::default()
+        };
+        let mut game = GameValues {
+            ammo: Some(bri_sim::session::HeldAmmo {
+                item: "guns:item/carbine".into(),
+                rounds: Some(6),
+                size: 24,
+                reserve: Some(48),
+                reloading: false,
+                printed: true,
+            }),
+            ..Default::default()
+        };
+        let texts = |draws: &[HudRegionDraw]| -> Vec<String> {
+            draws[0]
+                .items
+                .iter()
+                .filter_map(|i| match i {
+                    Item::Text { text, .. } => Some(text.clone()),
+                    _ => None,
+                })
+                .collect()
+        };
+        let draws = regions.draws(&state, 1, &viewer, &game);
+        assert_eq!(draws[0].region, Region::Ammo);
+        assert_eq!(texts(&draws), ["06", "/48"]);
+        let bar = draws[0].items.iter().find_map(|i| match i {
+            Item::Fill { rect, .. } => Some(rect[2]),
+            _ => None,
+        });
+        assert_eq!(bar, Some(25.0), "a quarter of the magazine");
+        game.ammo.as_mut().unwrap().reloading = true;
+        game.ammo.as_mut().unwrap().reserve = None;
+        let draws = regions.draws(&state, 1, &viewer, &game);
+        assert_eq!(texts(&draws), ["06", "/-", "RELOAD"]);
+        // Gun put away: the claim's `holding` no longer matches.
+        let draws = regions.draws(&state, 1, &Viewer::default(), &game);
+        assert!(draws.is_empty());
     }
 }
