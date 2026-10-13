@@ -399,10 +399,13 @@ pub struct Behaviour {
     #[serde(default)]
     pub on_contact: bool,
     /// `on_panel(player, event)` when a player presses a button or picks
-    /// a list row in a panel this Add-On showed them (`show_panel`), or
-    /// closes it: `event` is `#{ panel, control, fields, lists }`, with
-    /// `control` the button's or list's id or `"close"`, `fields` each
-    /// field's text and `lists` each list's picked row (or `()`).
+    /// a list row in a panel this Add-On showed them (`show_panel`), drags
+    /// a row onto a list, or closes it: `event` is `#{ panel, control,
+    /// fields, lists, drop }`, with `control` the button's or list's id or
+    /// `"close"`, `fields` each field's text, `lists` each list's picked
+    /// row (or `()`), and `drop` for a dragged row `#{ from, row, at, text
+    /// }` (the list it came from, its row and text there, and the row of
+    /// `control` it was let go over, or `()` below the last), else `()`.
     #[serde(default)]
     pub on_panel: bool,
     /// `on_tick()` every `tick_interval` ticks, when set.
