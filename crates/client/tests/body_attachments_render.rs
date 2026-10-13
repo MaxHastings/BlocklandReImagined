@@ -231,6 +231,8 @@ const PLAYGROUND: &[&str] = &[
     "blockhead_bot",
     "playground/playground-runner",
     "playground/playground-runner-look",
+    "playground/playground-runner-hud",
+    "samples/sample-trooper",
     "playground/playground-rifle",
     "playground/playground-buggy",
     "playground/playground-stomper-look",

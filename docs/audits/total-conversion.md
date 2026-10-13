@@ -96,8 +96,10 @@ cosmetics on the client, as the network rule asks.
 | Draw over the world in the view (view space) | **new** | `material_space(m, 1)`: camera-relative, always in front of the world, at the normal field of view, so a gun does not stretch while zoomed. |
 | Read the player's view (`view`: fov, aspect, size, first person, aiming, alive) | **new** | Lets client code draw sights only while aiming and a gun only in first person. |
 | Text drawn by client code | missing, **next** | Planned `ui.panel`. Until then, JSON panels and prints carry text. |
-| Hide or replace the base HUD (health, chat, tool bar) | missing, **next** | Needs a per-slot "replaced by" in the HUD slots. It is small, but it touches UI the first-impressions work is changing. The crosshair and prints cover the Commando needs. |
+| Textured HUD regions (images, frame strips, bars, sprite-font counters, text) | **new** (v0.3.0 W6) | A `hud` layout claims a named region per body, held item or vehicle and draws from the Add-On's PNGs; it replaces the crosshair, energy bar and prints when it claims them. See [hud.md](../modding/hud.md). |
+| Hide or replace the rest of the base HUD (health, chat, tool bar) | missing | Regions cover the crosshair, energy bar, prints and free corners; the chat and tool bar stay the game's. |
 | Camera distance per body (`camera_distance`) | present | |
+| Camera profile per body (FOV, eye offset, view bob, weapon sway, shoulder camera) | **new** (v0.3.0 W6) | Archetype `look.camera`; reverts on a switch; client code reads the sway from `view`. See [content-kinds.md](../modding/content-kinds.md). |
 | Forced first person while aiming | **new** | |
 | Scripted cameras (top-down, fixed, side-scroller) | missing, **next** | A Mario-style side view needs the camera and the movement axes both changed. That design belongs with package movement controllers (below), not a camera-only override that leaves controls wrong. |
 

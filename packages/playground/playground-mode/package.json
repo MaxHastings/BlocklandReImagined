@@ -4,13 +4,14 @@
   "version": "1.0.0",
   "api": 1,
   "name": "Mixed Add-On Playground",
-  "description": "Adds the Mixed Add-On Playground to Start Game: everyone plays the Runner with the Pulse Carbine, the Dune Buggy, Blockhead Bots, Stompers and Fizzers are on the spawn list, and bricks can be shot and driven through. The only Add-On here that names the others.",
+  "description": "Adds the Mixed Add-On Playground to Start Game: everyone plays the Runner, with its own HUD, holding the Pulse Carbine, /trooper switches to the Trooper and its camera, the Dune Buggy, Blockhead Bots, Stompers and Fizzers are on the spawn list, and bricks can be shot and driven through. The only Add-On here that names the others.",
   "authors": ["Blockland ReImagined"],
   "license": "CC0-1.0",
   "provenance": { "source": "original" },
   "dependencies": {
     "playground-runner": "^1.0.0",
     "playground-runner-look": "^1.0.0",
+    "playground-runner-hud": "^1.0.0",
     "playground-rifle": "^1.0.0",
     "playground-buggy": "^1.0.0",
     "blockhead_bot": "^1.0.0",
@@ -19,7 +20,8 @@
     "playground-stomper-rules": "^1.0.0",
     "playground-fizzer": "^1.0.0",
     "playground-fizzer-look": "^1.0.0",
-    "playground-fizzer-rules": "^1.0.0"
+    "playground-fizzer-rules": "^1.0.0",
+    "sample-trooper": "^1.0.0"
   },
   "capabilities": [],
   "provides": [
