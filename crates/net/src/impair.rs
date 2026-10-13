@@ -239,12 +239,25 @@ mod tests {
         let client = UdpSocket::bind("127.0.0.1:0").await?;
         let datagram = vec![7u8; 1000];
         // Sent in small bursts, so the loopback's own buffers never drop
-        // any: what the link loses is the link's.
-        async fn send(client: &UdpSocket, to: SocketAddr, datagram: &[u8], n: usize) -> Result<()> {
+        // any: what the link loses is the link's. A pause sleeps between
+        // bursts (at least 1 ms, about 15 ms on Windows' timer, so under
+        // the link's rate there); without one the bursts only yield, far
+        // faster than the link drains.
+        async fn send(
+            client: &UdpSocket,
+            to: SocketAddr,
+            datagram: &[u8],
+            n: usize,
+            pause: bool,
+        ) -> Result<()> {
             for i in 0..n {
                 client.send_to(datagram, to).await?;
                 if i % 10 == 9 {
-                    tokio::time::sleep(Duration::from_millis(1)).await;
+                    if pause {
+                        tokio::time::sleep(Duration::from_millis(1)).await;
+                    } else {
+                        tokio::task::yield_now().await;
+                    }
                 }
             }
             Ok(())
@@ -262,7 +275,7 @@ mod tests {
         }
         let start = std::time::Instant::now();
         // 100 kB: a tenth of a second at 1 MB/s, within the buffer.
-        send(&client, link.address, &datagram, 100).await?;
+        send(&client, link.address, &datagram, 100, true).await?;
         let mut buffer = vec![0u8; 2048];
         tokio::time::timeout(Duration::from_secs(5), host.recv_from(&mut buffer)).await??;
         let arrived = 1 + receive(&host).await;
@@ -278,7 +291,7 @@ mod tests {
         assert!(took >= least, "{forwarded} kB at 1 MB/s took {took:?}");
         // 500 kB as fast as the client sends it: what would wait longer
         // than 200 ms is dropped, the rest arrives.
-        send(&client, link.address, &datagram, 500).await?;
+        send(&client, link.address, &datagram, 500, false).await?;
         let arrived = arrived + receive(&host).await;
         let dropped = link.stats.dropped.load(Ordering::Relaxed);
         let forwarded = link.stats.forwarded.load(Ordering::Relaxed);
