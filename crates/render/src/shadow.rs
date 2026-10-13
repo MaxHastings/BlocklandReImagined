@@ -1628,6 +1628,56 @@ mod tests {
         assert_eq!(count as u64 * CASTER_STRIDE, size, "no slot left unused");
     }
 
+    /// Two mirrors facing each other bounce into each other's views: on
+    /// High every pass goes to them, one plane seen in another, so the
+    /// third plane is a reflection of a reflection. Each live plane's own
+    /// casters and map layers still fit the caster buffer (v0.2.11 crashed
+    /// here).
+    #[test]
+    fn facing_mirrors_on_high_keep_every_planes_shadows_inside_the_buffer() {
+        use crate::reflection::{Looks, Mirror, ReflectionSettings, SILVER, plan};
+        let wall = |z: f32, facing: f32| Mirror {
+            corners: [(-1.0, -1.0), (1.0, -1.0), (1.0, 1.0), (-1.0, 1.0)]
+                .map(|(x, y)| Vec3::new(x * facing, y, z) * Vec3::new(2.0, 2.0, 1.0)),
+            tint: [1.0; 3],
+            strength: 1.0,
+            looks: Looks::Reflect,
+            fallback: SILVER,
+            recess: 0.0,
+        };
+        let eye = Vec3::new(0.3, 0.2, 4.0);
+        let mirrors = [wall(0.0, 1.0), wall(8.0, -1.0)];
+        let p = plan(
+            &mirrors,
+            camera(eye, Vec3::ZERO),
+            eye,
+            &ReflectionSettings::HIGH,
+            (960, 540),
+        );
+        assert_eq!(p.planes.len(), ReflectionSettings::MAX_PLANES);
+        assert!(
+            p.planes.iter().any(|plane| plane.parent >= 2),
+            "a reflection of a reflection goes live: {:?}",
+            p.planes
+                .iter()
+                .map(|plane| plane.parent)
+                .collect::<Vec<_>>()
+        );
+        let size = CASTER_STRIDE * (FAR_SLOT + 1) as u64;
+        for view in 1..=p.planes.len() {
+            assert!(view < FITTED_VIEWS, "plane view {view} has no shadow slots");
+            for cascade in 0..MAX_CASCADES {
+                for offset in [
+                    ShadowMaps::caster_offset(view, cascade),
+                    ShadowMaps::map_offset(view, cascade),
+                ] {
+                    assert!(u64::from(offset) + CASTER_SIZE <= size, "view {view}");
+                    assert_ne!(offset, ShadowMaps::far_offset(), "view {view}");
+                }
+            }
+        }
+    }
+
     #[test]
     fn far_fit_holds_every_corner_of_the_map_with_room_to_spare() {
         let bounds = (

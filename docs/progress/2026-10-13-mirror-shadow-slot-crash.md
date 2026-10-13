@@ -66,3 +66,44 @@ warning too. Unit test:
 `cargo clippy -p bri-client --all-targets -- -D warnings` passes;
 `cargo test -p bri-client --lib`: 517 passed, and the same 6 GPU-adapter
 tests that fail in the container on main fail here.
+
+## Slayer uniform script error (second crash log)
+
+Max's second crash (`crash-20261013-030638.txt`, a Slayer match with bots) is
+the same mirror shadow overrun. Its log also shows
+`gamemode_slayer-rules: on_spawn → dress → undress: Data type incorrect: ()
+(expecting bool) (line 1577)`: `undress` read the `dressed` flag as a bool,
+and the flag is unset (`()`) for a player whose declared per-player defaults
+never reached them. The fixture tests seed the defaults on join and on a
+bot's mini-game membership, so they never hit it; which live path skips the
+seeding is not pinned down. `undress` and the three `out` reads now compare
+with `== true` / `!= true`, which treat unset as false (verified: reading an
+undeclared key that way passes the Slayer suite where the bare `if` raised the
+same error). `cargo test -p bri-addon-import` passes (slayer: 45).
+
+The same log's other notes, triaged rather than changed here:
+- `host rejected winRound: Only the mini-game owner's rules may change match
+  policy`: a brick whose owner is not the mini-game owner fired `winRound`
+  (`rule_game_context`, `crates/sim/src/session/rules.rs`). That is the
+  intended authority rule; whether the map's goal bricks should count as
+  the host's is a separate question.
+- `host rejected spawnProjectile: projectile quota is full`: brick events
+  spawning projectiles past their owner's live-projectile quota (default 5).
+  The count is of live event-spawned projectiles, so it frees as they expire;
+  the log notes are already rate limited.
+- Long frames: up to 442 ms in "avatar meshes" and 400 ms "untraced", plus
+  present stalls of 250-270 ms. Needs its own profiling.
+
+## Two facing mirrors
+
+Max found the reliable repro: two mirrors that can see each other. The
+planner (`reflection::plan_after`) gives a bounce deeper a live pass of its
+own, so facing mirrors on High fill all three passes, the third a
+reflection of a reflection, which is plane view 3, the one whose map layers
+overran. The pass count is capped at `ReflectionSettings::MAX_PLANES`
+whatever the recursion, and `FITTED_VIEWS` is sized from that cap, so the
+fixed buffer covers it. New test
+`shadow::tests::facing_mirrors_on_high_keep_every_planes_shadows_inside_the_buffer`
+plans two facing mirrors on High, checks a reflection of a reflection goes
+live, and checks every plane's caster and map offsets fit and miss the far
+slot. With the old `FAR_SLOT` it fails at view 3.
