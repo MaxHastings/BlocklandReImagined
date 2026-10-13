@@ -348,10 +348,13 @@ impl Engine {
         if pb.bus == Bus::Music {
             base *= self.music_gain;
         }
-        let mono = asset.data.channels() == 1;
+        // A placed 3D sound is heard where it is whatever its channel
+        // count: a stereo clip is folded to mono first (`mix_voice`).
+        // OpenAL left stereo buffers unplaced at full volume, which made an
+        // Add-On's stereo blast (the Mini-Nuke's) deafening at any distance.
+        let mono = asset.data.channels() == 1 || spatialised(asset, position);
         let (att, pan) = match (pb.spatial, position) {
-            // OpenAL does not spatialise multi-channel buffers.
-            (Some(sp), Some(pos)) if mono => {
+            (Some(sp), Some(pos)) => {
                 let (ear, d) = crate::spatial::heard(&self.listener, &self.windows, pos);
                 (
                     torque_attenuation(d, sp.reference_distance, sp.max_distance),
@@ -731,6 +734,12 @@ fn sanitize_gain(g: f32) -> f32 {
     }
 }
 
+/// Whether a voice is placed in the world with a 3D description, so it is
+/// attenuated and panned (a multi-channel clip is folded to mono for it).
+fn spatialised(asset: &SoundAsset, position: Option<Vec3>) -> bool {
+    asset.playback.spatial.is_some() && position.is_some()
+}
+
 /// Fetch one interpolated source frame (up to 2 channels) at `pos`.
 #[inline]
 fn pcm_frame(
@@ -779,6 +788,7 @@ fn mix_voice(
         * f64::from(v.asset.playback.pitch.max(0.01));
     let looping = v.looping();
     let mono_src = src_ch == 1;
+    let downmix = !mono_src && spatialised(&v.asset, v.position);
     let from = v.last;
     let to = v.target;
     let inv = 1.0 / frames.max(1) as f32;
@@ -830,13 +840,17 @@ fn mix_voice(
             },
             (ClipData::Stream(_), None) => None,
         };
-        let Some(f) = frame else {
+        let Some(mut f) = frame else {
             v.done = Some(AudioEvent::Finished { handle: v.handle });
             break;
         };
+        if downmix {
+            let m = (f[0] + f[1]) * 0.5;
+            f = [m, m];
+        }
         let base = n * out_ch;
         if out_ch == 1 {
-            let s = if mono_src {
+            let s = if mono_src || downmix {
                 f[0] * (gl + gr) * SQRT_HALF
             } else {
                 (f[0] * gl + f[1] * gr) * 0.5

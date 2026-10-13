@@ -478,16 +478,46 @@ fn music_disable_suspends_and_enable_restarts() {
     assert_eq!(rt.stats().suspended_voices, 2);
 }
 
+/// A placed 3D sound with a stereo clip (the Mini-Nuke's launch and blast)
+/// is folded to mono, then panned and faded with distance like any other.
+/// OpenAL played it unplaced at full volume wherever it went off.
 #[test]
-fn stereo_clips_are_not_spatialised() {
-    let mut rt = offline(|_| {});
-    rt.play("StereoSound", Placement::World([40.0, 0.0, 0.0]))
-        .unwrap(); // far right, beyond reference
-    let (l, r) = rms_lr(&seconds(&mut rt, 0.2));
+fn placed_stereo_clips_are_spatialised() {
+    // StereoSound: reference 10, max 60; its right channel is silent.
+    let level = |at: [f32; 3]| {
+        let mut rt = offline(linear);
+        rt.play("StereoSound", Placement::World(at)).unwrap();
+        rms_lr(&seconds(&mut rt, 0.2))
+    };
+    let (l, r) = level([5.0, 0.0, 0.0]); // right of the listener
+    assert!(r > 10.0 * l.max(1e-6), "panned right: l={l} r={r}");
+    let (l, r) = level([-5.0, 0.0, 0.0]);
+    assert!(l > 10.0 * r.max(1e-6), "panned left: l={l} r={r}");
+    let near = level([0.0, 0.0, -5.0]);
     assert!(
-        l > 0.05,
-        "left channel carries the clip's left channel unattenuated"
+        near.0 > 0.01 && (near.0 - near.1).abs() / near.0 < 0.02,
+        "both ears hear the folded clip ahead: {near:?}"
     );
+    let half = level([0.0, 0.0, -35.0]);
+    assert!(
+        (half.0 / near.0 - 0.5).abs() < 0.01,
+        "half way to max distance => 0.5, got {}",
+        half.0 / near.0
+    );
+    assert_eq!(
+        level([0.0, 0.0, -60.0]),
+        (0.0, 0.0),
+        "silent at max distance"
+    );
+}
+
+/// Played at the listener (2D), a stereo clip keeps its channels.
+#[test]
+fn unplaced_stereo_clips_keep_their_channels() {
+    let mut rt = offline(|_| {});
+    rt.play("StereoSound", Placement::Listener).unwrap();
+    let (l, r) = rms_lr(&seconds(&mut rt, 0.2));
+    assert!(l > 0.05, "left channel carries the clip's left channel");
     assert_eq!(r, 0.0, "the clip's right channel is silent");
 }
 
