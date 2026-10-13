@@ -1428,7 +1428,13 @@ impl Session {
             let pose =
                 Pose::from_translation((Vec3::from(bounds.min) + Vec3::from(bounds.max)) * 0.5);
             let feet = Vec3::from(peer.player.state().feet);
-            let may_board = !self.bots.is_bot(*owner) && self.vehicles.may_remount(*owner, tick);
+            // A body that cannot ride lands on a vehicle as on anything else.
+            let may_board = !self.bots.is_bot(*owner)
+                && self.vehicles.may_remount(*owner, tick)
+                && self
+                    .archetypes
+                    .resolve(peer.player.state().archetype)
+                    .can_ride;
             let center = (Vec3::from(bounds.min) + Vec3::from(bounds.max)) * 0.5;
             let reach = Aabb::new(
                 Vector::from_array((center - half).to_array()),
@@ -1506,10 +1512,12 @@ impl Session {
                 );
             }
         }
+        let mut struck = Vec::new();
         for (owner, vehicle) in begun {
             let Some(velocity) = self.peers.get(&owner).map(|p| p.player.state().velocity) else {
                 continue;
             };
+            struck.push((vehicle, owner, velocity));
             let _ = world.player_contact(
                 &self.simulation.physics,
                 vehicle,
@@ -1519,6 +1527,9 @@ impl Session {
             if Vec3::from(velocity).length_squared() > 4.0 {
                 credits.push((vehicle, owner));
             }
+        }
+        for (vehicle, owner, velocity) in struck {
+            self.package_vehicle_contact(vehicle.0, owner, Vec3::from(velocity));
         }
         for (vehicle, owner) in credits {
             if self.may_move(

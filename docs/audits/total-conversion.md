@@ -90,7 +90,7 @@ cosmetics on the client, as the network rule asks.
 |---|---|---|
 | JSON HUD panels (rows bound to rule state, key buttons) | present | Four corners, up to 16 rows and 8 keys. |
 | Center and bottom prints from rules (`center_print`, `bottom_print`) | **new** | v20's `centerPrint`/`bottomPrint`, per player or to everyone, budgeted per Add-On. |
-| Ammo counter | not in the engine, future | A HUD panel bound to rule state, or client code reading `state_num`, can show one once rules count rounds. |
+| Ammo counter | **new** (v0.3.0 W6) | The held gun's magazine, size, reserve and reload reach its holder; a HUD region draws them (`ammo`, `ammo_max`, `ammo_reserve`, `reloading`) and its `ammo` claim hides the stock display. |
 | Hide the crosshair | **new** | Through `zoom.crosshair: false` while aiming. |
 | Draw anything on the screen (client code screen space) | **new** | `material_space(m, 2)` draws in screen space, from -1 to 1 with y up and x scaled by aspect: scopes, hit markers, damage vignettes. |
 | Draw over the world in the view (view space) | **new** | `material_space(m, 1)`: camera-relative, always in front of the world, at the normal field of view, so a gun does not stretch while zoomed. |

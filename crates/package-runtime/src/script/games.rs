@@ -211,16 +211,30 @@ fn teams(value: Array) -> Fallible<Vec<TeamOp>> {
     value
         .into_iter()
         .map(|t| {
-            let t = t
-                .try_cast::<Map>()
-                .ok_or("a team is #{ name, color } (and its `id` to keep it)")?;
+            let t = t.try_cast::<Map>().ok_or(
+                "a team is #{ name, color } (and its `id` to keep it, its `body` to spawn as)",
+            )?;
             let name = t
                 .get("name")
                 .and_then(|n| n.clone().into_string().ok())
                 .ok_or("a team needs a `name`")?;
             let color = palette_index(t.get("color").ok_or("a team needs a `color`")?)?;
             let id = t.get("id").map(optional_id).transpose()?.flatten();
-            Ok(TeamOp { id, name, color })
+            let body = match t.get("body") {
+                None => None,
+                Some(b) if b.is_unit() => None,
+                Some(b) => Some(
+                    b.clone()
+                        .into_string()
+                        .map_err(|_| "a team's `body` is an archetype id")?,
+                ),
+            };
+            Ok(TeamOp {
+                id,
+                name,
+                color,
+                body,
+            })
         })
         .collect()
 }

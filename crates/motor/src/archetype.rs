@@ -306,6 +306,32 @@ impl Archetypes {
         }
         Ok(())
     }
+    /// The bodies a player may be offered (a brick's ChangeDatablock list,
+    /// the mini-game's player types, `/body`): v20's selectable player
+    /// types, then every package archetype with a name, in table order.
+    pub fn choosable(&self) -> impl Iterator<Item = (ArchetypeId, &Archetype)> {
+        PlayerType::ALL
+            .into_iter()
+            .map(|t| (t.archetype(), self.resolve(t.archetype())))
+            .chain(
+                self.iter()
+                    .skip(PlayerType::EVERY.len())
+                    .filter(|(_, a)| !a.name.is_empty()),
+            )
+    }
+    /// The choosable body a player names: by archetype id, v20 datablock
+    /// name or shown name, ignoring case.
+    pub fn choice(&self, named: &str) -> Option<ArchetypeId> {
+        let named = named.trim();
+        let by_datablock = PlayerType::from_datablock_name(named).map(PlayerType::archetype);
+        self.choosable()
+            .find(|(id, a)| {
+                Some(*id) == by_datablock
+                    || a.id.eq_ignore_ascii_case(named)
+                    || a.name.eq_ignore_ascii_case(named)
+            })
+            .map(|(id, _)| id)
+    }
     pub fn iter(&self) -> impl Iterator<Item = (ArchetypeId, &Archetype)> {
         self.0
             .iter()
