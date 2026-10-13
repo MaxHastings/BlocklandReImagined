@@ -9,5 +9,12 @@
     "gravity": 12,
     "jump_speed": 11
   },
-  "controller": "sample-trooper:controller/air-steer"
+  "controller": "sample-trooper:controller/air-steer",
+  "camera": {
+    "fov": 72,
+    "eye_offset": [0, 0.08, 0],
+    "bob": { "height": 0.05, "side": 0.035, "stride": 3.2 },
+    "sway": { "lag": 0.6, "max_degrees": 5, "settle": 6, "bob": 0.8 },
+    "third_person": { "side": 0.9, "height": 0.25 }
+  }
 }

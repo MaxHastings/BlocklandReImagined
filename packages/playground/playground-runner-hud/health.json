@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "region": "top_left",
+  "when": { "body": ["playground-runner:archetype/runner"] },
+  "pixelated": true,
+  "elements": [
+    { "type": "image", "texture": "playground-runner-hud:texture/cap", "rect": [16, 52, 40, 40] },
+    { "type": "text", "at": [62, 64], "text": "x{}", "value": "health", "digits": 3,
+      "glyphs": { "texture": "playground-runner-hud:texture/digits", "charset": "0123456789x*",
+        "size": [20, 20], "spacing": 2 } },
+    { "type": "image", "texture": "playground-runner-hud:texture/cap", "rect": [16, 52, 40, 40],
+      "tint": [1, 0.2, 0.2, 0.6], "show": { "value": "health", "below": 30 } }
+  ]
+}

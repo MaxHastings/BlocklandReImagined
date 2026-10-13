@@ -55,6 +55,12 @@ fn set() -> PackageSet {
                 Side::Client,
             ),
             (
+                "playground-runner-hud",
+                "playground/playground-runner-hud",
+                Side::Client,
+            ),
+            ("sample-trooper", "samples/sample-trooper", Side::Server),
+            (
                 "playground-rifle",
                 "playground/playground-rifle",
                 Side::Shared,
@@ -272,8 +278,8 @@ async fn two_players_and_a_late_joiner_share_the_playground() -> Result<()> {
         anyhow::Ok((client, ids, cache_dir))
     };
 
-    // A clean client downloads the look, the carbine, the buggy and the
-    // bot: what its screen and prediction need. The Runner's rules and the
+    // A clean client downloads the look, the Runner's HUD, the carbine,
+    // the buggy and the bot: what its screen and prediction need. The Runner's rules and the
     // mode stay on the host.
     let (mut driver, ids, _driver_cache) = join("Driver").await?;
     assert_eq!(
@@ -282,6 +288,7 @@ async fn two_players_and_a_late_joiner_share_the_playground() -> Result<()> {
             "blockhead_bot",
             "playground-buggy",
             "playground-rifle",
+            "playground-runner-hud",
             "playground-runner-look"
         ]
     );

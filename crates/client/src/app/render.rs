@@ -862,6 +862,12 @@ impl App {
                 first_person: !third_person,
                 aiming: self.controls.aiming(),
                 alive: view.vitals.get(&view.owner).is_none_or(|v| v.alive),
+                view_model: if third_person {
+                    [0.0; 5]
+                } else {
+                    self.controls.view_model_record()
+                },
+                hud_owned: 0,
             };
             let span = crate::frame_trace::span("Add-On code");
             self.addons.client_code.run_frame(
@@ -1603,6 +1609,7 @@ impl App {
             self.rebuild_effects_renderer(frame.device, frame.queue, frame.format)?;
         }
         self.item_ui.register_icons(frame);
+        self.addons.hud_regions.register_textures(frame);
         // Until its pipelines finish compiling, the preview stays due.
         if (self.avatar.preview_dirty
             || self.ui.stack().contains(&bri_ui::screens::ScreenId::Avatar))

@@ -296,6 +296,84 @@ fn package_panels(pack: &Pack, dl: &mut DrawList, core: &Core) {
     }
 }
 
+/// The HUD regions Add-Ons claim (`bri_content::hud`): each region's box
+/// on a screen 480 units tall, its items placed from the box's corner.
+fn hud_regions(pack: &Pack, dl: &mut DrawList, core: &Core) {
+    use bri_content::hud::{Align, HEIGHT, Item};
+    if core.hud_regions.is_empty() {
+        return;
+    }
+    let (w, h) = core.logical;
+    if w <= 0 || h <= 0 {
+        return;
+    }
+    let unit = h as f32 / HEIGHT;
+    let width = w as f32 / unit;
+    let font = pack
+        .data
+        .styles
+        .get("BlockChatTextProfile")
+        .and_then(|s| s.font.as_deref())
+        .and_then(|f| crate::text::Font::get(pack, f));
+    let byte = |v: f32| (v.clamped(0.0, 1.0) * 255.0).round() as u8;
+    let rgba = |c: [f32; 4]| c.map(byte);
+    for region in &core.hud_regions {
+        let [ox, oy, ..] = region.region.rect(width);
+        let px = |x: f32, y: f32| ((ox + x) * unit, (oy + y) * unit);
+        let filter = if region.pixelated {
+            crate::draw::Filter::Nearest
+        } else {
+            crate::draw::Filter::Linear
+        };
+        for item in &region.items {
+            match item {
+                Item::Image {
+                    texture,
+                    uv,
+                    rect,
+                    tint,
+                } => {
+                    let (x, y) = px(rect[0], rect[1]);
+                    dl.image(
+                        crate::pack::TexKey::External(*texture),
+                        [uv[0], uv[1], uv[2] - uv[0], uv[3] - uv[1]],
+                        [x, y, rect[2] * unit, rect[3] * unit],
+                        rgba(*tint),
+                        filter,
+                    );
+                }
+                Item::Fill { rect, color } => {
+                    let (x, y) = px(rect[0], rect[1]);
+                    let (x1, y1) = px(rect[0] + rect[2], rect[1] + rect[3]);
+                    let (x, y) = (x.round() as i32, y.round() as i32);
+                    dl.fill(
+                        Rect::new(x, y, x1.round() as i32 - x, y1.round() as i32 - y),
+                        rgba(*color),
+                    );
+                }
+                Item::Text {
+                    at,
+                    text,
+                    color,
+                    align,
+                } => {
+                    let Some(font) = font.as_ref() else {
+                        continue;
+                    };
+                    let (x, y) = px(at[0], at[1]);
+                    let tw = font.width(text) as f32;
+                    let x = match align {
+                        Align::Left => x,
+                        Align::Center => x - tw / 2.0,
+                        Align::Right => x - tw,
+                    };
+                    font.draw(dl, x.round(), y.round(), text, rgba(*color), &[]);
+                }
+            }
+        }
+    }
+}
+
 fn hud(core: &Core) -> View {
     let (w, h) = core.logical;
     let m = &core.hud;
@@ -553,8 +631,12 @@ impl Screen for Play {
         self.on_update(core);
     }
     fn on_update(&mut self, core: &mut Core) {
+        use bri_content::hud::Region;
         if let Some(n) = self.view.id("HUD_EnergyBar") {
-            self.view.set_visible(n, core.energy.is_some());
+            self.view.set_visible(
+                n,
+                core.energy.is_some() && !core.hud_claimed(Region::Energy),
+            );
             self.view.set_num(n, core.energy.unwrap_or(0.0));
         }
         if let Some(n) = self.view.id("LagIcon") {
@@ -565,19 +647,30 @@ impl Screen for Play {
         if let Some(n) = self.view.id("Crosshair") {
             self.view.set_visible(
                 n,
-                core.shape_names && core.first_person && !core.hide_crosshair,
+                core.shape_names
+                    && core.first_person
+                    && !core.hide_crosshair
+                    && !core.hud_claimed(Region::Crosshair),
             );
         }
         // clientCmdCenterPrint / clientCmdBottomPrint on the authored dialogs
         // (c:6921-6969): center prints get `<just:center>` and a trailing
         // newline, bottom prints are set as sent.
-        let center = core.center_print.as_ref().map(|(text, _)| text);
+        // An Add-On claiming a print's region shows it its own way.
+        let center = core
+            .center_print
+            .as_ref()
+            .map(|(text, _)| text)
+            .filter(|_| !core.hud_claimed(Region::CenterPrint));
         self.print(
             "centerPrintDlg",
             "CenterPrintText",
             center.map(|t| format!("<just:center>{t}\n")),
         );
-        let bottom = core.bottom_print.as_ref();
+        let bottom = core
+            .bottom_print
+            .as_ref()
+            .filter(|_| !core.hud_claimed(Region::BottomPrint));
         self.print(
             "bottomPrintDlg",
             "BottomPrintText",
@@ -646,6 +739,9 @@ impl Screen for Play {
                 dl.pop_clip();
             }
         }
+        // Add-On regions over the stock HUD's own controls, under the
+        // inventory and chat, which stay the player's.
+        hud_regions(pack, dl, core);
         hud(core).draw(pack, dl);
         package_panels(pack, dl, core);
         captions(pack, dl, core);

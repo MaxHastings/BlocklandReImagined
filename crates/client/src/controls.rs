@@ -77,6 +77,19 @@ pub struct Controls {
     /// (upside down, for a floor onto a floor) past the turn of its
     /// heading, both easing back upright (`crate::portal_view`).
     portal_ease: Option<PortalEase>,
+    /// The active body's camera (`Look::camera`) and its bob and weapon
+    /// trail. The stock profile leaves every view untouched.
+    body_camera: BodyCamera,
+}
+/// The active body's camera profile and how it is moving.
+#[derive(Clone, Debug, Default)]
+struct BodyCamera {
+    profile: bri_content::camera::CameraProfile,
+    motion: bri_content::camera::CameraMotion,
+    /// The look's angles at the last advance, to measure each turn.
+    last_look: Option<(f32, f32)>,
+    /// Scale of the body, which the offsets follow.
+    scale: f32,
 }
 /// The roll and tilt an opening left on the view, and how far they have
 /// eased out.
@@ -1064,6 +1077,111 @@ impl Controls {
             self.sway = SwayState::default();
         }
     }
+    /// The active body's camera (`Look::camera`) at its `scale`. A
+    /// different profile starts from rest, so switching bodies hands the
+    /// camera over cleanly: the old body's bob and trail never carry over.
+    pub fn set_body_camera(&mut self, profile: &bri_content::camera::CameraProfile, scale: f32) {
+        if self.body_camera.profile != *profile {
+            self.body_camera = BodyCamera {
+                profile: profile.clone(),
+                ..Default::default()
+            };
+        }
+        self.body_camera.scale = if scale.is_finite() { scale } else { 1.0 };
+    }
+    /// The body owns the view: on foot, not seated, riding or watching
+    /// from a camera. A vehicle's camera owns it in a seat, and aiming
+    /// owns the FOV while it runs.
+    fn body_owns_view(&self) -> bool {
+        self.observer.is_none()
+            && !self.mounted
+            && self.vehicle_view.is_none()
+            && self.seat_yaw.is_none()
+    }
+    /// Move the body camera's bob and weapon trail on by `seconds`, the body
+    /// moving at `ground_speed` (horizontal units a second), on the
+    /// ground or not. At rest whenever the body does not own the view.
+    pub fn advance_body_camera(&mut self, seconds: f32, ground_speed: f32, grounded: bool) {
+        let look = self.view_angles();
+        if !self.body_owns_view() || self.body_camera.profile.is_default() {
+            self.body_camera.motion = Default::default();
+            self.body_camera.last_look = Some(look);
+            return;
+        }
+        let turned = self
+            .body_camera
+            .last_look
+            .map_or((0.0, 0.0), |(yaw, pitch)| {
+                (wrap(look.0 - yaw), look.1 - pitch)
+            });
+        self.body_camera.last_look = Some(look);
+        let scale = self.body_camera.scale;
+        self.body_camera.motion.advance(
+            &self.body_camera.profile,
+            seconds,
+            ground_speed / scale.max(0.01),
+            grounded,
+            turned,
+        );
+    }
+    /// Where the body moves the first-person camera from its eye, in the
+    /// world, for a look heading `yaw`: the profile's `eye_offset` plus
+    /// the bob. Zero for the stock camera and whenever the body does not
+    /// own the view.
+    pub fn body_eye_offset(&self, yaw: f32) -> glam::Vec3 {
+        let b = &self.body_camera;
+        if !self.body_owns_view() || b.profile.is_default() {
+            return glam::Vec3::ZERO;
+        }
+        let (side, dip) = b.motion.bob(&b.profile);
+        let [right, up, forward] = b.profile.eye_offset;
+        let heading = glam::Vec3::new(yaw.sin(), 0.0, -yaw.cos());
+        let across = glam::Vec3::new(yaw.cos(), 0.0, yaw.sin());
+        let offset = across * (right + side) + glam::Vec3::Y * (up + dip) + heading * forward;
+        offset * b.scale
+    }
+    /// The held weapon's sway and bob in first person, in the view's frame
+    /// (x right, y up, looking down -z), applied to the view frame the
+    /// weapon is drawn in. `None` when there is none to apply.
+    pub fn view_model_sway(&self) -> Option<glam::Mat4> {
+        let b = &self.body_camera;
+        let sway = b.profile.sway.as_ref()?;
+        if !self.body_owns_view() || b.motion.at_rest() {
+            return None;
+        }
+        let (side, dip) = b.motion.bob(&b.profile);
+        let (yaw, pitch) = b.motion.trail;
+        let m = glam::Mat4::from_rotation_translation(
+            glam::Quat::from_rotation_y(-yaw) * glam::Quat::from_rotation_x(pitch),
+            glam::Vec3::new(side, dip, 0.0) * sway.bob * b.scale,
+        );
+        m.is_finite().then_some(m)
+    }
+    /// The view model's sway for Add-On code (`view`): trail yaw and pitch
+    /// (radians), then its bob offset in view space.
+    pub fn view_model_record(&self) -> [f32; 5] {
+        let b = &self.body_camera;
+        match (&b.profile.sway, self.body_owns_view()) {
+            (Some(sway), true) => {
+                let (side, dip) = b.motion.bob(&b.profile);
+                let k = sway.bob * b.scale;
+                [b.motion.trail.0, b.motion.trail.1, side * k, dip * k, 0.0]
+            }
+            _ => [0.0; 5],
+        }
+    }
+    /// The on-foot third-person pivot's shift from the body's profile, in
+    /// the world, for a look heading `yaw`.
+    pub fn body_pivot_offset(&self, yaw: f32) -> glam::Vec3 {
+        let b = &self.body_camera;
+        match &b.profile.third_person {
+            Some(t) if self.body_owns_view() => {
+                let across = glam::Vec3::new(yaw.cos(), 0.0, yaw.sin());
+                (across * t.side + glam::Vec3::Y * t.height) * b.scale
+            }
+            _ => glam::Vec3::ZERO,
+        }
+    }
     fn target_fov(&self) -> f32 {
         if let Some(aim) = self.aim_while_aiming() {
             aim.level_fov(self.aim_level)
@@ -1071,7 +1189,12 @@ impl Controls {
         } else if self.held(HeldControl::Zoom) {
             self.zoom_fov.unwrap_or(10.0)
         } else {
-            self.server_fov.or(self.normal_fov).unwrap_or(90.0)
+            // The body's FOV, at the ratio the player's own setting keeps.
+            self.server_fov.unwrap_or_else(|| {
+                self.body_camera
+                    .profile
+                    .fov_for(self.normal_fov.unwrap_or(90.0))
+            })
         }
     }
     /// The player's normal horizontal FOV in degrees, zoom aside.
@@ -1220,6 +1343,67 @@ mod tests {
             c.advance_zoom(0.25);
         }
         assert_eq!(c.fov(), 90.0);
+    }
+    fn shooter_camera() -> bri_content::camera::CameraProfile {
+        serde_json::from_value(serde_json::json!({
+            "fov": 70,
+            "eye_offset": [0, 0.1, 0.05],
+            "bob": { "height": 0.06, "side": 0.03, "stride": 2.4 },
+            "sway": { "lag": 0.5, "max_degrees": 4, "settle": 8, "bob": 0.5 },
+            "third_person": { "side": 0.7, "height": 0.3 }
+        }))
+        .unwrap()
+    }
+    /// Walk forward turning right for `frames`, then return the view.
+    fn walk(c: &mut Controls, frames: u32) {
+        for _ in 0..frames {
+            c.yaw = wrap(c.yaw + 0.01);
+            c.advance_body_camera(1.0 / 60.0, 6.0, true);
+            c.advance_zoom(1.0 / 60.0);
+        }
+    }
+    #[test]
+    fn the_stock_body_camera_changes_nothing() {
+        let mut c = Controls::default();
+        c.set_fov_prefs(100.0, 45.0);
+        let before = (c.fov(), c.body_eye_offset(0.3), c.body_pivot_offset(0.3));
+        c.set_body_camera(&Default::default(), 1.0);
+        walk(&mut c, 60);
+        assert_eq!(c.fov(), 100.0);
+        assert_eq!(c.body_eye_offset(0.3), glam::Vec3::ZERO);
+        assert_eq!(c.body_pivot_offset(0.3), glam::Vec3::ZERO);
+        assert_eq!(before.1, glam::Vec3::ZERO);
+        assert!(c.view_model_sway().is_none());
+        assert_eq!(c.view_model_record(), [0.0; 5]);
+    }
+    #[test]
+    fn a_body_camera_owns_the_view_and_hands_it_back_on_a_switch() {
+        let mut c = Controls::default();
+        c.set_fov_prefs(90.0, 45.0);
+        c.set_body_camera(&shooter_camera(), 1.0);
+        walk(&mut c, 120);
+        assert!((c.fov() - 70.0).abs() < 1e-4, "the body's FOV: {}", c.fov());
+        let offset = c.body_eye_offset(c.yaw);
+        assert!(offset.y > 0.0 && offset.length() > 0.05, "{offset:?}");
+        assert!(c.view_model_sway().is_some(), "the weapon trails the turn");
+        assert!(c.body_pivot_offset(0.0).x > 0.6, "over the right shoulder");
+        // Seated, the vehicle's camera owns the view: no bob, no sway.
+        c.set_mounted(true);
+        walk(&mut c, 1);
+        assert_eq!(c.body_eye_offset(c.yaw), glam::Vec3::ZERO);
+        assert!(c.view_model_sway().is_none());
+        c.set_mounted(false);
+        // Back to the Blockhead: everything stock again, the FOV gliding home.
+        c.set_body_camera(&Default::default(), 1.0);
+        walk(&mut c, 120);
+        assert_eq!(c.fov(), 90.0);
+        assert_eq!(c.body_eye_offset(c.yaw), glam::Vec3::ZERO);
+        assert!(c.view_model_sway().is_none());
+        // Aiming still owns the FOV over the body's.
+        c.set_body_camera(&shooter_camera(), 1.0);
+        c.set_server_fov(Some(50.0));
+        walk(&mut c, 120);
+        assert_eq!(c.fov(), 50.0, "a rule's set_fov wins over the body");
     }
     #[test]
     fn host_fov_replaces_the_normal_fov_until_handed_back() {

@@ -1549,6 +1549,11 @@ pub struct ArchetypeDef {
     /// `thirdPersonOnly`.
     #[serde(default)]
     pub third_person_only: Option<bool>,
+    /// The body's camera while it is active: `fov`, `eye_offset`, `bob`,
+    /// weapon `sway` and the `third_person` pivot; replacing the base's.
+    /// Left out, the stock camera.
+    #[serde(default)]
+    pub camera: Option<bri_content::camera::CameraProfile>,
     /// Whether it fires and uses items; `false` for a body that only
     /// waits (`PlayerData::onTrigger` doing nothing).
     #[serde(default)]
@@ -1604,6 +1609,9 @@ impl ArchetypeDef {
         }
         if let Some(animations) = &self.animations {
             bri_content::body::validate_animations(animations)?;
+        }
+        if let Some(camera) = &self.camera {
+            camera.validate()?;
         }
         ensure!(
             self.controller.as_ref().is_none_or(|c| text(c, 160)),
@@ -2178,6 +2186,21 @@ impl HudPanel {
         }
         Ok(())
     }
+}
+/// Check a HUD region layout (`bri_content::hud::Layout`): its own rules,
+/// and that every rule state it reads is a binding a HUD panel row could
+/// read.
+pub fn hud_layout(layout: &bri_content::hud::Layout) -> Result<()> {
+    layout.validate()?;
+    for source in layout.sources() {
+        if let bri_content::hud::Source::State(bind) = source {
+            ensure!(
+                Binding::parse(&bind).is_some_and(|b| b.scope != Scope::Players),
+                "`{bind}` is not package:player/key or package:global/key"
+            );
+        }
+    }
+    Ok(())
 }
 /// A parsed state binding.
 #[derive(Debug, Clone, PartialEq, Eq)]

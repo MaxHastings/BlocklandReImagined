@@ -33,7 +33,7 @@ const BUGGY: &str = "playground-buggy:vehicle/buggy";
 const BOT: &str = "bot.blockhead";
 
 /// The Add-Ons, by id: their folder under `packages/` and side.
-const ADD_ONS: [(&str, &str, Side); 6] = [
+const ADD_ONS: [(&str, &str, Side); 8] = [
     (
         "playground-runner",
         "playground/playground-runner",
@@ -44,6 +44,12 @@ const ADD_ONS: [(&str, &str, Side); 6] = [
         "playground/playground-runner-look",
         Side::Client,
     ),
+    (
+        "playground-runner-hud",
+        "playground/playground-runner-hud",
+        Side::Client,
+    ),
+    ("sample-trooper", "samples/sample-trooper", Side::Server),
     (
         "playground-rifle",
         "playground/playground-rifle",
@@ -426,6 +432,11 @@ fn each_add_on_stands_alone_and_names_no_other() {
     let independent = [
         &["playground-runner", "playground-runner-look"][..],
         &["playground-runner-look"],
+        &[
+            "playground-runner",
+            "playground-runner-look",
+            "playground-runner-hud",
+        ],
         &["playground-rifle"],
         &["playground-buggy"],
         &["blockhead_bot"],
@@ -443,6 +454,15 @@ fn each_add_on_stands_alone_and_names_no_other() {
         (
             "playground-runner-look",
             &["playground-runner", "playground-runner-look"],
+        ),
+        // The HUD is drawn for the Runner's body, which it depends on.
+        (
+            "playground-runner-hud",
+            &[
+                "playground-runner",
+                "playground-runner-look",
+                "playground-runner-hud",
+            ],
         ),
         ("playground-rifle", &["playground-rifle"]),
         ("playground-buggy", &["playground-buggy"]),

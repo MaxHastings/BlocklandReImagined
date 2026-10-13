@@ -108,6 +108,9 @@ pub struct ClientCode {
     /// Players' bodies as the last frames posed them (`avatar.pose`), for
     /// the next frame's drawing.
     poses: std::collections::BTreeMap<u64, Vec<PosedNode>>,
+    /// The HUD regions each Add-On's layouts own now, by Add-On id, for
+    /// `hud_region`.
+    hud_owners: std::collections::BTreeMap<String, Vec<bri_content::hud::Region>>,
 }
 
 /// A node Add-On code placed: index, world position, world rotation.
@@ -417,6 +420,14 @@ impl ClientCode {
 
     /// Run every Add-On's `frame` for the frame rendered at `now` (seconds
     /// on any steady clock).
+    /// Which HUD regions each Add-On's layouts own now
+    /// (`crate::hud_regions::HudRegions::owners`).
+    pub fn set_hud_owners(
+        &mut self,
+        owners: std::collections::BTreeMap<String, Vec<bri_content::hud::Region>>,
+    ) {
+        self.hud_owners = owners;
+    }
     pub fn run_frame(
         &mut self,
         now: f64,
@@ -450,14 +461,24 @@ impl ClientCode {
         let shared = Arc::new(shared);
         // Requests for another Add-On's bodies, applied once all have run.
         let mut elsewhere = Vec::new();
+        let hud_owners = &self.hud_owners;
         self.running.retain_mut(|r| {
+            let hud_owned = hud_owners.get(&r.addon.id).map_or(0, |regions| {
+                regions.iter().fold(0u16, |bits, region| {
+                    let at = bri_content::hud::Region::ALL
+                        .iter()
+                        .position(|r| r == region)
+                        .unwrap_or(0);
+                    bits | (1 << at)
+                })
+            });
             let input = FrameInput {
                 time: self.time,
                 dt,
                 eye: eye.to_array(),
                 forward: forward.to_array(),
                 world: world.clone(),
-                view,
+                view: bri_client_sandbox::View { hud_owned, ..view },
                 bodies: r.physics.snapshot(),
                 shared: shared.clone(),
                 ..Default::default()

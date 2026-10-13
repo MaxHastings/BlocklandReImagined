@@ -43,6 +43,8 @@
     { "id": "blockhead_bot", "path": "blockhead_bot", "enabled": false },
     { "id": "playground-runner-look", "path": "playground/playground-runner-look", "enabled": false },
     { "id": "playground-runner", "path": "playground/playground-runner", "enabled": false },
+    { "id": "playground-runner-hud", "path": "playground/playground-runner-hud", "enabled": false },
+    { "id": "sample-trooper", "path": "samples/sample-trooper", "enabled": false },
     { "id": "playground-rifle", "path": "playground/playground-rifle", "enabled": false },
     { "id": "playground-buggy", "path": "playground/playground-buggy", "enabled": false },
     { "id": "playground-mode", "path": "playground/playground-mode", "enabled": false },

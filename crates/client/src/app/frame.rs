@@ -130,6 +130,28 @@ impl App {
             });
         self.controls
             .set_third_person_only(third_person_only.unwrap_or(false));
+        // The active body's camera profile owns the on-foot view; another
+        // body (or none) hands it over at once.
+        let body = self
+            .net
+            .attempt
+            .as_ref()
+            .filter(|a| a.entered)
+            .and_then(|a| {
+                let view = a.view.as_ref()?;
+                let body = self.motion.presented().get(&view.owner)?;
+                let velocity = glam::Vec3::from(body.velocity);
+                Some((
+                    view.archetypes.resolve(body.archetype).look.camera.clone(),
+                    body.scale,
+                    glam::Vec2::new(velocity.x, velocity.z).length(),
+                    body.grounded,
+                ))
+            });
+        let (camera, scale, ground_speed, grounded) = body.unwrap_or_default();
+        self.controls.set_body_camera(&camera, scale);
+        self.controls
+            .advance_body_camera(elapsed.as_secs_f32(), ground_speed, grounded);
         self.controls.advance_view(elapsed.as_secs_f32());
         self.controls.advance_head(elapsed.as_secs_f32());
         let span = crate::frame_trace::span("local game");
@@ -1284,7 +1306,13 @@ impl App {
                     // with any seat, so the image stays where it sits on
                     // screen.
                     let eye = if owner == view.owner && !third_person {
-                        crate::controls::view_frame(eye, yaw, pitch, roll)
+                        // The body's weapon sway and bob ride the view.
+                        crate::controls::view_frame(eye, yaw, pitch, roll).map(|frame| {
+                            match self.controls.view_model_sway() {
+                                Some(sway) => frame * sway,
+                                None => frame,
+                            }
+                        })
                     } else {
                         let (yaw, pitch) = if owner == view.owner {
                             (local_view_yaw, local_view_pitch)
