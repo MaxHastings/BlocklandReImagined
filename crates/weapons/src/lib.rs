@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 pub mod debris;
 mod merge;
+pub mod muzzle;
 mod references;
 pub use references::{Reference, add_on_of};
 pub mod rotation;
@@ -2228,6 +2229,41 @@ pub struct ProjectileDef {
     /// Not stable yet.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub turns_into: Option<String>,
+    /// The mark it leaves where it hits a brick (a bullet hole), drawn by
+    /// every player until it fades or the brick goes. None leaves no mark,
+    /// as v20's own projectiles.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub decal: Option<Decal>,
+}
+/// A projectile's mark on a brick: a soft disc flat on the face it hit,
+/// darkest in the middle, fading out over its last second.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Decal {
+    /// Across, in units at scale 1: 0.02 to 4.
+    pub size: f32,
+    /// Its colour and opacity in the middle, each 0 to 1. A bullet hole's
+    /// near black by default.
+    #[serde(default = "Decal::hole")]
+    pub color: [f32; 4],
+    /// How long it stays, in seconds: 0.5 to 600.
+    #[serde(default = "Decal::stays")]
+    pub seconds: f32,
+}
+impl Decal {
+    fn hole() -> [f32; 4] {
+        [0.04, 0.035, 0.03, 0.9]
+    }
+    fn stays() -> f32 {
+        30.0
+    }
+    pub fn valid(&self) -> bool {
+        self.size.is_finite()
+            && (0.02..=4.0).contains(&self.size)
+            && self.color.iter().all(|c| (0.0..=1.0).contains(c))
+            && self.seconds.is_finite()
+            && (0.5..=600.0).contains(&self.seconds)
+    }
 }
 /// A sound played where a projectile hits something, bounce or not, as
 /// `serverPlay3D(sound, ...)` in its `onCollision` (or a helper it calls)
@@ -2440,6 +2476,7 @@ impl Default for ProjectileDef {
             collision_sound: None,
             sport_hit: None,
             turns_into: None,
+            decal: None,
         }
     }
 }
@@ -3220,6 +3257,10 @@ impl Pack {
                     .as_ref()
                     .is_none_or(|t| !t.is_empty() && t.len() <= 128),
                 "Invalid turns_into of projectile {id}: a player type id"
+            );
+            ensure!(
+                p.decal.as_ref().is_none_or(Decal::valid),
+                "Invalid decal of projectile {id}: size 0.02 to 4, colour 0 to 1, seconds 0.5 to 600"
             );
             if let Some(c) = &p.collision_sound {
                 ensure!(

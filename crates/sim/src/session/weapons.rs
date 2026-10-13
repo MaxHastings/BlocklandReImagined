@@ -280,6 +280,17 @@ impl Session {
         self.end_gun_slows()?;
         let tick = self.simulation.state().tick;
         let mut prepared_triggers = Vec::with_capacity(self.peers.len());
+        let owners: Vec<OwnerId> = self.peers.keys().copied().collect();
+        let muzzles: BTreeMap<OwnerId, [Vec3; 2]> = owners
+            .into_iter()
+            .map(|owner| {
+                let eye = self.peers[&owner].player.eye();
+                (
+                    owner,
+                    [self.muzzle(owner, 0, eye), self.muzzle(owner, 1, eye)],
+                )
+            })
+            .collect();
         for (owner, peer) in &self.peers {
             let actor = ActorId(*owner);
             let expired = tick.saturating_sub(peer.last_input_tick) > 60;
@@ -345,15 +356,16 @@ impl Session {
                 (None, None) => state.forward(),
             };
             let eye = peer.player.eye();
-            // Temporary host mount origin until original animated mount poses
-            // are bound. This is not claimed to reproduce authored muzzle offsets.
+            // Each hand's shots leave the muzzle of the image in it, as the
+            // shooter's body holds it.
+            let muzzle = muzzles.get(owner).copied().unwrap_or([eye; 2]);
             self.weapons.set_frame(
                 actor,
                 Frame {
                     body_yaw: state.yaw,
                     position: Vec3::from(state.feet),
                     eye,
-                    muzzle: [eye; 2],
+                    muzzle,
                     direction,
                     velocity: Vec3::from(state.velocity),
                     grounded: state.grounded,
@@ -585,6 +597,28 @@ impl Session {
                     self.package_hit(&impact);
                     self.tutorial_contact(&impact);
                     self.spray_player(&impact);
+                    // A projectile that marks what it hits leaves its decal
+                    // on the brick, for every player to draw.
+                    if let TargetId::Brick(brick) = impact.target
+                        && self
+                            .weapons
+                            .pack
+                            .projectiles
+                            .get(&impact.definition)
+                            .is_some_and(|d| d.decal.is_some())
+                        && impact.normal.is_normalized()
+                    {
+                        self.cues.emit(
+                            tick,
+                            crate::presentation::CueKind::Decal {
+                                brick,
+                                normal: impact.normal.to_array(),
+                                projectile: impact.definition.clone(),
+                                scale: impact.scale,
+                            },
+                            impact.position.to_array(),
+                        );
+                    }
                     if let TargetId::Brick(brick) = impact.target {
                         self.paint_contact(&impact)?;
                         self.special_projectile_hit(impact.source.0, brick, &impact.definition)?;
@@ -899,12 +933,13 @@ impl Session {
     /// the magazine's `display_ticks` (until the next change when 0), and
     /// cleared when the hand no longer holds a gun with a magazine.
     fn show_ammo(&mut self, owner: OwnerId) {
+        // HUDs drawing their own counter hear first, so the client knows
+        // whether the print that follows is the ammo display.
+        let held = self.weapons.ammo(bri_weapons::ActorId(owner));
+        self.notify(owner, Notice::Ammo(held.as_ref().map(held_ammo)));
         // A magazine without a display (Display Ammo off, nothing used)
         // shows nothing, as no gun.
-        let view = self
-            .weapons
-            .ammo(bri_weapons::ActorId(owner))
-            .filter(|v| v.shown);
+        let view = held.filter(|v| v.shown);
         let Some(view) = view else {
             if self.ammo_shown.remove(&owner) {
                 self.notify(
@@ -1056,6 +1091,31 @@ fn shooter(source: ActorId) -> Option<OwnerId> {
 
 /// The ammo display's line: `name  rounds / reserve`, right-aligned, with
 /// "Reloading" while a reload runs.
+/// A held gun's ammunition as its holder's HUD reads it.
+fn held_ammo(view: &bri_weapons::runtime::AmmoView) -> HeldAmmo {
+    use bri_weapons::runtime::Reserve;
+    let reserve = match view.reserve {
+        Reserve::Rounds(n) => Some(n),
+        Reserve::Endless => None,
+    };
+    HeldAmmo {
+        item: view.item.clone(),
+        rounds: if view.counted {
+            reserve
+        } else {
+            Some(view.rounds)
+        },
+        size: view.size,
+        reserve: if view.supply == bri_weapons::Supply::Endless {
+            None
+        } else {
+            reserve
+        },
+        reloading: view.reloading,
+        printed: view.shown,
+    }
+}
+
 pub(crate) fn ammo_text(view: &bri_weapons::runtime::AmmoView) -> String {
     let reserve = match view.reserve {
         bri_weapons::runtime::Reserve::Rounds(n) => n.to_string(),

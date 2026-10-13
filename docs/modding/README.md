@@ -26,6 +26,7 @@ then what players are asked to trust when your Add-On runs code on their PC
 | New bricks | a v20-style brick Add-On you import ([Old v20 Add-Ons and new bricks](old-addons.md)) | a brick catalog the importer writes |
 | A game mode in Start Game | [`stresslab-mode`](../../packages/stresslab/stresslab-mode) | a `mode` file naming Add-Ons and a map |
 | A game mode on a world players dig into, with its own mini-game | [`crates/sim/tests/mode_and_voxels.rs`](../../crates/sim/tests/mode_and_voxels.rs) | rules with a generated world, a tool and a mode whose `minigame` block runs the game ([Other content kinds](content-kinds.md)) |
+| A character, weapon or vehicle model made in Blender | [Models from Blender (glTF)](gltf-models.md) | `bri-import-addon gltf` turns a `.glb` into a body Add-On or a model for `weapons.json` and `vehicles.json` |
 | Worlds, creatures, bodies, blocks | [`packages/stresslab`](../../packages/stresslab) | see [Other content kinds](content-kinds.md) |
 | A whole new game on top: bodies, scoped guns, creatures that shoot back, scoring | [`sample-commando`](../../packages/samples/sample-commando) and its four siblings | five Add-Ons: a weapon, a look with client code, rules, a HUD and a mode ([total-conversion.md](../audits/total-conversion.md)) |
 
@@ -60,7 +61,11 @@ cargo run -p bri-package-runtime --bin bri-addon-check -- path/to/coin-rain
 It prints who needs the Add-On (the host only, each player, or everyone),
 what it provides and may do, and every mistake with its file, line and a
 hint: a misspelt field, a missing hook function, a script syntax error, a
-HUD row bound to a key players never receive, a broken weapons file.
+HUD row bound to a key players never receive, a broken weapons file. Each
+sound file a weapons pack ships is run through the game's own decoder, so a
+sound that would load and then play silence (an unreadable header, a codec
+the game does not play, such as ADPCM WAV) fails the check by name; the
+game plays PCM WAV and Ogg Vorbis files of up to 30 seconds and 8 MiB.
 
 **Try** a rule without opening the game. `bri-addon-run` runs it with the
 Add-Ons it needs in an empty world with two players, `Host` (an admin) and
@@ -81,6 +86,35 @@ at least that long (10 by default), `"Guest: ..."` sends as the Guest and
 depends on and shows players what it may do. See
 [mod-manager.md](../architecture/mod-manager.md).
 
+**Not in your game?** An Add-On that brings rules, bodies, a HUD,
+creatures, blocks or a world plays only in the games it fits; weapons and
+vehicles play in every game. Pick it in the Add-Ons screen: a "Not in
+every game" paragraph names the game mode or map that plays it, for
+example a body a game mode uses, which a Custom game leaves out. In a
+game, `/body` lists the bodies this game left out, and `/body <name>` says
+why.
+
+**Edit while you play.** A game keeps the Add-Ons it started with. Edit a
+file while you host, switch back to the game, and chat names the Add-Ons
+that changed; host again to play them. A body's numbers are the exception:
+`/tune` changes them live for everyone and saves them back to its file
+([Tuning bodies in the game](tuning.md)).
+
+**Share it** as one ZIP that installs byte for byte:
+
+```sh
+cargo run -p bri-package-runtime --bin bri-addon-check -- path/to/coin-rain --package
+```
+
+It runs the check above first and packs nothing when the check fails. The
+ZIP holds the Add-On's folder and its `coin-rain-rules` companion if there
+is one, in a fixed order with fixed dates, so packing the same files twice
+gives the same ZIP; it skips hidden files and `target` folders, then reads
+the ZIP back and compares every file before it is kept. `--out FILE.zip`
+names it (the folder's name by default). Players drop the ZIP in their
+Add-Ons folder (the Add-Ons screen's **Add-Ons Folder** button opens it)
+and the game installs it as it is.
+
 ## The rest of the guide
 
 Each topic has its own page:
@@ -91,6 +125,7 @@ Each topic has its own page:
 6. [Other content kinds](content-kinds.md)
 7. [Old v20 Add-Ons and new bricks](old-addons.md)
 8. [What players are asked to trust](trust.md)
+9. [Tuning bodies in the game](tuning.md)
 
 Porting an old Add-On's scripts is [porting.md](porting.md), and the
 TorqueScript functions they used map to [torque-equivalents.md](torque-equivalents.md).

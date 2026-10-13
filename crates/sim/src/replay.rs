@@ -350,6 +350,19 @@ pub enum Call {
         trusted_host: bool,
         principal: Option<bri_admin::Principal>,
     },
+    /// A connection accepted while its player still loads
+    /// ([`Session::arrive`]).
+    Arrive {
+        name: String,
+        clan: Clan,
+        trusted_host: bool,
+        principal: Option<bri_admin::Principal>,
+    },
+    /// A loading player spawns ([`Session::enter_arrival`]).
+    EnterArrival {
+        owner: OwnerId,
+        spawn: [f32; 3],
+    },
     Disconnect {
         owner: OwnerId,
     },
@@ -360,7 +373,7 @@ pub enum Call {
     Command {
         owner: OwnerId,
         sequence: u64,
-        command: Command,
+        command: Box<Command>,
         aim: Option<ActionAim>,
     },
     Movement {
@@ -529,6 +542,13 @@ fn apply(
             trusted_host,
             principal,
         } => Returned::Unit(s.resume_verified(owner, vec(spawn), trusted_host, principal)),
+        Call::Arrive {
+            name,
+            clan,
+            trusted_host,
+            principal,
+        } => Returned::Owner(s.arrive(name, &clan, trusted_host, principal)),
+        Call::EnterArrival { owner, spawn } => Returned::Unit(s.enter_arrival(owner, vec(spawn))),
         Call::Disconnect { owner } => Returned::Unit(s.disconnect(owner)),
         Call::SetClan { owner, clan } => Returned::Unit(s.set_clan(owner, &clan)),
         Call::Command {
@@ -539,7 +559,7 @@ fn apply(
         } => Returned::Reply(s.command_with_aim_and_admin_persistence(
             owner,
             sequence,
-            command,
+            *command,
             aim,
             |state| outside(tape, || Persisted(persist(state))).0,
         )),
@@ -597,10 +617,8 @@ impl Secrets {
     /// `call` as recorded: its passwords replaced by stand-ins.
     fn redact_call(&mut self, call: &Call) -> Call {
         let mut call = call.clone();
-        if let Call::Command {
-            command: Command::Admin(request),
-            ..
-        } = &mut call
+        if let Call::Command { command, .. } = &mut call
+            && let Command::Admin(request) = &mut **command
         {
             use bri_admin::Action;
             match &mut request.action {
@@ -1090,6 +1108,37 @@ impl Recorder {
             },
         )
     }
+    pub fn arrive(
+        &mut self,
+        s: &mut Session,
+        name: String,
+        clan: &Clan,
+        trusted_host: bool,
+        principal: Option<bri_admin::Principal>,
+    ) -> Result<OwnerId> {
+        if self.live.is_none() {
+            return s.arrive(name, clan, trusted_host, principal);
+        }
+        let call = Call::Arrive {
+            name,
+            clan: clan.clone(),
+            trusted_host,
+            principal,
+        };
+        match self.call(s, call, &mut no_storage) {
+            Returned::Owner(r) => r,
+            _ => unreachable!("an arrival"),
+        }
+    }
+    pub fn enter_arrival(&mut self, s: &mut Session, owner: OwnerId, spawn: Vec3) -> Result<()> {
+        self.unit(
+            s,
+            Call::EnterArrival {
+                owner,
+                spawn: spawn.to_array(),
+            },
+        )
+    }
     pub fn disconnect(&mut self, s: &mut Session, owner: OwnerId) -> Result<()> {
         self.unit(s, Call::Disconnect { owner })
     }
@@ -1118,7 +1167,7 @@ impl Recorder {
         let call = Call::Command {
             owner,
             sequence,
-            command,
+            command: Box::new(command),
             aim,
         };
         match self.call(s, call, &mut persist) {
@@ -1558,6 +1607,8 @@ fn label(call: &Call) -> String {
     match call {
         Call::Join { name, .. } => format!("{name:?} joining"),
         Call::Resume { owner, .. } => format!("Player {owner} rejoining"),
+        Call::Arrive { name, .. } => format!("{name:?} connecting"),
+        Call::EnterArrival { owner, .. } => format!("Player {owner} spawning"),
         Call::Disconnect { owner } => format!("Player {owner} leaving"),
         Call::SetClan { owner, .. } => format!("Player {owner}'s clan tags"),
         Call::Command { owner, command, .. } => {

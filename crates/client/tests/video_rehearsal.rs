@@ -974,6 +974,7 @@ impl Rehearsal {
             length_seconds: length,
             time,
             anchor_tick: 0,
+            paused: false,
         });
         self.request(UiAction::Admin(
             bri_ui::models::admin::AdminAction::SetEnvironment {

@@ -5,6 +5,11 @@ use super::*;
 pub(super) struct SessionState {
     /// Movement the server's map rules currently allow (the Tutorial's lessons).
     pub(super) abilities: bri_sim::session::Abilities,
+    /// The held gun's ammunition, as the server last said
+    /// (`Notice::Ammo`), for HUD regions.
+    pub(super) held_ammo: Option<bri_sim::session::HeldAmmo>,
+    /// The next bottom print is the ammo display (`HeldAmmo::printed`).
+    pub(super) next_print_is_ammo: bool,
     /// Last brick inventory state reported to the server.
     pub(super) brick_hand: Option<bri_sim::session::BrickHand>,
     pub(super) attempt: Option<Attempt>,
@@ -24,6 +29,20 @@ pub(super) struct SessionState {
     pub(super) reconnects: u8,
     /// The invite for the game this player hosts (`/invite` copies it).
     pub(super) invite: Option<String>,
+    /// The connection the host announced this player on while they load,
+    /// for chat until they enter the game. It outlives the join attempt
+    /// across an Add-On reload, so the player is not announced twice.
+    pub(super) arrival: Option<HeldArrival>,
+}
+/// A join's loading connection ([`bri_net::client::Arrival`]).
+pub(super) struct HeldArrival {
+    /// The join it was opened for.
+    pub(super) id: RequestId,
+    /// What the player joined, as they gave it.
+    pub(super) address: String,
+    pub(super) arrival: bri_net::client::Arrival,
+    /// The newest chat line shown.
+    pub(super) last_chat: u64,
 }
 
 impl App {
@@ -78,6 +97,8 @@ impl App {
         self.ui.core.name_tags.clear();
         self.scene.scene_map = None;
         self.net.abilities = Default::default();
+        self.net.held_ammo = None;
+        self.net.next_print_is_ammo = false;
         self.net.brick_hand = None;
         self.build.ghost_report = None;
         self.copy_report = None;
@@ -90,6 +111,7 @@ impl App {
         self.fx.actor_effects.reset(0);
         self.fx.explosion_shapes.reset(0);
         self.fx.beams.clear();
+        self.fx.decals.clear();
         self.fx.tutorial_targets.update(&[], 0.0);
         self.fx.explosion_debris.reset(0);
         self.fx.weapon_shells.clear();
@@ -130,6 +152,7 @@ impl App {
         }
         self.ui.apply(UiUpdate::UnsavedChanges(false));
         self.addons.client_code.stop();
+        self.addons.edits.game_ended();
         self.avatar.avatars.clear();
         self.avatar.mount_meshes.clear();
         self.avatar.avatar_actions.clear();
@@ -189,11 +212,13 @@ impl App {
         self.mounts.takes_turret = false;
         self.mounts.seat_report = None;
         self.mounts.rider_rotations.clear();
+        self.mounts.rider_hands.clear();
         self.mounts.posed_eye = None;
         self.mounts.tumble = None;
         self.view.observer_eye = None;
         self.view.rendered_camera = None;
         self.view.rendered_roll = 0.0;
+        self.view.pixels_per_unit = None;
         self.view.drawn_controls = None;
         self.scene.liquid_cache = None;
         self.ghosts.clear();
@@ -336,6 +361,13 @@ impl App {
         let avatar_catalog = self.avatar.avatar_assets.package.clone();
         let body_mounts =
             bri_sim::session::shape_mount_points(&self.avatar.avatar_assets.rig.shape);
+        // Shots leave the muzzle each image draws at in the hand.
+        let body_grips = bri_sim::session::shape_grips(&self.avatar.avatar_assets.rig, &[]);
+        let package_body_grips = bri_net::content_identity::package_body_grips(
+            &self.content.paths.root,
+            &self.content.paths.packages,
+        );
+        let image_barrels = self.world_items.assets().image_barrels();
         let mut catalog = self.build.tool_ui.server_catalog();
         // Start Game's Music Files: the loops this game's music bricks offer.
         let prefs = &self.ui.core.prefs;
@@ -578,6 +610,9 @@ impl App {
                     item_bounds,
                     avatar_catalog,
                     body_mounts,
+                    body_grips,
+                    package_body_grips,
+                    image_barrels,
                     vehicle_pack,
                     bot_kinds,
                     event_catalog,
@@ -719,6 +754,9 @@ impl App {
                 mods: Default::default(),
             })
         });
+        // This game runs the Add-Ons as they are now; edits made while it
+        // runs are named in chat (`add_on_edits`).
+        self.addons.edits.game_started(&self.content.paths.root);
         self.net.attempt = Some(Attempt {
             id,
             worker,
@@ -746,6 +784,7 @@ impl App {
             identity_changed: Default::default(),
             add_ons: Default::default(),
             joined: Default::default(),
+            arrival: Default::default(),
         });
         Ok(())
     }
@@ -860,6 +899,7 @@ impl App {
         self.ui.apply_session(id, UiUpdate::Connection(screen));
         let pin_key = typed.clone();
         let reporting = progress.clone();
+        let reporting_early = progress.clone();
         // A saved server's invite carries the key it had when joined.
         let saved_invite = crate::servers::SavedServers::load(&servers_file)
             .servers
@@ -867,6 +907,36 @@ impl App {
             .any(|s| s.invite.as_deref() == Some(address.trim()));
         let identity_changed = Arc::new(std::sync::atomic::AtomicBool::new(false));
         let changed = identity_changed.clone();
+        // A join that reloads for the server's Add-Ons keeps the connection
+        // the host announced the player on; a rejoin after a dropped
+        // connection is not announced again.
+        if self
+            .net
+            .arrival
+            .as_ref()
+            .is_some_and(|held| held.id != id || held.address != address.trim() || resume.is_some())
+        {
+            self.net.arrival = None;
+        }
+        let announced = self.net.arrival.as_ref().map(|held| {
+            (
+                held.arrival.ticket.clone(),
+                held.arrival.certificate.clone(),
+                held.arrival.listing.map.clone(),
+            )
+        });
+        let arrival_slot = Arc::new(std::sync::Mutex::new(None));
+        let arrived = arrival_slot.clone();
+        let opens_arrival = announced.is_none() && resume.is_none();
+        let early = (
+            paths.clone(),
+            selected.clone(),
+            catalog.clone(),
+            light_cache.clone(),
+            load_limit.clone(),
+        );
+        let early_scene = Arc::new(std::sync::Mutex::new(None::<(String, Prepared)>));
+        let early_out = early_scene.clone();
         let worker = Worker::start(self.runtime.handle(), progress.clone(), async move {
             let route = target.resolve().await?;
             let address = route.address;
@@ -914,7 +984,80 @@ impl App {
             let cache = bri_package::sync::Cache::open(&package_cache)?;
             let local = identity.client_packages();
             let mut mods = None;
-            let joined = Client::connect_fetching_resuming(
+            // v20 accepts the connection before the loading screen: the
+            // host says the player connected, and they chat while the
+            // Add-Ons download and the map loads. The game join spawns them.
+            let (pin, ticket, map_early) = match announced {
+                Some((ticket, certificate, map)) => {
+                    (HostPin::Certificate(certificate), Some(ticket), Some(map))
+                }
+                None if opens_arrival => {
+                    let arrival = bri_net::client::Arrival::open(
+                        address,
+                        &pin,
+                        player.clone(),
+                        None,
+                        &native_identity,
+                    )
+                    .await;
+                    let arrival = match arrival {
+                        Ok(arrival) => arrival,
+                        Err(error) => {
+                            if (had_pin || saved_invite)
+                                && matches!(
+                                    error.downcast_ref::<bri_net::client::JoinError>(),
+                                    Some(bri_net::client::JoinError::IdentityChanged(_))
+                                )
+                            {
+                                changed.store(true, std::sync::atomic::Ordering::Relaxed);
+                            }
+                            return Err(error);
+                        }
+                    };
+                    let found = (
+                        HostPin::Certificate(arrival.certificate.clone()),
+                        Some(arrival.ticket.clone()),
+                        Some(arrival.listing.map.clone()),
+                    );
+                    if let Ok(mut slot) = arrived.lock() {
+                        *slot = Some(arrival);
+                    }
+                    found
+                }
+                None => (pin, None, None),
+            };
+            // The map loads before the player spawns, as v20's mission
+            // load comes before `onClientEnterGame`.
+            let ready = async move {
+                let Some(map) = map_early.filter(|m| LOADABLE_MAPS.contains(&m.as_str())) else {
+                    return Ok(());
+                };
+                let (paths, selected, catalog, light_cache, load_limit) = early;
+                reporting_early.begin(
+                    bri_progress::Stage::LoadingMap,
+                    bri_progress::Unit::Steps,
+                    None,
+                );
+                let permit = load_limit.acquire_owned().await?;
+                let prepared_map = map.clone();
+                let visual = tokio::task::spawn_blocking(move || -> Result<Prepared> {
+                    let _permit = permit;
+                    prepare_map(
+                        &paths,
+                        &prepared_map,
+                        selected,
+                        &catalog,
+                        &light_cache,
+                        lighting,
+                    )
+                })
+                .await??;
+                if let Ok(mut slot) = early_out.lock() {
+                    *slot = Some((map, visual));
+                }
+                Ok(())
+            };
+            let joined = Client::connect_arriving(
                 address,
                 pin,
                 player,
@@ -959,6 +1102,11 @@ impl App {
                                         || fresh.bot_extras != paths.bot_extras
                                 },
                             )
+                                // A body the host's players may wear (an
+                                // imported Mario) loads with the content.
+                                || fetched.iter().any(|f| {
+                                    !crate::avatar::body_models(&f.dir, &f.package.id).is_empty()
+                                })
                         });
                     if reload {
                         *needs_add_ons.lock().map_err(|_| {
@@ -969,6 +1117,8 @@ impl App {
                     mods = Some(catalog);
                     Ok(packages)
                 },
+                ticket,
+                ready,
             )
             .await;
             let client = match joined {
@@ -1025,17 +1175,24 @@ impl App {
                 LOADABLE_MAPS.contains(&map.as_str()),
                 "Server map has no supported native render bundle yet"
             );
-            reporting.begin(
-                bri_progress::Stage::LoadingMap,
-                bri_progress::Unit::Steps,
-                None,
-            );
-            let permit = load_limit.acquire_owned().await?;
-            let visual = tokio::task::spawn_blocking(move || -> Result<Prepared> {
-                let _permit = permit;
-                prepare_map(&paths, &map, selected, &catalog, &light_cache, lighting)
-            })
-            .await??;
+            let early = early_scene.lock().ok().and_then(|mut slot| slot.take());
+            let visual = match early {
+                Some((prepared, visual)) if prepared == map => visual,
+                // The host changed maps while this player loaded.
+                _ => {
+                    reporting.begin(
+                        bri_progress::Stage::LoadingMap,
+                        bri_progress::Unit::Steps,
+                        None,
+                    );
+                    let permit = load_limit.acquire_owned().await?;
+                    tokio::task::spawn_blocking(move || -> Result<Prepared> {
+                        let _permit = permit;
+                        prepare_map(&paths, &map, selected, &catalog, &light_cache, lighting)
+                    })
+                    .await??
+                }
+            };
             scene_tx.send(visual).context("Loading cancelled")?;
             Ok(Connected {
                 client,
@@ -1070,6 +1227,7 @@ impl App {
             identity_changed,
             add_ons,
             joined: joined_list,
+            arrival: arrival_slot,
         });
         Ok(())
     }

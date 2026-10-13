@@ -6,6 +6,7 @@ use bri_console::Clamp;
 use bri_content::{
     animation::{Channels, Layer, sample_layers_with_transition},
     avatar::{Appearance, Outfit, Package, Rig},
+    body::{Animations, Role, RoleClips, Sockets},
 };
 use bri_render::scene::{
     AlphaMode, GpuInstances, GpuScene, Material, SceneData, SceneImage, SceneRenderer,
@@ -22,6 +23,9 @@ pub struct AvatarAssets {
     pub rig: Rig,
     images: BTreeMap<String, SceneImage>,
     detail: usize,
+    /// A body's details by distance: each visible detail's screen height
+    /// in pixels and index, tallest first. Empty for a body of one detail.
+    lods: Vec<(f32, usize)>,
     /// Bodies other than the Blockhead, by the archetype model that draws
     /// them: `HorseArmor`'s horse.dts ([`HORSE_SHAPE`]), and each enabled
     /// Add-On's own player model (the Shark's `shark.dts`).
@@ -34,6 +38,13 @@ pub struct AvatarAssets {
     mount_nodes: [Option<usize>; 32],
     /// The node tree Add-Ons with `avatar.pose` see.
     tree: Arc<NodeTree>,
+    /// An imported glTF `body`: its hands are fitted to hold as the
+    /// Blockhead's do ([`bri_content::hold`]). A converted v20 shape keeps
+    /// the mounts its artist placed.
+    fitted: bool,
+    /// The Blockhead's hip while it sits ([`bri_content::hold::sit_hip`]):
+    /// where a seat puts a fitted body's hip.
+    seat_hip: Option<Vec3>,
 }
 /// Farthest a posed node may be put from the body's feet; a pose further
 /// away is not drawn.
@@ -282,7 +293,15 @@ impl AvatarAssets {
             rig,
             images,
             detail,
+            lods: Vec::new(),
             bodies: BTreeMap::new(),
+            fitted: false,
+            seat_hip: None,
+        })
+        .map(|mut assets: Self| {
+            assets.seat_hip =
+                bri_content::hold::sit_hip(&assets.rig.shape, assets.rig.sequence(SIT));
+            assets
         })
     }
     /// Load `HorseArmor`'s shape, sequence aliases and paint textures from
@@ -385,7 +404,10 @@ impl AvatarAssets {
             rig,
             images,
             detail,
+            lods: Vec::new(),
             bodies: BTreeMap::new(),
+            fitted: false,
+            seat_hip: None,
         });
         self.bodies.insert(HORSE_SHAPE.into(), horse);
         Ok(())
@@ -399,24 +421,13 @@ impl AvatarAssets {
             let Ok(dir) = bri_package::packages::package_dir(root, entry) else {
                 continue;
             };
-            let Ok(archetypes) = std::fs::read_dir(dir.join("assets/archetypes")) else {
-                continue;
-            };
-            let mut models: Vec<String> = archetypes
-                .flatten()
-                .filter_map(|e| std::fs::read(e.path()).ok())
-                .filter_map(|b| serde_json::from_slice::<serde_json::Value>(&b).ok())
-                .filter_map(|a| a["model"].as_str().map(str::to_owned))
-                .filter(|m| m.starts_with(&format!("{}:asset/", entry.id)))
-                .collect();
-            models.sort();
-            models.dedup();
-            for model in models {
+            let models = body_models(&dir, &entry.id);
+            for (model, file) in models {
                 if self.bodies.contains_key(&model) {
                     continue;
                 }
                 // One that does not load leaves its players Blockheads.
-                match self.package_body(&dir, &model) {
+                match self.package_body(&dir, &model, file.as_deref()) {
                     Ok(body) => {
                         self.bodies.insert(model, Box::new(body));
                     }
@@ -427,8 +438,10 @@ impl AvatarAssets {
             }
         }
     }
-    /// The body `model` (`<package>:asset/<file>`) in the package at `dir`.
-    fn package_body(&self, dir: &Path, model: &str) -> Result<Self> {
+    /// The body `model` in the package at `dir`: a `body` in its `file`, or
+    /// an asset (`<package>:asset/<file>`) its `assets/content.json` lists.
+    /// Its textures are assets that file lists.
+    fn package_body(&self, dir: &Path, model: &str, shape_file: Option<&str>) -> Result<Self> {
         let content: serde_json::Value =
             serde_json::from_slice(&std::fs::read(dir.join("assets/content.json"))?)?;
         let file = |id: &str| {
@@ -441,9 +454,14 @@ impl AvatarAssets {
                 .map(str::to_owned)
                 .with_context(|| format!("{id} is not in its package"))
         };
+        let fitted = shape_file.is_some();
+        let shape_file = match shape_file {
+            Some(f) => f.to_owned(),
+            None => file(model)?,
+        };
         let root = dir.canonicalize()?;
         let shape: bri_content::shape::Shape = serde_json::from_slice(
-            &crate::materials::read_resource(&root, &file(model)?, 32 << 20)?,
+            &crate::materials::read_resource(&root, &shape_file, 32 << 20)?,
         )?;
         shape.validate()?;
         let package = model.split(':').next().unwrap_or_default();
@@ -477,6 +495,20 @@ impl AvatarAssets {
             .iter()
             .position(|d| !d.collision)
             .context("no visible detail")?;
+        let mut lods: Vec<(f32, usize)> = shape
+            .details
+            .iter()
+            .enumerate()
+            .filter(|(_, d)| {
+                !d.collision
+                    && (0.0..crate::items::FIRST_PERSON_DETAIL).contains(&d.pixel_threshold)
+            })
+            .map(|(i, d)| (d.pixel_threshold, i))
+            .collect();
+        lods.sort_by(|a, b| b.0.total_cmp(&a.0));
+        if lods.len() < 2 {
+            lods.clear();
+        }
         let sequences = shape
             .animations
             .iter()
@@ -490,12 +522,8 @@ impl AvatarAssets {
             sources: Vec::new(),
             omissions: Vec::new(),
         };
-        for needed in ["root", "run", "back", "side", "crouch", "look", "headside"] {
-            ensure!(
-                rig.sequence(needed).is_some(),
-                "it lacks the {needed} sequence"
-            );
-        }
+        // Clips it lacks fall back or leave their layer out
+        // (`RoleClips`); a body with none stands in its bind pose.
         let (node_index, mount_nodes) = node_indices(&rig);
         Ok(Self {
             tree: node_tree(&rig),
@@ -506,7 +534,10 @@ impl AvatarAssets {
             rig,
             images,
             detail,
+            lods,
             bodies: BTreeMap::new(),
+            fitted,
+            seat_hip: self.seat_hip,
         })
     }
     /// Whether `model` draws a body other than the Blockhead.
@@ -537,6 +568,21 @@ impl AvatarAssets {
             .into()
         } else {
             let selected = self.package.resolve(&appearance)?;
+            // An object named as a Blockhead part or colour slot is that
+            // part: painted, or hidden when the outfit leaves it out. Any
+            // other object (an imported model's own) draws with its own
+            // textures, untinted.
+            let part = |name: &str| {
+                selected.nodes.contains_key(name)
+                    || appearance.colors.contains_key(name)
+                    || self.package.defaults.colors.contains_key(name)
+                    || self
+                        .package
+                        .parts
+                        .values()
+                        .flatten()
+                        .any(|p| p.eq_ignore_ascii_case(name))
+            };
             horse
                 .object_names
                 .iter()
@@ -550,7 +596,9 @@ impl AvatarAssets {
                         .colors
                         .get(slot)
                         .or_else(|| selected.nodes.get(name))
-                        .map(|c| (name.clone(), *c))
+                        .copied()
+                        .or_else(|| (!part(name)).then_some([1.0; 4]))
+                        .map(|c| (name.clone(), c))
                 })
                 .collect()
         };
@@ -574,8 +622,36 @@ impl AvatarAssets {
             let image = data.images.len();
             data.images.push(horse.images[&name].clone());
             materials.push(data.materials.len());
-            data.materials
-                .push(Material::brick_overlay(format!("{model}/{name}"), image));
+            let name = format!("{model}/{name}");
+            // The horse lays its texture over its chest colour. Any other
+            // body draws as a held item does (`items::native_shape_scene`):
+            // a texture with a translucent texel over its colour, one with
+            // none the texture times the world's light, untinted. As an
+            // overlay an opaque texture would ignore the light entirely.
+            let overlay = model == HORSE_SHAPE
+                || (crate::items::translucent_texel(&data.images[image])
+                    && source.blend == "opaque");
+            let mut material = if overlay {
+                Material::brick_overlay(name, image)
+            } else {
+                Material::vertex_lit(name, image)
+            };
+            if !overlay {
+                // A lit texture is a colour (sRGB); an overlay's is mixed raw.
+                data.images[image].srgb = true;
+                material.untinted = source.blend == "opaque";
+            }
+            if model != HORSE_SHAPE && source.blend == "alpha" {
+                material.alpha = AlphaMode::Blend;
+            }
+            if source.unlit {
+                material.kind = if overlay {
+                    bri_render::scene::MaterialKind::UnlitOverlay
+                } else {
+                    bri_render::scene::MaterialKind::Unlit
+                };
+            }
+            data.materials.push(material);
         }
         let translucent_materials: Vec<_> = materials
             .iter()
@@ -600,6 +676,19 @@ impl AvatarAssets {
         }
     }
     /// The rig and textures this mesh draws with.
+    /// The detail a body draws at `screen_height` pixels tall: the most
+    /// detailed one it is tall enough for, the least detailed below them
+    /// all. Unknown heights (no frame drawn yet) draw the full detail.
+    fn detail_at(&self, screen_height: Option<f32>) -> usize {
+        match (screen_height, self.lods.last()) {
+            (Some(px), Some(&(_, least))) => self
+                .lods
+                .iter()
+                .find(|(threshold, _)| px >= *threshold)
+                .map_or(least, |(_, d)| *d),
+            _ => self.detail,
+        }
+    }
     fn for_mesh(&self, mesh: &AvatarMesh) -> &AvatarAssets {
         mesh.model
             .as_ref()
@@ -681,6 +770,7 @@ impl AvatarAssets {
             pending: None,
             defer_mesh: false,
             instanced: false,
+            screen_height: None,
             straddle: None,
             instance: None,
             drawn_pose: None,
@@ -706,6 +796,11 @@ impl AvatarAssets {
             unacted_nodes: Vec::new(),
             wants_unacted: true,
             model_transform: Mat4::IDENTITY,
+            kind: BodyKind::default(),
+            roles: None,
+            fits: None,
+            held: ([false; 2], 0.0),
+            skipped: Vec::new(),
         }
     }
 }
@@ -729,6 +824,9 @@ impl AvatarMesh {
 pub struct AvatarMesh {
     /// The body drawn instead of the Blockhead ([`AvatarAssets::body_mesh`]).
     pub model: Option<String>,
+    /// How tall the body last drew on screen, in pixels: a body with a
+    /// distant detail draws it when small. None draws the full detail.
+    pub screen_height: Option<f32>,
     posed_nodes: Vec<Mat4>,
     /// While Add-On code poses the body (`override_nodes`), the pose the
     /// animation gave it; empty otherwise. Gameplay-facing nodes (the eye)
@@ -795,6 +893,167 @@ pub struct AvatarMesh {
     /// Body nodes the held images hide (`bri_weapons::Image::hide_nodes`),
     /// lower case; the outfit keeps them for when the image goes.
     hidden_nodes: Vec<String>,
+    /// How the player's archetype fits this body ([`BodyKind`]).
+    kind: BodyKind,
+    /// The body's clip for each animation role, resolved against its rig
+    /// the first time it is posed after `kind` changes.
+    roles: Option<Arc<RoleClips>>,
+    /// How a fitted body holds with each hand, worked out with `roles`.
+    fits: Option<Arc<Fits>>,
+    /// The hands the last pose held something up in, and its aim's pitch:
+    /// a fitted body's held hand points along the aim.
+    held: ([bool; 2], f32),
+    /// Clips the last pose asked for that the body lacks, left out.
+    skipped: Vec<String>,
+}
+
+/// How a fitted body ([`AvatarAssets::fitted`]) holds with each hand: the
+/// turn that lines its hand socket up with the Blockhead's `Mount0`, the
+/// raise for an arm it has no aim clip for and where the hand holds from
+/// its shoulder ([`bri_content::hold::fit`]).
+#[derive(Debug, Default, PartialEq)]
+struct Fits {
+    hands: [Option<bri_content::hold::Fit>; 2],
+    /// How far a rider is moved (model frame, unscaled) so its hip sits
+    /// where the Blockhead's does in its `sit` pose: every seat is
+    /// authored for the Blockhead.
+    seat: Option<Vec3>,
+}
+
+/// How a player's archetype fits the mesh drawn for it: where its sockets
+/// are, which clips play each animation role, and whether the mesh is the
+/// body at all.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct BodyKind {
+    pub sockets: Sockets,
+    pub animations: Animations,
+    /// The archetype draws a box model or no body: this mesh is a hidden
+    /// Blockhead that only times the poses (sitting down, getting up), and
+    /// none of its nodes is the body's. Sockets are offsets, or missing.
+    pub stand_in: bool,
+    /// Where a stand-in body sees from standing and seated (feet at the
+    /// origin, facing -Z, unscaled): its archetype's eyes.
+    pub eye: Vec3,
+    pub sit_eye: Vec3,
+    /// The archetype's speed for each locomotion role's clip at 1x
+    /// (`Look::ground_speeds`).
+    pub ground_speeds: bri_content::body::GroundSpeeds,
+    /// The fastest a locomotion clip plays (`Look::max_time_scale`); 0
+    /// takes v20's 1.5.
+    pub max_time_scale: f32,
+}
+impl BodyKind {
+    /// The archetype's fit for a mesh: `stand_in` when it draws a box model
+    /// or no body.
+    pub fn of(archetype: &bri_sim::archetype::Archetype, stand_in: bool) -> Self {
+        let m = &archetype.movement;
+        Self {
+            sockets: archetype.sockets.clone(),
+            animations: archetype.look.animations.clone(),
+            stand_in,
+            eye: Vec3::new(0.0, m.stand_eye, -m.eye_forward),
+            sit_eye: Vec3::new(0.0, m.sit_eye, -m.sit_eye_forward),
+            ground_speeds: archetype.look.ground_speeds.clone(),
+            max_time_scale: archetype.look.max_time_scale,
+        }
+    }
+    /// How fast `clip` plays for `role` while the body moves at `velocity`
+    /// (its own frame, facing -Z): v20's `Player::updateAnimation` plays a
+    /// locomotion clip at the speed the body covers the ground along the
+    /// clip's way, `|v . dir| / speed`, up to `maxTimeScale`. The speed is
+    /// the archetype's for the role, else the clip's own ground motion; a
+    /// clip with neither, and every other role, plays at 1x.
+    pub fn time_scale(
+        &self,
+        clip: &bri_content::shape::Animation,
+        role: Role,
+        velocity: Vec3,
+    ) -> f32 {
+        let Some(axis) = role.ground_axis() else {
+            return 1.0;
+        };
+        let ground = clip
+            .ground_translations
+            .last()
+            .map(|&t| Vec3::from(t))
+            .filter(|t| t.is_finite() && clip.duration > 0.0 && t.length() > 1e-4);
+        let (speed, dir) = match self.ground_speeds.get(role.name()) {
+            Some(&speed) => (speed, Vec3::from(axis)),
+            None => match ground {
+                Some(t) => (t.length() / clip.duration, t.normalize()),
+                None => return 1.0,
+            },
+        };
+        let max = if self.max_time_scale > 0.0 {
+            self.max_time_scale
+        } else {
+            bri_sim::archetype::MAX_TIME_SCALE
+        };
+        let scale = (velocity.dot(dir) / speed).abs().min(max);
+        if scale.is_finite() { scale } else { 1.0 }
+    }
+    /// What the body lacks, one line each: sockets for any body, and for a
+    /// rigged one the animation roles it has no clip for.
+    pub fn report(&self, roles: Option<&RoleClips>) -> Vec<String> {
+        let mut lines = Vec::new();
+        if self.stand_in {
+            for (name, socket) in [
+                ("right_hand", self.sockets.hand(0)),
+                ("left_hand", self.sockets.hand(1)),
+            ] {
+                if socket.is_some_and(|s| s.node.is_some()) {
+                    lines.push(format!(
+                        "no `{name}` socket offset (a box body has no nodes), so items held in that hand are hidden"
+                    ));
+                }
+            }
+            if self.sockets.seat.as_ref().is_none_or(|s| s.node.is_some()) {
+                lines.push(
+                    "no `seat` socket offset, so it sits upright without folding its legs".into(),
+                );
+            }
+        }
+        if let Some(roles) = roles.filter(|_| !self.stand_in) {
+            lines.extend(roles.report());
+        }
+        lines
+    }
+}
+/// Log once what a body lacks for the archetype drawn with it
+/// ([`AvatarMesh::body_report`]), as an Add-On fault naming the archetype
+/// and its model: one line per missing socket or animation role.
+pub fn report_body(archetype: &str, model: &str, mesh: &mut AvatarMesh, assets: &AvatarAssets) {
+    static REPORTED: std::sync::Mutex<std::collections::BTreeSet<(String, String)>> =
+        std::sync::Mutex::new(std::collections::BTreeSet::new());
+    // The Blockhead is the reference every default names.
+    if mesh.model.is_none() && !mesh.kind.stand_in {
+        return;
+    }
+    let key = (archetype.to_owned(), model.to_owned());
+    let Ok(mut reported) = REPORTED.lock() else {
+        return;
+    };
+    if reported.contains(&key) {
+        return;
+    }
+    let lines = mesh.body_report(assets);
+    reported.insert(key);
+    for line in lines {
+        crate::cosmetic::add_on_fault(archetype, model, line);
+    }
+}
+
+/// How a pose's arms hold on after its clips ([`AvatarMesh::fit_hands`]).
+#[derive(Clone, Copy, Debug, Default)]
+struct Holds {
+    /// Hands raised to hold an item.
+    raised: [bool; 2],
+    /// The aim's pitch, up positive.
+    pitch: f32,
+    /// [`AvatarAnimationInput::support`].
+    support: Option<Vec3>,
+    /// [`AvatarAnimationInput::hand_holds`].
+    seat: [Option<Vec3>; 2],
 }
 
 /// Authored right/left hand readiness selected by mounted vanilla images.
@@ -859,6 +1118,14 @@ pub struct AvatarAnimationInput {
     /// A seated rider's full mount rotation, in place of the upright yaw,
     /// so they sit flush with a tilted seat.
     pub mount_rotation: Option<Quat>,
+    /// Where a seated rider's right and left hands hold on, in the world
+    /// (a seat's `hands`): each arm reaches its hand there after the clip
+    /// pose ([`reach_hands`]).
+    pub hand_holds: [Option<Vec3>; 2],
+    /// Where the off hand holds what the right hand holds in both hands,
+    /// in the right hand's frame (`ItemAssets::image_support`). A fitted
+    /// body reaches its left hand there.
+    pub support: Option<Vec3>,
     /// Script threads 0 and 1 (`playThread(0 or 1, ...)`): body animations
     /// a package plays, such as a hit's flinch. Each holds until replaced
     /// or stopped by `root`.
@@ -880,6 +1147,27 @@ pub struct AvatarAnimationInput {
     /// The fraction of the body in liquid, for `pickActionAnimation`'s
     /// water rules.
     pub water_coverage: f32,
+    /// The clip the body's archetype plays for its movement controller's
+    /// current intent (`Look::intent_clips`): Mario's triple jump or
+    /// skid. It takes the place of the run, jump and fall clips while the
+    /// model has it; death, sitting and swimming still win.
+    pub intent_clip: Option<String>,
+}
+
+pub use bri_content::hold::reach as reach_hands;
+
+/// A clip name as the action thread holds it. Intent clips come from
+/// archetype data, a bounded table, so each distinct name is kept once.
+fn interned(name: &str) -> &'static str {
+    static NAMES: std::sync::Mutex<std::collections::BTreeSet<&'static str>> =
+        std::sync::Mutex::new(std::collections::BTreeSet::new());
+    let mut names = NAMES.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(known) = names.get(name) {
+        return known;
+    }
+    let leaked: &'static str = Box::leak(name.to_owned().into_boxed_str());
+    names.insert(leaked);
+    leaked
 }
 
 /// Which body a drawn player is, and whether it lies dead, at the tick of
@@ -1278,22 +1566,306 @@ impl AvatarMesh {
         }
         self.animated_nodes = animated;
     }
-    /// `world_node` of `Mount<n>` (n below 32), without building its name.
+    /// How the player's archetype fits this mesh. A change re-resolves the
+    /// animation roles at the next pose.
+    pub fn set_body_kind(&mut self, kind: BodyKind) {
+        if self.kind != kind {
+            self.kind = kind;
+            self.roles = None;
+            self.fits = None;
+        }
+    }
+    pub fn body_kind(&self) -> &BodyKind {
+        &self.kind
+    }
+    /// The body's clip for each role: the archetype's names (a stand-in
+    /// keeps the Blockhead's), then the Blockhead's, then the fallbacks.
+    fn roles(&mut self, assets: &AvatarAssets) -> Arc<RoleClips> {
+        let kind = &self.kind;
+        self.roles
+            .get_or_insert_with(|| {
+                let none = Animations::new();
+                let animations = if kind.stand_in {
+                    &none
+                } else {
+                    &kind.animations
+                };
+                Arc::new(RoleClips::resolve(animations, |clip| {
+                    assets.rig.sequence(clip).is_some()
+                }))
+            })
+            .clone()
+    }
+    /// How the body holds with each hand ([`Fits`]): nothing for the
+    /// Blockhead, a v20 body or a stand-in. Its aim pose is the host's
+    /// (`bri_sim::session::body_grips`): idle, the hand's aim clip at its
+    /// end and the look level, with the arm raised where it has no aim clip.
+    fn fits(&mut self, assets: &AvatarAssets) -> Arc<Fits> {
+        if let Some(fits) = &self.fits {
+            return fits.clone();
+        }
+        let roles = self.roles(assets);
+        let assets = assets.for_mesh(self);
+        let mut fits = Fits::default();
+        if assets.fitted && !self.kind.stand_in {
+            let clip = |role: Role| assets.rig.sequence(roles.clip(role)?.0);
+            let parents: Vec<Option<usize>> =
+                assets.rig.shape.nodes.iter().map(|n| n.parent).collect();
+            let ends = [0, 1].map(|n| self.mount_index(assets, n));
+            for (hand, aim) in [Role::AimRight, Role::AimLeft].into_iter().enumerate() {
+                let Some(end) = ends[hand] else {
+                    continue;
+                };
+                let mut layers: Vec<Layer<'_>> = [
+                    (clip(Role::Idle), 0.0),
+                    (clip(aim), 1.0),
+                    (clip(Role::Look), 0.5),
+                ]
+                .into_iter()
+                .filter_map(|(animation, at)| {
+                    let animation = animation?;
+                    Some(Layer {
+                        animation,
+                        time: animation.duration * at,
+                        weight: 1.0,
+                    })
+                })
+                .collect();
+                layers.sort_by_key(|l| (l.animation.additive, l.animation.priority));
+                let Ok(mut pose) =
+                    bri_content::animation::sample_layers(&assets.rig.shape, &layers)
+                else {
+                    continue;
+                };
+                let landmark = ends[1 - hand].or_else(|| assets.node("eye"));
+                if let Some(fit) = bri_content::hold::fit(
+                    &parents,
+                    &mut pose.nodes,
+                    end,
+                    landmark,
+                    clip(aim).is_none(),
+                    hand == 0,
+                ) {
+                    fits.hands[hand] = Some(fit);
+                }
+            }
+            let hip = bri_content::hold::sit_hip(&assets.rig.shape, clip(Role::Sit));
+            fits.seat = assets
+                .seat_hip
+                .zip(hip)
+                .map(|(blockhead, own)| blockhead - own)
+                .filter(|shift| shift.is_finite() && shift.length() < 8.0);
+        }
+        let fits = Arc::new(fits);
+        self.fits = Some(fits.clone());
+        fits
+    }
+    /// What the body lacks for the archetype drawn with it, one line each:
+    /// a socket whose node the rig does not have (or, on a box body, any
+    /// socket that names a node), and the animation roles it has no clip
+    /// for. Empty for the Blockhead.
+    pub fn body_report(&mut self, assets: &AvatarAssets) -> Vec<String> {
+        let assets = assets.for_mesh(self);
+        let roles = self.roles(assets);
+        let mut lines = self.kind.report(Some(&roles));
+        if !self.kind.stand_in {
+            let sockets = &self.kind.sockets;
+            for (name, socket) in [
+                ("right_hand", sockets.hand(0)),
+                ("left_hand", sockets.hand(1)),
+                ("eye", Some(sockets.eye())),
+                ("seat", sockets.seat.clone()),
+            ] {
+                if let Some(node) = socket.and_then(|s| s.node)
+                    && assets.node(&node).is_none()
+                {
+                    lines.push(format!(
+                        "its model has no `{node}` node for the `{name}` socket, so {}",
+                        match name {
+                            "eye" => "it sees from its archetype's eye height",
+                            "seat" => "the seat socket is unused",
+                            _ => "items held in that hand are hidden",
+                        }
+                    ));
+                }
+            }
+        }
+        lines
+    }
+    /// Clips the last pose asked for that the body does not have (a
+    /// script's `playThread` of a clip it lacks), left out of the pose.
+    pub fn skipped_clips(&self) -> &[String] {
+        &self.skipped
+    }
+    /// The node index of image mount point `n`: the hand sockets' nodes
+    /// for 0 and 1, `Mount<n>` otherwise. None on a stand-in, whose nodes
+    /// are not the body's.
+    fn mount_index(&self, assets: &AvatarAssets, n: usize) -> Option<usize> {
+        if self.kind.stand_in {
+            return None;
+        }
+        let assets = assets.for_mesh(self);
+        match self.kind.sockets.hand(n as u32) {
+            Some(socket) => assets.node(socket.node.as_deref()?),
+            None => *assets.mount_nodes.get(n)?,
+        }
+    }
+    /// `world_node` of image mount point `n` (n below 32): a hand socket's
+    /// node with its offset for 0 and 1, `Mount<n>` for the others. None
+    /// when the body has no such node (a box body has none).
     pub fn mount_node(&self, assets: &AvatarAssets, n: usize) -> Option<Mat4> {
-        let index = (*assets.for_mesh(self).mount_nodes.get(n)?)?;
-        self.posed_nodes
-            .get(index)
-            .map(|node| self.model_transform * *node)
+        let index = self.mount_index(assets, n)?;
+        let offset = match self.kind.sockets.hand(n as u32) {
+            Some(socket) => Vec3::from(socket.offset),
+            None => Vec3::ZERO,
+        };
+        let node = *self.posed_nodes.get(index)?;
+        let hand = match self.held_hand(n) {
+            // Where the arm put it, pointing along the aim.
+            Some(aim) => Mat4::from_rotation_translation(aim, node.w_axis.truncate()),
+            None => node * self.hand_turn(n),
+        };
+        Some(self.model_transform * hand * Mat4::from_translation(offset))
+    }
+    /// A fitted body's hand `n` while it holds something up: how it turns
+    /// in the body's frame, along the aim ([`bri_content::hold::Raise::aim`]).
+    fn held_hand(&self, n: usize) -> Option<Quat> {
+        let (held, pitch) = self.held;
+        let fit = self.fits.as_ref()?.hands.get(n)?.as_ref()?;
+        (*held.get(n)? && fit.hold.is_some()).then(|| bri_content::hold::Raise::aim(pitch))
+    }
+    /// The turn after a fitted body's hand socket node that lines it up
+    /// with the Blockhead's `Mount0` ([`bri_content::hold::Fit`]).
+    fn hand_turn(&self, n: usize) -> Mat4 {
+        self.fits
+            .as_ref()
+            .and_then(|f| f.hands.get(n)?.as_ref())
+            .map_or(Mat4::IDENTITY, |fit| Mat4::from_quat(fit.correction))
+    }
+    /// Where a fitted body's hand `n` holds in first person, in the eye's
+    /// frame (the camera, scaled with the body): where the Blockhead's
+    /// aiming hand is from its eye ([`bri_content::hold::FIRST_PERSON_HAND`]).
+    /// A first-person image without an eye offset is drawn there, so a
+    /// gun sits on screen as it does for a Blockhead and turns with the
+    /// view, whatever the body's size or arm animation.
+    /// `None` for the Blockhead and v20 bodies, which hold in the hand.
+    pub fn first_person_hand(&self, n: usize) -> Option<Mat4> {
+        self.fits.as_ref()?.hands.get(n)?.as_ref()?;
+        let offset = self
+            .kind
+            .sockets
+            .hand(n as u32)
+            .map_or(Vec3::ZERO, |s| Vec3::from(s.offset));
+        let mut at = bri_content::hold::FIRST_PERSON_HAND;
+        if n == 1 {
+            at.x = -at.x;
+        }
+        let scale = self.model_transform.x_axis.truncate().length();
+        let local = Mat4::from_scale(Vec3::splat(scale))
+            * Mat4::from_rotation_translation(bri_content::hold::AIM_HAND, at)
+            * Mat4::from_translation(offset);
+        local.is_finite().then_some(local)
+    }
+    /// Where image mount point `n` attaches in the world. A hand socket
+    /// that is an offset (a box body's hand) holds what it carries pitched
+    /// with the aim, as a raised arm would; one on a node follows the node
+    /// as the arm animates. `None` when the body has nowhere for it.
+    pub fn mount_socket(&self, assets: &AvatarAssets, n: usize, aim_pitch: f32) -> Option<Mat4> {
+        match self.kind.sockets.hand(n as u32) {
+            Some(socket) if socket.node.is_none() && aim_pitch.is_finite() => Some(
+                self.seated_frame()
+                    * Mat4::from_translation(Vec3::from(socket.offset))
+                    * Mat4::from_rotation_x(aim_pitch),
+            ),
+            _ => self.mount_node(assets, n),
+        }
     }
     /// How the playing thread-2/3 actions (a brick shift, plant, recoil,
     /// swing) move `Mount<n>`, in that mount's own frame: the rest of the
     /// pose (locomotion, armReady, look) is left out. None while no action
     /// moves it. A first-person image rides this on its eye offset.
     pub fn mount_action(&self, assets: &AvatarAssets, n: usize) -> Option<Mat4> {
-        let index = (*assets.for_mesh(self).mount_nodes.get(n)?)?;
-        let rest = self.unacted_nodes.get(index)?;
-        let moved = rest.inverse() * *self.posed_nodes.get(index)?;
+        let index = self.mount_index(assets, n)?;
+        let rest = *self.unacted_nodes.get(index)? * self.hand_turn(n);
+        let moved = rest.inverse() * *self.posed_nodes.get(index)? * self.hand_turn(n);
         (moved.is_finite() && !moved.abs_diff_eq(Mat4::IDENTITY, 1e-6)).then_some(moved)
+    }
+    /// How far into the `sit` pose the body is: 1 seated, easing from 0
+    /// over one action transition as it sits down and back as it gets up.
+    pub fn sit_weight(&self) -> f32 {
+        if self.mode == SIT {
+            match (&self.transition, self.last_time) {
+                (Some((_, start)), Some(now)) => {
+                    ((now - start) / TRANSITION_TIME).clamped(0.0, 1.0) as f32
+                }
+                _ => 1.0,
+            }
+        } else {
+            self.getting_up().unwrap_or(0.0)
+        }
+    }
+    /// A stand-in body's model frame with the sit applied: lowered and set
+    /// back by as much as its archetype's seated eye is from its standing
+    /// one, so the drawn head is where the player sees from. Any other
+    /// body's model frame as posed.
+    pub fn seated_frame(&self) -> Mat4 {
+        if !self.kind.stand_in {
+            return self.model_transform;
+        }
+        let shift = (self.kind.sit_eye - self.kind.eye) * self.sit_weight();
+        self.model_transform * Mat4::from_translation(shift)
+    }
+    /// How a stand-in's box body is drawn: the seated frame, and while it
+    /// sits, the boxes below its `seat` socket (the hip) folded forward
+    /// with the sit. A body with no seat offset sits without folding.
+    pub fn box_pose(&self) -> crate::packages::BoxPose {
+        let hip = self
+            .kind
+            .sockets
+            .seat
+            .as_ref()
+            .filter(|s| s.node.is_none())
+            .map(|s| Vec3::from(s.offset));
+        crate::packages::BoxPose {
+            frame: self.seated_frame(),
+            hip,
+            fold: std::f32::consts::FRAC_PI_2 * self.sit_weight(),
+        }
+    }
+    /// The body's eye in its model frame (feet, facing -Z, unscaled): the
+    /// eye socket's node and offset, else the archetype's eye, seated as
+    /// the body sits. `animated`: as the animation poses it, whatever
+    /// Add-On code draws.
+    pub fn eye_local(&self, assets: &AvatarAssets, animated: bool) -> Option<Vec3> {
+        let socket = self.kind.sockets.eye();
+        let offset = Vec3::from(socket.offset);
+        if !self.kind.stand_in
+            && let Some(index) = socket
+                .node
+                .as_deref()
+                .and_then(|n| assets.for_mesh(self).node(n))
+        {
+            let nodes = if animated && !self.animated_nodes.is_empty() {
+                &self.animated_nodes
+            } else {
+                &self.posed_nodes
+            };
+            return nodes
+                .get(index)
+                .map(|node| (*node * Mat4::from_translation(offset)).w_axis.truncate());
+        }
+        let standing = if socket.node.is_none() {
+            offset
+        } else {
+            self.kind.eye
+        };
+        let seated = standing + (self.kind.sit_eye - self.kind.eye);
+        Some(standing.lerp(seated, self.sit_weight()))
+    }
+    /// [`Self::eye_local`] in the world.
+    pub fn eye_world(&self, assets: &AvatarAssets, animated: bool) -> Option<Vec3> {
+        let local = self.eye_local(assets, animated)?;
+        Some(self.model_transform.transform_point3(local))
     }
     /// Engine-style world eye transform. The original Eye node supplies its
     /// sampled world position; the player supplies view rotation. The native
@@ -1309,7 +1881,7 @@ impl AvatarMesh {
         if !view_yaw.is_finite() || !view_pitch.is_finite() {
             return None;
         }
-        let eye_position = self.animated_world_node(assets, "Eye")?.w_axis.truncate();
+        let eye_position = self.eye_world(assets, true)?;
         let rotation = Quat::from_rotation_y(-view_yaw) * Quat::from_rotation_x(view_pitch);
         Some(Mat4::from_rotation_translation(rotation, eye_position))
     }
@@ -1328,6 +1900,23 @@ impl AvatarMesh {
         animation_input: &AvatarAnimationInput,
     ) -> Result<()> {
         let assets = assets.for_mesh(self);
+        let roles = self.roles(assets);
+        self.skipped.clear();
+        // A role's clip, played reversed when it stands in for walking
+        // back; `None` leaves the layer out.
+        let role = |role: Role| -> Option<(&bri_content::shape::Animation, bool)> {
+            let (clip, reversed) = roles.clip(role)?;
+            Some((assets.rig.sequence(clip)?, reversed))
+        };
+        // A clip asked for by the Blockhead's name (the engine's actions, a
+        // script's `playThread`): the body's clip for that role, or the
+        // body's own clip of that name.
+        let named = |name: &str| -> Option<&bri_content::shape::Animation> {
+            match Role::from_blockhead_clip(name) {
+                Some(r) => role(r).map(|(clip, _)| clip),
+                None => assets.rig.sequence(name),
+            }
+        };
         ensure!(
             time.is_finite()
                 && animation_input
@@ -1363,10 +1952,19 @@ impl AvatarMesh {
             || {
                 if self.model.is_some()
                     && animation_input.water_coverage > 0.0
-                    && assets.rig.sequence("swim").is_some()
+                    && role(Role::Swim).is_some()
                 {
                     LocomotionAction {
                         sequence: "swim",
+                        forward: true,
+                    }
+                } else if let Some(clip) = animation_input
+                    .intent_clip
+                    .as_deref()
+                    .filter(|clip| assets.rig.sequence(clip).is_some())
+                {
+                    LocomotionAction {
+                        sequence: interned(&clip.to_ascii_lowercase()),
                         forward: true,
                     }
                 } else {
@@ -1385,10 +1983,16 @@ impl AvatarMesh {
         // `Player::setActionThread` ignores a request for the running action,
         // even in the other play direction.
         let next = next.filter(|action| action.sequence != self.mode);
-        let clip = assets
-            .rig
-            .sequence(next.map_or(self.mode, |action| action.sequence))
-            .context("Missing avatar movement clip")?;
+        let movement_role =
+            |sequence: &str| Role::from_blockhead_clip(sequence).unwrap_or(Role::Idle);
+        // The body's clip for the movement; one standing in for walking
+        // back plays reversed. None: the body has no clip even to stand in,
+        // and holds its bind pose under the other layers.
+        let (clip, reversed) = match role(movement_role(next.map_or(self.mode, |a| a.sequence))) {
+            Some((clip, reversed)) => (Some(clip), reversed),
+            None => (None, false),
+        };
+        let duration = clip.map_or(0.0, |c| c.duration);
         if let Some(action) = next {
             if action.sequence == SIT {
                 self.stood_at = None;
@@ -1401,42 +2005,46 @@ impl AvatarMesh {
                 .filter(|_| !first)
                 .map(|channels| (channels, time));
             self.mode = action.sequence;
-            self.forward = action.forward;
-            self.phase = if action.forward { 0.0 } else { clip.duration };
-        } else if self.forward {
-            self.phase += elapsed;
+            self.forward = action.forward != reversed;
+            self.phase = if self.forward { 0.0 } else { duration };
         } else {
-            self.phase -= elapsed;
+            // A locomotion clip plays at the speed the body moves.
+            let rate = clip.map_or(1.0, |clip| {
+                let local = Quat::from_rotation_y(movement.body_yaw())
+                    * Vec3::from(movement.velocity)
+                    / movement.scale.max(0.01);
+                self.kind.time_scale(clip, movement_role(self.mode), local)
+            });
+            if self.forward {
+                self.phase += elapsed * rate;
+            } else {
+                self.phase -= elapsed * rate;
+            }
         }
         let mode = self.mode;
-        if clip.looping && clip.duration > 0.0 {
-            self.phase = self.phase.rem_euclid(clip.duration);
+        if clip.is_some_and(|c| c.looping) && duration > 0.0 {
+            self.phase = self.phase.rem_euclid(duration);
         } else {
-            self.phase = self.phase.clamped(0.0, clip.duration);
+            self.phase = self.phase.clamped(0.0, duration);
         }
         let mut layers = Vec::new();
-        layers.push(Layer {
-            animation: clip,
-            time: self.phase,
-            weight: 1.0,
-        });
+        if let Some(clip) = clip {
+            layers.push(Layer {
+                animation: clip,
+                time: self.phase,
+                weight: 1.0,
+            });
+        }
         // Native sequence priorities put armReady (14) over locomotion (12).
         // Custom rigs may author it as an additive overlay; the completed
         // stack below orders each rig's own sequence type appropriately.
-        let ready_name = match animation_input.held_tool_pose {
+        let ready_role = match animation_input.held_tool_pose {
             HeldToolPose::None => None,
-            HeldToolPose::Right => Some("armreadyright"),
-            HeldToolPose::Left => Some("armreadyleft"),
-            HeldToolPose::Both => Some("armreadyboth"),
+            HeldToolPose::Right => Some(Role::AimRight),
+            HeldToolPose::Left => Some(Role::AimLeft),
+            HeldToolPose::Both => Some(Role::AimBoth),
         };
-        let ready_clip = ready_name
-            .map(|name| {
-                assets
-                    .rig
-                    .sequence(name)
-                    .with_context(|| format!("Missing held-arm clip {name}"))
-            })
-            .transpose()?;
+        let ready_clip = ready_role.and_then(role).map(|(clip, _)| clip);
         if let Some(clip) = &ready_clip {
             layers.push(Layer {
                 animation: clip,
@@ -1444,18 +2052,16 @@ impl AvatarMesh {
                 weight: 1.0,
             });
         }
-        let crouch = assets
-            .rig
-            .sequence("crouch")
-            .context("Missing crouch clip")?;
-        self.crouch
-            .update(player.crouched, elapsed, crouch.duration);
-        if let Some(time) = self.crouch.time() {
-            layers.push(Layer {
-                animation: crouch,
-                time,
-                weight: 1.0,
-            });
+        if let Some((crouch, _)) = role(Role::Crouch) {
+            self.crouch
+                .update(player.crouched, elapsed, crouch.duration);
+            if let Some(time) = self.crouch.time() {
+                layers.push(Layer {
+                    animation: crouch,
+                    time,
+                    weight: 1.0,
+                });
+            }
         }
         // Thread-2/3 actions. An absolute one (a rule's `playThread(2,
         // armReadyBoth)` or `death1`) takes over the nodes it animates by
@@ -1475,10 +2081,11 @@ impl AvatarMesh {
             if name == "root" {
                 continue;
             }
-            let clip = assets
-                .rig
-                .sequence(&name)
-                .with_context(|| format!("Missing avatar action clip {}", action.sequence))?;
+            // A clip the body lacks is left out, not the whole pose.
+            let Some(clip) = named(&name) else {
+                self.skipped.push(name);
+                continue;
+            };
             let played = (time - action.started_at).max(0.0) as f32;
             if clip.additive {
                 additive_actions.push(Layer {
@@ -1513,35 +2120,32 @@ impl AvatarMesh {
         layers.extend(absolute_actions.iter().copied());
         order(&mut layers);
         let mut overlays = Vec::new();
-        if self.outfit.head_up {
-            let clip = assets
-                .rig
-                .sequence("headup")
-                .context("Missing pack head pose")?;
+        if self.outfit.head_up
+            && let Some((clip, _)) = role(Role::HeadUp)
+        {
             overlays.push(Layer {
                 animation: clip,
                 time: clip.duration,
                 weight: 1.0,
             });
         }
-        let look = assets.rig.sequence("look").context("Missing look clip")?;
-        overlays.push(Layer {
-            animation: look,
-            time: look_position(player.pitch, animation_input.look_limits) * look.duration,
-            weight: 1.0,
-        });
+        if let Some((look, _)) = role(Role::Look) {
+            overlays.push(Layer {
+                animation: look,
+                time: look_position(player.pitch, animation_input.look_limits) * look.duration,
+                weight: 1.0,
+            });
+        }
         // `Player::updateLookAnimation`: free look turns only the head,
         // mapped over the datablock's +/-maxLookAngle.
-        let headside = assets
-            .rig
-            .sequence("headside")
-            .context("Missing headside clip")?;
-        overlays.push(Layer {
-            animation: headside,
-            time: (0.5 + player.head_yaw / std::f32::consts::PI).clamped(0.0, 1.0)
-                * headside.duration,
-            weight: 1.0,
-        });
+        if let Some((headside, _)) = role(Role::HeadSide) {
+            overlays.push(Layer {
+                animation: headside,
+                time: (0.5 + player.head_yaw / std::f32::consts::PI).clamped(0.0, 1.0)
+                    * headside.duration,
+                weight: 1.0,
+            });
+        }
         layers.extend(overlays.iter().copied());
         unacted.extend(overlays);
         let acted = !absolute_actions.is_empty() || !additive_actions.is_empty();
@@ -1557,17 +2161,18 @@ impl AvatarMesh {
         // had when the action changed. Its channels end right after the
         // locomotion clip, or where the absolute layers end for additive jumps.
         let transition_at = |layers: &[Layer<'_>]| -> Result<usize> {
-            Ok(if clip.additive {
-                layers
+            Ok(match clip {
+                Some(clip) if !clip.additive => {
+                    layers
+                        .iter()
+                        .position(|layer| std::ptr::eq(layer.animation, clip))
+                        .context("Missing avatar movement layer")?
+                        + 1
+                }
+                _ => layers
                     .iter()
                     .position(|layer| layer.animation.additive)
-                    .unwrap_or(layers.len())
-            } else {
-                layers
-                    .iter()
-                    .position(|layer| std::ptr::eq(layer.animation, clip))
-                    .context("Missing avatar movement layer")?
-                    + 1
+                    .unwrap_or(layers.len()),
             })
         };
         let at = transition_at(&layers)?;
@@ -1599,25 +2204,87 @@ impl AvatarMesh {
             self.unacted_nodes = rest.nodes;
         }
         self.channels = Some(channels);
-        self.finish_pose(assets, player, pose, animation_input.mount_rotation)
+        // A fitted body raises an arm it has no aim clip for, and puts its
+        // off hand on what it holds in both.
+        let raised = match animation_input.held_tool_pose {
+            HeldToolPose::None => [false; 2],
+            HeldToolPose::Right => [true, false],
+            HeldToolPose::Left => [false, true],
+            HeldToolPose::Both => [true; 2],
+        };
+        let support = animation_input
+            .support
+            .filter(|_| animation_input.held_tool_pose == HeldToolPose::Both);
+        self.fits(assets);
+        self.finish_pose(
+            assets,
+            player,
+            pose,
+            animation_input.mount_rotation,
+            Holds {
+                raised,
+                pitch: player.pitch,
+                support,
+                seat: animation_input.hand_holds,
+            },
+        )
     }
 
     fn finish_pose(
         &mut self,
         assets: &AvatarAssets,
         player: &PlayerState,
-        pose: bri_content::animation::Pose,
+        mut pose: bri_content::animation::Pose,
         mount_rotation: Option<Quat>,
+        holds: Holds,
     ) -> Result<()> {
+        let hand_holds = holds.seat;
         // `setScale` scales the whole shape about the feet.
         let model_transform = Mat4::from_scale_rotation_translation(
             Vec3::splat(player.scale),
             mount_rotation
                 .filter(|q| q.is_finite() && q.is_normalized())
-                .unwrap_or_else(|| Quat::from_rotation_y(-player.yaw)),
+                .unwrap_or_else(|| Quat::from_rotation_y(-player.body_yaw())),
             Vec3::from(player.feet),
         );
+        // A rider sits with its hip where the Blockhead's is.
+        let model_transform = match self.fits.as_ref().and_then(|f| f.seat) {
+            Some(shift) if mount_rotation.is_some() => {
+                model_transform * Mat4::from_translation(shift)
+            }
+            _ => model_transform,
+        };
         self.model_transform = model_transform;
+        self.held = (holds.raised, holds.pitch);
+        self.fit_hands(assets, &mut pose.nodes, &holds);
+        if hand_holds.iter().any(Option::is_some) {
+            let inverse = model_transform.inverse();
+            let ends = [0, 1].map(|n| self.mount_index(assets, n));
+            let parents: Vec<Option<usize>> = assets
+                .for_mesh(self)
+                .rig
+                .shape
+                .nodes
+                .iter()
+                .map(|n| n.parent)
+                .collect();
+            if inverse.is_finite() && parents.len() == pose.nodes.len() {
+                for n in 0..2 {
+                    if let (Some(end), Some(hold)) = (ends[n], hand_holds[n])
+                        && hold.is_finite()
+                    {
+                        let other = ends[1 - n].or_else(|| assets.for_mesh(self).node("eye"));
+                        reach_hands(
+                            &parents,
+                            &mut pose.nodes,
+                            end,
+                            other,
+                            inverse.transform_point3(hold),
+                        );
+                    }
+                }
+            }
+        }
         self.posed_nodes.clone_from(&pose.nodes);
         self.animated_nodes.clear();
         if self.defer_mesh {
@@ -1625,6 +2292,78 @@ impl AvatarMesh {
             Ok(())
         } else {
             self.build_mesh(assets, &pose)
+        }
+    }
+    /// A fitted body's arms after its clips: each held hand it has no aim
+    /// clip for raised in front of the chest and pitched with the aim
+    /// ([`bri_content::hold::Raise`]), then the left hand on the support
+    /// point of what the right holds in both. Seat holds come after.
+    fn fit_hands(&self, assets: &AvatarAssets, nodes: &mut [Mat4], holds: &Holds) {
+        let Some(fits) = self.fits.clone() else {
+            return;
+        };
+        if fits.hands.iter().all(Option::is_none) {
+            return;
+        }
+        let assets = assets.for_mesh(self);
+        let parents: Vec<Option<usize>> = assets.rig.shape.nodes.iter().map(|n| n.parent).collect();
+        if parents.len() != nodes.len() {
+            return;
+        }
+        let ends = [0, 1].map(|n| self.mount_index(assets, n));
+        let landmark = |n: usize| ends[1 - n].or_else(|| assets.node("eye"));
+        let pitch = if holds.pitch.is_finite() {
+            holds.pitch
+        } else {
+            0.0
+        };
+        for (n, end) in ends.into_iter().enumerate() {
+            if !holds.raised[n] || holds.seat[n].is_some() {
+                continue;
+            }
+            let (Some(end), Some(fit)) = (end, &fits.hands[n]) else {
+                continue;
+            };
+            if let Some(raise) = fit.hold
+                && raise.shoulder < nodes.len()
+            {
+                let shoulder = nodes[raise.shoulder].w_axis.truncate();
+                bri_content::hold::reach(
+                    &parents,
+                    nodes,
+                    end,
+                    landmark(n),
+                    raise.target(shoulder, pitch),
+                );
+            }
+        }
+        if let (Some(point), Some(right), Some(left), Some(fit)) =
+            (holds.support, ends[0], ends[1], &fits.hands[0])
+            && holds.seat[1].is_none()
+            && point.is_finite()
+        {
+            let offset = self
+                .kind
+                .sockets
+                .hand(0)
+                .map_or(Vec3::ZERO, |s| Vec3::from(s.offset));
+            // The right hand as `mount_node` draws it.
+            let hand = if holds.raised[0] && fit.hold.is_some() {
+                Mat4::from_rotation_translation(
+                    bri_content::hold::Raise::aim(pitch),
+                    nodes[right].w_axis.truncate(),
+                )
+            } else {
+                nodes[right] * Mat4::from_quat(fit.correction)
+            };
+            let grip = hand * Mat4::from_translation(offset);
+            bri_content::hold::reach(
+                &parents,
+                nodes,
+                left,
+                Some(right),
+                grip.transform_point3(point),
+            );
         }
     }
     /// Write the posed vertices into `data`, reusing the last frame's
@@ -1647,7 +2386,7 @@ impl AvatarMesh {
             .collect();
         let binding = crate::avatar_mesh::Binding {
             shape: &assets.rig.shape,
-            detail: assets.detail,
+            detail: assets.detail_at(self.screen_height),
             materials: &self.materials,
             translucent_materials: &self.translucent_materials,
             unassigned_material: self.materials[0],
@@ -1930,6 +2669,7 @@ impl Preview {
                 speed_scale: 1.0,
                 tick: Default::default(),
                 tether: None,
+                controller: None,
             },
             time * 0.85,
             &AvatarAnimationInput {
@@ -2022,6 +2762,42 @@ pub fn appearance_from_prefs(package: &Package, prefs: &AvatarPrefs) -> Result<A
     let (appearance, _) = package.repaired(&appearance);
     package.resolve(&appearance)?;
     Ok(appearance)
+}
+
+/// The bodies the Add-On `id` at `dir` brings, each with its shape file when
+/// it names one: its `body` content (an imported glTF body), and the bodies
+/// its own player types name among its assets (a v20 import's, whose file
+/// `assets/content.json` gives).
+pub fn body_models(dir: &Path, id: &str) -> Vec<(String, Option<String>)> {
+    let mut models: Vec<(String, Option<String>)> =
+        std::fs::read(dir.join(bri_package::library::MANIFEST_FILE))
+            .ok()
+            .and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok())
+            .and_then(|m| m["provides"].as_array().cloned())
+            .into_iter()
+            .flatten()
+            .filter(|p| p["kind"] == "body")
+            .filter_map(|p| {
+                Some((
+                    p["id"].as_str()?.to_owned(),
+                    Some(p["file"].as_str()?.to_owned()),
+                ))
+            })
+            .collect();
+    if let Ok(archetypes) = std::fs::read_dir(dir.join("assets/archetypes")) {
+        models.extend(
+            archetypes
+                .flatten()
+                .filter_map(|e| std::fs::read(e.path()).ok())
+                .filter_map(|b| serde_json::from_slice::<serde_json::Value>(&b).ok())
+                .filter_map(|a| a["model"].as_str().map(str::to_owned))
+                .filter(|m| m.starts_with(&format!("{id}:asset/")))
+                .map(|m| (m, None)),
+        );
+    }
+    models.sort();
+    models.dedup_by(|a, b| a.0 == b.0);
+    models
 }
 
 #[cfg(test)]
@@ -2228,12 +3004,14 @@ mod tests {
         new_outfits_bind_the_textures_bodies_already_uploaded,
         a_respawned_body_stands_in_root_without_getting_up_from_the_corpse,
         item_mounts_use_the_same_sampled_avatar_pose_and_body_transform,
+        the_blockheads_aiming_hand_is_the_frame_fitted_hands_take,
         held_and_action_arm_layers_keep_locomotion_and_mounts_coherent,
         absolute_actions_take_over_the_nodes_they_animate,
         held_arm_pose_precedes_additive_look_and_pack_headup_layers,
         rebuilt_outfit_continues_the_running_clip,
         mount_action_is_only_the_playing_actions_motion,
         seated_body_takes_the_mount_rotation,
+        a_seated_rider_reaches_the_seats_hand_holds,
         getting_up_eases_out_of_the_sit_over_one_transition,
         jet_release_keeps_the_root_pose_until_landing,
         jets_interrupt_a_jump_without_restarting_it_on_release,
@@ -2351,6 +3129,419 @@ mod tests {
         Ok(())
     }
 
+    /// An Add-On body loaded as `load_bodies` loads one: the made-up rig
+    /// with its nodes renamed (`from`, `to`, lower case `from`) and only
+    /// the clips `clips` keeps, renamed (`from`, `to`).
+    fn own_body(
+        name: &str,
+        renames: &[(&str, &str)],
+        clips: &[(&str, &str)],
+    ) -> Result<(AvatarAssets, String, crate::testing::ScratchDir)> {
+        let mut assets = crate::testing::avatar::assets()?;
+        let root = crate::testing::ScratchDir::new(name)?;
+        let dir = root.path().join(format!("addons/{name}"));
+        std::fs::create_dir_all(dir.join("assets/archetypes"))?;
+        let rig = crate::testing::avatar::rig();
+        let mut shape = rig.shape.clone();
+        let rename = |n: &mut String| {
+            if let Some((_, to)) = renames
+                .iter()
+                .find(|(from, _)| from.eq_ignore_ascii_case(n))
+            {
+                *n = (*to).into();
+            }
+        };
+        for node in &mut shape.nodes {
+            rename(&mut node.name);
+        }
+        shape.animations = clips
+            .iter()
+            .map(|(from, to)| {
+                let mut clip = rig.sequence(from).expect("made-up clip").clone();
+                clip.name = (*to).into();
+                for track in &mut clip.nodes {
+                    rename(&mut track.node);
+                }
+                clip
+            })
+            .collect();
+        std::fs::write(
+            dir.join(format!("assets/{name}.shape.json")),
+            serde_json::to_vec(&shape)?,
+        )?;
+        let model = format!("{name}:asset/{name}.dts");
+        let mut content = vec![serde_json::json!({
+            "kind": "asset", "id": model, "file": format!("assets/{name}.shape.json")})];
+        for material in &shape.materials {
+            let png = format!("assets/{}.png", material.name);
+            image::RgbaImage::from_pixel(1, 1, image::Rgba([255; 4])).save(dir.join(&png))?;
+            content.push(serde_json::json!({
+                "kind": "asset", "id": format!("{name}:asset/{}.png", material.name), "file": png}));
+        }
+        std::fs::write(
+            dir.join("assets/content.json"),
+            serde_json::to_vec(&serde_json::json!({ "content": content }))?,
+        )?;
+        std::fs::write(
+            dir.join(format!("assets/archetypes/{name}.json")),
+            serde_json::to_vec(&serde_json::json!({"schema_version":1,"name":"","model": model}))?,
+        )?;
+        let packages: bri_package::packages::PackageSet = serde_json::from_value(
+            serde_json::json!({ "schema_version": 1, "packages": [
+                { "id": name, "version": "1.0.0", "side": "shared", "dir": format!("addons/{name}") }]}),
+        )?;
+        assets.load_bodies(root.path(), &packages);
+        ensure!(assets.has_body(&model), "{model} did not load");
+        Ok((assets, model, root))
+    }
+
+    /// v20 plays the run, back and side clips at the speed the body covers
+    /// the ground (`maxTimeScale` 1.5 at most): by the clip's own ground
+    /// motion, or by the speed an archetype gives a clip that has none.
+    #[test]
+    fn locomotion_clips_play_at_the_speed_the_body_moves() -> Result<()> {
+        let rig = crate::testing::avatar::rig();
+        let mut run = rig.sequence("run").context("run")?.clone();
+        let kind = BodyKind::default();
+        let forward = |speed: f32| Vec3::new(0.0, 0.0, -speed);
+        assert_eq!(
+            kind.time_scale(&run, Role::Run, forward(9.0)),
+            1.0,
+            "a clip with no ground motion keeps its own time"
+        );
+        // Two units of ground over the clip.
+        run.ground_translations = vec![[0.0, 0.0, -1.0], [0.0, 0.0, -2.0]];
+        let speed = 2.0 / run.duration;
+        let scale = |kind: &BodyKind, v: Vec3| kind.time_scale(&run, Role::Run, v);
+        assert!((scale(&kind, forward(speed * 0.5)) - 0.5).abs() < 1e-5);
+        assert!((scale(&kind, forward(speed)) - 1.0).abs() < 1e-5);
+        assert_eq!(
+            scale(&kind, forward(speed * 3.0)),
+            1.5,
+            "v20's maxTimeScale"
+        );
+        assert!(
+            scale(&kind, Vec3::new(speed, 0.0, 0.0)) < 1e-5,
+            "only the clip's own way counts"
+        );
+        assert_eq!(kind.time_scale(&run, Role::Idle, forward(speed)), 1.0);
+        let mut archetype = bri_sim::archetype::Archetypes::default()
+            .resolve(Default::default())
+            .clone();
+        archetype.look.ground_speeds = [("run".to_string(), 4.0)].into();
+        archetype.look.max_time_scale = 2.0;
+        archetype.validate()?;
+        let kind = BodyKind::of(&archetype, false);
+        assert!(
+            (scale(&kind, forward(6.0)) - 1.5).abs() < 1e-5,
+            "the archetype's speed wins"
+        );
+        assert_eq!(scale(&kind, forward(20.0)), 2.0);
+        archetype.look.ground_speeds = [("jump".to_string(), 4.0)].into();
+        assert!(archetype.validate().is_err(), "only locomotion roles");
+
+        // A drawn body: running at half the clip's speed, half as far in.
+        let assets = crate::testing::avatar::assets()?;
+        let mut archetype = bri_sim::archetype::Archetypes::default()
+            .resolve(Default::default())
+            .clone();
+        let clip = assets.rig.sequence("run").context("run")?.duration;
+        archetype.look.ground_speeds = [("run".to_string(), 8.0)].into();
+        let mut phases = Vec::new();
+        for speed in [4.0, 8.0] {
+            let mut mesh = assets.mesh(assets.package.defaults.clone())?;
+            mesh.set_body_kind(BodyKind::of(&archetype, false));
+            let mut p = player();
+            p.velocity = [0.0, 0.0, -speed];
+            mesh.pose(&assets, &p, 0.0)?;
+            assert_eq!(mesh.mode, "run");
+            mesh.pose(&assets, &p, f64::from(clip) * 0.2)?;
+            phases.push(mesh.phase);
+        }
+        assert!((phases[0] * 2.0 - phases[1]).abs() < 1e-4, "{phases:?}");
+        Ok(())
+    }
+
+    /// v0.3.0 W2: a body authored with its own node names (no `Mount0`, no
+    /// `Eye`) and only an idle and a walk clip used to be refused at load,
+    /// and any missing clip failed its whole pose. Now it holds an item on
+    /// its own hand node, sees from its own head node, poses for every
+    /// action with fallbacks (walking back plays the walk reversed), and
+    /// names exactly what it lacks.
+    #[test]
+    fn a_body_with_its_own_nodes_and_two_clips_holds_sits_and_names_what_it_lacks() -> Result<()> {
+        let (assets, model, _dir) = own_body(
+            "strider",
+            &[
+                ("Mount0", "Grip_R"),
+                ("Mount1", "Grip_L_Unused"),
+                ("Eye", "Head_Cam"),
+            ],
+            &[("root", "Stand"), ("run", "Walk")],
+        )?;
+        let mut archetype = bri_sim::archetype::Archetypes::default()
+            .resolve(Default::default())
+            .clone();
+        archetype.id = "strider:archetype/strider".into();
+        archetype.look.model = model.clone();
+        archetype.sockets = Sockets {
+            right_hand: Some(bri_content::body::Socket {
+                node: Some("Grip_R".into()),
+                offset: [0.0, 0.0, -0.1],
+            }),
+            eye: Some(bri_content::body::Socket::node("head_cam")),
+            ..Sockets::default()
+        };
+        archetype.look.animations = [
+            ("idle".to_string(), "Stand".to_string()),
+            ("run".into(), "Walk".into()),
+        ]
+        .into();
+        let mut mesh = assets.body_mesh(&model, assets.package.defaults.clone())?;
+        mesh.set_body_kind(BodyKind::of(&archetype, false));
+        // Every pose that used to refuse the body.
+        let mut time = 0.0;
+        let mut pose = |mesh: &mut AvatarMesh, player: PlayerState, input: AvatarAnimationInput| {
+            time += 0.1;
+            mesh.pose_with_animation(&assets, &player, time, &input)
+        };
+        for held in [HeldToolPose::Right, HeldToolPose::Left, HeldToolPose::Both] {
+            pose(
+                &mut mesh,
+                player(),
+                AvatarAnimationInput {
+                    held_tool_pose: held,
+                    ..Default::default()
+                },
+            )?;
+        }
+        pose(
+            &mut mesh,
+            player(),
+            AvatarAnimationInput {
+                sitting: true,
+                ..Default::default()
+            },
+        )?;
+        assert_eq!(mesh.mode, SIT, "it is seated, standing in its idle");
+        pose(
+            &mut mesh,
+            player(),
+            AvatarAnimationInput {
+                dead: true,
+                ..Default::default()
+            },
+        )?;
+        let crouched = PlayerState {
+            crouched: true,
+            velocity: [0.0, 0.0, -3.0],
+            ..player()
+        };
+        pose(&mut mesh, crouched, AvatarAnimationInput::default())?;
+        let airborne = PlayerState {
+            grounded: false,
+            velocity: [0.0, -20.0, 0.0],
+            ..player()
+        };
+        pose(&mut mesh, airborne, AvatarAnimationInput::default())?;
+        assert_eq!(mesh.mode, "fall");
+        pose(
+            &mut mesh,
+            player(),
+            AvatarAnimationInput {
+                action: Some(ActionAnimation {
+                    sequence: "armreadyboth".into(),
+                    started_at: 0.0,
+                }),
+                ..Default::default()
+            },
+        )?;
+        assert_eq!(mesh.skipped_clips(), ["armreadyboth"], "named, not fatal");
+        // Walking back plays the walk clip reversed.
+        let back = PlayerState {
+            velocity: [0.0, 0.0, 4.0],
+            ..player()
+        };
+        pose(&mut mesh, back, AvatarAnimationInput::default())?;
+        assert_eq!((mesh.mode, mesh.forward), ("back", false));
+        // The hand is its own node, the eye its own head.
+        let grip = mesh.world_node(&assets, "Grip_R").context("its grip")?;
+        let held = mesh
+            .mount_socket(&assets, 0, 0.3)
+            .context("held in the right hand")?;
+        assert!(held.abs_diff_eq(
+            grip * Mat4::from_translation(Vec3::new(0.0, 0.0, -0.1)),
+            1e-5
+        ));
+        assert_eq!(mesh.mount_node(&assets, 0), Some(held));
+        assert_eq!(
+            mesh.mount_socket(&assets, 1, 0.0),
+            None,
+            "no left hand node: nothing drawn there"
+        );
+        let head = mesh.world_node(&assets, "Head_Cam").context("its head")?;
+        let eye = mesh.eye_world(&assets, true).context("its eye")?;
+        assert!(eye.abs_diff_eq(head.w_axis.truncate(), 1e-5));
+        assert!(mesh.eye_transform(&assets, 0.0, 0.0).is_some());
+        let report = mesh.body_report(&assets);
+        for line in [
+            "no `aim_right` animation; its arm does not raise a held item",
+            "no `sit` animation; it plays its `idle` instead",
+            "no `back` animation; it plays its `run` instead",
+            "its model has no `Mount1` node for the `left_hand` socket, so items held in that hand are hidden",
+        ] {
+            assert!(report.iter().any(|l| l == line), "{line}\n{report:#?}");
+        }
+        assert!(
+            !report
+                .iter()
+                .any(|l| l.contains("`idle`") && l.starts_with("no `idle`"))
+        );
+        Ok(())
+    }
+
+    /// A body with no clips at all still poses (its bind pose), holds and
+    /// sits, and says it has no animations.
+    #[test]
+    fn a_body_with_no_clips_stands_in_its_bind_pose_and_still_holds() -> Result<()> {
+        let (assets, model, _dir) = own_body("statue", &[], &[])?;
+        let mut mesh = assets.body_mesh(&model, assets.package.defaults.clone())?;
+        let mut archetype = bri_sim::archetype::Archetypes::default()
+            .resolve(Default::default())
+            .clone();
+        archetype.look.model = model.clone();
+        mesh.set_body_kind(BodyKind::of(&archetype, false));
+        for (t, input) in [
+            AvatarAnimationInput {
+                held_tool_pose: HeldToolPose::Both,
+                ..Default::default()
+            },
+            AvatarAnimationInput {
+                sitting: true,
+                ..Default::default()
+            },
+            AvatarAnimationInput {
+                dead: true,
+                ..Default::default()
+            },
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            mesh.pose_with_animation(&assets, &player(), t as f64, &input)?;
+        }
+        assert!(
+            mesh.mount_socket(&assets, 0, 0.0).is_some(),
+            "holds on its Mount0"
+        );
+        assert!(mesh.eye_world(&assets, true).is_some());
+        let report = mesh.body_report(&assets);
+        assert!(
+            report
+                .iter()
+                .any(|l| l == "no `idle` animation; it stands in its bind pose")
+        );
+        Ok(())
+    }
+
+    /// The Runner's box body: the mesh is a hidden Blockhead that only
+    /// times the sit, so items go to its own hand sockets (pitched with
+    /// the aim), never the Blockhead's hand; seated it drops to its sitting
+    /// eye, tilts with the seat and folds its legs at the hip; getting up
+    /// eases back.
+    #[test]
+    fn a_box_body_holds_at_its_own_hand_and_sits_with_folded_legs() -> Result<()> {
+        let assets = crate::testing::avatar::assets()?;
+        let mut mesh = assets.mesh(assets.package.defaults.clone())?;
+        let mut runner = bri_sim::archetype::Archetypes::default()
+            .resolve(Default::default())
+            .clone();
+        runner.movement.stand_eye = 1.5;
+        runner.movement.eye_forward = 0.1;
+        runner.movement.sit_eye = 1.15;
+        runner.movement.sit_eye_forward = -0.1;
+        runner.sockets = serde_json::from_value(serde_json::json!({
+            "right_hand": { "offset": [0.5, 0.74, -0.14] },
+            "seat": { "offset": [0.0, 0.66, 0.0] }
+        }))?;
+        mesh.set_body_kind(BodyKind::of(&runner, true));
+        let feet = Vec3::new(3.0, 0.0, 0.0);
+        let at = PlayerState {
+            feet: feet.to_array(),
+            ..player()
+        };
+        mesh.pose_with_animation(&assets, &at, 0.0, &AvatarAnimationInput::default())?;
+        let held = mesh.mount_socket(&assets, 0, 0.0).context("right hand")?;
+        assert!(
+            held.w_axis
+                .truncate()
+                .abs_diff_eq(feet + Vec3::new(0.5, 0.74, -0.14), 1e-5)
+        );
+        let up = mesh.mount_socket(&assets, 0, 0.5).context("aiming up")?;
+        assert!(
+            (up.transform_vector3(Vec3::NEG_Z)).y > 0.4,
+            "the item pitches with the aim"
+        );
+        assert_eq!(
+            mesh.mount_socket(&assets, 1, 0.0),
+            None,
+            "no left hand: hidden, not on a Blockhead hand"
+        );
+        assert_eq!(
+            mesh.mount_socket(&assets, 2, 0.0),
+            None,
+            "no Blockhead mounts"
+        );
+        let eye = mesh.eye_world(&assets, true).context("eye")?;
+        assert!(eye.abs_diff_eq(feet + Vec3::new(0.0, 1.5, -0.1), 1e-5));
+        assert_eq!(mesh.box_pose().fold, 0.0);
+        // Seated, tilted with the seat.
+        let tilt = Quat::from_rotation_x(0.2);
+        let seated = AvatarAnimationInput {
+            sitting: true,
+            mount_rotation: Some(tilt),
+            ..Default::default()
+        };
+        mesh.pose_with_animation(&assets, &at, 1.0, &seated)?;
+        mesh.pose_with_animation(&assets, &at, 1.1, &seated)?;
+        let halfway = mesh.sit_weight();
+        assert!(
+            (0.3..0.5).contains(&halfway),
+            "eases into the seat: {halfway}"
+        );
+        mesh.pose_with_animation(&assets, &at, 1.5, &seated)?;
+        assert_eq!(mesh.sit_weight(), 1.0);
+        // Down to the sitting eye and back by the 0.2 it sits behind the
+        // standing eye.
+        let shift = Vec3::new(0.0, 1.15 - 1.5, 0.2);
+        let pose = mesh.box_pose();
+        let frame = Mat4::from_rotation_translation(tilt, feet) * Mat4::from_translation(shift);
+        assert!(pose.frame.abs_diff_eq(frame, 1e-5), "{:?}", pose.frame);
+        assert_eq!(pose.hip, Some(Vec3::new(0.0, 0.66, 0.0)));
+        assert!((pose.fold - std::f32::consts::FRAC_PI_2).abs() < 1e-6);
+        let eye = mesh.eye_world(&assets, true).context("seated eye")?;
+        assert!(eye.abs_diff_eq(frame.transform_point3(Vec3::new(0.0, 1.5, -0.1)), 1e-5));
+        let held = mesh.mount_socket(&assets, 0, 0.0).context("seated hand")?;
+        assert!(held.abs_diff_eq(
+            frame * Mat4::from_translation(Vec3::new(0.5, 0.74, -0.14)),
+            1e-5
+        ));
+        // Getting up eases back over one transition.
+        mesh.pose_with_animation(&assets, &at, 2.0, &AvatarAnimationInput::default())?;
+        assert_eq!(mesh.sit_weight(), 1.0);
+        mesh.pose_with_animation(&assets, &at, 2.1, &AvatarAnimationInput::default())?;
+        assert!((0.5..0.7).contains(&mesh.sit_weight()));
+        mesh.pose_with_animation(&assets, &at, 2.4, &AvatarAnimationInput::default())?;
+        assert_eq!(mesh.sit_weight(), 0.0);
+        assert_eq!(
+            mesh.body_report(&assets),
+            [
+                "no `left_hand` socket offset (a box body has no nodes), so items held in that hand are hidden"
+            ]
+        );
+        Ok(())
+    }
+
     fn player() -> PlayerState {
         PlayerState {
             owner: 1,
@@ -2369,6 +3560,7 @@ mod tests {
             speed_scale: 1.0,
             tick: Default::default(),
             tether: None,
+            controller: None,
         }
     }
     fn vitals(alive: bool, spawn_tick: u64, died_tick: Option<u64>) -> bri_sim::session::Vitals {
@@ -2756,6 +3948,39 @@ mod tests {
         Ok(())
     }
 
+    /// `bri_content::hold::AIM_HAND` is the real Blockhead's aiming hand:
+    /// a fitted body's hand is turned to it, so an image held in either
+    /// points the same way.
+    fn the_blockheads_aiming_hand_is_the_frame_fitted_hands_take(fx: &Avatar) -> Result<()> {
+        let assets = &fx.assets;
+        let mut mesh = assets.mesh(assets.package.defaults.clone())?;
+        let input = AvatarAnimationInput {
+            held_tool_pose: HeldToolPose::Right,
+            ..Default::default()
+        };
+        mesh.pose_with_animation(assets, &player(), 0.0, &input)?;
+        mesh.pose_with_animation(assets, &player(), 1.0, &input)?;
+        let (_, rotation, at) = (mesh.body_transform().inverse()
+            * mesh.mount_node(assets, 0).context("mount0")?)
+        .to_scale_rotation_translation();
+        let eye = mesh.eye_local(assets, false).context("eye")?;
+        eprintln!(
+            "Blockhead aiming Mount0: {rotation} at {at}, from the eye {}",
+            at - eye
+        );
+        if fx.content {
+            assert!(
+                (at - eye).abs_diff_eq(bri_content::hold::FIRST_PERSON_HAND, 0.01),
+                "{}",
+                at - eye
+            );
+            assert!(
+                rotation.angle_between(bri_content::hold::AIM_HAND) < 0.05,
+                "{rotation}"
+            );
+        }
+        Ok(())
+    }
     fn item_mounts_use_the_same_sampled_avatar_pose_and_body_transform(fx: &Avatar) -> Result<()> {
         let assets = &fx.assets;
         let mut mesh = assets.mesh(assets.package.defaults.clone())?;
@@ -2851,23 +4076,24 @@ mod tests {
             equipped.world_node(assets, "mount0"),
             equipped.world_node(assets, "MOUNT0")
         );
-        assert!(
-            equipped
-                .pose_with_animation(
-                    assets,
-                    &p,
-                    0.5,
-                    &AvatarAnimationInput {
-                        held_tool_pose: HeldToolPose::None,
-                        action: Some(ActionAnimation {
-                            sequence: "missing-original-clip".into(),
-                            started_at: 0.0
-                        }),
-                        ..Default::default()
-                    },
-                )
-                .is_err()
-        );
+        // A clip the body lacks is left out of the pose and named, not
+        // the whole body refused (it used to fail the pose).
+        let before = equipped.world_node(assets, "RightLeg");
+        equipped.pose_with_animation(
+            assets,
+            &p,
+            0.5,
+            &AvatarAnimationInput {
+                held_tool_pose: HeldToolPose::None,
+                action: Some(ActionAnimation {
+                    sequence: "missing-original-clip".into(),
+                    started_at: 0.0,
+                }),
+                ..Default::default()
+            },
+        )?;
+        assert_eq!(equipped.skipped_clips(), ["missing-original-clip"]);
+        assert!(equipped.world_node(assets, "RightLeg").is_some() && before.is_some());
         Ok(())
     }
 
@@ -3030,6 +4256,31 @@ mod tests {
         )?;
         let up = mesh.body_transform().transform_vector3(Vec3::Y);
         assert!(up.dot(tilt * Vec3::Y) > 0.999, "{up}");
+        Ok(())
+    }
+    fn a_seated_rider_reaches_the_seats_hand_holds(fx: &Avatar) -> Result<()> {
+        let assets = &fx.assets;
+        let mut mesh = assets.mesh(assets.package.defaults.clone())?;
+        let mut input = AvatarAnimationInput {
+            mount_rotation: Some(Quat::from_rotation_y(0.4)),
+            sitting: true,
+            ..Default::default()
+        };
+        mesh.pose_with_animation(assets, &player(), 0.0, &input)?;
+        let hand = |mesh: &AvatarMesh, n: usize| {
+            mesh.mount_node(assets, n)
+                .map(|m| m.w_axis.truncate())
+                .context("hand")
+        };
+        let rest = [hand(&mesh, 0)?, hand(&mesh, 1)?];
+        // Each hand a little forward and up of where the sit leaves it.
+        let forward = Quat::from_rotation_y(0.4) * Vec3::new(0.0, 0.12, -0.12);
+        input.hand_holds = [Some(rest[0] + forward), Some(rest[1] + forward)];
+        mesh.pose_with_animation(assets, &player(), 0.0, &input)?;
+        for (n, rest) in rest.into_iter().enumerate() {
+            let reached = hand(&mesh, n)?.distance(rest + forward);
+            assert!(reached < 0.06, "hand {n} {reached} from its hold");
+        }
         Ok(())
     }
     fn jet_history_survives_skipped_poses_and_first_remote_observation(fx: &Avatar) -> Result<()> {

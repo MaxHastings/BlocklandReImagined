@@ -39,7 +39,14 @@ pub(super) struct AddOns {
     )>,
     /// What the enabled Add-Ons name that could not be found or used.
     pub(super) add_on_health: crate::add_on_health::AddOnHealth,
+    /// HUD regions Add-Ons claim, and their textures.
+    pub(super) hud_regions: crate::hud_regions::HudRegions,
+    /// Add-On files edited while a hosted game runs.
+    pub(super) edits: crate::add_on_edits::AddOnEdits,
 }
+
+/// The Add-Ons screen's status line during a game.
+const IN_GAME_NOTICE: &str = "You are in a game, which keeps the Add-Ons it started with: changes here apply the next time you host or join.";
 
 impl App {
     /// Chat lines (and an optional question) for a host notice.
@@ -447,6 +454,7 @@ impl App {
                     self.join_resuming(id, address, String::new(), None, None, Some(map))
                 {
                     self.net.join_notices.clear();
+                    self.net.arrival = None;
                     self.answer(id, Err(error));
                 }
             }
@@ -534,10 +542,37 @@ impl App {
             Err(error) => bri_console::warn(format!("Add-On health report not written: {error:#}")),
         }
     }
+    /// Name in chat, once, the Add-Ons whose files changed on disk since the
+    /// hosted game started, and mark them in the Add-Ons screen.
+    pub(super) fn notice_add_on_edits(&mut self) {
+        let Some(a) = self.net.attempt.as_ref().filter(|a| a.entered) else {
+            return;
+        };
+        let id = a.id;
+        let names = self.addons.edits.poll();
+        if names.is_empty() {
+            return;
+        }
+        let text = crate::add_on_edits::AddOnEdits::notice(&names);
+        bri_console::echo(&text);
+        self.ui.apply_session(id, UiUpdate::Chat { text });
+        if self.ui.is_open(bri_ui::screens::ScreenId::AddOns) {
+            self.show_add_ons(crate::add_ons::view(&self.content.paths.root));
+        }
+    }
     /// Show the Add-Ons screen's `view` with each Add-On's problems from
     /// the last load listed under it.
     pub(super) fn show_add_ons(&mut self, mut view: AddOnsView) {
         crate::add_ons::with_health(&mut view, &self.addons.add_on_health);
+        crate::add_ons::with_plays_only(&mut view, self.addons.server_packages.as_deref());
+        let edited = self.addons.edits.changed_set();
+        for row in &mut view.rows {
+            row.changed_in_game = edited.contains(row.id.as_str());
+        }
+        if self.net.attempt.is_some() && view.notice.is_empty() {
+            // A game keeps the Add-Ons it started with.
+            view.notice = IN_GAME_NOTICE.into();
+        }
         self.ui.apply(UiUpdate::AddOns(view));
     }
     /// What the enabled Add-Ons name that this computer could not find
@@ -569,16 +604,20 @@ impl App {
             .and_then(|a| a.view.as_ref());
         let Some(view) = view else {
             self.ui.core.package_panels.clear();
+            self.ui.core.hud_regions.clear();
             self.ui.core.package_keys.clear();
             self.ui.set_package_binds(Vec::new());
             self.ui.core.addon_help.clear();
+            self.addons.client_code.set_hud_owners(Default::default());
             return;
         };
         let Some(catalog) = packages_for(&self.addons.package_catalog, view) else {
             self.ui.core.package_panels.clear();
+            self.ui.core.hud_regions.clear();
             self.ui.core.package_keys.clear();
             self.ui.set_package_binds(Vec::new());
             self.ui.core.addon_help.clear();
+            self.addons.client_code.set_hud_owners(Default::default());
             return;
         };
         let mac = self.ui.core.platform == Platform::MacOs;
@@ -607,6 +646,50 @@ impl App {
             });
         self.ui.core.package_panels = panels;
         self.ui.core.package_keys = keys;
+        // HUD regions: the viewer's body, held item and seat pick the claims.
+        let presented = self.motion.presented().get(&view.owner);
+        let body = presented.map_or("", |p| view.archetypes.resolve(p.archetype).id.as_str());
+        let vitals = view.vitals.get(&view.owner);
+        let vehicle = vitals
+            .and_then(|v| v.mounted)
+            .and_then(|(vehicle, _)| view.vehicles.get(&vehicle))
+            .map_or("", |info| info.definition.as_str());
+        let viewer = bri_content::hud::Viewer {
+            body,
+            holding: held,
+            vehicle,
+        };
+        let energy = presented
+            .filter(|p| view.archetypes.resolve(p.archetype).energy_bar)
+            .map_or(0.0, |p| {
+                p.energy / view.archetypes.tuning(p.archetype, p.scale).max_energy
+            });
+        let game = crate::hud_regions::GameValues {
+            health: vitals.map_or(0.0, |v| v.health),
+            health_max: presented.map_or(bri_sim::session::MAX_HEALTH, |p| {
+                view.archetypes.resolve(p.archetype).max_health
+            }),
+            energy: if energy.is_finite() { energy } else { 0.0 },
+            alive: vitals.is_none_or(|v| v.alive),
+            center_print: self
+                .ui
+                .core
+                .center_print
+                .as_ref()
+                .map_or_else(String::new, |(t, _)| bri_content::hud::plain(t)),
+            bottom_print: self
+                .ui
+                .core
+                .bottom_print
+                .as_ref()
+                .map_or_else(String::new, |(t, ..)| bri_content::hud::plain(t)),
+            ammo: self.net.held_ammo.clone(),
+        };
+        let regions = &mut self.addons.hud_regions;
+        regions.use_catalog(Some(catalog));
+        self.ui.core.hud_regions = regions.draws(&view.package_state, view.owner, &viewer, &game);
+        let owners = regions.owners(&view.package_state, &viewer);
+        self.addons.client_code.set_hud_owners(owners);
     }
 }
 

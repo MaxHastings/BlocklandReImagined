@@ -3,7 +3,9 @@
 use anyhow::{Result, ensure};
 use bri_console::Clamp;
 use bri_minigames::Settings;
-use bri_package::setting::{SettingEditor, SettingScope, SettingType, SettingValue, ShownWhen};
+use bri_package::setting::{
+    SettingEditor, SettingPlace, SettingScope, SettingType, SettingValue, ShownWhen,
+};
 use bri_sim::session::{
     AddOnSetting, Command, MiniGameRequest, MiniGameView, SettingEdit, TeamEdit, Vitals,
 };
@@ -62,6 +64,9 @@ pub fn settings(rules: &MiniGameRules) -> Result<Settings> {
         player_type: rules.player_type.clone(),
         loadout: rules.loadout.clone(),
         lives: bri_minigames::Lives::Unlimited,
+        // Add-On rules the dialog does not show; the host keeps the game's.
+        bodies: Default::default(),
+        keep_chosen_body: true,
     })
 }
 
@@ -212,22 +217,12 @@ pub fn state(
             })
             .collect(),
         invitations,
-        player_types: bri_sim::player_types::PlayerType::ALL
-            .map(|t| MiniGameChoice {
-                id: t.id().into(),
-                name: t.name().into(),
+        player_types: archetypes
+            .choosable()
+            .map(|(_, a)| MiniGameChoice {
+                id: a.id.clone(),
+                name: a.name.clone(),
             })
-            .into_iter()
-            .chain(
-                archetypes
-                    .iter()
-                    .skip(bri_sim::player_types::PlayerType::EVERY.len())
-                    .filter(|(_, a)| !a.name.is_empty())
-                    .map(|(_, a)| MiniGameChoice {
-                        id: a.id.clone(),
-                        name: a.name.clone(),
-                    }),
-            )
             .collect(),
         items: items
             .iter()
@@ -331,6 +326,15 @@ pub fn with_addon_settings(
             server: s.def.scope == SettingScope::Server,
             restart: s.def.restart,
             kind: match s.def.kind {
+                // A check box naming its on and off is a drop-down of them.
+                SettingType::Bool if !s.def.items.is_empty() => MiniGameSettingKind::List {
+                    items: s
+                        .def
+                        .items
+                        .iter()
+                        .map(|i| (ui_value(&i.value), i.name.clone()))
+                        .collect(),
+                },
                 SettingType::Bool => MiniGameSettingKind::Bool,
                 SettingType::Int => MiniGameSettingKind::Int {
                     min: s.def.min.unwrap_or(0),
@@ -367,6 +371,18 @@ pub fn with_addon_settings(
             default: ui_value(&s.def.default),
             help: s.def.help.clone(),
             avatar: s.def.avatar.clone(),
+            place: s.def.place.map(|p| match p {
+                SettingPlace::Basics => MiniGameSettingPlace::Basics,
+                SettingPlace::Loadout => MiniGameSettingPlace::Loadout,
+                SettingPlace::Win => MiniGameSettingPlace::Win,
+                SettingPlace::Rounds => MiniGameSettingPlace::Rounds,
+                SettingPlace::Teams => MiniGameSettingPlace::Teams,
+                SettingPlace::Scoring => MiniGameSettingPlace::Scoring,
+                SettingPlace::Respawn => MiniGameSettingPlace::Respawn,
+                SettingPlace::Damage => MiniGameSettingPlace::Damage,
+                SettingPlace::Bricks => MiniGameSettingPlace::Bricks,
+            }),
+            unit: s.def.unit.clone(),
             shown_when: s.def.shown_when.as_ref().map(|w| {
                 // The host names a same-Add-On setting by its bare key.
                 let key = if w.setting.contains(':') {

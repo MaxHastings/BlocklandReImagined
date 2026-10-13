@@ -13,6 +13,9 @@ mod tires;
 pub use tires::{TireState, WheelState};
 /// Torque vehicles and players fall at 20 m/s^2 whatever the shared world uses.
 pub const VEHICLE_GRAVITY: f32 = 20.;
+/// Below this speed a `throttle_brakes` vehicle's reversed throttle drives
+/// it the other way instead of braking.
+const THROTTLE_BRAKE_SPEED: f32 = 0.5;
 pub use checkpoint::*;
 macro_rules! id {
     ($name:ident) => {
@@ -51,6 +54,10 @@ pub struct Controls {
     /// This tick's mouse turn (yaw right, pitch up), radians: Torque's
     /// `move->yaw`/`move->pitch`, which mouse-steered vehicles accumulate.
     pub look_delta: [f32; 2],
+    /// The driver's head turn from the seat's facing (yaw, right positive,
+    /// radians): where they look. A `toward_look` vehicle steers to it.
+    #[serde(default)]
+    pub look_yaw: f32,
     /// The driver turned `$pref::Input::UseStrafeSteering` off: a vehicle
     /// with `steeringUseStrafeSteering` is then mouse-steered too.
     pub strafe_steering_off: bool,
@@ -92,7 +99,8 @@ impl Controls {
                 self.aim_yaw,
                 self.aim_pitch,
                 self.look_delta[0],
-                self.look_delta[1]
+                self.look_delta[1],
+                self.look_yaw
             ]
             .iter()
             .all(|x| x.is_finite()),
@@ -352,6 +360,8 @@ struct Instance {
     last_damage: OwnerId,
     last_shot: Option<u64>,
     charge_started: Option<u64>,
+    /// When the trigger of an automatic gun was pulled, while it is held.
+    trigger_pulled: Option<u64>,
     turret_damage: Option<f32>,
     charge: u8,
     steering: f32,
@@ -414,6 +424,7 @@ impl Instance {
         }
         self.charge = 0;
         self.charge_started = None;
+        self.trigger_pulled = None;
         self.fire_held = false;
     }
     fn velocity(&self, _: &Definition, b: &RigidBody) -> Vec3 {
@@ -716,7 +727,7 @@ impl VehiclesWorld {
                 .sum::<Vec3>()
                 * sign;
             if impulse.is_finite() && impulse.length_squared() > 0. {
-                kicks.push((body, impulse, None));
+                kicks.push((body, impulse, v.previous_velocity, None));
             }
         }
         // A vehicle part way into an opening that ran into the body beyond
@@ -731,14 +742,22 @@ impl VehiclesWorld {
                     && let Some((impulse, _)) = bri_physics::portal::impulse(world, fill, v.body)
                     && impulse.y.abs() < SIDE_HIT * impulse.length()
                 {
-                    kicks.push((v.body, impulse, Some(opening.carry)));
+                    kicks.push((v.body, impulse, v.previous_velocity, Some(opening.carry)));
                 }
             }
         }
         let mut change = Vec3::ZERO;
-        for (body, impulse, carry) in kicks {
+        for (body, impulse, before, carry) in kicks {
             let b = &mut world.bodies[body];
             let total = b.mass() + mass;
+            // The share never sends the vehicle on into the body faster
+            // than it came: the solver's push out of an overlap is no hit,
+            // and shared with a body that does not give way (a bot holding
+            // its ground) it handed the vehicle back in faster each step,
+            // until the hull flew off at hundreds of units a second.
+            let away = impulse.normalize();
+            let room = (b.linvel().dot(away) + (-before.dot(away)).max(0.)).max(0.);
+            let impulse = impulse.clamp_length_max(room * total);
             b.apply_impulse(-impulse * (b.mass() / total), true);
             let kick = -impulse / total;
             change += carry.map_or(kick, |c| c.transform_vector3(kick));
@@ -782,6 +801,20 @@ impl VehiclesWorld {
     /// Where an occupant sits, if mounted.
     pub fn occupant(&self, occupant: OccupantId) -> Option<(VehicleId, usize)> {
         self.occupied.get(&occupant).copied()
+    }
+    /// A seated occupant changed body ([`Occupant::body`]): getting out
+    /// tests room for the body they have now.
+    pub fn resize_occupant(&mut self, occupant: OccupantId, body: [f32; 2]) {
+        let Some(&(id, seat)) = self.occupied.get(&occupant) else {
+            return;
+        };
+        if let Some(Some(o)) = self
+            .instances
+            .get_mut(&id)
+            .and_then(|v| v.seats.get_mut(seat))
+        {
+            o.body = body;
+        }
     }
     /// Abandon a held charge without firing on trigger release. Used when
     /// an action is cancelled; ordinary release remains a firing action.
@@ -868,6 +901,7 @@ impl VehiclesWorld {
                 dead_at: None,
                 last_shot: None,
                 charge_started: None,
+                trigger_pulled: None,
                 turret_damage: d.attachment_model.as_ref().map(|_| 0.),
                 charge: 0,
                 steering: 0.,
@@ -1399,6 +1433,7 @@ impl VehiclesWorld {
             v.controls.fill(Controls::default());
             v.charge = 0;
             v.charge_started = None;
+            v.trigger_pulled = None;
             v.wheels.clear();
             self.intents.push(Intent::Destroyed { vehicle: id, by });
             let initial = if v
@@ -1456,6 +1491,7 @@ impl VehiclesWorld {
             v.last_damage = by;
             v.charge = 0;
             v.charge_started = None;
+            v.trigger_pulled = None;
             let d = &self.catalog[&v.spawn.definition];
             let gunner = d.weapon_seat();
             if let Some(index) = gunner {
@@ -1678,8 +1714,28 @@ impl VehiclesWorld {
                 driver_seat.map_or(SeatRole::Passenger, |seat| d.seat_role(seat)),
                 SeatRole::MouseDriver | SeatRole::StrafeDriver
             );
-            if driver {
-                let limit = d.max_steering.max(0.01);
+            // `speed_lock`: the lock narrows with speed along the nose.
+            let lock = d.max_steering.max(0.01) * d.steering.lock_at(speed, d.max_speed);
+            if driver && d.steering.toward_look {
+                // Steer toward where the driver looks, at the strafe rate.
+                // It eases off ahead of arriving as a driver does: the
+                // look is taken from where the heading will be once the
+                // wheels have turned back straight at that rate, so it
+                // meets the look instead of swinging past it.
+                let limit = lock;
+                let rate = d.steering.strafe_rate * 25. / 96.;
+                let now = v.mouse_steering[0];
+                let yaw_rate = -world.bodies[v.body].angvel().dot(up);
+                let unwind = now.abs() / (rate * 120.).max(0.01);
+                let target = if driven && c.look_yaw.is_finite() {
+                    (c.look_yaw - yaw_rate * unwind).clamped(-limit, limit)
+                } else {
+                    0.
+                };
+                v.mouse_steering = [now + (target - now).clamped(-rate, rate), 0.];
+                v.steering_quiet = 0;
+            } else if driver {
+                let limit = lock;
                 let mut steering = v.mouse_steering;
                 let turn = if strafe_mode {
                     let key = if c.strafe > 0. {
@@ -1745,7 +1801,11 @@ impl VehiclesWorld {
                 (
                     v.mouse_steering[0] / limit,
                     v.mouse_steering[1] / limit,
-                    if strafe_mode { 0. } else { c.strafe },
+                    if strafe_mode || d.steering.toward_look {
+                        0.
+                    } else {
+                        c.strafe
+                    },
                 )
             } else {
                 (c.steer, c.pitch, c.roll)
@@ -1849,7 +1909,7 @@ impl VehiclesWorld {
             } else {
                 Vec3::ZERO
             };
-            let gravity = VEHICLE_GRAVITY;
+            let gravity = d.gravity();
             let b = &mut world.bodies[v.body];
             b.reset_forces(false);
             b.reset_torques(false);
@@ -1999,6 +2059,12 @@ impl VehiclesWorld {
                         },
                     }
                 };
+                // `throttle_brakes`: a throttle against the roll brakes.
+                let against = d.throttle_brakes && {
+                    let b = &world.bodies[v.body];
+                    let rolling = b.linvel().dot(*b.rotation() * Vec3::NEG_Z);
+                    rolling.abs() > THROTTLE_BRAKE_SPEED && c.throttle * rolling < 0.
+                };
                 tires::update(
                     world,
                     v.body,
@@ -2008,7 +2074,7 @@ impl VehiclesWorld {
                     tires::Drive {
                         steering: v.steering,
                         throttle: c.throttle,
-                        braking: c.brake,
+                        braking: c.brake || against,
                         jetting: v.jetting,
                         wake,
                     },
@@ -2476,6 +2542,7 @@ fn actor_step(
         jump: driven && c.jump,
         crouch: false,
         jet: false,
+        attack: false,
     };
     let motion = actor.step_through(world, input, waters, parts, passages)?;
     if motion.jumped && d.family == Family::Horse {
@@ -2525,6 +2592,7 @@ fn weapon_step(
     let Some(occupant) = v.seats[index] else {
         v.charge = 0;
         v.charge_started = None;
+        v.trigger_pulled = None;
         return;
     };
     let mut c = v.controls[index];
@@ -2538,7 +2606,19 @@ fn weapon_step(
     let pressed = c.fire && !v.fire_held;
     v.fire_held = c.fire;
     let mut fire = false;
-    if weapon.charge_ticks > 0 {
+    // How long an automatic gun's trigger has been held.
+    let held = match &weapon.automatic {
+        Some(_) if c.fire => Some(tick - *v.trigger_pulled.get_or_insert(tick)),
+        _ => {
+            v.trigger_pulled = None;
+            None
+        }
+    };
+    if let (Some(auto), Some(held)) = (&weapon.automatic, held) {
+        fire = v
+            .last_shot
+            .is_none_or(|last| tick - last >= auto.interval(held));
+    } else if weapon.charge_ticks > 0 {
         if c.fire && ready && (pressed || v.charge_started.is_some()) {
             let start = *v.charge_started.get_or_insert(tick);
             let charge = (1 + (tick - start) / weapon.charge_ticks)
@@ -2569,6 +2649,10 @@ fn weapon_step(
         let b = &mut world.bodies[v.body];
         let Some((muzzle, aimed)) = d.muzzle([c.aim_yaw, c.aim_pitch]) else {
             return;
+        };
+        let aimed = match (&weapon.automatic, held) {
+            (Some(auto), Some(held)) => stray(aimed, auto.spread(held), id, tick),
+            _ => aimed,
         };
         let direction = *b.rotation() * aimed;
         let origin = b.position().transform_point(muzzle * v.spawn.scale);
@@ -2602,8 +2686,11 @@ fn weapon_step(
             vehicle: id,
             id: "activate".into(),
         });
-        if d.family != Family::Cannon {
-            b.apply_impulse(-(direction + Vec3::Y) * d.mass * 5., true);
+        let recoil = weapon
+            .recoil
+            .unwrap_or(if d.family == Family::Cannon { 0. } else { 5. });
+        if recoil > 0. {
+            b.apply_impulse(-(direction + Vec3::Y) * d.mass * recoil, true);
         }
         v.last_shot = Some(tick);
         v.charge = 0;
@@ -2616,6 +2703,29 @@ fn weapon_step(
             });
         }
     }
+}
+
+/// `aim` turned up to `spread` radians off, the same way for the same
+/// vehicle and tick on every machine: uniformly over the cone, as Halo
+/// spreads its error angle.
+fn stray(aim: Vec3, spread: f32, id: VehicleId, tick: u64) -> Vec3 {
+    if spread <= 0. {
+        return aim;
+    }
+    // splitmix64 of the vehicle and tick.
+    let mut x = id.0.wrapping_mul(0x9e37_79b9_7f4a_7c15) ^ tick;
+    let mut next = || {
+        x = x.wrapping_add(0x9e37_79b9_7f4a_7c15);
+        let mut z = x;
+        z = (z ^ (z >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+        ((z ^ (z >> 31)) >> 40) as f32 / (1u64 << 24) as f32
+    };
+    let cos = 1. - next() * (1. - spread.cos());
+    let sin = (1. - cos * cos).max(0.).sqrt();
+    let around = next() * std::f32::consts::TAU;
+    let (a, b) = aim.any_orthonormal_pair();
+    (aim * cos + (a * around.cos() + b * around.sin()) * sin).normalize()
 }
 
 /// A vehicle's body as it collides, at `scale`: its shape and where that
@@ -2705,7 +2815,7 @@ fn prepare_spawn(
     }
     .pose(pose(&s.transform))
     .gravity_scale(if world_gravity > 0. {
-        VEHICLE_GRAVITY / world_gravity
+        d.gravity() / world_gravity
     } else {
         0.
     })

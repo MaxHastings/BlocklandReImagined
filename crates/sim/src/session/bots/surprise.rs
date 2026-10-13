@@ -1147,7 +1147,7 @@ impl Session {
             .bots
             .brains
             .get(&bot)
-            .is_some_and(|b| b.kind.surprise.strength > 0.0)
+            .is_some_and(|b| b.kind.surprise.strength > 0.0 && b.kind.tactics.flank)
         {
             return [None, None];
         }

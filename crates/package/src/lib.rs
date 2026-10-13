@@ -15,6 +15,7 @@ pub mod diag;
 pub mod environment;
 pub mod health;
 pub mod id;
+pub mod json_edit;
 pub mod library;
 pub mod packages;
 pub mod path;

@@ -56,6 +56,136 @@ pub fn kind_providers(
     }
     Ok(out)
 }
+/// Each enabled Add-On's own player models' hand nodes in their aim pose
+/// ([`bri_sim::session::body_grips`]), by model id: an archetype drawn with
+/// one of its package's converted shapes (`<package>:asset/<file>`) holds
+/// its images by the nodes its `sockets` name, so its shots leave the
+/// muzzle in its hand rather than its eye. A model that cannot be read is
+/// left out and said once; its shots leave the eye as before.
+pub fn package_body_grips(
+    content_root: &Path,
+    packages: &bri_package::packages::PackageSet,
+) -> BTreeMap<String, BTreeMap<String, [f32; 16]>> {
+    let mut out = BTreeMap::new();
+    for entry in packages.packages.iter().filter(|p| p.role.is_none()) {
+        let Ok(dir) = bri_package::packages::package_dir(content_root, entry) else {
+            continue;
+        };
+        let assets = dir.join("assets");
+        let Ok(files) = std::fs::read_dir(assets.join("archetypes")) else {
+            continue;
+        };
+        let prefix = format!("{}:asset/", entry.id);
+        // An imported glTF body is the package's own `body` content, its
+        // shape file named beside it.
+        let provided = package_bodies(&dir);
+        // Each model's socket nodes and role clips, from every archetype
+        // drawn with it.
+        let mut bodies: BTreeMap<
+            String,
+            Vec<(bri_content::body::Sockets, bri_content::body::Animations)>,
+        > = BTreeMap::new();
+        for file in files.flatten() {
+            let Ok(bytes) = bounded_bytes(&file.path(), 256 * 1024) else {
+                continue;
+            };
+            let Ok(a) = serde_json::from_slice::<serde_json::Value>(&bytes) else {
+                continue;
+            };
+            let Some(model) = a["model"]
+                .as_str()
+                .filter(|m| m.starts_with(&prefix) || provided.contains_key(*m))
+            else {
+                continue;
+            };
+            let sockets = serde_json::from_value(a["sockets"].clone()).unwrap_or_default();
+            let animations = serde_json::from_value(a["animations"].clone()).unwrap_or_default();
+            bodies
+                .entry(model.to_owned())
+                .or_default()
+                .push((sockets, animations));
+        }
+        for (model, looks) in bodies {
+            match body_rig(&dir, &model, provided.get(&model).map(String::as_str)) {
+                Ok(rig) => {
+                    let mut grips = BTreeMap::new();
+                    // An imported glTF body is fitted; a converted v20
+                    // shape keeps its authored mounts.
+                    let fitted = provided.contains_key(&model);
+                    for (sockets, animations) in &looks {
+                        grips.extend(bri_sim::session::body_grips(
+                            &rig, sockets, animations, fitted,
+                        ));
+                    }
+                    if !grips.is_empty() {
+                        out.insert(model, grips);
+                    }
+                }
+                Err(error) => bri_console::warn(format!(
+                    "{model}: its hands could not be read ({error:#}), so its shots leave the eye"
+                )),
+            }
+        }
+    }
+    out
+}
+/// The `body` content the package at `dir` provides, as model id to its
+/// package-relative shape file.
+fn package_bodies(dir: &Path) -> BTreeMap<String, String> {
+    contained(dir, bri_package::library::MANIFEST_FILE)
+        .and_then(|path| bounded_bytes(&path, 256 * 1024))
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
+        .and_then(|manifest| manifest["provides"].as_array().cloned())
+        .into_iter()
+        .flatten()
+        .filter(|p| p["kind"] == "body")
+        .filter_map(|p| Some((p["id"].as_str()?.to_owned(), p["file"].as_str()?.to_owned())))
+        .collect()
+}
+/// The converted shape `model` names in the package at `dir` (`file` when
+/// the package provides it as a body, else as its `assets/content.json`
+/// lists it), as a rig of its own sequences.
+fn body_rig(dir: &Path, model: &str, file: Option<&str>) -> Result<bri_content::avatar::Rig> {
+    let listed;
+    let file = match file {
+        Some(file) => file,
+        None => {
+            let index: serde_json::Value = serde_json::from_slice(&bounded_bytes(
+                &contained(dir, "assets/content.json")?,
+                4 << 20,
+            )?)?;
+            listed = index["content"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .find(|c| {
+                    c["id"]
+                        .as_str()
+                        .is_some_and(|c| c.eq_ignore_ascii_case(model))
+                })
+                .and_then(|c| c["file"].as_str().map(str::to_owned))
+                .with_context(|| format!("{model} is not in its package"))?;
+            &listed
+        }
+    };
+    let shape: bri_content::shape::Shape =
+        serde_json::from_slice(&bounded_bytes(&contained(dir, file)?, 32 << 20)?)?;
+    shape.validate()?;
+    let sequences = shape
+        .animations
+        .iter()
+        .map(|a| (a.name.to_ascii_lowercase(), a.clone()))
+        .collect();
+    Ok(bri_content::avatar::Rig {
+        schema_version: 1,
+        id: model.into(),
+        shape,
+        sequences,
+        sources: Vec::new(),
+        omissions: Vec::new(),
+    })
+}
 /// [`kind_providers`] of brick catalogs, as (package dir, catalog dir).
 pub fn brick_catalog_providers(
     content_root: &Path,
@@ -117,24 +247,75 @@ pub fn brick_geometry_assets(
     }
     Ok(out)
 }
-/// Bot kinds from every package providing `assets/bots.json`, in
-/// `packages.json` order (a later id replaces an earlier one). The base
-/// game provides none.
+/// Bot kinds from every enabled Add-On providing them, in `packages.json`
+/// order (a later id replaces an earlier one). The base game provides none.
 pub fn bot_kinds(
     content_root: &Path,
     packages: &bri_package::packages::PackageSet,
 ) -> Result<Vec<bri_sim::bot_kind::BotKind>> {
-    bot_kinds_from(&kind_providers(content_root, packages, "bots.json")?)
+    bot_kinds_from_files(&bot_providers(content_root, packages)?)
 }
-/// [`bot_kinds`] from already listed providers.
+/// Each enabled Add-On's bot kinds file, as (`<dir>/<file>`, absolute
+/// path): the `file` of the `bots` kind its manifest provides, as it does
+/// for every other kind (the Stomper's and the Fizzer's are `bots.json`
+/// beside the manifest), else `assets/bots.json`.
+pub fn bot_providers(
+    content_root: &Path,
+    packages: &bri_package::packages::PackageSet,
+) -> Result<Vec<(String, PathBuf)>> {
+    let mut out = Vec::new();
+    for entry in packages.packages.iter().filter(|p| p.role.is_none()) {
+        let dir = bri_package::packages::package_dir(content_root, entry)?;
+        let declared = declared_files(&dir, "bots");
+        let files = if declared.is_empty() && dir.join("assets/bots.json").is_file() {
+            vec!["assets/bots.json".to_string()]
+        } else {
+            declared
+        };
+        for file in files {
+            let path = contained(&dir.canonicalize()?, &file)
+                .with_context(|| format!("Add-On {}: {file}", entry.dir))?;
+            out.push((format!("{}/{file}", entry.dir), path));
+        }
+    }
+    Ok(out)
+}
+/// The `file` of each `kind` entry in the manifest's `provides` under
+/// `dir`, in order; none when it has no readable manifest.
+fn declared_files(dir: &Path, kind: &str) -> Vec<String> {
+    let Ok(bytes) = bounded_bytes(&dir.join("package.json"), 256 * 1024) else {
+        return Vec::new();
+    };
+    let Ok(manifest) = serde_json::from_slice::<serde_json::Value>(&bytes) else {
+        return Vec::new();
+    };
+    manifest["provides"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|p| p["kind"] == kind)
+        .filter_map(|p| p["file"].as_str().map(str::to_string))
+        .collect()
+}
+/// [`bot_kinds`] from already listed providers' directories, each holding
+/// a `bots.json`.
 pub fn bot_kinds_from(providers: &[(String, PathBuf)]) -> Result<Vec<bri_sim::bot_kind::BotKind>> {
+    let files = providers
+        .iter()
+        .map(|(dir, abs)| Ok((format!("{dir}/bots.json"), contained(abs, "bots.json")?)))
+        .collect::<Result<Vec<_>>>()?;
+    bot_kinds_from_files(&files)
+}
+/// [`bot_kinds`] from already found files ([`bot_providers`]).
+pub fn bot_kinds_from_files(
+    files: &[(String, PathBuf)],
+) -> Result<Vec<bri_sim::bot_kind::BotKind>> {
     let mut packs = Vec::new();
-    for (dir, abs) in providers {
-        let path = contained(abs, "bots.json")?;
-        let bytes = bounded_bytes(&path, 128 * 1024)?;
+    for (label, path) in files {
+        let bytes = bounded_bytes(path, 128 * 1024)?;
         packs.push(
             bri_sim::bot_kind::BotPack::from_json(&bytes)
-                .with_context(|| format!("Add-On {dir}: bots.json"))?,
+                .with_context(|| format!("Add-On {label}"))?,
         );
     }
     bri_sim::bot_kind::BotPack::merge(packs)
@@ -797,6 +978,77 @@ fn item_choices(
     Ok((item_choices, aliases))
 }
 
+/// Each image's muzzle in the frame of the hand holding it
+/// (`bri_weapons::muzzle::barrel`), as clients draw it: from the base
+/// presentation (`presentation.json` and its model files), each Add-On's
+/// own presentation, and Add-On images whose model is their own
+/// `*.shape.json`. An image none of these describe is left out and fires
+/// from the hand itself.
+pub fn image_barrels(
+    presentation_root: &Path,
+    weapons: &WeaponContent,
+    extras: &[(String, PathBuf)],
+) -> BTreeMap<String, [f32; 3]> {
+    use serde_json::Value;
+    let read = |root: &Path, file: &str| -> Option<Value> {
+        let path = contained(root, file).ok()?;
+        serde_json::from_slice(&bounded_bytes(&path, 32 << 20).ok()?).ok()
+    };
+    let shape = |root: &Path, file: &str| -> Option<bri_content::shape::Shape> {
+        serde_json::from_value(read(root, file)?).ok()
+    };
+    let triple = |v: &Value| -> [f32; 3] {
+        let a = |i: usize| v.get(i).and_then(Value::as_f64).unwrap_or(0.0) as f32;
+        [a(0), a(1), a(2)]
+    };
+    let mut out = BTreeMap::new();
+    let presented = |root: &Path, out: &mut BTreeMap<String, [f32; 3]>| {
+        let Some(manifest) = read(root, "presentation.json") else {
+            return;
+        };
+        let Some(images) = manifest["images"].as_object() else {
+            return;
+        };
+        for (id, image) in images {
+            let model = image["model"].as_str().unwrap_or_default();
+            let file = manifest["models"][model]["file"].as_str();
+            let shape = file.and_then(|f| shape(root, f));
+            let barrel = bri_weapons::muzzle::barrel(
+                triple(&image["offset"]),
+                triple(&image["source_rotation_degrees"]),
+                shape.as_ref(),
+            );
+            out.insert(id.clone(), barrel.to_array());
+        }
+    };
+    if let Ok(root) = presentation_root.canonicalize() {
+        presented(&root, &mut out);
+    }
+    for (_, abs) in extras {
+        let Ok(abs) = abs.canonicalize() else {
+            continue;
+        };
+        presented(&abs, &mut out);
+        let Some(pack) = read(&abs, "weapons.json") else {
+            continue;
+        };
+        for (id, image) in pack["images"].as_object().into_iter().flatten() {
+            let model = image["model"].as_str().unwrap_or_default();
+            if out.contains_key(id) || !model.ends_with(".shape.json") {
+                continue;
+            }
+            let barrel = bri_weapons::muzzle::barrel(
+                triple(&image["offset"]),
+                triple(&image["source_rotation_degrees"]),
+                shape(&abs, model).as_ref(),
+            );
+            out.insert(id.clone(), barrel.to_array());
+        }
+    }
+    out.retain(|id, _| weapons.pack.images.contains_key(id));
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1452,5 +1704,71 @@ mod tests {
             ),
             21
         );
+    }
+
+    /// A bots Add-On is read where its manifest says (the Stomper's and
+    /// the Fizzer's `bots.json` beside `package.json`), as well as at
+    /// `assets/bots.json` when it names none: each one's kinds reach a
+    /// Vehicle Spawn brick's list on a real host.
+    #[test]
+    fn bot_kinds_follow_the_manifest_file() {
+        let scratch = bri_content::testing::ScratchDir::new("bot-providers").unwrap();
+        let root = scratch.path();
+        crate::testing::write_root(root, &[crate::testing::MAP]).unwrap();
+        let mut set = bri_package::packages::PackageSet::load_root(root).unwrap();
+        let repo = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../packages");
+        for (id, from) in [
+            ("blockhead_bot", "blockhead_bot"),
+            ("playground-stomper", "playground/playground-stomper"),
+            ("playground-fizzer", "playground/playground-fizzer"),
+        ] {
+            let to = root.join("add-ons").join(id);
+            for file in ["package.json", "bots.json", "assets/bots.json"] {
+                let from = repo.join(from).join(file);
+                if from.is_file() {
+                    std::fs::create_dir_all(to.join(file).parent().unwrap()).unwrap();
+                    std::fs::copy(from, to.join(file)).unwrap();
+                }
+            }
+            set.packages.push(bri_package::packages::PackageEntry {
+                id: id.into(),
+                version: "1.0.0".into(),
+                side: bri_package::packages::Side::Shared,
+                dir: format!("add-ons/{id}"),
+                role: None,
+            });
+        }
+        let files: Vec<String> = bot_providers(root, &set)
+            .unwrap()
+            .into_iter()
+            .map(|(label, _)| label)
+            .collect();
+        assert_eq!(
+            files,
+            [
+                "add-ons/blockhead_bot/assets/bots.json",
+                "add-ons/playground-stomper/bots.json",
+                "add-ons/playground-fizzer/bots.json",
+            ]
+        );
+        let kinds: Vec<String> = bot_kinds(root, &set)
+            .unwrap()
+            .into_iter()
+            .map(|k| k.id)
+            .collect();
+        for id in [
+            "playground-stomper:bot/stomper",
+            "playground-fizzer:bot/fizzer",
+        ] {
+            assert!(kinds.iter().any(|k| k == id), "{id} missing from {kinds:?}");
+        }
+        assert!(kinds.len() >= 3, "{kinds:?}");
+        // A manifest naming a file outside its package is refused.
+        std::fs::write(
+            root.join("add-ons/playground-fizzer/package.json"),
+            r#"{"provides": [{"kind": "bots", "file": "../blockhead_bot/assets/bots.json"}]}"#,
+        )
+        .unwrap();
+        assert!(bot_providers(root, &set).is_err());
     }
 }

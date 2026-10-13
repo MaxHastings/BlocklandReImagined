@@ -1,4 +1,10 @@
-# HUD panels
+# HUD panels and regions
+
+A `hud` file is one of two things: a panel (rows of text from a rule's
+state, below) or a region layout, which claims a part of the screen and
+draws your own textures there ([HUD regions](#hud-regions)).
+
+## Panels
 
 A HUD panel is a JSON file each player's game draws from state it
 receives. A rule's Add-On runs only on the host, so a HUD is always its own
@@ -38,3 +44,122 @@ Add-On that depends on the rule, as `sample-points-hud` depends on
   holds one of these: an Add-On id (any of its images) or an image id.
   An ammo panel listing `["my-guns"]` appears with one of that Add-On's
   guns out and nowhere else.
+
+## HUD regions
+
+A file with a `"region"` claims one named part of the screen and draws
+textured elements into it from the Add-On's own PNGs: a Mario-style power
+meter, a sprite-font counter, a reticle. It needs no code. The Playground's
+[Runner HUD](../../packages/playground/playground-runner-hud) is a
+complete example.
+
+```json
+{
+  "schema_version": 1,
+  "region": "top_center",
+  "when": { "body": ["playground-runner:archetype/runner"] },
+  "pixelated": true,
+  "elements": [
+    { "type": "image", "texture": "playground-runner-hud:texture/power", "rect": [80, 12, 80, 80],
+      "frames": { "count": 9, "value": "health" } },
+    { "type": "text", "at": [120, 96], "text": "POWER", "align": "center" }
+  ]
+}
+```
+
+List each layout as `{ "kind": "hud", ... }` and each PNG as
+`{ "kind": "texture", ... }` (up to 1024 px a side) in `package.json`
+`provides`. A layout may use only its own Add-On's textures. Like a panel,
+it is a client Add-On: put it beside the body or rule it dresses, depending
+on it, as `playground-runner-hud` depends on `playground-runner`.
+
+**Units.** The screen is 480 HUD units tall and as wide as its aspect makes
+it (640 at 4:3, about 853 at 16:9), so a layout keeps its proportions at
+any size; an N64 layout drawn at 320x240 doubles straight into it. Each
+region is a fixed box; positions are from its top left corner, x right, y
+down. Elements may reach outside the box.
+
+| Region | Box (x, y, width, height) | Hides |
+|---|---|---|
+| `top_left` | 0, 0, 240, 120 | |
+| `top_center` | centred, 0, 240, 120 | |
+| `top_right` | right edge, 0, 240, 120 | |
+| `left` | 0, 180, 120, 120 | |
+| `right` | right edge, 180, 120, 120 | |
+| `bottom_left` | 0, 360, 240, 120 | |
+| `bottom_center` | centred, 360, 240, 120 | |
+| `bottom_right` | right edge, 360, 240, 120 | |
+| `crosshair` | centred, 208, 64, 64 | the crosshair |
+| `energy` | right edge, 240, 48, 120 | the jet energy bar |
+| `center_print` | centred, 160, 480, 120 | the center print |
+| `bottom_print` | 0, 400, full width, 80 | the bottom print, whatever it shows |
+| `ammo` | right edge, 400, 240, 80 | the bottom print only while it is the ammo display |
+
+A region nobody claims shows the stock HUD as before. Claiming one of the
+last five hides that stock element while the claim applies; a layout with
+no elements just hides it, or saves the region for your client code.
+
+**When.** `when` limits the claim to a body (`body`: archetype ids), a held
+item (`holding`: a weapons Add-On's id or an image id) and a vehicle seat
+(`vehicle`: vehicle ids). Every list given must match. The HUD switches
+with the body, the weapon and the seat the moment they change, and goes
+back to the stock HUD when nothing claims a region.
+
+**Elements**, drawn back to front, at most 64:
+
+- `image`: `texture`, `rect` [x, y, w, h], optional `tint` (RGBA 0..1).
+  With `frames` `{ "count", "columns", "value", "max" }` it shows one frame
+  of a strip (left to right, then down), picked by the value's share of its
+  maximum: the first frame at 0, the last when full.
+- `bar`: `rect`, `value`, optional `max`, `fill` and `back` (each a `color`
+  and an optional `texture` revealed from one end), `direction` `right`
+  (fills from the left, the default), `left`, `up` or `down`.
+- `text`: `at` [x, y] (the left, centre or right of the line by `align`,
+  and its top), `text` (a fixed line, `{}` where the value goes), `value`,
+  `digits` (zero padding), `color`. Without `glyphs` it uses the game's
+  font. With `glyphs` `{ "texture", "charset", "columns", "size": [w, h],
+  "spacing" }` it draws from your sprite font, one equal cell per character
+  of `charset`; a character not in it leaves a space.
+- Any element takes `show` `{ "value", "above", "below" }` to appear only
+  while a value is in range: a low-health flash, a reload prompt.
+
+**Values** (`value`, `max`, `show`): `health`, `health_max`, `energy` (jet
+energy 0 to 1), `alive` (1 or 0), `center_print` and `bottom_print` (the
+stock prints' text, without markup), or a rule's state as a panel binds it,
+`rule-id:player/key` or `rule-id:global/key`. The held gun gives `ammo`
+(rounds ready to fire; for a gun counted from its reserve, such as
+grenades, the reserve), `ammo_max` (a full magazine), `ammo_reserve`
+(rounds carried beyond it) and `reloading` (1 while it reloads). They are
+missing with no gun that has a magazine, and `ammo` and `ammo_reserve` are
+missing when they never run out. A missing value reads as `-` in text and
+0 in a bar or `show`, so `"show": { "value": "ammo_max", "above": 0 }`
+shows an element only with such a gun out. A `max` left out is the value's
+own (`health_max` for `health`, `ammo_max` for `ammo`, else 1). A layout reading a rule's
+state is not drawn on a server that does not run that rule.
+
+`pixelated: true` draws images with sharp pixels: pixel art and sprite
+fonts.
+
+**Two Add-Ons, one region.** One claim draws. The most specific wins (a
+vehicle seat beats a held item, which beats a body, which beats no
+condition; they add up), then the higher `priority` (-100 to 100), then the
+package id in alphabetical order. The game names the losing layout once in
+the Add-On's problems; it is not drawn. So a weapon's ammo counter
+claiming `ammo` with `holding` shows over a body's `ammo` claim while that
+weapon is out, and the body's comes back when it is put away.
+
+**Drawing from client code.** An Add-On with client code and
+`render.layer` draws its own HUD in screen space. Its `hud` layout claims
+the region (with no elements, or with some under the code's drawing), and
+`hud_region(name, ptr)` gives the region's box in screen space, the size of
+one unit and whether this Add-On owns the region now. Draw only while it
+does ([client sandbox](../architecture/client-sandbox.md)).
+
+**Not yet.** Region boxes are fixed; there is no free placement or new
+region names.
+
+Tests: `crates/content/src/hud.rs` (validation, conflict ranking, frames,
+sprite fonts), `crates/client/src/hud_regions.rs`, and the render check
+`crates/client/tests/hud_regions_render.rs` (including the Runner's ammo
+counter), and `crates/sim/tests/script_api.rs`
+`a_held_guns_ammo_reaches_its_holder_for_hud_counters`.

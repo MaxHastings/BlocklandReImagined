@@ -1,0 +1,27 @@
+{
+  "schema_version": 1,
+  "id": "test_wahoo",
+  "name": "Stand-in Wahoo",
+  "version": "1.0.0",
+  "api": 1,
+  "authors": [
+    "Blockland ReImagined tests"
+  ],
+  "license": "CC0-1.0",
+  "description": "Gives the standard player its own jump sound, from a file the Add-On ships.",
+  "provides": [
+    {
+      "kind": "archetype",
+      "id": "test_wahoo:archetype/standard",
+      "file": "assets/standard.json"
+    },
+    {
+      "kind": "weapons",
+      "id": "test_wahoo:weapons/main",
+      "file": "assets/weapons.json"
+    }
+  ],
+  "provenance": {
+    "source": "original"
+  }
+}

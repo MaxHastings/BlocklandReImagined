@@ -299,6 +299,7 @@ pub fn lower(
             controls: i == 0 && family != Family::Tumble,
             weapon: matches!(family, Family::Cannon | Family::Turret)
                 || (name == "TankVehicle" && i == 2),
+            hands: Default::default(),
         });
     }
     let mut wheels = vec![];
@@ -341,6 +342,7 @@ pub fn lower(
             spring: number(spring, "force", 10.),
             damping: number(spring, "damping", 10.),
             anti_sway: number(spring, "antiSwayForce", 1.),
+            rebound_damping: 0.,
             tire: Tire {
                 static_friction: number(tire, "staticFriction", 1.),
                 kinetic_friction: number(tire, "kineticFriction", 0.5),
@@ -350,6 +352,7 @@ pub fn lower(
                 longitudinal_force: number(tire, "longitudinalForce", 10.),
                 longitudinal_damping: number(tire, "longitudinalDamping", 1.),
                 longitudinal_relaxation: number(tire, "longitudinalRelaxation", 1.),
+                lateral_grip: 1.,
             },
             // TankVehicle::onAdd steers all four wheels and powers them all;
             // skis have no engine.
@@ -438,6 +441,8 @@ pub fn lower(
                 "TankSmokeImage"
             }
             .into(),
+            automatic: None,
+            recoil: None,
             look_muzzle: Vec::new(),
         })
     } else {
@@ -583,17 +588,23 @@ pub fn lower(
         ),
         impact_damage: number(b, "collDamageMultiplier", 0.),
         strafe_steering,
+        throttle_brakes: false,
+        reverse_limited: false,
         steering: SteeringSettings {
             strafe_rate: number(b, "steeringStrafeSteeringRate", 0.1),
             auto_return: torque_bool(b, "steeringUseAutoReturn", true),
             auto_return_rate: number(b, "steeringAutoReturnRate", 0.9),
             auto_return_max_speed: number(b, "steeringAutoReturnMaxSpeed", 10.),
+            toward_look: false,
+            speed_lock: 1.,
         },
         wheeled_flight: match family {
             Family::Wheeled | Family::Skis => wheeled_flight(b),
             _ => None,
         },
         threads: vec![],
+        engine_curve: vec![],
+        gravity_scale: None,
         look_pitch: [
             -number(look, "maxLookAngle", std::f32::consts::FRAC_PI_2),
             -number(look, "minLookAngle", -std::f32::consts::FRAC_PI_2),
@@ -639,6 +650,7 @@ pub fn lower(
         blast_scale: None,
         trails: vec![],
         effects: Default::default(),
+        engine_sound: None,
         authored: b.fields.clone(),
         adaptations,
     })

@@ -83,6 +83,9 @@ pub struct Motion {
     pub(crate) drive_state: DriveState,
     mirror: Option<CollisionMirror>,
     predictor: Option<Predictor>,
+    /// The archetype table the predictor runs, so a body the host tunes
+    /// mid-game reaches it.
+    archetypes: Option<Arc<bri_sim::archetype::Archetypes>>,
     /// The replica world the collision mirror matches, with its change log
     /// and revision.
     mirrored: Option<(Arc<PublicWorld>, Arc<crate::network::WorldLog>, u64)>,
@@ -490,6 +493,15 @@ impl Motion {
                 view.world_revision,
             ));
         }
+        if let Some(predictor) = &mut self.predictor
+            && self
+                .archetypes
+                .as_ref()
+                .is_some_and(|seen| !Arc::ptr_eq(seen, &view.archetypes))
+        {
+            predictor.set_archetypes((*view.archetypes).clone());
+        }
+        self.archetypes = Some(view.archetypes.clone());
         match (&mut self.predictor, &mut self.mirror) {
             (Some(predictor), _) => {
                 predictor.set_broken_shapes(&view.broken_shapes)?;
@@ -1136,6 +1148,13 @@ fn blend(a: &PlayerState, b: &PlayerState, t: f32) -> PlayerState {
     out.yaw = lerp_angle(a.yaw, b.yaw, t);
     out.pitch = a.pitch + (b.pitch - a.pitch) * t;
     out.head_yaw = a.head_yaw + (b.head_yaw - a.head_yaw) * t;
+    // A controller's own heading turns smoothly too, from or to the look
+    // when only one side has one.
+    if let Some(controller) = &mut out.controller
+        && controller.heading.is_some()
+    {
+        controller.set_heading(Some(lerp_angle(a.body_yaw(), b.body_yaw(), t)));
+    }
     out
 }
 
@@ -1162,6 +1181,7 @@ mod tests {
             speed_scale: 1.0,
             tick: Default::default(),
             tether: None,
+            controller: None,
         }
     }
     fn pose(tick: u64, x: f32, yaw: f32) -> bri_net::protocol::Pose {
@@ -2947,3 +2967,7 @@ mod tests {
         Ok(())
     }
 }
+
+#[cfg(test)]
+#[path = "crew_link_tests.rs"]
+mod crew_link_tests;

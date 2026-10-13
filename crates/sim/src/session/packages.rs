@@ -31,6 +31,7 @@ mod brick_events;
 mod brick_fields;
 mod brick_hooks;
 mod chat_hooks;
+mod contacts;
 pub(in crate::session) use brick_events::Follower;
 pub(in crate::session) use chat_hooks::{ChatAnswer, DeathLine};
 mod game_hooks;
@@ -356,6 +357,8 @@ pub(super) struct PackageHost {
     item_hooks: item_hooks::ItemHooks,
     /// Pending `on_minigame` events and who stands in each zone.
     game_hooks: game_hooks::GameHooks,
+    /// Which bodies touch, for `on_contact`.
+    contacts: contacts::Contacts,
     /// What each Add-On keeps on the host ([`AddOnData`]), by package.
     host_data: BTreeMap<String, BTreeMap<String, serde_json::Value>>,
     /// Values rules keep on bricks (`set_brick_field`).
@@ -567,10 +570,11 @@ fn diagnostics_error(problems: Vec<Diagnostic>) -> anyhow::Error {
 /// A package archetype: its base with the declared overrides. Movement
 /// constants merge by name, so a package names only what it changes and the
 /// motor's own check decides what is valid.
-fn archetype(
+pub(super) fn archetype(
     table: &crate::archetype::Archetypes,
     id: &str,
     def: &bri_package_runtime::content::ArchetypeDef,
+    catalog: &Catalog,
 ) -> Result<crate::archetype::Archetype> {
     let base = match def.adjusts.as_ref().or(def.base.as_ref()) {
         Some(base) => table
@@ -591,6 +595,13 @@ fn archetype(
         fields.insert(name.clone(), value.clone());
     }
     archetype.movement = serde_json::from_value(movement).context("movement")?;
+    if let Some(sockets) = &def.sockets {
+        archetype.sockets = sockets.clone();
+        body_eyes(&mut archetype.movement, sockets, &def.movement);
+    }
+    if let Some(animations) = &def.animations {
+        archetype.look.animations = animations.clone();
+    }
     archetype.id = id.into();
     archetype.name = def.name.clone();
     if let Some(v) = def.max_health {
@@ -627,8 +638,32 @@ fn archetype(
     if let Some(v) = def.third_person_only {
         archetype.look.third_person_only = v;
     }
+    if let Some(camera) = &def.camera {
+        archetype.look.camera = camera.clone();
+    }
+    if let Some(v) = &def.intent_clips {
+        archetype.look.intent_clips = v.clone();
+    }
+    if let Some(v) = &def.intent_sounds {
+        archetype.look.intent_sounds = v.clone();
+    }
+    if let Some(v) = &def.ground_speeds {
+        archetype.look.ground_speeds = v.clone();
+    }
+    if let Some(v) = def.max_time_scale {
+        archetype.look.max_time_scale = v;
+    }
     if let Some(v) = def.uses_items {
         archetype.uses_items = v;
+    }
+    if let Some(controller) = &def.controller {
+        let module = catalog.controller(controller).with_context(|| {
+            format!("controller {controller} is not provided by an Add-On that is on")
+        })?;
+        archetype.controller = Some(crate::archetype::ControllerSource {
+            id: controller.clone(),
+            module: module.to_vec(),
+        });
     }
     let sounds = &mut archetype.sounds;
     for (to, from) in [
@@ -642,6 +677,43 @@ fn archetype(
     }
     archetype.validate()?;
     Ok(archetype)
+}
+
+/// Eye heights from the body: an archetype whose `eye` socket is an offset
+/// from the feet sees from there, and crouches and sits by the Blockhead's
+/// proportions, unless its `movement` sets those heights itself.
+fn body_eyes(
+    movement: &mut crate::player::PlayerTuning,
+    sockets: &bri_content::body::Sockets,
+    set: &serde_json::Map<String, serde_json::Value>,
+) {
+    let Some(eye) = sockets.eye.as_ref().filter(|e| e.node.is_none()) else {
+        return;
+    };
+    let blockhead = crate::player::PlayerTuning::default();
+    let [_, up, forward] = eye.offset;
+    if up <= 0.0 {
+        return;
+    }
+    let ratio = up / blockhead.stand_eye;
+    let put = |name: &str, field: &mut f32, value: f32| {
+        if !set.contains_key(name) {
+            *field = value;
+        }
+    };
+    put("stand_eye", &mut movement.stand_eye, up);
+    put("eye_forward", &mut movement.eye_forward, -forward);
+    put(
+        "crouch_eye",
+        &mut movement.crouch_eye,
+        blockhead.crouch_eye * ratio,
+    );
+    put("sit_eye", &mut movement.sit_eye, blockhead.sit_eye * ratio);
+    put(
+        "sit_eye_forward",
+        &mut movement.sit_eye_forward,
+        blockhead.sit_eye_forward * ratio,
+    );
 }
 
 impl Session {
@@ -671,17 +743,25 @@ impl Session {
             let index = archetypes
                 .find(stock)
                 .with_context(|| format!("Archetype {id}: {stock} is not a v20 player type"))?;
-            let mut adjusted =
-                archetype(&archetypes, id, def).with_context(|| format!("Archetype {id}"))?;
+            let mut adjusted = archetype(&archetypes, id, def, &catalog)
+                .with_context(|| format!("Archetype {id}"))?;
             let original = archetypes.resolve(index);
             adjusted.id = original.id.clone();
             adjusted.name = original.name.clone();
             archetypes.replace(index, adjusted)?;
         }
         for (id, def) in catalog.archetypes().filter(|(_, d)| d.adjusts.is_none()) {
-            let archetype =
-                archetype(&archetypes, id, def).with_context(|| format!("Archetype {id}"))?;
+            let archetype = archetype(&archetypes, id, def, &catalog)
+                .with_context(|| format!("Archetype {id}"))?;
             archetypes.add(archetype)?;
+        }
+        // A controller that does not load refuses the Add-On now, with its
+        // reason, rather than leaving a body that moves unlike its Add-On.
+        if let Some((id, why)) = crate::archetype::bind_controllers(&mut archetypes)
+            .into_iter()
+            .next()
+        {
+            return Err(why.context(format!("Archetype {id}: its controller")));
         }
         self.archetypes = archetypes;
         self.fill_body_mount_points()?;
@@ -763,6 +843,7 @@ impl Session {
             in_damage_hook: false,
             item_hooks: Default::default(),
             game_hooks: Default::default(),
+            contacts: Default::default(),
             host_data: BTreeMap::new(),
             brick_fields: Default::default(),
             brick_watch: Default::default(),
@@ -2661,6 +2742,23 @@ impl Session {
         // `serverCmdTripOut`: an administrator's joke.
         let typed_trip_out =
             request.package.is_empty() && request.command.eq_ignore_ascii_case("tripout");
+        // `/tune`: the host changes an Add-On body's numbers.
+        let typed_tune = request.package.is_empty() && request.command.eq_ignore_ascii_case("tune");
+        // `/body`: become another body this game lets one pick.
+        let typed_body = request.package.is_empty() && request.command.eq_ignore_ascii_case("body");
+        let body_words = (typed_body || typed_tune).then(|| {
+            request
+                .args
+                .iter()
+                .map(|a| match a {
+                    PackageArg::String(word) => word.clone(),
+                    PackageArg::Int(n) => n.to_string(),
+                    PackageArg::Float(n) => n.to_string(),
+                    PackageArg::Bool(b) => b.to_string(),
+                })
+                .collect::<Vec<_>>()
+                .join(" ")
+        });
         let request = match self.resolve_typed_command(request) {
             Ok(request) => request,
             Err(_) if typed_brick_count => {
@@ -2677,6 +2775,20 @@ impl Session {
             }
             Err(_) if typed_trip_out => {
                 self.trip_out(owner)?;
+                return Ok(Reply::Accepted);
+            }
+            Err(_) if typed_tune => {
+                let words: Vec<String> = body_words
+                    .as_deref()
+                    .unwrap_or_default()
+                    .split_whitespace()
+                    .map(str::to_string)
+                    .collect();
+                self.tune_command(owner, &words);
+                return Ok(Reply::Accepted);
+            }
+            Err(_) if typed_body => {
+                self.body_command(owner, body_words.as_deref().unwrap_or_default())?;
                 return Ok(Reply::Accepted);
             }
             Err(error) => return Err(error),
@@ -3714,6 +3826,45 @@ impl Session {
             }
         }
     }
+    /// `on_bot_ability(bot, kind, ability, target)` of every package that
+    /// declares it, in load order: `bot` has wound up its kind's ability
+    /// (`BotKind::ability`) and the Add-On says what it does. Whether any
+    /// package heard it.
+    pub(super) fn package_bot_ability(
+        &mut self,
+        bot: OwnerId,
+        kind: &str,
+        ability: &str,
+        target: Option<OwnerId>,
+    ) -> bool {
+        let Some(host) = self.packages.as_ref() else {
+            return false;
+        };
+        let hooks: Vec<String> = host
+            .catalog
+            .behaviours()
+            .filter(|(_, b)| b.on_bot_ability)
+            .map(|(id, _)| id.clone())
+            .collect();
+        for package in &hooks {
+            let _ = self.run_package(
+                package,
+                "on_bot_ability",
+                vec![
+                    Dynamic::from_int(bot as i64),
+                    Dynamic::from(kind.to_owned()),
+                    Dynamic::from(ability.to_owned()),
+                    target.map_or(Dynamic::UNIT, |t| Dynamic::from_int(t as i64)),
+                ],
+                Budget::Command,
+                None,
+                None,
+                None,
+            );
+            self.charge_work(package);
+        }
+        !hooks.is_empty()
+    }
     fn deliver_deaths(&mut self) {
         let Some(host) = self.packages.as_mut() else {
             return;
@@ -4045,5 +4196,40 @@ mod allowance_tests {
                 assert_eq!(copy.available(&key, later), peeked, "tick {later}");
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod archetype_tests {
+    /// An Add-On's archetype JSON sets how its body looks while it moves:
+    /// the clip and sound for each controller intent and the speed its
+    /// locomotion clips play at.
+    #[test]
+    fn an_archetype_names_its_intent_clips_sounds_and_clip_speeds() -> anyhow::Result<()> {
+        let def: bri_package_runtime::content::ArchetypeDef =
+            serde_json::from_value(serde_json::json!({
+                "schema_version": 1, "name": "Plumber",
+                "intent_clips": { "11": "triple" },
+                "intent_sounds": { "11": "plumber:sound/yahoo" },
+                "ground_speeds": { "run": 9.0 },
+                "max_time_scale": 2.0
+            }))?;
+        def.validate()?;
+        let a = super::archetype(
+            &crate::archetype::Archetypes::default(),
+            "plumber:archetype/plumber",
+            &def,
+            &Default::default(),
+        )?;
+        assert_eq!(a.look.intent_clips[&11], "triple");
+        assert_eq!(a.look.intent_sounds[&11], "plumber:sound/yahoo");
+        assert_eq!(a.look.ground_speeds["run"], 9.0);
+        assert_eq!(a.look.max_time_scale, 2.0);
+        let bad: bri_package_runtime::content::ArchetypeDef =
+            serde_json::from_value(serde_json::json!({
+                "schema_version": 1, "ground_speeds": { "jump": 9.0 }
+            }))?;
+        assert!(bad.validate().is_err());
+        Ok(())
     }
 }

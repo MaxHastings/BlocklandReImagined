@@ -126,6 +126,7 @@ fn seat(node: &str, position: [f32; 3], controls: bool, weapon: bool) -> Seat {
         pose: "sit".into(),
         controls,
         weapon,
+        hands: Default::default(),
     }
 }
 
@@ -140,6 +141,7 @@ fn tire() -> Tire {
         longitudinal_force: 3000.,
         longitudinal_damping: 300.,
         longitudinal_relaxation: 1.,
+        lateral_grip: 1.,
     }
 }
 
@@ -154,6 +156,7 @@ fn wheel(position: [f32; 3], steering: f32, powered: bool) -> Wheel {
         spring: 3000.,
         damping: 300.,
         anti_sway: 500.,
+        rebound_damping: 0.,
         tire: tire(),
         steering,
         powered,
@@ -242,9 +245,13 @@ fn base(id: &str, name: &str, family: Family) -> Definition {
         impact_threshold: 0.,
         impact_damage: 0.,
         strafe_steering: false,
+        throttle_brakes: false,
+        reverse_limited: false,
         steering: SteeringSettings::default(),
         wheeled_flight: None,
         threads: vec![],
+        engine_curve: vec![],
+        gravity_scale: None,
         look_pitch: [-1., 1.],
         underwater_speeds: [0.; 3],
         camera: VehicleCamera {
@@ -269,6 +276,7 @@ fn base(id: &str, name: &str, family: Family) -> Definition {
         blast_scale: None,
         trails: vec![],
         effects: VehicleEffects::default(),
+        engine_sound: None,
         authored: BTreeMap::new(),
         adaptations: vec![],
     }
@@ -371,6 +379,8 @@ pub fn tank() -> Definition {
             charge_steps: 1,
             sound: "test:sound/shell-fire".into(),
             effect: "test:effect/shell-smoke".into(),
+            automatic: None,
+            recoil: None,
             look_muzzle: vec![],
         }),
         attachment_model: Some("test/tank-turret.dts".into()),
@@ -434,6 +444,7 @@ pub fn skis() -> Definition {
         longitudinal_force: 0.,
         longitudinal_damping: 0.,
         longitudinal_relaxation: 0.,
+        lateral_grip: 1.,
     };
     // Springs far too soft for the weight: the skis ride on their body.
     let ski = |x: f32, z: f32| Wheel {
@@ -443,6 +454,7 @@ pub fn skis() -> Definition {
         spring: 100.,
         damping: 20.,
         anti_sway: 0.,
+        rebound_damping: 0.,
         tire: frictionless.clone(),
         steering: 0.,
         powered: false,
@@ -589,6 +601,8 @@ pub fn cannon() -> Definition {
             charge_steps: 4,
             sound: "test:sound/cannon-fire".into(),
             effect: "test:effect/cannon-smoke".into(),
+            automatic: None,
+            recoil: None,
             look_muzzle: vec![],
         }),
         mass: 200.,
@@ -610,6 +624,8 @@ pub fn turret() -> Definition {
             charge_steps: 1,
             sound: "test:sound/turret-fire".into(),
             effect: String::new(),
+            automatic: None,
+            recoil: None,
             look_muzzle: vec![],
         }),
         mass: 150.,

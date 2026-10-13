@@ -8,7 +8,10 @@
 use crate::player::PlayerTuning;
 use crate::player_types::PlayerType;
 use anyhow::{Result, ensure};
+use bri_content::body::{Animations, Sockets};
+use bri_content::camera::CameraProfile;
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 
 /// Index into an [`Archetypes`] table. `0` is v20's standard player.
 #[derive(
@@ -18,6 +21,8 @@ pub struct ArchetypeId(pub u16);
 
 /// Most archetypes one table holds: v20's eight plus packages'.
 pub const MAX_ARCHETYPES: usize = 256;
+/// Most controller module bytes one table carries, all archetypes together.
+pub const MAX_CONTROLLER_BYTES: usize = 1024 * 1024;
 /// Most riders one rideable archetype seats.
 pub const MAX_MOUNT_POINTS: usize = 8;
 
@@ -47,6 +52,15 @@ pub struct Archetype {
     /// (Slayer's `PlayerFrozenArmor`) does not.
     #[serde(default = "yes", skip_serializing_if = "is_yes")]
     pub uses_items: bool,
+    /// Where items attach, the eye and the hip ([`Sockets`]); each left out
+    /// is the Blockhead's node.
+    #[serde(default, skip_serializing_if = "Sockets::is_default")]
+    pub sockets: Sockets,
+    /// Its own movement rules (`crate::controller`): the module the host
+    /// runs and sends, so clients predict with exactly the same bytes.
+    /// [`Archetypes::bind_controllers`] makes it run.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub controller: Option<crate::controller::ControllerSource>,
     /// What it sounds like jumping, hurting and dying.
     #[serde(default, skip_serializing_if = "Sounds::is_standard")]
     pub sounds: Sounds,
@@ -120,6 +134,48 @@ pub struct Look {
     /// `thirdPersonOnly`: the camera stays behind the body.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub third_person_only: bool,
+    /// The model's clip for each animation role (`idle`, `run`, `sit`...);
+    /// a role left out asks for the Blockhead's clip name.
+    #[serde(default, skip_serializing_if = "Animations::is_empty")]
+    pub animations: Animations,
+    /// The body's camera: field of view, first-person offset, bob, weapon
+    /// sway and third-person pivot. The default is the stock camera.
+    #[serde(default, skip_serializing_if = "CameraProfile::is_default")]
+    pub camera: CameraProfile,
+    /// The model's clip for each of its movement controller's intents
+    /// (`crate::controller::ControllerState::intent`): `{"11": "triple"}`
+    /// plays the model's `triple` sequence while the controller says 11.
+    /// An intent with no clip, or a clip the model lacks, plays the clip
+    /// the body's motion picks, as for every body.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub intent_clips: BTreeMap<u8, String>,
+    /// A sound (a sound id of the Add-On's packs) heard where the body is
+    /// each time its controller changes to that intent: the jump, the wall
+    /// kick, the ground pound's thud.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub intent_sounds: BTreeMap<u8, String>,
+    /// The speed (units/s) at which the clip for each locomotion role (`run`,
+    /// `back`, `side`, `crouch_run`...) plays at 1x; the clip then plays
+    /// faster or slower with the body's speed, as v20 plays its run by the
+    /// ground its sequence covers. A role left out uses its clip's own
+    /// ground motion, and a clip without any keeps its own time.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub ground_speeds: bri_content::body::GroundSpeeds,
+    /// The fastest a locomotion clip plays for its speed (v20's
+    /// `maxTimeScale`, 1.5).
+    #[serde(
+        default = "default_max_time_scale",
+        skip_serializing_if = "is_default_max_time_scale"
+    )]
+    pub max_time_scale: f32,
+}
+/// v20's `PlayerData::maxTimeScale`.
+pub const MAX_TIME_SCALE: f32 = 1.5;
+fn default_max_time_scale() -> f32 {
+    MAX_TIME_SCALE
+}
+fn is_default_max_time_scale(v: &f32) -> bool {
+    *v == MAX_TIME_SCALE
 }
 /// v20's horse (`horse.dts`): players and entities with this look draw
 /// and carry items as a horse.
@@ -149,6 +205,16 @@ impl Archetype {
                 && (1.0..=100_000.0).contains(&self.max_health)
                 && self.look.camera_distance.is_finite()
                 && (0.0..=64.0).contains(&self.look.camera_distance)
+                && self
+                    .look
+                    .intent_clips
+                    .values()
+                    .chain(self.look.intent_sounds.values())
+                    .all(|name| {
+                        !name.is_empty() && name.len() <= 160 && !name.chars().any(char::is_control)
+                    })
+                && self.look.max_time_scale.is_finite()
+                && (0.1..=16.0).contains(&self.look.max_time_scale)
                 && self.sounds.valid()
                 && self.mount_points.len() <= MAX_MOUNT_POINTS
                 && self.mount_points.iter().all(|m| {
@@ -161,6 +227,13 @@ impl Archetype {
             "Invalid archetype {}",
             self.id
         );
+        self.sockets.validate()?;
+        bri_content::body::validate_animations(&self.look.animations)?;
+        bri_content::body::validate_ground_speeds(&self.look.ground_speeds)?;
+        self.look.camera.validate()?;
+        if let Some(source) = &self.controller {
+            source.validate()?;
+        }
         Ok(())
     }
     fn v20(kind: PlayerType) -> Self {
@@ -182,8 +255,16 @@ impl Archetype {
                 camera_distance: 8.0,
                 first_person_only: false,
                 third_person_only: false,
+                animations: Animations::new(),
+                camera: CameraProfile::default(),
+                intent_clips: BTreeMap::new(),
+                intent_sounds: BTreeMap::new(),
+                ground_speeds: Default::default(),
+                max_time_scale: MAX_TIME_SCALE,
             },
             uses_items: true,
+            sockets: Sockets::default(),
+            controller: None,
             sounds: Sounds {
                 jump: (kind == PlayerType::Horse).then(|| "HorseJumpSound".into()),
                 ..Default::default()
@@ -275,11 +356,79 @@ impl Archetypes {
         }
         Ok(())
     }
+    /// The bodies a player may be offered (a brick's ChangeDatablock list,
+    /// the mini-game's player types, `/body`): v20's selectable player
+    /// types, then every package archetype with a name, in table order.
+    pub fn choosable(&self) -> impl Iterator<Item = (ArchetypeId, &Archetype)> {
+        PlayerType::ALL
+            .into_iter()
+            .map(|t| (t.archetype(), self.resolve(t.archetype())))
+            .chain(
+                self.iter()
+                    .skip(PlayerType::EVERY.len())
+                    .filter(|(_, a)| !a.name.is_empty()),
+            )
+    }
+    /// The choosable body a player names: by archetype id, v20 datablock
+    /// name or shown name, ignoring case.
+    pub fn choice(&self, named: &str) -> Option<ArchetypeId> {
+        let named = named.trim();
+        let by_datablock = PlayerType::from_datablock_name(named).map(PlayerType::archetype);
+        self.choosable()
+            .find(|(id, a)| {
+                Some(*id) == by_datablock
+                    || a.id.eq_ignore_ascii_case(named)
+                    || a.name.eq_ignore_ascii_case(named)
+            })
+            .map(|(id, _)| id)
+    }
     pub fn iter(&self) -> impl Iterator<Item = (ArchetypeId, &Archetype)> {
         self.0
             .iter()
             .enumerate()
             .map(|(i, a)| (ArchetypeId(i as u16), a))
+    }
+    /// Make every archetype's controller run: `compile` turns a module into
+    /// a controller (the engine's WebAssembly host), once per distinct
+    /// module. An archetype whose module does not compile moves by the
+    /// motor alone; its id and the reason are returned, for the host to
+    /// refuse the Add-On and a client to report.
+    pub fn bind_controllers(
+        &mut self,
+        compile: &mut dyn FnMut(
+            &crate::controller::ControllerSource,
+        ) -> Result<crate::controller::Controller>,
+    ) -> Vec<(String, anyhow::Error)> {
+        let mut built: Vec<(
+            &crate::controller::ControllerSource,
+            crate::controller::Controller,
+        )> = Vec::new();
+        let mut failed = Vec::new();
+        let mut bound = Vec::with_capacity(self.0.len());
+        for archetype in &self.0 {
+            let Some(source) = &archetype.controller else {
+                bound.push(None);
+                continue;
+            };
+            if let Some((_, c)) = built.iter().find(|(s, _)| *s == source) {
+                bound.push(Some(c.clone()));
+                continue;
+            }
+            match compile(source) {
+                Ok(c) => {
+                    built.push((source, c.clone()));
+                    bound.push(Some(c));
+                }
+                Err(e) => {
+                    failed.push((archetype.id.clone(), e));
+                    bound.push(None);
+                }
+            }
+        }
+        for (archetype, controller) in self.0.iter_mut().zip(bound) {
+            archetype.movement.controller = controller;
+        }
+        failed
     }
     pub fn highest_max_health(&self) -> f32 {
         self.0.iter().map(|a| a.max_health).fold(0.0, f32::max)
@@ -289,6 +438,15 @@ impl Archetypes {
         ensure!(
             self.0.len() >= PlayerType::EVERY.len() && self.0.len() <= MAX_ARCHETYPES,
             "Invalid archetype table"
+        );
+        ensure!(
+            self.0
+                .iter()
+                .filter_map(|a| a.controller.as_ref())
+                .map(|c| c.module.len())
+                .sum::<usize>()
+                <= MAX_CONTROLLER_BYTES,
+            "Archetype controllers exceed {MAX_CONTROLLER_BYTES} bytes"
         );
         for (i, a) in self.0.iter().enumerate() {
             a.validate()?;

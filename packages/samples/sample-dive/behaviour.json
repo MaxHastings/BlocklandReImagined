@@ -1,0 +1,8 @@
+{
+  "schema_version": 1,
+  "script": "dive.rhai",
+  "commands": [
+    { "name": "diver", "cooldown_ticks": 30 },
+    { "name": "blockhead", "cooldown_ticks": 30 }
+  ]
+}

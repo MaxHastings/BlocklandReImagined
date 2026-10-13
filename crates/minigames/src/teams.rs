@@ -42,6 +42,13 @@ impl MinigamesWorld {
             if !valid_team_name(&spec.name) {
                 return Err(Error::InvalidSettings);
             }
+            if spec
+                .player_type
+                .as_ref()
+                .is_some_and(|b| !self.catalog.player_types.contains(b))
+            {
+                return Err(Error::UnknownContent);
+            }
             if let Some(id) = spec.id
                 && (!TeamId::valid(id) || !kept.insert(id))
             {
@@ -81,6 +88,7 @@ impl MinigamesWorld {
                     id,
                     name: spec.name,
                     color: spec.color,
+                    player_type: spec.player_type,
                     addon_settings: old
                         .remove(&id)
                         .filter(|_| !fresh.contains(&id))

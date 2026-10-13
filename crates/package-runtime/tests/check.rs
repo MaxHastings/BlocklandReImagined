@@ -17,6 +17,17 @@ fn write(dir: &Path, file: &str, value: serde_json::Value) {
     std::fs::create_dir_all(dir).unwrap();
     std::fs::write(dir.join(file), value.to_string()).unwrap();
 }
+fn copy_dir(from: &Path, to: &Path) {
+    std::fs::create_dir_all(to).unwrap();
+    for entry in std::fs::read_dir(from).unwrap().flatten() {
+        let target = to.join(entry.file_name());
+        if entry.path().is_dir() {
+            copy_dir(&entry.path(), &target);
+        } else {
+            std::fs::copy(entry.path(), target).unwrap();
+        }
+    }
+}
 fn manifest(id: &str, extra: serde_json::Value) -> serde_json::Value {
     let mut m = json!({
         "schema_version": 1, "id": id, "version": "1.0.0", "api": 1,
@@ -157,6 +168,8 @@ fn weapons_and_bricks_are_shared_and_the_screen_agrees() {
     assert_eq!(side_for(["weapons"]), Some(Side::Shared));
     assert_eq!(side_for(["bricks"]), Some(Side::Shared));
     assert_eq!(side_for(["archetype"]), Some(Side::Server));
+    // A player type with its body: everyone draws the body.
+    assert_eq!(side_for(["archetype", "body"]), Some(Side::Shared));
     // One rule: a kind the host alone loads is a server kind on the Add-Ons
     // screen too, and the screen's client kinds are ones clients load.
     use bri_package::library::{CLIENT_KINDS, SERVER_KINDS};
@@ -361,4 +374,80 @@ fn timing_and_state_limits_are_named_before_the_game_runs() {
     );
     assert!(found[0].message.contains("Ready → Dry → Ready"), "{report}");
     assert!(found[1].message.contains("`log`"), "{report}");
+}
+
+#[test]
+fn a_sound_the_game_cannot_decode_fails_the_check() {
+    let sample = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../packages/samples/sample-bubble-blaster/assets/weapons.json");
+    let mut weapons: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(sample).unwrap()).unwrap();
+    weapons["sounds"] = json!({
+        "sounds:good": { "file": "sounds/good.wav" },
+        "sounds:adpcm": { "file": "sounds/adpcm.wav" },
+        "sounds:garbage": { "file": "sounds/garbage.ogg" },
+        "sounds:missing": { "file": "sounds/missing.wav" },
+        "sounds:stock": { "file": "base/data/sound/clickMove.wav", "stock": true },
+    });
+    let dir = tempfile::tempdir().unwrap();
+    let add_on = dir.path().join("sounds");
+    write(&add_on, "package.json", manifest("sounds", json!({})));
+    write(&add_on.join("assets"), "weapons.json", weapons);
+    let folder = add_on.join("assets/sounds");
+    std::fs::create_dir_all(&folder).unwrap();
+    let good = bri_audio::wav::encode_pcm16(22050, 1, &[0.25; 2205]);
+    std::fs::write(folder.join("good.wav"), &good).unwrap();
+    // A well-formed header for a codec the game does not decode (MS ADPCM),
+    // like the Add-On sounds that loaded and then played silence.
+    let mut adpcm = good.clone();
+    adpcm[20..22].copy_from_slice(&2u16.to_le_bytes());
+    std::fs::write(folder.join("adpcm.wav"), &adpcm).unwrap();
+    std::fs::write(folder.join("garbage.ogg"), b"not a sound at all").unwrap();
+
+    let report = check(&add_on);
+    assert!(!report.ok, "{report}");
+    let mut bad: Vec<_> = report
+        .diagnostics
+        .iter()
+        .filter(|d| d.code == "check.sound")
+        .map(|d| d.message.split(' ').nth(1).unwrap())
+        .collect();
+    bad.sort();
+    assert_eq!(
+        bad,
+        ["sounds:adpcm", "sounds:garbage", "sounds:missing"],
+        "{report}"
+    );
+    assert!(report.to_string().contains("will not play"), "{report}");
+}
+
+#[test]
+fn a_vehicle_engine_sound_must_be_a_declared_loop() {
+    let buggy = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../packages/playground/playground-buggy");
+    let report = check(&buggy);
+    assert!(report.ok, "{report}");
+    assert!(codes(&report).is_empty(), "{report}");
+
+    // A copy whose engine sound plays once, then one naming no sound.
+    let dir = tempfile::tempdir().unwrap();
+    let copy = dir.path().join("playground-buggy");
+    copy_dir(&buggy, &copy);
+    let read = |file: &str| -> serde_json::Value {
+        serde_json::from_slice(&std::fs::read(copy.join(file)).unwrap()).unwrap()
+    };
+    let mut weapons = read("assets/weapons.json");
+    weapons["sounds"]["playground-buggy:engine"]["looping"] = json!(false);
+    write(&copy.join("assets"), "weapons.json", weapons);
+    let report = check(&copy);
+    assert!(report.ok, "{report}");
+    assert_eq!(codes(&report), ["check.vehicles.engine_sound"], "{report}");
+    assert!(report.to_string().contains("plays once"), "{report}");
+
+    let mut vehicles = read("assets/vehicles.json");
+    vehicles["definitions"][0]["engine_sound"]["sound"] = json!("playground-buggy:motor");
+    write(&copy.join("assets"), "vehicles.json", vehicles);
+    let report = check(&copy);
+    assert!(!report.ok, "{report}");
+    assert!(report.to_string().contains("is not declared"), "{report}");
 }

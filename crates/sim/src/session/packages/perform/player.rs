@@ -44,28 +44,23 @@ impl Perform for ops::Teleport {
 impl Perform for ops::SetArchetype {
     fn perform(self, session: &mut Session, _cx: OpCall<'_>) -> Result<()> {
         let ops::SetArchetype { player, archetype } = self;
-        let chosen = if archetype.is_empty() {
-            None
-        } else {
-            Some(
-                session
-                    .archetypes
-                    .find(&archetype)
-                    .with_context(|| format!("No archetype {archetype}"))?,
-            )
-        };
-        let peer = session.peers.get_mut(&player).context("No such player")?;
-        peer.package_archetype = chosen;
-        if let Some(chosen) = chosen
-            && peer.combat.alive
-        {
-            // Under laid-on archetypes it changes the one beneath.
-            match &mut peer.overlays {
-                Some(overlays) => overlays.base = chosen,
-                None => session.set_player_archetype(player, chosen)?,
-            }
+        ensure!(session.peers.contains_key(&player), "No such player");
+        if archetype.is_empty() {
+            session.forget_body(player);
+            return Ok(());
         }
-        Ok(())
+        let chosen = session
+            .archetypes
+            .find(&archetype)
+            .with_context(|| format!("No archetype {archetype}"))?;
+        session
+            .choose_body(
+                player,
+                chosen,
+                crate::session::bodies::Chooser::AddOn,
+                crate::session::bodies::Room::Forced,
+            )
+            .map(drop)
     }
 }
 impl Perform for ops::PushArchetype {

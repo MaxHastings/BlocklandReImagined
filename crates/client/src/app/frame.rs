@@ -86,6 +86,8 @@ impl App {
                 self.ui.apply_session(a.id, UiUpdate::Chat { text });
             }
         }
+        self.notice_add_on_edits();
+        self.refresh_tune();
         let alive = self.local_alive();
         self.follow_control();
         self.controls
@@ -130,6 +132,28 @@ impl App {
             });
         self.controls
             .set_third_person_only(third_person_only.unwrap_or(false));
+        // The active body's camera profile owns the on-foot view; another
+        // body (or none) hands it over at once.
+        let body = self
+            .net
+            .attempt
+            .as_ref()
+            .filter(|a| a.entered)
+            .and_then(|a| {
+                let view = a.view.as_ref()?;
+                let body = self.motion.presented().get(&view.owner)?;
+                let velocity = glam::Vec3::from(body.velocity);
+                Some((
+                    view.archetypes.resolve(body.archetype).look.camera.clone(),
+                    body.scale,
+                    glam::Vec2::new(velocity.x, velocity.z).length(),
+                    body.grounded,
+                ))
+            });
+        let (camera, scale, ground_speed, grounded) = body.unwrap_or_default();
+        self.controls.set_body_camera(&camera, scale);
+        self.controls
+            .advance_body_camera(elapsed.as_secs_f32(), ground_speed, grounded);
         self.controls.advance_view(elapsed.as_secs_f32());
         self.controls.advance_head(elapsed.as_secs_f32());
         let span = crate::frame_trace::span("local game");
@@ -387,6 +411,10 @@ impl App {
                         SeatRole::Gunner => Some(crate::controls::Ride::Hull(frame.rotation)),
                         SeatRole::Actor => None,
                     });
+                    self.controls.hold_world_look(
+                        (role == SeatRole::StrafeDriver && d.steering.toward_look)
+                            .then(|| forward.x.atan2(-forward.z)),
+                    );
                     Some((
                         role,
                         forward.x.atan2(-forward.z),
@@ -513,6 +541,7 @@ impl App {
                 // Riders sit exactly on their rendered vehicle's seat, tilted
                 // with it (`Player::processTick` takes the mount transform).
                 self.mounts.rider_rotations.clear();
+                self.mounts.rider_hands.clear();
                 self.mounts.posed_eye = None;
                 for (owner, vitals) in &view.vitals {
                     let Some((vehicle, seat)) = vitals.mounted else {
@@ -572,6 +601,12 @@ impl App {
                         rotation *= glam::Quat::from_rotation_y(-turn);
                         yaw += turn;
                         self.mounts.rider_rotations.insert(*owner, rotation);
+                        let hands =
+                            self.vehicles
+                                .hand_holds(&self.vehicle_assets, info, usize::from(seat));
+                        if hands.iter().any(Option::is_some) {
+                            self.mounts.rider_hands.insert(*owner, hands);
+                        }
                         let velocity = self
                             .vehicles
                             .frame(vehicle)
@@ -691,6 +726,16 @@ impl App {
                     }
                 }
                 self.audio.sync_image_loops(&loops);
+                let engines = view
+                    .vehicles
+                    .iter()
+                    .filter_map(|(id, info)| {
+                        let d = self.vehicle_assets.definition(&info.definition)?;
+                        let frame = self.vehicles.frame(*id)?;
+                        crate::audio::engine_loop(d, info, frame).map(|e| (*id, e))
+                    })
+                    .collect();
+                self.audio.sync_engines(&engines);
                 if self
                     .music_world
                     .as_ref()
@@ -1017,6 +1062,21 @@ impl App {
                     }
                     self.avatar.avatars.insert(*owner, mesh);
                 }
+                // How the archetype fits the drawn mesh: its sockets and
+                // clips, or a box (or no) body the mesh only stands in for.
+                let archetype = view.archetypes.resolve(player.archetype);
+                let stand_in = model.is_none()
+                    && (look.hides_body()
+                        || packages_for(&self.addons.package_catalog, view)
+                            .is_some_and(|catalog| catalog.model(&look.model).is_some()));
+                let mesh = self.avatar.avatars.get_mut(owner).unwrap();
+                mesh.set_body_kind(crate::avatar::BodyKind::of(archetype, stand_in));
+                crate::avatar::report_body(
+                    &archetype.id,
+                    &look.model,
+                    mesh,
+                    &self.avatar.avatar_assets,
+                );
                 // Death and respawn as of the drawn pose, not the newest vitals.
                 let life = view.vitals.get(owner).map(|vitals| {
                     let (tick, spawned) = if *owner == view.owner {
@@ -1041,8 +1101,13 @@ impl App {
                 }
                 let mut ready_hands = Vec::new();
                 let mut hidden_nodes = Vec::new();
+                // Where the off hand goes on what the right hand holds.
+                let mut support = None;
                 if let Some(images) = view.weapons.images.get(owner) {
                     for mounted in images {
+                        if mounted.hand == 0 {
+                            support = self.world_items.assets().image_support(&mounted.image);
+                        }
                         let image = self.content.weapons.pack.images.get(&mounted.image);
                         if let Some(image) = image {
                             hidden_nodes.extend(image.hide_nodes.iter().cloned());
@@ -1121,9 +1186,21 @@ impl App {
                     .filter(|_| !dead)
                     .cloned()
                     .unwrap_or_default();
+                let riding = view
+                    .vitals
+                    .get(owner)
+                    .is_some_and(|v| v.mounted.is_some() || v.ride.is_some());
                 let input = crate::avatar::AvatarAnimationInput {
                     look_limits,
                     mount_rotation: self.mounts.rider_rotations.get(owner).copied(),
+                    hand_holds: self
+                        .mounts
+                        .rider_hands
+                        .get(owner)
+                        .copied()
+                        .filter(|_| !dead)
+                        .unwrap_or_default(),
+                    support,
                     held_tool_pose: if dead {
                         self.combat.hugging.remove(owner);
                         crate::avatar::HeldToolPose::None
@@ -1143,11 +1220,7 @@ impl App {
                     // Riders hold `root` (`Armor::onMount` sets the action
                     // thread to root and mountThread on thread 0); they do
                     // not run, jump or fall with their mount's motion.
-                    tick_state: if view
-                        .vitals
-                        .get(owner)
-                        .is_some_and(|v| v.mounted.is_some() || v.ride.is_some())
-                    {
+                    tick_state: if riding {
                         Some(bri_sim::player::PlayerState {
                             velocity: [0.0; 3],
                             grounded: true,
@@ -1167,8 +1240,29 @@ impl App {
                         ),
                     )
                     .map_or(0.0, |(_, c)| c),
+                    // A rider's controller does not run, so its last
+                    // intent says nothing about the seat.
+                    intent_clip: player.controller.filter(|_| !riding).and_then(|c| {
+                        view.archetypes
+                            .resolve(player.archetype)
+                            .look
+                            .intent_clips
+                            .get(&c.intent)
+                            .cloned()
+                    }),
                 };
                 let avatar = self.avatar.avatars.get_mut(owner).unwrap();
+                avatar.screen_height = self
+                    .view
+                    .rendered_camera
+                    .zip(self.view.pixels_per_unit)
+                    .map(|((eye, _, _), ppu)| {
+                        let height = bri_sim::water::body_height(
+                            player,
+                            &view.archetypes.tuning(player.archetype, player.scale),
+                        );
+                        height * ppu / eye.distance(Vec3::from(player.feet)).max(0.01)
+                    });
                 let posed = avatar.pose_with_animation(
                     &self.avatar.avatar_assets,
                     player,
@@ -1268,8 +1362,15 @@ impl App {
                     // and the eye is the camera: it pitches, rolls and loops
                     // with any seat, so the image stays where it sits on
                     // screen.
-                    let eye = if owner == view.owner && !third_person {
-                        crate::controls::view_frame(eye, yaw, pitch, roll)
+                    let own_view = owner == view.owner && !third_person;
+                    let eye = if own_view {
+                        // The body's weapon sway and bob ride the view.
+                        crate::controls::view_frame(eye, yaw, pitch, roll).map(|frame| {
+                            match self.controls.view_model_sway() {
+                                Some(sway) => frame * sway,
+                                None => frame,
+                            }
+                        })
                     } else {
                         let (yaw, pitch) = if owner == view.owner {
                             (local_view_yaw, local_view_pitch)
@@ -1280,14 +1381,36 @@ impl App {
                     }?;
                     Some(crate::world_items::MountPose {
                         eye,
-                        // Torque mounts an image whose mount point has no
-                        // `mountN` node (the dribbled basketball's Mount8) at
-                        // the player's own transform.
+                        // The hands are the body's hand sockets, and an
+                        // image for a hand the body has no socket for is not
+                        // drawn. Torque mounts an image whose other mount
+                        // point has no `mountN` node (the dribbled
+                        // basketball's Mount8) at the player's own transform.
                         mounts: (0..32)
-                            .map(|n| {
-                                let node =
-                                    avatar.mount_node(&self.avatar.avatar_assets, n as usize);
-                                (n, node.unwrap_or_else(|| avatar.body_transform()))
+                            .filter_map(|n| {
+                                let aim = if owner == view.owner {
+                                    local_view_pitch
+                                } else {
+                                    player.pitch
+                                };
+                                // A fitted body's hand in first person is
+                                // where it holds from its eye, on screen.
+                                let node = own_view
+                                    .then(|| avatar.first_person_hand(n as usize))
+                                    .flatten()
+                                    .map(|hand| eye * hand)
+                                    .or_else(|| {
+                                        avatar.mount_socket(
+                                            &self.avatar.avatar_assets,
+                                            n as usize,
+                                            aim,
+                                        )
+                                    });
+                                match node {
+                                    Some(node) => Some((n, node)),
+                                    None if n < 2 => None,
+                                    None => Some((n, avatar.body_transform())),
+                                }
                             })
                             .collect(),
                         actions: (0..32)
@@ -1372,6 +1495,9 @@ impl App {
                 .absorb("player and vehicle effects", actors);
             self.fx.explosion_shapes.advance(game_elapsed.as_secs_f32());
             self.fx.beams.advance(game_elapsed.as_secs_f32());
+            self.fx.decals.advance(game_elapsed.as_secs_f32(), |brick| {
+                building.brick_stands(brick)
+            });
             self.fx
                 .explosion_debris
                 .advance(game_elapsed.as_secs_f32(), |from, to| {

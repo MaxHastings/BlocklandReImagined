@@ -234,12 +234,19 @@ pub(super) fn update(
                     b.add_force(Vec3::Y * (n * (1. + d.restitution) * zero), wake);
                 }
             }
-            // The damper only resists compression.
-            let damping = (w.damping * -up.dot(velocity) / length).max(0.);
+            // Torque's damper only resists compression; an Add-On's
+            // `rebound_damping` resists the spring extending again, never
+            // pulling the wheel off the ground harder than it pushes.
+            let closing = -up.dot(velocity);
+            let damping = if closing >= 0. {
+                w.damping * closing / length
+            } else {
+                w.rebound_damping * closing / length
+            };
             let anti_sway = opposite[i]
                 .and_then(|o| extensions[o])
                 .map_or(0., |other| ((other - s.extension) * w.anti_sway).max(0.));
-            let load = spring + damping + anti_sway;
+            let load = (spring + damping + anti_sway).max(0.);
             b.add_force_at_point(up * load, at, wake);
             // The tyre's own axes along the ground.
             let axle = right * cos + forward * (sin * w.steering);
@@ -260,7 +267,11 @@ pub(super) fn update(
                 } else {
                     t.static_friction
                 };
-            let (limit, pull) = (grip * grip, fx * fx + fy * fy);
+            // Across the tyre the grip is `lateral_grip` of the grip along
+            // it: measured against an ellipse, which is Torque's circle
+            // when it is 1 (dividing by 1 changes no bits).
+            let across_share = fx / t.lateral_grip;
+            let (limit, pull) = (grip * grip, across_share * across_share + fy * fy);
             if pull > limit {
                 let k = (limit / pull).sqrt();
                 fx *= k;
@@ -284,12 +295,12 @@ pub(super) fn update(
         // The engine turns powered wheels, less as they near maxWheelSpeed;
         // the tyre's pull turns every wheel back.
         let scale_torque = if w.powered {
-            let max = d.max_speed / radius;
-            if tire.spin.abs() > max {
-                0.
+            let top = if d.reverse_limited && tire.spin < 0. {
+                d.reverse_speed
             } else {
-                1. - tire.spin.abs() / max
-            }
+                d.max_speed
+            };
+            d.engine_torque(tire.spin.abs() / (top / radius))
         } else {
             0.
         };
@@ -483,11 +494,24 @@ mod tests {
     /// replay lands exactly where the host does, slipping tyres included.
     #[test]
     fn a_replay_from_the_hosts_pose_matches_the_host() {
+        replay_matches(|_| {});
+    }
+
+    /// The same with the centre of mass well off the hull's origin (a
+    /// nose-heavy Warthog): the pose's velocity is the origin's or the
+    /// centre's, and the replay must read it the way the host wrote it.
+    #[test]
+    fn a_replay_of_an_off_centre_vehicle_matches_the_host() {
+        replay_matches(|d| d.mass_center = [0.1, 0.05, -0.4]);
+    }
+
+    fn replay_matches(edit: impl Fn(&mut Definition) + Copy) {
         let tank = crate::testing::TANK;
         let full_lock = crate::testing::definition(tank).max_steering;
         // Slick tyres, so the replay has slipping wheels to get right.
         let slick = || {
             crate::testing::pack_with(|d| {
+                edit(d);
                 for wheel in &mut d.wheels {
                     wheel.tire.static_friction = 0.3;
                     wheel.tire.kinetic_friction = 0.2;

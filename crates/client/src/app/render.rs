@@ -35,10 +35,18 @@ impl App {
                 .collect();
         let mut own_package_body = None;
         if let Some(catalog) = package_catalog {
-            for (owner, placement) in
+            for (owner, mut placement) in
                 crate::packages::body_placements(catalog, &view.archetypes, self.motion.presented())
             {
                 hidden.insert(owner);
+                // Seated, tilted with the seat and sitting, as its
+                // stand-in mesh times it.
+                if let Some(p) = &mut placement
+                    && let Some(mesh) = self.avatar.avatars.get(&owner)
+                    && mesh.body_kind().stand_in
+                {
+                    p.pose = Some(mesh.box_pose());
+                }
                 match placement {
                     Some(p) if owner == view.owner && !third_person => own_package_body = Some(p),
                     Some(p) => package_placements.push(p),
@@ -552,6 +560,7 @@ impl App {
             .explosion_shapes
             .upload(renderer, frame.device, frame.queue)?;
         self.fx.beams.upload(renderer, frame.device, frame.queue)?;
+        self.fx.decals.upload(renderer, frame.device, frame.queue)?;
         self.fx
             .tutorial_targets
             .upload(renderer, frame.device, frame.queue)?;
@@ -616,6 +625,8 @@ impl App {
             roll,
         );
         let aspect = frame.size.0 as f32 / frame.size.1 as f32;
+        let fov = vertical_fov(controls.fov().to_radians(), aspect);
+        self.view.pixels_per_unit = Some(frame.size.1 as f32 / (2.0 * (fov * 0.5).tan()));
         let mut camera = Camera::oriented(
             eye.to_array(),
             forward.to_array(),
@@ -877,6 +888,12 @@ impl App {
                 first_person: !third_person,
                 aiming: self.controls.aiming(),
                 alive: view.vitals.get(&view.owner).is_none_or(|v| v.alive),
+                view_model: if third_person {
+                    [0.0; 5]
+                } else {
+                    self.controls.view_model_record()
+                },
+                hud_owned: 0,
             };
             let span = crate::frame_trace::span("Add-On code");
             self.addons.client_code.run_frame(
@@ -1199,6 +1216,7 @@ impl App {
         shared_draws.extend(self.gpu.gpu_terrain.iter().flat_map(|t| t.draws()));
         shared_draws.extend(self.fx.explosion_shapes.draws());
         shared_draws.extend(self.fx.beams.draws());
+        shared_draws.extend(self.fx.decals.draws());
         shared_draws.extend(self.fx.tutorial_targets.draws());
         if let Some((scene, instances)) = &self.gpu.shell_gpu
             && self.fx.weapon_shells.active_count() > 0
@@ -1634,6 +1652,7 @@ impl App {
             self.rebuild_effects_renderer(frame.device, frame.queue, frame.format)?;
         }
         self.item_ui.register_icons(frame);
+        self.addons.hud_regions.register_textures(frame);
         // Until its pipelines finish compiling, the preview stays due.
         if (self.avatar.preview_dirty
             || self.ui.stack().contains(&bri_ui::screens::ScreenId::Avatar))

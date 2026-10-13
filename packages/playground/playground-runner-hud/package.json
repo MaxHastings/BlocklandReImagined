@@ -1,0 +1,22 @@
+{
+  "schema_version": 1,
+  "id": "playground-runner-hud",
+  "version": "1.0.0",
+  "api": 1,
+  "name": "Runner HUD",
+  "description": "The Runner's own HUD, drawn from textures while you are the Runner: a power meter that empties as you are hurt, a cap with a sprite-font health counter, a gold reticle in place of the crosshair, and a sprite-font ammo counter with a magazine bar in place of the ammo display. Part of the Mixed Add-On Playground; switch to another body and the stock HUD comes back.",
+  "authors": ["Blockland ReImagined"],
+  "license": "CC0-1.0",
+  "provenance": { "source": "original" },
+  "dependencies": { "playground-runner": "^1.0.0" },
+  "provides": [
+    { "kind": "hud", "id": "playground-runner-hud:hud/power", "file": "power.json" },
+    { "kind": "hud", "id": "playground-runner-hud:hud/health", "file": "health.json" },
+    { "kind": "hud", "id": "playground-runner-hud:hud/reticle", "file": "reticle.json" },
+    { "kind": "hud", "id": "playground-runner-hud:hud/ammo", "file": "ammo.json" },
+    { "kind": "texture", "id": "playground-runner-hud:texture/power", "file": "textures/power.png" },
+    { "kind": "texture", "id": "playground-runner-hud:texture/digits", "file": "textures/digits.png" },
+    { "kind": "texture", "id": "playground-runner-hud:texture/cap", "file": "textures/cap.png" },
+    { "kind": "texture", "id": "playground-runner-hud:texture/reticle", "file": "textures/reticle.png" }
+  ]
+}

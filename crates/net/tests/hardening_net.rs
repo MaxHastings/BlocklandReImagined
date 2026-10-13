@@ -134,6 +134,7 @@ fn hello(name: &str) -> Hello {
         identity: None,
         accept_differences: false,
         kept: None,
+        arrival: None,
     }
 }
 
@@ -753,7 +754,9 @@ async fn hostile_movement_datagrams_keep_the_attacker_finite_and_in_place() -> R
             inputs: vec![MoveInput::default()],
         },
     ] {
-        datagrams.push(codec::encode_request(&movement, MAX_DATAGRAM)?);
+        // The compact form, as clients send: thirteen named moves no
+        // longer fit one datagram.
+        datagrams.push(codec::encode_datagram(&movement)?);
     }
     datagrams.push(vec![0xff; 64]);
     datagrams.push(Vec::new());

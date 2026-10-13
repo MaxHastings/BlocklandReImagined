@@ -553,6 +553,7 @@ mod tests {
                 speed_scale: 1.0,
                 tick: Default::default(),
                 tether: None,
+                controller: None,
             },
         }
     }
@@ -851,6 +852,45 @@ mod tests {
             (back.scale, back.crouched, back.grounded),
             (2.0, true, true)
         );
+    }
+
+    /// Others see a body its movement controller turned itself (Mario
+    /// running across the camera) face its own way, with its intent's clip;
+    /// the controller's memory stays its owner's, and a blank controller
+    /// costs nothing.
+    #[test]
+    fn a_controllers_heading_and_intent_reach_others_but_not_its_memory() {
+        let mut p = pose(1, 100, 0.0);
+        p.player.yaw = 0.3;
+        let plain = crate::codec::encode_datagram_item(&Datagram::Remote(RemotePose::of(
+            p.tick, &p.player,
+        )))
+        .unwrap()
+        .len();
+        let mut controller = bri_sim::archetype::ControllerState {
+            intent: 11,
+            ..Default::default()
+        };
+        controller.memory[0] = 9;
+        controller.set_heading(Some(-2.0));
+        p.player.controller = Some(controller);
+        let remote = RemotePose::of(p.tick, &p.player);
+        let bytes = crate::codec::encode_datagram_item(&Datagram::Remote(remote.clone())).unwrap();
+        assert!(
+            bytes.len() <= plain + 5,
+            "{} bytes over {plain}",
+            bytes.len()
+        );
+        let back = remote.into_pose().player;
+        assert!((back.body_yaw() + 2.0).abs() < 1e-3, "{}", back.body_yaw());
+        assert!((back.yaw - 0.3).abs() < 1e-3, "the look stays the look");
+        let c = back.controller.unwrap();
+        assert_eq!((c.intent, c.memory[0]), (11, 0));
+        p.player.controller = Some(bri_sim::archetype::ControllerState {
+            memory: controller.memory,
+            ..Default::default()
+        });
+        assert_eq!(RemotePose::of(p.tick, &p.player).controller, None);
     }
 
     #[test]

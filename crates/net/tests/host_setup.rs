@@ -84,6 +84,9 @@ fn content() -> SessionContent {
         }))
         .unwrap(),
         body_mounts: Vec::new(),
+        body_grips: Default::default(),
+        package_body_grips: Default::default(),
+        image_barrels: Default::default(),
         bot_kinds: Vec::new(),
         event_catalog: bri_events::testing::catalog(),
         event_sounds: Vec::new(),
@@ -209,5 +212,66 @@ fn a_session_from_the_setup_has_everything_the_host_installs() -> Result<()> {
     assert_eq!(spawn_points, options().spawn_points);
     assert_eq!(session.spawn_points(), &spawn_points[..]);
     assert!(session.package_save().is_some(), "Add-On scripts installed");
+    Ok(())
+}
+
+/// A game runs the bot kinds whose bodies it has: on a base map with the
+/// Playground mode also on, the mode claims the Stomper and the Fizzer, so
+/// their bodies are not in the game and their bots are left out instead of
+/// refusing to host; a bot with the Blockhead's body always runs.
+#[test]
+fn a_game_runs_only_the_bots_whose_bodies_it_has() -> Result<()> {
+    let packages = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../packages");
+    let kinds = bri_net::content_identity::bot_kinds_from_files(&[
+        (
+            "blockhead_bot/assets/bots.json".into(),
+            packages.join("blockhead_bot/assets/bots.json"),
+        ),
+        (
+            "playground-stomper/bots.json".into(),
+            packages.join("playground/playground-stomper/bots.json"),
+        ),
+        (
+            "playground-fizzer/bots.json".into(),
+            packages.join("playground/playground-fizzer/bots.json"),
+        ),
+    ])?;
+    let set = PackageSet {
+        schema_version: 1,
+        packages: ["playground-stomper", "playground-stomper-look"]
+            .into_iter()
+            .map(|id| PackageEntry {
+                id: id.into(),
+                version: "1.0.0".into(),
+                side: Side::Shared,
+                dir: id.into(),
+                role: None,
+            })
+            .collect(),
+    };
+    let catalog = Catalog::load(&packages.join("playground"), &set, true)
+        .map_err(|e| anyhow::anyhow!("{e:?}"))?;
+    let session = bri_sim::session::Session::new(bri_sim::simulation::Simulation::new(
+        World::new("Bots".into(), "fixture".into(), vec![[1.0; 4]]),
+        Default::default(),
+        Vec::new(),
+    )?);
+    let ids = |kinds: Vec<bri_sim::bot_kind::BotKind>| -> Vec<String> {
+        kinds.into_iter().map(|k| k.id).collect()
+    };
+    assert_eq!(
+        ids(bri_net::host_setup::playable_bot_kinds(
+            &kinds,
+            &session,
+            Some(&catalog)
+        )),
+        ["bot.blockhead", "playground-stomper:bot/stomper"]
+    );
+    assert_eq!(
+        ids(bri_net::host_setup::playable_bot_kinds(
+            &kinds, &session, None
+        )),
+        ["bot.blockhead"]
+    );
     Ok(())
 }

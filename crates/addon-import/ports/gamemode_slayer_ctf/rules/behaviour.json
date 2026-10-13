@@ -15,7 +15,7 @@
     { "name": "ctf", "while_dead": true, "cooldown_ticks": 12 }
   ],
   "settings": [
-    { "key": "flag_returns_to_win", "title": "Flag Captures to Win", "category": "Capture the Flag", "type": "int", "default": {{pref_returns_to_win}}, "min": 0, "max": 100,
+    { "key": "flag_returns_to_win", "title": "Flag Captures", "place": "win", "unit": "returned flags win the round", "category": "Capture the Flag", "type": "int", "default": {{pref_returns_to_win}}, "min": 0, "max": 100,
       "shown_when": { "setting": "{{slayer_rules}}:mode", "is": ["{{ctf_class}}"] } },
     { "key": "flag_return_location", "title": "Flag Return Location", "category": "Capture the Flag", "type": "list", "default": {{pref_return_only_at_return}},
       "items": [ { "value": 0, "name": "Flag Spawn or Flag Return Point" }, { "value": 1, "name": "Flag Return Point Only" } ],
@@ -25,9 +25,9 @@
     { "key": "neutral_flags", "title": "Neutral Flags", "category": "Capture the Flag", "type": "list", "default": {{pref_neutral_flags}},
       "items": [ { "value": 0, "name": "Disabled" }, { "value": 1, "name": "Enabled" }, { "value": 2, "name": "Enabled, Neutral Flags Only" } ],
       "shown_when": { "setting": "{{slayer_rules}}:mode", "is": ["{{ctf_class}}"] } },
-    { "key": "points_flag", "title": "Points for a Flag Return", "category": "Capture the Flag", "type": "int", "default": {{pref_points_flag}}, "min": -999, "max": 999,
+    { "key": "points_flag", "title": "Returning a Flag", "place": "scoring", "unit": "points", "category": "Capture the Flag", "type": "int", "default": {{pref_points_flag}}, "min": -999, "max": 999,
       "shown_when": { "setting": "{{slayer_rules}}:mode", "is": ["{{ctf_class}}"] } },
-    { "key": "points_flag_recovery", "title": "Points for a Flag Recovery", "category": "Capture the Flag", "type": "int", "default": {{pref_points_recovery}}, "min": -999, "max": 999,
+    { "key": "points_flag_recovery", "title": "Recovering a Flag", "place": "scoring", "unit": "points", "category": "Capture the Flag", "type": "int", "default": {{pref_points_recovery}}, "min": -999, "max": 999,
       "shown_when": { "setting": "{{slayer_rules}}:mode", "is": ["{{ctf_class}}"] } },
     { "key": "flag_recovery", "title": "Flag Recovery Mode", "category": "Capture the Flag", "type": "list", "default": {{pref_flag_recovery}},
       "items": [ { "value": 0, "name": "Disabled" }, { "value": 1, "name": "Instant Recovery" }, { "value": 2, "name": "Manual Recovery" } ],

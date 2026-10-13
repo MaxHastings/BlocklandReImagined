@@ -1333,8 +1333,9 @@ impl Session {
 
     /// A smashing vehicle struck something: bricks break under the same
     /// rules a rocket's hit follows, and vehicles take damage where the
-    /// minigame lets its thrower damage them. Credited to whoever threw the
-    /// vehicle, else its owner.
+    /// minigame lets its thrower damage them. Credited as a run-over is: to
+    /// its driver, else whoever threw, held or last pushed it, else its
+    /// owner.
     pub(super) fn vehicle_struck(&mut self, strike: Strike) -> Result<()> {
         let Strike {
             vehicle,
@@ -1354,7 +1355,8 @@ impl Session {
             return Ok(());
         };
         let source = self
-            .mover_credit(ObjectRef::Vehicle(vehicle))
+            .vehicle_driver(VehicleId(vehicle))
+            .or_else(|| self.mover_credit(ObjectRef::Vehicle(vehicle)))
             .unwrap_or(owner);
         if !self.peers.contains_key(&source) || (gentle && self.game_of(source).is_none()) {
             return Ok(());
@@ -1393,6 +1395,21 @@ impl Session {
             self.blow_up_bricks(source, None, point, &around)?;
         }
         Ok(())
+    }
+
+    /// Who sits in `vehicle`'s driving seat, if they are still here.
+    pub(in crate::session) fn vehicle_driver(&self, vehicle: VehicleId) -> Option<OwnerId> {
+        let world = self.vehicles.world.as_ref()?;
+        let seat = world.definition_of(vehicle)?.control_seat()?;
+        let driver = world
+            .vehicle_snapshot(&self.simulation.physics, vehicle)?
+            .seats
+            .get(seat)?
+            .occupant
+            .as_ref()?
+            .owner
+            .0;
+        self.peers.contains_key(&driver).then_some(driver)
     }
 
     /// A momentum smash: the brick struck, then the bricks within the

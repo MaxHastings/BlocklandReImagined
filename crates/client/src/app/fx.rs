@@ -14,6 +14,8 @@ pub(super) struct Effects {
     pub(super) explosion_shapes: crate::explosion_shapes::ExplosionShapes,
     /// Add-On beams: tracers, lasers.
     pub(super) beams: crate::beams::Beams,
+    /// Marks projectiles leave on bricks: bullet holes.
+    pub(super) decals: crate::decals::Decals,
     /// The Tutorial's target practice targets.
     pub(super) tutorial_targets: crate::tutorial_targets::TutorialTargets,
     /// Pieces thrown by explosions with `debris` (vehicle wrecks, tank shells).
@@ -192,6 +194,30 @@ impl App {
                 tracer.color,
                 tracer.width,
                 tracer.seconds,
+            );
+        }
+        // A projectile's mark on the brick it hit, as this client's copy
+        // of the projectile draws it.
+        if let bri_sim::presentation::CueKind::Decal {
+            brick,
+            normal,
+            projectile,
+            scale,
+        } = &cue.kind
+            && let Some(decal) = self
+                .content
+                .weapons
+                .pack
+                .projectiles
+                .get(projectile)
+                .and_then(|p| p.decal.as_ref())
+        {
+            self.fx.decals.add(
+                *brick,
+                Vec3::from(cue.position),
+                Vec3::from(*normal),
+                decal,
+                *scale,
             );
         }
         self.fx.actor_effects.cue(&cue);
@@ -384,6 +410,7 @@ impl App {
         self.fx.actor_effects.reset(checkpoint_cursor);
         self.fx.explosion_shapes.reset(checkpoint_cursor);
         self.fx.beams.clear();
+        self.fx.decals.clear();
         self.fx.explosion_debris.reset(checkpoint_cursor);
         self.fx.weapon_shells.reset(checkpoint_cursor);
         self.fx

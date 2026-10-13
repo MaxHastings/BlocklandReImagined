@@ -1,0 +1,18 @@
+{
+  "schema_version": 1,
+  "id": "sample-trooper",
+  "version": "1.0.0",
+  "api": 1,
+  "name": "Trooper",
+  "description": "A sample movement controller: type /trooper to become a Trooper, a heavy shooter's body. It runs slower than a Blockhead, jumps higher and falls slower, steers in the air and has no jet. Its camera is its own: a narrower view, a heavy step that bobs the view, a weapon that trails your turns, and an over-the-shoulder third person. Type /blockhead to go back.",
+  "authors": ["Blockland ReImagined"],
+  "license": "CC0-1.0",
+  "provenance": { "source": "original" },
+  "capabilities": ["player"],
+  "provides": [
+    { "kind": "behaviour", "id": "sample-trooper:behaviour/rules", "file": "behaviour.json" },
+    { "kind": "script", "id": "sample-trooper:script/rules", "file": "trooper.rhai" },
+    { "kind": "archetype", "id": "sample-trooper:archetype/trooper", "file": "trooper-archetype.json" },
+    { "kind": "controller", "id": "sample-trooper:controller/air-steer", "file": "controller/air_steer.wasm" }
+  ]
+}

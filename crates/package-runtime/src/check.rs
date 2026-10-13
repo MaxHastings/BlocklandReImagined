@@ -239,6 +239,8 @@ pub fn check(folder: &Path) -> Report {
     }
     // Weapons are merged by the engine's content loading rather than the
     // catalog, from `assets/weapons.json` whether or not `provides` lists it.
+    // Every sound the set declares, lower case, and whether it loops.
+    let mut sounds = BTreeMap::new();
     for (manifest, dir) in &found {
         let file = parent.join(dir).join("assets/weapons.json");
         let Ok(bytes) = std::fs::read(&file) else {
@@ -255,6 +257,11 @@ pub fn check(folder: &Path) -> Report {
                 continue;
             }
         };
+        sounds.extend(
+            pack.sounds
+                .iter()
+                .map(|(key, def)| (key.to_ascii_lowercase(), def.looping)),
+        );
         diagnostics.extend(crate::timing::weapon_timing(
             &pack,
             &format!("{}/assets/weapons.json", manifest.id),
@@ -279,6 +286,26 @@ pub fn check(folder: &Path) -> Report {
                 );
             }
         }
+        // Each sound file it ships, through the game's own decoder: a file
+        // the game cannot decode loads with the Add-On but plays silence.
+        // (A `stock` sound is the installed game's copy, not the Add-On's.)
+        for (profile, def) in pack.sounds.iter().filter(|(_, d)| !d.stock) {
+            let loaded =
+                bri_package::path::inside(&bri_weapons::sound_root(&assets, def), &def.file)
+                    .and_then(|path| {
+                        bri_audio::bank::SoundAsset::decoded_file(profile, &path, 1.0, 2.0)
+                    });
+            if let Err(e) = loaded {
+                diagnostics.push(
+                    Diagnostic::error(
+                        "check.sound",
+                        format!("sound {profile} will not play: {e}"),
+                    )
+                    .at(format!("{}/assets/{}", manifest.id, def.file))
+                    .hint("the game plays PCM WAV and Ogg Vorbis files of up to 30 seconds and 8 MiB; re-export it as 16-bit PCM WAV"),
+                );
+            }
+        }
         // Presentation is how items look. Without it the game still loads
         // the Add-On: items use their own models, or the stock models and
         // icons they name, and one the base game lacks shows no model and
@@ -290,6 +317,19 @@ pub fn check(folder: &Path) -> Report {
                     .at(format!("{}/assets/presentation.json", manifest.id))
                     .hint("items then use the stock models and icons they name; run bri-import-addon to convert the Add-On's own art"),
             );
+        }
+    }
+    // Each vehicle's engine sound, against the sounds the set declares.
+    for (manifest, dir) in &found {
+        for provided in manifest.provides.iter().filter(|p| p.kind == "vehicles") {
+            let Ok(bytes) = std::fs::read(parent.join(dir).join(&provided.file)) else {
+                continue;
+            };
+            diagnostics.extend(engine_sound_problems(
+                &bytes,
+                &sounds,
+                &format!("{}/{}", manifest.id, provided.file),
+            ));
         }
     }
     // The state each behaviour declares, against the limits it will meet.
@@ -318,6 +358,53 @@ pub fn check(folder: &Path) -> Report {
         add_ons,
         diagnostics,
     }
+}
+
+/// What is wrong with the engine sounds a vehicles pack (`bytes`, at
+/// `at`) names: an Add-On sound (a namespaced key) that no weapons pack in
+/// the set declares, or one that does not loop. A key without a namespace
+/// is one of the game's own sounds.
+fn engine_sound_problems(
+    bytes: &[u8],
+    sounds: &BTreeMap<String, bool>,
+    at: &str,
+) -> Vec<Diagnostic> {
+    let Ok(pack) = serde_json::from_slice::<serde_json::Value>(bytes) else {
+        return vec![];
+    };
+    let definitions = pack.get("definitions").and_then(|d| d.as_array());
+    let mut problems = Vec::new();
+    for d in definitions.into_iter().flatten() {
+        let Some(sound) = d
+            .get("engine_sound")
+            .and_then(|e| e.get("sound"))
+            .and_then(|s| s.as_str())
+        else {
+            continue;
+        };
+        let vehicle = d.get("id").and_then(|i| i.as_str()).unwrap_or("?");
+        match sounds.get(&sound.to_ascii_lowercase()) {
+            Some(true) => {}
+            Some(false) => problems.push(
+                Diagnostic::warning(
+                    "check.vehicles.engine_sound",
+                    format!("{vehicle}'s engine sound {sound} plays once instead of looping"),
+                )
+                .at(at.to_owned())
+                .hint("declare it with \"looping\": true in the weapons pack's sounds"),
+            ),
+            None if sound.contains(':') => problems.push(
+                Diagnostic::error(
+                    "check.vehicles.engine_sound",
+                    format!("{vehicle}'s engine sound {sound} is not declared"),
+                )
+                .at(at.to_owned())
+                .hint("add it to the sounds of the Add-On's assets/weapons.json, with \"looping\": true"),
+            ),
+            None => {}
+        }
+    }
+    problems
 }
 
 /// Why an item's own model `model` (relative to `assets`) will not draw,

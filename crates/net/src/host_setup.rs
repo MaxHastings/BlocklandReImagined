@@ -25,6 +25,16 @@ pub struct SessionContent {
     pub avatar_catalog: bri_content::avatar::Package,
     /// The Blockhead's mount points (`mountObject`), from its rig.
     pub body_mounts: Vec<bri_sim::archetype::MountPoint>,
+    /// The Blockhead's hand nodes in its aim pose (`shape_grips`), so its
+    /// shots leave the muzzle in its hand.
+    pub body_grips: BTreeMap<String, [f32; 16]>,
+    /// Each Add-On player model's hand nodes in its aim pose, by model
+    /// (`content_identity::package_body_grips`), so an imported body's shots
+    /// leave the muzzle in its hand too.
+    pub package_body_grips: BTreeMap<String, BTreeMap<String, [f32; 16]>>,
+    /// Each image's muzzle in the frame of the hand holding it
+    /// (`bri_weapons::muzzle::barrel`).
+    pub image_barrels: BTreeMap<String, [f32; 3]>,
     pub vehicle_pack: bri_vehicles::Pack,
     pub bot_kinds: Vec<BotKind>,
     pub event_catalog: bri_events::Catalog,
@@ -107,8 +117,16 @@ pub fn hosted(server: Option<&Arc<Catalog>>, map: &str, mode: Option<&str>) -> R
             map.to_owned(),
         ),
     };
-    // Nothing to run: host the plain base game.
-    let catalog = catalog.filter(|c| c.world().is_some() || c.behaviours().next().is_some());
+    // Nothing to run: host the plain base game. A chosen mode always runs:
+    // its mini-game, bodies and loadout need no rules (the Playground's).
+    // So do bodies alone: an imported player type, or an Add-On changing
+    // v20's (`adjusts`), means nothing unless the session installs it.
+    let catalog = catalog.filter(|c| {
+        mode.is_some()
+            || c.world().is_some()
+            || c.behaviours().next().is_some()
+            || c.archetypes().next().is_some()
+    });
     let base_map = catalog
         .as_ref()
         .and_then(|c| c.world().map(|(_, _, w)| w.environment.clone()))
@@ -219,7 +237,17 @@ impl HostSetup {
         session.set_item_bounds(content.item_bounds.clone())?;
         session.set_avatar_catalog(content.avatar_catalog.clone())?;
         session.set_body_mount_points(BLOCKHEAD_MODEL, content.body_mounts.clone())?;
-        session.set_vehicle_pack(content.vehicle_pack.clone(), content.bot_kinds.clone())?;
+        session.set_body_grips(BLOCKHEAD_MODEL, content.body_grips.clone())?;
+        for (model, grips) in &content.package_body_grips {
+            if let Err(error) = session.set_body_grips(model, grips.clone()) {
+                bri_console::warn(format!("{model}: {error:#}; its shots leave the eye"));
+            }
+        }
+        session.set_image_barrels(content.image_barrels.clone())?;
+        session.set_vehicle_pack(
+            content.vehicle_pack.clone(),
+            playable_bot_kinds(&content.bot_kinds, &session, hosted.catalog.as_deref()),
+        )?;
         if let Some(tuning) = &self.bot_tuning {
             let problems = match &self.bot_overrides {
                 Some(overrides) => {
@@ -262,6 +290,13 @@ impl HostSetup {
                 );
                 spawn_points = generated;
             }
+        }
+        if let Some(add_ons) = &self.add_ons {
+            session.set_absent_bodies(absent_bodies(
+                &add_ons.server,
+                add_ons.mode.as_deref(),
+                &hosted.map,
+            ));
         }
         Ok((session, spawn_points))
     }
@@ -325,4 +360,59 @@ impl crate::server::MapHost for HostSetup {
             eprintln!("Could not save the Add-Ons' state: {error:#}");
         }
     }
+}
+
+/// The bodies of the host's enabled Add-Ons that a game of `mode` (None:
+/// Custom) on `map` leaves out, each with why ([`Catalog::left_out`]).
+pub fn absent_bodies(
+    server: &Catalog,
+    mode: Option<&str>,
+    map: &str,
+) -> Vec<bri_sim::session::AbsentBody> {
+    server
+        .left_out(mode, map)
+        .into_iter()
+        .flat_map(|(package, why)| {
+            server.packages[&package]
+                .archetypes
+                .iter()
+                .filter(|(_, def)| def.adjusts.is_none())
+                .map(move |(id, def)| bri_sim::session::AbsentBody {
+                    id: id.clone(),
+                    name: def.name.clone(),
+                    why: why.clone(),
+                })
+                .collect::<Vec<_>>()
+        })
+        .collect()
+}
+
+/// The bot kinds a game can run: each enabled Add-On's, less those whose
+/// body neither the base game nor this game's Add-Ons provide. A game on a
+/// base map leaves out the Add-Ons a game mode claims, the Stomper's body
+/// with them when the Playground mode is on, and its bot goes too (said
+/// once) rather than refusing to host.
+pub fn playable_bot_kinds(
+    kinds: &[BotKind],
+    session: &Session,
+    catalog: Option<&Catalog>,
+) -> Vec<BotKind> {
+    kinds
+        .iter()
+        .filter(|kind| {
+            let Some(body) = kind.body.as_deref() else {
+                return true;
+            };
+            let found = session.archetypes().find(body).is_some()
+                || catalog.is_some_and(|c| c.archetypes().any(|(id, _)| id == body));
+            if !found {
+                bri_console::warn(format!(
+                    "Bot {} left out: its body {body} is in none of this game's Add-Ons",
+                    kind.id
+                ));
+            }
+            found
+        })
+        .cloned()
+        .collect()
 }

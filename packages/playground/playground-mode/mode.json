@@ -1,0 +1,18 @@
+{
+  "schema_version": 1,
+  "name": "Mixed Add-On Playground",
+  "description": "A Runner with its own HUD and a Pulse Carbine, a Dune Buggy, Blockhead Bots, Stompers and Fizzers, all from separate Add-Ons. Build a fort, drive through it, fight the bots. Type /trooper to become the heavy Trooper with its own camera, /blockhead for a plain Blockhead, or /body to pick any body the game allows. You respawn as the body you picked.",
+  "add_ons": ["playground-runner", "playground-runner-look", "playground-runner-hud", "playground-rifle", "playground-buggy", "blockhead_bot", "playground-stomper", "playground-stomper-look", "playground-stomper-rules", "playground-fizzer", "playground-fizzer-look", "playground-fizzer-rules", "sample-trooper"],
+  "minigame": {
+    "title": "Playground",
+    "loadout": ["playground-rifle:weapon/carbine"],
+    "player_type": "playground-runner:archetype/runner",
+    "bodies": ["v20.player.playerstandardarmor", "playground-stomper:archetype/stomper"],
+    "keep_chosen_body": true,
+    "respawn_seconds": 3,
+    "brick_respawn_seconds": 30,
+    "vehicle_respawn_seconds": 5,
+    "self_damage": false,
+    "use_all_players_bricks": true
+  }
+}

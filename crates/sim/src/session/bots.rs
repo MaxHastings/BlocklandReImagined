@@ -34,6 +34,7 @@ use bri_content::passage::{Way, carried_yaw};
 use bri_package_runtime::ops::ObjectRef;
 use bri_weapons::ActorId;
 
+mod ability;
 mod act;
 mod arming;
 mod behaviour;
@@ -52,6 +53,7 @@ use fire::{Hand, Shot};
 #[path = "bots/combat.rs"]
 mod hand_combat;
 mod hearing;
+mod intents;
 mod interactions;
 mod lifecycle;
 mod looks;
@@ -275,6 +277,7 @@ const STRAY: f32 = 4.0;
 /// What a bot's last behaviour choice saw ([`Brain::choice_was`]).
 #[derive(Clone, Copy, Debug, Default)]
 struct ChoiceWas {
+    flee: bool,
     objective: bool,
     committed: bool,
     holding: bool,
@@ -363,7 +366,8 @@ struct Brain {
     /// The vehicle spawn brick that made it; `None` for a bot the rules
     /// added (`Bots::by_rules`).
     brick: Option<BrickId>,
-    kind: BotKind,
+    /// Shared, so reading it each tick copies nothing.
+    kind: std::sync::Arc<BotKind>,
     /// Where it strolls around: its brick, or for a rules bot wherever it
     /// last stood idle.
     home: Vec3,
@@ -484,7 +488,7 @@ struct Brain {
     dry: u32,
     /// The kind its brick made, while a bite has turned it into another
     /// (`BotMelee::converts_below`); it comes back as this one.
-    born: Option<BotKind>,
+    born: Option<std::sync::Arc<BotKind>>,
     next_interaction: u64,
     object_cursor: usize,
     push_contact: Option<(u64, u64)>,
@@ -531,6 +535,10 @@ struct Brain {
     extras: extras::State,
     /// Where it has been and what it knows of enemies, for exploring.
     explore: explore::Explore,
+    /// What its rules want of it (`bot_intent`).
+    intent: Option<intents::Held>,
+    /// Its kind's ability and harm on touch (`ability`).
+    ability: ability::State,
 }
 /// A bot holding something with a tool that holds (the Gravity Gun, or
 /// any tool whose trigger reaches and holds: `reach`, `hold`) carries it
@@ -572,6 +580,8 @@ enum Goal {
     Arm(Vec3),
     /// A place to fight from (`spots`).
     Stand(Vec3),
+    /// Away from what it runs from (`intents`).
+    Flee(Vec3),
     Home,
 }
 impl Goal {
@@ -584,7 +594,8 @@ impl Goal {
             | Self::Interact(p)
             | Self::Objective(p)
             | Self::Arm(p)
-            | Self::Stand(p) => p,
+            | Self::Stand(p)
+            | Self::Flee(p) => p,
             Self::Home => home,
         }
     }
@@ -609,8 +620,9 @@ impl Brain {
     /// its brick and goes back to it. A rules bot has no spot of its own:
     /// it plays the whole map, as a player does, strolls from wherever it
     /// is and follows gunfire it hears (`hear_fighting`).
+    /// An intent from its rules (`bot_intent`) anchors it the same way.
     fn tethered(&self) -> bool {
-        self.brick.is_some()
+        self.brick.is_some() || self.intent.as_ref().is_some_and(intents::Held::anchors)
     }
     /// Its chase leash. An untethered bot has no bound, on foot or in a
     /// seat (a leash to where it spawned had it drop a chase at the edge
@@ -623,14 +635,14 @@ impl Brain {
             _ if !self.tethered() => (self.leash, f32::INFINITY),
             (true, Some((_, at))) => (at, DRIVE_CHASE_RADIUS),
             (true, None) => (self.leash, DRIVE_CHASE_RADIUS),
-            (false, _) => (self.leash, self.kind.chase_radius),
+            (false, _) => (self.leash, self.chase_radius()),
         };
         Leash { at, radius }
     }
     fn new(brick: Option<BrickId>, kind: BotKind, home: Vec3, bot: OwnerId, crossed: u64) -> Self {
         Self {
             brick,
-            kind,
+            kind: std::sync::Arc::new(kind),
             home,
             leash: home,
             crossed,
@@ -710,6 +722,8 @@ impl Brain {
             team: team::State::default(),
             extras: Default::default(),
             explore: Default::default(),
+            intent: None,
+            ability: Default::default(),
         }
     }
     fn random(&mut self) -> f32 {
@@ -866,10 +880,17 @@ impl Brain {
         if !self.tethered() {
             self.home = feet;
         }
+        // A patrol walks its round: on to the next point once there.
+        if let Some(point) = self.patrol_point(feet) {
+            if !matches!(self.goal, Some(Goal::Wander(at)) if flat(at - point).length() < 1.0) {
+                self.set_goal(Some(Goal::Wander(point)));
+            }
+            return;
+        }
         if self.goal.is_none() && tick >= self.next_wander {
             let around = if self.tethered() { self.home } else { feet };
             let angle = self.random() * std::f32::consts::TAU;
-            let radius = self.random() * self.kind.wander_radius;
+            let radius = self.random() * self.stroll_radius();
             // A swimmer roams up and down too (the water bounds it).
             let rise = if swimming {
                 (self.random() * 2.0 - 1.0) * self.kind.wander_radius * 0.5
@@ -1497,6 +1518,9 @@ impl Session {
             self.kill(bot, None, combat::DamageKind::Suicide)?;
             return Ok(true);
         }
+        // Harm on touch, whatever it is doing (`ability`).
+        self.bot_contact(bot, tick)?;
+        let brain = self.bots.brains.get_mut(&bot).unwrap();
         // Its kind's emote, once each life (a zombie's arms out ahead).
         if !brain.posed {
             brain.posed = true;
@@ -2059,6 +2083,7 @@ impl Session {
             brain.vehicle_headway.clear();
             brain.mount_anchor = None;
         }
+        self.bot_follow_intent(bot, tick);
         let peer = &self.peers[&bot];
         let state = peer.player.state().clone();
         let own_feet = Vec3::from(state.feet);
@@ -2151,6 +2176,13 @@ impl Session {
             seen.eye = at + Vec3::Y * 0.5;
         }
         let (hurt_by, threat) = self.bot_evidence(bot, sight.target, feet, tick);
+        // Hurt to its kind's `flee_below`, or told to run (`intents`): what
+        // it runs from.
+        let flee_from = self.bot_flee_from(
+            bot,
+            sight.target.map(|seen| seen.real),
+            hurt_by.or(threat).or(self.bots.brains[&bot].memory),
+        );
         // Holding something with its tool: carry it to open space to throw.
         let holding = self.held_by(bot).is_some();
         let grabbing = holding || self.is_reaching(bot);
@@ -2168,11 +2200,7 @@ impl Session {
         let vehicle_weapon = self.bot_vehicle_weapon(bot).is_some();
         let can_retaliate = vehicle_weapon
             || self.bot_spare_gun(bot, tick).is_some()
-            || self.bots.brains[&bot]
-                .kind
-                .melee
-                .as_ref()
-                .is_some_and(|melee| melee.damage > 0.0)
+            || self.bots.brains[&bot].kind.body_attack()
             || hand_combat::has_possible_attack(self, bot);
         let ranged_in_hand = held.is_some_and(|w| !w.melee);
         let objective = self.bot_objective(bot, tick).filter(|view| {
@@ -2285,6 +2313,7 @@ impl Session {
         // upgrades in a game with nothing else at stake.
         let wants_arm = driving.is_none()
             && (!can_retaliate || objective.is_none())
+            && self.bots.brains[&bot].kind.weapons
             && self.bots.brains[&bot].kind.weight("arm") > 0.0
             && if can_retaliate {
                 self.game_of(bot).is_some()
@@ -2309,7 +2338,12 @@ impl Session {
             self.surprise_flanks(bot, feet, seen.real)
         });
         // Teammates' intents, and what this bot exposes to them (`team`).
-        let intents = self.team_intents(bot, tick);
+        // A kind with no teamwork pays nothing for them.
+        let intents = if self.bots.brains[&bot].kind.team.teamwork > 0.0 {
+            self.team_intents(bot, tick)
+        } else {
+            Vec::new()
+        };
         let seats = self.team_seats(bot);
         let mount = self.mounted(bot).map(|(v, _)| v);
         let sightline = if driving.is_none() {
@@ -2531,9 +2565,9 @@ impl Session {
             // the chase's, as for a fight.
             strayed: if brain.tethered() {
                 let radius = if opportunity.is_some() {
-                    kind.chase_radius
+                    brain.chase_radius()
                 } else {
-                    kind.wander_radius
+                    brain.stroll_radius()
                 };
                 (away - radius) / STRAY
             } else {
@@ -2541,6 +2575,7 @@ impl Session {
             },
             pursuing: brain.objective.pursuing(),
             explore: explore_to.is_some(),
+            flee: flee_from.is_some(),
             // Never a way out of a fight: not with an enemy in sight or
             // one that hurt it, nor while it carries something.
             trapped: if sight.target.is_none()
@@ -2573,6 +2608,7 @@ impl Session {
         let hurt_anew =
             hurt_now && hurt_by.is_some_and(|k| brain.choice_was.target != Some(k.subject));
         let interrupt = hurt_anew
+            || situation.flee && !brain.choice_was.flee
             || situation.objective && !brain.choice_was.objective
             || situation.committed != brain.choice_was.committed
             || situation.holding != brain.choice_was.holding
@@ -2582,6 +2618,7 @@ impl Session {
                 && brain.choice_was.target.is_none()
                 && target.is_some();
         brain.choice_was = ChoiceWas {
+            flee: situation.flee,
             objective: situation.objective,
             committed: situation.committed,
             holding: situation.holding,
@@ -2759,6 +2796,7 @@ impl Session {
         let spot = match (enemy, weapon) {
             (Some(seen), Some(weapon))
                 if behaviour == Behaviour::Fight
+                    && kind.tactics.cover
                     && !weapon.melee
                     && swim.is_none()
                     && driving.is_none()
@@ -2861,6 +2899,12 @@ impl Session {
                 brain.set_goal(Some(Goal::Home));
                 false
             }
+            Behaviour::Flee => {
+                if let Some(from) = flee_from {
+                    brain.flee(feet, from, tick);
+                }
+                false
+            }
             Behaviour::Respawn => {
                 brain.set_goal(None);
                 false
@@ -2896,6 +2940,32 @@ impl Session {
             return Ok(());
         }
 
+        // Its kind's own attack (`ability`): wound up in range of the enemy
+        // it fights or chases, then the Add-On's hooks run.
+        let quarry = sight
+            .target
+            .map(|seen| (seen.owner, seen.real, true))
+            .or(self.bots.brains[&bot]
+                .memory
+                .map(|k| (k.subject, k.at, false)));
+        let winding = self.bot_ability(
+            bot,
+            quarry.map(|(o, at, _)| (o, at)),
+            quarry.is_some_and(|(_, _, seen)| seen),
+            matches!(
+                behaviour,
+                Behaviour::Fight | Behaviour::Chase | Behaviour::Search
+            ),
+            feet,
+            tick,
+        )?;
+        if self.bot_gone(bot) || !self.is_alive(bot) {
+            return Ok(());
+        }
+        let brain = self.bots.brains.get_mut(&bot).unwrap();
+        if winding.stand {
+            brain.set_goal(None);
+        }
         // Path.
         let home = brain.home;
         let mut wanted = self.bot_path(bot, feet, &body, costs, swim, &state, tick);
@@ -3386,7 +3456,9 @@ impl Session {
                     } else if let Some(gap) = gap {
                         // In its band it keeps its feet moving: in, back
                         // out and aside, on its own seeded beat.
-                        let room = gap + FOOTWORK_BACK <= near.max(1.0);
+                        // A kind that never gives ground steps in and
+                        // aside only.
+                        let room = kind.tactics.retreat && gap + FOOTWORK_BACK <= near.max(1.0);
                         walk = footwork(bot, tick, forward, right, room);
                     }
                 } else {
@@ -3713,6 +3785,9 @@ impl Session {
         {
             nav.avoid(from, to, tick + AVOID_TICKS);
         }
+        // A kind whose only attack is its ability or its touch pulls no
+        // trigger: its hands are empty.
+        let body_only = held.is_none() && bite.is_none() && !vehicle_weapon;
         self.bot_act(
             bot,
             tick,
@@ -3726,7 +3801,7 @@ impl Session {
                 native,
                 native_choice,
                 target: sight.target,
-                fire,
+                fire: fire && !body_only,
                 grabbing,
                 gunning,
                 vehicle_weapon,

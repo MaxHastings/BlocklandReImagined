@@ -570,3 +570,47 @@ fn device_output_is_explicit() {
         assert_eq!(rt.output_format(), (48_000, 2));
     }
 }
+
+/// Upward zero crossings of the left channel: twice the pitch, twice as many.
+fn crossings(stereo: &[f32]) -> usize {
+    stereo
+        .chunks(2)
+        .collect::<Vec<_>>()
+        .windows(2)
+        .filter(|w| w[0][0] <= 0.0 && w[1][0] > 0.0)
+        .count()
+}
+
+#[test]
+fn a_playing_loop_changes_volume_and_pitch_in_place() {
+    let mut rt = offline(linear);
+    let clip = bri_audio::wav::encode_pcm16(22050, 1, &sine(22050, 1, 1.0, 220.0, 0.5));
+    let mut asset = SoundAsset::decoded("engine", &clip, "wav", 10.0, 60.0).unwrap();
+    asset.playback.looping = true;
+    let h = rt
+        .play_asset(std::sync::Arc::new(asset), Placement::Listener, 1.0)
+        .unwrap();
+    seconds(&mut rt, 0.05);
+    let base = seconds(&mut rt, 0.5);
+    rt.set_voice_params(h, 0.5, 2.0).unwrap();
+    // One block to glide to the new gain.
+    seconds(&mut rt, 0.05);
+    let changed = seconds(&mut rt, 0.5);
+    assert_finite(&changed);
+    let ratio = rms(&changed) / rms(&base);
+    assert!((ratio - 0.5).abs() < 0.05, "gain ratio {ratio}");
+    let (a, b) = (crossings(&base) as f32, crossings(&changed) as f32);
+    assert!((b / a - 2.0).abs() < 0.05, "{a} then {b} crossings");
+    // Nonsense values neither silence it forever nor break the mix.
+    rt.set_voice_params(h, f32::NAN, f32::INFINITY).unwrap();
+    assert_finite(&seconds(&mut rt, 0.1));
+    rt.set_voice_params(h, 1.0, 1.0).unwrap();
+    seconds(&mut rt, 0.05);
+    let back = seconds(&mut rt, 0.5);
+    assert!((crossings(&back) as f32 / a - 1.0).abs() < 0.05);
+    assert!(
+        !rt.drain_events()
+            .iter()
+            .any(|e| matches!(e, AudioEvent::Finished { .. }))
+    );
+}

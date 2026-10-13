@@ -11,14 +11,16 @@ visuals depending on the rules. `bri-addon-check` tells you which it is.
 | `behaviour`, `script` | host | a game rule ([Game rules](rules.md)) | `packages/samples/sample-survival-points` |
 | `world` | host | a generated chunk world: materials, a `generate(cx, cz)` function | `packages/stresslab/stresslab-world` |
 | `entity` | host | a scripted creature: model, `think` function, speed, health | `packages/stresslab/stresslab-creeper` |
-| `archetype` | host | a playable body: movement, collision `box` or `ball`, steering, health, riding, model, camera distance | `crates/sim/tests/unlike_modes.rs` |
+| `archetype` | host | a playable body: movement, collision `box` or `ball`, steering, health, riding, model, camera distance, `camera` profile and `sounds` | `crates/sim/tests/unlike_modes.rs` |
+| `controller` | host | a movement controller: a WebAssembly module an archetype names as its `controller`; clients receive it with the archetype table ([Movement controllers](../architecture/movement-controllers.md)) | `packages/samples/sample-wall-kick`, `packages/samples/sample-dive`, `packages/samples/sample-trooper` |
 | `mode` | host | a Start Game game mode: name, the Add-Ons it runs, a map, and its own mini-game | `packages/stresslab/stresslab-mode`, `crates/sim/tests/mode_and_voxels.rs` |
 | `model` | each player | a box model for an entity | `packages/stresslab/stresslab-creeper-model` |
-| `hud` | each player | a HUD panel ([HUD panels](hud.md)) | `packages/samples/sample-points-hud` |
+| `hud` | each player | a HUD panel, or a layout that claims a HUD region and draws textured elements in it ([HUD panels and regions](hud.md)) | `packages/samples/sample-points-hud` |
 | `binds` | each player | keys for an Add-On's commands, under its own heading in Controls (below) | `crates/addon-import/ports/tool_newduplicator/files/binds.json` |
 | `weapons` | everyone | weapons ([Weapons](weapons.md)) | `packages/samples/sample-bubble-blaster` |
 | `bricks`, `vehicles` | everyone | written by Import Add-On ([Old v20 Add-Ons and new bricks](old-addons.md)), or a `vehicles.json` you write (fields below) | `packages/showcase/steel-ball-kit` |
 | `bots` | everyone | bots a Vehicle Spawn brick can hold: name and how they play (fields below) | `packages/blockhead_bot` |
+| `body` | everyone | a player body: a native shape (`.shape.json`) an `archetype` names as its `model`, its PNGs listed in `assets/content.json`. Carried with its archetype, it makes the Add-On everyone's, so joiners download the body and see it ([glTF models](gltf-models.md)) | `crates/client/tests/add_on_join.rs` |
 | `texture`, `block` | everyone | a PNG for block faces (up to 1024 px a side); textures or flipbooks per face with named states | `crates/sim/tests/blocks.rs` |
 
 Entities may spawn only their own Add-On's entity kinds.
@@ -77,6 +79,8 @@ world's own bricks, so its brick damage reaches them.
 | `points_kill_player`, `points_kill_self`, `points_die`, `points_break_brick`, `points_plant_brick` | 1, -1, 0, 0, 0 | v20's score settings |
 | `falling_damage`, `weapon_damage`, `self_damage`, `vehicle_damage`, `brick_damage`, `building`, `painting` | all `true` | what the game allows |
 | `use_all_players_bricks` | `false` | let the game break everyone's bricks, not only the world's |
+| `bodies` | none | bodies players may pick for themselves with `/body`, besides `player_type` (archetype ids) |
+| `keep_chosen_body` | `true` | a player who picked a body (a brick's ChangeDatablock, `/body`), before joining or in the game, respawns as it rather than as `player_type` or their team's body; `false` spawns everyone as the game says |
 
 Teams are not a mini-game setting (v20 had none): a rule keeps each
 player's team in a state key, refuses friendly fire in `on_damage` and
@@ -89,7 +93,25 @@ Commando's [archetype](../../packages/samples/sample-commando/commando-archetype
 is a whole new body in a dozen lines: no jet, 150 health and faster feet.
 `movement` accepts any of the motor's constants by name (`gravity`,
 `jump_speed`, `air_control`, `step_height` and the rest); `set_archetype`
-switches a player between bodies at any time. `push_archetype(p, a)` lays
+switches a player between bodies at any time.
+
+Every way of changing body is one transition: `set_archetype`, a brick's
+`onActivate -> Player -> ChangeDatablock` (whose list holds v20's player
+types and every named Add-On body), `/body <name>` and a mini-game's or
+team's body. The player keeps their place, motion, scale and the same
+share of health; a new movement controller starts afresh; a body that
+cannot ride (`can_ride: false`) is set down beside its seat, and one that
+can stays seated and later gets out with room for the body it is now; a
+body that uses no items (`uses_items: false`) puts its tool away and keeps
+it. A brick or `/body` refuses a bigger body where it would reach into a
+brick or the map, and says so; an Add-On's `set_archetype` does not. A
+body picked by a brick or `/body` is kept through respawns outside
+mini-games and into a game that keeps chosen bodies (the default, so a
+dialog-made game lets Mario and Master Chief fight); a game with
+`keep_chosen_body: false` ends the pick. An Add-On's choice is kept
+everywhere, and the latest choice wins. `/body` alone lists the
+bodies one may pick: outside mini-games any named body, inside one its
+`player_type`, the player's team's body and its `bodies`. `push_archetype(p, a)` lays
 another body of the same model over theirs for a while (a machine gunner
 slowed as they fire; v20's `pushDatablock`), keeping their damage, and
 `pop_archetype(p, a)` lifts it; `set_archetype` meanwhile changes the body
@@ -97,6 +119,137 @@ underneath, and death lifts them all. An archetype with
 `"first_person_only": true` keeps its player's view in the eye whatever
 their camera toggle says (v20's `firstPersonOnly`: Tier 2's slowed
 machine gunner), and the toggle takes over again once the body changes.
+
+**Sockets and animations.** A body says where it holds things, sees from
+and sits with `sockets`: `right_hand`, `left_hand`, `eye` and `seat`, each a
+`node` of its model, an `offset` (feet at the origin, facing -Z), or both.
+A rigged body names its own nodes; a box model or `"none"` body has no
+nodes, so it gives offsets. Missing sockets fall back to the Blockhead's
+`Mount0`, `Mount1` and `Eye` on a rigged body; a box body without a hand
+socket hides what that hand holds, and without a `seat` it sits upright.
+Every gun fires from its muzzle at the hand socket and converges on the
+crosshair, falling back to the eye when the barrel is inside a wall. The
+host reads an imported body's hand nodes from its package with the arm
+raised to aim (its `aim_right` clip), as the Blockhead's.
+
+**Grips on imported bodies.** An imported glTF body holds every image as
+the Blockhead does, whatever way its hand bones point
+(`crates/content/src/hold.rs`). The engine takes the hand socket's
+position and ignores its turn: a held hand faces the Blockhead's aiming
+hand (forward along -Z, up +Y), pitched with the look. An arm the body has
+no `aim_right` (`aim_left`) clip for is raised in front of the chest by
+two-bone IK, to the spot the Blockhead's arm reaches, scaled to the arm's
+length. An arm with its own aim clip keeps that pose and only the hand
+turns. A socket `offset` on a node is measured in that aiming hand's
+frame, so the same image sits the same way in every body's hand. A
+two-handed image (`aim_both`) pulls the left hand to its `supportPoint`
+node (glTF `supportPoint` Empty), else halfway from the grip to the
+muzzle. The host fires from the same fitted hand, pitching about the
+shoulder. v20 shapes and the Blockhead keep their authored `Mount0` and
+`Mount1`.
+
+In first person an imported body draws its held images where the
+Blockhead's are, at the same spot from the eye, so a gun sits in view the
+same on every body. Its own arms are not drawn there: the view shows the
+gun alone, as for v20 images with an `eye_offset`.
+
+A rider whose body has a `sit` clip is moved so its hip sits where the
+Blockhead's hip sits in its own `sit` pose; a seat authored for the
+Blockhead seats every body. A seat tuned to one body's pelvis (a vehicle
+from another game) still seats that body as it was tuned. Tests:
+`crates/content/src/hold.rs`,
+`the_blockheads_aiming_hand_is_the_frame_fitted_hands_take` in
+`crates/client/src/avatar.rs` and `crates/client/tests/gltf_body.rs`.
+
+**Movement controller intents.** An archetype's `intent_clips` maps the
+animation intents a movement `controller` reports to the model's clips, and
+`intent_sounds` to a sound played where the body is each time the
+controller changes to that intent: `{"11": "triple_jump"}`. An intent
+clip replaces run, jump and fall while the controller reports it; dying,
+sitting and swimming still win, and a rider's intent is ignored.
+
+**Clip speed.** As in v20, the clip for `run`, `back`, `side` and the
+crouched ones plays at the speed the body moves along the way it walks
+(`|velocity . direction| / clip speed`), at most `max_time_scale` times
+(1.5, v20's `maxTimeScale`): feet keep pace with the ground instead of
+skating. A clip's speed at 1x is its own ground motion, which v20's
+sequences carry. A clip without any (most glTF exports) keeps its own time
+unless the archetype gives `ground_speeds`, in units per second at 1x:
+`{"run": 9.0, "side": 6.0}`. Measure it as the distance one cycle's feet
+travel divided by the cycle's length.
+`look.animations` maps roles to the body's own clips: `idle`, `run`,
+`back`, `side`, `crouch`, `crouch_run`, `crouch_back`, `crouch_side`,
+`jump`, `fall`, `sit`, `aim_right`, `aim_left`, `aim_both`,
+`look`, `head_up`, `head_side`, `swim` and `death`. Unnamed roles use a clip of the
+Blockhead's name if the model has one, then a fallback (`back` runs `run`
+reversed, `fall` plays `jump`, `sit` plays `idle`), and a role with none
+leaves the body in its bind pose for that layer. The client names what a
+body lacks once, in the Add-On faults log ("no `sit` animation; it plays
+its `idle` instead"). The Playground's
+[Runner](../../packages/playground/playground-runner/runner.json) and the
+Commando are two box bodies with their own sockets. Tests:
+`crates/client/src/avatar.rs` (`a_body_with_its_own_nodes_and_two_clips_…`,
+`a_box_body_holds_at_its_own_hand_…`), `crates/sim/tests/playground.rs`
+and `crates/client/tests/body_attachments_render.rs`.
+
+**Camera.** A body owns how its player sees while it is theirs with
+`camera`, so a heavy shooter can feel nothing like a Blockhead:
+
+```json
+"camera": {
+  "fov": 72,
+  "eye_offset": [0, 0.08, 0],
+  "bob": { "height": 0.05, "side": 0.035, "stride": 3.2 },
+  "sway": { "lag": 0.6, "max_degrees": 5, "settle": 6, "bob": 0.8 },
+  "third_person": { "side": 0.9, "height": 0.25 }
+}
+```
+
+- `fov` (30 to 140 degrees) is the body's field of view for a player at the
+  stock 90; a player who set their own FOV gets the same ratio (72 seen at
+  a 110 setting is 88). Aiming and zoom own the FOV while they run, and a
+  rule's `set_fov` wins over the body.
+- `eye_offset` moves only the first-person camera from the `eye` socket,
+  right, up and forward along the heading (units at scale 1, within 2). Aim
+  and shots stay at the eye. Eye height itself is the `eye` socket.
+- `bob` dips the first-person camera `height` at each footfall and rocks it
+  `side` across a cycle of two steps covering `stride` units, while walking
+  on the ground; it eases in and out with speed.
+- `sway` makes the held weapon trail the look by `lag` of each turn (0 to
+  1), never more than `max_degrees`, settling at `settle` per second, and
+  bob against the camera by `bob` times the camera's bob. Client code
+  drawing its own first-person model reads the same sway from `view`.
+- `third_person` puts the on-foot chase camera's pivot over a shoulder
+  (`side`, negative for the left) and higher (`height`); its distance is
+  still `camera_distance`.
+
+All of it scales with the body and applies only while that body is the
+player's, on foot and not observing: a vehicle seat's camera, the
+observer camera and a switch to another body each take over, and a body
+with no `camera` sees exactly as the stock Blockhead does. The
+[Trooper](../../packages/samples/sample-trooper/trooper-archetype.json)
+has one; test `crates/client/tests/hud_regions_render.rs`.
+
+**Sounds.** A body jumps, hurts and dies with its own sounds:
+
+```json
+"sounds": { "jump": "mario:sound/wahoo", "pain": "mario:sound/ow", "death": "" }
+```
+
+Each names a sound of your weapons pack's `sounds` (your own `.wav` or
+`.ogg`, see [weapons.md](weapons.md); an Add-On with no weapons provides a
+`weapons` pack holding just its sounds) or one of the base game's by its v20
+name (`HorseJumpSound`). An empty name plays nothing, and one you leave out
+keeps the base's: the Blockhead's jump, pain cry and death cry. Players who
+join without your Add-On download its sound files with it, and everyone
+hears the sound where the body is. The pain sound plays on hits that make
+the Blockhead cry out (more than 10 damage). The
+[stand-in wahoo](../../crates/client/tests/fixtures/stand-in-wahoo) gives
+the standard player its own jump sound in two files; test
+`crates/client/tests/add_on_join.rs`
+(`a_guest_hears_an_add_ons_own_jump_sound_it_downloaded`). Importing a v20
+`PlayerData` converts `jumpSound`, and `painSound`/`deathSound` under
+`useCustomPainEffects`, to these.
 
 An archetype with `"adjusts": "v20.player.<datablock>"` (and no `base` or
 `name`) is no new body: it changes the constants it names on one of v20's
@@ -156,6 +309,40 @@ no seats cannot be mounted. Three fields exist for Add-Ons:
   shots push it that many times as hard as v20's rule (the impulse over
   its mass) would. The Steel Ball weighs 900 and sets 3, so a rocket
   still knocks it about. Contacts and a click's flip go by its mass alone.
+- A seat's `"hands": { "right": [x, y, z], "left": [x, y, z] }` puts the
+  rider's hands there: a steering wheel, a gun's handles. The points are in
+  the vehicle's frame, as the seat's `transform` is. Every body reaches
+  them the same way, with no per-body offsets: after the seat's clip pose,
+  each arm (the hand socket's node and its ancestors below the chest)
+  bends at its elbow and swings from its shoulder so the hand node lands
+  on the point, or points straight at it when it is out of reach. An arm
+  with no even elbow (a Blockhead's rigid arm) only swings. A gunner's
+  holds turn with the turret and, when the gun model pitches with a
+  `look` clip, tip with it about the weapon's `pivot`. A hand left out
+  keeps its clip pose. The Playground buggy's driver and gunner use it.
+- `"engine_sound": { "sound": "your-id:engine" }` gives it a running
+  engine. The sound is a key of the `sounds` in the same Add-On's
+  `assets/weapons.json`, declared with `"looping": true` (a `.wav` or
+  `.ogg` of up to 30 seconds; a whole number of cycles loops without a
+  click). It plays at the vehicle, heard in 3D like any world sound, while
+  someone sits in the seat that drives it (any seat, for a vehicle no
+  seat drives), and fades out when they get out or it is destroyed. Its
+  pitch and volume follow the vehicle's speed in a straight line, as
+  multiples of the sound's own: `idle_pitch` (0.8) and `idle_volume`
+  (0.6) standing still, `full_pitch` (1.6) and `full_volume` (1.0) at
+  `full_speed` units a second (the vehicle's `max_speed` when absent) and
+  past it. Pitch is 0.25 to 4, volume 0 to 4. Every player hears it from
+  the vehicle's motion as they see it, the driver included; nothing is
+  sent for it. The Playground buggy's chug
+  (`tools/make_playground_assets.py`) is the example:
+
+  ```json
+  "engine_sound": { "sound": "playground-buggy:engine",
+                    "idle_pitch": 0.8, "full_pitch": 1.6, "full_speed": 34 }
+  ```
+
+  `bri-addon-check` fails an engine sound no weapons pack declares, and
+  warns when it does not loop.
 
 Every vehicle can be placed from a vehicle spawn brick and spawned by a
 rule (`spawn_vehicle`).
@@ -188,8 +375,46 @@ engine changes. The fields that decide how it flies and looks:
 | `strafe_steering` | the strafe keys steer; otherwise the mouse steers and pitches | `steeringUseStrafeSteering` |
 | `steering` | `strafe_rate`, and `auto_return`, `auto_return_rate`, `auto_return_max_speed`: whether steering drifts back to straight | `steeringStrafeSteeringRate`, `steeringUseAutoReturn`, `steeringAutoReturnRate`, `steeringAutoReturnMaxSpeed` |
 | `wheels[].steering`, `wheels[].powered` | how far each wheel turns (1 fully, negative the other way) and whether it drives | `setWheelSteering`/`setWheelPowered` in `onAdd`, else v20's table by wheel count |
+| `steering.toward_look` | the driver steers by looking: the wheels turn the hull toward the driver's free look and ease off to arrive (Halo's Warthog); a bot drives it the same way. Off: v20's mouse or strafe steering | none (new) |
+| `steering.speed_lock` | the share (0 to 1) of `max_steering` left at `max_speed`, narrowing in a straight line from full lock at rest (1, the default, never narrows) | none (new) |
+| `engine_curve` | the engine's torque by speed: up to 16 `[speed share, torque share]` points (speed share 0 to 1 of `max_speed` by rising speed, torque share 0 to 4 of `engine_force`), linear between points, flat before the first and past the last, none past `max_speed`. Empty: v20's torque falling straight from full at rest to none at `max_speed` | none (new) |
+| `wheels[].rebound_damping` | damping while the spring extends, apart from `damping` while it compresses: long, soft springs that soak a landing without bouncing. 0, the default: `damping` both ways, as v20 | none (new) |
+| `gravity_scale` | gravity on this vehicle as a share (0 to 4) of the game's (0.85 floats its jumps). Absent: the game's | none (new) |
+| `wheels[].tire.lateral_grip` | the tyre's grip across as a share (0.05 to 20) of its grip along (`static_friction`, `kinetic_friction`), stretching the friction circle into an ellipse: Halo's Warthog front tyres 0.6, rear 1.44. 1, the default: v20's circle | none (new) |
+| `throttle_brakes` | the throttle against the way the vehicle rolls brakes it with `brake_force` until it stops, then drives the other way (Halo's hard stop when you pull back). Off: v20's reversed engine, which does next to nothing near top speed | none (new) |
+| `reverse_limited` | a wheeled vehicle's engine stops pushing it backward at `reverse_speed`. Off: v20's wheeled vehicles back up as fast as they go forward | none (new) |
+| `weapon.automatic` | the gun fires for as long as the trigger is held: `rate` [first, last] rounds a second rising over `spin_up_ticks`, and `spread` [first, last] radians each round may stray from the aim, rising over `spread_ticks` (120 ticks a second); letting go starts both again from the first. Absent: one shot a pull, at most every `cooldown_ticks` | none (new; Halo's `weap` rate of fire and error angle) |
+| `weapon.recoil` | each shot's kick, as a speed change in units a second back from the shot and up (the impulse is that times `mass`). Absent: v20's 5, and 0 for a cannon | the fixed kick in v20's vehicle gun |
 | `threads` | animations the model plays by itself, like a propeller | `playThread` and `setThreadDir` in `onAdd` and the functions it calls |
 | `trails`, `effects` | emitters run at the model's nodes within a speed range, like wing-tip contrails; `effects` holds the vehicle's own particles and emitters | `mountImage` of an image whose state holds a `stateEmitter`, in `onAdd` and the functions it calls |
+
+A Warthog is a wheeled vehicle with these set, as the Playground buggy has
+them from Halo's own Warthog tags at 4.12 units to a Halo unit
+(`tools/make_playground_assets.py`; the tag numbers, the reasons and the
+measurements are in `docs/audits/vehicle-handling.md`): `max_speed` 34,
+`reverse_speed` 14.8 with `reverse_limited`, `max_steering` 0.5236 (30°),
+all four wheels `powered`, `rest_length` 0.62, the weight 57% forward with
+each axle's `spring` carrying its share (10300 front, 7700 rear, so the deck
+sits level and clears the ground), each axle's grip along and
+across from the tags, a flat `engine_curve` with `engine_force` set so it
+gains about 10 units a second each second, `throttle_brakes`, the
+chaingun's rate of fire and spread on its gun, and:
+
+```json
+"engine_curve": [[0.0, 1.0], [0.9, 1.0], [1.0, 0.0]],
+"throttle_brakes": true,
+"reverse_limited": true,
+"weapon": { "automatic": { "rate": [8.0, 15.0], "spin_up_ticks": 120,
+                           "spread": [0.0175, 0.0349], "spread_ticks": 360 },
+            "recoil": 0.0, "...": "..." },
+"gravity_scale": 0.85,
+"steering": { "strafe_rate": 0.25, "toward_look": true, "speed_lock": 0.6 },
+"mass_center": [0.0, 0.05, -0.2],
+"wheels": [{ "rest_length": 0.62, "spring": 10300, "damping": 2600,
+             "rebound_damping": 2400, "anti_sway": 6000,
+             "tire": { "static_friction": 3.0, "lateral_grip": 0.6, "...": "..." },
+             "...": "..." }]
+```
 
 Every force and turn acts along the vehicle's own axes, so a flying vehicle
 climbs where its nose points. A thread plays one of the model's sequences

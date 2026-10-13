@@ -41,11 +41,17 @@ pub struct DayCycle {
     /// request says.
     #[serde(default)]
     pub anchor_tick: u64,
+    /// The sun stays at `time`: a time of day with no time passing.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub paused: bool,
 }
 impl DayCycle {
     /// Time of day (0..1) at server tick `tick`, which may fall between
     /// ticks (a client's frame).
     pub fn time_at(&self, tick: f64) -> f64 {
+        if self.paused {
+            return f64::from(self.time).rem_euclid(1.0);
+        }
         let elapsed = (tick - self.anchor_tick as f64).max(0.0) / TICKS_PER_SECOND as f64;
         (f64::from(self.time) + elapsed / f64::from(self.length_seconds)).rem_euclid(1.0)
     }
@@ -78,7 +84,7 @@ pub struct Vignette {
 }
 
 /// Every setting's name, as [`Settings::unset`] takes them.
-pub const KEYS: [&str; 19] = [
+pub const KEYS: [&str; 20] = [
     "day_cycle",
     "sun_azimuth",
     "sun_elevation",
@@ -89,6 +95,7 @@ pub const KEYS: [&str; 19] = [
     "visible_distance",
     "fog_distance",
     "fog_color",
+    "overcast",
     "sky_color",
     "vignette",
     "sky",
@@ -135,6 +142,10 @@ pub struct Settings {
     pub fog_distance: Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub fog_color: Option<[f32; 3]>,
+    /// Cloud cover, 0 clear to 1 grey: dims the sun, flattens the light
+    /// and greys the fog and sky.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub overcast: Option<f32>,
     /// Tint over the map's sky.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub sky_color: Option<[f32; 3]>,
@@ -236,6 +247,10 @@ impl Settings {
             "Fog distance must be 0 to 1000"
         );
         ensure!(
+            self.overcast.is_none_or(|o| (0.0..=1.0).contains(&o)),
+            "Overcast must be 0 to 1"
+        );
+        ensure!(
             self.sky.as_deref().is_none_or(choice_id),
             "Invalid sky name"
         );
@@ -280,6 +295,7 @@ impl Settings {
             visible_distance,
             fog_distance,
             fog_color,
+            overcast,
             sky_color,
             vignette,
             sky,
@@ -305,6 +321,7 @@ impl Settings {
             "visible_distance" => self.visible_distance = None,
             "fog_distance" => self.fog_distance = None,
             "fog_color" => self.fog_color = None,
+            "overcast" => self.overcast = None,
             "sky_color" => self.sky_color = None,
             "vignette" => self.vignette = None,
             "sky" => self.sky = None,
@@ -320,6 +337,49 @@ impl Settings {
     }
     pub fn is_empty(&self) -> bool {
         *self == Self::default()
+    }
+    /// Setting `name` (as in [`KEYS`]) from `other`, set or not. False for
+    /// an unknown name.
+    pub fn take(&mut self, other: &Settings, name: &str) -> bool {
+        macro_rules! by_name {
+            ($($f:ident),*) => {
+                match name {
+                    $(stringify!($f) => self.$f = other.$f.clone(),)*
+                    _ => return false,
+                }
+            };
+        }
+        by_name!(
+            day_cycle,
+            sun_azimuth,
+            sun_elevation,
+            direct_light,
+            ambient_light,
+            shadow_color,
+            sun_flare,
+            visible_distance,
+            fog_distance,
+            fog_color,
+            overcast,
+            sky_color,
+            vignette,
+            sky,
+            ground,
+            ground_color,
+            water,
+            water_height,
+            water_color,
+            underwater_color
+        );
+        true
+    }
+    /// Setting `name` is the same in both.
+    pub fn same(&self, other: &Settings, name: &str) -> bool {
+        let mut mine = Settings::default();
+        let mut theirs = Settings::default();
+        mine.take(self, name);
+        theirs.take(other, name);
+        mine == theirs
     }
 }
 
@@ -421,10 +481,21 @@ pub fn resolve(authored: &Authored, settings: &Settings, tick: f64) -> Live {
     let (map_azimuth, map_elevation) = angles(authored.sun_direction);
     let azimuth = settings.sun_azimuth.unwrap_or(map_azimuth);
     let elevation = settings.sun_elevation.unwrap_or(map_elevation);
-    let direct = settings.direct_light.unwrap_or(authored.direct_light);
-    let ambient = settings.ambient_light.unwrap_or(authored.ambient_light);
-    let fog_color = settings.fog_color.unwrap_or(authored.fog_color);
-    let sky = settings.sky_color.unwrap_or([1.0; 3]);
+    let mut direct = settings.direct_light.unwrap_or(authored.direct_light);
+    let mut ambient = settings.ambient_light.unwrap_or(authored.ambient_light);
+    let mut fog_color = settings.fog_color.unwrap_or(authored.fog_color);
+    let mut sky = settings.sky_color.unwrap_or([1.0; 3]);
+    // Cloud cover: the sun dims, its light spreads into the ambient, and
+    // fog and sky go grey. The day cycle then shades the overcast light.
+    let overcast = settings.overcast.unwrap_or(0.0).clamped(0.0, 1.0);
+    if overcast > 0.0 {
+        let grey = |c: [f32; 3]| 0.3 * c[0] + 0.59 * c[1] + 0.11 * c[2];
+        let diffuse = (grey(ambient) + 0.35 * grey(direct)).min(1.0);
+        ambient = mix(ambient, [diffuse; 3], overcast);
+        direct = scale(direct, 1.0 - 0.75 * overcast);
+        fog_color = mix(fog_color, [grey(fog_color) * 0.9; 3], 0.8 * overcast);
+        sky = mix(sky, [grey(sky) * 0.8; 3], 0.8 * overcast);
+    }
     let (mut fog_start, mut fog_end) = (authored.fog_start, authored.fog_end);
     if let Some(end) = settings.visible_distance {
         // A map without fog gets it from its first distance.
@@ -444,9 +515,10 @@ pub fn resolve(authored: &Authored, settings: &Settings, tick: f64) -> Live {
     if fog_end > 0.0 {
         fog_start = fog_start.clamped(0.0, fog_end);
     }
-    let flare = settings
+    let mut flare = settings
         .sun_flare
         .map_or(([0.0; 4], 1.0), |f| (f.color, f.size));
+    flare.0[3] *= 1.0 - overcast;
     let mut live = Live {
         sun_direction: if settings.sun_azimuth.is_some() || settings.sun_elevation.is_some() {
             light_direction(azimuth, elevation)
@@ -505,108 +577,6 @@ pub fn resolve(authored: &Authored, settings: &Settings, tick: f64) -> Live {
     live.sky_tint = clamp01(mul(night(sky, 0.15), mix([1.0; 3], tint, 0.6)));
     live.flare.0[3] *= sun;
     live
-}
-
-/// The Simple tab's looks: a name and the settings it sets. "Map Default"
-/// (no settings) comes first.
-pub fn presets() -> Vec<(&'static str, Settings)> {
-    let look = |azimuth: f32,
-                elevation: f32,
-                direct: [f32; 3],
-                ambient: [f32; 3],
-                fog: [f32; 3],
-                sky: [f32; 3]| Settings {
-        sun_azimuth: Some(azimuth),
-        sun_elevation: Some(elevation),
-        direct_light: Some(direct),
-        ambient_light: Some(ambient),
-        fog_color: Some(fog),
-        sky_color: Some(sky),
-        ..Default::default()
-    };
-    vec![
-        ("Map Default", Settings::default()),
-        (
-            "Clear Day",
-            look(
-                135.0,
-                60.0,
-                [0.85, 0.83, 0.75],
-                [0.45, 0.47, 0.52],
-                [0.75, 0.82, 0.9],
-                [1.0, 1.0, 1.0],
-            ),
-        ),
-        (
-            "Golden Hour",
-            Settings {
-                sun_flare: Some(SunFlare {
-                    color: [1.0, 0.8, 0.45, 0.9],
-                    size: 1.5,
-                }),
-                ..look(
-                    250.0,
-                    12.0,
-                    [1.0, 0.72, 0.42],
-                    [0.42, 0.36, 0.38],
-                    [0.95, 0.72, 0.5],
-                    [1.0, 0.82, 0.65],
-                )
-            },
-        ),
-        (
-            "Sunset",
-            Settings {
-                sun_flare: Some(SunFlare {
-                    color: [1.0, 0.55, 0.25, 1.0],
-                    size: 2.0,
-                }),
-                ..look(
-                    270.0,
-                    4.0,
-                    [0.95, 0.45, 0.25],
-                    [0.32, 0.24, 0.34],
-                    [0.85, 0.45, 0.35],
-                    [0.95, 0.6, 0.55],
-                )
-            },
-        ),
-        (
-            "Night",
-            look(
-                45.0,
-                40.0,
-                [0.16, 0.19, 0.3],
-                [0.1, 0.12, 0.2],
-                [0.03, 0.04, 0.08],
-                [0.12, 0.14, 0.25],
-            ),
-        ),
-        (
-            "Overcast",
-            Settings {
-                visible_distance: Some(350.0),
-                fog_distance: Some(40.0),
-                ..look(
-                    160.0,
-                    70.0,
-                    [0.35, 0.36, 0.38],
-                    [0.55, 0.56, 0.6],
-                    [0.62, 0.64, 0.67],
-                    [0.7, 0.72, 0.75],
-                )
-            },
-        ),
-        (
-            "Thick Fog",
-            Settings {
-                visible_distance: Some(90.0),
-                fog_distance: Some(5.0),
-                fog_color: Some([0.78, 0.8, 0.82]),
-                ..Default::default()
-            },
-        ),
-    ]
 }
 
 #[cfg(test)]
@@ -687,6 +657,7 @@ mod tests {
                 length_seconds: length,
                 time: 0.5,
                 anchor_tick: 1000,
+                paused: false,
             }),
             ..Default::default()
         };
@@ -720,6 +691,7 @@ mod tests {
             length_seconds: 300.0,
             time: 0.3,
             anchor_tick: 50,
+            paused: false,
         };
         let s = Settings {
             day_cycle: Some(cycle),
@@ -791,15 +763,70 @@ mod tests {
                     length_seconds: 1.0,
                     time: 0.0,
                     anchor_tick: 0,
+                    paused: false,
                 }),
                 ..Default::default()
             },
         ] {
             assert!(bad.validate().is_err());
         }
-        for (_, preset) in presets() {
-            preset.validate().unwrap();
+        assert!(
+            Settings {
+                overcast: Some(1.5),
+                ..Default::default()
+            }
+            .validate()
+            .is_err()
+        );
+    }
+    #[test]
+    fn a_paused_cycle_holds_its_time_and_overcast_greys_the_light() {
+        let s = Settings {
+            day_cycle: Some(DayCycle {
+                length_seconds: 60.0,
+                time: 0.0,
+                anchor_tick: 0,
+                paused: true,
+            }),
+            ..Default::default()
+        };
+        let midnight = resolve(&map(), &s, 0.0);
+        assert_eq!(resolve(&map(), &s, 1e6), midnight, "the clock stands still");
+        assert_eq!(midnight.direct_light, clamp01(scale(MOON, 1.0)));
+        let grey = resolve(
+            &map(),
+            &Settings {
+                overcast: Some(1.0),
+                sun_flare: Some(SunFlare::default()),
+                ..Default::default()
+            },
+            0.0,
+        );
+        let clear = resolve(&map(), &Settings::default(), 0.0);
+        assert!(grey.direct_light[0] < clear.direct_light[0] * 0.3);
+        assert!(grey.ambient_light[0] > clear.ambient_light[0]);
+        let [r, g, b] = grey.fog_color;
+        assert!((r - g).abs() < 0.05 && (g - b).abs() < 0.05, "{r} {g} {b}");
+        assert_eq!(grey.flare.0[3], 0.0);
+    }
+    #[test]
+    fn every_key_is_taken_and_compared_by_name() {
+        let full = Settings {
+            overcast: Some(0.5),
+            sky: Some("plain".into()),
+            water_height: Some(3.0),
+            ..Default::default()
+        };
+        for key in KEYS {
+            let mut s = Settings::default();
+            assert!(s.take(&full, key), "{key}");
+            assert!(s.same(&full, key), "{key}");
         }
+        let mut s = Settings::default();
+        s.take(&full, "overcast");
+        assert_eq!(s.overcast, Some(0.5));
+        assert!(!s.same(&full, "sky"));
+        assert!(!s.take(&full, "nonsense"));
     }
     #[test]
     fn skies_are_names_that_merge_and_unset() {

@@ -270,6 +270,13 @@ impl Replica {
                 && checkpoint.projectile_falls.values().all(|f| f.is_finite()),
             "Invalid projectile falls"
         );
+        // The host's movement controllers, compiled to predict with. One
+        // that does not compile here leaves that body to the host's
+        // corrections: playable, only less smooth.
+        let mut archetypes = checkpoint.archetypes;
+        for (id, why) in bri_sim::archetype::bind_controllers(&mut archetypes) {
+            eprintln!("Not predicting {id}'s movement controller: {why:#}");
+        }
         let mut out = Self {
             weapons: checkpoint.weapons,
             tools: checkpoint.tools,
@@ -299,7 +306,7 @@ impl Replica {
             map_lights: checkpoint.map_lights,
             environment: checkpoint.environment,
             weapon_settings: checkpoint.weapon_settings,
-            archetypes: checkpoint.archetypes.into(),
+            archetypes: archetypes.into(),
             addon_settings: checkpoint.addon_settings.into(),
             addon_teams_shown_when: checkpoint.addon_teams_shown_when,
             brick_events: checkpoint.brick_events.into(),
@@ -407,6 +414,17 @@ impl Replica {
         if let Some(settings) = &delta.weapon_settings {
             validate_weapon_settings(settings)?;
         }
+        // The host's tuned bodies, into a copy of the table: kept only if
+        // every one fits.
+        let archetypes = match &delta.archetypes {
+            Some(tuned) => {
+                let mut table = (*self.archetypes).clone();
+                bri_sim::session::apply_tuned(&mut table, tuned.clone())?;
+                table.validate()?;
+                Some(std::sync::Arc::new(table))
+            }
+            None => None,
+        };
         let entities = match &delta.entities {
             Some(changes) => {
                 let mut entities = self.entities.clone();
@@ -494,6 +512,9 @@ impl Replica {
         }
         if let Some(settings) = delta.weapon_settings {
             self.weapon_settings = settings;
+        }
+        if let Some(archetypes) = archetypes {
+            self.archetypes = archetypes;
         }
         if let Some(entities) = entities {
             self.entities = entities;

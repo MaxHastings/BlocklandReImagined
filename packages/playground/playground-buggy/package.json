@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "id": "playground-buggy",
+  "version": "1.0.0",
+  "api": 1,
+  "name": "Dune Buggy",
+  "description": "A vehicle: an open buggy with a roll cage, placed from a vehicle spawn brick. The driver steers, the passenger can use their weapon, a gunner stands at the rear gun, and at speed it knocks bricks out in a mini-game that allows brick damage. Part of the Mixed Add-On Playground; it knows nothing about any body, weapon or game mode.",
+  "authors": ["Blockland ReImagined"],
+  "license": "CC0-1.0",
+  "provenance": { "source": "original" },
+  "provides": [
+    { "kind": "vehicles", "id": "playground-buggy:vehicles/main", "file": "assets/vehicles.json" },
+    { "kind": "weapons", "id": "playground-buggy:weapons/main", "file": "assets/weapons.json" }
+  ]
+}

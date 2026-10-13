@@ -93,6 +93,8 @@ fn setting(args: &[String], global: &str) -> Result<SettingDef, String> {
         resets: false,
         help: String::new(),
         avatar: None,
+        place: None,
+        unit: String::new(),
     };
     let whole = |n: f32| (n.fract() == 0.0 && n.abs() <= 1e9).then_some(n as i64);
     match words.next().map(str::to_ascii_lowercase).as_deref() {

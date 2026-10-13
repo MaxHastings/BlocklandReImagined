@@ -53,6 +53,7 @@ mod saves;
 mod scene;
 mod scenery;
 mod session;
+mod tune;
 mod view;
 use addons::*;
 use avatars::*;
@@ -227,6 +228,9 @@ struct Attempt {
     /// from this client's own but brings no content to reload: whose
     /// Add-On code runs.
     joined: Arc<std::sync::Mutex<Option<bri_package::packages::PackageSet>>>,
+    /// Joins: the connection the host announced the player on, handed to
+    /// [`SessionState::arrival`] once open.
+    arrival: Arc<std::sync::Mutex<Option<bri_net::client::Arrival>>>,
 }
 struct PendingAction {
     action: UiAction,
@@ -496,6 +500,8 @@ pub struct App {
     pub cosmetic_faults: crate::cosmetic::CosmeticFaults,
     /// Add-On packages: the catalog, client code, server packages and imports.
     addons: AddOns,
+    /// `/tune`'s window, while open.
+    tuning: tune::Tuning,
     /// Add-On world shapes (`show_shapes`), and the sets last uploaded.
     world_shapes: Option<bri_render::world_shapes::ShapeRenderer>,
     shapes_uploaded:
@@ -1518,6 +1524,10 @@ impl PlatformApp for App {
     }
     fn focus_changed(&mut self, focused: bool) {
         self.audio.set_focused(focused);
+        if focused {
+            // Back from an editor, maybe: look for Add-On edits.
+            self.addons.edits.check();
+        }
         if focused
             && (self.ui.is_open(bri_ui::screens::ScreenId::StartMission)
                 || self.ui.is_open(bri_ui::screens::ScreenId::HostColorsets))
@@ -1567,11 +1577,13 @@ impl PlatformApp for App {
         self.gpu.opened = true;
         self.gpu.device = Some((device.clone(), queue.clone(), format));
         self.item_ui.gpu_stopped();
+        self.addons.hud_regions.gpu_stopped();
         self.scene.scenery.gpu_stopped();
         self.world_items.clear_gpu();
         crate::vehicles::ClientVehicles::gpu_stopped(&mut self.vehicle_assets);
         self.fx.explosion_shapes.gpu_stopped();
         self.fx.beams.gpu_stopped();
+        self.fx.decals.gpu_stopped();
         self.fx.tutorial_targets.gpu_stopped();
         self.gpu.shell_gpu = None;
         for avatar in self.avatar.avatars.values_mut() {
@@ -1717,10 +1729,12 @@ impl PlatformApp for App {
         self.addons.client_code.gpu_stopped();
         self.addons.item_skins.gpu_stopped();
         self.item_ui.gpu_stopped();
+        self.addons.hud_regions.gpu_stopped();
         self.world_items.clear_gpu();
         crate::vehicles::ClientVehicles::gpu_stopped(&mut self.vehicle_assets);
         self.fx.explosion_shapes.gpu_stopped();
         self.fx.beams.gpu_stopped();
+        self.fx.decals.gpu_stopped();
         self.fx.tutorial_targets.gpu_stopped();
         self.gpu.shell_gpu = None;
         self.avatar.gpu_stopped();

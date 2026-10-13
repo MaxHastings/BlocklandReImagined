@@ -656,6 +656,24 @@ impl App {
             UiAction::Chat {
                 channel: ChatChannel::Say,
                 text,
+            } if self.net.arrival.is_some()
+                && !self.net.attempt.as_ref().is_some_and(|a| a.entered) =>
+            {
+                // Still loading: the line goes over the connection the host
+                // announced this player on, as v20's loading screen chat.
+                let said = self
+                    .net
+                    .arrival
+                    .as_ref()
+                    .context("Not connected")?
+                    .arrival
+                    .say(text);
+                self.answer(id, said);
+                return Ok(());
+            }
+            UiAction::Chat {
+                channel: ChatChannel::Say,
+                text,
             } => {
                 let result = self.command(
                     id,
@@ -700,6 +718,26 @@ impl App {
                     Ok(false) => Err(anyhow::anyhow!("Not connected")),
                     Err(error) => Err(error),
                 }
+            }
+            // `/tune` and `/tune <body>` open the Tune window; a change
+            // typed out (`/tune <body> <field> <value>`) goes to the host.
+            UiAction::ChatCommand { ref name, ref args }
+                if name.eq_ignore_ascii_case("tune")
+                    && args.last().is_none_or(|a| a.parse::<f32>().is_err()) =>
+            {
+                let args = args.clone();
+                self.open_tune(&args)
+            }
+            UiAction::TuneSet { .. } | UiAction::TuneUndo { .. } | UiAction::TuneSave { .. } => {
+                let result = self.tune_action(id, &action);
+                if result.is_ok() {
+                    return Ok(());
+                }
+                result
+            }
+            UiAction::TuneClosed => {
+                self.close_tune();
+                Ok(())
             }
             UiAction::ChatCommand { ref name, .. } if name.eq_ignore_ascii_case("invite") => {
                 match self.net.invite.clone() {

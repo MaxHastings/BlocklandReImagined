@@ -1,0 +1,28 @@
+{
+  "schema_version": 1,
+  "name": "Runner",
+  "model": "playground-runner-look:model/runner",
+  "max_health": 100,
+  "energy_bar": false,
+  "movement": {
+    "can_jet": false,
+    "width": 1.0,
+    "stand_height": 1.9,
+    "crouch_height": 0.9,
+    "stand_eye": 1.5,
+    "crouch_eye": 0.6,
+    "eye_forward": 0.1,
+    "sit_eye": 1.15,
+    "forward": 10,
+    "backward": 6,
+    "sideways": 8,
+    "jump_speed": 14,
+    "air_control": 0.4
+  },
+  "sockets": {
+    "right_hand": { "offset": [0.5, 0.74, -0.14] },
+    "left_hand": { "offset": [-0.5, 0.74, -0.14] },
+    "eye": { "offset": [0.0, 1.5, -0.1] },
+    "seat": { "offset": [0.0, 0.66, 0.0] }
+  }
+}

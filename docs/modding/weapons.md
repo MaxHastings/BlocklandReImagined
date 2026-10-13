@@ -19,7 +19,9 @@ up, -z forward) relative to `assets/`, such as
 `ejectPoint` say where a gun fires and throws its casings. Each material names a PNG
 beside the model (`pick_wood` draws `pick_wood.png`, up to 1,024 pixels a
 side), as a vehicle model's do. A node called `mountPoint` is where the hand
-holds it. A `detail9999` detail is what the holder sees in first person
+holds it. A node called `supportPoint` is where a second hand holds a two-handed
+image (`aim_both`) on imported bodies; without it that hand goes halfway
+from `mountPoint` to `muzzlePoint`. A `detail9999` detail is what the holder sees in first person
 and the lower details what everyone else sees, so an image state's
 `sequence` (the pick's `"fire"`) can swing the first-person copy alone.
 Its box is its bounds for dropping; `bri-addon-check` names a model or
@@ -111,6 +113,7 @@ The fields you are most likely to change:
 | projectile | `speed`, `gravity`, `lifetime_ticks` | how fast, how much it drops, how long it lives (120 ticks = 1 s) |
 | projectile | `damage`, `impulse`, `vertical` | hurt, and how hard it shoves |
 | projectile | `ballistic`, `elasticity` | bounces, and how much |
+| projectile | `decal` | the mark it leaves where it hits a brick, a bullet hole: `{ "size": 0.15, "color": [0.04, 0.035, 0.03, 0.9], "seconds": 30 }`, a soft disc `size` across (0.02 to 4, times the projectile's scale) on the face it hit, darkest in the middle, gone after `seconds` (0.5 to 600, fading over the last one) or when the brick goes; each player keeps the newest 512. `color` and `seconds` may be left out (near black, 30). None leaves no mark, as v20's own projectiles |
 | image state | `ticks` | how long a state (`Fire` is the reload time) lasts |
 | image | `shot` | several projectiles per shot, their spread and the recoil ([porting.md](porting.md#the-image-shot-field)); `scale` sizes the projectiles against their holder (0.1 to 10) |
 | image | `volleys` | up to 4 more sets each shot fires after its own: `[{ "projectile": "...", "projectiles": 1, "spread": 0.0005 }]`, a shotgun's slug after its pellets |
@@ -132,7 +135,7 @@ The fields you are most likely to change:
 | image | `scripts` | what each state `script` does, by lower-case name: `{ "onfire": { "arm": "spearThrow", "fire": true, "use_up": true } }` swings the arm, launches the image's projectile (or the entry's own `projectile`) and uses the item up, as a thrown grenade ([torque-equivalents.md](torque-equivalents.md#image-state-scripts-as-data)) |
 | image | `follow_arm` | `true` also moves a first-person `eye_offset` image with the arm's actions (shift, plant, swing), as the base game's brick, hammer and spray cans do; off by default |
 | image | `rope` | `{ "projectile": "your-id:projectile/chain", "speed": 160 }`: while the holder hangs on a rope (`tether`), every player's game draws it with that projectile's trail, swept from the muzzle to the rope's end as densely as the projectile flying it at `speed` would lay it, as v20 rope tools did by firing a stream of them; nothing is sent for it |
-| pack | `sounds` | `{ "your-id:shot": { "file": "sounds/shot.wav", "volume": 0.8 } }`: your own `.wav`/`.ogg` files, named by a state's `sound` and by rules; `local` for sounds only the holder hears, `looping` for a state-long hum |
+| pack | `sounds` | `{ "your-id:shot": { "file": "sounds/shot.wav", "volume": 0.8 } }`: your own `.wav`/`.ogg` files, named by a state's `sound` and by rules; `local` for sounds only the holder hears, `looping` for a state-long hum or a vehicle's `engine_sound` ([content-kinds.md](content-kinds.md)). `bri-addon-check` decodes each file as the game does and fails one it cannot play |
 
 **Scopes.** `zoom` takes more for a proper scope:
 

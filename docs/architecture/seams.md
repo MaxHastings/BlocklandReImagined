@@ -23,6 +23,8 @@ labels are retained so earlier progress notes remain traceable.
 | Add-On content preparation | One worker and latest pending choice; owned UI schema crosses threads, caches and audio device stay on the UI thread; host/join continuations preserve cancellation and explicit tool choices | Content reload cleanup | on main |
 | Native framework dependency ports | `handles` dependency declarations paired with manifest removal; only applied ports settle source requirements, with evidence retained | Content reload cleanup | on main |
 | Click swaps | `CatalogEntry::swap` (front/back brick ids), `ToolCatalog::swaps` and `swap_sounds`; swaps replace bounds and collision, including wider open doors, with optional positional sound, at most every 250 ms | Bundled originals (doors, coffins) | on main |
+| HUD regions and body cameras | `hud` layouts with a `region` (`bri_content::hud`, `bri_client::hud_regions`, the `hud_region` sandbox call), archetype `look.camera` (`bri_content::camera`, `Controls::set_body_camera`) | v0.3.0 HUD regions and camera (W6) | branch `claude/hud-regions-camera-vuyw6r` |
+| Movement controllers | `controller` kind, `Archetype::controller`, `bri_motor::controller` (tick record, sweeps, 16-byte memory, animation intent), `bri-controller` Wasmtime host on host and client | v0.3.0 movement controllers (W3) | branch `claude/v030-movement-controllers-w3puoe` |
 | Hit regions | `info.region` on damage: head, torso, legs | Bushido's Adventure Pack | on main |
 | HUD "holding" line | per-gun HUD text while an item is held | Bushido's Adventure Pack | on main |
 | Scope zoom | zoom, `hide_nodes`, `both_arms` | Kaje's Sniper Rifle | on main |
@@ -36,6 +38,7 @@ labels are retained so earlier progress notes remain traceable.
 | Tethers | tether and winch | Grapple rope Add-On | on main |
 | Passages | `Brick::stretched`, `EffectsWorld::set_passages`, clip planes | Portal bricks Add-On | on main |
 | Seat-tagged moves | moves tagged with the seat they steer | Turret aim flickers for watchers | on main |
+| Seat hand holds | `Seat::hands` points, `Definition::hand_hold`, client two-bone reach (`avatar::reach_hands`) | Feel and presentation seams (W8, for Halo's Warthog) | branch w8-bodies |
 | Importer base datablocks | base v20 bricks, projectiles and damage types without `--core` | Trench Warfare game mode | on main |
 | Client app split | `crates/client/src/app.rs` into modules | Code health audit | on main |
 | Registries, protocol changes, progress entries | how features add ops, messages and notes without editing shared lists | Tech debt hot spots | on main |
@@ -52,6 +55,7 @@ labels are retained so earlier progress notes remain traceable.
 | Bot behaviours | the bot brain's behaviours and their order (`docs/architecture/bots.md`), a weapon image's `bot` use (`fire`, `reach`) | Gravity Gun (bots lane) | on main |
 | Bot route planner | One search over the walk grid whose edges are the locomotion the body can perform now (walk, jump, crawl, portal, swim, jet) plus board/drive/leave legs for a usable vehicle; costs from `PlayerTuning` and vehicle definitions; per-leg ordinary-control executors (`crate::route`, `nav::Mode`); replaces the Fly behaviour and the driver's ad hoc steering (`docs/architecture/bots.md#routes-one-planner-for-every-way-of-getting-about`) | Bot route planner (fix/bot-route-planner) | branch fix/bot-route-planner |
 | Rules bots | `add_bot`, `remove_bot`, `rest_bot`, `bot_tool`, `bot_kinds`, `bot_limit`, `bot_name_limit`, a player's `spawner`; capability `bots`; the engine brain roams, fights and respawns them, sharing the host's Max bots cap (default 16, at most 32) with spawn-brick bots | Capture the Flag (Slayer) | on main |
+| Bot profiles, intents and contact | A kind's `tactics`, `vehicles`, `contact`, `ability`, `flee_below`, `reaction_seconds` and `memory_seconds` in `bots.json`; `bot_intent` (guard, patrol, follow, flee); `on_bot_ability` and `on_contact` hooks; `BotKind::cost` weighting the bot limit (`docs/architecture/bots.md` Profiles, Intents, Attacks) | NPC profiles and reach (v0.3.0 W7, claude/npc-profiles-reach-2vczf0) | branch, PR against v0.3.0-experimental |
 | Message box | `message_box(p, title, text)` (v20 `MessageBoxOK`), capability `chat` | Capture the Flag (Slayer) | on main |
 | Saved mini-games | a build keeps its saver's mini-game (settings, Add-On settings, teams, `per_minigame` state keys); loading sets it up again and sends `on_minigame` `loaded` | Capture the Flag (Slayer) | on main |
 | Copy jobs | big copy work a slice each tick (`CopyWork`, `cancel_copy`, `copy_working`), copy ghost subset, `IdMap` | Duplicators | on main |

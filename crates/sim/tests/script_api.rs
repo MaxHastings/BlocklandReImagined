@@ -87,11 +87,12 @@ fn cmd_lamp_reset(p, x, radius) { set_map_lights([x, 2.0, 0.0], radius, #{}); }
 fn cmd_env_set(p) {
     set_environment(#{ sun_azimuth: 90.0, fog_color: [0.2, 0.3, 0.4], day_length: 60.0,
         time_of_day: 0.25, sun_flare_size: 2.0, sky: "plain", water: "none", water_height: 8.0,
-        ground_color: [1.0, 0.5, 0.0, 1.0] });
+        ground_color: [1.0, 0.5, 0.0, 1.0], overcast: 0.5 });
 }
+fn cmd_env_hold(p) { set_environment(#{ time_passes: false, time_of_day: 0.75 }); }
 fn cmd_env_read(p) {
     let e = environment();
-    note("env", `${e.sun_azimuth}|${e.day_length}|${e.sun_flare_size}|${"fog_color" in e}|${"sky_color" in e}|${e.sky}|${e.water}|${e.water_height}|${e.ground_color[1]}`);
+    note("env", `${e.sun_azimuth}|${e.day_length}|${e.sun_flare_size}|${"fog_color" in e}|${"sky_color" in e}|${e.sky}|${e.water}|${e.water_height}|${e.ground_color[1]}|${e.overcast}|${e.time_passes}`);
 }
 fn cmd_env_unset(p) { set_environment(#{ sun_azimuth: (), day_cycle: false, sky: (), water: () }); }
 fn cmd_env_bad(p) { set_environment(#{ sun_elevation: 120.0 }); }
@@ -195,6 +196,7 @@ fn behaviour() -> Value {
             command("region", &["int", "float"]),
             command("env_set", &[]),
             command("env_read", &[]),
+            command("env_hold", &[]),
             command("env_unset", &[]),
             command("env_bad", &[]),
             command("env_reset", &[]),
@@ -887,7 +889,20 @@ fn scripts_change_the_environment_for_everyone() {
     );
     assert_eq!(e.sky.as_deref(), Some("plain"));
     g.run(a, "env_read", vec![]);
-    assert_eq!(g.text("env"), "90.0|60.0|2.0|true|false|plain|none|8.0|0.5");
+    assert_eq!(
+        g.text("env"),
+        "90.0|60.0|2.0|true|false|plain|none|8.0|0.5|0.5|true"
+    );
+    assert_eq!(e.overcast, Some(0.5));
+    // A held time of day keeps the day length and stops the clock.
+    g.run(a, "env_hold", vec![]);
+    let held = g.s.environment().day_cycle.unwrap();
+    assert_eq!(
+        (held.length_seconds, held.time, held.paused),
+        (60.0, 0.75, true)
+    );
+    g.run(a, "env_read", vec![]);
+    assert!(g.text("env").ends_with("|false"));
     // `()` puts one setting back to the map's; the rest stay.
     g.run(a, "env_unset", vec![]);
     let e = g.s.environment();
@@ -1083,6 +1098,75 @@ fn a_magazine_shows_its_rounds_reloads_on_the_light_key_and_takes_ammo_from_rule
     assert_eq!(bottom_prints(&mut g, p), [String::new()]);
     g.run(p, "mag", vec![]);
     assert_eq!(g.text("mag"), "none");
+}
+
+/// The owner's `Notice::Ammo`s, each with whether a bottom print came
+/// straight after it.
+fn held_ammo(g: &mut Game, owner: OwnerId) -> Vec<(Option<bri_sim::session::HeldAmmo>, bool)> {
+    let mine: Vec<Notice> =
+        g.s.take_private_notices()
+            .into_iter()
+            .filter(|(o, _)| *o == owner)
+            .map(|(_, n)| n)
+            .collect();
+    mine.iter()
+        .enumerate()
+        .filter_map(|(i, n)| match n {
+            Notice::Ammo(held) => Some((
+                held.clone(),
+                matches!(mine.get(i + 1), Some(Notice::Bottom { .. })),
+            )),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn a_held_guns_ammo_reaches_its_holder_for_hud_counters() {
+    let mut g = Game::new();
+    let p = g.join(Vec3::new(0.0, 0.05, 0.0));
+    let other = g.join(Vec3::new(3.0, 0.05, 0.0));
+    g.steps(3);
+    g.s.take_private_notices();
+    g.run(p, "rifle", vec![]);
+    g.steps(10);
+    let ammo = held_ammo(&mut g, p);
+    let (last, printed_next) = ammo.last().expect("drawing it sends the ammo");
+    let last = last.as_ref().expect("a gun with a magazine");
+    assert_eq!(
+        (
+            last.rounds,
+            last.size,
+            last.reserve,
+            last.reloading,
+            last.printed
+        ),
+        (Some(5), 5, Some(10), false, true)
+    );
+    assert!(printed_next, "the ammo display's print follows it");
+    g.run(p, "load", vec![PackageArg::Int(2)]);
+    g.send(p, Command::ToggleLight).unwrap();
+    g.steps(1);
+    let ammo = held_ammo(&mut g, p);
+    let last = ammo.last().unwrap().0.as_ref().unwrap();
+    assert_eq!((last.rounds, last.reloading), (Some(2), true));
+    g.run(p, "endless", vec![]);
+    g.steps(40);
+    let ammo = held_ammo(&mut g, p);
+    let last = ammo.last().unwrap().0.as_ref().unwrap();
+    assert_eq!(
+        (last.rounds, last.reserve),
+        (Some(5), None),
+        "endless reserve"
+    );
+    // A gun without a magazine has no ammo to count.
+    g.run(p, "arm", vec![]);
+    g.steps(10);
+    assert_eq!(held_ammo(&mut g, p).last().map(|a| a.0.clone()), Some(None));
+    // Nobody else hears it.
+    g.run(p, "rifle", vec![]);
+    g.steps(10);
+    assert!(held_ammo(&mut g, other).is_empty());
 }
 
 #[test]

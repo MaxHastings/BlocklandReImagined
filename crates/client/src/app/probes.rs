@@ -139,6 +139,11 @@ impl App {
     pub fn audio_warnings(&self) -> &std::collections::BTreeSet<String> {
         &self.audio.warnings
     }
+    /// Whether `profile` names a sound this client can play: a loaded
+    /// Add-On's own, or the game's.
+    pub fn audio_has_sound(&self, profile: &str) -> bool {
+        self.audio.has_sound(profile)
+    }
     pub fn effect_counts(&self) -> (usize, usize, usize, usize) {
         (
             self.fx.effects.attachment_count(),
@@ -175,6 +180,21 @@ impl App {
     /// A body's action sequence and whether it is still blending in.
     pub fn avatar_action(&self, owner: bri_world::OwnerId) -> Option<(&'static str, bool)> {
         Some(self.avatar.avatars.get(&owner)?.action())
+    }
+    /// What a body lacks against the contract (sockets, nodes, animation
+    /// roles), as the one-time report names it; empty for a complete body.
+    pub fn avatar_body_report(&mut self, owner: bri_world::OwnerId) -> Option<Vec<String>> {
+        let assets = &self.avatar.avatar_assets;
+        Some(self.avatar.avatars.get_mut(&owner)?.body_report(assets))
+    }
+    /// The Add-On body a player draws as (`look.model` of its type), or
+    /// None for the Blockhead.
+    pub fn avatar_model(&self, owner: bri_world::OwnerId) -> Option<Option<&str>> {
+        Some(self.avatar.avatars.get(&owner)?.model.as_deref())
+    }
+    /// Whether a body draws over the hidden Blockhead stand-in (a box model).
+    pub fn avatar_is_stand_in(&self, owner: bri_world::OwnerId) -> Option<bool> {
+        Some(self.avatar.avatars.get(&owner)?.body_kind().stand_in)
     }
     /// A body's posed node in the world, as drawn this frame.
     pub fn avatar_node(&self, owner: bri_world::OwnerId, name: &str) -> Option<glam::Mat4> {

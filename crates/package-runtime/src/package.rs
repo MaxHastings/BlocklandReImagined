@@ -29,10 +29,14 @@ pub struct Package {
     pub entities: BTreeMap<String, content::EntityKind>,
     pub models: BTreeMap<String, content::BoxModel>,
     pub huds: BTreeMap<String, content::HudPanel>,
+    /// HUD files that claim a region (`"region"`) rather than add a panel.
+    pub hud_regions: BTreeMap<String, bri_content::hud::Layout>,
     pub binds: BTreeMap<String, content::Binds>,
     pub help: BTreeMap<String, content::HelpPages>,
     pub splashes: BTreeMap<String, content::Splash>,
     pub archetypes: BTreeMap<String, content::ArchetypeDef>,
+    /// Movement controllers' WebAssembly modules.
+    pub controllers: BTreeMap<String, Vec<u8>>,
     pub textures: BTreeMap<String, content::Texture>,
     pub blocks: BTreeMap<String, content::BlockDef>,
     pub modes: BTreeMap<String, content::GameMode>,
@@ -41,6 +45,23 @@ pub struct Package {
 const MAX_PACKAGE_BYTES: usize = 32 * 1024 * 1024;
 
 impl Package {
+    /// It brings something a host runs for some games and not others
+    /// (rules, bodies, HUD, creatures, blocks, a world or a game mode), as
+    /// opposed to weapons and vehicles, which load with the game's content
+    /// whatever the game.
+    pub fn runs_per_game(&self) -> bool {
+        self.behaviour.is_some()
+            || !self.archetypes.is_empty()
+            || !self.controllers.is_empty()
+            || !self.entities.is_empty()
+            || !self.models.is_empty()
+            || !self.huds.is_empty()
+            || !self.hud_regions.is_empty()
+            || !self.binds.is_empty()
+            || !self.blocks.is_empty()
+            || !self.worlds.is_empty()
+            || !self.modes.is_empty()
+    }
     /// Read a mod package directory. Every problem is returned, not just the
     /// first.
     pub fn load(dir: &Path, entry: &PackageEntry) -> Result<Self, Vec<Diagnostic>> {
@@ -116,7 +137,8 @@ impl Package {
                 // imported one with weapons and player types) may carry
                 // it. Only the host's table counts; clients receive that
                 // with the checkpoint and ignore the file.
-                (Side::Server, Side::Shared) if kind == Kind::Archetype => {}
+                (Side::Server, Side::Shared)
+                    if matches!(kind, Kind::Archetype | Kind::Controller) => {}
                 (Side::Server, _) => {
                     out.push(
                         Diagnostic::error(
@@ -187,10 +209,12 @@ impl Package {
             entities: BTreeMap::new(),
             models: BTreeMap::new(),
             huds: BTreeMap::new(),
+            hud_regions: BTreeMap::new(),
             binds: BTreeMap::new(),
             help: BTreeMap::new(),
             splashes: BTreeMap::new(),
             archetypes: BTreeMap::new(),
+            controllers: BTreeMap::new(),
             textures: BTreeMap::new(),
             blocks: BTreeMap::new(),
             modes: BTreeMap::new(),
@@ -294,7 +318,17 @@ impl Package {
                     }
                 }
                 Kind::Hud => {
-                    if let Some(h) = parse::<content::HudPanel>(asset, &id, |h| h.validate(), out) {
+                    let layout = serde_json::from_slice::<serde_json::Value>(&asset.bytes)
+                        .is_ok_and(|v| bri_content::hud::is_layout(&v));
+                    if layout {
+                        if let Some(l) =
+                            parse::<bri_content::hud::Layout>(asset, &id, content::hud_layout, out)
+                        {
+                            self.hud_regions.insert(asset.id.clone(), l);
+                        }
+                    } else if let Some(h) =
+                        parse::<content::HudPanel>(asset, &id, |h| h.validate(), out)
+                    {
                         self.huds.insert(asset.id.clone(), h);
                     }
                 }
@@ -323,6 +357,20 @@ impl Package {
                         self.archetypes.insert(asset.id.clone(), a);
                     }
                 }
+                Kind::Controller => {
+                    if asset.bytes.starts_with(b"\0asm") {
+                        self.controllers
+                            .insert(asset.id.clone(), asset.bytes.clone());
+                    } else {
+                        out.push(
+                            Diagnostic::error(
+                                "content.controller",
+                                "a controller is a WebAssembly binary module (.wasm)",
+                            )
+                            .at(location(&id, &asset.file)),
+                        );
+                    }
+                }
                 Kind::Texture => match content::Texture::read(&asset.bytes) {
                     Ok(t) => {
                         self.textures.insert(asset.id.clone(), t);
@@ -337,12 +385,36 @@ impl Package {
                         self.blocks.insert(asset.id.clone(), b);
                     }
                 }
+                // Drawn by clients (`bri-client` `AvatarAssets::load_bodies`);
+                // checked here so a broken one is named before anyone joins.
+                Kind::Body => {
+                    parse::<bri_content::shape::Shape>(asset, &id, |s| s.validate(), out);
+                }
                 // Read and validated by the engine systems that merge them.
                 Kind::Weapons | Kind::Vehicles | Kind::Bricks | Kind::Bots => {}
                 Kind::Mode => {
                     if let Some(m) = parse::<content::GameMode>(asset, &id, |m| m.validate(), out) {
                         self.modes.insert(asset.id.clone(), m);
                     }
+                }
+            }
+        }
+        // A region layout draws this Add-On's own textures.
+        for (hud, layout) in &self.hud_regions {
+            for texture in layout.textures() {
+                if !self.textures.contains_key(texture) {
+                    let file = self
+                        .assets
+                        .iter()
+                        .find(|a| &a.id == hud)
+                        .map_or("", |a| a.file.as_str());
+                    out.push(
+                        Diagnostic::error(
+                            "content.hud.texture",
+                            format!("texture `{texture}` is not provided by this Add-On as kind `texture`"),
+                        )
+                        .at(location(&id, file)),
+                    );
                 }
             }
         }
@@ -966,6 +1038,10 @@ impl Catalog {
     /// a game mode claims. A mode claims its own package and the Add-Ons it
     /// names; those run in that mode, not in every game.
     pub fn for_base_map(&self) -> Result<Catalog, Vec<Diagnostic>> {
+        self.only(&self.base_map_packages())
+    }
+    /// [`Self::for_base_map`]'s packages.
+    fn base_map_packages(&self) -> BTreeSet<&str> {
         let claimed: BTreeSet<&str> = self
             .packages
             .iter()
@@ -975,12 +1051,10 @@ impl Catalog {
                     .flat_map(move |m| m.add_ons.iter().map(String::as_str).chain([owner.as_str()]))
             })
             .collect();
-        let keep = self
-            .needing_only("")
+        self.needing_only("")
             .into_iter()
             .filter(|id| self.closure([*id]).is_disjoint(&claimed))
-            .collect();
-        self.only(&keep)
+            .collect()
     }
     /// What a host runs on package world `world` without a game mode: every
     /// enabled package except those that need a different world.
@@ -993,6 +1067,110 @@ impl Catalog {
             )]);
         }
         Ok(catalog)
+    }
+    /// Why the enabled package `id` does not run in every game, in plain
+    /// words for the Add-Ons screen: a game mode uses it (or something it
+    /// needs), so a Custom game leaves it out ([`Self::for_base_map`]), or
+    /// it needs a package world. None: every game the host starts runs it,
+    /// or it brings nothing a game leaves out (weapons and vehicles load
+    /// with the game's content whatever the game).
+    pub fn plays_only(&self, id: &str) -> Option<String> {
+        if !self.packages.get(id).is_some_and(Package::runs_per_game) {
+            return None;
+        }
+        let needs = self.closure([id]);
+        let name = |id: &str| {
+            self.packages
+                .get(id)
+                .map_or(id, |p| p.manifest.name.as_str())
+                .to_string()
+        };
+        // Each game mode using it or something it needs, and which.
+        let mut modes: Vec<(&str, &str)> = Vec::new();
+        for (owner, p) in &self.packages {
+            for mode in p.modes.values() {
+                let via = mode
+                    .add_ons
+                    .iter()
+                    .map(String::as_str)
+                    .chain([owner.as_str()])
+                    .filter(|c| needs.contains(c))
+                    .min_by_key(|c| *c != id);
+                if let Some(via) = via {
+                    modes.push((mode.name.as_str(), via));
+                }
+            }
+        }
+        if let Some(&(first, via)) = modes.first() {
+            let names: Vec<&str> = modes.iter().map(|(m, _)| *m).collect();
+            let list = match names.as_slice() {
+                [one] => (*one).to_string(),
+                [rest @ .., last] => format!("{} or {last}", rest.join(", ")),
+                [] => unreachable!(),
+            };
+            let direct = modes.iter().any(|(_, v)| *v == id);
+            if direct && !self.packages[id].modes.is_empty() {
+                return Some(format!(
+                    "Plays only when you pick {list} as the game mode in Start Game."
+                ));
+            }
+            let because = if direct {
+                String::new()
+            } else {
+                format!(" It needs {}, which {first} uses.", name(via))
+            };
+            return Some(format!(
+                "Plays only in {list} games: a Custom game leaves out the rules and bodies a game mode uses.{because} Pick {first} as the game mode in Start Game to play it."
+            ));
+        }
+        let world = *needs
+            .iter()
+            .find(|dep| !self.packages[**dep].worlds.is_empty())?;
+        Some(if world == id {
+            format!(
+                "Plays only on its own map: pick {} as the map in Start Game.",
+                name(world)
+            )
+        } else {
+            format!(
+                "Plays only on {}'s map, which it needs: pick that map in Start Game.",
+                name(world)
+            )
+        })
+    }
+    /// The enabled packages whose rules, bodies or HUD a game of `mode`
+    /// (None: Custom) on `map` leaves out, each with why in plain words: the
+    /// same choice [`Self::for_mode`], [`Self::for_world`] and
+    /// [`Self::for_base_map`] make.
+    pub fn left_out(&self, mode: Option<&str>, map: &str) -> Vec<(String, String)> {
+        let (kept, playing) = match mode {
+            Some(mode) => {
+                let owner = mode.split(':').next().unwrap_or_default();
+                let def = self.packages.get(owner).and_then(|p| p.modes.get(mode));
+                let roots = def
+                    .into_iter()
+                    .flat_map(|m| m.add_ons.iter().map(String::as_str))
+                    .chain([owner]);
+                (self.closure(roots), def.map(|m| m.name.as_str()))
+            }
+            None if self.packages.values().any(|p| p.worlds.contains_key(map)) => {
+                (self.needing_only(map), None)
+            }
+            None => (self.base_map_packages(), None),
+        };
+        self.packages
+            .iter()
+            .filter(|(id, p)| p.runs_per_game() && !kept.contains(id.as_str()))
+            .map(|(id, _)| {
+                let why = match playing {
+                    Some(mode) => format!("This game plays {mode}, which does not use it."),
+                    None => self
+                        .plays_only(id)
+                        .unwrap_or_else(|| "It needs another world than this map.".into()),
+                };
+                (id.clone(), why)
+            })
+            .collect()
     }
     /// Packages whose dependencies provide no world other than `world`.
     fn needing_only(&self, world: &str) -> BTreeSet<&str> {
@@ -1038,12 +1216,28 @@ impl Catalog {
     pub fn block(&self, id: &str) -> Option<&content::BlockDef> {
         self.packages.get(id.split(':').next()?)?.blocks.get(id)
     }
+    /// A movement controller's module.
+    pub fn controller(&self, id: &str) -> Option<&[u8]> {
+        self.packages
+            .get(id.split(':').next()?)?
+            .controllers
+            .get(id)
+            .map(Vec::as_slice)
+    }
     /// Every package's archetypes, in package then id order.
     pub fn archetypes(&self) -> impl Iterator<Item = (&String, &content::ArchetypeDef)> {
         self.packages.values().flat_map(|p| p.archetypes.iter())
     }
     pub fn huds(&self) -> impl Iterator<Item = (&String, &content::HudPanel)> {
         self.packages.values().flat_map(|p| p.huds.iter())
+    }
+    /// Every package's HUD region layouts, with the package they come from.
+    pub fn hud_regions(&self) -> impl Iterator<Item = (&str, &String, &bri_content::hud::Layout)> {
+        self.packages.iter().flat_map(|(package, p)| {
+            p.hud_regions
+                .iter()
+                .map(move |(id, l)| (package.as_str(), id, l))
+        })
     }
     pub fn binds(&self) -> impl Iterator<Item = (&String, &content::Binds)> {
         self.packages.values().flat_map(|p| p.binds.iter())

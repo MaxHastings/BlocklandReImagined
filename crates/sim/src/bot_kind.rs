@@ -21,9 +21,10 @@ pub const MAX_KINDS: usize = 64;
 pub const MAX_FIRST_NAMES: usize = 256;
 /// The behaviours a kind's `behaviours` may weigh, in the brain's urgency
 /// order (`session::bots::behaviour::Behaviour`).
-pub const BEHAVIOURS: [&str; 11] = [
+pub const BEHAVIOURS: [&str; 12] = [
     "carry",
     "interact",
+    "flee",
     "fight",
     "arm",
     "chase",
@@ -112,6 +113,162 @@ pub struct BotKind {
     pub perception: BotPerception,
     /// Seconds a choice is held before another may take over (`BotHold`).
     pub hold_seconds: f32,
+    /// Whether it fights with hand weapons. False: it never takes up,
+    /// draws or fires one, even one the rules put in its hand, and fights
+    /// with its body (`melee`, `contact`, `ability`) or a vehicle gun it
+    /// crews.
+    pub weapons: bool,
+    /// Which of the brain's fighting tactics it uses (all, by default).
+    pub tactics: BotTactics,
+    /// Which seats of a vehicle it takes (all, by default).
+    pub vehicles: BotVehicles,
+    /// Hurts whoever it touches, whatever it is doing: a creature that
+    /// harms by bumping into you. None: touching is harmless.
+    pub contact: Option<BotContact>,
+    /// An attack its Add-On defines (a fuse that ends in a blast, a
+    /// spit, a roar): the brain decides when, the Add-On what happens
+    /// (`on_bot_ability`).
+    pub ability: Option<BotAbility>,
+    /// Below this share of its health, with an enemy about, it runs away
+    /// from them (the `flee` behaviour); 0 never.
+    pub flee_below: f32,
+}
+/// What a minimal-profile bot costs as a share of a full Blockhead bot:
+/// measured at 21 to 24 percent (`creature_think_time_16` in
+/// `crates/chaos/tests/bot_gauntlet.rs`, release), so four count as one
+/// against the bot limit.
+pub const MINIMAL_COST: f32 = 0.25;
+
+/// The tactics the shared brain may use in a fight
+/// (`docs/architecture/bots.md`). Off, the brain leaves the tactic out
+/// and spends nothing on it.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct BotTactics {
+    /// Weighs places to fight from (where it is seen, where its shot is
+    /// best: "Where to stand"). Off, it fights where it stands.
+    pub cover: bool,
+    /// Gives ground: steps back out of a fight or to a place farther from
+    /// its enemy. Off, it never backs off.
+    pub retreat: bool,
+    /// Comes at an enemy round a side as well as straight (`surprise`).
+    pub flank: bool,
+    /// Hops or steps out of the way of a shot or a chassis coming at it.
+    pub dodge: bool,
+}
+impl BotTactics {
+    /// None at all.
+    pub fn none() -> Self {
+        Self {
+            cover: false,
+            retreat: false,
+            flank: false,
+            dodge: false,
+        }
+    }
+}
+impl Default for BotTactics {
+    fn default() -> Self {
+        Self {
+            cover: true,
+            retreat: true,
+            flank: true,
+            dodge: true,
+        }
+    }
+}
+/// The seats it takes, by what the seat does.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct BotVehicles {
+    /// A seat with the controls.
+    pub drive: bool,
+    /// A seat with the vehicle's gun.
+    pub gun: bool,
+    /// Any other seat, riding along.
+    pub ride: bool,
+}
+impl Default for BotVehicles {
+    fn default() -> Self {
+        Self {
+            drive: true,
+            gun: true,
+            ride: true,
+        }
+    }
+}
+impl BotVehicles {
+    /// It takes no seat at all.
+    pub fn none(&self) -> bool {
+        !self.drive && !self.gun && !self.ride
+    }
+}
+/// Harm on touch: an enemy whose body touches its body loses `damage`
+/// every `seconds` while they touch.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BotContact {
+    pub damage: f32,
+    #[serde(default = "melee_seconds")]
+    pub seconds: f32,
+    /// What the kill feed and `on_damage` hooks call it.
+    #[serde(default = "contact_name")]
+    pub name: String,
+}
+fn contact_name() -> String {
+    "Touch".into()
+}
+/// An attack its Add-On defines. The brain walks into `range` of an enemy
+/// it sees and, its reaction passed, starts it: a `fuse_seconds` wind-up
+/// (its body plays `action` and wears `emote`, `sound` repeats every
+/// `sound_seconds`) that is called off when the enemy gets `cancel_range`
+/// away, then the Add-On's `on_bot_ability(bot, kind, ability, target)`
+/// hooks run. What the ability does (a blast, a spit, a heal) is
+/// entirely theirs.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct BotAbility {
+    /// Its name, passed to the hook.
+    pub name: String,
+    /// How near an enemy must be to start it, in world units.
+    pub range: f32,
+    /// Seconds of wind-up before the hook runs (0 at once).
+    pub fuse_seconds: f32,
+    /// The enemy this far away during the wind-up calls it off.
+    pub cancel_range: f32,
+    /// Seconds before it may start again.
+    pub cooldown_seconds: f32,
+    /// Whether it must see its enemy to start (false: one it remembers
+    /// near will do).
+    pub sight: bool,
+    /// An action its body's model plays as the wind-up starts.
+    pub action: Option<String>,
+    /// An image its body wears during the wind-up (`emote` slot).
+    pub emote: Option<String>,
+    /// A sound played at it during the wind-up...
+    pub sound: Option<String>,
+    /// ...every this many seconds.
+    pub sound_seconds: f32,
+    /// It stands still during the wind-up rather than keep on at its
+    /// enemy.
+    pub stand: bool,
+}
+impl Default for BotAbility {
+    fn default() -> Self {
+        Self {
+            name: "Ability".into(),
+            range: 2.5,
+            fuse_seconds: 0.0,
+            cancel_range: 6.0,
+            cooldown_seconds: 2.0,
+            sight: true,
+            action: None,
+            emote: None,
+            sound: None,
+            sound_seconds: 0.5,
+            stand: false,
+        }
+    }
 }
 /// What a bot notices, from engine data only: a blast's radius, a sound's
 /// volume, someone staring at it, something moving fast; and how its
@@ -258,6 +415,12 @@ impl Default for BotKind {
             surprise: BotSurprise::default(),
             team: BotTeam::default(),
             hold_seconds: BotHold::default().seconds,
+            weapons: true,
+            tactics: BotTactics::default(),
+            vehicles: BotVehicles::default(),
+            contact: None,
+            ability: None,
+            flee_below: 0.0,
         }
     }
 }
@@ -270,6 +433,8 @@ impl BotKind {
     }
     /// Its weight on behaviour or leg `name` (`behaviours`): 1 unless it
     /// says otherwise, but 0 for the opt-in ones (interact, objective).
+    /// Interact is off for a kind that takes no seat and has no tool use
+    /// to offer (`vehicles` all off).
     pub fn weight(&self, name: &str) -> f32 {
         self.behaviours
             .get(name)
@@ -279,6 +444,26 @@ impl BotKind {
             } else {
                 1.0
             })
+    }
+    /// Whether it attacks with its body at all: a hit (`melee`), a touch
+    /// (`contact`) or its ability.
+    pub fn body_attack(&self) -> bool {
+        self.melee.as_ref().is_some_and(|m| m.damage > 0.0)
+            || self.contact.as_ref().is_some_and(|c| c.damage > 0.0)
+            || self.ability.is_some()
+    }
+    /// What one bot of this kind costs the server, as a share of a full
+    /// Blockhead bot, for the bot limit (`Session::bot_limit`): a minimal
+    /// profile (no hand weapons, tactics, seats, teamwork, surprise or
+    /// human perception) is [`MINIMAL_COST`], anything more a whole bot.
+    pub fn cost(&self) -> f32 {
+        let minimal = !self.weapons
+            && self.tactics == BotTactics::none()
+            && self.vehicles.none()
+            && self.team.teamwork == 0.0
+            && self.surprise.strength == 0.0
+            && self.perception.strength == 0.0;
+        if minimal { MINIMAL_COST } else { 1.0 }
     }
     pub fn validate(&self) -> Result<()> {
         ensure!(
@@ -380,7 +565,56 @@ impl BotKind {
             BEHAVIOURS.join(", "),
             LEG_WEIGHTS.join(", ")
         );
+        if let Some(c) = &self.contact {
+            ensure!(
+                c.damage.is_finite()
+                    && (0.0..=1000.0).contains(&c.damage)
+                    && c.seconds.is_finite()
+                    && (0.05..=30.0).contains(&c.seconds)
+                    && !c.name.trim().is_empty()
+                    && c.name.chars().count() <= 32,
+                "Bot `{}`: contact damage is 0 to 1000 every 0.05 to 30 seconds, with a name of 1-32 characters",
+                self.id
+            );
+        }
+        if let Some(a) = &self.ability {
+            let word = |s: &str| {
+                !s.is_empty()
+                    && s.len() <= 96
+                    && s.chars()
+                        .all(|c| c.is_ascii_alphanumeric() || "._:/-".contains(c))
+            };
+            for (name, value, min, max) in [
+                ("range", a.range, 0.5, 64.0),
+                ("fuse_seconds", a.fuse_seconds, 0.0, 30.0),
+                ("cancel_range", a.cancel_range, 0.5, 128.0),
+                ("cooldown_seconds", a.cooldown_seconds, 0.0, 600.0),
+                ("sound_seconds", a.sound_seconds, 0.05, 30.0),
+            ] {
+                ensure!(
+                    value.is_finite() && (min..=max).contains(&value),
+                    "Bot `{}`: ability {name} must be {min} to {max}",
+                    self.id
+                );
+            }
+            ensure!(
+                !a.name.trim().is_empty()
+                    && a.name.chars().count() <= 32
+                    && !a.name.chars().any(char::is_control)
+                    && a.cancel_range >= a.range
+                    && a.action.as_ref().is_none_or(|x| {
+                        !x.is_empty()
+                            && x.len() <= 32
+                            && x.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+                    })
+                    && a.emote.as_deref().is_none_or(word)
+                    && a.sound.as_deref().is_none_or(word),
+                "Bot `{}`: an ability needs a name of 1-32 characters, a cancel_range no shorter than its range, an action of letters, digits or _, and emote and sound ids",
+                self.id
+            );
+        }
         let ranges = [
+            ("flee_below", self.flee_below, 0.0, 1.0),
             ("sight", self.sight, 1.0, 400.0),
             ("wander_radius", self.wander_radius, 0.0, 64.0),
             ("chase_radius", self.chase_radius, 0.0, 256.0),
@@ -594,7 +828,6 @@ mod tests {
         for fixed in [
             r#""hold":{"seconds":1}"#,
             r#""fighting":{"strafe_seconds":2}"#,
-            r#""reaction_seconds":0.1"#,
             r#""perception":{"glance_seconds":1}"#,
             r#""team":{"mood_cap":4}"#,
             r#""mounted":{"chase_radius":10}"#,
@@ -603,6 +836,13 @@ mod tests {
                 format!(r#"{{"schema_version":1,"bots":[{{"id":"x","name":"X",{fixed}}}]}}"#);
             assert!(BotPack::from_json(json.as_bytes()).is_err(), "{fixed}");
         }
+        // How quick and how long it remembers are the kind's own.
+        let quick = BotPack::from_json(
+            br#"{"schema_version":1,"bots":[{"id":"x","name":"X","reaction_seconds":0.1,"memory_seconds":2}]}"#,
+        )
+        .unwrap();
+        assert_eq!(quick.bots[0].reaction_seconds, 0.1);
+        assert_eq!(quick.bots[0].memory_seconds, 2.0);
         assert!(tuning::with_dial(read, "team.mood_cap", 1.0).is_err());
         assert!(
             tuning::dials(read)
@@ -636,6 +876,15 @@ mod tests {
         let melee = fish.melee.as_ref().unwrap();
         assert_eq!((melee.damage, melee.reach, melee.seconds), (25.0, 3.0, 0.8));
         assert_eq!(melee.name, "Bite");
+        assert!(
+            fish.weapons,
+            "a kind fights with hand weapons unless it says not"
+        );
+        let unarmed = BotPack::from_json(
+            br#"{"schema_version":1,"bots":[{"id":"x","name":"X","weapons":false}]}"#,
+        )
+        .unwrap();
+        assert!(!unarmed.bots[0].weapons);
         assert_eq!(BotKind::default().moves, Moves::Walk);
         for bad in [
             r#""melee":{"damage":-1}"#,

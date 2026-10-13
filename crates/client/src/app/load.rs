@@ -215,6 +215,8 @@ impl App {
             net: SessionState {
                 attempt: None,
                 abilities: Default::default(),
+                held_ammo: None,
+                next_print_is_ammo: false,
                 brick_hand: None,
                 steering_sent: None,
                 join_notices: Vec::new(),
@@ -224,6 +226,7 @@ impl App {
                 trigger_epoch: None,
                 reconnects: 0,
                 invite: None,
+                arrival: None,
             },
             build: BuildState {
                 ghost_report: None,
@@ -271,6 +274,7 @@ impl App {
                 observer_eye: None,
                 rendered_camera: None,
                 rendered_roll: 0.0,
+                pixels_per_unit: None,
                 drawn_controls: None,
             },
             fx: Effects {
@@ -279,6 +283,7 @@ impl App {
                 actor_effects,
                 explosion_shapes,
                 beams: Default::default(),
+                decals: Default::default(),
                 tutorial_targets,
                 explosion_debris,
                 weapon_shells,
@@ -297,6 +302,7 @@ impl App {
                 weapon_animation_cursor: 0,
             },
             cosmetic_faults: Default::default(),
+            tuning: Default::default(),
             addons: AddOns {
                 reload: None,
                 reload_pending: None,
@@ -311,6 +317,8 @@ impl App {
                 after_sync: None,
                 left_out_add_ons: None,
                 add_on_health: Default::default(),
+                hud_regions: Default::default(),
+                edits: Default::default(),
             },
             world_shapes: None,
             shapes_uploaded: None,
@@ -351,6 +359,7 @@ impl App {
                 takes_turret: false,
                 seat_report: None,
                 rider_rotations: BTreeMap::new(),
+                rider_hands: BTreeMap::new(),
                 posed_eye: None,
                 tumble: None,
             },

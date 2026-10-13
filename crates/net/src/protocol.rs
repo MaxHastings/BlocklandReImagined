@@ -67,8 +67,12 @@ pub const VERSION: u32 = FROZEN_VERSION + PROTOCOL_CHANGES.len() as u32;
 /// The last hand-numbered version, before per-change files.
 const FROZEN_VERSION: u32 = 69;
 include!(concat!(env!("OUT_DIR"), "/protocol_changes.rs"));
-/// Inputs repeated in every movement datagram so isolated losses cost nothing.
-pub const MOVEMENT_REDUNDANCY: usize = 6;
+/// Inputs repeated in every movement datagram so losses cost nothing: 100
+/// ms of moves, so two datagrams lost running (one in four hundred at 5%
+/// loss) still skip none. With six, a driver's moves skipped over such a
+/// pair and their vehicle's prediction was corrected by a tick or two of
+/// travel (`crew_link_tests`).
+pub const MOVEMENT_REDUNDANCY: usize = 12;
 /// Most inputs one frame may hand the transport (split across datagrams).
 pub const MAX_MOVEMENT_BATCH: usize = 48;
 /// Least time between two movement datagrams (about 70 Hz): a client
@@ -141,6 +145,19 @@ pub struct Hello {
     /// one does.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub kept: Option<KeptWorld>,
+    /// The loading connection ([`Purpose::Lobby`]) this join completes:
+    /// the player it announced spawns, under the name and owner number it
+    /// was given, without being announced again.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub arrival: Option<ResumeToken>,
+}
+/// What a loading client ([`Purpose::Lobby`]) asks of the host after its
+/// Hello. Each is answered only by what it causes.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub enum LobbyRequest {
+    /// `commandToServer('messageSent', ...)`: a chat line.
+    Chat(String),
 }
 /// What a resuming client still holds of the world: the map and the
 /// replication cursor its bricks are current to.
@@ -224,6 +241,11 @@ pub enum Purpose {
     Join,
     /// Fetch packages this client lacks; no identity, no game state.
     Download,
+    /// Identity challenge, Hello, then chat while the player downloads the
+    /// server's Add-Ons and loads the map, as v20's loading screen does.
+    /// The host announces the player as connected ([`Message::Arrived`]);
+    /// the join that follows names it in [`Hello::arrival`] and spawns them.
+    Lobby,
 }
 impl JoinBegin {
     pub fn join() -> Self {
@@ -309,6 +331,7 @@ pub fn identity_transcript(
     )?));
     append_token(&mut transcript, hello.resume.as_ref());
     append_token(&mut transcript, hello.host.as_ref());
+    append_token(&mut transcript, hello.arrival.as_ref());
     Ok(transcript)
 }
 fn append_text(out: &mut Vec<u8>, text: &str) -> anyhow::Result<()> {
@@ -461,6 +484,19 @@ pub struct RemotePose {
     pub archetype: bri_sim::archetype::ArchetypeId,
     /// None for the normal size.
     pub scale: Option<f32>,
+    /// A movement controller's animation intent and the heading it turned
+    /// the body to, so others see Mario's triple jump facing his own way;
+    /// none for a body whose controller state is blank. Its memory stays
+    /// the owner's. Last and left out when none, so an ordinary pose
+    /// costs no byte for it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub controller: Option<RemoteController>,
+}
+/// The part of [`bri_sim::archetype::ControllerState`] others draw.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RemoteController {
+    pub intent: u8,
+    pub heading: Option<i16>,
 }
 const CENTIMETRES: f32 = 100.0;
 const LOOK_UNITS: f32 = 10_000.0;
@@ -490,6 +526,13 @@ impl RemotePose {
                 | flag(p.jump.jet_flight, Self::JET_FLIGHT),
             archetype: p.archetype,
             scale: (p.scale != 1.0).then_some(p.scale),
+            controller: p
+                .controller
+                .filter(|c| c.intent != 0 || c.heading.is_some())
+                .map(|c| RemoteController {
+                    intent: c.intent,
+                    heading: c.heading,
+                }),
         }
     }
     /// As a pose, with owner-only state at its defaults and flight history
@@ -522,6 +565,13 @@ impl RemotePose {
                 speed_scale: 1.0,
                 tick: Default::default(),
                 tether: None,
+                controller: self
+                    .controller
+                    .map(|c| bri_sim::archetype::ControllerState {
+                        intent: c.intent,
+                        heading: c.heading,
+                        ..Default::default()
+                    }),
             },
         }
     }
@@ -1049,6 +1099,15 @@ pub struct Delta {
     /// The live environment, whole, whenever it changed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub environment: Option<bri_content::atmosphere::Settings>,
+    /// Every body the host tuned while the game runs (`/tune`), whole and
+    /// without its controller's module, whenever one changed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub archetypes: Option<
+        Vec<(
+            bri_sim::archetype::ArchetypeId,
+            bri_sim::archetype::Archetype,
+        )>,
+    >,
     /// The weapons pack's bound server settings, whole, whenever one changed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub weapon_settings: Option<BTreeMap<String, String>>,
@@ -1083,6 +1142,7 @@ impl Delta {
             targets,
             map_lights,
             environment,
+            archetypes,
             weapon_settings,
             entities,
             world_shapes,
@@ -1103,6 +1163,7 @@ impl Delta {
             && targets.is_none()
             && map_lights.is_none()
             && environment.is_none()
+            && archetypes.is_none()
             && weapon_settings.is_none()
             && entities.is_none()
             && world_shapes.is_empty()
@@ -1339,6 +1400,18 @@ pub enum Message {
         result: Result<Reply, bri_sim::session::Rejection>,
     },
     Rejected(String),
+    /// Answer to a loading connection's Hello ([`Purpose::Lobby`]): the
+    /// owner number and name the player was announced under, and the
+    /// ticket the game join presents ([`Hello::arrival`]). Chat lines with
+    /// ids above `chat_cursor` follow as [`Message::LobbyChat`].
+    Arrived {
+        owner: OwnerId,
+        name: String,
+        arrival: ResumeToken,
+        chat_cursor: u64,
+    },
+    /// New chat lines, for a client still loading.
+    LobbyChat(Vec<bri_sim::session::ChatLine>),
     /// The join was refused because these shared packages differ. A client
     /// can fetch what it lacks from the server and join again
     /// ([`crate::client::Client::connect_fetching`]).

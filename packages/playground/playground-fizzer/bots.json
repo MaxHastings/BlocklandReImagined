@@ -1,0 +1,37 @@
+{
+  "schema_version": 1,
+  "bots": [
+    {
+      // The one shared brain with nearly everything off: it strolls near
+      // its brick, notices whoever comes near, walks at them and lights
+      // its wick. Its ability's wind-up is data; what the pop does is
+      // fizzer.rhai's (`on_bot_ability`).
+      "id": "playground-fizzer:bot/fizzer",
+      "name": "Fizzer",
+      "body": "playground-fizzer:archetype/fizzer",
+      "side": "fizzers",
+      "sight": 32,
+      "reaction_seconds": 0.5,
+      "memory_seconds": 4,
+      "wander_radius": 10,
+      "chase_radius": 40,
+      "weapons": false,
+      "tactics": { "cover": false, "retreat": false, "flank": false, "dodge": false },
+      "vehicles": { "drive": false, "gun": false, "ride": false },
+      "ability": {
+        "name": "Pop",
+        "range": 2.6,
+        "fuse_seconds": 1.5,
+        "cancel_range": 7,
+        "cooldown_seconds": 3,
+        "sound": "playground-fizzer:hiss",
+        "sound_seconds": 0.5
+      },
+      "behaviours": { "arm": 0, "carry": 0, "interact": 0, "objective": 0, "explore": 0, "fly": 0 },
+      "surprise": { "strength": 0 },
+      "team": { "teamwork": 0 },
+      "perception": { "strength": 0 },
+      "first_names": ["Fizzer"]
+    }
+  ]
+}

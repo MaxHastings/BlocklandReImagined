@@ -15,15 +15,27 @@ use std::{
 pub(crate) struct PreparedSounds {
     bank: Arc<SoundBank>,
     sounds: BTreeMap<String, (Arc<SoundAsset>, f32)>,
+    /// Why each pack sound that did not load failed, by lowercase profile.
+    failed: BTreeMap<String, String>,
     warnings: BTreeSet<String>,
 }
 
 pub trait SoundLookup {
     fn has_sound(&self, profile: &str) -> bool;
+    /// Why `profile`, an Add-On's own sound, could not be played (its file
+    /// is missing or does not decode), when it was tried.
+    fn why_missing(&self, _profile: &str) -> Option<String> {
+        None
+    }
 }
 impl SoundLookup for ClientAudio {
     fn has_sound(&self, profile: &str) -> bool {
         ClientAudio::has_sound(self, profile)
+    }
+    fn why_missing(&self, profile: &str) -> Option<String> {
+        self.pack_sound_failures
+            .get(&profile.to_ascii_lowercase())
+            .cloned()
     }
 }
 impl SoundLookup for PreparedSounds {
@@ -31,12 +43,16 @@ impl SoundLookup for PreparedSounds {
         self.sounds.contains_key(&profile.to_ascii_lowercase())
             || self.bank.resolve(profile).is_ok()
     }
+    fn why_missing(&self, profile: &str) -> Option<String> {
+        self.failed.get(&profile.to_ascii_lowercase()).cloned()
+    }
 }
 impl PreparedSounds {
     pub(crate) fn load(bank: Arc<SoundBank>, pack: &bri_weapons::Pack, root: &Path) -> Self {
         let mut prepared = Self {
             bank: bank.clone(),
             sounds: BTreeMap::new(),
+            failed: BTreeMap::new(),
             warnings: BTreeSet::new(),
         };
         for (profile, def) in &pack.sounds {
@@ -49,21 +65,8 @@ impl PreparedSounds {
             });
             let dir = bri_weapons::sound_root(root, def);
             let loaded = stock.unwrap_or_else(|| {
-                bri_package::path::inside(&dir, &def.file).and_then(|path| {
-                    use std::io::Read;
-                    let mut bytes = Vec::new();
-                    std::fs::File::open(&path)
-                        .and_then(|f| {
-                            f.take(bri_audio::bank::MAX_DECODED_CLIP_BYTES as u64 + 1)
-                                .read_to_end(&mut bytes)
-                        })
-                        .map_err(|e| e.to_string())?;
-                    let extension = Path::new(&def.file)
-                        .extension()
-                        .and_then(|e| e.to_str())
-                        .unwrap_or_default();
-                    SoundAsset::decoded(profile, &bytes, extension, near, far)
-                })
+                bri_package::path::inside(&dir, &def.file)
+                    .and_then(|path| SoundAsset::decoded_file(profile, &path, near, far))
             });
             match loaded {
                 Ok(mut asset) => {
@@ -73,6 +76,11 @@ impl PreparedSounds {
                         .insert(profile.clone(), (Arc::new(asset), def.volume));
                 }
                 Err(error) => {
+                    if prepared.failed.len() < 512 {
+                        prepared
+                            .failed
+                            .insert(profile.to_ascii_lowercase(), error.to_string());
+                    }
                     if prepared.warnings.len() < 64 {
                         prepared
                             .warnings
@@ -83,6 +91,42 @@ impl PreparedSounds {
         }
         prepared
     }
+}
+
+/// A vehicle's engine sound this frame ([`bri_vehicles::EngineSound`]).
+#[derive(Clone, Debug, PartialEq)]
+pub struct EngineLoop {
+    pub sound: String,
+    pub position: [f32; 3],
+    /// Multiples of the sound's own volume and pitch.
+    pub volume: f32,
+    pub pitch: f32,
+}
+/// The engine loop vehicle `info` plays this frame, if its definition has
+/// one and it is running: someone is in the seat that drives it (any
+/// seat, when none does) and it is not destroyed. Its pitch and volume
+/// follow the vehicle's presented speed, so every client hears every
+/// vehicle the same way, the driver included.
+pub fn engine_loop(
+    d: &bri_vehicles::Definition,
+    info: &bri_sim::session::VehicleInfo,
+    frame: &crate::vehicles::VehicleFrame,
+) -> Option<EngineLoop> {
+    let engine = d.engine_sound.as_ref()?;
+    let running = match d.control_seat() {
+        Some(seat) => info.occupants.get(seat).is_some_and(Option::is_some),
+        None => info.occupants.iter().any(Option::is_some),
+    };
+    if !running || info.destroyed || !frame.position.is_finite() {
+        return None;
+    }
+    let (volume, pitch) = engine.at(frame.velocity.length(), d.max_speed);
+    Some(EngineLoop {
+        sound: engine.sound.clone(),
+        position: frame.position.to_array(),
+        volume,
+        pitch,
+    })
 }
 
 /// The world's music bricks (a resolved `sound`), kept in step with each
@@ -167,6 +211,8 @@ pub struct ClientAudio {
     /// Looping image state sounds (spray hiss, push broom) keyed by
     /// (player, hand); they play only while that state lasts.
     image_loops: BTreeMap<(u64, u8), (String, SoundHandle)>,
+    /// Vehicle engine loops keyed by vehicle id; see [`engine_loop`].
+    engines: BTreeMap<u64, (String, SoundHandle)>,
     /// Projectile `sound` loops keyed by projectile id.
     projectiles: BTreeSet<u64>,
     /// The player's master volume, before any background mute.
@@ -178,6 +224,8 @@ pub struct ClientAudio {
     /// Sounds Add-On weapons packs ship, by lower-case profile, with their
     /// volume: played in place of a bank sound of the same name.
     pack_sounds: BTreeMap<String, (Arc<SoundAsset>, f32)>,
+    /// [`PreparedSounds`]' reasons for the pack sounds that did not load.
+    pack_sound_failures: BTreeMap<String, String>,
     /// The portals the listener hears through, as last sent.
     windows: Vec<bri_audio::Window>,
 }
@@ -257,11 +305,13 @@ impl ClientAudio {
             music_bricks: MusicBricks::default(),
             projectiles: BTreeSet::new(),
             image_loops: BTreeMap::new(),
+            engines: BTreeMap::new(),
             master: 1.,
             mute_in_background: false,
             focused: true,
             last_break: None,
             pack_sounds: BTreeMap::new(),
+            pack_sound_failures: BTreeMap::new(),
             windows: Vec::new(),
         };
         audio.apply_settings(settings);
@@ -379,7 +429,8 @@ impl ClientAudio {
             | CueKind::WeaponAnimation { .. }
             | CueKind::WeaponShell { .. }
             | CueKind::Beam { .. }
-            | CueKind::Tracer { .. } => return,
+            | CueKind::Tracer { .. }
+            | CueKind::Decal { .. } => return,
             CueKind::WeaponSound { profile } => {
                 // A looping state sound belongs to the state, not to its
                 // entry; `sync_image_loops` owns it.
@@ -532,6 +583,7 @@ impl ClientAudio {
     }
     pub(crate) fn install_pack_sounds(&mut self, prepared: PreparedSounds) {
         self.pack_sounds = prepared.sounds;
+        self.pack_sound_failures = prepared.failed;
         self.warnings.extend(
             prepared
                 .warnings
@@ -573,6 +625,53 @@ impl ClientAudio {
                     Err(error) => self.record(Err(error)),
                 }
             }
+        }
+    }
+    /// Keep one engine loop per vehicle in `wanted` (see [`engine_loop`]),
+    /// following it with its pitch and volume, and fade out the rest.
+    pub fn sync_engines(&mut self, wanted: &BTreeMap<u64, EngineLoop>) {
+        let stale: Vec<_> = self
+            .engines
+            .iter()
+            .filter(|(id, (sound, _))| wanted.get(id).is_none_or(|want| &want.sound != sound))
+            .map(|(id, _)| *id)
+            .collect();
+        for id in stale {
+            if let Some((_, handle)) = self.engines.remove(&id) {
+                let result = self.runtime.stop_with_fade(handle, 0.15);
+                self.record(result);
+            }
+        }
+        for (id, engine) in wanted {
+            // The volume the pack declares the sound at, scaled.
+            let volume = engine.volume
+                * self
+                    .pack_sounds
+                    .get(&engine.sound.to_ascii_lowercase())
+                    .map_or(1.0, |(_, v)| *v);
+            let handle = match self.engines.get(id) {
+                Some((_, handle)) => {
+                    let handle = *handle;
+                    let result = self.runtime.set_source_position(handle, engine.position);
+                    self.record(result);
+                    handle
+                }
+                None if self.engines.len() < 64 => {
+                    match self.start(&engine.sound, Placement::World(engine.position)) {
+                        Ok(handle) => {
+                            self.engines.insert(*id, (engine.sound.clone(), handle));
+                            handle
+                        }
+                        Err(error) => {
+                            self.record(Err(error));
+                            continue;
+                        }
+                    }
+                }
+                None => continue,
+            };
+            let result = self.runtime.set_voice_params(handle, volume, engine.pitch);
+            self.record(result);
         }
     }
     /// `ProjectileData.sound`: a loop that flies with each projectile and
@@ -637,6 +736,7 @@ impl ClientAudio {
         self.music_bricks = MusicBricks::default();
         self.projectiles.clear();
         self.image_loops.clear();
+        self.engines.clear();
         self.pending.clear();
         let result = self.runtime.stop_all();
         self.record(result);
@@ -665,6 +765,52 @@ impl ClientAudio {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The engine runs while its driver's seat is taken, louder and higher
+    /// with speed, and stops when the driver gets out or it is destroyed.
+    #[test]
+    fn an_engine_runs_with_its_driver_and_rises_with_speed() {
+        let mut d = bri_vehicles::testing::car();
+        d.engine_sound =
+            Some(serde_json::from_value(serde_json::json!({ "sound": "buggy:engine" })).unwrap());
+        let mut info = bri_sim::session::VehicleInfo {
+            id: 1,
+            definition: d.id.clone(),
+            color: None,
+            occupants: vec![None, Some(9), None, None],
+            destroyed: false,
+            turret_broken: false,
+            scale: 1.0,
+        };
+        let frame = |speed: f32| crate::vehicles::VehicleFrame {
+            position: glam::Vec3::new(1.0, 2.0, 3.0),
+            rotation: glam::Quat::IDENTITY,
+            velocity: glam::Vec3::new(speed, 0.0, 0.0),
+            steering: 0.0,
+            wheel_suspension: vec![],
+            wheel_rotation: vec![],
+            wheel_contact: vec![],
+            turret_aim: [0.0; 2],
+        };
+        // Only a passenger: the engine is off.
+        assert_eq!(engine_loop(&d, &info, &frame(0.0)), None);
+        info.occupants[0] = Some(7);
+        let idle = engine_loop(&d, &info, &frame(0.0)).unwrap();
+        assert_eq!(idle.sound, "buggy:engine");
+        assert_eq!(idle.position, [1.0, 2.0, 3.0]);
+        assert_eq!((idle.volume, idle.pitch), (0.6, 0.8));
+        // Half the car's top speed (30) is half way; past it holds.
+        let half = engine_loop(&d, &info, &frame(15.0)).unwrap();
+        assert!((half.volume - 0.8).abs() < 1e-5 && (half.pitch - 1.2).abs() < 1e-5);
+        let flat_out = engine_loop(&d, &info, &frame(90.0)).unwrap();
+        assert_eq!((flat_out.volume, flat_out.pitch), (1.0, 1.6));
+        info.destroyed = true;
+        assert_eq!(engine_loop(&d, &info, &frame(15.0)), None);
+        // A vehicle without an engine sound plays none.
+        info.destroyed = false;
+        d.engine_sound = None;
+        assert_eq!(engine_loop(&d, &info, &frame(15.0)), None);
+    }
 
     /// A world change costs the bricks it changed: only the first replica
     /// is read whole, however many revisions follow.

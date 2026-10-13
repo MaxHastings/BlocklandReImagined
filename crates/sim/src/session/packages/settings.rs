@@ -515,7 +515,9 @@ impl Session {
     /// definitions; a player must be the game's owner or an admin, and an
     /// admin for an admins-only setting. A team edit's id names a team the
     /// game has, unless `saved_ids`: a saved build's teams come back in
-    /// the slots its rules name them by.
+    /// the slots its rules name them by. Returns whether a setting that
+    /// changed resets the game once the edit is done (its `resets`, as
+    /// Slayer's Game Mode).
     pub(in crate::session) fn edit_settings(
         &mut self,
         editor: Editor,
@@ -524,7 +526,7 @@ impl Session {
         teams: Option<Vec<TeamEdit>>,
         quiet: bool,
         saved_ids: bool,
-    ) -> Result<()> {
+    ) -> Result<bool> {
         let host = self.packages.as_ref().context("No Add-Ons are running")?;
         let g = self
             .minigames
@@ -624,6 +626,12 @@ impl Session {
                         id: t.id.map(mg::TeamId),
                         name: t.name.trim().to_owned(),
                         color: t.color,
+                        // The dialog edits names and colours; a team keeps
+                        // the body its Add-On gave it.
+                        player_type: t
+                            .id
+                            .and_then(|id| g.teams.get(mg::TeamId(id)))
+                            .and_then(|t| t.player_type.clone()),
                     });
                 }
                 Some(specs)
@@ -656,11 +664,17 @@ impl Session {
                 .map(|c| (c.key.clone(), c.team.map(|t| u64::from(t.0))))
                 .collect(),
         };
-        effects.extend(
-            self.minigames
-                .set_addon_settings(game, changes)
-                .map_err(|e| anyhow::anyhow!("Settings rejected: {e}"))?,
-        );
+        let stored = self
+            .minigames
+            .set_addon_settings(game, changes)
+            .map_err(|e| anyhow::anyhow!("Settings rejected: {e}"))?;
+        let resets = stored.iter().any(|e| match e {
+            mg::Effect::AddOnSettings { keys, .. } => keys
+                .iter()
+                .any(|k| host.settings.get(k).is_some_and(|s| s.def.resets)),
+            _ => false,
+        });
+        effects.extend(stored);
         if let Some(host) = self.packages.as_mut() {
             host.game_hooks.editing = Some(edit.clone());
         }
@@ -668,7 +682,7 @@ impl Session {
         if let Some(host) = self.packages.as_mut() {
             host.game_hooks.editing = None;
         }
-        result
+        result.map(|()| resets)
     }
 
     /// What `owner` may change in `game`'s settings.
@@ -711,9 +725,9 @@ impl Session {
         let game = mg::GameId(game);
         let edit = SettingEdit { key, value };
         match team {
-            None => {
-                self.edit_settings(Editor::Rules(package), game, vec![edit], None, false, false)
-            }
+            None => self
+                .edit_settings(Editor::Rules(package), game, vec![edit], None, false, false)
+                .map(drop),
             Some(team) => {
                 let team = u32::try_from(team)
                     .ok()

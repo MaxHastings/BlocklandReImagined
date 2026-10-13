@@ -2528,6 +2528,7 @@ fn admins_set_the_environment_and_a_changed_day_restarts_from_now() {
         length_seconds: 120.0,
         time,
         anchor_tick,
+        paused: false,
     };
     let wanted = Settings {
         sun_elevation: Some(20.0),
@@ -2781,4 +2782,73 @@ fn a_picked_water_floods_a_flat_map_and_lava_burns() {
     }
     assert!(s.simulation().liquid_at(feet, 2.0).is_none());
     assert_eq!(s.vitals()[&admin].health, 65.0);
+}
+
+/// v20 accepts a connection before the client loads: `onConnect` tells
+/// everyone "connected." while the player downloads and loads, they chat
+/// meanwhile and do nothing else, and `onClientEnterGame` spawns them and
+/// says "spawned.". A player who leaves while loading only "has left".
+#[test]
+fn a_loading_player_is_connected_chats_and_spawns_later() {
+    use bri_admin::Principal;
+    use bri_sim::session::{Clan, Notice};
+
+    let mut s = session();
+    let host = s
+        .join_verified("Host".into(), Vec3::Y, true, Some(Principal([1; 32])))
+        .unwrap();
+    s.take_private_notices();
+    let bob = s
+        .arrive(
+            "Bob".into(),
+            &Clan::default(),
+            false,
+            Some(Principal([2; 32])),
+        )
+        .unwrap();
+    let chat = |n: &[(u64, Notice)], to: u64| -> Vec<String> {
+        n.iter()
+            .filter_map(|(o, n)| match n {
+                Notice::Chat(text) if *o == to => Some(text.clone()),
+                _ => None,
+            })
+            .collect()
+    };
+    let arrived = s.take_private_notices();
+    assert_eq!(chat(&arrived, host), ["\u{E001}Bob connected."]);
+    assert_eq!(chat(&arrived, bob), ["\u{E002}Welcome to Blockland Bob."]);
+    assert_eq!(s.arrivals().get(&bob).map(String::as_str), Some("Bob"));
+    // No body: not a player in the world, and nothing but chat goes through.
+    assert!(!s.names().contains_key(&bob));
+    let refused = s.command(bob, 1, Command::Suicide).unwrap_err();
+    assert!(refused.to_string().contains("still loading"), "{refused:#}");
+    assert!(s.command(bob, 2, Command::Respawn).is_err());
+    s.command(bob, 0, Command::Chat("hi, loading".into()))
+        .unwrap();
+    let line = s.chat().into_iter().last().unwrap();
+    assert_eq!((line.owner, line.name.as_str()), (bob, "Bob"));
+    assert_eq!(line.text, "hi, loading");
+    // The same name is not handed out twice while Bob loads.
+    let other = s
+        .arrive(
+            "Bob".into(),
+            &Clan::default(),
+            false,
+            Some(Principal([3; 32])),
+        )
+        .unwrap();
+    assert_eq!(s.arrivals()[&other], "Bob 2");
+    s.disconnect(other).unwrap();
+    let left = s.take_private_notices();
+    assert!(chat(&left, host).contains(&"\u{E001}Bob 2 connected.".to_string()));
+    assert!(chat(&left, host).contains(&"\u{E001}Bob 2 has left the game.".to_string()));
+    assert!(!chat(&left, host).iter().any(|l| l.contains("spawned")));
+    // Done loading: spawned, once, and in the world under the same number.
+    s.enter_arrival(bob, Vec3::new(4., 1., 0.)).unwrap();
+    let spawned = s.take_private_notices();
+    assert_eq!(chat(&spawned, host), ["\u{E001}Bob spawned."]);
+    assert!(chat(&spawned, bob).is_empty());
+    assert_eq!(s.names().get(&bob).map(String::as_str), Some("Bob"));
+    assert!(s.arrivals().is_empty());
+    s.command(bob, 1, Command::Suicide).unwrap();
 }

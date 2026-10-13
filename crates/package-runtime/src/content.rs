@@ -63,9 +63,19 @@ pub enum Kind {
     /// A screen shown over the main menu on some days of the year
     /// (`splash.json`, Slayer's Happy Holidays). Client side.
     Splash,
+    /// A movement controller: a WebAssembly module an archetype names as
+    /// its `controller` (`bri-controller`). Server side like the archetype:
+    /// clients receive the module with the host's archetype table, so they
+    /// predict with exactly the bytes the host runs.
+    Controller,
+    /// A player body: a native shape (`.shape.json`) an archetype names as
+    /// its `model`, its textures listed in `assets/content.json`. Client
+    /// side: every player draws it, so an Add-On with a player type and its
+    /// body is shared and joiners download both.
+    Body,
 }
 impl Kind {
-    pub const NAMES: [&str; 19] = [
+    pub const NAMES: [&str; 21] = [
         "behaviour",
         "script",
         "world",
@@ -85,6 +95,8 @@ impl Kind {
         "help",
         "image",
         "splash",
+        "controller",
+        "body",
     ];
     pub fn parse(text: &str) -> Option<Self> {
         Some(match text {
@@ -107,6 +119,8 @@ impl Kind {
             "help" => Self::Help,
             "image" => Self::Image,
             "splash" => Self::Splash,
+            "controller" => Self::Controller,
+            "body" => Self::Body,
             _ => return None,
         })
     }
@@ -118,7 +132,8 @@ impl Kind {
             | Self::Entity
             | Self::Archetype
             | Self::Mode
-            | Self::Data => Side::Server,
+            | Self::Data
+            | Self::Controller => Side::Server,
             // Shared gameplay data is client-visible: clients load it too.
             Self::Model
             | Self::Hud
@@ -131,7 +146,8 @@ impl Kind {
             | Self::Binds
             | Self::Help
             | Self::Image
-            | Self::Splash => Side::Client,
+            | Self::Splash
+            | Self::Body => Side::Client,
         }
     }
     /// Largest accepted file of this kind.
@@ -140,7 +156,8 @@ impl Kind {
             Self::Script => 256 * 1024,
             Self::Data => 1024 * 1024,
             Self::Image => 4 * 1024 * 1024,
-            Self::Weapons | Self::Vehicles | Self::Bricks => 32 * 1024 * 1024,
+            Self::Weapons | Self::Vehicles | Self::Bricks | Self::Body => 32 * 1024 * 1024,
+            Self::Controller => 64 * 1024,
             _ => 128 * 1024,
         }
     }
@@ -360,6 +377,25 @@ pub struct Behaviour {
     /// it is asked, in load order, until one takes it.
     #[serde(default)]
     pub on_drop_key: bool,
+    /// `on_bot_ability(bot, kind, ability, target)` as a bot whose kind
+    /// has an `ability` (`bots.json`) finishes winding it up: what the
+    /// ability does (a blast, a spit, a heal) is this hook's, the brain
+    /// only decides when. `target` is the enemy it was aimed at, or `()`.
+    /// Every package that declares it hears it, in load order; one checks
+    /// `kind` for its own.
+    #[serde(default)]
+    pub on_bot_ability: bool,
+    /// `on_contact(info)` as two bodies begin to touch: `info` is
+    /// `#{ kind, by, target, vehicle, from, speed, velocity }`. `kind` is
+    /// `"body"` (a player's body meeting another's) or `"vehicle"` (a
+    /// vehicle running into a player); `by` is the one that came down on,
+    /// ran into or drove into `target` (the upper body, the quicker one, the
+    /// vehicle's driver or `()`); `from` is `"above"`, `"below"` or
+    /// `"side"`; `velocity` is `by`'s (the vehicle's) less `target`'s as
+    /// they met, `[x, y, z]`, and `speed` its length. A stomp, a run-over
+    /// or a shove means what the rules make it mean.
+    #[serde(default)]
+    pub on_contact: bool,
     /// `on_tick()` every `tick_interval` ticks, when set.
     #[serde(default)]
     pub tick_interval: Option<u32>,
@@ -1236,6 +1272,12 @@ pub struct ModeMiniGame {
     pub building: bool,
     pub painting: bool,
     pub use_all_players_bricks: bool,
+    /// Bodies a player may pick for themselves with `/body`, besides
+    /// `player_type` (archetype ids, as `player_type`).
+    pub bodies: Vec<String>,
+    /// A player who picks a body (a brick event, `/body`) respawns as it.
+    /// On by default; a mode that forces its bodies turns it off.
+    pub keep_chosen_body: bool,
 }
 impl Default for ModeMiniGame {
     fn default() -> Self {
@@ -1259,6 +1301,8 @@ impl Default for ModeMiniGame {
             building: true,
             painting: true,
             use_all_players_bricks: false,
+            bodies: Vec::new(),
+            keep_chosen_body: true,
         }
     }
 }
@@ -1283,6 +1327,16 @@ impl ModeMiniGame {
             "minigame player_type `{}` is not a player type id",
             self.player_type
         );
+        ensure!(
+            self.bodies.len() <= 256,
+            "a minigame lists at most 256 bodies"
+        );
+        for body in &self.bodies {
+            ensure!(
+                bri_package::id::is_content_ref(body, None),
+                "minigame body `{body}` is not a player type id"
+            );
+        }
         ensure!(
             (1.0..=30.0).contains(&self.respawn_seconds),
             "respawn_seconds must be 1 to 30"
@@ -1540,10 +1594,45 @@ pub struct ArchetypeDef {
     /// `thirdPersonOnly`.
     #[serde(default)]
     pub third_person_only: Option<bool>,
+    /// The body's camera while it is active: `fov`, `eye_offset`, `bob`,
+    /// weapon `sway` and the `third_person` pivot; replacing the base's.
+    /// Left out, the stock camera.
+    #[serde(default)]
+    pub camera: Option<bri_content::camera::CameraProfile>,
     /// Whether it fires and uses items; `false` for a body that only
     /// waits (`PlayerData::onTrigger` doing nothing).
     #[serde(default)]
     pub uses_items: Option<bool>,
+    /// Where the body holds items, sees from and sits (`right_hand`,
+    /// `left_hand`, `eye`, `seat`), each a model node, an offset from the
+    /// feet, or both; replacing the base's.
+    #[serde(default)]
+    pub sockets: Option<bri_content::body::Sockets>,
+    /// The model's clip for each animation role (`idle`, `run`, `jump`,
+    /// `aim_right`, `sit`, `death`...); replacing the base's. A role left
+    /// out asks for the Blockhead's clip name, then falls back.
+    #[serde(default)]
+    pub animations: Option<bri_content::body::Animations>,
+    /// The model's clip for each of its movement controller's intents
+    /// (`{"11": "triple"}`), replacing the base's.
+    #[serde(default)]
+    pub intent_clips: Option<BTreeMap<u8, String>>,
+    /// A sound of this Add-On heard where the body is each time its
+    /// controller changes to that intent, replacing the base's.
+    #[serde(default)]
+    pub intent_sounds: Option<BTreeMap<u8, String>>,
+    /// The speed (units/s) at which each locomotion role's clip plays at
+    /// 1x (`run`, `back`, `side`, `crouch_run`...), replacing the base's.
+    #[serde(default)]
+    pub ground_speeds: Option<bri_content::body::GroundSpeeds>,
+    /// The fastest a locomotion clip plays for its speed (v20's
+    /// `maxTimeScale`, 1.5).
+    #[serde(default)]
+    pub max_time_scale: Option<f32>,
+    /// Its own movement rules: a `controller` this Add-On or one it
+    /// depends on provides (`namespace:controller/name`).
+    #[serde(default)]
+    pub controller: Option<String>,
     /// Its own jump, pain and death sounds, each an `AudioProfile` name
     /// (an empty one plays nothing); one left out keeps the base's.
     #[serde(default)]
@@ -1590,6 +1679,34 @@ impl ArchetypeDef {
         ensure!(
             self.model.as_ref().is_none_or(|m| text(m, 160)),
             "model must be a model id"
+        );
+        if let Some(sockets) = &self.sockets {
+            sockets.validate()?;
+        }
+        if let Some(animations) = &self.animations {
+            bri_content::body::validate_animations(animations)?;
+        }
+        ensure!(
+            [&self.intent_clips, &self.intent_sounds]
+                .into_iter()
+                .flatten()
+                .all(|m| m.len() <= 64 && m.values().all(|v| text(v, 160))),
+            "intent_clips and intent_sounds name up to 64 clips and sounds"
+        );
+        if let Some(speeds) = &self.ground_speeds {
+            bri_content::body::validate_ground_speeds(speeds)?;
+        }
+        ensure!(
+            self.max_time_scale
+                .is_none_or(|v| v.is_finite() && (0.1..=16.0).contains(&v)),
+            "max_time_scale must be 0.1 to 16"
+        );
+        if let Some(camera) = &self.camera {
+            camera.validate()?;
+        }
+        ensure!(
+            self.controller.as_ref().is_none_or(|c| text(c, 160)),
+            "controller must be a controller id"
         );
         ensure!(
             [&self.sounds.jump, &self.sounds.pain, &self.sounds.death]
@@ -2167,6 +2284,21 @@ impl HudPanel {
         }
         Ok(())
     }
+}
+/// Check a HUD region layout (`bri_content::hud::Layout`): its own rules,
+/// and that every rule state it reads is a binding a HUD panel row could
+/// read.
+pub fn hud_layout(layout: &bri_content::hud::Layout) -> Result<()> {
+    layout.validate()?;
+    for source in layout.sources() {
+        if let bri_content::hud::Source::State(bind) = source {
+            ensure!(
+                Binding::parse(&bind).is_some_and(|b| b.scope != Scope::Players),
+                "`{bind}` is not package:player/key or package:global/key"
+            );
+        }
+    }
+    Ok(())
 }
 /// A parsed state binding.
 #[derive(Debug, Clone, PartialEq, Eq)]

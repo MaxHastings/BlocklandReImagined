@@ -636,6 +636,23 @@ enum Event {
         owner: OwnerId,
         generation: usize,
     },
+    /// A loading connection's Hello ([`Purpose::Lobby`]).
+    Arrive {
+        hello: Hello,
+        principal: Option<Principal>,
+        connection: Connection,
+        out: Outbox,
+        answer: oneshot::Sender<Result<OwnerId, Message>>,
+    },
+    LobbyRequest {
+        owner: OwnerId,
+        generation: usize,
+        request: LobbyRequest,
+    },
+    LobbyLost {
+        owner: OwnerId,
+        generation: usize,
+    },
 }
 pub fn transport() -> quinn::TransportConfig {
     let mut t = quinn::TransportConfig::default();
@@ -903,6 +920,68 @@ async fn connection_task(
     };
     let (out, mut output, queued) = outbox();
     let (answer, accepted) = oneshot::channel();
+    if begin.purpose == Purpose::Lobby {
+        events
+            .send(Event::Arrive {
+                hello,
+                principal,
+                connection: connection.clone(),
+                out,
+                answer,
+            })
+            .await?;
+        let owner = match accepted.await? {
+            Ok(owner) => owner,
+            Err(refusal) => {
+                codec::write_frame(&mut send, &codec::encode(&refusal)?).await?;
+                send.finish()?;
+                linger(&mut send, &connection).await;
+                return Ok(());
+            }
+        };
+        // An accepted player is bounded by the player limit, as a join is.
+        drop(handshake);
+        let generation = connection.stable_id();
+        let write = async {
+            while let Some(frame) = output.recv().await {
+                // Only ready frames (chat, notices) go to a loading client.
+                if let Frame::Ready(bytes) = frame {
+                    write_timed(&mut send, &bytes).await?;
+                    queued.fetch_sub(bytes.len(), Ordering::Relaxed);
+                }
+            }
+            Result::<()>::Ok(())
+        };
+        let read = async {
+            // A few lines a second is all chat needs; a flood is dropped
+            // here rather than crowding the shared event queue.
+            let mut window = (tokio::time::Instant::now(), 0_u32);
+            loop {
+                let request: LobbyRequest = codec::read_small_request(&mut receive).await?;
+                let now = tokio::time::Instant::now();
+                if now.duration_since(window.0) >= Duration::from_secs(1) {
+                    window = (now, 0);
+                }
+                window.1 += 1;
+                if window.1 > LOBBY_REQUESTS_PER_SECOND {
+                    continue;
+                }
+                events
+                    .send(Event::LobbyRequest {
+                        owner,
+                        generation,
+                        request,
+                    })
+                    .await?;
+            }
+            #[allow(unreachable_code)]
+            Result::<()>::Ok(())
+        };
+        tokio::select! {_ = write=>{},_ = read=>{}}
+        connection.close(0_u32.into(), b"Session ended");
+        let _ = events.send(Event::LobbyLost { owner, generation }).await;
+        return Ok(());
+    }
     let bulk = Arc::new(AtomicBool::new(false));
     events
         .send(Event::Join {
@@ -1061,6 +1140,15 @@ impl MovementAllowance {
         self.tokens -= 1.0;
         true
     }
+}
+/// Requests a loading client may send in one second; more are dropped.
+const LOBBY_REQUESTS_PER_SECOND: u32 = 8;
+/// A connection accepted while its player still loads ([`Purpose::Lobby`]).
+struct Lobby {
+    peer: Peer,
+    /// [`token_key`] of the ticket its game join presents.
+    ticket: [u8; 32],
+    principal: Option<Principal>,
 }
 /// Unauthenticated connections (QUIC handshake through Welcome) may take at
 /// most this long in total.
@@ -1370,10 +1458,14 @@ fn close_admin_disconnects(
     session: &mut Session,
     recorder: &mut Recorder,
     peers: &mut BTreeMap<OwnerId, Peer>,
+    lobbies: &mut BTreeMap<OwnerId, Lobby>,
 ) {
     for target in recorder.take_admin_disconnects(session) {
         let message = recorder.take_admin_disconnect_message(session, target);
-        if let Some(target_peer) = peers.remove(&target) {
+        if let Some(target_peer) = peers
+            .remove(&target)
+            .or_else(|| lobbies.remove(&target).map(|l| l.peer))
+        {
             // The close frame must fit one packet; messages stay short.
             target_peer.connection.close(
                 0_u32.into(),
@@ -1463,6 +1555,8 @@ async fn run(
     let bulk_budget = Arc::new(Semaphore::new(codec::BULK_REQUEST_BUDGET));
     let mut tasks = tokio::task::JoinSet::new();
     let mut peers = BTreeMap::<OwnerId, Peer>::new();
+    // Players accepted and still loading: chat only, until their game join.
+    let mut lobbies = BTreeMap::<OwnerId, Lobby>::new();
     // Resume tokens are server-issued capabilities. Retain the host bit bound to
     // the ticket so a reconnect cannot claim a role through its Hello payload.
     let mut tickets = Tickets::default();
@@ -1498,6 +1592,7 @@ async fn run(
     let mut map_lights = session.map_light_rules();
     let mut world_shapes = (session.world_shapes_revision(), session.world_shapes());
     let mut environment = session.environment();
+    let mut tuned_revision = session.tuned_revision();
     let mut weapon_settings = session.weapon_settings().clone();
     let mut last_chat = 0;
     let mut state_stream = crate::stream::StateStream::default();
@@ -1546,11 +1641,11 @@ async fn run(
                     if let Some(host)=&options.map_loader{host.outgoing(&session);}
                     recorder.map_changed(&mut session,new,admin,&map,package_save)?;
                     // Players the new map could not place are let go with the reason.
-                    close_admin_disconnects(&mut session,&mut recorder,&mut peers);
+                    close_admin_disconnects(&mut session,&mut recorder,&mut peers,&mut lobbies);
                     if let Ok(mut listing)=listing.lock(){listing.map=session.simulation().state().map_id.clone();}
                     spawn_points=session.spawn_points().to_vec();
                     names=session.names();avatars=session.avatars();tools=session.tool_inventories();weapons.reset(session.weapon_view(),session.simulation().state().tick,session.projectile_falls());
-                    palette=session.simulation().state().palette.clone();vitals=session.vitals();minigames=session.minigame_views();vehicles=session.vehicle_infos();broken_shapes=session.broken_shapes();targets=session.tutorial_targets();map_lights=session.map_light_rules();world_shapes=(session.world_shapes_revision(),session.world_shapes());environment=session.environment();weapon_settings=session.weapon_settings().clone();entities=session.package_entities().into_iter().map(|e|(e.id,e)).collect();joined_entities.clear();
+                    palette=session.simulation().state().palette.clone();vitals=session.vitals();minigames=session.minigame_views();vehicles=session.vehicle_infos();broken_shapes=session.broken_shapes();targets=session.tutorial_targets();map_lights=session.map_light_rules();world_shapes=(session.world_shapes_revision(),session.world_shapes());environment=session.environment();tuned_revision=session.tuned_revision();weapon_settings=session.weapon_settings().clone();entities=session.package_entities().into_iter().map(|e|(e.id,e)).collect();joined_entities.clear();
                     backlog.reset(cursor);
                     let (checkpoint,bricks)=Checkpoint::from_session(&session,cursor);
                     let transfer=encode_transfer(WorldTransfer{head:Message::MapChanged(checkpoint),bricks,focus:None},traffic.clone(),peers.len());
@@ -1565,9 +1660,21 @@ async fn run(
             Event::Join{hello,principal,connection,out,bulk,answer}=>{
                 let join:Result<OwnerId>= match fuse.guard("a join",||(||{
                     ensure!(hello.version==VERSION,"Incompatible protocol version");let differences=check_packages(&options.environment,&hello.packages,hello.accept_differences)?;
-                    ensure!(peers.len()<max_players,"Server is full");
+                    let arriving=hello.arrival.as_ref().map(token_key);
+                    // A loading player already holds their place.
+                    ensure!(arriving.is_some()||peers.len()+lobbies.len()<max_players,"Server is full");
                     let supplied_host=if let Some(host)=&hello.host {ensure!(token_key(host)==host_key,"Invalid host credential");true}else{false};
-                    let (owner,token,kept)=if let Some(token)=hello.resume {
+                    let (owner,token,kept)=if let Some(ticket)=arriving {
+                        // The player this host announced as connected has the
+                        // map and the Add-Ons: they spawn now.
+                        let owner=lobbies.iter().find(|(_,l)|l.ticket==ticket).map(|(o,_)|*o).context("This join's loading connection has ended")?;
+                        ensure!(lobbies.get(&owner).is_some_and(|l|l.principal==principal),"Join identity does not match its loading connection");
+                        let mut error=None;let mut found=false;for spawn in &spawn_points {match recorder.enter_arrival(&mut session,owner,*spawn){Ok(())=>{found=true;break},Err(e)=>error=Some(e)}}ensure!(found,"{}",error.context("No spawn points")?);
+                        let mut bytes=[0;32];getrandom::fill(&mut bytes).map_err(|e|anyhow::anyhow!("OS randomness failed: {e}"))?;let token=ResumeToken(bytes);
+                        if let Some(lobby)=lobbies.remove(&owner){lobby.peer.connection.close(0_u32.into(),b"Joined");}
+                        if let Err(error)=tickets.insert(token_key(&token),Ticket{owner,host:supplied_host,principal,issued:0},|o|peers.contains_key(&o)){let _=recorder.disconnect(&mut session,owner);return Err(error)}
+                        joins+=1;(owner,token,None)
+                    }else if let Some(token)=hello.resume {
                         let Ticket{owner,host:ticket_host,principal:ticket_principal,..}=tickets.get(&token_key(&token)).context("Invalid resume credential")?;
                         ensure!(ticket_principal==principal,"Resume identity does not match authenticated ticket");
                         // The ticket's own connection is still here: the player's
@@ -1610,6 +1717,33 @@ async fn run(
                 })())? {Ok(join)=>join,Err(fault)=>Err(anyhow::anyhow!("{fault}"))};
                 if join.is_err(){rejected+=1;}else{broadcast_admin_snapshots(&session,&peers);}let _=answer.send(join.map_err(|e|match e.downcast::<crate::client::PackagesDiffer>(){Ok(d)=>Message::PackagesDiffer(d.0),Err(e)=>Message::Rejected(e.to_string())}));
             },
+            Event::Arrive{hello,principal,connection,out,answer}=>{
+                let arrived:Result<OwnerId>=match fuse.guard("a connection",||(||{
+                    ensure!(hello.version==VERSION,"Incompatible protocol version");
+                    ensure!(peers.len()+lobbies.len()<max_players,"Server is full");
+                    let supplied_host=if let Some(host)=&hello.host {ensure!(token_key(host)==host_key,"Invalid host credential");true}else{false};
+                    let owner=recorder.arrive(&mut session,hello.name.clone(),&hello.clan,supplied_host,principal)?;
+                    let mut bytes=[0;32];getrandom::fill(&mut bytes).map_err(|e|anyhow::anyhow!("OS randomness failed: {e}"))?;let arrival=ResumeToken(bytes);
+                    let name=session.arrivals().remove(&owner).unwrap_or_default();
+                    let bytes=match codec::encode(&Message::Arrived{owner,name,arrival:arrival.clone(),chat_cursor:session.chat_cursor()}) {Ok(bytes)=>bytes,Err(error)=>{let _=recorder.disconnect(&mut session,owner);return Err(error)}};
+                    if out.try_send(Frame::Ready(Arc::new(bytes))).is_err(){let _=recorder.disconnect(&mut session,owner);anyhow::bail!("Connection writer unavailable");}
+                    lobbies.insert(owner,Lobby{peer:Peer{generation:connection.stable_id(),connection,out,traffic:traffic.clone(),bulk:Arc::new(AtomicBool::new(false))},ticket:token_key(&arrival),principal});
+                    Ok(owner)
+                })())? {Ok(arrived)=>arrived,Err(fault)=>Err(anyhow::anyhow!("{fault}"))};
+                if arrived.is_err(){rejected+=1;}else{broadcast_admin_snapshots(&session,&peers);}
+                let _=answer.send(arrived.map_err(|e|Message::Rejected(e.to_string())));
+            },
+            Event::LobbyRequest{owner,generation,request}=>{
+                if lobbies.get(&owner).is_some_and(|l|l.peer.generation==generation){
+                    let LobbyRequest::Chat(text)=request;
+                    commands+=1;
+                    // Refusals (pace, filter) are the session's to tell; a
+                    // loading client is answered by what its line causes.
+                    let result=match fuse.guard("a loading player's chat",||recorder.command(&mut session,owner,0,bri_sim::session::Command::Chat(text),None,|_|anyhow::bail!("Loading players cannot administer")))? {Ok(result)=>result,Err(fault)=>Err(anyhow::anyhow!("{fault}"))};
+                    if result.is_err(){rejected+=1;}
+                }
+            },
+            Event::LobbyLost{owner,generation}=>{if lobbies.get(&owner).is_some_and(|l|l.peer.generation==generation){lobbies.remove(&owner);let _=recorder.disconnect(&mut session,owner);broadcast_admin_snapshots(&session,&peers);}},
             Event::Lost{owner,generation}=>{if peers.get(&owner).is_some_and(|p|p.generation==generation){peers.remove(&owner);package_views.sent.remove(&owner);let _=recorder.disconnect(&mut session,owner);broadcast_admin_snapshots(&session,&peers);}},
             Event::Command{owner,generation,request,_body_permit}=>{
                 if let Some(peer)=peers.get(&owner).filter(|p|p.generation==generation){
@@ -1629,7 +1763,7 @@ async fn run(
                         Err(error)=>peer.send_message(Kind::Reply,&Message::Reply{sequence:request.sequence,result:Err(bri_sim::session::Rejection::message(format!("Could not transfer reply: {error}")))}),
                     }
                     }
-                    close_admin_disconnects(&mut session,&mut recorder,&mut peers);
+                    close_admin_disconnects(&mut session,&mut recorder,&mut peers,&mut lobbies);
                     if old_admin_revision!=session.admin_revision(){broadcast_admin_snapshots(&session,&peers);}
                     if let Some((admin,map))=recorder.take_map_change(&mut session){
                         match options.map_loader.clone() {
@@ -1645,7 +1779,7 @@ async fn run(
             Event::Move{owner,generation,movement}=>{if peers.get(&owner).is_some_and(|p|p.generation==generation){let _=recorder.seat_report(&mut session,owner,movement.newest,movement.seat);for (sequence,input) in movement.sequenced(){let _=recorder.movement(&mut session,owner,sequence,input);}if let Some(camera)=movement.camera{let _=recorder.camera_report(&mut session,owner,camera);}}},
         }},
         _=ticker.tick()=>{
-            players.store(peers.len() as u32,std::sync::atomic::Ordering::Relaxed);
+            players.store((peers.len()+lobbies.len()) as u32,std::sync::atomic::Ordering::Relaxed);
             let now=std::time::Instant::now();
             let steps=clock.advance(now.duration_since(previous).mul_f32(session.time_scale()));previous=now;
             for _ in 0..steps {
@@ -1682,12 +1816,14 @@ async fn run(
                 let current_targets=session.tutorial_targets();let changed_targets=if targets!=current_targets{targets=current_targets;Some(targets.clone())}else{None};
                 let current_lights=session.map_light_rules();let changed_lights=if map_lights!=current_lights{map_lights=current_lights;Some(map_lights.clone())}else{None};
                 let changed_shapes=if world_shapes.0!=session.world_shapes_revision(){world_shapes.0=session.world_shapes_revision();crate::protocol::changed_world_shapes(&mut world_shapes.1,session.world_shapes())}else{BTreeMap::new()};
-                let current_environment=session.environment();let changed_environment=if environment!=current_environment{environment=current_environment;Some(environment.clone())}else{None};
+                let current_environment=session.environment();let changed_environment=if environment!=current_environment{environment=current_environment;Some(environment.clone())}else{None};let changed_archetypes=(session.tuned_revision()!=tuned_revision).then(||{tuned_revision=session.tuned_revision();session.tuned_archetypes()});
                 let changed_weapon_settings=if weapon_settings!=*session.weapon_settings(){weapon_settings=session.weapon_settings().clone();Some(weapon_settings.clone())}else{None};
                 let chat=session.chat_after(last_chat);if let Some(line)=chat.last(){last_chat=line.id;}
+                // Players still loading read and send chat (v20's loading screen).
+                if !chat.is_empty()&&!lobbies.is_empty(){broadcast(lobbies.values().map(|l|&l.peer),Kind::Notice,&Message::LobbyChat(chat.clone()));}
                 let next=cursor.checked_add(1).context("Replication sequence exhausted")?;
                 let cues=recorder.take_cues(&mut session);let dropped_cues=session.dropped_cues();
-                let delta=Delta{base:cursor,cursor:next,tick,bricks,names:changed_names,avatars:changed_avatars,tools:changed_tools,weapons:changed_weapons,palette:changed_palette,chat,cues,dropped_cues,vitals:changed_vitals,minigames:changed_minigames,vehicles:changed_vehicles,time_scale:changed_time_scale,broken_shapes:changed_broken,targets:changed_targets,map_lights:changed_lights,environment:changed_environment,weapon_settings:changed_weapon_settings,entities:changed_entities,world_shapes:changed_shapes};
+                let delta=Delta{base:cursor,cursor:next,tick,bricks,names:changed_names,avatars:changed_avatars,tools:changed_tools,weapons:changed_weapons,palette:changed_palette,chat,cues,dropped_cues,vitals:changed_vitals,minigames:changed_minigames,vehicles:changed_vehicles,time_scale:changed_time_scale,broken_shapes:changed_broken,targets:changed_targets,map_lights:changed_lights,environment:changed_environment,archetypes:changed_archetypes,weapon_settings:changed_weapon_settings,entities:changed_entities,world_shapes:changed_shapes};
                 // An update with nothing in it only moves the clients' clock.
                 // Clients coast projectiles on each update's tick, so they keep 20 Hz.
                 if !delta.is_empty() || dropped_cues!=sent_dropped_cues || weapons.in_flight() || tick.is_multiple_of(HEARTBEAT_INTERVAL) {
@@ -1696,7 +1832,7 @@ async fn run(
                     broadcast(peers.values(),Kind::Update,&Message::Update(delta));cursor=next;
                 }
                 send_package_views(&session,&peers,&mut package_views);
-                for (owner,notice) in recorder.take_private_notices(&mut session){if let Some(peer)=peers.get(&owner){peer.send_message(Kind::Notice,&Message::Notice(notice));}}
+                for (owner,notice) in recorder.take_private_notices(&mut session){if let Some(peer)=peers.get(&owner){peer.send_message(Kind::Notice,&Message::Notice(notice));}else if let Some(lobby)=lobbies.get(&owner)&&matches!(notice,bri_sim::session::Notice::Chat(_)|bri_sim::session::Notice::Sound(_)){lobby.peer.send_message(Kind::Notice,&Message::Notice(notice));}}
             }
             }
             event_overload.0+=session.take_event_overload();

@@ -44,7 +44,7 @@ pub struct ContentPaths {
     pub weapon_extras: Vec<(String, PathBuf)>,
     pub vehicle_extras: Vec<(String, PathBuf)>,
     pub brick_extras: Vec<(String, PathBuf)>,
-    /// Packages providing bot kinds (`assets/bots.json`).
+    /// Each Add-On's bot kinds file (`content_identity::bot_providers`).
     pub bot_extras: Vec<(String, PathBuf)>,
     pub map_bundle: PathBuf,
     pub brick_catalog: PathBuf,
@@ -359,7 +359,7 @@ impl ContentPaths {
                 "vehicles.json",
             )?,
             brick_extras: bri_net::content_identity::brick_catalog_providers(&root, packages)?,
-            bot_extras: bri_net::content_identity::kind_providers(&root, packages, "bots.json")?,
+            bot_extras: bri_net::content_identity::bot_providers(&root, packages)?,
             packages: packages.clone(),
             root,
             shared: Default::default(),
@@ -434,7 +434,7 @@ impl ContentPaths {
     /// The bot kinds the enabled Add-Ons provide (`bots.json`): what a
     /// vehicle spawn brick may make besides vehicles.
     pub fn bot_kinds(&self) -> Result<Vec<bri_sim::bot_kind::BotKind>> {
-        bri_net::content_identity::bot_kinds_from(&self.bot_extras)
+        bri_net::content_identity::bot_kinds_from_files(&self.bot_extras)
     }
     pub fn vehicle_pack(&self) -> Result<bri_vehicles::Pack> {
         Ok(self.merged_vehicles()?.0)

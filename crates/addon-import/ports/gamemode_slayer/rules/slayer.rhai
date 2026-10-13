@@ -2267,6 +2267,19 @@ fn note_team_lives(g) {
     }
     set("team_lives", seen);
 }
+fn forget_gone_team_lives(g) {
+    let seen = get("team_lives");
+    let ids = [];
+    for t in g.teams {
+        ids.push(`${g.id}:${t.id}`);
+    }
+    for key in seen.keys() {
+        if key.starts_with(`${g.id}:`) && !ids.contains(key) {
+            seen.remove(key);
+        }
+    }
+    set("team_lives", seen);
+}
 fn team_lives_changed(g, team) {
     let seen = get("team_lives");
     let key = `${g.id}:${team}`;
@@ -2824,7 +2837,10 @@ fn mg_teams(g, event) {
     // (The Mini-Game window's Apply sends its teams before their
     // settings, so the kits noted are still the old ones.)
     dress_game(g);
-    note_team_lives(g);
+    // Nor the lives: the same Apply's new Lives are stored already, and
+    // noting them here would leave `team_lives_changed` nothing to change.
+    // Only a team that is gone is forgotten.
+    forget_gone_team_lives(g);
     announce_new_teams(g, balance_new(g), event);
     save_last(g, event);
     // A team gone takes its bots with it; a new one gets its own.

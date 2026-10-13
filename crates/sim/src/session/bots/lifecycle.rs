@@ -20,7 +20,7 @@ impl Session {
         self.bots.kinds = kinds;
         for brain in self.bots.brains.values_mut() {
             if let Some(kind) = self.bots.kinds.iter().find(|k| k.id == brain.kind.id) {
-                brain.kind = kind.clone();
+                brain.kind = kind.clone().into();
             }
         }
         self.vehicles.scanned = false;
@@ -31,6 +31,13 @@ impl Session {
     /// the host's Max bots. Lowering it keeps the bots already running.
     pub fn bot_limit(&self) -> usize {
         (self.admin.settings.max_bots as usize).clamp(1, MAX_BOTS)
+    }
+    /// Whether one more bot of `kind` fits under the bot limit: each bot
+    /// counts what its kind costs (`BotKind::cost`), so a server limited to
+    /// 16 full bots runs 64 minimal creatures.
+    pub(in crate::session) fn bot_room(&self, kind: &BotKind) -> bool {
+        let load: f32 = self.bots.brains.values().map(|b| b.kind.cost()).sum();
+        load + kind.cost() <= self.bot_limit() as f32 + 0.001
     }
     pub fn is_bot_kind(&self, id: &str) -> bool {
         self.bots.kind(id).is_some()
@@ -84,7 +91,7 @@ impl Session {
         // A refused bot is never silent: the brick's builder is told why,
         // as for a vehicle the server has no room for.
         let limit = self.bot_limit();
-        if self.bots.brains.len() >= limit {
+        if !self.bot_room(&kind) {
             self.notify(
                 builder,
                 Notice::Center {
@@ -194,7 +201,10 @@ impl Session {
         }
         let peer = self.peers.get_mut(&bot).context("No such bot")?;
         peer.avatar = avatar;
-        peer.package_archetype = body;
+        peer.chosen_body = body.map(|archetype| super::bodies::ChosenBody {
+            archetype,
+            by: super::bodies::Chooser::AddOn,
+        });
         let body = body.unwrap_or_else(|| crate::player_types::PlayerType::Standard.archetype());
         self.set_player_archetype(bot, body)
     }
@@ -300,14 +310,12 @@ impl Session {
         kind: &str,
     ) -> Result<()> {
         let limit = self.bot_limit();
-        ensure!(
-            self.bots.brains.len() < limit,
-            "Server is limited to {limit} bots"
-        );
-        ensure!(self.peers.len() < 64, "Server is full");
-        self.bots
+        let kind = self
+            .bots
             .kind(kind)
             .with_context(|| format!("No bot kind `{kind}`: its Add-On is not enabled"))?;
+        ensure!(self.bot_room(kind), "Server is limited to {limit} bots");
+        ensure!(self.peers.len() < 64, "Server is full");
         let found = self
             .minigames
             .game(bri_minigames::GameId(game))
@@ -455,8 +463,13 @@ impl Session {
             .map(|(bot, _)| *bot)
             .collect()
     }
-    /// The game a spawn brick's bot plays in: its builder's.
+    /// The game a spawn brick's bot plays in: a game mode's own mini-game,
+    /// which holds everyone on the server (bots of the map's own bricks
+    /// too, which have no builder), and otherwise its builder's.
     pub(super) fn spawn_brick_game(&self, brick: BrickId) -> Option<bri_minigames::GameId> {
+        if let Some(game) = self.minigames.server_game() {
+            return Some(game);
+        }
         let owner = self.simulation.state().bricks.get(&brick)?.owner;
         let player = self.peers.get(&owner)?.combat.player;
         self.minigames.player(player).ok()?.game
@@ -575,8 +588,8 @@ impl Session {
         }
         Ok(())
     }
-    /// Minigame membership follows the spawn brick owner, and team the
-    /// brick's Team choice.
+    /// Minigame membership follows the spawn brick ([`Self::spawn_brick_game`]),
+    /// and team the brick's Team choice.
     pub(super) fn sync_bot_minigames(&mut self) -> Result<()> {
         let bots: Vec<(OwnerId, BrickId)> = self
             .bots
@@ -585,20 +598,16 @@ impl Session {
             .filter_map(|(o, b)| Some((*o, b.brick?)))
             .collect();
         for (bot, brick) in bots {
-            let Some((owner, team)) = self
+            let Some(team) = self
                 .simulation
                 .state()
                 .bricks
                 .get(&brick)
-                .map(|b| (b.owner, b.vehicle.as_ref().and_then(|v| v.team)))
+                .map(|b| b.vehicle.as_ref().and_then(|v| v.team))
             else {
                 continue;
             };
-            let wanted = self
-                .peers
-                .get(&owner)
-                .and_then(|p| self.minigames.player(p.combat.player).ok())
-                .and_then(|p| p.game);
+            let wanted = self.spawn_brick_game(brick);
             let Some(peer) = self.peers.get(&bot) else {
                 continue;
             };

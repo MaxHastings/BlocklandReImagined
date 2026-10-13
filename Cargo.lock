@@ -557,6 +557,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "bri-controller"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "bri-motor",
+ "glam 0.33.10",
+ "wasmtime",
+ "wat",
+]
+
+[[package]]
 name = "bri-convert"
 version = "0.1.0"
 dependencies = [
@@ -757,6 +768,7 @@ name = "bri-package-runtime"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "bri-audio",
  "bri-console",
  "bri-content",
  "bri-package",
@@ -815,6 +827,7 @@ dependencies = [
  "bri-admin",
  "bri-console",
  "bri-content",
+ "bri-controller",
  "bri-events",
  "bri-minigames",
  "bri-motor",

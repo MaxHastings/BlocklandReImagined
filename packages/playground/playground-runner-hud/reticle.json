@@ -1,0 +1,9 @@
+{
+  "schema_version": 1,
+  "region": "crosshair",
+  "when": { "body": ["playground-runner:archetype/runner"] },
+  "pixelated": true,
+  "elements": [
+    { "type": "image", "texture": "playground-runner-hud:texture/reticle", "rect": [16, 16, 32, 32] }
+  ]
+}

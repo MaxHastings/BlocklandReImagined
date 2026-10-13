@@ -1,0 +1,1 @@
+`Delta::archetypes`: every body the host tuned while the game runs (`/tune`, the Tune window), as `(ArchetypeId, Archetype)` without the controller's module, whenever one changed; clients keep their own module and bound controller.

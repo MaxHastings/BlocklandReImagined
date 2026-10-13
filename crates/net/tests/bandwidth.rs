@@ -163,6 +163,7 @@ fn rocket_pack() -> bri_weapons::Pack {
         collision_sound: None,
         sport_hit: None,
         turns_into: None,
+        decal: None,
     };
     let pack = bri_weapons::Pack {
         effects: Default::default(),

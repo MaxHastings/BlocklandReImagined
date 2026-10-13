@@ -12,6 +12,12 @@
 //!   surface with an extra non-sRGB `view_formats` entry and render the UI
 //!   through that view.
 //! - Clip rectangles become scissor rectangles.
+//! - A fractional scale above 1 (UI Size 125%, 150%, 250%) draws the UI at
+//!   the next whole scale into an offscreen texture and shrinks it onto the
+//!   target with exact area weights, as macOS draws its scaled resolutions.
+//!   Every logical pixel then covers the same 1.25 or 1.5 screen pixels, so
+//!   one-pixel borders, glyph strokes and stretched art look the same
+//!   wherever they land, and the result is the whole-scale UI, made smaller.
 //! - Host-supplied textures (brick icons, avatar preview) are registered with
 //!   [`UiRenderer::set_external`] and referenced as `TexKey::External(id)`.
 
@@ -122,6 +128,202 @@ pub struct UiRenderer {
     vbuf: Option<(wgpu::Buffer, u64)>,
     ubuf: wgpu::Buffer,
     screen_group: wgpu::BindGroup,
+    downscale: Option<Downscale>,
+}
+
+/// The offscreen whole-scale UI and the pass that shrinks it onto the target.
+struct Downscale {
+    layout: wgpu::BindGroupLayout,
+    pipeline_layout: wgpu::PipelineLayout,
+    shader: wgpu::ShaderModule,
+    pipelines: HashMap<wgpu::TextureFormat, wgpu::RenderPipeline>,
+    ubuf: wgpu::Buffer,
+    /// The offscreen texture, its size and the bind group reading it.
+    target: Option<((u32, u32), wgpu::TextureView, wgpu::BindGroup)>,
+}
+
+/// Format of the offscreen UI: non-sRGB, so blending stays in display space.
+const OFFSCREEN: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
+
+/// Shrinks the premultiplied offscreen UI by `ratio` (whole scale over the
+/// requested scale, between 1 and 2): each target pixel averages the
+/// offscreen texels its footprint covers, weighted by the area covered. A
+/// footprint at most two texels wide touches at most three per axis.
+const DOWNSCALE_SHADER: &str = r#"
+struct Params { ratio: f32, pad0: f32, size: vec2<f32> };
+@group(0) @binding(0) var<uniform> params: Params;
+@group(0) @binding(1) var src: texture_2d<f32>;
+
+@vertex
+fn vs(@builtin(vertex_index) i: u32) -> @builtin(position) vec4<f32> {
+    let uv = vec2<f32>(f32((i << 1u) & 2u), f32(i & 2u));
+    return vec4<f32>(uv * vec2<f32>(2.0, -2.0) + vec2<f32>(-1.0, 1.0), 0.0, 1.0);
+}
+
+fn weights(start: f32, ratio: f32) -> vec3<f32> {
+    let i = floor(start);
+    let end = start + ratio;
+    var w: vec3<f32>;
+    for (var k = 0; k < 3; k++) {
+        let a = i + f32(k);
+        w[k] = max(min(end, a + 1.0) - max(start, a), 0.0) / ratio;
+    }
+    return w;
+}
+
+@fragment
+fn fs(@builtin(position) pos: vec4<f32>) -> @location(0) vec4<f32> {
+    let start = floor(pos.xy) * params.ratio;
+    let base = floor(start);
+    let wx = weights(start.x, params.ratio);
+    let wy = weights(start.y, params.ratio);
+    let last = params.size - 1.0;
+    var c = vec4<f32>(0.0);
+    for (var y = 0; y < 3; y++) {
+        for (var x = 0; x < 3; x++) {
+            let w = wx[x] * wy[y];
+            if w > 0.0 {
+                let t = min(base + vec2<f32>(f32(x), f32(y)), last);
+                c += w * textureLoad(src, vec2<i32>(t), 0);
+            }
+        }
+    }
+    return c;
+}
+"#;
+
+impl Downscale {
+    fn new(device: &wgpu::Device) -> Self {
+        let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("bri-ui downscale"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+            ],
+        });
+        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("bri-ui downscale"),
+            bind_group_layouts: &[Some(&layout)],
+            immediate_size: 0,
+        });
+        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("bri-ui downscale"),
+            source: wgpu::ShaderSource::Wgsl(DOWNSCALE_SHADER.into()),
+        });
+        let ubuf = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("bri-ui downscale"),
+            size: 16,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        Downscale {
+            layout,
+            pipeline_layout,
+            shader,
+            pipelines: HashMap::new(),
+            ubuf,
+            target: None,
+        }
+    }
+
+    /// The offscreen texture of `size`, made or remade as needed.
+    fn target(&mut self, device: &wgpu::Device, size: (u32, u32)) -> wgpu::TextureView {
+        if self.target.as_ref().is_none_or(|(s, ..)| *s != size) {
+            let texture = device.create_texture(&wgpu::TextureDescriptor {
+                label: Some("bri-ui whole scale"),
+                size: wgpu::Extent3d {
+                    width: size.0,
+                    height: size.1,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: OFFSCREEN,
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                    | wgpu::TextureUsages::TEXTURE_BINDING,
+                view_formats: &[],
+            });
+            let view = texture.create_view(&Default::default());
+            let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("bri-ui downscale"),
+                layout: &self.layout,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: self.ubuf.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: wgpu::BindingResource::TextureView(&view),
+                    },
+                ],
+            });
+            self.target = Some((size, view, group));
+        }
+        self.target.as_ref().expect("made above").1.clone()
+    }
+
+    fn pipeline(
+        &mut self,
+        device: &wgpu::Device,
+        format: wgpu::TextureFormat,
+    ) -> &wgpu::RenderPipeline {
+        let (layout, shader) = (&self.pipeline_layout, &self.shader);
+        self.pipelines.entry(format).or_insert_with(|| {
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some("bri-ui downscale"),
+                layout: Some(layout),
+                vertex: wgpu::VertexState {
+                    module: shader,
+                    entry_point: Some("vs"),
+                    compilation_options: Default::default(),
+                    buffers: &[],
+                },
+                primitive: wgpu::PrimitiveState::default(),
+                depth_stencil: None,
+                multisample: wgpu::MultisampleState::default(),
+                fragment: Some(wgpu::FragmentState {
+                    module: shader,
+                    entry_point: Some("fs"),
+                    compilation_options: Default::default(),
+                    targets: &[Some(wgpu::ColorTargetState {
+                        format,
+                        // The offscreen UI is premultiplied (drawn over
+                        // transparent black with ordinary alpha blending).
+                        blend: Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
+                        write_mask: wgpu::ColorWrites::ALL,
+                    })],
+                }),
+                multiview_mask: None,
+                cache: None,
+            })
+        })
+    }
+}
+
+/// The whole scale a fractional `scale` above 1 is drawn at before it is
+/// shrunk, or `None` to draw straight at `scale`.
+fn whole_scale(scale: f32) -> Option<f32> {
+    (scale.is_finite() && scale > 1.0 && scale.fract() > 1e-4).then(|| scale.ceil())
 }
 
 fn filter_index(f: Filter) -> usize {
@@ -222,6 +424,7 @@ impl UiRenderer {
             vbuf: None,
             ubuf,
             screen_group,
+            downscale: None,
         }
     }
 
@@ -349,6 +552,75 @@ impl UiRenderer {
     /// clears the target first (otherwise the UI is composited over it).
     #[allow(clippy::too_many_arguments)]
     pub fn render(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+        target: &wgpu::TextureView,
+        format: wgpu::TextureFormat,
+        size: (u32, u32),
+        scale: f32,
+        pack: &Pack,
+        dl: &DrawList,
+        clear: Option<wgpu::Color>,
+    ) {
+        let Some(whole) = whole_scale(scale) else {
+            self.draw(
+                device, queue, encoder, target, format, size, scale, pack, dl, clear,
+            );
+            return;
+        };
+        let ratio = whole / scale;
+        let inner = (
+            ((size.0 as f32 * ratio).ceil() as u32).max(1),
+            ((size.1 as f32 * ratio).ceil() as u32).max(1),
+        );
+        let downscale = self.downscale.get_or_insert_with(|| Downscale::new(device));
+        let offscreen = downscale.target(device, inner);
+        queue.write_buffer(
+            &downscale.ubuf,
+            0,
+            bytemuck::cast_slice(&[ratio, 0.0, inner.0 as f32, inner.1 as f32]),
+        );
+        self.draw(
+            device,
+            queue,
+            encoder,
+            &offscreen,
+            OFFSCREEN,
+            inner,
+            whole,
+            pack,
+            dl,
+            Some(wgpu::Color::TRANSPARENT),
+        );
+        let downscale = self.downscale.as_mut().expect("made above");
+        let pipeline = downscale.pipeline(device, format).clone();
+        let group = downscale.target.as_ref().expect("made above").2.clone();
+        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("bri-ui downscale"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: target,
+                resolve_target: None,
+                depth_slice: None,
+                ops: wgpu::Operations {
+                    load: clear.map_or(wgpu::LoadOp::Load, wgpu::LoadOp::Clear),
+                    store: wgpu::StoreOp::Store,
+                },
+            })],
+            depth_stencil_attachment: None,
+            timestamp_writes: None,
+            occlusion_query_set: None,
+            multiview_mask: None,
+        });
+        pass.set_pipeline(&pipeline);
+        pass.set_bind_group(0, &group, &[]);
+        pass.draw(0..3, 0..1);
+    }
+
+    /// [`Self::render`] straight at `scale`.
+    #[allow(clippy::too_many_arguments)]
+    fn draw(
         &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
@@ -660,6 +932,57 @@ mod tests {
     use super::*;
     use crate::draw::{DrawList, Filter};
     use crate::pack::{Pack, Pixels};
+
+    /// One-logical-pixel fill lines at a fractional scale each cover exactly
+    /// 1.25 or 1.5 screen pixels wherever they fall (drawn at the next whole
+    /// scale and shrunk by area), instead of rounding to one or two pixels.
+    /// Translucent fills blend over the background as they do when drawn
+    /// straight.
+    #[test]
+    fn fractional_scale_lines_cover_their_exact_share() {
+        let gpu = Headless::new().unwrap();
+        let pack = Pack::from_parts(Default::default(), Default::default());
+        let mut renderer = UiRenderer::new(&gpu.device, &gpu.queue);
+        for scale in [1.25f32, 1.5, 2.5] {
+            let width = (16.0 * scale) as u32;
+            let mut dl = DrawList::new(Rect::new(0, 0, 16, 8));
+            for x in (0..16).step_by(2) {
+                dl.fill(Rect::new(x, 0, 1, 4), crate::geom::WHITE);
+            }
+            dl.fill(Rect::new(0, 4, 16, 4), [255, 0, 0, 128]);
+            let out = gpu
+                .render_rgba(
+                    &mut renderer,
+                    &pack,
+                    &dl,
+                    (width, (8.0 * scale) as u32),
+                    scale,
+                    [0.0, 0.0, 1.0, 1.0],
+                )
+                .unwrap();
+            for x in 0..width {
+                let covered: f32 = (0..16)
+                    .step_by(2)
+                    .map(|j| {
+                        let (a, b) = (j as f32 * scale, (j + 1) as f32 * scale);
+                        (b.min(x as f32 + 1.0) - a.max(x as f32)).max(0.0)
+                    })
+                    .sum();
+                let want = (covered * 255.0).round() as i32;
+                let got = out[x as usize * 4] as i32;
+                assert!(
+                    (got - want).abs() <= 3,
+                    "scale {scale} pixel {x}: got {got}, want {want}"
+                );
+            }
+            let row = ((6.0 * scale) as u32 * width) as usize * 4;
+            let px = &out[row + 4..row + 8];
+            assert!(
+                (px[0] as i32 - 128).abs() <= 2 && px[1] == 0 && (px[2] as i32 - 127).abs() <= 2,
+                "scale {scale}: translucent fill {px:?}"
+            );
+        }
+    }
 
     /// A one-texel stripe pattern drawn at fractional UI scales covers each
     /// screen pixel by exactly its share of opaque texels, so a 1-texel stroke
