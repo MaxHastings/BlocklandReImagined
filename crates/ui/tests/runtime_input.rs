@@ -1290,6 +1290,7 @@ fn a_player_the_host_accepted_chats_from_the_loading_screen() {
     down(&mut u, Key::Letter('w'));
     assert!(actions(&mut u).is_empty());
     down(&mut u, Key::Letter('t'));
+    u.handle_input(InputEvent::Char('t'));
     assert_eq!(u.top_id(), ScreenId::MessageInput(ChatChannel::Say));
     for ch in "hi".chars() {
         u.handle_input(InputEvent::Char(ch));
