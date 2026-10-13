@@ -1,0 +1,16 @@
+{
+ "schema_version": 5,
+ "id": "playground-stomper",
+ "items": {},
+ "images": {},
+ "projectiles": {},
+ "damage_types": {
+  "flattened": {
+   "name": "Flattened",
+   "suicide_message": "%1 was flattened",
+   "murder_message": "%2 flattened %1",
+   "vehicle_scale": 0.0,
+   "direct": true
+  }
+ }
+}

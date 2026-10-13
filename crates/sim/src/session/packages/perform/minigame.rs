@@ -131,6 +131,7 @@ impl Rule for ops::SetTeams {
                     id: t.id.map(team_id).transpose()?,
                     name: t.name,
                     color: t.color,
+                    player_type: t.body,
                 })
             })
             .collect::<Result<Vec<_>>>()?;

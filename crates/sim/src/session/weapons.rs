@@ -933,12 +933,13 @@ impl Session {
     /// the magazine's `display_ticks` (until the next change when 0), and
     /// cleared when the hand no longer holds a gun with a magazine.
     fn show_ammo(&mut self, owner: OwnerId) {
+        // HUDs drawing their own counter hear first, so the client knows
+        // whether the print that follows is the ammo display.
+        let held = self.weapons.ammo(bri_weapons::ActorId(owner));
+        self.notify(owner, Notice::Ammo(held.as_ref().map(held_ammo)));
         // A magazine without a display (Display Ammo off, nothing used)
         // shows nothing, as no gun.
-        let view = self
-            .weapons
-            .ammo(bri_weapons::ActorId(owner))
-            .filter(|v| v.shown);
+        let view = held.filter(|v| v.shown);
         let Some(view) = view else {
             if self.ammo_shown.remove(&owner) {
                 self.notify(
@@ -1090,6 +1091,31 @@ fn shooter(source: ActorId) -> Option<OwnerId> {
 
 /// The ammo display's line: `name  rounds / reserve`, right-aligned, with
 /// "Reloading" while a reload runs.
+/// A held gun's ammunition as its holder's HUD reads it.
+fn held_ammo(view: &bri_weapons::runtime::AmmoView) -> HeldAmmo {
+    use bri_weapons::runtime::Reserve;
+    let reserve = match view.reserve {
+        Reserve::Rounds(n) => Some(n),
+        Reserve::Endless => None,
+    };
+    HeldAmmo {
+        item: view.item.clone(),
+        rounds: if view.counted {
+            reserve
+        } else {
+            Some(view.rounds)
+        },
+        size: view.size,
+        reserve: if view.supply == bri_weapons::Supply::Endless {
+            None
+        } else {
+            reserve
+        },
+        reloading: view.reloading,
+        printed: view.shown,
+    }
+}
+
 pub(crate) fn ammo_text(view: &bri_weapons::runtime::AmmoView) -> String {
     let reserve = match view.reserve {
         bri_weapons::runtime::Reserve::Rounds(n) => n.to_string(),

@@ -231,6 +231,10 @@ const PLAYGROUND: &[&str] = &[
     "playground/playground-buggy",
     "playground/playground-stomper-look",
     "playground/playground-stomper",
+    "playground/playground-stomper-rules",
+    "playground/playground-fizzer-look",
+    "playground/playground-fizzer",
+    "playground/playground-fizzer-rules",
     "playground/playground-mode",
 ];
 impl Staged {
@@ -351,6 +355,39 @@ fn the_hud_and_camera_follow_the_body(f: &ContentRoot) -> Result<()> {
         "full-health wedge {wedge:?}"
     );
     ensure!(near(rim, [230, 180, 40], 24), "meter rim {rim:?}");
+
+    // Draw the Carbine: the Runner's ammo counter replaces the server's
+    // ammo display, from the magazine the server sends its holder.
+    app.ui.core.request(UiAction::UseTool { slot: 0 });
+    until(&mut app, "the ammo counter", |a| {
+        a.ui.core.hud_regions.iter().any(|r| {
+            r.region == Region::Ammo
+                && r.items
+                    .iter()
+                    .any(|i| matches!(i, bri_content::hud::Item::Image { .. }))
+        })
+    })?;
+    run_for(&mut app, 0.5)?;
+    ensure!(
+        app.ui.core.bottom_print_ammo && app.ui.core.hud_claimed(Region::Ammo),
+        "the ammo display is the bottom print, and the counter hides it"
+    );
+    let counter = app
+        .ui
+        .core
+        .hud_regions
+        .iter()
+        .find(|r| r.region == Region::Ammo)
+        .context("ammo region")?;
+    let digits = counter
+        .items
+        .iter()
+        .filter(|i| matches!(i, bri_content::hud::Item::Image { .. }))
+        .count();
+    // "24" in the magazine and "x" and the reserve's digits below it.
+    ensure!(digits >= 4, "sprite digits drawn: {digits}");
+    let armed = capture(&mut app, &gpu, &mut renderer)?;
+    save(&artifact.join("runner-ammo.png"), &armed)?;
 
     // Become the Trooper: its camera owns the view, and the stock HUD is
     // back, for the Runner's HUD claimed only the Runner's body.

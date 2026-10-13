@@ -3726,6 +3726,12 @@ impl Runtime {
             if behaviour.on_drop_key {
                 need("on_drop_key".into(), 1, "on_drop_key");
             }
+            if behaviour.on_contact {
+                need("on_contact".into(), 1, "on_contact");
+            }
+            if behaviour.on_bot_ability {
+                need("on_bot_ability".into(), 4, "on_bot_ability");
+            }
             for policy in &behaviour.policies {
                 need(format!("allow_{policy}"), 1, &format!("policy `{policy}`"));
             }

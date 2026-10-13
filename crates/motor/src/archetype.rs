@@ -61,6 +61,9 @@ pub struct Archetype {
     /// [`Archetypes::bind_controllers`] makes it run.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub controller: Option<crate::controller::ControllerSource>,
+    /// What it sounds like jumping, hurting and dying.
+    #[serde(default, skip_serializing_if = "Sounds::is_standard")]
+    pub sounds: Sounds,
 }
 fn yes() -> bool {
     true
@@ -85,6 +88,33 @@ impl MountPoint {
     /// The seat in the world for a mount at `feet`, facing `yaw`.
     pub fn seat(&self, feet: glam::Vec3, yaw: f32, scale: f32) -> glam::Vec3 {
         feet + glam::Quat::from_rotation_y(-yaw) * glam::Vec3::from(self.position) * scale
+    }
+}
+/// An archetype's own sounds (`PlayerData.jumpSound`, and `painSound` and
+/// `deathSound` under `useCustomPainEffects`), each an `AudioProfile` name.
+/// None makes the standard player's sound; an empty name makes none, as a
+/// Bot_Hole bot's `jumpSound = ""` did.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Sounds {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub jump: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pain: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub death: Option<String>,
+}
+impl Sounds {
+    /// Longest sound name, as cues carry it.
+    pub const MAX_NAME: usize = 128;
+    pub fn is_standard(&self) -> bool {
+        *self == Self::default()
+    }
+    fn valid(&self) -> bool {
+        [&self.jump, &self.pain, &self.death]
+            .into_iter()
+            .flatten()
+            .all(|s| s.len() <= Self::MAX_NAME && !s.chars().any(char::is_control))
     }
 }
 /// How clients draw an archetype and place its camera.
@@ -185,6 +215,7 @@ impl Archetype {
                     })
                 && self.look.max_time_scale.is_finite()
                 && (0.1..=16.0).contains(&self.look.max_time_scale)
+                && self.sounds.valid()
                 && self.mount_points.len() <= MAX_MOUNT_POINTS
                 && self.mount_points.iter().all(|m| {
                     !m.node.is_empty()
@@ -234,6 +265,10 @@ impl Archetype {
             uses_items: true,
             sockets: Sockets::default(),
             controller: None,
+            sounds: Sounds {
+                jump: (kind == PlayerType::Horse).then(|| "HorseJumpSound".into()),
+                ..Default::default()
+            },
         }
     }
 }
@@ -320,6 +355,32 @@ impl Archetypes {
             }
         }
         Ok(())
+    }
+    /// The bodies a player may be offered (a brick's ChangeDatablock list,
+    /// the mini-game's player types, `/body`): v20's selectable player
+    /// types, then every package archetype with a name, in table order.
+    pub fn choosable(&self) -> impl Iterator<Item = (ArchetypeId, &Archetype)> {
+        PlayerType::ALL
+            .into_iter()
+            .map(|t| (t.archetype(), self.resolve(t.archetype())))
+            .chain(
+                self.iter()
+                    .skip(PlayerType::EVERY.len())
+                    .filter(|(_, a)| !a.name.is_empty()),
+            )
+    }
+    /// The choosable body a player names: by archetype id, v20 datablock
+    /// name or shown name, ignoring case.
+    pub fn choice(&self, named: &str) -> Option<ArchetypeId> {
+        let named = named.trim();
+        let by_datablock = PlayerType::from_datablock_name(named).map(PlayerType::archetype);
+        self.choosable()
+            .find(|(id, a)| {
+                Some(*id) == by_datablock
+                    || a.id.eq_ignore_ascii_case(named)
+                    || a.name.eq_ignore_ascii_case(named)
+            })
+            .map(|(id, _)| id)
     }
     pub fn iter(&self) -> impl Iterator<Item = (ArchetypeId, &Archetype)> {
         self.0
@@ -437,5 +498,17 @@ mod tests {
         let back: Archetypes = serde_json::from_str(&json).unwrap();
         back.validate().unwrap();
         assert_eq!(back, table);
+    }
+
+    #[test]
+    fn the_horse_jumps_with_its_own_sound() {
+        let table = Archetypes::default();
+        let horse = table.resolve(PlayerType::Horse.archetype());
+        assert_eq!(horse.sounds.jump.as_deref(), Some("HorseJumpSound"));
+        let standard = table.resolve(PlayerType::Standard.archetype());
+        assert!(standard.sounds.is_standard());
+        let mut loud = horse.clone();
+        loud.sounds.pain = Some("x".repeat(Sounds::MAX_NAME + 1));
+        assert!(loud.validate().is_err());
     }
 }

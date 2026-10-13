@@ -1085,6 +1085,75 @@ fn a_magazine_shows_its_rounds_reloads_on_the_light_key_and_takes_ammo_from_rule
     assert_eq!(g.text("mag"), "none");
 }
 
+/// The owner's `Notice::Ammo`s, each with whether a bottom print came
+/// straight after it.
+fn held_ammo(g: &mut Game, owner: OwnerId) -> Vec<(Option<bri_sim::session::HeldAmmo>, bool)> {
+    let mine: Vec<Notice> =
+        g.s.take_private_notices()
+            .into_iter()
+            .filter(|(o, _)| *o == owner)
+            .map(|(_, n)| n)
+            .collect();
+    mine.iter()
+        .enumerate()
+        .filter_map(|(i, n)| match n {
+            Notice::Ammo(held) => Some((
+                held.clone(),
+                matches!(mine.get(i + 1), Some(Notice::Bottom { .. })),
+            )),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn a_held_guns_ammo_reaches_its_holder_for_hud_counters() {
+    let mut g = Game::new();
+    let p = g.join(Vec3::new(0.0, 0.05, 0.0));
+    let other = g.join(Vec3::new(3.0, 0.05, 0.0));
+    g.steps(3);
+    g.s.take_private_notices();
+    g.run(p, "rifle", vec![]);
+    g.steps(10);
+    let ammo = held_ammo(&mut g, p);
+    let (last, printed_next) = ammo.last().expect("drawing it sends the ammo");
+    let last = last.as_ref().expect("a gun with a magazine");
+    assert_eq!(
+        (
+            last.rounds,
+            last.size,
+            last.reserve,
+            last.reloading,
+            last.printed
+        ),
+        (Some(5), 5, Some(10), false, true)
+    );
+    assert!(printed_next, "the ammo display's print follows it");
+    g.run(p, "load", vec![PackageArg::Int(2)]);
+    g.send(p, Command::ToggleLight).unwrap();
+    g.steps(1);
+    let ammo = held_ammo(&mut g, p);
+    let last = ammo.last().unwrap().0.as_ref().unwrap();
+    assert_eq!((last.rounds, last.reloading), (Some(2), true));
+    g.run(p, "endless", vec![]);
+    g.steps(40);
+    let ammo = held_ammo(&mut g, p);
+    let last = ammo.last().unwrap().0.as_ref().unwrap();
+    assert_eq!(
+        (last.rounds, last.reserve),
+        (Some(5), None),
+        "endless reserve"
+    );
+    // A gun without a magazine has no ammo to count.
+    g.run(p, "arm", vec![]);
+    g.steps(10);
+    assert_eq!(held_ammo(&mut g, p).last().map(|a| a.0.clone()), Some(None));
+    // Nobody else hears it.
+    g.run(p, "rifle", vec![]);
+    g.steps(10);
+    assert!(held_ammo(&mut g, other).is_empty());
+}
+
 #[test]
 fn an_add_on_explosion_looks_and_sounds_like_its_own() {
     let mut g = Game::new();

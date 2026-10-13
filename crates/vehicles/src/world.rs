@@ -765,6 +765,20 @@ impl VehiclesWorld {
     pub fn occupant(&self, occupant: OccupantId) -> Option<(VehicleId, usize)> {
         self.occupied.get(&occupant).copied()
     }
+    /// A seated occupant changed body ([`Occupant::body`]): getting out
+    /// tests room for the body they have now.
+    pub fn resize_occupant(&mut self, occupant: OccupantId, body: [f32; 2]) {
+        let Some(&(id, seat)) = self.occupied.get(&occupant) else {
+            return;
+        };
+        if let Some(Some(o)) = self
+            .instances
+            .get_mut(&id)
+            .and_then(|v| v.seats.get_mut(seat))
+        {
+            o.body = body;
+        }
+    }
     /// Abandon a held charge without firing on trigger release. Used when
     /// an action is cancelled; ordinary release remains a firing action.
     pub fn cancel_weapon_charge(&mut self, occupant: OccupantId) {

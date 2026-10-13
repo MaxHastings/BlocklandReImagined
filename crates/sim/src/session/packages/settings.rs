@@ -624,6 +624,12 @@ impl Session {
                         id: t.id.map(mg::TeamId),
                         name: t.name.trim().to_owned(),
                         color: t.color,
+                        // The dialog edits names and colours; a team keeps
+                        // the body its Add-On gave it.
+                        player_type: t
+                            .id
+                            .and_then(|id| g.teams.get(mg::TeamId(id)))
+                            .and_then(|t| t.player_type.clone()),
                     });
                 }
                 Some(specs)

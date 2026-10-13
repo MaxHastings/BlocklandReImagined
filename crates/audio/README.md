@@ -84,9 +84,12 @@ to case. See `examples/client_integration.rs` for a complete client loop.
   maps to amplitude through the TGE `linearToDB` table, interpolated
   (`GainCurve::TorqueTable`, the default). `GainCurve::Linear` is available if
   Maxwell's A/B listening prefers it.
-- **Panning:** equal-power stereo from listener-relative azimuth for mono
-  sources. Multi-channel clips are not spatialised, as in OpenAL. 2D sounds play
-  centred.
+- **Panning:** equal-power stereo from listener-relative azimuth. A placed 3D
+  sound with a multi-channel clip is folded to mono and then attenuated and
+  panned like any other. OpenAL left such clips unplaced at full volume, which
+  made stereo Add-On sounds (the Mini-Nuke's blast) deafening at any distance;
+  this is a deliberate departure. 2D sounds play centred and keep their
+  channels.
 - **Placement rule:** a 3D description with `Placement::Listener` plays 2D,
   exactly like vanilla `alxPlay(profile)` and `client.play2D(profile)`.
 - **Voices:** `VoicePolicy::default()` matches TGE:

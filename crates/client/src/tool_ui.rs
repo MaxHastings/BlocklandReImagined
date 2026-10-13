@@ -279,18 +279,28 @@ impl ToolUi {
             .insert("ProjectileData".into(), menu(projectiles));
         self.datablocks.insert(
             "PlayerData".into(),
-            bri_sim::player_types::PlayerType::ALL
-                .map(|t| Choice {
-                    id: t.datablock_name().into(),
-                    name: t.name().into(),
-                })
-                .into(),
+            body_choices(&bri_sim::archetype::Archetypes::default()),
         );
         self.base_events = Some(
             bri_events::rules::workshop_catalog(&catalog).expect("Validated core rule vocabulary"),
         );
         self.merge_events();
         self.invalidate();
+    }
+    /// The bodies the server's ChangeDatablock event may name: v20's player
+    /// types and every Add-On body it runs. Returns the new menus when
+    /// they changed.
+    pub fn offer_bodies(
+        &mut self,
+        archetypes: &bri_sim::archetype::Archetypes,
+    ) -> Option<UiUpdate> {
+        let bodies = body_choices(archetypes);
+        if self.datablocks.get("PlayerData") == Some(&bodies) {
+            return None;
+        }
+        self.datablocks.insert("PlayerData".into(), bodies);
+        self.invalidate();
+        Some(UiUpdate::Datablocks(self.datablocks.clone()))
     }
     /// The server's Add-Ons' wrench event inputs and outputs, added to the
     /// installed catalog. Returns the wrench's new event lists when they
@@ -1000,6 +1010,19 @@ fn wrench_variants(catalog: &Catalog) -> BTreeMap<String, WrenchVariant> {
         .collect()
 }
 
+/// The ChangeDatablock menu: each choosable body by the name the host
+/// resolves (v20's datablock names, Add-On archetype ids).
+fn body_choices(archetypes: &bri_sim::archetype::Archetypes) -> Vec<Choice> {
+    bri_sim::session::event_bodies(archetypes)
+        .into_iter()
+        .zip(archetypes.choosable())
+        .map(|(id, (_, a))| Choice {
+            id,
+            name: a.name.clone(),
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1079,6 +1102,44 @@ mod tests {
             ui.install_effects(vec![("bad\nid".into(), "Bad".into())], vec![])
                 .is_err()
         );
+    }
+    /// v0.3.0 W4: ChangeDatablock lists every body the server runs, an
+    /// Add-On's by its id and name beside v20's datablocks, and a server
+    /// with the same bodies changes nothing.
+    #[test]
+    fn change_datablock_lists_the_servers_add_on_bodies() {
+        let mut ui = fixture();
+        let mut table = bri_sim::archetype::Archetypes::default();
+        let standard = table.resolve(Default::default()).clone();
+        table
+            .add(bri_sim::archetype::Archetype {
+                id: "mario:archetype/mario".into(),
+                name: "Mario".into(),
+                ..standard.clone()
+            })
+            .unwrap();
+        // A body nobody may pick (no name) stays off the list.
+        table
+            .add(bri_sim::archetype::Archetype {
+                id: "mario:archetype/frozen".into(),
+                name: String::new(),
+                ..standard
+            })
+            .unwrap();
+        let Some(UiUpdate::Datablocks(menus)) = ui.offer_bodies(&table) else {
+            panic!("the list changed");
+        };
+        let bodies = &menus["PlayerData"];
+        assert!(bodies.contains(&Choice {
+            id: "mario:archetype/mario".into(),
+            name: "Mario".into(),
+        }));
+        assert!(bodies.contains(&Choice {
+            id: "PlayerStandardArmor".into(),
+            name: "Standard Player".into(),
+        }));
+        assert!(!bodies.iter().any(|c| c.id.ends_with("frozen")));
+        assert!(ui.offer_bodies(&table).is_none());
     }
     #[test]
     fn the_wrench_lists_the_servers_add_on_inputs_targets_and_outputs() {

@@ -895,7 +895,7 @@ its kind and team label. See `bots/looks.rs`.
 
 - `bots.json` (a kind) sets only what the kind is and the six main dials
   (`bot_kind::tuning::SETTABLE`); any other number there is an error.
-  Everything else (reaction, turn rate, aim error, memory, the rest of
+  Everything else (turn rate, aim error, the rest of
   `perception` and `team`) is fixed in code at `BotKind::default`, and
   the contest, hold margin, strafe and driving numbers are constants, so tuning
   means turning a main dial. What a kind sets:
@@ -933,6 +933,29 @@ its kind and team label. See `bots/looks.rs`.
     (a mini-game loadout), so it fights with its `melee` or a vehicle gun
     it crews. A simple enemy (the Playground's Stomper) is this, `melee`
     and the opt-out weights in `behaviours`, on the same brain.
+  - `reaction_seconds` (0 to 5, 0.35 shipped) and `memory_seconds` (0 to
+    60, 8 shipped): how quickly it acts on an enemy it sees and how long it
+    keeps one it lost sight of. A Creeper is slow to notice and forgets
+    quickly; a guard dog is quick and dogged.
+  - `tactics` (`cover`, `retreat`, `flank`, `dodge`, all on by default):
+    off, the brain leaves that tactic out and spends nothing on it. No
+    `cover`: it fights where it stands (no places to stand weighed).
+    No `retreat`: it never gives ground (no place farther from its enemy,
+    no step back from a swing). No `flank`: it comes straight at an enemy.
+    No `dodge`: it neither hops out of a shot's way nor steps out of an
+    ally's line of fire.
+  - `vehicles` (`drive`, `gun`, `ride`, all on): the seats it takes, by
+    what the seat does. All off, it never boards.
+  - `contact` (`damage`, `seconds`, `name`): it hurts any enemy whose body
+    touches its own, once every `seconds`, through the same rules as a
+    shot. A Goomba is this.
+  - `ability`: an attack its Add-On defines (see Attacks below).
+  - `flee_below` (0 to 1): it runs from the enemy it sees or knows of
+    once its health is that share of its most or less (`Behaviour::Flee`).
+  - Cost: a kind with no hand weapons, tactics, seats, teamwork, surprise
+    or perception strength is a minimal profile and counts a quarter of a
+    bot against the server's bot limit (`BotKind::cost`,
+    `MINIMAL_COST`); see Profiles.
   - `moves`: `walk`, or `swim`. A swimmer in water skips the walk grid and
     heads straight for its goal at any depth (jump rises, crouch dives),
     roams up and down as well as across, and every goal is kept inside its
@@ -974,6 +997,80 @@ its kind and team label. See `bots/looks.rs`.
   band it fights from follows the reach. Without `bot`, reach comes from
   the projectile (close range without one) and the trigger is tapped; a
   tool reaching or holding right now is held anyway.
+
+## Profiles
+
+One brain moves everything that moves with intent; a kind's data decides
+how much of it a bot uses. The Blockhead has everything on. The
+Playground's Stomper (a Goomba) and Fizzer (a Creeper) turn nearly all of
+it off: no hand weapons (`weapons: false`), no tactics, no seats, no
+teamwork, surprise or human perception, and the behaviours they do not use
+weighted 0. What is off costs nothing: spots are weighed only with
+`cover`, dodges only with `dodge`, flanks only with `flank`, allies'
+intents and the gaps they file through only with `teamwork`.
+
+Measured with `creature_think_time_16` beside `bot_think_time_16`
+(`crates/chaos/tests/bot_gauntlet.rs`, release, 16 bots fighting in two
+sides): a minimal profile thinks in 21 to 24 percent of a full Blockhead
+bot's time (about 14 us against 66 us a tick). What remains is what every
+mover needs: seeing, routing and walking. So the bot limit counts each
+bot as its kind's cost: a server limited to 16 full bots runs 64 minimal
+creatures (the 64-player server cap still holds).
+
+A body's reach is its own: routes are planned with what the body's motor
+and its movement controller really do (`reach::Reach::of` flies the
+tuning, controller included). A body that cannot jump walks round a low
+wall; one that can jumps it. Moves that need a second press in the air (a
+wall kick, a double jump, a dive or ground pound) are out of scope: a bot
+runs, jumps and jets through its body's controller with the default brain
+(Max, 2026-10-13).
+
+## Intents
+
+An Add-On gives its own bots goals with `bot_intent(bot, intent)`; the
+brain carries them out with everything it already does (routes, jumps,
+seats, fights). An Add-On never ships a brain loop of its own.
+
+- `#{ guard: [x, y, z], radius }`: keep to a spot, strolling within half
+  the radius, following a fight no farther than the radius.
+- `#{ patrol: [[x, y, z], ...], radius }` (up to 16 points): walk the round
+  from point to point while strolling, following a fight no farther than
+  the radius from the point it heads for.
+- `#{ follow: player, distance }`: stay by a player or another bot; a
+  leader who leaves ends it.
+- `#{ flee: player or (), seconds }`: run from that player (or from the
+  enemy it sees or knows of) for that long.
+- `()`: none; it is its kind again.
+
+An intent moves the bot's anchor (where its stroll, its walk home and its
+leash are measured from); fleeing is the `flee` behaviour. Only the
+package that added the bot (`add_bot`) may set its intent.
+
+## Attacks
+
+What an attack looks like is data or the Add-On's, never the brain's. A
+kind attacks with its hands (weapons), its body (`melee`), a touch
+(`contact`) or an `ability`:
+
+- `ability` (`name`, `range`, `fuse_seconds`, `cancel_range`,
+  `cooldown_seconds`, `sight`, `action`, `emote`, `sound`,
+  `sound_seconds`, `stand`): the brain walks into `range` of an enemy as it
+  would to strike, waits out its reaction, then winds it up for
+  `fuse_seconds`, playing `action` on its arms' thread, wearing `emote`,
+  repeating `sound` every `sound_seconds` (and standing still with
+  `stand`). An enemy that gets beyond `cancel_range` calls it off. When it
+  finishes, every package declaring `on_bot_ability(bot, kind, ability,
+  target)` is told, and the Add-On makes it happen: the Fizzer fires its
+  own explosive projectile at its feet (`fire`, so brick damage is the
+  mini-game's) and dies with it.
+- Body contact (`on_contact(info)`): as two bodies begin to touch, every
+  package declaring it hears who met whom (`by`, `target`), how (`kind`:
+  `"body"`, or `"vehicle"` with the `vehicle` and its driver as `by`),
+  from where (`from`: `"above"`, `"below"`, `"side"`) and how fast
+  (`velocity`, `speed`, `by`'s less `target`'s). What it means is the
+  rules': the Stomper's flatten it when landed on from above or run over
+  at a pace. A Mario Add-On's stomp and a Warthog's run-over need no
+  engine code.
 
 ## Adding a behaviour
 

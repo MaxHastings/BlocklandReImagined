@@ -369,6 +369,25 @@ pub struct Behaviour {
     /// it is asked, in load order, until one takes it.
     #[serde(default)]
     pub on_drop_key: bool,
+    /// `on_bot_ability(bot, kind, ability, target)` as a bot whose kind
+    /// has an `ability` (`bots.json`) finishes winding it up: what the
+    /// ability does (a blast, a spit, a heal) is this hook's, the brain
+    /// only decides when. `target` is the enemy it was aimed at, or `()`.
+    /// Every package that declares it hears it, in load order; one checks
+    /// `kind` for its own.
+    #[serde(default)]
+    pub on_bot_ability: bool,
+    /// `on_contact(info)` as two bodies begin to touch: `info` is
+    /// `#{ kind, by, target, vehicle, from, speed, velocity }`. `kind` is
+    /// `"body"` (a player's body meeting another's) or `"vehicle"` (a
+    /// vehicle running into a player); `by` is the one that came down on,
+    /// ran into or drove into `target` (the upper body, the quicker one, the
+    /// vehicle's driver or `()`); `from` is `"above"`, `"below"` or
+    /// `"side"`; `velocity` is `by`'s (the vehicle's) less `target`'s as
+    /// they met, `[x, y, z]`, and `speed` its length. A stomp, a run-over
+    /// or a shove means what the rules make it mean.
+    #[serde(default)]
+    pub on_contact: bool,
     /// `on_tick()` every `tick_interval` ticks, when set.
     #[serde(default)]
     pub tick_interval: Option<u32>,
@@ -1245,6 +1264,12 @@ pub struct ModeMiniGame {
     pub building: bool,
     pub painting: bool,
     pub use_all_players_bricks: bool,
+    /// Bodies a player may pick for themselves with `/body`, besides
+    /// `player_type` (archetype ids, as `player_type`).
+    pub bodies: Vec<String>,
+    /// A player who picks a body (a brick event, `/body`) respawns as it.
+    /// On by default; a mode that forces its bodies turns it off.
+    pub keep_chosen_body: bool,
 }
 impl Default for ModeMiniGame {
     fn default() -> Self {
@@ -1268,6 +1293,8 @@ impl Default for ModeMiniGame {
             building: true,
             painting: true,
             use_all_players_bricks: false,
+            bodies: Vec::new(),
+            keep_chosen_body: true,
         }
     }
 }
@@ -1292,6 +1319,16 @@ impl ModeMiniGame {
             "minigame player_type `{}` is not a player type id",
             self.player_type
         );
+        ensure!(
+            self.bodies.len() <= 256,
+            "a minigame lists at most 256 bodies"
+        );
+        for body in &self.bodies {
+            ensure!(
+                bri_package::id::is_content_ref(body, None),
+                "minigame body `{body}` is not a player type id"
+            );
+        }
         ensure!(
             (1.0..=30.0).contains(&self.respawn_seconds),
             "respawn_seconds must be 1 to 30"
@@ -1588,6 +1625,21 @@ pub struct ArchetypeDef {
     /// depends on provides (`namespace:controller/name`).
     #[serde(default)]
     pub controller: Option<String>,
+    /// Its own jump, pain and death sounds, each an `AudioProfile` name
+    /// (an empty one plays nothing); one left out keeps the base's.
+    #[serde(default)]
+    pub sounds: ArchetypeSounds,
+}
+/// [`ArchetypeDef::sounds`].
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ArchetypeSounds {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub jump: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pain: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub death: Option<String>,
 }
 /// One rider seat: the model node riders follow, its rest position from
 /// the feet (facing -Z, at scale 1) and the rider's action (`root`, `sit`).
@@ -1647,6 +1699,13 @@ impl ArchetypeDef {
         ensure!(
             self.controller.as_ref().is_none_or(|c| text(c, 160)),
             "controller must be a controller id"
+        );
+        ensure!(
+            [&self.sounds.jump, &self.sounds.pain, &self.sounds.death]
+                .into_iter()
+                .flatten()
+                .all(|s| s.is_empty() || text(s, 128)),
+            "sounds name sound profiles"
         );
         if let Some(stock) = &self.adjusts {
             ensure!(

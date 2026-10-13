@@ -82,6 +82,26 @@ fn set() -> PackageSet {
                 Side::Client,
             ),
             (
+                "playground-fizzer",
+                "playground/playground-fizzer",
+                Side::Shared,
+            ),
+            (
+                "playground-fizzer-look",
+                "playground/playground-fizzer-look",
+                Side::Client,
+            ),
+            (
+                "playground-fizzer-rules",
+                "playground/playground-fizzer-rules",
+                Side::Server,
+            ),
+            (
+                "playground-stomper-rules",
+                "playground/playground-stomper-rules",
+                Side::Server,
+            ),
+            (
                 "playground-mode",
                 "playground/playground-mode",
                 Side::Server,
@@ -316,6 +336,8 @@ async fn two_players_and_a_late_joiner_share_the_playground() -> Result<()> {
         [
             "blockhead_bot",
             "playground-buggy",
+            "playground-fizzer",
+            "playground-fizzer-look",
             "playground-rifle",
             "playground-runner-hud",
             "playground-runner-look",
@@ -487,6 +509,185 @@ async fn two_players_and_a_late_joiner_share_the_playground() -> Result<()> {
     assert!(in_hand(&late), "the late joiner sees the carbine in hand");
     agree(&mut watcher, &mut late).await?;
     drop((driver, watcher, late));
+    server.stop().await?;
+    Ok(())
+}
+
+/// What `client` sees `owner` as: their body's archetype id.
+fn body_of(client: &Client, owner: u64) -> Option<String> {
+    let pose = client.replica.poses.get(&owner)?;
+    Some(
+        client
+            .replica
+            .archetypes
+            .resolve(pose.player.archetype)
+            .id
+            .clone(),
+    )
+}
+
+/// `/body <named>`, typed in chat.
+async fn become_body(client: &mut Client, named: &str) -> Result<()> {
+    client
+        .request(Command::Package(bri_sim::session::PackageCommand {
+            package: String::new(),
+            command: "body".into(),
+            args: named
+                .split_whitespace()
+                .map(|w| bri_sim::session::PackageArg::String(w.into()))
+                .collect(),
+        }))
+        .await?;
+    Ok(())
+}
+
+/// v0.3.0 W4 over real QUIC, mid-match in the Playground mode, which lets
+/// players pick the Blockhead as well as its Runner: a Runner holding the
+/// Carbine becomes a Blockhead and the other player sees it still holding
+/// the Carbine; seated at the buggy's wheel it becomes a Runner again and
+/// stays seated; it climbs out a Runner. A late joiner sees the body,
+/// the seat and the Carbine as they are.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn players_switch_bodies_mid_match_armed_and_seated() -> Result<()> {
+    const STANDARD: &str = "v20.player.playerstandardarmor";
+    let (game, buggy) = session();
+    let root = packages();
+    let environment = Environment::load(&root, &set())?;
+    let shelf = PackageShelf::new(&root, &set(), &environment)?;
+    let mut options = common::options();
+    options.spawn_points = vec![SPAWN];
+    options.environment = environment.clone();
+    options.packages = Some(Arc::new(shelf));
+    let server = server::start(game, options)?;
+    let identity_dir = tempfile::tempdir()?;
+    let identity =
+        bri_identity::ClientIdentity::load_or_create(identity_dir.path().join("client.identity"))?;
+    let join = async |name: &str| {
+        let cache_dir = tempfile::tempdir()?;
+        let cache = Cache::open(cache_dir.path())?;
+        let (client, _, _) = Client::connect_fetching(
+            server.address,
+            HostPin::from(&server.certificate[..]),
+            name.into(),
+            Vec::new(),
+            None,
+            &identity,
+            &cache,
+            Progress::default(),
+            |fetched, _| Ok(fetched.iter().map(|f| f.package.clone()).collect()),
+        )
+        .await?;
+        anyhow::Ok((client, cache_dir))
+    };
+    let (mut ann, _ann_cache) = join("Ann").await?;
+    let (mut bo, _bo_cache) = join("Bo").await?;
+    let (a, b) = (ann.owner, bo.owner);
+    let armed = |c: &Client| {
+        c.replica
+            .tools
+            .get(&c.owner)
+            .is_some_and(|t| t.slots.iter().any(|s| s.as_deref() == Some(CARBINE)))
+    };
+    wait(&mut ann, |c| {
+        armed(c)
+            && c.replica.vehicle_poses.contains_key(&buggy)
+            && c.replica
+                .poses
+                .get(&c.owner)
+                .is_some_and(|p| p.player.grounded)
+    })
+    .await?;
+    wait(&mut bo, |c| {
+        armed(c) && body_of(c, a).as_deref() == Some(RUNNER)
+    })
+    .await?;
+    let slot = ann.replica.tools[&a]
+        .slots
+        .iter()
+        .position(|s| s.as_deref() == Some(CARBINE))
+        .unwrap();
+    ann.request(Command::EquipTool { slot: Some(slot) }).await?;
+    let in_hand = |c: &Client| {
+        c.replica
+            .weapons
+            .images
+            .get(&a)
+            .is_some_and(|images| images.iter().any(|i| i.image == CARBINE_IMAGE))
+    };
+    wait(&mut bo, in_hand).await?;
+
+    // A Runner holding the Carbine becomes a Blockhead holding it.
+    become_body(&mut ann, "Standard Player").await?;
+    wait(&mut ann, |c| body_of(c, a).as_deref() == Some(STANDARD)).await?;
+    wait(&mut bo, |c| {
+        body_of(c, a).as_deref() == Some(STANDARD) && in_hand(c)
+    })
+    .await?;
+    assert_eq!(
+        body_of(&bo, b).as_deref(),
+        Some(RUNNER),
+        "Bo is still a Runner"
+    );
+
+    // At the wheel, back to a Runner, still seated.
+    let mut seat_report = None;
+    let (seat, yaw) = board(&mut ann, &mut seat_report, buggy).await?;
+    assert_eq!(seat, 0);
+    // `/body` takes one change a half second; idle a moment first.
+    hold(
+        &mut ann,
+        &mut seat_report,
+        MoveInput {
+            yaw,
+            ..Default::default()
+        },
+        60,
+    )
+    .await?;
+    become_body(&mut ann, "Runner").await?;
+    wait(&mut bo, |c| {
+        body_of(c, a).as_deref() == Some(RUNNER)
+            && c.replica.vehicles[&buggy].occupants.first() == Some(&Some(a))
+    })
+    .await?;
+    assert_eq!(ann.replica.vitals[&a].mounted.map(|m| m.0), Some(buggy));
+
+    // Jet climbs out, a Runner.
+    let jet = MoveInput {
+        jet: true,
+        yaw,
+        ..Default::default()
+    };
+    for _ in 0..10 {
+        // One press a batch: the press that gets off makes the host drop
+        // the rest of its batch, still tagged with the seat.
+        hold(&mut ann, &mut seat_report, jet, 1).await?;
+        hold(
+            &mut ann,
+            &mut seat_report,
+            MoveInput {
+                yaw,
+                ..Default::default()
+            },
+            30,
+        )
+        .await?;
+        if ann.replica.vitals[&a].mounted.is_none() {
+            break;
+        }
+    }
+    wait(&mut bo, |c| {
+        c.replica.vitals[&a].mounted.is_none() && body_of(c, a).as_deref() == Some(RUNNER)
+    })
+    .await?;
+
+    let (mut late, _late_cache) = join("Late").await?;
+    wait(&mut late, |c| {
+        c.world_complete() && body_of(c, a).as_deref() == Some(RUNNER) && in_hand(c)
+    })
+    .await?;
+    assert_eq!(late.replica.vitals[&a].mounted, None);
+    drop((ann, bo, late));
     server.stop().await?;
     Ok(())
 }

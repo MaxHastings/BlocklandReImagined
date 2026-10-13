@@ -702,6 +702,7 @@ struct Runner {
     grabbed: bool,
     regrab: bool,
     next_regrab: Instant,
+    grab_retry: GrabRetry,
     focus_click: FocusClick,
     ime_allowed: bool,
     composing: bool,
@@ -753,6 +754,7 @@ pub fn run(config: PlatformConfig) -> Result<()> {
         grabbed: false,
         regrab: false,
         next_regrab: now,
+        grab_retry: GrabRetry::default(),
         focus_click: FocusClick::default(),
         ime_allowed: false,
         composing: false,
@@ -806,23 +808,41 @@ impl Runner {
         let minimized =
             window.is_minimized().unwrap_or(false) || size.width == 0 || size.height == 0;
         let grab = self.focused && !minimized && !self.config.app.ui().cursor_visible();
-        if grab && (!self.grabbed || self.regrab) {
+        let now = Instant::now();
+        if grab && (!self.grabbed || self.regrab) && self.grab_retry.ready(now) {
             // Windows locks the cursor wherever it sits, which after Alt+Tab
             // or a taskbar restore is outside the client area, and the OS
             // drops the clip on activation changes. Like v20's
             // setMouseClipping on WM_ACTIVATE, park it inside and re-clip.
             let _ =
                 window.set_cursor_position(PhysicalPosition::new(size.width / 2, size.height / 2));
-            window
+            match window
                 .set_cursor_grab(CursorGrabMode::Locked)
                 .or_else(|_| window.set_cursor_grab(CursorGrabMode::Confined))
-                .context("capturing the gameplay cursor")?;
-            self.grabbed = true;
+            {
+                Ok(()) => {
+                    self.grabbed = true;
+                    self.grab_retry.succeeded();
+                }
+                // X11 refuses a pointer grab while another client holds one
+                // (the window manager mapping or focusing the window, a
+                // launcher) or before the window is viewable. Play on with
+                // a free cursor and try again shortly.
+                Err(e) => {
+                    self.grabbed = false;
+                    if self.grab_retry.failed(now) {
+                        bri_console::warn(format!(
+                            "Could not capture the gameplay cursor, retrying: {e}"
+                        ));
+                    }
+                }
+            }
         } else if !grab && self.grabbed {
-            window
-                .set_cursor_grab(CursorGrabMode::None)
-                .context("releasing the gameplay cursor")?;
+            if let Err(e) = window.set_cursor_grab(CursorGrabMode::None) {
+                bri_console::warn(format!("Could not release the gameplay cursor: {e}"));
+            }
             self.grabbed = false;
+            self.grab_retry.succeeded();
         }
         self.regrab = false;
         window.set_cursor_visible(!grab);
@@ -1962,6 +1982,33 @@ struct FocusClick {
     swallowed: [bool; 5],
 }
 
+/// A refused cursor grab waits this long before the next try.
+const GRAB_RETRY: Duration = Duration::from_millis(250);
+
+/// Paces cursor grab attempts after the OS refuses one (X11 while another
+/// client holds the pointer), and warns once per run of refusals.
+#[derive(Default)]
+struct GrabRetry {
+    /// When the next attempt may run, after a refusal.
+    after: Option<Instant>,
+}
+
+impl GrabRetry {
+    fn ready(&self, now: Instant) -> bool {
+        self.after.is_none_or(|after| now >= after)
+    }
+    /// Records a refusal; true for the first of a run, which is worth a
+    /// log line.
+    fn failed(&mut self, now: Instant) -> bool {
+        let first = self.after.is_none();
+        self.after = Some(now + GRAB_RETRY);
+        first
+    }
+    fn succeeded(&mut self) {
+        self.after = None;
+    }
+}
+
 /// Windows delivers the activating button-down right after WM_SETFOCUS.
 const FOCUS_CLICK_WINDOW: Duration = Duration::from_millis(250);
 
@@ -2168,6 +2215,29 @@ fn pixel_wheel_steps(acc: &mut f64, delta: f64) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A refused grab (X11 at launch) is retried shortly instead of ending
+    /// the game, with one warning per run of refusals.
+    #[test]
+    fn a_refused_cursor_grab_retries_after_a_pause_and_warns_once() {
+        let start = Instant::now();
+        let mut retry = GrabRetry::default();
+        assert!(retry.ready(start));
+        assert!(retry.failed(start), "the first refusal warns");
+        assert!(!retry.ready(start + GRAB_RETRY / 2));
+        assert!(retry.ready(start + GRAB_RETRY));
+        assert!(
+            !retry.failed(start + GRAB_RETRY),
+            "later refusals are quiet"
+        );
+        assert!(!retry.ready(start + GRAB_RETRY + GRAB_RETRY / 2));
+        retry.succeeded();
+        assert!(retry.ready(start + GRAB_RETRY));
+        assert!(
+            retry.failed(start + 3 * GRAB_RETRY),
+            "a new run warns again"
+        );
+    }
 
     #[test]
     fn the_log_names_dxc_only_when_it_ships_beside_the_game() -> Result<()> {

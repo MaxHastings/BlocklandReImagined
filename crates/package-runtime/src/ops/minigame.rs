@@ -38,6 +38,7 @@ impl ScriptOp for SetTeams {
                 !t.name.trim().is_empty()
                     && t.name.chars().count() <= MAX_TEAM_NAME
                     && !t.name.chars().any(char::is_control)
+                    && t.body.as_ref().is_none_or(|b| b.len() <= 160)
             })
     }
 }
