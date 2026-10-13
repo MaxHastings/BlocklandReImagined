@@ -213,7 +213,11 @@ pub(super) fn update(
                 } else {
                     t.static_friction
                 };
-            let (limit, pull) = (grip * grip, fx * fx + fy * fy);
+            // Across the tyre the grip is `lateral_grip` of the grip along
+            // it: measured against an ellipse, which is Torque's circle
+            // when it is 1 (dividing by 1 changes no bits).
+            let across_share = fx / t.lateral_grip;
+            let (limit, pull) = (grip * grip, across_share * across_share + fy * fy);
             if pull > limit {
                 let k = (limit / pull).sqrt();
                 fx *= k;
@@ -237,7 +241,12 @@ pub(super) fn update(
         // The engine turns powered wheels, less as they near maxWheelSpeed;
         // the tyre's pull turns every wheel back.
         let scale_torque = if w.powered {
-            d.engine_torque(tire.spin.abs() / (d.max_speed / radius))
+            let top = if d.reverse_limited && tire.spin < 0. {
+                d.reverse_speed
+            } else {
+                d.max_speed
+            };
+            d.engine_torque(tire.spin.abs() / (top / radius))
         } else {
             0.
         };
@@ -431,11 +440,24 @@ mod tests {
     /// replay lands exactly where the host does, slipping tyres included.
     #[test]
     fn a_replay_from_the_hosts_pose_matches_the_host() {
+        replay_matches(|_| {});
+    }
+
+    /// The same with the centre of mass well off the hull's origin (a
+    /// nose-heavy Warthog): the pose's velocity is the origin's or the
+    /// centre's, and the replay must read it the way the host wrote it.
+    #[test]
+    fn a_replay_of_an_off_centre_vehicle_matches_the_host() {
+        replay_matches(|d| d.mass_center = [0.1, 0.05, -0.4]);
+    }
+
+    fn replay_matches(edit: impl Fn(&mut Definition) + Copy) {
         let tank = crate::testing::TANK;
         let full_lock = crate::testing::definition(tank).max_steering;
         // Slick tyres, so the replay has slipping wheels to get right.
         let slick = || {
             crate::testing::pack_with(|d| {
+                edit(d);
                 for wheel in &mut d.wheels {
                     wheel.tire.static_friction = 0.3;
                     wheel.tire.kinetic_friction = 0.2;

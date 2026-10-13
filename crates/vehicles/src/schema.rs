@@ -122,6 +122,12 @@ pub struct Tire {
     pub longitudinal_force: f32,
     pub longitudinal_damping: f32,
     pub longitudinal_relaxation: f32,
+    /// The grip across the tyre as a share of the grip along it, stretching
+    /// Torque's friction circle into an ellipse: Halo's Warthog grips 0.75
+    /// along and 0.45 across at the front (0.6), 0.45 and 0.65 at the rear
+    /// (1.44). 1, the default, is Torque's circle exactly.
+    #[serde(default = "one", skip_serializing_if = "is_one")]
+    pub lateral_grip: f32,
 }
 /// `WheeledVehicleTire`'s constructor defaults.
 impl Default for Tire {
@@ -135,6 +141,7 @@ impl Default for Tire {
             longitudinal_force: 10.,
             longitudinal_damping: 1.,
             longitudinal_relaxation: 1.,
+            lateral_grip: 1.,
         }
     }
 }
@@ -152,6 +159,8 @@ impl Tire {
         ]
         .iter()
         .all(|v| v.is_finite() && *v >= 0.)
+            && self.lateral_grip.is_finite()
+            && (0.05..=20.).contains(&self.lateral_grip)
     }
 }
 impl Wheel {
@@ -451,6 +460,18 @@ pub struct Definition {
     /// `steeringUseStrafeSteering`: the strafe keys steer. Otherwise the
     /// mouse steers and pitches the vehicle (Torque `mSteering`).
     pub strafe_steering: bool,
+    /// Pulling the throttle against the way the vehicle rolls brakes it
+    /// (with `brake_force`) until it stops, then drives the other way, as
+    /// Halo's Warthog stops hard when you pull back. Off, v20's: the
+    /// engine pushes back, which near top speed is next to nothing.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub throttle_brakes: bool,
+    /// A wheeled vehicle's engine stops pushing it backward at
+    /// `reverse_speed`, as Halo's Warthog backs up at under half its
+    /// forward speed. Off, v20's: wheeled vehicles back up as fast as they
+    /// go forward (`maxBackwardSpeed` is only a hover vehicle's).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub reverse_limited: bool,
     #[serde(default)]
     pub steering: SteeringSettings,
     /// Blockland's flying forces for a `Wheeled` or `Skis` vehicle; `None`

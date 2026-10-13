@@ -878,13 +878,15 @@ fn a_bot_drives_the_look_steered_buggy_at_a_runner() {
             let ann = Vec3::from(g.state(p).feet);
             closest = closest.min(Vec3::from(v.position).distance(ann));
         }
-        if closest < 15.0 {
+        if closest < 20.0 {
             break;
         }
     }
     assert!(drove, "the bot took the wheel");
     assert!(turned > 0.5, "it turned toward the Runner: {turned}");
-    assert!(closest < 15.0, "it drove at the Runner: {closest}");
+    // From 45 away to within the buggy gun's reach, where it may well
+    // climb back to the gun rather than keep driving.
+    assert!(closest < 20.0, "it drove at the Runner: {closest}");
 }
 
 /// Inside the mode's mini-game a buggy running into a Stomper hurts it as
@@ -918,10 +920,15 @@ fn a_buggy_runs_a_stomper_over() {
     let mut hit = false;
     for _ in 0..5 {
         // Launch the Runner's buggy at the Stomper from a few metres off,
-        // faster than a run-over needs.
+        // faster than a run-over needs, from its side away from the Runner
+        // it is after, so the Runner is not the one in the way.
         let at = Vec3::from(g.state(bot).feet);
-        let from = at + Vec3::new(0.0, 1.0, 5.0);
-        g.s.spawn_vehicle_at(p, BUGGY, from, 0.0, Vec3::new(0.0, 0.0, -16.0))
+        let mut away = at - Vec3::from(g.state(p).feet);
+        away.y = 0.0;
+        let away = away.try_normalize().unwrap_or(Vec3::Z);
+        let from = at + away * 5.0 + Vec3::Y;
+        let yaw = away.x.atan2(away.z);
+        g.s.spawn_vehicle_at(p, BUGGY, from, yaw, -away * 16.0)
             .unwrap();
         for _ in 0..90 {
             g.steps(1);

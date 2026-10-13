@@ -140,6 +140,7 @@ fn tire() -> Tire {
         longitudinal_force: 3000.,
         longitudinal_damping: 300.,
         longitudinal_relaxation: 1.,
+        lateral_grip: 1.,
     }
 }
 
@@ -243,6 +244,8 @@ fn base(id: &str, name: &str, family: Family) -> Definition {
         impact_threshold: 0.,
         impact_damage: 0.,
         strafe_steering: false,
+        throttle_brakes: false,
+        reverse_limited: false,
         steering: SteeringSettings::default(),
         wheeled_flight: None,
         threads: vec![],
@@ -437,6 +440,7 @@ pub fn skis() -> Definition {
         longitudinal_force: 0.,
         longitudinal_damping: 0.,
         longitudinal_relaxation: 0.,
+        lateral_grip: 1.,
     };
     // Springs far too soft for the weight: the skis ride on their body.
     let ski = |x: f32, z: f32| Wheel {

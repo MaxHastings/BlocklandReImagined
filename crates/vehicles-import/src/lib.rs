@@ -351,6 +351,7 @@ pub fn lower(
                 longitudinal_force: number(tire, "longitudinalForce", 10.),
                 longitudinal_damping: number(tire, "longitudinalDamping", 1.),
                 longitudinal_relaxation: number(tire, "longitudinalRelaxation", 1.),
+                lateral_grip: 1.,
             },
             // TankVehicle::onAdd steers all four wheels and powers them all;
             // skis have no engine.
@@ -584,6 +585,8 @@ pub fn lower(
         ),
         impact_damage: number(b, "collDamageMultiplier", 0.),
         strafe_steering,
+        throttle_brakes: false,
+        reverse_limited: false,
         steering: SteeringSettings {
             strafe_rate: number(b, "steeringStrafeSteeringRate", 0.1),
             auto_return: torque_bool(b, "steeringUseAutoReturn", true),

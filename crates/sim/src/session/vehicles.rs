@@ -2133,11 +2133,13 @@ impl Session {
                     // credits them as its mover, which must not turn the
                     // driver's kill into a suicide. Only an undriven one is
                     // run by whoever threw, holds or last pushed it, else
-                    // its owner.
+                    // its owner. The victim's own bump as it closes on
+                    // them never makes it theirs.
                     let owner = match driver {
                         Some(driver) if self.peers.contains_key(&driver.0) => driver.0,
                         _ => self
                             .mover_credit(bri_package_runtime::ops::ObjectRef::Vehicle(vehicle.0))
+                            .filter(|mover| *mover != victim)
                             .unwrap_or(owner.0),
                     };
                     let (shoves, gentle) = self
