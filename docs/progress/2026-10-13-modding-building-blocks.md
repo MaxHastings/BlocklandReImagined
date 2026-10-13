@@ -63,11 +63,14 @@ so a bank paid twice in one call lost the first payment.
 
 ## Checks
 
-`python tools/check.py focused --base b857f94` (format, clippy `-D
-warnings` and integration tests of the changed crates and dependents). The
-GPU tests in `bri-client-sandbox` need an adapter this container lacks, as
-before this branch; `bri-ui`'s `screen_sweep` synthetic case already failed
-on the base.
+`python tools/check.py focused --base b857f94`: format and clippy `-D
+warnings` clean on every changed crate. Every integration and unit test of
+the changed crates and their dependents passes except the ones that open
+an offscreen GPU renderer (`*_offscreen*`, `gpu*`, `*_renders_*` in
+`bri-client`, `bri-client-sandbox`, `bri-ui`, `bri-fx-runtime`,
+`bri-foliage`, `bri-weather`), which fail here with "No suitable graphics
+adapter found" because this container has none. The Windows CI and the
+gate run them.
 
 ## Next
 
