@@ -430,7 +430,7 @@ impl Session {
             }
             peer.player
                 .set_solid(&mut self.simulation.physics, peer.combat.alive);
-            peer.inputs.clear();
+            peer.discard_inputs();
         }
     }
     fn forget_ride(&mut self, rider: OwnerId) {
@@ -514,7 +514,7 @@ impl Session {
             peer.player.push(velocity);
             peer.player
                 .set_solid(&mut self.simulation.physics, peer.combat.alive);
-            peer.inputs.clear();
+            peer.discard_inputs();
         }
         Ok(())
     }

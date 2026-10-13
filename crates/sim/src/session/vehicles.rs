@@ -72,6 +72,11 @@ pub(super) struct Vehicles {
     tumbling: BTreeSet<OwnerId>,
     /// Player/vehicle pairs in contact last tick, so run-overs fire on contact.
     touching: BTreeSet<(OwnerId, VehicleId)>,
+    /// Vehicles each player's own move ran into since the last contact
+    /// check (Torque queues `onCollision` from `Player::updatePos`'s
+    /// hits): boarding takes one of these, not a body merely resting on
+    /// or walking across a vehicle.
+    pub(super) struck: BTreeSet<(OwnerId, VehicleId)>,
     pub(super) scanned: bool,
     /// Stand-ins of players on foot part way through openings, beyond the
     /// partners, for this tick's physics step: who, the stand-in's body
@@ -680,7 +685,7 @@ impl Session {
                 position,
                 forward.x.atan2(-forward.z),
             )?;
-            peer.inputs.clear();
+            peer.discard_inputs();
             self.follow_player_mounts();
             return Ok(Some((position, scale)));
         }
@@ -1482,7 +1487,12 @@ impl Session {
                 }
                 let above = feet.y > v.transform.position[1] + MOUNT_ABOVE * v.scale;
                 let free = v.seats.iter().any(|s| s.occupant.is_none());
-                let boards = above && !v.seats.is_empty() && may_board;
+                // v20 boards from `onCollision`, which only a hit of the
+                // player's own move raises: landing on the vehicle, not
+                // standing or walking on it (a rider jetted out onto its
+                // roof walks off it without being seated again).
+                let landed = self.vehicles.struck.contains(&(*owner, v.id));
+                let boards = above && landed && !v.seats.is_empty() && may_board;
                 if boards && self.can_ride(*owner, v.owner.0) {
                     if free {
                         boarding.push((*owner, v.id));
@@ -1502,6 +1512,7 @@ impl Session {
             .copied()
             .collect();
         self.vehicles.touching = touching;
+        self.vehicles.struck.clear();
         for (owner, vehicle, vehicle_owner) in refused {
             if begun.contains(&(owner, vehicle)) {
                 let message = self.ride_refusal(owner, vehicle_owner);
@@ -2116,7 +2127,7 @@ impl Session {
                         peer.player.push(Vec3::from(velocity));
                         peer.player
                             .set_solid(&mut self.simulation.physics, peer.combat.alive);
-                        peer.inputs.clear();
+                        peer.discard_inputs();
                     }
                 }
                 Intent::Effect {

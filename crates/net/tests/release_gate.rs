@@ -1141,6 +1141,16 @@ const MARIO_BRICK: [f32; 3] = [-4.0, 0.3, 14.0];
 const CHIEF_BRICK: [f32; 3] = [4.0, 0.3, 14.0];
 const PAD: [f32; 3] = [-30.0, 0.1, 10.0];
 const STOMPER_SPAWN: [f32; 3] = [-30.0, 0.1, -30.0];
+/// Where the two stand for the fight, 20 apart and clear of the bricks.
+const MARIO_SPOT: Vec3 = Vec3::new(-10.0, 0.0, -20.0);
+const CHIEF_SPOT: Vec3 = Vec3::new(10.0, 0.0, -20.0);
+/// Where Chief steps up to for his rocket, 10 from Mario. The Halo rocket
+/// launcher's shot spreads (`spread` 0.001667: up to 1.5 degrees, v20's
+/// random turn), and Mario is narrow (0.37 either side of his middle):
+/// from 20 apart about one rocket in five went by him. From here every
+/// rocket aimed at his middle lands on him. (Mario's rifle stays at 20: from
+/// 10 its burst kills Chief before he can fire.)
+const ROCKET_SPOT: Vec3 = Vec3::new(0.0, 0.0, -20.0);
 
 fn script(d: &mut dyn Driver, steps: &mut Steps) {
     // A step that failed is already a FAIL line; anything else that
@@ -1458,17 +1468,17 @@ fn run(d: &mut dyn Driver, steps: &mut Steps) -> Result<(), String> {
     // Step 5: Goombas (Stompers) from a bot spawn brick, run over.
     let mut stomper = 0;
     let pad = Vec3::from(STOMPER_SPAWN) + Vec3::new(0.0, 0.0, 5.0);
-    let walked = leave_warthog(d, pad);
-    steps.known(
+    // A failed leave is a FAIL; the fallback only lets the later steps run.
+    let walked = steps.run(
         "leave the Warthog on foot (to set the Stomper brick)",
         || {
-            walked.as_ref().map_err(|e| anyhow::anyhow!("{e:#}"))?;
+            leave_warthog(d, pad)?;
             Ok("off the roof and at the Stomper pad".into())
         },
     );
     if walked.is_err() {
-        // Where the reseated Warthog went is anyone's guess: a fresh one
-        // on its pad, out of the way, and Max back where he was going.
+        // Where the Warthog went is anyone's guess: a fresh one on its
+        // pad, out of the way, and Max back where he was going.
         steps.run("out by a respawn, a fresh Warthog (Stomper brick)", || {
             respawn_as_mario(d, pad)?;
             hog = fresh_warthog(d, hog)?;
@@ -1617,9 +1627,8 @@ fn run(d: &mut dyn Driver, steps: &mut Steps) -> Result<(), String> {
         Ok("in Max's game".into())
     })?;
     let back = Vec3::from(CHIEF_BRICK) + Vec3::new(0.0, 0.0, 3.0);
-    let walked = leave_warthog(d, back);
-    steps.known("leave the Warthog on foot (to set the Chief brick)", || {
-        walked.as_ref().map_err(|e| anyhow::anyhow!("{e:#}"))?;
+    let walked = steps.run("leave the Warthog on foot (to set the Chief brick)", || {
+        leave_warthog(d, back)?;
         Ok("off the roof and back at the spawn".into())
     });
     if walked.is_err() {
@@ -1697,27 +1706,29 @@ fn run(d: &mut dyn Driver, steps: &mut Steps) -> Result<(), String> {
             (speed - 9.27).abs() < 0.3,
             "ran at up to {speed:.2} units/s (Halo 9.27)"
         );
-        // A tap of about a tenth of a second. Found by this gate: standing
-        // still, Chief creeps up off the floor (about 0.01 units/s) until
-        // the motor no longer counts him grounded, and the Halo controller
-        // drops a press made then; a player presses again.
+        // A tap of about a tenth of a second, after standing still a
+        // while. Found by this gate: a body whose controller owns its
+        // running crept up off the floor (the motor's 0.01 contact
+        // elasticity, which nothing took off again) until it was no longer
+        // grounded, and the controller dropped a press made then. Every
+        // press must take now.
         let mut lost = 0;
         let mut height = 0.0;
         for _ in 0..3 {
+            d.wait(600)?;
             let grounded = d
                 .view(Who::Friend)
                 .player(friend)
                 .is_some_and(|p| p.grounded);
             height = jump(d, Who::Friend, 12)?.0;
-            if height > 2.0 {
-                break;
+            if height <= 2.0 {
+                lost += 1;
+                eprintln!("[gate] Chief's jump press was lost (grounded before the wait: {grounded})");
             }
-            lost += 1;
-            eprintln!("[gate] Chief's jump press was lost (grounded before the wait: {grounded})");
         }
         ensure!(
-            height > 2.0,
-            "Chief jumped {height:.2} (Halo: about his height)"
+            lost == 0 && height > 2.0,
+            "Chief jumped {height:.2} (Halo: about his height); {lost} of 3 presses lost standing still"
         );
         Ok(format!(
             "ran at {speed:.2} units/s (Halo 9.27), {ran:.1} units; jumped {height:.2} \
@@ -1740,19 +1751,58 @@ fn run(d: &mut dyn Driver, steps: &mut Steps) -> Result<(), String> {
         Ok("rifle and launcher".into())
     })?;
     steps.run("blow each other up in the mini-game", || {
+        // The host clears the Stompers first (`/clearBots`), as Max would
+        // before a duel: their brick keeps its setting. Then both stand,
+        // alive, on known spots facing each other.
+        d.command(
+            Who::Max,
+            Command::Admin(bri_admin::Request::new(bri_admin::Action::ClearBots)),
+            None,
+        )?;
+        d.wait(30)?;
         revive(d)?;
-        // Apart, facing each other.
-        walk_to(d, Who::Friend, Vec3::new(10.0, 0.0, -20.0), 1.0)?;
-        walk_to(d, Who::Max, Vec3::new(-10.0, 0.0, -20.0), 1.0)?;
-        let chest = |d: &dyn Driver, o: OwnerId| d.view(Who::Max).feet(o) + Vec3::Y * 1.2;
+        if !d.view(Who::Friend).alive(friend) {
+            for _ in 0..10 {
+                d.command(Who::Friend, Command::Respawn, None).ok();
+                d.wait(100)?;
+                if d.view(Who::Friend).alive(friend) {
+                    break;
+                }
+            }
+        }
+        ensure!(
+            d.view(Who::Max).alive(max) && d.view(Who::Friend).alive(friend),
+            "not both alive before the fight"
+        );
+        // Where Chief stood at each point, as the host sent it.
+        let mut chief = Vec::new();
+        let mut note = |d: &dyn Driver, at: &str| {
+            let p = d.view(Who::Friend).player(friend);
+            chief.push(format!(
+                "{at}: {:?}",
+                p.map(|p| (p.feet, p.velocity, p.grounded))
+            ));
+        };
+        walk_to(d, Who::Friend, CHIEF_SPOT, 1.0)?;
+        walk_to(d, Who::Max, MARIO_SPOT, 1.0)?;
+        d.wait(60)?;
+        note(d, "on his spot");
+        // The middle of a body, as each side sees it.
+        let middle = |d: &dyn Driver, who: Who, o: OwnerId| {
+            let view = d.view(who);
+            let p = view.player(o).expect("no player");
+            let height = view.archetypes().resolve(p.archetype).movement.stand_height;
+            Vec3::from(p.feet) + Vec3::Y * height * p.scale * 0.5
+        };
         // Max (Mario) fires the rifle at Chief.
         let max_health = d.view(Who::Max).vitals(max).unwrap().health;
         let friend_health = d.view(Who::Friend).vitals(friend).unwrap().health;
         equip(d, Who::Max, RIFLE)?;
         d.wait(200)?;
-        let target = chest(d, friend);
+        let target = middle(d, Who::Max, friend);
         let rounds = burst_at(d, Who::Max, target, 120)?;
         d.wait(30)?;
+        note(d, "shot");
         let hit_friend = {
             let v = d.view(Who::Friend).vitals(friend).unwrap();
             !v.alive || v.health < friend_health
@@ -1767,25 +1817,63 @@ fn run(d: &mut dyn Driver, steps: &mut Steps) -> Result<(), String> {
             d.command(Who::Friend, Command::Respawn, None).ok();
             d.wait(240)?;
         }
+        walk_to(d, Who::Friend, ROCKET_SPOT, 1.0)?;
         equip(d, Who::Friend, ROCKETS)?;
+        note(d, "launcher out");
         d.wait(200)?;
-        let target = chest(d, max);
+        note(d, "firing");
+        let max_at = d.view(Who::Friend).feet(max);
+        let max_own = d.view(Who::Max).feet(max);
+        let target = middle(d, Who::Friend, max);
+        let chief_eye = d.view(Who::Friend).eye(friend);
         let rocket = fire_at(d, Who::Friend, target)?;
-        d.wait(120)?;
+        let launched = rocket.and_then(|id| {
+            d.view(Who::Friend)
+                .weapons()
+                .fired()
+                .find(|p| p.id == id)
+                .map(|p| (p.origin, p.velocity.normalize_or_zero()))
+        });
+        // Where the rocket went, as the host saw it, until it is gone.
+        let mut flight = Vec::new();
+        for _ in 0..60 {
+            let at = rocket.and_then(|id| {
+                d.view(Who::Friend)
+                    .weapons()
+                    .fired()
+                    .find(|p| p.id == id)
+                    .map(|p| p.position)
+            });
+            match at {
+                Some(at) => flight.push(at),
+                None if !flight.is_empty() => break,
+                None => {}
+            }
+            d.wait(2)?;
+        }
+        d.wait(60)?;
         let v = d.view(Who::Max).vitals(max).unwrap();
         let hit_max = !v.alive || v.health < max_health;
         ensure!(rocket.is_some(), "Chief's rocket never left");
         ensure!(
             (hit_friend || shield < 75.0) && hit_max,
             "Mario fired {rounds} rounds (Chief hit: {hit_friend}, shield {shield}); \
-             Chief's rocket hit Mario: {hit_max} (health {}, alive {})",
+             Chief's rocket hit Mario: {hit_max} (health {}, alive {}); \
+             aimed at {target} from Chief's eye {chief_eye} (Mario at {max_at}, by his own view {max_own}); \
+             launched (from, heading) {launched:?}, flew {:?} .. {:?}; Chief (feet, \
+             velocity, grounded) {chief:?}",
             v.health,
-            v.alive
+            v.alive,
+            flight.first(),
+            flight.last(),
         );
         Ok(format!(
             "Mario's {rounds} rifle rounds: Chief's shield {shield}, hurt {hit_friend}; \
-             Chief's rocket: Mario health {}, alive {}",
-            v.health, v.alive
+             Chief's rocket at Mario's middle {target} from {chief_eye}: launched {launched:?}, \
+             last seen at {:?}; Mario health {}, alive {}",
+            flight.last(),
+            v.health,
+            v.alive
         ))
     })?;
     steps.run("a respawn keeps the chosen bodies", || {
@@ -1840,16 +1928,30 @@ fn shield(state: &bri_sim::session::PackageStateView, owner: OwnerId) -> f64 {
         .unwrap_or(-1.0)
 }
 
-/// Max out of the Warthog (jet), off it before v20's MinMountTime lets
-/// touching it seat him again, and on foot to `back`.
+/// Max out of the Warthog (jet) and on foot to `back`.
 ///
-/// Found by this gate: jetting out leaves Mario on the Warthog's roof,
-/// where his controller barely moves him, and once MinMountTime has passed
-/// touching it seats him again; then this fails and Max gets out by
-/// [`respawn_as_mario`], as a player would.
+/// v20's `Armor::doDismount` puts a rider 2.2 up the seat, which on the
+/// Warthog's box hull is over its roof: a body that cannot jet (Mario)
+/// lands on the roof. Found by this gate: standing there seated him again
+/// once MinMountTime passed, before Mario (who gets going slowly) could
+/// walk off; v20 seats only a player who lands on a vehicle. He walks off
+/// the roof on the seat's side, as a player does.
 fn leave_warthog(d: &mut dyn Driver, back: Vec3) -> Result<()> {
     let max = d.owner(Who::Max);
     let look = d.look(Who::Max);
+    let hog = d
+        .view(Who::Max)
+        .vitals(max)
+        .and_then(|v| v.mounted)
+        .map(|m| m.0)
+        .context("not in a vehicle")?;
+    // Off the driver's side: the Warthog's driver sits left of its middle
+    // (its mount0 at x -0.683); the other way is the gun on top.
+    let pose = d.view(Who::Max).vehicle_pose(hog).context("no Warthog")?;
+    let at = Vec3::from(pose.position);
+    let turn = glam::Quat::from_array(pose.rotation);
+    let seated = turn.inverse() * (d.view(Who::Max).feet(max) - at);
+    let side = turn * Vec3::NEG_X;
     d.hold(
         Who::Max,
         MoveInput {
@@ -1858,27 +1960,37 @@ fn leave_warthog(d: &mut dyn Driver, back: Vec3) -> Result<()> {
         },
         2,
     )?;
-    d.hold(Who::Max, released(look), 2)?;
-    ensure!(
-        d.view(Who::Max)
-            .vitals(max)
-            .and_then(|v| v.mounted)
-            .is_none(),
-        "the jet did not take him out"
-    );
-    for _ in 0..12 {
-        let at = d.view(Who::Max).feet(max);
-        let to = back - at;
-        d.hold(
-            Who::Max,
-            MoveInput {
-                forward: 1.0,
-                jump: true,
-                yaw: to.x.atan2(-to.z),
-                ..Default::default()
-            },
-            6,
-        )?;
+    let jetted = turn.inverse() * (d.view(Who::Max).feet(max) - at);
+    // Out and straight off the roof in one held move, as a player keeps
+    // the key down (a driver that let go between steps would leave Mario
+    // hanging at the host, which holds a body whose moves stop coming).
+    // In the air Mario's controller can carry him the other way first, and
+    // on the roof he turns and gets going slowly, so the key stays down
+    // four seconds.
+    d.keep(
+        Who::Max,
+        MoveInput {
+            forward: 1.0,
+            yaw: side.x.atan2(-side.z),
+            ..Default::default()
+        },
+        480,
+    )?;
+    d.hold(Who::Max, released(d.look(Who::Max)), 1)?;
+    let feet = d.view(Who::Max).feet(max);
+    let seat = d.view(Who::Max).vitals(max).and_then(|v| v.mounted);
+    ensure!(seat.is_none(), "seated again ({seat:?}) at {feet}");
+    if feet.y >= at.y + 1.0 {
+        let now = d.view(Who::Max).vehicle_pose(hog).context("no Warthog")?;
+        let local =
+            glam::Quat::from_array(now.rotation).inverse() * (feet - Vec3::from(now.position));
+        bail!(
+            "still on the Warthog after four seconds, at {feet}: in its frame seated at \
+             {seated}, jetted to {jetted}, now {local}; Warthog at {at} moving {:?}, now at \
+             {:?}",
+            pose.velocity,
+            now.position
+        );
     }
     walk_to(d, Who::Max, back, 0.5)?;
     ensure!(
