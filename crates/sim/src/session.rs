@@ -53,6 +53,9 @@ mod tutorial;
 mod world_shapes;
 pub use tutorial::{Abilities, BRICK_HAND_IMAGES, BrickHand};
 mod bodies;
+pub use bodies::AbsentBody;
+mod tuning;
+pub use tuning::apply_tuned;
 mod grips;
 pub use grips::{body_grips, shape_grips};
 mod riding;
@@ -1123,6 +1126,11 @@ pub struct Session {
     /// v20's player datablocks, then every enabled package's archetypes.
     /// Clients receive the table with the checkpoint.
     archetypes: crate::archetype::Archetypes,
+    /// Bodies the host's enabled Add-Ons have that this game left out, each
+    /// with why (`set_absent_bodies`), so `/body` can say so.
+    absent_bodies: Vec<bodies::AbsentBody>,
+    /// Bodies the host tuned while the game runs (`/tune`).
+    tuned: tuning::Tuned,
     /// Mount points by body model, for bodies that declare none.
     body_mounts: BTreeMap<String, Vec<crate::archetype::MountPoint>>,
     /// Bodies' hands and images' barrels, for shots from the muzzle.
@@ -1162,6 +1170,8 @@ impl Session {
         Self {
             events: Default::default(),
             archetypes: Default::default(),
+            absent_bodies: Vec::new(),
+            tuned: Default::default(),
             body_mounts: BTreeMap::new(),
             grips: Default::default(),
             breakables: Default::default(),

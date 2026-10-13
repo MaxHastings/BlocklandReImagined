@@ -1099,6 +1099,15 @@ pub struct Delta {
     /// The live environment, whole, whenever it changed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub environment: Option<bri_content::atmosphere::Settings>,
+    /// Every body the host tuned while the game runs (`/tune`), whole and
+    /// without its controller's module, whenever one changed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub archetypes: Option<
+        Vec<(
+            bri_sim::archetype::ArchetypeId,
+            bri_sim::archetype::Archetype,
+        )>,
+    >,
     /// The weapons pack's bound server settings, whole, whenever one changed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub weapon_settings: Option<BTreeMap<String, String>>,
@@ -1133,6 +1142,7 @@ impl Delta {
             targets,
             map_lights,
             environment,
+            archetypes,
             weapon_settings,
             entities,
             world_shapes,
@@ -1153,6 +1163,7 @@ impl Delta {
             && targets.is_none()
             && map_lights.is_none()
             && environment.is_none()
+            && archetypes.is_none()
             && weapon_settings.is_none()
             && entities.is_none()
             && world_shapes.is_empty()

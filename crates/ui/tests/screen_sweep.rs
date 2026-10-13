@@ -66,6 +66,7 @@ fn screens() -> Vec<(ScreenId, &'static str)> {
         (ScreenId::About, "about"),
         (ScreenId::Console, "console"),
         (ScreenId::AddOns, "add-ons"),
+        (ScreenId::Tune, "tune-body"),
         (ScreenId::PackageDownload, "add-on-download"),
         (ScreenId::AddOnMismatch, "add-on-mismatch"),
         (ScreenId::ServerConfig, "server-config"),
