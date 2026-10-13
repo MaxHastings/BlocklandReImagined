@@ -129,9 +129,7 @@ impl Lab {
     fn steps(&mut self, n: usize) {
         for _ in 0..n {
             self.moves += 1;
-            self.s
-                .movement(self.p, self.moves, self.look.clone())
-                .unwrap();
+            self.s.movement(self.p, self.moves, self.look).unwrap();
             self.s.step().unwrap();
         }
     }
