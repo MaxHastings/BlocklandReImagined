@@ -56,6 +56,11 @@ pub struct Controls {
     /// A mouse driver's head returning on v20's 32 ms ticks, which
     /// `head_pitch` shows between.
     driver_head: HeadTicks,
+    /// The heading of a vehicle that steers toward its driver's look, as
+    /// last seen: the head turns back by each turn the vehicle makes, so
+    /// the view holds its direction in the world and the vehicle turns to
+    /// meet it ([`Self::hold_world_look`]).
+    look_heading: Option<f32>,
     /// A passenger's body turn on the seat (`mRot.z` relative to the mount).
     body_turn: f32,
     /// Mounted on anything (a vehicle, a player-type mount, another player).
@@ -419,6 +424,7 @@ impl Controls {
             self.driver_head = HeadTicks::default();
             self.body_turn = 0.0;
             self.free_yaw = 0.0;
+            self.look_heading = None;
         }
         self.ride = ride;
     }
@@ -478,6 +484,20 @@ impl Controls {
             }
             _ => {}
         }
+    }
+    /// Driving a vehicle that steers toward the look (`toward_look`), at
+    /// `heading`: the head turns back by however far the vehicle turned
+    /// since the last frame, holding the view's direction in the world.
+    /// `None` drives anything else.
+    pub fn hold_world_look(&mut self, heading: Option<f32>) {
+        let heading = heading.filter(|h| h.is_finite());
+        if let (Some(now), Some(before)) = (heading, self.look_heading)
+            && self.seat_look() == Some(SeatLook::StrafeDriver)
+        {
+            self.free_yaw =
+                (self.free_yaw - wrap(now - before)).clamped(-MAX_FREELOOK, MAX_FREELOOK);
+        }
+        self.look_heading = heading;
     }
     /// A passenger's body turn on the seat, radians (right positive); 0 in
     /// any other seat.

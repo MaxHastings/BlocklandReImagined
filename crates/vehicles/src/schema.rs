@@ -92,6 +92,13 @@ pub struct Wheel {
     /// `WheeledVehicleSpring::antiSway`: pushes this side down by the
     /// difference in extension from the opposite wheel.
     pub anti_sway: f32,
+    /// Resists the spring extending again, force per unit of extension
+    /// speed over the spring's length, as `damping` resists compression.
+    /// Torque's damper has no rebound (0, the default): a soft, long spring
+    /// then throws the chassis back up. A loose suspension that soaks a
+    /// landing without pogoing (an off-road truck) sets it.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub rebound_damping: f32,
     pub tire: Tire,
     pub steering: f32,
     pub powered: bool,
@@ -235,6 +242,35 @@ pub struct SteeringSettings {
     pub auto_return_rate: f32,
     /// `steeringAutoReturnMaxSpeed`: the throttle at which the return is full.
     pub auto_return_max_speed: f32,
+    /// The driver's mouse looks around freely and the wheels steer toward
+    /// where they look: the view holds its direction while the vehicle
+    /// turns to meet it, at up to `strafe_rate` a 32 ms tick and no more
+    /// than `max_steering`. Neither the strafe keys nor auto-return steer.
+    /// Not a v20 mode; an Add-On's off-roader in the style of shooters
+    /// where you drive where you look.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub toward_look: bool,
+    /// The share of `max_steering` the driver can still turn to at
+    /// `max_speed`, narrowing in a straight line from the full lock
+    /// standing: a fast truck that turns sharply in a yard but cannot spin
+    /// itself round at full speed sets about 0.4. 1, the default, is v20's
+    /// lock at any speed.
+    #[serde(default = "one", skip_serializing_if = "is_one")]
+    pub speed_lock: f32,
+}
+impl SteeringSettings {
+    /// The share of the full lock the driver may steer to at `speed`.
+    pub fn lock_at(&self, speed: f32, max_speed: f32) -> f32 {
+        if self.speed_lock == 1. {
+            return 1.;
+        }
+        let t = if max_speed > 0. {
+            (speed.abs() / max_speed).min(1.)
+        } else {
+            1.
+        };
+        1. + (self.speed_lock - 1.) * t
+    }
 }
 impl Default for SteeringSettings {
     fn default() -> Self {
@@ -243,6 +279,8 @@ impl Default for SteeringSettings {
             auto_return: true,
             auto_return_rate: 0.9,
             auto_return_max_speed: 10.,
+            toward_look: false,
+            speed_lock: 1.,
         }
     }
 }
@@ -269,6 +307,12 @@ pub struct AnimationThread {
 }
 fn one() -> f32 {
     1.
+}
+fn is_one(x: &f32) -> bool {
+    *x == 1.
+}
+fn is_zero(x: &f32) -> bool {
+    *x == 0.
 }
 /// An emitter a vehicle runs at one of its model's nodes while its speed is
 /// in range: an Add-On script mounting an emitting image (`mountImage`)
@@ -416,6 +460,20 @@ pub struct Definition {
     /// Animations the model plays by itself.
     #[serde(default)]
     pub threads: Vec<AnimationThread>,
+    /// The engine's torque against wheel speed: `[share of the top wheel
+    /// speed, share of engine_force]` points, by rising speed, joined by
+    /// straight lines and held flat past the last. Empty is Torque's
+    /// straight fall from full torque standing to none at `max_speed`
+    /// (`[[0, 1], [1, 0]]`). A truck that pulls hard to near its top speed
+    /// says `[[0, 1], [0.8, 0.9], [1, 0]]`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub engine_curve: Vec<[f32; 2]>,
+    /// Multiplies the gravity this vehicle falls with (v20's 20 units per
+    /// second squared), and the weight its springs, hover and buoyancy
+    /// carry. `None` is 1: a floaty off-roader that hangs in the air off a
+    /// jump sets less.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gravity_scale: Option<f32>,
     /// Actor look pitch range, native up-positive radians, from PlayerData
     /// `maxLookAngle`/`minLookAngle`. Bounds a gunner's barrel.
     pub look_pitch: [f32; 2],
@@ -540,6 +598,31 @@ impl Definition {
     /// node black (`setNodeColor("ALL", "0 0 0 1")`) the moment damage
     /// reaches `maxDamage`, so every vehicle of those classes, an Add-On's
     /// included, chars; PlayerData mounts die like players and keep theirs.
+    /// The gravity this vehicle falls with: v20's, times `gravity_scale`.
+    pub fn gravity(&self) -> f32 {
+        crate::world::VEHICLE_GRAVITY * self.gravity_scale.unwrap_or(1.)
+    }
+    /// The share of `engine_force` a powered wheel gets turning at
+    /// `share` of its top speed (`max_speed` over its radius), past which
+    /// it gets none: `engine_curve`, else Torque's straight fall.
+    pub fn engine_torque(&self, share: f32) -> f32 {
+        if share > 1. {
+            return 0.;
+        }
+        let Some(first) = self.engine_curve.first() else {
+            return 1. - share;
+        };
+        if share <= first[0] {
+            return first[1];
+        }
+        for w in self.engine_curve.windows(2) {
+            let ([x0, y0], [x1, y1]) = (w[0], w[1]);
+            if share <= x1 {
+                return y0 + (y1 - y0) * (share - x0) / (x1 - x0);
+            }
+        }
+        self.engine_curve.last().map_or(0., |p| p[1])
+    }
     pub fn wreck_color(&self) -> Option<[f32; 4]> {
         matches!(self.family, Family::Wheeled | Family::Flying | Family::Ball)
             .then_some([0., 0., 0., 1.])
@@ -602,7 +685,7 @@ impl Definition {
             SeatRole::Gunner
         } else if !s.controls {
             SeatRole::Passenger
-        } else if self.strafe_steering && strafe_steering {
+        } else if self.steering.toward_look || (self.strafe_steering && strafe_steering) {
             SeatRole::StrafeDriver
         } else {
             SeatRole::MouseDriver
@@ -764,6 +847,30 @@ impl Pack {
                     "invalid flight damping"
                 );
             }
+            ensure!(
+                d.engine_curve.len() <= 16
+                    && d.engine_curve.iter().all(|[x, y]| x.is_finite()
+                        && y.is_finite()
+                        && (0. ..=1.).contains(x)
+                        && (0. ..=4.).contains(y))
+                    && d.engine_curve.windows(2).all(|w| w[0][0] < w[1][0]),
+                "invalid engine curve: up to 16 [speed share 0..1, torque share 0..4] points by rising speed"
+            );
+            ensure!(
+                d.steering.speed_lock.is_finite() && (0. ..=1.).contains(&d.steering.speed_lock),
+                "invalid steering speed lock: 0 to 1"
+            );
+            ensure!(
+                d.gravity_scale
+                    .is_none_or(|g| g.is_finite() && (0. ..=4.).contains(&g)),
+                "invalid gravity scale: 0 to 4"
+            );
+            ensure!(
+                d.wheels
+                    .iter()
+                    .all(|w| w.rebound_damping.is_finite() && w.rebound_damping >= 0.),
+                "invalid rebound damping"
+            );
             if let Some(s) = &d.smash {
                 ensure!(
                     [s.speed, s.radius, s.max_volume, s.force]
@@ -982,6 +1089,7 @@ mod tests {
             spring: 1.0,
             damping: 1.0,
             anti_sway: 0.0,
+            rebound_damping: 0.,
             tire: Tire::default(),
             steering,
             powered: false,

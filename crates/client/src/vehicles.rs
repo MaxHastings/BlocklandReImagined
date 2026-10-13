@@ -1136,6 +1136,7 @@ pub(crate) mod tests {
             spring: 6000.0,
             damping: 800.0,
             anti_sway: 0.0,
+            rebound_damping: 0.,
             tire: Default::default(),
             steering: 1.0,
             powered: false,

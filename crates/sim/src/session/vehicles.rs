@@ -221,6 +221,7 @@ pub fn driver_controls(
         fire,
         strafe: input.right,
         look_delta: [wrap(input.yaw - last.0), wrap_half(input.pitch - last.1)],
+        look_yaw: input.head_yaw,
         strafe_steering_off: strafe_off,
         auto_return_off,
         ..Default::default()

@@ -180,12 +180,19 @@ pub(super) fn update(
                     b.add_force(Vec3::Y * (n * (1. + d.restitution) * zero), wake);
                 }
             }
-            // The damper only resists compression.
-            let damping = (w.damping * -up.dot(velocity) / length).max(0.);
+            // Torque's damper only resists compression; an Add-On's
+            // `rebound_damping` resists the spring extending again, never
+            // pulling the wheel off the ground harder than it pushes.
+            let closing = -up.dot(velocity);
+            let damping = if closing >= 0. {
+                w.damping * closing / length
+            } else {
+                w.rebound_damping * closing / length
+            };
             let anti_sway = opposite[i]
                 .and_then(|o| extensions[o])
                 .map_or(0., |other| ((other - s.extension) * w.anti_sway).max(0.));
-            let load = spring + damping + anti_sway;
+            let load = (spring + damping + anti_sway).max(0.);
             b.add_force_at_point(up * load, at, wake);
             // The tyre's own axes along the ground.
             let axle = right * cos + forward * (sin * w.steering);
@@ -230,12 +237,7 @@ pub(super) fn update(
         // The engine turns powered wheels, less as they near maxWheelSpeed;
         // the tyre's pull turns every wheel back.
         let scale_torque = if w.powered {
-            let max = d.max_speed / radius;
-            if tire.spin.abs() > max {
-                0.
-            } else {
-                1. - tire.spin.abs() / max
-            }
+            d.engine_torque(tire.spin.abs() / (d.max_speed / radius))
         } else {
             0.
         };

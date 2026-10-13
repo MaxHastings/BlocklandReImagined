@@ -423,6 +423,16 @@ fn turning(
     let (vehicles, world) = stand(definition, scale, budget)?;
     let mut run = Run::new(vehicles, world)?;
     let mut look = definition.max_steering * lock;
+    // One that steers toward its driver's look (`toward_look`) is held on
+    // that lock by looking there, every tick; full lock by looking well
+    // past it, as a bot driving it does.
+    let toward = definition.steering.toward_look.then(|| {
+        if lock >= 1.0 {
+            bri_motor::player::MAX_FREELOOK
+        } else {
+            look
+        }
+    });
     let mut samples = vec![];
     let mut speed = 0.0;
     let mut target = TURN_SPACING;
@@ -434,6 +444,7 @@ fn turning(
             let state = run.step(Controls {
                 throttle: crate::route::DRIVE_THROTTLE,
                 look_delta: [look, 0.0],
+                look_yaw: toward.unwrap_or(0.0),
                 ..Default::default()
             })?;
             look = 0.0;
@@ -464,6 +475,7 @@ fn turning(
                 } else {
                     0.0
                 },
+                look_yaw: toward.unwrap_or(0.0),
                 ..Default::default()
             })?;
             speed = state.speed;

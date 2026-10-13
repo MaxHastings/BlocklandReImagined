@@ -280,9 +280,18 @@ def carbine(root):
 
 # --- the Dune Buggy ----------------------------------------------------------
 
-TIRE = dict(static_friction=4.0, kinetic_friction=3.0, lateral_force=16000.0, lateral_damping=3500.0,
-            lateral_relaxation=0.02, longitudinal_force=14000.0, longitudinal_damping=1800.0,
-            longitudinal_relaxation=0.02)
+# The buggy is the Playground's stand-in for a Warthog-style off-roader:
+# heavy, four-wheel drive and four-wheel steering, long loose springs that
+# soak a landing (rebound damping), rear tyres that step out first so it
+# drifts, an engine that pulls hard to near its top speed, a little less
+# gravity so it hangs off a jump, and steering toward where the driver
+# looks with the lock narrowing at speed. `crates/vehicles/tests/handling.rs`
+# measures each; placeholders shaped by the real vehicle until measured
+# numbers replace them.
+TIRE = dict(lateral_force=42000.0, lateral_damping=9000.0, lateral_relaxation=0.02,
+            longitudinal_force=40000.0, longitudinal_damping=5000.0, longitudinal_relaxation=0.02)
+FRONT_GRIP = (3.2, 2.4)
+REAR_GRIP = (2.6, 1.8)
 WHEEL_RADIUS = 0.55
 
 
@@ -330,9 +339,16 @@ def buggy(root):
         'buggy_tire': write(assets / 'textures' / 'buggy_tire.png', flat([18, 18, 18], seed=7)),
     }
 
-    def wheel(x, z, steering, powered):
-        return {'position': [x, 0.0, z], 'radius': WHEEL_RADIUS, 'rest_length': 0.35, 'spring': 3000.0,
-                'damping': 650.0, 'anti_sway': 8.0, 'tire': TIRE, 'steering': steering, 'powered': powered,
+    def wheel(x, z):
+        rear = z > 0
+        grip = REAR_GRIP if rear else FRONT_GRIP
+        tire = dict(static_friction=grip[0], kinetic_friction=grip[1], **TIRE)
+        # A quarter of the weight holds each spring near half its travel.
+        # The hubs mount high in the wheel wells, so the long travel hangs
+        # below and the deck stays low enough to jump onto.
+        return {'position': [x, 0.35, z], 'radius': WHEEL_RADIUS, 'rest_length': 0.7, 'spring': 9000.0,
+                'damping': 2600.0, 'rebound_damping': 2400.0, 'anti_sway': 6000.0, 'tire': tire,
+                'steering': -0.35 if rear else 1.0, 'powered': True,
                 'model': 'models/tire.shape.json', 'model_rotation': [0.0, 0.0, 0.0, 1.0]}
 
     hull = [[x, y, z] for x in (-1.0, 1.0) for y in (-0.1, 1.2) for z in (-2.0, 2.0)]
@@ -350,8 +366,7 @@ def buggy(root):
              'pose': 'sit' if i < 2 else 'root', 'controls': i == 0, 'weapon': i == 2}
             for i, at in enumerate(seats)
         ],
-        'wheels': [wheel(x, z, 1.0 if z < 0 else 0.0, z > 0)
-                   for z in (-1.45, 1.45) for x in (-1.15, 1.15)],
+        'wheels': [wheel(x, z) for z in (-1.45, 1.45) for x in (-1.15, 1.15)],
         # The gunner's post fires bolts where they look, turning about the
         # post's top.
         'weapon': {'projectile': 'playground-buggy:projectile/bolt',
@@ -366,9 +381,9 @@ def buggy(root):
         'collision_hulls': [hull],
         'bounds_min': [-1.15 - 0.22, -WHEEL_RADIUS, -2.0],
         'bounds_max': [1.15 + 0.22, 2.4, 2.0],
-        'mass': 300.0,
-        'mass_center': [0.0, 0.2, 0.0],
-        'inertia_box': [2.6, 1.6, 4.0],
+        'mass': 900.0,
+        'mass_center': [0.0, 0.05, 0.0],
+        'inertia_box': [2.8, 1.6, 4.4],
         'density': 4.0,
         'drag': 0.4,
         'friction': 0.8,
@@ -381,12 +396,13 @@ def buggy(root):
         'initial_explosion_offset': 0.0,
         'final_explosion_offset': 0.0,
         'mount_distance': 3.0,
-        'engine_force': 12000.0,
-        'engine_brake': 1500.0,
-        'brake_force': 4000.0,
-        'max_speed': 30.0,
+        'engine_force': 22000.0,
+        'engine_curve': [[0.0, 1.0], [0.7, 0.95], [1.0, 0.0]],
+        'engine_brake': 4500.0,
+        'brake_force': 12000.0,
+        'max_speed': 36.0,
         'reverse_speed': 12.0,
-        'max_steering': 0.6,
+        'max_steering': 0.55,
         'thrust': 0.0,
         'reverse_thrust': 0.0,
         'lift': 0.0,
@@ -400,6 +416,9 @@ def buggy(root):
         'impact_threshold': 15.0,
         'impact_damage': 0.05,
         'strafe_steering': False,
+        'steering': {'strafe_rate': 0.25, 'auto_return': True, 'auto_return_rate': 0.9,
+                     'auto_return_max_speed': 10.0, 'toward_look': True, 'speed_lock': 0.6},
+        'gravity_scale': 0.85,
         'look_pitch': [-1.5, 1.5],
         'underwater_speeds': [5.0, 3.0, 3.0],
         'camera': {'max_dist': 9.0, 'offset': 2.5, 'tilt': 0.1, 'lag': 0.1, 'decay': 0.5},

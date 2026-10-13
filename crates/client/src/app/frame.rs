@@ -387,6 +387,10 @@ impl App {
                         SeatRole::Gunner => Some(crate::controls::Ride::Hull(frame.rotation)),
                         SeatRole::Actor => None,
                     });
+                    self.controls.hold_world_look(
+                        (role == SeatRole::StrafeDriver && d.steering.toward_look)
+                            .then(|| forward.x.atan2(-forward.z)),
+                    );
                     Some((
                         role,
                         forward.x.atan2(-forward.z),

@@ -51,6 +51,10 @@ pub struct Controls {
     /// This tick's mouse turn (yaw right, pitch up), radians: Torque's
     /// `move->yaw`/`move->pitch`, which mouse-steered vehicles accumulate.
     pub look_delta: [f32; 2],
+    /// The driver's head turn from the seat's facing (yaw, right positive,
+    /// radians): where they look. A `toward_look` vehicle steers to it.
+    #[serde(default)]
+    pub look_yaw: f32,
     /// The driver turned `$pref::Input::UseStrafeSteering` off: a vehicle
     /// with `steeringUseStrafeSteering` is then mouse-steered too.
     pub strafe_steering_off: bool,
@@ -92,7 +96,8 @@ impl Controls {
                 self.aim_yaw,
                 self.aim_pitch,
                 self.look_delta[0],
-                self.look_delta[1]
+                self.look_delta[1],
+                self.look_yaw
             ]
             .iter()
             .all(|x| x.is_finite()),
@@ -1638,8 +1643,28 @@ impl VehiclesWorld {
                 driver_seat.map_or(SeatRole::Passenger, |seat| d.seat_role(seat)),
                 SeatRole::MouseDriver | SeatRole::StrafeDriver
             );
-            if driver {
-                let limit = d.max_steering.max(0.01);
+            // `speed_lock`: the lock narrows with speed along the nose.
+            let lock = d.max_steering.max(0.01) * d.steering.lock_at(speed, d.max_speed);
+            if driver && d.steering.toward_look {
+                // Steer toward where the driver looks, at the strafe rate.
+                // It eases off ahead of arriving as a driver does: the
+                // look is taken from where the heading will be once the
+                // wheels have turned back straight at that rate, so it
+                // meets the look instead of swinging past it.
+                let limit = lock;
+                let rate = d.steering.strafe_rate * 25. / 96.;
+                let now = v.mouse_steering[0];
+                let yaw_rate = -world.bodies[v.body].angvel().dot(up);
+                let unwind = now.abs() / (rate * 120.).max(0.01);
+                let target = if driven && c.look_yaw.is_finite() {
+                    (c.look_yaw - yaw_rate * unwind).clamped(-limit, limit)
+                } else {
+                    0.
+                };
+                v.mouse_steering = [now + (target - now).clamped(-rate, rate), 0.];
+                v.steering_quiet = 0;
+            } else if driver {
+                let limit = lock;
                 let mut steering = v.mouse_steering;
                 let turn = if strafe_mode {
                     let key = if c.strafe > 0. {
@@ -1705,7 +1730,11 @@ impl VehiclesWorld {
                 (
                     v.mouse_steering[0] / limit,
                     v.mouse_steering[1] / limit,
-                    if strafe_mode { 0. } else { c.strafe },
+                    if strafe_mode || d.steering.toward_look {
+                        0.
+                    } else {
+                        c.strafe
+                    },
                 )
             } else {
                 (c.steer, c.pitch, c.roll)
@@ -1809,7 +1838,7 @@ impl VehiclesWorld {
             } else {
                 Vec3::ZERO
             };
-            let gravity = VEHICLE_GRAVITY;
+            let gravity = d.gravity();
             let b = &mut world.bodies[v.body];
             b.reset_forces(false);
             b.reset_torques(false);
@@ -2561,7 +2590,7 @@ fn prepare_spawn(
     }
     .pose(pose(&s.transform))
     .gravity_scale(if world_gravity > 0. {
-        VEHICLE_GRAVITY / world_gravity
+        d.gravity() / world_gravity
     } else {
         0.
     })
