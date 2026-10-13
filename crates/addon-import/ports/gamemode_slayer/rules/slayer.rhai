@@ -272,7 +272,7 @@ fn colored(t) { `<color:${hex(t.color)}>${t.name}` }
 fn living(list) {
     let n = 0;
     for m in list {
-        if !get_player(m.id, "out") {
+        if get_player(m.id, "out") != true {
             n += 1;
         }
     }
@@ -1282,7 +1282,7 @@ fn count_down(g, r) {
         r.clock = tick();
         r.told = ();
         for m in g.members {
-            if !get_player(m, "out") {
+            if get_player(m, "out") != true {
                 thaw(m);
             }
         }
@@ -1574,7 +1574,8 @@ fn custom_uniform(p, g, team, c) {
     set_avatar_colors(p, colors);
 }
 fn undress(p) {
-    if get_player(p, "dressed") {
+    // Unset (()) when the per-player defaults never reached this player.
+    if get_player(p, "dressed") == true {
         set_avatar_parts(p, ());
         set_avatar_colors(p, ());
         set_player(p, "dressed", false);
@@ -4373,7 +4374,7 @@ fn step_spectators() {
         if "init_at" in spec && spec.init_at != () && tick() >= spec.init_at {
             spec.init_at = ();
             set_spec(q.id, spec);
-            if get_player(q.id, "out") && !q.alive && !resetting(q.minigame) {
+            if get_player(q.id, "out") == true && !q.alive && !resetting(q.minigame) {
                 spectate_init(q.id);
             }
         } else if spec.mode == "auto" && "retry_at" in spec && spec.retry_at != () && tick() >= spec.retry_at {

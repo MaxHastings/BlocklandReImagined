@@ -117,11 +117,14 @@ const OCCLUDER_GAP: f32 = 0.1;
 /// World units the far map layer reaches past the map's bounds on every
 /// side, so its edge texels and depth range never cut a wall.
 const FAR_MARGIN: f32 = 4.0;
-/// Caster slot of the far map layer's matrix, after every other slot.
-const FAR_SLOT: usize = MAX_CASCADES * 2
-    + MAX_LAMPS * FACES
-    + crate::map_lighting::MAX_LIGHTS * FACES
-    + 2 * MAX_CASCADES * (FITTED_VIEWS - 1);
+/// Caster slot of the first plane view's matrices: after the player's
+/// cascades, lamp faces, map layers, map light cube faces and kept brick
+/// layers.
+const VIEW_SLOTS: usize =
+    MAX_CASCADES * 3 + MAX_LAMPS * FACES + crate::map_lighting::MAX_LIGHTS * FACES;
+/// Caster slot of the far map layer's matrix, after every other slot (the
+/// plane views' casters and map layers included).
+const FAR_SLOT: usize = VIEW_SLOTS + 2 * MAX_CASCADES * (FITTED_VIEWS - 1);
 
 /// Sun shadow quality: how many cascades, their square resolution, and how
 /// far from the eye shadows reach before fading out.
@@ -1345,10 +1348,7 @@ impl ShadowMaps {
     /// Caster matrices: the player's cascades first; a plane's own after
     /// the kept brick layers' (`kept_offset`), casters then map layers.
     fn view_slot(view: usize) -> usize {
-        MAX_CASCADES * 3
-            + MAX_LAMPS * FACES
-            + crate::map_lighting::MAX_LIGHTS * FACES
-            + (view - 1) * 2 * MAX_CASCADES
+        VIEW_SLOTS + (view - 1) * 2 * MAX_CASCADES
     }
     pub fn caster_offset(view: usize, cascade: usize) -> u32 {
         let slot = match view {
@@ -1589,6 +1589,93 @@ mod tests {
     fn camera(eye: Vec3, target: Vec3) -> Mat4 {
         crate::scene::perspective(1.5, 16.0 / 9.0, 0.05, 4000.0)
             * glam::camera::rh::view::look_at_mat4(eye, target, Vec3::Y)
+    }
+
+    /// Every caster matrix has a slot of its own inside the caster buffer:
+    /// a third live mirror plane's map layers once ran past its end (a
+    /// wgpu validation panic in `Queue::write_buffer`).
+    #[test]
+    fn caster_slots_are_distinct_and_inside_the_buffer() {
+        let size = CASTER_STRIDE * (FAR_SLOT + 1) as u64;
+        let mut offsets = vec![ShadowMaps::far_offset()];
+        for cascade in 0..MAX_CASCADES {
+            offsets.push(ShadowMaps::kept_offset(cascade));
+            for view in 0..FITTED_VIEWS {
+                offsets.push(ShadowMaps::caster_offset(view, cascade));
+                offsets.push(ShadowMaps::map_offset(view, cascade));
+            }
+        }
+        for slot in 0..MAX_LAMPS {
+            for face in 0..FACES {
+                offsets.push(ShadowMaps::lamp_offset(slot, face));
+            }
+        }
+        for light in 0..crate::map_lighting::MAX_LIGHTS {
+            for face in 0..FACES {
+                offsets.push(ShadowMaps::cube_offset(light, face));
+            }
+        }
+        for &offset in &offsets {
+            assert!(
+                u64::from(offset) + CASTER_SIZE <= size,
+                "slot at {offset} overruns the {size}-byte caster buffer"
+            );
+        }
+        let count = offsets.len();
+        offsets.sort_unstable();
+        offsets.dedup();
+        assert_eq!(offsets.len(), count, "two caster matrices share a slot");
+        assert_eq!(count as u64 * CASTER_STRIDE, size, "no slot left unused");
+    }
+
+    /// Two mirrors facing each other bounce into each other's views: on
+    /// High every pass goes to them, one plane seen in another, so the
+    /// third plane is a reflection of a reflection. Each live plane's own
+    /// casters and map layers still fit the caster buffer (v0.2.11 crashed
+    /// here).
+    #[test]
+    fn facing_mirrors_on_high_keep_every_planes_shadows_inside_the_buffer() {
+        use crate::reflection::{Looks, Mirror, ReflectionSettings, SILVER, plan};
+        let wall = |z: f32, facing: f32| Mirror {
+            corners: [(-1.0, -1.0), (1.0, -1.0), (1.0, 1.0), (-1.0, 1.0)]
+                .map(|(x, y)| Vec3::new(x * facing, y, z) * Vec3::new(2.0, 2.0, 1.0)),
+            tint: [1.0; 3],
+            strength: 1.0,
+            looks: Looks::Reflect,
+            fallback: SILVER,
+            recess: 0.0,
+        };
+        let eye = Vec3::new(0.3, 0.2, 4.0);
+        let mirrors = [wall(0.0, 1.0), wall(8.0, -1.0)];
+        let p = plan(
+            &mirrors,
+            camera(eye, Vec3::ZERO),
+            eye,
+            &ReflectionSettings::HIGH,
+            (960, 540),
+        );
+        assert_eq!(p.planes.len(), ReflectionSettings::MAX_PLANES);
+        assert!(
+            p.planes.iter().any(|plane| plane.parent >= 2),
+            "a reflection of a reflection goes live: {:?}",
+            p.planes
+                .iter()
+                .map(|plane| plane.parent)
+                .collect::<Vec<_>>()
+        );
+        let size = CASTER_STRIDE * (FAR_SLOT + 1) as u64;
+        for view in 1..=p.planes.len() {
+            assert!(view < FITTED_VIEWS, "plane view {view} has no shadow slots");
+            for cascade in 0..MAX_CASCADES {
+                for offset in [
+                    ShadowMaps::caster_offset(view, cascade),
+                    ShadowMaps::map_offset(view, cascade),
+                ] {
+                    assert!(u64::from(offset) + CASTER_SIZE <= size, "view {view}");
+                    assert_ne!(offset, ShadowMaps::far_offset(), "view {view}");
+                }
+            }
+        }
     }
 
     #[test]
