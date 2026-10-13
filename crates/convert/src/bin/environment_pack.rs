@@ -392,6 +392,7 @@ fn sky(root: &Path, out: &Path, dml: &str) -> Result<Sky> {
             length_seconds: number(&v, "$sky::daylength", 300.0, (10.0, 86_400.0)),
             time: 0.5,
             anchor_tick: 0,
+            paused: false,
         }),
         sun_azimuth: Some(azimuth),
         sun_elevation: Some(number(&v, "$sky::sunelevation", 35.0, (-90.0, 90.0))),

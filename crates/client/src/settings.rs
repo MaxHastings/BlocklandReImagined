@@ -365,6 +365,7 @@ mod tests {
                 length_seconds: 600.0,
                 time: 0.75,
                 anchor_tick: 0,
+                paused: false,
             }),
             sun_azimuth: Some(200.0),
             sky_color: Some([0.2, 0.3, 0.9]),

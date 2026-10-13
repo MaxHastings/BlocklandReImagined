@@ -955,6 +955,7 @@ fn environment_replicates_whole_and_is_checked() {
             length_seconds: 300.0,
             time: 0.25,
             anchor_tick: 7,
+            paused: false,
         }),
         ..Default::default()
     };
