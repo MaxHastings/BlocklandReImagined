@@ -510,10 +510,14 @@ impl Session {
                 }
                 // Only the seats its kind takes (`BotKind::vehicles`).
                 let takes = &self.bots.brains[&bot].kind.vehicles;
-                if role.controls && !takes.drive
-                    || role.weapon && !role.controls && !takes.gun
-                    || !role.controls && !role.weapon && !takes.ride
-                {
+                let allowed = if role.controls {
+                    takes.drive
+                } else if role.weapon {
+                    takes.gun
+                } else {
+                    takes.ride
+                };
+                if !allowed {
                     return None;
                 }
                 let crew = self.bot_crew(bot, v, tick);
