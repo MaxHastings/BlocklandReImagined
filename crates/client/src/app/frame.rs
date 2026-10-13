@@ -539,6 +539,7 @@ impl App {
                 // Riders sit exactly on their rendered vehicle's seat, tilted
                 // with it (`Player::processTick` takes the mount transform).
                 self.mounts.rider_rotations.clear();
+                self.mounts.rider_hands.clear();
                 self.mounts.posed_eye = None;
                 for (owner, vitals) in &view.vitals {
                     let Some((vehicle, seat)) = vitals.mounted else {
@@ -598,6 +599,12 @@ impl App {
                         rotation *= glam::Quat::from_rotation_y(-turn);
                         yaw += turn;
                         self.mounts.rider_rotations.insert(*owner, rotation);
+                        let hands =
+                            self.vehicles
+                                .hand_holds(&self.vehicle_assets, info, usize::from(seat));
+                        if hands.iter().any(Option::is_some) {
+                            self.mounts.rider_hands.insert(*owner, hands);
+                        }
                         let velocity = self
                             .vehicles
                             .frame(vehicle)
@@ -1169,6 +1176,13 @@ impl App {
                 let input = crate::avatar::AvatarAnimationInput {
                     look_limits,
                     mount_rotation: self.mounts.rider_rotations.get(owner).copied(),
+                    hand_holds: self
+                        .mounts
+                        .rider_hands
+                        .get(owner)
+                        .copied()
+                        .filter(|_| !dead)
+                        .unwrap_or_default(),
                     held_tool_pose: if dead {
                         self.combat.hugging.remove(owner);
                         crate::avatar::HeldToolPose::None

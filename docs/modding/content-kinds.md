@@ -243,6 +243,17 @@ no seats cannot be mounted. Three fields exist for Add-Ons:
   shots push it that many times as hard as v20's rule (the impulse over
   its mass) would. The Steel Ball weighs 900 and sets 3, so a rocket
   still knocks it about. Contacts and a click's flip go by its mass alone.
+- A seat's `"hands": { "right": [x, y, z], "left": [x, y, z] }` puts the
+  rider's hands there: a steering wheel, a gun's handles. The points are in
+  the vehicle's frame, as the seat's `transform` is. Every body reaches
+  them the same way, with no per-body offsets: after the seat's clip pose,
+  each arm (the hand socket's node and its ancestors below the chest)
+  bends at its elbow and swings from its shoulder so the hand node lands
+  on the point, or points straight at it when it is out of reach. An arm
+  with no even elbow (a Blockhead's rigid arm) only swings. A gunner's
+  holds turn with the turret and, when the gun model pitches with a
+  `look` clip, tip with it about the weapon's `pivot`. A hand left out
+  keeps its clip pose. The Playground buggy's driver and gunner use it.
 
 Every vehicle can be placed from a vehicle spawn brick and spawned by a
 rule (`spawn_vehicle`).

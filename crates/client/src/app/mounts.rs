@@ -17,6 +17,9 @@ pub(super) struct Mounts {
     pub(super) seat_report: Option<bri_sim::session::SeatSince>,
     /// This frame's seat rotation for every mounted player.
     pub(super) rider_rotations: BTreeMap<bri_world::OwnerId, glam::Quat>,
+    /// This frame's seat hand holds for every vehicle rider whose seat has
+    /// them, right then left.
+    pub(super) rider_hands: BTreeMap<bri_world::OwnerId, [Option<Vec3>; 2]>,
     /// This frame's first-person eye while the local player rides a vehicle
     /// or another player, or sits, from their posed `eye` node.
     pub(super) posed_eye: Option<Vec3>,

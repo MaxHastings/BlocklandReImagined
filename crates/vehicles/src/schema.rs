@@ -79,6 +79,29 @@ pub struct Seat {
     pub pose: String,
     pub controls: bool,
     pub weapon: bool,
+    /// Where the rider's hands hold on, in the vehicle's frame as
+    /// `transform` is: a gun's handles, a steering wheel. A gunner's turn
+    /// and tip with the gun's aim. Every body reaches its arms there.
+    #[serde(default, skip_serializing_if = "SeatHands::is_empty")]
+    pub hands: SeatHands,
+}
+/// A seat's hand holds: the rider's right and left hand.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SeatHands {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub right: Option<[f32; 3]>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub left: Option<[f32; 3]>,
+}
+impl SeatHands {
+    pub fn is_empty(&self) -> bool {
+        self.right.is_none() && self.left.is_none()
+    }
+    /// Right then left.
+    pub fn each(&self) -> [Option<[f32; 3]>; 2] {
+        [self.right, self.left]
+    }
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Wheel {
@@ -1055,6 +1078,15 @@ impl Pack {
                     "invalid wheel"
                 );
             }
+            ensure!(
+                d.seats.iter().all(|seat| seat
+                    .hands
+                    .each()
+                    .iter()
+                    .flatten()
+                    .all(|p| p.iter().all(|v| v.is_finite() && v.abs() <= 64.))),
+                "invalid seat hands"
+            );
             if let Some(w) = &d.weapon {
                 ensure!(
                     w.cooldown_ticks > 0

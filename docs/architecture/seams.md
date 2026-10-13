@@ -38,6 +38,7 @@ labels are retained so earlier progress notes remain traceable.
 | Tethers | tether and winch | Grapple rope Add-On | on main |
 | Passages | `Brick::stretched`, `EffectsWorld::set_passages`, clip planes | Portal bricks Add-On | on main |
 | Seat-tagged moves | moves tagged with the seat they steer | Turret aim flickers for watchers | on main |
+| Seat hand holds | `Seat::hands` points, `Definition::hand_hold`, client two-bone reach (`avatar::reach_hands`) | Feel and presentation seams (W8, for Halo's Warthog) | branch w8-bodies |
 | Importer base datablocks | base v20 bricks, projectiles and damage types without `--core` | Trench Warfare game mode | on main |
 | Client app split | `crates/client/src/app.rs` into modules | Code health audit | on main |
 | Registries, protocol changes, progress entries | how features add ops, messages and notes without editing shared lists | Tech debt hot spots | on main |

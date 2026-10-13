@@ -263,6 +263,7 @@ fn vehicles() -> bri_vehicles::Pack {
         pose: "root".into(),
         controls: false,
         weapon: false,
+        hands: Default::default(),
     }];
     pack.definitions.push(crate_);
     pack.definitions.push(tumble);

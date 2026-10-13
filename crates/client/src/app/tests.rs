@@ -1549,6 +1549,7 @@ fn leaving_a_game_forgets_its_seat_eyes_and_liquids(f: &ContentRoot) -> anyhow::
     app.mounts
         .rider_rotations
         .insert(3, glam::Quat::from_rotation_y(1.0));
+    app.mounts.rider_hands.insert(3, [Some(Vec3::ONE), None]);
     app.view.observer_eye = Some(Vec3::ONE);
     app.view.rendered_camera = Some((Vec3::ONE, 1.0, 0.5));
     app.view.rendered_roll = 0.3;
@@ -1567,6 +1568,7 @@ fn leaving_a_game_forgets_its_seat_eyes_and_liquids(f: &ContentRoot) -> anyhow::
     assert_eq!(app.mounts.posed_eye, None);
     assert_eq!(app.mounts.tumble, None);
     assert!(app.mounts.rider_rotations.is_empty());
+    assert!(app.mounts.rider_hands.is_empty());
     assert_eq!(app.mounts.seat_report, None);
     assert_eq!(app.view.observer_eye, None);
     assert_eq!(app.view.rendered_camera, None);

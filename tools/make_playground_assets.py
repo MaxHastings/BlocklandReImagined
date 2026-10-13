@@ -405,6 +405,10 @@ def buggy(root):
                 'steering': -0.35 if rear else 1.0, 'powered': True,
                 'model': 'models/tire.shape.json', 'model_rotation': [0.0, 0.0, 0.0, 1.0]}
 
+    # The driver's hands on the steering bar, the gunner's on the gun's
+    # back corners (right is +X, facing -Z).
+    hands = {0: {'right': [0.15, 1.25, -0.5], 'left': [-0.15, 1.25, -0.5]},
+             2: {'right': [0.2, 1.85, 1.55], 'left': [-0.2, 1.85, 1.55]}}
     hull = [[x, y, z] for x in (-1.0, 1.0) for y in (-0.1, 1.2) for z in (-2.0, 2.0)]
     definition = {
         'id': 'playground-buggy:vehicle/buggy',
@@ -417,7 +421,8 @@ def buggy(root):
         'model': 'models/buggy.shape.json',
         'seats': [
             {'node': f'mount{i}', 'transform': {'position': at, 'rotation': [0.0, 0.0, 0.0, 1.0]},
-             'pose': 'sit' if i < 2 else 'root', 'controls': i == 0, 'weapon': i == 2}
+             'pose': 'sit' if i < 2 else 'root', 'controls': i == 0, 'weapon': i == 2,
+             **({'hands': hands[i]} if i in hands else {})}
             for i, at in enumerate(seats)
         ],
         'wheels': [wheel(x, z) for z in (-1.45, 1.45) for x in (-1.15, 1.15)],

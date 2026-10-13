@@ -1043,6 +1043,10 @@ pub struct AvatarAnimationInput {
     /// A seated rider's full mount rotation, in place of the upright yaw,
     /// so they sit flush with a tilted seat.
     pub mount_rotation: Option<Quat>,
+    /// Where a seated rider's right and left hands hold on, in the world
+    /// (a seat's `hands`): each arm reaches its hand there after the clip
+    /// pose ([`reach_hands`]).
+    pub hand_holds: [Option<Vec3>; 2],
     /// Script threads 0 and 1 (`playThread(0 or 1, ...)`): body animations
     /// a package plays, such as a hit's flinch. Each holds until replaced
     /// or stopped by `root`.
@@ -1073,6 +1077,121 @@ pub struct AvatarAnimationInput {
 
 /// A clip name as the action thread holds it. Intent clips come from
 /// archetype data, a bounded table, so each distinct name is kept once.
+/// Reach the arm that ends at node `end` so `end` lies at `target` (model
+/// space), for seat hand holds. The arm is `end`'s ancestors below the
+/// first one it shares with `landmark` (the other hand, else the eye),
+/// so the chest and everything above stay put. Of that chain the
+/// shoulder and elbow are the pair giving the most even upper and lower
+/// arm; an even arm bends at its elbow (two-bone IK, kept in the clip's
+/// bend plane) and then swings from its shoulder, while a rigid arm (a
+/// Blockhead's, one piece with a short hand) only swings. A target past
+/// the arm's reach gets the arm held straight toward it.
+pub fn reach_hands(
+    parents: &[Option<usize>],
+    nodes: &mut [Mat4],
+    end: usize,
+    landmark: Option<usize>,
+    target: Vec3,
+) {
+    let count = nodes.len();
+    if end >= count || parents.len() != count || !target.is_finite() {
+        return;
+    }
+    let ancestors = |mut i: usize| {
+        let mut up = Vec::new();
+        while let Some(p) = parents[i].filter(|p| *p < count) {
+            if up.len() > count {
+                break;
+            }
+            up.push(p);
+            i = p;
+        }
+        up
+    };
+    let trunk = landmark.filter(|l| *l < count).map(|l| {
+        let mut t = ancestors(l);
+        t.push(l);
+        t
+    });
+    let arm: Vec<usize> = ancestors(end)
+        .into_iter()
+        .take_while(|i| trunk.as_ref().is_none_or(|t| !t.contains(i)))
+        .take(if trunk.is_some() { usize::MAX } else { 3 })
+        .collect();
+    let at = |nodes: &[Mat4], i: usize| nodes[i].w_axis.truncate();
+    let under = |root: usize| -> Vec<usize> {
+        (0..count)
+            .filter(|&i| i == root || ancestors(i).contains(&root))
+            .collect()
+    };
+    let turn = |nodes: &mut [Mat4], root: usize, about: Vec3, by: Quat| {
+        if !by.is_finite() {
+            return;
+        }
+        let m =
+            Mat4::from_translation(about) * Mat4::from_quat(by) * Mat4::from_translation(-about);
+        for i in under(root) {
+            nodes[i] = m * nodes[i];
+        }
+    };
+    let end_at = at(nodes, end);
+    // The most even (shoulder, elbow) pair.
+    let mut best: Option<(usize, usize, f32)> = None;
+    for (k, &mid) in arm.iter().enumerate() {
+        for &root in &arm[k + 1..] {
+            let (a, b) = (
+                at(nodes, mid).distance(at(nodes, root)),
+                end_at.distance(at(nodes, mid)),
+            );
+            let even = a.min(b);
+            if best.is_none_or(|(_, _, e)| even > e) && even > 1e-4 {
+                best = Some((root, mid, even));
+            }
+        }
+    }
+    let two_bone = best.filter(|&(root, mid, even)| {
+        let longer = at(nodes, mid)
+            .distance(at(nodes, root))
+            .max(end_at.distance(at(nodes, mid)));
+        even >= 0.35 * longer
+    });
+    let shoulder_node = match two_bone {
+        Some((root, mid, _)) => {
+            let (s, e, h) = (at(nodes, root), at(nodes, mid), end_at);
+            let (a, b) = (e.distance(s), h.distance(e));
+            let d = target
+                .distance(s)
+                .clamped((a - b).abs() + 1e-4, a + b - 1e-4);
+            let want = ((a * a + b * b - d * d) / (2.0 * a * b))
+                .clamped(-1.0, 1.0)
+                .acos();
+            let (u, v) = ((s - e).normalize(), (h - e).normalize());
+            let current = u.dot(v).clamped(-1.0, 1.0).acos();
+            let axis = [u.cross(v), u.cross(target - s), Vec3::NEG_X]
+                .into_iter()
+                .find(|k| k.length_squared() > 1e-8)
+                .unwrap_or(Vec3::NEG_X)
+                .normalize();
+            turn(nodes, mid, e, Quat::from_axis_angle(axis, want - current));
+            root
+        }
+        None => match best.map(|(root, _, _)| root).or(arm.last().copied()) {
+            Some(root) => root,
+            None => return,
+        },
+    };
+    let s = at(nodes, shoulder_node);
+    let (from, to) = (at(nodes, end) - s, target - s);
+    if from.length_squared() > 1e-8 && to.length_squared() > 1e-8 {
+        turn(
+            nodes,
+            shoulder_node,
+            s,
+            Quat::from_rotation_arc(from.normalize(), to.normalize()),
+        );
+    }
+}
+
 fn interned(name: &str) -> &'static str {
     static NAMES: std::sync::Mutex<std::collections::BTreeSet<&'static str>> =
         std::sync::Mutex::new(std::collections::BTreeSet::new());
@@ -2011,15 +2130,22 @@ impl AvatarMesh {
             self.unacted_nodes = rest.nodes;
         }
         self.channels = Some(channels);
-        self.finish_pose(assets, player, pose, animation_input.mount_rotation)
+        self.finish_pose(
+            assets,
+            player,
+            pose,
+            animation_input.mount_rotation,
+            animation_input.hand_holds,
+        )
     }
 
     fn finish_pose(
         &mut self,
         assets: &AvatarAssets,
         player: &PlayerState,
-        pose: bri_content::animation::Pose,
+        mut pose: bri_content::animation::Pose,
         mount_rotation: Option<Quat>,
+        hand_holds: [Option<Vec3>; 2],
     ) -> Result<()> {
         // `setScale` scales the whole shape about the feet.
         let model_transform = Mat4::from_scale_rotation_translation(
@@ -2030,6 +2156,34 @@ impl AvatarMesh {
             Vec3::from(player.feet),
         );
         self.model_transform = model_transform;
+        if hand_holds.iter().any(Option::is_some) {
+            let inverse = model_transform.inverse();
+            let ends = [0, 1].map(|n| self.mount_index(assets, n));
+            let parents: Vec<Option<usize>> = assets
+                .for_mesh(self)
+                .rig
+                .shape
+                .nodes
+                .iter()
+                .map(|n| n.parent)
+                .collect();
+            if inverse.is_finite() && parents.len() == pose.nodes.len() {
+                for n in 0..2 {
+                    if let (Some(end), Some(hold)) = (ends[n], hand_holds[n])
+                        && hold.is_finite()
+                    {
+                        let other = ends[1 - n].or_else(|| assets.for_mesh(self).node("eye"));
+                        reach_hands(
+                            &parents,
+                            &mut pose.nodes,
+                            end,
+                            other,
+                            inverse.transform_point3(hold),
+                        );
+                    }
+                }
+            }
+        }
         self.posed_nodes.clone_from(&pose.nodes);
         self.animated_nodes.clear();
         if self.defer_mesh {
@@ -2625,6 +2779,7 @@ mod tests {
         rebuilt_outfit_continues_the_running_clip,
         mount_action_is_only_the_playing_actions_motion,
         seated_body_takes_the_mount_rotation,
+        a_seated_rider_reaches_the_seats_hand_holds,
         getting_up_eases_out_of_the_sit_over_one_transition,
         jet_release_keeps_the_root_pose_until_landing,
         jets_interrupt_a_jump_without_restarting_it_on_release,
@@ -2635,6 +2790,34 @@ mod tests {
         ragdoll_keeps_accessories_on,
         a_corpse_vanishes_where_its_body_is_drawn,
     );
+
+    #[test]
+    fn an_even_arm_bends_its_elbow_to_reach_a_hold() {
+        // Chest, shoulder, elbow, hand, and the other hand on the chest.
+        let parents = [None, Some(0), Some(1), Some(2), Some(0)];
+        let rest = [
+            Vec3::new(0.0, 1.5, 0.0),
+            Vec3::new(0.5, 1.5, 0.0),
+            Vec3::new(0.5, 1.0, 0.0),
+            Vec3::new(0.5, 0.5, 0.0),
+            Vec3::new(-0.5, 0.5, 0.0),
+        ]
+        .map(Mat4::from_translation);
+        let at = |nodes: &[Mat4], i: usize| nodes[i].w_axis.truncate();
+        let target = Vec3::new(0.2, 1.3, -0.6);
+        let mut nodes = rest;
+        reach_hands(&parents, &mut nodes, 3, Some(4), target);
+        assert!(at(&nodes, 3).distance(target) < 1e-3, "{}", at(&nodes, 3));
+        assert!((at(&nodes, 2).distance(at(&nodes, 1)) - 0.5).abs() < 1e-4);
+        assert!((at(&nodes, 3).distance(at(&nodes, 2)) - 0.5).abs() < 1e-4);
+        assert_eq!(nodes[0], rest[0], "the chest stays");
+        assert_eq!(nodes[4], rest[4], "the other arm stays");
+        // Out of reach: held straight toward it.
+        let far = Vec3::new(0.5, 1.5, -3.0);
+        let mut nodes = rest;
+        reach_hands(&parents, &mut nodes, 3, Some(4), far);
+        assert!(at(&nodes, 3).abs_diff_eq(Vec3::new(0.5, 1.5, -1.0), 1e-3));
+    }
 
     #[test]
     #[ignore = "requires generated v20 avatar content and an offscreen adapter"]
@@ -3788,6 +3971,31 @@ mod tests {
         )?;
         let up = mesh.body_transform().transform_vector3(Vec3::Y);
         assert!(up.dot(tilt * Vec3::Y) > 0.999, "{up}");
+        Ok(())
+    }
+    fn a_seated_rider_reaches_the_seats_hand_holds(fx: &Avatar) -> Result<()> {
+        let assets = &fx.assets;
+        let mut mesh = assets.mesh(assets.package.defaults.clone())?;
+        let mut input = AvatarAnimationInput {
+            mount_rotation: Some(Quat::from_rotation_y(0.4)),
+            sitting: true,
+            ..Default::default()
+        };
+        mesh.pose_with_animation(assets, &player(), 0.0, &input)?;
+        let hand = |mesh: &AvatarMesh, n: usize| {
+            mesh.mount_node(assets, n)
+                .map(|m| m.w_axis.truncate())
+                .context("hand")
+        };
+        let rest = [hand(&mesh, 0)?, hand(&mesh, 1)?];
+        // Each hand a little forward and up of where the sit leaves it.
+        let forward = Quat::from_rotation_y(0.4) * Vec3::new(0.0, 0.12, -0.12);
+        input.hand_holds = [Some(rest[0] + forward), Some(rest[1] + forward)];
+        mesh.pose_with_animation(assets, &player(), 0.0, &input)?;
+        for (n, rest) in rest.into_iter().enumerate() {
+            let reached = hand(&mesh, n)?.distance(rest + forward);
+            assert!(reached < 0.06, "hand {n} {reached} from its hold");
+        }
         Ok(())
     }
     fn jet_history_survives_skipped_poses_and_first_remote_observation(fx: &Avatar) -> Result<()> {

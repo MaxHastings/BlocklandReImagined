@@ -57,6 +57,21 @@ moonwalking), and an imported body's shots left its eye.
   `a_carbine_shot_marks_the_brick_it_hits` (sim) and the three
   `decals::tests` (client).
 
+- **Hands on the handles.** A gate item asks for a reasonable seated pose
+  for every body, Max's bar being Mario's hands on the Warthog's turret
+  handles. A seat's `hands` names where the right and left hands hold on,
+  in the vehicle's frame; the client reaches each arm there after the
+  seat's pose (`avatar::reach_hands`: the hand socket's chain below the
+  chest, the most even shoulder and elbow pair, two-bone IK then a swing
+  from the shoulder). Positions rather than the vehicle's nodes, so an
+  Add-On vehicle needs no model nodes for it and the client needs no
+  vehicle rig. A gunner's holds follow the drawn gun (turret yaw; pitch
+  only when the gun has a `look` clip). Seat enter and exit stay instant
+  (parked). The buggy's driver and gunner carry holds. Tests:
+  `a_gunners_hand_holds_turn_and_tip_with_the_drawn_gun` (vehicles),
+  `an_even_arm_bends_its_elbow_to_reach_a_hold` and
+  `a_seated_rider_reaches_the_seats_hand_holds` (client).
+
 ## What the engine did not own
 
 Checked against #109 (grips, sockets, roles): the client already draws a

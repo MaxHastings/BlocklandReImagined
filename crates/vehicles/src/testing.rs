@@ -126,6 +126,7 @@ fn seat(node: &str, position: [f32; 3], controls: bool, weapon: bool) -> Seat {
         pose: "sit".into(),
         controls,
         weapon,
+        hands: Default::default(),
     }
 }
 
