@@ -233,6 +233,18 @@ impl Role {
             Role::HeadUp => &[],
         }
     }
+    /// The way a locomotion role's clip carries the body, facing -Z (v20's
+    /// `ActionAnimationList` directions): the clip plays at the speed the
+    /// body covers ground that way (`Player::updateAnimation`). None for a
+    /// clip that keeps its own time.
+    pub fn ground_axis(self) -> Option<[f32; 3]> {
+        match self {
+            Role::Run | Role::CrouchRun => Some([0.0, 0.0, -1.0]),
+            Role::Back | Role::CrouchBack => Some([0.0, 0.0, 1.0]),
+            Role::Side | Role::CrouchSide => Some([-1.0, 0.0, 0.0]),
+            _ => None,
+        }
+    }
     /// What the body loses when the role has no clip and nothing stands in.
     pub fn cost(self) -> &'static str {
         match self {
@@ -261,6 +273,24 @@ pub fn validate_animations(animations: &Animations) -> Result<()> {
         ensure!(
             !clip.is_empty() && clip.len() <= 64 && !clip.chars().any(char::is_control),
             "animation role `{role}` needs a clip name of up to 64 characters"
+        );
+    }
+    Ok(())
+}
+
+/// An archetype's `ground_speeds`: locomotion role name to the speed, in
+/// units per second, at which the body's clip for it plays at 1x.
+pub type GroundSpeeds = BTreeMap<String, f32>;
+
+pub fn validate_ground_speeds(speeds: &GroundSpeeds) -> Result<()> {
+    for (role, speed) in speeds {
+        ensure!(
+            Role::from_name(role).is_some_and(|r| r.ground_axis().is_some()),
+            "ground speed role `{role}` must be one of run, back, side, crouch_run, crouch_back or crouch_side"
+        );
+        ensure!(
+            speed.is_finite() && (0.01..=1000.0).contains(speed),
+            "ground speed for `{role}` must be 0.01 to 1000 units per second"
         );
     }
     Ok(())

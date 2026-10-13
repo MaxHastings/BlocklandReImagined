@@ -873,6 +873,12 @@ pub struct BodyKind {
     /// origin, facing -Z, unscaled): its archetype's eyes.
     pub eye: Vec3,
     pub sit_eye: Vec3,
+    /// The archetype's speed for each locomotion role's clip at 1x
+    /// (`Look::ground_speeds`).
+    pub ground_speeds: bri_content::body::GroundSpeeds,
+    /// The fastest a locomotion clip plays (`Look::max_time_scale`); 0
+    /// takes v20's 1.5.
+    pub max_time_scale: f32,
 }
 impl BodyKind {
     /// The archetype's fit for a mesh: `stand_in` when it draws a box model
@@ -885,7 +891,44 @@ impl BodyKind {
             stand_in,
             eye: Vec3::new(0.0, m.stand_eye, -m.eye_forward),
             sit_eye: Vec3::new(0.0, m.sit_eye, -m.sit_eye_forward),
+            ground_speeds: archetype.look.ground_speeds.clone(),
+            max_time_scale: archetype.look.max_time_scale,
         }
+    }
+    /// How fast `clip` plays for `role` while the body moves at `velocity`
+    /// (its own frame, facing -Z): v20's `Player::updateAnimation` plays a
+    /// locomotion clip at the speed the body covers the ground along the
+    /// clip's way, `|v . dir| / speed`, up to `maxTimeScale`. The speed is
+    /// the archetype's for the role, else the clip's own ground motion; a
+    /// clip with neither, and every other role, plays at 1x.
+    pub fn time_scale(
+        &self,
+        clip: &bri_content::shape::Animation,
+        role: Role,
+        velocity: Vec3,
+    ) -> f32 {
+        let Some(axis) = role.ground_axis() else {
+            return 1.0;
+        };
+        let ground = clip
+            .ground_translations
+            .last()
+            .map(|&t| Vec3::from(t))
+            .filter(|t| t.is_finite() && clip.duration > 0.0 && t.length() > 1e-4);
+        let (speed, dir) = match self.ground_speeds.get(role.name()) {
+            Some(&speed) => (speed, Vec3::from(axis)),
+            None => match ground {
+                Some(t) => (t.length() / clip.duration, t.normalize()),
+                None => return 1.0,
+            },
+        };
+        let max = if self.max_time_scale > 0.0 {
+            self.max_time_scale
+        } else {
+            bri_sim::archetype::MAX_TIME_SCALE
+        };
+        let scale = (velocity.dot(dir) / speed).abs().min(max);
+        if scale.is_finite() { scale } else { 1.0 }
     }
     /// What the body lacks, one line each: sockets for any body, and for a
     /// rigged one the animation roles it has no clip for.
@@ -1771,10 +1814,19 @@ impl AvatarMesh {
             self.mode = action.sequence;
             self.forward = action.forward != reversed;
             self.phase = if self.forward { 0.0 } else { duration };
-        } else if self.forward {
-            self.phase += elapsed;
         } else {
-            self.phase -= elapsed;
+            // A locomotion clip plays at the speed the body moves.
+            let rate = clip.map_or(1.0, |clip| {
+                let local = Quat::from_rotation_y(movement.body_yaw())
+                    * Vec3::from(movement.velocity)
+                    / movement.scale.max(0.01);
+                self.kind.time_scale(clip, movement_role(self.mode), local)
+            });
+            if self.forward {
+                self.phase += elapsed * rate;
+            } else {
+                self.phase -= elapsed * rate;
+            }
         }
         let mode = self.mode;
         if clip.is_some_and(|c| c.looping) && duration > 0.0 {
@@ -2754,6 +2806,73 @@ mod tests {
         assets.load_bodies(root.path(), &packages);
         ensure!(assets.has_body(&model), "{model} did not load");
         Ok((assets, model, root))
+    }
+
+    /// v20 plays the run, back and side clips at the speed the body covers
+    /// the ground (`maxTimeScale` 1.5 at most): by the clip's own ground
+    /// motion, or by the speed an archetype gives a clip that has none.
+    #[test]
+    fn locomotion_clips_play_at_the_speed_the_body_moves() -> Result<()> {
+        let rig = crate::testing::avatar::rig();
+        let mut run = rig.sequence("run").context("run")?.clone();
+        let kind = BodyKind::default();
+        let forward = |speed: f32| Vec3::new(0.0, 0.0, -speed);
+        assert_eq!(
+            kind.time_scale(&run, Role::Run, forward(9.0)),
+            1.0,
+            "a clip with no ground motion keeps its own time"
+        );
+        // Two units of ground over the clip.
+        run.ground_translations = vec![[0.0, 0.0, -1.0], [0.0, 0.0, -2.0]];
+        let speed = 2.0 / run.duration;
+        let scale = |kind: &BodyKind, v: Vec3| kind.time_scale(&run, Role::Run, v);
+        assert!((scale(&kind, forward(speed * 0.5)) - 0.5).abs() < 1e-5);
+        assert!((scale(&kind, forward(speed)) - 1.0).abs() < 1e-5);
+        assert_eq!(
+            scale(&kind, forward(speed * 3.0)),
+            1.5,
+            "v20's maxTimeScale"
+        );
+        assert!(
+            scale(&kind, Vec3::new(speed, 0.0, 0.0)) < 1e-5,
+            "only the clip's own way counts"
+        );
+        assert_eq!(kind.time_scale(&run, Role::Idle, forward(speed)), 1.0);
+        let mut archetype = bri_sim::archetype::Archetypes::default()
+            .resolve(Default::default())
+            .clone();
+        archetype.look.ground_speeds = [("run".to_string(), 4.0)].into();
+        archetype.look.max_time_scale = 2.0;
+        archetype.validate()?;
+        let kind = BodyKind::of(&archetype, false);
+        assert!(
+            (scale(&kind, forward(6.0)) - 1.5).abs() < 1e-5,
+            "the archetype's speed wins"
+        );
+        assert_eq!(scale(&kind, forward(20.0)), 2.0);
+        archetype.look.ground_speeds = [("jump".to_string(), 4.0)].into();
+        assert!(archetype.validate().is_err(), "only locomotion roles");
+
+        // A drawn body: running at half the clip's speed, half as far in.
+        let assets = crate::testing::avatar::assets()?;
+        let mut archetype = bri_sim::archetype::Archetypes::default()
+            .resolve(Default::default())
+            .clone();
+        let clip = assets.rig.sequence("run").context("run")?.duration;
+        archetype.look.ground_speeds = [("run".to_string(), 8.0)].into();
+        let mut phases = Vec::new();
+        for speed in [4.0, 8.0] {
+            let mut mesh = assets.mesh(assets.package.defaults.clone())?;
+            mesh.set_body_kind(BodyKind::of(&archetype, false));
+            let mut p = player();
+            p.velocity = [0.0, 0.0, -speed];
+            mesh.pose(&assets, &p, 0.0)?;
+            assert_eq!(mesh.mode, "run");
+            mesh.pose(&assets, &p, f64::from(clip) * 0.2)?;
+            phases.push(mesh.phase);
+        }
+        assert!((phases[0] * 2.0 - phases[1]).abs() < 1e-4, "{phases:?}");
+        Ok(())
     }
 
     /// v0.3.0 W2: a body authored with its own node names (no `Mount0`, no

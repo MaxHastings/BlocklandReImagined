@@ -542,3 +542,123 @@ fn a_buggy_pinned_against_someone_who_holds_their_ground_never_speeds_up() {
         assert!(fastest <= 16.5, "it never sped up ({half}): {fastest}");
     }
 }
+
+/// The gunner's post fires as the Warthog's chaingun (`warthog gun` weap):
+/// for as long as the trigger is held, 8 rounds a second rising to 15 over
+/// the first second, straying 1 rising to 2 degrees over 3 seconds, and
+/// without kicking the buggy. Letting go and pulling again starts slow.
+#[test]
+fn the_gunners_chaingun_spins_up_spreads_and_does_not_kick() {
+    let pack = buggy_pack();
+    let gun = pack
+        .definitions
+        .iter()
+        .find(|d| d.id == BUGGY)
+        .and_then(|d| d.weapon.clone())
+        .unwrap();
+    let auto = gun
+        .automatic
+        .clone()
+        .expect("the chaingun fires while held");
+    assert_eq!(auto.rate, [8.0, 15.0]);
+    assert_eq!(gun.recoil, Some(0.0));
+    let (mut v, mut w) = spawn(pack, [0.0, 1.0, 0.0]);
+    settle(&mut v, &mut w);
+    let seat = v.snapshot(&w).vehicles[0].seats[2].transform.position;
+    let gunner = OccupantId(22);
+    v.mount(
+        &w,
+        VehicleId(1),
+        2,
+        Occupant {
+            id: gunner,
+            owner: OwnerId(10),
+            body: [1.25, 2.65],
+        },
+        seat,
+    )
+    .unwrap();
+    let rest = v.snapshot(&w).vehicles[0].transform.position;
+    v.drain_intents();
+    let mut shots = Vec::new();
+    let fire = |v: &mut VehiclesWorld,
+                w: &mut PhysicsWorld,
+                on: bool,
+                ticks: usize,
+                shots: &mut Vec<(usize, Vec3)>,
+                from: usize| {
+        v.set_controls(
+            OwnerId(10),
+            gunner,
+            Controls {
+                fire: on,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        for t in 0..ticks {
+            v.pre_step(w, &[]).unwrap();
+            w.step();
+            v.post_step(w).unwrap();
+            for i in v.drain_intents() {
+                if let Intent::Fire(f) = i {
+                    shots.push((from + t, Vec3::from(f.direction)));
+                }
+            }
+        }
+    };
+    fire(&mut v, &mut w, true, seconds(4.0), &mut shots, 0);
+    let in_second = |a: f32, b: f32| {
+        shots
+            .iter()
+            .filter(|(t, _)| (seconds(a)..seconds(b)).contains(t))
+            .count()
+    };
+    let first = in_second(0.0, 1.0);
+    let spun = in_second(2.0, 3.0);
+    assert!(
+        (9..=12).contains(&first),
+        "{first} rounds in the first second"
+    );
+    assert_eq!(spun, 15, "15 a second once spun up");
+    // The aim is still: the rounds stray around it, up to the error angle.
+    let aim = shots
+        .iter()
+        .fold(Vec3::ZERO, |sum, (_, d)| sum + *d)
+        .normalize();
+    let off = |a: f32, b: f32| {
+        shots
+            .iter()
+            .filter(|(t, _)| (seconds(a)..seconds(b)).contains(t))
+            .map(|(_, d)| d.angle_between(aim))
+            .fold(0.0f32, f32::max)
+    };
+    assert!(off(0.0, 0.5) < 0.0175 + 0.004, "{}", off(0.0, 0.5));
+    assert!(
+        off(3.0, 4.0) > 0.02 && off(3.0, 4.0) < 0.0349 + 0.004,
+        "{}",
+        off(3.0, 4.0)
+    );
+    assert!(
+        shots.windows(2).all(|p| p[0].1 != p[1].1),
+        "every round strays its own way"
+    );
+    let moved = Vec3::from(v.snapshot(&w).vehicles[0].transform.position) - Vec3::from(rest);
+    assert!(moved.length() < 0.05, "60 rounds moved it {moved}");
+    // Let go, pull again: back to 8 a second.
+    fire(
+        &mut v,
+        &mut w,
+        false,
+        seconds(0.5),
+        &mut shots,
+        seconds(4.0),
+    );
+    let before = shots.len();
+    fire(&mut v, &mut w, true, seconds(0.5), &mut shots, seconds(4.5));
+    let again = shots.len() - before;
+    assert!(
+        (4..=5).contains(&again),
+        "{again} rounds in the first half second again"
+    );
+}

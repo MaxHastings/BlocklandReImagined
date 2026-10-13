@@ -128,9 +128,9 @@ Choices behind it:
   normal. At most 8 sweeps of at most 8 units (times the body's scale) per
   step.
 - **Animation intent is a number the Add-On names.** The engine replicates
-  it; the archetype's `look.intent_clips` names the clip each intent plays
+  it; the archetype's `intent_clips` names the clip each intent plays
   (in place of run, jump and fall; death, sitting and swimming still win)
-  and `look.intent_sounds` the sound heard where the body is when the
+  and `intent_sounds` the sound heard where the body is when the
   controller changes to it.
 - **The body's facing is the controller's when it says so.** The camera
   and aim stay the look's; the body turns to the heading the controller

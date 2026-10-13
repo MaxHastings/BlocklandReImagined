@@ -19,15 +19,32 @@ moonwalking), and an imported body's shots left its eye.
   `MoveInput::attack`), the archetype's gravity (offset 96), "no motor
   gravity this tick" (out flag 2), `bri.sweep_from` (a sweep from an offset
   for ledge grabs), and air drag and speed resistance allowed at 0.
-- **Intents look and sound like something.** `look.intent_clips` plays the
-  model's clip for each controller intent in place of run, jump and fall;
-  `look.intent_sounds` plays a sound where the body is when the controller
-  changes to an intent.
+- **Intents look and sound like something.** An archetype's `intent_clips`
+  plays the model's clip for each controller intent in place of run, jump
+  and fall; `intent_sounds` plays a sound where the body is when the
+  controller changes to an intent. Both were engine fields an Add-On's
+  archetype JSON could not set until this change.
+- **Run clips keep pace with the ground.** v20's `Player::updateAnimation`
+  plays run, back and side at `|v . dir| / speed`, the speed from the
+  sequence's ground transform, capped at `maxTimeScale` (1.5). The client
+  played every clip at 1x. It now scales them (`BodyKind::time_scale`),
+  by the clip's own ground motion or, for clips without one, the
+  archetype's `ground_speeds`; `max_time_scale` overrides the cap. The
+  Blockhead's clips change only if its converted sequences carry ground
+  motion. Test: `locomotion_clips_play_at_the_speed_the_body_moves`.
 - **Shots leave an imported body's hand.** The host only knew the
   Blockhead's hand nodes. It now reads each enabled Add-On body's hand
   nodes from its package (`content_identity::package_body_grips`), in its
   own raised-arm pose (`body_grips`, with the archetype's role clips), on
   listen and dedicated hosts.
+
+- **The buggy's gun is the Warthog's chaingun.** Vehicle guns could only
+  fire one shot a pull. `weapon.automatic` fires while held with a rate
+  and a spread that rise as it is held (Halo's `weap` numbers), and
+  `weapon.recoil` sets the per-shot kick that was fixed at 5. The buggy
+  takes the chaingun's tags (`docs/audits/vehicle-handling.md`); its rounds
+  push a tenth as hard as the old bolt so a burst does not fling a target.
+  Test: `the_gunners_chaingun_spins_up_spreads_and_does_not_kick`.
 
 ## What the engine did not own
 

@@ -147,6 +147,24 @@ What remains for the driver is the host meeting a late burst for the
 first time: it runs one tick without their move, their prediction is
 corrected by that tick's travel (0.1 to 0.2 units at speed), eased in.
 
+## The chaingun
+
+The gunner's post fires as the Warthog's `warthog gun` tag: held, 8 rounds
+a second rising to 15 over the first second; each round strays up to 1°
+rising to 2° over three seconds of fire; 293 wu/s (1207 units/s); no kick
+(Halo 1 has no recoil field). Before, the post fired one bolt a pull, at
+most 10 a second, at 140 units/s, and each bolt kicked the buggy back
+5 units/s, which a stream of 15 a second would have turned into a shove.
+The aim deviation (10°, the turret's slack against the camera) is not
+modelled: the turret already follows the gunner's look at the post's own
+turn rate.
+
+`the_gunners_chaingun_spins_up_spreads_and_does_not_kick` holds the trigger
+four seconds: 12 rounds in the first second, 15 a second once spun up, the
+first rounds within 1° of the aim and the last within 2°, the buggy moved
+under 0.05 units by 60 rounds, and a fresh pull starts slow again. The
+spread is the same on every machine for a vehicle and tick.
+
 ## Not the vehicle format's job
 
 | Gap | Where it goes |

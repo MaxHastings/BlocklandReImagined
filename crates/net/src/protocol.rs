@@ -468,7 +468,9 @@ pub struct RemotePose {
     /// A movement controller's animation intent and the heading it turned
     /// the body to, so others see Mario's triple jump facing his own way;
     /// none for a body whose controller state is blank. Its memory stays
-    /// the owner's.
+    /// the owner's. Last and left out when none, so an ordinary pose
+    /// costs no byte for it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub controller: Option<RemoteController>,
 }
 /// The part of [`bri_sim::archetype::ControllerState`] others draw.

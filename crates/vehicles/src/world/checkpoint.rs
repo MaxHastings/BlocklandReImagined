@@ -38,6 +38,9 @@ pub struct VehicleSave {
     pub last_damage_owner: OwnerId,
     pub last_shot_tick: Option<u64>,
     pub charge_started_tick: Option<u64>,
+    /// When an automatic gun's held trigger was pulled.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trigger_pulled_tick: Option<u64>,
     pub charge: u8,
     pub turret_damage: Option<f32>,
     pub steering: f32,
@@ -104,6 +107,7 @@ impl VehiclesWorld {
                 last_damage_owner: v.last_damage,
                 last_shot_tick: v.last_shot,
                 charge_started_tick: v.charge_started,
+                trigger_pulled_tick: v.trigger_pulled,
                 charge: v.charge,
                 turret_damage: v.turret_damage,
                 steering: v.steering,
@@ -263,6 +267,7 @@ impl VehiclesWorld {
                     last_damage: saved.last_damage_owner,
                     last_shot: saved.last_shot_tick,
                     charge_started: saved.charge_started_tick,
+                    trigger_pulled: saved.trigger_pulled_tick,
                     turret_damage: saved.turret_damage,
                     charge: saved.charge,
                     steering: saved.steering,
@@ -408,6 +413,8 @@ impl VehiclesWorld {
                     && v.last_shot_tick
                         .is_none_or(|n| n >= v.born_tick && n <= c.tick)
                     && v.charge_started_tick
+                        .is_none_or(|n| n >= v.born_tick && n <= c.tick)
+                    && v.trigger_pulled_tick
                         .is_none_or(|n| n >= v.born_tick && n <= c.tick),
                 "invalid saved timer"
             );

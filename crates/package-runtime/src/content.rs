@@ -1568,6 +1568,22 @@ pub struct ArchetypeDef {
     /// out asks for the Blockhead's clip name, then falls back.
     #[serde(default)]
     pub animations: Option<bri_content::body::Animations>,
+    /// The model's clip for each of its movement controller's intents
+    /// (`{"11": "triple"}`), replacing the base's.
+    #[serde(default)]
+    pub intent_clips: Option<BTreeMap<u8, String>>,
+    /// A sound of this Add-On heard where the body is each time its
+    /// controller changes to that intent, replacing the base's.
+    #[serde(default)]
+    pub intent_sounds: Option<BTreeMap<u8, String>>,
+    /// The speed (units/s) at which each locomotion role's clip plays at
+    /// 1x (`run`, `back`, `side`, `crouch_run`...), replacing the base's.
+    #[serde(default)]
+    pub ground_speeds: Option<bri_content::body::GroundSpeeds>,
+    /// The fastest a locomotion clip plays for its speed (v20's
+    /// `maxTimeScale`, 1.5).
+    #[serde(default)]
+    pub max_time_scale: Option<f32>,
     /// Its own movement rules: a `controller` this Add-On or one it
     /// depends on provides (`namespace:controller/name`).
     #[serde(default)]
@@ -1610,6 +1626,21 @@ impl ArchetypeDef {
         if let Some(animations) = &self.animations {
             bri_content::body::validate_animations(animations)?;
         }
+        ensure!(
+            [&self.intent_clips, &self.intent_sounds]
+                .into_iter()
+                .flatten()
+                .all(|m| m.len() <= 64 && m.values().all(|v| text(v, 160))),
+            "intent_clips and intent_sounds name up to 64 clips and sounds"
+        );
+        if let Some(speeds) = &self.ground_speeds {
+            bri_content::body::validate_ground_speeds(speeds)?;
+        }
+        ensure!(
+            self.max_time_scale
+                .is_none_or(|v| v.is_finite() && (0.1..=16.0).contains(&v)),
+            "max_time_scale must be 0.1 to 16"
+        );
         if let Some(camera) = &self.camera {
             camera.validate()?;
         }

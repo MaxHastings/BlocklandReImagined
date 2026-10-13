@@ -440,6 +440,8 @@ pub fn lower(
                 "TankSmokeImage"
             }
             .into(),
+            automatic: None,
+            recoil: None,
             look_muzzle: Vec::new(),
         })
     } else {
