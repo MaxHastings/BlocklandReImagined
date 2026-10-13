@@ -125,7 +125,9 @@ pub(super) fn register(engine: &mut Engine) {
                 Dynamic::from_map(
                     o.exports
                         .iter()
-                        .map(|(name, args)| (name.as_str().into(), Dynamic::from_int(i64::from(*args))))
+                        .map(|(name, args)| {
+                            (name.as_str().into(), Dynamic::from_int(i64::from(*args)))
+                        })
                         .collect(),
                 )
             }))
@@ -188,7 +190,10 @@ fn call_addon(addon: &str, function: &str, args: Vec<Dynamic>) -> Fallible<Dynam
                  dependencies or optional_dependencies"
             ));
         }
-        let Some(arity) = runtime.interop.get(addon).and_then(|o| o.exports.get(function))
+        let Some(arity) = runtime
+            .interop
+            .get(addon)
+            .and_then(|o| o.exports.get(function))
         else {
             return fail(format!("call_addon: `{addon}` exports no `{function}`"));
         };

@@ -41,10 +41,14 @@ impl AddOnData for MemoryAddOnData {
 pub(in crate::session) use bri_package_runtime::ops::valid_host_key as rules_key;
 
 impl Session {
-    /// Where Add-Ons keep data on this host. Set before packages are
-    /// enabled; without one, nothing outlives the session.
+    /// Where Add-Ons keep data on this host; without one, nothing outlives
+    /// the session. Set after the packages are installed, it reads what
+    /// they kept at once.
     pub fn set_addon_data(&mut self, store: Arc<dyn AddOnData>) {
         self.addon_data = Some(store);
+        if self.packages.is_some() {
+            self.load_host_data();
+        }
     }
 
     /// Read every enabled Add-On's kept data.

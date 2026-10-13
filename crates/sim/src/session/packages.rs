@@ -4174,8 +4174,7 @@ fn vet_part(host: &PackageHost, part: &Part, function: &str) -> Result<isize, Di
                 let before = input.players.get(player);
                 m.iter()
                     .find(|(k, v)| {
-                        !schema.player.contains_key(*k)
-                            && before.and_then(|b| b.get(*k)) != Some(v)
+                        !schema.player.contains_key(*k) && before.and_then(|b| b.get(*k)) != Some(v)
                     })
                     .map(|(k, _)| k)
             })

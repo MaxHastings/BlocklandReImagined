@@ -45,8 +45,7 @@ impl Session {
             return;
         }
         let take = host.addon_events.pending.len().min(MAX_A_TICK);
-        let due: Vec<(String, script::Emitted)> =
-            host.addon_events.pending.drain(..take).collect();
+        let due: Vec<(String, script::Emitted)> = host.addon_events.pending.drain(..take).collect();
         let listeners: Vec<(String, Vec<String>)> = host
             .catalog
             .behaviours()

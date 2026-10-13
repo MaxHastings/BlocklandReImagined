@@ -29,8 +29,8 @@ mod math;
 mod physics;
 pub mod view;
 pub use bots::BotKindView;
-pub use interop::{Emitted, Nested};
 pub use games::{BrickView, DropView, MAX_BRICKS_LISTED, MinigameView, TeamView, brick_map};
+pub use interop::{Emitted, Nested};
 use view::{Of, view_in};
 
 /// Operation budgets per kind of call.
@@ -3843,7 +3843,9 @@ impl Runtime {
                             format!("listens: `{namespace}` sends no event `{event}`"),
                         )
                         .at(location(id, &behaviour.script))
-                        .hint(format!("the events `{namespace}` sends are in its behaviour's `events`")),
+                        .hint(format!(
+                            "the events `{namespace}` sends are in its behaviour's `events`"
+                        )),
                     );
                 }
             }
@@ -3960,7 +3962,8 @@ impl Runtime {
         let previous_transaction =
             interop::TRANSACTION.with(|t| std::mem::take(&mut *t.borrow_mut()));
         let result = self.run(package, call, read_only, world);
-        let nested = interop::TRANSACTION.with(|t| std::mem::replace(&mut *t.borrow_mut(), previous_transaction));
+        let nested = interop::TRANSACTION
+            .with(|t| std::mem::replace(&mut *t.borrow_mut(), previous_transaction));
         interop::CHAIN.with(|c| *c.borrow_mut() = previous_chain);
         interop::RUNTIME.with(|r| r.set(previous_runtime));
         OFFSET.with(|o| o.set(previous_offset));

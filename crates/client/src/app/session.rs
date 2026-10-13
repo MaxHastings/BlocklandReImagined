@@ -422,6 +422,11 @@ impl App {
             )),
         }
         let copies = Arc::new(crate::copies::CopyFiles::new(self.files.old_saves.clone()));
+        // What Add-Ons' rules keep between games (money, ranks, saved
+        // configs), beside the host's other state.
+        let addon_data: Arc<dyn bri_sim::session::AddOnData> = Arc::new(
+            bri_net::addon_data::AddOnDataFiles::new(self.state_dir.join("addon-data")),
+        );
         let load_limit = self.load_limit.clone();
         // v20's `$Pref::Server::Port`, 28000 unless the player changed it.
         let port = u16::try_from(self.ui.core.prefs.i64_or("$Pref::Server::Port", 28000))
@@ -620,6 +625,7 @@ impl App {
                 },
                 maps: map_list,
                 copies: Some(copies),
+                addon_data: Some(addon_data),
                 game_version: Some(crate::updates::version()),
                 // `/botreload` reads the Add-Ons' bots.json again; `/botsave`
                 // keeps dial overrides beside settings.json, never in the

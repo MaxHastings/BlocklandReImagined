@@ -96,13 +96,7 @@ impl Drop for Root {
     }
 }
 
-fn package(
-    root: &Root,
-    id: &str,
-    manifest: Value,
-    behaviour: Value,
-    script: &str,
-) {
+fn package(root: &Root, id: &str, manifest: Value, behaviour: Value, script: &str) {
     let dir = root.0.join(id);
     std::fs::create_dir_all(&dir).unwrap();
     let mut manifest = manifest;
@@ -343,12 +337,11 @@ fn the_callees_operations_use_the_callees_capabilities() {
     let mut g = Game::new();
     // `shop` has no `chat` capability; `economy`'s `tell` still goes out.
     g.shop("buy", vec![PackageArg::Int(5)]).unwrap();
-    let problems: Vec<String> = g
-        .s
-        .package_diagnostics()
-        .iter()
-        .map(|d| format!("{}: {}", d.code, d.message))
-        .collect();
+    let problems: Vec<String> =
+        g.s.package_diagnostics()
+            .iter()
+            .map(|d| format!("{}: {}", d.code, d.message))
+            .collect();
     assert!(
         !problems.iter().any(|p| p.contains("op.capability")),
         "{problems:?}"
