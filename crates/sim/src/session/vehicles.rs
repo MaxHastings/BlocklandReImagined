@@ -79,7 +79,11 @@ const SEATED_FLOOD: usize = 30;
 /// Ticks a seated player's queue is watched before a lasting excess drains.
 const SEATED_WINDOW: u64 = 240;
 /// Moves a seated player's queue keeps beyond the worst jitter it has shown.
-const SEATED_SPARE: usize = 2;
+/// Two drained it back below what a jittery, lossy link needs, and each
+/// starved tick after that is a tick of travel its driver's prediction is
+/// corrected by: half again as many corrections at 150 ms each way with
+/// 40 ms of jitter and 5% loss (`crew_link_tests`).
+const SEATED_SPARE: usize = 4;
 
 /// How many of a seated player's queued moves the host runs this tick.
 ///
@@ -221,6 +225,7 @@ pub fn driver_controls(
         fire,
         strafe: input.right,
         look_delta: [wrap(input.yaw - last.0), wrap_half(input.pitch - last.1)],
+        look_yaw: input.head_yaw,
         strafe_steering_off: strafe_off,
         auto_return_off,
         ..Default::default()
@@ -1369,7 +1374,12 @@ impl Session {
                 // points. Their client turns its look onto the barrel once it
                 // knows the seat; until its moves are made here, the turret
                 // stays put.
-                let hull = heading(v.transform.rotation);
+                // Relative to where the hull will face after this tick's
+                // step, which applies the aim: relative to where it faces
+                // now, a turning hull carried the gun a tick's turn off
+                // the gunner's look (`crew_link_tests`).
+                let hull =
+                    heading(v.transform.rotation) - v.angular_velocity[1] * bri_physics::FIXED_DT;
                 let holding = !made_here;
                 let [aim_yaw, aim_pitch] = if holding {
                     v.turret_aim
@@ -2134,11 +2144,13 @@ impl Session {
                     // credits them as its mover, which must not turn the
                     // driver's kill into a suicide. Only an undriven one is
                     // run by whoever threw, holds or last pushed it, else
-                    // its owner.
+                    // its owner. The victim's own bump as it closes on
+                    // them never makes it theirs.
                     let owner = match driver {
                         Some(driver) if self.peers.contains_key(&driver.0) => driver.0,
                         _ => self
                             .mover_credit(bri_package_runtime::ops::ObjectRef::Vehicle(vehicle.0))
+                            .filter(|mover| *mover != victim)
                             .unwrap_or(owner.0),
                     };
                     let (shoves, gentle) = self

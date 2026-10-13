@@ -271,8 +271,40 @@ engine changes. The fields that decide how it flies and looks:
 | `strafe_steering` | the strafe keys steer; otherwise the mouse steers and pitches | `steeringUseStrafeSteering` |
 | `steering` | `strafe_rate`, and `auto_return`, `auto_return_rate`, `auto_return_max_speed`: whether steering drifts back to straight | `steeringStrafeSteeringRate`, `steeringUseAutoReturn`, `steeringAutoReturnRate`, `steeringAutoReturnMaxSpeed` |
 | `wheels[].steering`, `wheels[].powered` | how far each wheel turns (1 fully, negative the other way) and whether it drives | `setWheelSteering`/`setWheelPowered` in `onAdd`, else v20's table by wheel count |
+| `steering.toward_look` | the driver steers by looking: the wheels turn the hull toward the driver's free look and ease off to arrive (Halo's Warthog); a bot drives it the same way. Off: v20's mouse or strafe steering | none (new) |
+| `steering.speed_lock` | the share (0 to 1) of `max_steering` left at `max_speed`, narrowing in a straight line from full lock at rest (1, the default, never narrows) | none (new) |
+| `engine_curve` | the engine's torque by speed: up to 16 `[speed share, torque share]` points (speed share 0 to 1 of `max_speed` by rising speed, torque share 0 to 4 of `engine_force`), linear between points, flat before the first and past the last, none past `max_speed`. Empty: v20's torque falling straight from full at rest to none at `max_speed` | none (new) |
+| `wheels[].rebound_damping` | damping while the spring extends, apart from `damping` while it compresses: long, soft springs that soak a landing without bouncing. 0, the default: `damping` both ways, as v20 | none (new) |
+| `gravity_scale` | gravity on this vehicle as a share (0 to 4) of the game's (0.85 floats its jumps). Absent: the game's | none (new) |
+| `wheels[].tire.lateral_grip` | the tyre's grip across as a share (0.05 to 20) of its grip along (`static_friction`, `kinetic_friction`), stretching the friction circle into an ellipse: Halo's Warthog front tyres 0.6, rear 1.44. 1, the default: v20's circle | none (new) |
+| `throttle_brakes` | the throttle against the way the vehicle rolls brakes it with `brake_force` until it stops, then drives the other way (Halo's hard stop when you pull back). Off: v20's reversed engine, which does next to nothing near top speed | none (new) |
+| `reverse_limited` | a wheeled vehicle's engine stops pushing it backward at `reverse_speed`. Off: v20's wheeled vehicles back up as fast as they go forward | none (new) |
 | `threads` | animations the model plays by itself, like a propeller | `playThread` and `setThreadDir` in `onAdd` and the functions it calls |
 | `trails`, `effects` | emitters run at the model's nodes within a speed range, like wing-tip contrails; `effects` holds the vehicle's own particles and emitters | `mountImage` of an image whose state holds a `stateEmitter`, in `onAdd` and the functions it calls |
+
+A Warthog is a wheeled vehicle with these set, as the Playground buggy has
+them from Halo's own Warthog tags at 4.12 units to a Halo unit
+(`tools/make_playground_assets.py`; the tag numbers, the reasons and the
+measurements are in `docs/audits/vehicle-handling.md`): `max_speed` 34,
+`reverse_speed` 14.8 with `reverse_limited`, `max_steering` 0.5236 (30°),
+all four wheels `powered`, `rest_length` 0.62, the weight 57% forward with
+each axle's `spring` carrying its share (10300 front, 7700 rear, so the deck
+sits level and clears the ground), each axle's grip along and
+across from the tags, a flat `engine_curve` with `engine_force` set so it
+gains about 10 units a second each second, `throttle_brakes`, and:
+
+```json
+"engine_curve": [[0.0, 1.0], [0.9, 1.0], [1.0, 0.0]],
+"throttle_brakes": true,
+"reverse_limited": true,
+"gravity_scale": 0.85,
+"steering": { "strafe_rate": 0.25, "toward_look": true, "speed_lock": 0.6 },
+"mass_center": [0.0, 0.05, -0.2],
+"wheels": [{ "rest_length": 0.62, "spring": 10300, "damping": 2600,
+             "rebound_damping": 2400, "anti_sway": 6000,
+             "tire": { "static_friction": 3.0, "lateral_grip": 0.6, "...": "..." },
+             "...": "..." }]
+```
 
 Every force and turn acts along the vehicle's own axes, so a flying vehicle
 climbs where its nose points. A thread plays one of the model's sequences
