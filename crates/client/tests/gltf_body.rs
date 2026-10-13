@@ -82,14 +82,12 @@ fn an_imported_gltf_body_draws_untinted_holds_and_animates() -> Result<()> {
         "imported at 1.6 units tall, not {top}"
     );
 
-    // Held items go to its hand socket, level with the body; it sees from
-    // its eye socket.
-    let hand = mesh.mount_node(&assets, 0).context("Mount0")?;
-    let (_, rotation, at) = hand.to_scale_rotation_translation();
-    ensure!(
-        rotation.dot(glam::Quat::IDENTITY).abs() > 0.999,
-        "level grip"
-    );
+    // At rest its hand hangs at its side.
+    let at = mesh
+        .mount_node(&assets, 0)
+        .context("Mount0")?
+        .w_axis
+        .truncate();
     ensure!(
         at.x > 0.1 && at.y > 0.5 && at.y < 1.2,
         "the right hand (+X facing -Z): {at}"
@@ -104,19 +102,40 @@ fn an_imported_gltf_body_draws_untinted_holds_and_animates() -> Result<()> {
         "eye in front of the head: {eye}"
     );
 
+    // Holding something, it raises the arm (it has no aim clip) in front of
+    // its chest and holds the item level, as the Blockhead does, whichever
+    // way its hand bone points (`bri_content::hold`).
+    let holding = AvatarAnimationInput {
+        held_tool_pose: bri_client::avatar::HeldToolPose::Right,
+        ..Default::default()
+    };
+    mesh.pose_with_animation(&assets, &player, 0.0, &holding)?;
+    let hand = mesh.mount_node(&assets, 0).context("Mount0 held")?;
+    let (_, rotation, raised) = hand.to_scale_rotation_translation();
+    ensure!(
+        rotation.dot(bri_content::hold::AIM_HAND).abs() > 0.999,
+        "level grip: {rotation}"
+    );
+    ensure!(
+        raised.y > at.y && raised.z < at.z && raised.x > 0.0,
+        "the held hand is raised in front: {raised}, at rest {at}"
+    );
+
     // The host holds its shots to the same hand: it reads the body's hand
-    // node from the package, so they leave the muzzle in its hand and not
-    // its eye. It takes the hand with the arm raised to aim (the body's
-    // `armReadyRight`), so higher and further forward than at rest.
+    // node from the package with the arm raised the same way, so they leave
+    // the muzzle in its hand and not its eye.
     let grips = bri_net::content_identity::package_body_grips(root.path(), &packages);
     let hands = grips
         .get(MODEL)
         .context("the host found the body's hands")?;
-    let (node, grip) = hands.iter().next().context("a right hand node")?;
+    let (node, grip) = hands
+        .iter()
+        .find(|(name, _)| !name.contains('#'))
+        .context("a right hand node")?;
     let held = glam::Mat4::from_cols_array(grip).w_axis.truncate();
     ensure!(
-        (held.x - at.x).abs() < 0.01 && held.y > at.y && held.y < 1.6 && held.z < at.z,
-        "the host holds at the raised right hand ({node}): {held}, at rest {at}"
+        held.distance(raised) < 0.05,
+        "the host holds at the client's raised right hand ({node}): {held}, drawn {raised}"
     );
 
     // Running swings the arm that holds things.
