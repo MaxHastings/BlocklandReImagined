@@ -89,6 +89,21 @@ fn an_imported_gltf_body_draws_untinted_holds_and_animates() -> Result<()> {
         "eye in front of the head: {eye}"
     );
 
+    // The host holds its shots to the same hand: it reads the body's hand
+    // node from the package, so they leave the muzzle in its hand and not
+    // its eye. It takes the hand with the arm raised to aim (the body's
+    // `armReadyRight`), so higher and further forward than at rest.
+    let grips = bri_net::content_identity::package_body_grips(root.path(), &packages);
+    let hands = grips
+        .get(MODEL)
+        .context("the host found the body's hands")?;
+    let (node, grip) = hands.iter().next().context("a right hand node")?;
+    let held = glam::Mat4::from_cols_array(grip).w_axis.truncate();
+    ensure!(
+        (held.x - at.x).abs() < 0.01 && held.y > at.y && held.y < 1.6 && held.z < at.z,
+        "the host holds at the raised right hand ({node}): {held}, at rest {at}"
+    );
+
     // Running swings the arm that holds things.
     let mut moving = player.clone();
     moving.velocity = [0.0, 0.0, -8.0];

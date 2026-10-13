@@ -53,7 +53,7 @@ mod tutorial;
 mod world_shapes;
 pub use tutorial::{Abilities, BRICK_HAND_IMAGES, BrickHand};
 mod grips;
-pub use grips::shape_grips;
+pub use grips::{body_grips, shape_grips};
 mod riding;
 pub use riding::{Ride, shape_mount_points};
 mod vehicles;

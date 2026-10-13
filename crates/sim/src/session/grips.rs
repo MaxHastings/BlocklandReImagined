@@ -28,38 +28,15 @@ pub(super) struct Grips {
 /// `nodes`) with the rig's idle clip, the arm raised for that hand and the
 /// look clip level. A rig without those clips holds them in its bind pose.
 pub fn shape_grips(rig: &bri_content::avatar::Rig, nodes: &[&str]) -> BTreeMap<String, [f32; 16]> {
-    let shape = &rig.shape;
     let clip = |role: Role| rig.sequence(role.blockhead_clip());
     let mut out = BTreeMap::new();
-    for (hand, aim) in [(0, Role::AimRight), (1, Role::AimLeft)] {
-        let mut layers = Vec::new();
-        for (animation, at) in [
-            (clip(Role::Idle), 0.0),
-            (clip(aim), 1.0),
-            (clip(Role::Look), 0.5),
-        ] {
-            if let Some(animation) = animation {
-                layers.push(Layer {
-                    animation,
-                    time: animation.duration * at,
-                    weight: 1.0,
-                });
-            }
-        }
-        layers.sort_by_key(|l| (l.animation.additive, l.animation.priority));
-        let Ok(pose) = sample_layers(shape, &layers) else {
+    for hand in [0, 1] {
+        let Some(pose) = aim_pose(rig, &clip, hand) else {
             continue;
         };
         let names =
             std::iter::once(bri_content::body::BLOCKHEAD_HANDS[hand]).chain(nodes.iter().copied());
         for name in names {
-            let Some(i) = shape
-                .nodes
-                .iter()
-                .position(|n| n.name.eq_ignore_ascii_case(name))
-            else {
-                continue;
-            };
             let key = name.to_ascii_lowercase();
             // A node is its own hand's: Mount1 from the left arm's pose.
             if out.contains_key(&key)
@@ -67,12 +44,83 @@ pub fn shape_grips(rig: &bri_content::avatar::Rig, nodes: &[&str]) -> BTreeMap<S
             {
                 continue;
             }
-            if let Some(m) = pose.nodes.get(i).filter(|m| m.is_finite()) {
-                out.insert(key, m.to_cols_array());
+            if let Some(m) = node_in(rig, &pose, name) {
+                out.insert(key, m);
             }
         }
     }
     out
+}
+
+/// The hand nodes an imported body's archetype holds its images by (its
+/// `sockets`), each in its own hand's aim pose, with the clips the
+/// archetype names for its roles (`Look::animations`), else the
+/// Blockhead's clip names, else the bind pose.
+pub fn body_grips(
+    rig: &bri_content::avatar::Rig,
+    sockets: &bri_content::body::Sockets,
+    animations: &bri_content::body::Animations,
+) -> BTreeMap<String, [f32; 16]> {
+    let clip = |role: Role| {
+        animations
+            .get(role.name())
+            .and_then(|clip| rig.sequence(clip))
+            .or_else(|| rig.sequence(role.blockhead_clip()))
+    };
+    let mut out = BTreeMap::new();
+    for hand in [0, 1] {
+        let Some(name) = sockets.hand(hand as u32).and_then(|s| s.node) else {
+            continue;
+        };
+        let Some(pose) = aim_pose(rig, &clip, hand) else {
+            continue;
+        };
+        if let Some(m) = node_in(rig, &pose, &name) {
+            out.insert(name.to_ascii_lowercase(), m);
+        }
+    }
+    out
+}
+
+/// The rig's idle, its arm raised for `hand` and its look level.
+fn aim_pose<'a>(
+    rig: &'a bri_content::avatar::Rig,
+    clip: &dyn Fn(Role) -> Option<&'a bri_content::shape::Animation>,
+    hand: usize,
+) -> Option<bri_content::animation::Pose> {
+    let aim = [Role::AimRight, Role::AimLeft][hand];
+    let mut layers = Vec::new();
+    for (animation, at) in [
+        (clip(Role::Idle), 0.0),
+        (clip(aim), 1.0),
+        (clip(Role::Look), 0.5),
+    ] {
+        if let Some(animation) = animation {
+            layers.push(Layer {
+                animation,
+                time: animation.duration * at,
+                weight: 1.0,
+            });
+        }
+    }
+    layers.sort_by_key(|l| (l.animation.additive, l.animation.priority));
+    sample_layers(&rig.shape, &layers).ok()
+}
+
+fn node_in(
+    rig: &bri_content::avatar::Rig,
+    pose: &bri_content::animation::Pose,
+    name: &str,
+) -> Option<[f32; 16]> {
+    let i = rig
+        .shape
+        .nodes
+        .iter()
+        .position(|n| n.name.eq_ignore_ascii_case(name))?;
+    pose.nodes
+        .get(i)
+        .filter(|m| m.is_finite())
+        .map(|m| m.to_cols_array())
 }
 
 impl Session {

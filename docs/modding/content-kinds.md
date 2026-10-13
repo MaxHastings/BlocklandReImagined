@@ -107,7 +107,21 @@ nodes, so it gives offsets. Missing sockets fall back to the Blockhead's
 `Mount0`, `Mount1` and `Eye` on a rigged body; a box body without a hand
 socket hides what that hand holds, and without a `seat` it sits upright.
 Every gun fires from its muzzle at the hand socket and converges on the
-crosshair, falling back to the eye when the barrel is inside a wall.
+crosshair, falling back to the eye when the barrel is inside a wall. The
+host reads an imported body's hand nodes from its package with the arm
+raised to aim (its `aim_right` clip), as the Blockhead's.
+
+A held item takes the socket node's own axes, so author the socket nodes
+(`socket_right_hand`, `socket_left_hand` in glTF) with no turn of their own
+against the body (`crates/client/tests/gltf_body.rs` holds level that
+way): a bare hand bone's axes point the item along the bone.
+
+**Movement controller intents.** `look.intent_clips` maps the animation
+intents a movement `controller` reports to the model's clips, and
+`look.intent_sounds` to a sound played where the body is each time the
+controller changes to that intent: `{"11": "triple_jump"}`. An intent
+clip replaces run, jump and fall while the controller reports it; dying,
+sitting and swimming still win, and a rider's intent is ignored.
 `look.animations` maps roles to the body's own clips: `idle`, `run`,
 `back`, `side`, `crouch`, `crouch_run`, `crouch_back`, `crouch_side`,
 `jump`, `fall`, `sit`, `aim_right`, `aim_left`, `aim_both`,

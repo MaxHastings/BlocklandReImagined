@@ -56,6 +56,104 @@ pub fn kind_providers(
     }
     Ok(out)
 }
+/// Each enabled Add-On's own player models' hand nodes in their aim pose
+/// ([`bri_sim::session::body_grips`]), by model id: an archetype drawn with
+/// one of its package's converted shapes (`<package>:asset/<file>`) holds
+/// its images by the nodes its `sockets` name, so its shots leave the
+/// muzzle in its hand rather than its eye. A model that cannot be read is
+/// left out and said once; its shots leave the eye as before.
+pub fn package_body_grips(
+    content_root: &Path,
+    packages: &bri_package::packages::PackageSet,
+) -> BTreeMap<String, BTreeMap<String, [f32; 16]>> {
+    let mut out = BTreeMap::new();
+    for entry in packages.packages.iter().filter(|p| p.role.is_none()) {
+        let Ok(dir) = bri_package::packages::package_dir(content_root, entry) else {
+            continue;
+        };
+        let assets = dir.join("assets");
+        let Ok(files) = std::fs::read_dir(assets.join("archetypes")) else {
+            continue;
+        };
+        let prefix = format!("{}:asset/", entry.id);
+        // Each model's socket nodes and role clips, from every archetype
+        // drawn with it.
+        let mut bodies: BTreeMap<
+            String,
+            Vec<(bri_content::body::Sockets, bri_content::body::Animations)>,
+        > = BTreeMap::new();
+        for file in files.flatten() {
+            let Ok(bytes) = bounded_bytes(&file.path(), 256 * 1024) else {
+                continue;
+            };
+            let Ok(a) = serde_json::from_slice::<serde_json::Value>(&bytes) else {
+                continue;
+            };
+            let Some(model) = a["model"].as_str().filter(|m| m.starts_with(&prefix)) else {
+                continue;
+            };
+            let sockets = serde_json::from_value(a["sockets"].clone()).unwrap_or_default();
+            let animations = serde_json::from_value(a["animations"].clone()).unwrap_or_default();
+            bodies
+                .entry(model.to_owned())
+                .or_default()
+                .push((sockets, animations));
+        }
+        for (model, looks) in bodies {
+            match body_rig(&dir, &model) {
+                Ok(rig) => {
+                    let mut grips = BTreeMap::new();
+                    for (sockets, animations) in &looks {
+                        grips.extend(bri_sim::session::body_grips(&rig, sockets, animations));
+                    }
+                    if !grips.is_empty() {
+                        out.insert(model, grips);
+                    }
+                }
+                Err(error) => bri_console::warn(format!(
+                    "{model}: its hands could not be read ({error:#}), so its shots leave the eye"
+                )),
+            }
+        }
+    }
+    out
+}
+/// The converted shape `model` names in the package at `dir` (its
+/// `assets/content.json` lists files by package-relative path), as a rig of
+/// its own sequences.
+fn body_rig(dir: &Path, model: &str) -> Result<bri_content::avatar::Rig> {
+    let index: serde_json::Value = serde_json::from_slice(&bounded_bytes(
+        &contained(dir, "assets/content.json")?,
+        4 << 20,
+    )?)?;
+    let file = index["content"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .find(|c| {
+            c["id"]
+                .as_str()
+                .is_some_and(|c| c.eq_ignore_ascii_case(model))
+        })
+        .and_then(|c| c["file"].as_str())
+        .with_context(|| format!("{model} is not in its package"))?;
+    let shape: bri_content::shape::Shape =
+        serde_json::from_slice(&bounded_bytes(&contained(dir, file)?, 32 << 20)?)?;
+    shape.validate()?;
+    let sequences = shape
+        .animations
+        .iter()
+        .map(|a| (a.name.to_ascii_lowercase(), a.clone()))
+        .collect();
+    Ok(bri_content::avatar::Rig {
+        schema_version: 1,
+        id: model.into(),
+        shape,
+        sequences,
+        sources: Vec::new(),
+        omissions: Vec::new(),
+    })
+}
 /// [`kind_providers`] of brick catalogs, as (package dir, catalog dir).
 pub fn brick_catalog_providers(
     content_root: &Path,

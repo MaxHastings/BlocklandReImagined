@@ -77,14 +77,17 @@ input ─► Player::torque_tick
 A controller is a WebAssembly module exporting `memory`, `io() -> i32`
 (where its 128-byte exchange record lives) and `step() -> i32` (0: use the
 record; anything else: leave this tick to the motor). Its only possible
-import is `bri.sweep(dx, dy, dz: f32, out: i32) -> i32`: sweep the body's
+imports are `bri.sweep(dx, dy, dz: f32, out: i32) -> i32`: sweep the body's
 box by that vector, 1 when something is hit, writing fraction and outward
-normal (four f32) at `out`.
+normal (four f32) at `out`; and `bri.sweep_from(ox, oy, oz, dx, dy, dz: f32,
+out: i32) -> i32`, the same sweep with the box first moved by the offset
+from the feet (room above a wall for a ledge grab, floor a step ahead). The
+offset and the sweep together stay within the reach.
 
 | Offset | Type | In/out | What |
 |---|---|---|---|
 | 0 | u32 | in | interface version, 1 |
-| 4 | u32 | in | flags: 1 grounded, 2 crouched, 4 jump, 8 crouch, 16 jet, 32 submerged |
+| 4 | u32 | in | flags: 1 grounded, 2 crouched, 4 jump, 8 crouch, 16 jet, 32 submerged, 64 attack (the primary trigger, SM64's B) |
 | 8 | f32 | in | tick length, seconds |
 | 12 | f32 | in | body scale |
 | 16 | f32×3 | in | feet |
@@ -92,9 +95,14 @@ normal (four f32) at `out`.
 | 40 | f32×3 | in | facing on the ground plane, unit |
 | 52 | f32×3 | in | where the movement keys push, on the ground plane |
 | 64 | f32 | in | pitch |
-| 68 | u32 | out | 1: the controller took the jump (the motor does not jump) |
+| 68 | u32 | out | flags: 1 the controller took the jump (the motor does not jump), 2 no motor gravity this tick (it did its own), 4 the body faces the heading at 92 |
 | 72 | u32 | in/out | animation intent (low 8 bits kept) |
 | 76 | 16 bytes | in/out | the controller's memory |
+| 92 | f32 | in/out | the body's heading, radians in the look's yaw convention: in, the one it set last tick, else the look's; out, read when flag 4 is set (kept to 1/10000 rad); a tick without flag 4 turns the body back to the look |
+| 96 | f32 | in | the archetype's gravity, units/s² |
+
+Bytes 100 to 127 are reserved and read as zero. A module that never sets out
+flags 2 or 4 runs exactly as it did before they existed.
 
 Choices behind it:
 
@@ -120,8 +128,16 @@ Choices behind it:
   normal. At most 8 sweeps of at most 8 units (times the body's scale) per
   step.
 - **Animation intent is a number the Add-On names.** The engine replicates
-  it; what it looks like belongs to W2's animation roles (an archetype's
-  `animations` map can name a clip per intent).
+  it; the archetype's `look.intent_clips` names the clip each intent plays
+  (in place of run, jump and fall; death, sitting and swimming still win)
+  and `look.intent_sounds` the sound heard where the body is when the
+  controller changes to it.
+- **The body's facing is the controller's when it says so.** The camera
+  and aim stay the look's; the body turns to the heading the controller
+  sets, at whatever rate it turns it (SM64 turns Mario fast but not
+  instantly), so Mario runs across the screen facing where he runs.
+  Others receive the heading with the pose (`RemotePose::controller`),
+  never the controller's memory.
 
 Real controllers will be written in Rust, C or Zig and compiled to
 `wasm32-unknown-unknown`; the samples are hand-written WebAssembly text so

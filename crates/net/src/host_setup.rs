@@ -28,6 +28,10 @@ pub struct SessionContent {
     /// The Blockhead's hand nodes in its aim pose (`shape_grips`), so its
     /// shots leave the muzzle in its hand.
     pub body_grips: BTreeMap<String, [f32; 16]>,
+    /// Each Add-On player model's hand nodes in its aim pose, by model
+    /// (`content_identity::package_body_grips`), so an imported body's shots
+    /// leave the muzzle in its hand too.
+    pub package_body_grips: BTreeMap<String, BTreeMap<String, [f32; 16]>>,
     /// Each image's muzzle in the frame of the hand holding it
     /// (`bri_weapons::muzzle::barrel`).
     pub image_barrels: BTreeMap<String, [f32; 3]>,
@@ -228,6 +232,11 @@ impl HostSetup {
         session.set_avatar_catalog(content.avatar_catalog.clone())?;
         session.set_body_mount_points(BLOCKHEAD_MODEL, content.body_mounts.clone())?;
         session.set_body_grips(BLOCKHEAD_MODEL, content.body_grips.clone())?;
+        for (model, grips) in &content.package_body_grips {
+            if let Err(error) = session.set_body_grips(model, grips.clone()) {
+                bri_console::warn(format!("{model}: {error:#}; its shots leave the eye"));
+            }
+        }
         session.set_image_barrels(content.image_barrels.clone())?;
         session.set_vehicle_pack(content.vehicle_pack.clone(), content.bot_kinds.clone())?;
         if let Some(tuning) = &self.bot_tuning {

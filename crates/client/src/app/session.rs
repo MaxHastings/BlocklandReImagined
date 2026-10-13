@@ -339,6 +339,10 @@ impl App {
             bri_sim::session::shape_mount_points(&self.avatar.avatar_assets.rig.shape);
         // Shots leave the muzzle each image draws at in the hand.
         let body_grips = bri_sim::session::shape_grips(&self.avatar.avatar_assets.rig, &[]);
+        let package_body_grips = bri_net::content_identity::package_body_grips(
+            &self.content.paths.root,
+            &self.content.paths.packages,
+        );
         let image_barrels = self.world_items.assets().image_barrels();
         let mut catalog = self.build.tool_ui.server_catalog();
         // Start Game's Music Files: the loops this game's music bricks offer.
@@ -583,6 +587,7 @@ impl App {
                     avatar_catalog,
                     body_mounts,
                     body_grips,
+                    package_body_grips,
                     image_barrels,
                     vehicle_pack,
                     bot_kinds,
