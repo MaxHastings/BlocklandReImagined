@@ -302,6 +302,25 @@ impl MiniGameView {
     }
 }
 
+/// What the gun in a player's hand has to shoot ([`Notice::Ammo`]).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HeldAmmo {
+    /// The item (or image) id of the gun.
+    pub item: String,
+    /// Rounds ready to fire: the magazine, or for a gun counted from its
+    /// reserve (grenades) the reserve. `None` when they never run out.
+    pub rounds: Option<u32>,
+    /// A full magazine.
+    pub size: u32,
+    /// Rounds carried for it beyond the magazine; `None` when endless.
+    pub reserve: Option<u32>,
+    pub reloading: bool,
+    /// The ammo display shows this as the bottom print now, so a HUD that
+    /// draws its own counter hides that print.
+    pub printed: bool,
+}
+
 /// A message for one player only (minigame chat, prints, invitations).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -431,6 +450,10 @@ pub enum Notice {
     /// `setControlCameraFov`: an Add-On sets this player's field of view,
     /// or hands it back to their own setting with `None`.
     Fov(Option<f32>),
+    /// The gun in this player's hand and what it has to shoot, for HUDs
+    /// that draw their own ammo counter, or `None` with no such gun. Sent
+    /// as it changes, right after the ammo display's bottom print.
+    Ammo(Option<HeldAmmo>),
     /// The host emptied this player's hand (an Add-On's `unmount_image`):
     /// bricks, spray can and tools are put away on the client too.
     PutAway,
