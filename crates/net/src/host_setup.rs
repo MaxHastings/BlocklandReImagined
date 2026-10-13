@@ -249,11 +249,19 @@ impl HostSetup {
             playable_bot_kinds(&content.bot_kinds, &session, hosted.catalog.as_deref()),
         )?;
         if let Some(tuning) = &self.bot_tuning {
+            // `/botreload` reads every enabled Add-On's bots again: keep
+            // the ones this game can run, as above.
+            let mut tuning = tuning.clone();
+            if let Some(reload) = tuning.reload.take() {
+                let archetypes = session.archetypes().clone();
+                let catalog = hosted.catalog.clone();
+                tuning.reload = Some(Arc::new(move || {
+                    Ok(playable_with(&reload()?, &archetypes, catalog.as_deref()))
+                }));
+            }
             let problems = match &self.bot_overrides {
-                Some(overrides) => {
-                    session.set_bot_tuning_with(tuning.clone(), overrides.clone())?
-                }
-                None => session.set_bot_tuning(tuning.clone())?,
+                Some(overrides) => session.set_bot_tuning_with(tuning, overrides.clone())?,
+                None => session.set_bot_tuning(tuning)?,
             };
             for problem in problems {
                 bri_console::warn(format!("Bot override left out: {problem}"));
@@ -365,13 +373,20 @@ pub fn playable_bot_kinds(
     session: &Session,
     catalog: Option<&Catalog>,
 ) -> Vec<BotKind> {
+    playable_with(kinds, session.archetypes(), catalog)
+}
+fn playable_with(
+    kinds: &[BotKind],
+    archetypes: &bri_sim::archetype::Archetypes,
+    catalog: Option<&Catalog>,
+) -> Vec<BotKind> {
     kinds
         .iter()
         .filter(|kind| {
             let Some(body) = kind.body.as_deref() else {
                 return true;
             };
-            let found = session.archetypes().find(body).is_some()
+            let found = archetypes.find(body).is_some()
                 || catalog.is_some_and(|c| c.archetypes().any(|(id, _)| id == body));
             if !found {
                 bri_console::warn(format!(
