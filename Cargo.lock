@@ -768,6 +768,7 @@ name = "bri-package-runtime"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "bri-audio",
  "bri-console",
  "bri-content",
  "bri-package",

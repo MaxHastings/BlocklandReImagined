@@ -296,6 +296,29 @@ no seats cannot be mounted. Three fields exist for Add-Ons:
   holds turn with the turret and, when the gun model pitches with a
   `look` clip, tip with it about the weapon's `pivot`. A hand left out
   keeps its clip pose. The Playground buggy's driver and gunner use it.
+- `"engine_sound": { "sound": "your-id:engine" }` gives it a running
+  engine. The sound is a key of the `sounds` in the same Add-On's
+  `assets/weapons.json`, declared with `"looping": true` (a `.wav` or
+  `.ogg` of up to 30 seconds; a whole number of cycles loops without a
+  click). It plays at the vehicle, heard in 3D like any world sound, while
+  someone sits in the seat that drives it (any seat, for a vehicle no
+  seat drives), and fades out when they get out or it is destroyed. Its
+  pitch and volume follow the vehicle's speed in a straight line, as
+  multiples of the sound's own: `idle_pitch` (0.8) and `idle_volume`
+  (0.6) standing still, `full_pitch` (1.6) and `full_volume` (1.0) at
+  `full_speed` units a second (the vehicle's `max_speed` when absent) and
+  past it. Pitch is 0.25 to 4, volume 0 to 4. Every player hears it from
+  the vehicle's motion as they see it, the driver included; nothing is
+  sent for it. The Playground buggy's chug
+  (`tools/make_playground_assets.py`) is the example:
+
+  ```json
+  "engine_sound": { "sound": "playground-buggy:engine",
+                    "idle_pitch": 0.8, "full_pitch": 1.6, "full_speed": 34 }
+  ```
+
+  `bri-addon-check` fails an engine sound no weapons pack declares, and
+  warns when it does not loop.
 
 Every vehicle can be placed from a vehicle spawn brick and spawned by a
 rule (`spawn_vehicle`).

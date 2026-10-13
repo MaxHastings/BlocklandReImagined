@@ -6,6 +6,6 @@ pub mod muzzle;
 pub mod schema;
 pub mod testing;
 pub mod world;
-pub use schema::{Definition, Family, Pack, Transform};
+pub use schema::{Definition, EngineSound, Family, Pack, Transform};
 pub use world::*;
 pub const FIXED_DT: f32 = 1.0 / 120.0;
