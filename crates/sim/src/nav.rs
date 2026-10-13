@@ -2688,7 +2688,7 @@ mod tests {
             z > 0.0
         };
         let sides: Vec<bool> = (1..=24u64)
-            .map(|seed| side(seed * 0x9e37_79b9 | 1))
+            .map(|seed| side((seed * 0x9e37_79b9) | 1))
             .collect();
         assert!(
             sides.iter().any(|s| *s) && sides.iter().any(|s| !*s),
