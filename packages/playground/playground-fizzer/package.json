@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "id": "playground-fizzer",
+  "version": "1.0.0",
+  "api": 1,
+  "name": "Fizzer",
+  "description": "A walking bomb: it wanders, walks up to whoever it sees, lights its wick with a hiss and, if they have not run, goes pop, hurting everyone near and breaking bricks where the game allows brick damage. The shared bot brain decides when; its rules (Fizzer Rules) decide what the pop is. Its body is also a player type. Part of the Mixed Add-On Playground; it knows nothing about any other Add-On.",
+  "authors": ["Blockland ReImagined"],
+  "license": "CC0-1.0",
+  "provenance": { "source": "original" },
+  "dependencies": { "playground-fizzer-look": "^1.0.0" },
+  "provides": [
+    { "kind": "archetype", "id": "playground-fizzer:archetype/fizzer", "file": "fizzer.json" },
+    { "kind": "bots", "id": "playground-fizzer:bots/main", "file": "bots.json" },
+    { "kind": "weapons", "id": "playground-fizzer:weapons/main", "file": "assets/weapons.json" }
+  ]
+}
