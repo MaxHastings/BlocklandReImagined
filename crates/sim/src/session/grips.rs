@@ -55,11 +55,15 @@ pub fn shape_grips(rig: &bri_content::avatar::Rig, nodes: &[&str]) -> BTreeMap<S
 /// The hand nodes an imported body's archetype holds its images by (its
 /// `sockets`), each in its own hand's aim pose, with the clips the
 /// archetype names for its roles (`Look::animations`), else the
-/// Blockhead's clip names, else the bind pose.
+/// Blockhead's clip names, else the bind pose. A `fitted` body (an
+/// imported glTF `body`) is held as every client draws it
+/// ([`bri_content::hold::fit`]): an arm it has no aim clip for raised in
+/// front of the chest, and the hand turned to hold as the Blockhead's.
 pub fn body_grips(
     rig: &bri_content::avatar::Rig,
     sockets: &bri_content::body::Sockets,
     animations: &bri_content::body::Animations,
+    fitted: bool,
 ) -> BTreeMap<String, [f32; 16]> {
     let clip = |role: Role| {
         animations
@@ -67,20 +71,53 @@ pub fn body_grips(
             .and_then(|clip| rig.sequence(clip))
             .or_else(|| rig.sequence(role.blockhead_clip()))
     };
+    let index = |name: &str| {
+        rig.shape
+            .nodes
+            .iter()
+            .position(|n| n.name.eq_ignore_ascii_case(name))
+    };
+    let parents: Vec<Option<usize>> = rig.shape.nodes.iter().map(|n| n.parent).collect();
     let mut out = BTreeMap::new();
     for hand in [0, 1] {
         let Some(name) = sockets.hand(hand as u32).and_then(|s| s.node) else {
             continue;
         };
-        let Some(pose) = aim_pose(rig, &clip, hand) else {
+        let Some(mut pose) = aim_pose(rig, &clip, hand) else {
             continue;
         };
+        if fitted && let Some(end) = index(&name) {
+            let landmark = sockets
+                .hand(1 - hand as u32)
+                .and_then(|s| s.node)
+                .and_then(|n| index(&n))
+                .or_else(|| sockets.eye().node.and_then(|n| index(&n)));
+            let aims = clip([Role::AimRight, Role::AimLeft][hand]).is_some();
+            if let Some(fit) =
+                bri_content::hold::fit(&parents, &mut pose.nodes, end, landmark, !aims, hand == 0)
+            {
+                pose.nodes[end] *= Mat4::from_quat(fit.correction);
+                // The hand pitches with the aim about its shoulder.
+                if let Some(hold) = fit.hold
+                    && let Some(shoulder) = pose.nodes.get(hold.shoulder)
+                {
+                    out.insert(
+                        format!("{}{SHOULDER}", name.to_ascii_lowercase()),
+                        Mat4::from_translation(shoulder.w_axis.truncate()).to_cols_array(),
+                    );
+                }
+            }
+        }
         if let Some(m) = node_in(rig, &pose, &name) {
             out.insert(name.to_ascii_lowercase(), m);
         }
     }
     out
 }
+
+/// Beside a fitted hand's node in [`body_grips`]: the shoulder it pitches
+/// about with the aim.
+const SHOULDER: &str = "#shoulder";
 
 /// The rig's idle, its arm raised for `hand` and its look level.
 fn aim_pose<'a>(
@@ -173,15 +210,21 @@ impl Session {
                 pivot: Vec3::from(socket.offset),
             });
         };
-        let hand_node = self
+        let hands = self
             .grips
             .hands
-            .get(&archetype.look.model.to_ascii_lowercase())?
-            .get(&node.to_ascii_lowercase())?;
+            .get(&archetype.look.model.to_ascii_lowercase())?;
+        let node = node.to_ascii_lowercase();
+        let hand_node = hands.get(&node)?;
         let m = &archetype.movement;
+        let pivot = hands
+            .get(&format!("{node}{SHOULDER}"))
+            .map_or(Vec3::new(0.0, m.stand_eye, -m.eye_forward), |s| {
+                s.w_axis.truncate()
+            });
         Some(Grip {
             hand: *hand_node * offset,
-            pivot: Vec3::new(0.0, m.stand_eye, -m.eye_forward),
+            pivot,
         })
     }
     /// Where `owner`'s shot from `hand` leaves: the muzzle of the image in

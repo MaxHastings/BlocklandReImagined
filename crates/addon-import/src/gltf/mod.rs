@@ -1491,7 +1491,10 @@ fn points(shape: &Shape, kind: Kind) -> Vec<Point> {
         let n = name.to_ascii_lowercase();
         match kind {
             Kind::Body => false,
-            Kind::Item => matches!(n.as_str(), "mountpoint" | "muzzlepoint" | "ejectpoint"),
+            Kind::Item => matches!(
+                n.as_str(),
+                "mountpoint" | "muzzlepoint" | "ejectpoint" | "supportpoint"
+            ),
             Kind::Prop => [
                 "mount",
                 "hub",

@@ -10,6 +10,7 @@ pub mod brick;
 pub mod camera;
 pub mod collision;
 pub mod effects;
+pub mod hold;
 pub mod hud;
 pub mod interior;
 pub mod passage;
