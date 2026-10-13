@@ -686,14 +686,14 @@ impl Session {
             self.bots.claims.release_owner(bot);
             return None;
         }
-        // On the way to an objective, a seat is a way there; else with no
-        // enemy known, a way to where it would look for one (`explore`, its
-        // own subject); with no enemy about, idle play toward a player in
-        // sight (`extras`).
+        // An enemy known comes first, as it did; else on the way to an
+        // objective, a seat is a way there; else a way to where it would
+        // look for an enemy (`explore`, its own subject); with no enemy
+        // about, idle play toward a player in sight (`extras`).
         let exploring = brain.explore.to.filter(|_| seats && !brain.tethered());
         let (subject, toward, want) = match (enemy, exploring, objective_to) {
-            (_, _, Some(to)) => (bot, to, Want::Objective),
-            (Some(enemy), _, None) => (enemy.subject, enemy.at, Want::Fight),
+            (Some(enemy), _, _) => (enemy.subject, enemy.at, Want::Fight),
+            (None, _, Some(to)) => (bot, to, Want::Objective),
             (None, Some(to), None) => (bot, to, Want::Explore),
             (None, None, None) => match self.bot_idle_mark(bot, tick) {
                 Some((mark, at)) => (mark, at, Want::Play),

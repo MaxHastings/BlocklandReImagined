@@ -40,7 +40,8 @@ v0.3.0-experimental (Max asked for it in v0.3.0).
   grounded objective. Farther than 32 units from a feet-only step it has not
   picked up, a vehicle's controls are now an opportunity when the drive
   beats the walk (`Want::Objective`, `drive_serves`, armed or not); the
-  driver pulls up and walks the last stretch.
+  driver pulls up and walks the last stretch. A known enemy still comes
+  first, as before: the seat is only sought with none about.
 - **Fear of drops.** A body whose jets lift it and hold 3 s of jetting gets a
   32-unit walk-grid drop (was 4 for everyone), and a new highest mover,
   `Brake`, holds the jets with no walk when `route::brake_fall` says a fall
@@ -55,6 +56,13 @@ v0.3.0-experimental (Max asked for it in v0.3.0).
   `nav::tests::seeded_searches_spread_over_equal_ways`, and
   `slayer::bots_are_offered_the_way_home_and_their_own_dropped_flag`
   (fixture CTF port, no original content).
+
+- Chaos `bot_objectives::an_objective_resumes_after_an_ordinary_combat_interruption_and_disconnect`
+  failed once the seeded routes moved the bot: the scripted attacker's
+  misses then flew on 75 units into the passive author. The assertion now
+  checks the stated intent (the bot never takes the author on) rather than
+  the author's health. `bot_objectives`, `bot_interactions`, `bot_gauntlet`
+  pass.
 
 ## Not verified here
 
