@@ -29,6 +29,25 @@ impl App {
     /// a dead player's clicks, recorded macros and building actions.
     /// True when `action` was handled here.
     fn intercept_action(&mut self, id: RequestId, action: &UiAction) -> bool {
+        // Controls a running Add-On holds (`input.capture`) are its, not
+        // the game's.
+        let captured = match action {
+            UiAction::Game(GameAction::Held { control, down }) => {
+                self.addons.client_code.capture_held(*control, *down)
+            }
+            UiAction::Game(GameAction::Look { yaw, pitch }) => {
+                // As the game turns the view: pitch up, at its scale.
+                let scale = self.controls.fov() / 90.0;
+                self.addons
+                    .client_code
+                    .capture_look(yaw * scale, -pitch * scale)
+            }
+            _ => false,
+        };
+        if captured {
+            self.answer(id, Ok(()));
+            return true;
+        }
         note_trigger(&mut self.controls, action);
         // A spectator's keys go to the rules that hold them
         // (`Observer::onTrigger`, `serverCmdLight`).

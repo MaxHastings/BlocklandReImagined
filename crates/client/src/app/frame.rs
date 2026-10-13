@@ -252,6 +252,14 @@ impl App {
                 .as_ref()
                 .and_then(|v| v.vitals.get(&v.owner))
                 .is_some_and(|v| v.mounted.is_some() || v.ride.is_some());
+            // Controls an Add-On took over while held stop acting in the
+            // game at once.
+            let captured = self.addons.client_code.captured_controls();
+            for control in crate::client_code::HELD_CONTROLS {
+                if captured & crate::client_code::control_bit(control) != 0 {
+                    self.controls.let_go(control);
+                }
+            }
             let input = if alive {
                 rider_input(self.net.abilities, self.controls.movement(), mounted)
             } else {

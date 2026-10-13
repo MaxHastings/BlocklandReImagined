@@ -273,6 +273,7 @@ impl App {
                 scope_overlay: None,
                 observer_eye: None,
                 rendered_camera: None,
+                addon_camera: false,
                 rendered_roll: 0.0,
                 pixels_per_unit: None,
                 drawn_controls: None,
