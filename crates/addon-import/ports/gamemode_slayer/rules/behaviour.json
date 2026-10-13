@@ -510,7 +510,8 @@
       "type": "player_type",
       "default": "v20.player.{{team_player_type|lower}}",
       "scope": "team",
-      "quiet": true
+      "quiet": true,
+      "shown_when": { "setting": "team_sync_loadout", "is": [false] }
     },
     {
       "key": "team_equip_0",
@@ -519,7 +520,8 @@
       "type": "item",
       "default": "v20.weapon.{{team_equip_0|lower}}",
       "scope": "team",
-      "quiet": true
+      "quiet": true,
+      "shown_when": { "setting": "team_sync_loadout", "is": [false] }
     },
     {
       "key": "team_equip_1",
@@ -528,7 +530,8 @@
       "type": "item",
       "default": "v20.weapon.{{team_equip_1|lower}}",
       "scope": "team",
-      "quiet": true
+      "quiet": true,
+      "shown_when": { "setting": "team_sync_loadout", "is": [false] }
     },
     {
       "key": "team_equip_2",
@@ -537,7 +540,8 @@
       "type": "item",
       "default": "v20.weapon.{{team_equip_2|lower}}",
       "scope": "team",
-      "quiet": true
+      "quiet": true,
+      "shown_when": { "setting": "team_sync_loadout", "is": [false] }
     },
     {
       "key": "team_equip_3",
@@ -546,7 +550,8 @@
       "type": "item",
       "default": "",
       "scope": "team",
-      "quiet": true
+      "quiet": true,
+      "shown_when": { "setting": "team_sync_loadout", "is": [false] }
     },
     {
       "key": "team_equip_4",
@@ -555,7 +560,8 @@
       "type": "item",
       "default": "",
       "scope": "team",
-      "quiet": true
+      "quiet": true,
+      "shown_when": { "setting": "team_sync_loadout", "is": [false] }
     },
     {
       "key": "team_sync_loadout",
@@ -564,7 +570,8 @@
       "type": "bool",
       "default": {{team_sync_loadout|bool}},
       "scope": "team",
-      "quiet": true
+      "quiet": true,
+      "help": "On, the team plays with the mini-game's own player type and start tools. Turn it off to give the team its own (Slayer's Sync box, which picking a team's tools unticks)."
     },
     {
       "key": "team_scale",
