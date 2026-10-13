@@ -1,7 +1,7 @@
 # Release builds on GitHub
 
-`.github/workflows/release.yml` builds the Windows release on a GitHub runner
-and publishes it as a GitHub Release. Players download
+`.github/workflows/release.yml` builds the Windows, macOS and Linux releases
+side by side on GitHub runners and publishes all three as one GitHub Release. Players download
 `BlocklandReImagined-windows.zip` from the
 [Releases page](https://github.com/MaxHastings/BlocklandReImagined/releases),
 and the game's update check (`crates/client/src/updates.rs`) reads the latest
@@ -22,8 +22,12 @@ The workflow runs the same recipe as a release built by hand
 5. The zip smoke: unzip it, check it holds exactly the versioned release
    folder, `-VerifyPackage` that folder and run its `bri-client --check`.
 6. Publish a release tagged with the version, carrying
-   `BlocklandReImagined-windows.zip`. The Mac and Linux workflows add
-   `BlocklandReImagined-macos.zip` and `BlocklandReImagined-linux.zip`. The
+   `BlocklandReImagined-windows.zip`, `BlocklandReImagined-macos.zip`,
+   `BlocklandReImagined-linux.zip` and `SHA256SUMS` (`tools/publish_release.py`,
+   which first checks every zip names the version and that the base content
+   packs are byte-identical on all three). The Mac and Linux builds
+   (`mac-release-asset.yml`, `linux-release-asset.yml`) fetch the same content
+   and Add-On bundle as Windows, so they run alongside it. The
    names carry no version, so
    `releases/latest/download/BlocklandReImagined-<os>.zip` always fetches the
    newest; the folder inside is `BlocklandReImagined-<v>-<os>`.
@@ -132,11 +136,11 @@ The draft release is `addon-bundle`, like `ci-content`: visible only to people
 who can push and to the workflows. The Windows release workflow runs
 `python tools/addon_bundle.py fetch`, and its packager copies the originals
 into `content/addons/<id>` and `CREDITS.md` beside the docs. The Mac and
-Linux workflows already take the base game from that release's Windows zip
-(checked against its `MANIFEST.json`); they take the originals and
-`CREDITS.md` from it too (`python tools/addon_bundle.py from-release`), so
-every platform ships the same credited originals whenever the draft was
-last uploaded.
+Linux workflows fetch the same draft (and the same `ci-content`), so every
+platform ships the same credited originals whenever the draft was last
+uploaded; `tools/publish_release.py` refuses a release whose three zips carry
+different base content. (`addon_bundle.py from-release` still takes the
+bundle back out of an unpacked release.)
 
 - **Pin an original:** run `find`, check the copy it names is the one to
   credit, and add its sha256 to the entry's `sha256`.
@@ -166,42 +170,53 @@ game on the PC.
 
 ## Making a release
 
-Either push a tag named by the version:
+From a gate-ready branch on origin (it contains origin/main), one command on
+the PC does everything, and the next release needs one go-ahead from Max:
 
 ```powershell
-git tag 2026-10-02-a19 origin/main
-git push origin 2026-10-02-a19
+python tools/release.py v0.2.11 --branch claude/v0211-integration-ab12cd
 ```
 
-or open Actions, **release**, **Run workflow**, and type the version. That form
-can also build without publishing (Windows, macOS and Linux zips are then kept on the run for 30
-days) and leave the Stress Lab out.
+1. **Content refresh first.** The main checkout checks out the branch head
+   (detached) and runs `tools/bootstrap.py`, which rebuilds only packs whose
+   importer inputs changed; `ci_content.py upload` runs when a pack changed,
+   `addon_bundle.py upload` when the content, `packages/default-addons.json`,
+   the importer or a port changed since the previous `v*` tag. The gate then
+   tests the content that ships. (`--skip-refresh` when it already matches,
+   `--upload` to upload regardless.)
+2. **Release builds start**: a build-only `release.yml` run at the branch,
+   Windows, macOS and Linux in parallel, while the gate runs.
+3. **The gate** (`tools/gate.py`) on that commit. It goes first: any queued
+   perf or benchmark runs on the PC wait until it finishes.
+4. **Push and tag.** The exact gated commit is pushed to main (the push hook
+   reuses the gate's pass, so it takes seconds) and tagged with the version.
+   There is no merge pull request, so nothing waits on the GitHub Windows
+   check, which still runs on main afterwards as the record. An open pull
+   request for the branch shows as merged.
+5. **Publish.** The tag starts `publish-release.yml`, which waits for the
+   build-only run if it is still going, takes its three zips and publishes
+   them with `docs/releases/<version>.md` (when the commit has it) above the
+   download instructions. With no build at that commit it starts a
+   publishing `release.yml` run at the tag instead.
 
-Tags that start with a date (`YYYY-MM-DD-...`) start the workflow. The version
-becomes the release's tag, the dist folder name and what the main menu shows,
-exactly as `BRI_VERSION` does for a hand-made build. The workflow refuses a
-version that already has a release.
+It stops at the first failure and says what failed; nothing is pushed until
+the gate and the builds pass. `--check-only` does steps 1 to 3 and publishes
+nothing. Each step prints its minutes. The binaries carry the tagged commit's
+hash, because the tag names the commit they were built from.
 
+Other ways in, for a release built without the PC:
 
-## Staging one cross-platform release
+- Push a date tag (`git tag 2026-10-02-a19 origin/main` then
+  `git push origin 2026-10-02-a19`): `release.yml` builds and publishes all
+  three platforms.
+- Push a `v*` tag yourself: `publish-release.yml` publishes a build-only run
+  at that commit if there is one, otherwise builds.
+- Actions, **release**, **Run workflow**, with a version, and publish on or
+  off. Off keeps the three zips on the run for 30 days.
 
-For a release containing Windows, macOS and Linux, pin the reviewed main commit
-with its version tag first. The three workflows must build that exact commit.
-Semantic version tags such as `v0.2.0` do not trigger the date-tag workflow;
-dispatch `release.yml` at the tag with `version=v0.2.0` and `publish=false`.
-Wait for Windows CI and the full local gate before treating the source as ready.
+The workflows refuse a version that already has a published release. A draft
+left by a failed publish is reused.
 
-Download the Windows artifact and verify its package manifest. Create a draft
-GitHub Release at the pinned tag and attach `BlocklandReImagined-windows.zip`.
-Dispatch `mac-release-asset.yml` and `linux-release-asset.yml` with that release
-tag and immutable source commit. Authenticated workflows can read the draft's
-Windows asset. They verify its manifest, carry over its credited original
-Add-Ons, build their platform binaries, verify the package and run a startup
-check from the extracted archive before attaching it to the draft.
-
-Check all three workflow outcomes, archive manifests, binary versions and common
-content hashes. Attach `SHA256SUMS` for the final archives, write the release
-notes and publish the draft only after those checks pass. The Mac archive targets
-Apple silicon and the Linux archive targets x86-64/glibc 2.35 or newer.
-The native Mac app uses an ad-hoc signature unless a signing identity was supplied.
-The creator guides ship in all archives with links to their packaged filenames.
+Re-attaching one platform to an existing release: run `mac-release-asset.yml`
+or `linux-release-asset.yml` with the release tag, the release commit and
+publish on. They never replace an asset.

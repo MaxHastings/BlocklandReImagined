@@ -28,6 +28,7 @@ const RUNNER: &str = "playground-runner:archetype/runner";
 const TROOPER: &str = "sample-trooper:archetype/trooper";
 const KICKER: &str = "sample-wall-kick:archetype/kicker";
 const COMMANDO: &str = "sample-commando:archetype/commando";
+const STOMPER: &str = "playground-stomper:archetype/stomper";
 const GIANT: &str = "test-bodies:archetype/giant";
 const STATUE: &str = "test-bodies:archetype/statue";
 const CARBINE: &str = "playground-rifle:weapon/carbine";
@@ -52,6 +53,14 @@ fn add_on(id: &str) -> (PathBuf, Side) {
         "playground-rifle" => (packages().join("playground/playground-rifle"), Side::Shared),
         "playground-buggy" => (packages().join("playground/playground-buggy"), Side::Shared),
         "playground-mode" => (packages().join("playground/playground-mode"), Side::Server),
+        "playground-stomper" => (
+            packages().join("playground/playground-stomper"),
+            Side::Shared,
+        ),
+        "playground-stomper-look" => (
+            packages().join("playground/playground-stomper-look"),
+            Side::Client,
+        ),
         "blockhead_bot" => (packages().join("blockhead_bot"), Side::Shared),
         "sample-commando" | "sample-trooper" | "sample-wall-kick" => {
             (packages().join("samples").join(id), Side::Server)
@@ -77,12 +86,14 @@ const BODIES: [&str; 7] = [
     "test-bodies",
 ];
 /// The Playground mode, with the Add-Ons it names.
-const MODE: [&str; 6] = [
+const MODE: [&str; 8] = [
     "playground-runner",
     "playground-runner-look",
     "playground-rifle",
     "playground-buggy",
     "blockhead_bot",
+    "playground-stomper",
+    "playground-stomper-look",
     "playground-mode",
 ];
 
@@ -1016,6 +1027,43 @@ fn bodies_picked_from_bricks_coexist_in_a_dialog_mini_game() {
     g.steps(20);
     respawn(&mut g, bo);
     assert_eq!(g.body(bo), STANDARD);
+}
+
+/// Max's Goomba as a player type: in the Playground's match a Runner
+/// holding the Carbine becomes the Stomper (the enemy's own body, from its
+/// own Add-On) from a class brick, keeps the Carbine and a full share of
+/// its smaller health, becomes a Stomper again in the buggy's driving seat
+/// with `/body`, and respawns as the body it picked last.
+#[test]
+fn a_runner_becomes_a_stomper_drives_the_buggy_and_respawns_as_one() {
+    let mut g = Game::server(&MODE, true, false);
+    let ann = g.join("Ann");
+    assert_eq!(g.body(ann), RUNNER);
+    g.steps(300);
+    g.equip(ann, CARBINE);
+    let stomper = g.class_brick(ann, [6.5, 0.1, 8.25], STOMPER);
+    g.click(stomper, ann);
+    assert_eq!(g.body(ann), STOMPER);
+    assert_eq!(g.held(ann).as_deref(), Some(CARBINE), "still holding it");
+    assert!((g.health(ann) - 40.0).abs() < 1e-3, "{}", g.health(ann));
+    g.slash_body(ann, "Runner");
+    assert_eq!(g.body(ann), RUNNER);
+    let buggy =
+        g.s.spawn_vehicle_at(ann, BUGGY, Vec3::new(0.0, 1.0, 0.0), 0.0, Vec3::ZERO)
+            .unwrap();
+    g.steps(60);
+    assert_eq!(g.board(ann).0, buggy);
+    let seat = g.s.mounted(ann);
+    g.slash_body(ann, "Stomper");
+    assert_eq!(g.body(ann), STOMPER, "the mode lets players be a Stomper");
+    assert_eq!(g.s.mounted(ann), seat, "a Stomper drives the buggy");
+    g.cmd(ann, Command::Suicide).unwrap();
+    g.steps(3 * 120 + 60);
+    g.cmd(ann, Command::Respawn).unwrap();
+    g.steps(20);
+    assert!(g.s.vitals()[&ann].alive);
+    assert_eq!(g.body(ann), STOMPER, "respawned as the body picked last");
+    assert!(g.carries(ann, CARBINE));
 }
 
 /// Two players switch independently mid-match: one never sees the other's

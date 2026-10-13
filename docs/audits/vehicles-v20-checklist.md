@@ -77,7 +77,7 @@ stand on the exe and the Torque source.
 | Passenger (every non-driving seat of a vehicle, sitting or standing) | pitches the head freely | turns the whole body on the seat, a full circle; Free Look turns only the head, up to 3 rad | the head's turn eases back after Free Look, halving every 32 ms; the pitch and the body's turn stay | own player camera round the seat |
 | Jeep and Tank driver, `UseStrafeSteering` off (the default) | steers the vehicle's pitch (nothing on a car) and tips the head, which springs back in first person | steers; A/D do nothing | as a mouse driver | the vehicle's chase camera |
 | Jeep and Tank driver, `UseStrafeSteering` on | pitches the head freely | turns the head up to 3 rad, no Z needed; A/D steer | nothing returns | the Jeep's chase camera, swung by the head's turn |
-| Stunt Plane, Flying Wheeled Jeep, Magic Carpet and skis driver (mouse steering) | steers (v20 also tipped the head slightly; left out, see below) | steers; Free Look moves the head | in first person the head springs back (the tip within about a tenth of a second, Free Look after release); in third it stays | the vehicle's chase camera, swung by the head's turn |
+| Stunt Plane, Flying Wheeled Jeep, Magic Carpet and skis driver (mouse steering) | steers (v20 also tipped the head slightly; left out, see below) | steers; Free Look moves the head | the head springs back (the tip within about a tenth of a second, Free Look after release), in third person too (see `Controls::advance_head`: v20's server never saw the client's view) | the vehicle's chase camera, swung by the head's turn |
 | Tank gunner | pitches the barrel and head | turns the turret | nothing | the turret's own player camera |
 | Horse, Rowboat, Cannon rider | pitches | turns the mount | nothing | the mount's own player camera |
 | Rowboat passenger | as a passenger | as a passenger | as a passenger | own player camera |
@@ -114,7 +114,7 @@ player.cpp:1972 and :2523, and `Armor::onMount`. All of these are confirmed
 | Item | v20 | Verdict | Basis |
 |---|---|---|---|
 | First-person view in a vehicle seat | The seat's rotation times the head: rolls and pitches with the vehicle | Fixed (first pass) | Confirmed: 0x5aafa0, 0x5ac506; `vehicle_first_person` test |
-| First-person head return | Passengers: the turn returns after Free Look. Mouse drivers: the head returns in first person only. Strafe drivers: never | **Corrected**: the first pass sprang every seat back | Confirmed: 0x5aeae3 to 0x5aeb27; `controls.rs` tests |
+| First-person head return | Passengers: the turn returns after Free Look. Mouse drivers: the head returns, in third person too: 0x5aeaf6 skips it only when the server's connection is not `isFirstPerson`, and its `mCameraPos` follows the server process's own view, not the joined client's. Strafe drivers: never | **Corrected** twice: the first pass sprang every seat back; v0.2.10 kept a mouse driver's head in third person, so the Jeep's view stuck after Free Look (Max: "def not how old v20 felt") | Confirmed: 0x5aeae3 to 0x5aeb27; `controls.rs` tests |
 | Tank gunner first person | Rides the hull, turned by the aim, pitch free | Fixed (first pass) | Confirmed: 0x5ab0d0 (own transform times head); test |
 | Player-type mount riders, first person | Upright, no spring | Matches | Confirmed: mount type 0x4000 skips the halving |
 | First-person eye position | Vehicle riders: through the seat. Player-mount controllers: the mount node plus the eye | Fixed (first pass) | Confirmed: 0x5ab84d; `vehicle_first_person` |

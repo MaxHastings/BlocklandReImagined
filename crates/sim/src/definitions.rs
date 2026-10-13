@@ -142,6 +142,7 @@ pub fn brick_water(brick: &Placed, definition: &Definition) -> Option<bri_conten
         reflection_intensity: 0.0,
         parallax: 0.0,
         warnings: vec![],
+        tint: None,
         current: match definition.mesh.id.as_str() {
             // River and rapids zones push along the brick's forward vector
             // with 1000 and 3000 force on the 90-mass player.

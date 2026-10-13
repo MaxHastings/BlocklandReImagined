@@ -53,6 +53,8 @@ const ASK_AGAIN: u64 = 240;
 enum Threat {
     Shot(u64),
     Ally(OwnerId, u64),
+    /// An enemy's chassis bearing down, judged again each `ASK_AGAIN`.
+    Chassis(u64, u64),
 }
 /// Seconds of jetting a jet dodge takes (`route::Jets::seconds`).
 const JET_SECONDS: f32 = 0.5;
@@ -337,16 +339,64 @@ impl Session {
             })
     }
 
-    /// The soonest projectile, not its own or an ally's, whose path is
-    /// predicted to meet the bot's body (or put it inside its splash): its
-    /// id, the share of the bot's health it would take, and the flat way
-    /// off its line.
-    fn bot_incoming(&self, bot: OwnerId, feet: Vec3) -> Option<(u64, f32, Vec3)> {
+    /// The soonest projectile, or enemy-driven chassis that runs people
+    /// over, not its own or an ally's, whose path is predicted to meet the
+    /// bot's body (or put it inside its splash): which, the share of the
+    /// bot's health it would take, and the flat way off its line.
+    fn bot_incoming(&self, bot: OwnerId, feet: Vec3, tick: u64) -> Option<(Threat, f32, Vec3)> {
         let scale = self.peers.get(&bot)?.player.state().scale;
         let centre = feet + Vec3::Y * scale;
         // Of what it has left: a hurt bot clears what a fresh one would not.
         let health = self.peers.get(&bot)?.combat.health.max(1.0);
-        let mut soonest: Option<(f32, u64, f32, Vec3)> = None;
+        // Square to a path, toward the side the bot already stands to.
+        let aside = |from: Vec3, velocity: Vec3| {
+            let across = Vec3::new(-velocity.z, 0.0, velocity.x).normalize_or_zero();
+            if across.dot(centre - from) >= 0.0 {
+                across
+            } else {
+                -across
+            }
+        };
+        let mut soonest: Option<(f32, Threat, f32, Vec3)> = None;
+        // A chassis is a blow like a shot: its driver's to aim, its hull
+        // the width of it (`Session::bot_seated_input` publishes the same
+        // sweep to the driver's own side).
+        if let Some(world) = self.vehicles.world.as_ref() {
+            for v in world.snapshot(&self.simulation.physics).vehicles {
+                let Some(d) = world.definition(&v.definition) else {
+                    continue;
+                };
+                let velocity = Vec3::from(v.velocity);
+                let from = Vec3::from(v.transform.position)
+                    + glam::Quat::from_array(v.transform.rotation)
+                        * (Vec3::from(d.bounds_min) + Vec3::from(d.bounds_max))
+                        * (v.scale * 0.5);
+                let driver = d
+                    .control_seat()
+                    .and_then(|seat| world.seat_occupant(v.id, seat))
+                    .map(|o| o.owner.0);
+                let Some(driver) = driver else { continue };
+                if v.destroyed
+                    || d.runover_damage <= 0.0
+                    || driver == bot
+                    || from.distance(centre) > INCOMING
+                    || velocity.dot(centre - from) <= 0.0
+                    || self.bot_allies(bot, driver)
+                    || !self.can_damage_player(driver, bot, false)
+                {
+                    continue;
+                }
+                let half = (d.bounds_max[0] - d.bounds_min[0]) * v.scale * 0.5;
+                if let Some(t) =
+                    predicted_hit(from, velocity, 0.0, centre, 0.9 * scale + half, LOOKAHEAD)
+                    && soonest.is_none_or(|(old, ..)| t < old)
+                {
+                    let harm = (d.runover_damage / health).clamp(0.0, 1.0);
+                    let threat = Threat::Chassis(v.id.0, tick / ASK_AGAIN);
+                    soonest = Some((t, threat, harm, aside(from, velocity)));
+                }
+            }
+        }
         for p in self.weapons.projectiles() {
             let source = p.source.0;
             if p.stuck
@@ -379,18 +429,10 @@ impl Session {
             ) && soonest.is_none_or(|(old, _, _, _)| t < old)
             {
                 let harm = (d.damage.max(d.explosion.damage) / health).clamp(0.0, 1.0);
-                // Square to its flight, toward the side the bot already
-                // stands to.
-                let across = Vec3::new(-p.velocity.z, 0.0, p.velocity.x).normalize_or_zero();
-                let side = if across.dot(centre - p.position) >= 0.0 {
-                    across
-                } else {
-                    -across
-                };
-                soonest = Some((t, p.id, harm, side));
+                soonest = Some((t, Threat::Shot(p.id), harm, aside(p.position, p.velocity)));
             }
         }
-        soonest.map(|(_, id, harm, side)| (id, harm, side))
+        soonest.map(|(_, threat, harm, side)| (threat, harm, side))
     }
 
     /// The extra options for this tick: controls to add, and the commands
@@ -454,8 +496,8 @@ impl Session {
             && brain.extras.dodge.is_none()
             && tick >= brain.extras.next_dodge)
             .then(|| {
-                self.bot_incoming(bot, feet)
-                    .map(|(id, harm, side)| (Threat::Shot(id), harm, side, None))
+                self.bot_incoming(bot, feet, tick)
+                    .map(|(threat, harm, side)| (threat, harm, side, None))
                     .filter(|(id, ..)| brain.extras.judged != Some(*id))
                     .or_else(|| {
                         self.bot_in_the_way(bot, feet, tick)
@@ -467,11 +509,12 @@ impl Session {
         // The ways a dodge may go: up where it comes down on floor (a hop,
         // or a jet while its fuel holds a jet's worth), or aside where
         // floor lies under the step, never into an ally's line of fire. Out
-        // of an ally's harm only a step aside goes: a hop comes down in it.
+        // of an ally's harm, or a chassis's way, only a step aside goes: a
+        // hop comes down in it.
         let velocity = Vec3::from(state.velocity);
         // What its jets can do now, by its kind's `fly` weight and fuel.
         let jets = crate::route::Jets::of(&tuning, state.energy, brain.kind.weight("fly"));
-        let ways = incoming.map(|(_, _, side, from)| {
+        let ways = incoming.map(|(threat, _, side, from)| {
             use super::surprise::{DODGE_HOP, DODGE_JET, DODGE_STRAFE};
             // A hop fires its jets too while it has them (a jet dodge
             // after a crouch): judged over that jetted flight.
@@ -480,7 +523,7 @@ impl Session {
             } else {
                 0.0
             };
-            let up = from.is_none()
+            let up = matches!(threat, Threat::Shot(_))
                 && super::hop_lands(&self.simulation, feet, velocity, &tuning, jetted);
             let fuel = jets.as_ref().is_some_and(|j| j.seconds >= JET_SECONDS);
             let to = feet + side * tuning.forward * STRAFE_TICKS as f32 / 120.0;

@@ -1653,6 +1653,16 @@ impl Player {
             region,
             parts,
         );
+        // A body that starts inside another player (two spawned on one
+        // spot) is not walled in by that player's faces: sweeping against
+        // them stopped every move dead, so neither ever left. Players
+        // otherwise never overlap (each closes half its gap per tick), and
+        // the push below parts the two.
+        let inside = players_inside(&query, body_box(feet));
+        if !inside.is_empty() {
+            soup.polys
+                .retain(|p| p.kind != torque::Kind::Actor || !inside.contains(&p.collider));
+        }
         let run_cos = t.slope_degrees.to_radians().cos();
         let jump_cos = t.jump_surface_degrees.to_radians().cos();
         let contact = torque::find_contact(&soup, feet, half, run_cos, jump_cos);
@@ -2036,6 +2046,26 @@ impl Player {
 }
 fn v3(v: Vector) -> Vec3 {
     Vec3::from_array(v.to_array())
+}
+/// How deep a player's box must reach into another's, along every axis,
+/// to count as started inside it rather than resting against it.
+const INSIDE_DEPTH: f32 = 0.02;
+/// The other players' colliders the box `body` is already inside.
+fn players_inside(query: &QueryPipeline<'_>, body: torque::Box3) -> Vec<ColliderHandle> {
+    let shrunk = Aabb::new(
+        Vector::from_array((body.min + INSIDE_DEPTH).to_array()),
+        Vector::from_array((body.max - INSIDE_DEPTH).to_array()),
+    );
+    query
+        .intersect_aabb_conservative(shrunk)
+        .filter(|(_, c)| c.user_data >> 64 == 1)
+        .filter(|(_, c)| {
+            let theirs = c.compute_aabb();
+            let (min, max) = (v3(theirs.mins), v3(theirs.maxs));
+            (body.max.min(max) - body.min.max(min)).min_element() > INSIDE_DEPTH
+        })
+        .map(|(handle, _)| handle)
+        .collect()
 }
 /// v20's moveVec after air control (0x5AF4B5): steering wider than about 25
 /// degrees off fast enough travel becomes the half-difference of the two.

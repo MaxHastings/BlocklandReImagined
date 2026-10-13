@@ -25,7 +25,9 @@ Five Add-Ons, each standing alone and naming no other except through
 | `playground-runner` | archetype (host) | The Runner body: own size, eyes, speeds and jump, no jets |
 | `playground-rifle` | weapons | The Pulse Carbine: own `*.shape.json` model, magazine of 24, reload, projectile, sounds |
 | `playground-buggy` | vehicles, weapons | A three-seat buggy: own chassis and tires, smashes bricks; the driver steers, the passenger keeps their weapon, a gunner works its rear gun |
-| `playground-mode` | mode | Plays them together with `blockhead_bot`: Runner body, Carbine loadout, respawn rules |
+| `playground-stomper-look` | model (client) | The Stomper's box model: a squat walking mushroom, 1.2 units tall |
+| `playground-stomper` | archetype, bots | A simple enemy: a squat walking mushroom on the shared brain with weapons, objectives, vehicles, teamwork and surprise turned off by data; it stomps with its body. Its body is also a player type |
+| `playground-mode` | mode | Plays them together with `blockhead_bot` and the Stomper: Runner body, Carbine loadout, respawn rules |
 
 ## Matrix
 
@@ -41,6 +43,8 @@ Five Add-Ons, each standing alone and naming no other except through
 | Two networked players see each other's body, held weapon, the driven vehicle and the knocked-out bricks | works | `crates/net/tests/playground.rs` `two_players_and_a_late_joiner_share_the_playground` |
 | A late joiner downloads exactly the missing Add-Ons and sees the same world | works | same test (clean cache; the buggy, its driver, the Carbine in hand and the brick state all match) |
 | With no mode or mini-game, an Add-On weapon spawns from an item brick and an Add-On vehicle from a vehicle spawn brick, both set with the wrench | works | `a_builder_spawns_the_carbine_and_the_buggy_from_bricks_without_a_mini_game` |
+| Outside a mini-game, explosions break bricks by v20's rules: a LAN host breaks anyone's, an internet host only the shooter's own | works | `rocket_outside_a_minigame_follows_v20_lan_and_ownership_rules` (`crates/sim/tests/brick_damage.rs`) |
+| Inside a mini-game, a vehicle runs a bot over as it does a player (outside one, nobody can be hurt, so Max's session starts a mini-game first) | works | `a_buggy_runs_a_stomper_over` |
 | A brick event switches a player to an Add-On body (`onActivate -> Player -> ChangeDatablock`), no mini-game | fixed (W4) | The event's list holds v20's player types and every named Add-On body, on the host and in the wrench (`crates/sim/src/session/events.rs` `event_bodies`, `crates/client/src/tool_ui.rs` `change_datablock_lists_the_servers_add_on_bodies`); `crates/sim/tests/body_switching.rs` `class_bricks_turn_a_builder_into_any_add_on_body_and_back` |
 | Switching keeps the held weapon in hand, and it fires from the new body's hand | works (W4) | `the_carbine_fires_from_the_hand_of_whichever_body_holds_it` |
 | Switching mid-air keeps momentum and starts the new body's movement controller afresh | works (W4) | `switching_mid_air_keeps_momentum_and_starts_the_new_controller_afresh` |
@@ -52,6 +56,7 @@ Five Add-Ons, each standing alone and naming no other except through
 | A picked body is kept through respawns, an Add-On's choice too, and the latest choice wins | works (W4) | `a_chosen_body_is_kept_through_respawns_and_the_latest_choice_wins` (the Commando total conversion and the Trooper's own command) |
 | A body picked from a class brick survives joining a dialog-made mini-game, a late joiner's in-game pick survives respawn, and two bodies fight in one game; a game with `keep_chosen_body: false` spawns everyone as its player type | fixed (W4) | `crates/sim/tests/body_switching.rs` `bodies_picked_from_bricks_coexist_in_a_dialog_mini_game`; a dialog game reverted a pick to its player type at respawn before. The dialog's edits keep the game's body rules |
 | `/body` lists and picks bodies; a mode lists the bodies its players may pick and keeps a pick | works (W4) | `slash_body_lists_and_switches_bodies`, `mid_match_a_runner_becomes_a_blockhead_and_respawns_as_one`; the Playground mode lists the Blockhead beside its Runner |
+| A player becomes the Stomper (an enemy's body from its own Add-On) from a class brick or the Playground's `/body`, holds the Carbine, takes the buggy's driving seat and respawns as one | works (W4) | `a_runner_becomes_a_stomper_drives_the_buggy_and_respawns_as_one`; the Playground mode lists the Stomper beside the Blockhead |
 | A team spawns its members as its own body | works (W4) | `crates/minigames/tests/teams.rs` `a_team_spawns_its_members_as_its_own_body` |
 | Two networked players see a switch armed and seated; a late joiner sees the body as it is | works (W4) | `crates/net/tests/playground.rs` `players_switch_bodies_mid_match_armed_and_seated` |
 | A custom body's held item attaches to its own hand | fixed (W2) | Archetype `sockets` (node or offset); `crates/client/src/avatar.rs` `a_body_with_its_own_nodes_and_two_clips_holds_sits_and_names_what_it_lacks`, `a_box_body_holds_at_its_own_hand_and_sits_with_folded_legs`; `crates/client/tests/body_attachments_render.rs` |
@@ -61,6 +66,7 @@ Five Add-Ons, each standing alone and naming no other except through
 | A body brings its own movement (Mario-style jumps, wall kicks) | gap (W3) | Movement is the fixed Blockhead motor plus tuning; the controller design is its own thread |
 | An Add-On owns the HUD or the camera | gap (W6) | No base-HUD replacement or camera ownership seam |
 | Custom NPCs on the shared bot brain | works for bodies, gap for new behaviours (W7) | Bot kinds pick a body and weapons; new behaviours go into the shared brain |
+| A simple enemy: the shared brain cut down by data to wander, chase and hit with its body, hands empty even where the mode hands out guns | works | `a_stomper_walks_up_and_stomps_a_runner_with_its_body`; a kind's `weapons: false` (added for this) keeps its hands empty |
 
 ## Headline scenario: Blockhead, Mario, Warthog, Goombas
 
@@ -76,12 +82,12 @@ code only; the Mario, Warthog, Goomba and tank Add-Ons themselves are Max's.
 |---|---|---|
 | Mario's run, jump arcs, triple jump, wall kick, ground pound feel like Mario | W3 movement controllers | wall kick and dive working in PR #107; triple jump next |
 | Mario's model animates with its own clips (run, jump, kick, sit) | W2 animation roles; W5 glTF import for a rigged model | W2 in progress |
-| Switch between Blockhead and Mario mid-game, mid-air or seated, no respawn | W4 switching lifecycle | works (a class brick, `/body`, a mode's or team's rules); the Stomper joins the tests once it lands |
+| Switch between Blockhead and Mario mid-game, mid-air or seated, no respawn | W4 switching lifecycle | works (a class brick, `/body`, a mode's or team's rules); `crates/sim/tests/body_switching.rs`, the Stomper in `a_runner_becomes_a_stomper_drives_the_buggy_and_respawns_as_one` |
 | Mario or a Blockhead holds a rocket launcher in his own hand; shots leave its muzzle | W2 sockets and muzzle | in progress |
 | Jump into the Warthog: any body sits in any seat, the passenger keeps their weapon, a gunner seat fires a turret | W2 seats; vehicles (seats, `weapon` seats, turrets already work) | seats for box bodies in W2 |
 | The Warthog drives like a Warthog (loose suspension, drift, chase camera, engine sound) | W8 vehicle feel, W6 camera ownership | not started |
 | The HUD switches with the body and the vehicle (Mario's coins, the Warthog's gun) | W6 HUD regions | not started |
-| Goombas are bots on the one shared brain with their own body (`kind.body`) | W7; bot kinds already pick a body and weapons | works today for box bodies |
+| Goombas are bots on the one shared brain with their own body (`kind.body`) | W7; bot kinds already pick a body and weapons; a plain Goomba is the Stomper's data (`weapons: false`, `melee`, behaviours off) | works for box bodies (`a_stomper_walks_up_and_stomps_a_runner_with_its_body`) |
 | Goombas use rocket launchers and jet around | works today: bots fight with any weapon and jet when their body `can_jet` | works |
 | A Goomba jumps into a tank and shells Mario | works today: bots drive and crew vehicles, and a gunner fights with its seat's gun (`bots/combat.rs`) | needs a tank Add-On to prove it |
 | Rockets blow the brick castle apart | works today: brick damage under mini-game rules | works |
@@ -91,6 +97,8 @@ code only; the Mario, Warthog, Goomba and tank Add-Ons themselves are Max's.
 | A Goomba-bodied player or bot holds a rocket launcher and jets | W2 named weapon socket for bodies without hands; jets when the body sets `can_jet` | socket not started |
 | NPCs follow players through buildings and jump or jet onto things their body can reach | shared nav today for the Blockhead's reach; W7 plans with any body's reach | partial |
 | Bots move with the body they have (a Goomba with Mario-style movement still paths sensibly) | W7 (after W3): the bot brain plans with the Blockhead motor's reach, not an Add-On controller's | not started |
+| A player or bot dies as any body: its death clip, ragdoll or vanish plays, it respawns as the body it chose, and the spectate camera frames that body | W2 death roles and W4 switching lifecycle; respawn keeps an Add-On body today (`a_runner_killed_by_the_carbine_respawns_as_the_runner_with_it`) | partial |
+| Body-on-body contact: Mario stomps a Goomba, the Warthog runs one over | run-overs damage today; W7 contact hook lets an Add-On answer the contact | hook not started |
 | Everyone sees it all in multiplayer, late joiners included | every workstream extends the Playground network test | Playground proves it for today's seams |
 
 ## Defects found that belong elsewhere

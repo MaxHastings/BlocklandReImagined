@@ -1041,6 +1041,20 @@ impl App {
             .context("Effects GPU not initialized")?;
         effects_renderer.set_fog(camera.atmosphere, camera.fog_color);
         effects_renderer.prepare(frame.queue, &effects_camera, &effects_frame)?;
+        // A sky's rain or snow changed the weather pack: its pictures go up.
+        if self.gpu.weather_revision != self.weather.revision {
+            let limits = bri_weather::WeatherLimits::default();
+            self.gpu.weather_renderer = Some(bri_weather::gpu::WeatherRenderer::new(
+                frame.device,
+                frame.queue,
+                self.weather.world.pack(),
+                frame.format,
+                bri_render::scene::DEPTH_FORMAT,
+                self.graphics.samples,
+                limits.drops + limits.splashes,
+            )?);
+            self.gpu.weather_revision = self.weather.revision;
+        }
         let weather_renderer = self
             .gpu
             .weather_renderer
@@ -1506,12 +1520,14 @@ impl App {
             );
             self.scene.cpu_scene = Some(visual.scene);
             self.scene.cpu_terrain = visual.terrain.into_iter().map(Arc::new).collect();
+            self.scene.scenery.reset();
             self.scene.shape_indices = visual.shape_indices;
             crate::frame_trace::note("the map's lighting source changed");
             self.gpu.gpu_scene = None;
             self.lighting.reflections = None;
             self.lighting.environment_probe = None;
         }
+        self.update_scenery(frame);
         if self.graphics.lighting != 3 {
             self.lighting
                 .light_volume

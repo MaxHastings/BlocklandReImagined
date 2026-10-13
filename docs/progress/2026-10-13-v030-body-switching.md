@@ -42,7 +42,7 @@ Master Chief or a Goomba. Any body is both a player type and a bot body.
 - **Mini-game rules**. A mode may set `bodies` (allowed for `/body`) and
   `keep_chosen_body`. A team may set `body`, through rules `teams()` or a
   `set_teams` spec. The settings dialog keeps the rules an Add-On set.
-  Playground allows the Blockhead and keeps chosen bodies.
+  Playground allows the Blockhead and the Stomper and keeps chosen bodies.
 - **`/body`**. With no argument it lists the bodies you may pick. With a
   name (an id, a v20 datablock or a display name) it switches you. The
   command has a cooldown of 60 ticks and says when you hit it. A dead
@@ -52,7 +52,7 @@ Master Chief or a Goomba. Any body is both a player type and a bot body.
 
 ## Evidence
 
-- `cargo test -p bri-sim --test body_switching`: 13 tests pass. They cover:
+- `cargo test -p bri-sim --test body_switching`: 14 tests pass. They cover:
   - class bricks round-trip a builder through Add-On bodies
   - the Carbine fires from each body's own hand
   - a mid-air switch keeps momentum
@@ -66,6 +66,7 @@ Master Chief or a Goomba. Any body is both a player type and a bot body.
   - two players switching independently
   - bodies picked from bricks coexisting in a dialog-made mini-game,
     through a late join and respawns
+  - the Stomper as a player type, armed and seated
   - a predicting client at 18 ticks of latency
 - `cargo test -p bri-net --test playground players_switch_bodies_mid_match_armed_and_seated`:
   two QUIC clients switch armed, mid-match and seated, and both see every switch.
@@ -75,8 +76,11 @@ Master Chief or a Goomba. Any body is both a player type and a bot body.
 
 ## Notes and next
 
-- The Stomper (#110) is not on experimental yet. Its switching rows are
-  added once it lands.
+- The Stomper (#110) landed during this work. A Runner becomes one from a
+  brick or `/body`, holding the Carbine, seated in the buggy, and respawns
+  as one. The test boards the buggy as a Runner: the boarding helper aims
+  a Blockhead's run-and-hop, and the Stomper's 0.1 air control barely
+  carries it forward. That is the helper's limit, not the body's.
 - The client's vehicle-prediction occupant size is not refreshed on a
   seated switch. It corrects on the next authoritative update. This is minor.
 - In the net test harness a jet dismount needs one input per batch, or the

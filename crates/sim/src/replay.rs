@@ -1504,11 +1504,26 @@ pub fn replay<R: std::io::Read>(
     frames: &mut FrameReader<R>,
     load_map: &mut LoadMap<'_>,
 ) -> Result<Report> {
+    replay_watching(s, frames, load_map, &mut |_| {})
+}
+
+/// [`replay`], showing `watch` the session after every tick it replays, so
+/// a tool can read what the bots were thinking at any moment of the match.
+pub fn replay_watching<R: std::io::Read>(
+    s: &mut Session,
+    frames: &mut FrameReader<R>,
+    load_map: &mut LoadMap<'_>,
+    watch: &mut dyn FnMut(&Session),
+) -> Result<Report> {
     let mut replayer = Replayer::start(s);
     while !replayer.finished()
         && let Some(frame) = frames.next_frame()?
     {
+        let ticked = matches!(frame, Frame::Tick { .. });
         replayer.frame(s, frame, load_map)?;
+        if ticked {
+            watch(s);
+        }
     }
     s.set_tape(None);
     let mut report = replayer.report();

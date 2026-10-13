@@ -116,6 +116,8 @@ fn game() -> Result<()> {
             None
         }
     };
+    // Host and Join hash every package; unchanged files keep their hash.
+    bri_package::environment::remember_file_hashes_in(state.join("package-hashes.json"));
     if mode == "--check" {
         // Validation leaves the content as it is (the push gate checks the
         // shared main checkout's); a fresh checkout's own check can opt in.

@@ -13,7 +13,7 @@ use bri_sim::{
     presentation::Cue,
     replay::{
         Call, Frame, FrameReader, FrameWriter, Outcome, Read, Recorder, Report, Secrets, Take,
-        digest_of, replay,
+        digest_of, replay, replay_watching,
     },
     session::{Command, MiniGameRequest, PackageArg, PackageCommand, Session, shape_mount_points},
     simulation::Simulation,
@@ -354,6 +354,44 @@ fn a_recorded_match_replays_tick_for_tick() {
     assert_eq!(report.cut_off, None);
     // A second replay in this process finds the same.
     assert_eq!(replay_of(&frames), report);
+}
+
+#[test]
+fn a_replay_shows_what_the_bots_thought_at_every_tick() {
+    let frames = frames(&record_match());
+    let recorded: std::collections::BTreeMap<u64, _> = frames
+        .iter()
+        .filter_map(|frame| match frame {
+            Frame::Tick {
+                tick,
+                full: Some(full),
+                ..
+            } => Some((*tick, full.bots.clone())),
+            _ => None,
+        })
+        .collect();
+    let mut s = session("replay-secret-1");
+    let mut watched = Vec::new();
+    let mut thinking = 0;
+    let report = replay_watching(
+        &mut s,
+        &mut FrameReader::new(&written(&frames)[..]),
+        &mut |map, _| anyhow::bail!("This match never changes to {map}"),
+        &mut |s| {
+            let tick = s.simulation().state().tick;
+            watched.push(tick);
+            thinking = thinking.max(s.bot_thoughts().len());
+            if let Some(bots) = recorded.get(&tick) {
+                assert_eq!(&s.bot_why(), bots, "what the bots thought at tick {tick}");
+            }
+        },
+    )
+    .unwrap();
+    assert_eq!(report.divergence, None, "{report:#?}");
+    assert_eq!(watched.len() as u64, report.ticks, "shown once a tick");
+    assert!(watched.windows(2).all(|w| w[0] <= w[1]), "in order");
+    assert_eq!(thinking, BOTS, "every bot is there to read");
+    assert!(recorded.len() > 10, "full checks to compare against");
 }
 
 #[test]

@@ -687,12 +687,19 @@ map starts with none set.
 | `visible_distance`, `fog_distance` | units: where fog is complete (20 to 1000) and where it starts (0 to 1000) |
 | `fog_color`, `sky_color` | `[r, g, b]`: the fog, and a tint over the map's sky |
 | `vignette_color`, `vignette_multiply` | `[r, g, b, a]` darkening the screen's edges; `true` multiplies instead of blending |
+| `sky` | a sky box in place of this map's: its material list in lower case, as the Environment window's Sky picker names it (`"add-ons/sky_sunset/sunset.dml"`, `"base/data/skies/sunset/resource.dml"`), or `"plain"`, one colour that `sky_color` sets |
+| `ground`, `ground_color` | a flat map's floor: a Steam ground by name (`"add-ons/ground_tt/grass.ground"`), and `[r, g, b, a]` over it (alpha 0 hides it) |
+| `water`, `water_height` | a sea over a flat map: a Steam water by name (`"add-ons/water_lava/lava.water"`) or `"none"`, and its surface's height over the plate, 0 to 100 |
+| `water_color`, `underwater_color` | `[r, g, b, a]`: the sea's surface, and the screen's colour under it |
 
 `environment()` reads what is set, as the same keys; unset keys are absent,
 and `time_of_day` is where a cycle is now. A cycle runs on every player's
 clock from the server's tick, so a turning sun sends nothing after it
 starts: use `day_length` for a moving sun rather than setting
-`sun_azimuth` again and again. An Add-On gets 8 changes a second; each is
+`sun_azimuth` again and again. A `sky`, `ground` or `water` a player's
+game does not have leaves them the map's own. Grounds and waters go only on
+flat maps (Slate and its kin, Skylands, Construct, Destruct): elsewhere they
+change nothing. A picked water is swum in, and Lava burns whoever is in it. An Add-On gets 8 changes a second; each is
 sent to every player. Players' own Visible Distance option still caps how
 far they see.
 

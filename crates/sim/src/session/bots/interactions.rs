@@ -199,6 +199,68 @@ impl Session {
         Ok(())
     }
 
+    /// The other role of the vehicle `bot` crews alone, free for it to take:
+    /// its gun seat from its controls, or its controls from its gun, as a
+    /// player takes either with the seat keys. A seat someone holds, or
+    /// one an ally is on its way to, is not free; nor is a gun that cannot
+    /// fire. Returns that seat and whether it is the gun's.
+    pub(super) fn bot_lone_role(&self, bot: OwnerId, tick: u64) -> Option<(usize, bool)> {
+        let (vehicle, seat) = self.mounted(bot)?;
+        let world = self.vehicles.world.as_ref()?;
+        let d = world.definition_of(VehicleId(vehicle))?;
+        let (controls, gun) = (d.control_seat()?, d.weapon_seat()?);
+        let (other, to_gun) = match usize::from(seat) {
+            s if s == controls && gun != controls => (gun, true),
+            s if s == gun && gun != controls => (controls, false),
+            _ => return None,
+        };
+        let free = world.seat_occupant(VehicleId(vehicle), other).is_none()
+            && !self.bot_claimed(
+                Resource::Seat {
+                    vehicle,
+                    seat: other as u8,
+                },
+                bot,
+                tick,
+            )
+            && (!to_gun || self.vehicle_gun(vehicle).is_some());
+        free.then_some((other, to_gun))
+    }
+
+    /// The gun a seat away from the controls `bot` holds alone
+    /// (`bot_lone_role`): its weapon too, one switch off.
+    pub(super) fn bot_spare_gun(&self, bot: OwnerId, tick: u64) -> Option<Weapon> {
+        let (vehicle, _) = self.mounted(bot)?;
+        self.bot_lone_role(bot, tick)
+            .filter(|(_, to_gun)| *to_gun)
+            .and_then(|_| self.vehicle_gun(vehicle))
+    }
+
+    /// Whether the chassis `bot` sits in runs `target` over (on foot, a
+    /// chassis that hurts on contact, the rules letting it hurt them) from
+    /// nearer than `near`: inside a gun's near edge, where its own blast
+    /// would reach it, the chassis is the blow.
+    pub(super) fn bot_runs_over_near(&self, bot: OwnerId, target: OwnerId, near: f32) -> bool {
+        let Some((vehicle, _)) = self.mounted(bot) else {
+            return false;
+        };
+        let (Some(world), Some(them)) = (self.vehicles.world.as_ref(), self.peers.get(&target))
+        else {
+            return false;
+        };
+        let (Some(d), Some(v)) = (
+            world.definition_of(VehicleId(vehicle)),
+            world.vehicle_snapshot(&self.simulation.physics, VehicleId(vehicle)),
+        ) else {
+            return false;
+        };
+        let at = Vec3::from(v.transform.position);
+        d.runover_damage > 0.0
+            && self.mounted(target).is_none()
+            && self.can_damage_player(bot, target, false)
+            && flat(Vec3::from(them.player.state().feet) - at).length() < near
+    }
+
     pub(super) fn observe_bot_objects(&mut self) {
         self.bots.objects = self
             .vehicles
@@ -1593,6 +1655,37 @@ impl Session {
                 yaw: self.bots.brains[&bot].yaw,
                 ..Default::default()
             });
+        }
+        // Crewing it alone, it sits where its plan is served: at the gun to
+        // fight what the gun reaches, at the controls to go somewhere or to
+        // run down one too near for the gun's blast (`bot_lone_role`). With
+        // nothing to do it stays put.
+        if let Some((other, to_gun)) = self.bot_lone_role(bot, tick) {
+            let target = self.bots.brains[&bot].target;
+            let gun_serves = self.vehicle_gun(vehicle).is_some_and(|g| {
+                !target.is_some_and(|t| self.bot_runs_over_near(bot, t, g.band().0))
+            });
+            let wants = match behaviour {
+                Behaviour::Fight => Some(gun_serves),
+                Behaviour::Chase
+                | Behaviour::Search
+                | Behaviour::Return
+                | Behaviour::Objective
+                | Behaviour::Explore => Some(false),
+                _ => None,
+            };
+            if wants == Some(to_gun) {
+                for _ in 0..d.seats.len() {
+                    self.switch_seat(bot, 1)?;
+                    if self.mounted(bot) == Some((vehicle, other as u8)) {
+                        break;
+                    }
+                }
+                return Ok(MoveInput {
+                    yaw: self.bots.brains[&bot].yaw,
+                    ..Default::default()
+                });
+            }
         }
         let role = &d.seats[usize::from(seat)];
         // A seat with neither controls nor a weapon carries a bot, but it
