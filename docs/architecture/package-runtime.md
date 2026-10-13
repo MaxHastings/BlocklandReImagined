@@ -30,6 +30,7 @@ file:
 | `hud` | client | A HUD panel: title, colours, rows bound to public state, keys bound to commands. |
 | `texture` | client | A PNG image (at most 1024 pixels on an edge), downloaded with the package. |
 | `block` | client | A block: per face (`all`, `side`, `top`, `bottom`, `north`, `south`, `east`, `west`; the most specific wins) a texture id or a flipbook (`frames`, `fps`, `once`), and named `states` that replace some faces. |
+| `body` | client | A player body: a native shape an archetype names as its `model`. A package with archetypes and their bodies is `shared`, so joiners download it. |
 | `mode` | server | A game mode: name, description, optional map, and the Add-Ons it runs. |
 
 **Clients never receive or run package code.** Server kinds may only appear

@@ -405,24 +405,13 @@ impl AvatarAssets {
             let Ok(dir) = bri_package::packages::package_dir(root, entry) else {
                 continue;
             };
-            let Ok(archetypes) = std::fs::read_dir(dir.join("assets/archetypes")) else {
-                continue;
-            };
-            let mut models: Vec<String> = archetypes
-                .flatten()
-                .filter_map(|e| std::fs::read(e.path()).ok())
-                .filter_map(|b| serde_json::from_slice::<serde_json::Value>(&b).ok())
-                .filter_map(|a| a["model"].as_str().map(str::to_owned))
-                .filter(|m| m.starts_with(&format!("{}:asset/", entry.id)))
-                .collect();
-            models.sort();
-            models.dedup();
-            for model in models {
+            let models = body_models(&dir, &entry.id);
+            for (model, file) in models {
                 if self.bodies.contains_key(&model) {
                     continue;
                 }
                 // One that does not load leaves its players Blockheads.
-                match self.package_body(&dir, &model) {
+                match self.package_body(&dir, &model, file.as_deref()) {
                     Ok(body) => {
                         self.bodies.insert(model, Box::new(body));
                     }
@@ -433,8 +422,10 @@ impl AvatarAssets {
             }
         }
     }
-    /// The body `model` (`<package>:asset/<file>`) in the package at `dir`.
-    fn package_body(&self, dir: &Path, model: &str) -> Result<Self> {
+    /// The body `model` in the package at `dir`: a `body` in its `file`, or
+    /// an asset (`<package>:asset/<file>`) its `assets/content.json` lists.
+    /// Its textures are assets that file lists.
+    fn package_body(&self, dir: &Path, model: &str, shape_file: Option<&str>) -> Result<Self> {
         let content: serde_json::Value =
             serde_json::from_slice(&std::fs::read(dir.join("assets/content.json"))?)?;
         let file = |id: &str| {
@@ -447,9 +438,13 @@ impl AvatarAssets {
                 .map(str::to_owned)
                 .with_context(|| format!("{id} is not in its package"))
         };
+        let shape_file = match shape_file {
+            Some(f) => f.to_owned(),
+            None => file(model)?,
+        };
         let root = dir.canonicalize()?;
         let shape: bri_content::shape::Shape = serde_json::from_slice(
-            &crate::materials::read_resource(&root, &file(model)?, 32 << 20)?,
+            &crate::materials::read_resource(&root, &shape_file, 32 << 20)?,
         )?;
         shape.validate()?;
         let package = model.split(':').next().unwrap_or_default();
@@ -608,8 +603,36 @@ impl AvatarAssets {
             let image = data.images.len();
             data.images.push(horse.images[&name].clone());
             materials.push(data.materials.len());
-            data.materials
-                .push(Material::brick_overlay(format!("{model}/{name}"), image));
+            let name = format!("{model}/{name}");
+            // The horse lays its texture over its chest colour. Any other
+            // body draws as a held item does (`items::native_shape_scene`):
+            // a texture with a translucent texel over its colour, one with
+            // none the texture times the world's light, untinted. As an
+            // overlay an opaque texture would ignore the light entirely.
+            let overlay = model == HORSE_SHAPE
+                || (crate::items::translucent_texel(&data.images[image])
+                    && source.blend == "opaque");
+            let mut material = if overlay {
+                Material::brick_overlay(name, image)
+            } else {
+                Material::vertex_lit(name, image)
+            };
+            if !overlay {
+                // A lit texture is a colour (sRGB); an overlay's is mixed raw.
+                data.images[image].srgb = true;
+                material.untinted = source.blend == "opaque";
+            }
+            if model != HORSE_SHAPE && source.blend == "alpha" {
+                material.alpha = AlphaMode::Blend;
+            }
+            if source.unlit {
+                material.kind = if overlay {
+                    bri_render::scene::MaterialKind::UnlitOverlay
+                } else {
+                    bri_render::scene::MaterialKind::Unlit
+                };
+            }
+            data.materials.push(material);
         }
         let translucent_materials: Vec<_> = materials
             .iter()
@@ -2355,6 +2378,42 @@ pub fn appearance_from_prefs(package: &Package, prefs: &AvatarPrefs) -> Result<A
     let (appearance, _) = package.repaired(&appearance);
     package.resolve(&appearance)?;
     Ok(appearance)
+}
+
+/// The bodies the Add-On `id` at `dir` brings, each with its shape file when
+/// it names one: its `body` content (an imported glTF body), and the bodies
+/// its own player types name among its assets (a v20 import's, whose file
+/// `assets/content.json` gives).
+pub fn body_models(dir: &Path, id: &str) -> Vec<(String, Option<String>)> {
+    let mut models: Vec<(String, Option<String>)> =
+        std::fs::read(dir.join(bri_package::library::MANIFEST_FILE))
+            .ok()
+            .and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok())
+            .and_then(|m| m["provides"].as_array().cloned())
+            .into_iter()
+            .flatten()
+            .filter(|p| p["kind"] == "body")
+            .filter_map(|p| {
+                Some((
+                    p["id"].as_str()?.to_owned(),
+                    Some(p["file"].as_str()?.to_owned()),
+                ))
+            })
+            .collect();
+    if let Ok(archetypes) = std::fs::read_dir(dir.join("assets/archetypes")) {
+        models.extend(
+            archetypes
+                .flatten()
+                .filter_map(|e| std::fs::read(e.path()).ok())
+                .filter_map(|b| serde_json::from_slice::<serde_json::Value>(&b).ok())
+                .filter_map(|a| a["model"].as_str().map(str::to_owned))
+                .filter(|m| m.starts_with(&format!("{id}:asset/")))
+                .map(|m| (m, None)),
+        );
+    }
+    models.sort();
+    models.dedup_by(|a, b| a.0 == b.0);
+    models
 }
 
 #[cfg(test)]

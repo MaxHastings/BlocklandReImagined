@@ -368,6 +368,11 @@ impl Package {
                         self.blocks.insert(asset.id.clone(), b);
                     }
                 }
+                // Drawn by clients (`bri-client` `AvatarAssets::load_bodies`);
+                // checked here so a broken one is named before anyone joins.
+                Kind::Body => {
+                    parse::<bri_content::shape::Shape>(asset, &id, |s| s.validate(), out);
+                }
                 // Read and validated by the engine systems that merge them.
                 Kind::Weapons | Kind::Vehicles | Kind::Bricks | Kind::Bots => {}
                 Kind::Mode => {

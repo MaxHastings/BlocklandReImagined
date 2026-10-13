@@ -14,7 +14,7 @@ cargo run -p bri-addon-import --bin bri-import-addon -- gltf buggy.glb buggy-mod
 
 | `--kind` | Writes | Then |
 |---|---|---|
-| `body` (default) | a whole Add-On: `package.json`, the model and its PNGs under `assets/`, `assets/content.json` and an archetype (`assets/archetypes/<id>.json`) whose `model` is the imported body | check it with `bri-addon-check`, adjust the archetype's `movement` (its collision box, sized from the model; see Bodies), name it in a mode or `set_archetype` |
+| `body` (default) | a whole Add-On: `package.json`, the model and its PNGs under `assets/`, `assets/content.json` and an archetype (`assets/archetypes/<id>.json`) whose `model` is the imported body (`<id>:body/<id>`, provided as `body` content). Everyone draws it, so the Add-On is shared: friends who join download the body and its textures | check it with `bri-addon-check`, adjust the archetype's `movement` (its collision box, sized from the model; see Bodies), name it in a mode or `set_archetype` |
 | `item` | `models/<id>.shape.json` and its PNGs | copy `models/` into your weapon Add-On's `assets/` and name `models/<id>.shape.json` as the item's and image's `model` in `weapons.json` ([Weapons](weapons.md)) |
 | `prop` | the same, for vehicles, wheels, projectiles and props | name it from `vehicles.json`; the report lists the `mount` and `hub` empties' positions for its seats and wheels |
 
@@ -94,6 +94,14 @@ importer stores them relative to their middle or first frame), so a running
 Mario still looks up. Any other action (`stomp`, `wave`, `ground_pound`) is
 kept under its own name for rules to play. Blockland names also work
 (`root`, `armreadyright`, `death1`).
+
+A clip that is not layered (`aim_right`, `sit`, `crouch` over `run`)
+takes over exactly the bones it has keys for, even a bone it keys at rest:
+key the off hand still in `aim_right` and the run's swing of that hand stops
+while aiming. Bones it has no keys for keep following the clip below, so
+don't key the legs in an aim clip. Blender's exporter can drop keys that
+never change (Animation > Optimize Animation Size): turn that off if a
+"hold still" bone goes missing from a clip.
 
 Missing clips are fine: each missing role falls back (a body with only
 `idle` and `run` still works) and the report lists what each missing one
@@ -182,9 +190,12 @@ gun's sound goes in the vehicle pack's `weapons.json` `sounds`, as above.
   texture becomes its plain colour.
 - Normal, roughness, metallic, emission and occlusion maps are ignored and
   listed in the report. Vertex colours and shape keys are ignored too.
-- Alpha: Blend mode "Alpha Blend" draws see-through; "Alpha Clip" and
-  "Opaque" draw solid.
-- An "Unlit" (emission shader / KHR_materials_unlit) material draws unlit.
+- Alpha: Blend mode "Alpha Blend" and "Alpha Clip" draw see-through
+  where the texture is; "Opaque" draws solid and ignores the texture's
+  alpha (a specular or colour-change mask left there does no harm).
+- Every material takes the map's light, sun and shadow as a Blockhead
+  does. Only an "Unlit" (emission shader / KHR_materials_unlit) material
+  draws at full brightness whatever the light: keep that for glowing parts.
 
 ## 6. Export settings (File > Export > glTF 2.0)
 

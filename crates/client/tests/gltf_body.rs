@@ -8,7 +8,7 @@ use bri_client::avatar::AvatarAnimationInput;
 use bri_package::packages::PackageSet;
 use glam::Vec3;
 
-const MODEL: &str = "figure:asset/figure.glb";
+const MODEL: &str = "figure:body/figure";
 
 fn player() -> Result<bri_sim::player::PlayerState> {
     Ok(serde_json::from_value(serde_json::json!({
@@ -49,6 +49,21 @@ fn an_imported_gltf_body_draws_untinted_holds_and_animates() -> Result<()> {
         mesh.data.vertices.iter().all(|v| v.color == [1.0; 4]),
         "untinted: {:?}",
         mesh.data.vertices.first().map(|v| v.color)
+    );
+    // The world lights it as it lights a Blockhead: each texture is drawn
+    // times the light, not laid over as a decal, which ignores the light
+    // (Max's playtest: Mario stayed bright in a dark map).
+    ensure!(
+        mesh.data
+            .materials
+            .iter()
+            .all(|m| m.kind == bri_render::scene::MaterialKind::VertexLit),
+        "lit materials: {:?}",
+        mesh.data
+            .materials
+            .iter()
+            .map(|m| m.kind)
+            .collect::<Vec<_>>()
     );
     let drawn = mesh.data.indices.len() / 3;
     ensure!(
@@ -138,6 +153,17 @@ mod support;
 /// Draw a posed body offscreen from in front and from its right, side by
 /// side, `height` the body's height.
 fn render(mesh: &mut bri_client::avatar::AvatarMesh, height: f32) -> Result<image::RgbaImage> {
+    render_lit(mesh, height, 0.5, 1.0)
+}
+
+/// The body from the front and the side, under `ambient` grey light and a
+/// white sun of `sun` from above and in front.
+fn render_lit(
+    mesh: &mut bri_client::avatar::AvatarMesh,
+    height: f32,
+    ambient: f32,
+    sun: f32,
+) -> Result<image::RgbaImage> {
     use bri_render::scene::{Camera, SceneRenderer, create_depth};
     const CELL: (u32, u32) = (240, 320);
     let gpu = support::gpu::turn()?;
@@ -174,9 +200,9 @@ fn render(mesh: &mut bri_client::avatar::AvatarMesh, height: f32) -> Result<imag
             0.05,
             50.0,
         );
-        camera.sun_direction = [0.4, 0.8, -0.45, 0.0];
-        camera.sun_color = [1.0, 1.0, 1.0, 0.0];
-        camera.ambient = [0.5, 0.5, 0.5, 0.0];
+        camera.sun_direction = [0.4, -0.8, 0.45, 0.0];
+        camera.sun_color = [sun, sun, sun, 0.0];
+        camera.ambient = [ambient, ambient, ambient, 0.0];
         renderer.update_camera(&gpu.queue, &camera);
         let mut encoder = gpu.device.create_command_encoder(&Default::default());
         renderer.render(
@@ -294,11 +320,97 @@ fn an_imported_gltf_body_renders_with_its_own_textures() -> Result<()> {
     sheet.save(out.join("figure.png"))?;
     // The skin texture's red and green squares show, lit, on the body.
     let count = |test: &dyn Fn([u8; 4]) -> bool| sheet.pixels().filter(|p| test(p.0)).count();
-    let red = count(&|[r, g, b, _]| r > 120 && g < 60 && b < 60);
-    let green = count(&|[r, g, b, _]| g > 120 && r < 60 && b < 60);
+    let red = count(&|[r, g, b, _]| r > g.saturating_add(60) && r > b.saturating_add(60));
+    let green = count(&|[r, g, b, _]| g > r.saturating_add(60) && g > b.saturating_add(60));
     ensure!(
         red > 200 && green > 200,
         "texture squares drawn: {red} red, {green} green pixels"
+    );
+    Ok(())
+}
+
+/// The made-up Blockhead as v20 draws one: its textures clear, so its paint
+/// shows, lit (the made-up textures are opaque placeholders; v20's are clear
+/// but for a face's or decal's print, which v20 draws unlit).
+fn painted_blockhead() -> Result<bri_client::avatar::AvatarAssets> {
+    use bri_client::testing::avatar;
+    use sha2::Digest;
+    let dir = bri_client::testing::ScratchDir::new("painted-blockhead")?;
+    avatar::write(dir.path())?;
+    let index = dir.path().join("avatar.json");
+    let mut pack: serde_json::Value = serde_json::from_slice(&std::fs::read(&index)?)?;
+    let ids = avatar::SURFACES.iter().map(|(_, id)| *id);
+    for id in ids.chain(avatar::FACES).chain(avatar::DECALS) {
+        let entry = &mut pack["textures"][id];
+        let file = dir
+            .path()
+            .join(entry["file"].as_str().context("texture file")?);
+        let mut png = Vec::new();
+        image::RgbaImage::from_pixel(8, 8, image::Rgba([255, 255, 255, 0]))
+            .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)?;
+        std::fs::write(&file, &png)?;
+        entry["sha256"] = format!("{:x}", sha2::Sha256::digest(&png)).into();
+    }
+    std::fs::write(&index, serde_json::to_vec(&pack)?)?;
+    bri_client::avatar::AvatarAssets::load(dir.path())
+}
+
+/// Mean brightness of what is drawn over the sky.
+fn brightness(sheet: &image::RgbaImage) -> f32 {
+    let sky = sheet.get_pixel(0, 0).0;
+    let drawn: Vec<f32> = sheet
+        .pixels()
+        .filter(|p| p.0 != sky)
+        .map(|p| (u32::from(p.0[0]) + u32::from(p.0[1]) + u32::from(p.0[2])) as f32 / 3.0)
+        .collect();
+    drawn.iter().sum::<f32>() / drawn.len().max(1) as f32
+}
+
+/// Blockhead and `body` side by side (columns), in sun and in the dark
+/// (rows), and the share of brightness each keeps in the dark.
+fn lighting_sheet(
+    blockhead: &mut bri_client::avatar::AvatarMesh,
+    body: &mut bri_client::avatar::AvatarMesh,
+    height: f32,
+) -> Result<(image::RgbaImage, [f32; 2])> {
+    let mut cells = Vec::new();
+    let mut shares = [0.0; 2];
+    for (i, mesh) in [blockhead, body].into_iter().enumerate() {
+        let lit = render_lit(mesh, height, 0.5, 1.0)?;
+        let dark = render_lit(mesh, height, 0.08, 0.0)?;
+        shares[i] = brightness(&dark) / brightness(&lit);
+        cells.push(lit);
+        cells.push(dark);
+    }
+    let (w, h) = cells[0].dimensions();
+    let mut sheet = image::RgbaImage::new(w * 2, h * 2);
+    for (i, cell) in cells.iter().enumerate() {
+        let (column, row) = ((i / 2) as u32, (i % 2) as u32);
+        image::imageops::overlay(&mut sheet, cell, i64::from(column * w), i64::from(row * h));
+    }
+    Ok((sheet, shares))
+}
+
+/// Max's v0.3.0 playtest: Mario stayed bright in a dark map, as if lit by
+/// nothing. His textures were laid over his colour as a decal, which v20
+/// draws without light. An imported body takes the world's light as a
+/// Blockhead does: in the dark both lose the same share of their
+/// brightness. The sheet is saved for a look.
+#[test]
+fn an_imported_body_takes_the_worlds_light_as_a_blockhead_does() -> Result<()> {
+    let (assets, model, _root) = load(&gltf::testing::character(true).glb, 2.65, "figure")?;
+    let mut body = assets.body_mesh(&model, assets.package.defaults.clone())?;
+    body.pose(&assets, &player()?, 0.0)?;
+    let painted = painted_blockhead()?;
+    let mut blockhead = painted.mesh(painted.package.defaults.clone())?;
+    blockhead.pose(&painted, &player()?, 0.0)?;
+    let (sheet, [blockhead, body]) = lighting_sheet(&mut blockhead, &mut body, 2.65)?;
+    let out = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join("gltf-body");
+    std::fs::create_dir_all(&out)?;
+    sheet.save(out.join("lighting.png"))?;
+    ensure!(
+        blockhead < 0.5 && body < 0.5 && (blockhead - body).abs() < 0.12,
+        "share of brightness kept in the dark: Blockhead {blockhead:.2}, imported body {body:.2}"
     );
     Ok(())
 }
@@ -310,18 +422,32 @@ fn an_imported_gltf_body_renders_with_its_own_textures() -> Result<()> {
 #[ignore = "set BRI_GLTF to a .glb to render it"]
 fn a_gltf_model_from_disk_renders() -> Result<()> {
     let path = std::path::PathBuf::from(std::env::var_os("BRI_GLTF").context("set BRI_GLTF")?);
-    let (assets, model, _root) = load(&std::fs::read(&path)?, 2.65, "sample")?;
+    // BRI_GLTF_HEIGHT: its height (`--height`); a Blockhead's by default.
+    let height = std::env::var("BRI_GLTF_HEIGHT")
+        .ok()
+        .and_then(|h| h.parse().ok())
+        .unwrap_or(2.65);
+    let (assets, model, _root) = load(&std::fs::read(&path)?, height, "sample")?;
     let mut mesh = assets.body_mesh(&model, assets.package.defaults.clone())?;
     mesh.pose(&assets, &player()?, 0.0)?;
     let sheet = render(&mut mesh, 2.65)?;
     let out = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join("gltf-body");
     std::fs::create_dir_all(&out)?;
-    let file = out.join(format!(
-        "{}.png",
-        path.file_stem().unwrap_or_default().to_string_lossy()
-    ));
+    let name = path.file_stem().unwrap_or_default().to_string_lossy();
+    let file = out.join(format!("{name}.png"));
     sheet.save(&file)?;
     println!("rendered {}", file.display());
+    // Beside a Blockhead, in sun and in the dark.
+    let painted = painted_blockhead()?;
+    let mut blockhead = painted.mesh(painted.package.defaults.clone())?;
+    blockhead.pose(&painted, &player()?, 0.0)?;
+    let (sheet, [kept_blockhead, kept_body]) = lighting_sheet(&mut blockhead, &mut mesh, 2.65)?;
+    let file = out.join(format!("{name}-lighting.png"));
+    sheet.save(&file)?;
+    println!(
+        "rendered {}: in the dark the Blockhead keeps {kept_blockhead:.2} of its brightness, {name} {kept_body:.2}",
+        file.display()
+    );
     Ok(())
 }
 
