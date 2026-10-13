@@ -884,7 +884,14 @@ fn a_guest_hears_an_add_ons_own_jump_sound_it_downloaded(f: &ContentRoot) -> Res
         "the standard jump played: {:?}",
         guest.audio_requests()
     );
-    ensure!(heard(&host_app) > 0, "the host did not hear the wahoo");
+    // The host hears it once the guest's jump reaches it and comes back
+    // as a cue, a step or more behind the guest's own.
+    until(
+        &mut [&mut host_app, &mut guest],
+        "the host hearing the wahoo",
+        10,
+        |a| heard(a[0]) > 0,
+    )?;
     leave(&mut [&mut guest, &mut host_app])?;
     Ok(())
 }
