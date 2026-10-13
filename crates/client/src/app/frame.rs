@@ -1184,6 +1184,17 @@ impl App {
                     .map_or(0.0, |(_, c)| c),
                 };
                 let avatar = self.avatar.avatars.get_mut(owner).unwrap();
+                avatar.screen_height = self
+                    .view
+                    .rendered_camera
+                    .zip(self.view.pixels_per_unit)
+                    .map(|((eye, _, _), ppu)| {
+                        let height = bri_sim::water::body_height(
+                            player,
+                            &view.archetypes.tuning(player.archetype, player.scale),
+                        );
+                        height * ppu / eye.distance(Vec3::from(player.feet)).max(0.01)
+                    });
                 let posed = avatar.pose_with_animation(
                     &self.avatar.avatar_assets,
                     player,

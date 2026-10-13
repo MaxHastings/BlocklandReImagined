@@ -23,6 +23,9 @@ pub struct AvatarAssets {
     pub rig: Rig,
     images: BTreeMap<String, SceneImage>,
     detail: usize,
+    /// A body's details by distance: each visible detail's screen height
+    /// in pixels and index, tallest first. Empty for a body of one detail.
+    lods: Vec<(f32, usize)>,
     /// Bodies other than the Blockhead, by the archetype model that draws
     /// them: `HorseArmor`'s horse.dts ([`HORSE_SHAPE`]), and each enabled
     /// Add-On's own player model (the Shark's `shark.dts`).
@@ -283,6 +286,7 @@ impl AvatarAssets {
             rig,
             images,
             detail,
+            lods: Vec::new(),
             bodies: BTreeMap::new(),
         })
     }
@@ -386,6 +390,7 @@ impl AvatarAssets {
             rig,
             images,
             detail,
+            lods: Vec::new(),
             bodies: BTreeMap::new(),
         });
         self.bodies.insert(HORSE_SHAPE.into(), horse);
@@ -478,6 +483,20 @@ impl AvatarAssets {
             .iter()
             .position(|d| !d.collision)
             .context("no visible detail")?;
+        let mut lods: Vec<(f32, usize)> = shape
+            .details
+            .iter()
+            .enumerate()
+            .filter(|(_, d)| {
+                !d.collision
+                    && (0.0..crate::items::FIRST_PERSON_DETAIL).contains(&d.pixel_threshold)
+            })
+            .map(|(i, d)| (d.pixel_threshold, i))
+            .collect();
+        lods.sort_by(|a, b| b.0.total_cmp(&a.0));
+        if lods.len() < 2 {
+            lods.clear();
+        }
         let sequences = shape
             .animations
             .iter()
@@ -503,6 +522,7 @@ impl AvatarAssets {
             rig,
             images,
             detail,
+            lods,
             bodies: BTreeMap::new(),
         })
     }
@@ -534,6 +554,21 @@ impl AvatarAssets {
             .into()
         } else {
             let selected = self.package.resolve(&appearance)?;
+            // An object named as a Blockhead part or colour slot is that
+            // part: painted, or hidden when the outfit leaves it out. Any
+            // other object (an imported model's own) draws with its own
+            // textures, untinted.
+            let part = |name: &str| {
+                selected.nodes.contains_key(name)
+                    || appearance.colors.contains_key(name)
+                    || self.package.defaults.colors.contains_key(name)
+                    || self
+                        .package
+                        .parts
+                        .values()
+                        .flatten()
+                        .any(|p| p.eq_ignore_ascii_case(name))
+            };
             horse
                 .object_names
                 .iter()
@@ -547,7 +582,9 @@ impl AvatarAssets {
                         .colors
                         .get(slot)
                         .or_else(|| selected.nodes.get(name))
-                        .map(|c| (name.clone(), *c))
+                        .copied()
+                        .or_else(|| (!part(name)).then_some([1.0; 4]))
+                        .map(|c| (name.clone(), c))
                 })
                 .collect()
         };
@@ -597,6 +634,19 @@ impl AvatarAssets {
         }
     }
     /// The rig and textures this mesh draws with.
+    /// The detail a body draws at `screen_height` pixels tall: the most
+    /// detailed one it is tall enough for, the least detailed below them
+    /// all. Unknown heights (no frame drawn yet) draw the full detail.
+    fn detail_at(&self, screen_height: Option<f32>) -> usize {
+        match (screen_height, self.lods.last()) {
+            (Some(px), Some(&(_, least))) => self
+                .lods
+                .iter()
+                .find(|(threshold, _)| px >= *threshold)
+                .map_or(least, |(_, d)| *d),
+            _ => self.detail,
+        }
+    }
     fn for_mesh(&self, mesh: &AvatarMesh) -> &AvatarAssets {
         mesh.model
             .as_ref()
@@ -678,6 +728,7 @@ impl AvatarAssets {
             pending: None,
             defer_mesh: false,
             instanced: false,
+            screen_height: None,
             straddle: None,
             instance: None,
             drawn_pose: None,
@@ -729,6 +780,9 @@ impl AvatarMesh {
 pub struct AvatarMesh {
     /// The body drawn instead of the Blockhead ([`AvatarAssets::body_mesh`]).
     pub model: Option<String>,
+    /// How tall the body last drew on screen, in pixels: a body with a
+    /// distant detail draws it when small. None draws the full detail.
+    pub screen_height: Option<f32>,
     posed_nodes: Vec<Mat4>,
     /// While Add-On code poses the body (`override_nodes`), the pose the
     /// animation gave it; empty otherwise. Gameplay-facing nodes (the eye)
@@ -1925,7 +1979,7 @@ impl AvatarMesh {
             .collect();
         let binding = crate::avatar_mesh::Binding {
             shape: &assets.rig.shape,
-            detail: assets.detail,
+            detail: assets.detail_at(self.screen_height),
             materials: &self.materials,
             translucent_materials: &self.translucent_materials,
             unassigned_material: self.materials[0],
