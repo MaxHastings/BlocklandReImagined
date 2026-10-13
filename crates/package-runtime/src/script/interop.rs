@@ -292,6 +292,13 @@ fn call_addon(addon: &str, function: &str, args: Vec<Dynamic>) -> Fallible<Dynam
         }
         Err(problem) => {
             TRANSACTION.with(|t| *t.borrow_mut() = before);
+            if problem.code == "script.read_only" {
+                // A read-only call cannot hide a denied write by catching it.
+                with(|i| {
+                    i.write_attempted = true;
+                    Ok(())
+                })?;
+            }
             fail(format!("{addon}:{function} failed: {}", problem.message))
         }
     }

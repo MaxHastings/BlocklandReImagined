@@ -26,6 +26,7 @@ use bri_package_runtime::{
 use bri_world::MAX_BRICKS;
 use std::sync::Arc;
 
+mod addon_events;
 mod bot_objectives;
 mod brick_events;
 mod brick_fields;
@@ -326,7 +327,7 @@ impl GeneratedWorld {
 pub(super) struct PackageHost {
     pub(super) catalog: Arc<Catalog>,
     runtime: Runtime,
-    store: Store,
+    pub(super) store: Store,
     world: Option<GeneratedWorld>,
     pub(super) entities: BTreeMap<u64, Entity>,
     next_entity: u64,
@@ -359,6 +360,8 @@ pub(super) struct PackageHost {
     game_hooks: game_hooks::GameHooks,
     /// Which bodies touch, for `on_contact`.
     contacts: contacts::Contacts,
+    /// Events Add-Ons sent each other (`emit`), for the next tick.
+    addon_events: addon_events::AddOnEvents,
     /// What each Add-On keeps on the host ([`AddOnData`]), by package.
     host_data: BTreeMap<String, BTreeMap<String, serde_json::Value>>,
     /// Values rules keep on bricks (`set_brick_field`).
@@ -386,15 +389,15 @@ pub(super) struct PackageHost {
     /// While the engine runs a tick's package work, every call shares one
     /// view of the world taken at its start, so a call costs what it does,
     /// not the size of the world (stress campaign W12).
-    view: Option<TickView>,
+    pub(super) view: Option<TickView>,
     /// Wall-clock time each package's script calls took since the host last
     /// took them (the performance overlay's per-Add-On script time).
     script_time: BTreeMap<String, std::time::Duration>,
 }
 
-struct TickView {
+pub(super) struct TickView {
     snapshot: Arc<Snapshot>,
-    vars: BTreeMap<String, Arc<script::EntityVars>>,
+    pub(super) vars: BTreeMap<String, Arc<script::EntityVars>>,
 }
 
 /// Script operations per tick the server gives package work it runs itself
@@ -844,6 +847,7 @@ impl Session {
             item_hooks: Default::default(),
             game_hooks: Default::default(),
             contacts: Default::default(),
+            addon_events: Default::default(),
             host_data: BTreeMap::new(),
             brick_fields: Default::default(),
             brick_watch: Default::default(),
@@ -1120,7 +1124,7 @@ impl Session {
             None => PlayerKey::session(owner),
         }
     }
-    fn package_vars(&self, package: &str) -> script::EntityVars {
+    pub(super) fn package_vars(&self, package: &str) -> script::EntityVars {
         self.packages
             .as_ref()
             .map(|h| {
@@ -1478,182 +1482,152 @@ impl Session {
                 return Err(diagnostic);
             }
         };
-        for line in outcome.output {
-            if host.output.len() == MAX_DIAGNOSTICS {
-                host.output.pop_front();
+        // The call's own part and each Add-On whose exports it called
+        // (`call_addon`): every part is checked as its own package's, and
+        // the call is kept only if all of them pass.
+        let script::Outcome {
+            returned,
+            ops,
+            required,
+            state,
+            entity_vars,
+            output,
+            events,
+            nested,
+        } = outcome;
+        let mut parts: Vec<Part> = nested
+            .into_iter()
+            .map(|n| Part {
+                package: n.package,
+                input: n.input,
+                state: n.state,
+                ops: n.ops,
+                required: n.required,
+                entity_vars: n.entity_vars,
+                output: n.output,
+                events: n.events,
+            })
+            .collect();
+        parts.push(Part {
+            package: package.to_owned(),
+            input,
+            state,
+            ops,
+            required,
+            entity_vars,
+            output,
+            events,
+        });
+        for part in &parts {
+            for line in &part.output {
+                if host.output.len() == MAX_DIAGNOSTICS {
+                    host.output.pop_front();
+                }
+                host.output.push_back(format!("{}: {line}", part.package));
             }
-            host.output.push_back(format!("{package}: {line}"));
         }
-        // A call may only write declared keys. Keys it left as they were (a
-        // save from an older version of the package, say) are kept, not
-        // blamed on this call.
-        let schema = host
-            .catalog
-            .packages
-            .get(package)
-            .and_then(|p| p.behaviour.as_ref())
-            .map(|b| b.state.clone())
-            .unwrap_or_default();
-        let undeclared = outcome
-            .state
-            .global
-            .iter()
-            .find(|(k, v)| !schema.global.contains_key(*k) && input.global.get(*k) != Some(v))
-            .map(|(k, _)| k)
-            .or_else(|| {
-                outcome.state.players.iter().find_map(|(player, m)| {
-                    let before = input.players.get(player);
-                    m.iter()
-                        .find(|(k, v)| {
-                            !schema.player.contains_key(*k)
-                                && before.and_then(|b| b.get(*k)) != Some(v)
-                        })
-                        .map(|(k, _)| k)
-                })
-            });
-        if let Some(key) = undeclared {
-            let d = Diagnostic::error(
-                "state.undeclared",
-                format!("{function} wrote state key `{key}`, which the behaviour does not declare"),
-            )
-            .at(package.to_string())
-            .hint("declare every state key under behaviour.json `state`");
-            note(host, d.clone());
-            return Err(d);
-        }
-        // State is budgeted per player, per package and in total, and only
-        // growth is refused, so a call can always shrink state (W7).
         let mut growth = 0_isize;
-        let mut over = None;
-        if outcome.state.global != input.global {
-            let (before, after) = (
-                state::stored_size(&input.global),
-                state::stored_size(&outcome.state.global),
-            );
-            growth += after as isize - before as isize;
-            if after > before && after > state::MAX_GLOBAL_STATE_BYTES {
-                over = Some(format!(
-                    "{function} would grow server-wide state to {after} bytes; the limit is {}",
-                    state::MAX_GLOBAL_STATE_BYTES
-                ));
-            }
-        }
-        let empty = BTreeMap::new();
-        for (player, values) in &outcome.state.players {
-            let old = input.players.get(player).unwrap_or(&empty);
-            if old == values {
-                continue;
-            }
-            let (before, after) = (state::stored_size(old), state::stored_size(values));
-            growth += after as isize - before as isize;
-            if after > before && after > state::MAX_PLAYER_STATE_BYTES {
-                over = Some(format!(
-                    "{function} would grow a player's state to {after} bytes; the limit is {}",
-                    state::MAX_PLAYER_STATE_BYTES
-                ));
-            }
-        }
-        for (player, values) in &input.players {
-            if !outcome.state.players.contains_key(player) {
-                growth -= state::stored_size(values) as isize;
+        for part in &parts {
+            match vet_part(host, part, function) {
+                Ok(grew) => growth += grew,
+                Err(d) => {
+                    note(host, d.clone());
+                    return Err(d);
+                }
             }
         }
         let total = host.state_bytes.saturating_add_signed(growth);
-        if over.is_none() && growth > 0 && total > state::MAX_STATE_BYTES {
-            over = Some(format!(
-                "{function} would grow package state past the server's {} bytes",
-                state::MAX_STATE_BYTES
-            ));
-        }
-        if let Some(message) = over {
-            let d = Diagnostic::error("state.budget", message)
-                .at(package.to_string())
-                .hint("keep per-player state small; store counts, not logs");
+        if growth > 0 && total > state::MAX_STATE_BYTES {
+            let d = Diagnostic::error(
+                "state.budget",
+                format!(
+                    "{function} would grow package state past the server's {} bytes",
+                    state::MAX_STATE_BYTES
+                ),
+            )
+            .at(package.to_string())
+            .hint("keep per-player state small; store counts, not logs");
             note(host, d.clone());
             return Err(d);
-        }
-        let capabilities = host
-            .catalog
-            .packages
-            .get(package)
-            .map(|p| p.manifest.capabilities.clone())
-            .unwrap_or_default();
-        for op in &outcome.ops {
-            let owned = perform::entity(op).is_none_or(|entity| {
-                host.entities
-                    .get(&entity)
-                    .is_some_and(|e| e.package == package)
-            });
-            let checked = authorize(package, &capabilities, op).and_then(|()| {
-                if owned {
-                    Ok(())
-                } else {
-                    Err(Diagnostic::error(
-                        "op.not_owner",
-                        format!(
-                            "{} targets an entity this package does not own",
-                            bri_package_runtime::ops::op_name(op)
-                        ),
-                    )
-                    .at(package.to_string()))
-                }
-            });
-            if let Err(d) = checked {
-                note(host, d.clone());
-                return Err(d);
-            }
         }
         // Operations the script marked `require` are checked before the
         // call takes effect: a shop that charges for an item it cannot hand
         // out charges nobody. What a check cannot see is caught below.
         let tick = self.simulation.state().tick;
-        let cx = perform::OpCall {
-            package,
-            caller,
-            tick,
-        };
-        let required = |index: usize| outcome.required.contains(&index);
-        for (index, op) in outcome.ops.iter().enumerate() {
-            if required(index)
-                && let Err(error) = perform::check(self, op, cx)
-            {
-                let d = required_failed(package, function, op, &error);
-                note(self.packages.as_mut().expect("installed"), d.clone());
-                return Err(d);
+        for part in &parts {
+            let cx = perform::OpCall {
+                package: &part.package,
+                caller,
+                tick,
+            };
+            for (index, op) in part.ops.iter().enumerate() {
+                if part.required.contains(&index)
+                    && let Err(error) = perform::check(self, op, cx)
+                {
+                    let d = required_failed(&part.package, function, op, &error);
+                    note(self.packages.as_mut().expect("installed"), d.clone());
+                    return Err(d);
+                }
             }
         }
         let host = self.packages.as_mut().expect("installed");
         let bytes_before = host.state_bytes;
         host.state_bytes = total;
-        let namespace = host.store.namespace_mut(package);
-        let state_changed = *namespace != outcome.state;
-        if state_changed {
-            *namespace = outcome.state.clone();
-            self.package_revision += 1;
-        }
-        for (id, vars) in outcome.entity_vars {
-            if let Some(e) = host.entities.get_mut(&id) {
-                e.vars = vars;
+        let mut changed = Vec::new();
+        for part in &mut parts {
+            let namespace = host.store.namespace_mut(&part.package);
+            if *namespace != part.state {
+                *namespace = part.state.clone();
+                changed.push(part.package.clone());
             }
-        }
-        let returned = outcome.returned;
-        let mut refused = None;
-        for (index, op) in outcome.ops.into_iter().enumerate() {
-            let name = bri_package_runtime::ops::op_name(&op);
-            if let Err(error) = perform::perform(self, op, cx) {
-                let host = self.packages.as_mut().expect("installed");
-                if required(index) && refused.is_none() {
-                    refused = Some((name, format!("{error:#}")));
-                } else {
+            for (id, vars) in std::mem::take(&mut part.entity_vars) {
+                if let Some(e) = host.entities.get_mut(&id)
+                    && e.package == part.package
+                {
+                    e.vars = vars;
+                }
+            }
+            for event in std::mem::take(&mut part.events) {
+                let name = event.name.clone();
+                if !host.addon_events.send(&part.package, event) {
                     note(
                         host,
-                        Diagnostic::warning("op.failed", format!("{error:#}"))
-                            .at(package.to_string()),
+                        Diagnostic::warning(
+                            "event.dropped",
+                            format!("event `{name}` was dropped: too many events are waiting"),
+                        )
+                        .at(part.package.clone()),
                     );
                 }
             }
         }
-        let Some((name, error)) = refused else {
+        if !changed.is_empty() {
+            self.package_revision += 1;
+        }
+        let mut refused = None;
+        for part in &mut parts {
+            let cx = perform::OpCall {
+                package: &part.package,
+                caller,
+                tick,
+            };
+            for (index, op) in std::mem::take(&mut part.ops).into_iter().enumerate() {
+                let name = bri_package_runtime::ops::op_name(&op);
+                if let Err(error) = perform::perform(self, op, cx) {
+                    let host = self.packages.as_mut().expect("installed");
+                    if part.required.contains(&index) && refused.is_none() {
+                        refused = Some((part.package.clone(), name, format!("{error:#}")));
+                    } else {
+                        note(
+                            host,
+                            Diagnostic::warning("op.failed", format!("{error:#}"))
+                                .at(part.package.clone()),
+                        );
+                    }
+                }
+            }
+        }
+        let Some((owner, name, error)) = refused else {
             return Ok(returned);
         };
         // A required operation failed where its check could not see it
@@ -1661,10 +1635,15 @@ impl Session {
         // long as nothing else wrote it meanwhile (an output the operations
         // fired may have run this package again).
         let host = self.packages.as_mut().expect("installed");
-        let namespace = host.store.namespace_mut(package);
-        let rolled_back = state_changed && *namespace == outcome.state;
+        let untouched = parts
+            .iter()
+            .filter(|p| changed.contains(&p.package))
+            .all(|p| host.store.namespace(&p.package) == Some(&p.state));
+        let rolled_back = !changed.is_empty() && untouched;
         if rolled_back {
-            *namespace = input;
+            for part in parts.iter().filter(|p| changed.contains(&p.package)) {
+                *host.store.namespace_mut(&part.package) = part.input.clone();
+            }
             host.state_bytes = bytes_before;
             self.package_revision += 1;
         }
@@ -1672,14 +1651,14 @@ impl Session {
             "op.required",
             format!(
                 "{function}: required {name} failed ({error}); {}",
-                if rolled_back || !state_changed {
+                if rolled_back || changed.is_empty() {
                     "the state it wrote was not kept"
                 } else {
                     "its state was written again meanwhile and is kept"
                 }
             ),
         )
-        .at(package.to_string())
+        .at(owner)
         .hint(
             "check player(p).tools or the brick before charging, or require earlier operations too",
         );
@@ -3027,6 +3006,7 @@ impl Session {
         self.deliver_spawns();
         self.deliver_hits();
         self.deliver_minigame_events();
+        self.deliver_addon_events();
         self.step_zones();
         self.step_paths();
         self.step_saved_copies();
@@ -4154,6 +4134,129 @@ pub struct PackageStats {
 
 /// The diagnostic for a `require`d operation the engine will not carry out
 /// before the call takes effect: nothing of the call is kept.
+/// One package's share of a script call: the calling package's own, or
+/// that of an Add-On whose exports it called.
+struct Part {
+    package: String,
+    input: Namespace,
+    state: Namespace,
+    ops: Vec<bri_package_runtime::Op>,
+    required: BTreeSet<usize>,
+    entity_vars: script::EntityVars,
+    output: Vec<String>,
+    events: Vec<script::Emitted>,
+}
+
+/// Check one part of a call as its own package's: only declared keys
+/// written, within the state budgets, every operation allowed by that
+/// package's capabilities and on entities it owns. Returns how many bytes
+/// its state grew by.
+fn vet_part(host: &PackageHost, part: &Part, function: &str) -> Result<isize, Diagnostic> {
+    let package = part.package.as_str();
+    let (input, outcome) = (&part.input, &part.state);
+    // A call may only write declared keys. Keys it left as they were (a
+    // save from an older version of the package, say) are kept, not
+    // blamed on this call.
+    let schema = host
+        .catalog
+        .packages
+        .get(package)
+        .and_then(|p| p.behaviour.as_ref())
+        .map(|b| b.state.clone())
+        .unwrap_or_default();
+    let undeclared = outcome
+        .global
+        .iter()
+        .find(|(k, v)| !schema.global.contains_key(*k) && input.global.get(*k) != Some(v))
+        .map(|(k, _)| k)
+        .or_else(|| {
+            outcome.players.iter().find_map(|(player, m)| {
+                let before = input.players.get(player);
+                m.iter()
+                    .find(|(k, v)| {
+                        !schema.player.contains_key(*k)
+                            && before.and_then(|b| b.get(*k)) != Some(v)
+                    })
+                    .map(|(k, _)| k)
+            })
+        });
+    if let Some(key) = undeclared {
+        return Err(Diagnostic::error(
+            "state.undeclared",
+            format!("{function} wrote {package}'s state key `{key}`, which its behaviour does not declare"),
+        )
+        .at(package.to_string())
+        .hint("declare every state key under behaviour.json `state`"));
+    }
+    // State is budgeted per player, per package and in total, and only
+    // growth is refused, so a call can always shrink state (W7).
+    let mut growth = 0_isize;
+    let mut over = None;
+    if outcome.global != input.global {
+        let (before, after) = (
+            state::stored_size(&input.global),
+            state::stored_size(&outcome.global),
+        );
+        growth += after as isize - before as isize;
+        if after > before && after > state::MAX_GLOBAL_STATE_BYTES {
+            over = Some(format!(
+                "{function} would grow {package}'s server-wide state to {after} bytes; the limit is {}",
+                state::MAX_GLOBAL_STATE_BYTES
+            ));
+        }
+    }
+    let empty = BTreeMap::new();
+    for (player, values) in &outcome.players {
+        let old = input.players.get(player).unwrap_or(&empty);
+        if old == values {
+            continue;
+        }
+        let (before, after) = (state::stored_size(old), state::stored_size(values));
+        growth += after as isize - before as isize;
+        if after > before && after > state::MAX_PLAYER_STATE_BYTES {
+            over = Some(format!(
+                "{function} would grow a player's {package} state to {after} bytes; the limit is {}",
+                state::MAX_PLAYER_STATE_BYTES
+            ));
+        }
+    }
+    for (player, values) in &input.players {
+        if !outcome.players.contains_key(player) {
+            growth -= state::stored_size(values) as isize;
+        }
+    }
+    if let Some(message) = over {
+        return Err(Diagnostic::error("state.budget", message)
+            .at(package.to_string())
+            .hint("keep per-player state small; store counts, not logs"));
+    }
+    let capabilities = host
+        .catalog
+        .packages
+        .get(package)
+        .map(|p| p.manifest.capabilities.clone())
+        .unwrap_or_default();
+    for op in &part.ops {
+        let owned = perform::entity(op).is_none_or(|entity| {
+            host.entities
+                .get(&entity)
+                .is_some_and(|e| e.package == package)
+        });
+        authorize(package, &capabilities, op)?;
+        if !owned {
+            return Err(Diagnostic::error(
+                "op.not_owner",
+                format!(
+                    "{} targets an entity this package does not own",
+                    bri_package_runtime::ops::op_name(op)
+                ),
+            )
+            .at(package.to_string()));
+        }
+    }
+    Ok(growth)
+}
+
 fn required_failed(
     package: &str,
     function: &str,

@@ -94,6 +94,21 @@ impl World for ScriptWorld<'_> {
     fn lan(&self) -> bool {
         self.session.lan_host
     }
+    fn addon_state(&self, package: &str) -> Option<bri_package_runtime::state::Namespace> {
+        self.session
+            .packages
+            .as_ref()
+            .and_then(|host| host.store.namespace(package).cloned())
+    }
+    fn addon_vars(&self, package: &str) -> std::sync::Arc<bri_package_runtime::script::EntityVars> {
+        let shared = self
+            .session
+            .packages
+            .as_ref()
+            .and_then(|h| h.view.as_ref())
+            .and_then(|v| v.vars.get(package).cloned());
+        shared.unwrap_or_else(|| std::sync::Arc::new(self.session.package_vars(package)))
+    }
     fn hit_region(&self, player: u64, point: [f32; 3]) -> Option<&'static str> {
         self.session.region_of(player, Vec3::from(point))
     }
