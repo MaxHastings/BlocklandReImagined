@@ -200,6 +200,7 @@ impl Client {
             None,
             Progress::default(),
             false,
+            None,
         )
         .await
     }
@@ -226,6 +227,7 @@ impl Client {
             kept,
             Progress::default(),
             false,
+            None,
         )
         .await
     }
@@ -306,6 +308,49 @@ impl Client {
         pin: HostPin,
         name: JoinName,
         packages: Vec<bri_package::environment::PackageRef>,
+        resume: Option<ResumeToken>,
+        kept: Option<KeptBricks>,
+        host: Option<ResumeToken>,
+        identity: &ClientIdentity,
+        cache: &bri_package::sync::Cache,
+        progress: Progress,
+        load: impl FnMut(
+            &[crate::packages::Fetched],
+            &[bri_package::environment::PackageRef],
+        ) -> Result<Vec<bri_package::environment::PackageRef>>,
+    ) -> Result<(
+        Self,
+        Vec<crate::packages::Fetched>,
+        Vec<bri_package::environment::PackageRef>,
+    )> {
+        Self::connect_arriving(
+            address,
+            pin,
+            name,
+            packages,
+            resume,
+            kept,
+            host,
+            identity,
+            cache,
+            progress,
+            load,
+            None,
+            async { Ok(()) },
+        )
+        .await
+    }
+    /// [`Client::connect_fetching_resuming`] for a player the host already
+    /// announced as connected ([`Arrival`]): `arrival` is its ticket, so
+    /// the join spawns that player. `ready` runs after the server's
+    /// Add-Ons are downloaded and loaded and before the join, for loading
+    /// the map: the player spawns once they can play.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn connect_arriving(
+        address: SocketAddr,
+        pin: HostPin,
+        name: JoinName,
+        packages: Vec<bri_package::environment::PackageRef>,
         mut resume: Option<ResumeToken>,
         mut kept: Option<KeptBricks>,
         host: Option<ResumeToken>,
@@ -316,6 +361,8 @@ impl Client {
             &[crate::packages::Fetched],
             &[bri_package::environment::PackageRef],
         ) -> Result<Vec<bri_package::environment::PackageRef>>,
+        arrival: Option<ResumeToken>,
+        ready: impl std::future::Future<Output = Result<()>>,
     ) -> Result<(
         Self,
         Vec<crate::packages::Fetched>,
@@ -356,6 +403,7 @@ impl Client {
                 }
             }
         }
+        ready.await?;
         let mut joined = Self::connect_inner(
             address,
             pin.clone(),
@@ -367,6 +415,7 @@ impl Client {
             kept.clone(),
             progress.clone(),
             false,
+            arrival.clone(),
         )
         .await;
         if resume.is_some()
@@ -389,6 +438,7 @@ impl Client {
                 None,
                 progress.clone(),
                 false,
+                arrival.clone(),
             )
             .await;
         }
@@ -437,6 +487,7 @@ impl Client {
             kept,
             progress,
             true,
+            arrival,
         )
         .await?;
         // A callback may have declined a downloaded shared package, or a
@@ -508,6 +559,7 @@ impl Client {
             None,
             progress,
             false,
+            None,
         )
         .await
     }
@@ -523,6 +575,7 @@ impl Client {
         kept: Option<KeptBricks>,
         progress: Progress,
         accept_differences: bool,
+        arrival: Option<ResumeToken>,
     ) -> Result<Self> {
         progress.begin(Stage::Connecting, Unit::Steps, None);
         let Opened {
@@ -548,6 +601,7 @@ impl Client {
             identity: None,
             accept_differences,
             kept: kept.as_ref().map(KeptBricks::offer),
+            arrival,
         };
         if let Some(identity) = identity {
             let server_fingerprint: [u8; 32] = sha2::Sha256::digest(&certificate).into();
@@ -1135,6 +1189,187 @@ impl From<&[u8]> for HostPin {
     }
 }
 
+/// What a loading connection ([`Arrival`]) hears from the host.
+#[derive(Debug, Clone)]
+pub enum ArrivalEvent {
+    /// New chat lines, oldest first; each id above every one before.
+    Chat(Vec<bri_sim::session::ChatLine>),
+    /// A server line or sound addressed to this player.
+    Notice(bri_sim::session::Notice),
+    /// The connection ended, with why.
+    Closed(String),
+}
+/// The connection v20 makes before its loading screen: the host accepts
+/// the player and announces them as connected while they download the
+/// server's Add-Ons and load the map, and they read and send chat
+/// ([`Purpose::Lobby`]). Its [`Arrival::ticket`] goes on the game join
+/// ([`Client::connect_arriving`]), which spawns them; the host closes this
+/// connection then. Dropping it before that leaves the game.
+pub struct Arrival {
+    endpoint: quinn::Endpoint,
+    connection: quinn::Connection,
+    pub owner: OwnerId,
+    /// The name the host announced, after cleaning and numbering.
+    pub name: String,
+    pub ticket: ResumeToken,
+    /// Chat lines up to this id came before the player connected.
+    pub chat_cursor: u64,
+    /// The certificate the host presented, to pin for the game join.
+    pub certificate: Vec<u8>,
+    pub listing: Listing,
+    say: mpsc::Sender<String>,
+    events: mpsc::Receiver<ArrivalEvent>,
+    tasks: Vec<tokio::task::JoinHandle<()>>,
+}
+impl Arrival {
+    pub async fn open(
+        address: SocketAddr,
+        pin: &HostPin,
+        name: JoinName,
+        host: Option<ResumeToken>,
+        identity: &ClientIdentity,
+    ) -> Result<Self> {
+        let Opened {
+            endpoint,
+            connection,
+            certificate,
+            mut send,
+            mut receive,
+            nonce: challenge,
+            listing,
+        } = open_for(
+            address,
+            pin,
+            Duration::from_secs(10),
+            JoinBegin {
+                version: VERSION,
+                purpose: Purpose::Lobby,
+            },
+        )
+        .await?;
+        let JoinName { name, clan } = name;
+        let mut hello = Hello {
+            version: VERSION,
+            name,
+            clan,
+            packages: Vec::new(),
+            resume: None,
+            host,
+            identity: None,
+            accept_differences: false,
+            kept: None,
+            arrival: None,
+        };
+        let server_fingerprint: [u8; 32] = sha2::Sha256::digest(&certificate).into();
+        let transcript = identity_transcript(&hello, &challenge, &server_fingerprint)?;
+        hello.identity = Some(IdentityProof {
+            public_key: *identity.public_key(),
+            signature: identity.sign(&transcript)?.to_vec(),
+        });
+        let answer = tokio::time::timeout(Duration::from_secs(10), async {
+            codec::write_small_request(&mut send, &hello).await?;
+            codec::read_frame(&mut receive, codec::MAX_FRAME).await
+        })
+        .await
+        .map_err(|_| {
+            JoinError::Connection(address, "the server stopped answering the join".into())
+        })??;
+        let (owner, name, ticket, chat_cursor) = match codec::decode::<Message>(&answer)? {
+            Message::Arrived {
+                owner,
+                name,
+                arrival,
+                chat_cursor,
+            } => (owner, name, arrival, chat_cursor),
+            Message::Rejected(reason) => return Err(JoinError::Rejected(reason).into()),
+            _ => anyhow::bail!("Expected the host to accept the connection"),
+        };
+        let (events_tx, events) = mpsc::channel(64);
+        let closed = events_tx.clone();
+        let reader_connection = connection.clone();
+        let reader = tokio::spawn(async move {
+            loop {
+                let message = match codec::read_frame(&mut receive, codec::MAX_FRAME).await {
+                    Ok(frame) => codec::decode::<Message>(&frame),
+                    Err(error) => Err(error),
+                };
+                let event = match message {
+                    Ok(Message::LobbyChat(lines)) if lines.len() <= 100 => {
+                        ArrivalEvent::Chat(lines)
+                    }
+                    Ok(Message::Notice(notice)) => ArrivalEvent::Notice(notice),
+                    Ok(_) => continue,
+                    Err(error) => {
+                        let reason = match reader_connection.close_reason() {
+                            Some(
+                                quinn::ConnectionError::TimedOut | quinn::ConnectionError::Reset,
+                            ) => CONNECTION_LOST.to_string(),
+                            Some(reason) => reason.to_string(),
+                            None => error.to_string(),
+                        };
+                        let _ = closed.send(ArrivalEvent::Closed(reason)).await;
+                        break;
+                    }
+                };
+                // A player not reading (the game is busy loading) loses
+                // the oldest lines, never the connection.
+                let _ = events_tx.try_send(event);
+            }
+        });
+        let (say, mut said) = mpsc::channel::<String>(16);
+        let writer = tokio::spawn(async move {
+            while let Some(text) = said.recv().await {
+                if codec::write_small_request(&mut send, &LobbyRequest::Chat(text))
+                    .await
+                    .is_err()
+                {
+                    break;
+                }
+            }
+        });
+        Ok(Self {
+            endpoint,
+            connection,
+            owner,
+            name,
+            ticket,
+            chat_cursor,
+            certificate,
+            listing,
+            say,
+            events,
+            tasks: vec![reader, writer],
+        })
+    }
+    /// Send a chat line. A full queue (more than a player types) drops it.
+    pub fn say(&self, text: String) -> Result<()> {
+        self.say
+            .try_send(text)
+            .context("The chat queue is full or the connection ended")
+    }
+    /// What the host sent that has not been taken yet.
+    pub fn try_next(&mut self) -> Option<ArrivalEvent> {
+        self.events.try_recv().ok()
+    }
+    /// The next thing the host sends; `None` once the connection is gone.
+    pub async fn next(&mut self) -> Option<ArrivalEvent> {
+        self.events.recv().await
+    }
+    /// Leave: the host tells everyone the player left, unless the game
+    /// join already spawned them.
+    pub fn close(&self) {
+        self.connection.close(0_u32.into(), b"Left");
+    }
+}
+impl Drop for Arrival {
+    fn drop(&mut self) {
+        self.close();
+        for task in &self.tasks {
+            task.abort();
+        }
+        self.endpoint.close(0_u32.into(), b"Left");
+    }
+}
 /// What a probe learned about a server over its game port.
 #[derive(Debug, Clone)]
 pub struct Probe {
@@ -1171,13 +1406,21 @@ struct Opened {
 }
 
 async fn open(address: SocketAddr, pin: &HostPin, wait: Duration) -> Result<Opened> {
+    open_for(address, pin, wait, JoinBegin::join()).await
+}
+async fn open_for(
+    address: SocketAddr,
+    pin: &HostPin,
+    wait: Duration,
+    begin: JoinBegin,
+) -> Result<Opened> {
     let (endpoint, connection, certificate) = connect_quic(address, pin, wait).await?;
     // Every step after the handshake shares the caller's wait: a host that
     // allows no streams, grants no flow control or never answers would
     // otherwise hold the join forever.
     let (send, receive, frame) = tokio::time::timeout(wait, async {
         let (mut send, mut receive) = connection.open_bi().await?;
-        codec::write_small_request(&mut send, &JoinBegin::join()).await?;
+        codec::write_small_request(&mut send, &begin).await?;
         let frame = codec::read_frame(&mut receive, codec::MAX_FRAME).await?;
         anyhow::Ok((send, receive, frame))
     })
