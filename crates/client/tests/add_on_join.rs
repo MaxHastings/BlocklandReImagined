@@ -24,6 +24,7 @@ synthetic_and_content!(
     a_guest_joins_a_host_running_every_repository_add_on,
     a_guest_without_a_vehicle_add_on_downloads_it_and_can_spawn_it,
     a_host_with_the_blockhead_bot_on_spawns_bots_and_one_without_offers_none,
+    a_guest_hears_an_add_ons_own_jump_sound_it_downloaded,
 );
 
 const SIZE: (u32, u32) = (960, 720);
@@ -423,7 +424,10 @@ fn walk(dir: &Path) -> Vec<String> {
 /// the test's length, in dependency order.
 /// Test-only Add-Ons the repository keeps beside the tests that use them,
 /// standing in for third-party originals it never holds.
-const STAND_INS: &[&str] = &["crates/vehicles/tests/fixtures/stand-in-plane"];
+const STAND_INS: &[&str] = &[
+    "crates/vehicles/tests/fixtures/stand-in-plane",
+    "crates/client/tests/fixtures/stand-in-wahoo",
+];
 
 struct RepoAddOns {
     dir: PathBuf,
@@ -778,6 +782,109 @@ fn a_guest_without_a_vehicle_add_on_downloads_it_and_can_spawn_it(f: &ContentRoo
         spawnable(&guest),
         "the guest's vehicle list lacks {VEHICLE}"
     );
+    leave(&mut [&mut guest, &mut host_app])?;
+    Ok(())
+}
+
+/// An Add-On's own sound file for a player type (a Mario body's "wahoo"):
+/// a guest who has the Add-On off downloads it with the Add-On, and when
+/// they jump, they hear the Add-On's file, not the standard jump.
+fn a_guest_hears_an_add_ons_own_jump_sound_it_downloaded(f: &ContentRoot) -> Result<()> {
+    const WAHOO: &str = "test_wahoo";
+    const SOUND: &str = "test_wahoo:sound/wahoo";
+    let content = f.root.clone();
+    let listed = bri_package::packages::PackageSet::load_root(&content)?;
+    let staged = RepoAddOns::install(&content)?;
+    let mut set = listed.clone();
+    set.packages.extend(staged.with(&[WAHOO])?);
+    let mut host_app = app(&content, "WahooHost")?;
+    host_app
+        .apply_packages(&set)
+        .context("the host loads the wahoo")?;
+    let mut guest = app(&content, "WahooGuest")?;
+    guest
+        .apply_packages(&listed)
+        .context("the guest has the wahoo off")?;
+    // The content root's own map has a floor to jump from.
+    host_app.host_on_any_port();
+    request(
+        &mut host_app,
+        UiAction::HostGame {
+            map: f.map.0.clone(),
+            mode: ServerMode::Lan,
+            game_mode: None,
+            max_players: 4,
+            server_name: "Add-On join".into(),
+            password: String::new(),
+            admin_password: String::new(),
+            super_admin_password: String::new(),
+        },
+    )?;
+    until(&mut [&mut host_app], "host in game", 180, |a| in_game(a[0]))?;
+    join(&mut guest, &host_app)?;
+    until(
+        &mut [&mut host_app, &mut guest],
+        "guest standing in game",
+        300,
+        |a| {
+            in_game(a[1])
+                && a[1].local_motion().is_some_and(|(p, _)| {
+                    p.grounded && glam::Vec3::from(p.velocity).length() < 0.001
+                })
+        },
+    )?;
+    let cache = guest_cache_ids(&guest);
+    ensure!(
+        cache.iter().any(|id| id == WAHOO),
+        "{WAHOO} was not downloaded: {cache:?}"
+    );
+    ensure!(
+        guest.audio_has_sound(SOUND),
+        "the guest did not load the downloaded wahoo"
+    );
+    let heard = |app: &App| app.audio_requests().get(SOUND).copied().unwrap_or(0);
+    ensure!(heard(&guest) == 0, "a wahoo before anyone jumped");
+    let jump = |app: &mut App, down: bool| {
+        request(
+            app,
+            UiAction::Game(GameAction::Held {
+                control: HeldControl::Jump,
+                down,
+            }),
+        )
+    };
+    // Tap jump until it lands on the ground: a press while still falling
+    // in after spawning is no jump.
+    for _ in 0..30 {
+        jump(&mut guest, true)?;
+        let _ = until(&mut [&mut host_app, &mut guest], "a jump", 1, |a| {
+            heard(a[1]) > 0
+        });
+        jump(&mut guest, false)?;
+        if heard(&guest) > 0 {
+            break;
+        }
+        let _ = until(&mut [&mut host_app, &mut guest], "a release", 1, |_| false);
+    }
+    ensure!(
+        heard(&guest) > 0,
+        "the guest never heard their wahoo: {:?}",
+        guest.audio_requests()
+    );
+    // It played from the downloaded file: no start failed, and the
+    // standard jump never sounded.
+    let warnings: Vec<_> = guest
+        .audio_warnings()
+        .iter()
+        .filter(|w| w.contains("wahoo"))
+        .collect();
+    ensure!(warnings.is_empty(), "{warnings:?}");
+    ensure!(
+        !guest.audio_requests().contains_key("player.jump"),
+        "the standard jump played: {:?}",
+        guest.audio_requests()
+    );
+    ensure!(heard(&host_app) > 0, "the host did not hear the wahoo");
     leave(&mut [&mut guest, &mut host_app])?;
     Ok(())
 }

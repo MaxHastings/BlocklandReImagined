@@ -293,6 +293,9 @@ Sounds declared this way (Slayer's countdown voices, made in a loop) play
 by id from the rules, `play_sound(p, "<namespace>:sound/<name>")`: every
 converted `AudioProfile` goes into the Add-On's weapons pack, which an
 Add-On with no weapons gets just for its sounds.
+A player type's `jumpSound`, and its `painSound` and `deathSound` under
+`useCustomPainEffects`, become its archetype's `sounds` the same way: one
+of the Add-On's own plays by that id, one of the base game's by its name.
 
 A `covers` pattern reads a function's plain definition, the last one if
 the Add-On defines it twice, as Torque keeps. A definition inside a
