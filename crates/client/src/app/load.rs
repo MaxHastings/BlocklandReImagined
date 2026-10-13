@@ -343,6 +343,7 @@ impl App {
                 preview_dirty: false,
                 preview_time: 0.0,
                 meshes_built: (0, 0),
+                body_textures: BTreeMap::new(),
             },
             splash_checked: false,
             motion: Default::default(),

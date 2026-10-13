@@ -1583,6 +1583,7 @@ impl PlatformApp for App {
             avatar.gpu = None;
             avatar.instance = None;
         }
+        self.avatar.body_textures.clear();
         // The avatar preview and the world compile their pipelines on
         // worker threads; the menus draw meanwhile (see gpu_build).
         let preview_device = device.clone();
