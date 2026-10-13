@@ -76,6 +76,9 @@ pub fn package_body_grips(
             continue;
         };
         let prefix = format!("{}:asset/", entry.id);
+        // An imported glTF body is the package's own `body` content, its
+        // shape file named beside it.
+        let provided = package_bodies(&dir);
         // Each model's socket nodes and role clips, from every archetype
         // drawn with it.
         let mut bodies: BTreeMap<
@@ -89,7 +92,10 @@ pub fn package_body_grips(
             let Ok(a) = serde_json::from_slice::<serde_json::Value>(&bytes) else {
                 continue;
             };
-            let Some(model) = a["model"].as_str().filter(|m| m.starts_with(&prefix)) else {
+            let Some(model) = a["model"]
+                .as_str()
+                .filter(|m| m.starts_with(&prefix) || provided.contains_key(*m))
+            else {
                 continue;
             };
             let sockets = serde_json::from_value(a["sockets"].clone()).unwrap_or_default();
@@ -100,7 +106,7 @@ pub fn package_body_grips(
                 .push((sockets, animations));
         }
         for (model, looks) in bodies {
-            match body_rig(&dir, &model) {
+            match body_rig(&dir, &model, provided.get(&model).map(String::as_str)) {
                 Ok(rig) => {
                     let mut grips = BTreeMap::new();
                     for (sockets, animations) in &looks {
@@ -118,25 +124,46 @@ pub fn package_body_grips(
     }
     out
 }
-/// The converted shape `model` names in the package at `dir` (its
-/// `assets/content.json` lists files by package-relative path), as a rig of
-/// its own sequences.
-fn body_rig(dir: &Path, model: &str) -> Result<bri_content::avatar::Rig> {
-    let index: serde_json::Value = serde_json::from_slice(&bounded_bytes(
-        &contained(dir, "assets/content.json")?,
-        4 << 20,
-    )?)?;
-    let file = index["content"]
-        .as_array()
+/// The `body` content the package at `dir` provides, as model id to its
+/// package-relative shape file.
+fn package_bodies(dir: &Path) -> BTreeMap<String, String> {
+    contained(dir, bri_package::library::MANIFEST_FILE)
+        .and_then(|path| bounded_bytes(&path, 256 * 1024))
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
+        .and_then(|manifest| manifest["provides"].as_array().cloned())
         .into_iter()
         .flatten()
-        .find(|c| {
-            c["id"]
-                .as_str()
-                .is_some_and(|c| c.eq_ignore_ascii_case(model))
-        })
-        .and_then(|c| c["file"].as_str())
-        .with_context(|| format!("{model} is not in its package"))?;
+        .filter(|p| p["kind"] == "body")
+        .filter_map(|p| Some((p["id"].as_str()?.to_owned(), p["file"].as_str()?.to_owned())))
+        .collect()
+}
+/// The converted shape `model` names in the package at `dir` (`file` when
+/// the package provides it as a body, else as its `assets/content.json`
+/// lists it), as a rig of its own sequences.
+fn body_rig(dir: &Path, model: &str, file: Option<&str>) -> Result<bri_content::avatar::Rig> {
+    let listed;
+    let file = match file {
+        Some(file) => file,
+        None => {
+            let index: serde_json::Value = serde_json::from_slice(&bounded_bytes(
+                &contained(dir, "assets/content.json")?,
+                4 << 20,
+            )?)?;
+            listed = index["content"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .find(|c| {
+                    c["id"]
+                        .as_str()
+                        .is_some_and(|c| c.eq_ignore_ascii_case(model))
+                })
+                .and_then(|c| c["file"].as_str().map(str::to_owned))
+                .with_context(|| format!("{model} is not in its package"))?;
+            &listed
+        }
+    };
     let shape: bri_content::shape::Shape =
         serde_json::from_slice(&bounded_bytes(&contained(dir, file)?, 32 << 20)?)?;
     shape.validate()?;
