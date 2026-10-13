@@ -1020,9 +1020,10 @@ creatures (the 64-player server cap still holds).
 A body's reach is its own: routes are planned with what the body's motor
 and its movement controller really do (`reach::Reach::of` flies the
 tuning, controller included). A body that cannot jump walks round a low
-wall; one that can jumps it. Not used yet: moves that need a second press
-in the air (a wall kick, a double jump), which the bot's leg controller
-does not make.
+wall; one that can jumps it. Moves that need a second press in the air (a
+wall kick, a double jump, a dive or ground pound) are out of scope: a bot
+runs, jumps and jets through its body's controller with the default brain
+(Max, 2026-10-13).
 
 ## Intents
 

@@ -82,5 +82,6 @@ measures what a cut-down one costs.
 ## Next
 
 - A stomp bounce (the stomper springing up) is the Add-On's, using `push`.
-- Bots using wall kicks and double jumps needs the leg controller to press
-  again in the air.
+- Bots using a body's special moves (wall kick, triple jump, dive, ground
+  pound) is parked, out of scope for v0.3.0 (Max, 2026-10-13): bots run,
+  jump and jet through the body's controller with the default brain.
