@@ -239,11 +239,15 @@ pub struct MiniGameWindow {
     /// A favourite's slot whose unavailable settings were left out: Set
     /// Favs may not save over it.
     unavailable_favorite: Option<u8>,
+    /// The game picked in the Mini-Game list, when the window opened from
+    /// it.
+    picked: Option<MiniGameId>,
 }
 
 impl MiniGameWindow {
     pub fn new(core: &mut Core) -> Self {
         let teams_route = std::mem::take(&mut core.minigame_addons_teams);
+        let picked = core.minigame_addons.take();
         let mut view = layout_view(core, "CreateMiniGameGui");
         let win = window(&view).unwrap_or(view.root);
         // The End blocker greys End out, so it must draw over the button.
@@ -387,6 +391,7 @@ impl MiniGameWindow {
             request: None,
             step: None,
             unavailable_favorite: None,
+            picked,
         };
         screen.set_favs(false);
         screen.load(core);
@@ -397,10 +402,16 @@ impl MiniGameWindow {
 
     /// The game the window edits: the player's own, when they may manage
     /// it; none, to create one.
-    fn target(core: &Core) -> Option<MiniGameId> {
-        core.minigames
-            .active_game
-            .filter(|g| core.minigames.can_manage(*g))
+    /// The game the window shows: the one picked in the list while it is
+    /// listed, else the player's own when they may manage it, else a new one.
+    fn target(&self, core: &Core) -> Option<MiniGameId> {
+        self.picked
+            .filter(|p| core.minigames.games.iter().any(|g| g.id == *p))
+            .or_else(|| {
+                core.minigames
+                    .active_game
+                    .filter(|g| core.minigames.can_manage(*g))
+            })
     }
     fn summary<'a>(&self, core: &'a Core) -> Option<&'a MiniGameSummary> {
         self.game
@@ -420,15 +431,25 @@ impl MiniGameWindow {
                 .can(crate::models::minigames::Operation::Create),
         }
     }
+    /// Whether the host lets the player change the game's Add-On settings
+    /// and teams (a game's rules may be theirs to change while these are
+    /// not).
+    fn addons_editable(&self, core: &Core) -> bool {
+        self.game
+            .is_none_or(|g| core.minigames.addon_editable.contains(&g))
+    }
     /// Whether the player lacks the level an Add-On setting needs.
     fn locked(&self, core: &Core, key: &str) -> bool {
         match self.game {
             None => core.minigames.addon_locked_new.iter().any(|k| k == key),
-            Some(g) => core
-                .minigames
-                .addon_locked
-                .iter()
-                .any(|(id, keys)| *id == g && keys.iter().any(|k| k == key)),
+            Some(g) => {
+                !self.addons_editable(core)
+                    || core
+                        .minigames
+                        .addon_locked
+                        .iter()
+                        .any(|(id, keys)| *id == g && keys.iter().any(|k| k == key))
+            }
         }
     }
     /// What the window shows changed when this does. A score does not
@@ -455,7 +476,10 @@ impl MiniGameWindow {
     /// Take the host's values afresh: the game's rules, settings and teams,
     /// or a new game's defaults.
     fn load(&mut self, core: &Core) {
-        self.game = Self::target(core);
+        self.game = self.target(core);
+        // The window stays on its game while it is listed, though the
+        // player's rights to change it come and go.
+        self.picked = self.picked.or(self.game);
         self.loaded = Some(self.game);
         self.seen = Some(Self::revision(core));
         self.rows.clear();
@@ -464,7 +488,10 @@ impl MiniGameWindow {
         self.typed_dirty = false;
         self.rules_dirty = false;
         self.unavailable_favorite = None;
-        self.write_rules(core, &core.minigames.rules_draft());
+        let rules = self
+            .summary(core)
+            .map_or_else(|| core.minigames.rules_draft(), |g| g.rules.clone());
+        self.write_rules(core, &rules);
         self.fill_colors(core, self.summary(core).map(|g| g.color));
         let declared = || {
             core.minigames
@@ -814,6 +841,23 @@ impl MiniGameWindow {
             return "This game doesn't use teams.".into();
         };
         let title = &setting.title;
+        // The page the setting sits on.
+        let page = match setting.place {
+            Some(
+                MiniGameSettingPlace::Basics
+                | MiniGameSettingPlace::Loadout
+                | MiniGameSettingPlace::Win
+                | MiniGameSettingPlace::Rounds,
+            ) => "the Game page",
+            Some(MiniGameSettingPlace::Teams) => "the Teams page",
+            Some(
+                MiniGameSettingPlace::Scoring
+                | MiniGameSettingPlace::Respawn
+                | MiniGameSettingPlace::Damage
+                | MiniGameSettingPlace::Bricks,
+            ) => "the Rules page",
+            None => "More Settings",
+        };
         let choices: Vec<&str> = match &setting.kind {
             MiniGameSettingKind::List { items }
             | MiniGameSettingKind::Item { items }
@@ -825,12 +869,12 @@ impl MiniGameWindow {
             _ => Vec::new(),
         };
         match choices.as_slice() {
-            [] => format!("This {title} doesn't use teams: change {title} on the Game page."),
+            [] => format!("This {title} doesn't use teams: change {title} on {page}."),
             [one] => {
-                format!("This {title} doesn't use teams: set {title} on the Game page to {one}.")
+                format!("This {title} doesn't use teams: set {title} on {page} to {one}.")
             }
             [rest @ .., last] => format!(
-                "This {title} doesn't use teams: set {title} on the Game page to {} or {last}.",
+                "This {title} doesn't use teams: set {title} on {page} to {} or {last}.",
                 rest.join(", ")
             ),
         }
@@ -1503,7 +1547,10 @@ impl MiniGameWindow {
         let mut y = 0;
         match self.page {
             Page::Game => self.game_page(core, &mut y, editable),
-            Page::Teams => self.teams_page(core, &mut y, editable),
+            Page::Teams => {
+                let addons = editable && self.addons_editable(core);
+                self.teams_page(core, &mut y, addons);
+            }
             Page::Rules => self.rules_page(core, &mut y, editable),
             Page::Players => self.players_page(core, &mut y, editable),
             Page::More => self.more_page(core, &mut y, editable),
@@ -1989,16 +2036,36 @@ impl MiniGameWindow {
                 ),
             );
             self.view.set_bool(n, core.prefs.bool_or(NOTIFY_PREF, true));
-            self.view.set_active(n, editable);
+            self.view
+                .set_active(n, editable && self.addons_editable(core));
             sec.y += 22;
             self.close(sec, y);
         }
+    }
+    /// Set Favs and the favourite slots, which wait while a change is sent.
+    fn favorite_command(lower: &str) -> bool {
+        lower == SET_FAVS || lower.starts_with("createminigamegui.clickfav(")
     }
     /// v20's footer: Update or Create while the player may, Reset and End
     /// on a running game.
     fn footer(&mut self, core: &Core) {
         let editing = self.game.is_some();
         let idle = self.request.is_none();
+        let favorites: Vec<_> = self
+            .view
+            .walk()
+            .filter(|&n| {
+                self.view
+                    .node(n)
+                    .ctrl
+                    .command
+                    .as_deref()
+                    .is_some_and(|c| Self::favorite_command(&c.to_ascii_lowercase()))
+            })
+            .collect();
+        for n in favorites {
+            self.view.set_active(n, idle);
+        }
         if let Some(n) = self.view.id("CMG_EndBlocker") {
             self.view.set_visible(n, !editing);
         }
@@ -2132,7 +2199,10 @@ impl MiniGameWindow {
             self.teams = teams;
         }
         self.unavailable_favorite = (!unavailable.is_empty()).then_some(slot);
+        // The favourite's values replace what the boxes hold.
         self.typed.clear();
+        self.rows.clear();
+        self.name_fields.clear();
         self.build(core);
         if !unavailable.is_empty() {
             let keys = unavailable
@@ -2185,7 +2255,13 @@ impl MiniGameWindow {
             self.build(core);
             return;
         };
-        let (settings, teams) = self.changes(core);
+        // Add-On settings and teams the host keeps from this player stay
+        // as they are.
+        let (settings, teams) = if self.addons_editable(core) {
+            self.changes(core)
+        } else {
+            (Vec::new(), None)
+        };
         let next = if settings.is_empty() && teams.is_none() {
             reset.then_some((MiniGameOperation::Reset, UiAction::ResetMiniGame { game }))
         } else {
@@ -2267,7 +2343,7 @@ impl Screen for MiniGameWindow {
     }
     fn on_update(&mut self, core: &mut Core) {
         self.take_look(core);
-        if self.loaded != Some(Self::target(core)) && self.request.is_none() {
+        if self.loaded != Some(self.target(core)) && self.request.is_none() {
             self.load(core);
             return;
         }
@@ -2509,6 +2585,9 @@ impl Screen for MiniGameWindow {
             return;
         }
         let lower = command.to_ascii_lowercase();
+        if self.request.is_some() && Self::favorite_command(&lower) {
+            return;
+        }
         match lower.as_str() {
             CANCEL => {
                 core.pop(ScreenId::MiniGameSettings);

@@ -14,6 +14,9 @@ enum Kind {
 const DEFAULT_HEADER: &str = "JMG_DefaultHeader";
 /// `JMG_List.columns` with the Default column (Slayer's).
 const DEFAULT_COLUMNS: &str = "0 102 165 490 450";
+/// Beside the status: the picked game's settings in the Mini-Game window,
+/// to change when the player may, else to read.
+const SETTINGS_BUTTON: &str = "NativeMiniGameSettings";
 
 pub struct MiniGameScreen {
     id: ScreenId,
@@ -226,14 +229,35 @@ impl MiniGameScreen {
             let [w, h] = self.view.nodes[parent].ctrl.extent;
             let grow = 26.min((480 - h).max(0));
             self.view.nodes[parent].ctrl.extent[1] = h + grow;
+            let list = matches!(self.kind, Kind::List);
             let mut c = text(
                 "GuiTextProfile",
-                Rect::new(12, h + grow - 28, (w - 24).max(0), 24),
+                Rect::new(
+                    12,
+                    h + grow - 28,
+                    (w - 24 - if list { 88 } else { 0 }).max(0),
+                    24,
+                ),
                 &status,
             );
             c.name = Some(key.into());
             c.class = "GuiMLTextCtrl".into();
             self.view.add(parent, c);
+            if list {
+                let mut b = button(
+                    "BlockButtonProfile",
+                    Rect::new(w - 12 - 76, h + grow - 30, 76, 26),
+                    "base/client/ui/button1",
+                    "Settings",
+                    SETTINGS_BUTTON,
+                );
+                b.name = Some(SETTINGS_BUTTON.into());
+                self.view.add(parent, b);
+            }
+        }
+        if let Some(n) = self.view.id(SETTINGS_BUTTON) {
+            let picked = self.selected_game();
+            self.view.set_active(n, picked.is_some());
         }
     }
 }
@@ -321,6 +345,13 @@ impl Screen for MiniGameScreen {
             return;
         }
         let cmd = command_of(&self.view, ev.node).to_ascii_lowercase();
+        if cmd == SETTINGS_BUTTON.to_ascii_lowercase() {
+            if let Some(game) = self.selected_game() {
+                core.minigame_addons = Some(game);
+                core.push(ScreenId::MiniGameSettings);
+            }
+            return;
+        }
         match self.kind {
             Kind::List => match cmd.as_str() {
                 "canvas.popdialog(joinminigamegui);" => core.pop(self.id),

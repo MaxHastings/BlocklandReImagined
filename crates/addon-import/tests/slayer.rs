@@ -2427,6 +2427,61 @@ fn teams_dress_their_members_and_give_them_their_kit() {
     g.quiet();
 }
 
+/// Max's report: in team Capture the Flag every team spawned with the
+/// mini-game's tools. With "Own loadout" picked (Sync off), each team
+/// spawns with the tools picked for it, and Sync puts the game's back.
+#[test]
+fn team_ctf_teams_spawn_with_their_own_loadouts() {
+    let mut g = Game::new("ctf-loadouts");
+    let (red, blue) = two_teams(&mut g);
+    let owner = g.s.minigame_views()[0].owner;
+    g.set(
+        owner,
+        &[(&key(SLAYER, "mode"), Value::Text(CTF_MODE.into()))],
+    );
+    for (team, tool) in [
+        (RED, "v20.weapon.hammeritem"),
+        (BLUE, "v20.weapon.wrenchitem"),
+    ] {
+        g.set_team(
+            owner,
+            team,
+            &[
+                (&key(SLAYER, "team_sync_loadout"), Value::Bool(false)),
+                (&key(SLAYER, "team_equip_0"), Value::Text(tool.into())),
+            ],
+        );
+    }
+    for player in [red, blue] {
+        g.cmd(player, Command::Suicide).unwrap();
+    }
+    g.steps(125);
+    for player in [red, blue] {
+        g.cmd(player, Command::Respawn).unwrap();
+    }
+    g.steps(2);
+    assert_eq!(g.tools(red)[0], "v20.weapon.hammeritem");
+    assert_eq!(g.tools(blue)[0], "v20.weapon.wrenchitem");
+
+    // Same as everyone: the mini-game's tools (none here) again.
+    g.set_team(
+        owner,
+        BLUE,
+        &[(&key(SLAYER, "team_sync_loadout"), Value::Bool(true))],
+    );
+    g.cmd(blue, Command::Suicide).unwrap();
+    g.steps(125);
+    g.cmd(blue, Command::Respawn).unwrap();
+    g.steps(2);
+    assert!(g.tools(blue).iter().all(String::is_empty));
+    assert_eq!(
+        g.tools(red)[0],
+        "v20.weapon.hammeritem",
+        "Red keeps its own"
+    );
+    g.quiet();
+}
+
 /// The rules' bots in `g`'s game by team colour: (red, blue, without a
 /// team).
 fn bots_by_team(g: &Game) -> (usize, usize, usize) {

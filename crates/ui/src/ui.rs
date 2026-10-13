@@ -388,15 +388,16 @@ pub struct Core {
     /// The host's environment and the Environment window's draft.
     pub environment: crate::models::environment::EnvironmentModel,
     pub minigames: MiniGameUiState,
-    /// The mini-game whose Add-On Settings window is open (or opening).
+    /// The game the Mini-Game window opens on, picked in the Mini-Game
+    /// list; the window takes it as it opens.
     pub minigame_addons: Option<MiniGameId>,
-    /// Initial destination for this opening, not a saved user preference.
+    /// The Mini-Game window opens on its Teams page this once.
     pub minigame_addons_teams: bool,
-    /// The Add-On Settings window shows the server-wide settings instead
-    /// (opened from the Admin menu).
+    /// The Add-On Settings window (the server-wide settings) is open from
+    /// the Admin menu.
     pub server_addon_settings: bool,
-    /// Add-On settings and teams set up in the Create Mini-Game window's
-    /// Setup before the game exists; sent once Create makes it.
+    /// Add-On settings and teams set up in the Mini-Game window before the
+    /// game exists; sent once Create makes it.
     pub minigame_addon_draft: Option<AddOnFavorite>,
     /// Create succeeded: [`Self::minigame_addon_draft`] goes to the new game
     /// as soon as the host lists it as this player's to edit.
