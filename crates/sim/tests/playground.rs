@@ -35,7 +35,7 @@ const STOMPER: &str = "playground-stomper:bot/stomper";
 const STOMPER_BODY: &str = "playground-stomper:archetype/stomper";
 
 /// The Add-Ons, by id: their folder under `packages/` and side.
-const ADD_ONS: [(&str, &str, Side); 8] = [
+const ADD_ONS: [(&str, &str, Side); 10] = [
     (
         "playground-runner",
         "playground/playground-runner",
