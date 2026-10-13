@@ -189,8 +189,28 @@ engine changes. The fields that decide how it flies and looks:
 | `strafe_steering` | the strafe keys steer; otherwise the mouse steers and pitches | `steeringUseStrafeSteering` |
 | `steering` | `strafe_rate`, and `auto_return`, `auto_return_rate`, `auto_return_max_speed`: whether steering drifts back to straight | `steeringStrafeSteeringRate`, `steeringUseAutoReturn`, `steeringAutoReturnRate`, `steeringAutoReturnMaxSpeed` |
 | `wheels[].steering`, `wheels[].powered` | how far each wheel turns (1 fully, negative the other way) and whether it drives | `setWheelSteering`/`setWheelPowered` in `onAdd`, else v20's table by wheel count |
+| `steering.toward_look` | the driver steers by looking: the wheels turn the hull toward the driver's free look and ease off to arrive (Halo's Warthog); a bot drives it the same way. Off: v20's mouse or strafe steering | none (new) |
+| `steering.speed_lock` | the share (0 to 1) of `max_steering` left at `max_speed`, narrowing in a straight line from full lock at rest (1, the default, never narrows) | none (new) |
+| `engine_curve` | the engine's torque by speed: up to 16 `[speed share, torque share]` points (speed share 0 to 1 of `max_speed` by rising speed, torque share 0 to 4 of `engine_force`), linear between points, flat before the first and past the last, none past `max_speed`. Empty: v20's torque falling straight from full at rest to none at `max_speed` | none (new) |
+| `wheels[].rebound_damping` | damping while the spring extends, apart from `damping` while it compresses: long, soft springs that soak a landing without bouncing. 0, the default: `damping` both ways, as v20 | none (new) |
+| `gravity_scale` | gravity on this vehicle as a share (0 to 4) of the game's (0.85 floats its jumps). Absent: the game's | none (new) |
 | `threads` | animations the model plays by itself, like a propeller | `playThread` and `setThreadDir` in `onAdd` and the functions it calls |
 | `trails`, `effects` | emitters run at the model's nodes within a speed range, like wing-tip contrails; `effects` holds the vehicle's own particles and emitters | `mountImage` of an image whose state holds a `stateEmitter`, in `onAdd` and the functions it calls |
+
+A Warthog-like car is a wheeled vehicle with these set, as the Playground
+buggy has them (`tools/make_playground_assets.py`; the reasons and the
+measurements are in `docs/audits/vehicle-handling.md`): all four wheels
+`powered`, the rear ones `steering` -0.35, the rear tyres a little less
+grippy than the front so the back slides first, long soft springs with
+rebound damping, and:
+
+```json
+"engine_curve": [[0.0, 1.0], [0.7, 0.95], [1.0, 0.0]],
+"gravity_scale": 0.85,
+"steering": { "strafe_rate": 0.25, "toward_look": true, "speed_lock": 0.6 },
+"wheels": [{ "rest_length": 0.7, "spring": 9000, "damping": 2600,
+             "rebound_damping": 2400, "anti_sway": 6000, "...": "..." }]
+```
 
 Every force and turn acts along the vehicle's own axes, so a flying vehicle
 climbs where its nose points. A thread plays one of the model's sequences

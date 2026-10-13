@@ -35,6 +35,8 @@ Five Add-Ons, each standing alone and naming no other except through
 | Joining a mode puts a player in another Add-On's body, holding a third Add-On's weapon, and it fires | works | `a_player_joins_as_the_runner_holding_the_carbine_and_fires` |
 | A custom body drives a custom vehicle through bricks and climbs out | works | `the_runner_drives_the_buggy_through_the_fort_and_climbs_out` |
 | A passenger fires their own weapon from a vehicle seat, and a gunner fires the vehicle's own gun, which the vehicle Add-On brings (its projectile and sound in its own weapons file) | works | `a_passenger_fires_the_carbine_and_a_gunner_the_buggy_gun` |
+| An Add-On vehicle steers like a Warthog (toward the driver's look, four-wheel steering, torque curve, long-travel springs, floaty jumps) from its `vehicles.json` alone, and a bot drives it | fixed here (W8) | `crates/vehicles/tests/handling.rs`; `a_bot_drives_the_look_steered_buggy_at_a_runner` (the bot steered by the mouse turn a look-steered vehicle ignores, and the handling it plans with was measured the same way) |
+| Driver, passenger and gunner share one vehicle over 150 ms each way with jitter and 5% loss without rubber-banding | fixed here (W8) | `crates/client/src/crew_link_tests.rs`: moves skipped over two lost datagrams, the host's seated queue drained into starvation, and the gun lagged the hull a tick; see `docs/audits/vehicle-handling.md` |
 | A killed custom body respawns as the same body with its loadout | works | `a_runner_killed_by_the_carbine_respawns_as_the_runner_with_it` |
 | A bot from a separate Add-On joins the mode's game and fights custom bodies | fixed here | `a_blockhead_bot_fights_the_runners`; the bot spawned outside the mode's mini-game (`crates/sim/src/session/bots/lifecycle.rs` `spawn_brick_game`) |
 | Brick smashing by a vehicle owned by someone else credits its driver | fixed here | `crates/net/tests/playground.rs`; `vehicle_struck` credited the vehicle's owner, not its driver (`crates/sim/src/session/movables.rs`) |
@@ -67,7 +69,7 @@ code only; the Mario, Warthog, Goomba and tank Add-Ons themselves are Max's.
 | Switch between Blockhead and Mario mid-game, mid-air or seated, no respawn | W4 switching lifecycle | not started |
 | Mario or a Blockhead holds a rocket launcher in his own hand; shots leave its muzzle | W2 sockets and muzzle | in progress |
 | Jump into the Warthog: any body sits in any seat, the passenger keeps their weapon, a gunner seat fires a turret | W2 seats; vehicles (seats, `weapon` seats, turrets already work) | seats for box bodies in W2 |
-| The Warthog drives like a Warthog (loose suspension, drift, chase camera, engine sound) | W8 vehicle feel, W6 camera ownership | not started |
+| The Warthog drives like a Warthog (loose suspension, drift, chase camera, engine sound) | W8 vehicle feel, W6 camera ownership | handling and three-player netcode done in W8 (`docs/audits/vehicle-handling.md`); engine sound is W8's next part; camera W6 |
 | The HUD switches with the body and the vehicle (Mario's coins, the Warthog's gun) | W6 HUD regions | not started |
 | Goombas are bots on the one shared brain with their own body (`kind.body`) | W7; bot kinds already pick a body and weapons | works today for box bodies |
 | Goombas use rocket launchers and jet around | works today: bots fight with any weapon and jet when their body `can_jet` | works |
@@ -90,8 +92,10 @@ code only; the Mario, Warthog, Goomba and tank Add-Ons themselves are Max's.
   Playground test uses two spawn points until that lands.
 - **The buggy pulls left when driven straight.** With the yaw held at the
   wall's centre it drifts to the wall's left corner (x about -5.4). It also
-  bounces when someone boards it from above. Tuning or physics, not
-  interop; left for a vehicle-feel pass.
+  bounces when someone boards it from above. Fixed in W8's retune: it
+  tracks straight (`the_warthog_pulls_hard_to_its_top_speed_and_tracks_straight`).
+  The boarding bounce did not reproduce headless (the hull moves under 2 mm
+  once mounted, before and after); Max's playtest decides.
 
 ## Network test notes
 
