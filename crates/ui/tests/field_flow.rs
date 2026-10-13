@@ -1599,16 +1599,69 @@ fn scenarios() -> Vec<Scenario> {
                 ),
                 ("CMG_ColorList", Sent(&["actions.CreateMiniGame.color"])),
                 (
+                    "$MiniGame::InviteOnly",
+                    Sent(&["actions.CreateMiniGame.rules.invite_only"]),
+                ),
+                (
+                    "CMG_PlayerDataBlock",
+                    Sent(&["actions.CreateMiniGame.rules.player_type"]),
+                ),
+                (
+                    "$MiniGame::EnableWand",
+                    Sent(&["actions.CreateMiniGame.rules.enable_wand"]),
+                ),
+                (
+                    "$MiniGame::EnableBuilding",
+                    Sent(&["actions.CreateMiniGame.rules.enable_building"]),
+                ),
+                (
+                    "$MiniGame::EnablePainting",
+                    Sent(&["actions.CreateMiniGame.rules.enable_painting"]),
+                ),
+                (
+                    "CMG_StartEquip4",
+                    Sent(&["actions.CreateMiniGame.rules.loadout[4]"]),
+                ),
+                (
+                    "CMG_StartEquip3",
+                    Sent(&["actions.CreateMiniGame.rules.loadout[3]"]),
+                ),
+                (
+                    "CMG_StartEquip2",
+                    Sent(&["actions.CreateMiniGame.rules.loadout[2]"]),
+                ),
+                (
+                    "CMG_StartEquip1",
+                    Sent(&["actions.CreateMiniGame.rules.loadout[1]"]),
+                ),
+                (
+                    "CMG_StartEquip0",
+                    Sent(&["actions.CreateMiniGame.rules.loadout[0]"]),
+                ),
+            ],
+            rows: None,
+        },
+        Scenario {
+            name: "Create Mini-Game: Rules",
+            open: |u| {
+                in_game(u, false, false);
+                minigame_state(u);
+                u.core.push(ScreenId::MiniGameSettings);
+                u.update(0);
+                click(u, ScreenId::MiniGameSettings, "MGW_Tab2");
+                u.update(0);
+            },
+            screen: ScreenId::MiniGameSettings,
+            submit: Some("CreateMiniGameGui.clickCreate();"),
+            confirm: &[],
+            expect: &[
+                (
                     "$MiniGame::PlayersUseOwnBricks",
                     Sent(&["actions.CreateMiniGame.rules.players_use_own_bricks"]),
                 ),
                 (
                     "$MiniGame::UseAllPlayersBricks",
                     Sent(&["actions.CreateMiniGame.rules.use_all_players_bricks"]),
-                ),
-                (
-                    "$MiniGame::InviteOnly",
-                    Sent(&["actions.CreateMiniGame.rules.invite_only"]),
                 ),
                 (
                     "$MiniGame::Points::BreakBrick",
@@ -1665,42 +1718,6 @@ fn scenarios() -> Vec<Scenario> {
                 (
                     "$MiniGame::UseSpawnBricks",
                     Sent(&["actions.CreateMiniGame.rules.use_spawn_bricks"]),
-                ),
-                (
-                    "CMG_PlayerDataBlock",
-                    Sent(&["actions.CreateMiniGame.rules.player_type"]),
-                ),
-                (
-                    "$MiniGame::EnableWand",
-                    Sent(&["actions.CreateMiniGame.rules.enable_wand"]),
-                ),
-                (
-                    "$MiniGame::EnableBuilding",
-                    Sent(&["actions.CreateMiniGame.rules.enable_building"]),
-                ),
-                (
-                    "$MiniGame::EnablePainting",
-                    Sent(&["actions.CreateMiniGame.rules.enable_painting"]),
-                ),
-                (
-                    "CMG_StartEquip4",
-                    Sent(&["actions.CreateMiniGame.rules.loadout[4]"]),
-                ),
-                (
-                    "CMG_StartEquip3",
-                    Sent(&["actions.CreateMiniGame.rules.loadout[3]"]),
-                ),
-                (
-                    "CMG_StartEquip2",
-                    Sent(&["actions.CreateMiniGame.rules.loadout[2]"]),
-                ),
-                (
-                    "CMG_StartEquip1",
-                    Sent(&["actions.CreateMiniGame.rules.loadout[1]"]),
-                ),
-                (
-                    "CMG_StartEquip0",
-                    Sent(&["actions.CreateMiniGame.rules.loadout[0]"]),
                 ),
             ],
             rows: None,

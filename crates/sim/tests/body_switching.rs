@@ -917,6 +917,32 @@ fn slash_body_lists_and_switches_bodies() {
             .iter()
             .any(|t| t.contains("No body is called Mario"))
     );
+    // A body the host has but this game left out says why, by name or id.
+    g.s.set_absent_bodies(vec![
+        bri_sim::session::AbsentBody {
+            id: "halo:archetype/chief".into(),
+            name: "Master Chief".into(),
+            why: "Plays only in Halo Slayer games.".into(),
+        },
+        // One this game has after all is never listed as absent.
+        bri_sim::session::AbsentBody {
+            id: RUNNER.into(),
+            name: "Runner".into(),
+            why: "never shown".into(),
+        },
+    ]);
+    g.slash_body(ann, "");
+    let list = g.told(ann).join("\n");
+    assert!(list.contains("Not in this game: Master Chief"), "{list}");
+    assert!(!list.contains("never shown"), "{list}");
+    for named in ["master chief", "halo:archetype/chief"] {
+        g.slash_body(ann, named);
+        assert_eq!(g.body(ann), RUNNER);
+        assert_eq!(
+            g.told(ann),
+            ["Master Chief is not in this game. Plays only in Halo Slayer games."]
+        );
+    }
 }
 
 /// In the Playground mode's mini-game (Runner body, Carbine loadout) the
@@ -1210,4 +1236,93 @@ fn a_predicting_client_follows_each_switch_with_one_correction() {
         .unwrap();
     assert_eq!(client.state(), &host, "it ends exactly where the host is");
     assert_eq!(g.s.archetypes().resolve(host.archetype).id, STANDARD);
+}
+
+/// The host tunes an Add-On body while the game runs: the table changes in
+/// place (players of the body carry on with the new numbers), a client's
+/// copy takes the tuned body, a bad change changes nothing, and only the
+/// host may tune.
+#[test]
+fn the_host_tunes_a_body_live_and_clients_get_it() {
+    let mut g = Game::new();
+    let ann = g.join("Ann");
+    let host = g.s.join("Host".into(), SPAWN, true).unwrap();
+    g.steps(5);
+    g.told(ann);
+    let before = g.s.archetypes().clone();
+    let index = before.find(RUNNER).unwrap();
+    // A player may not.
+    let refused =
+        g.s.tune_archetype(ann, RUNNER, &[("movement.forward".into(), 20.0)]);
+    assert!(
+        refused.unwrap_err().to_string().contains("Only the host"),
+        "a player cannot tune"
+    );
+    // The host tunes speed and the right hand together.
+    g.s.tune_archetype(
+        host,
+        RUNNER,
+        &[
+            ("movement.forward".into(), 20.0),
+            ("sockets.right_hand.offset.1".into(), 0.125),
+        ],
+    )
+    .unwrap();
+    let tuned = g.s.archetypes().resolve(index).clone();
+    assert_eq!(tuned.movement.forward, 20.0);
+    assert_eq!(tuned.sockets.hand(0).unwrap().offset[1], 0.125);
+    assert_eq!(g.s.tuned_revision(), 1);
+    let file = &g.s.tuned_archetype_files()[RUNNER];
+    assert_eq!(file["movement"]["forward"], serde_json::json!(20.0));
+    // Everything else is as it was.
+    assert_eq!(
+        tuned.movement.jump_speed,
+        before.resolve(index).movement.jump_speed
+    );
+    assert_eq!(tuned.look, before.resolve(index).look);
+    // A client's table takes it.
+    let mut client = before.clone();
+    bri_sim::session::apply_tuned(&mut client, g.s.tuned_archetypes()).unwrap();
+    assert_eq!(client.resolve(index), &tuned);
+    // A change the body refuses changes nothing.
+    for bad in [
+        ("movement.forward", f32::NAN),
+        ("controller", 1.0),
+        ("max_time_scale", 100.0),
+    ] {
+        assert!(
+            g.s.tune_archetype(host, RUNNER, &[(bad.0.into(), bad.1)])
+                .is_err(),
+            "{bad:?}"
+        );
+    }
+    assert_eq!(g.s.archetypes().resolve(index), &tuned);
+    assert_eq!(g.s.tuned_revision(), 1);
+    // `/tune` from chat says why it refused.
+    g.cmd(
+        ann,
+        Command::Package(PackageCommand {
+            package: String::new(),
+            command: "tune".into(),
+            args: vec![
+                PackageArg::String(RUNNER.into()),
+                PackageArg::String("movement.forward".into()),
+                PackageArg::Float(3.0),
+            ],
+        }),
+    )
+    .unwrap();
+    assert!(
+        g.told(ann).iter().any(|t| t.contains("Only the host")),
+        "told why"
+    );
+    // A v20 body is not an Add-On's to tune.
+    assert!(
+        g.s.tune_archetype(
+            host,
+            "v20.player.playerstandardarmor",
+            &[("movement.forward".into(), 9.0)]
+        )
+        .is_err()
+    );
 }

@@ -363,6 +363,8 @@ pub struct Core {
     pub save_preview: Option<(String, String, IconRef)>,
     /// Installed packages for the Add-Ons screen (host-prepared text).
     pub add_ons: crate::api::AddOnsView,
+    /// The Tune window's body, while it is open.
+    pub tune: Option<crate::api::TuneView>,
     /// Differing add-ons behind the last refused join (Can't Join dialog).
     pub add_on_mismatch: Option<crate::api::AddOnMismatch>,
     /// See `UiUpdate::FailureQuestion`.
@@ -388,15 +390,16 @@ pub struct Core {
     /// The host's environment and the Environment window's draft.
     pub environment: crate::models::environment::EnvironmentModel,
     pub minigames: MiniGameUiState,
-    /// The mini-game whose Add-On Settings window is open (or opening).
+    /// The game the Mini-Game window opens on, picked in the Mini-Game
+    /// list; the window takes it as it opens.
     pub minigame_addons: Option<MiniGameId>,
-    /// Initial destination for this opening, not a saved user preference.
+    /// The Mini-Game window opens on its Teams page this once.
     pub minigame_addons_teams: bool,
-    /// The Add-On Settings window shows the server-wide settings instead
-    /// (opened from the Admin menu).
+    /// The Add-On Settings window (the server-wide settings) is open from
+    /// the Admin menu.
     pub server_addon_settings: bool,
-    /// Add-On settings and teams set up in the Create Mini-Game window's
-    /// Setup before the game exists; sent once Create makes it.
+    /// Add-On settings and teams set up in the Mini-Game window before the
+    /// game exists; sent once Create makes it.
     pub minigame_addon_draft: Option<AddOnFavorite>,
     /// Create succeeded: [`Self::minigame_addon_draft`] goes to the new game
     /// as soon as the host lists it as this player's to edit.
@@ -1056,10 +1059,7 @@ impl Core {
     fn open_bind_screen(&mut self, screen: &str, package: &str) {
         match screen {
             "minigame_addons" => match self.minigames.active_game {
-                Some(game) => {
-                    self.minigame_addons = Some(game);
-                    self.push(ScreenId::MiniGameAddOns);
-                }
+                Some(_) => self.push(ScreenId::MiniGameSettings),
                 None => self.push(ScreenId::MiniGames),
             },
             "help" => {
@@ -1531,6 +1531,7 @@ impl Ui {
             save_context: None,
             save_preview: None,
             add_ons: Default::default(),
+            tune: None,
             add_on_mismatch: None,
             failure_question: None,
             unsaved_changes: false,
@@ -2213,6 +2214,15 @@ impl Ui {
                 c.push(ScreenId::Splash);
             }
             UiUpdate::AddOns(view) => c.add_ons = view,
+            UiUpdate::Tune(view) => {
+                let open = view.is_some();
+                c.tune = view;
+                if open {
+                    c.push(ScreenId::Tune);
+                } else {
+                    c.pop(ScreenId::Tune);
+                }
+            }
             UiUpdate::AddOnMismatch(m) => c.add_on_mismatch = Some(m),
             UiUpdate::Question(q) => c.ask(q),
             UiUpdate::FailureQuestion(q) => c.failure_question = Some(q),

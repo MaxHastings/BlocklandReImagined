@@ -398,6 +398,14 @@ pub fn details(r: &AddOnRow) -> String {
             out.push_str(&format!("  - {p}\n"));
         }
     }
+    if r.changed_in_game {
+        out.push_str(
+            "\nChanged since this game started:\n  Your edits apply the next time you host or join a game.\n",
+        );
+    }
+    if !r.plays_only.is_empty() && r.enabled {
+        out.push_str(&format!("\nNot in every game:\n  {}\n", r.plays_only));
+    }
     if !r.description.is_empty() {
         out.push_str(&format!("\n{}\n", r.description));
     }

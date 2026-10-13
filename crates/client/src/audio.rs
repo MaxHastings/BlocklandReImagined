@@ -15,15 +15,27 @@ use std::{
 pub(crate) struct PreparedSounds {
     bank: Arc<SoundBank>,
     sounds: BTreeMap<String, (Arc<SoundAsset>, f32)>,
+    /// Why each pack sound that did not load failed, by lowercase profile.
+    failed: BTreeMap<String, String>,
     warnings: BTreeSet<String>,
 }
 
 pub trait SoundLookup {
     fn has_sound(&self, profile: &str) -> bool;
+    /// Why `profile`, an Add-On's own sound, could not be played (its file
+    /// is missing or does not decode), when it was tried.
+    fn why_missing(&self, _profile: &str) -> Option<String> {
+        None
+    }
 }
 impl SoundLookup for ClientAudio {
     fn has_sound(&self, profile: &str) -> bool {
         ClientAudio::has_sound(self, profile)
+    }
+    fn why_missing(&self, profile: &str) -> Option<String> {
+        self.pack_sound_failures
+            .get(&profile.to_ascii_lowercase())
+            .cloned()
     }
 }
 impl SoundLookup for PreparedSounds {
@@ -31,12 +43,16 @@ impl SoundLookup for PreparedSounds {
         self.sounds.contains_key(&profile.to_ascii_lowercase())
             || self.bank.resolve(profile).is_ok()
     }
+    fn why_missing(&self, profile: &str) -> Option<String> {
+        self.failed.get(&profile.to_ascii_lowercase()).cloned()
+    }
 }
 impl PreparedSounds {
     pub(crate) fn load(bank: Arc<SoundBank>, pack: &bri_weapons::Pack, root: &Path) -> Self {
         let mut prepared = Self {
             bank: bank.clone(),
             sounds: BTreeMap::new(),
+            failed: BTreeMap::new(),
             warnings: BTreeSet::new(),
         };
         for (profile, def) in &pack.sounds {
@@ -60,6 +76,11 @@ impl PreparedSounds {
                         .insert(profile.clone(), (Arc::new(asset), def.volume));
                 }
                 Err(error) => {
+                    if prepared.failed.len() < 512 {
+                        prepared
+                            .failed
+                            .insert(profile.to_ascii_lowercase(), error.to_string());
+                    }
                     if prepared.warnings.len() < 64 {
                         prepared
                             .warnings
@@ -203,6 +224,8 @@ pub struct ClientAudio {
     /// Sounds Add-On weapons packs ship, by lower-case profile, with their
     /// volume: played in place of a bank sound of the same name.
     pack_sounds: BTreeMap<String, (Arc<SoundAsset>, f32)>,
+    /// [`PreparedSounds`]' reasons for the pack sounds that did not load.
+    pack_sound_failures: BTreeMap<String, String>,
     /// The portals the listener hears through, as last sent.
     windows: Vec<bri_audio::Window>,
 }
@@ -288,6 +311,7 @@ impl ClientAudio {
             focused: true,
             last_break: None,
             pack_sounds: BTreeMap::new(),
+            pack_sound_failures: BTreeMap::new(),
             windows: Vec::new(),
         };
         audio.apply_settings(settings);
@@ -559,6 +583,7 @@ impl ClientAudio {
     }
     pub(crate) fn install_pack_sounds(&mut self, prepared: PreparedSounds) {
         self.pack_sounds = prepared.sounds;
+        self.pack_sound_failures = prepared.failed;
         self.warnings.extend(
             prepared
                 .warnings

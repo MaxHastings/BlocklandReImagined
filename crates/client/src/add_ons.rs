@@ -79,6 +79,18 @@ pub fn with_health(view: &mut AddOnsView, health: &crate::add_on_health::AddOnHe
     }
 }
 
+/// Say under each enabled row whose rules or bodies a Custom game leaves
+/// out which games play it ([`bri_package_runtime::Catalog::plays_only`]),
+/// from `server`, every enabled package as hosting loads them.
+pub fn with_plays_only(view: &mut AddOnsView, server: Option<&bri_package_runtime::Catalog>) {
+    let Some(server) = server else {
+        return;
+    };
+    for row in &mut view.rows {
+        row.plays_only = server.plays_only(&row.id).unwrap_or_default();
+    }
+}
+
 /// The Can't Join rows for a join refused over differing add-ons, named as
 /// the player's own list names them. `None` for any other failure.
 pub fn mismatch(root: &Path, reason: &str) -> Option<bri_ui::api::AddOnMismatch> {
@@ -798,6 +810,8 @@ fn row(library: &Library, e: &LibraryEntry) -> AddOnRow {
         importable: false,
         importing: false,
         ported: false,
+        plays_only: String::new(),
+        changed_in_game: false,
     }
 }
 

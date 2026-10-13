@@ -299,6 +299,13 @@ impl HostSetup {
                 spawn_points = generated;
             }
         }
+        if let Some(add_ons) = &self.add_ons {
+            session.set_absent_bodies(absent_bodies(
+                &add_ons.server,
+                add_ons.mode.as_deref(),
+                &hosted.map,
+            ));
+        }
         Ok((session, spawn_points))
     }
 
@@ -361,6 +368,31 @@ impl crate::server::MapHost for HostSetup {
             eprintln!("Could not save the Add-Ons' state: {error:#}");
         }
     }
+}
+
+/// The bodies of the host's enabled Add-Ons that a game of `mode` (None:
+/// Custom) on `map` leaves out, each with why ([`Catalog::left_out`]).
+pub fn absent_bodies(
+    server: &Catalog,
+    mode: Option<&str>,
+    map: &str,
+) -> Vec<bri_sim::session::AbsentBody> {
+    server
+        .left_out(mode, map)
+        .into_iter()
+        .flat_map(|(package, why)| {
+            server.packages[&package]
+                .archetypes
+                .iter()
+                .filter(|(_, def)| def.adjusts.is_none())
+                .map(move |(id, def)| bri_sim::session::AbsentBody {
+                    id: id.clone(),
+                    name: def.name.clone(),
+                    why: why.clone(),
+                })
+                .collect::<Vec<_>>()
+        })
+        .collect()
 }
 
 /// The bot kinds a game can run: each enabled Add-On's, less those whose

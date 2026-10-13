@@ -86,6 +86,8 @@ impl App {
                 self.ui.apply_session(a.id, UiUpdate::Chat { text });
             }
         }
+        self.notice_add_on_edits();
+        self.refresh_tune();
         let alive = self.local_alive();
         self.follow_control();
         self.controls
