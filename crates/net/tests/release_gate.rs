@@ -733,8 +733,9 @@ fn look_at(d: &mut dyn Driver, who: Who, point: Vec3) -> Result<ActionAim> {
 /// Walk `who` to `target` (in x and z), within `within`.
 fn walk_to(d: &mut dyn Driver, who: Who, target: Vec3, within: f32) -> Result<()> {
     let from = d.view(who).feet(d.owner(who));
-    // Where the walk stood two strides ago: no closer since means
-    // something is in the way (a parked Warthog), so a player steps aside.
+    // Where the walk stood five strides (half a second) ago: no closer
+    // since means something is in the way (a parked Warthog), so a player
+    // steps aside. Mario turns and gets going slowly, so not sooner.
     let mut strides: Vec<f32> = Vec::new();
     let mut side = 1.0;
     for _ in 0..120 {
@@ -746,7 +747,7 @@ fn walk_to(d: &mut dyn Driver, who: Who, target: Vec3, within: f32) -> Result<()
             return d.hold(who, released(look), 1);
         }
         strides.push(to.length());
-        if to.length() > 3.0 && strides.len() >= 3 && strides[strides.len() - 3] - to.length() < 0.3
+        if to.length() > 3.0 && strides.len() >= 6 && strides[strides.len() - 6] - to.length() < 0.5
         {
             let look = d.look(who);
             d.hold(
@@ -998,6 +999,9 @@ fn burst_at(d: &mut dyn Driver, who: Who, point: Vec3, ticks: u64) -> Result<usi
 fn board(d: &mut dyn Driver, who: Who, vehicle: u64) -> Result<u8> {
     let owner = d.owner(who);
     for _ in 0..12 {
+        if who == Who::Max {
+            revive(d)?;
+        }
         let at = Vec3::from(
             d.view(who)
                 .vehicle_pose(vehicle)
@@ -1139,7 +1143,17 @@ const PAD: [f32; 3] = [-30.0, 0.1, 10.0];
 const STOMPER_SPAWN: [f32; 3] = [-30.0, 0.1, -30.0];
 
 fn script(d: &mut dyn Driver, steps: &mut Steps) {
-    let _ = run(d, steps);
+    // A step that failed is already a FAIL line; anything else that
+    // stopped the script early fails the gate here, never silently.
+    let recorded = |steps: &Steps| steps.lines.iter().filter(|(_, o)| o.is_err()).count();
+    let before = recorded(steps);
+    if let Err(why) = run(d, steps)
+        && recorded(steps) == before
+    {
+        steps
+            .lines
+            .push(("the script ran to its end".into(), Err(why)));
+    }
 }
 
 fn run(d: &mut dyn Driver, steps: &mut Steps) -> Result<(), String> {
@@ -1453,11 +1467,16 @@ fn run(d: &mut dyn Driver, steps: &mut Steps) -> Result<(), String> {
         },
     );
     if walked.is_err() {
-        respawn_as_mario(d, pad).map_err(|e| format!("{e:#}"))?;
         // Where the reseated Warthog went is anyone's guess: a fresh one
         // on its pad, out of the way, and Max back where he was going.
-        hog = fresh_warthog(d, hog).map_err(|e| format!("{e:#}"))?;
-        walk_to(d, Who::Max, pad, 0.5).map_err(|e| format!("{e:#}"))?;
+        steps.run("out by a respawn, a fresh Warthog (Stomper brick)", || {
+            respawn_as_mario(d, pad)?;
+            hog = fresh_warthog(d, hog)?;
+            walk_to(d, Who::Max, pad, 0.5)?;
+            Ok(format!(
+                "Mario again at the Stomper pad; Warthog {hog} on its pad"
+            ))
+        })?;
     }
     steps.run("spawn some Goombas (Stompers) from a spawn brick", || {
         let at = d.view(Who::Max).feet(max);
@@ -1604,9 +1623,14 @@ fn run(d: &mut dyn Driver, steps: &mut Steps) -> Result<(), String> {
         Ok("off the roof and back at the spawn".into())
     });
     if walked.is_err() {
-        respawn_as_mario(d, back).map_err(|e| format!("{e:#}"))?;
-        fresh_warthog(d, hog).map_err(|e| format!("{e:#}"))?;
-        walk_to(d, Who::Max, back, 0.5).map_err(|e| format!("{e:#}"))?;
+        steps.run("out by a respawn, a fresh Warthog (Chief brick)", || {
+            respawn_as_mario(d, back)?;
+            let parked = fresh_warthog(d, hog)?;
+            walk_to(d, Who::Max, back, 0.5)?;
+            Ok(format!(
+                "Mario again by the Chief brick; Warthog {parked} on its pad"
+            ))
+        })?;
     }
     // The remounted Warthog can run the friend over on its way.
     if !d.view(Who::Friend).alive(friend) {
@@ -1716,6 +1740,7 @@ fn run(d: &mut dyn Driver, steps: &mut Steps) -> Result<(), String> {
         Ok("rifle and launcher".into())
     })?;
     steps.run("blow each other up in the mini-game", || {
+        revive(d)?;
         // Apart, facing each other.
         walk_to(d, Who::Friend, Vec3::new(10.0, 0.0, -20.0), 1.0)?;
         walk_to(d, Who::Max, Vec3::new(-10.0, 0.0, -20.0), 1.0)?;
@@ -1870,7 +1895,9 @@ fn leave_warthog(d: &mut dyn Driver, back: Vec3) -> Result<()> {
 /// rifle (its item brick), standing at `back`.
 fn respawn_as_mario(d: &mut dyn Driver, back: Vec3) -> Result<()> {
     let max = d.owner(Who::Max);
-    d.command(Who::Max, Command::Suicide, None)?;
+    if d.view(Who::Max).alive(max) {
+        d.command(Who::Max, Command::Suicide, None)?;
+    }
     let mut last = None;
     for _ in 0..10 {
         d.wait(100)?;
@@ -1905,9 +1932,24 @@ fn respawn_as_mario(d: &mut dyn Driver, back: Vec3) -> Result<()> {
     walk_to(d, Who::Max, back, 0.5)
 }
 
+/// Max back as Mario if the mini-game's Stompers (or the Warthog) killed
+/// him, as a player clicks to respawn.
+fn revive(d: &mut dyn Driver) -> Result<()> {
+    if !d.view(Who::Max).alive(d.owner(Who::Max)) {
+        eprintln!("[gate] Max was killed in the mini-game; respawning as Mario");
+        respawn_as_mario(d, Vec3::new(-10.0, 0.0, 21.0))?;
+    }
+    Ok(())
+}
+
 /// A fresh Warthog on its pad by the wrench's `< Respawn >` (the pad
 /// already names the Warthog), as a player gets one back; its id.
 fn fresh_warthog(d: &mut dyn Driver, old: u64) -> Result<u64> {
+    // From the spawn, round behind the class bricks and item spawns.
+    let at = d.view(Who::Max).feet(d.owner(Who::Max));
+    if at.z > 8.0 && at.x > -8.0 {
+        walk_to(d, Who::Max, Vec3::new(-10.0, 0.0, 21.0), 1.0)?;
+    }
     walk_to(d, Who::Max, Vec3::from(PAD) + Vec3::new(5.0, 0.0, 0.0), 0.5)?;
     let pad = brick_at(d, PAD)?;
     wrench(d, Who::Max, pad, |d| {
