@@ -167,6 +167,7 @@ macro_rules! for_each_op {
             RemoveBot = bots,
             RestBot = bots,
             BotTool = bots,
+            SetBotIntent = bots,
             FollowPath = player,
             Camera = player,
             OrbitCamera = player,

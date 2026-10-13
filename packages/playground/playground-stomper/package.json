@@ -11,6 +11,7 @@
   "dependencies": { "playground-stomper-look": "^1.0.0" },
   "provides": [
     { "kind": "archetype", "id": "playground-stomper:archetype/stomper", "file": "stomper.json" },
-    { "kind": "bots", "id": "playground-stomper:bots/main", "file": "bots.json" }
+    { "kind": "bots", "id": "playground-stomper:bots/main", "file": "bots.json" },
+    { "kind": "weapons", "id": "playground-stomper:weapons/main", "file": "assets/weapons.json" }
   ]
 }

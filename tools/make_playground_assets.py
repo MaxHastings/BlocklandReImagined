@@ -20,6 +20,11 @@ writes their generated files:
                                               strip, a sprite font, a cap
                                               icon and a reticle
   playground-stomper-look/models/stomper.json the Stomper's box body
+  playground-fizzer-look/models/fizzer.json   the Fizzer's box body
+  playground-fizzer/assets/sounds/*.wav       its fuse hiss and its pop
+  playground-fizzer/assets/weapons.json       its pop: a projectile whose
+                                              blast breaks bricks, and the
+                                              hiss and blast it sounds
 
 Everything here is original and generated; run it again after changing the
 numbers below. Only the Python standard library is used, and the output is
@@ -536,6 +541,119 @@ def buggy(root):
     })
 
 
+# --- the Fizzer --------------------------------------------------------------
+
+def fizzer(root):
+    """A walking bomb: a squat slate-blue barrel on two stubby feet, with a
+    copper band, two pale eyes and a short wick on top; an original body
+    1.3 units tall. Its sounds: a crackling hiss while its wick burns,
+    and the pop it goes off with."""
+    body, band, dark, white, wick, spark = [0.28, 0.36, 0.5, 1], [0.72, 0.42, 0.2, 1], \
+        [0.1, 0.1, 0.12, 1], [0.95, 0.95, 0.9, 1], [0.35, 0.25, 0.15, 1], [1.0, 0.75, 0.2, 1]
+    boxes = [
+        ([-0.22, 0.08, -0.04], [0.32, 0.16, 0.44], dark),  # feet
+        ([0.22, 0.08, -0.04], [0.32, 0.16, 0.44], dark),
+        ([0.0, 0.62, 0.0], [0.9, 0.9, 0.9], body),         # barrel
+        ([0.0, 0.62, 0.0], [0.96, 0.14, 0.96], band),      # its band
+        ([0.0, 1.1, 0.0], [0.7, 0.08, 0.7], dark),         # lid
+        ([-0.18, 0.82, -0.46], [0.16, 0.16, 0.04], white),  # eyes
+        ([0.18, 0.82, -0.46], [0.16, 0.16, 0.04], white),
+        ([-0.18, 0.8, -0.48], [0.07, 0.08, 0.02], dark),   # pupils
+        ([0.18, 0.8, -0.48], [0.07, 0.08, 0.02], dark),
+        ([0.0, 1.22, 0.0], [0.06, 0.18, 0.06], wick),      # wick
+        ([0.0, 1.33, 0.0], [0.08, 0.06, 0.08], spark),     # its spark
+    ]
+    model = {'schema_version': 1, 'boxes': [
+        {'center': c, 'size': s, 'color': col} for c, s, col in boxes]}
+    write_json(root / 'playground-fizzer-look' / 'models' / 'fizzer.json', model)
+
+    assets = root / 'playground-fizzer' / 'assets'
+    # A crackling hiss, half a second, played again and again while the
+    # wick burns: noise with a crackle of random pops.
+    hiss = [x * (0.35 + (0.65 if rng.random() < 0.02 else 0.0)) for x in noise(0.5)]
+    write(assets / 'sounds' / 'hiss.wav', wav(hiss, 0.5))
+    # The pop: a deep thump under a burst of noise.
+    pop = mix(decay(tone(0.6, 90, 35), 0.25), decay(noise(0.7), 0.12))
+    write(assets / 'sounds' / 'pop.wav', wav(pop, 0.95))
+    write_json(assets / 'weapons.json', {
+        'schema_version': 5,
+        'id': 'playground-fizzer',
+        'items': {},
+        'images': {},
+        'projectiles': {
+            # Fired straight down at its own feet, it goes off at once.
+            'playground-fizzer:projectile/pop': {
+                'speed': 40.0,
+                'lifetime_ticks': 12,
+                'fade_ticks': 12,
+                'damage': 0.0,
+                'damage_type': '$DamageType::FizzerPop',
+                'radius_damage_type': '$DamageType::FizzerPop',
+                'explode_death': True,
+                'explosion': {
+                    'effect': 'fizzerPop',
+                    'damage': 60.0,
+                    'radius': 5.0,
+                    'impulse': 900.0,
+                    'impulse_radius': 6.0,
+                    'impulse_vertical': 300.0,
+                },
+                'brick': {'radius': 2.5, 'force': 20.0, 'max_volume': 400.0, 'max_floating_volume': 200.0},
+            },
+        },
+        'damage_types': {
+            'fizzerpop': {
+                'name': 'FizzerPop',
+                'suicide_message': '%1 went pop',
+                'murder_message': '%2 popped %1',
+                'vehicle_scale': 1.0,
+                'direct': False,
+            },
+        },
+        'explosions': {
+            'fizzerpop': {
+                'name': 'fizzerPop',
+                'sound': 'playground-fizzer:pop',
+                'shake': {'frequency': [9.0, 10.0, 9.0], 'amplitude': [1.5, 1.5, 1.5],
+                          'seconds': 0.6, 'radius': 14.0, 'falloff': 2.0},
+                'shape': '',
+                'seconds': 0.4,
+                'play_speed': 1.0,
+                'face_viewer': True,
+                'scale': [1.0, 1.0, 1.0],
+                'sizes': [],
+            },
+        },
+        'sounds': {
+            'playground-fizzer:hiss': {'file': 'sounds/hiss.wav', 'volume': 0.8},
+            'playground-fizzer:pop': {'file': 'sounds/pop.wav'},
+        },
+    })
+
+
+# --- the Stomper's kill feed --------------------------------------------------
+
+def stomper_feed(root):
+    """How a flattened Stomper is told in the kill feed: a damage type its
+    rules (`playground-stomper-rules`) deal."""
+    write_json(root / 'playground-stomper' / 'assets' / 'weapons.json', {
+        'schema_version': 5,
+        'id': 'playground-stomper',
+        'items': {},
+        'images': {},
+        'projectiles': {},
+        'damage_types': {
+            'flattened': {
+                'name': 'Flattened',
+                'suicide_message': '%1 was flattened',
+                'murder_message': '%2 flattened %1',
+                'vehicle_scale': 0.0,
+                'direct': True,
+            },
+        },
+    })
+
+
 # --- the Runner's HUD ---------------------------------------------------------
 
 CLEAR = bytes([0, 0, 0, 0])
@@ -659,6 +777,8 @@ def main():
     buggy(ROOT)
     runner_hud(ROOT)
     stomper(ROOT)
+    fizzer(ROOT)
+    stomper_feed(ROOT)
 
 
 if __name__ == '__main__':

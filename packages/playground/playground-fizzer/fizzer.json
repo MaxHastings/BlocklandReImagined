@@ -1,0 +1,22 @@
+{
+  "schema_version": 1,
+  "name": "Fizzer",
+  "model": "playground-fizzer-look:model/fizzer",
+  "max_health": 30,
+  "energy_bar": false,
+  "movement": {
+    "can_jet": false,
+    "width": 1.0,
+    "stand_height": 1.3,
+    "crouch_height": 1.1,
+    "stand_eye": 0.85,
+    "crouch_eye": 0.75,
+    "eye_forward": 0.4,
+    "sit_eye": 0.7,
+    "forward": 5,
+    "backward": 3,
+    "sideways": 3,
+    "jump_speed": 7,
+    "air_control": 0.1
+  }
+}

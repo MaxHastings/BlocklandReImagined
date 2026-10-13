@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "id": "test-bodies",
+  "version": "1.0.0",
+  "api": 1,
+  "name": "Test Bodies",
+  "description": "Two bodies for the body-switching tests: a Giant twice a Blockhead's height and a Statue that uses no items and cannot ride.",
+  "authors": ["Blockland ReImagined"],
+  "license": "CC0-1.0",
+  "provenance": { "source": "original" },
+  "provides": [
+    { "kind": "archetype", "id": "test-bodies:archetype/giant", "file": "giant.json" },
+    { "kind": "archetype", "id": "test-bodies:archetype/statue", "file": "statue.json" }
+  ]
+}

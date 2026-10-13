@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "name": "Giant",
+  "max_health": 200,
+  "movement": {
+    "stand_height": 5.4,
+    "crouch_height": 2.0,
+    "stand_eye": 4.6,
+    "crouch_eye": 1.5,
+    "sit_eye": 3.0
+  }
+}
