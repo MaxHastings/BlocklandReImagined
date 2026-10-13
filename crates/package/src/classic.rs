@@ -378,6 +378,161 @@ pub fn unpack_native_zip(zip_path: &Path, out: &Path) -> Result<()> {
     Ok(())
 }
 
+/// What [`pack_native_zip`] wrote.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Packed {
+    /// The zip's top folders: the Add-On's, then its rules companion's.
+    pub folders: Vec<String>,
+    pub files: usize,
+    /// Bytes of the files, before compression.
+    pub bytes: u64,
+    /// The zip's own SHA-256, hex.
+    pub sha256: String,
+    /// Paths left out: hidden files and folders, and build output.
+    pub skipped: Vec<String>,
+}
+
+/// Whether a file or folder name is left out of a packaged Add-On: hidden
+/// ones (`.git`, `.cargo`) and a Rust build's `target`.
+fn left_out_of_zip(name: &str) -> bool {
+    name.starts_with('.') || name == "target"
+}
+
+/// Write the Add-On folder `addon` (and its rules companion `<folder>-rules`
+/// beside it, when there is one) as a native Add-On zip at `out`: the form
+/// [`unpack_native_zip`] installs and joining players' copies are compared
+/// against. The zip is the same bytes for the same files (sorted names, a
+/// fixed date, no extra fields), and is read back before this returns:
+/// every file must unpack to exactly the bytes on disk.
+pub fn pack_native_zip(addon: &Path, out: &Path) -> Result<Packed> {
+    use sha2::Digest;
+    use std::io::Write;
+    anyhow::ensure!(
+        addon.join("package.json").is_file(),
+        "{} has no package.json",
+        addon.display()
+    );
+    let name = addon
+        .file_name()
+        .and_then(|n| n.to_str())
+        .context("The Add-On folder needs a name")?
+        .to_string();
+    anyhow::ensure!(
+        !name.ends_with("-rules"),
+        "{name} is a rules companion; package the Add-On it belongs to"
+    );
+    let mut folders = vec![(name.clone(), addon.to_path_buf())];
+    let rules = addon.with_file_name(format!("{name}-rules"));
+    if rules.join("package.json").is_file() {
+        folders.push((format!("{name}-rules"), rules));
+    }
+    let mut files = Vec::new();
+    let mut skipped = Vec::new();
+    for (top, dir) in &folders {
+        let mut stack = vec![(dir.clone(), top.clone())];
+        while let Some((dir, prefix)) = stack.pop() {
+            let entries =
+                std::fs::read_dir(&dir).with_context(|| format!("Reading {}", dir.display()))?;
+            for entry in entries {
+                let entry = entry.with_context(|| format!("Reading {}", dir.display()))?;
+                let file_name = entry.file_name();
+                let Some(file_name) = file_name.to_str() else {
+                    anyhow::bail!(
+                        "{} has a name that is not valid text",
+                        entry.path().display()
+                    );
+                };
+                let path = format!("{prefix}/{file_name}");
+                if left_out_of_zip(file_name) {
+                    skipped.push(path);
+                    continue;
+                }
+                let kind = entry.file_type()?;
+                if kind.is_dir() {
+                    stack.push((entry.path(), path));
+                } else if kind.is_file() {
+                    files.push((path, entry.path()));
+                } else {
+                    // A link could point outside the Add-On.
+                    skipped.push(path);
+                }
+            }
+        }
+    }
+    files.sort();
+    skipped.sort();
+    anyhow::ensure!(
+        files.len() <= NATIVE_MAX_FILES,
+        "The Add-On has {} files; the game installs at most {NATIVE_MAX_FILES}",
+        files.len()
+    );
+    if let Some(dir) = out.parent().filter(|d| !d.as_os_str().is_empty()) {
+        std::fs::create_dir_all(dir).with_context(|| format!("Creating {}", dir.display()))?;
+    }
+    let partial = out.with_extension("zip.partial");
+    let mut zip = zip::ZipWriter::new(
+        std::fs::File::create(&partial)
+            .with_context(|| format!("Writing {}", partial.display()))?,
+    );
+    let options = zip::write::SimpleFileOptions::default()
+        .compression_method(zip::CompressionMethod::Deflated)
+        .last_modified_time(zip::DateTime::default())
+        .unix_permissions(0o644);
+    let mut bytes = 0u64;
+    let mut sums = Vec::with_capacity(files.len());
+    for (name, path) in &files {
+        let body = std::fs::read(path).with_context(|| format!("Reading {}", path.display()))?;
+        bytes += body.len() as u64;
+        anyhow::ensure!(
+            bytes <= NATIVE_MAX_BYTES,
+            "The Add-On is over the game's {} MiB install limit",
+            NATIVE_MAX_BYTES >> 20
+        );
+        zip.start_file(name.as_str(), options)?;
+        zip.write_all(&body)?;
+        sums.push(sha2::Sha256::digest(&body));
+    }
+    zip.finish()?;
+    // Read it back: the game must find exactly these files, byte for byte.
+    let mut archive = zip::ZipArchive::new(
+        std::fs::File::open(&partial).with_context(|| format!("Reading {}", partial.display()))?,
+    )
+    .context("Reading back the zip")?;
+    anyhow::ensure!(
+        archive.len() == files.len(),
+        "The zip holds {} files, not {}",
+        archive.len(),
+        files.len()
+    );
+    for ((name, _), sum) in files.iter().zip(&sums) {
+        let mut entry = archive
+            .by_name(name)
+            .with_context(|| format!("The zip lost {name}"))?;
+        let mut hasher = sha2::Sha256::new();
+        std::io::copy(&mut entry, &mut hasher).with_context(|| format!("Reading back {name}"))?;
+        anyhow::ensure!(
+            hasher.finalize() == *sum,
+            "{name} reads back different from the file on disk"
+        );
+    }
+    drop(archive);
+    std::fs::rename(&partial, out).with_context(|| format!("Writing {}", out.display()))?;
+    anyhow::ensure!(is_native_zip(out), "{} is not an Add-On zip", out.display());
+    let sha256 = format!(
+        "{:x}",
+        sha2::Sha256::digest(
+            std::fs::read(out).with_context(|| format!("Reading {}", out.display()))?
+        )
+    );
+    Ok(Packed {
+        folders: folders.into_iter().map(|(n, _)| n).collect(),
+        files: files.len(),
+        bytes,
+        sha256,
+        skipped,
+    })
+}
+
 /// The drop folder of the content root `root`.
 pub fn folder(root: &Path) -> std::path::PathBuf {
     root.join(DROP_DIR)
@@ -424,6 +579,55 @@ mod tests {
                 Step::Included { name, id, .. } => format!("included {name} {id}"),
             })
             .collect()
+    }
+
+    #[test]
+    fn a_packaged_add_on_installs_byte_for_byte_and_packs_the_same_twice() {
+        let root = temp("pack");
+        let gun = root.join("src/Gun");
+        for (path, body) in [
+            ("package.json", b"{}".as_slice()),
+            ("assets/icon.png", &[0x89, b'P', b'N', b'G', 0, 255, 13, 10]),
+            ("assets/deep/a.json", b"[1]"),
+            (".git/HEAD", b"ref"),
+            ("controller-src/target/big.o", b"obj"),
+            ("controller-src/lib.rs", b"fn x() {}"),
+        ] {
+            let file = gun.join(path);
+            std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+            std::fs::write(file, body).unwrap();
+        }
+        std::fs::create_dir_all(root.join("src/Gun-rules")).unwrap();
+        std::fs::write(root.join("src/Gun-rules/package.json"), b"{\"r\":1}").unwrap();
+        let out = root.join("out/Gun.zip");
+        let packed = pack_native_zip(&gun, &out).unwrap();
+        assert_eq!(packed.folders, ["Gun", "Gun-rules"]);
+        assert_eq!(packed.files, 5);
+        assert_eq!(packed.skipped, ["Gun/.git", "Gun/controller-src/target"]);
+        // Installs as the game installs a dropped zip, every byte the same.
+        unpack_native_zip(&out, &root.join("installed/Gun")).unwrap();
+        for (from, to) in [
+            ("src/Gun/assets/icon.png", "installed/Gun/assets/icon.png"),
+            (
+                "src/Gun/assets/deep/a.json",
+                "installed/Gun/assets/deep/a.json",
+            ),
+            (
+                "src/Gun-rules/package.json",
+                "installed/Gun-rules/package.json",
+            ),
+        ] {
+            assert_eq!(
+                std::fs::read(root.join(from)).unwrap(),
+                std::fs::read(root.join(to)).unwrap()
+            );
+        }
+        assert!(!root.join("installed/Gun/.git").exists());
+        // Same files, same zip.
+        let again = pack_native_zip(&gun, &root.join("out/again.zip")).unwrap();
+        assert_eq!(again.sha256, packed.sha256);
+        let rules = pack_native_zip(&root.join("src/Gun-rules"), &root.join("out/r.zip"));
+        assert!(rules.unwrap_err().to_string().contains("rules companion"));
     }
 
     #[test]
