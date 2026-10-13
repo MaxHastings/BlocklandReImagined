@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "id": "playground-stomper-rules",
+  "version": "1.0.0",
+  "api": 1,
+  "name": "Stomper Rules",
+  "description": "What touching a Stomper means (host only): landed on from above, or run over by a vehicle at a pace, it is flattened, and the kill feed says so. Part of the Mixed Add-On Playground.",
+  "authors": ["Blockland ReImagined"],
+  "license": "CC0-1.0",
+  "provenance": { "source": "original" },
+  "dependencies": { "playground-stomper": "^1.0.0" },
+  "capabilities": ["damage"],
+  "provides": [
+    { "kind": "behaviour", "id": "playground-stomper-rules:behaviour/rules", "file": "behaviour.json" },
+    { "kind": "script", "id": "playground-stomper-rules:script/rules", "file": "stomper.rhai" }
+  ]
+}

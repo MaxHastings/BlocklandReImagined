@@ -229,12 +229,26 @@ impl Session {
             .is_none()
             .then(|| self.bots.brains[&bot].kind.melee.clone())
             .flatten();
-        let weapon = held.or(bite.as_ref().map(|m| Weapon {
+        // Its body's reach: a hit's, an ability's (`ability`), whichever is
+        // shorter, so it gets near enough for both; a touch's is its body.
+        let kind = &self.bots.brains[&bot].kind;
+        let body_reach = [
+            bite.as_ref().map(|m| m.reach),
+            kind.ability.as_ref().map(|a| a.range),
+            kind.contact
+                .as_ref()
+                .map(|_| self.peers[&bot].player.tuning().width),
+        ]
+        .into_iter()
+        .flatten()
+        .reduce(f32::min)
+        .filter(|_| held.is_none());
+        let weapon = held.or(body_reach.map(|reach| Weapon {
             melee: true,
             hold: false,
             charge: false,
             near: None,
-            reach: m.reach,
+            reach,
             speed: 0.0,
             fall: 0.0,
             splash: 0.0,
