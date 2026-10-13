@@ -112,6 +112,10 @@ pub struct BotKind {
     pub perception: BotPerception,
     /// Seconds a choice is held before another may take over (`BotHold`).
     pub hold_seconds: f32,
+    /// Whether it fights with hand weapons. False: it never takes up,
+    /// draws or fires one, even one the rules put in its hand, and fights
+    /// with its body (`melee`) or a vehicle gun it crews.
+    pub weapons: bool,
 }
 /// What a bot notices, from engine data only: a blast's radius, a sound's
 /// volume, someone staring at it, something moving fast; and how its
@@ -258,6 +262,7 @@ impl Default for BotKind {
             surprise: BotSurprise::default(),
             team: BotTeam::default(),
             hold_seconds: BotHold::default().seconds,
+            weapons: true,
         }
     }
 }
@@ -636,6 +641,15 @@ mod tests {
         let melee = fish.melee.as_ref().unwrap();
         assert_eq!((melee.damage, melee.reach, melee.seconds), (25.0, 3.0, 0.8));
         assert_eq!(melee.name, "Bite");
+        assert!(
+            fish.weapons,
+            "a kind fights with hand weapons unless it says not"
+        );
+        let unarmed = BotPack::from_json(
+            br#"{"schema_version":1,"bots":[{"id":"x","name":"X","weapons":false}]}"#,
+        )
+        .unwrap();
+        assert!(!unarmed.bots[0].weapons);
         assert_eq!(BotKind::default().moves, Moves::Walk);
         for bad in [
             r#""melee":{"damage":-1}"#,

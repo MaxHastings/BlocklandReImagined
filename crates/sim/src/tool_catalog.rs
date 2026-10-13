@@ -43,6 +43,15 @@ impl ToolCatalog {
                 .iter()
                 .map(|p| (p.id.clone(), p.aspect.clone()))
                 .collect(),
+            print_aliases: materials
+                .prints
+                .iter()
+                .flat_map(|p| {
+                    p.aliases
+                        .iter()
+                        .map(|a| (a.to_ascii_lowercase(), p.id.clone()))
+                })
+                .collect(),
             brick_print_aspects,
             brick_names: catalog
                 .bricks
@@ -243,6 +252,28 @@ mod tests {
             &bri_package::testing::pack_dir(&root.join("content"), "geometry"),
         )?;
         Ok((catalog, effects, materials, definitions))
+    }
+
+    /// A save names prints as written (`Letters/A`, an older texture
+    /// path); the catalog knows them by alias, so a default build that
+    /// uses stock prints is not reported as missing content.
+    #[test]
+    fn saves_print_names_resolve_through_aliases() -> Result<()> {
+        let (catalog, effects, materials, _) = synthetic_inputs();
+        let tools = ToolCatalog::from_native(&catalog, &effects, &materials)?;
+        for name in [
+            "print/test_letters/A",
+            "Letters/A",
+            "letters/b",
+            "base/data/prints/Letters/B.png",
+            "Add-Ons/Print_Letters_Default/prints/A.png",
+        ] {
+            assert!(tools.has_print(name), "{name}");
+        }
+        for name in ["Letters/C", "Custom/face", "2x2f/vent"] {
+            assert!(!tools.has_print(name), "{name}");
+        }
+        Ok(())
     }
 
     /// A brick's click swap is kept only when both targets are bricks of

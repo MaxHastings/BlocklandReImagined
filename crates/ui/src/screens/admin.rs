@@ -1110,6 +1110,7 @@ impl Screen for AdminScreen {
                 ScreenId::AdminRanks,
                 ScreenId::AdminEnvironment,
                 ScreenId::AdminColorPicker,
+                ScreenId::AdminEnvironmentChoice,
                 ScreenId::AdminConfirm,
             ] {
                 core.pop(id);

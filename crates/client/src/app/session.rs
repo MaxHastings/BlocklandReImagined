@@ -139,6 +139,7 @@ impl App {
         self.scene.cpu_scene = None;
         self.lighting.light_volume = LightVolumeState::default();
         self.scene.cpu_terrain.clear();
+        self.scene.scenery.reset();
         self.gpu.gpu_scene = None;
         self.gpu.gpu_terrain.clear();
         self.scene.meshes = None;
@@ -491,9 +492,7 @@ impl App {
                 );
                 let mirror_shapes =
                     Arc::new(crate::mirrors::shapes(&loaded.simulation.definitions));
-                let materials = Arc::new(crate::materials::BrickMaterials::load(
-                    &paths.brick_materials,
-                )?);
+                let materials = paths.materials()?;
                 let palette = Arc::new(crate::world_chunks::BrickPalette::new(&materials)?);
                 let mut mirror = bri_sim::prediction::CollisionMirror::new(
                     loaded.simulation.definitions.clone(),
@@ -519,6 +518,7 @@ impl App {
                     )?;
                 }
                 let waters = loaded.simulation.waters.clone();
+                let plate = loaded.plate;
                 let foliage = crate::foliage::PreparedFoliage::load(
                     &paths.foliage,
                     &base_map,
@@ -531,6 +531,7 @@ impl App {
                         foliage,
                         map_id: base_map.clone(),
                         waters,
+                        plate,
                         scene: visual.scene,
                         terrain: visual.terrain.into_iter().map(Arc::new).collect(),
                         meshes,
@@ -645,12 +646,18 @@ impl App {
                         Some(server::HostCertificate::load_or_create(&state_dir)?)
                     },
                     map_loader: Some(map_loader),
-                    // Joiners download the Add-Ons this host runs.
-                    packages: Some(Arc::new(bri_net::packages::PackageShelf::new(
-                        &paths_for_maps.root,
-                        &paths_for_maps.packages,
-                        &identity,
-                    )?)),
+                    // Joiners download the Add-Ons this host runs. Listing
+                    // them reads and hashes every Add-On file, so a single
+                    // player game, which nobody joins, lists none.
+                    packages: if single {
+                        None
+                    } else {
+                        Some(Arc::new(bri_net::packages::PackageShelf::new(
+                            &paths_for_maps.root,
+                            &paths_for_maps.packages,
+                            &identity,
+                        )?))
+                    },
                 },
                 max_players as usize,
                 state_dir.join("administration.json"),
