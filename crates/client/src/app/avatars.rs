@@ -23,6 +23,10 @@ pub(super) struct Avatars {
     /// Bodies and horses whose mesh the last frame built, where they can
     /// show (`render_frame`).
     pub(super) meshes_built: (usize, usize),
+    /// The face, decal and surface textures bodies have uploaded, by body
+    /// model (None the Blockhead): a new outfit binds them instead of
+    /// mipmapping and uploading its own copies.
+    pub(super) body_textures: BTreeMap<Option<String>, bri_render::scene::TextureCache>,
 }
 
 impl Avatars {
@@ -36,6 +40,7 @@ impl Avatars {
         {
             mesh.gpu_stopped();
         }
+        self.body_textures.clear();
         self.avatar_preview = None;
     }
 }
