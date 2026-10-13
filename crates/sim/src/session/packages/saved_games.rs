@@ -339,6 +339,7 @@ impl Session {
             return Ok(());
         }
         self.edit_settings(editor, game, settings, teams, true, true)
+            .map(drop)
     }
 
     /// Replace the chosen game's declared `per_minigame` entries. Absence
