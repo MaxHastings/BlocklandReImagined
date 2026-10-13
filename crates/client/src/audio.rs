@@ -982,4 +982,57 @@ mod tests {
         assert!(audio.take_capture().iter().any(|v| v.abs() > 0.00001));
         Ok(())
     }
+
+    /// An Add-On weapon's own stereo sounds (the Mini-Nuke's launch and
+    /// blast are 44.1 kHz stereo `.wav`s with 3D descriptions) are heard
+    /// where they go off and fade with distance, like every other weapon's,
+    /// rather than at full volume in both ears wherever the player is.
+    #[test]
+    fn an_add_on_weapons_stereo_sounds_fade_with_distance() -> Result<()> {
+        let fx = Pack::synthetic()?;
+        let dir = tempfile::tempdir()?;
+        let rate = 44_100;
+        let samples: Vec<f32> = (0..rate / 2)
+            .flat_map(|i| {
+                let s = (i as f32 / rate as f32 * 440.0 * std::f32::consts::TAU).sin() * 0.5;
+                [s, s]
+            })
+            .collect();
+        std::fs::write(
+            dir.path().join("blast.wav"),
+            bri_audio::wav::encode_pcm16(rate, 2, &samples),
+        )?;
+        let mut pack: bri_weapons::Pack =
+            serde_json::from_str(r#"{ "schema_version": 1, "id": "addon" }"#)?;
+        let blast = "addon:sound/mininukeexplodesound";
+        pack.sounds.insert(
+            blast.into(),
+            bri_weapons::SoundDef {
+                file: "blast.wav".into(),
+                volume: 1.0,
+                looping: false,
+                local: false,
+                package: None,
+                stock: false,
+            },
+        );
+        let heard = |distance: f32| -> Result<f32> {
+            let mut audio =
+                ClientAudio::load(&fx.root, &mut Settings::default(), OutputKind::Offline)?;
+            audio.set_pack_sounds(&pack, dir.path());
+            assert!(audio.warnings.is_empty(), "{:?}", audio.warnings);
+            audio.profile(blast, Placement::World([0.0, 0.0, -distance]));
+            audio.tick(0.2, Listener::default());
+            let capture = audio.take_capture();
+            Ok((capture.iter().map(|v| v * v).sum::<f32>() / capture.len().max(1) as f32).sqrt())
+        };
+        let (near, mid, far) = (heard(5.0)?, heard(35.0)?, heard(100.0)?);
+        assert!(near > 0.01, "heard up close: {near}");
+        assert!(
+            mid > 0.0 && mid < near * 0.8,
+            "fainter further off: {near} then {mid}"
+        );
+        assert_eq!(far, 0.0, "out of earshot");
+        Ok(())
+    }
 }
