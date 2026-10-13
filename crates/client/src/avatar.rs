@@ -2115,6 +2115,24 @@ impl AvatarMesh {
         device: &wgpu::Device,
         queue: &wgpu::Queue,
     ) -> Result<()> {
+        self.upload_sharing(renderer, device, queue, None)
+    }
+    /// Whether the next [`Self::upload`] sends the whole mesh (a new body or
+    /// outfit): its materials and any textures not yet uploaded, not only
+    /// vertices.
+    pub fn needs_full_upload(&self) -> bool {
+        self.gpu.is_none()
+    }
+    /// As [`Self::upload`]; a whole upload binds the images `textures`
+    /// already holds (every body wears faces and decals from one catalog)
+    /// and keeps the ones it makes there.
+    pub fn upload_sharing(
+        &mut self,
+        renderer: &SceneRenderer,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        textures: Option<&mut bri_render::scene::TextureCache>,
+    ) -> Result<()> {
         if std::mem::take(&mut self.restructured)
             && let Some(base) = &self.gpu
         {
@@ -2134,7 +2152,10 @@ impl AvatarMesh {
                 gpu.update_vertices(queue, &self.data.vertices, &centers)?;
             }
         } else {
-            self.gpu = Some(renderer.upload(device, queue, &self.data)?);
+            self.gpu = Some(match textures {
+                Some(textures) => renderer.upload_cached(device, queue, &self.data, textures)?,
+                None => renderer.upload(device, queue, &self.data)?,
+            });
             self.vertices_dirty = false;
         }
         if self.instanced {
@@ -2596,6 +2617,7 @@ mod tests {
     crate::testing::synthetic_and_content!(
         Avatar: reposed_vertices_match_a_full_shape_rebuild,
         a_restructured_body_keeps_its_textures,
+        new_outfits_bind_the_textures_bodies_already_uploaded,
         a_respawned_body_stands_in_root_without_getting_up_from_the_corpse,
         item_mounts_use_the_same_sampled_avatar_pose_and_body_transform,
         held_and_action_arm_layers_keep_locomotion_and_mounts_coherent,
@@ -3271,6 +3293,54 @@ mod tests {
         );
     }
 
+    /// A round that dresses every player builds a new mesh per body: the
+    /// second body in an outfit uploads no texture, and a new face uploads
+    /// only that face. A restructure still reuses the shared textures.
+    fn new_outfits_bind_the_textures_bodies_already_uploaded(fx: &Avatar) -> Result<()> {
+        let assets = &fx.assets;
+        let gpu = bri_ui::gpu::Headless::new()?;
+        let renderer = SceneRenderer::new(&gpu.device, wgpu::TextureFormat::Rgba8UnormSrgb);
+        let mut cache = bri_render::scene::TextureCache::default();
+        let p = player();
+        let dressed = |appearance: Appearance| -> Result<AvatarMesh> {
+            let mut mesh = assets.mesh(appearance)?;
+            mesh.pose(assets, &p, 0.0)?;
+            Ok(mesh)
+        };
+        let defaults = assets.package.defaults.clone();
+        let mut first = dressed(defaults.clone())?;
+        assert!(first.needs_full_upload());
+        first.upload_sharing(&renderer, &gpu.device, &gpu.queue, Some(&mut cache))?;
+        assert!(!first.needs_full_upload());
+        let made = renderer.upload_counts().textures;
+        assert!(made > 0);
+        assert_eq!(cache.len() as u64, made);
+        let mut second = dressed(defaults.clone())?;
+        second.upload_sharing(&renderer, &gpu.device, &gpu.queue, Some(&mut cache))?;
+        assert_eq!(renderer.upload_counts().textures, made);
+        let face = assets
+            .package
+            .faces
+            .iter()
+            .map(|f| f.rsplit('/').next().unwrap_or(f))
+            .find(|f| !f.eq_ignore_ascii_case(&defaults.face))
+            .context("a second face")?
+            .to_string();
+        let mut third = dressed(Appearance {
+            face,
+            ..defaults.clone()
+        })?;
+        third.upload_sharing(&renderer, &gpu.device, &gpu.queue, Some(&mut cache))?;
+        assert_eq!(renderer.upload_counts().textures, made + 1);
+        second.set_hidden_nodes(["LHand".to_string()]);
+        second.pose(assets, &p, 0.1)?;
+        assert!(second.restructured);
+        let shared = renderer.upload_counts().shared_geometry;
+        second.upload_sharing(&renderer, &gpu.device, &gpu.queue, Some(&mut cache))?;
+        assert_eq!(renderer.upload_counts().shared_geometry, shared + 1);
+        assert_eq!(renderer.upload_counts().textures, made + 1);
+        Ok(())
+    }
     /// Skis on and off, hands hidden and shown, a translucent paint: the
     /// body's layout changes but not its outfit, so it uploads new geometry
     /// on the textures it has, never the face, decal and surfaces again.

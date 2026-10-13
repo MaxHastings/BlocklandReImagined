@@ -701,8 +701,14 @@ struct Runner {
     occluded: bool,
     grabbed: bool,
     regrab: bool,
+    /// Re-assert the cursor clip without moving the cursor (once a second
+    /// while playing).
+    reclip: bool,
     next_regrab: Instant,
     grab_retry: GrabRetry,
+    /// Raw mouse motion since it was last handed to the interface: it goes
+    /// once per frame, or before any other input so order holds.
+    mouse_delta: Option<(f64, f64)>,
     focus_click: FocusClick,
     ime_allowed: bool,
     composing: bool,
@@ -728,6 +734,9 @@ struct Runner {
     frame_background: bool,
     /// When the event loop went to sleep, for the frame trace's "idle".
     idle_from: Option<Instant>,
+    /// When the last event handler returned, for the frame trace's "event
+    /// loop": time Windows and winit spend between the game's handlers.
+    left_handler: Option<Instant>,
 }
 
 /// Launch only from an explicitly requested interactive execution path. This
@@ -753,8 +762,10 @@ pub fn run(config: PlatformConfig) -> Result<()> {
         occluded: false,
         grabbed: false,
         regrab: false,
+        reclip: false,
         next_regrab: now,
         grab_retry: GrabRetry::default(),
+        mouse_delta: None,
         focus_click: FocusClick::default(),
         ime_allowed: false,
         composing: false,
@@ -774,6 +785,7 @@ pub fn run(config: PlatformConfig) -> Result<()> {
         last_present: None,
         frame_background: true,
         idle_from: None,
+        left_handler: None,
     };
     crate::winit_log::install();
     let event_loop = EventLoop::new().context("creating the native event loop")?;
@@ -792,15 +804,41 @@ impl Runner {
         event_loop.exit();
     }
     fn input(&mut self, event: InputEvent) {
+        self.flush_mouse();
+        self.deliver(event);
+    }
+    fn deliver(&mut self, event: InputEvent) {
+        let _span = crate::frame_trace::span("input");
         if let Some(recorder) = &mut self.recorder {
             recorder.event(event);
         }
         self.config.app.ui_mut().handle_input(event);
     }
+    /// Hand the raw mouse motion gathered since the last call to the
+    /// interface as one delta.
+    fn flush_mouse(&mut self) {
+        if let Some((dx, dy)) = self.mouse_delta.take() {
+            self.deliver(InputEvent::MouseDelta {
+                dx: dx as f32,
+                dy: dy as f32,
+            });
+        }
+    }
+    /// A handler starts: what passed since the last one returned was spent
+    /// in the event loop, not in the game.
+    fn enter_handler(&mut self) {
+        if let Some(from) = self.left_handler.take() {
+            crate::frame_trace::add("event loop", from.elapsed());
+        }
+    }
+    fn leave_handler(&mut self) {
+        self.left_handler = Some(Instant::now());
+    }
     fn focused_text(&self) -> bool {
         self.config.app.ui().takes_text()
     }
     fn sync_cursor(&mut self) -> Result<()> {
+        let _span = crate::frame_trace::span("cursor");
         let Some(window) = &self.window else {
             return Ok(());
         };
@@ -837,6 +875,19 @@ impl Runner {
                     }
                 }
             }
+        } else if grab && self.grabbed && self.reclip {
+            // Re-clipping alone restores a clip Windows dropped: winit calls
+            // ClipCursor only when the clip differs, and the clip pulls the
+            // cursor inside it. Moving the cursor as well, every second, was
+            // a system-wide input call for nothing. A refused clip grabs
+            // afresh, through the retry above.
+            if window
+                .set_cursor_grab(CursorGrabMode::Locked)
+                .or_else(|_| window.set_cursor_grab(CursorGrabMode::Confined))
+                .is_err()
+            {
+                self.grabbed = false;
+            }
         } else if !grab && self.grabbed {
             if let Err(e) = window.set_cursor_grab(CursorGrabMode::None) {
                 bri_console::warn(format!("Could not release the gameplay cursor: {e}"));
@@ -845,6 +896,7 @@ impl Runner {
             self.grab_retry.succeeded();
         }
         self.regrab = false;
+        self.reclip = false;
         window.set_cursor_visible(!grab);
         let ime = self.focused && self.focused_text();
         if ime != self.ime_allowed {
@@ -1549,122 +1601,8 @@ fn write_capture_image(frame: &image::DynamicImage, path: &std::path::Path) -> R
     Ok(())
 }
 
-impl ApplicationHandler for Runner {
-    fn resumed(&mut self, event_loop: &ActiveEventLoop) {
-        let result = (|| -> Result<()> {
-            if self.window.is_none() {
-                // Hidden until its first frame is drawn: an empty window
-                // shows as a blank white rectangle on Windows.
-                let attributes = Window::default_attributes()
-                    .with_visible(false)
-                    .with_title(self.config.title.clone())
-                    .with_inner_size(PhysicalSize::new(self.config.size.0, self.config.size.1))
-                    .with_min_inner_size(PhysicalSize::new(640, 480));
-                let window = Arc::new(
-                    event_loop
-                        .create_window(attributes)
-                        .context("creating the native client window")?,
-                );
-                crate::perf::startup::mark("window created");
-                self.focused = window.has_focus();
-                self.window = Some(window);
-                self.report_modes();
-                // Saved prefs may name a size this monitor cannot show, or an
-                // exclusive fullscreen mode from before fullscreen went
-                // borderless; start in the nearest mode and record it.
-                let saved = self.config.size;
-                let fits_here = self.modes.as_ref().is_none_or(|m| fits(&m.windowed, saved));
-                if self.config.fullscreen || !fits_here {
-                    let fullscreen = self.config.fullscreen;
-                    let target = if fullscreen {
-                        let window = self.window.as_ref().unwrap();
-                        window.current_monitor().map(|m| m.size())
-                    } else {
-                        Some(self.windowed_size())
-                    };
-                    match target {
-                        Some(t) if t == PhysicalSize::new(saved.0, saved.1) => {
-                            set_mode(self.window.as_ref().unwrap(), fullscreen, t);
-                        }
-                        Some(t) => {
-                            let vsync = self.config.vsync;
-                            self.change_mode(None, fullscreen, t, vsync);
-                        }
-                        None => self.config.fullscreen = false,
-                    }
-                }
-            }
-            if self.graphics.is_none() {
-                let gpu = Graphics::new(
-                    self.window.as_ref().unwrap().clone(),
-                    self.config.vsync,
-                    event_loop.owned_display_handle(),
-                    self.config.early_gpu.take(),
-                )?;
-                crate::perf::startup::mark("GPU opened");
-                self.config
-                    .app
-                    .gpu_ready(&gpu.device, &gpu.queue, gpu.config.format)?;
-                self.graphics = Some(gpu);
-            }
-            self.resize(self.window.as_ref().unwrap().inner_size());
-            let window = self.window.as_ref().unwrap().clone();
-            if !window.is_visible().unwrap_or(true) {
-                // Draw the first frame here rather than wait for a redraw
-                // (Windows sends none to a hidden window), then show it.
-                self.config.app.ui_mut().update(0);
-                self.pump(event_loop)?;
-                self.render()?;
-                // Shown only once the GPU has drawn it.
-                if let Some(g) = &self.graphics {
-                    let _ = g.device.poll(wgpu::PollType::Wait {
-                        submission_index: None,
-                        timeout: Some(Duration::from_secs(1)),
-                    });
-                }
-                window.set_visible(true);
-                crate::perf::startup::mark("window shown");
-            }
-            self.focused = window.has_focus();
-            self.regrab = true;
-            self.last_tick = Instant::now();
-            self.next_tick = self.last_tick;
-            self.sync_cursor()?;
-            Ok(())
-        })();
-        if let Err(e) = result {
-            self.fail(event_loop, e);
-        }
-    }
-    fn suspended(&mut self, _event_loop: &ActiveEventLoop) {
-        self.input(InputEvent::FocusLost);
-        self.mods = Modifiers::NONE;
-        self.focused = false;
-        self.composing = false;
-        if let Some(w) = &self.window {
-            let _ = w.set_cursor_grab(CursorGrabMode::None);
-            w.set_cursor_visible(true);
-            w.set_ime_allowed(false);
-        }
-        self.grabbed = false;
-        self.ime_allowed = false;
-        if self.graphics.is_some() {
-            self.config.app.gpu_stopped();
-            self.graphics = None;
-        }
-        if let Some(change) = self.display.take() {
-            self.config.vsync = change.old_vsync;
-            self.config.size = (change.old_size.width, change.old_size.height);
-            self.config.fullscreen = change.old_fullscreen;
-            if let Some(window) = &self.window {
-                set_mode(window, change.old_fullscreen, change.old_size);
-            }
-            if let Some(id) = change.request {
-                self.reject_display(id, "Display change interrupted by suspension.".into());
-            }
-        }
-    }
-    fn window_event(
+impl Runner {
+    fn handle_window_event(
         &mut self,
         event_loop: &ActiveEventLoop,
         window_id: WindowId,
@@ -1850,25 +1788,153 @@ impl ApplicationHandler for Runner {
             self.fail(event_loop, e);
         }
     }
-    fn device_event(
+}
+
+impl ApplicationHandler for Runner {
+    fn resumed(&mut self, event_loop: &ActiveEventLoop) {
+        let result = (|| -> Result<()> {
+            if self.window.is_none() {
+                // Hidden until its first frame is drawn: an empty window
+                // shows as a blank white rectangle on Windows.
+                let attributes = Window::default_attributes()
+                    .with_visible(false)
+                    .with_title(self.config.title.clone())
+                    .with_inner_size(PhysicalSize::new(self.config.size.0, self.config.size.1))
+                    .with_min_inner_size(PhysicalSize::new(640, 480));
+                let window = Arc::new(
+                    event_loop
+                        .create_window(attributes)
+                        .context("creating the native client window")?,
+                );
+                crate::perf::startup::mark("window created");
+                self.focused = window.has_focus();
+                self.window = Some(window);
+                self.report_modes();
+                // Saved prefs may name a size this monitor cannot show, or an
+                // exclusive fullscreen mode from before fullscreen went
+                // borderless; start in the nearest mode and record it.
+                let saved = self.config.size;
+                let fits_here = self.modes.as_ref().is_none_or(|m| fits(&m.windowed, saved));
+                if self.config.fullscreen || !fits_here {
+                    let fullscreen = self.config.fullscreen;
+                    let target = if fullscreen {
+                        let window = self.window.as_ref().unwrap();
+                        window.current_monitor().map(|m| m.size())
+                    } else {
+                        Some(self.windowed_size())
+                    };
+                    match target {
+                        Some(t) if t == PhysicalSize::new(saved.0, saved.1) => {
+                            set_mode(self.window.as_ref().unwrap(), fullscreen, t);
+                        }
+                        Some(t) => {
+                            let vsync = self.config.vsync;
+                            self.change_mode(None, fullscreen, t, vsync);
+                        }
+                        None => self.config.fullscreen = false,
+                    }
+                }
+            }
+            if self.graphics.is_none() {
+                let gpu = Graphics::new(
+                    self.window.as_ref().unwrap().clone(),
+                    self.config.vsync,
+                    event_loop.owned_display_handle(),
+                    self.config.early_gpu.take(),
+                )?;
+                crate::perf::startup::mark("GPU opened");
+                self.config
+                    .app
+                    .gpu_ready(&gpu.device, &gpu.queue, gpu.config.format)?;
+                self.graphics = Some(gpu);
+            }
+            self.resize(self.window.as_ref().unwrap().inner_size());
+            let window = self.window.as_ref().unwrap().clone();
+            if !window.is_visible().unwrap_or(true) {
+                // Draw the first frame here rather than wait for a redraw
+                // (Windows sends none to a hidden window), then show it.
+                self.config.app.ui_mut().update(0);
+                self.pump(event_loop)?;
+                self.render()?;
+                // Shown only once the GPU has drawn it.
+                if let Some(g) = &self.graphics {
+                    let _ = g.device.poll(wgpu::PollType::Wait {
+                        submission_index: None,
+                        timeout: Some(Duration::from_secs(1)),
+                    });
+                }
+                window.set_visible(true);
+                crate::perf::startup::mark("window shown");
+            }
+            self.focused = window.has_focus();
+            self.regrab = true;
+            self.last_tick = Instant::now();
+            self.next_tick = self.last_tick;
+            self.sync_cursor()?;
+            Ok(())
+        })();
+        if let Err(e) = result {
+            self.fail(event_loop, e);
+        }
+    }
+    fn suspended(&mut self, _event_loop: &ActiveEventLoop) {
+        self.input(InputEvent::FocusLost);
+        self.mods = Modifiers::NONE;
+        self.focused = false;
+        self.composing = false;
+        if let Some(w) = &self.window {
+            let _ = w.set_cursor_grab(CursorGrabMode::None);
+            w.set_cursor_visible(true);
+            w.set_ime_allowed(false);
+        }
+        self.grabbed = false;
+        self.ime_allowed = false;
+        if self.graphics.is_some() {
+            self.config.app.gpu_stopped();
+            self.graphics = None;
+        }
+        if let Some(change) = self.display.take() {
+            self.config.vsync = change.old_vsync;
+            self.config.size = (change.old_size.width, change.old_size.height);
+            self.config.fullscreen = change.old_fullscreen;
+            if let Some(window) = &self.window {
+                set_mode(window, change.old_fullscreen, change.old_size);
+            }
+            if let Some(id) = change.request {
+                self.reject_display(id, "Display change interrupted by suspension.".into());
+            }
+        }
+    }
+    fn window_event(
         &mut self,
         event_loop: &ActiveEventLoop,
+        window_id: WindowId,
+        event: WindowEvent,
+    ) {
+        self.enter_handler();
+        self.handle_window_event(event_loop, window_id, event);
+        self.leave_handler();
+    }
+    fn device_event(
+        &mut self,
+        _event_loop: &ActiveEventLoop,
         _device_id: DeviceId,
         event: DeviceEvent,
     ) {
+        // Raw motion arrives at the mouse's polling rate (up to 8000 a
+        // second), and a stalled frame finds thousands queued: each is
+        // only added up here and goes to the interface once per frame.
         if self.focused
             && self.grabbed
             && let DeviceEvent::MouseMotion { delta: (dx, dy) } = event
             && dx.is_finite()
             && dy.is_finite()
         {
-            self.input(InputEvent::MouseDelta {
-                dx: dx as f32,
-                dy: dy as f32,
-            });
-            if let Err(e) = self.pump(event_loop) {
-                self.fail(event_loop, e);
-            }
+            self.enter_handler();
+            let total = self.mouse_delta.get_or_insert((0.0, 0.0));
+            total.0 += dx;
+            total.1 += dy;
+            self.leave_handler();
         }
     }
     fn new_events(&mut self, _event_loop: &ActiveEventLoop, _cause: winit::event::StartCause) {
@@ -1877,8 +1943,10 @@ impl ApplicationHandler for Runner {
         if let Some(from) = self.idle_from.take() {
             crate::frame_trace::add("idle", from.elapsed());
         }
+        self.leave_handler();
     }
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        self.enter_handler();
         let now = Instant::now();
         // A focused, visible window renders continuously so simulation ticks
         // and camera interpolation line up with every presented frame (paced
@@ -1911,6 +1979,14 @@ impl ApplicationHandler for Runner {
                 .app
                 .frame_finished(crate::frame_trace::finish(elapsed, background));
             let working = Instant::now();
+            // This frame's mouse motion turns the camera before the tick.
+            if self.mouse_delta.is_some() {
+                self.flush_mouse();
+                if let Err(e) = self.pump(event_loop) {
+                    self.fail(event_loop, e);
+                    return;
+                }
+            }
             // Avoid minutes of UI repeat catch-up after suspension/debug pauses.
             let dt_ms = elapsed.as_millis().min(250) as u64;
             let interface_span = crate::frame_trace::span("interface");
@@ -1949,7 +2025,7 @@ impl ApplicationHandler for Runner {
         // app's ClipCursor, the secure desktop); re-assert it while playing.
         if self.grabbed && now >= self.next_regrab {
             self.next_regrab = now + Duration::from_secs(1);
-            self.regrab = true;
+            self.reclip = true;
             if let Err(e) = self.sync_cursor() {
                 self.fail(event_loop, e);
                 return;

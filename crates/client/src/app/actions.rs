@@ -9,10 +9,18 @@ impl App {
         }
         let mut platform = Vec::new();
         for (id, action) in self.ui.drain_actions() {
-            if self.intercept_action(id, &action) {
-                continue;
+            let started = std::time::Instant::now();
+            let label = action_label(&action);
+            if !self.intercept_action(id, &action) {
+                self.dispatch_action(id, action, &mut platform)?;
             }
-            self.dispatch_action(id, action, &mut platform)?;
+            let took = started.elapsed();
+            if took >= SLOW_ACTION {
+                crate::frame_trace::note(format!(
+                    "{label} took {:.1} ms",
+                    took.as_secs_f64() * 1000.0
+                ));
+            }
         }
         Ok(platform)
     }
@@ -1086,4 +1094,27 @@ impl App {
         self.answer(id, result);
         Ok(())
     }
+}
+
+/// An interface request this slow names itself in the frame's trace.
+const SLOW_ACTION: Duration = Duration::from_millis(20);
+
+/// The start of an action's debug text ("Game(Look { yaw: 0.0"), enough to
+/// name it without formatting a large payload.
+fn action_label(action: &UiAction) -> String {
+    struct Head(String);
+    impl std::fmt::Write for Head {
+        fn write_str(&mut self, s: &str) -> std::fmt::Result {
+            for c in s.chars() {
+                if self.0.len() >= 40 {
+                    return Err(std::fmt::Error);
+                }
+                self.0.push(c);
+            }
+            Ok(())
+        }
+    }
+    let mut head = Head(String::new());
+    let _ = std::fmt::write(&mut head, format_args!("{action:?}"));
+    head.0
 }
