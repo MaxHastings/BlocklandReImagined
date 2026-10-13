@@ -226,6 +226,7 @@ impl App {
                 trigger_epoch: None,
                 reconnects: 0,
                 invite: None,
+                arrival: None,
             },
             build: BuildState {
                 ghost_report: None,

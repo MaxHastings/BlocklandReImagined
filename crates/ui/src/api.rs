@@ -1628,6 +1628,10 @@ pub enum UiUpdate {
     },
     /// Names typing in the chat box, in the order they started (`WhoTalkSO`).
     Talking(Vec<String>),
+    /// Whether the host has accepted this player while they still load, so
+    /// the loading screen shows chat and the chat key opens the chat box
+    /// there, as on v20's LoadingGui.
+    LoadingChat(bool),
     CenterPrint {
         text: String,
         seconds: f32,

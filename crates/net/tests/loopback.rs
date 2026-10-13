@@ -2081,6 +2081,7 @@ fn hello_for_proof(name: &str) -> Hello {
         identity: None,
         accept_differences: false,
         kept: None,
+        arrival: None,
     }
 }
 

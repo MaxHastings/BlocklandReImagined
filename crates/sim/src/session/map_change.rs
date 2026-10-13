@@ -79,6 +79,8 @@ impl Session {
         }
         self.next_owner = self.next_owner.max(old.next_owner);
         self.departed = std::mem::take(&mut old.departed);
+        // Players still loading load the new map instead.
+        self.arrivals = std::mem::take(&mut old.arrivals);
         // Their steering prefs came once, when they joined.
         self.vehicles.steering = std::mem::take(&mut old.vehicles.steering);
         let players: Vec<(OwnerId, Peer)> = std::mem::take(&mut old.peers)
