@@ -1001,6 +1001,23 @@ fn environment_map(e: &bri_content::atmosphere::Settings, tick: u64) -> Dynamic 
         put("vignette_color", color_value(&v.color));
         put("vignette_multiply", v.multiply.into());
     }
+    for (k, name) in [("sky", &e.sky), ("ground", &e.ground), ("water", &e.water)] {
+        if let Some(name) = name {
+            put(k, name.as_str().into());
+        }
+    }
+    if let Some(h) = e.water_height {
+        put("water_height", Dynamic::from_float(f64::from(h)));
+    }
+    for (k, c) in [
+        ("ground_color", e.ground_color),
+        ("water_color", e.water_color),
+        ("underwater_color", e.underwater_color),
+    ] {
+        if let Some(c) = c {
+            put(k, color_value(&c));
+        }
+    }
     Dynamic::from_map(m)
 }
 /// `set_environment(#{ ... })`: each key sets one setting, `()` puts it
@@ -1049,6 +1066,30 @@ fn set_environment(options: Map) -> Fallible<INT> {
             "shadow_color" => changes.shadow_color = Some(color(value, "shadow_color")?),
             "fog_color" => changes.fog_color = Some(color(value, "fog_color")?),
             "sky_color" => changes.sky_color = Some(color(value, "sky_color")?),
+            "sky" | "ground" | "water" | "water_height" | "ground_color" | "water_color"
+            | "underwater_color"
+                if clear =>
+            {
+                remove(key.as_str())
+            }
+            "sky" | "ground" | "water" => {
+                let name = Some(
+                    value
+                        .into_string()
+                        .map_err(|_| format!("{key} is a name (a string)"))?,
+                );
+                match key.as_str() {
+                    "sky" => changes.sky = name,
+                    "ground" => changes.ground = name,
+                    _ => changes.water = name,
+                }
+            }
+            "water_height" => changes.water_height = Some(float(&value)?),
+            "ground_color" => changes.ground_color = Some(color(value, "ground_color")?),
+            "water_color" => changes.water_color = Some(color(value, "water_color")?),
+            "underwater_color" => {
+                changes.underwater_color = Some(color(value, "underwater_color")?)
+            }
             "sun_flare_color" | "sun_flare_size" if clear => {
                 flare = None;
                 flare_set = true;
@@ -1091,7 +1132,8 @@ fn set_environment(options: Map) -> Fallible<INT> {
                     "set_environment has no setting `{other}` (day_cycle, day_length, time_of_day, \
                      sun_azimuth, sun_elevation, direct_light, ambient_light, shadow_color, \
                      sun_flare_color, sun_flare_size, visible_distance, fog_distance, fog_color, \
-                     sky_color, vignette_color, vignette_multiply)"
+                     sky_color, vignette_color, vignette_multiply, sky, ground, ground_color, \
+                     water, water_height, water_color, underwater_color)"
                 ));
             }
         }

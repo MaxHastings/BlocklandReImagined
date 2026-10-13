@@ -1,12 +1,16 @@
-# Builds the Windows release and publishes it as a GitHub Release: the
-# BlocklandReImagined-windows.zip players download (the Mac and Linux zips are
-# added by their own workflows), which is also what the game's update check
-# reads. Same recipe as a release built by hand
+# Builds the Windows, macOS and Linux releases side by side and, when
+# publishing, puts all three on one GitHub Release with SHA256SUMS
+# (tools/publish_release.py): the zips players download, and what the game's
+# update check reads. Same recipe as a release built by hand
 # (docs/playtest-package-layout.md); setup and use in docs/release-builds.md.
 #
-# Push a version tag (git tag 2026-10-02-a19 && git push origin 2026-10-02-a19)
-# or run it from the Actions tab with a version.
+# Push a date tag (git tag 2026-10-02-a19 && git push origin 2026-10-02-a19)
+# or run it from the Actions tab with a version. With publish off it only
+# builds; tools/release.py starts it that way while the PC gate runs, and
+# pushing the v* tag afterwards publishes those same zips
+# (publish-release.yml) instead of building again.
 name: release
+run-name: release ${{ github.event.inputs.version || github.ref_name }}${{ github.event.inputs.publish == 'false' && ' (build only)' || '' }}
 
 on:
   push:
@@ -35,6 +39,10 @@ env:
   CARGO_INCREMENTAL: 0
   BRI_VERSION: ${{ github.event.inputs.version || github.ref_name }}
   PUBLISH: ${{ github.event_name == 'push' || github.event.inputs.publish == 'true' }}
+  # sccache keeps the workspace's own crates between release builds, as in
+  # ci.yml; rust-cache keeps only the crates.io dependencies.
+  SCCACHE_GHA_ENABLED: 'true'
+  RUSTC_WRAPPER: sccache
 
 jobs:
   release:
@@ -81,6 +89,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: release
+      - uses: mozilla-actions/sccache-action@v0.0.9
 
       - name: Build the game, Add-On importer and dedicated server
         run: cargo build --release --locked -p bri-client --bin bri-client -p bri-addon-import --bin bri-import-addon -p bri-net --bin bri-server
@@ -159,44 +168,41 @@ jobs:
           path: symbols
           retention-days: 90
 
+      # Always kept: the publish job below, and publish-release.yml for a
+      # build-only run, take the zip from here.
       - uses: actions/upload-artifact@v5
-        if: env.PUBLISH != 'true'
         with:
           name: ${{ env.RELEASE_NAME }}
           path: upload
           retention-days: 30
 
+  # The Mac and Linux builds take the same content and Add-On bundle from the
+  # draft releases as Windows does, so they run alongside it instead of after
+  # it; the publish step checks the three zips carry identical base content.
+  mac:
+    uses: ./.github/workflows/mac-release-asset.yml
+    with:
+      tag: ${{ github.event.inputs.version || github.ref_name }}
+      ref: ${{ github.sha }}
+      publish: false
+
+  linux:
+    uses: ./.github/workflows/linux-release-asset.yml
+    with:
+      tag: ${{ github.event.inputs.version || github.ref_name }}
+      ref: ${{ github.sha }}
+      publish: false
+
+  publish:
+    needs: [release, mac, linux]
+    if: github.event_name == 'push' || github.event.inputs.publish == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
       - name: Publish the GitHub Release
-        if: env.PUBLISH == 'true'
-        shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          $notes = @"
-          **Windows:** download ``BlocklandReImagined-windows.zip``, unzip it anywhere and run ``Launch.cmd``. Windows may say "Windows protected your PC": click More info, then Run anyway. Settings and saves live in ``%LOCALAPPDATA%\BlocklandReImagined``, so a new version's folder picks them up.
-
-          To play together, one player hosts and the others join by IP address. Hosting over the internet needs UDP port 28000 forwarded to the host when the router doesn't open it automatically.
-          "@
-          Set-Content -Path notes.md -Value $notes -Encoding utf8
-          gh release create $env:BRI_VERSION upload\* --target $env:GITHUB_SHA --title "Blockland ReImagined $env:BRI_VERSION" --notes-file notes.md --generate-notes
-          exit $LASTEXITCODE
-
-  preview-mac:
-    needs: release
-    if: github.event_name == 'workflow_dispatch' && github.event.inputs.publish != 'true'
-    uses: ./.github/workflows/mac-release-asset.yml
-    with:
-      tag: ${{ github.event.inputs.version }}
-      ref: ${{ github.sha }}
-      windows_run: ${{ github.run_id }}
-      publish: false
-
-  preview-linux:
-    needs: release
-    if: github.event_name == 'workflow_dispatch' && github.event.inputs.publish != 'true'
-    uses: ./.github/workflows/linux-release-asset.yml
-    with:
-      tag: ${{ github.event.inputs.version }}
-      ref: ${{ github.sha }}
-      windows_run: ${{ github.run_id }}
-      publish: false
+          notes="docs/releases/$BRI_VERSION.md"
+          python3 tools/publish_release.py --version "$BRI_VERSION" --sha "$GITHUB_SHA" --run "$GITHUB_RUN_ID" --notes "$notes"

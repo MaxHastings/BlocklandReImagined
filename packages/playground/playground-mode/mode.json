@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
   "name": "Mixed Add-On Playground",
-  "description": "A Runner with a Pulse Carbine, a Dune Buggy and Blockhead Bots, all from separate Add-Ons. Build a fort, drive through it, fight the bots.",
-  "add_ons": ["playground-runner", "playground-runner-look", "playground-rifle", "playground-buggy", "blockhead_bot"],
+  "description": "A Runner with a Pulse Carbine, a Dune Buggy, Blockhead Bots and Stompers, all from separate Add-Ons. Build a fort, drive through it, fight the bots.",
+  "add_ons": ["playground-runner", "playground-runner-look", "playground-rifle", "playground-buggy", "blockhead_bot", "playground-stomper", "playground-stomper-look"],
   "minigame": {
     "title": "Playground",
     "loadout": ["playground-rifle:weapon/carbine"],

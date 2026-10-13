@@ -183,9 +183,10 @@ pub enum SeatLook {
     /// nothing returns.
     StrafeDriver,
     /// A mouse-steered vehicle's driver (Stunt Plane, Flying Wheeled Jeep,
-    /// Magic Carpet, skis): the mouse steers; Free Look moves the head,
-    /// which springs back after in first person (0x5aeae3, a control object
-    /// of `VehicleObjectType`) and stays put in third.
+    /// Magic Carpet, skis, and the Jeep and Tank with strafe steering off):
+    /// the mouse steers; Free Look moves the head, which springs back after
+    /// (0x5aeae3, a control object of `VehicleObjectType`; see
+    /// [`Controls::advance_head`] for third person).
     MouseDriver,
 }
 /// `Player::updateMove` halves a returning head every 32 ms tick.
@@ -444,10 +445,19 @@ impl Controls {
     }
     /// Ease a seated head back as v20 does, halving it every 32 ms tick
     /// (`Player::updateMove`, blocklandv20.exe 0x5aeae3): without Free Look
-    /// a passenger's turn returns; a mouse driver's turn and pitch return in
-    /// first person only (`isFirstPerson`: the camera fully in; a vehicle's
-    /// driver in third person skips both halvings). A strafe driver's head
-    /// never returns.
+    /// a passenger's turn returns, and so do a mouse driver's turn and
+    /// pitch, in first and third person alike. A strafe driver's head never
+    /// returns.
+    ///
+    /// 0x5aeaf6 skips both halvings for a vehicle's driver when the
+    /// controlling connection is not `isFirstPerson` (0x526d60, `mCameraPos`
+    /// at +0x364). That field only moves in `getControlCameraTransform`
+    /// (0x592790), which follows the first-person global (0x77026c) of the
+    /// process it runs in, so the authoritative server's copy never tracked
+    /// a joined client's view, and its halved head reached the client in
+    /// the control-object update. Max, v0.2.10: letting go of Z in a Jeep
+    /// left the chase camera stuck where he looked, "def not how old v20
+    /// felt".
     pub fn advance_head(&mut self, seconds: f32) {
         let Some(look) = self.seat_look() else {
             // Off a vehicle seat the head's turn halves every tick unless
@@ -470,11 +480,8 @@ impl Controls {
         match look {
             SeatLook::Passenger => self.free_yaw *= keep,
             SeatLook::MouseDriver => {
-                let first_person = self.camera_pos == 0.0;
-                if first_person {
-                    self.free_yaw *= keep;
-                }
-                self.head_pitch = self.driver_head.advance(seconds, first_person);
+                self.free_yaw *= keep;
+                self.head_pitch = self.driver_head.advance(seconds, true);
             }
             _ => {}
         }
@@ -1767,9 +1774,9 @@ mod tests {
         assert_eq!(c.driver_head_yaw(), Some(c.movement().head_yaw));
     }
     /// A mouse driver's mouse steers and leaves the head alone; Free Look
-    /// moves the head, which springs back after in first person only.
+    /// moves the head, which springs back after in either view.
     #[test]
-    fn a_mouse_driver_steers_and_free_look_springs_back_in_first_person() {
+    fn a_mouse_driver_steers_and_free_look_springs_back() {
         let mut c = seated(SeatLook::MouseDriver);
         c.set_invert_prefs(false, false);
         c.set_vehicle_view(Some((0.0, 0.0)));
@@ -1784,16 +1791,21 @@ mod tests {
         c.advance_head(0.064);
         assert!(close(c.movement().head_yaw, 0.15));
         assert!(close(c.view_angles().1, 0.2), "{:?}", c.view_angles());
+        // Max, v0.2.10: in a Jeep's chase camera, letting go of Z left the
+        // view where he had looked.
         third_person(&mut c);
         held(&mut c, HeldControl::FreeLook, true);
-        mouse(&mut c, 0.0, 0.2);
+        mouse(&mut c, 1.0, 0.2);
+        let looked = c.driver_head_yaw().unwrap();
+        assert!(close(looked, 1.15));
+        c.advance_head(1.0);
+        assert!(close(c.driver_head_yaw().unwrap(), looked), "held with Z");
         held(&mut c, HeldControl::FreeLook, false);
         c.advance_head(0.032);
-        assert!(
-            close(c.body_pitch(), 0.4),
-            "no pitch return in third person"
-        );
-        assert!(close(c.movement().head_yaw, 0.15), "nor a turn return");
+        assert!(close(c.movement().head_yaw, looked / 2.0), "halved a tick");
+        c.advance_head(1.0);
+        assert!(c.driver_head_yaw().unwrap().abs() < 1e-3, "back ahead");
+        assert!(c.body_pitch().abs() < 1e-3, "pitch too");
     }
     /// Max, v0.1.7: pulling the Stunt Plane up in first person, the view
     /// looked up first and the plane caught up after; in third person the

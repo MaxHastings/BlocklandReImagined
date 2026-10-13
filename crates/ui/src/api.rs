@@ -1126,6 +1126,10 @@ pub struct AddOnRow {
     pub importable: bool,
     /// Being imported right now.
     pub importing: bool,
+    /// With `importable` or `importing`: a ZIP already ported for this game,
+    /// installed as it is rather than converted.
+    #[serde(default)]
+    pub ported: bool,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]

@@ -61,6 +61,9 @@ pub struct NativeMap {
     pub pending_objects: Vec<String>,
     /// Static shapes a fast player smashes (v20 `Glass` class).
     pub breakables: Vec<Breakable>,
+    /// The plate a flat map stands on, where the Environment window's
+    /// ground and water go; None on every other map.
+    pub plate: Option<bri_content::scene::Plate>,
 }
 
 /// A v20 `Glass`-class static shape (`glassA`, `lightBulbA`,
@@ -189,6 +192,7 @@ impl NativeMap {
         }
         let lift = scene.floor_lift(|id| interiors.get(id));
         scene.lift(lift);
+        let plate = scene.plate(|id| interiors.get(id));
         let mut colliders = Vec::new();
         let mut waters: Vec<bri_content::water::Water> = bundle
             .get("waters")
@@ -320,6 +324,7 @@ impl NativeMap {
             waters,
             pending_objects,
             breakables,
+            plate,
         })
     }
 }

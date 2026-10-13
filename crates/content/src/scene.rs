@@ -125,6 +125,61 @@ impl Scene {
             (floor / PLATE_HEIGHT).round() * PLATE_HEIGHT - floor
         })
     }
+    /// The plate a flat map stands on: v21's "flat maps", the ones
+    /// Steam's Environment window lays a ground and a sea over. A map is
+    /// flat when it has no terrain and no models, every interior is
+    /// collision only (draws nothing, as v20's `slate.dif` plate does), and
+    /// a level face of them lies under the first spawn. None for every
+    /// other map: a ground or a sea there would cut through what it built.
+    pub fn plate<'a>(&self, interiors: impl Fn(&str) -> Option<&'a Interior>) -> Option<Plate> {
+        let spawn = self.nodes.iter().find(|n| matches!(n.kind, Kind::Spawn))?;
+        let spawn = Vec3::new(
+            spawn.transform[12],
+            spawn.transform[13],
+            spawn.transform[14],
+        );
+        if self.nodes.iter().any(|n| {
+            matches!(
+                n.kind,
+                Kind::Terrain | Kind::StaticModel | Kind::DatablockModel
+            )
+        }) {
+            return None;
+        }
+        let mut faces = Vec::new();
+        for node in self
+            .nodes
+            .iter()
+            .filter(|n| matches!(n.kind, Kind::Interior))
+        {
+            let detail = interiors(node.asset.as_deref()?)?.details.first()?;
+            if !detail.surfaces.is_empty() {
+                return None;
+            }
+            let matrix = Mat4::from_cols_array(&node.transform);
+            for triangle in &detail.collision_triangles {
+                let t = triangle.map(|p| matrix.transform_point3(Vec3::from(p)));
+                if (t[0].y - t[1].y).abs() < 1e-3 && (t[0].y - t[2].y).abs() < 1e-3 {
+                    faces.push(t);
+                }
+            }
+        }
+        let top = faces
+            .iter()
+            .filter(|t| t[0].y <= spawn.y && covers(**t, spawn))
+            .map(|t| t[0].y)
+            .max_by(f32::total_cmp)?;
+        let (mut min, mut max) = ([f32::MAX; 2], [f32::MIN; 2]);
+        for p in faces
+            .iter()
+            .filter(|t| (t[0].y - top).abs() < 1e-3)
+            .flatten()
+        {
+            min = [min[0].min(p.x), min[1].min(p.z)];
+            max = [max[0].max(p.x), max[1].max(p.z)];
+        }
+        Some(Plate { top, min, max })
+    }
     /// Move every placement up by `height` (see [`Scene::floor_lift`]).
     /// Terrain origins and water volumes live outside the scene; callers
     /// raise them by the same height.
@@ -133,6 +188,15 @@ impl Scene {
             node.transform[13] += height;
         }
     }
+}
+/// The invisible plate a flat map stands on ([`Scene::plate`]).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Plate {
+    /// Its top face's height, in the scene's placement.
+    pub top: f32,
+    /// The top face's extent, X and Z.
+    pub min: [f32; 2],
+    pub max: [f32; 2],
 }
 /// Whether the XZ projection of `triangle` contains `point`.
 fn covers([a, b, c]: [Vec3; 3], point: Vec3) -> bool {
@@ -201,6 +265,76 @@ mod tests {
         // Nothing under the spawn: the map stays put.
         scene.nodes[0].transform[12] = 100.0;
         assert_eq!(scene.floor_lift(|_| Some(&interior)), 0.0);
+    }
+
+    #[test]
+    fn a_plate_that_draws_nothing_under_the_spawn_is_flat() {
+        let face = |y: f32| {
+            vec![
+                [[-50.0, y, -50.0], [50.0, y, -50.0], [50.0, y, 50.0]],
+                [[-50.0, y, -50.0], [50.0, y, 50.0], [-50.0, y, 50.0]],
+                // The plate's underside, lower down.
+                [
+                    [-50.0, y - 1.0, -50.0],
+                    [50.0, y - 1.0, -50.0],
+                    [50.0, y - 1.0, 50.0],
+                ],
+            ]
+        };
+        let interior = |surfaces| Interior {
+            schema_version: 1,
+            id: "plate".into(),
+            details: vec![Detail {
+                minimum_pixels: 0,
+                materials: vec![],
+                surfaces,
+                lightmaps: vec![],
+                collision_triangles: face(-0.5),
+                convex_hulls: vec![],
+                ambient: [0; 4],
+                alarm_ambient: [0; 4],
+                has_alarm: false,
+            }],
+            subobjects: vec![],
+            vehicle_collision: None,
+        };
+        let plate = interior(vec![]);
+        let mut scene = Scene {
+            schema_version: 1,
+            id: "slate".into(),
+            name: "Slate".into(),
+            nodes: vec![
+                node(Kind::Spawn, 2.0, None),
+                node(Kind::Interior, 1.0, Some("plate")),
+                node(Kind::Water, 0.0, None),
+            ],
+            pending_scripts: vec![],
+        };
+        assert_eq!(
+            scene.plate(|_| Some(&plate)),
+            Some(Plate {
+                top: 0.5,
+                min: [-50.0, -50.0],
+                max: [50.0, 50.0]
+            })
+        );
+        // An interior that draws (Bedroom's room) is no plate.
+        let room = interior(vec![crate::interior::Surface {
+            source_index: 0,
+            material: 0,
+            flags: 0,
+            vertices: vec![],
+            triangles: vec![],
+            lightmap: None,
+            alarm_lightmap: None,
+        }]);
+        assert_eq!(scene.plate(|_| Some(&room)), None);
+        // Nor is a map with terrain or models, or a spawn off the plate.
+        scene.nodes.push(node(Kind::StaticModel, 0.0, None));
+        assert_eq!(scene.plate(|_| Some(&plate)), None);
+        scene.nodes.pop();
+        scene.nodes[0].transform[12] = 100.0;
+        assert_eq!(scene.plate(|_| Some(&plate)), None);
     }
 }
 

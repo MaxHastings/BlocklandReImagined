@@ -1,7 +1,10 @@
-# Adds the Linux zip to an existing release. It builds the client on the
-# oldest supported Ubuntu (glibc 2.35), takes the content from that release's
-# Windows zip (including a draft release) (checked against its MANIFEST.json), packages with
-# tools/package_playtest.sh and uploads the zip. It never replaces an asset.
+# Builds the Linux zip. It builds the client on the oldest supported Ubuntu
+# (glibc 2.35), takes the content and the bundled original Add-Ons from the
+# same draft releases the Windows build fetches (tools/ci_content.py,
+# tools/addon_bundle.py), packages with tools/package_playtest.sh and keeps
+# the zip as the linux-release artifact. release.yml calls it alongside the
+# Windows build; run on its own with publish on, it adds the zip to an
+# existing release. It never replaces an asset.
 name: linux-release-asset
 
 on:
@@ -13,9 +16,6 @@ on:
       ref:
         type: string
         required: true
-      windows_run:
-        type: string
-        default: ''
       publish:
         type: boolean
         default: true
@@ -42,9 +42,10 @@ env:
   CARGO_TERM_COLOR: always
   CARGO_INCREMENTAL: 0
   BRI_VERSION: ${{ inputs.tag }}
-  WINDOWS_RUN: ${{ inputs.windows_run }}
   PUBLISH: ${{ inputs.publish }}
   GH_TOKEN: ${{ github.token }}
+  SCCACHE_GHA_ENABLED: 'true'
+  RUSTC_WRAPPER: sccache
 
 jobs:
   linux:
@@ -59,43 +60,24 @@ jobs:
       - name: Install the build dependencies
         run: sudo apt-get update && sudo apt-get install -y build-essential pkg-config libasound2-dev libudev-dev
 
-      - name: Take and verify the Windows package content
-        run: |
-          if [ -n "$WINDOWS_RUN" ]; then
-            gh run download "$WINDOWS_RUN" --name "BlocklandReImagined-$BRI_VERSION-windows" --dir "$RUNNER_TEMP/win"
-          else
-            gh release download "$BRI_VERSION" --pattern 'BlocklandReImagined-windows.zip' --dir "$RUNNER_TEMP/win"
-          fi
-          unzip -q "$RUNNER_TEMP"/win/*.zip -d "$RUNNER_TEMP/win/x"
-          python3 - "$RUNNER_TEMP"/win/x/* <<'PY'
-          import hashlib, json, pathlib, shutil, sys
-          root = pathlib.Path(sys.argv[1])
-          manifest = json.loads((root / 'MANIFEST.json').read_text(encoding='utf-8-sig'))
-          for entry in manifest['files']:
-              data = (root / entry['path']).read_bytes()
-              if len(data) != entry['bytes'] or hashlib.sha256(data).hexdigest() != entry['sha256']:
-                  sys.exit(f"::error::{entry['path']} does not match the Windows MANIFEST.json")
-          packs = json.loads(pathlib.Path('crates/package/base-packages.json').read_text(encoding='utf-8'))['packages']
-          content = pathlib.Path('content')
-          content.mkdir(exist_ok=True)
-          for pack in packs:
-              source = root / 'content' / pack['dir']
-              if not source.is_dir():
-                  sys.exit(f"::error::the Windows zip has no {pack['dir']}")
-              shutil.copytree(source, content / pack['dir'])
-          print(f"Windows {manifest['version']}: {len(manifest['files'])} files verified, {len(packs)} packs taken.")
-          PY
+      # The same private content and credited original Add-Ons the Windows
+      # build fetches; publish_release.py checks the three zips' base content
+      # is byte-identical before a release is published.
+      - name: Fetch the generated v20 content
+        run: python3 tools/ci_content.py fetch
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
 
-      # The original classic Add-Ons and their credits, taken from the same
-      # verified Windows zip, so this zip ships exactly what Windows does
-      # (tools/addon_bundle.py from-release).
-      - name: Take the bundled originals from the Windows zip
-        run: python3 tools/addon_bundle.py from-release "$RUNNER_TEMP"/win/x/*
+      - name: Fetch the Add-On bundle
+        run: python3 tools/addon_bundle.py fetch
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
 
       - uses: dtolnay/rust-toolchain@1.93
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: release-linux
+      - uses: mozilla-actions/sccache-action@v0.0.9
 
       - name: Build the game and Add-On importer
         run: cargo build --release --locked -p bri-client --bin bri-client -p bri-addon-import --bin bri-import-addon -p bri-net --bin bri-server
