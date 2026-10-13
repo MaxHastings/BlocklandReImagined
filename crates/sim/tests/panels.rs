@@ -137,6 +137,7 @@ impl Game {
                 control: control.into(),
                 fields: [("note".into(), note.into())].into(),
                 lists: [("stock".into(), row)].into(),
+                drop: None,
             },
         }))
     }

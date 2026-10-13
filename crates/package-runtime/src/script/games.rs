@@ -541,11 +541,14 @@ pub(super) fn register(engine: &mut Engine) {
         })
     });
     // What the host keeps for these rules between games and restarts.
+    // What this call (and the chain it runs in) already wrote reads back.
     engine.register_fn("host_data", |key: &str| {
-        with_world(|world, _| {
-            Ok(world
-                .host_data(key)
-                .map_or(Dynamic::UNIT, |v| to_dynamic(&v)))
+        with_world(|world, i| {
+            let value = match super::interop::written_host_data(i, key) {
+                Some(written) => written,
+                None => world.host_data(key),
+            };
+            Ok(value.map_or(Dynamic::UNIT, |v| to_dynamic(&v)))
         })
     });
     engine.register_fn("set_host_data", |key: &str, value: Dynamic| {

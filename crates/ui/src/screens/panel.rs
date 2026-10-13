@@ -3,9 +3,12 @@
 //! style: plain text, a list to pick from, labelled text fields and a row
 //! of buttons. Pressing a button, picking a row or closing the window goes
 //! to the rules with every field's text and list's pick
-//! (`UiAction::PanelEvent`); the rules decide what it means.
+//! (`UiAction::PanelEvent`); the rules decide what it means. A list the
+//! rules let drag (`drag`) gives its rows to another such list, or
+//! reorders its own: the drop goes to the rules too, which move the row
+//! (or refuse) by showing the panel again.
 use super::*;
-use crate::api::{PanelItemView, PanelView, UiAction};
+use crate::api::{PanelDropView, PanelItemView, PanelView, UiAction};
 use crate::view::EventKind;
 
 const MARGIN: i32 = 12;
@@ -79,7 +82,9 @@ impl AddOnPanel {
                     win.children.push(c);
                     y += height + GAP;
                 }
-                PanelItemView::List { id, height, .. } => {
+                PanelItemView::List {
+                    id, height, drag, ..
+                } => {
                     let height = i32::from(*height);
                     let mut scroll = ctrl(
                         "GuiScrollCtrl",
@@ -90,11 +95,14 @@ impl AddOnPanel {
                         .fields
                         .insert("hScrollBar".into(), "alwaysOff".into());
                     scroll.fields.insert("vScrollBar".into(), "dynamic".into());
-                    let list = ctrl(
+                    let mut list = ctrl(
                         "GuiTextListCtrl",
                         "GuiTextListProfile",
                         Rect::new(0, 0, inner - 16, 16),
                     );
+                    if *drag {
+                        list.fields.insert("dragRows".into(), "1".into());
+                    }
                     scroll.children.push(named(list, format!("{LIST}{id}")));
                     win.children.push(scroll);
                     y += height + GAP;
@@ -198,6 +206,10 @@ impl AddOnPanel {
     }
 
     fn send(&self, control: &str, core: &mut Core) {
+        self.send_drop(control, None, core);
+    }
+
+    fn send_drop(&self, control: &str, drop: Option<PanelDropView>, core: &mut Core) {
         let (fields, lists) = self.values();
         core.request(UiAction::PanelEvent {
             package: self.shown.package.clone(),
@@ -205,7 +217,19 @@ impl AddOnPanel {
             control: control.into(),
             fields,
             lists,
+            drop,
         });
+    }
+
+    /// The list id a panel list's node stands for.
+    fn list_id(&self, node: crate::view::NodeId) -> Option<String> {
+        self.view
+            .node(node)
+            .ctrl
+            .name
+            .as_deref()?
+            .strip_prefix(LIST)
+            .map(str::to_owned)
     }
 
     fn close(&mut self, core: &mut Core) {
@@ -250,6 +274,24 @@ impl Screen for AddOnPanel {
             EventKind::Changed => {
                 if let Some(id) = name.strip_prefix(LIST) {
                     self.send(id, core);
+                }
+            }
+            EventKind::Drop => {
+                let Some(dropped) = self.view.take_drop() else {
+                    return;
+                };
+                let row = |item: i64| u16::try_from(item).ok();
+                if let (Some(to), Some(from), Some(r)) = (
+                    name.strip_prefix(LIST),
+                    self.list_id(dropped.from),
+                    row(dropped.item),
+                ) {
+                    let drop = PanelDropView {
+                        from,
+                        row: r,
+                        at: dropped.at.and_then(row),
+                    };
+                    self.send_drop(to, Some(drop), core);
                 }
             }
             _ => {}

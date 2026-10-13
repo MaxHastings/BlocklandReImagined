@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "script": "bank.rhai",
+  "commands": [
+    { "name": "money", "cooldown_ticks": 30 },
+    { "name": "grant", "args": ["int", "int"], "admin": true }
+  ],
+  "exports": [
+    { "name": "balance", "args": 1 },
+    { "name": "pay", "args": 2 },
+    { "name": "give", "args": 2 }
+  ],
+  "events": ["paid", "given"]
+}

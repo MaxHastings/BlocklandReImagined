@@ -93,6 +93,17 @@ impl Session {
             shown.panel.accepts(&event),
             "The panel has no such control or value"
         );
+        // The dragged row's text as the player saw it, so rules whose list
+        // changed since (a chest another player emptied) can tell.
+        let dragged = event.drop.as_ref().and_then(|d| {
+            shown
+                .panel
+                .items
+                .iter()
+                .find(|item| item.id == d.from)
+                .and_then(|item| item.rows.get(usize::from(d.row)))
+                .cloned()
+        });
         if event.control == "close" {
             host.panels.remove(&owner);
         }
@@ -123,6 +134,18 @@ impl Session {
             .collect();
         map.insert("fields".into(), Dynamic::from_map(fields));
         map.insert("lists".into(), Dynamic::from_map(lists));
+        let drop = event.drop.map_or(Dynamic::UNIT, |d| {
+            let mut drop = Map::new();
+            drop.insert("from".into(), d.from.into());
+            drop.insert("row".into(), Dynamic::from_int(d.row.into()));
+            drop.insert("text".into(), dragged.unwrap_or_default().into());
+            drop.insert(
+                "at".into(),
+                d.at.map_or(Dynamic::UNIT, |r| Dynamic::from_int(r.into())),
+            );
+            Dynamic::from_map(drop)
+        });
+        map.insert("drop".into(), drop);
         let _ = self.run_package(
             &package,
             "on_panel",

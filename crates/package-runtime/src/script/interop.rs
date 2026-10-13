@@ -232,12 +232,9 @@ fn call_addon(addon: &str, function: &str, args: Vec<Dynamic>) -> Fallible<Dynam
     // The transaction as it was, to put back if this call fails: nothing
     // of a failed call is kept, down the whole chain.
     let before: Vec<Nested> = TRANSACTION.with(|t| t.borrow().clone());
-    let prior = TRANSACTION.with(|t| {
-        let mut t = t.borrow_mut();
-        t.iter()
-            .position(|n| n.package == addon)
-            .map(|at| t.remove(at))
-    });
+    // Left in the transaction while the call runs, so what this Add-On
+    // already wrote in it stays readable (`host_data`).
+    let prior = TRANSACTION.with(|t| t.borrow().iter().find(|n| n.package == addon).cloned());
     // The state and entity variables it starts from: what this transaction
     // already made of them, else the host's.
     // SAFETY: as `with_world`: the pointer outlives the outermost call.
@@ -281,7 +278,23 @@ fn call_addon(addon: &str, function: &str, args: Vec<Dynamic>) -> Fallible<Dynam
         entity_vars: Arc::new(entity_vars),
         world: None,
     };
-    match runtime.run(addon, call, read_only, world) {
+    // The other Add-On reads the world as its own calls do: its host data,
+    // settings and data files, not the caller's.
+    let mut call = Some(call);
+    let mut result = None;
+    let mut run = |own: Option<&dyn World>| {
+        let world = own.map(erase_world).or(world);
+        if let Some(call) = call.take() {
+            result = Some(runtime.run(addon, call, read_only, world));
+        }
+    };
+    match world_ref {
+        Some(w) => w.as_package(addon, &mut run),
+        None => run(None),
+    }
+    let result =
+        result.ok_or_else(|| Box::<EvalAltResult>::from("call_addon: the call did not run"))?;
+    match result {
         Ok(outcome) => {
             entry.state = outcome.state;
             let base = entry.ops.len();
@@ -292,7 +305,11 @@ fn call_addon(addon: &str, function: &str, args: Vec<Dynamic>) -> Fallible<Dynam
             entry.entity_vars.extend(outcome.entity_vars);
             entry.output.extend(outcome.output);
             entry.events.extend(outcome.events);
-            TRANSACTION.with(|t| t.borrow_mut().push(entry));
+            TRANSACTION.with(|t| {
+                let mut t = t.borrow_mut();
+                t.retain(|n| n.package != addon);
+                t.push(entry);
+            });
             Ok(outcome.returned)
         }
         Err(problem) => {
@@ -307,4 +324,25 @@ fn call_addon(addon: &str, function: &str, args: Vec<Dynamic>) -> Fallible<Dynam
             fail(format!("{addon}:{function} failed: {}", problem.message))
         }
     }
+}
+
+/// The value the running call's Add-On last wrote under a host data key in
+/// this transaction, if it did: `Some(None)` for a cleared key. Its own
+/// writes in this call come first, then what earlier calls into it in the
+/// same chain wrote.
+pub(super) fn written_host_data(i: &Invocation, key: &str) -> Option<Option<serde_json::Value>> {
+    let written = |ops: &[Op]| {
+        ops.iter().rev().find_map(|op| match op {
+            Op::SetHostData(set) if set.key == key => Some(set.value.clone()),
+            _ => None,
+        })
+    };
+    written(&i.ops).or_else(|| {
+        TRANSACTION.with(|t| {
+            t.borrow()
+                .iter()
+                .find(|n| n.package == i.package)
+                .and_then(|n| written(&n.ops))
+        })
+    })
 }

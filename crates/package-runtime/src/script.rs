@@ -361,6 +361,20 @@ pub trait World {
     fn addon_vars(&self, _package: &str) -> Arc<EntityVars> {
         Arc::default()
     }
+    /// Run `f` with this world as another package's call sees it (its host
+    /// data, settings, data files), for a call into that package's exports
+    /// (`call_addon`); `None` where the world has no per-package view.
+    fn as_package(&self, _package: &str, f: &mut dyn FnMut(Option<&dyn World>)) {
+        f(None)
+    }
+}
+
+/// A world reference as a running call keeps it (see `with_world`): the
+/// caller keeps the reference alive for as long as the pointer is used.
+pub(crate) fn erase_world(w: &dyn World) -> *const (dyn World + 'static) {
+    let w: *const (dyn World + '_) = w;
+    // SAFETY: only the trait object's lifetime bound changes.
+    unsafe { std::mem::transmute::<*const (dyn World + '_), *const (dyn World + 'static)>(w) }
 }
 /// A placed brick as a script reads it ([`World::brick`]).
 #[derive(Debug, Clone, PartialEq)]
@@ -3952,13 +3966,7 @@ impl Runtime {
         // The world reference outlives this function; the pointer is taken
         // back out below, before `call.world`'s borrow ends, and is never
         // reached after that (see `with_world`).
-        let world = call.world.map(|w| {
-            let w: *const (dyn World + '_) = w;
-            // SAFETY: only the trait object's lifetime bound changes.
-            unsafe {
-                std::mem::transmute::<*const (dyn World + '_), *const (dyn World + 'static)>(w)
-            }
-        });
+        let world = call.world.map(erase_world);
         let previous_limit = LIMIT.with(|l| l.replace(call.budget.operations()));
         OPERATIONS.with(|o| o.set(0));
         let previous_offset = OFFSET.with(|o| o.replace(0));

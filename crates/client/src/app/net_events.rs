@@ -1311,6 +1311,7 @@ fn panel_view(shown: bri_sim::session::PanelShown) -> bri_ui::api::PanelView {
                         rows: item.rows,
                         selected: item.selected,
                         height: item.height.unwrap_or(120),
+                        drag: item.drag,
                     },
                     PanelKind::Field => PanelItemView::Field {
                         id: item.id,

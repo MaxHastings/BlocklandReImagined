@@ -829,6 +829,8 @@ pub enum UiAction {
         control: String,
         fields: Vec<(String, String)>,
         lists: Vec<(String, Option<u16>)>,
+        /// A row dragged onto the list `control` names.
+        drop: Option<PanelDropView>,
     },
     StartTyping,
     /// `SteeringPrefsEvent`: `$pref::Input::UseStrafeSteering` and
@@ -1541,16 +1543,25 @@ pub struct PanelView {
     pub height: u16,
     pub items: Vec<PanelItemView>,
 }
+/// A panel list's row dragged from list `from` (row `row`, from 0) and let
+/// go over row `at` of the list an event names (none: below its rows).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PanelDropView {
+    pub from: String,
+    pub row: u16,
+    pub at: Option<u16>,
+}
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum PanelItemView {
     /// Lines of plain text.
     Text(String),
-    /// Rows to pick one of.
+    /// Rows to pick one of; with `drag`, rows drag to other such lists.
     List {
         id: String,
         rows: Vec<String>,
         selected: Option<u16>,
         height: u16,
+        drag: bool,
     },
     /// A line to type in, with a label.
     Field {

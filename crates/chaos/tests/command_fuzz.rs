@@ -269,6 +269,11 @@ fn examples() -> Vec<Command> {
                 control: "close".into(),
                 fields: [("x".into(), "y".repeat(5000))].into(),
                 lists: [("l".into(), Some(u16::MAX))].into(),
+                drop: Some(bri_package_runtime::panel::PanelDrop {
+                    from: "l\u{202e}".into(),
+                    row: u16::MAX,
+                    at: Some(u16::MAX),
+                }),
             },
         }),
         Command::SetName("Blockhead \u{202e}".into()),

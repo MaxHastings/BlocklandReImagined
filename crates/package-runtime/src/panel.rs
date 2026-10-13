@@ -60,7 +60,8 @@ pub enum PanelKind {
     /// Lines of text (`text`).
     Text,
     /// Rows to pick one of (`rows`, `selected`), `height` tall; picking
-    /// one is an event.
+    /// one is an event. With `drag`, a row can be dragged onto another
+    /// list with `drag` (or elsewhere in its own), which is an event too.
     List,
     /// A line of text the player types (`label` beside it, `text` to
     /// start with, at most `max` characters).
@@ -96,6 +97,9 @@ pub struct PanelItem {
     /// A field's most characters (default 64).
     #[serde(default)]
     pub max: Option<u16>,
+    /// A list's rows can be dragged to another list that allows it.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub drag: bool,
     #[serde(default)]
     pub buttons: Vec<PanelButton>,
 }
@@ -117,6 +121,23 @@ pub struct PanelEvent {
     pub fields: BTreeMap<String, String>,
     #[serde(default)]
     pub lists: BTreeMap<String, Option<u16>>,
+    /// A row dragged onto the list `control` names.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub drop: Option<PanelDrop>,
+}
+
+/// A row dragged from one list and let go over another (or its own).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PanelDrop {
+    /// The list the row came from.
+    pub from: String,
+    /// The row, counted from 0, in that list.
+    pub row: u16,
+    /// The row of the list it was let go over, if any (none: below its
+    /// last row).
+    #[serde(default)]
+    pub at: Option<u16>,
 }
 
 /// An id rules may give: 1 to 32 of a-z, 0-9 and `_`.
@@ -143,6 +164,7 @@ impl PanelItem {
         let no_id = || (!self.id.is_empty()).then(|| format!("a {:?} item has no id", self.kind));
         match self.kind {
             PanelKind::Text => no_id()
+                .or_else(|| unused("drag", self.drag))
                 .or_else(|| unused("label", !self.label.is_empty()))
                 .or_else(|| unused("rows", !self.rows.is_empty()))
                 .or_else(|| unused("buttons", !self.buttons.is_empty()))
@@ -172,6 +194,7 @@ impl PanelItem {
                 }),
             PanelKind::Field => (!is_panel_id(&self.id))
                 .then(|| format!("a field's id is 1 to {MAX_PANEL_ID} of a-z, 0-9 and _"))
+                .or_else(|| unused("drag", self.drag))
                 .or_else(|| unused("rows", !self.rows.is_empty()))
                 .or_else(|| unused("buttons", !self.buttons.is_empty()))
                 .or_else(|| {
@@ -184,6 +207,7 @@ impl PanelItem {
                     .then(|| "a field's label and text are single lines within its size".into())
                 }),
             PanelKind::Buttons => no_id()
+                .or_else(|| unused("drag", self.drag))
                 .or_else(|| unused("rows", !self.rows.is_empty()))
                 .or_else(|| unused("text", !self.text.is_empty()))
                 .or_else(|| {
@@ -281,7 +305,18 @@ impl Panel {
             matches!(self.control(id), Some((item, None)) if item.kind == PanelKind::List
                 && row.is_none_or(|r| usize::from(r) < item.rows.len()))
         });
-        event.panel == self.id && control && fields && lists
+        let list = |id: &str| match self.control(id) {
+            Some((item, None)) if item.kind == PanelKind::List && item.drag => Some(item),
+            _ => None,
+        };
+        let drop = event.drop.as_ref().is_none_or(|d| {
+            let (Some(from), Some(to)) = (list(&d.from), list(&event.control)) else {
+                return false;
+            };
+            usize::from(d.row) < from.rows.len()
+                && d.at.is_none_or(|at| usize::from(at) < to.rows.len())
+        });
+        event.panel == self.id && control && fields && lists && drop
     }
 }
 
@@ -311,6 +346,7 @@ mod tests {
             control: "buy".into(),
             fields: [("qty".into(), "2".into())].into(),
             lists: [("stock".into(), Some(1))].into(),
+            drop: None,
         };
         assert!(panel.accepts(&buy));
         assert!(panel.accepts(&PanelEvent {
@@ -368,5 +404,49 @@ mod tests {
         let mut p = shop();
         p.items[3].buttons[0].id = "close".into();
         assert!(p.problem().is_some());
+        let mut p = shop();
+        p.items[0].drag = true;
+        assert!(p.problem().unwrap().contains("no drag"));
+    }
+
+    fn backpack_and_chest() -> Panel {
+        serde_json::from_value(serde_json::json!({
+            "id": "chest", "title": "Chest",
+            "items": [
+                { "kind": "list", "id": "pack", "rows": ["Bread", "Rope"], "drag": true },
+                { "kind": "list", "id": "chest", "rows": ["Gold"], "drag": true },
+                { "kind": "list", "id": "log", "rows": ["opened"] }
+            ]
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn a_row_drops_only_between_lists_that_drag_and_onto_rows_they_have() {
+        let panel = backpack_and_chest();
+        assert_eq!(panel.problem(), None);
+        let drop = |control: &str, from: &str, row: u16, at: Option<u16>| PanelEvent {
+            panel: "chest".into(),
+            control: control.into(),
+            drop: Some(PanelDrop {
+                from: from.into(),
+                row,
+                at,
+            }),
+            ..PanelEvent::default()
+        };
+        assert!(panel.accepts(&drop("chest", "pack", 1, None)));
+        assert!(panel.accepts(&drop("chest", "pack", 0, Some(0))));
+        assert!(panel.accepts(&drop("pack", "chest", 0, Some(1))));
+        assert!(panel.accepts(&drop("pack", "pack", 1, Some(0))));
+        for bad in [
+            drop("chest", "pack", 2, None),
+            drop("chest", "pack", 0, Some(1)),
+            drop("log", "pack", 0, None),
+            drop("chest", "log", 0, None),
+            drop("chest", "nowhere", 0, None),
+        ] {
+            assert!(!panel.accepts(&bad), "{bad:?}");
+        }
     }
 }

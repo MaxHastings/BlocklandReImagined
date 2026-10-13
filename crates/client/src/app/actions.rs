@@ -764,6 +764,7 @@ impl App {
                 ref control,
                 ref fields,
                 ref lists,
+                ref drop,
             } => {
                 let request = Command::Panel(bri_sim::session::PanelCommand {
                     package: package.clone(),
@@ -772,6 +773,13 @@ impl App {
                         control: control.clone(),
                         fields: fields.iter().cloned().collect(),
                         lists: lists.iter().cloned().collect(),
+                        drop: drop
+                            .as_ref()
+                            .map(|d| bri_package_runtime::panel::PanelDrop {
+                                from: d.from.clone(),
+                                row: d.row,
+                                at: d.at,
+                            }),
                     },
                 });
                 let result = self.command(id, request, action.clone());

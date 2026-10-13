@@ -190,6 +190,9 @@ impl World for ScriptWorld<'_> {
     fn minigame_snapshot(&self, game: u64) -> Option<serde_json::Value> {
         self.session.minigame_snapshot(bri_minigames::GameId(game))
     }
+    fn as_package(&self, package: &str, f: &mut dyn FnMut(Option<&dyn World>)) {
+        f(Some(&ScriptWorld::new(self.session, package)));
+    }
     fn host_data(&self, key: &str) -> Option<serde_json::Value> {
         self.session.host_data(self.package, key).cloned()
     }

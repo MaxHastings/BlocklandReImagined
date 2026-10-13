@@ -1,8 +1,10 @@
 //! An Add-On's panel: laid out from the rules' description, its buttons,
-//! list picks and close box sent with every field's text and list's pick.
+//! list picks and close box sent with every field's text and list's pick,
+//! and a row dragged from one list to another.
 use bri_ui::{
     api::*,
     binds::Platform,
+    input::{InputEvent, MouseButton},
     pack::Pack,
     schema::UiPack,
     screens::ScreenId,
@@ -40,6 +42,7 @@ fn shop() -> PanelView {
                 rows: vec!["Pistol $5".into(), "Rifle $20".into()],
                 selected: Some(0),
                 height: 100,
+                drag: false,
             },
             PanelItemView::Field {
                 id: "note".into(),
@@ -83,6 +86,7 @@ fn sent(control: &str, row: Option<u16>, note: &str) -> UiAction {
         control: control.into(),
         fields: vec![("note".into(), note.into())],
         lists: vec![("stock".into(), row)],
+        drop: None,
     }
 }
 
@@ -156,4 +160,117 @@ fn the_rules_replace_or_close_the_panel() {
     assert!(!ui.is_open(ScreenId::AddOnPanel));
     // Closed by the rules: nothing goes back to them.
     assert!(actions(&mut ui).is_empty());
+}
+
+fn backpack_and_chest() -> PanelView {
+    let list = |id: &str, rows: &[&str]| PanelItemView::List {
+        id: id.into(),
+        rows: rows.iter().map(|r| (*r).to_owned()).collect(),
+        selected: None,
+        height: 80,
+        drag: true,
+    };
+    PanelView {
+        package: "rp".into(),
+        id: "chest".into(),
+        title: "Chest".into(),
+        width: 320,
+        height: 300,
+        items: vec![
+            list("pack", &["Bread", "Rope", "Lamp"]),
+            list("chest", &["Gold"]),
+            PanelItemView::List {
+                id: "log".into(),
+                rows: vec!["opened".into()],
+                selected: None,
+                height: 40,
+                drag: false,
+            },
+        ],
+    }
+}
+
+fn press_drag_release(ui: &mut Ui, from: (i32, i32), to: (i32, i32)) {
+    let p = |(x, y): (i32, i32)| (x as f32, y as f32);
+    let ((fx, fy), (tx, ty)) = (p(from), p(to));
+    ui.handle_input(InputEvent::MouseMove { x: fx, y: fy });
+    ui.handle_input(InputEvent::MouseDown {
+        button: MouseButton::Left,
+        x: fx,
+        y: fy,
+    });
+    ui.handle_input(InputEvent::MouseMove { x: tx, y: ty });
+    ui.handle_input(InputEvent::MouseUp {
+        button: MouseButton::Left,
+        x: tx,
+        y: ty,
+    });
+}
+
+fn dropped(from: &str, row: u16, at: Option<u16>) -> Option<PanelDropView> {
+    Some(PanelDropView {
+        from: from.into(),
+        row,
+        at,
+    })
+}
+
+#[test]
+fn a_row_dragged_from_the_backpack_to_the_chest_goes_to_the_rules() {
+    let mut ui = ui();
+    ui.apply(UiUpdate::Panel(Some(backpack_and_chest())));
+    ui.update(0);
+    let v = view(&ui);
+    let row = |name: &str, i: i32| {
+        let r = v.node(v.id(name).unwrap()).rect;
+        let h = r.h / v.node(v.id(name).unwrap()).state.items.len() as i32;
+        (r.x + 10, r.y + i * h + h / 2)
+    };
+    let rope = row("Panel_List_pack", 1);
+    let gold = row("Panel_List_chest", 0);
+    let log = row("Panel_List_log", 0);
+    let chest = v.node(v.id("Panel_List_chest").unwrap()).rect;
+    // Below the chest's only row, still inside its scroll box.
+    let chest_floor = (chest.x + 10, chest.bottom() + 20);
+    let lamp = row("Panel_List_pack", 2);
+
+    press_drag_release(&mut ui, rope, gold);
+    let drops: Vec<_> = actions(&mut ui)
+        .into_iter()
+        .filter_map(|a| match a {
+            UiAction::PanelEvent { control, drop, .. } => Some((control, drop)),
+            _ => None,
+        })
+        .collect();
+    // The press picks Rope; letting go over Gold drops it there.
+    assert_eq!(
+        drops,
+        [
+            ("pack".to_owned(), None),
+            ("chest".to_owned(), dropped("pack", 1, Some(0)))
+        ]
+    );
+
+    press_drag_release(&mut ui, lamp, chest_floor);
+    let last = actions(&mut ui).pop();
+    assert!(
+        matches!(&last, Some(UiAction::PanelEvent { control, drop, .. })
+            if control == "chest" && *drop == dropped("pack", 2, None)),
+        "{last:?}"
+    );
+
+    // A list the rules did not let drag takes nothing, and a press that
+    // does not move is a plain pick.
+    press_drag_release(&mut ui, rope, log);
+    assert!(
+        actions(&mut ui)
+            .iter()
+            .all(|a| matches!(a, UiAction::PanelEvent { drop: None, .. })),
+    );
+    press_drag_release(&mut ui, gold, gold);
+    assert!(
+        actions(&mut ui)
+            .iter()
+            .all(|a| matches!(a, UiAction::PanelEvent { drop: None, .. })),
+    );
 }
