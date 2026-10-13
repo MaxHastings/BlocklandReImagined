@@ -106,9 +106,24 @@ impl App {
         if !same {
             if let Some(window) = &mut self.tuning.window {
                 window.status.clear();
+                if let Some(archetypes) = &current {
+                    window.settle(archetypes);
+                }
             }
             self.show_tune();
         }
+    }
+    /// The host refused a change (a private "Not tuned:" notice): said in
+    /// the window, and what was waiting on it is not. False when no Tune
+    /// window is open.
+    pub(super) fn tune_refused(&mut self, why: &str) -> bool {
+        let Some(window) = &mut self.tuning.window else {
+            return false;
+        };
+        window.refused(why);
+        self.tuning.shown = None;
+        self.show_tune();
+        true
     }
     /// The window closed itself (Done or Escape).
     pub(super) fn close_tune(&mut self) {
@@ -141,19 +156,25 @@ impl App {
     /// A Tune window request: answered here when it succeeds, by the
     /// caller when it fails.
     pub(super) fn tune_action(&mut self, id: RequestId, action: &UiAction) -> Result<()> {
-        let Some(window) = &self.tuning.window else {
+        if self.tuning.window.is_none() {
             self.ui.apply(UiUpdate::Tune(None));
             self.answer(id, Ok(()));
             return Ok(());
-        };
+        }
         let archetypes = self
             .network_view()
             .map(|v| v.archetypes.clone())
             .context("Not in a game")?;
+        let Some(window) = &mut self.tuning.window else {
+            return Ok(());
+        };
         match action {
             UiAction::TuneSet { body, changes } if *body == window.body => {
                 let changes = changes.clone();
                 let body = body.clone();
+                // Save straight after writes these too, before the host's
+                // tuned body arrives.
+                window.sending(&changes);
                 self.tune_command(id, &body, &changes)
             }
             UiAction::TuneUndo { body } if *body == window.body => {

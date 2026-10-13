@@ -682,6 +682,13 @@ impl App {
                     }
                 }
                 network::Event::Notice(notice) => {
+                    // A change the Tune window sent and the host refused:
+                    // said in the window too, where it was made.
+                    if let bri_sim::session::Notice::Chat(text) = &notice
+                        && text.starts_with(bri_sim::session::NOT_TUNED)
+                    {
+                        self.tune_refused(text);
+                    }
                     let update = match notice {
                         bri_sim::session::Notice::Chat(text) => UiUpdate::Chat {
                             text: bri_ui::ml::sanitize(&text),
