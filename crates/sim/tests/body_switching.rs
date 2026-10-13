@@ -53,6 +53,10 @@ fn add_on(id: &str) -> (PathBuf, Side) {
         "playground-rifle" => (packages().join("playground/playground-rifle"), Side::Shared),
         "playground-buggy" => (packages().join("playground/playground-buggy"), Side::Shared),
         "playground-mode" => (packages().join("playground/playground-mode"), Side::Server),
+        "playground-runner-hud" => (
+            packages().join("playground/playground-runner-hud"),
+            Side::Client,
+        ),
         "playground-stomper" => (
             packages().join("playground/playground-stomper"),
             Side::Shared,
@@ -86,9 +90,11 @@ const BODIES: [&str; 7] = [
     "test-bodies",
 ];
 /// The Playground mode, with the Add-Ons it names.
-const MODE: [&str; 8] = [
+const MODE: [&str; 10] = [
     "playground-runner",
     "playground-runner-look",
+    "playground-runner-hud",
+    "sample-trooper",
     "playground-rifle",
     "playground-buggy",
     "blockhead_bot",
