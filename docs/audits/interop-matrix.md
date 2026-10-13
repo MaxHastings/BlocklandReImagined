@@ -82,6 +82,8 @@ code only; the Mario, Warthog, Goomba and tank Add-Ons themselves are Max's.
 | A Goomba-bodied player or bot holds a rocket launcher and jets | W2 named weapon socket for bodies without hands; jets when the body sets `can_jet` | socket not started |
 | NPCs follow players through buildings and jump or jet onto things their body can reach | shared nav today for the Blockhead's reach; W7 plans with any body's reach | partial |
 | Bots move with the body they have (a Goomba with Mario-style movement still paths sensibly) | W7 (after W3): the bot brain plans with the Blockhead motor's reach, not an Add-On controller's | not started |
+| A player or bot dies as any body: its death clip, ragdoll or vanish plays, it respawns as the body it chose, and the spectate camera frames that body | W2 death roles and W4 switching lifecycle; respawn keeps an Add-On body today (`a_runner_killed_by_the_carbine_respawns_as_the_runner_with_it`) | partial |
+| Body-on-body contact: Mario stomps a Goomba, the Warthog runs one over | run-overs damage today; W7 contact hook lets an Add-On answer the contact | hook not started |
 | Everyone sees it all in multiplayer, late joiners included | every workstream extends the Playground network test | Playground proves it for today's seams |
 
 ## Defects found that belong elsewhere
