@@ -119,8 +119,14 @@ pub fn hosted(server: Option<&Arc<Catalog>>, map: &str, mode: Option<&str>) -> R
     };
     // Nothing to run: host the plain base game. A chosen mode always runs:
     // its mini-game, bodies and loadout need no rules (the Playground's).
-    let catalog = catalog
-        .filter(|c| mode.is_some() || c.world().is_some() || c.behaviours().next().is_some());
+    // So do bodies alone: an imported player type, or an Add-On changing
+    // v20's (`adjusts`), means nothing unless the session installs it.
+    let catalog = catalog.filter(|c| {
+        mode.is_some()
+            || c.world().is_some()
+            || c.behaviours().next().is_some()
+            || c.archetypes().next().is_some()
+    });
     let base_map = catalog
         .as_ref()
         .and_then(|c| c.world().map(|(_, _, w)| w.environment.clone()))

@@ -1,0 +1,5 @@
+{
+  "schema_version": 1,
+  "adjusts": "v20.player.playerstandardarmor",
+  "sounds": { "jump": "test_wahoo:sound/wahoo" }
+}

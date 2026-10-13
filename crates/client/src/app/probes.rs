@@ -139,6 +139,11 @@ impl App {
     pub fn audio_warnings(&self) -> &std::collections::BTreeSet<String> {
         &self.audio.warnings
     }
+    /// Whether `profile` names a sound this client can play: a loaded
+    /// Add-On's own, or the game's.
+    pub fn audio_has_sound(&self, profile: &str) -> bool {
+        self.audio.has_sound(profile)
+    }
     pub fn effect_counts(&self) -> (usize, usize, usize, usize) {
         (
             self.fx.effects.attachment_count(),
