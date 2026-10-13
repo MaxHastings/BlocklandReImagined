@@ -1182,6 +1182,7 @@ mod tests {
             tick: Default::default(),
             tether: None,
             controller: None,
+            pass_group: 0,
         }
     }
     fn pose(tick: u64, x: f32, yaw: f32) -> bri_net::protocol::Pose {

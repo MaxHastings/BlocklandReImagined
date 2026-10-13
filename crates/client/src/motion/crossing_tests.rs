@@ -289,6 +289,7 @@ fn camera_test_player(feet: Vec3) -> PlayerState {
         tick: Default::default(),
         tether: None,
         controller: None,
+        pass_group: 0,
     };
     player.tick.feet = player.feet;
     player.tick.from = player.feet;

@@ -101,6 +101,7 @@ macro_rules! for_each_op {
             RemoveDrop = player,
             NameDrop = player,
             Push = physics,
+            SetPassGroup = physics,
             Tumble = physics,
             Hold = physics,
             HoldDistance = physics,

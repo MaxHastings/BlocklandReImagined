@@ -136,7 +136,11 @@ fn catalog() -> Arc<Catalog> {
     let entry = |id: &str| PackageEntry {
         id: id.into(),
         version: "1.0.0".into(),
-        side: if id == "kitmodel" { Side::Client } else { Side::Server },
+        side: if id == "kitmodel" {
+            Side::Client
+        } else {
+            Side::Server
+        },
         dir: id.into(),
         role: None,
     };
