@@ -48,3 +48,36 @@ Bundled Add-Ons pick up their `sounds` when re-imported
 (`python tools/addon_bundle.py build --missing-ok`, then `install`); until
 then their bots jump with the standard sound as before. The horse needs no
 regeneration.
+
+## Follow-up: an Add-On's own sound files
+
+Maxwell: "Add-Ons should be able to play their own sound files like
+Mario's wahoo". Add-On sound files already reached joining players: the
+whole package downloads, and its weapons pack's `sounds` (its own `.wav` and
+`.ogg`, hashed into the weapons identity) load into the client's pack
+sounds, which every profile-named sound (weapon states, vehicle and brick
+event sounds, and now archetype sounds) resolves first. So:
+
+- The importer points `jumpSound`/`painSound`/`deathSound` naming the
+  Add-On's own `AudioProfile` at that sound's id in its weapons pack
+  (`<namespace>:sound/<name>`), instead of leaving it out; a profile whose
+  file is missing plays nothing, as in v20.
+- A hand-made Add-On names its own sound id in `sounds`
+  (`docs/modding/content-kinds.md`, "Sounds").
+- `crates/client/tests/fixtures/stand-in-wahoo` (CC0, a generated tone) is a
+  two-file Add-On giving the standard player its own jump sound.
+
+Evidence:
+- `cargo test -p bri-addon-import --test player_sounds`.
+- `cargo test -p bri-client --test add_on_join wahoo`: a guest without the
+  Add-On downloads it, loads its sound, jumps and hears
+  `test_wahoo:sound/wahoo`, never `player.jump`; the host hears it too.
+
+- Hosting a plain map dropped a package catalog with no mode, world or
+  rules (`crates/net/src/host_setup.rs`), so an Add-On of bodies alone (an
+  imported player type, or one that `adjusts` v20's) was never installed:
+  its archetypes, and their sounds, did not exist in the game. A catalog
+  with archetypes now runs. `main` has the same filter.
+
+Not changed: the `playSound` brick event offers only the base game's
+sounds; an Add-On's own still plays from its rules (`play_sound`).

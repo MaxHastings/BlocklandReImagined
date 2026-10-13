@@ -11,7 +11,7 @@ visuals depending on the rules. `bri-addon-check` tells you which it is.
 | `behaviour`, `script` | host | a game rule ([Game rules](rules.md)) | `packages/samples/sample-survival-points` |
 | `world` | host | a generated chunk world: materials, a `generate(cx, cz)` function | `packages/stresslab/stresslab-world` |
 | `entity` | host | a scripted creature: model, `think` function, speed, health | `packages/stresslab/stresslab-creeper` |
-| `archetype` | host | a playable body: movement, collision `box` or `ball`, steering, health, riding, model, camera distance and `camera` profile | `crates/sim/tests/unlike_modes.rs` |
+| `archetype` | host | a playable body: movement, collision `box` or `ball`, steering, health, riding, model, camera distance, `camera` profile and `sounds` | `crates/sim/tests/unlike_modes.rs` |
 | `controller` | host | a movement controller: a WebAssembly module an archetype names as its `controller`; clients receive it with the archetype table ([Movement controllers](../architecture/movement-controllers.md)) | `packages/samples/sample-wall-kick`, `packages/samples/sample-dive`, `packages/samples/sample-trooper` |
 | `mode` | host | a Start Game game mode: name, the Add-Ons it runs, a map, and its own mini-game | `packages/stresslab/stresslab-mode`, `crates/sim/tests/mode_and_voxels.rs` |
 | `model` | each player | a box model for an entity | `packages/stresslab/stresslab-creeper-model` |
@@ -181,6 +181,27 @@ observer camera and a switch to another body each take over, and a body
 with no `camera` sees exactly as the stock Blockhead does. The
 [Trooper](../../packages/samples/sample-trooper/trooper-archetype.json)
 has one; test `crates/client/tests/hud_regions_render.rs`.
+
+**Sounds.** A body jumps, hurts and dies with its own sounds:
+
+```json
+"sounds": { "jump": "mario:sound/wahoo", "pain": "mario:sound/ow", "death": "" }
+```
+
+Each names a sound of your weapons pack's `sounds` (your own `.wav` or
+`.ogg`, see [weapons.md](weapons.md); an Add-On with no weapons provides a
+`weapons` pack holding just its sounds) or one of the base game's by its v20
+name (`HorseJumpSound`). An empty name plays nothing, and one you leave out
+keeps the base's: the Blockhead's jump, pain cry and death cry. Players who
+join without your Add-On download its sound files with it, and everyone
+hears the sound where the body is. The pain sound plays on hits that make
+the Blockhead cry out (more than 10 damage). The
+[stand-in wahoo](../../crates/client/tests/fixtures/stand-in-wahoo) gives
+the standard player its own jump sound in two files; test
+`crates/client/tests/add_on_join.rs`
+(`a_guest_hears_an_add_ons_own_jump_sound_it_downloaded`). Importing a v20
+`PlayerData` converts `jumpSound`, and `painSound`/`deathSound` under
+`useCustomPainEffects`, to these.
 
 An archetype with `"adjusts": "v20.player.<datablock>"` (and no `base` or
 `name`) is no new body: it changes the constants it names on one of v20's

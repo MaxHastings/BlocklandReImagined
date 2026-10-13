@@ -3097,20 +3097,17 @@ fn player_archetype(cx: &Ctx, name: &str) -> Result<(serde_json::Value, Vec<Stri
         }
     };
     let mut converted = player_types::convert(&fields, Some(base));
-    // Sounds play by `AudioProfile` name from the game's own bank. One of
-    // this Add-On's own is not in it yet; a name nothing defines played
-    // nothing in v20 either.
+    // Sounds play by `AudioProfile` name from the game's own bank, or by
+    // id from this Add-On's weapons pack, which holds every one of its own
+    // whose file converted (`weapon_fx::sounds`). A name nothing defines,
+    // or whose file is missing, played nothing in v20 either.
     let profile = |class: &str| class.eq_ignore_ascii_case("AudioProfile");
     if let Some(sounds) = converted
         .archetype
         .get_mut("sounds")
         .and_then(|s| s.as_object_mut())
     {
-        for (slot, field) in [
-            ("jump", "jumpsound"),
-            ("pain", "painsound"),
-            ("death", "deathsound"),
-        ] {
+        for slot in ["jump", "pain", "death"] {
             let Some(name) = sounds.get(slot).and_then(|v| v.as_str()).map(str::to_owned) else {
                 continue;
             };
@@ -3124,12 +3121,10 @@ fn player_archetype(cx: &Ctx, name: &str) -> Result<(serde_json::Value, Vec<Stri
             {
                 continue;
             }
-            if cx.owned.get(&key).is_some_and(|o| profile(&o.d.class)) {
-                sounds.remove(slot);
-                converted.left_out.push(field.into());
-            } else {
-                sounds.insert(slot.into(), json!(""));
-            }
+            let own = content_id(&cx.ns, "sound", &name);
+            let packed = cx.owned.get(&key).is_some_and(|o| profile(&o.d.class))
+                && cx.report.ids.iter().any(|e| e.id == own);
+            sounds.insert(slot.into(), json!(if packed { own } else { String::new() }));
         }
     }
     if converted.archetype["sounds"]

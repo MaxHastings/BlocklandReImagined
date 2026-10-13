@@ -1,0 +1,7 @@
+{
+  "schema_version": 5,
+  "id": "test_wahoo",
+  "sounds": {
+    "test_wahoo:sound/wahoo": { "file": "sounds/wahoo.wav", "volume": 0.8 }
+  }
+}
