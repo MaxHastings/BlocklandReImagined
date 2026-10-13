@@ -374,7 +374,9 @@ impl App {
                 drawn_offset,
                 building,
                 collision,
-                first_person_eye,
+                // The body's camera profile moves the first-person camera
+                // (its `eye_offset` and bob); zero for the stock camera.
+                moved(first_person_eye, controls.body_eye_offset(yaw)),
                 look(yaw, pitch),
                 None,
                 passages,
@@ -443,13 +445,21 @@ impl App {
             Some((info, _, seat, _)) => vehicles
                 .seat(assets, info, seat)
                 .map(|(feet, _)| Self::player_camera(assets, &view.archetypes, local, feet, pos)),
-            _ if seated.is_none() => Some(Self::player_camera(
-                assets,
-                &view.archetypes,
-                local,
-                Vec3::from(local.feet),
-                pos,
-            )),
+            _ if seated.is_none() => {
+                let (distance, pivot, tilt) = Self::player_camera(
+                    assets,
+                    &view.archetypes,
+                    local,
+                    Vec3::from(local.feet),
+                    pos,
+                );
+                // Over the shoulder or higher, as the body's profile says.
+                Some((
+                    distance,
+                    moved(pivot, controls.body_pivot_offset(yaw)),
+                    tilt,
+                ))
+            }
             _ => None,
         };
         if let Some((distance, pivot, tilt)) = player_view {
@@ -639,4 +649,10 @@ impl App {
     pub(super) fn third_person_view(&self) -> bool {
         draws_third_person(&self.controls, self.local_alive())
     }
+}
+
+/// `at` moved by `by`; exactly `at` when `by` is zero, so the stock camera
+/// is the same to the bit.
+fn moved(at: Vec3, by: Vec3) -> Vec3 {
+    if by == Vec3::ZERO { at } else { at + by }
 }

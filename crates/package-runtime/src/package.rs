@@ -29,6 +29,8 @@ pub struct Package {
     pub entities: BTreeMap<String, content::EntityKind>,
     pub models: BTreeMap<String, content::BoxModel>,
     pub huds: BTreeMap<String, content::HudPanel>,
+    /// HUD files that claim a region (`"region"`) rather than add a panel.
+    pub hud_regions: BTreeMap<String, bri_content::hud::Layout>,
     pub binds: BTreeMap<String, content::Binds>,
     pub help: BTreeMap<String, content::HelpPages>,
     pub splashes: BTreeMap<String, content::Splash>,
@@ -190,6 +192,7 @@ impl Package {
             entities: BTreeMap::new(),
             models: BTreeMap::new(),
             huds: BTreeMap::new(),
+            hud_regions: BTreeMap::new(),
             binds: BTreeMap::new(),
             help: BTreeMap::new(),
             splashes: BTreeMap::new(),
@@ -298,7 +301,17 @@ impl Package {
                     }
                 }
                 Kind::Hud => {
-                    if let Some(h) = parse::<content::HudPanel>(asset, &id, |h| h.validate(), out) {
+                    let layout = serde_json::from_slice::<serde_json::Value>(&asset.bytes)
+                        .is_ok_and(|v| bri_content::hud::is_layout(&v));
+                    if layout {
+                        if let Some(l) =
+                            parse::<bri_content::hud::Layout>(asset, &id, content::hud_layout, out)
+                        {
+                            self.hud_regions.insert(asset.id.clone(), l);
+                        }
+                    } else if let Some(h) =
+                        parse::<content::HudPanel>(asset, &id, |h| h.validate(), out)
+                    {
                         self.huds.insert(asset.id.clone(), h);
                     }
                 }
@@ -361,6 +374,25 @@ impl Package {
                     if let Some(m) = parse::<content::GameMode>(asset, &id, |m| m.validate(), out) {
                         self.modes.insert(asset.id.clone(), m);
                     }
+                }
+            }
+        }
+        // A region layout draws this Add-On's own textures.
+        for (hud, layout) in &self.hud_regions {
+            for texture in layout.textures() {
+                if !self.textures.contains_key(texture) {
+                    let file = self
+                        .assets
+                        .iter()
+                        .find(|a| &a.id == hud)
+                        .map_or("", |a| a.file.as_str());
+                    out.push(
+                        Diagnostic::error(
+                            "content.hud.texture",
+                            format!("texture `{texture}` is not provided by this Add-On as kind `texture`"),
+                        )
+                        .at(location(&id, file)),
+                    );
                 }
             }
         }
@@ -1070,6 +1102,14 @@ impl Catalog {
     }
     pub fn huds(&self) -> impl Iterator<Item = (&String, &content::HudPanel)> {
         self.packages.values().flat_map(|p| p.huds.iter())
+    }
+    /// Every package's HUD region layouts, with the package they come from.
+    pub fn hud_regions(&self) -> impl Iterator<Item = (&str, &String, &bri_content::hud::Layout)> {
+        self.packages.iter().flat_map(|(package, p)| {
+            p.hud_regions
+                .iter()
+                .map(move |(id, l)| (package.as_str(), id, l))
+        })
     }
     pub fn binds(&self) -> impl Iterator<Item = (&String, &content::Binds)> {
         self.packages.values().flat_map(|p| p.binds.iter())

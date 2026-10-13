@@ -622,6 +622,16 @@ pub struct PackagePanel {
     /// (key letter, label) hints.
     pub keys: Vec<(char, String)>,
 }
+/// A HUD region an Add-On claims this frame (`bri_content::hud`), its
+/// elements already resolved by the game: positions in HUD units from the
+/// region's corner, textures as external keys.
+#[derive(Debug, Clone, PartialEq)]
+pub struct HudRegionDraw {
+    pub region: bri_content::hud::Region,
+    /// Images drawn with sharp pixels.
+    pub pixelated: bool,
+    pub items: Vec<bri_content::hud::Item>,
+}
 /// A key players can bind to a package's command in Options → Controls,
 /// from an enabled package's `binds.json`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
