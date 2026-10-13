@@ -49,6 +49,9 @@ fn step(app: &mut App, dt: Duration) -> Result<()> {
 const GAME_BUDGET: u64 = 30 * 120;
 const STALL: Duration = Duration::from_secs(90);
 fn until(app: &mut App, what: &str, ready: impl Fn(&App) -> bool) -> Result<()> {
+    // Catch up first: the host keeps ticking while the test captures a
+    // frame (seconds on a software GPU), and those ticks are not the wait's.
+    step(app, Duration::ZERO)?;
     let start = Instant::now();
     let mut previous = start;
     let tick = |a: &App| a.network_view().map(|v| v.tick);
