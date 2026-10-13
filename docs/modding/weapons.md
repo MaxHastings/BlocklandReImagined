@@ -111,6 +111,7 @@ The fields you are most likely to change:
 | projectile | `speed`, `gravity`, `lifetime_ticks` | how fast, how much it drops, how long it lives (120 ticks = 1 s) |
 | projectile | `damage`, `impulse`, `vertical` | hurt, and how hard it shoves |
 | projectile | `ballistic`, `elasticity` | bounces, and how much |
+| projectile | `decal` | the mark it leaves where it hits a brick, a bullet hole: `{ "size": 0.15, "color": [0.04, 0.035, 0.03, 0.9], "seconds": 30 }`, a soft disc `size` across (0.02 to 4, times the projectile's scale) on the face it hit, darkest in the middle, gone after `seconds` (0.5 to 600, fading over the last one) or when the brick goes; each player keeps the newest 512. `color` and `seconds` may be left out (near black, 30). None leaves no mark, as v20's own projectiles |
 | image state | `ticks` | how long a state (`Fire` is the reload time) lasts |
 | image | `shot` | several projectiles per shot, their spread and the recoil ([porting.md](porting.md#the-image-shot-field)); `scale` sizes the projectiles against their holder (0.1 to 10) |
 | image | `volleys` | up to 4 more sets each shot fires after its own: `[{ "projectile": "...", "projectiles": 1, "spread": 0.0005 }]`, a shotgun's slug after its pellets |

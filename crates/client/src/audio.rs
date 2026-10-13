@@ -379,7 +379,8 @@ impl ClientAudio {
             | CueKind::WeaponAnimation { .. }
             | CueKind::WeaponShell { .. }
             | CueKind::Beam { .. }
-            | CueKind::Tracer { .. } => return,
+            | CueKind::Tracer { .. }
+            | CueKind::Decal { .. } => return,
             CueKind::WeaponSound { profile } => {
                 // A looping state sound belongs to the state, not to its
                 // entry; `sync_image_loops` owns it.

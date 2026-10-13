@@ -1573,6 +1573,7 @@ impl PlatformApp for App {
         crate::vehicles::ClientVehicles::gpu_stopped(&mut self.vehicle_assets);
         self.fx.explosion_shapes.gpu_stopped();
         self.fx.beams.gpu_stopped();
+        self.fx.decals.gpu_stopped();
         self.fx.tutorial_targets.gpu_stopped();
         self.gpu.shell_gpu = None;
         for avatar in self.avatar.avatars.values_mut() {
@@ -1722,6 +1723,7 @@ impl PlatformApp for App {
         crate::vehicles::ClientVehicles::gpu_stopped(&mut self.vehicle_assets);
         self.fx.explosion_shapes.gpu_stopped();
         self.fx.beams.gpu_stopped();
+        self.fx.decals.gpu_stopped();
         self.fx.tutorial_targets.gpu_stopped();
         self.gpu.shell_gpu = None;
         self.avatar.gpu_stopped();

@@ -388,6 +388,7 @@ pub fn lower(definitions: Vec<Definition>) -> Result<Pack> {
             collision_sound: None,
             sport_hit: None,
             turns_into: None,
+            decal: None,
         };
         pack.projectiles.insert(id, p);
     }

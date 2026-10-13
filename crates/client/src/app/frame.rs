@@ -1454,6 +1454,9 @@ impl App {
                 .absorb("player and vehicle effects", actors);
             self.fx.explosion_shapes.advance(game_elapsed.as_secs_f32());
             self.fx.beams.advance(game_elapsed.as_secs_f32());
+            self.fx.decals.advance(game_elapsed.as_secs_f32(), |brick| {
+                building.brick_stands(brick)
+            });
             self.fx
                 .explosion_debris
                 .advance(game_elapsed.as_secs_f32(), |from, to| {

@@ -597,6 +597,28 @@ impl Session {
                     self.package_hit(&impact);
                     self.tutorial_contact(&impact);
                     self.spray_player(&impact);
+                    // A projectile that marks what it hits leaves its decal
+                    // on the brick, for every player to draw.
+                    if let TargetId::Brick(brick) = impact.target
+                        && self
+                            .weapons
+                            .pack
+                            .projectiles
+                            .get(&impact.definition)
+                            .is_some_and(|d| d.decal.is_some())
+                        && impact.normal.is_normalized()
+                    {
+                        self.cues.emit(
+                            tick,
+                            crate::presentation::CueKind::Decal {
+                                brick,
+                                normal: impact.normal.to_array(),
+                                projectile: impact.definition.clone(),
+                                scale: impact.scale,
+                            },
+                            impact.position.to_array(),
+                        );
+                    }
                     if let TargetId::Brick(brick) = impact.target {
                         self.paint_contact(&impact)?;
                         self.special_projectile_hit(impact.source.0, brick, &impact.definition)?;

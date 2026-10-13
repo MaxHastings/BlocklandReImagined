@@ -535,6 +535,8 @@ def buggy(root):
                 # old single bolt did: a burst shoves and does not fling.
                 'speed': CHAINGUN_SPEED, 'lifetime_ticks': 180, 'fade_ticks': 180, 'damage': 20.0,
                 'damage_type': '$DamageType::BuggyGun', 'impulse': 15.0,
+                # Each round leaves a bullet hole on the brick it hits.
+                'decal': {'size': 0.15, 'seconds': 30.0},
             },
         },
         'damage_types': {

@@ -10,7 +10,11 @@
    "fade_ticks": 180,
    "damage": 20.0,
    "damage_type": "$DamageType::BuggyGun",
-   "impulse": 15.0
+   "impulse": 15.0,
+   "decal": {
+    "size": 0.15,
+    "seconds": 30.0
+   }
   }
  },
  "damage_types": {

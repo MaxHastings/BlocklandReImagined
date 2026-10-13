@@ -560,6 +560,7 @@ impl App {
             .explosion_shapes
             .upload(renderer, frame.device, frame.queue)?;
         self.fx.beams.upload(renderer, frame.device, frame.queue)?;
+        self.fx.decals.upload(renderer, frame.device, frame.queue)?;
         self.fx
             .tutorial_targets
             .upload(renderer, frame.device, frame.queue)?;
@@ -1192,6 +1193,7 @@ impl App {
         shared_draws.extend(self.gpu.gpu_terrain.iter().flat_map(|t| t.draws()));
         shared_draws.extend(self.fx.explosion_shapes.draws());
         shared_draws.extend(self.fx.beams.draws());
+        shared_draws.extend(self.fx.decals.draws());
         shared_draws.extend(self.fx.tutorial_targets.draws());
         if let Some((scene, instances)) = &self.gpu.shell_gpu
             && self.fx.weapon_shells.active_count() > 0

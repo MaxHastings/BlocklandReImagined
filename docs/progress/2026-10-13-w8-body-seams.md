@@ -46,6 +46,17 @@ moonwalking), and an imported body's shots left its eye.
   push a tenth as hard as the old bolt so a burst does not fling a target.
   Test: `the_gunners_chaingun_spins_up_spreads_and_does_not_kick`.
 
+- **Bullet holes on bricks** (a playtest gate item). A projectile's
+  `decal` names the mark it leaves; when one hits a brick the host sends
+  one `CueKind::Decal` (brick, face normal, projectile, scale; protocol
+  file `brick-decals.md`), and each client draws a soft disc flat on that
+  face from its own copy of the pack (`crates/client/src/decals.rs`, the
+  newest 512, unlit and blended like beams), dropping it when it fades or
+  the brick stops standing. v20's projectiles leave none. The Playground's
+  Carbine and the buggy's chaingun carry one. Tests:
+  `a_carbine_shot_marks_the_brick_it_hits` (sim) and the three
+  `decals::tests` (client).
+
 ## What the engine did not own
 
 Checked against #109 (grips, sockets, roles): the client already draws a

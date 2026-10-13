@@ -1909,6 +1909,7 @@ fn add_launcher(
         collision_sound: None,
         sport_hit: None,
         turns_into: None,
+        decal: None,
     };
     pack.items.insert(item_id, item);
     pack.images.insert(image_id, image);

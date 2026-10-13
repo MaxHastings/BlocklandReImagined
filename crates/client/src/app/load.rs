@@ -280,6 +280,7 @@ impl App {
                 actor_effects,
                 explosion_shapes,
                 beams: Default::default(),
+                decals: Default::default(),
                 tutorial_targets,
                 explosion_debris,
                 weapon_shells,
