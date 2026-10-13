@@ -71,3 +71,25 @@ real map or tank. Whether the v20 tank's seat counts as a wheeled control
 seat for bots, and how carried flags behave while seated (bots only board
 before picking a flag up), need a playtest. Next: a headless match recording
 on TDM Afghan with the match recorder.
+
+## Considered and left out: blasting through walls, rocket jumps
+
+Max asked whether bots could blast a shortcut through a wall (when brick
+damage is on) or rocket jump onto a roof, only if either fits the existing
+planner without a rework. Neither does yet:
+
+- **Wall shortcut.** The route search (`nav::Search`) has no edge that needs
+  an action first; walls are fixed colliders in the walk grid. Pricing a
+  breakable wall as a way through needs a new edge kind carrying the brick,
+  its volume and support (`events.rs::breakable_bricks`), the game's brick
+  damage permission, and the weapon's `BrickImpact`, which bot capabilities
+  (`tactics.rs::Capability`) do not carry today. The hole also refills when
+  the brick respawns. The piece that would fit is narrower: the door seam
+  (`extras.rs::bot_opens_way`) could treat a breakable brick across the way
+  as openable when the route gives up short, but that only helps with no
+  way round, not with a shorter one.
+- **Rocket jump.** Only jumps and jets are measured legs (`reach.rs`). A
+  blast at the feet pushes its shooter only where self damage is on (impulse
+  and damage share `can_radius_damage`), so it would need a new `nav::Mode`,
+  reach tables keyed by weapon as well as tuning, a leg controller and a
+  health budget.
