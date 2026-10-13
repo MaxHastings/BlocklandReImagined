@@ -31,6 +31,7 @@ mod brick_events;
 mod brick_fields;
 mod brick_hooks;
 mod chat_hooks;
+mod contacts;
 pub(in crate::session) use brick_events::Follower;
 pub(in crate::session) use chat_hooks::{ChatAnswer, DeathLine};
 mod game_hooks;
@@ -356,6 +357,8 @@ pub(super) struct PackageHost {
     item_hooks: item_hooks::ItemHooks,
     /// Pending `on_minigame` events and who stands in each zone.
     game_hooks: game_hooks::GameHooks,
+    /// Which bodies touch, for `on_contact`.
+    contacts: contacts::Contacts,
     /// What each Add-On keeps on the host ([`AddOnData`]), by package.
     host_data: BTreeMap<String, BTreeMap<String, serde_json::Value>>,
     /// Values rules keep on bricks (`set_brick_field`).
@@ -818,6 +821,7 @@ impl Session {
             in_damage_hook: false,
             item_hooks: Default::default(),
             game_hooks: Default::default(),
+            contacts: Default::default(),
             host_data: BTreeMap::new(),
             brick_fields: Default::default(),
             brick_watch: Default::default(),
@@ -3787,6 +3791,45 @@ impl Session {
                 self.charge_work(package);
             }
         }
+    }
+    /// `on_bot_ability(bot, kind, ability, target)` of every package that
+    /// declares it, in load order: `bot` has wound up its kind's ability
+    /// (`BotKind::ability`) and the Add-On says what it does. Whether any
+    /// package heard it.
+    pub(super) fn package_bot_ability(
+        &mut self,
+        bot: OwnerId,
+        kind: &str,
+        ability: &str,
+        target: Option<OwnerId>,
+    ) -> bool {
+        let Some(host) = self.packages.as_ref() else {
+            return false;
+        };
+        let hooks: Vec<String> = host
+            .catalog
+            .behaviours()
+            .filter(|(_, b)| b.on_bot_ability)
+            .map(|(id, _)| id.clone())
+            .collect();
+        for package in &hooks {
+            let _ = self.run_package(
+                package,
+                "on_bot_ability",
+                vec![
+                    Dynamic::from_int(bot as i64),
+                    Dynamic::from(kind.to_owned()),
+                    Dynamic::from(ability.to_owned()),
+                    target.map_or(Dynamic::UNIT, |t| Dynamic::from_int(t as i64)),
+                ],
+                Budget::Command,
+                None,
+                None,
+                None,
+            );
+            self.charge_work(package);
+        }
+        !hooks.is_empty()
     }
     fn deliver_deaths(&mut self) {
         let Some(host) = self.packages.as_mut() else {

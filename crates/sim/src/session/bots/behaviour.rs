@@ -18,6 +18,9 @@ pub(crate) enum Behaviour {
     Carry,
     /// A useful, reservable opportunity in the environment.
     Interact,
+    /// Hurt past its kind's `flee_below`, or told to by its rules
+    /// (`bot_intent`), with an enemy about: run away from them.
+    Flee,
     /// An enemy in sight within its weapon's band: stand its ground,
     /// strafe and shoot.
     Fight,
@@ -91,6 +94,9 @@ pub(crate) struct Situation {
     /// It knows of no fight, enemies play in its game, and it has a place
     /// to look (`explore`).
     pub explore: bool,
+    /// It wants to get away from an enemy: hurt past its kind's
+    /// `flee_below`, or its rules' intent says so, with an enemy known.
+    pub flee: bool,
 }
 
 /// Going to find the game, against strolling's 0.1 and a search's 0.4.
@@ -125,10 +131,11 @@ fn fade(value: f32, edge: f32, width: f32) -> f32 {
 impl Behaviour {
     /// Every behaviour, most urgent first.
     /// How many there are.
-    pub(crate) const COUNT: usize = 11;
+    pub(crate) const COUNT: usize = 12;
     pub(crate) const ALL: [Behaviour; Self::COUNT] = [
         Behaviour::Carry,
         Behaviour::Interact,
+        Behaviour::Flee,
         Behaviour::Fight,
         Behaviour::Arm,
         Behaviour::Chase,
@@ -153,6 +160,8 @@ impl Behaviour {
         match self {
             Behaviour::Carry => fits(s.holding, 1.0),
             Behaviour::Interact => s.interaction,
+            // Over any fight or play it is not carrying home.
+            Behaviour::Flee => fits(s.flee, 0.9),
             // Full in its band, fading past the far edge and with height.
             Behaviour::Fight => s.enemy.map_or(0.0, |(distance, rise)| {
                 let width = (s.far * FIGHT_FADE_SHARE).max(FIGHT_FADE);

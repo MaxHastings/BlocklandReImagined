@@ -65,6 +65,22 @@ fn add_on(id: &str) -> (PathBuf, Side) {
             packages().join("playground/playground-stomper-look"),
             Side::Client,
         ),
+        "playground-stomper-rules" => (
+            packages().join("playground/playground-stomper-rules"),
+            Side::Server,
+        ),
+        "playground-fizzer" => (
+            packages().join("playground/playground-fizzer"),
+            Side::Shared,
+        ),
+        "playground-fizzer-look" => (
+            packages().join("playground/playground-fizzer-look"),
+            Side::Client,
+        ),
+        "playground-fizzer-rules" => (
+            packages().join("playground/playground-fizzer-rules"),
+            Side::Server,
+        ),
         "blockhead_bot" => (packages().join("blockhead_bot"), Side::Shared),
         "sample-commando" | "sample-trooper" | "sample-wall-kick" => {
             (packages().join("samples").join(id), Side::Server)
@@ -90,7 +106,7 @@ const BODIES: [&str; 7] = [
     "test-bodies",
 ];
 /// The Playground mode, with the Add-Ons it names.
-const MODE: [&str; 10] = [
+const MODE: [&str; 14] = [
     "playground-runner",
     "playground-runner-look",
     "playground-runner-hud",
@@ -100,6 +116,10 @@ const MODE: [&str; 10] = [
     "blockhead_bot",
     "playground-stomper",
     "playground-stomper-look",
+    "playground-stomper-rules",
+    "playground-fizzer",
+    "playground-fizzer-look",
+    "playground-fizzer-rules",
     "playground-mode",
 ];
 
