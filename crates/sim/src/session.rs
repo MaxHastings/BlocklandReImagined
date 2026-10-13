@@ -52,6 +52,8 @@ mod trust;
 mod tutorial;
 mod world_shapes;
 pub use tutorial::{Abilities, BRICK_HAND_IMAGES, BrickHand};
+mod grips;
+pub use grips::shape_grips;
 mod riding;
 pub use riding::{Ride, shape_mount_points};
 mod vehicles;
@@ -1085,6 +1087,8 @@ pub struct Session {
     archetypes: crate::archetype::Archetypes,
     /// Mount points by body model, for bodies that declare none.
     body_mounts: BTreeMap<String, Vec<crate::archetype::MountPoint>>,
+    /// Bodies' hands and images' barrels, for shots from the muzzle.
+    grips: grips::Grips,
     breakables: breakables::Breakables,
     /// Add-On map light rules (`set_map_lights`), replicated to clients.
     map_lights: Vec<map_lights::MapLightRule>,
@@ -1121,6 +1125,7 @@ impl Session {
             events: Default::default(),
             archetypes: Default::default(),
             body_mounts: BTreeMap::new(),
+            grips: Default::default(),
             breakables: Default::default(),
             map_lights: Vec::new(),
             world_shapes: Default::default(),

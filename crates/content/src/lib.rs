@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 pub mod animation;
 pub mod atmosphere;
 pub mod avatar;
+pub mod body;
 pub mod brick;
 pub mod collision;
 pub mod effects;

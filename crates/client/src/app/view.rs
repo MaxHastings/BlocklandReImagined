@@ -217,10 +217,7 @@ impl App {
         let avatar = avatars.get(&view.owner)?;
         if vitals.mounted.is_none() && vitals.ride.is_none() && !vitals.sitting {
             let (sit, standing) = avatar.getting_up().zip(standing)?;
-            let head = avatar
-                .animated_world_node(avatar_assets, "Eye")?
-                .w_axis
-                .truncate();
+            let head = avatar.eye_world(avatar_assets, true)?;
             let eye = standing.lerp(head, sit);
             return eye.is_finite().then_some(eye);
         }
@@ -236,12 +233,9 @@ impl App {
                 frame.position,
                 frame.rotation,
                 Vec3::from(seat.transform.position),
-                avatar.model_node(avatar_assets, "Eye")?.w_axis.truncate() * local.scale,
+                avatar.eye_local(avatar_assets, false)? * local.scale,
             ),
-            None => avatar
-                .animated_world_node(avatar_assets, "Eye")?
-                .w_axis
-                .truncate(),
+            None => avatar.eye_world(avatar_assets, true)?,
         };
         eye.is_finite().then_some(eye)
     }

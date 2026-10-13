@@ -176,6 +176,16 @@ impl App {
     pub fn avatar_action(&self, owner: bri_world::OwnerId) -> Option<(&'static str, bool)> {
         Some(self.avatar.avatars.get(&owner)?.action())
     }
+    /// What a body lacks against the contract (sockets, nodes, animation
+    /// roles), as the one-time report names it; empty for a complete body.
+    pub fn avatar_body_report(&mut self, owner: bri_world::OwnerId) -> Option<Vec<String>> {
+        let assets = &self.avatar.avatar_assets;
+        Some(self.avatar.avatars.get_mut(&owner)?.body_report(assets))
+    }
+    /// Whether a body draws over the hidden Blockhead stand-in (a box model).
+    pub fn avatar_is_stand_in(&self, owner: bri_world::OwnerId) -> Option<bool> {
+        Some(self.avatar.avatars.get(&owner)?.body_kind().stand_in)
+    }
     /// A body's posed node in the world, as drawn this frame.
     pub fn avatar_node(&self, owner: bri_world::OwnerId, name: &str) -> Option<glam::Mat4> {
         self.avatar

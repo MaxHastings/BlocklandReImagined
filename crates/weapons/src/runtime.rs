@@ -3384,7 +3384,55 @@ impl WeaponsWorld {
                 {
                     origin = a.frame.eye;
                 }
-                let mut velocity = direction * speed + a.frame.velocity * p.inherit;
+                // A muzzle on the far side of something from the eye (a gun
+                // pushed into a wall) fires from the eye: a shot never
+                // starts through what the shooter stands against.
+                if !image.melee
+                    && origin.distance_squared(a.frame.eye) > 1e-6
+                    && q.sweep(
+                        a.frame.eye,
+                        origin,
+                        Filter {
+                            projectile_age_ticks: None,
+                            source: id,
+                            players: true,
+                            world_only: false,
+                        },
+                    )
+                    .is_some()
+                {
+                    origin = a.frame.eye;
+                }
+                // `correctMuzzleVector`: from a muzzle off the eye, the shot
+                // flies at what the crosshair is on (within its reach), so
+                // it lands where the player aims whatever body holds it.
+                let mut aim = direction;
+                if image.correct_muzzle
+                    && !image.melee
+                    && origin.distance_squared(a.frame.eye) > 1e-6
+                {
+                    let reach = (p.speed * p.lifetime_ticks as f32 / 120.0).clamped(1.0, 1000.0);
+                    let end = a.frame.eye + direction * reach;
+                    let point = q
+                        .sweep(
+                            a.frame.eye,
+                            end,
+                            Filter {
+                                projectile_age_ticks: None,
+                                source: id,
+                                players: p.collide_players,
+                                world_only: false,
+                            },
+                        )
+                        .map_or(end, |hit| hit.position);
+                    let toward = point - origin;
+                    // Only ahead of the muzzle: a target between the eye
+                    // and the muzzle keeps the look's direction.
+                    if toward.dot(direction) > 0.5 * toward.length() {
+                        aim = toward.normalize_or(direction);
+                    }
+                }
+                let mut velocity = aim * speed + a.frame.velocity * p.inherit;
                 if sport {
                     let sport = image.sport.unwrap_or_default();
                     let [power, up] = sport.throw;

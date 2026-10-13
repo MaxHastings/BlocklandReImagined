@@ -256,6 +256,32 @@ pub struct Placement<'a> {
     /// Size relative to a player: the model's boxes scale about its feet.
     pub scale: f32,
     pub label: &'a str,
+    /// A player's box body as its stand-in mesh poses it (seat tilt, sit),
+    /// in place of `position`, `yaw` and `scale`.
+    pub pose: Option<BoxPose>,
+}
+/// How a player's box body is posed: its model frame (feet, rotation with
+/// any seat's tilt, scale, lowered as it sits) and, seated, the boxes
+/// below the hip folded forward about it by `fold` radians.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct BoxPose {
+    pub frame: Mat4,
+    pub hip: Option<Vec3>,
+    pub fold: f32,
+}
+impl BoxPose {
+    /// A box's transform in the model frame, folded if it hangs below the
+    /// hip (its centre lower than the hip: a leg).
+    fn place(&self, center: Vec3) -> Mat4 {
+        match self.hip {
+            Some(hip) if center.y < hip.y && self.fold != 0.0 => {
+                Mat4::from_translation(hip)
+                    * Mat4::from_rotation_x(self.fold)
+                    * Mat4::from_translation(center - hip)
+            }
+            _ => Mat4::from_translation(center),
+        }
+    }
 }
 /// Every entity where it stands.
 pub fn entity_placements(
@@ -267,6 +293,7 @@ pub fn entity_placements(
         yaw: e.yaw,
         scale: e.scale,
         label: &e.label,
+        pose: None,
     })
 }
 /// Players whose archetype's look replaces the Blockhead: a package model
@@ -291,6 +318,7 @@ pub fn body_placements<'a>(
                 yaw: p.yaw,
                 scale: p.scale,
                 label: "",
+                pose: None,
             };
             Some((*owner, Some(placement)))
         })
@@ -320,21 +348,25 @@ pub fn place_boxes<'a>(
         } else {
             1.0
         };
-        let frame = Mat4::from_scale_rotation_translation(
-            Vec3::splat(scale),
-            Quat::from_rotation_y(-e.yaw),
-            Vec3::from(e.position),
+        let frame = e.pose.map_or_else(
+            || {
+                Mat4::from_scale_rotation_translation(
+                    Vec3::splat(scale),
+                    Quat::from_rotation_y(-e.yaw),
+                    Vec3::from(e.position),
+                )
+            },
+            |pose| pose.frame,
         );
         for b in &model.boxes {
             let color = b.label_colors.get(e.label).copied().unwrap_or(b.color);
             let scale = Vec3::from(b.size) / cube;
+            let at = e.pose.map_or_else(
+                || Mat4::from_translation(Vec3::from(b.center)),
+                |pose| pose.place(Vec3::from(b.center)),
+            );
             out.push(SceneTransform {
-                transform: frame
-                    * Mat4::from_scale_rotation_translation(
-                        scale,
-                        Quat::IDENTITY,
-                        Vec3::from(b.center),
-                    ),
+                transform: frame * at * Mat4::from_scale(scale),
                 tint: color.map(|v| v.clamped(0.0, 1.0)),
             });
         }
