@@ -7,7 +7,8 @@ const USAGE: &str = "Usage:
   bri-import-addon port ADDON(.zip|folder) FRESH_WORK_DIR [--reference V20_ROOT] [--core RECOVERED_SCRIPT.cs]... [--installed CONTENT_ROOT]
   bri-import-addon check-port WORK_DIR
   bri-import-addon gltf MODEL(.glb|.gltf) FRESH_OUTPUT_DIR [--kind body|item|prop] [--id NAME] [--name MENU_NAME]
-      [--height UNITS | --scale FACTOR] [--fps 30] [--right-hand NODE] [--left-hand NODE] [--eye NODE] [--loop CLIP]... [--json]
+      [--height UNITS | --scale FACTOR] [--fps 30] [--right-hand NODE] [--left-hand NODE] [--eye NODE] [--loop CLIP]...
+      [--lod TRIANGLES] [--lod-pixels 100] [--box-width UNITS] [--box-height UNITS] [--json]
 
 Converts one legacy Blockland Add-On into a native package directory and writes
 import-report.json and IMPORT-REPORT.md into it. Never executes scripts.
@@ -148,6 +149,16 @@ fn gltf(mut args: impl Iterator<Item = String>) -> Result<()> {
             "--left-hand" => opts.left_hand = Some(value()?),
             "--eye" => opts.eye = Some(value()?),
             "--loop" => opts.loops.push(value()?),
+            "--lod" => {
+                let v = value()?;
+                opts.lod = Some(
+                    v.parse()
+                        .with_context(|| format!("{v} is not a triangle count"))?,
+                )
+            }
+            "--lod-pixels" => opts.lod_pixels = number(value()?)?,
+            "--box-width" => opts.box_width = Some(number(value()?)?),
+            "--box-height" => opts.box_height = Some(number(value()?)?),
             "--version" => opts.version = value()?,
             "--json" => json = true,
             "-h" | "--help" => {

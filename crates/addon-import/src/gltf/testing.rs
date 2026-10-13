@@ -245,6 +245,47 @@ pub fn cuboid(center: Vec3, size: Vec3) -> (Vec<Vec3>, Vec<Vec3>, Vec<[f32; 2]>,
     (p, n, uv, idx)
 }
 
+/// A box of `n` by `n` quads a side bulged toward an ellipsoid, each side
+/// its own vertices (a UV seam along every edge), as [`cuboid`].
+pub fn rounded_cuboid(
+    center: Vec3,
+    size: Vec3,
+    n: u32,
+) -> (Vec<Vec3>, Vec<Vec3>, Vec<[f32; 2]>, Vec<u32>) {
+    let (mut p, mut nrm, mut uv, mut idx) = (vec![], vec![], vec![], vec![]);
+    let at = |i: u32| -1.0 + 2.0 * i as f32 / n as f32;
+    for axis in 0..3 {
+        for sign in [-1.0f32, 1.0] {
+            let (u, v) = ((axis + 1) % 3, (axis + 2) % 3);
+            let base = p.len() as u32;
+            for j in 0..=n {
+                for i in 0..=n {
+                    let mut cube = Vec3::ZERO;
+                    cube[axis] = sign;
+                    cube[u] = at(i);
+                    cube[v] = at(j);
+                    let round = cube.lerp(cube.normalize() * 1.2, 0.5);
+                    p.push(center + round * size * 0.5);
+                    nrm.push((round / size).normalize());
+                    uv.push([i as f32 / n as f32, j as f32 / n as f32]);
+                }
+            }
+            for j in 0..n {
+                for i in 0..n {
+                    let a = base + j * (n + 1) + i;
+                    let (b, c, d) = (a + 1, a + n + 2, a + n + 1);
+                    if sign > 0.0 {
+                        idx.extend([a, b, c, a, c, d]);
+                    } else {
+                        idx.extend([a, c, b, a, d, c]);
+                    }
+                }
+            }
+        }
+    }
+    (p, nrm, uv, idx)
+}
+
 /// The figure's bones: name, parent (index into this list), translation
 /// and rotation in the parent's frame. The armature above them is scaled
 /// by [`ARMATURE_SCALE`], as models made at another scale are.
@@ -272,6 +313,12 @@ pub struct Figure {
 /// `Back`, `Side`, `Crouch`, `Look`, `head_side`, `aim_right` and `Stomp`.
 /// About 2.25 units tall.
 pub fn character(with_eye: bool) -> Figure {
+    detailed_character(with_eye, 1)
+}
+/// [`character`] with each box of its skinned body a rounded box of
+/// `subdivisions` squared quads a side (12 by 12 makes about 8,600
+/// triangles), as heavy as a detailed game character.
+pub fn detailed_character(with_eye: bool, subdivisions: u32) -> Figure {
     let mut g = Gltf::new();
     let armature = g.node(
         json!({ "name": "Armature", "scale": [ARMATURE_SCALE, ARMATURE_SCALE, ARMATURE_SCALE] }),
@@ -335,8 +382,14 @@ pub fn character(with_eye: bool) -> Figure {
     ];
     let (mut pos, mut nrm, mut uvs, mut idx, mut joints, mut weights) =
         (vec![], vec![], vec![], vec![], vec![], vec![]);
+    let mut legs_len = 0;
     for (center, size, influence) in parts {
-        let (p, n, uv, i) = cuboid(center, size);
+        let (p, n, uv, i) = if subdivisions > 1 {
+            rounded_cuboid(center, size, subdivisions)
+        } else {
+            cuboid(center, size)
+        };
+        legs_len = i.len();
         let base = (pos.len() / 3) as u32;
         for k in 0..p.len() {
             pos.extend(p[k].to_array());
@@ -371,11 +424,11 @@ pub fn character(with_eye: bool) -> Figure {
         g.floats(&pos, 3),
         g.floats(&nrm, 3),
         g.floats(&uvs, 2),
-        g.uints(&idx[..idx.len() - 36], 1),
+        g.uints(&idx[..idx.len() - legs_len], 1),
         g.uints(&joints, 4),
         g.floats(&weights, 4),
     );
-    let legs = g.uints(&idx[idx.len() - 36..], 1);
+    let legs = g.uints(&idx[idx.len() - legs_len..], 1);
     let attributes = json!({ "POSITION": a_pos, "NORMAL": a_nrm, "TEXCOORD_0": a_uv, "JOINTS_0": a_j, "WEIGHTS_0": a_w });
     let body = g.mesh(
         "Body",

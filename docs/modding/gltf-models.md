@@ -14,7 +14,7 @@ cargo run -p bri-addon-import --bin bri-import-addon -- gltf buggy.glb buggy-mod
 
 | `--kind` | Writes | Then |
 |---|---|---|
-| `body` (default) | a whole Add-On: `package.json`, the model and its PNGs under `assets/`, `assets/content.json` and an archetype (`assets/archetypes/<id>.json`) whose `model` is the imported body | check it with `bri-addon-check`, change the archetype's `movement` (its collision box: a Blockhead's `width` is 1.25 and `stand_height` 2.65), name it in a mode or `set_archetype` |
+| `body` (default) | a whole Add-On: `package.json`, the model and its PNGs under `assets/`, `assets/content.json` and an archetype (`assets/archetypes/<id>.json`) whose `model` is the imported body | check it with `bri-addon-check`, adjust the archetype's `movement` (its collision box, sized from the model; see Bodies), name it in a mode or `set_archetype` |
 | `item` | `models/<id>.shape.json` and its PNGs | copy `models/` into your weapon Add-On's `assets/` and name `models/<id>.shape.json` as the item's and image's `model` in `weapons.json` ([Weapons](weapons.md)) |
 | `prop` | the same, for vehicles, wheels, projectiles and props | name it from `vehicles.json`; the report lists the `mount` and `hub` empties' positions for its seats and wheels |
 
@@ -26,8 +26,10 @@ the fix. `--json` prints the same report as JSON.
 Options: `--id` (the file and package name; from the file name otherwise),
 `--name` (a body's menu name), `--height UNITS` or `--scale FACTOR`,
 `--fps` (clip samples per second, 30 by default), `--right-hand`,
-`--left-hand` and `--eye` (a node to use as that socket), and `--loop CLIP`
-(an extra clip that loops).
+`--left-hand` and `--eye` (a node to use as that socket), `--loop CLIP`
+(an extra clip that loops), `--box-width` and `--box-height` (a body's
+collision box), and `--lod TRIANGLES` and `--lod-pixels N` (its distant
+detail).
 
 ## 1. Scale, axes and origin
 
@@ -103,6 +105,26 @@ costs.
 Every other object draws with its own textures, untinted. For team-coloured
 armour (a Spartan), make the plates one object named `chest` with a plain
 white material: the player's chest colour paints it.
+
+**Size and collision box.** The body's archetype gets a collision box from
+the model: as tall as the model (after `--height`), and as wide for that
+height as a Blockhead (1.25 for 2.65), with its eye heights from the eye
+socket. Set it yourself with `--box-width UNITS` and `--box-height UNITS`
+(Mario's SM64 hitbox is 37 units in radius and 160 tall, so `--box-width
+0.74 --box-height 1.6`), or later in the archetype's `movement` (`width`,
+`stand_height`, `crouch_height`, `stand_eye`, `crouch_eye`, `sit_eye`).
+The box, not the mesh, is what bullets, explosions, other players and
+vehicles hit.
+
+**Distant detail (optional, off by default).** Classic-era models are light
+enough to skip this. For a heavy model, `--lod TRIANGLES` adds a lighter
+copy with that many triangles that the body draws when it is small on
+screen (under 100 pixels tall: about 20 units away for a Blockhead at
+1080p; `--lod-pixels N` changes that). It keeps the skeleton, skinning,
+textures and sockets. To make it yourself, add a simpler copy of a mesh
+named `<name>_LOD1` (a `Body_LOD1` for `Body`), skinned to the same
+armature or parented to the same bone; a mesh with no `_LOD1` copy then
+draws as it is at every distance.
 
 ## 3. Weapons and other held items
 
@@ -195,6 +217,11 @@ additive overlays relative to their middle (or first) frame, as the
 Blockhead's are; channels a clip leaves at the rest pose are dropped so
 they do not override the layers below. Socket nodes (`Mount0`, `Mount1`,
 `Eye`) are added as children of the empty or bone they follow, turned so
-their axes are the body's in the rest pose. Code:
+their axes are the body's in the rest pose. The distant detail is a
+second detail level (`detail100` and `detail0`, each object with a second
+mesh) made by quadric-error edge collapse: a vertex moves onto a
+neighbour and takes its weights and UVs, a seam's copies move together,
+and no collapse crosses between parts on different bones. The client
+picks a body's detail each frame from its height on screen. Code:
 `crates/addon-import/src/gltf/`; tests: `crates/addon-import/src/gltf/tests.rs`
 and `crates/client/tests/gltf_body.rs`.

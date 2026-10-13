@@ -246,6 +246,18 @@ fn load(
     String,
     bri_client::testing::ScratchDir,
 )> {
+    load_with(glb, height, name, None)
+}
+fn load_with(
+    glb: &[u8],
+    height: f32,
+    name: &str,
+    lod: Option<usize>,
+) -> Result<(
+    bri_client::avatar::AvatarAssets,
+    String,
+    bri_client::testing::ScratchDir,
+)> {
     let root = bri_client::testing::ScratchDir::new(name)?;
     let source = root.path().join(format!("{name}.glb"));
     std::fs::write(&source, glb)?;
@@ -255,6 +267,7 @@ fn load(
         Kind::Body,
     );
     opts.height = Some(height);
+    opts.lod = lod;
     let report = gltf::import(&opts)?;
     let mut assets = bri_client::testing::avatar::assets()?;
     let packages: PackageSet = serde_json::from_value(serde_json::json!({
@@ -309,5 +322,120 @@ fn a_gltf_model_from_disk_renders() -> Result<()> {
     ));
     sheet.save(&file)?;
     println!("rendered {}", file.display());
+    Ok(())
+}
+
+/// Eight heavy imported bodies, each with a distant detail of a quarter of
+/// its triangles (`--lod`): up close each draws its full detail; small on
+/// screen, the distant one. Prints what one
+/// frame of the eight costs either way (posing and skinning on the CPU,
+/// then drawing offscreen) as evidence of the saving, and checks the
+/// switch both ways.
+#[test]
+fn eight_heavy_bodies_draw_their_distant_detail_when_small() -> Result<()> {
+    use bri_render::scene::{Camera, SceneRenderer, create_depth};
+    use std::time::{Duration, Instant};
+    let figure = gltf::testing::detailed_character(true, 16);
+    let (assets, model, _root) = load_with(&figure.glb, 2.0, "heavy", Some(15_372 / 4))?;
+    type Bodies = Vec<(bri_client::avatar::AvatarMesh, bri_sim::player::PlayerState)>;
+    let mut bodies: Bodies = Vec::new();
+    for i in 0..8 {
+        let mut p = player()?;
+        p.owner = i + 1;
+        p.feet = [i as f32 * 1.5 - 5.25, 0.0, -(i as f32)];
+        p.velocity = [0.0, 0.0, -8.0];
+        bodies.push((
+            assets.body_mesh(&model, assets.package.defaults.clone())?,
+            p,
+        ));
+    }
+    let drawn = |bodies: &Bodies| {
+        bodies
+            .iter()
+            .map(|(m, _)| m.data.indices.len() / 3)
+            .sum::<usize>()
+    };
+    let gpu = support::gpu::turn()?;
+    let format = wgpu::TextureFormat::Rgba8UnormSrgb;
+    let mut renderer = SceneRenderer::new(&gpu.device, format);
+    let (width, height) = (960, 540);
+    let texture = gpu.device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("eight bodies"),
+        size: wgpu::Extent3d {
+            width,
+            height,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format,
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+        view_formats: &[],
+    });
+    let view = texture.create_view(&Default::default());
+    let depth = create_depth(&gpu.device, width, height);
+    let depth_view = depth.create_view(&Default::default());
+    let camera = Camera::perspective(
+        [0.0, 2.0, 12.0],
+        [0.0, 1.0, -3.0],
+        width as f32 / height as f32,
+        50_f32.to_radians(),
+        0.05,
+        200.0,
+    );
+    renderer.update_camera(&gpu.queue, &camera);
+
+    // A frame: pose all eight a little further into their run, upload
+    // their skinned vertices, draw them; returns the CPU and GPU time.
+    let frame = |bodies: &mut Bodies, t: f64| -> Result<(Duration, Duration)> {
+        let start = Instant::now();
+        for (mesh, p) in bodies.iter_mut() {
+            mesh.pose_with_animation(&assets, p, t, &AvatarAnimationInput::default())?;
+            mesh.upload(&renderer, &gpu.device, &gpu.queue)?;
+        }
+        let cpu = start.elapsed();
+        let start = Instant::now();
+        let scenes: Vec<_> = bodies
+            .iter()
+            .map(|(m, _)| m.gpu.as_ref().context("uploaded"))
+            .collect::<Result<_>>()?;
+        let mut encoder = gpu.device.create_command_encoder(&Default::default());
+        renderer.render(&mut encoder, &view, &depth_view, &scenes, None);
+        gpu.queue.submit([encoder.finish()]);
+        support::gpu::wait(&gpu.device, "the frame")?;
+        Ok((cpu, start.elapsed()))
+    };
+    let measure = |bodies: &mut Bodies, screen: Option<f32>, what: &str| -> Result<usize> {
+        for (mesh, _) in bodies.iter_mut() {
+            mesh.screen_height = screen;
+        }
+        frame(bodies, 0.0)?;
+        let (mut cpu, mut gpu_time) = (Duration::ZERO, Duration::ZERO);
+        const FRAMES: u32 = 20;
+        for f in 1..=FRAMES {
+            let (c, g) = frame(bodies, f64::from(f) / 30.0)?;
+            cpu += c;
+            gpu_time += g;
+        }
+        let triangles = drawn(bodies);
+        eprintln!(
+            "{what}: {triangles} triangles; per frame {:.2} ms posing and skinning, {:.2} ms drawing",
+            cpu.as_secs_f64() * 1000.0 / f64::from(FRAMES),
+            gpu_time.as_secs_f64() * 1000.0 / f64::from(FRAMES)
+        );
+        Ok(triangles)
+    };
+    let near = measure(&mut bodies, Some(400.0), "eight bodies near (full detail)")?;
+    let far = measure(&mut bodies, Some(40.0), "eight bodies far (distant detail)")?;
+    ensure!(near > 8 * 15_000, "full detail: {near}");
+    ensure!(
+        far * 4 <= near + near / 10,
+        "the distant detail is a quarter: {far} of {near}"
+    );
+    // Back up close it draws the full detail again; with no frame drawn
+    // yet (no screen height) it starts there too.
+    ensure!(measure(&mut bodies, Some(150.0), "back near")? == near);
+    ensure!(measure(&mut bodies, None, "no frame yet")? == near);
     Ok(())
 }

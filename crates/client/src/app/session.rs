@@ -193,6 +193,7 @@ impl App {
         self.view.observer_eye = None;
         self.view.rendered_camera = None;
         self.view.rendered_roll = 0.0;
+        self.view.pixels_per_unit = None;
         self.view.drawn_controls = None;
         self.scene.liquid_cache = None;
         self.ghosts.clear();

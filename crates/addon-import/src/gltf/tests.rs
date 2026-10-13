@@ -370,6 +370,21 @@ fn imports_write_a_package_the_runtime_reads() {
         archetype.model.as_deref(),
         Some("big_figure:asset/big_figure.glb")
     );
+    // Its collision box is its own size, not the Blockhead's: as tall as
+    // the model, as wide for that height as a Blockhead, the eye at its
+    // eye socket.
+    let m = &archetype.movement;
+    let get = |k: &str| m[k].as_f64().unwrap() as f32;
+    assert!((get("stand_height") - report.height).abs() < 0.01, "{m:?}");
+    assert!(
+        (get("width") - report.height * 1.25 / 2.65).abs() < 0.01,
+        "{m:?}"
+    );
+    assert!(
+        get("stand_eye") > report.height * 0.7 && get("stand_eye") < report.height,
+        "{m:?}"
+    );
+    assert!(get("crouch_height") < get("stand_height") && get("sit_eye") < get("stand_eye"));
     let check = bri_package_runtime::check::check(&dir);
     assert!(check.ok, "{check}");
     let md = std::fs::read_to_string(dir.join("IMPORT-REPORT.md")).unwrap();
@@ -481,4 +496,162 @@ fn a_vehicle_lists_its_seats_hubs_gun_and_collision_hulls() {
         "not drawn"
     );
     assert_eq!(c.shape.materials[0].name, "hog_default");
+}
+
+/// The posed vertices of `detail`, in the idle clip's middle.
+fn posed_detail(shape: &Shape, detail: usize) -> Vec<Vec3> {
+    let clip = shape.animations.iter().find(|a| a.name == "root");
+    let pose = animation::sample(shape, clip, 0.5).unwrap();
+    animation::triangles(shape, &pose, detail, |_| true)
+        .unwrap()
+        .iter()
+        .flat_map(|t| t.vertices.iter().map(|v| v.position).collect::<Vec<_>>())
+        .collect()
+}
+
+#[test]
+fn a_heavy_body_gets_a_distant_detail_that_keeps_its_skin_and_sockets() {
+    let figure = super::testing::detailed_character(true, 12);
+    let mut opts = body_opts();
+    opts.lod = Some(8652 / 4);
+    let c = convert_glb(&figure.glb, &opts).unwrap();
+    let full: usize = c.report.triangles;
+    assert!(full > 8000, "{full}");
+    let lod = c.report.lod.as_ref().expect("a distant detail");
+    assert!(!lod.hand_made);
+    assert!(
+        lod.triangles <= full / 4 + full / 20,
+        "{} triangles of {full}",
+        lod.triangles
+    );
+    let s = &c.shape;
+    let visible: Vec<_> = s.details.iter().filter(|d| !d.collision).collect();
+    assert_eq!(visible.len(), 2);
+    assert_eq!(
+        (visible[0].pixel_threshold, visible[0].mesh_offset),
+        (LOD_PIXELS, 0)
+    );
+    assert_eq!(
+        (visible[1].pixel_threshold, visible[1].mesh_offset),
+        (0.0, 1)
+    );
+    for o in &s.objects {
+        assert_eq!(o.meshes.len(), 2, "{} has both details", o.name);
+    }
+    let body = s.objects.iter().find(|o| o.name == "Body").unwrap();
+    let low = s.meshes[body.meshes[1]].as_ref().unwrap();
+    let skin = low.skin.as_ref().expect("the distant detail is skinned");
+    let mut total = vec![0.0f32; low.frame_vertices];
+    for i in &skin.influences {
+        total[i.vertex] += i.weight;
+    }
+    assert!(
+        total.iter().all(|w| (w - 1.0).abs() < 1e-4),
+        "every vertex weighted"
+    );
+    for socket in ["Mount0", "Mount1", "Eye"] {
+        node(s, socket);
+    }
+    // Posed, the distant detail covers the same figure: every one of its
+    // vertices is a vertex of the full one, and it reaches the same extent.
+    let (near_full, far) = (posed_detail(s, 0), posed_detail(s, 1));
+    let extent = |v: &[Vec3]| {
+        v.iter().fold((Vec3::MAX, Vec3::MIN), |(lo, hi), p| {
+            (lo.min(*p), hi.max(*p))
+        })
+    };
+    let (a, b) = (extent(&near_full), extent(&far));
+    assert!(
+        a.0.distance(b.0) < 0.02 && a.1.distance(b.1) < 0.02,
+        "{a:?} {b:?}"
+    );
+    assert!(far.iter().all(|p| near_full.iter().any(|q| near(*p, *q))));
+}
+
+#[test]
+fn a_distant_detail_is_made_only_when_asked_for() {
+    let heavy = super::testing::detailed_character(true, 12);
+    let mut opts = body_opts();
+    for lod in [None, Some(0)] {
+        opts.lod = lod;
+        let c = convert_glb(&heavy.glb, &opts).unwrap();
+        assert!(c.report.lod.is_none());
+        assert_eq!(c.shape.details.iter().filter(|d| !d.collision).count(), 1);
+    }
+    opts.lod = Some(600);
+    opts.lod_pixels = 150.0;
+    let c = convert_glb(&heavy.glb, &opts).unwrap();
+    let lod = c.report.lod.unwrap();
+    assert!(lod.triangles <= 700, "{}", lod.triangles);
+    assert_eq!(c.shape.details[0].name, "detail150");
+}
+
+#[test]
+fn hand_made_lod1_objects_stand_in_at_a_distance() {
+    let mut g = super::testing::Gltf::new();
+    let flat = |v: &[Vec3]| v.iter().flat_map(|v| v.to_array()).collect::<Vec<f32>>();
+    let mesh = |g: &mut super::testing::Gltf, name: &str, size: f32| {
+        let (p, n, uv, i) = super::testing::cuboid(Vec3::ZERO, Vec3::splat(size));
+        let (a, b, c, d) = (
+            g.floats(&flat(&p), 3),
+            g.floats(&flat(&n), 3),
+            g.floats(&uv.concat(), 2),
+            g.uints(&i, 1),
+        );
+        g.mesh(
+            name,
+            vec![json!({ "attributes": { "POSITION": a, "NORMAL": b, "TEXCOORD_0": c }, "indices": d })],
+        )
+    };
+    let (body, low, hat) = (
+        mesh(&mut g, "Body", 1.0),
+        mesh(&mut g, "Body_LOD1", 0.8),
+        mesh(&mut g, "Hat", 0.3),
+    );
+    g.node(
+        json!({ "name": "Body", "mesh": body, "translation": [0.0, 0.5, 0.0] }),
+        None,
+    );
+    g.node(
+        json!({ "name": "Body_LOD1", "mesh": low, "translation": [0.0, 1.5, 0.0] }),
+        None,
+    );
+    g.node(
+        json!({ "name": "Hat", "mesh": hat, "translation": [0.0, 1.2, 0.0] }),
+        None,
+    );
+    g.node(json!({ "name": "Shoe_LOD1", "mesh": hat }), None);
+    let c = convert_glb(&g.glb(), &body_opts()).unwrap();
+    let lod = c.report.lod.as_ref().unwrap();
+    assert!(lod.hand_made);
+    assert_eq!(
+        c.report.triangles, 24,
+        "the twins are not counted as full detail"
+    );
+    assert!(c.report.warnings.iter().any(|w| w.contains("Shoe_LOD1")));
+    let s = &c.shape;
+    let names: Vec<_> = s.objects.iter().map(|o| o.name.as_str()).collect();
+    assert_eq!(names, ["Body", "Hat"]);
+    let hat = &s.objects[1];
+    assert_eq!(hat.meshes[0], hat.meshes[1], "no twin: draws as it is");
+    let body = &s.objects[0];
+    let far = s.meshes[body.meshes[1]].as_ref().unwrap();
+    // The twin sits a unit higher than the body; its vertices move into
+    // the body's frame so it draws where the twin was modelled.
+    let top = far.positions.iter().map(|p| p[1]).fold(f32::MIN, f32::max);
+    assert!((top - 1.4).abs() < 1e-4, "{top}");
+}
+
+#[test]
+fn a_bodys_box_can_be_set() {
+    let mut opts = body_opts();
+    opts.height = Some(1.6);
+    opts.box_width = Some(0.74);
+    opts.box_height = Some(1.5);
+    let c = convert_glb(&character(true).glb, &opts).unwrap();
+    let m = c.report.movement.unwrap();
+    assert_eq!((m.width, m.stand_height), (0.74, 1.5));
+    assert!(c.report.markdown().contains("0.74 wide, 1.5 tall"));
+    opts.box_width = Some(0.0);
+    assert!(convert_glb(&character(true).glb, &opts).is_err());
 }

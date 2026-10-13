@@ -9,6 +9,7 @@
 //! child translations, mesh vertices and inverse bind matrices. Animation
 //! clips are sampled at a fixed rate; clips named after a body's animation
 //! roles take the Blockhead's clip names, so a body needs no mapping.
+mod lod;
 mod read;
 #[doc(hidden)]
 pub mod testing;
@@ -73,6 +74,17 @@ pub struct Options {
     /// Extra clips (not animation roles) that loop.
     pub loops: Vec<String>,
     pub version: String,
+    /// The triangle budget of a body's distant detail; none when unset
+    /// (or 0). Objects named `<name>_LOD1` make one whatever this says.
+    pub lod: Option<usize>,
+    /// How tall on screen, in pixels, a body draws its full detail; smaller
+    /// than that it draws the distant one.
+    pub lod_pixels: f32,
+    /// A body's collision box, game units: its width (and depth) and its
+    /// standing height. From the model when unset: its height, and the
+    /// Blockhead's width for that height.
+    pub box_width: Option<f32>,
+    pub box_height: Option<f32>,
 }
 impl Options {
     pub fn new(input: impl Into<PathBuf>, out: impl Into<PathBuf>, kind: Kind) -> Self {
@@ -90,6 +102,10 @@ impl Options {
             eye: None,
             loops: Vec::new(),
             version: "1.0.0".into(),
+            lod: None,
+            lod_pixels: LOD_PIXELS,
+            box_width: None,
+            box_height: None,
         }
     }
 }
@@ -124,8 +140,54 @@ pub struct Report {
     /// Each `col_` mesh's corners in the model's frame: a vehicle's
     /// `collision_hulls`.
     pub hulls: Vec<Hull>,
+    /// The distant detail, when the model has one.
+    pub lod: Option<Lod>,
+    /// A body's collision box and eye heights, as its archetype's
+    /// `movement` gets them.
+    pub movement: Option<Movement>,
     pub warnings: Vec<String>,
 }
+#[derive(Debug, Clone, Copy, Serialize)]
+pub struct Movement {
+    pub width: f64,
+    pub stand_height: f64,
+    pub crouch_height: f64,
+    pub stand_eye: f64,
+    pub crouch_eye: f64,
+    pub sit_eye: f64,
+}
+impl Movement {
+    /// The Blockhead's box and eyes (`PlayerTuning::default`) scaled to
+    /// `height`, `width` wide and the standing eye at `eye`.
+    fn new(width: f32, height: f32, eye: f32) -> Self {
+        const BLOCKHEAD: (f32, f32, f32, f32, f32) =
+            (2.65, 1.0, 2.156_496_5, 0.626_668_45, 1.635_348_9);
+        let (tall, crouch, stand_eye, crouch_eye, sit_eye) = BLOCKHEAD;
+        let eye = eye.clamped(height * 0.3, height);
+        let r = |v: f32| (f64::from(v) * 1000.0).round() / 1000.0;
+        Self {
+            width: r(width),
+            stand_height: r(height),
+            crouch_height: r(height * crouch / tall),
+            stand_eye: r(eye),
+            crouch_eye: r(eye * crouch_eye / stand_eye),
+            sit_eye: r(eye * sit_eye / stand_eye),
+        }
+    }
+}
+/// The Blockhead's width for its height (1.25 for 2.65).
+const WIDTH_FOR_HEIGHT: f32 = 1.25 / 2.65;
+#[derive(Debug, Clone, Serialize)]
+pub struct Lod {
+    pub triangles: usize,
+    /// Drawn below this many pixels tall.
+    pub pixels: f32,
+    /// From the model's own `_LOD1` objects rather than generated.
+    pub hand_made: bool,
+}
+/// Default [`Options::lod_pixels`]: a body under 100 pixels tall (about 20
+/// units away for a Blockhead at 1080p) draws its distant detail.
+pub const LOD_PIXELS: f32 = 100.0;
 #[derive(Debug, Clone, Serialize)]
 pub struct Hull {
     pub object: String,
@@ -371,7 +433,7 @@ fn write(opts: &Options, id: &str, converted: Converted) -> Result<Report> {
                 "name": name,
                 "model": model,
                 "max_health": 100,
-                "movement": {},
+                "movement": report.movement.map_or(json!({}), |m| json!(m)),
             });
             put(
                 &format!("assets/archetypes/{id}.json"),
@@ -976,6 +1038,7 @@ pub fn convert(
         materials,
         animations,
     };
+    distant_detail(&mut shape, opts, &mut report)?;
     let mut scale = opts.scale.unwrap_or(1.0);
     ensure!(scale.is_finite() && scale > 0.0, "--scale must be positive");
     if scale != 1.0 {
@@ -1013,6 +1076,31 @@ pub fn convert(
             ));
         }
         sockets(&mut shape, opts, report.height, &mut report)?;
+        let height = opts.box_height.unwrap_or(report.height);
+        ensure!(
+            height.is_finite() && height > 0.1,
+            "--box-height must be above 0.1"
+        );
+        let width = opts.box_width.unwrap_or(height * WIDTH_FOR_HEIGHT);
+        ensure!(
+            width.is_finite() && width > 0.05,
+            "--box-width must be above 0.05"
+        );
+        // Where the eye is standing in the idle clip (a rig's rest pose need
+        // not be standing), scaled with the box.
+        let idle = shape
+            .animations
+            .iter()
+            .find(|a| a.name == "root" && !a.additive);
+        let pose = bri_content::animation::sample(&shape, idle, 0.0)?;
+        let eye = shape
+            .nodes
+            .iter()
+            .position(|n| n.name == "Eye")
+            .map_or(report.height * 0.81, |e| pose.nodes[e].w_axis.y)
+            * height
+            / report.height;
+        report.movement = Some(Movement::new(width, height, eye));
         for (role, _, _, cost) in ROLES {
             if !report.clips.iter().any(|c| c.role.as_deref() == Some(role)) {
                 report
@@ -1049,6 +1137,162 @@ pub fn convert(
         textures,
         report,
     })
+}
+
+/// Give a body a second, distant detail: each visible object's `_LOD1`
+/// twin when the model has any (an object without one draws as it is), or
+/// else its meshes simplified to the triangle budget. The twins leave the
+/// full detail.
+fn distant_detail(shape: &mut Shape, opts: &Options, report: &mut Report) -> Result<()> {
+    let Some(full) = shape.details.iter().position(|d| !d.collision) else {
+        return Ok(());
+    };
+    let d = shape.details[full].clone();
+    let range = d.object_start..d.object_start + d.object_count;
+    let twin_of = |name: &str| {
+        let lower = name.to_ascii_lowercase();
+        lower
+            .strip_suffix("_lod1")
+            .or_else(|| lower.strip_suffix(".lod1"))
+            .map(str::to_owned)
+    };
+    let twins: Vec<usize> = range
+        .clone()
+        .filter(|i| twin_of(&shape.objects[*i].name).is_some())
+        .collect();
+    let mesh_of = |shape: &Shape, i: usize| shape.objects[i].meshes.first().copied();
+    let count = |shape: &Shape, i: usize| {
+        mesh_of(shape, i)
+            .and_then(|m| shape.meshes[m].as_ref())
+            .map_or(0, lod::triangles)
+    };
+    let mut low: BTreeMap<usize, usize> = BTreeMap::new();
+    let hand_made = !twins.is_empty();
+    if hand_made {
+        for &t in &twins {
+            report.triangles -= count(shape, t);
+            let base = twin_of(&shape.objects[t].name).expect("a twin");
+            let Some(original) = range
+                .clone()
+                .find(|i| !twins.contains(i) && shape.objects[*i].name.eq_ignore_ascii_case(&base))
+            else {
+                report.warnings.push(format!(
+                    "`{}` names no object `{base}` to stand in for at a distance; left out",
+                    shape.objects[t].name
+                ));
+                continue;
+            };
+            let Some(slot) = mesh_of(shape, t) else {
+                continue;
+            };
+            let Some(mut mesh) = shape.meshes[slot].clone() else {
+                continue;
+            };
+            // A rigid twin's vertices are in its own node's frame; move
+            // them into the original's.
+            if mesh.skin.is_none() {
+                let to = |o: usize| {
+                    shape.objects[o]
+                        .node
+                        .map_or(Mat4::IDENTITY, |n| world(shape, n))
+                };
+                let m = to(original).inverse() * to(t);
+                for p in &mut mesh.positions {
+                    *p = m.transform_point3(Vec3::from(*p)).to_array();
+                }
+                for n in &mut mesh.normals {
+                    *n = m
+                        .transform_vector3(Vec3::from(*n))
+                        .normalize_or(Vec3::Y)
+                        .to_array();
+                }
+            }
+            shape.meshes[slot] = Some(mesh);
+            low.insert(original, slot);
+        }
+    } else {
+        if opts.kind != Kind::Body {
+            return Ok(());
+        }
+        let total: usize = range.clone().map(|i| count(shape, i)).sum();
+        let target = match opts.lod {
+            None | Some(0) => return Ok(()),
+            Some(t) => t,
+        };
+        if target >= total {
+            return Ok(());
+        }
+        for i in range.clone() {
+            let Some(mesh) = mesh_of(shape, i).and_then(|m| shape.meshes[m].as_ref()) else {
+                continue;
+            };
+            let share = (lod::triangles(mesh) * target).div_ceil(total);
+            let simple = lod::simplify(mesh, share);
+            shape.meshes.push(Some(simple));
+            low.insert(i, shape.meshes.len() - 1);
+        }
+    }
+    // Rebuild the object list without the twins, each kept object with
+    // its full mesh and its distant one.
+    let mut objects = Vec::new();
+    let mut details = Vec::new();
+    let mut triangles = 0;
+    for (di, detail) in shape.details.iter().enumerate() {
+        let start = objects.len();
+        for i in detail.object_start..detail.object_start + detail.object_count {
+            if twins.contains(&i) {
+                continue;
+            }
+            let mut object = shape.objects[i].clone();
+            if di == full {
+                let distant = low.get(&i).copied().or(object.meshes.first().copied());
+                triangles += distant
+                    .and_then(|m| shape.meshes[m].as_ref())
+                    .map_or(0, lod::triangles);
+                object.meshes = object
+                    .meshes
+                    .first()
+                    .copied()
+                    .into_iter()
+                    .chain(distant)
+                    .collect();
+            }
+            objects.push(object);
+        }
+        let count = objects.len() - start;
+        if di == full {
+            details.push(Detail {
+                name: format!("detail{}", opts.lod_pixels.round() as i32),
+                pixel_threshold: opts.lod_pixels,
+                object_start: start,
+                object_count: count,
+                mesh_offset: 0,
+                collision: false,
+            });
+            details.push(Detail {
+                name: "detail0".into(),
+                pixel_threshold: 0.0,
+                object_start: start,
+                object_count: count,
+                mesh_offset: 1,
+                collision: false,
+            });
+        } else {
+            details.push(Detail {
+                object_start: start,
+                object_count: count,
+                ..detail.clone()
+            });
+        }
+    }
+    shape.objects = objects;
+    shape.details = details;
+    report.lod = Some(Lod {
+        triangles,
+        pixels: opts.lod_pixels,
+        hand_made,
+    });
+    Ok(())
 }
 
 /// Turn the rest rotation of a leaf node to the model's axes, so an empty's
@@ -1756,6 +2000,26 @@ impl Report {
             self.triangles, self.vertices, self.bones, self.height, self.width, self.scale
         );
         let _ = writeln!(s, "Model: `{}`\n", self.model);
+        if let Some(m) = &self.movement {
+            let _ = writeln!(
+                s,
+                "Collision box: {} wide, {} tall ({} crouched); eye at {} (set with --box-width and --box-height, or in the archetype's `movement`).\n",
+                m.width, m.stand_height, m.crouch_height, m.stand_eye
+            );
+        }
+        if let Some(lod) = &self.lod {
+            let _ = writeln!(
+                s,
+                "Distant detail: {} triangles ({}), drawn below {} pixels tall.\n",
+                lod.triangles,
+                if lod.hand_made {
+                    "the `_LOD1` objects"
+                } else {
+                    "generated"
+                },
+                lod.pixels
+            );
+        }
         if !self.sockets.is_empty() {
             let _ = writeln!(s, "## Sockets\n");
             for (socket, node) in &self.sockets {
