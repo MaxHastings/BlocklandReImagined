@@ -159,6 +159,12 @@ The aim deviation (10°, the turret's slack against the camera) is not
 modelled: the turret already follows the gunner's look at the post's own
 turn rate.
 
+Each round does 8 damage, so a spun-up gun drops a 100-health Blockhead in
+about a second, as the Warthog's drops a Spartan (the round damage is a
+feel choice, not a tag number). The old bolt's 20 at 15 a second took a
+third of a second, and a Blockhead Bot manning the post killed the Runner
+it should have driven at (`a_bot_drives_the_look_steered_buggy_at_a_runner`).
+
 `the_gunners_chaingun_spins_up_spreads_and_does_not_kick` holds the trigger
 four seconds: 12 rounds in the first second, 15 a second once spun up, the
 first rounds within 1° of the aim and the last within 2°, the buggy moved

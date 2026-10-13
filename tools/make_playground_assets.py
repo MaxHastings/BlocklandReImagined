@@ -538,7 +538,11 @@ def buggy(root):
             'playground-buggy:projectile/bolt': {
                 # Up to 15 a second, so each round pushes a tenth of what the
                 # old single bolt did: a burst shoves and does not fling.
-                'speed': CHAINGUN_SPEED, 'lifetime_ticks': 180, 'fade_ticks': 180, 'damage': 20.0,
+                # 8 a round takes a 100-health Blockhead down in about a
+                # second once the gun has spun up, as the Warthog's gun
+                # drops a Spartan; the old bolt's 20 at 15 a second was a
+                # third of a second.
+                'speed': CHAINGUN_SPEED, 'lifetime_ticks': 180, 'fade_ticks': 180, 'damage': 8.0,
                 'damage_type': '$DamageType::BuggyGun', 'impulse': 15.0,
                 # Each round leaves a bullet hole on the brick it hits.
                 'decal': {'size': 0.15, 'seconds': 30.0},
