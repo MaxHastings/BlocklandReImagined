@@ -48,6 +48,9 @@ fn step(app: &mut App, dt: Duration) -> Result<()> {
 const GAME_BUDGET: u64 = 30 * 120;
 const STALL: Duration = Duration::from_secs(90);
 fn until(app: &mut App, what: &str, ready: impl Fn(&App) -> bool) -> Result<()> {
+    // Catch up first: the host keeps ticking while the test captures a
+    // frame (seconds on a software GPU), and those ticks are not the wait's.
+    step(app, Duration::ZERO)?;
     let start = Instant::now();
     let mut previous = start;
     let tick = |a: &App| a.network_view().map(|v| v.tick);
@@ -490,10 +493,30 @@ fn the_runner_holds_the_carbine_sits_in_the_buggy_and_climbs_out(f: &ContentRoot
 
     // Climb out and step clear (or it lands back in the seat): it stands
     // again, the Carbine back at hand height.
-    held(&mut app, HeldControl::Jet, true)?;
-    run_for(&mut app, 0.2)?;
+    // Jet gets off on its press. A press timed in host ticks can end
+    // before a loaded client builds a single move with it held (one CPU
+    // core: the host never saw it), so hold it until the Runner is off,
+    // pressing again if needed; then step left at once, before
+    // `MinMountTime` lets it land back in the seat.
+    let mut off = false;
+    'climb: for _ in 0..5 {
+        held(&mut app, HeldControl::Jet, true)?;
+        for _ in 0..20 {
+            run_for(&mut app, 0.05)?;
+            off = !mounted(&app);
+            if off {
+                break 'climb;
+            }
+        }
+        held(&mut app, HeldControl::Jet, false)?;
+        run_for(&mut app, 0.2)?;
+    }
     held(&mut app, HeldControl::Jet, false)?;
-    until(&mut app, "off the buggy", |a| !mounted(a))?;
+    ensure!(
+        off,
+        "never got off the buggy: {:?}",
+        app.local_motion().map(|(p, _)| p.feet)
+    );
     held(&mut app, HeldControl::Left, true)?;
     run_for(&mut app, 0.6)?;
     held(&mut app, HeldControl::Left, false)?;
