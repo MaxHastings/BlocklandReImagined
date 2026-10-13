@@ -439,6 +439,82 @@ fn moves_queued_at_a_dismount_are_acknowledged(f: &Fixture) -> anyhow::Result<()
 }
 
 on_both! {
+/// A rider jetted out lands on the car's roof (`doDismount`'s first point
+/// is 2.2 up the seat) and may stand there: v20 seats a player from
+/// `onCollision`, which only a hit of their own move raises, so standing
+/// on a vehicle long past MinMountTime does not seat them again; landing
+/// on it from a hop does.
+fn standing_on_a_vehicle_does_not_seat_a_rider_but_landing_on_it_does(f: &Fixture) -> anyhow::Result<()> {
+    let (mut s, owner) = session(f)?;
+    let mut sequence = 0;
+    let mut feed = |s: &mut Session, input: MoveInput, ticks: usize| -> anyhow::Result<()> {
+        for _ in 0..ticks {
+            sequence += 1;
+            s.movement(owner, sequence, input)?;
+            s.step()?;
+        }
+        Ok(())
+    };
+    feed(&mut s, MoveInput::default(), 120)?;
+    for i in 0..60 {
+        let input = MoveInput {
+            forward: 1.0,
+            jump: i % 3 == 0,
+            ..Default::default()
+        };
+        feed(&mut s, input, 10)?;
+        if s.mounted(owner).is_some() {
+            break;
+        }
+    }
+    assert!(s.mounted(owner).is_some(), "boarded the car");
+    feed(&mut s, MoveInput::default(), 120)?;
+    feed(
+        &mut s,
+        MoveInput {
+            jet: true,
+            ..Default::default()
+        },
+        2,
+    )?;
+    feed(&mut s, MoveInput::default(), 60)?;
+    assert_eq!(s.mounted(owner), None, "jet leaves the car");
+    let car = Vec3::from(s.vehicle_poses()[0].position);
+    let feet = |s: &Session| {
+        Vec3::from(
+            s.motion_states()
+                .into_iter()
+                .find(|(p, _)| p.owner == owner)
+                .unwrap()
+                .0
+                .feet,
+        )
+    };
+    assert!(
+        feet(&s).y > car.y + 0.5,
+        "the rider stands on the roof: feet {} over the car at {car}",
+        feet(&s)
+    );
+    // Long past MinMountTime, still standing there.
+    feed(&mut s, MoveInput::default(), 360)?;
+    assert_eq!(s.mounted(owner), None, "standing on the roof does not seat him");
+    assert!(feet(&s).y > car.y + 0.5, "still on the roof");
+    // A hop lands on it again: that seats him.
+    feed(
+        &mut s,
+        MoveInput {
+            jump: true,
+            ..Default::default()
+        },
+        4,
+    )?;
+    feed(&mut s, MoveInput::default(), 240)?;
+    assert!(s.mounted(owner).is_some(), "landing on the car seats him");
+    Ok(())
+}
+}
+
+on_both! {
 fn bot_brick_spawns_a_bot_that_fights_inside_its_owners_minigame(f: &Fixture) -> anyhow::Result<()> {
     use bri_sim::session::{InspectMode, MiniGameRequest, Notice, ToolCatalog, WrenchProperties};
     let definitions = f.bricks();
