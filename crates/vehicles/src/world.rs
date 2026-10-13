@@ -360,6 +360,8 @@ struct Instance {
     last_damage: OwnerId,
     last_shot: Option<u64>,
     charge_started: Option<u64>,
+    /// When the trigger of an automatic gun was pulled, while it is held.
+    trigger_pulled: Option<u64>,
     turret_damage: Option<f32>,
     charge: u8,
     steering: f32,
@@ -417,6 +419,7 @@ impl Instance {
         }
         self.charge = 0;
         self.charge_started = None;
+        self.trigger_pulled = None;
         self.fire_held = false;
     }
     fn velocity(&self, _: &Definition, b: &RigidBody) -> Vec3 {
@@ -861,6 +864,7 @@ impl VehiclesWorld {
                 dead_at: None,
                 last_shot: None,
                 charge_started: None,
+                trigger_pulled: None,
                 turret_damage: d.attachment_model.as_ref().map(|_| 0.),
                 charge: 0,
                 steering: 0.,
@@ -1389,6 +1393,7 @@ impl VehiclesWorld {
             v.controls.fill(Controls::default());
             v.charge = 0;
             v.charge_started = None;
+            v.trigger_pulled = None;
             v.wheels.clear();
             self.intents.push(Intent::Destroyed { vehicle: id, by });
             let initial = if v
@@ -1446,6 +1451,7 @@ impl VehiclesWorld {
             v.last_damage = by;
             v.charge = 0;
             v.charge_started = None;
+            v.trigger_pulled = None;
             let d = &self.catalog[&v.spawn.definition];
             let gunner = d.weapon_seat();
             if let Some(index) = gunner {
@@ -2392,6 +2398,7 @@ fn actor_step(
         jump: driven && c.jump,
         crouch: false,
         jet: false,
+        attack: false,
     };
     let motion = actor.step_through(world, input, waters, parts, passages)?;
     if motion.jumped && d.family == Family::Horse {
@@ -2441,6 +2448,7 @@ fn weapon_step(
     let Some(occupant) = v.seats[index] else {
         v.charge = 0;
         v.charge_started = None;
+        v.trigger_pulled = None;
         return;
     };
     let mut c = v.controls[index];
@@ -2454,7 +2462,19 @@ fn weapon_step(
     let pressed = c.fire && !v.fire_held;
     v.fire_held = c.fire;
     let mut fire = false;
-    if weapon.charge_ticks > 0 {
+    // How long an automatic gun's trigger has been held.
+    let held = match &weapon.automatic {
+        Some(_) if c.fire => Some(tick - *v.trigger_pulled.get_or_insert(tick)),
+        _ => {
+            v.trigger_pulled = None;
+            None
+        }
+    };
+    if let (Some(auto), Some(held)) = (&weapon.automatic, held) {
+        fire = v
+            .last_shot
+            .is_none_or(|last| tick - last >= auto.interval(held));
+    } else if weapon.charge_ticks > 0 {
         if c.fire && ready && (pressed || v.charge_started.is_some()) {
             let start = *v.charge_started.get_or_insert(tick);
             let charge = (1 + (tick - start) / weapon.charge_ticks)
@@ -2485,6 +2505,10 @@ fn weapon_step(
         let b = &mut world.bodies[v.body];
         let Some((muzzle, aimed)) = d.muzzle([c.aim_yaw, c.aim_pitch]) else {
             return;
+        };
+        let aimed = match (&weapon.automatic, held) {
+            (Some(auto), Some(held)) => stray(aimed, auto.spread(held), id, tick),
+            _ => aimed,
         };
         let direction = *b.rotation() * aimed;
         let origin = b.position().transform_point(muzzle * v.spawn.scale);
@@ -2518,8 +2542,11 @@ fn weapon_step(
             vehicle: id,
             id: "activate".into(),
         });
-        if d.family != Family::Cannon {
-            b.apply_impulse(-(direction + Vec3::Y) * d.mass * 5., true);
+        let recoil = weapon
+            .recoil
+            .unwrap_or(if d.family == Family::Cannon { 0. } else { 5. });
+        if recoil > 0. {
+            b.apply_impulse(-(direction + Vec3::Y) * d.mass * recoil, true);
         }
         v.last_shot = Some(tick);
         v.charge = 0;
@@ -2532,6 +2559,29 @@ fn weapon_step(
             });
         }
     }
+}
+
+/// `aim` turned up to `spread` radians off, the same way for the same
+/// vehicle and tick on every machine: uniformly over the cone, as Halo
+/// spreads its error angle.
+fn stray(aim: Vec3, spread: f32, id: VehicleId, tick: u64) -> Vec3 {
+    if spread <= 0. {
+        return aim;
+    }
+    // splitmix64 of the vehicle and tick.
+    let mut x = id.0.wrapping_mul(0x9e37_79b9_7f4a_7c15) ^ tick;
+    let mut next = || {
+        x = x.wrapping_add(0x9e37_79b9_7f4a_7c15);
+        let mut z = x;
+        z = (z ^ (z >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+        ((z ^ (z >> 31)) >> 40) as f32 / (1u64 << 24) as f32
+    };
+    let cos = 1. - next() * (1. - spread.cos());
+    let sin = (1. - cos * cos).max(0.).sqrt();
+    let around = next() * std::f32::consts::TAU;
+    let (a, b) = aim.any_orthonormal_pair();
+    (aim * cos + (a * around.cos() + b * around.sin()) * sin).normalize()
 }
 
 /// A vehicle's body as it collides, at `scale`: its shape and where that

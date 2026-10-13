@@ -341,6 +341,8 @@ def carbine(root):
 TIRE = dict(lateral_force=42000.0, lateral_damping=9000.0, lateral_relaxation=0.02,
             longitudinal_force=40000.0, longitudinal_damping=5000.0, longitudinal_relaxation=0.02)
 GRIP_SCALE = 4.0
+# The chaingun's bullet, 293 wu/s.
+CHAINGUN_SPEED = round(293 * 4.12, 1)
 # (along, across) per axle, from the Warthog's mass points 11 to 14.
 FRONT_GRIP = (0.75, 0.45)
 REAR_GRIP = (0.45, 0.65)
@@ -408,6 +410,10 @@ def buggy(root):
                 'steering': -0.35 if rear else 1.0, 'powered': True,
                 'model': 'models/tire.shape.json', 'model_rotation': [0.0, 0.0, 0.0, 1.0]}
 
+    # The driver's hands on the steering bar, the gunner's on the gun's
+    # back corners (right is +X, facing -Z).
+    hands = {0: {'right': [0.15, 1.25, -0.5], 'left': [-0.15, 1.25, -0.5]},
+             2: {'right': [0.2, 1.85, 1.55], 'left': [-0.2, 1.85, 1.55]}}
     hull = [[x, y, z] for x in (-1.0, 1.0) for y in (-0.1, 1.2) for z in (-2.0, 2.0)]
     definition = {
         'id': 'playground-buggy:vehicle/buggy',
@@ -420,17 +426,23 @@ def buggy(root):
         'model': 'models/buggy.shape.json',
         'seats': [
             {'node': f'mount{i}', 'transform': {'position': at, 'rotation': [0.0, 0.0, 0.0, 1.0]},
-             'pose': 'sit' if i < 2 else 'root', 'controls': i == 0, 'weapon': i == 2}
+             'pose': 'sit' if i < 2 else 'root', 'controls': i == 0, 'weapon': i == 2,
+             **({'hands': hands[i]} if i in hands else {})}
             for i, at in enumerate(seats)
         ],
         'wheels': [wheel(x, z) for z in (-1.45, 1.45) for x in (-1.15, 1.15)],
-        # The gunner's post fires bolts where they look, turning about the
-        # post's top.
+        # The gunner's post fires where they look, turning about the post's
+        # top, as the Warthog's chaingun (`warthog gun` weap): for as long
+        # as the trigger is held, 8 rising to 15 rounds a second over 1 s,
+        # straying 1 rising to 2 degrees over 3 s, at 293 wu/s, and no kick.
         'weapon': {'projectile': 'playground-buggy:projectile/bolt',
                    'muzzle': {'position': [0.0, 1.85, 0.6], 'rotation': [0.0, 0.0, 0.0, 1.0]},
-                   'pivot': [0.0, 1.85, 1.5], 'cooldown_ticks': 12, 'speed': 140.0,
+                   'pivot': [0.0, 1.85, 1.5], 'cooldown_ticks': 8, 'speed': CHAINGUN_SPEED,
                    'charge_ticks': 0, 'charge_steps': 1, 'sound': 'playground-buggy:turret',
-                   'effect': ''},
+                   'effect': '',
+                   'automatic': {'rate': [8.0, 15.0], 'spin_up_ticks': 120,
+                                 'spread': [0.0175, 0.0349], 'spread_ticks': 360},
+                   'recoil': 0.0},
         'attachment_model': None,
         'attachment_collision_hulls': [],
         'attachment_mount': None,
@@ -529,8 +541,16 @@ def buggy(root):
         'images': {},
         'projectiles': {
             'playground-buggy:projectile/bolt': {
-                'speed': 140.0, 'lifetime_ticks': 180, 'fade_ticks': 180, 'damage': 20.0,
-                'damage_type': '$DamageType::BuggyGun', 'impulse': 150.0,
+                # Up to 15 a second, so each round pushes a tenth of what the
+                # old single bolt did: a burst shoves and does not fling.
+                # 8 a round takes a 100-health Blockhead down in about a
+                # second once the gun has spun up, as the Warthog's gun
+                # drops a Spartan; the old bolt's 20 at 15 a second was a
+                # third of a second.
+                'speed': CHAINGUN_SPEED, 'lifetime_ticks': 180, 'fade_ticks': 180, 'damage': 8.0,
+                'damage_type': '$DamageType::BuggyGun', 'impulse': 15.0,
+                # Each round leaves a bullet hole on the brick it hits.
+                'decal': {'size': 0.15, 'seconds': 30.0},
             },
         },
         'damage_types': {

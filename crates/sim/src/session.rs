@@ -54,7 +54,7 @@ mod world_shapes;
 pub use tutorial::{Abilities, BRICK_HAND_IMAGES, BrickHand};
 mod bodies;
 mod grips;
-pub use grips::shape_grips;
+pub use grips::{body_grips, shape_grips};
 mod riding;
 pub use riding::{Ride, shape_mount_points};
 mod vehicles;
@@ -3148,6 +3148,7 @@ impl Session {
                     }
                 };
                 let before = Vec3::from(peer.player.state().feet);
+                let intent = peer.player.state().controller.map_or(0, |c| c.intent);
                 let motion = match self.simulation.step_body(&mut peer.player, input, &liquids) {
                     Ok(motion) => motion,
                     Err(error) => {
@@ -3197,6 +3198,26 @@ impl Session {
                     self.cues.emit(
                         tick,
                         crate::presentation::CueKind::Jump { sound },
+                        state.feet,
+                    );
+                }
+                // A movement controller's move sounds: the archetype's
+                // sound for the intent it changed to.
+                let state = peer.player.state();
+                let now = state.controller.map_or(0, |c| c.intent);
+                if now != intent
+                    && let Some(profile) = self
+                        .archetypes
+                        .resolve(state.archetype)
+                        .look
+                        .intent_sounds
+                        .get(&now)
+                {
+                    self.cues.emit(
+                        tick,
+                        crate::presentation::CueKind::WeaponSound {
+                            profile: profile.clone(),
+                        },
                         state.feet,
                     );
                 }

@@ -641,6 +641,18 @@ fn archetype(
     if let Some(camera) = &def.camera {
         archetype.look.camera = camera.clone();
     }
+    if let Some(v) = &def.intent_clips {
+        archetype.look.intent_clips = v.clone();
+    }
+    if let Some(v) = &def.intent_sounds {
+        archetype.look.intent_sounds = v.clone();
+    }
+    if let Some(v) = &def.ground_speeds {
+        archetype.look.ground_speeds = v.clone();
+    }
+    if let Some(v) = def.max_time_scale {
+        archetype.look.max_time_scale = v;
+    }
     if let Some(v) = def.uses_items {
         archetype.uses_items = v;
     }
@@ -4172,5 +4184,40 @@ mod allowance_tests {
                 assert_eq!(copy.available(&key, later), peeked, "tick {later}");
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod archetype_tests {
+    /// An Add-On's archetype JSON sets how its body looks while it moves:
+    /// the clip and sound for each controller intent and the speed its
+    /// locomotion clips play at.
+    #[test]
+    fn an_archetype_names_its_intent_clips_sounds_and_clip_speeds() -> anyhow::Result<()> {
+        let def: bri_package_runtime::content::ArchetypeDef =
+            serde_json::from_value(serde_json::json!({
+                "schema_version": 1, "name": "Plumber",
+                "intent_clips": { "11": "triple" },
+                "intent_sounds": { "11": "plumber:sound/yahoo" },
+                "ground_speeds": { "run": 9.0 },
+                "max_time_scale": 2.0
+            }))?;
+        def.validate()?;
+        let a = super::archetype(
+            &crate::archetype::Archetypes::default(),
+            "plumber:archetype/plumber",
+            &def,
+            &Default::default(),
+        )?;
+        assert_eq!(a.look.intent_clips[&11], "triple");
+        assert_eq!(a.look.intent_sounds[&11], "plumber:sound/yahoo");
+        assert_eq!(a.look.ground_speeds["run"], 9.0);
+        assert_eq!(a.look.max_time_scale, 2.0);
+        let bad: bri_package_runtime::content::ArchetypeDef =
+            serde_json::from_value(serde_json::json!({
+                "schema_version": 1, "ground_speeds": { "jump": 9.0 }
+            }))?;
+        assert!(bad.validate().is_err());
+        Ok(())
     }
 }

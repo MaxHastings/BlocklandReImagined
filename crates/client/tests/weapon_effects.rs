@@ -137,6 +137,7 @@ fn weapons() -> Arc<Pack> {
         collision_sound: None,
         sport_hit: None,
         turns_into: None,
+        decal: None,
     };
     Arc::new(Pack {
         effects: Default::default(),

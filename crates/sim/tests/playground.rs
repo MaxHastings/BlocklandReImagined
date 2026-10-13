@@ -1407,3 +1407,50 @@ fn a_buggy_runs_a_stomper_over() {
     }
     assert!(hit, "the buggy ran the Stomper over");
 }
+
+/// The Carbine's pulse leaves a mark where it hits the fort (its
+/// projectile's `decal`): the host tells every player which brick and
+/// which face, and the pack says how the mark looks.
+#[test]
+fn a_carbine_shot_marks_the_brick_it_hits() {
+    let mut g = Game::new();
+    let p = g.join("Ann");
+    g.steps(40);
+    g.equip(p, CARBINE);
+    g.steps(300);
+    g.s.take_cues();
+    assert_eq!(g.fire(p), 1);
+    let decals: Vec<_> =
+        g.s.take_cues()
+            .into_iter()
+            .filter_map(|c| match c.kind {
+                bri_sim::presentation::CueKind::Decal {
+                    brick,
+                    normal,
+                    projectile,
+                    scale,
+                } => Some((brick, Vec3::from(normal), projectile, scale, c.position)),
+                _ => None,
+            })
+            .collect();
+    assert_eq!(decals.len(), 1, "one mark for one shot");
+    let (brick, normal, projectile, scale, at) = &decals[0];
+    assert!(
+        g.s.simulation().state().bricks.contains_key(brick),
+        "on a brick of the fort"
+    );
+    assert!(
+        normal.abs_diff_eq(Vec3::Z, 1e-3),
+        "on the face toward the shooter: {normal}"
+    );
+    assert!(
+        (at[2] - (WALL_Z + 0.25)).abs() < 0.05,
+        "on the wall's near face: {at:?}"
+    );
+    assert_eq!(projectile, "playground-rifle:projectile/pulse");
+    assert_eq!(*scale, 1.0);
+    assert!(
+        weapons().projectiles[projectile.as_str()].decal.is_some(),
+        "the pack says how it looks"
+    );
+}

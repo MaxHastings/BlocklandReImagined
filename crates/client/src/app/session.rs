@@ -111,6 +111,7 @@ impl App {
         self.fx.actor_effects.reset(0);
         self.fx.explosion_shapes.reset(0);
         self.fx.beams.clear();
+        self.fx.decals.clear();
         self.fx.tutorial_targets.update(&[], 0.0);
         self.fx.explosion_debris.reset(0);
         self.fx.weapon_shells.clear();
@@ -210,6 +211,7 @@ impl App {
         self.mounts.takes_turret = false;
         self.mounts.seat_report = None;
         self.mounts.rider_rotations.clear();
+        self.mounts.rider_hands.clear();
         self.mounts.posed_eye = None;
         self.mounts.tumble = None;
         self.view.observer_eye = None;
@@ -360,6 +362,10 @@ impl App {
             bri_sim::session::shape_mount_points(&self.avatar.avatar_assets.rig.shape);
         // Shots leave the muzzle each image draws at in the hand.
         let body_grips = bri_sim::session::shape_grips(&self.avatar.avatar_assets.rig, &[]);
+        let package_body_grips = bri_net::content_identity::package_body_grips(
+            &self.content.paths.root,
+            &self.content.paths.packages,
+        );
         let image_barrels = self.world_items.assets().image_barrels();
         let mut catalog = self.build.tool_ui.server_catalog();
         // Start Game's Music Files: the loops this game's music bricks offer.
@@ -604,6 +610,7 @@ impl App {
                     avatar_catalog,
                     body_mounts,
                     body_grips,
+                    package_body_grips,
                     image_barrels,
                     vehicle_pack,
                     bot_kinds,

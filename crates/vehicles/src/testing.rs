@@ -126,6 +126,7 @@ fn seat(node: &str, position: [f32; 3], controls: bool, weapon: bool) -> Seat {
         pose: "sit".into(),
         controls,
         weapon,
+        hands: Default::default(),
     }
 }
 
@@ -377,6 +378,8 @@ pub fn tank() -> Definition {
             charge_steps: 1,
             sound: "test:sound/shell-fire".into(),
             effect: "test:effect/shell-smoke".into(),
+            automatic: None,
+            recoil: None,
             look_muzzle: vec![],
         }),
         attachment_model: Some("test/tank-turret.dts".into()),
@@ -597,6 +600,8 @@ pub fn cannon() -> Definition {
             charge_steps: 4,
             sound: "test:sound/cannon-fire".into(),
             effect: "test:effect/cannon-smoke".into(),
+            automatic: None,
+            recoil: None,
             look_muzzle: vec![],
         }),
         mass: 200.,
@@ -618,6 +623,8 @@ pub fn turret() -> Definition {
             charge_steps: 1,
             sound: "test:sound/turret-fire".into(),
             effect: String::new(),
+            automatic: None,
+            recoil: None,
             look_muzzle: vec![],
         }),
         mass: 150.,

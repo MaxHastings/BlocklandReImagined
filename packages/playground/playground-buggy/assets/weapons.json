@@ -5,12 +5,16 @@
  "images": {},
  "projectiles": {
   "playground-buggy:projectile/bolt": {
-   "speed": 140.0,
+   "speed": 1207.2,
    "lifetime_ticks": 180,
    "fade_ticks": 180,
-   "damage": 20.0,
+   "damage": 8.0,
    "damage_type": "$DamageType::BuggyGun",
-   "impulse": 150.0
+   "impulse": 15.0,
+   "decal": {
+    "size": 0.15,
+    "seconds": 30.0
+   }
   }
  },
  "damage_types": {

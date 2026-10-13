@@ -85,6 +85,7 @@ fn content() -> SessionContent {
         .unwrap(),
         body_mounts: Vec::new(),
         body_grips: Default::default(),
+        package_body_grips: Default::default(),
         image_barrels: Default::default(),
         bot_kinds: Vec::new(),
         event_catalog: bri_events::testing::catalog(),

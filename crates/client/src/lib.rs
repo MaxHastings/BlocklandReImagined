@@ -22,6 +22,7 @@ pub mod controls;
 pub mod copies;
 pub mod cosmetic;
 pub mod culling;
+pub mod decals;
 pub mod rule_regions;
 pub use bri_sim::crouch;
 pub mod effects;

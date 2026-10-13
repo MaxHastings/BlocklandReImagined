@@ -818,6 +818,32 @@ impl ClientVehicles {
         let (_, rotation, position) = world.to_scale_rotation_translation();
         Some((position, rotation))
     }
+    /// Where seat `seat`'s rider holds on in the world, right hand then
+    /// left (`Seat::hands`), turned with the turret and gun as drawn.
+    /// None for a hand the seat leaves free, and for both while a broken
+    /// turret's gunner sits on the hull's fallback seat.
+    pub fn hand_holds(
+        &self,
+        assets: &VehicleAssets,
+        info: &VehicleInfo,
+        seat: usize,
+    ) -> [Option<Vec3>; 2] {
+        let Some((frame, d)) = self
+            .frames
+            .get(&info.id)
+            .zip(assets.definition(&info.definition))
+        else {
+            return [None; 2];
+        };
+        if info.turret_broken && d.weapon_seat() == Some(seat) {
+            return [None; 2];
+        }
+        let body = to_transform(frame.position, frame.rotation);
+        [0, 1].map(|hand| {
+            d.hand_hold(seat, hand, frame.turret_aim)
+                .map(|at| body.transform_point3(at))
+        })
+    }
     /// Refresh per-model instance lists (chassis, wheels, turrets).
     pub fn prepare(&mut self, assets: &mut VehicleAssets, infos: &BTreeMap<u64, VehicleInfo>) {
         let VehicleAssets {

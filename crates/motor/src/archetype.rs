@@ -11,6 +11,7 @@ use anyhow::{Result, ensure};
 use bri_content::body::{Animations, Sockets};
 use bri_content::camera::CameraProfile;
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 
 /// Index into an [`Archetypes`] table. `0` is v20's standard player.
 #[derive(
@@ -141,6 +142,40 @@ pub struct Look {
     /// sway and third-person pivot. The default is the stock camera.
     #[serde(default, skip_serializing_if = "CameraProfile::is_default")]
     pub camera: CameraProfile,
+    /// The model's clip for each of its movement controller's intents
+    /// (`crate::controller::ControllerState::intent`): `{"11": "triple"}`
+    /// plays the model's `triple` sequence while the controller says 11.
+    /// An intent with no clip, or a clip the model lacks, plays the clip
+    /// the body's motion picks, as for every body.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub intent_clips: BTreeMap<u8, String>,
+    /// A sound (a sound id of the Add-On's packs) heard where the body is
+    /// each time its controller changes to that intent: the jump, the wall
+    /// kick, the ground pound's thud.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub intent_sounds: BTreeMap<u8, String>,
+    /// The speed (units/s) at which the clip for each locomotion role (`run`,
+    /// `back`, `side`, `crouch_run`...) plays at 1x; the clip then plays
+    /// faster or slower with the body's speed, as v20 plays its run by the
+    /// ground its sequence covers. A role left out uses its clip's own
+    /// ground motion, and a clip without any keeps its own time.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub ground_speeds: bri_content::body::GroundSpeeds,
+    /// The fastest a locomotion clip plays for its speed (v20's
+    /// `maxTimeScale`, 1.5).
+    #[serde(
+        default = "default_max_time_scale",
+        skip_serializing_if = "is_default_max_time_scale"
+    )]
+    pub max_time_scale: f32,
+}
+/// v20's `PlayerData::maxTimeScale`.
+pub const MAX_TIME_SCALE: f32 = 1.5;
+fn default_max_time_scale() -> f32 {
+    MAX_TIME_SCALE
+}
+fn is_default_max_time_scale(v: &f32) -> bool {
+    *v == MAX_TIME_SCALE
 }
 /// v20's horse (`horse.dts`): players and entities with this look draw
 /// and carry items as a horse.
@@ -170,6 +205,16 @@ impl Archetype {
                 && (1.0..=100_000.0).contains(&self.max_health)
                 && self.look.camera_distance.is_finite()
                 && (0.0..=64.0).contains(&self.look.camera_distance)
+                && self
+                    .look
+                    .intent_clips
+                    .values()
+                    .chain(self.look.intent_sounds.values())
+                    .all(|name| {
+                        !name.is_empty() && name.len() <= 160 && !name.chars().any(char::is_control)
+                    })
+                && self.look.max_time_scale.is_finite()
+                && (0.1..=16.0).contains(&self.look.max_time_scale)
                 && self.sounds.valid()
                 && self.mount_points.len() <= MAX_MOUNT_POINTS
                 && self.mount_points.iter().all(|m| {
@@ -184,6 +229,7 @@ impl Archetype {
         );
         self.sockets.validate()?;
         bri_content::body::validate_animations(&self.look.animations)?;
+        bri_content::body::validate_ground_speeds(&self.look.ground_speeds)?;
         self.look.camera.validate()?;
         if let Some(source) = &self.controller {
             source.validate()?;
@@ -211,6 +257,10 @@ impl Archetype {
                 third_person_only: false,
                 animations: Animations::new(),
                 camera: CameraProfile::default(),
+                intent_clips: BTreeMap::new(),
+                intent_sounds: BTreeMap::new(),
+                ground_speeds: Default::default(),
+                max_time_scale: MAX_TIME_SCALE,
             },
             uses_items: true,
             sockets: Sockets::default(),

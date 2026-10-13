@@ -33,7 +33,19 @@
      },
      "pose": "sit",
      "controls": true,
-     "weapon": false
+     "weapon": false,
+     "hands": {
+      "right": [
+       0.15,
+       1.25,
+       -0.5
+      ],
+      "left": [
+       -0.15,
+       1.25,
+       -0.5
+      ]
+     }
     },
     {
      "node": "mount1",
@@ -71,7 +83,19 @@
      },
      "pose": "root",
      "controls": false,
-     "weapon": true
+     "weapon": true,
+     "hands": {
+      "right": [
+       0.2,
+       1.85,
+       1.55
+      ],
+      "left": [
+       -0.2,
+       1.85,
+       1.55
+      ]
+     }
     }
    ],
    "wheels": [
@@ -228,12 +252,25 @@
      1.85,
      1.5
     ],
-    "cooldown_ticks": 12,
-    "speed": 140.0,
+    "cooldown_ticks": 8,
+    "speed": 1207.2,
     "charge_ticks": 0,
     "charge_steps": 1,
     "sound": "playground-buggy:turret",
-    "effect": ""
+    "effect": "",
+    "automatic": {
+     "rate": [
+      8.0,
+      15.0
+     ],
+     "spin_up_ticks": 120,
+     "spread": [
+      0.0175,
+      0.0349
+     ],
+     "spread_ticks": 360
+    },
+    "recoil": 0.0
    },
    "attachment_model": null,
    "attachment_collision_hulls": [],

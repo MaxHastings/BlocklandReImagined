@@ -1473,6 +1473,11 @@ impl Building {
     }
     /// The shape and pose `id` is solid with, as [`Self::colliding_bricks`]
     /// gives it; `None` when it is gone or no longer solid.
+    /// Whether brick `id` stands and collides (not killed or fake-killed).
+    pub fn brick_stands(&self, id: BrickId) -> bool {
+        self.bricks.get(&id).is_some_and(|b| b.colliding)
+    }
+
     pub fn solid_brick(&self, id: BrickId) -> Option<(SharedShape, Pose)> {
         let brick = self.bricks.get(&id).filter(|b| b.colliding)?;
         let shape = self.definitions.get(brick).ok()?.shape.clone();

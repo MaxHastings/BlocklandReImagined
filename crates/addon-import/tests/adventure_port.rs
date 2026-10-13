@@ -389,6 +389,7 @@ fn tumble_pack() -> bri_vehicles::Pack {
         pose: "root".into(),
         controls: false,
         weapon: false,
+        hands: Default::default(),
     }];
     pack.definitions.push(tumble);
     // A vehicle a swing can wreck.

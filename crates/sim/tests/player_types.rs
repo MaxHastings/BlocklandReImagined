@@ -31,6 +31,7 @@ fn spawn(w: &mut PhysicsWorld, datablock: PlayerType) -> Player {
     p
 }
 const JET: MoveInput = MoveInput {
+    attack: false,
     forward: 0.0,
     right: 0.0,
     yaw: 0.0,

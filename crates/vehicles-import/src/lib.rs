@@ -299,6 +299,7 @@ pub fn lower(
             controls: i == 0 && family != Family::Tumble,
             weapon: matches!(family, Family::Cannon | Family::Turret)
                 || (name == "TankVehicle" && i == 2),
+            hands: Default::default(),
         });
     }
     let mut wheels = vec![];
@@ -440,6 +441,8 @@ pub fn lower(
                 "TankSmokeImage"
             }
             .into(),
+            automatic: None,
+            recoil: None,
             look_muzzle: Vec::new(),
         })
     } else {

@@ -109,6 +109,40 @@ impl Definition {
     }
 }
 
+impl Definition {
+    /// Where seat `seat`'s rider holds on with `hand` (0 right, 1 left),
+    /// body-local and unscaled, for a gunner's `[yaw, pitch]` aim. A
+    /// gunner's holds move as the gun is drawn: tipped about its `pivot`
+    /// when its model has a `look` clip, then turned with the turret about
+    /// its mount (as the seat is). A gun drawn fixed to the body keeps its
+    /// holds where they are, whatever the shots do.
+    pub fn hand_hold(&self, seat: usize, hand: usize, aim: [f32; 2]) -> Option<Vec3> {
+        let s = self.seats.get(seat)?;
+        let at = Vec3::from((*s.hands.each().get(hand)?)?);
+        let Some(weapon) = self
+            .weapon
+            .as_ref()
+            .filter(|_| self.weapon_seat() == Some(seat))
+        else {
+            return Some(at);
+        };
+        let at = if weapon.look_muzzle.len() >= 2 {
+            let pitch = aim[1].clamped(self.look_pitch[0], self.look_pitch[1]);
+            let pivot = Vec3::from(weapon.pivot);
+            pivot + Quat::from_rotation_x(pitch) * (at - pivot)
+        } else {
+            at
+        };
+        Some(match &self.attachment_mount {
+            Some(mount) if !self.is_actor() => {
+                let about = Vec3::from(mount.position);
+                about + Quat::from_rotation_y(aim[0]) * (at - about)
+            }
+            _ => at,
+        })
+    }
+}
+
 impl Pack {
     /// Sample each gunner's muzzle node along its model's `look` clip.
     pub fn attach_muzzle_tracks(&mut self, root: &Path) -> Result<()> {
@@ -217,5 +251,34 @@ mod tests {
             assert!(spread < 0.03, "{id}: barrel lags the aim by {spread} rad");
         }
         Ok(())
+    }
+
+    /// A gunner's hands stay on the drawn gun: turned with the turret
+    /// about its mount, tipped about the pivot only when the gun's model
+    /// pitches with a `look` clip; other seats' holds stay put.
+    #[test]
+    fn a_gunners_hand_holds_turn_and_tip_with_the_drawn_gun() {
+        let mut tank = crate::testing::tank();
+        let grip = [0.3, 2.4, 1.0];
+        tank.seats[2].hands.right = Some(grip);
+        tank.seats[0].hands.left = Some([0.2, 1.2, -1.5]);
+        let quarter = std::f32::consts::FRAC_PI_2;
+        let turned = tank.hand_hold(2, 0, [quarter, 0.3]).unwrap();
+        // About the mount at (0, 1.6, 0): (0.3, _, 1.0) turns to (1.0, _, -0.3).
+        assert!(
+            turned.abs_diff_eq(Vec3::new(1.0, 2.4, -0.3), 1e-5),
+            "{turned}"
+        );
+        assert_eq!(tank.hand_hold(2, 1, [quarter, 0.3]), None, "left free");
+        assert_eq!(
+            tank.hand_hold(0, 1, [quarter, 0.3]),
+            Some(Vec3::new(0.2, 1.2, -1.5)),
+            "the driver's do not turn"
+        );
+        // With a look clip the gun tips: the grip, behind the pivot at
+        // (0, 2.4, 0), drops as the gun looks up.
+        tank.weapon.as_mut().unwrap().look_muzzle = vec![[0.0; 3]; 2];
+        let tipped = tank.hand_hold(2, 0, [0.0, 0.3]).unwrap();
+        assert!(tipped.y < 2.4 && (tipped.distance(Vec3::new(0.3, 2.4, 0.0)) - 1.0).abs() < 1e-5);
     }
 }

@@ -315,7 +315,7 @@ pub fn body_placements<'a>(
             let placement = Placement {
                 model: &look.model,
                 position: p.feet,
-                yaw: p.yaw,
+                yaw: p.body_yaw(),
                 scale: p.scale,
                 label: "",
                 pose: None,

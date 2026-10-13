@@ -1,0 +1,1 @@
+`CueKind::Decal { brick, normal, projectile, scale }`: a projectile with a `decal` hit a brick, so every client marks that face with the projectile's decal (a bullet hole) until it fades or the brick goes.

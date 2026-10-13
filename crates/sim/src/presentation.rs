@@ -147,6 +147,16 @@ pub enum CueKind {
         actor: u64,
         hand: u8,
     },
+    /// A projectile that leaves a mark (`ProjectileDef::decal`) hit `brick`
+    /// at the cue position, on the face turned to `normal`. Clients draw
+    /// the projectile's own decal there, `scale` times its size, until it
+    /// fades or the brick goes.
+    Decal {
+        brick: u64,
+        normal: [f32; 3],
+        projectile: String,
+        scale: f32,
+    },
 }
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Cue {
@@ -276,6 +286,21 @@ impl Cue {
             CueKind::Tracer { actor, hand } => {
                 ensure!(*actor > 0 && *hand < 2, "Invalid tracer cue")
             }
+            CueKind::Decal {
+                brick,
+                normal,
+                projectile,
+                scale,
+            } => ensure!(
+                *brick > 0
+                    && normal.iter().all(|v| v.is_finite())
+                    && (normal.iter().map(|v| v * v).sum::<f32>() - 1.).abs() < 0.01
+                    && !projectile.is_empty()
+                    && text(projectile)
+                    && scale.is_finite()
+                    && (0.01..=100.).contains(scale),
+                "Invalid decal cue"
+            ),
             CueKind::Teleport { actor, scale, .. } => ensure!(
                 *actor > 0 && scale.is_finite() && (0.01..=100.0).contains(scale),
                 "Invalid teleport cue"

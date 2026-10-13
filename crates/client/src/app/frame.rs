@@ -539,6 +539,7 @@ impl App {
                 // Riders sit exactly on their rendered vehicle's seat, tilted
                 // with it (`Player::processTick` takes the mount transform).
                 self.mounts.rider_rotations.clear();
+                self.mounts.rider_hands.clear();
                 self.mounts.posed_eye = None;
                 for (owner, vitals) in &view.vitals {
                     let Some((vehicle, seat)) = vitals.mounted else {
@@ -598,6 +599,12 @@ impl App {
                         rotation *= glam::Quat::from_rotation_y(-turn);
                         yaw += turn;
                         self.mounts.rider_rotations.insert(*owner, rotation);
+                        let hands =
+                            self.vehicles
+                                .hand_holds(&self.vehicle_assets, info, usize::from(seat));
+                        if hands.iter().any(Option::is_some) {
+                            self.mounts.rider_hands.insert(*owner, hands);
+                        }
                         let velocity = self
                             .vehicles
                             .frame(vehicle)
@@ -1162,9 +1169,20 @@ impl App {
                     .filter(|_| !dead)
                     .cloned()
                     .unwrap_or_default();
+                let riding = view
+                    .vitals
+                    .get(owner)
+                    .is_some_and(|v| v.mounted.is_some() || v.ride.is_some());
                 let input = crate::avatar::AvatarAnimationInput {
                     look_limits,
                     mount_rotation: self.mounts.rider_rotations.get(owner).copied(),
+                    hand_holds: self
+                        .mounts
+                        .rider_hands
+                        .get(owner)
+                        .copied()
+                        .filter(|_| !dead)
+                        .unwrap_or_default(),
                     held_tool_pose: if dead {
                         self.combat.hugging.remove(owner);
                         crate::avatar::HeldToolPose::None
@@ -1184,11 +1202,7 @@ impl App {
                     // Riders hold `root` (`Armor::onMount` sets the action
                     // thread to root and mountThread on thread 0); they do
                     // not run, jump or fall with their mount's motion.
-                    tick_state: if view
-                        .vitals
-                        .get(owner)
-                        .is_some_and(|v| v.mounted.is_some() || v.ride.is_some())
-                    {
+                    tick_state: if riding {
                         Some(bri_sim::player::PlayerState {
                             velocity: [0.0; 3],
                             grounded: true,
@@ -1208,6 +1222,16 @@ impl App {
                         ),
                     )
                     .map_or(0.0, |(_, c)| c),
+                    // A rider's controller does not run, so its last
+                    // intent says nothing about the seat.
+                    intent_clip: player.controller.filter(|_| !riding).and_then(|c| {
+                        view.archetypes
+                            .resolve(player.archetype)
+                            .look
+                            .intent_clips
+                            .get(&c.intent)
+                            .cloned()
+                    }),
                 };
                 let avatar = self.avatar.avatars.get_mut(owner).unwrap();
                 avatar.screen_height = self
@@ -1444,6 +1468,9 @@ impl App {
                 .absorb("player and vehicle effects", actors);
             self.fx.explosion_shapes.advance(game_elapsed.as_secs_f32());
             self.fx.beams.advance(game_elapsed.as_secs_f32());
+            self.fx.decals.advance(game_elapsed.as_secs_f32(), |brick| {
+                building.brick_stands(brick)
+            });
             self.fx
                 .explosion_debris
                 .advance(game_elapsed.as_secs_f32(), |from, to| {

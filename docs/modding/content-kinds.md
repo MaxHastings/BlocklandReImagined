@@ -128,7 +128,31 @@ nodes, so it gives offsets. Missing sockets fall back to the Blockhead's
 `Mount0`, `Mount1` and `Eye` on a rigged body; a box body without a hand
 socket hides what that hand holds, and without a `seat` it sits upright.
 Every gun fires from its muzzle at the hand socket and converges on the
-crosshair, falling back to the eye when the barrel is inside a wall.
+crosshair, falling back to the eye when the barrel is inside a wall. The
+host reads an imported body's hand nodes from its package with the arm
+raised to aim (its `aim_right` clip), as the Blockhead's.
+
+A held item takes the socket node's own axes, so author the socket nodes
+(`socket_right_hand`, `socket_left_hand` in glTF) with no turn of their own
+against the body (`crates/client/tests/gltf_body.rs` holds level that
+way): a bare hand bone's axes point the item along the bone.
+
+**Movement controller intents.** An archetype's `intent_clips` maps the
+animation intents a movement `controller` reports to the model's clips, and
+`intent_sounds` to a sound played where the body is each time the
+controller changes to that intent: `{"11": "triple_jump"}`. An intent
+clip replaces run, jump and fall while the controller reports it; dying,
+sitting and swimming still win, and a rider's intent is ignored.
+
+**Clip speed.** As in v20, the clip for `run`, `back`, `side` and the
+crouched ones plays at the speed the body moves along the way it walks
+(`|velocity . direction| / clip speed`), at most `max_time_scale` times
+(1.5, v20's `maxTimeScale`): feet keep pace with the ground instead of
+skating. A clip's speed at 1x is its own ground motion, which v20's
+sequences carry. A clip without any (most glTF exports) keeps its own time
+unless the archetype gives `ground_speeds`, in units per second at 1x:
+`{"run": 9.0, "side": 6.0}`. Measure it as the distance one cycle's feet
+travel divided by the cycle's length.
 `look.animations` maps roles to the body's own clips: `idle`, `run`,
 `back`, `side`, `crouch`, `crouch_run`, `crouch_back`, `crouch_side`,
 `jump`, `fall`, `sit`, `aim_right`, `aim_left`, `aim_both`,
@@ -261,6 +285,17 @@ no seats cannot be mounted. Three fields exist for Add-Ons:
   shots push it that many times as hard as v20's rule (the impulse over
   its mass) would. The Steel Ball weighs 900 and sets 3, so a rocket
   still knocks it about. Contacts and a click's flip go by its mass alone.
+- A seat's `"hands": { "right": [x, y, z], "left": [x, y, z] }` puts the
+  rider's hands there: a steering wheel, a gun's handles. The points are in
+  the vehicle's frame, as the seat's `transform` is. Every body reaches
+  them the same way, with no per-body offsets: after the seat's clip pose,
+  each arm (the hand socket's node and its ancestors below the chest)
+  bends at its elbow and swings from its shoulder so the hand node lands
+  on the point, or points straight at it when it is out of reach. An arm
+  with no even elbow (a Blockhead's rigid arm) only swings. A gunner's
+  holds turn with the turret and, when the gun model pitches with a
+  `look` clip, tip with it about the weapon's `pivot`. A hand left out
+  keeps its clip pose. The Playground buggy's driver and gunner use it.
 
 Every vehicle can be placed from a vehicle spawn brick and spawned by a
 rule (`spawn_vehicle`).
@@ -301,6 +336,8 @@ engine changes. The fields that decide how it flies and looks:
 | `wheels[].tire.lateral_grip` | the tyre's grip across as a share (0.05 to 20) of its grip along (`static_friction`, `kinetic_friction`), stretching the friction circle into an ellipse: Halo's Warthog front tyres 0.6, rear 1.44. 1, the default: v20's circle | none (new) |
 | `throttle_brakes` | the throttle against the way the vehicle rolls brakes it with `brake_force` until it stops, then drives the other way (Halo's hard stop when you pull back). Off: v20's reversed engine, which does next to nothing near top speed | none (new) |
 | `reverse_limited` | a wheeled vehicle's engine stops pushing it backward at `reverse_speed`. Off: v20's wheeled vehicles back up as fast as they go forward | none (new) |
+| `weapon.automatic` | the gun fires for as long as the trigger is held: `rate` [first, last] rounds a second rising over `spin_up_ticks`, and `spread` [first, last] radians each round may stray from the aim, rising over `spread_ticks` (120 ticks a second); letting go starts both again from the first. Absent: one shot a pull, at most every `cooldown_ticks` | none (new; Halo's `weap` rate of fire and error angle) |
+| `weapon.recoil` | each shot's kick, as a speed change in units a second back from the shot and up (the impulse is that times `mass`). Absent: v20's 5, and 0 for a cannon | the fixed kick in v20's vehicle gun |
 | `threads` | animations the model plays by itself, like a propeller | `playThread` and `setThreadDir` in `onAdd` and the functions it calls |
 | `trails`, `effects` | emitters run at the model's nodes within a speed range, like wing-tip contrails; `effects` holds the vehicle's own particles and emitters | `mountImage` of an image whose state holds a `stateEmitter`, in `onAdd` and the functions it calls |
 
@@ -313,12 +350,16 @@ all four wheels `powered`, `rest_length` 0.62, the weight 57% forward with
 each axle's `spring` carrying its share (10300 front, 7700 rear, so the deck
 sits level and clears the ground), each axle's grip along and
 across from the tags, a flat `engine_curve` with `engine_force` set so it
-gains about 10 units a second each second, `throttle_brakes`, and:
+gains about 10 units a second each second, `throttle_brakes`, the
+chaingun's rate of fire and spread on its gun, and:
 
 ```json
 "engine_curve": [[0.0, 1.0], [0.9, 1.0], [1.0, 0.0]],
 "throttle_brakes": true,
 "reverse_limited": true,
+"weapon": { "automatic": { "rate": [8.0, 15.0], "spin_up_ticks": 120,
+                           "spread": [0.0175, 0.0349], "spread_ticks": 360 },
+            "recoil": 0.0, "...": "..." },
 "gravity_scale": 0.85,
 "steering": { "strafe_rate": 0.25, "toward_look": true, "speed_lock": 0.6 },
 "mass_center": [0.0, 0.05, -0.2],

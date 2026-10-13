@@ -79,6 +79,29 @@ pub struct Seat {
     pub pose: String,
     pub controls: bool,
     pub weapon: bool,
+    /// Where the rider's hands hold on, in the vehicle's frame as
+    /// `transform` is: a gun's handles, a steering wheel. A gunner's turn
+    /// and tip with the gun's aim. Every body reaches its arms there.
+    #[serde(default, skip_serializing_if = "SeatHands::is_empty")]
+    pub hands: SeatHands,
+}
+/// A seat's hand holds: the rider's right and left hand.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SeatHands {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub right: Option<[f32; 3]>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub left: Option<[f32; 3]>,
+}
+impl SeatHands {
+    pub fn is_empty(&self) -> bool {
+        self.right.is_none() && self.left.is_none()
+    }
+    /// Right then left.
+    pub fn each(&self) -> [Option<[f32; 3]>; 2] {
+        [self.right, self.left]
+    }
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Wheel {
@@ -187,10 +210,68 @@ pub struct Weapon {
     pub charge_steps: u8,
     pub sound: String,
     pub effect: String,
+    /// Fires for as long as the trigger is held, spinning up and spreading
+    /// as it goes (the Warthog's chaingun); left out, one shot a pull, at
+    /// most every `cooldown_ticks`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub automatic: Option<Automatic>,
+    /// The kick each shot gives the vehicle, as a speed change in units/s
+    /// (the impulse is this times its mass) back from the shot and up. Left
+    /// out, v20's 5 for every gun but the cannon's 0.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recoil: Option<f32>,
     /// Weapon-frame muzzle node positions from full up to full down, sampled
     /// from the model's `look` clip at load (see `muzzle`). Empty without one.
     #[serde(skip)]
     pub look_muzzle: Vec<[f32; 3]>,
+}
+/// How a held trigger fires: Halo's `weap` rate of fire and error angle,
+/// each rising from its first to its last value while the trigger stays
+/// held. Letting go starts it again from the first.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Automatic {
+    /// Shots a second, from the pull to fully spun up.
+    pub rate: [f32; 2],
+    /// 120 Hz ticks from the first rate to the last.
+    pub spin_up_ticks: u64,
+    /// The widest a shot strays from the aim, in radians, from the pull to
+    /// fully spread.
+    #[serde(default)]
+    pub spread: [f32; 2],
+    /// 120 Hz ticks from the first spread to the last.
+    #[serde(default)]
+    pub spread_ticks: u64,
+}
+impl Automatic {
+    fn along(values: [f32; 2], held: u64, ticks: u64) -> f32 {
+        let t = if ticks == 0 {
+            1.0
+        } else {
+            (held as f32 / ticks as f32).min(1.0)
+        };
+        values[0] + (values[1] - values[0]) * t
+    }
+    /// The ticks between shots after the trigger has been held `held` ticks.
+    pub fn interval(&self, held: u64) -> u64 {
+        let rate = Self::along(self.rate, held, self.spin_up_ticks);
+        ((1.0 / (rate * crate::FIXED_DT)).round() as u64).max(1)
+    }
+    /// The widest a shot strays after the trigger has been held `held` ticks.
+    pub fn spread(&self, held: u64) -> f32 {
+        Self::along(self.spread, held, self.spread_ticks)
+    }
+    pub fn valid(&self) -> bool {
+        self.rate
+            .iter()
+            .all(|r| r.is_finite() && (0.1..=120.0).contains(r))
+            && self
+                .spread
+                .iter()
+                .all(|s| s.is_finite() && (0.0..=0.5).contains(s))
+            && self.spin_up_ticks <= 120 * 60
+            && self.spread_ticks <= 120 * 60
+    }
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct EnergySettings {
@@ -997,13 +1078,27 @@ impl Pack {
                     "invalid wheel"
                 );
             }
+            ensure!(
+                d.seats.iter().all(|seat| seat
+                    .hands
+                    .each()
+                    .iter()
+                    .flatten()
+                    .all(|p| p.iter().all(|v| v.is_finite() && v.abs() <= 64.))),
+                "invalid seat hands"
+            );
             if let Some(w) = &d.weapon {
                 ensure!(
                     w.cooldown_ticks > 0
                         && w.speed.is_finite()
                         && w.speed > 0.
                         && w.charge_steps > 0
-                        && w.charge_steps <= 64,
+                        && w.charge_steps <= 64
+                        && w.automatic
+                            .as_ref()
+                            .is_none_or(|a| a.valid() && w.charge_ticks == 0)
+                        && w.recoil
+                            .is_none_or(|r| r.is_finite() && (0.0..=100.0).contains(&r)),
                     "invalid weapon"
                 );
             }

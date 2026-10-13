@@ -173,6 +173,7 @@ pub fn load_packages(
     rig.validate()?;
     let body_mounts = bri_sim::session::shape_mount_points(&rig.shape);
     let body_grips = bri_sim::session::shape_grips(&rig, &[]);
+    let package_body_grips = content_identity::package_body_grips(content_root, packages);
     let image_barrels =
         content_identity::image_barrels(&item_presentation_dir, &weapons, &weapon_extras);
     let setup = HostSetup {
@@ -184,6 +185,7 @@ pub fn load_packages(
             avatar_catalog: avatar,
             body_mounts,
             body_grips,
+            package_body_grips,
             image_barrels,
             vehicle_pack,
             bot_kinds,
