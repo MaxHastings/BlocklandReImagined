@@ -676,6 +676,36 @@ async fn players_switch_bodies_mid_match_armed_and_seated() -> Result<()> {
             break;
         }
     }
+    // Jet off the hull: a body still on the seat once `$Game::MinMountTime`
+    // is up climbs back in, and a slow late join would find it seated.
+    let away = MoveInput {
+        forward: 1.0,
+        jet: true,
+        yaw,
+        ..Default::default()
+    };
+    let clear = |c: &Client| {
+        let hull = Vec3::from(c.replica.vehicle_poses[&buggy].position);
+        (feet(c, a) - hull).with_y(0.0).length() > 3.0
+    };
+    for _ in 0..30 {
+        if clear(&ann) {
+            break;
+        }
+        hold(&mut ann, &mut seat_report, away, 10).await?;
+    }
+    assert!(clear(&ann), "Ann got clear of the buggy");
+    hold(
+        &mut ann,
+        &mut seat_report,
+        MoveInput {
+            yaw,
+            ..Default::default()
+        },
+        130,
+    )
+    .await?;
+    assert_eq!(ann.replica.vitals[&a].mounted, None, "Ann stays out");
     wait(&mut bo, |c| {
         c.replica.vitals[&a].mounted.is_none() && body_of(c, a).as_deref() == Some(RUNNER)
     })
