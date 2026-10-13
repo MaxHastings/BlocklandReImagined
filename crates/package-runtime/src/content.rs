@@ -386,11 +386,13 @@ pub struct Behaviour {
     #[serde(default)]
     pub on_bot_ability: bool,
     /// `on_contact(info)` as two bodies begin to touch: `info` is
-    /// `#{ kind, by, target, vehicle, from, speed, velocity }`. `kind` is
-    /// `"body"` (a player's body meeting another's) or `"vehicle"` (a
-    /// vehicle running into a player); `by` is the one that came down on,
-    /// ran into or drove into `target` (the upper body, the quicker one, the
-    /// vehicle's driver or `()`); `from` is `"above"`, `"below"` or
+    /// `#{ kind, by, target, vehicle, target_vehicle, from, speed, velocity }`.
+    /// `kind` is `"body"` (a player's body meeting another's), `"vehicle"`
+    /// (a vehicle running into a player) or `"vehicles"` (two vehicles
+    /// crashing: `vehicle` ran into `target_vehicle`, and `by` and
+    /// `target` are their drivers or `()`); `by` is the one that came down
+    /// on, ran into or drove into `target` (the upper body, the quicker one,
+    /// the vehicle's driver or `()`); `from` is `"above"`, `"below"` or
     /// `"side"`; `velocity` is `by`'s (the vehicle's) less `target`'s as
     /// they met, `[x, y, z]`, and `speed` its length. A stomp, a run-over
     /// or a shove means what the rules make it mean.

@@ -3243,6 +3243,7 @@ impl Session {
         };
         self.push_contacts(push_contacts);
         self.package_body_contacts(&moving);
+        self.package_vehicle_crashes();
         impacts.retain(|(owner, _)| !smashers.contains(owner));
         self.fire_touches(touches);
         for (owner, carry) in crossed {
