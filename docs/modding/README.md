@@ -26,6 +26,7 @@ then what players are asked to trust when your Add-On runs code on their PC
 | New bricks | a v20-style brick Add-On you import ([Old v20 Add-Ons and new bricks](old-addons.md)) | a brick catalog the importer writes |
 | A game mode in Start Game | [`stresslab-mode`](../../packages/stresslab/stresslab-mode) | a `mode` file naming Add-Ons and a map |
 | A game mode on a world players dig into, with its own mini-game | [`crates/sim/tests/mode_and_voxels.rs`](../../crates/sim/tests/mode_and_voxels.rs) | rules with a generated world, a tool and a mode whose `minigame` block runs the game ([Other content kinds](content-kinds.md)) |
+| A character, weapon or vehicle model made in Blender | [Models from Blender (glTF)](gltf-models.md) | `bri-import-addon gltf` turns a `.glb` into a body Add-On or a model for `weapons.json` and `vehicles.json` |
 | Worlds, creatures, bodies, blocks | [`packages/stresslab`](../../packages/stresslab) | see [Other content kinds](content-kinds.md) |
 | A whole new game on top: bodies, scoped guns, creatures that shoot back, scoring | [`sample-commando`](../../packages/samples/sample-commando) and its four siblings | five Add-Ons: a weapon, a look with client code, rules, a HUD and a mode ([total-conversion.md](../audits/total-conversion.md)) |
 

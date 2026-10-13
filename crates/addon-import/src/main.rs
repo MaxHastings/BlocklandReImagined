@@ -6,6 +6,9 @@ const USAGE: &str = "Usage:
   bri-import-addon ADDON(.zip|folder) FRESH_OUTPUT_DIR [--reference V20_ROOT] [--core RECOVERED_SCRIPT.cs]... [--installed CONTENT_ROOT] [--version 1.0.0] [--json]
   bri-import-addon port ADDON(.zip|folder) FRESH_WORK_DIR [--reference V20_ROOT] [--core RECOVERED_SCRIPT.cs]... [--installed CONTENT_ROOT]
   bri-import-addon check-port WORK_DIR
+  bri-import-addon gltf MODEL(.glb|.gltf) FRESH_OUTPUT_DIR [--kind body|item|prop] [--id NAME] [--name MENU_NAME]
+      [--height UNITS | --scale FACTOR] [--fps 30] [--right-hand NODE] [--left-hand NODE] [--eye NODE] [--loop CLIP]...
+      [--lod TRIANGLES] [--lod-pixels 100] [--box-width UNITS] [--box-height UNITS] [--json]
 
 Converts one legacy Blockland Add-On into a native package directory and writes
 import-report.json and IMPORT-REPORT.md into it. Never executes scripts.
@@ -15,9 +18,16 @@ inherits from or names (a brick's parent, a sound) are read from it.
 `port` sets up a folder for porting the Add-On's scripts natively: the import,
 the original scripts, a drafted port, checks of what v20 does, stubs and an
 AGENT.md with instructions. `check-port` imports the Add-On again with that
-port, runs the checks and prints the entry for the ports list.";
+port, runs the checks and prints the entry for the ports list.
+
+`gltf` converts a Blender (glTF 2.0) model: a body becomes a package with an
+archetype, an item or prop a `models/` folder for weapons.json or
+vehicles.json. Names, scale and clips: docs/modding/gltf-models.md.";
 
 fn main() -> Result<()> {
+    if std::env::args().nth(1).as_deref() == Some("gltf") {
+        return gltf(std::env::args().skip(2));
+    }
     let mut args = std::env::args_os().skip(1);
     let mut positional = vec![];
     let mut reference = None;
@@ -112,6 +122,66 @@ fn main() -> Result<()> {
     } else {
         print!("{}", report.markdown());
         println!("\nPackage written to {}", out.display());
+    }
+    Ok(())
+}
+
+fn gltf(mut args: impl Iterator<Item = String>) -> Result<()> {
+    use bri_addon_import::gltf;
+    let mut positional = vec![];
+    let mut kind = gltf::Kind::Body;
+    let mut opts = gltf::Options::new("", "", kind);
+    let mut json = false;
+    while let Some(a) = args.next() {
+        let mut value = || args.next().context(USAGE);
+        let number = |v: String| {
+            v.parse::<f32>()
+                .with_context(|| format!("{v} is not a number"))
+        };
+        match a.as_str() {
+            "--kind" => kind = gltf::Kind::parse(&value()?)?,
+            "--id" => opts.id = Some(value()?),
+            "--name" => opts.name = Some(value()?),
+            "--height" => opts.height = Some(number(value()?)?),
+            "--scale" => opts.scale = Some(number(value()?)?),
+            "--fps" => opts.fps = number(value()?)?,
+            "--right-hand" => opts.right_hand = Some(value()?),
+            "--left-hand" => opts.left_hand = Some(value()?),
+            "--eye" => opts.eye = Some(value()?),
+            "--loop" => opts.loops.push(value()?),
+            "--lod" => {
+                let v = value()?;
+                opts.lod = Some(
+                    v.parse()
+                        .with_context(|| format!("{v} is not a triangle count"))?,
+                )
+            }
+            "--lod-pixels" => opts.lod_pixels = number(value()?)?,
+            "--box-width" => opts.box_width = Some(number(value()?)?),
+            "--box-height" => opts.box_height = Some(number(value()?)?),
+            "--version" => opts.version = value()?,
+            "--json" => json = true,
+            "-h" | "--help" => {
+                println!("{USAGE}");
+                return Ok(());
+            }
+            flag if flag.starts_with("--") => bail!("unknown option {flag}\n{USAGE}"),
+            _ => positional.push(PathBuf::from(a)),
+        }
+    }
+    let [input, out] = <[PathBuf; 2]>::try_from(positional).map_err(|_| anyhow::anyhow!(USAGE))?;
+    if bri_package::id::Version::parse(&opts.version).is_err() {
+        bail!("--version must be major.minor.patch");
+    }
+    opts.input = input;
+    opts.out = out.clone();
+    opts.kind = kind;
+    let report = gltf::import(&opts)?;
+    if json {
+        println!("{}", serde_json::to_string_pretty(&report)?);
+    } else {
+        print!("{}", report.markdown());
+        println!("\nWritten to {}", out.display());
     }
     Ok(())
 }
