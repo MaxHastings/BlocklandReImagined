@@ -760,7 +760,16 @@ impl App {
         let others_see = casts || reflecting || !probe_faces.is_empty();
         let mut bodies_drawn = BTreeSet::new();
         let passages = self.motion.passages();
-        for (owner, avatar) in &mut self.avatar.avatars {
+        // A new body or outfit uploads whole: materials, and textures the
+        // shared cache lacks. A round that respawns and dresses every
+        // player at once would do them all in one frame, so whole uploads
+        // stop once they have taken BODY_UPLOAD_BUDGET; the rest draw from
+        // the next frames. The player's own body goes first.
+        let mut whole = WholeUploads::default();
+        let mut own_first: Vec<_> = self.avatar.avatars.keys().copied().collect();
+        own_first.sort_by_key(|owner| *owner != view.owner);
+        for owner in &own_first {
+            let avatar = self.avatar.avatars.get_mut(owner).expect("listed above");
             if hidden.contains(owner) {
                 continue;
             }
@@ -779,10 +788,24 @@ impl App {
             if !seen(center) && through.is_none_or(|c| !seen(c)) {
                 continue;
             }
+            let full = avatar.needs_full_upload();
+            if full && !whole.may_start() {
+                continue;
+            }
+            let started = full.then(std::time::Instant::now);
             avatar.build_pending(&self.avatar.avatar_assets)?;
-            avatar.upload(renderer, frame.device, frame.queue)?;
+            let textures = self
+                .avatar
+                .body_textures
+                .entry(avatar.model.clone())
+                .or_default();
+            avatar.upload_sharing(renderer, frame.device, frame.queue, Some(textures))?;
+            if let Some(started) = started {
+                whole.done(started.elapsed());
+            }
             bodies_drawn.insert(*owner);
         }
+        whole.note();
         // Horses likewise: posed every frame (riders sit on their nodes),
         // their mesh built and drawn only where it can show.
         let mut mounts_drawn = BTreeSet::new();
@@ -1721,5 +1744,41 @@ fn note_chunk_uploads(chunks: usize, vertices: usize) {
             "uploaded {chunks} brick chunks ({:.1}k vertices)",
             vertices as f64 / 1000.0
         ));
+    }
+}
+
+/// How long one frame may spend on whole body uploads before the rest wait
+/// for the next frame. One always goes, so a body is never held back
+/// forever.
+const BODY_UPLOAD_BUDGET: Duration = Duration::from_millis(4);
+
+/// Whole body uploads this frame (`render_frame`).
+#[derive(Default)]
+struct WholeUploads {
+    done: usize,
+    spent: Duration,
+    deferred: usize,
+}
+
+impl WholeUploads {
+    fn may_start(&mut self) -> bool {
+        let may = self.done == 0 || self.spent < BODY_UPLOAD_BUDGET;
+        self.deferred += usize::from(!may);
+        may
+    }
+    fn done(&mut self, took: Duration) {
+        self.done += 1;
+        self.spent += took;
+    }
+    /// Say in the frame's trace what a slow "avatar meshes" did.
+    fn note(&self) {
+        if (self.done > 0 && self.spent >= Duration::from_millis(8)) || self.deferred > 0 {
+            crate::frame_trace::note(format!(
+                "uploaded {} new bodies in {:.1} ms, {} wait",
+                self.done,
+                self.spent.as_secs_f64() * 1000.0,
+                self.deferred
+            ));
+        }
     }
 }
