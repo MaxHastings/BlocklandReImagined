@@ -1166,6 +1166,29 @@ mod tests {
         Ok(())
     }
 
+    /// Startup loaded the Add-On lists as they are on disk: the first Host
+    /// starts on them rather than loading every Add-On a second time.
+    #[test]
+    fn the_first_host_after_startup_does_not_reload_the_add_ons() -> Result<()> {
+        let (_content, _state, mut app) = app()?;
+        assert!(app.addons.packages_from_tools);
+        let action = UiAction::HostGame {
+            map: app.content.maps[0].id.clone(),
+            mode: ServerMode::SinglePlayer,
+            game_mode: None,
+            max_players: 8,
+            server_name: "Test".into(),
+            password: String::new(),
+            admin_password: String::new(),
+            super_admin_password: String::new(),
+        };
+        let id = app.ui.core.request(action.clone());
+        app.dispatch_action(id, action, &mut Vec::new())?;
+        assert!(app.addons.reload.is_none() && app.addons.reload_pending.is_none());
+        assert!(app.net.attempt.is_some(), "the host starts at once");
+        app.disconnect();
+        Ok(())
+    }
     #[test]
     fn a_cancelled_host_waiting_for_reload_does_not_start_a_server() -> Result<()> {
         let (_content, _state, mut app) = app()?;

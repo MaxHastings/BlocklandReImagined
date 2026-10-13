@@ -43,6 +43,7 @@ fn native_water_buoyancy_drag_and_exit_share_the_player_motor() {
         reflection_intensity: 0.,
         parallax: 0.,
         warnings: vec![],
+        tint: None,
         current: [0.0; 3],
     };
     water.validate().unwrap();
@@ -1260,4 +1261,54 @@ fn crouching_into_a_brick_corner_keeps_the_jump() {
         assert!(peak > state.feet[1] + 0.3, "trial {trial}: {:?}", state);
     }
     assert!(tried > 300, "{tried}");
+}
+/// A body spawned inside a smaller player (a bot respawning on the spawn
+/// point a short-bodied player stands on) walks out of it, and so does the
+/// player: sweeping against each other's faces stopped every move of both.
+#[test]
+fn bodies_spawned_inside_another_player_walk_out_of_it() {
+    let short = PlayerTuning {
+        width: 1.0,
+        stand_height: 1.9,
+        crouch_height: 0.9,
+        ..PlayerTuning::default()
+    };
+    for (walker, yaw) in [(0, 0.0), (0, 1.5), (0, -2.5), (1, 0.0), (1, 2.0)] {
+        let mut w = scene();
+        let mut small = Player::spawn(&mut w, 1, Vec3::new(0.0, 0.05, 0.0), short.clone()).unwrap();
+        step(&mut small, &mut w, MoveInput::default(), 30);
+        let mut big = Player::spawn_overlapping(
+            &mut w,
+            2,
+            Vec3::new(0.0, 0.05, 0.0),
+            PlayerTuning::default(),
+        )
+        .unwrap();
+        let walk = MoveInput {
+            forward: 1.0,
+            yaw,
+            ..Default::default()
+        };
+        let (start_big, start_small) =
+            (Vec3::from(big.state().feet), Vec3::from(small.state().feet));
+        for _ in 0..120 {
+            let (big_input, small_input) = if walker == 0 {
+                (walk, MoveInput::default())
+            } else {
+                (MoveInput::default(), walk)
+            };
+            small.step(&mut w, small_input).unwrap();
+            big.step(&mut w, big_input).unwrap();
+            w.step();
+        }
+        let moved = if walker == 0 {
+            Vec3::from(big.state().feet) - start_big
+        } else {
+            Vec3::from(small.state().feet) - start_small
+        };
+        assert!(
+            Vec3::new(moved.x, 0.0, moved.z).length() > 3.0,
+            "walker {walker} at yaw {yaw} moved only {moved}"
+        );
+    }
 }

@@ -28,7 +28,7 @@ pub struct MapScene {
     pub modern_lights: Option<Vec<crate::map_lighting::MapLight>>,
 }
 
-fn file(root: &Path, name: &str) -> Result<PathBuf> {
+pub(crate) fn file(root: &Path, name: &str) -> Result<PathBuf> {
     let path = Path::new(name);
     ensure!(
         !path.is_absolute()
@@ -47,7 +47,7 @@ fn file(root: &Path, name: &str) -> Result<PathBuf> {
     );
     Ok(path)
 }
-fn read(root: &Path, name: &str) -> Result<Vec<u8>> {
+pub(crate) fn read(root: &Path, name: &str) -> Result<Vec<u8>> {
     Ok(std::fs::read(file(root, name)?)?)
 }
 fn transform(node: &Node) -> Result<Mat4> {
@@ -64,7 +64,7 @@ fn transform(node: &Node) -> Result<Mat4> {
     );
     Ok(matrix)
 }
-fn decode(bytes: &[u8], label: &str, srgb: bool) -> Result<SceneImage> {
+pub(crate) fn decode(bytes: &[u8], label: &str, srgb: bool) -> Result<SceneImage> {
     let (width, height) = image::ImageReader::new(Cursor::new(bytes))
         .with_guessed_format()?
         .into_dimensions()
@@ -285,42 +285,9 @@ fn load_bundle(root: &Path, map_id: &str, legacy: bool) -> Result<MapScene> {
     }
     let mut cache = BTreeMap::new();
     if let Some(environment) = bundle.get("environments").and_then(|e| e.get(&scene.id)) {
-        use sha2::{Digest, Sha256};
         let environment: bri_content::environment::Environment =
             serde_json::from_value(environment.clone())?;
-        environment.validate()?;
-        let mut images = vec![];
-        for image in environment
-            .faces
-            .iter()
-            .chain(environment.clouds.iter().map(|c| &c.image))
-        {
-            let mut bytes = Vec::new();
-            std::fs::File::open(file(&root, &image.file)?)?
-                .take(32 * 1024 * 1024 + 1)
-                .read_to_end(&mut bytes)?;
-            ensure!(
-                bytes.len() <= 32 * 1024 * 1024
-                    && format!("{:x}", Sha256::digest(&bytes)) == image.sha256,
-                "Sky image checksum mismatch: {}",
-                image.source
-            );
-            let decoded = decode(&bytes, &image.source, true)?;
-            ensure!(
-                decoded.width == image.width && decoded.height == image.height,
-                "Sky image dimensions changed"
-            );
-            let index = out.images.len();
-            out.images.push(decoded);
-            images.push(index);
-        }
-        let face_count = environment.faces.len();
-        crate::environment_scene::append(
-            &mut out,
-            &environment,
-            &images[..face_count],
-            &images[face_count..],
-        )?;
+        crate::environment_choices::append_sky(&root, &mut out, &environment)?;
     } else {
         out.omissions
             .push("Native environment binding missing: authored sky/cloud/fog not rendered".into());

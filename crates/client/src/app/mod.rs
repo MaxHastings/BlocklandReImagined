@@ -16,10 +16,7 @@ use bri_render::{
     scene::{Camera, GpuScene, SceneData, SceneRenderer, create_depth_samples},
     scene_loader::load_map_bundle,
 };
-use bri_sim::{
-    definitions::Definitions,
-    session::{Command, InspectMode, Reply, ToolAction},
-};
+use bri_sim::session::{Command, InspectMode, Reply, ToolAction};
 use bri_ui::{
     api::*,
     binds::Platform,
@@ -54,6 +51,7 @@ mod probes;
 mod render;
 mod saves;
 mod scene;
+mod scenery;
 mod session;
 mod view;
 use addons::*;
@@ -121,6 +119,8 @@ struct Prepared {
     foliage: crate::foliage::PreparedFoliage,
     map_id: String,
     waters: Vec<bri_content::water::Water>,
+    /// The plate a flat map stands on.
+    plate: Option<bri_content::scene::Plate>,
     scene: SceneData,
     terrain: Vec<Arc<bri_render::terrain_scene::TerrainScene>>,
     meshes: Arc<Meshes>,
@@ -402,12 +402,7 @@ fn prepare_map(
     let mut light_volume =
         LightVolumeState::start(&visual.scene, light_cache, visual.modern_lights.as_deref());
     // The same definitions the host's session loads, Add-On bricks included.
-    let definitions = Definitions::load_with_geometry(
-        &paths.brick_catalog,
-        &paths.geometry,
-        &paths.brick_extras,
-        &bri_net::content_identity::brick_geometry_assets(&paths.root, &paths.packages)?,
-    )?;
+    let definitions = paths.map_content()?.definitions()?;
     let meshes = Arc::new(
         definitions
             .entries
@@ -417,9 +412,7 @@ fn prepare_map(
     );
     let mirror_shapes = Arc::new(crate::mirrors::shapes(&definitions));
     let native_map = bri_sim::map::NativeMap::load(&paths.map_bundle, &map)?;
-    let materials = Arc::new(crate::materials::BrickMaterials::load(
-        &paths.brick_materials,
-    )?);
+    let materials = paths.materials()?;
     let palette = Arc::new(crate::world_chunks::BrickPalette::new(&materials)?);
     let mut mirror = bri_sim::prediction::CollisionMirror::new(
         definitions.clone(),
@@ -448,6 +441,7 @@ fn prepare_map(
         foliage,
         map_id: map,
         waters: native_map.waters,
+        plate: native_map.plate,
         scene: visual.scene,
         terrain: visual.terrain.into_iter().map(Arc::new).collect(),
         meshes,
@@ -1095,6 +1089,14 @@ fn plain_chat(text: &str) -> String {
         })
         .collect()
 }
+/// [`plain_chat`] for a message box: the text keeps its line breaks, so a
+/// server's grouped list does not run into the sentence after it.
+fn plain_lines(text: &str) -> String {
+    text.split('\n')
+        .map(plain_chat)
+        .collect::<Vec<_>>()
+        .join("\n")
+}
 /// A score report as the Report window shows it: plain text, each column
 /// in the host's order, team names in their paint.
 fn report_view(
@@ -1566,6 +1568,7 @@ impl PlatformApp for App {
         self.gpu.device = Some((device.clone(), queue.clone(), format));
         self.item_ui.gpu_stopped();
         self.addons.hud_regions.gpu_stopped();
+        self.scene.scenery.gpu_stopped();
         self.world_items.clear_gpu();
         crate::vehicles::ClientVehicles::gpu_stopped(&mut self.vehicle_assets);
         self.fx.explosion_shapes.gpu_stopped();
@@ -1592,9 +1595,19 @@ impl PlatformApp for App {
             .graphics
             .with_lighting(self.lighting.light_volume.mode(self.graphics.lighting));
         let (scene_device, shadows) = (device.clone(), effective.shadows);
+        // Unified and Dynamic lighting draw with more pipelines; built here
+        // too, the first game's first frame no longer compiles them.
+        let modern = self.graphics.lighting != 0;
+        let soft_shading = modern && self.graphics.soft_shading;
+        let occlusion = modern && self.graphics.ambient_occlusion;
         self.gpu.renderer = Some(crate::gpu_build::Building::spawn(
             "scene pipelines",
-            move || SceneRenderer::with_settings(&scene_device, format, samples, shadows),
+            move || {
+                let mut renderer =
+                    SceneRenderer::with_settings(&scene_device, format, samples, shadows);
+                renderer.prepare_lighting_pipelines(soft_shading, occlusion);
+                renderer
+            },
         ));
         self.lighting.reflections = Some(bri_render::reflection::Reflections::new(
             device,
@@ -1607,6 +1620,7 @@ impl PlatformApp for App {
         self.addons.client_code.gpu_stopped();
         self.addons.item_skins.gpu_stopped();
         let weather_limits = bri_weather::WeatherLimits::default();
+        self.gpu.weather_revision = self.weather.revision;
         self.gpu.weather_renderer = Some(bri_weather::gpu::WeatherRenderer::new(
             device,
             queue,

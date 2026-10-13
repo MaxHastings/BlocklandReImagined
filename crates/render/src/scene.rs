@@ -3592,6 +3592,48 @@ impl SceneRenderer {
         self.map_lights
             .set_tints(queue, |i| tints.get(i).copied().unwrap_or(Vec3::ONE));
     }
+    /// Builds the Unified and Dynamic lighting pipelines (`soft_shading`'s
+    /// sky-tinted world, `occlusion`'s exclusion mask) now, rather than on
+    /// the first frame that draws with them. On DX12 their first compile
+    /// takes over a second, which froze the first frame of the first game
+    /// of a run; built on the startup worker, the menu and loading screen
+    /// absorb it. Building them again is a no-op.
+    pub fn prepare_lighting_pipelines(&mut self, soft_shading: bool, occlusion: bool) {
+        if soft_shading {
+            self.build_modern_pipelines();
+        }
+        if occlusion {
+            self.build_occlusion_mask_pipelines();
+        }
+    }
+    fn build_modern_pipelines(&mut self) {
+        if !self.modern_pipelines.is_empty() {
+            return;
+        }
+        let layout = self
+            .device
+            .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("modern scene"),
+                bind_group_layouts: &[Some(&self.camera_layout), Some(&self.material_layout)],
+                immediate_size: 0,
+            });
+        let shader = self
+            .device
+            .create_shader_module(wgpu::ShaderModuleDescriptor {
+                label: Some("modern scene"),
+                source: wgpu::ShaderSource::Wgsl(
+                    crate::color::shader_source(include_str!("scene.wgsl")).into(),
+                ),
+            });
+        self.modern_pipelines = Self::world_pipelines(
+            &self.device,
+            self.color_format,
+            self.samples,
+            &layout,
+            &shader,
+            true,
+        );
+    }
     /// Call once before encoding/submitting a frame. Multiple writes before a
     /// single submission would intentionally use the latest camera everywhere.
     pub fn update_camera(&mut self, queue: &wgpu::Queue, camera: &Camera) {
@@ -3630,31 +3672,8 @@ impl SceneRenderer {
         }
         let modern = camera.shading[0] > 0.0 && camera.ambient[3] >= 0.5;
         // Keep main's original shader and uniform prefix when the effects are off.
-        // On pipelines cost nothing until first use.
-        if modern && self.modern_pipelines.is_empty() {
-            let layout = self
-                .device
-                .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-                    label: Some("modern scene"),
-                    bind_group_layouts: &[Some(&self.camera_layout), Some(&self.material_layout)],
-                    immediate_size: 0,
-                });
-            let shader = self
-                .device
-                .create_shader_module(wgpu::ShaderModuleDescriptor {
-                    label: Some("modern scene"),
-                    source: wgpu::ShaderSource::Wgsl(
-                        crate::color::shader_source(include_str!("scene.wgsl")).into(),
-                    ),
-                });
-            self.modern_pipelines = Self::world_pipelines(
-                &self.device,
-                self.color_format,
-                self.samples,
-                &layout,
-                &shader,
-                true,
-            );
+        if modern {
+            self.build_modern_pipelines();
         }
         let sky_on = camera.shading[0] > 0.0 && camera.ambient[3] >= 0.5;
         if sky_on && !self.views[view].sky.enabled {
@@ -4854,35 +4873,30 @@ impl SceneRenderer {
     ) {
         self.record_world(encoder, target, scenes, instances, Some(between), false);
     }
-    /// Visible emissive surfaces excluded from AO. Loads the finished depth;
-    /// never changes it, and follows the same instancing/culling/cut-out rules.
-    pub fn render_occlusion_mask(
-        &self,
-        encoder: &mut wgpu::CommandEncoder,
-        target: WorldPass<'_>,
-        scenes: &[&GpuScene],
-        instances: &[(&GpuScene, &GpuInstances)],
-    ) {
+    fn build_occlusion_mask_pipelines(&self) {
         let mut pipelines = self.occlusion_mask_pipelines.borrow_mut();
-        if pipelines.is_empty() {
-            let layout = self
-                .device
-                .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-                    label: Some("occlusion exclusion mask"),
-                    bind_group_layouts: &[Some(&self.camera_layout), Some(&self.material_layout)],
-                    immediate_size: 0,
-                });
-            let shader = self
-                .device
-                .create_shader_module(wgpu::ShaderModuleDescriptor {
-                    label: Some("occlusion exclusion mask"),
-                    source: wgpu::ShaderSource::Wgsl(
-                        crate::color::shader_source(include_str!("scene.wgsl")).into(),
-                    ),
-                });
-            for double_sided in [false, true] {
-                pipelines.push(self.device.create_render_pipeline(
-                    &wgpu::RenderPipelineDescriptor {
+        if !pipelines.is_empty() {
+            return;
+        }
+        let layout = self
+            .device
+            .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("occlusion exclusion mask"),
+                bind_group_layouts: &[Some(&self.camera_layout), Some(&self.material_layout)],
+                immediate_size: 0,
+            });
+        let shader = self
+            .device
+            .create_shader_module(wgpu::ShaderModuleDescriptor {
+                label: Some("occlusion exclusion mask"),
+                source: wgpu::ShaderSource::Wgsl(
+                    crate::color::shader_source(include_str!("scene.wgsl")).into(),
+                ),
+            });
+        for double_sided in [false, true] {
+            pipelines.push(
+                self.device
+                    .create_render_pipeline(&wgpu::RenderPipelineDescriptor {
                         label: Some("occlusion exclusion mask"),
                         layout: Some(&layout),
                         vertex: wgpu::VertexState {
@@ -4927,11 +4941,20 @@ impl SceneRenderer {
                         }),
                         multiview_mask: None,
                         cache: None,
-                    },
-                ));
-            }
+                    }),
+            );
         }
-        drop(pipelines);
+    }
+    /// Visible emissive surfaces excluded from AO. Loads the finished depth;
+    /// never changes it, and follows the same instancing/culling/cut-out rules.
+    pub fn render_occlusion_mask(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        target: WorldPass<'_>,
+        scenes: &[&GpuScene],
+        instances: &[(&GpuScene, &GpuInstances)],
+    ) {
+        self.build_occlusion_mask_pipelines();
         // Only scenes that can show an emissive surface draw; the pass still
         // begins (and clears the mask) with none.
         let scenes: Vec<&GpuScene> = scenes.iter().copied().filter(|s| s.emissive).collect();

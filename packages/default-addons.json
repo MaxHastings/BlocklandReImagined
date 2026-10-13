@@ -47,6 +47,8 @@
     { "id": "sample-trooper", "path": "samples/sample-trooper", "enabled": false },
     { "id": "playground-rifle", "path": "playground/playground-rifle", "enabled": false },
     { "id": "playground-buggy", "path": "playground/playground-buggy", "enabled": false },
+    { "id": "playground-stomper-look", "path": "playground/playground-stomper-look", "enabled": false },
+    { "id": "playground-stomper", "path": "playground/playground-stomper", "enabled": false },
     { "id": "playground-mode", "path": "playground/playground-mode", "enabled": false },
     {
       "id": "bot_hole",

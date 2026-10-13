@@ -235,6 +235,8 @@ const PLAYGROUND: &[&str] = &[
     "samples/sample-trooper",
     "playground/playground-rifle",
     "playground/playground-buggy",
+    "playground/playground-stomper-look",
+    "playground/playground-stomper",
     "playground/playground-mode",
 ];
 impl Staged {

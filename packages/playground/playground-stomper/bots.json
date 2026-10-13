@@ -1,0 +1,24 @@
+{
+  "schema_version": 1,
+  "bots": [
+    {
+      // The one shared brain with most of it turned off: it wanders near
+      // its brick, chases what it sees and stomps what it reaches. Every
+      // behaviour it does not list keeps the default weight.
+      "id": "playground-stomper:bot/stomper",
+      "name": "Stomper",
+      "body": "playground-stomper:archetype/stomper",
+      "side": "stompers",
+      "sight": 40,
+      "wander_radius": 10,
+      "chase_radius": 40,
+      "weapons": false,
+      "melee": { "damage": 15, "reach": 1.8, "seconds": 1.0, "name": "Stomp" },
+      "behaviours": { "arm": 0, "carry": 0, "interact": 0, "objective": 0, "search": 0, "fly": 0 },
+      "surprise": { "strength": 0 },
+      "team": { "teamwork": 0 },
+      "perception": { "strength": 0 },
+      "first_names": ["Stomper"]
+    }
+  ]
+}

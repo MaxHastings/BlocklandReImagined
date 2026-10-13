@@ -34,6 +34,10 @@ pub struct Water {
     /// (a `PhysicalZone` applied force over the player's mass). Map water has none.
     #[serde(default)]
     pub current: [f32; 3],
+    /// The colour over the screen of whoever is under it; None for a map
+    /// `WaterBlock`'s (`bri_sim::water::MAP_WATER_COLOR`).
+    #[serde(default)]
+    pub tint: Option<[f32; 4]>,
 }
 /// The one "which water am I in" query for players, splashes and vehicles:
 /// the body of water covering the most of a box from `feet` up `height`,
@@ -79,6 +83,7 @@ impl Water {
             reflection_intensity: 0.0,
             parallax: 0.0,
             warnings: Vec::new(),
+            tint: None,
             current: [0.0; 3],
         }
     }
@@ -244,6 +249,7 @@ mod tests {
             reflection_intensity: 0.,
             parallax: 0.5,
             warnings: vec![],
+            tint: None,
             current: [0.0; 3],
         };
         w.validate().unwrap();

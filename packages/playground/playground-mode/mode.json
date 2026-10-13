@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
   "name": "Mixed Add-On Playground",
-  "description": "A Runner with its own HUD and a Pulse Carbine, a Dune Buggy and Blockhead Bots, all from separate Add-Ons. Build a fort, drive through it, fight the bots. Type /trooper to become the heavy Trooper with its own camera, and /blockhead for a plain Blockhead. Respawning brings the Runner back.",
-  "add_ons": ["playground-runner", "playground-runner-look", "playground-runner-hud", "playground-rifle", "playground-buggy", "blockhead_bot", "sample-trooper"],
+  "description": "A Runner with its own HUD and a Pulse Carbine, a Dune Buggy, Blockhead Bots and Stompers, all from separate Add-Ons. Build a fort, drive through it, fight the bots. Type /trooper to become the heavy Trooper with its own camera, and /blockhead for a plain Blockhead. Respawning brings the Runner back.",
+  "add_ons": ["playground-runner", "playground-runner-look", "playground-runner-hud", "playground-rifle", "playground-buggy", "blockhead_bot", "playground-stomper", "playground-stomper-look", "sample-trooper"],
   "minigame": {
     "title": "Playground",
     "loadout": ["playground-rifle:weapon/carbine"],
