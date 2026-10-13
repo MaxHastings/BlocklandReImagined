@@ -2528,6 +2528,7 @@ fn admins_set_the_environment_and_a_changed_day_restarts_from_now() {
         length_seconds: 120.0,
         time,
         anchor_tick,
+        paused: false,
     };
     let wanted = Settings {
         sun_elevation: Some(20.0),

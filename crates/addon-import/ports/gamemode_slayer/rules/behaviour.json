@@ -177,6 +177,7 @@
   "settings": [
     {
       "key": "mode",
+      "place": "basics",
       "title": "Game Mode",
       "category": "Minigame",
       "type": "list",
@@ -195,6 +196,8 @@
     },
     {
       "key": "time_between_rounds",
+      "place": "rounds",
+      "unit": "seconds",
       "title": "Time Between Rounds",
       "category": "Minigame",
       "type": "int",
@@ -205,6 +208,8 @@
     },
     {
       "key": "pre_round_seconds",
+      "place": "rounds",
+      "unit": "seconds",
       "title": "Pre-Round Countdown",
       "category": "Minigame",
       "type": "int",
@@ -266,6 +271,8 @@
     },
     {
       "key": "lives",
+      "place": "win",
+      "unit": "each (0: unlimited)",
       "title": "Lives",
       "category": "Victory Method",
       "type": "int",
@@ -275,6 +282,8 @@
     },
     {
       "key": "points",
+      "place": "win",
+      "unit": "to win (0: off)",
       "title": "Points",
       "category": "Victory Method",
       "type": "int",
@@ -284,7 +293,9 @@
     },
     {
       "key": "time",
-      "title": "Time",
+      "title": "Time Limit",
+      "place": "win",
+      "unit": "minutes (0: no limit)",
       "category": "Victory Method",
       "type": "int",
       "default": {{pref_time}},
@@ -293,7 +304,9 @@
     },
     {
       "key": "points_cp",
-      "title": "CP Capture",
+      "title": "Capturing a Point",
+      "place": "scoring",
+      "unit": "points",
       "category": "Points",
       "type": "int",
       "default": {{pref_points_cp}},
@@ -310,7 +323,9 @@
     },
     {
       "key": "points_kill_bot",
-      "title": "Kill Bot",
+      "title": "Killing a Bot",
+      "place": "scoring",
+      "unit": "points",
       "category": "Points",
       "type": "int",
       "default": {{pref_points_kill_bot}},
@@ -320,14 +335,17 @@
     },
     {
       "key": "bot_damage",
-      "title": "Bot",
+      "title": "Bot Damage",
+      "place": "damage",
       "category": "Damage",
       "type": "bool",
       "default": {{pref_bot_damage|bool}}
     },
     {
       "key": "respawn_time_bot",
-      "title": "Bot",
+      "title": "Bots",
+      "place": "respawn",
+      "unit": "seconds (-1: as players)",
       "category": "Respawn Time",
       "type": "int",
       "default": {{pref_respawn_bot}},
@@ -352,6 +370,7 @@
     },
     {
       "key": "auto_sort",
+      "place": "teams",
       "title": "Auto Sort",
       "category": "Teams",
       "type": "bool",
@@ -375,6 +394,7 @@
     },
     {
       "key": "friendly_fire",
+      "place": "teams",
       "title": "Friendly Fire",
       "category": "Teams",
       "type": "bool",
@@ -382,6 +402,7 @@
     },
     {
       "key": "lock_teams",
+      "place": "teams",
       "title": "Lock Teams",
       "category": "Teams",
       "type": "bool",
@@ -389,6 +410,7 @@
     },
     {
       "key": "ally_same_colors",
+      "place": "teams",
       "title": "Ally Same Colors",
       "category": "Teams",
       "type": "bool",
@@ -451,6 +473,8 @@
     },
     {
       "key": "team_lives",
+      "place": "teams",
+      "unit": "(-1: the game's)",
       "title": "Lives",
       "category": "Team",
       "type": "int",
@@ -479,6 +503,8 @@
     },
     {
       "key": "team_max_players",
+      "place": "teams",
+      "unit": "(-1: no limit)",
       "title": "Max Players",
       "category": "Team",
       "type": "int",
@@ -505,66 +531,81 @@
     },
     {
       "key": "team_player_type",
-      "title": "Playertype",
+      "title": "Player Type",
+      "place": "loadout",
       "category": "Team",
       "type": "player_type",
       "default": "v20.player.{{team_player_type|lower}}",
       "scope": "team",
-      "quiet": true
+      "quiet": true,
+      "shown_when": { "setting": "team_sync_loadout", "is": [false] }
     },
     {
       "key": "team_equip_0",
-      "title": "Start Equip 0",
+      "title": "Tool 1",
+      "place": "loadout",
       "category": "Team",
       "type": "item",
       "default": "v20.weapon.{{team_equip_0|lower}}",
       "scope": "team",
-      "quiet": true
+      "quiet": true,
+      "shown_when": { "setting": "team_sync_loadout", "is": [false] }
     },
     {
       "key": "team_equip_1",
-      "title": "Start Equip 1",
+      "title": "Tool 2",
+      "place": "loadout",
       "category": "Team",
       "type": "item",
       "default": "v20.weapon.{{team_equip_1|lower}}",
       "scope": "team",
-      "quiet": true
+      "quiet": true,
+      "shown_when": { "setting": "team_sync_loadout", "is": [false] }
     },
     {
       "key": "team_equip_2",
-      "title": "Start Equip 2",
+      "title": "Tool 3",
+      "place": "loadout",
       "category": "Team",
       "type": "item",
       "default": "v20.weapon.{{team_equip_2|lower}}",
       "scope": "team",
-      "quiet": true
+      "quiet": true,
+      "shown_when": { "setting": "team_sync_loadout", "is": [false] }
     },
     {
       "key": "team_equip_3",
-      "title": "Start Equip 3",
+      "title": "Tool 4",
+      "place": "loadout",
       "category": "Team",
       "type": "item",
       "default": "",
       "scope": "team",
-      "quiet": true
+      "quiet": true,
+      "shown_when": { "setting": "team_sync_loadout", "is": [false] }
     },
     {
       "key": "team_equip_4",
-      "title": "Start Equip 4",
+      "title": "Tool 5",
+      "place": "loadout",
       "category": "Team",
       "type": "item",
       "default": "",
       "scope": "team",
-      "quiet": true
+      "quiet": true,
+      "shown_when": { "setting": "team_sync_loadout", "is": [false] }
     },
     {
       "key": "team_sync_loadout",
-      "title": "Sync w/ Minigame Loadout",
+      "title": "Loadout",
+      "place": "loadout",
+      "items": [{ "value": true, "name": "Same as everyone" }, { "value": false, "name": "Own loadout" }],
       "category": "Team",
       "type": "bool",
       "default": {{team_sync_loadout|bool}},
       "scope": "team",
-      "quiet": true
+      "quiet": true,
+      "help": "Same as everyone: the team plays with the mini-game's own player type and start tools. Own loadout gives the team its own (Slayer's Sync w/ Minigame Loadout box)."
     },
     {
       "key": "team_scale",
@@ -578,6 +619,8 @@
     },
     {
       "key": "team_respawn_time",
+      "place": "teams",
+      "unit": "seconds (-1: the game's)",
       "title": "Respawn Time",
       "category": "Team",
       "type": "int",
@@ -588,7 +631,9 @@
     },
     {
       "key": "team_bot_fill",
-      "title": "Preferred Player Count",
+      "title": "Bots",
+      "place": "teams",
+      "unit": "fill the team to this many",
       "category": "Bots",
       "type": "int",
       "default": {{team_bot_fill}},
@@ -611,6 +656,7 @@
     },
     {
       "key": "team_uniform",
+      "place": "teams",
       "title": "Uniform",
       "category": "Team",
       "type": "list",
@@ -1003,7 +1049,8 @@
     },
     {
       "key": "enable_team_chat",
-      "title": "Enable Team Chat",
+      "title": "Team Chat",
+      "place": "teams",
       "category": "Chat",
       "type": "bool",
       "default": {{pref_enable_team_chat|bool}},
@@ -1053,6 +1100,7 @@
     },
     {
       "key": "clear_scores",
+      "place": "rounds",
       "title": "Clear Scores on Reset",
       "category": "Minigame",
       "type": "bool",
@@ -1272,7 +1320,9 @@
     },
     {
       "key": "points_friendly_fire",
-      "title": "Friendly Fire",
+      "title": "Killing a Teammate",
+      "place": "scoring",
+      "unit": "points",
       "category": "Points",
       "type": "int",
       "default": 0,
@@ -1317,6 +1367,7 @@
     },
     {
       "key": "balance_teams",
+      "place": "teams",
       "title": "Balance Teams",
       "category": "Teams",
       "type": "bool",
@@ -1348,6 +1399,7 @@
     },
     {
       "key": "shuffle_teams",
+      "place": "teams",
       "title": "Shuffle Teams",
       "category": "Teams",
       "type": "bool",

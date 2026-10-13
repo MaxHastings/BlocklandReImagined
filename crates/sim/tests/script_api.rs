@@ -87,11 +87,12 @@ fn cmd_lamp_reset(p, x, radius) { set_map_lights([x, 2.0, 0.0], radius, #{}); }
 fn cmd_env_set(p) {
     set_environment(#{ sun_azimuth: 90.0, fog_color: [0.2, 0.3, 0.4], day_length: 60.0,
         time_of_day: 0.25, sun_flare_size: 2.0, sky: "plain", water: "none", water_height: 8.0,
-        ground_color: [1.0, 0.5, 0.0, 1.0] });
+        ground_color: [1.0, 0.5, 0.0, 1.0], overcast: 0.5 });
 }
+fn cmd_env_hold(p) { set_environment(#{ time_passes: false, time_of_day: 0.75 }); }
 fn cmd_env_read(p) {
     let e = environment();
-    note("env", `${e.sun_azimuth}|${e.day_length}|${e.sun_flare_size}|${"fog_color" in e}|${"sky_color" in e}|${e.sky}|${e.water}|${e.water_height}|${e.ground_color[1]}`);
+    note("env", `${e.sun_azimuth}|${e.day_length}|${e.sun_flare_size}|${"fog_color" in e}|${"sky_color" in e}|${e.sky}|${e.water}|${e.water_height}|${e.ground_color[1]}|${e.overcast}|${e.time_passes}`);
 }
 fn cmd_env_unset(p) { set_environment(#{ sun_azimuth: (), day_cycle: false, sky: (), water: () }); }
 fn cmd_env_bad(p) { set_environment(#{ sun_elevation: 120.0 }); }
@@ -195,6 +196,7 @@ fn behaviour() -> Value {
             command("region", &["int", "float"]),
             command("env_set", &[]),
             command("env_read", &[]),
+            command("env_hold", &[]),
             command("env_unset", &[]),
             command("env_bad", &[]),
             command("env_reset", &[]),
@@ -887,7 +889,20 @@ fn scripts_change_the_environment_for_everyone() {
     );
     assert_eq!(e.sky.as_deref(), Some("plain"));
     g.run(a, "env_read", vec![]);
-    assert_eq!(g.text("env"), "90.0|60.0|2.0|true|false|plain|none|8.0|0.5");
+    assert_eq!(
+        g.text("env"),
+        "90.0|60.0|2.0|true|false|plain|none|8.0|0.5|0.5|true"
+    );
+    assert_eq!(e.overcast, Some(0.5));
+    // A held time of day keeps the day length and stops the clock.
+    g.run(a, "env_hold", vec![]);
+    let held = g.s.environment().day_cycle.unwrap();
+    assert_eq!(
+        (held.length_seconds, held.time, held.paused),
+        (60.0, 0.75, true)
+    );
+    g.run(a, "env_read", vec![]);
+    assert!(g.text("env").ends_with("|false"));
     // `()` puts one setting back to the map's; the rest stay.
     g.run(a, "env_unset", vec![]);
     let e = g.s.environment();

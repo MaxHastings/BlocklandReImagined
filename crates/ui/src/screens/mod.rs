@@ -12,6 +12,7 @@ pub mod help;
 pub mod host_colorsets;
 pub mod menus;
 pub mod minigame_addons;
+pub mod minigame_window;
 pub mod minigames;
 pub mod modes;
 pub mod music;
@@ -225,7 +226,9 @@ pub fn make(id: ScreenId, core: &mut Core) -> Box<dyn Screen> {
         }
         ScreenId::PlayerList => return Box::new(players::Players::new(core)),
         ScreenId::MiniGames => return Box::new(minigames::MiniGameScreen::list(core)),
-        ScreenId::MiniGameSettings => return Box::new(minigames::MiniGameScreen::settings(core)),
+        ScreenId::MiniGameSettings => {
+            return Box::new(minigame_window::MiniGameWindow::new(core));
+        }
         ScreenId::MiniGameInvitation => {
             return Box::new(minigames::MiniGameScreen::invitation(core));
         }
