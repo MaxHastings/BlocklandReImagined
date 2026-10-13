@@ -47,6 +47,8 @@ Eleven Add-Ons, each standing alone and naming no other except through
 | Two networked players see each other's body, held weapon, the driven vehicle and the knocked-out bricks | works | `crates/net/tests/playground.rs` `two_players_and_a_late_joiner_share_the_playground` |
 | A late joiner downloads exactly the missing Add-Ons and sees the same world | works | same test (clean cache; the buggy, its driver, the Carbine in hand and the brick state all match) |
 | With no mode or mini-game, an Add-On weapon spawns from an item brick and an Add-On vehicle from a vehicle spawn brick, both set with the wrench | works | `a_builder_spawns_the_carbine_and_the_buggy_from_bricks_without_a_mini_game` |
+| Outside a mini-game, explosions break bricks by v20's rules: a LAN host breaks anyone's, an internet host only the shooter's own | works | `rocket_outside_a_minigame_follows_v20_lan_and_ownership_rules` (`crates/sim/tests/brick_damage.rs`) |
+| Inside a mini-game, a vehicle runs a bot over as it does a player (outside one, nobody can be hurt, so Max's session starts a mini-game first) | works | `a_buggy_runs_a_stomper_over` |
 | A brick event switches a player to an Add-On body (`onActivate -> Player -> ChangeDatablock`) | gap (W4) | The event already calls `set_player_archetype`, but its PlayerData list holds only the built-in player types (`crates/sim/src/session/events.rs`), so no Add-On body can be picked |
 | A custom body's held item attaches to its own hand | gap (W2) | Held items attach to a node named `Mount0` and need a node named `Eye`; box bodies hold items on an invisible Blockhead hand (`crates/client/src/avatar.rs`, `app/frame.rs`) |
 | Shots leave the weapon's muzzle | gap (W2) | The server fires from the eye (`crates/sim/src/session/weapons.rs`) |
@@ -92,6 +94,7 @@ code only; the Mario, Warthog, Goomba and tank Add-Ons themselves are Max's.
 | A Goomba-bodied player or bot holds a rocket launcher and jets | W2 named weapon socket for bodies without hands; jets when the body sets `can_jet` | socket not started |
 | NPCs follow players through buildings and jump or jet onto things their body can reach | W7: routes use each body's measured reach | works (`each_body_plans_with_its_own_reach`) |
 | Bots move with the body they have (a Goomba with Mario-style movement still paths sensibly) | W7: reach is measured with the body's own controller | works for jumps and jets; second presses in the air (wall kick, double jump) are not used by bots yet |
+| A player or bot dies as any body: its death clip, ragdoll or vanish plays, it respawns as the body it chose, and the spectate camera frames that body | W2 death roles and W4 switching lifecycle; respawn keeps an Add-On body today (`a_runner_killed_by_the_carbine_respawns_as_the_runner_with_it`) | partial |
 | Everyone sees it all in multiplayer, late joiners included | every workstream extends the Playground network test | Playground proves it for today's seams |
 
 ## Defects found that belong elsewhere

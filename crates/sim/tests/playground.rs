@@ -1083,3 +1083,51 @@ fn the_buggy_runs_a_stomper_over() {
     // Its rules flattened it, before the buggy's own run-over damage.
     assert!(flattened_by_rules(&mut g));
 }
+
+/// Inside the mode's mini-game a buggy running into a Stomper hurts it as
+/// it hurts a player: a bot is a run-over target like anyone else. (The
+/// driving is `the_runner_drives_the_buggy_through_the_fort_and_climbs_out`;
+/// that a driven run-over is the driver's kill is
+/// `a_runover_is_the_drivers_kill_even_when_the_victim_walks_into_it`.)
+#[test]
+fn a_buggy_runs_a_stomper_over() {
+    let mut world = World::new("Playground".into(), "playground".into(), vec![[1.0; 4]]);
+    kind_spawn(&mut world, [6.5, 0.1, 2.25], STOMPER);
+    let mut g = Game::with(world);
+    let p = g.join("Ann");
+    g.steps(20);
+    let bot =
+        g.s.names()
+            .keys()
+            .copied()
+            .find(|o| g.s.is_bot(*o))
+            .expect("the spawn brick made a Stomper");
+    assert_eq!(g.body(bot), STOMPER_BODY);
+    assert_eq!(
+        g.s.vitals()[&bot].minigame,
+        g.s.vitals()[&p].minigame,
+        "the Stomper plays in the Runner's mini-game"
+    );
+    let full = g.s.vitals()[&bot].health;
+    let mut hit = false;
+    for _ in 0..5 {
+        // Launch the Runner's buggy at the Stomper from a few metres off,
+        // faster than a run-over needs.
+        let at = Vec3::from(g.state(bot).feet);
+        let from = at + Vec3::new(0.0, 1.0, 5.0);
+        g.s.spawn_vehicle_at(p, BUGGY, from, 0.0, Vec3::new(0.0, 0.0, -16.0))
+            .unwrap();
+        for _ in 0..90 {
+            g.steps(1);
+            let v = &g.s.vitals()[&bot];
+            if v.health < full || !v.alive {
+                hit = true;
+                break;
+            }
+        }
+        if hit {
+            break;
+        }
+    }
+    assert!(hit, "the buggy ran the Stomper over");
+}
