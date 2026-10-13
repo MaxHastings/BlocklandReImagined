@@ -117,11 +117,14 @@ const OCCLUDER_GAP: f32 = 0.1;
 /// World units the far map layer reaches past the map's bounds on every
 /// side, so its edge texels and depth range never cut a wall.
 const FAR_MARGIN: f32 = 4.0;
-/// Caster slot of the far map layer's matrix, after every other slot.
-const FAR_SLOT: usize = MAX_CASCADES * 2
-    + MAX_LAMPS * FACES
-    + crate::map_lighting::MAX_LIGHTS * FACES
-    + 2 * MAX_CASCADES * (FITTED_VIEWS - 1);
+/// Caster slot of the first plane view's matrices: after the player's
+/// cascades, lamp faces, map layers, map light cube faces and kept brick
+/// layers.
+const VIEW_SLOTS: usize =
+    MAX_CASCADES * 3 + MAX_LAMPS * FACES + crate::map_lighting::MAX_LIGHTS * FACES;
+/// Caster slot of the far map layer's matrix, after every other slot (the
+/// plane views' casters and map layers included).
+const FAR_SLOT: usize = VIEW_SLOTS + 2 * MAX_CASCADES * (FITTED_VIEWS - 1);
 
 /// Sun shadow quality: how many cascades, their square resolution, and how
 /// far from the eye shadows reach before fading out.
@@ -1345,10 +1348,7 @@ impl ShadowMaps {
     /// Caster matrices: the player's cascades first; a plane's own after
     /// the kept brick layers' (`kept_offset`), casters then map layers.
     fn view_slot(view: usize) -> usize {
-        MAX_CASCADES * 3
-            + MAX_LAMPS * FACES
-            + crate::map_lighting::MAX_LIGHTS * FACES
-            + (view - 1) * 2 * MAX_CASCADES
+        VIEW_SLOTS + (view - 1) * 2 * MAX_CASCADES
     }
     pub fn caster_offset(view: usize, cascade: usize) -> u32 {
         let slot = match view {
@@ -1589,6 +1589,43 @@ mod tests {
     fn camera(eye: Vec3, target: Vec3) -> Mat4 {
         crate::scene::perspective(1.5, 16.0 / 9.0, 0.05, 4000.0)
             * glam::camera::rh::view::look_at_mat4(eye, target, Vec3::Y)
+    }
+
+    /// Every caster matrix has a slot of its own inside the caster buffer:
+    /// a third live mirror plane's map layers once ran past its end (a
+    /// wgpu validation panic in `Queue::write_buffer`).
+    #[test]
+    fn caster_slots_are_distinct_and_inside_the_buffer() {
+        let size = CASTER_STRIDE * (FAR_SLOT + 1) as u64;
+        let mut offsets = vec![ShadowMaps::far_offset()];
+        for cascade in 0..MAX_CASCADES {
+            offsets.push(ShadowMaps::kept_offset(cascade));
+            for view in 0..FITTED_VIEWS {
+                offsets.push(ShadowMaps::caster_offset(view, cascade));
+                offsets.push(ShadowMaps::map_offset(view, cascade));
+            }
+        }
+        for slot in 0..MAX_LAMPS {
+            for face in 0..FACES {
+                offsets.push(ShadowMaps::lamp_offset(slot, face));
+            }
+        }
+        for light in 0..crate::map_lighting::MAX_LIGHTS {
+            for face in 0..FACES {
+                offsets.push(ShadowMaps::cube_offset(light, face));
+            }
+        }
+        for &offset in &offsets {
+            assert!(
+                u64::from(offset) + CASTER_SIZE <= size,
+                "slot at {offset} overruns the {size}-byte caster buffer"
+            );
+        }
+        let count = offsets.len();
+        offsets.sort_unstable();
+        offsets.dedup();
+        assert_eq!(offsets.len(), count, "two caster matrices share a slot");
+        assert_eq!(count as u64 * CASTER_STRIDE, size, "no slot left unused");
     }
 
     #[test]
