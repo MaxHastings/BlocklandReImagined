@@ -93,3 +93,17 @@ The same log's other notes, triaged rather than changed here:
   the log notes are already rate limited.
 - Long frames: up to 442 ms in "avatar meshes" and 400 ms "untraced", plus
   present stalls of 250-270 ms. Needs its own profiling.
+
+## Two facing mirrors
+
+Max found the reliable repro: two mirrors that can see each other. The
+planner (`reflection::plan_after`) gives a bounce deeper a live pass of its
+own, so facing mirrors on High fill all three passes, the third a
+reflection of a reflection, which is plane view 3, the one whose map layers
+overran. The pass count is capped at `ReflectionSettings::MAX_PLANES`
+whatever the recursion, and `FITTED_VIEWS` is sized from that cap, so the
+fixed buffer covers it. New test
+`shadow::tests::facing_mirrors_on_high_keep_every_planes_shadows_inside_the_buffer`
+plans two facing mirrors on High, checks a reflection of a reflection goes
+live, and checks every plane's caster and map offsets fit and miss the far
+slot. With the old `FAR_SLOT` it fails at view 3.
