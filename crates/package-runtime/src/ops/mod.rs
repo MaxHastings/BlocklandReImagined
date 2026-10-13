@@ -338,6 +338,10 @@ pub struct TeamOp {
     pub name: String,
     /// The team's paint palette index.
     pub color: u8,
+    /// The body its members spawn as (an archetype id), in place of the
+    /// game's player type.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub body: Option<String>,
 }
 /// Longest a dropped item may lie, seconds.
 pub const MAX_DROP_SECONDS: u32 = 600;

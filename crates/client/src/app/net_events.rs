@@ -114,6 +114,13 @@ impl App {
         {
             self.ui.apply_session(a.id, update);
         }
+        // So do the Add-On bodies its ChangeDatablock event may name.
+        if let Some(view) = &a.view
+            && let Some(update) = self.build.tool_ui.offer_bodies(&view.archetypes)
+            && a.entered
+        {
+            self.ui.apply_session(a.id, update);
+        }
         if let (Some(building), Some(view)) = (&mut self.build.building, &a.view) {
             building.set_held_brick(view.weapons.images.get(&view.owner).is_some_and(|images| {
                 images.iter().any(|image| {

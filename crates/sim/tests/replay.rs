@@ -578,7 +578,7 @@ fn a_changed_add_on_value_is_caught() {
             ..
         } = frame
         {
-            *command = put("right");
+            **command = put("right");
         }
     }
     let divergence = replayed(&frames).divergence.expect("the value is caught");

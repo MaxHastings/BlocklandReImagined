@@ -1245,6 +1245,12 @@ pub struct ModeMiniGame {
     pub building: bool,
     pub painting: bool,
     pub use_all_players_bricks: bool,
+    /// Bodies a player may pick for themselves with `/body`, besides
+    /// `player_type` (archetype ids, as `player_type`).
+    pub bodies: Vec<String>,
+    /// A player who picks a body (a brick event, `/body`) respawns as it.
+    /// On by default; a mode that forces its bodies turns it off.
+    pub keep_chosen_body: bool,
 }
 impl Default for ModeMiniGame {
     fn default() -> Self {
@@ -1268,6 +1274,8 @@ impl Default for ModeMiniGame {
             building: true,
             painting: true,
             use_all_players_bricks: false,
+            bodies: Vec::new(),
+            keep_chosen_body: true,
         }
     }
 }
@@ -1292,6 +1300,16 @@ impl ModeMiniGame {
             "minigame player_type `{}` is not a player type id",
             self.player_type
         );
+        ensure!(
+            self.bodies.len() <= 256,
+            "a minigame lists at most 256 bodies"
+        );
+        for body in &self.bodies {
+            ensure!(
+                bri_package::id::is_content_ref(body, None),
+                "minigame body `{body}` is not a player type id"
+            );
+        }
         ensure!(
             (1.0..=30.0).contains(&self.respawn_seconds),
             "respawn_seconds must be 1 to 30"

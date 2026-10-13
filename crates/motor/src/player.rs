@@ -33,6 +33,9 @@ const JUMP_WINDOW_TICKS: u8 = 8;
 /// Time is counted in 1/3000 s: a 120 Hz step is 25 and a 32 ms Torque tick
 /// 96, so the motor runs v20's ticks exactly inside the server's steps.
 const STEP_PARTS: u8 = 25;
+/// How far above its feet [`Player::room_for`] tests a new body, clear of
+/// the floor the motor rests a hair inside.
+const ROOM_LIFT: f32 = 0.05;
 const TICK_PARTS: u8 = 96;
 /// The collision group of a dead player's body. Player bodies move
 /// through it (no player is blocked by a corpse, nor a corpse by another),
@@ -1153,6 +1156,36 @@ impl Player {
         physics.colliders[self.collider].set_shape(self.tuning.shape(self.state.crouched));
         self.synchronize_pose(physics);
         Ok(())
+    }
+    /// Whether this player, where it stands and as crouched as it is, has
+    /// room to be `tuning` (an archetype at its scale): a body no wider and
+    /// no taller than this one always has; a bigger one must not reach into
+    /// anything that never moves (bricks, the map). Players and vehicles
+    /// are left out, as they move aside.
+    pub fn room_for(&self, physics: &PhysicsWorld, tuning: &PlayerTuning) -> bool {
+        let crouched = self.state.crouched;
+        if tuning.width <= self.tuning.width
+            && tuning.height(crouched) <= self.tuning.height(crouched)
+        {
+            return true;
+        }
+        // The motor keeps feet a hair into the floor; test just above it.
+        let feet = Vec3::from(self.state.feet) + Vec3::Y * ROOM_LIFT;
+        let fixed = |_: ColliderHandle, c: &Collider| {
+            c.parent()
+                .is_none_or(|b| physics.bodies.get(b).is_some_and(|b| b.is_fixed()))
+        };
+        physics
+            .query_pipeline_with_filter(
+                QueryFilter::default()
+                    .exclude_sensors()
+                    .exclude_collider(self.collider)
+                    .groups(MOVES_AGAINST)
+                    .predicate(&fixed),
+            )
+            .intersect_shape(tuning.pose(feet, crouched), tuning.shape(crouched).as_ref())
+            .next()
+            .is_none()
     }
     /// Authoritative contact box, including current crouch dimensions. This is
     /// the same pose/shape used by the player motor, not a client pickup radius.

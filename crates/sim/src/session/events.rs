@@ -180,6 +180,20 @@ pub(super) fn note(queue: &mut VecDeque<String>, text: String) {
     queue.push_back(text);
 }
 
+/// The bodies `ChangeDatablock` may name: v20's selectable player types by
+/// datablock name, then every named Add-On body by archetype id.
+pub fn event_bodies(archetypes: &crate::archetype::Archetypes) -> Vec<String> {
+    archetypes
+        .choosable()
+        .map(
+            |(id, a)| match crate::player_types::PlayerType::from_archetype(id) {
+                Some(t) => t.datablock_name().to_string(),
+                None => a.id.clone(),
+            },
+        )
+        .collect()
+}
+
 impl Session {
     /// Install the vanilla event catalog. Datablock parameters are bound to
     /// the content this session serves (tool catalog, weapon and vehicle
@@ -213,11 +227,11 @@ impl Session {
             "ProjectileData".into(),
             self.weapons.pack.projectiles.keys().cloned().collect(),
         );
+        // v20's player types by datablock name, as saves name them, then
+        // every Add-On body a player may be by its id.
         datablocks.insert(
             "PlayerData".into(),
-            crate::player_types::PlayerType::ALL
-                .map(|t| t.datablock_name().to_string())
-                .into(),
+            event_bodies(&self.archetypes).into_iter().collect(),
         );
         datablocks.insert("Sound".into(), self.events.sounds.clone());
         let bindings = ev::Bindings {
@@ -1858,14 +1872,15 @@ impl EventHost<'_> {
                     self.spawn_explosion(d, projectile, at, *scale);
                 }
             }
-            // `Player::ChangeDataBlock`: unknown datablocks are ignored.
+            // `Player::ChangeDataBlock`: unknown datablocks are ignored. Any
+            // choosable body, v20's or an Add-On's, is the player's choice,
+            // as `/body` is.
             PlayerOp::DataBlock(datablock) => {
-                if let Some(datablock) = datablock
+                if let Some(body) = datablock
                     .as_deref()
-                    .and_then(crate::player_types::PlayerType::from_datablock_name)
+                    .and_then(|d| self.session.archetypes.choice(d))
                 {
-                    self.session
-                        .set_player_archetype(owner, datablock.archetype())?;
+                    self.session.player_chooses_body(owner, body)?;
                 }
             }
             // `Player::BurnPlayer`/`clearBurn`: PlayerBurnImage flames for the

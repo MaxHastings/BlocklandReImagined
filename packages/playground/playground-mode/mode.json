@@ -7,6 +7,8 @@
     "title": "Playground",
     "loadout": ["playground-rifle:weapon/carbine"],
     "player_type": "playground-runner:archetype/runner",
+    "bodies": ["v20.player.playerstandardarmor"],
+    "keep_chosen_body": true,
     "respawn_seconds": 3,
     "brick_respawn_seconds": 30,
     "vehicle_respawn_seconds": 5,

@@ -78,6 +78,8 @@ world's own bricks, so its brick damage reaches them.
 | `points_kill_player`, `points_kill_self`, `points_die`, `points_break_brick`, `points_plant_brick` | 1, -1, 0, 0, 0 | v20's score settings |
 | `falling_damage`, `weapon_damage`, `self_damage`, `vehicle_damage`, `brick_damage`, `building`, `painting` | all `true` | what the game allows |
 | `use_all_players_bricks` | `false` | let the game break everyone's bricks, not only the world's |
+| `bodies` | none | bodies players may pick for themselves with `/body`, besides `player_type` (archetype ids) |
+| `keep_chosen_body` | `true` | a player who picked a body (a brick's ChangeDatablock, `/body`), before joining or in the game, respawns as it rather than as `player_type` or their team's body; `false` spawns everyone as the game says |
 
 Teams are not a mini-game setting (v20 had none): a rule keeps each
 player's team in a state key, refuses friendly fire in `on_damage` and
@@ -90,7 +92,25 @@ Commando's [archetype](../../packages/samples/sample-commando/commando-archetype
 is a whole new body in a dozen lines: no jet, 150 health and faster feet.
 `movement` accepts any of the motor's constants by name (`gravity`,
 `jump_speed`, `air_control`, `step_height` and the rest); `set_archetype`
-switches a player between bodies at any time. `push_archetype(p, a)` lays
+switches a player between bodies at any time.
+
+Every way of changing body is one transition: `set_archetype`, a brick's
+`onActivate -> Player -> ChangeDatablock` (whose list holds v20's player
+types and every named Add-On body), `/body <name>` and a mini-game's or
+team's body. The player keeps their place, motion, scale and the same
+share of health; a new movement controller starts afresh; a body that
+cannot ride (`can_ride: false`) is set down beside its seat, and one that
+can stays seated and later gets out with room for the body it is now; a
+body that uses no items (`uses_items: false`) puts its tool away and keeps
+it. A brick or `/body` refuses a bigger body where it would reach into a
+brick or the map, and says so; an Add-On's `set_archetype` does not. A
+body picked by a brick or `/body` is kept through respawns outside
+mini-games and into a game that keeps chosen bodies (the default, so a
+dialog-made game lets Mario and Master Chief fight); a game with
+`keep_chosen_body: false` ends the pick. An Add-On's choice is kept
+everywhere, and the latest choice wins. `/body` alone lists the
+bodies one may pick: outside mini-games any named body, inside one its
+`player_type`, the player's team's body and its `bodies`. `push_archetype(p, a)` lays
 another body of the same model over theirs for a while (a machine gunner
 slowed as they fire; v20's `pushDatablock`), keeping their damage, and
 `pop_archetype(p, a)` lifts it; `set_archetype` meanwhile changes the body

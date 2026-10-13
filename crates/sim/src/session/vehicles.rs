@@ -1428,7 +1428,13 @@ impl Session {
             let pose =
                 Pose::from_translation((Vec3::from(bounds.min) + Vec3::from(bounds.max)) * 0.5);
             let feet = Vec3::from(peer.player.state().feet);
-            let may_board = !self.bots.is_bot(*owner) && self.vehicles.may_remount(*owner, tick);
+            // A body that cannot ride lands on a vehicle as on anything else.
+            let may_board = !self.bots.is_bot(*owner)
+                && self.vehicles.may_remount(*owner, tick)
+                && self
+                    .archetypes
+                    .resolve(peer.player.state().archetype)
+                    .can_ride;
             let center = (Vec3::from(bounds.min) + Vec3::from(bounds.max)) * 0.5;
             let reach = Aabb::new(
                 Vector::from_array((center - half).to_array()),

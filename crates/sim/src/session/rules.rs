@@ -1085,11 +1085,13 @@ impl Session {
                             id: None,
                             name: "Blue".into(),
                             color: 0,
+                            player_type: None,
                         },
                         mg::TeamSpec {
                             id: None,
                             name: "Red".into(),
                             color: 1,
+                            player_type: None,
                         },
                     ]
                 } else {
@@ -1098,11 +1100,13 @@ impl Session {
                             id: Some(existing[0].id),
                             name: existing[0].name.clone(),
                             color: existing[0].color,
+                            player_type: existing[0].player_type.clone(),
                         },
                         mg::TeamSpec {
                             id: None,
                             name: "Opponents".into(),
                             color: 1,
+                            player_type: None,
                         },
                     ]
                 };

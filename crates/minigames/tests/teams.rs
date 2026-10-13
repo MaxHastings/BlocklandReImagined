@@ -16,6 +16,7 @@ fn spec(name: &str, color: u8) -> TeamSpec {
         id: None,
         name: name.into(),
         color,
+        player_type: None,
     }
 }
 fn hit(w: &MinigamesWorld, by: PlayerId, victim: PlayerId) -> Decision {
@@ -76,11 +77,13 @@ fn friendly_fire_off_spares_teammates_only() {
                 id: Some(red),
                 name: "Red".into(),
                 color: 0,
+                player_type: None,
             },
             TeamSpec {
                 id: Some(blue),
                 name: "Blue".into(),
                 color: 3,
+                player_type: None,
             },
         ],
         true,
@@ -104,11 +107,13 @@ fn same_colour_allies_and_removed_teams_free_their_members() {
                     id: Some(red),
                     name: "Red".into(),
                     color: 0,
+                    player_type: None,
                 },
                 TeamSpec {
                     id: Some(blue),
                     name: "Blue".into(),
                     color: 3,
+                    player_type: None,
                 },
                 spec("Crimson", 0),
             ],
@@ -130,6 +135,7 @@ fn same_colour_allies_and_removed_teams_free_their_members() {
                 id: Some(red),
                 name: "Reds".into(),
                 color: 0,
+                player_type: None,
             }],
             false,
             false,
@@ -209,12 +215,14 @@ fn teams_are_checked_and_survive_a_save() {
                 TeamSpec {
                     id: Some(red),
                     name: "A".into(),
-                    color: 0
+                    color: 0,
+                    player_type: None,
                 },
                 TeamSpec {
                     id: Some(red),
                     name: "B".into(),
-                    color: 0
+                    color: 0,
+                    player_type: None,
                 },
             ],
             false,
@@ -285,6 +293,7 @@ fn addon_settings_live_on_games_and_teams_and_only_owners_or_admins_edit() {
         id: Some(red),
         name: "Crimson".into(),
         color: 0,
+        player_type: None,
     }];
     w.set_teams(game, specs, false, false).unwrap();
     let g = w.game(game).unwrap();
@@ -384,6 +393,7 @@ fn team_ids_are_slots_from_one_that_never_read_as_no_team() {
                         id: Some(blue),
                         name: "Blue".into(),
                         color: 3,
+                        player_type: None,
                     },
                     spec(&format!("New {round}"), 1),
                 ],
@@ -400,6 +410,7 @@ fn team_ids_are_slots_from_one_that_never_read_as_no_team() {
                 id: Some(TeamId(7)),
                 name: "Restored".into(),
                 color: 2,
+                player_type: None,
             }],
             false,
             false,
@@ -419,6 +430,7 @@ fn team_ids_are_slots_from_one_that_never_read_as_no_team() {
                     id: Some(TeamId(bad)),
                     name: "Out of range".into(),
                     color: 0,
+                    player_type: None,
                 }],
                 false,
                 false,
@@ -491,6 +503,7 @@ fn a_new_team_in_a_removed_teams_slot_starts_fresh() {
         id: Some(red),
         name: "Red".into(),
         color: 0,
+        player_type: None,
     };
     let (ids, _) = w
         .set_teams(game, vec![kept, spec("Green", 2)], false, false)
@@ -499,4 +512,107 @@ fn a_new_team_in_a_removed_teams_slot_starts_fresh() {
     let g = w.game(game).unwrap();
     assert!(g.teams.get(blue).unwrap().addon_settings.is_empty());
     assert_eq!(w.team_score(game, blue), Ok(0));
+}
+
+/// v0.3.0 W4: a team's own body outranks the game's player type when its
+/// members spawn; a team without one spawns as the game's. A body the
+/// server does not offer is refused.
+#[test]
+fn a_team_spawns_its_members_as_its_own_body() {
+    let mut catalog = Catalog::minimal_vanilla();
+    catalog.player_types.insert("v20.player.playernojet".into());
+    let mut w = MinigamesWorld::new(catalog, PolicyMode::Internet, true).unwrap();
+    let a = connect(&mut w, 1);
+    let b = connect(&mut w, 2);
+    w.execute(Command::Create {
+        actor: a,
+        color: 0,
+        settings: Settings::default(),
+    })
+    .unwrap();
+    let game = w.player(a).unwrap().game.unwrap();
+    w.execute(Command::Join { actor: b, game }).unwrap();
+    let mut red = spec("Red", 0);
+    red.player_type = Some("v20.player.playernojet".into());
+    let (ids, _) = w
+        .set_teams(game, vec![red, spec("Blue", 3)], false, false)
+        .unwrap();
+    w.assign_team(a, Some(ids[0])).unwrap();
+    w.assign_team(b, Some(ids[1])).unwrap();
+    assert_eq!(
+        w.game(game)
+            .unwrap()
+            .teams
+            .get(ids[0])
+            .unwrap()
+            .player_type
+            .as_deref(),
+        Some("v20.player.playernojet")
+    );
+    let body = |w: &mut MinigamesWorld, p| {
+        w.execute(Command::ForceRespawn { target: p })
+            .unwrap()
+            .into_iter()
+            .find_map(|e| match e {
+                Effect::Spawn { equipment, .. } => equipment.map(|e| e.player_type),
+                _ => None,
+            })
+            .unwrap()
+    };
+    assert_eq!(body(&mut w, a), "v20.player.playernojet");
+    assert_eq!(body(&mut w, b), STANDARD_PLAYER);
+    let mut bad = spec("Green", 2);
+    bad.player_type = Some("someone:archetype/unknown".into());
+    assert_eq!(
+        w.set_teams(game, vec![bad], false, false).unwrap_err(),
+        Error::UnknownContent
+    );
+}
+
+/// The Mini-Game dialog has no fields for the bodies a game lets members
+/// pick or whether it keeps a pick, so an owner's edit there keeps what an
+/// Add-On set.
+#[test]
+fn the_dialog_keeps_the_bodies_rules_an_add_on_set() {
+    let mut catalog = Catalog::minimal_vanilla();
+    catalog.player_types.insert("v20.player.playernojet".into());
+    let mut w = MinigamesWorld::new(catalog, PolicyMode::Internet, true).unwrap();
+    let a = connect(&mut w, 1);
+    w.execute(Command::Create {
+        actor: a,
+        color: 0,
+        settings: Settings::default(),
+    })
+    .unwrap();
+    let game = w.player(a).unwrap().game.unwrap();
+    let rules = Settings {
+        bodies: ["v20.player.playernojet".to_string()].into(),
+        keep_chosen_body: false,
+        ..Settings::default()
+    };
+    w.host_configure(game, rules).unwrap();
+    let edit = Settings {
+        title: "Renamed".into(),
+        ..Settings::default()
+    };
+    w.execute(Command::Configure {
+        actor: a,
+        settings: edit,
+    })
+    .unwrap();
+    let settings = &w.game(game).unwrap().settings;
+    assert_eq!(settings.title, "Renamed");
+    assert!(
+        !settings.keep_chosen_body,
+        "the dialog's default did not undo it"
+    );
+    assert!(settings.bodies.contains("v20.player.playernojet"));
+    let unknown = Settings {
+        bodies: ["someone:archetype/unknown".to_string()].into(),
+        ..Settings::default()
+    };
+    assert_eq!(
+        w.host_configure(game, unknown).unwrap_err(),
+        Error::UnknownContent
+    );
 }

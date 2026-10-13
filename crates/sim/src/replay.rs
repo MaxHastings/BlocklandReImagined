@@ -360,7 +360,7 @@ pub enum Call {
     Command {
         owner: OwnerId,
         sequence: u64,
-        command: Command,
+        command: Box<Command>,
         aim: Option<ActionAim>,
     },
     Movement {
@@ -539,7 +539,7 @@ fn apply(
         } => Returned::Reply(s.command_with_aim_and_admin_persistence(
             owner,
             sequence,
-            command,
+            *command,
             aim,
             |state| outside(tape, || Persisted(persist(state))).0,
         )),
@@ -597,10 +597,8 @@ impl Secrets {
     /// `call` as recorded: its passwords replaced by stand-ins.
     fn redact_call(&mut self, call: &Call) -> Call {
         let mut call = call.clone();
-        if let Call::Command {
-            command: Command::Admin(request),
-            ..
-        } = &mut call
+        if let Call::Command { command, .. } = &mut call
+            && let Command::Admin(request) = &mut **command
         {
             use bri_admin::Action;
             match &mut request.action {
@@ -1118,7 +1116,7 @@ impl Recorder {
         let call = Call::Command {
             owner,
             sequence,
-            command,
+            command: Box::new(command),
             aim,
         };
         match self.call(s, call, &mut persist) {
