@@ -5,6 +5,11 @@ use super::*;
 pub(super) struct SessionState {
     /// Movement the server's map rules currently allow (the Tutorial's lessons).
     pub(super) abilities: bri_sim::session::Abilities,
+    /// The held gun's ammunition, as the server last said
+    /// (`Notice::Ammo`), for HUD regions.
+    pub(super) held_ammo: Option<bri_sim::session::HeldAmmo>,
+    /// The next bottom print is the ammo display (`HeldAmmo::printed`).
+    pub(super) next_print_is_ammo: bool,
     /// Last brick inventory state reported to the server.
     pub(super) brick_hand: Option<bri_sim::session::BrickHand>,
     pub(super) attempt: Option<Attempt>,
@@ -92,6 +97,8 @@ impl App {
         self.ui.core.name_tags.clear();
         self.scene.scene_map = None;
         self.net.abilities = Default::default();
+        self.net.held_ammo = None;
+        self.net.next_print_is_ammo = false;
         self.net.brick_hand = None;
         self.build.ghost_report = None;
         self.copy_report = None;

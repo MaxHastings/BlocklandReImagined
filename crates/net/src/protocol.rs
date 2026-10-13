@@ -67,8 +67,12 @@ pub const VERSION: u32 = FROZEN_VERSION + PROTOCOL_CHANGES.len() as u32;
 /// The last hand-numbered version, before per-change files.
 const FROZEN_VERSION: u32 = 69;
 include!(concat!(env!("OUT_DIR"), "/protocol_changes.rs"));
-/// Inputs repeated in every movement datagram so isolated losses cost nothing.
-pub const MOVEMENT_REDUNDANCY: usize = 6;
+/// Inputs repeated in every movement datagram so losses cost nothing: 100
+/// ms of moves, so two datagrams lost running (one in four hundred at 5%
+/// loss) still skip none. With six, a driver's moves skipped over such a
+/// pair and their vehicle's prediction was corrected by a tick or two of
+/// travel (`crew_link_tests`).
+pub const MOVEMENT_REDUNDANCY: usize = 12;
 /// Most inputs one frame may hand the transport (split across datagrams).
 pub const MAX_MOVEMENT_BATCH: usize = 48;
 /// Least time between two movement datagrams (about 70 Hz): a client

@@ -20,7 +20,11 @@ pub enum BrickDeath {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum CueKind {
-    Jump,
+    /// A player jumped. `sound` is its archetype's own (`Sounds::jump`):
+    /// None plays the standard jump, an empty name nothing.
+    Jump {
+        sound: Option<String>,
+    },
     Plant,
     /// A brick was killed or fake-killed; `death` says how clients draw
     /// it. Blasts throw debris from `origin`; `Cue::position` is the
@@ -69,10 +73,14 @@ pub enum CueKind {
         actor: u64,
         level: f32,
         cry: bool,
+        /// The archetype's own cry (`Sounds::pain`), as `Jump::sound`.
+        sound: Option<String>,
     },
     /// `Armor::onDisabled`: death cry and death animation.
     Death {
         actor: u64,
+        /// The archetype's own cry (`Sounds::death`), as `Jump::sound`.
+        sound: Option<String>,
     },
     /// A player's feet crossed a water surface at this speed: the entry
     /// splash and `impactWater*` sound, or the `exitingWater` sound.
@@ -202,9 +210,23 @@ impl Cue {
                 *actor > 0 && !image.is_empty() && text(image) && *hand < 2,
                 "Invalid shell cue"
             ),
-            CueKind::Death { actor } => ensure!(*actor > 0, "Invalid player cue"),
-            CueKind::Pain { actor, level, .. } => ensure!(
-                *actor > 0 && level.is_finite() && (0.0..=1e6).contains(level),
+            CueKind::Jump { sound } => {
+                ensure!(sound.as_deref().is_none_or(text), "Invalid jump cue")
+            }
+            CueKind::Death { actor, sound } => ensure!(
+                *actor > 0 && sound.as_deref().is_none_or(text),
+                "Invalid player cue"
+            ),
+            CueKind::Pain {
+                actor,
+                level,
+                sound,
+                ..
+            } => ensure!(
+                *actor > 0
+                    && level.is_finite()
+                    && (0.0..=1e6).contains(level)
+                    && sound.as_deref().is_none_or(text),
                 "Invalid pain cue"
             ),
             CueKind::Water { actor, speed, .. } => ensure!(
@@ -468,7 +490,7 @@ mod tests {
     fn cosmetic_overflow_is_bounded_observable_and_never_reuses_ids() {
         let mut cues = Cues::default();
         for _ in 0..MAX_CUES + 3 {
-            cues.emit(9, CueKind::Jump, [0.; 3]);
+            cues.emit(9, CueKind::Jump { sound: None }, [0.; 3]);
         }
         let cursor = cues.cursor();
         let first = cues.take();

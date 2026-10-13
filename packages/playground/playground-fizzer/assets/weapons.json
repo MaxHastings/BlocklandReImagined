@@ -1,0 +1,80 @@
+{
+ "schema_version": 5,
+ "id": "playground-fizzer",
+ "items": {},
+ "images": {},
+ "projectiles": {
+  "playground-fizzer:projectile/pop": {
+   "speed": 40.0,
+   "lifetime_ticks": 12,
+   "fade_ticks": 12,
+   "damage": 0.0,
+   "damage_type": "$DamageType::FizzerPop",
+   "radius_damage_type": "$DamageType::FizzerPop",
+   "explode_death": true,
+   "explosion": {
+    "effect": "fizzerPop",
+    "damage": 60.0,
+    "radius": 5.0,
+    "impulse": 900.0,
+    "impulse_radius": 6.0,
+    "impulse_vertical": 300.0
+   },
+   "brick": {
+    "radius": 2.5,
+    "force": 20.0,
+    "max_volume": 400.0,
+    "max_floating_volume": 200.0
+   }
+  }
+ },
+ "damage_types": {
+  "fizzerpop": {
+   "name": "FizzerPop",
+   "suicide_message": "%1 went pop",
+   "murder_message": "%2 popped %1",
+   "vehicle_scale": 1.0,
+   "direct": false
+  }
+ },
+ "explosions": {
+  "fizzerpop": {
+   "name": "fizzerPop",
+   "sound": "playground-fizzer:pop",
+   "shake": {
+    "frequency": [
+     9.0,
+     10.0,
+     9.0
+    ],
+    "amplitude": [
+     1.5,
+     1.5,
+     1.5
+    ],
+    "seconds": 0.6,
+    "radius": 14.0,
+    "falloff": 2.0
+   },
+   "shape": "",
+   "seconds": 0.4,
+   "play_speed": 1.0,
+   "face_viewer": true,
+   "scale": [
+    1.0,
+    1.0,
+    1.0
+   ],
+   "sizes": []
+  }
+ },
+ "sounds": {
+  "playground-fizzer:hiss": {
+   "file": "sounds/hiss.wav",
+   "volume": 0.8
+  },
+  "playground-fizzer:pop": {
+   "file": "sounds/pop.wav"
+  }
+ }
+}

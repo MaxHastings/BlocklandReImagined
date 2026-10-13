@@ -388,7 +388,10 @@ impl ClientAudio {
                 }
                 return;
             }
-            CueKind::Jump => "player.jump",
+            CueKind::Jump { sound } => {
+                self.body_sound(sound.as_deref(), "player.jump", cue.position);
+                return;
+            }
             CueKind::Plant => "brick.plant",
             // One break sound per `BREAK_SOUND_GAP_MS`, at the brick
             // (the event plays at the ghost brick's own transform).
@@ -404,8 +407,16 @@ impl ClientAudio {
                 self.trigger("brick.break", Placement::World(cue.position));
                 return;
             }
-            CueKind::Pain { cry: true, .. } => "player.pain_cry",
-            CueKind::Death { .. } => "player.death_cry",
+            CueKind::Pain {
+                cry: true, sound, ..
+            } => {
+                self.body_sound(sound.as_deref(), "player.pain_cry", cue.position);
+                return;
+            }
+            CueKind::Death { sound, .. } => {
+                self.body_sound(sound.as_deref(), "player.death_cry", cue.position);
+                return;
+            }
             // `mediumSplashSoundVelocity` 10, `hardSplashSoundVelocity` 20.
             CueKind::Water {
                 entered: true,
@@ -440,6 +451,15 @@ impl ClientAudio {
             }
         };
         self.trigger(key, Placement::World(cue.position));
+    }
+    /// A player's jump or cry: its archetype's own `sound`, an empty one
+    /// none, else the standard player's `standard` trigger.
+    fn body_sound(&mut self, sound: Option<&str>, standard: &str, at: [f32; 3]) {
+        match sound {
+            Some("") => {}
+            Some(profile) => self.profile(profile, Placement::World(at)),
+            None => self.trigger(standard, Placement::World(at)),
+        }
     }
     /// Keep one positional loop per music brick in step with the world.
     pub fn sync_music(&mut self, bricks: &bri_world::Bricks) {
@@ -834,6 +854,75 @@ mod tests {
         Ok(())
     }
 
+    /// A player type's own jump and cries play in place of the standard
+    /// player's (the horse's `HorseJumpSound`), and an empty one plays
+    /// nothing (a Bot_Hole bot's `jumpSound = ""`).
+    #[test]
+    fn a_player_types_own_sounds_replace_the_standard_ones() -> Result<()> {
+        let fx = Pack::synthetic()?;
+        let mut audio = ClientAudio::load(&fx.root, &mut Settings::default(), OutputKind::Offline)?;
+        let cue = |id: u64, kind: CueKind| Cue {
+            id,
+            tick: id,
+            position: [1000., 1., 0.],
+            kind,
+        };
+        let own = Some(fx.note.clone());
+        audio.cue(&cue(1, CueKind::Jump { sound: own.clone() }));
+        audio.cue(&cue(
+            2,
+            CueKind::Pain {
+                actor: 1,
+                level: 20.,
+                cry: true,
+                sound: own.clone(),
+            },
+        ));
+        audio.cue(&cue(
+            3,
+            CueKind::Death {
+                actor: 1,
+                sound: own,
+            },
+        ));
+        assert_eq!(audio.requested.get(&fx.note).copied(), Some(3));
+        assert_eq!(audio.pending.len(), 3);
+        let silent = Some(String::new());
+        audio.cue(&cue(
+            4,
+            CueKind::Jump {
+                sound: silent.clone(),
+            },
+        ));
+        audio.cue(&cue(
+            5,
+            CueKind::Death {
+                actor: 1,
+                sound: silent,
+            },
+        ));
+        assert_eq!(audio.pending.len(), 3, "an empty sound plays nothing");
+        // The standard player's jump is the `player.jump` trigger, which
+        // this pack leaves unbound.
+        audio.cue(&cue(6, CueKind::Jump { sound: None }));
+        assert_eq!(audio.pending.len(), 3);
+        assert!(
+            audio
+                .warnings
+                .contains("Unbound audio trigger: player.jump")
+        );
+        let position = [1000., 1., 0.];
+        audio.tick(
+            0.2,
+            Listener {
+                position,
+                ..Default::default()
+            },
+        );
+        assert_eq!(audio.stats().started, 3);
+        Ok(())
+    }
+
     /// An Add-On's `AudioProfile` naming a file of the game itself (the HE
     /// Grenade's explosion is `base/data/sound/vehicleExplosion.wav`) plays
     /// the bank's copy of that file, at the Add-On's volume.
@@ -891,6 +980,59 @@ mod tests {
         );
         assert_eq!(audio.stats().started, 1);
         assert!(audio.take_capture().iter().any(|v| v.abs() > 0.00001));
+        Ok(())
+    }
+
+    /// An Add-On weapon's own stereo sounds (the Mini-Nuke's launch and
+    /// blast are 44.1 kHz stereo `.wav`s with 3D descriptions) are heard
+    /// where they go off and fade with distance, like every other weapon's,
+    /// rather than at full volume in both ears wherever the player is.
+    #[test]
+    fn an_add_on_weapons_stereo_sounds_fade_with_distance() -> Result<()> {
+        let fx = Pack::synthetic()?;
+        let dir = tempfile::tempdir()?;
+        let rate = 44_100;
+        let samples: Vec<f32> = (0..rate / 2)
+            .flat_map(|i| {
+                let s = (i as f32 / rate as f32 * 440.0 * std::f32::consts::TAU).sin() * 0.5;
+                [s, s]
+            })
+            .collect();
+        std::fs::write(
+            dir.path().join("blast.wav"),
+            bri_audio::wav::encode_pcm16(rate, 2, &samples),
+        )?;
+        let mut pack: bri_weapons::Pack =
+            serde_json::from_str(r#"{ "schema_version": 1, "id": "addon" }"#)?;
+        let blast = "addon:sound/mininukeexplodesound";
+        pack.sounds.insert(
+            blast.into(),
+            bri_weapons::SoundDef {
+                file: "blast.wav".into(),
+                volume: 1.0,
+                looping: false,
+                local: false,
+                package: None,
+                stock: false,
+            },
+        );
+        let heard = |distance: f32| -> Result<f32> {
+            let mut audio =
+                ClientAudio::load(&fx.root, &mut Settings::default(), OutputKind::Offline)?;
+            audio.set_pack_sounds(&pack, dir.path());
+            assert!(audio.warnings.is_empty(), "{:?}", audio.warnings);
+            audio.profile(blast, Placement::World([0.0, 0.0, -distance]));
+            audio.tick(0.2, Listener::default());
+            let capture = audio.take_capture();
+            Ok((capture.iter().map(|v| v * v).sum::<f32>() / capture.len().max(1) as f32).sqrt())
+        };
+        let (near, mid, far) = (heard(5.0)?, heard(35.0)?, heard(100.0)?);
+        assert!(near > 0.01, "heard up close: {near}");
+        assert!(
+            mid > 0.0 && mid < near * 0.8,
+            "fainter further off: {near} then {mid}"
+        );
+        assert_eq!(far, 0.0, "out of earshot");
         Ok(())
     }
 }

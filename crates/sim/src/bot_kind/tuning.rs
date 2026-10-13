@@ -75,13 +75,19 @@ pub fn with_dial(kind: &BotKind, path: &str, value: f64) -> Result<BotKind> {
 }
 
 /// The numbers a kind may set, in `bots.json` and as a dial: what the kind
-/// is (its sight and ranges, behaviour and goof weights, its melee hit) and
+/// is (its sight, reaction, memory and ranges, behaviour and goof weights,
+/// its body's attacks and when it flees: its behaviour profile) and
 /// the six main dials: surprise, teamwork, mood pull, alertness, hold time
 /// and pressure. Every other number is fixed in code (`BotKind::default`),
 /// so tuning a kind means turning a main dial. A path ending in `.` covers
 /// every entry under it.
-pub const SETTABLE: [&str; 14] = [
+pub const SETTABLE: [&str; 19] = [
     "sight",
+    "reaction_seconds",
+    "memory_seconds",
+    "flee_below",
+    "contact.",
+    "ability.",
     "wander_radius",
     "chase_radius",
     "objective_radius",

@@ -47,3 +47,13 @@ impl Perform for ops::BotTool {
         session.rules_bot_tool(package, bot, slot)
     }
 }
+impl Perform for ops::SetBotIntent {
+    fn check(&self, session: &Session, cx: OpCall<'_>) -> Result<()> {
+        session.check_rest_rules_bot(cx.package, self.bot)
+    }
+    fn perform(self, session: &mut Session, cx: OpCall<'_>) -> Result<()> {
+        let OpCall { package, .. } = cx;
+        let ops::SetBotIntent { bot, intent } = self;
+        session.set_bot_intent(package, bot, intent)
+    }
+}

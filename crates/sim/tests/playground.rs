@@ -33,9 +33,10 @@ const BUGGY: &str = "playground-buggy:vehicle/buggy";
 const BOT: &str = "bot.blockhead";
 const STOMPER: &str = "playground-stomper:bot/stomper";
 const STOMPER_BODY: &str = "playground-stomper:archetype/stomper";
+const FIZZER: &str = "playground-fizzer:bot/fizzer";
 
 /// The Add-Ons, by id: their folder under `packages/` and side.
-const ADD_ONS: [(&str, &str, Side); 10] = [
+const ADD_ONS: [(&str, &str, Side); 14] = [
     (
         "playground-runner",
         "playground/playground-runner",
@@ -72,6 +73,26 @@ const ADD_ONS: [(&str, &str, Side); 10] = [
         "playground-stomper-look",
         "playground/playground-stomper-look",
         Side::Client,
+    ),
+    (
+        "playground-fizzer",
+        "playground/playground-fizzer",
+        Side::Shared,
+    ),
+    (
+        "playground-fizzer-look",
+        "playground/playground-fizzer-look",
+        Side::Client,
+    ),
+    (
+        "playground-fizzer-rules",
+        "playground/playground-fizzer-rules",
+        Side::Server,
+    ),
+    (
+        "playground-stomper-rules",
+        "playground/playground-stomper-rules",
+        Side::Server,
     ),
     (
         "playground-mode",
@@ -114,17 +135,22 @@ fn catalog(mode: bool) -> Arc<Catalog> {
     Arc::new(catalog)
 }
 
-/// The carbine's weapons and the buggy's gun, merged as a host merges
-/// every package's.
+/// The carbine's weapons, the buggy's gun and the Fizzer's pop, merged as
+/// a host merges every package's.
 fn weapons() -> bri_weapons::Pack {
     let load = |dir: &str| {
         let path = packages().join(dir).join("weapons.json");
         bri_weapons::Pack::from_json(&std::fs::read(path).unwrap()).unwrap()
     };
-    let (pack, problems) = load("playground/playground-rifle/assets").merge(vec![(
-        "playground/playground-buggy/assets".into(),
-        load("playground/playground-buggy/assets"),
-    )]);
+    let (pack, problems) = load("playground/playground-rifle/assets").merge(
+        [
+            "playground/playground-buggy/assets",
+            "playground/playground-fizzer/assets",
+            "playground/playground-stomper/assets",
+        ]
+        .map(|dir| (dir.into(), load(dir)))
+        .into(),
+    );
     assert!(problems.is_empty(), "{problems:?}");
     pack
 }
@@ -154,7 +180,7 @@ fn vehicles() -> bri_vehicles::Pack {
         .unwrap()
 }
 
-/// The Blockhead Bot's kinds and the Stomper's, merged as a host merges
+/// The Blockhead Bot's kinds, the Stomper's and the Fizzer's, merged as a host merges
 /// every package's.
 fn bot_kinds() -> Vec<bri_sim::bot_kind::BotKind> {
     let load = |file: &str| {
@@ -164,6 +190,7 @@ fn bot_kinds() -> Vec<bri_sim::bot_kind::BotKind> {
     bri_sim::bot_kind::BotPack::merge([
         load("blockhead_bot/assets/bots.json"),
         load("playground/playground-stomper/bots.json"),
+        load("playground/playground-fizzer/bots.json"),
     ])
     .unwrap()
 }
@@ -291,7 +318,7 @@ impl Game {
         s.set_vehicle_pack(vehicles(), bot_kinds()).unwrap();
         s.set_tool_catalog(ToolCatalog {
             items: [CARBINE.to_string()].into(),
-            vehicles: [BUGGY.to_string(), BOT.to_string(), STOMPER.to_string()].into(),
+            vehicles: [BUGGY, BOT, STOMPER, FIZZER].map(String::from).into(),
             vehicle_bricks: ["plate".to_string()].into(),
             ..Default::default()
         })
@@ -448,9 +475,16 @@ impl Game {
     }
 }
 
+/// The Fizzer's author's three Add-Ons.
+const FIZZER_FAMILY: [&str; 3] = [
+    "playground-fizzer",
+    "playground-fizzer-look",
+    "playground-fizzer-rules",
+];
+
 /// Each Add-On but the mode loads on its own, with only its declared
 /// dependencies, and none of them names another: no file of the Runner,
-/// its look, the carbine, the buggy or the bot mentions another's id.
+/// its look, the carbine, the buggy, the bot or the Fizzer mentions another's id.
 #[test]
 fn each_add_on_stands_alone_and_names_no_other() {
     let independent = [
@@ -464,6 +498,12 @@ fn each_add_on_stands_alone_and_names_no_other() {
         &["playground-rifle"],
         &["playground-buggy"],
         &["blockhead_bot"],
+        &["playground-fizzer", "playground-fizzer-look"],
+        &[
+            "playground-fizzer",
+            "playground-fizzer-look",
+            "playground-fizzer-rules",
+        ],
     ];
     for ids in independent {
         Catalog::load(&packages(), &set(ids), true)
@@ -491,6 +531,9 @@ fn each_add_on_stands_alone_and_names_no_other() {
         ("playground-rifle", &["playground-rifle"]),
         ("playground-buggy", &["playground-buggy"]),
         ("blockhead_bot", &["blockhead_bot"]),
+        ("playground-fizzer", &FIZZER_FAMILY[..]),
+        ("playground-fizzer-look", &FIZZER_FAMILY),
+        ("playground-fizzer-rules", &FIZZER_FAMILY),
     ];
     fn texts(dir: &Path, out: &mut Vec<(PathBuf, String)>) {
         for entry in std::fs::read_dir(dir).unwrap() {
@@ -626,7 +669,10 @@ fn a_passenger_fires_the_carbine_and_a_gunner_the_buggy_gun() {
     assert_eq!(g.s.mounted(passenger), Some((buggy, 1)));
     // A third climbs onto the deck and works the buggy's own gun, which
     // fires the buggy Add-On's bolt, not anything in their hands.
-    g.looks.get_mut(&driver).unwrap().forward = 0.0;
+    // The driver lets off and brakes to a stop (jump brakes).
+    let look = g.looks.get_mut(&driver).unwrap();
+    look.forward = 0.0;
+    look.jump = true;
     g.steps(240);
     let gunner = g.join("Cy");
     g.steps(40);
@@ -1027,6 +1073,285 @@ fn a_builder_spawns_the_carbine_and_the_buggy_from_bricks_without_a_mini_game() 
     assert_ne!(g.body(taker), RUNNER, "no mode: the standard body");
 }
 
+/// The buggy steers toward where its driver looks (`toward_look`), so a
+/// bot at the wheel steers it by looking, not by the mouse turn the v20
+/// jeep takes: a Blockhead Bot boards the parked buggy and drives it at a
+/// Runner far across the field, turning to do so.
+#[test]
+fn a_bot_drives_the_look_steered_buggy_at_a_runner() {
+    let mut world = World::new("Playground".into(), "playground".into(), vec![[1.0; 4]]);
+    bot_spawn(&mut world, [40.0, 0.1, 40.25]);
+    let mut g = Game::with(world);
+    g.s.set_spawn_points(vec![
+        Vec3::new(0.0, 0.05, 30.0),
+        Vec3::new(40.0, 0.05, 44.0),
+    ])
+    .unwrap();
+    let p = g.join("Ann");
+    g.steps(60);
+    let bot =
+        g.s.names()
+            .keys()
+            .copied()
+            .find(|o| g.s.is_bot(*o))
+            .unwrap();
+    let buggy =
+        g.s.spawn_vehicle_at(bot, BUGGY, Vec3::new(44.0, 1.0, 40.0), 1.2, Vec3::ZERO)
+            .unwrap();
+    let start =
+        g.s.vehicle_poses()
+            .into_iter()
+            .find(|v| v.id == buggy)
+            .unwrap();
+    let heading = |r: [f32; 4]| {
+        let f = glam::Quat::from_array(r) * Vec3::NEG_Z;
+        f.x.atan2(-f.z)
+    };
+    let (mut drove, mut turned, mut closest) = (false, 0f32, f32::INFINITY);
+    for _ in 0..90 {
+        g.steps(120);
+        let v =
+            g.s.vehicle_poses()
+                .into_iter()
+                .find(|v| v.id == buggy)
+                .unwrap();
+        if g.s.mounted(bot) == Some((buggy, 0)) {
+            drove = true;
+            let d = (heading(v.rotation) - heading(start.rotation) + std::f32::consts::PI)
+                .rem_euclid(std::f32::consts::TAU)
+                - std::f32::consts::PI;
+            turned = turned.max(d.abs());
+            let ann = Vec3::from(g.state(p).feet);
+            closest = closest.min(Vec3::from(v.position).distance(ann));
+        }
+        if closest < 20.0 {
+            break;
+        }
+    }
+    assert!(drove, "the bot took the wheel");
+    assert!(turned > 0.5, "it turned toward the Runner: {turned}");
+    // From 45 away to within the buggy gun's reach, where it may well
+    // climb back to the gun rather than keep driving.
+    assert!(closest < 20.0, "it drove at the Runner: {closest}");
+}
+
+/// A Fizzer, a creature from its own Add-On, walks up to a Runner by a
+/// wall, hisses while its wick burns (the brain winds up the kind's
+/// ability from data) and pops: the Add-On's `on_bot_ability` fires its
+/// own blast, which hurts the Runner and knocks bricks out of the wall
+/// under the mini-game's brick damage, and the Fizzer is gone. Nothing in
+/// the engine knows what the pop is.
+#[test]
+fn a_fizzer_walks_up_hisses_and_pops_breaking_bricks() {
+    let mut world = World::new("Playground".into(), "playground".into(), vec![[1.0; 4]]);
+    fort(&mut world);
+    kind_spawn(&mut world, [4.5, 0.1, -6.25], FIZZER);
+    let mut g = Game::with(world);
+    // The Runner waits in front of the fort's wall.
+    g.s.set_spawn_points(vec![Vec3::new(0.0, 0.05, WALL_Z + 1.5)])
+        .unwrap();
+    let p = g.join("Ann");
+    g.steps(60);
+    let fizzer =
+        g.s.names()
+            .keys()
+            .copied()
+            .find(|o| g.s.is_bot(*o))
+            .expect("the spawn brick made a Fizzer");
+    let bricks = g.bricks();
+    g.s.take_cues();
+    let (mut hissed, mut popped) = (None, None);
+    for second in 0..60 {
+        g.steps(120);
+        let cues = g.s.take_cues();
+        if hissed.is_none()
+            && cues.iter().any(|c| {
+                matches!(&c.kind, bri_sim::presentation::CueKind::WeaponSound { profile }
+                    if profile == "playground-fizzer:hiss")
+            })
+        {
+            hissed = Some(second);
+        }
+        let v = &g.s.vitals()[&p];
+        if v.health < 100.0 || !v.alive {
+            popped = Some(second);
+            break;
+        }
+    }
+    let popped = popped.expect("the Fizzer popped by the Runner within a minute");
+    assert!(
+        hissed.is_some_and(|h| h <= popped),
+        "it hissed before it popped: {hissed:?} {popped}"
+    );
+    g.steps(10);
+    assert!(
+        g.bricks() < bricks,
+        "the pop knocked bricks out of the wall: {} of {bricks}",
+        g.bricks()
+    );
+    assert!(
+        g.s.vitals().get(&fizzer).is_none_or(|v| !v.alive),
+        "the Fizzer went with its pop"
+    );
+}
+
+/// A Fizzer whose quarry runs while the wick burns calls it off: no pop
+/// while the Runner keeps away.
+#[test]
+fn a_fizzer_calls_off_its_pop_when_the_runner_runs() {
+    let mut world = World::new("Playground".into(), "playground".into(), vec![[1.0; 4]]);
+    kind_spawn(&mut world, [3.5, 0.1, 0.25], FIZZER);
+    let mut g = Game::with(world);
+    g.s.set_spawn_points(vec![Vec3::new(0.0, 0.05, 0.0)])
+        .unwrap();
+    let p = g.join("Ann");
+    g.steps(60);
+    let fizzer =
+        g.s.names()
+            .keys()
+            .copied()
+            .find(|o| g.s.is_bot(*o))
+            .expect("the spawn brick made a Fizzer");
+    g.s.take_cues();
+    // Wait for the hiss, then run straight away from it.
+    let mut hissed = false;
+    for _ in 0..30 * 12 {
+        g.steps(10);
+        hissed = g.s.take_cues().iter().any(|c| {
+            matches!(&c.kind, bri_sim::presentation::CueKind::WeaponSound { profile }
+                if profile == "playground-fizzer:hiss")
+        });
+        if hissed {
+            break;
+        }
+    }
+    assert!(hissed, "the Fizzer lit its wick by the Runner");
+    // The Runner is twice as quick as the Fizzer.
+    let away = Vec3::from(g.state(p).feet) - Vec3::from(g.state(fizzer).feet);
+    g.drive(
+        p,
+        MoveInput {
+            forward: 1.0,
+            yaw: away.x.atan2(-away.z),
+            ..Default::default()
+        },
+        240,
+    );
+    let v = &g.s.vitals()[&p];
+    assert!(v.alive && v.health >= 100.0, "it did not pop: {v:?}");
+}
+
+/// The Stomper's rules flatten it when a body lands on its cap
+/// (`on_contact` from above): a Runner coming down onto a Stomper kills it,
+/// the engine only telling who met whom, from where and how fast. Here the
+/// Runner, stomped to death by it, comes back right over its head.
+#[test]
+fn a_runner_landing_on_a_stomper_flattens_it() {
+    let mut world = World::new("Playground".into(), "playground".into(), vec![[1.0; 4]]);
+    kind_spawn(&mut world, [4.5, 0.1, 0.25], STOMPER);
+    let mut g = Game::with(world);
+    g.s.set_spawn_points(vec![Vec3::new(0.0, 0.05, 0.0)])
+        .unwrap();
+    let p = g.join("Ann");
+    g.steps(60);
+    let stomper =
+        g.s.names()
+            .keys()
+            .copied()
+            .find(|o| g.s.is_bot(*o))
+            .expect("the spawn brick made a Stomper");
+    // It stomps the Runner to death.
+    for _ in 0..60 * 12 {
+        g.steps(10);
+        if !g.s.vitals()[&p].alive {
+            break;
+        }
+    }
+    assert!(!g.s.vitals()[&p].alive, "the Stomper stomped the Runner");
+    // The Runner comes back over its cap.
+    let mut flattened = false;
+    for _ in 0..12 * 120 {
+        if !g.s.vitals()[&p].alive {
+            let over = Vec3::from(g.state(stomper).feet) + Vec3::Y * 2.8;
+            g.s.set_spawn_points(vec![over]).unwrap();
+            let _ = g.cmd(p, Command::Respawn);
+        }
+        g.steps(1);
+        if !g.s.vitals()[&stomper].alive {
+            flattened = true;
+            break;
+        }
+    }
+    assert!(
+        flattened,
+        "the Stomper was flattened: {:?}",
+        g.s.package_diagnostics()
+    );
+    assert!(g.s.vitals()[&p].alive, "the Runner landed on it alive");
+    assert!(flattened_by_rules(&mut g));
+}
+
+/// Whether the kill feed told of a Stomper flattened by its rules'
+/// damage type, not killed by the engine's own run-over damage.
+fn flattened_by_rules(g: &mut Game) -> bool {
+    let notices = g.s.take_private_notices();
+    notices
+        .iter()
+        .any(|(_, n)| matches!(n, bri_sim::session::Notice::Chat(t) if t.contains("flattened")))
+        || panic!("{notices:?}")
+}
+
+/// Run over by the buggy at speed, a Stomper is flattened by its own
+/// Add-On's rules (`on_contact` with a vehicle), credited to the driver.
+#[test]
+fn the_buggy_runs_a_stomper_over() {
+    let mut world = World::new("Playground".into(), "playground".into(), vec![[1.0; 4]]);
+    kind_spawn(&mut world, [0.5, 0.1, -20.25], STOMPER);
+    let mut g = Game::with(world);
+    let p = g.join("Ann");
+    g.steps(40);
+    let buggy =
+        g.s.spawn_vehicle_at(p, BUGGY, Vec3::new(0.0, 1.0, 0.0), 0.0, Vec3::ZERO)
+            .unwrap();
+    g.steps(60);
+    let (vehicle, _) = g.board(p, 0.0);
+    assert_eq!(vehicle, buggy);
+    let stomper =
+        g.s.names()
+            .keys()
+            .copied()
+            .find(|o| g.s.is_bot(*o))
+            .expect("the spawn brick made a Stomper");
+    // It has come up behind for the driver: away from it, then back
+    // into it at full throttle.
+    g.drive(
+        p,
+        MoveInput {
+            forward: 1.0,
+            ..Default::default()
+        },
+        120,
+    );
+    let mut flattened = false;
+    for _ in 0..100 {
+        g.drive(
+            p,
+            MoveInput {
+                forward: -1.0,
+                ..Default::default()
+            },
+            6,
+        );
+        if !g.s.vitals()[&stomper].alive {
+            flattened = true;
+            break;
+        }
+    }
+    assert!(flattened, "the buggy ran the Stomper over");
+    // Its rules flattened it, before the buggy's own run-over damage.
+    assert!(flattened_by_rules(&mut g));
+}
+
 /// Inside the mode's mini-game a buggy running into a Stomper hurts it as
 /// it hurts a player: a bot is a run-over target like anyone else. (The
 /// driving is `the_runner_drives_the_buggy_through_the_fort_and_climbs_out`;
@@ -1051,14 +1376,22 @@ fn a_buggy_runs_a_stomper_over() {
         g.s.vitals()[&p].minigame,
         "the Stomper plays in the Runner's mini-game"
     );
+    // A fresh spawn takes no damage for its first 2.5 s, so wait that out:
+    // a run-over before then pushes the Stomper but cannot hurt it.
+    g.steps(300);
     let full = g.s.vitals()[&bot].health;
     let mut hit = false;
     for _ in 0..5 {
         // Launch the Runner's buggy at the Stomper from a few metres off,
-        // faster than a run-over needs.
+        // faster than a run-over needs, from its side away from the Runner
+        // it is after, so the Runner is not the one in the way.
         let at = Vec3::from(g.state(bot).feet);
-        let from = at + Vec3::new(0.0, 1.0, 5.0);
-        g.s.spawn_vehicle_at(p, BUGGY, from, 0.0, Vec3::new(0.0, 0.0, -16.0))
+        let mut away = at - Vec3::from(g.state(p).feet);
+        away.y = 0.0;
+        let away = away.try_normalize().unwrap_or(Vec3::Z);
+        let from = at + away * 5.0 + Vec3::Y;
+        let yaw = away.x.atan2(away.z);
+        g.s.spawn_vehicle_at(p, BUGGY, from, yaw, -away * 16.0)
             .unwrap();
         for _ in 0..90 {
             g.steps(1);

@@ -20,7 +20,7 @@ use std::{
 
 const HISTORY: usize = 16;
 /// Render other vehicles this many server ticks behind the newest pose.
-const INTERPOLATION_TICKS: f64 = 9.0;
+pub(crate) const INTERPOLATION_TICKS: f64 = 9.0;
 const TICK_RATE: f64 = 120.0;
 /// The driven vehicle runs at most this many ticks past its newest pose.
 const DRIVEN_AHEAD: f64 = 6.0;
@@ -1136,6 +1136,7 @@ pub(crate) mod tests {
             spring: 6000.0,
             damping: 800.0,
             anti_sway: 0.0,
+            rebound_damping: 0.,
             tire: Default::default(),
             steering: 1.0,
             powered: false,

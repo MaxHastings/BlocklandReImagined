@@ -421,6 +421,9 @@ pub struct Core {
     pub max_players: u32,
     pub center_print: Option<(String, Option<u64>)>,
     pub bottom_print: Option<(String, Option<u64>, bool)>,
+    /// The bottom print is the server's ammo display, which a claimed
+    /// `ammo` HUD region hides.
+    pub bottom_print_ammo: bool,
     pub plant_error: Option<(PlantError, u64)>,
     /// Sound captions on screen and when each one goes.
     pub captions: Vec<(String, u64)>,
@@ -576,6 +579,7 @@ impl Core {
         self.max_players = 0;
         self.center_print = None;
         self.bottom_print = None;
+        self.bottom_print_ammo = false;
         self.plant_error = None;
         self.damage_flash = 0.0;
         self.energy = None;
@@ -1558,6 +1562,7 @@ impl Ui {
             max_players: 0,
             center_print: None,
             bottom_print: None,
+            bottom_print_ammo: false,
             plant_error: None,
             captions: Vec::new(),
             damage_flash: 0.0,
@@ -1892,6 +1897,7 @@ impl Ui {
                     if self.core.in_game() && self.top_id() == ScreenId::Play {
                         let until = self.core.time_ms + 3000;
                         self.core.bottom_print = Some((reason, Some(until), false));
+                        self.core.bottom_print_ammo = false;
                     } else {
                         self.core.message_ok("Request Rejected", &reason);
                     }

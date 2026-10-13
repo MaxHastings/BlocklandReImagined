@@ -508,6 +508,18 @@ impl Session {
                 if role.weapon && !world.weapon_available(v.id) {
                     return None;
                 }
+                // Only the seats its kind takes (`BotKind::vehicles`).
+                let takes = &self.bots.brains[&bot].kind.vehicles;
+                let allowed = if role.controls {
+                    takes.drive
+                } else if role.weapon {
+                    takes.gun
+                } else {
+                    takes.ride
+                };
+                if !allowed {
+                    return None;
+                }
                 let crew = self.bot_crew(bot, v, tick);
                 // Complete roles before filling passenger seats. An empty
                 // vehicle needs someone at its controls before a passenger
@@ -1006,11 +1018,18 @@ impl Session {
         };
         let side = Vec3::new(-desired.z, 0.0, desired.x);
         let waist = feet + Vec3::Y * own.tuning().stand_height * 0.5;
-        // A gap: something solid close on both sides.
-        let no_room = [side, -side].iter().all(|d| {
-            self.world_ray(waist, *d, own.tuning().width + 0.6)
-                .is_some()
-        });
+        // A gap: something solid close on both sides. Only a kind with
+        // teamwork files through one behind an ally.
+        let teamwork = self
+            .bots
+            .brains
+            .get(&bot)
+            .is_some_and(|b| b.kind.team.teamwork > 0.0);
+        let no_room = teamwork
+            && [side, -side].iter().all(|d| {
+                self.world_ray(waist, *d, own.tuning().width + 0.6)
+                    .is_some()
+            });
         // The pace of an ally ahead going the same way, as a share of its own.
         let follow = self
             .peers
@@ -1823,6 +1842,18 @@ impl Session {
             // Mouse steering accumulates turn. Close its loop against the
             // actual steering angle rather than feeding enemy aim into it.
             input.yaw = wrap(previous + (desired_steer - v.mouse_steering[0]).clamp(-0.04, 0.04));
+            // A vehicle that steers toward its driver's look (`toward_look`)
+            // ignores the mouse turn: the bot looks the way it would steer.
+            // It looks past the lock for a full-lock turn: the chassis
+            // holds its lock until the look comes round ahead.
+            let looks = d.steering.toward_look;
+            if looks {
+                input.yaw = previous;
+                input.head_yaw = (response_sign * (heading_error * 1.5 - yaw_rate * 0.25)).clamp(
+                    -bri_motor::player::MAX_FREELOOK,
+                    bri_motor::player::MAX_FREELOOK,
+                );
+            }
             input.pitch = 0.0;
             input.right = 0.0;
             // An ally coming for a seat is waited for as long as its claim
@@ -1882,7 +1913,11 @@ impl Session {
             let edge = ahead || brain.edge_stop && speed > STOPPED_SPEED;
             brain.edge_stop = edge && speed > STOPPED_SPEED;
             if edge {
-                input.yaw = wrap(previous - v.mouse_steering[0].clamp(-0.04, 0.04));
+                if looks {
+                    input.head_yaw = 0.0;
+                } else {
+                    input.yaw = wrap(previous - v.mouse_steering[0].clamp(-0.04, 0.04));
+                }
             }
             let hazard = hazard || edge;
             let distance = toward.map_or(0.0, |delta| delta.length());

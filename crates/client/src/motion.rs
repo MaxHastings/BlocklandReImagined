@@ -2948,3 +2948,7 @@ mod tests {
         Ok(())
     }
 }
+
+#[cfg(test)]
+#[path = "crew_link_tests.rs"]
+mod crew_link_tests;

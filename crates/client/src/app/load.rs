@@ -215,6 +215,8 @@ impl App {
             net: SessionState {
                 attempt: None,
                 abilities: Default::default(),
+                held_ammo: None,
+                next_print_is_ammo: false,
                 brick_hand: None,
                 steering_sent: None,
                 join_notices: Vec::new(),

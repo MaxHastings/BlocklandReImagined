@@ -36,7 +36,7 @@ mod dirty;
 mod events;
 pub use events::{
     EVENT_COST_PER_OWNER, EVENT_COST_PER_TICK, EVENT_UNIT_COST_NS, EVENT_WATCHDOG, EventWork,
-    SlowEventTicks, event_limits,
+    SlowEventTicks, event_bodies, event_limits,
 };
 mod quotas;
 use quotas::Quota;
@@ -52,6 +52,7 @@ mod trust;
 mod tutorial;
 mod world_shapes;
 pub use tutorial::{Abilities, BRICK_HAND_IMAGES, BrickHand};
+mod bodies;
 mod grips;
 pub use grips::shape_grips;
 mod riding;
@@ -90,7 +91,8 @@ pub use admin::{
 };
 pub use bri_world::authority::WrenchProperties;
 pub use combat::{
-    DEATH_PROJECTILE, MAX_HEALTH, MiniGameRequest, MiniGameView, Notice, SPAWN_PROJECTILE, Vitals,
+    DEATH_PROJECTILE, HeldAmmo, MAX_HEALTH, MiniGameRequest, MiniGameView, Notice,
+    SPAWN_PROJECTILE, Vitals,
 };
 pub use inventory::{TOOL_SLOTS, ToolInventory};
 pub use packages::{
@@ -811,9 +813,12 @@ struct Peer {
     last_input_tick: u64,
     /// The datablock a basketball shot swapped for `BallShootPlayer`.
     sport_datablock: Option<crate::archetype::ArchetypeId>,
-    /// A package's choice of archetype, kept across respawns; otherwise
-    /// the mini-game's player type decides.
-    package_archetype: Option<crate::archetype::ArchetypeId>,
+    /// A body chosen for this player, kept across respawns as
+    /// [`Session::kept_body`] says; otherwise the mini-game's player type
+    /// decides.
+    chosen_body: Option<bodies::ChosenBody>,
+    /// When `/body` last switched them.
+    body_command_tick: Option<u64>,
     /// Archetypes packages laid over this life's own (`push_archetype`).
     overlays: Option<Overlays>,
     window_tick: u64,
@@ -939,7 +944,8 @@ impl Peer {
             last_move_sequence: 0,
             last_input_tick: tick,
             sport_datablock: None,
-            package_archetype: None,
+            chosen_body: None,
+            body_command_tick: None,
             overlays: None,
             window_tick: tick,
             actions: 0,
@@ -3036,6 +3042,12 @@ impl Session {
         // Moves of players driving a package entity, for `step_packages`.
         let mut entity_moves = Vec::new();
         let liquids = self.simulation.liquids();
+        // Velocities before movement, for `on_contact` (meeting stops them).
+        let moving: BTreeMap<OwnerId, Vec3> = self
+            .peers
+            .iter()
+            .map(|(o, p)| (*o, Vec3::from(p.player.state().velocity)))
+            .collect();
         let mut riding = Vec::new();
         for (&owner, peer) in self.peers.iter_mut() {
             let on_vehicle = self.vehicles.is_mounted(owner);
@@ -3180,10 +3192,12 @@ impl Session {
                     impacts.push((owner, motion.impact));
                 }
                 if motion.jumped {
+                    let state = peer.player.state();
+                    let sound = self.archetypes.resolve(state.archetype).sounds.jump.clone();
                     self.cues.emit(
                         tick,
-                        crate::presentation::CueKind::Jump,
-                        peer.player.state().feet,
+                        crate::presentation::CueKind::Jump { sound },
+                        state.feet,
                     );
                 }
             }
@@ -3197,6 +3211,7 @@ impl Session {
             }
         };
         self.push_contacts(push_contacts);
+        self.package_body_contacts(&moving);
         impacts.retain(|(owner, _)| !smashers.contains(owner));
         self.fire_touches(touches);
         for (owner, carry) in crossed {

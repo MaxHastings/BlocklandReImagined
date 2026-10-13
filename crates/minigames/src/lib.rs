@@ -221,9 +221,20 @@ impl MinigamesWorld {
     }
     fn spawn(&mut self, player: PlayerId, reason: SpawnReason, out: &mut Vec<Effect>) {
         let life = self.alloc_life();
-        let equipment = self.players[&player]
-            .game
-            .map(|id| self.games[&id].settings.equipment(&self.catalog));
+        let p = &self.players[&player];
+        let equipment = p.game.map(|id| {
+            let g = &self.games[&id];
+            let mut equipment = g.settings.equipment(&self.catalog);
+            // A team's own body outranks the game's.
+            if let Some(body) = p
+                .team
+                .and_then(|t| g.teams.get(t))
+                .and_then(|t| t.player_type.clone())
+            {
+                equipment.player_type = body;
+            }
+            equipment
+        });
         let p = self.players.get_mut(&player).expect("validated player");
         p.life = LifeState::Alive { life };
         p.respawn_held = false;
@@ -338,6 +349,14 @@ impl MinigamesWorld {
             }
         }
         out.push(Effect::Ended { game: id });
+    }
+    /// The Mini-Game dialog has no fields for the bodies rules an Add-On
+    /// set; an edit there keeps them.
+    fn keep_add_on_rules(&self, game: GameId, settings: &mut Settings) {
+        if let Some(old) = self.games.get(&game).map(|g| &g.settings) {
+            settings.bodies = old.bodies.clone();
+            settings.keep_chosen_body = old.keep_chosen_body;
+        }
     }
     pub(crate) fn configure(
         &mut self,
@@ -506,8 +525,12 @@ impl MinigamesWorld {
                 out.push(Effect::Created { game: id });
                 self.join_member(actor, id, &mut out)?;
             }
-            Command::Configure { actor, settings } => {
+            Command::Configure {
+                actor,
+                mut settings,
+            } => {
                 let id = self.owned(actor)?;
+                self.keep_add_on_rules(id, &mut settings);
                 self.configure(id, settings, &mut out)?;
             }
             Command::Join { actor, game } => {
@@ -600,7 +623,10 @@ impl MinigamesWorld {
                 self.player(actor)?;
                 self.game(game)?;
                 match action {
-                    Manage::Configure(settings) => self.configure(game, settings, &mut out)?,
+                    Manage::Configure(mut settings) => {
+                        self.keep_add_on_rules(game, &mut settings);
+                        self.configure(game, *settings, &mut out)?
+                    }
                     Manage::Invite(target) => self.invite(game, actor.account, target, &mut out)?,
                     Manage::Kick(target) => {
                         if self.player(target)?.game != Some(game) {

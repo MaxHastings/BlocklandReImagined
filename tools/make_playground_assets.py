@@ -20,6 +20,11 @@ writes their generated files:
                                               strip, a sprite font, a cap
                                               icon and a reticle
   playground-stomper-look/models/stomper.json the Stomper's box body
+  playground-fizzer-look/models/fizzer.json   the Fizzer's box body
+  playground-fizzer/assets/sounds/*.wav       its fuse hiss and its pop
+  playground-fizzer/assets/weapons.json       its pop: a projectile whose
+                                              blast breaks bricks, and the
+                                              hiss and blast it sounds
 
 Everything here is original and generated; run it again after changing the
 numbers below. Only the Python standard library is used, and the output is
@@ -323,9 +328,22 @@ def carbine(root):
 
 # --- the Dune Buggy ----------------------------------------------------------
 
-TIRE = dict(static_friction=4.0, kinetic_friction=3.0, lateral_force=16000.0, lateral_damping=3500.0,
-            lateral_relaxation=0.02, longitudinal_force=14000.0, longitudinal_damping=1800.0,
-            longitudinal_relaxation=0.02)
+# The buggy is the Playground's stand-in for Halo's Warthog, tuned from the
+# Warthog's own tags (Halo PC `bloodgulch.map`, 4.12 units per Halo world
+# unit; the numbers are in docs/audits/vehicle-handling.md): top speed 34
+# forward and 14.8 back, reached at a steady pull in about 3.3 s, a hard
+# stop in under a second, 30 degree lock, four-wheel drive, 0.62 of
+# suspension travel, the weight a little forward, and per-axle grip along
+# and across the tyre (front 0.75 / 0.45, rear 0.45 / 0.65, times 4 for this
+# tyre model). Halo has no springs, engine torque or gravity in its tags;
+# those, the rear steering and the look steering are this buggy's own.
+# `crates/vehicles/tests/handling.rs` measures each.
+TIRE = dict(lateral_force=42000.0, lateral_damping=9000.0, lateral_relaxation=0.02,
+            longitudinal_force=40000.0, longitudinal_damping=5000.0, longitudinal_relaxation=0.02)
+GRIP_SCALE = 4.0
+# (along, across) per axle, from the Warthog's mass points 11 to 14.
+FRONT_GRIP = (0.75, 0.45)
+REAR_GRIP = (0.45, 0.65)
 WHEEL_RADIUS = 0.55
 
 
@@ -373,9 +391,21 @@ def buggy(root):
         'buggy_tire': write(assets / 'textures' / 'buggy_tire.png', flat([18, 18, 18], seed=7)),
     }
 
-    def wheel(x, z, steering, powered):
-        return {'position': [x, 0.0, z], 'radius': WHEEL_RADIUS, 'rest_length': 0.35, 'spring': 3000.0,
-                'damping': 650.0, 'anti_sway': 8.0, 'tire': TIRE, 'steering': steering, 'powered': powered,
+    def wheel(x, z):
+        rear = z > 0
+        along, across = REAR_GRIP if rear else FRONT_GRIP
+        tire = dict(static_friction=along * GRIP_SCALE, kinetic_friction=along * GRIP_SCALE * 0.75,
+                    lateral_grip=round(across / along, 4), **TIRE)
+        # A quarter of the weight holds each spring near half its travel.
+        # The hubs mount high in the wheel wells, so the long travel hangs
+        # below and the deck stays low enough to jump onto.
+        # The springs share the forward weight (57% front) so the deck sits
+        # level, and the hubs mount high enough that a dipping nose clears
+        # the ground through the Warthog's shorter travel.
+        return {'position': [x, 0.43, z], 'radius': WHEEL_RADIUS, 'rest_length': 0.62,
+                'spring': 7700.0 if rear else 10300.0,
+                'damping': 2600.0, 'rebound_damping': 2400.0, 'anti_sway': 6000.0, 'tire': tire,
+                'steering': -0.35 if rear else 1.0, 'powered': True,
                 'model': 'models/tire.shape.json', 'model_rotation': [0.0, 0.0, 0.0, 1.0]}
 
     hull = [[x, y, z] for x in (-1.0, 1.0) for y in (-0.1, 1.2) for z in (-2.0, 2.0)]
@@ -393,8 +423,7 @@ def buggy(root):
              'pose': 'sit' if i < 2 else 'root', 'controls': i == 0, 'weapon': i == 2}
             for i, at in enumerate(seats)
         ],
-        'wheels': [wheel(x, z, 1.0 if z < 0 else 0.0, z > 0)
-                   for z in (-1.45, 1.45) for x in (-1.15, 1.15)],
+        'wheels': [wheel(x, z) for z in (-1.45, 1.45) for x in (-1.15, 1.15)],
         # The gunner's post fires bolts where they look, turning about the
         # post's top.
         'weapon': {'projectile': 'playground-buggy:projectile/bolt',
@@ -409,9 +438,11 @@ def buggy(root):
         'collision_hulls': [hull],
         'bounds_min': [-1.15 - 0.22, -WHEEL_RADIUS, -2.0],
         'bounds_max': [1.15 + 0.22, 2.4, 2.0],
-        'mass': 300.0,
-        'mass_center': [0.0, 0.2, 0.0],
-        'inertia_box': [2.6, 1.6, 4.0],
+        'mass': 900.0,
+        # 57% of the weight on the front axle, as the Warthog's centre of
+        # mass sits between its axles.
+        'mass_center': [0.0, 0.05, -0.2],
+        'inertia_box': [2.8, 1.6, 4.4],
         'density': 4.0,
         'drag': 0.4,
         'friction': 0.8,
@@ -424,12 +455,13 @@ def buggy(root):
         'initial_explosion_offset': 0.0,
         'final_explosion_offset': 0.0,
         'mount_distance': 3.0,
-        'engine_force': 12000.0,
-        'engine_brake': 1500.0,
-        'brake_force': 4000.0,
-        'max_speed': 30.0,
-        'reverse_speed': 12.0,
-        'max_steering': 0.6,
+        'engine_force': 5400.0,
+        'engine_curve': [[0.0, 1.0], [0.9, 1.0], [1.0, 0.0]],
+        'engine_brake': 4500.0,
+        'brake_force': 30000.0,
+        'max_speed': 34.0,
+        'reverse_speed': 14.8,
+        'max_steering': 0.5236,
         'thrust': 0.0,
         'reverse_thrust': 0.0,
         'lift': 0.0,
@@ -443,6 +475,11 @@ def buggy(root):
         'impact_threshold': 15.0,
         'impact_damage': 0.05,
         'strafe_steering': False,
+        'throttle_brakes': True,
+        'reverse_limited': True,
+        'steering': {'strafe_rate': 0.25, 'auto_return': True, 'auto_return_rate': 0.9,
+                     'auto_return_max_speed': 10.0, 'toward_look': True, 'speed_lock': 0.6},
+        'gravity_scale': 0.85,
         'look_pitch': [-1.5, 1.5],
         'underwater_speeds': [5.0, 3.0, 3.0],
         'camera': {'max_dist': 9.0, 'offset': 2.5, 'tilt': 0.1, 'lag': 0.1, 'decay': 0.5},
@@ -501,6 +538,119 @@ def buggy(root):
                          'murder_message': '%2 gunned down %1', 'vehicle_scale': 1.0, 'direct': True},
         },
         'sounds': {'playground-buggy:turret': {'file': 'sounds/turret.wav'}},
+    })
+
+
+# --- the Fizzer --------------------------------------------------------------
+
+def fizzer(root):
+    """A walking bomb: a squat slate-blue barrel on two stubby feet, with a
+    copper band, two pale eyes and a short wick on top; an original body
+    1.3 units tall. Its sounds: a crackling hiss while its wick burns,
+    and the pop it goes off with."""
+    body, band, dark, white, wick, spark = [0.28, 0.36, 0.5, 1], [0.72, 0.42, 0.2, 1], \
+        [0.1, 0.1, 0.12, 1], [0.95, 0.95, 0.9, 1], [0.35, 0.25, 0.15, 1], [1.0, 0.75, 0.2, 1]
+    boxes = [
+        ([-0.22, 0.08, -0.04], [0.32, 0.16, 0.44], dark),  # feet
+        ([0.22, 0.08, -0.04], [0.32, 0.16, 0.44], dark),
+        ([0.0, 0.62, 0.0], [0.9, 0.9, 0.9], body),         # barrel
+        ([0.0, 0.62, 0.0], [0.96, 0.14, 0.96], band),      # its band
+        ([0.0, 1.1, 0.0], [0.7, 0.08, 0.7], dark),         # lid
+        ([-0.18, 0.82, -0.46], [0.16, 0.16, 0.04], white),  # eyes
+        ([0.18, 0.82, -0.46], [0.16, 0.16, 0.04], white),
+        ([-0.18, 0.8, -0.48], [0.07, 0.08, 0.02], dark),   # pupils
+        ([0.18, 0.8, -0.48], [0.07, 0.08, 0.02], dark),
+        ([0.0, 1.22, 0.0], [0.06, 0.18, 0.06], wick),      # wick
+        ([0.0, 1.33, 0.0], [0.08, 0.06, 0.08], spark),     # its spark
+    ]
+    model = {'schema_version': 1, 'boxes': [
+        {'center': c, 'size': s, 'color': col} for c, s, col in boxes]}
+    write_json(root / 'playground-fizzer-look' / 'models' / 'fizzer.json', model)
+
+    assets = root / 'playground-fizzer' / 'assets'
+    # A crackling hiss, half a second, played again and again while the
+    # wick burns: noise with a crackle of random pops.
+    hiss = [x * (0.35 + (0.65 if rng.random() < 0.02 else 0.0)) for x in noise(0.5)]
+    write(assets / 'sounds' / 'hiss.wav', wav(hiss, 0.5))
+    # The pop: a deep thump under a burst of noise.
+    pop = mix(decay(tone(0.6, 90, 35), 0.25), decay(noise(0.7), 0.12))
+    write(assets / 'sounds' / 'pop.wav', wav(pop, 0.95))
+    write_json(assets / 'weapons.json', {
+        'schema_version': 5,
+        'id': 'playground-fizzer',
+        'items': {},
+        'images': {},
+        'projectiles': {
+            # Fired straight down at its own feet, it goes off at once.
+            'playground-fizzer:projectile/pop': {
+                'speed': 40.0,
+                'lifetime_ticks': 12,
+                'fade_ticks': 12,
+                'damage': 0.0,
+                'damage_type': '$DamageType::FizzerPop',
+                'radius_damage_type': '$DamageType::FizzerPop',
+                'explode_death': True,
+                'explosion': {
+                    'effect': 'fizzerPop',
+                    'damage': 60.0,
+                    'radius': 5.0,
+                    'impulse': 900.0,
+                    'impulse_radius': 6.0,
+                    'impulse_vertical': 300.0,
+                },
+                'brick': {'radius': 2.5, 'force': 20.0, 'max_volume': 400.0, 'max_floating_volume': 200.0},
+            },
+        },
+        'damage_types': {
+            'fizzerpop': {
+                'name': 'FizzerPop',
+                'suicide_message': '%1 went pop',
+                'murder_message': '%2 popped %1',
+                'vehicle_scale': 1.0,
+                'direct': False,
+            },
+        },
+        'explosions': {
+            'fizzerpop': {
+                'name': 'fizzerPop',
+                'sound': 'playground-fizzer:pop',
+                'shake': {'frequency': [9.0, 10.0, 9.0], 'amplitude': [1.5, 1.5, 1.5],
+                          'seconds': 0.6, 'radius': 14.0, 'falloff': 2.0},
+                'shape': '',
+                'seconds': 0.4,
+                'play_speed': 1.0,
+                'face_viewer': True,
+                'scale': [1.0, 1.0, 1.0],
+                'sizes': [],
+            },
+        },
+        'sounds': {
+            'playground-fizzer:hiss': {'file': 'sounds/hiss.wav', 'volume': 0.8},
+            'playground-fizzer:pop': {'file': 'sounds/pop.wav'},
+        },
+    })
+
+
+# --- the Stomper's kill feed --------------------------------------------------
+
+def stomper_feed(root):
+    """How a flattened Stomper is told in the kill feed: a damage type its
+    rules (`playground-stomper-rules`) deal."""
+    write_json(root / 'playground-stomper' / 'assets' / 'weapons.json', {
+        'schema_version': 5,
+        'id': 'playground-stomper',
+        'items': {},
+        'images': {},
+        'projectiles': {},
+        'damage_types': {
+            'flattened': {
+                'name': 'Flattened',
+                'suicide_message': '%1 was flattened',
+                'murder_message': '%2 flattened %1',
+                'vehicle_scale': 0.0,
+                'direct': True,
+            },
+        },
     })
 
 
@@ -627,6 +777,8 @@ def main():
     buggy(ROOT)
     runner_hud(ROOT)
     stomper(ROOT)
+    fizzer(ROOT)
+    stomper_feed(ROOT)
 
 
 if __name__ == '__main__':
