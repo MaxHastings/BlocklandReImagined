@@ -471,6 +471,7 @@ fn original_emote_pain_burn_and_vehicle_images_resolve() -> Result<()> {
             actor: 7,
             level,
             cry: true,
+            sound: None,
         }));
         fx.advance(0.05, head, &[], &[], &[])?;
     }

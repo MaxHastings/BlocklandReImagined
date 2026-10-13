@@ -205,7 +205,7 @@ fn reliable_cues_do_not_replay_before_join_or_duplicate_and_reject_unreported_lo
     let cue = |id| Cue {
         id,
         tick: 11,
-        kind: CueKind::Jump,
+        kind: CueKind::Jump { sound: None },
         position: [1., 2., 3.],
     };
     let mut delta = Delta {
