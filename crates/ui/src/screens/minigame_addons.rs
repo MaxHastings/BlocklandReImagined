@@ -135,12 +135,17 @@ pub struct AddOnSettings {
     name_field: Option<(usize, String)>,
 }
 
-fn value_text(v: &MiniGameSettingValue) -> String {
+pub(super) fn value_text(v: &MiniGameSettingValue) -> String {
     match v {
         MiniGameSettingValue::Bool(b) => (if *b { "1" } else { "0" }).into(),
         MiniGameSettingValue::Int(n) => n.to_string(),
         MiniGameSettingValue::Text(t) => t.clone(),
     }
+}
+
+/// Whether a setting may hold `value` (a favourite's, kept from before).
+pub(super) fn takes(s: &MiniGameAddOnSetting, value: &MiniGameSettingValue) -> bool {
+    AddOnSettings::takes(s, value)
 }
 
 /// Slayer's `TEAMCOLOR`: a look colour that is the team's own.
@@ -2361,7 +2366,7 @@ pub const RESTART_NOTE: &str = "* Takes effect when the server starts or loads a
 
 /// A setting's label: its title, marked when a change waits for the next
 /// start ([`RESTART_NOTE`]).
-fn title(s: &MiniGameAddOnSetting) -> String {
+pub(super) fn title(s: &MiniGameAddOnSetting) -> String {
     if s.restart {
         format!("{} *", s.title)
     } else {

@@ -1056,10 +1056,7 @@ impl Core {
     fn open_bind_screen(&mut self, screen: &str, package: &str) {
         match screen {
             "minigame_addons" => match self.minigames.active_game {
-                Some(game) => {
-                    self.minigame_addons = Some(game);
-                    self.push(ScreenId::MiniGameAddOns);
-                }
+                Some(_) => self.push(ScreenId::MiniGameSettings),
                 None => self.push(ScreenId::MiniGames),
             },
             "help" => {

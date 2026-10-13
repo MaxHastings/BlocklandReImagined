@@ -482,6 +482,18 @@ impl View {
         }
     }
 
+    /// Move a control, keeping its state (typed text, picks), under another
+    /// parent at `position`, drawn last there, like Torque's `add` of a
+    /// control that already has a parent.
+    pub fn reparent(&mut self, id: NodeId, parent: NodeId, position: [i32; 2]) {
+        if let Some(old) = self.nodes[id].parent {
+            self.nodes[old].children.retain(|k| *k != id);
+        }
+        self.nodes[id].parent = Some(parent);
+        self.nodes[parent].children.push(id);
+        self.nodes[id].ctrl.position = position;
+    }
+
     /// Move a child to the end of its parent's list (drawn last / on top),
     /// like Torque `pushToBack`.
     pub fn push_to_back(&mut self, id: NodeId) {

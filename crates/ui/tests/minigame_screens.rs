@@ -73,7 +73,10 @@ fn test_ui_with(favs_helper: bool) -> Ui {
     pack.layouts.insert(
         "CreateMiniGameGui".into(),
         layout(vec![
-            ctl("GuiWindowCtrl", Some("CMG_Window"), None, None),
+            Control {
+                extent: [534, 431],
+                ..ctl("GuiWindowCtrl", Some("CMG_Window"), None, None)
+            },
             ctl(
                 "GuiBitmapButtonCtrl",
                 Some("CMG_CreateButton"),
@@ -208,6 +211,13 @@ fn test_ui_with(favs_helper: bool) -> Ui {
                 Some("MiniGameInviteGui.clickIgnore();"),
                 None,
             ),
+        ]),
+    );
+    pack.layouts.insert(
+        "MessageBoxOKDlg".into(),
+        layout(vec![
+            ctl("GuiWindowCtrl", Some("MBOKFrame"), None, None),
+            ctl("GuiMLTextCtrl", Some("MBOKText"), None, None),
         ]),
     );
     if !favs_helper && let Some(l) = pack.layouts.get_mut("CreateMiniGameGui") {
@@ -564,6 +574,8 @@ fn addon_state() -> MiniGameUiState {
         default,
         help: String::new(),
         avatar: None,
+        place: None,
+        unit: String::new(),
         shown_when: None,
     };
     state.addon_settings = vec![
@@ -600,13 +612,16 @@ fn addon_state() -> MiniGameUiState {
                 MiniGameSettingValue::Int(1),
             )
         },
-        setting(
-            "slayer:teamlives",
-            "Team Lives",
-            true,
-            MiniGameSettingKind::Int { min: -1, max: 99 },
-            MiniGameSettingValue::Int(-1),
-        ),
+        MiniGameAddOnSetting {
+            place: Some(MiniGameSettingPlace::Teams),
+            ..setting(
+                "slayer:teamlives",
+                "Team Lives",
+                true,
+                MiniGameSettingKind::Int { min: -1, max: 99 },
+                MiniGameSettingValue::Int(-1),
+            )
+        },
     ];
     state.games[0].teams = vec![MiniGameTeam {
         id: 1,
@@ -616,22 +631,61 @@ fn addon_state() -> MiniGameUiState {
     }];
     state
 }
-fn addon_view(ui: &mut Ui) -> &mut bri_ui::view::View {
-    let i = ui
-        .dialogs
+/// The settings window on top: the mini-game window, or the server's
+/// Add-On settings.
+fn addon_screen(ui: &Ui) -> usize {
+    ui.dialogs
         .iter()
-        .rposition(|s| s.id() == ScreenId::MiniGameAddOns)
-        .unwrap();
+        .rposition(|s| {
+            matches!(
+                s.id(),
+                ScreenId::MiniGameAddOns | ScreenId::MiniGameSettings
+            )
+        })
+        .unwrap()
+}
+fn addon_view(ui: &mut Ui) -> &mut bri_ui::view::View {
+    let i = addon_screen(ui);
     ui.dialogs[i].view_mut()
 }
+/// A control of the window on top, by name, or by the footer's names for
+/// the mini-game window's tabs and buttons.
+fn addon_node(ui: &mut Ui, name: &str) -> bri_ui::view::NodeId {
+    let window = ui.dialogs[addon_screen(ui)].id() == ScreenId::MiniGameSettings;
+    let v = addon_view(ui);
+    let command = |v: &bri_ui::view::View, c: &str| v.by_command(c);
+    let found = match (window, name) {
+        (true, "AOS_Setup") => v.id("MGW_Tab4"),
+        (true, "AOS_Teams") => v.id("MGW_Tab1"),
+        (true, "AOS_Apply") => command(v, "CreateMiniGameGui.clickCreate();"),
+        (true, "AOS_ApplyReset") => command(v, "CreateMiniGameGui.clickReset();"),
+        _ => v.id(name),
+    };
+    found.unwrap_or_else(|| panic!("no {name}"))
+}
 fn addon_event(ui: &mut Ui, name: &str, kind: EventKind) {
-    let node = addon_view(ui).id(name).unwrap();
+    let (node, kind) = if name == "AOS_Close" {
+        (addon_node(ui, "AOS_Setup"), EventKind::Close)
+    } else {
+        (addon_node(ui, name), kind)
+    };
     let ev = ViewEvent { node, kind };
-    let i = ui
-        .dialogs
-        .iter()
-        .rposition(|s| s.id() == ScreenId::MiniGameAddOns)
-        .unwrap();
+    let i = addon_screen(ui);
+    let (dialogs, core) = (&mut ui.dialogs, &mut ui.core);
+    dialogs[i].on_event(&ev, core);
+}
+/// Open the mini-game window's page: 0 Game, 1 Teams, 2 Rules, 3 Players,
+/// 4 More Settings.
+fn tab(ui: &mut Ui, page: usize) {
+    click_named(ui, ScreenId::MiniGameSettings, &format!("MGW_Tab{page}"));
+}
+fn click_named(ui: &mut Ui, screen: ScreenId, name: &str) {
+    let node = ui.screen(screen).unwrap().view().id(name).unwrap();
+    let ev = ViewEvent {
+        node,
+        kind: EventKind::Click,
+    };
+    let i = ui.dialogs.iter().rposition(|s| s.id() == screen).unwrap();
     let (dialogs, core) = (&mut ui.dialogs, &mut ui.core);
     dialogs[i].on_event(&ev, core);
 }
@@ -668,7 +722,7 @@ fn addon_setting_shown_unless_the_mode_is_one_of_some_values() {
     ui.apply(UiUpdate::MiniGames(state));
     ui.core.push(ScreenId::MiniGameSettings);
     ui.update(0);
-    click(&mut ui, ScreenId::MiniGameSettings, "NativeMiniGameAddOns");
+    tab(&mut ui, 4);
     ui.update(0);
     assert!(
         addon_view(&mut ui).id("AOS_S4").is_none(),
@@ -793,10 +847,9 @@ fn addon_settings_window_edits_settings_and_teams_and_sends_only_changes() {
     ui.apply(UiUpdate::MiniGames(addon_state()));
     ui.core.push(ScreenId::MiniGameSettings);
     ui.update(0);
-    // The editor offers the window for the game being edited.
-    click(&mut ui, ScreenId::MiniGameSettings, "NativeMiniGameAddOns");
+    // More Settings holds the settings no page places.
+    tab(&mut ui, 4);
     ui.update(0);
-    assert!(ui.is_open(ScreenId::MiniGameAddOns));
     // CTF's setting hides until Capture the Flag is picked.
     assert!(addon_view(&mut ui).id("AOS_S2").is_none());
     let mode = addon_view(&mut ui).id("AOS_S0").unwrap();
@@ -860,8 +913,8 @@ fn addon_settings_window_edits_settings_and_teams_and_sends_only_changes() {
 }
 
 /// Max: having to create the mini-game before Setup and Teams work. Before
-/// Create they edit a draft, and Create's game gets it with a reset, as
-/// Save & Reset would.
+/// Create the window edits a draft, and Create's game gets it with a reset,
+/// as Save & Reset would.
 #[test]
 fn setup_and_teams_work_before_create_and_create_sends_them() {
     let mut ui = test_ui();
@@ -871,58 +924,31 @@ fn setup_and_teams_work_before_create_and_create_sends_them() {
     ui.apply(UiUpdate::MiniGames(fresh.clone()));
     ui.core.push(ScreenId::MiniGameSettings);
     ui.update(0);
-    let active = |ui: &Ui, name: &str| {
-        let v = ui.screen(ScreenId::MiniGameSettings).unwrap().view();
-        let n = v.id(name).unwrap();
-        v.node(n).state.visible && v.node(n).state.active
-    };
-    assert!(active(&ui, "NativeMiniGameAddOns"), "Setup before Create");
-    assert!(active(&ui, "NativeMiniGameTeams"), "Teams before Create");
-    click(&mut ui, ScreenId::MiniGameSettings, "NativeMiniGameAddOns");
+    tab(&mut ui, 4);
     ui.update(0);
-    assert!(ui.is_open(ScreenId::MiniGameAddOns));
     let shown = |ui: &mut Ui, name: &str| {
         let v = addon_view(ui);
-        let n = v.id(name).unwrap();
-        v.node(n).state.visible
+        v.id(name).is_some_and(|n| v.node(n).state.visible)
     };
-    // Nothing to reset, end or tell yet, and nobody to assign.
-    for name in [
-        "AOS_Reset",
-        "AOS_End",
-        "AOS_ApplyReset",
-        "AOS_Notify",
-        "AOS_Players",
-    ] {
-        assert!(!shown(&mut ui, name), "{name} hidden before Create");
-    }
-    assert!(shown(&mut ui, "AOS_Apply"));
+    // Nothing to tell yet.
+    assert!(!shown(&mut ui, "AOS_Notify"), "Notify hidden before Create");
     let mode = addon_view(&mut ui).id("AOS_S0").unwrap();
     addon_view(&mut ui).select(mode, Some(1));
     addon_event(&mut ui, "AOS_S0", EventKind::Changed);
-    addon_event(&mut ui, "AOS_Teams", EventKind::Click);
+    tab(&mut ui, 1);
     for (t, name) in [(0, "Red"), (1, "Blue")] {
         addon_event(&mut ui, "AOS_AddTeam", EventKind::Click);
         let field = addon_view(&mut ui).id(&format!("AOS_T{t}_Name")).unwrap();
         addon_view(&mut ui).set_text(field, name);
     }
-    addon_event(&mut ui, "AOS_Apply", EventKind::Click);
-    ui.update(0);
-    assert!(
-        !ui.is_open(ScreenId::MiniGameAddOns),
-        "Save goes back to Create"
-    );
     assert!(
         ui.drain_actions().is_empty(),
         "nothing goes to the host before Create"
     );
-    // Setup again shows the kept draft.
-    click(&mut ui, ScreenId::MiniGameSettings, "NativeMiniGameAddOns");
-    ui.update(0);
+    // Back on More Settings, the mode is still the one picked.
+    tab(&mut ui, 4);
     let mode = addon_view(&mut ui).id("AOS_S0").unwrap();
     assert_eq!(addon_view(&mut ui).selected(mode), Some(1));
-    addon_event(&mut ui, "AOS_Close", EventKind::Click);
-    ui.update(0);
 
     click(
         &mut ui,
@@ -996,7 +1022,7 @@ fn a_guests_setup_draft_greys_and_never_sends_host_only_settings() {
     ui.apply(UiUpdate::MiniGames(fresh.clone()));
     ui.core.push(ScreenId::MiniGameSettings);
     ui.update(0);
-    click(&mut ui, ScreenId::MiniGameSettings, "NativeMiniGameAddOns");
+    tab(&mut ui, 4);
     ui.update(0);
     let row_active = |ui: &mut Ui, name: &str| {
         let v = addon_view(ui);
@@ -1008,15 +1034,26 @@ fn a_guests_setup_draft_greys_and_never_sends_host_only_settings() {
     let mode = addon_view(&mut ui).id("AOS_S0").unwrap();
     addon_view(&mut ui).select(mode, Some(1));
     addon_event(&mut ui, "AOS_S0", EventKind::Changed);
-    addon_event(&mut ui, "AOS_Apply", EventKind::Click);
-    ui.update(0);
-    // As a favourite could: a host-only value in the kept draft.
-    ui.core
-        .minigame_addon_draft
-        .as_mut()
-        .unwrap()
-        .settings
-        .insert("slayer:lives".into(), MiniGameSettingValue::Int(3));
+    // A favourite holds a host-only value.
+    let text = |s: &str| MiniGameSettingValue::Text(s.into());
+    ui.core.settings.minigame_favorites.insert(
+        3,
+        MiniGameFavorite {
+            rules: fresh.games[0].rules.clone(),
+            color: None,
+            settings: [
+                ("slayer:mode".to_string(), text("ctf")),
+                ("slayer:lives".to_string(), MiniGameSettingValue::Int(3)),
+            ]
+            .into(),
+            teams: vec![],
+        },
+    );
+    click(
+        &mut ui,
+        ScreenId::MiniGameSettings,
+        "CreateMiniGameGui.clickFav(3);",
+    );
     click(
         &mut ui,
         ScreenId::MiniGameSettings,
@@ -1047,7 +1084,7 @@ fn a_guests_setup_draft_greys_and_never_sends_host_only_settings() {
     );
 }
 
-/// Closing the Create window without creating drops its Setup draft.
+/// Closing the Create window without creating drops what it was set to.
 #[test]
 fn a_cancelled_create_forgets_its_setup_draft() {
     let mut ui = test_ui();
@@ -1057,16 +1094,19 @@ fn a_cancelled_create_forgets_its_setup_draft() {
     ui.apply(UiUpdate::MiniGames(fresh));
     ui.core.push(ScreenId::MiniGameSettings);
     ui.update(0);
-    click(&mut ui, ScreenId::MiniGameSettings, "NativeMiniGameAddOns");
+    tab(&mut ui, 4);
     ui.update(0);
     let lives = addon_view(&mut ui).id("AOS_S1").unwrap();
     addon_view(&mut ui).set_text(lives, "3");
-    addon_event(&mut ui, "AOS_Apply", EventKind::Click);
-    ui.update(0);
-    assert!(ui.core.minigame_addon_draft.is_some());
     ui.core.pop(ScreenId::MiniGameSettings);
     ui.update(0);
     assert!(ui.core.minigame_addon_draft.is_none());
+    // Opening Create again starts from the Add-On defaults.
+    ui.core.push(ScreenId::MiniGameSettings);
+    ui.update(0);
+    tab(&mut ui, 4);
+    let lives = addon_view(&mut ui).id("AOS_S1").unwrap();
+    assert_eq!(addon_view(&mut ui).edit_text(lives), "0");
 }
 
 #[test]
@@ -1149,6 +1189,8 @@ fn server_addon_settings_open_from_the_admin_menu_for_the_host_and_go_with_host_
         default: MiniGameSettingValue::Int(0),
         help: String::new(),
         avatar: None,
+        place: None,
+        unit: String::new(),
         shown_when: None,
     });
     // One the game reads only as it starts is marked, with the note.
@@ -1164,6 +1206,8 @@ fn server_addon_settings_open_from_the_admin_menu_for_the_host_and_go_with_host_
         default: MiniGameSettingValue::Bool(false),
         help: String::new(),
         avatar: None,
+        place: None,
+        unit: String::new(),
         shown_when: None,
     });
     ui.apply(UiUpdate::MiniGames(state));
@@ -1246,19 +1290,13 @@ fn teams_work_without_addon_settings_and_remain_editable_in_a_small_window() {
     ui.apply(UiUpdate::MiniGames(state));
     ui.core.push(ScreenId::MiniGameSettings);
     ui.update(0);
-    click(&mut ui, ScreenId::MiniGameSettings, "NativeMiniGameAddOns");
+    tab(&mut ui, 1);
     ui.update(0);
-    assert!(ui.is_open(ScreenId::MiniGameAddOns));
     let name = addon_view(&mut ui).id("AOS_T0_Name").unwrap();
     addon_view(&mut ui).set_text(name, "Blue");
+    // The window keeps v20's size; a resize keeps what was typed.
     ui.resize((400, 300), Some(1.));
     let view = addon_view(&mut ui);
-    let n = view.id("AOS_Window").unwrap();
-    let r = view.node(n).rect;
-    assert!(
-        r.x >= 0 && r.y >= 0 && r.x + r.w <= 400 && r.y + r.h <= 300,
-        "{r:?}"
-    );
     let name = view.id("AOS_T0_Name").unwrap();
     assert_eq!(view.edit_text(name), "Blue");
     addon_event(&mut ui, "AOS_AddTeam", EventKind::Click);
@@ -1297,6 +1335,8 @@ fn addon_window_with_checkbox() -> (Ui, MiniGameUiState) {
         default: MiniGameSettingValue::Bool(false),
         help: String::new(),
         avatar: None,
+        place: None,
+        unit: String::new(),
         shown_when: None,
     });
     state.members.push(MiniGameMemberRow {
@@ -1310,16 +1350,15 @@ fn addon_window_with_checkbox() -> (Ui, MiniGameUiState) {
     ui.apply(UiUpdate::MiniGames(state.clone()));
     ui.core.push(ScreenId::MiniGameSettings);
     ui.update(0);
-    click(&mut ui, ScreenId::MiniGameSettings, "NativeMiniGameAddOns");
+    tab(&mut ui, 4);
     ui.update(0);
-    assert!(ui.is_open(ScreenId::MiniGameAddOns));
     (ui, state)
 }
 /// Press the checkbox, let `between` reach the window, release, and
 /// Save: the click must have ticked it.
 fn click_across_update(mut ui: Ui, between: MiniGameUiState) {
     let (x, y) = ui
-        .control_center(ScreenId::MiniGameAddOns, "AOS_S4")
+        .control_center(ScreenId::MiniGameSettings, "AOS_S4")
         .expect("checkbox row");
     ui.handle_input(InputEvent::MouseMove { x, y });
     ui.handle_input(InputEvent::MouseDown {
@@ -1434,6 +1473,8 @@ fn journey_state() -> MiniGameUiState {
             title: "Starting Equipment".into(),
             kind: equipment,
             default: MiniGameSettingValue::Text("none".into()),
+            // On More Settings, one team at a time.
+            place: None,
             ..team
         },
         MiniGameAddOnSetting {
@@ -1464,9 +1505,8 @@ fn direct_teams_two_team_equipment_and_round_setup_saves_one_coherent_draft() {
     ui.apply(UiUpdate::MiniGames(journey_state()));
     ui.core.push(ScreenId::MiniGameSettings);
     ui.update(0);
-    click(&mut ui, ScreenId::MiniGameSettings, "NativeMiniGameTeams");
+    tab(&mut ui, 1);
     ui.update(0);
-    assert!(!ui.core.minigame_addons_teams, "opening consumes the route");
     let add = addon_view(&mut ui).id("AOS_AddTeam").unwrap();
     assert!(addon_view(&mut ui).node(add).state.visible);
     assert!(
@@ -1475,16 +1515,23 @@ fn direct_teams_two_team_equipment_and_round_setup_saves_one_coherent_draft() {
     );
     addon_event(&mut ui, "AOS_AddTeam", EventKind::Click);
     type_addon(&mut ui, "AOS_T0_Name", "Red");
-    pick_category(&mut ui, "Equipment");
-    select_addon(&mut ui, "AOS_T0_S5", 1);
     addon_event(&mut ui, "AOS_AddTeam", EventKind::Click);
     type_addon(&mut ui, "AOS_T1_Name", "Blue");
-    select_addon(&mut ui, "AOS_T1_S5", 2);
     assert!(
-        addon_view(&mut ui).id("AOS_T0_Name").is_none(),
-        "one team's details at a time"
+        addon_view(&mut ui).id("AOS_T0_Name").is_some(),
+        "the Teams page shows every team"
     );
-    addon_event(&mut ui, "AOS_Setup", EventKind::Click);
+    // A team setting no page places: on More Settings, a team at a time.
+    tab(&mut ui, 4);
+    pick_category(&mut ui, "Equipment (each team)");
+    select_addon(&mut ui, "AOS_Team", 0);
+    select_addon(&mut ui, "AOS_T0_S5", 1);
+    select_addon(&mut ui, "AOS_Team", 1);
+    assert!(
+        addon_view(&mut ui).id("AOS_T0_S5").is_none(),
+        "one team's settings at a time"
+    );
+    select_addon(&mut ui, "AOS_T1_S5", 2);
     pick_category(&mut ui, "Rounds");
     type_addon(&mut ui, "AOS_S6", "25");
     addon_event(&mut ui, "AOS_Apply", EventKind::Click);
@@ -1990,6 +2037,8 @@ fn source_minigame_tasks_render_offscreen() -> anyhow::Result<()> {
                     shown_when: s.get("shown_when").map(condition),
                     help: s["help"].as_str().unwrap_or("").into(),
                     avatar: s["avatar"].as_str().map(String::from),
+                    place: serde_json::from_value(s["place"].clone()).ok(),
+                    unit: s["unit"].as_str().unwrap_or("").into(),
                 }
             })
             .collect();
@@ -2084,13 +2133,13 @@ fn stock_partial_rules_and_loadout_survive_teams_navigation_and_listing_refresh(
         },
         core,
     );
-    click(&mut ui, ScreenId::MiniGameSettings, "NativeMiniGameTeams");
+    tab(&mut ui, 1);
     ui.update(0);
     state.revision += 1;
     state.games[0].rules.respawn_seconds = 8;
     ui.apply(UiUpdate::MiniGames(state.clone()));
     ui.update(0);
-    addon_event(&mut ui, "AOS_Close", EventKind::Click);
+    tab(&mut ui, 0);
     ui.update(0);
     let view = ui.screen(ScreenId::MiniGameSettings).unwrap().view();
     assert_eq!(view.edit_text(number), "-");
@@ -2156,6 +2205,20 @@ fn semantic_team_loadout_and_body_choices_precede_deeper_authored_settings() {
     assert!(ui.drain_actions().iter().any(|(_, a)| matches!(a,UiAction::EditMiniGameAddOns {teams:Some(teams),..} if teams[0].settings.contains(&("orbit:body".into(),Some(MiniGameSettingValue::Text("runner".into())))) && teams[0].settings.contains(&("orbit:team_equipment".into(),Some(MiniGameSettingValue::Text("gun".into())))))));
 }
 
+/// The message box on top: its text, then closed.
+fn take_message(ui: &mut Ui) -> String {
+    ui.update(0);
+    assert_eq!(ui.top_id(), ScreenId::MessageBox);
+    let v = ui.screen(ScreenId::MessageBox).unwrap().view();
+    let text = (0..v.nodes.len())
+        .map(|n| v.text_of(n))
+        .collect::<Vec<_>>()
+        .join("\n");
+    ui.core.pop(ScreenId::MessageBox);
+    ui.update(0);
+    text
+}
+
 fn creator_pick(ui: &mut Ui, name: &str, label: &str) {
     let index = ui
         .dialogs
@@ -2195,6 +2258,8 @@ fn a_favorite_keeps_missing_body_and_equipment_until_explicit_recovery() {
             ..Default::default()
         },
         color: None,
+        settings: Default::default(),
+        teams: vec![],
     };
     ui.core
         .settings
@@ -2228,7 +2293,8 @@ fn a_favorite_keeps_missing_body_and_equipment_until_explicit_recovery() {
             .iter()
             .any(|(_, a)| matches!(a, UiAction::CreateMiniGame { .. }))
     );
-    assert!(ui.core.minigames.status.contains("Player type"));
+    let m = take_message(&mut ui);
+    assert!(m.contains("Player type"), "{m}");
     creator_pick(&mut ui, "CMG_PlayerDataBlock", "Standard Player");
     click(
         &mut ui,
@@ -2240,7 +2306,8 @@ fn a_favorite_keeps_missing_body_and_equipment_until_explicit_recovery() {
             .iter()
             .any(|(_, a)| matches!(a, UiAction::CreateMiniGame { .. }))
     );
-    assert!(ui.core.minigames.status.contains("Equipment slot 1"));
+    let m = take_message(&mut ui);
+    assert!(m.contains("Tool 1"), "{m}");
     creator_pick(&mut ui, "CMG_StartEquip0", " NONE");
     click(
         &mut ui,
@@ -2528,6 +2595,8 @@ fn server_addon_apply_freezes_fields_and_favorites_until_its_correlated_failure(
         default: MiniGameSettingValue::Int(0),
         help: String::new(),
         avatar: None,
+        place: None,
+        unit: String::new(),
         shown_when: None,
     }];
     ui.apply(UiUpdate::MiniGames(state));

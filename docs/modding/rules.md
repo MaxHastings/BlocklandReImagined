@@ -300,8 +300,8 @@ the `minigame` capability. A rule set like Slayer's sorts players with
 `on_minigame` and spawns them on their team's bricks with `on_pick_spawn`.
 
 **Add-On settings.** A rule declares the settings a mini-game's owner picks
-in its behaviour's `settings`, and the host shows them in the Mini-Game
-window's Add-On Settings, grouped by Add-On and `category`:
+in its behaviour's `settings`, and the host shows them in its Mini-Game
+window:
 
 ```json
 "settings": [
@@ -334,6 +334,16 @@ global it stands for (`"global": "$Pref::Server::TT::Ammo"`). One with
 `"restart": true` is read only as the server starts or loads a map (RTB's
 needsRestart): it keeps the value it had then, and a host's change waits
 for the next start, marked in the window.
+`place` puts a game or team setting beside v20's own rules in the
+Mini-Game window: `basics`, `loadout`, `win` (How to Win) and `rounds` on
+its Game page, `teams` on its Teams page (a team setting on each team),
+and `scoring`, `respawn`, `damage` and `bricks` on its Rules page. Every
+setting also shows on More Settings, by Add-On and `category`, and one
+without a `place` shows only there. `unit` is a few words after its box
+(`"unit": "minutes (0: no limit)"`). A `bool` may name its two choices,
+`"items": [{ "value": true, "name": "Same as everyone" }, { "value":
+false, "name": "Own loadout" }]`, to show as a drop-down instead of a check
+box.
 `editor: "admin"` lets only an admin change it. `shown_when` hides a
 setting unless another (`key`, or `ns:key` of an Add-On this one depends on)
 holds one of the listed values; `"is_not": [...]` in place of `"is"` shows it
