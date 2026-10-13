@@ -363,6 +363,8 @@ pub struct Core {
     pub save_preview: Option<(String, String, IconRef)>,
     /// Installed packages for the Add-Ons screen (host-prepared text).
     pub add_ons: crate::api::AddOnsView,
+    /// The Tune window's body, while it is open.
+    pub tune: Option<crate::api::TuneView>,
     /// Differing add-ons behind the last refused join (Can't Join dialog).
     pub add_on_mismatch: Option<crate::api::AddOnMismatch>,
     /// See `UiUpdate::FailureQuestion`.
@@ -1529,6 +1531,7 @@ impl Ui {
             save_context: None,
             save_preview: None,
             add_ons: Default::default(),
+            tune: None,
             add_on_mismatch: None,
             failure_question: None,
             unsaved_changes: false,
@@ -2211,6 +2214,15 @@ impl Ui {
                 c.push(ScreenId::Splash);
             }
             UiUpdate::AddOns(view) => c.add_ons = view,
+            UiUpdate::Tune(view) => {
+                let open = view.is_some();
+                c.tune = view;
+                if open {
+                    c.push(ScreenId::Tune);
+                } else {
+                    c.pop(ScreenId::Tune);
+                }
+            }
             UiUpdate::AddOnMismatch(m) => c.add_on_mismatch = Some(m),
             UiUpdate::Question(q) => c.ask(q),
             UiUpdate::FailureQuestion(q) => c.failure_question = Some(q),

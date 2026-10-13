@@ -86,6 +86,35 @@ at least that long (10 by default), `"Guest: ..."` sends as the Guest and
 depends on and shows players what it may do. See
 [mod-manager.md](../architecture/mod-manager.md).
 
+**Not in your game?** An Add-On that brings rules, bodies, a HUD,
+creatures, blocks or a world plays only in the games it fits; weapons and
+vehicles play in every game. Pick it in the Add-Ons screen: a "Not in
+every game" paragraph names the game mode or map that plays it, for
+example a body a game mode uses, which a Custom game leaves out. In a
+game, `/body` lists the bodies this game left out, and `/body <name>` says
+why.
+
+**Edit while you play.** A game keeps the Add-Ons it started with. Edit a
+file while you host, switch back to the game, and chat names the Add-Ons
+that changed; host again to play them. A body's numbers are the exception:
+`/tune` changes them live for everyone and saves them back to its file
+([Tuning bodies in the game](tuning.md)).
+
+**Share it** as one ZIP that installs byte for byte:
+
+```sh
+cargo run -p bri-package-runtime --bin bri-addon-check -- path/to/coin-rain --package
+```
+
+It runs the check above first and packs nothing when the check fails. The
+ZIP holds the Add-On's folder and its `coin-rain-rules` companion if there
+is one, in a fixed order with fixed dates, so packing the same files twice
+gives the same ZIP; it skips hidden files and `target` folders, then reads
+the ZIP back and compares every file before it is kept. `--out FILE.zip`
+names it (the folder's name by default). Players drop the ZIP in their
+Add-Ons folder (the Add-Ons screen's **Add-Ons Folder** button opens it)
+and the game installs it as it is.
+
 ## The rest of the guide
 
 Each topic has its own page:
@@ -96,6 +125,7 @@ Each topic has its own page:
 6. [Other content kinds](content-kinds.md)
 7. [Old v20 Add-Ons and new bricks](old-addons.md)
 8. [What players are asked to trust](trust.md)
+9. [Tuning bodies in the game](tuning.md)
 
 Porting an old Add-On's scripts is [porting.md](porting.md), and the
 TorqueScript functions they used map to [torque-equivalents.md](torque-equivalents.md).

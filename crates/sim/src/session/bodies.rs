@@ -170,6 +170,23 @@ impl Session {
             .collect();
         choosable.filter(|id| allowed.contains(id)).collect()
     }
+    /// The bodies the host's enabled Add-Ons have that this game leaves out
+    /// (a game mode uses them, or they need another map), so `/body` says
+    /// why rather than that no such body exists. Set after the Add-Ons are
+    /// installed: a body this game has is never absent.
+    pub fn set_absent_bodies(&mut self, bodies: Vec<AbsentBody>) {
+        let archetypes = &self.archetypes;
+        self.absent_bodies = bodies
+            .into_iter()
+            .filter(|b| archetypes.find(&b.id).is_none())
+            .collect();
+    }
+    fn absent_body(&self, named: &str) -> Option<&AbsentBody> {
+        let named = named.trim();
+        self.absent_bodies
+            .iter()
+            .find(|b| b.id.eq_ignore_ascii_case(named) || b.name.eq_ignore_ascii_case(named))
+    }
     /// `/body`: list the bodies one may pick; `/body <name>` becomes one.
     pub(super) fn body_command(&mut self, owner: OwnerId, named: &str) -> Result<()> {
         let bodies = self.bodies_for(owner);
@@ -181,16 +198,32 @@ impl Session {
                 .join(", ")
         };
         if named.trim().is_empty() {
-            let text = if bodies.len() > 1 {
+            let mut text = if bodies.len() > 1 {
                 format!("Bodies: {}. Type /body and a name.", names())
             } else {
                 "This mini-game lets you pick no other body.".into()
             };
+            let absent: Vec<&str> = self
+                .absent_bodies
+                .iter()
+                .filter(|b| !b.name.is_empty())
+                .map(|b| b.name.as_str())
+                .collect();
+            if !absent.is_empty() {
+                text.push_str(&format!(
+                    " Not in this game: {}; type /body and the name to see why.",
+                    absent.join(", ")
+                ));
+            }
             self.private_chat(owner, text);
             return Ok(());
         }
         let Some(archetype) = self.archetypes.choice(named) else {
-            self.private_chat(owner, format!("No body is called {}.", named.trim()));
+            let text = match self.absent_body(named) {
+                Some(b) => format!("{} is not in this game. {}", b.label(), b.why),
+                None => format!("No body is called {}.", named.trim()),
+            };
+            self.private_chat(owner, text);
             return Ok(());
         };
         if !bodies.contains(&archetype) {
@@ -219,5 +252,25 @@ impl Session {
             Chosen::Became | Chosen::NoRoom => {}
         }
         Ok(())
+    }
+}
+
+/// A body an enabled Add-On of the host's has that this game left out.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AbsentBody {
+    /// Its archetype id.
+    pub id: String,
+    /// Its shown name; empty for a body players cannot pick.
+    pub name: String,
+    /// Why this game left it out, in plain words.
+    pub why: String,
+}
+impl AbsentBody {
+    fn label(&self) -> &str {
+        if self.name.is_empty() {
+            &self.id
+        } else {
+            &self.name
+        }
     }
 }

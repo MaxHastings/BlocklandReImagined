@@ -152,6 +152,7 @@ impl App {
         }
         self.ui.apply(UiUpdate::UnsavedChanges(false));
         self.addons.client_code.stop();
+        self.addons.edits.game_ended();
         self.avatar.avatars.clear();
         self.avatar.mount_meshes.clear();
         self.avatar.avatar_actions.clear();
@@ -753,6 +754,9 @@ impl App {
                 mods: Default::default(),
             })
         });
+        // This game runs the Add-Ons as they are now; edits made while it
+        // runs are named in chat (`add_on_edits`).
+        self.addons.edits.game_started(&self.content.paths.root);
         self.net.attempt = Some(Attempt {
             id,
             worker,

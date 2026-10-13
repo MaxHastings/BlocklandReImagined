@@ -41,7 +41,12 @@ pub(super) struct AddOns {
     pub(super) add_on_health: crate::add_on_health::AddOnHealth,
     /// HUD regions Add-Ons claim, and their textures.
     pub(super) hud_regions: crate::hud_regions::HudRegions,
+    /// Add-On files edited while a hosted game runs.
+    pub(super) edits: crate::add_on_edits::AddOnEdits,
 }
+
+/// The Add-Ons screen's status line during a game.
+const IN_GAME_NOTICE: &str = "You are in a game, which keeps the Add-Ons it started with: changes here apply the next time you host or join.";
 
 impl App {
     /// Chat lines (and an optional question) for a host notice.
@@ -537,10 +542,37 @@ impl App {
             Err(error) => bri_console::warn(format!("Add-On health report not written: {error:#}")),
         }
     }
+    /// Name in chat, once, the Add-Ons whose files changed on disk since the
+    /// hosted game started, and mark them in the Add-Ons screen.
+    pub(super) fn notice_add_on_edits(&mut self) {
+        let Some(a) = self.net.attempt.as_ref().filter(|a| a.entered) else {
+            return;
+        };
+        let id = a.id;
+        let names = self.addons.edits.poll();
+        if names.is_empty() {
+            return;
+        }
+        let text = crate::add_on_edits::AddOnEdits::notice(&names);
+        bri_console::echo(&text);
+        self.ui.apply_session(id, UiUpdate::Chat { text });
+        if self.ui.is_open(bri_ui::screens::ScreenId::AddOns) {
+            self.show_add_ons(crate::add_ons::view(&self.content.paths.root));
+        }
+    }
     /// Show the Add-Ons screen's `view` with each Add-On's problems from
     /// the last load listed under it.
     pub(super) fn show_add_ons(&mut self, mut view: AddOnsView) {
         crate::add_ons::with_health(&mut view, &self.addons.add_on_health);
+        crate::add_ons::with_plays_only(&mut view, self.addons.server_packages.as_deref());
+        let edited = self.addons.edits.changed_set();
+        for row in &mut view.rows {
+            row.changed_in_game = edited.contains(row.id.as_str());
+        }
+        if self.net.attempt.is_some() && view.notice.is_empty() {
+            // A game keeps the Add-Ons it started with.
+            view.notice = IN_GAME_NOTICE.into();
+        }
         self.ui.apply(UiUpdate::AddOns(view));
     }
     /// What the enabled Add-Ons name that this computer could not find
