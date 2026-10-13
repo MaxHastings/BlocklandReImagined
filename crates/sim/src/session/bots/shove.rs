@@ -75,7 +75,14 @@ impl Session {
             bodies: &[],
             motions: &[],
         };
-        let shoved = crate::reach::shove_landing(&tuning, feet, velocity, &ground, allowance);
+        let shoved = crate::reach::shove_landing(
+            &tuning,
+            feet,
+            velocity,
+            &ground,
+            simulation.chunks(),
+            allowance,
+        );
         let fall = shoved.map_or(0.0, |s| self.fall_harm(target, s.impact));
         let landed = shoved.and_then(|s| s.landed);
         let harm = worth(fall, contest::shove_worth(self, bot, target), health);
@@ -200,6 +207,7 @@ mod tests {
             Vec3::from(peer.player.state().feet),
             velocity,
             &ground,
+            simulation.chunks(),
             &mut allowance,
         );
         assert_eq!(landing.map(|l| l.at), flown.and_then(|s| s.landed));

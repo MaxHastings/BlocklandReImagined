@@ -50,6 +50,9 @@ pub struct VehicleSave {
     pub energy: f32,
     pub jetting: bool,
     pub energy_phase: u8,
+    /// Ticks in a row it sat undriven and still, toward being put to sleep.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub still: u8,
     pub previous_velocity: [f32; 3],
     pub jump_held: bool,
     pub fire_held: bool,
@@ -117,6 +120,7 @@ impl VehiclesWorld {
                 energy: v.energy,
                 jetting: v.jetting,
                 energy_phase: v.energy_phase,
+                still: v.still,
                 previous_velocity: v.previous_velocity.to_array(),
                 jump_held: v.jump_held,
                 fire_held: v.fire_held,
@@ -281,6 +285,7 @@ impl VehiclesWorld {
                     energy: saved.energy,
                     jetting: saved.jetting,
                     energy_phase: saved.energy_phase,
+                    still: saved.still,
                     mouse_steering: saved.mouse_steering,
                     steering_quiet: saved.steering_quiet.min(AUTO_RETURN_QUIET),
                     actor,
@@ -519,6 +524,9 @@ impl VehiclesWorld {
         }
         Ok(())
     }
+}
+fn is_zero(n: &u8) -> bool {
+    *n == 0
 }
 fn quiet() -> u8 {
     AUTO_RETURN_QUIET

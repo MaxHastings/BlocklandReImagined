@@ -193,6 +193,15 @@ const FIGHT_HEARING: f32 = 128.0;
 const FIGHT_HEARD_ROUGHLY: f32 = 0.15;
 /// Farthest from its start a path may lead, across.
 const SEARCH_BOUND: f32 = 72.0;
+/// Nodes a route to a place to stand (`Goal::Stand`) expands before it
+/// settles for the closest it reached. Those places are a body's width
+/// aside, a hop or a jet up from where it stands (`spots`), scored on that
+/// one move. A ledge it cannot get onto from there (a tabletop it stands
+/// under) made the search prove every other way up first: on Crazy
+/// Collage Madness with 32 bots those searches spent the whole
+/// `nav::MAX_EXPANSIONS` 54 times in 30 s, 44% of every node the bots
+/// expanded. 90% of the places found at all are found within this.
+const STAND_EXPANSIONS: u32 = 1500;
 /// How far ahead a step looks for a portal it would go through.
 const PORTAL_REACH: f32 = 0.8;
 /// The pitch of a bot looking at what it handles (an emote, a tool).
@@ -1851,7 +1860,12 @@ impl Session {
         } else if let Some(goal) = brain.goal {
             let point = goal.point(home);
             if brain.plan.is_empty() && brain.search.is_none() && !brain.settled {
-                brain.search = Some(Search::with(feet, point, SEARCH_BOUND, costs));
+                let search = Search::with(feet, point, SEARCH_BOUND, costs);
+                brain.search = Some(if matches!(goal, Goal::Stand(_)) {
+                    search.limited(STAND_EXPANSIONS)
+                } else {
+                    search
+                });
             }
             // Where a chase's route ends short of its enemy, and the enemy.
             let mut gave_up = None;
