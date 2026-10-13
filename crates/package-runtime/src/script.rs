@@ -968,6 +968,7 @@ fn environment_map(e: &bri_content::atmosphere::Settings, tick: u64) -> Dynamic 
             Dynamic::from_float(f64::from(d.length_seconds)),
         );
         put("time_of_day", Dynamic::from_float(d.time_at(tick as f64)));
+        put("time_passes", (!d.paused).into());
     }
     for (k, v) in [
         ("sun_azimuth", e.sun_azimuth),
@@ -977,6 +978,7 @@ fn environment_map(e: &bri_content::atmosphere::Settings, tick: u64) -> Dynamic 
     .chain([
         ("visible_distance", e.visible_distance),
         ("fog_distance", e.fog_distance),
+        ("overcast", e.overcast),
     ]) {
         if let Some(v) = v {
             put(k, Dynamic::from_float(f64::from(v)));
@@ -1030,6 +1032,7 @@ fn set_environment(options: Map) -> Fallible<INT> {
     let mut day_length = None;
     let mut time_of_day = None;
     let mut day_cycle_off = false;
+    let mut passes = None;
     let mut flare = current.sun_flare;
     let mut flare_set = false;
     let mut vignette = current.vignette;
@@ -1045,13 +1048,23 @@ fn set_environment(options: Map) -> Fallible<INT> {
             "day_cycle" => {
                 if !value.as_bool().map_err(|_| "day_cycle is true or false")? {
                     day_cycle_off = true;
-                } else if current.day_cycle.is_none() {
-                    day_length.get_or_insert(DEFAULT_DAY_LENGTH);
+                } else {
+                    passes.get_or_insert(true);
                 }
             }
-            "sun_azimuth" | "sun_elevation" | "visible_distance" | "fog_distance" if clear => {
+            "time_passes" => {
+                passes = Some(
+                    value
+                        .as_bool()
+                        .map_err(|_| "time_passes is true or false")?,
+                );
+            }
+            "sun_azimuth" | "sun_elevation" | "visible_distance" | "fog_distance" | "overcast"
+                if clear =>
+            {
                 remove(key.as_str())
             }
+            "overcast" => changes.overcast = Some(float(&value)?),
             "sun_azimuth" => changes.sun_azimuth = Some(float(&value)?),
             "sun_elevation" => changes.sun_elevation = Some(float(&value)?),
             "visible_distance" => changes.visible_distance = Some(float(&value)?),
@@ -1130,7 +1143,7 @@ fn set_environment(options: Map) -> Fallible<INT> {
             other => {
                 return fail(format!(
                     "set_environment has no setting `{other}` (day_cycle, day_length, time_of_day, \
-                     sun_azimuth, sun_elevation, direct_light, ambient_light, shadow_color, \
+                     time_passes, overcast, sun_azimuth, sun_elevation, direct_light, ambient_light, shadow_color, \
                      sun_flare_color, sun_flare_size, visible_distance, fog_distance, fog_color, \
                      sky_color, vignette_color, vignette_multiply, sky, ground, ground_color, \
                      water, water_height, water_color, underwater_color)"
@@ -1152,18 +1165,26 @@ fn set_environment(options: Map) -> Fallible<INT> {
     }
     if day_cycle_off {
         unset.push("day_cycle".into());
-    } else if day_length.is_some() || time_of_day.is_some() {
+    } else if day_length.is_some() || time_of_day.is_some() || passes.is_some() {
         let running = current.day_cycle;
-        let Some(length) = day_length.or(running.map(|d| d.length_seconds)) else {
-            return fail("time_of_day needs a day cycle: set day_length too");
-        };
+        let length = day_length
+            .or(running.map(|d| d.length_seconds))
+            .unwrap_or(DEFAULT_DAY_LENGTH);
         let time = time_of_day
             .or(running.map(|d| d.time_at(tick as f64) as f32))
             .unwrap_or(0.5);
+        // A day length starts the clock; a time of day alone holds the
+        // sun there unless a cycle is already running.
+        let paused = match passes {
+            Some(p) => !p,
+            None if day_length.is_some() => false,
+            None => running.is_none_or(|d| d.paused),
+        };
         changes.day_cycle = Some(DayCycle {
             length_seconds: length,
             time: time.rem_euclid(1.0),
             anchor_tick: 0,
+            paused,
         });
     }
     changes

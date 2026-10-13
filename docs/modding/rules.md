@@ -678,14 +678,16 @@ map starts with none set.
 | Key | Value |
 |---|---|
 | `day_length` | seconds for a whole day and night, 10 to 86400; starts a day/night cycle (`()` stops it) |
-| `time_of_day` | 0 midnight, 0.25 sunrise, 0.5 noon, 0.75 sunset; needs a cycle |
-| `day_cycle` | `false` stops the cycle; `true` starts one of 300 seconds |
+| `time_of_day` | 0 midnight, 0.25 sunrise, 0.5 noon, 0.75 sunset; on its own it holds the sun there (or moves a running cycle) |
+| `time_passes` | `false` holds the sun at the time of day, `true` lets the day run |
+| `day_cycle` | `false` gives the map its own sun back; `true` lets the day run (300 seconds unless `day_length` says) |
 | `sun_azimuth`, `sun_elevation` | degrees, 0 to 360 and -90 to 90; with a cycle, where the sun is at noon |
 | `direct_light`, `ambient_light` | `[r, g, b]` from 0 to 1: the sun's light and the light everywhere |
 | `shadow_color` | `[r, g, b]`: the light where the sun does not reach, in place of the ambient light |
 | `sun_flare_color`, `sun_flare_size` | `[r, g, b, a]` (a is how strong) and 0.1 to 4: a glow around the sun |
 | `visible_distance`, `fog_distance` | units: where fog is complete (20 to 1000) and where it starts (0 to 1000) |
 | `fog_color`, `sky_color` | `[r, g, b]`: the fog, and a tint over the map's sky |
+| `overcast` | 0 to 1, cloud cover: dims the sun, spreads its light and greys the fog and sky |
 | `vignette_color`, `vignette_multiply` | `[r, g, b, a]` darkening the screen's edges; `true` multiplies instead of blending |
 | `sky` | a sky box in place of this map's: its material list in lower case, as the Environment window's Sky picker names it (`"add-ons/sky_sunset/sunset.dml"`, `"base/data/skies/sunset/resource.dml"`), or `"plain"`, one colour that `sky_color` sets |
 | `ground`, `ground_color` | a flat map's floor: a Steam ground by name (`"add-ons/ground_tt/grass.ground"`), and `[r, g, b, a]` over it (alpha 0 hides it) |
@@ -693,7 +695,7 @@ map starts with none set.
 | `water_color`, `underwater_color` | `[r, g, b, a]`: the sea's surface, and the screen's colour under it |
 
 `environment()` reads what is set, as the same keys; unset keys are absent,
-and `time_of_day` is where a cycle is now. A cycle runs on every player's
+`time_of_day` is where the sun is now and `time_passes` whether it moves. A cycle runs on every player's
 clock from the server's tick, so a turning sun sends nothing after it
 starts: use `day_length` for a moving sun rather than setting
 `sun_azimuth` again and again. A `sky`, `ground` or `water` a player's

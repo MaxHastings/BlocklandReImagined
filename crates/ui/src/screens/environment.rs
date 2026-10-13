@@ -7,7 +7,7 @@
 //! player.
 use super::*;
 use crate::models::admin::{AdminAction, AdminFeature};
-use crate::models::environment::{ChoiceKind, ColorField, NumberField, hsv, rgb};
+use crate::models::environment::{ChoiceKind, ColorField, EnvironmentModel, NumberField, hsv, rgb};
 use crate::view::EventKind;
 use bri_console::Clamp;
 use bri_content::atmosphere::Settings;
@@ -136,7 +136,7 @@ enum Row {
     Color(ColorField),
     VignetteMultiply,
 }
-const ROWS: [Row; 20] = [
+const ROWS: [Row; 21] = [
     Row::DayCycle,
     Row::Number(NumberField::DayLength),
     Row::Number(NumberField::TimeOfDay),
@@ -149,6 +149,7 @@ const ROWS: [Row; 20] = [
     Row::Number(NumberField::FlareSize),
     Row::Number(NumberField::VisibleDistance),
     Row::Number(NumberField::FogDistance),
+    Row::Number(NumberField::Overcast),
     Row::Color(ColorField::FogColor),
     Row::Color(ColorField::SkyColor),
     Row::Color(ColorField::Vignette),
@@ -364,10 +365,10 @@ impl Environment {
         let mut view = View::new(&root);
         view.measure(&core.pack);
         if let Some(n) = view.id("EnvPresets") {
-            view.state(n).items = bri_content::atmosphere::presets()
-                .iter()
+            view.state(n).items = EnvironmentModel::look_names()
+                .into_iter()
                 .enumerate()
-                .map(|(i, (name, _))| ((*name).to_string(), i as i64))
+                .map(|(i, name)| (name.to_string(), i as i64))
                 .collect();
         }
         let revision = core.environment.revision;
@@ -477,8 +478,9 @@ impl Environment {
         }
         for f in NumberField::ALL {
             let value = m.number(f);
+            // The time of day works with the cycle off too: it holds the sun.
             let active = match f {
-                NumberField::DayLength | NumberField::TimeOfDay => cycle,
+                NumberField::DayLength => cycle,
                 NumberField::WaterHeight => m.row_active(ChoiceKind::Water),
                 _ => true,
             };
@@ -489,7 +491,10 @@ impl Environment {
                     v.set_active(n, active);
                 }
                 if let Some(n) = v.id(&format!("{name}_Value")) {
-                    v.set_text(n, if active { f.format(value) } else { "-".into() });
+                    // The map's own sun has no time of day.
+                    let shown =
+                        active && (f != NumberField::TimeOfDay || m.time_of_day().is_some());
+                    v.set_text(n, if shown { f.format(value) } else { "-".into() });
                 }
             }
         }
@@ -507,7 +512,7 @@ impl Environment {
             }
         }
         if let Some(n) = v.id("EnvPresets") {
-            v.select(n, m.current_preset().map(|i| i as i64));
+            v.select(n, m.current_look().map(|i| i as i64));
         }
         for kind in CHOICE_KINDS {
             let name = choice_name(kind);
@@ -641,7 +646,7 @@ impl Screen for Environment {
                 core.environment.set_vignette_multiply(on);
             } else if name == "EnvPresets" {
                 if let Some(i) = self.view.selected(ev.node) {
-                    core.environment.preset(i as usize);
+                    core.environment.look(i as usize);
                 }
             } else if let Some(f) = NumberField::ALL
                 .into_iter()
