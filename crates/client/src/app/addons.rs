@@ -650,6 +650,7 @@ impl App {
                 .bottom_print
                 .as_ref()
                 .map_or_else(String::new, |(t, ..)| bri_content::hud::plain(t)),
+            ammo: self.net.held_ammo.clone(),
         };
         let regions = &mut self.addons.hud_regions;
         regions.use_catalog(Some(catalog));

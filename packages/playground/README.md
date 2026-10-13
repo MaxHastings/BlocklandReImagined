@@ -57,7 +57,10 @@ a late joiner over the network).
    Carbine.
 7. As the Runner, the top of the screen shows a gold power meter that
    loses wedges as you are hurt, a cap with a health counter, and a gold
-   reticle instead of the crosshair. Type `/trooper`: the HUD goes back to
+   reticle instead of the crosshair. Draw the Carbine: a big gold-edged
+   round count, a magazine bar and the reserve sit bottom right instead of
+   the text ammo display, counting down as you fire and showing RELOAD
+   while you reload. Type `/trooper`: the HUD goes back to
    the stock one, the view narrows, it bobs as you walk, the gun trails
    your turns, and the third-person camera sits over the right shoulder.
    Type `/blockhead`: the camera is the stock one again.
