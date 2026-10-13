@@ -113,6 +113,69 @@ fn clips_play_as_a_gltf_viewer_shows_them() {
     );
 }
 
+/// A clip's channel that holds a bone at rest still overrides the clips
+/// below it: aiming holds the left hand still, so the run's swing of that
+/// hand does not show through (Mario's weapon hold broke this way). Bones
+/// the clip has no channel for still follow the run.
+#[test]
+fn a_channel_held_at_rest_still_overrides_the_layer_below() {
+    use bri_content::animation::{Layer, sample, sample_layers};
+    let c = convert_glb(&character(true).glb, &body_opts()).unwrap();
+    let clip = |name: &str| c.shape.animations.iter().find(|a| a.name == name).unwrap();
+    let (run, aim) = (clip("run"), clip("armreadyright"));
+    assert!(
+        aim.nodes
+            .iter()
+            .any(|t| t.node == "hand.L" && !t.rotations.is_empty()),
+        "the still hand's channel is kept: {:?}",
+        aim.nodes.iter().map(|t| &t.node).collect::<Vec<_>>()
+    );
+    let hand = c
+        .shape
+        .nodes
+        .iter()
+        .position(|n| n.name == "hand.L")
+        .unwrap();
+    let hips = c.shape.nodes.iter().position(|n| n.name == "hips").unwrap();
+    let rest = sample(&c.shape, None, 0.0).unwrap();
+    let running = sample(&c.shape, Some(run), 0.1).unwrap();
+    let aiming = sample_layers(
+        &c.shape,
+        &[
+            Layer {
+                animation: run,
+                time: 0.1,
+                weight: 1.0,
+            },
+            Layer {
+                animation: aim,
+                time: aim.duration,
+                weight: 1.0,
+            },
+        ],
+    )
+    .unwrap();
+    let turn = |pose: &bri_content::animation::Pose, n: usize| {
+        let (_, r, _) = pose.nodes[n].to_scale_rotation_translation();
+        r
+    };
+    assert!(
+        turn(&running, hand).dot(turn(&rest, hand)).abs() < 0.999,
+        "the run swings the left hand"
+    );
+    assert!(
+        turn(&aiming, hand).dot(turn(&rest, hand)).abs() > 0.9999,
+        "aiming holds it at rest"
+    );
+    assert!(
+        running.nodes[hips]
+            .w_axis
+            .distance(aiming.nodes[hips].w_axis)
+            < 1e-4,
+        "the hips still follow the run"
+    );
+}
+
 #[test]
 fn roles_take_the_blockheads_clip_names_and_play_the_way_the_body_needs() {
     let c = convert_glb(&character(true).glb, &body_opts()).unwrap();
@@ -349,7 +412,7 @@ fn imports_write_a_package_the_runtime_reads() {
     opts.name = Some("Big Figure".into());
     let report = import(&opts).unwrap();
     assert_eq!(report.id, "big_figure");
-    assert_eq!(report.model, "big_figure:asset/big_figure.glb");
+    assert_eq!(report.model, "big_figure:body/big_figure");
     let dir = root.join("addons/big_figure");
     for f in [
         "package.json",
@@ -368,7 +431,7 @@ fn imports_write_a_package_the_runtime_reads() {
     .unwrap();
     assert_eq!(
         archetype.model.as_deref(),
-        Some("big_figure:asset/big_figure.glb")
+        Some("big_figure:body/big_figure")
     );
     // Its collision box is its own size, not the Blockhead's: as tall as
     // the model, as wide for that height as a Blockhead, the eye at its
@@ -387,6 +450,10 @@ fn imports_write_a_package_the_runtime_reads() {
     assert!(get("crouch_height") < get("stand_height") && get("sit_eye") < get("stand_eye"));
     let check = bri_package_runtime::check::check(&dir);
     assert!(check.ok, "{check}");
+    // Everyone draws it, so joiners download it: shared, not host-only.
+    let info: bri_package::library::PackageInfo =
+        serde_json::from_slice(&std::fs::read(dir.join("package.json")).unwrap()).unwrap();
+    assert_eq!(info.side(), Some(bri_package::packages::Side::Shared));
     let md = std::fs::read_to_string(dir.join("IMPORT-REPORT.md")).unwrap();
     assert!(
         md.contains("`Look` → `look` (role `look`)") && md.contains("overlay"),

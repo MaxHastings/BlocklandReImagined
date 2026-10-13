@@ -182,6 +182,11 @@ impl App {
         let assets = &self.avatar.avatar_assets;
         Some(self.avatar.avatars.get_mut(&owner)?.body_report(assets))
     }
+    /// The Add-On body a player draws as (`look.model` of its type), or
+    /// None for the Blockhead.
+    pub fn avatar_model(&self, owner: bri_world::OwnerId) -> Option<Option<&str>> {
+        Some(self.avatar.avatars.get(&owner)?.model.as_deref())
+    }
     /// Whether a body draws over the hidden Blockhead stand-in (a box model).
     pub fn avatar_is_stand_in(&self, owner: bri_world::OwnerId) -> Option<bool> {
         Some(self.avatar.avatars.get(&owner)?.body_kind().stand_in)
