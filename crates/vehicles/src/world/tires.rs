@@ -80,6 +80,51 @@ struct Surface {
 /// `WheeledVehicle::extendWheels` then the wheel half of `updateForces`:
 /// finds each wheel's ground, adds the spring and tyre forces to the body
 /// and advances the wheels' spin and tyre stretch by `dt`.
+/// The openings (portals) near a vehicle, for its wheel rays: a wheel whose
+/// ray goes in through one meets the ground beyond its partner.
+#[derive(Default)]
+pub(super) struct Through {
+    pub openings: bri_content::passage::Passages,
+}
+impl Through {
+    /// A ray from the hub's mount at `start` along `direction` for
+    /// `length`, as from the body's middle at `from`: through any opening
+    /// between the middle and the mount, and then any it goes in by. The
+    /// distance to what it meets, and that surface's normal as seen from
+    /// the body's side.
+    pub fn cast(
+        &self,
+        q: &QueryPipeline,
+        from: Vec3,
+        start: Vec3,
+        direction: Vec3,
+        length: f32,
+    ) -> Option<(f32, Vec3)> {
+        if self.openings.list.is_empty() {
+            return q
+                .cast_ray_and_get_normal(&Ray::new(start, direction), length, true)
+                .map(|(_, hit)| (hit.time_of_impact, hit.normal));
+        }
+        // A mount already past an opening's plane is beyond the partner.
+        let (start, before) = self.openings.travel(from, start);
+        let before = before.unwrap_or(glam::Affine3A::IDENTITY);
+        let direction = before.transform_vector3(direction);
+        self.openings
+            .cast(start, direction, length, |leg| {
+                Ok::<_, ()>(
+                    q.cast_ray_and_get_normal(&Ray::new(leg.from, leg.direction), leg.length, true)
+                        .map(|(_, hit)| (leg.start + hit.time_of_impact, hit.normal)),
+                )
+            })
+            .ok()
+            .flatten()
+            .map(|((distance, normal), leg)| {
+                let back = (leg.carry * before).inverse();
+                (distance, back.transform_vector3(normal))
+            })
+    }
+}
+#[allow(clippy::too_many_arguments)]
 pub(super) fn update(
     world: &mut PhysicsWorld,
     body: RigidBodyHandle,
@@ -88,11 +133,12 @@ pub(super) fn update(
     wheels: &mut [WheelState],
     drive: Drive,
     dt: f32,
+    through: &Through,
 ) {
     let wake = drive.wake;
-    let (origin, rotation) = {
+    let (origin, rotation, middle) = {
         let b = &world.bodies[body];
-        (b.translation(), *b.rotation())
+        (b.translation(), *b.rotation(), b.center_of_mass())
     };
     let right = rotation * Vec3::X;
     let forward = rotation * -Vec3::Z;
@@ -101,10 +147,18 @@ pub(super) fn update(
     // The ray runs from the hub's mount down the whole spring and tyre; a
     // hit within the tyre's radius of the mount compresses it fully.
     let surfaces: Vec<Option<Surface>> = {
+        // Through an opening too, the rays meet what the body itself meets.
+        let groups = world.bodies[body]
+            .colliders()
+            .first()
+            .map_or(InteractionGroups::all(), |c| {
+                world.colliders[*c].collision_groups()
+            });
         let q = world.query_pipeline_with_filter(
             QueryFilter::default()
                 .exclude_rigid_body(body)
-                .exclude_sensors(),
+                .exclude_sensors()
+                .groups(groups),
         );
         d.wheels
             .iter()
@@ -112,18 +166,18 @@ pub(super) fn update(
             .map(|(w, s)| {
                 let (length, radius) = (w.rest_length * scale, w.radius * scale);
                 let start = mount(w);
-                let hit = q.cast_ray_and_get_normal(&Ray::new(start, -up), length + radius, true);
+                let hit = through.cast(&q, middle, start, -up, length + radius);
                 s.contact = hit.is_some();
-                s.extension = hit.map_or(1., |(_, hit)| {
-                    ((hit.time_of_impact - radius) / length).clamped(0., 1.)
+                s.extension = hit.map_or(1., |(distance, _)| {
+                    ((distance - radius) / length).clamped(0., 1.)
                 });
-                hit.map(|(_, hit)| Surface {
-                    normal: if hit.normal.length_squared() > 0.5 {
-                        hit.normal
+                hit.map(|(distance, normal)| Surface {
+                    normal: if normal.length_squared() > 0.5 {
+                        normal
                     } else {
                         up
                     },
-                    point: start - up * hit.time_of_impact,
+                    point: start - up * distance,
                 })
             })
             .collect()

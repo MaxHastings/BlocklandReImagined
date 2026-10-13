@@ -2913,7 +2913,7 @@ impl Session {
         self.tell_package_problems();
         self.step_holds();
         contain("vehicles", self.vehicle_pre_step());
-        contain("physics", self.simulation.step());
+        contain("physics", self.step_physics());
         contain("vehicles", self.vehicle_post_step());
         self.player_mount_contacts();
         self.sync_seated();
