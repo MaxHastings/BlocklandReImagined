@@ -149,6 +149,9 @@ struct Seen {
     corrections: usize,
     worst: (f32, f32),
 }
+/// The host's gun at a tick: (tick, the gunner's move it ran, the gun's
+/// world look, the look on the gunner's screen then).
+type Aim = (u64, u64, (f32, f32), Option<f32>);
 /// A frame-to-frame change in the drawn velocity no driving does: 8
 /// units/s within a 6-25 ms frame is over 30 g.
 const ROUGH: f32 = 8.0;
@@ -295,7 +298,7 @@ fn three_in_the_buggy_over_a_bad_connection_do_not_rubber_band() -> Result<()> {
     // The host's truth: the buggy's place by tick, and its gun's world look
     // with the gunner's move it was taken from.
     let mut truth: BTreeMap<u64, (Vec3, glam::Quat)> = BTreeMap::new();
-    let mut aims: Vec<(u64, u64, (f32, f32), Option<f32>)> = vec![];
+    let mut aims: Vec<Aim> = vec![];
     let (mut time, mut host_tick) = (0.0f64, host.pose(buggy).tick);
     let start_tick = host_tick;
     let mut lost = (0usize, 0usize);

@@ -368,7 +368,7 @@ async fn two_players_and_a_late_joiner_share_the_playground() -> Result<()> {
         let throttle = MoveInput {
             forward: 1.0,
             yaw,
-            head_yaw: off.clamp(-3.0, 3.0),
+            head_yaw: bri_console::Clamp::clamped(off, -3.0, 3.0),
             ..Default::default()
         };
         hold(&mut driver, &mut seat_report, throttle, 30).await?;

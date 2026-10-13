@@ -426,12 +426,10 @@ fn turning(
     // One that steers toward its driver's look (`toward_look`) is held on
     // that lock by looking there, every tick; full lock by looking well
     // past it, as a bot driving it does.
-    let toward = definition.steering.toward_look.then(|| {
-        if lock >= 1.0 {
-            bri_motor::player::MAX_FREELOOK
-        } else {
-            look
-        }
+    let toward = definition.steering.toward_look.then_some(if lock >= 1.0 {
+        bri_motor::player::MAX_FREELOOK
+    } else {
+        look
     });
     let mut samples = vec![];
     let mut speed = 0.0;
