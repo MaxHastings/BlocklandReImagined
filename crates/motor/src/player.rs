@@ -1794,6 +1794,25 @@ impl Player {
             }
             let run = pv - (velocity + acc);
             acc += run.clamp_length_max(t.acceleration * dt);
+            // `updatePos` leaves every hit moving `NORMAL_ELASTICITY` away
+            // from the surface, which v20's run force takes off again on
+            // the next tick. A body whose controller owns its running
+            // (its archetype's `acceleration` is 0, as the Halo and Mario
+            // controllers' are) has no run force: it kept that speed, rose
+            // off the floor until it left the contact slab, and was no
+            // longer grounded, so its controller dropped a jump. For such a
+            // body the motor takes off what the run force leaves, and the
+            // same small speed into the surface: a push that slow (a shot
+            // from a little above) moves the body too little each tick for
+            // the sweep to see the floor, so it sank through it. Larger
+            // speeds hit the floor as usual. Bodies without a controller
+            // move exactly as v20's.
+            if t.controller.is_some() {
+                let away = (velocity + acc).dot(normal);
+                if away.abs() <= torque::NORMAL_ELASTICITY * 1.01 {
+                    acc -= normal * away;
+                }
+            }
         } else if liquid.is_some() {
             // Swimming pushes along the move direction; water drag sets the speed.
             acc += move_vec.normalize_or_zero() * t.swim_acceleration * dt;

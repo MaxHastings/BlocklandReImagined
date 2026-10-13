@@ -64,7 +64,7 @@ impl Session {
         let peer = self.peers.get_mut(&owner).context("Unknown player")?;
         peer.player
             .teleport(&mut self.simulation.physics, feet, yaw)?;
-        peer.inputs.clear();
+        peer.discard_inputs();
         self.simulation.stream_terrain();
         Ok(false)
     }
@@ -180,7 +180,7 @@ impl Session {
             let peer = self.peers.get_mut(&owner).context("Unknown connection")?;
             peer.player
                 .teleport(&mut self.simulation.physics, feet, camera.yaw)?;
-            peer.inputs.clear();
+            peer.discard_inputs();
             self.simulation.stream_terrain();
             self.player_teleport_effect(owner);
         }
@@ -227,7 +227,7 @@ impl Session {
         let peer = self.peers.get_mut(&admin).context("Unknown player")?;
         peer.player
             .teleport(&mut self.simulation.physics, start + dir * distance, yaw)?;
-        peer.inputs.clear();
+        peer.discard_inputs();
         self.simulation.stream_terrain();
         self.player_teleport_effect(admin);
         Ok(())

@@ -393,3 +393,68 @@ fn cmd_look(p) { set("seen", host_data("vault")); }
     assert!(state.path().join("addon-data/bank.json").is_file());
     Ok(())
 }
+
+/// `/botreload` while a game runs reads every enabled Add-On's bots again,
+/// and keeps only those the game can run, as hosting did: a bot whose body
+/// is in an Add-On this game leaves out (a mode claims it) is left out
+/// again rather than failing the reload.
+#[test]
+fn bot_reload_keeps_only_the_bots_the_game_can_run() -> Result<()> {
+    let packages = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../packages");
+    let files = [
+        (
+            "blockhead_bot/assets/bots.json".to_string(),
+            packages.join("blockhead_bot/assets/bots.json"),
+        ),
+        (
+            "playground-fizzer/bots.json".to_string(),
+            packages.join("playground/playground-fizzer/bots.json"),
+        ),
+    ];
+    let mut content = content();
+    content.bot_kinds = bri_net::content_identity::bot_kinds_from_files(&files)?;
+    let setup = HostSetup {
+        lan: true,
+        content,
+        maps: Vec::new(),
+        settings: None,
+        passwords: None,
+        add_ons: None,
+        load_map: None,
+        copies: None,
+        addon_data: None,
+        game_version: None,
+        bot_tuning: Some(bri_sim::session::BotTuning {
+            reload: Some(Arc::new(move || {
+                bri_net::content_identity::bot_kinds_from_files(&files)
+            })),
+            overrides: None,
+        }),
+        bot_overrides: None,
+    };
+    let (mut session, spawn_points) = setup.session(&setup.hosted("fixture")?, map("fixture"))?;
+    let admin = session.join("Admin".into(), spawn_points[0], true)?;
+    session.take_private_notices();
+    let reply = session.command(
+        admin,
+        1,
+        Command::Package(PackageCommand {
+            package: String::new(),
+            command: "botreload".into(),
+            args: vec![],
+        }),
+    )?;
+    assert!(matches!(reply, Reply::Accepted), "{reply:?}");
+    let said: Vec<String> = session
+        .take_private_notices()
+        .into_iter()
+        .filter(|(to, _)| *to == admin)
+        .map(|(_, notice)| format!("{notice:?}"))
+        .collect();
+    assert!(
+        said.iter()
+            .any(|l| l.contains("Bot settings reloaded: 1 kinds")),
+        "{said:?}"
+    );
+    Ok(())
+}

@@ -37,7 +37,7 @@ impl Perform for ops::Teleport {
         let yaw = peer.player.state().yaw;
         peer.player
             .teleport(&mut session.simulation.physics, Vec3::from(position), yaw)?;
-        peer.inputs.clear();
+        peer.discard_inputs();
         Ok(())
     }
 }
