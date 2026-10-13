@@ -363,8 +363,8 @@ async fn two_players_and_a_late_joiner_share_the_playground() -> Result<()> {
         let to = target - at;
         let nose = glam::Quat::from_array(pose.rotation) * Vec3::NEG_Z;
         let off = to.x.atan2(-to.z) - nose.x.atan2(-nose.z);
-        let off = (off + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU)
-            - std::f32::consts::PI;
+        let off =
+            (off + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU) - std::f32::consts::PI;
         let throttle = MoveInput {
             forward: 1.0,
             yaw,

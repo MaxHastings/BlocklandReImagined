@@ -1737,8 +1737,10 @@ impl Session {
             let looks = d.steering.toward_look;
             if looks {
                 input.yaw = previous;
-                input.head_yaw = (response_sign * (heading_error * 1.5 - yaw_rate * 0.25))
-                    .clamp(-bri_motor::player::MAX_FREELOOK, bri_motor::player::MAX_FREELOOK);
+                input.head_yaw = (response_sign * (heading_error * 1.5 - yaw_rate * 0.25)).clamp(
+                    -bri_motor::player::MAX_FREELOOK,
+                    bri_motor::player::MAX_FREELOOK,
+                );
             }
             input.pitch = 0.0;
             input.right = 0.0;

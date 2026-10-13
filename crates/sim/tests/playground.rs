@@ -763,15 +763,27 @@ fn a_bot_drives_the_look_steered_buggy_at_a_runner() {
     let mut world = World::new("Playground".into(), "playground".into(), vec![[1.0; 4]]);
     bot_spawn(&mut world, [40.0, 0.1, 40.25]);
     let mut g = Game::with(world);
-    g.s.set_spawn_points(vec![Vec3::new(0.0, 0.05, 30.0), Vec3::new(40.0, 0.05, 44.0)])
-        .unwrap();
+    g.s.set_spawn_points(vec![
+        Vec3::new(0.0, 0.05, 30.0),
+        Vec3::new(40.0, 0.05, 44.0),
+    ])
+    .unwrap();
     let p = g.join("Ann");
     g.steps(60);
-    let bot = g.s.names().keys().copied().find(|o| g.s.is_bot(*o)).unwrap();
+    let bot =
+        g.s.names()
+            .keys()
+            .copied()
+            .find(|o| g.s.is_bot(*o))
+            .unwrap();
     let buggy =
         g.s.spawn_vehicle_at(bot, BUGGY, Vec3::new(44.0, 1.0, 40.0), 1.2, Vec3::ZERO)
             .unwrap();
-    let start = g.s.vehicle_poses().into_iter().find(|v| v.id == buggy).unwrap();
+    let start =
+        g.s.vehicle_poses()
+            .into_iter()
+            .find(|v| v.id == buggy)
+            .unwrap();
     let heading = |r: [f32; 4]| {
         let f = glam::Quat::from_array(r) * Vec3::NEG_Z;
         f.x.atan2(-f.z)
@@ -779,7 +791,11 @@ fn a_bot_drives_the_look_steered_buggy_at_a_runner() {
     let (mut drove, mut turned, mut closest) = (false, 0f32, f32::INFINITY);
     for _ in 0..90 {
         g.steps(120);
-        let v = g.s.vehicle_poses().into_iter().find(|v| v.id == buggy).unwrap();
+        let v =
+            g.s.vehicle_poses()
+                .into_iter()
+                .find(|v| v.id == buggy)
+                .unwrap();
         if g.s.mounted(bot) == Some((buggy, 0)) {
             drove = true;
             let d = (heading(v.rotation) - heading(start.rotation) + std::f32::consts::PI)
