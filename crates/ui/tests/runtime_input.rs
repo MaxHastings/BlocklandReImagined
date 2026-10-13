@@ -1267,3 +1267,42 @@ fn chat_key_stays_out_of_confirmations() {
     assert_eq!(u.top_id(), over);
     assert!(actions(&mut u).is_empty());
 }
+#[test]
+fn a_player_the_host_accepted_chats_from_the_loading_screen() {
+    let mut u = ui();
+    u.apply(UiUpdate::Connection(ConnectionState::Loading {
+        map: "Bedroom".into(),
+        preview: IconRef::None,
+        status: "DOWNLOADING ADD-ONS".into(),
+        progress: 0.25,
+    }));
+    actions(&mut u);
+    // Not yet accepted by the host: nobody to talk to.
+    down(&mut u, Key::Letter('t'));
+    assert_eq!(u.top_id(), ScreenId::Loading);
+    u.apply(UiUpdate::LoadingChat(true));
+    u.apply(UiUpdate::Chat {
+        text: "Ann: welcome".into(),
+    });
+    assert_eq!(u.core.chat.visible(u.core.time_ms).len(), 1);
+    // LoadingGui keeps the move map: the chat key opens the chat box, and
+    // nothing else reaches the game.
+    down(&mut u, Key::Letter('w'));
+    assert!(actions(&mut u).is_empty());
+    down(&mut u, Key::Letter('t'));
+    u.handle_input(InputEvent::Char('t'));
+    assert_eq!(u.top_id(), ScreenId::MessageInput(ChatChannel::Say));
+    for ch in "hi".chars() {
+        u.handle_input(InputEvent::Char(ch));
+    }
+    down(&mut u, Key::Return);
+    assert!(actions(&mut u).contains(&UiAction::Chat {
+        channel: ChatChannel::Say,
+        text: "hi".into()
+    }));
+    assert_eq!(u.top_id(), ScreenId::Loading);
+    // Escape still cancels the join.
+    down(&mut u, Key::Escape);
+    assert_eq!(actions(&mut u), vec![UiAction::CancelConnect]);
+    assert!(!u.core.loading_chat);
+}

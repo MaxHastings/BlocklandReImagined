@@ -1033,17 +1033,120 @@ pub struct GpuScene {
     pub image_count: usize,
 }
 fn image_signatures(data: &SceneData) -> Vec<([u32; 2], bool, [u8; 32])> {
+    data.images.iter().map(image_signature).collect()
+}
+
+fn image_signature(image: &SceneImage) -> ([u32; 2], bool, [u8; 32]) {
     use sha2::{Digest, Sha256};
-    data.images
-        .iter()
-        .map(|image| {
-            (
-                [image.width, image.height],
-                image.srgb,
-                Sha256::digest(&image.rgba).into(),
-            )
-        })
-        .collect()
+    (
+        [image.width, image.height],
+        image.srgb,
+        Sha256::digest(&image.rgba).into(),
+    )
+}
+
+/// One uploaded image: its mipmapped texture, the views materials bind and
+/// the signature `upload_geometry_shared` compares.
+#[derive(Clone)]
+struct SharedTexture {
+    texture: wgpu::Texture,
+    view: wgpu::TextureView,
+    base_view: wgpu::TextureView,
+    signature: ([u32; 2], bool, [u8; 32]),
+}
+
+#[derive(Clone, PartialEq, Eq, Hash)]
+struct TextureKey {
+    label: String,
+    size: [u32; 2],
+    srgb: bool,
+    cutoff: Option<u32>,
+}
+
+/// Textures [`SceneRenderer::upload_cached`] made, kept for the next scene
+/// that draws the same images (a new outfit on a body). Belongs to one
+/// device: drop it with the renderer.
+#[derive(Default)]
+pub struct TextureCache {
+    textures: std::collections::HashMap<TextureKey, SharedTexture>,
+}
+
+impl TextureCache {
+    /// Images held.
+    pub fn len(&self) -> usize {
+        self.textures.len()
+    }
+    pub fn is_empty(&self) -> bool {
+        self.textures.is_empty()
+    }
+}
+
+/// Make, mipmap and fill `image`'s texture.
+fn image_texture(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    image: &SceneImage,
+    cutoff: Option<f32>,
+) -> SharedTexture {
+    let size = wgpu::Extent3d {
+        width: image.width,
+        height: image.height,
+        depth_or_array_layers: 1,
+    };
+    let levels = match cutoff {
+        Some(cutoff) => crate::mipmap::chain_preserving_coverage(
+            image.width,
+            image.height,
+            &image.rgba,
+            image.srgb,
+            cutoff,
+        ),
+        None => crate::mipmap::chain(image.width, image.height, &image.rgba, image.srgb),
+    };
+    let texture = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some(&image.label),
+        size,
+        mip_level_count: levels.len() as u32,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: if image.srgb {
+            wgpu::TextureFormat::Rgba8UnormSrgb
+        } else {
+            wgpu::TextureFormat::Rgba8Unorm
+        },
+        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+        view_formats: &[],
+    });
+    for (level, (width, height, rgba)) in levels.iter().enumerate() {
+        queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: &texture,
+                mip_level: level as u32,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            rgba.as_ref(),
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(width * 4),
+                rows_per_image: Some(*height),
+            },
+            wgpu::Extent3d {
+                width: *width,
+                height: *height,
+                depth_or_array_layers: 1,
+            },
+        );
+    }
+    SharedTexture {
+        view: texture.create_view(&Default::default()),
+        base_view: texture.create_view(&wgpu::TextureViewDescriptor {
+            mip_level_count: Some(1),
+            ..Default::default()
+        }),
+        signature: image_signature(image),
+        texture,
+    }
 }
 
 /// Per-object state. Geometry, materials and textures remain in a shared GpuScene.
@@ -3087,11 +3190,31 @@ impl SceneRenderer {
         queue: &wgpu::Queue,
         data: &SceneData,
     ) -> Result<GpuScene> {
+        self.upload_with(device, queue, data, None)
+    }
+    /// As [`Self::upload`], binding images `cache` already holds instead of
+    /// making and mipmapping a texture of their own, and keeping the ones
+    /// it makes there. The cache knows an image by its label, size and
+    /// colour space: the caller promises a label always names the same
+    /// pixels (a content pack's texture id). Scenes sharing textures must
+    /// not `patch_images`.
+    pub fn upload_cached(
+        &self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        data: &SceneData,
+        cache: &mut TextureCache,
+    ) -> Result<GpuScene> {
+        self.upload_with(device, queue, data, Some(cache))
+    }
+    fn upload_with(
+        &self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        data: &SceneData,
+        mut cache: Option<&mut TextureCache>,
+    ) -> Result<GpuScene> {
         data.validate()?;
-        self.count(|c| {
-            c.scenes += 1;
-            c.textures += data.images.len() as u64;
-        });
         let limits = device.limits();
         ensure!(
             data.vertices.len() as u64 * std::mem::size_of::<SceneVertex>() as u64
@@ -3105,6 +3228,7 @@ impl SceneRenderer {
         let mut views = Vec::with_capacity(data.images.len());
         let mut textures = Vec::with_capacity(data.images.len());
         let mut base_views = Vec::with_capacity(data.images.len());
+        let mut signatures = Vec::with_capacity(data.images.len());
         // An alpha-tested image keeps its cut-out coverage at every mip level;
         // plain averaging thins leaves until distant crowns turn to sparse
         // stripes with only their blended soft edges left.
@@ -3114,6 +3238,7 @@ impl SceneRenderer {
                 cutoffs[material.images[0]].get_or_insert(cutoff);
             }
         }
+        let mut made = 0;
         for (image, cutoff) in data.images.iter().zip(cutoffs) {
             ensure!(
                 image.width <= limits.max_texture_dimension_2d
@@ -3121,63 +3246,32 @@ impl SceneRenderer {
                 "Texture {} exceeds device limits",
                 image.label
             );
-            let size = wgpu::Extent3d {
-                width: image.width,
-                height: image.height,
-                depth_or_array_layers: 1,
+            let key = TextureKey {
+                label: image.label.clone(),
+                size: [image.width, image.height],
+                srgb: image.srgb,
+                cutoff: cutoff.map(f32::to_bits),
             };
-            let levels = match cutoff {
-                Some(cutoff) => crate::mipmap::chain_preserving_coverage(
-                    image.width,
-                    image.height,
-                    &image.rgba,
-                    image.srgb,
-                    cutoff,
-                ),
-                None => crate::mipmap::chain(image.width, image.height, &image.rgba, image.srgb),
+            let shared = match cache.as_deref_mut().and_then(|c| c.textures.get(&key)) {
+                Some(shared) => shared.clone(),
+                None => {
+                    made += 1;
+                    let shared = image_texture(device, queue, image, cutoff);
+                    if let Some(cache) = cache.as_deref_mut() {
+                        cache.textures.insert(key, shared.clone());
+                    }
+                    shared
+                }
             };
-            let texture = device.create_texture(&wgpu::TextureDescriptor {
-                label: Some(&image.label),
-                size,
-                mip_level_count: levels.len() as u32,
-                sample_count: 1,
-                dimension: wgpu::TextureDimension::D2,
-                format: if image.srgb {
-                    wgpu::TextureFormat::Rgba8UnormSrgb
-                } else {
-                    wgpu::TextureFormat::Rgba8Unorm
-                },
-                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-                view_formats: &[],
-            });
-            for (level, (width, height, rgba)) in levels.iter().enumerate() {
-                queue.write_texture(
-                    wgpu::TexelCopyTextureInfo {
-                        texture: &texture,
-                        mip_level: level as u32,
-                        origin: wgpu::Origin3d::ZERO,
-                        aspect: wgpu::TextureAspect::All,
-                    },
-                    rgba.as_ref(),
-                    wgpu::TexelCopyBufferLayout {
-                        offset: 0,
-                        bytes_per_row: Some(width * 4),
-                        rows_per_image: Some(*height),
-                    },
-                    wgpu::Extent3d {
-                        width: *width,
-                        height: *height,
-                        depth_or_array_layers: 1,
-                    },
-                );
-            }
-            views.push(texture.create_view(&Default::default()));
-            textures.push(texture.clone());
-            base_views.push(texture.create_view(&wgpu::TextureViewDescriptor {
-                mip_level_count: Some(1),
-                ..Default::default()
-            }));
+            views.push(shared.view);
+            textures.push(shared.texture);
+            base_views.push(shared.base_view);
+            signatures.push(shared.signature);
         }
+        self.count(|c| {
+            c.scenes += 1;
+            c.textures += made;
+        });
         let mut materials = vec![];
         for material in &data.materials {
             let mut parameters: [f32; 20] = [0.0; 20];
@@ -3249,7 +3343,7 @@ impl SceneRenderer {
             sky_revision: fresh_revision(),
             unique: next_unique(),
             material_descriptors: data.materials.clone(),
-            image_signatures: image_signatures(data),
+            image_signatures: signatures,
             textures: Arc::new(textures),
             vertices,
             indices,

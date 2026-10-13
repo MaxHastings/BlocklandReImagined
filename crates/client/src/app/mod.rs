@@ -227,6 +227,9 @@ struct Attempt {
     /// from this client's own but brings no content to reload: whose
     /// Add-On code runs.
     joined: Arc<std::sync::Mutex<Option<bri_package::packages::PackageSet>>>,
+    /// Joins: the connection the host announced the player on, handed to
+    /// [`SessionState::arrival`] once open.
+    arrival: Arc<std::sync::Mutex<Option<bri_net::client::Arrival>>>,
 }
 struct PendingAction {
     action: UiAction,
@@ -1579,6 +1582,7 @@ impl PlatformApp for App {
             avatar.gpu = None;
             avatar.instance = None;
         }
+        self.avatar.body_textures.clear();
         // The avatar preview and the world compile their pipelines on
         // worker threads; the menus draw meanwhile (see gpu_build).
         let preview_device = device.clone();

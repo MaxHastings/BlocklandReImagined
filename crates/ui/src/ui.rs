@@ -379,6 +379,8 @@ pub struct Core {
     pub chat: ChatModel,
     /// Who is typing, shown above the chat (`chatWhosTalkingText`).
     pub talking: Vec<String>,
+    /// The loading screen carries chat ([`UiUpdate::LoadingChat`]).
+    pub loading_chat: bool,
     pub selector: SelectorModel,
     pub wrench: WrenchState,
     pub players: Vec<PlayerRow>,
@@ -554,6 +556,7 @@ impl Core {
             self.chat.line_time_ms,
         );
         self.talking.clear();
+        self.loading_chat = false;
         self.selector.cart = [None; 10];
         self.selector.clicked_brick = None;
         self.selector.clicked_slot = None;
@@ -1537,6 +1540,7 @@ impl Ui {
             hud: HudModel::default(),
             chat,
             talking: Vec::new(),
+            loading_chat: false,
             selector,
             wrench: WrenchState::default(),
             players: Vec::new(),
@@ -2014,6 +2018,7 @@ impl Ui {
                 c.chat.add(&text, now);
             }
             UiUpdate::Talking(names) => c.talking = names,
+            UiUpdate::LoadingChat(on) => c.loading_chat = on,
             UiUpdate::CenterPrint { text, seconds } => c.center_print(&text, seconds),
             UiUpdate::BottomPrint {
                 text,
@@ -2608,6 +2613,25 @@ impl Ui {
             self.flush();
             return;
         }
+        // 4c. LoadingGui pushes the move map too, so the chat key opens the
+        // chat box while the player loads, once the host has accepted them.
+        if !repeat
+            && !self.text_focus()
+            && self.content.id() == ScreenId::Loading
+            && self.core.loading_chat
+            && self.dialogs.iter().all(|d| d.passive())
+            && let Some(cmd) = self
+                .core
+                .binds
+                .command_for_key(key, mods)
+                .filter(|c| c.eq_ignore_ascii_case("globalChat"))
+                .map(str::to_string)
+        {
+            self.core.run_command(&cmd, true);
+            self.swallow_char = true;
+            self.flush();
+            return;
+        }
         // 5. Accelerators, topmost screen first (fire on repeat too).
         let n = self.dialogs.len();
         for i in (0..=n).rev() {
@@ -2823,6 +2847,9 @@ impl Ui {
         let mut dl = DrawList::new(Rect::new(0, 0, w, h));
         let pack = &self.core.pack;
         self.content.draw(pack, &mut dl, &self.core);
+        if self.content.id() == ScreenId::Loading && self.core.loading_chat {
+            crate::screens::play::loading_chat(pack, &mut dl, &self.core);
+        }
         for d in &self.dialogs {
             d.draw(pack, &mut dl, &self.core);
         }

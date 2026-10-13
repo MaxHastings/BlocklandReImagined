@@ -405,24 +405,13 @@ impl AvatarAssets {
             let Ok(dir) = bri_package::packages::package_dir(root, entry) else {
                 continue;
             };
-            let Ok(archetypes) = std::fs::read_dir(dir.join("assets/archetypes")) else {
-                continue;
-            };
-            let mut models: Vec<String> = archetypes
-                .flatten()
-                .filter_map(|e| std::fs::read(e.path()).ok())
-                .filter_map(|b| serde_json::from_slice::<serde_json::Value>(&b).ok())
-                .filter_map(|a| a["model"].as_str().map(str::to_owned))
-                .filter(|m| m.starts_with(&format!("{}:asset/", entry.id)))
-                .collect();
-            models.sort();
-            models.dedup();
-            for model in models {
+            let models = body_models(&dir, &entry.id);
+            for (model, file) in models {
                 if self.bodies.contains_key(&model) {
                     continue;
                 }
                 // One that does not load leaves its players Blockheads.
-                match self.package_body(&dir, &model) {
+                match self.package_body(&dir, &model, file.as_deref()) {
                     Ok(body) => {
                         self.bodies.insert(model, Box::new(body));
                     }
@@ -433,8 +422,10 @@ impl AvatarAssets {
             }
         }
     }
-    /// The body `model` (`<package>:asset/<file>`) in the package at `dir`.
-    fn package_body(&self, dir: &Path, model: &str) -> Result<Self> {
+    /// The body `model` in the package at `dir`: a `body` in its `file`, or
+    /// an asset (`<package>:asset/<file>`) its `assets/content.json` lists.
+    /// Its textures are assets that file lists.
+    fn package_body(&self, dir: &Path, model: &str, shape_file: Option<&str>) -> Result<Self> {
         let content: serde_json::Value =
             serde_json::from_slice(&std::fs::read(dir.join("assets/content.json"))?)?;
         let file = |id: &str| {
@@ -447,9 +438,13 @@ impl AvatarAssets {
                 .map(str::to_owned)
                 .with_context(|| format!("{id} is not in its package"))
         };
+        let shape_file = match shape_file {
+            Some(f) => f.to_owned(),
+            None => file(model)?,
+        };
         let root = dir.canonicalize()?;
         let shape: bri_content::shape::Shape = serde_json::from_slice(
-            &crate::materials::read_resource(&root, &file(model)?, 32 << 20)?,
+            &crate::materials::read_resource(&root, &shape_file, 32 << 20)?,
         )?;
         shape.validate()?;
         let package = model.split(':').next().unwrap_or_default();
@@ -608,8 +603,36 @@ impl AvatarAssets {
             let image = data.images.len();
             data.images.push(horse.images[&name].clone());
             materials.push(data.materials.len());
-            data.materials
-                .push(Material::brick_overlay(format!("{model}/{name}"), image));
+            let name = format!("{model}/{name}");
+            // The horse lays its texture over its chest colour. Any other
+            // body draws as a held item does (`items::native_shape_scene`):
+            // a texture with a translucent texel over its colour, one with
+            // none the texture times the world's light, untinted. As an
+            // overlay an opaque texture would ignore the light entirely.
+            let overlay = model == HORSE_SHAPE
+                || (crate::items::translucent_texel(&data.images[image])
+                    && source.blend == "opaque");
+            let mut material = if overlay {
+                Material::brick_overlay(name, image)
+            } else {
+                Material::vertex_lit(name, image)
+            };
+            if !overlay {
+                // A lit texture is a colour (sRGB); an overlay's is mixed raw.
+                data.images[image].srgb = true;
+                material.untinted = source.blend == "opaque";
+            }
+            if model != HORSE_SHAPE && source.blend == "alpha" {
+                material.alpha = AlphaMode::Blend;
+            }
+            if source.unlit {
+                material.kind = if overlay {
+                    bri_render::scene::MaterialKind::UnlitOverlay
+                } else {
+                    bri_render::scene::MaterialKind::Unlit
+                };
+            }
+            data.materials.push(material);
         }
         let translucent_materials: Vec<_> = materials
             .iter()
@@ -2092,6 +2115,24 @@ impl AvatarMesh {
         device: &wgpu::Device,
         queue: &wgpu::Queue,
     ) -> Result<()> {
+        self.upload_sharing(renderer, device, queue, None)
+    }
+    /// Whether the next [`Self::upload`] sends the whole mesh (a new body or
+    /// outfit): its materials and any textures not yet uploaded, not only
+    /// vertices.
+    pub fn needs_full_upload(&self) -> bool {
+        self.gpu.is_none()
+    }
+    /// As [`Self::upload`]; a whole upload binds the images `textures`
+    /// already holds (every body wears faces and decals from one catalog)
+    /// and keeps the ones it makes there.
+    pub fn upload_sharing(
+        &mut self,
+        renderer: &SceneRenderer,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        textures: Option<&mut bri_render::scene::TextureCache>,
+    ) -> Result<()> {
         if std::mem::take(&mut self.restructured)
             && let Some(base) = &self.gpu
         {
@@ -2111,7 +2152,10 @@ impl AvatarMesh {
                 gpu.update_vertices(queue, &self.data.vertices, &centers)?;
             }
         } else {
-            self.gpu = Some(renderer.upload(device, queue, &self.data)?);
+            self.gpu = Some(match textures {
+                Some(textures) => renderer.upload_cached(device, queue, &self.data, textures)?,
+                None => renderer.upload(device, queue, &self.data)?,
+            });
             self.vertices_dirty = false;
         }
         if self.instanced {
@@ -2336,6 +2380,42 @@ pub fn appearance_from_prefs(package: &Package, prefs: &AvatarPrefs) -> Result<A
     Ok(appearance)
 }
 
+/// The bodies the Add-On `id` at `dir` brings, each with its shape file when
+/// it names one: its `body` content (an imported glTF body), and the bodies
+/// its own player types name among its assets (a v20 import's, whose file
+/// `assets/content.json` gives).
+pub fn body_models(dir: &Path, id: &str) -> Vec<(String, Option<String>)> {
+    let mut models: Vec<(String, Option<String>)> =
+        std::fs::read(dir.join(bri_package::library::MANIFEST_FILE))
+            .ok()
+            .and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok())
+            .and_then(|m| m["provides"].as_array().cloned())
+            .into_iter()
+            .flatten()
+            .filter(|p| p["kind"] == "body")
+            .filter_map(|p| {
+                Some((
+                    p["id"].as_str()?.to_owned(),
+                    Some(p["file"].as_str()?.to_owned()),
+                ))
+            })
+            .collect();
+    if let Ok(archetypes) = std::fs::read_dir(dir.join("assets/archetypes")) {
+        models.extend(
+            archetypes
+                .flatten()
+                .filter_map(|e| std::fs::read(e.path()).ok())
+                .filter_map(|b| serde_json::from_slice::<serde_json::Value>(&b).ok())
+                .filter_map(|a| a["model"].as_str().map(str::to_owned))
+                .filter(|m| m.starts_with(&format!("{id}:asset/")))
+                .map(|m| (m, None)),
+        );
+    }
+    models.sort();
+    models.dedup_by(|a, b| a.0 == b.0);
+    models
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2537,6 +2617,7 @@ mod tests {
     crate::testing::synthetic_and_content!(
         Avatar: reposed_vertices_match_a_full_shape_rebuild,
         a_restructured_body_keeps_its_textures,
+        new_outfits_bind_the_textures_bodies_already_uploaded,
         a_respawned_body_stands_in_root_without_getting_up_from_the_corpse,
         item_mounts_use_the_same_sampled_avatar_pose_and_body_transform,
         held_and_action_arm_layers_keep_locomotion_and_mounts_coherent,
@@ -3212,6 +3293,54 @@ mod tests {
         );
     }
 
+    /// A round that dresses every player builds a new mesh per body: the
+    /// second body in an outfit uploads no texture, and a new face uploads
+    /// only that face. A restructure still reuses the shared textures.
+    fn new_outfits_bind_the_textures_bodies_already_uploaded(fx: &Avatar) -> Result<()> {
+        let assets = &fx.assets;
+        let gpu = bri_ui::gpu::Headless::new()?;
+        let renderer = SceneRenderer::new(&gpu.device, wgpu::TextureFormat::Rgba8UnormSrgb);
+        let mut cache = bri_render::scene::TextureCache::default();
+        let p = player();
+        let dressed = |appearance: Appearance| -> Result<AvatarMesh> {
+            let mut mesh = assets.mesh(appearance)?;
+            mesh.pose(assets, &p, 0.0)?;
+            Ok(mesh)
+        };
+        let defaults = assets.package.defaults.clone();
+        let mut first = dressed(defaults.clone())?;
+        assert!(first.needs_full_upload());
+        first.upload_sharing(&renderer, &gpu.device, &gpu.queue, Some(&mut cache))?;
+        assert!(!first.needs_full_upload());
+        let made = renderer.upload_counts().textures;
+        assert!(made > 0);
+        assert_eq!(cache.len() as u64, made);
+        let mut second = dressed(defaults.clone())?;
+        second.upload_sharing(&renderer, &gpu.device, &gpu.queue, Some(&mut cache))?;
+        assert_eq!(renderer.upload_counts().textures, made);
+        let face = assets
+            .package
+            .faces
+            .iter()
+            .map(|f| f.rsplit('/').next().unwrap_or(f))
+            .find(|f| !f.eq_ignore_ascii_case(&defaults.face))
+            .context("a second face")?
+            .to_string();
+        let mut third = dressed(Appearance {
+            face,
+            ..defaults.clone()
+        })?;
+        third.upload_sharing(&renderer, &gpu.device, &gpu.queue, Some(&mut cache))?;
+        assert_eq!(renderer.upload_counts().textures, made + 1);
+        second.set_hidden_nodes(["LHand".to_string()]);
+        second.pose(assets, &p, 0.1)?;
+        assert!(second.restructured);
+        let shared = renderer.upload_counts().shared_geometry;
+        second.upload_sharing(&renderer, &gpu.device, &gpu.queue, Some(&mut cache))?;
+        assert_eq!(renderer.upload_counts().shared_geometry, shared + 1);
+        assert_eq!(renderer.upload_counts().textures, made + 1);
+        Ok(())
+    }
     /// Skis on and off, hands hidden and shown, a translucent paint: the
     /// body's layout changes but not its outfit, so it uploads new geometry
     /// on the textures it has, never the face, decal and surfaces again.
