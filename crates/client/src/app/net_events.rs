@@ -912,6 +912,9 @@ impl App {
                             }
                             continue;
                         }
+                        bri_sim::session::Notice::Panel(panel) => {
+                            UiUpdate::Panel(panel.map(|p| panel_view(*p)))
+                        }
                         bri_sim::session::Notice::Report(report) => {
                             let palette = a.view.as_ref().map_or(&[][..], |v| &v.world.palette[..]);
                             UiUpdate::Report(report.map(|r| report_view(&r, palette)))
@@ -1282,5 +1285,44 @@ fn log_entered(a: &mut Attempt) {
             "Loading {map}: IN GAME (after {} ms)",
             since.elapsed().as_millis()
         ));
+    }
+}
+
+/// An Add-On's panel as the panel screen lays it out.
+fn panel_view(shown: bri_sim::session::PanelShown) -> bri_ui::api::PanelView {
+    use bri_package_runtime::panel::PanelKind;
+    use bri_ui::api::PanelItemView;
+    let panel = shown.panel;
+    bri_ui::api::PanelView {
+        package: shown.package,
+        id: panel.id,
+        title: panel.title,
+        width: panel.width,
+        height: panel.height,
+        items: panel
+            .items
+            .into_iter()
+            .map(|item| {
+                let max = item.max_chars();
+                match item.kind {
+                    PanelKind::Text => PanelItemView::Text(item.text),
+                    PanelKind::List => PanelItemView::List {
+                        id: item.id,
+                        rows: item.rows,
+                        selected: item.selected,
+                        height: item.height.unwrap_or(120),
+                    },
+                    PanelKind::Field => PanelItemView::Field {
+                        id: item.id,
+                        label: item.label,
+                        text: item.text,
+                        max,
+                    },
+                    PanelKind::Buttons => PanelItemView::Buttons(
+                        item.buttons.into_iter().map(|b| (b.id, b.label)).collect(),
+                    ),
+                }
+            })
+            .collect(),
     }
 }

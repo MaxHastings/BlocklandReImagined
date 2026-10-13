@@ -758,6 +758,28 @@ impl App {
                 self.close_tune();
                 Ok(())
             }
+            UiAction::PanelEvent {
+                ref package,
+                ref panel,
+                ref control,
+                ref fields,
+                ref lists,
+            } => {
+                let request = Command::Panel(bri_sim::session::PanelCommand {
+                    package: package.clone(),
+                    event: bri_package_runtime::panel::PanelEvent {
+                        panel: panel.clone(),
+                        control: control.clone(),
+                        fields: fields.iter().cloned().collect(),
+                        lists: lists.iter().cloned().collect(),
+                    },
+                });
+                let result = self.command(id, request, action.clone());
+                if result.is_ok() {
+                    return Ok(());
+                }
+                result
+            }
             UiAction::ChatCommand { ref name, .. } if name.eq_ignore_ascii_case("invite") => {
                 match self.net.invite.clone() {
                     Some(invite) => {

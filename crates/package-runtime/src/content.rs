@@ -398,6 +398,13 @@ pub struct Behaviour {
     /// or a shove means what the rules make it mean.
     #[serde(default)]
     pub on_contact: bool,
+    /// `on_panel(player, event)` when a player presses a button or picks
+    /// a list row in a panel this Add-On showed them (`show_panel`), or
+    /// closes it: `event` is `#{ panel, control, fields, lists }`, with
+    /// `control` the button's or list's id or `"close"`, `fields` each
+    /// field's text and `lists` each list's picked row (or `()`).
+    #[serde(default)]
+    pub on_panel: bool,
     /// `on_tick()` every `tick_interval` ticks, when set.
     #[serde(default)]
     pub tick_interval: Option<u32>,

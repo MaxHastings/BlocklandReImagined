@@ -844,6 +844,28 @@ pub(super) fn register(engine: &mut Engine) {
             report: Some(Box::new(report_from(report)?)),
         }))
     });
+    // A window of the game's own widgets (`show_panel(p, #{ id, title,
+    // width, height, items: [#{ kind: "text" | "list" | "field" |
+    // "buttons", ... }] })`): what the player does in it comes back to
+    // `on_panel`. `close_panel(p, id)` takes it away.
+    engine.register_fn("show_panel", |player: Dynamic, panel: Map| {
+        let panel: crate::panel::Panel =
+            rhai::serde::from_dynamic(&view::plain(&Dynamic::from_map(panel)))
+                .map_err(|e| format!("a panel is #{{ id, title, items: [...] }}: {e}"))?;
+        if let Some(problem) = panel.problem() {
+            return fail(problem);
+        }
+        push(Op::ShowPanel(ops::ShowPanel {
+            player: id(&player)?,
+            panel: Box::new(panel),
+        }))
+    });
+    engine.register_fn("close_panel", |player: Dynamic, panel: &str| {
+        push(Op::ClosePanel(ops::ClosePanel {
+            player: id(&player)?,
+            id: panel.into(),
+        }))
+    });
     engine.register_fn("hide_report", |player: Dynamic| {
         push(Op::ShowReport(ops::ShowReport {
             player: id(&player)?,

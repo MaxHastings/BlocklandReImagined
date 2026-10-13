@@ -460,6 +460,9 @@ pub enum Notice {
     /// A score report in its own window (an Add-On's `show_report`, Slayer's
     /// End of Round Report), or `None` to close it.
     Report(Option<Box<bri_package_runtime::report::Report>>),
+    /// A panel an Add-On shows this player (`show_panel`), in place of any
+    /// open one, or `None` to close it.
+    Panel(Option<Box<crate::session::PanelShown>>),
 }
 
 /// Minigame requests. The actor is always the authenticated connection.

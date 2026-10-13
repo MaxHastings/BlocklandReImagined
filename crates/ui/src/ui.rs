@@ -336,6 +336,8 @@ pub struct Core {
     pub addon_help: Vec<crate::api::AddOnHelpPage>,
     /// The report the host last showed (the Report window's).
     pub report: Option<crate::api::ReportView>,
+    /// The Add-On panel open now (the panel screen's).
+    pub panel: Option<crate::api::PanelView>,
     pub print_letters_visible: bool,
     // catalogs
     pub maps: Vec<MapInfo>,
@@ -1498,6 +1500,7 @@ impl Ui {
             avatar_value: None,
             splash: None,
             report: None,
+            panel: None,
             print_letters_visible: false,
             maps: Vec::new(),
             game_modes: Vec::new(),
@@ -2112,6 +2115,16 @@ impl Ui {
                 c.trust_invites.push(invitation);
                 c.pop(ScreenId::TrustInvitation);
                 c.push(ScreenId::TrustInvitation);
+            }
+            UiUpdate::Panel(panel) => {
+                // A new panel is a new window: what was typed in the old
+                // one goes with it.
+                c.pop(ScreenId::AddOnPanel);
+                let open = panel.is_some();
+                c.panel = panel;
+                if open {
+                    c.push(ScreenId::AddOnPanel);
+                }
             }
             UiUpdate::Report(report) => {
                 // A new report opens a window sized to its columns, unless

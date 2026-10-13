@@ -3776,6 +3776,9 @@ impl Runtime {
             if behaviour.on_drop_key {
                 need("on_drop_key".into(), 1, "on_drop_key");
             }
+            if behaviour.on_panel {
+                need("on_panel".into(), 2, "on_panel");
+            }
             if behaviour.on_contact {
                 need("on_contact".into(), 1, "on_contact");
             }

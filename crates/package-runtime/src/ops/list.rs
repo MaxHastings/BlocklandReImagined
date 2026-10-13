@@ -120,6 +120,8 @@ macro_rules! for_each_op {
             MessageBox = chat,
             Ask = chat,
             ShowReport = chat,
+            ShowPanel = chat,
+            ClosePanel = chat,
             ReportColumn = minigame,
             Sound = effects,
             Beam = effects,

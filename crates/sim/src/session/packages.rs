@@ -43,6 +43,8 @@ pub use host_data::{AddOnData, MemoryAddOnData};
 pub(super) mod copy_hooks;
 mod item_hooks;
 mod object_hooks;
+mod panels;
+pub use panels::{PanelCommand, PanelShown};
 mod reports;
 mod saved_games;
 mod settings;
@@ -365,6 +367,8 @@ pub(super) struct PackageHost {
     addon_events: addon_events::AddOnEvents,
     /// What stood in the world last tick, for `on_object`.
     object_watch: object_hooks::ObjectWatch,
+    /// The panel each player has open, and the Add-On that showed it.
+    panels: BTreeMap<OwnerId, PanelShown>,
     /// What each Add-On keeps on the host ([`AddOnData`]), by package.
     host_data: BTreeMap<String, BTreeMap<String, serde_json::Value>>,
     /// Values rules keep on bricks (`set_brick_field`).
@@ -852,6 +856,7 @@ impl Session {
             contacts: Default::default(),
             addon_events: Default::default(),
             object_watch: Default::default(),
+            panels: BTreeMap::new(),
             host_data: BTreeMap::new(),
             brick_fields: Default::default(),
             brick_watch: Default::default(),
