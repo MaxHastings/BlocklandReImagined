@@ -603,8 +603,36 @@ impl AvatarAssets {
             let image = data.images.len();
             data.images.push(horse.images[&name].clone());
             materials.push(data.materials.len());
-            data.materials
-                .push(Material::brick_overlay(format!("{model}/{name}"), image));
+            let name = format!("{model}/{name}");
+            // The horse lays its texture over its chest colour. Any other
+            // body draws as a held item does (`items::native_shape_scene`):
+            // a texture with a translucent texel over its colour, one with
+            // none the texture times the world's light, untinted. As an
+            // overlay an opaque texture would ignore the light entirely.
+            let overlay = model == HORSE_SHAPE
+                || (crate::items::translucent_texel(&data.images[image])
+                    && source.blend == "opaque");
+            let mut material = if overlay {
+                Material::brick_overlay(name, image)
+            } else {
+                Material::vertex_lit(name, image)
+            };
+            if !overlay {
+                // A lit texture is a colour (sRGB); an overlay's is mixed raw.
+                data.images[image].srgb = true;
+                material.untinted = source.blend == "opaque";
+            }
+            if model != HORSE_SHAPE && source.blend == "alpha" {
+                material.alpha = AlphaMode::Blend;
+            }
+            if source.unlit {
+                material.kind = if overlay {
+                    bri_render::scene::MaterialKind::UnlitOverlay
+                } else {
+                    bri_render::scene::MaterialKind::Unlit
+                };
+            }
+            data.materials.push(material);
         }
         let translucent_materials: Vec<_> = materials
             .iter()

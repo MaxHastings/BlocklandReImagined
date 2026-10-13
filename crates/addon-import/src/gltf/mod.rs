@@ -1960,13 +1960,23 @@ fn make_material(
             image::RgbaImage::from_pixel(4, 4, image::Rgba(tint.map(|c| (c * 255.0).round() as u8)))
         }
     };
+    // glTF ignores an OPAQUE material's alpha, and exporters leave masks and
+    // specular maps in it; in a native shape an opaque texture with a
+    // translucent texel is laid over the model's colour (v20's decal),
+    // which ignores the world's light. MASK cut-outs draw blended.
+    let mut pixels = pixels;
+    let blend = match m["alphaMode"].as_str() {
+        Some("BLEND" | "MASK") => "alpha",
+        _ => {
+            for p in pixels.pixels_mut() {
+                p.0[3] = 255;
+            }
+            "opaque"
+        }
+    };
     let mut png = Vec::new();
     image::DynamicImage::ImageRgba8(pixels)
         .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)?;
-    let blend = match m["alphaMode"].as_str() {
-        Some("BLEND") => "alpha",
-        _ => "opaque",
-    };
     Ok((
         Material {
             name,
