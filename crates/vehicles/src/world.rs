@@ -13,6 +13,9 @@ mod tires;
 pub use tires::{TireState, WheelState};
 /// Torque vehicles and players fall at 20 m/s^2 whatever the shared world uses.
 pub const VEHICLE_GRAVITY: f32 = 20.;
+/// Below this speed a `throttle_brakes` vehicle's reversed throttle drives
+/// it the other way instead of braking.
+const THROTTLE_BRAKE_SPEED: f32 = 0.5;
 pub use checkpoint::*;
 macro_rules! id {
     ($name:ident) => {
@@ -51,6 +54,10 @@ pub struct Controls {
     /// This tick's mouse turn (yaw right, pitch up), radians: Torque's
     /// `move->yaw`/`move->pitch`, which mouse-steered vehicles accumulate.
     pub look_delta: [f32; 2],
+    /// The driver's head turn from the seat's facing (yaw, right positive,
+    /// radians): where they look. A `toward_look` vehicle steers to it.
+    #[serde(default)]
+    pub look_yaw: f32,
     /// The driver turned `$pref::Input::UseStrafeSteering` off: a vehicle
     /// with `steeringUseStrafeSteering` is then mouse-steered too.
     pub strafe_steering_off: bool,
@@ -92,7 +99,8 @@ impl Controls {
                 self.aim_yaw,
                 self.aim_pitch,
                 self.look_delta[0],
-                self.look_delta[1]
+                self.look_delta[1],
+                self.look_yaw
             ]
             .iter()
             .all(|x| x.is_finite()),
@@ -696,13 +704,21 @@ impl VehiclesWorld {
                 .sum::<Vec3>()
                 * sign;
             if impulse.is_finite() && impulse.length_squared() > 0. {
-                kicks.push((body, impulse));
+                kicks.push((body, impulse, v.previous_velocity));
             }
         }
         let mut change = Vec3::ZERO;
-        for (body, impulse) in kicks {
+        for (body, impulse, before) in kicks {
             let b = &mut world.bodies[body];
             let total = b.mass() + mass;
+            // The share never sends the vehicle on into the body faster
+            // than it came: the solver's push out of an overlap is no hit,
+            // and shared with a body that does not give way (a bot holding
+            // its ground) it handed the vehicle back in faster each step,
+            // until the hull flew off at hundreds of units a second.
+            let away = impulse.normalize();
+            let room = (b.linvel().dot(away) + (-before.dot(away)).max(0.)).max(0.);
+            let impulse = impulse.clamp_length_max(room * total);
             b.apply_impulse(-impulse * (b.mass() / total), true);
             change -= impulse / total;
         }
@@ -1652,8 +1668,28 @@ impl VehiclesWorld {
                 driver_seat.map_or(SeatRole::Passenger, |seat| d.seat_role(seat)),
                 SeatRole::MouseDriver | SeatRole::StrafeDriver
             );
-            if driver {
-                let limit = d.max_steering.max(0.01);
+            // `speed_lock`: the lock narrows with speed along the nose.
+            let lock = d.max_steering.max(0.01) * d.steering.lock_at(speed, d.max_speed);
+            if driver && d.steering.toward_look {
+                // Steer toward where the driver looks, at the strafe rate.
+                // It eases off ahead of arriving as a driver does: the
+                // look is taken from where the heading will be once the
+                // wheels have turned back straight at that rate, so it
+                // meets the look instead of swinging past it.
+                let limit = lock;
+                let rate = d.steering.strafe_rate * 25. / 96.;
+                let now = v.mouse_steering[0];
+                let yaw_rate = -world.bodies[v.body].angvel().dot(up);
+                let unwind = now.abs() / (rate * 120.).max(0.01);
+                let target = if driven && c.look_yaw.is_finite() {
+                    (c.look_yaw - yaw_rate * unwind).clamped(-limit, limit)
+                } else {
+                    0.
+                };
+                v.mouse_steering = [now + (target - now).clamped(-rate, rate), 0.];
+                v.steering_quiet = 0;
+            } else if driver {
+                let limit = lock;
                 let mut steering = v.mouse_steering;
                 let turn = if strafe_mode {
                     let key = if c.strafe > 0. {
@@ -1719,7 +1755,11 @@ impl VehiclesWorld {
                 (
                     v.mouse_steering[0] / limit,
                     v.mouse_steering[1] / limit,
-                    if strafe_mode { 0. } else { c.strafe },
+                    if strafe_mode || d.steering.toward_look {
+                        0.
+                    } else {
+                        c.strafe
+                    },
                 )
             } else {
                 (c.steer, c.pitch, c.roll)
@@ -1823,7 +1863,7 @@ impl VehiclesWorld {
             } else {
                 Vec3::ZERO
             };
-            let gravity = VEHICLE_GRAVITY;
+            let gravity = d.gravity();
             let b = &mut world.bodies[v.body];
             b.reset_forces(false);
             b.reset_torques(false);
@@ -1956,6 +1996,12 @@ impl VehiclesWorld {
             v.jump_held = c.jump;
             if !v.wheels.is_empty() {
                 self.wheel_rays += v.wheels.len() as u64;
+                // `throttle_brakes`: a throttle against the roll brakes.
+                let against = d.throttle_brakes && {
+                    let b = &world.bodies[v.body];
+                    let rolling = b.linvel().dot(*b.rotation() * Vec3::NEG_Z);
+                    rolling.abs() > THROTTLE_BRAKE_SPEED && c.throttle * rolling < 0.
+                };
                 tires::update(
                     world,
                     v.body,
@@ -1965,7 +2011,7 @@ impl VehiclesWorld {
                     tires::Drive {
                         steering: v.steering,
                         throttle: c.throttle,
-                        braking: c.brake,
+                        braking: c.brake || against,
                         jetting: v.jetting,
                         wake,
                     },
@@ -2575,7 +2621,7 @@ fn prepare_spawn(
     }
     .pose(pose(&s.transform))
     .gravity_scale(if world_gravity > 0. {
-        VEHICLE_GRAVITY / world_gravity
+        d.gravity() / world_gravity
     } else {
         0.
     })

@@ -410,20 +410,26 @@ async fn two_players_and_a_late_joiner_share_the_playground() -> Result<()> {
     let built = standing(&watcher);
     assert_eq!(built, 12 * 8);
     let start = Vec3::from(driver.replica.vehicle_poses[&buggy].position);
-    // The mouse steers: look at the middle of the wall and keep looking at
-    // it, so the buggy turns to face it from wherever it was boarded.
+    // The buggy steers toward where its driver looks (`toward_look`): look
+    // at the middle of the wall and keep looking at it, so the buggy turns
+    // to face it from wherever it was boarded. The look is free-look
+    // (`head_yaw`), relative to the hull, as a client sends it.
     let target = Vec3::new(0.0, 0.0, WALL_Z - 6.0);
-    let mut yaw = yaw;
     for _ in 0..30 {
-        let at = Vec3::from(driver.replica.vehicle_poses[&buggy].position);
+        let pose = &driver.replica.vehicle_poses[&buggy];
+        let at = Vec3::from(pose.position);
         if at.z < WALL_Z - 2.0 {
             break;
         }
         let to = target - at;
-        yaw = to.x.atan2(-to.z);
+        let nose = glam::Quat::from_array(pose.rotation) * Vec3::NEG_Z;
+        let off = to.x.atan2(-to.z) - nose.x.atan2(-nose.z);
+        let off =
+            (off + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU) - std::f32::consts::PI;
         let throttle = MoveInput {
             forward: 1.0,
             yaw,
+            head_yaw: bri_console::Clamp::clamped(off, -3.0, 3.0),
             ..Default::default()
         };
         hold(&mut driver, &mut seat_report, throttle, 30).await?;
