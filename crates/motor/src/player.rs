@@ -1729,11 +1729,15 @@ impl Player {
             // controllers' are) has no run force: it kept that speed, rose
             // off the floor until it left the contact slab, and was no
             // longer grounded, so its controller dropped a jump. For such a
-            // body the motor takes off what the run force leaves. Bodies
-            // without a controller move exactly as v20's.
+            // body the motor takes off what the run force leaves, and the
+            // same small speed into the surface: a push that slow (a shot
+            // from a little above) moves the body too little each tick for
+            // the sweep to see the floor, so it sank through it. Larger
+            // speeds hit the floor as usual. Bodies without a controller
+            // move exactly as v20's.
             if t.controller.is_some() {
                 let away = (velocity + acc).dot(normal);
-                if away > 0.0 && away <= torque::NORMAL_ELASTICITY * 1.01 {
+                if away.abs() <= torque::NORMAL_ELASTICITY * 1.01 {
                     acc -= normal * away;
                 }
             }

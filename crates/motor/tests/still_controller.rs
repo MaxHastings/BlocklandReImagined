@@ -74,3 +74,72 @@ fn a_standard_body_stays_on_the_floor() {
         "feet at {y}, grounded throughout: {grounded}"
     );
 }
+
+fn mesh_floor() -> PhysicsWorld {
+    let mut world = bri_physics::new_world();
+    let h = 72.0;
+    let points = vec![
+        Vector::new(-h, 0.0, -h),
+        Vector::new(h, 0.0, -h),
+        Vector::new(h, 0.0, h),
+        Vector::new(-h, 0.0, h),
+    ];
+    world.insert(
+        RigidBodyBuilder::fixed(),
+        ColliderBuilder::trimesh_with_flags(
+            points,
+            vec![[0, 2, 1], [0, 3, 2]],
+            TriMeshFlags::FIX_INTERNAL_EDGES,
+        )
+        .unwrap(),
+    );
+    bri_physics::detect_collisions(&mut world);
+    world
+}
+
+/// A shot that pushes a standing body very slightly down (a rifle round
+/// fired from a little above, about 0.003 units/s into the floor) moves it
+/// too little each tick for the sweep to see the floor. Nothing took that
+/// speed off a body with no run force, so it sank through the floor,
+/// whether a box or a map's mesh, and fell out of the world.
+#[test]
+fn a_body_whose_controller_owns_its_running_is_not_pushed_through_the_floor() {
+    let tuning = PlayerTuning {
+        acceleration: 0.0,
+        air_control: 0.0,
+        jump_speed: 0.0,
+        drag: 0.001,
+        gravity: 13.0,
+        width: 1.648,
+        stand_height: 2.884,
+        controller: Some(Controller(Arc::new(OwnsRunning))),
+        ..Default::default()
+    };
+    let pushes = [
+        0.0001f32, 0.0026, 0.005, 0.0099, 0.0101, 0.0105, 0.011, 0.012, 0.015, 0.02, 0.0026, 0.05,
+        0.0026, 0.1, 0.0005, 0.5, 0.0026,
+    ];
+    for mesh in [false, true] {
+        let mut world = if mesh { mesh_floor() } else { floor() };
+        let mut player =
+            Player::spawn(&mut world, 1, Vec3::new(9.85, 0.05, -19.45), tuning.clone()).unwrap();
+        for _ in 0..240 {
+            player.step(&mut world, MoveInput::default()).unwrap();
+        }
+        for down in pushes {
+            player.push(Vec3::new(0.0, -down, 0.0));
+            for step in 0..1200 {
+                player.step(&mut world, MoveInput::default()).unwrap();
+                let state = player.state();
+                assert!(
+                    state.feet[1] > -0.001 && (step < 4 || state.grounded),
+                    "pushed down {down} (mesh floor: {mesh}): feet at {:?} moving {:?}, \
+                     grounded {} after {step} steps",
+                    state.feet,
+                    state.velocity,
+                    state.grounded
+                );
+            }
+        }
+    }
+}
