@@ -276,6 +276,7 @@ fn base(id: &str, name: &str, family: Family) -> Definition {
         blast_scale: None,
         trails: vec![],
         effects: VehicleEffects::default(),
+        engine_sound: None,
         authored: BTreeMap::new(),
         adaptations: vec![],
     }

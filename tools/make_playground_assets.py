@@ -233,6 +233,20 @@ def wav(samples, gain):
     return buffer.getvalue()
 
 
+def engine_loop():
+    # A small motor's chug: a 55 Hz hum and its harmonics, pulsed by the
+    # cylinders firing 25 times a second. Every part repeats a whole
+    # number of times a second, so the one-second clip loops without a
+    # seam. No noise: the shared random stream stays as it was.
+    out = []
+    for i in range(RATE):
+        t = i / RATE
+        hum = sum(math.sin(2 * math.pi * 55 * k * t) / k for k in (1, 2, 3, 4, 6))
+        pulse = 0.55 + 0.45 * max(0.0, math.sin(2 * math.pi * 25 * t)) ** 3
+        out.append(hum * pulse)
+    return out
+
+
 def sounds(out):
     # A rising electric zap over a short thump: the Pulse Carbine firing.
     shot = mix(decay(tone(0.22, 1400, 380), 0.06), decay(tone(0.25, 120, 60), 0.08),
@@ -508,6 +522,10 @@ def buggy(root):
         'smash': {'speed': 12.0, 'radius': 1.2, 'max_volume': 8.0, 'force': 10.0},
         'harms_only_in_minigames': True,
         'trails': [],
+        # Its engine: a one-second loop that idles low and quiet and
+        # climbs to a buzz by top speed (the defaults: 0.8x to 1.6x pitch,
+        # 0.6x to full volume, over 0 to max_speed).
+        'engine_sound': {'sound': 'playground-buggy:engine'},
         'authored': {},
         'adaptations': [],
     }
@@ -534,6 +552,7 @@ def buggy(root):
     # brings what it fires.
     bolt = mix(decay(tone(0.12, 900, 250), 0.04), [0.3 * x for x in decay(noise(0.1), 0.02)])
     write(assets / 'sounds' / 'turret.wav', wav(bolt, 0.8))
+    write(assets / 'sounds' / 'engine.wav', wav(engine_loop(), 0.7))
     write_json(assets / 'weapons.json', {
         'schema_version': 5,
         'id': 'playground-buggy',
@@ -557,7 +576,11 @@ def buggy(root):
             'buggygun': {'name': 'BuggyGun', 'suicide_message': '%1 shot themselves',
                          'murder_message': '%2 gunned down %1', 'vehicle_scale': 1.0, 'direct': True},
         },
-        'sounds': {'playground-buggy:turret': {'file': 'sounds/turret.wav'}},
+        'sounds': {
+            'playground-buggy:turret': {'file': 'sounds/turret.wav'},
+            'playground-buggy:engine': {'file': 'sounds/engine.wav', 'volume': 0.7,
+                                        'looping': True},
+        },
     })
 
 

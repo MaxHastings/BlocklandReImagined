@@ -111,6 +111,9 @@ struct Voice {
     /// `None` = listener-relative 2D.
     position: Option<Vec3>,
     gain_scale: f32,
+    /// Multiplies the asset's pitch (`Command::SetVoiceParams`): an
+    /// engine loop rising with speed.
+    pitch_scale: f32,
     real: bool,
     /// Music disabled: not mixed, restarts from the top when re-enabled.
     suspended: bool,
@@ -532,6 +535,16 @@ impl Engine {
                     v.position = Some(position);
                 }
             }
+            Command::SetVoiceParams {
+                handle,
+                gain_scale,
+                pitch_scale,
+            } => {
+                if let Some(v) = self.voices.iter_mut().find(|v| v.handle == handle) {
+                    v.gain_scale = sanitize_gain(gain_scale);
+                    v.pitch_scale = sanitize_pitch(pitch_scale);
+                }
+            }
             Command::SetListener(l) => {
                 if l.is_valid() {
                     self.listener = l;
@@ -702,6 +715,7 @@ impl Engine {
             entity,
             position,
             gain_scale,
+            pitch_scale: 1.0,
             real,
             suspended,
             cursor: 0.0,
@@ -723,6 +737,15 @@ impl Engine {
     fn reject(&mut self, handle: SoundHandle, reason: CullReason) {
         self.stats.rejected.fetch_add(1, Ordering::Relaxed);
         self.emit(AudioEvent::Culled { handle, reason });
+    }
+}
+
+/// A pitch multiplier the mixer will play: two octaves either way.
+fn sanitize_pitch(p: f32) -> f32 {
+    if p.is_finite() {
+        p.clamped(0.25, 4.0)
+    } else {
+        1.0
     }
 }
 
@@ -785,7 +808,8 @@ fn mix_voice(
     let src_rate = v.asset.data.sample_rate();
     let src_ch = usize::from(v.asset.data.channels().max(1));
     let step = f64::from(src_rate) / f64::from(out_rate.max(1))
-        * f64::from(v.asset.playback.pitch.max(0.01));
+        * f64::from(v.asset.playback.pitch.max(0.01))
+        * f64::from(v.pitch_scale);
     let looping = v.looping();
     let mono_src = src_ch == 1;
     let downmix = !mono_src && spatialised(&v.asset, v.position);

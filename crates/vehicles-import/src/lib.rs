@@ -650,6 +650,7 @@ pub fn lower(
         blast_scale: None,
         trails: vec![],
         effects: Default::default(),
+        engine_sound: None,
         authored: b.fields.clone(),
         adaptations,
     })

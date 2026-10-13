@@ -724,6 +724,16 @@ impl App {
                     }
                 }
                 self.audio.sync_image_loops(&loops);
+                let engines = view
+                    .vehicles
+                    .iter()
+                    .filter_map(|(id, info)| {
+                        let d = self.vehicle_assets.definition(&info.definition)?;
+                        let frame = self.vehicles.frame(*id)?;
+                        crate::audio::engine_loop(d, info, frame).map(|e| (*id, e))
+                    })
+                    .collect();
+                self.audio.sync_engines(&engines);
                 if self
                     .music_world
                     .as_ref()

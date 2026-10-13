@@ -624,9 +624,97 @@ pub struct Definition {
     /// Particles and emitters of this vehicle's own that its trails use.
     #[serde(default, skip_serializing_if = "VehicleEffects::is_empty")]
     pub effects: VehicleEffects,
+    /// The engine's running sound: a loop at the vehicle that rises in
+    /// pitch and volume with its speed. Cosmetic: each client plays it
+    /// from the vehicle's presented motion. v20's vehicles have none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub engine_sound: Option<EngineSound>,
     /// Authored fields retained as metadata only. Runtime reads typed native fields above.
     pub authored: BTreeMap<String, String>,
     pub adaptations: Vec<String>,
+}
+/// A vehicle's engine sound ([`Definition::engine_sound`]). It plays while
+/// someone sits in the seat that drives the vehicle (any seat, for a
+/// vehicle no seat drives), and stops when they get out or the vehicle is
+/// destroyed. Its pitch and volume, as multiples of the sound's own, run in
+/// a straight line from `idle_*` standing still to `full_*` at
+/// `full_speed`, and hold there past it.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct EngineSound {
+    /// A looping sound of the vehicle Add-On's weapons pack (a key of its
+    /// `sounds`, declared with `"looping": true`), or one of the game's.
+    pub sound: String,
+    #[serde(default = "EngineSound::default_idle_pitch")]
+    pub idle_pitch: f32,
+    #[serde(default = "EngineSound::default_full_pitch")]
+    pub full_pitch: f32,
+    #[serde(default = "EngineSound::default_idle_volume")]
+    pub idle_volume: f32,
+    #[serde(default = "EngineSound::default_full_volume")]
+    pub full_volume: f32,
+    /// Units per second. `None` is the vehicle's `max_speed` (20 for one
+    /// without a top speed).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub full_speed: Option<f32>,
+}
+impl EngineSound {
+    fn default_idle_pitch() -> f32 {
+        0.8
+    }
+    fn default_full_pitch() -> f32 {
+        1.6
+    }
+    fn default_idle_volume() -> f32 {
+        0.6
+    }
+    fn default_full_volume() -> f32 {
+        1.0
+    }
+    /// The speed it reaches full pitch and volume at, for a vehicle whose
+    /// top speed is `max_speed`.
+    pub fn full_speed(&self, max_speed: f32) -> f32 {
+        self.full_speed
+            .unwrap_or(if max_speed > 0. { max_speed } else { 20. })
+            .max(0.01)
+    }
+    /// (volume, pitch) at `speed` units per second, for a vehicle whose
+    /// top speed is `max_speed`.
+    pub fn at(&self, speed: f32, max_speed: f32) -> (f32, f32) {
+        let t = if speed.is_finite() {
+            bri_console::Clamp::clamped(speed / self.full_speed(max_speed), 0., 1.)
+        } else {
+            0.
+        };
+        (
+            self.idle_volume + (self.full_volume - self.idle_volume) * t,
+            self.idle_pitch + (self.full_pitch - self.idle_pitch) * t,
+        )
+    }
+    fn validate(&self) -> Result<()> {
+        ensure!(
+            !self.sound.trim().is_empty() && self.sound.len() <= 128,
+            "engine_sound names no sound"
+        );
+        ensure!(
+            [self.idle_pitch, self.full_pitch]
+                .iter()
+                .all(|p| p.is_finite() && (0.25..=4.).contains(p)),
+            "engine_sound pitch must be from 0.25 to 4"
+        );
+        ensure!(
+            [self.idle_volume, self.full_volume]
+                .iter()
+                .all(|v| v.is_finite() && (0. ..=4.).contains(v)),
+            "engine_sound volume must be from 0 to 4"
+        );
+        ensure!(
+            self.full_speed
+                .is_none_or(|s| s.is_finite() && s > 0. && s <= 10_000.),
+            "engine_sound full_speed must be above 0"
+        );
+        Ok(())
+    }
 }
 /// A vehicle that breaks what it hits: striking something at `speed` or
 /// faster (units per second, into the surface) knocks out the brick it hit
@@ -899,6 +987,9 @@ impl Pack {
                 );
             }
             d.effects.validate()?;
+            if let Some(engine) = &d.engine_sound {
+                engine.validate()?;
+            }
             ensure!(d.trails.len() <= 16, "too many trails");
             for t in &d.trails {
                 let q = glam::Quat::from_array(t.transform.rotation);
