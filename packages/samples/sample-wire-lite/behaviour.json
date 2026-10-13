@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "script": "wire.rhai",
+  "commands": [
+    { "name": "gate", "args": ["string"], "aim_reach": 20 },
+    { "name": "wire", "aim_reach": 20 },
+    { "name": "circuit" }
+  ],
+  "state": {
+    "player": {
+      "from": { "default": -1, "persist": false }
+    },
+    "global": {
+      "gates": { "default": {} }
+    }
+  },
+  "on_activate": true,
+  "on_panel": true
+}
