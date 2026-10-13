@@ -136,8 +136,16 @@ shared zip), in order:
   then one full run in three still failed two-client on rocket spread.
 - Moving both to 10 apart made Mario's rifle kill Chief before his rocket
   (headless FAIL, 3 of 3), so only the rocket moved to 10 apart.
-- Final script: see the handover for the last three runs. Every run's only
-  KNOWN line is Mario's sounds (content: the Add-On has none).
+- Final script (0c69d1d4): three runs in a row passed, headless and two
+  clients (each run 48 PASS, 2 KNOWN, 0 FAIL over both). The only KNOWN is
+  Mario's sounds (content: the Add-On has none).
+
+The landing rule (0a7f6b66) also showed that two playground tests
+(`crates/net/tests/playground.rs`) only passed because both players
+respawned on top of the parked buggy and the old touch rule seated the
+driver at once; 89e93297 starts them at the host's spawn behind it, with
+the seat expectations unchanged (v20 seats a rider in the first free mount,
+`Armor::onCollision`).
 
 Still open: Mario has no sounds (content). Real v20 maps and a GPU are
 still needed for what the gate cannot see.
