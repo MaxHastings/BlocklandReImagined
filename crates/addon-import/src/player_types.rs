@@ -87,6 +87,7 @@ pub fn convert(fields: &BTreeMap<String, String>, base: Option<String>) -> Conve
         .filter(|m| *m > 0.0)
         .unwrap_or(STANDARD_MASS);
     let mut archetype = json!({ "schema_version": 1 });
+    let mut sounds = Map::new();
     for (key, value) in fields {
         let key = key.as_str();
         let v = crate::literal(value);
@@ -169,6 +170,12 @@ pub fn convert(fields: &BTreeMap<String, String>, base: Option<String>) -> Conve
                 }
                 continue;
             }
+        } else if key == "jumpsound" {
+            sounds.insert("jump".into(), json!(v.trim()));
+            continue;
+        } else if matches!(key, "usecustompaineffects" | "painsound" | "deathsound") {
+            // Read together below.
+            continue;
         } else if key == "mass"
             || SCRIPT_MARKS.contains(&key)
             || (FREE_AT_ZERO.contains(&key) && number(v) == Some(0.0))
@@ -176,6 +183,31 @@ pub fn convert(fields: &BTreeMap<String, String>, base: Option<String>) -> Conve
             continue;
         }
         left_out.push(key.to_owned());
+    }
+    // `Player::playPain` and `playDeathCry`: with `useCustomPainEffects`
+    // the datablock's own cries, and none at all without a `painSound`
+    // (the death cry checks it too); without it, the standard cries.
+    if fields
+        .get("usecustompaineffects")
+        .is_some_and(|v| flag(crate::literal(v)) == Some(true))
+    {
+        let named = |key: &str| {
+            fields
+                .get(key)
+                .map(|v| crate::literal(v).trim().to_owned())
+                .unwrap_or_default()
+        };
+        let pain = named("painsound");
+        let death = if pain.is_empty() {
+            String::new()
+        } else {
+            named("deathsound")
+        };
+        sounds.insert("pain".into(), json!(pain));
+        sounds.insert("death".into(), json!(death));
+    }
+    if !sounds.is_empty() {
+        archetype["sounds"] = Value::Object(sounds);
     }
     if let Some(base) = base {
         archetype["base"] = json!(base);
@@ -240,6 +272,47 @@ fn flag(v: &str) -> Option<bool> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn jump_and_custom_pain_sounds_become_the_archetypes() {
+        let fields = |pairs: &[(&str, &str)]| -> BTreeMap<String, String> {
+            pairs
+                .iter()
+                .map(|(k, v)| ((*k).into(), (*v).into()))
+                .collect()
+        };
+        // Bot_Hole's bots: `jumpSound = "";//Removed due to bots jumping a lot`.
+        let c = convert(&fields(&[("jumpsound", "\"\"")]), None);
+        assert_eq!(c.archetype["sounds"], json!({ "jump": "" }));
+        assert!(c.left_out.is_empty(), "{:?}", c.left_out);
+        let c = convert(&fields(&[("jumpsound", "HorseJumpSound")]), None);
+        assert_eq!(c.archetype["sounds"]["jump"], "HorseJumpSound");
+        let c = convert(
+            &fields(&[
+                ("usecustompaineffects", "true"),
+                ("painsound", "ZombiePainSound"),
+                ("deathsound", "ZombieDeathSound"),
+            ]),
+            None,
+        );
+        assert_eq!(
+            c.archetype["sounds"],
+            json!({ "pain": "ZombiePainSound", "death": "ZombieDeathSound" })
+        );
+        // v20 checks `painSound` before either cry.
+        let c = convert(
+            &fields(&[
+                ("usecustompaineffects", "1"),
+                ("deathsound", "ZombieDeathSound"),
+            ]),
+            None,
+        );
+        assert_eq!(c.archetype["sounds"], json!({ "pain": "", "death": "" }));
+        // Without the switch v20 plays the standard cries.
+        let c = convert(&fields(&[("painsound", "ZombiePainSound")]), None);
+        assert!(c.archetype.get("sounds").is_none());
+        assert!(c.left_out.is_empty(), "{:?}", c.left_out);
+    }
 
     #[test]
     fn authored_square_boxes_and_static_vector_scale_keep_collision_dimensions() {

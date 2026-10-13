@@ -1145,6 +1145,12 @@ impl Session {
         let alive = peer.combat.health > 0.0;
         let level = peer.combat.pain_level;
         let feet = peer.player.state().feet;
+        let sound = self
+            .archetypes
+            .resolve(peer.player.state().archetype)
+            .sounds
+            .pain
+            .clone();
         self.bots.note_hurt(target, source_observation, tick);
         self.observe_damage_result(DamageResult {
             victim: target,
@@ -1162,6 +1168,7 @@ impl Session {
                 actor: target,
                 level,
                 cry: alive && amount > 10.0,
+                sound,
             },
             feet,
         );
@@ -1285,10 +1292,20 @@ impl Session {
         // What an Add-On hung on the body (a carried flag) goes with it; the
         // Add-On's `on_death` decides what becomes of it.
         self.weapons.clear_worn(ActorId(victim));
-        let feet = self.peers[&victim].player.state().feet;
+        let state = self.peers[&victim].player.state();
+        let feet = state.feet;
+        let sound = self
+            .archetypes
+            .resolve(state.archetype)
+            .sounds
+            .death
+            .clone();
         self.cues.emit(
             tick,
-            crate::presentation::CueKind::Death { actor: victim },
+            crate::presentation::CueKind::Death {
+                actor: victim,
+                sound,
+            },
             feet,
         );
         self.apply_minigame_effects(effects)?;
