@@ -42,6 +42,11 @@ fn plain_lines(text: &str) -> String {
         .join("<br>")
 }
 
+/// Every field's text, by id.
+type Fields = Vec<(String, String)>;
+/// Every list's picked row, by id.
+type Lists = Vec<(String, Option<u16>)>;
+
 pub struct AddOnPanel {
     view: View,
     /// The panel shown: its package, id and controls, for events.
@@ -172,7 +177,7 @@ impl AddOnPanel {
     }
 
     /// Every field's text and list's pick, as the panel stands.
-    fn values(&self) -> (Vec<(String, String)>, Vec<(String, Option<u16>)>) {
+    fn values(&self) -> (Fields, Lists) {
         let mut fields = Vec::new();
         let mut lists = Vec::new();
         for item in &self.shown.items {
