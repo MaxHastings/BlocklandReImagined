@@ -1277,7 +1277,7 @@ impl Session {
             // A corpse keeps no laid-on archetypes (`pushDatablock`).
             peer.overlays = None;
             peer.combat.corpse_cleared = false;
-            peer.inputs.clear();
+            peer.discard_inputs();
             peer.control = super::ControlObject::Corpse;
         }
         self.observe_death_result(death);
@@ -1445,7 +1445,7 @@ impl Session {
             // Past the corpse timeout: the next step clears the body.
             peer.combat.died_tick = tick.saturating_sub(CORPSE_TICKS);
             peer.combat.corpse_cleared = false;
-            peer.inputs.clear();
+            peer.discard_inputs();
             peer.control = super::ControlObject::Corpse;
         }
         self.weapons.trigger(ActorId(owner), false)?;
@@ -2345,7 +2345,7 @@ impl Session {
             // The new body wears the client's own colours (`ApplyBodyColors`).
             peer.temp_color = None;
             peer.temp_look = None;
-            peer.inputs.clear();
+            peer.discard_inputs();
             // `spawnPlayer` hands control back to the new body.
             peer.control = super::ControlObject::Player;
         }

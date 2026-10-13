@@ -671,7 +671,7 @@ impl Session {
                 position,
                 forward.x.atan2(-forward.z),
             )?;
-            peer.inputs.clear();
+            peer.discard_inputs();
             self.follow_player_mounts();
             return Ok(Some((position, scale)));
         }
@@ -2032,7 +2032,7 @@ impl Session {
                         peer.player.push(Vec3::from(velocity));
                         peer.player
                             .set_solid(&mut self.simulation.physics, peer.combat.alive);
-                        peer.inputs.clear();
+                        peer.discard_inputs();
                     }
                 }
                 Intent::Effect {

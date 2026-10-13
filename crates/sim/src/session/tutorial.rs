@@ -502,7 +502,7 @@ impl Session {
                     let peer = self.peers.get_mut(&owner).unwrap();
                     peer.player
                         .teleport(&mut self.simulation.physics, Vec3::from(feet), yaw)?;
-                    peer.inputs.clear();
+                    peer.discard_inputs();
                     peer.tutorial.inside.clear();
                 }
             }

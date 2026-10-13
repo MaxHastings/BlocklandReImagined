@@ -375,6 +375,70 @@ fn spawn_brick_vehicle_mounts_drives_dismounts_and_respawns(f: &Fixture) -> anyh
 }
 
 on_both! {
+/// Moves still queued when the host dismounts a rider are dropped, and the
+/// next pose acknowledges them: the client must not keep replaying moves the
+/// host will never run.
+fn moves_queued_at_a_dismount_are_acknowledged(f: &Fixture) -> anyhow::Result<()> {
+    let (mut s, owner) = session(f)?;
+    let mut sequence = 0;
+    let ack = |s: &Session| {
+        s.motion_states()
+            .into_iter()
+            .find(|(p, _)| p.owner == owner)
+            .unwrap()
+            .1
+    };
+    for _ in 0..120 {
+        sequence += 1;
+        s.movement(owner, sequence, MoveInput::default())?;
+        s.step()?;
+    }
+    // Hop onto the jeep, as above.
+    'board: for i in 0..60 {
+        let input = MoveInput {
+            forward: 1.0,
+            jump: i % 3 == 0,
+            ..Default::default()
+        };
+        for _ in 0..10 {
+            sequence += 1;
+            s.movement(owner, sequence, input)?;
+            s.step()?;
+            if s.mounted(owner).is_some() {
+                break 'board;
+            }
+        }
+    }
+    assert!(s.mounted(owner).is_some(), "boarded the jeep");
+    for _ in 0..60 {
+        sequence += 1;
+        s.movement(owner, sequence, MoveInput::default())?;
+        s.step()?;
+    }
+    // Jet, then a burst of moves that arrives in the same datagram.
+    for i in 0..8 {
+        sequence += 1;
+        let input = MoveInput {
+            jet: i < 2,
+            ..Default::default()
+        };
+        s.movement(owner, sequence, input)?;
+    }
+    for _ in 0..20 {
+        s.step()?;
+    }
+    assert_eq!(s.mounted(owner), None, "jet leaves the jeep");
+    assert_eq!(ack(&s), sequence, "every move sent before the dismount is acknowledged");
+    // The next move runs on foot and is acknowledged as usual.
+    sequence += 1;
+    s.movement(owner, sequence, MoveInput::default())?;
+    s.step()?;
+    assert_eq!(ack(&s), sequence);
+    Ok(())
+}
+}
+
+on_both! {
 fn bot_brick_spawns_a_bot_that_fights_inside_its_owners_minigame(f: &Fixture) -> anyhow::Result<()> {
     use bri_sim::session::{InspectMode, MiniGameRequest, Notice, ToolCatalog, WrenchProperties};
     let definitions = f.bricks();
