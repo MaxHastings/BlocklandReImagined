@@ -1553,6 +1553,16 @@ pub struct ArchetypeDef {
     /// waits (`PlayerData::onTrigger` doing nothing).
     #[serde(default)]
     pub uses_items: Option<bool>,
+    /// Where the body holds items, sees from and sits (`right_hand`,
+    /// `left_hand`, `eye`, `seat`), each a model node, an offset from the
+    /// feet, or both; replacing the base's.
+    #[serde(default)]
+    pub sockets: Option<bri_content::body::Sockets>,
+    /// The model's clip for each animation role (`idle`, `run`, `jump`,
+    /// `aim_right`, `sit`, `death`...); replacing the base's. A role left
+    /// out asks for the Blockhead's clip name, then falls back.
+    #[serde(default)]
+    pub animations: Option<bri_content::body::Animations>,
     /// Its own movement rules: a `controller` this Add-On or one it
     /// depends on provides (`namespace:controller/name`).
     #[serde(default)]
@@ -1589,6 +1599,12 @@ impl ArchetypeDef {
             self.model.as_ref().is_none_or(|m| text(m, 160)),
             "model must be a model id"
         );
+        if let Some(sockets) = &self.sockets {
+            sockets.validate()?;
+        }
+        if let Some(animations) = &self.animations {
+            bri_content::body::validate_animations(animations)?;
+        }
         ensure!(
             self.controller.as_ref().is_none_or(|c| text(c, 160)),
             "controller must be a controller id"

@@ -99,6 +99,30 @@ underneath, and death lifts them all. An archetype with
 their camera toggle says (v20's `firstPersonOnly`: Tier 2's slowed
 machine gunner), and the toggle takes over again once the body changes.
 
+**Sockets and animations.** A body says where it holds things, sees from
+and sits with `sockets`: `right_hand`, `left_hand`, `eye` and `seat`, each a
+`node` of its model, an `offset` (feet at the origin, facing -Z), or both.
+A rigged body names its own nodes; a box model or `"none"` body has no
+nodes, so it gives offsets. Missing sockets fall back to the Blockhead's
+`Mount0`, `Mount1` and `Eye` on a rigged body; a box body without a hand
+socket hides what that hand holds, and without a `seat` it sits upright.
+Every gun fires from its muzzle at the hand socket and converges on the
+crosshair, falling back to the eye when the barrel is inside a wall.
+`look.animations` maps roles to the body's own clips: `idle`, `run`,
+`back`, `side`, `crouch`, `crouch_run`, `crouch_back`, `crouch_side`,
+`jump`, `fall`, `sit`, `aim_right`, `aim_left`, `aim_both`,
+`look`, `head_up`, `head_side`, `swim` and `death`. Unnamed roles use a clip of the
+Blockhead's name if the model has one, then a fallback (`back` runs `run`
+reversed, `fall` plays `jump`, `sit` plays `idle`), and a role with none
+leaves the body in its bind pose for that layer. The client names what a
+body lacks once, in the Add-On faults log ("no `sit` animation; it plays
+its `idle` instead"). The Playground's
+[Runner](../../packages/playground/playground-runner/runner.json) and the
+Commando are two box bodies with their own sockets. Tests:
+`crates/client/src/avatar.rs` (`a_body_with_its_own_nodes_and_two_clips_…`,
+`a_box_body_holds_at_its_own_hand_…`), `crates/sim/tests/playground.rs`
+and `crates/client/tests/body_attachments_render.rs`.
+
 An archetype with `"adjusts": "v20.player.<datablock>"` (and no `base` or
 `name`) is no new body: it changes the constants it names on one of v20's
 own player types while the Add-On is on, as a v20 Add-On's

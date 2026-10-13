@@ -592,6 +592,13 @@ fn archetype(
         fields.insert(name.clone(), value.clone());
     }
     archetype.movement = serde_json::from_value(movement).context("movement")?;
+    if let Some(sockets) = &def.sockets {
+        archetype.sockets = sockets.clone();
+        body_eyes(&mut archetype.movement, sockets, &def.movement);
+    }
+    if let Some(animations) = &def.animations {
+        archetype.look.animations = animations.clone();
+    }
     archetype.id = id.into();
     archetype.name = def.name.clone();
     if let Some(v) = def.max_health {
@@ -642,6 +649,43 @@ fn archetype(
     }
     archetype.validate()?;
     Ok(archetype)
+}
+
+/// Eye heights from the body: an archetype whose `eye` socket is an offset
+/// from the feet sees from there, and crouches and sits by the Blockhead's
+/// proportions, unless its `movement` sets those heights itself.
+fn body_eyes(
+    movement: &mut crate::player::PlayerTuning,
+    sockets: &bri_content::body::Sockets,
+    set: &serde_json::Map<String, serde_json::Value>,
+) {
+    let Some(eye) = sockets.eye.as_ref().filter(|e| e.node.is_none()) else {
+        return;
+    };
+    let blockhead = crate::player::PlayerTuning::default();
+    let [_, up, forward] = eye.offset;
+    if up <= 0.0 {
+        return;
+    }
+    let ratio = up / blockhead.stand_eye;
+    let put = |name: &str, field: &mut f32, value: f32| {
+        if !set.contains_key(name) {
+            *field = value;
+        }
+    };
+    put("stand_eye", &mut movement.stand_eye, up);
+    put("eye_forward", &mut movement.eye_forward, -forward);
+    put(
+        "crouch_eye",
+        &mut movement.crouch_eye,
+        blockhead.crouch_eye * ratio,
+    );
+    put("sit_eye", &mut movement.sit_eye, blockhead.sit_eye * ratio);
+    put(
+        "sit_eye_forward",
+        &mut movement.sit_eye_forward,
+        blockhead.sit_eye_forward * ratio,
+    );
 }
 
 impl Session {

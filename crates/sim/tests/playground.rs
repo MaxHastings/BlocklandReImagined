@@ -123,6 +123,26 @@ fn weapons() -> bri_weapons::Pack {
     pack
 }
 
+/// Each Carbine image's muzzle in the hand's frame, from its own model,
+/// as a host computes it.
+fn barrels() -> BTreeMap<String, [f32; 3]> {
+    let dir = packages().join("playground/playground-rifle/assets");
+    weapons()
+        .images
+        .iter()
+        .map(|(id, image)| {
+            let shape: bri_content::shape::Shape =
+                serde_json::from_slice(&std::fs::read(dir.join(&image.model)).unwrap()).unwrap();
+            let barrel = bri_weapons::muzzle::barrel(
+                image.offset,
+                image.source_rotation_degrees,
+                Some(&shape),
+            );
+            (id.clone(), barrel.to_array())
+        })
+        .collect()
+}
+
 fn vehicles() -> bri_vehicles::Pack {
     bri_vehicles::Pack::load(packages().join("playground/playground-buggy/assets/vehicles.json"))
         .unwrap()
@@ -269,6 +289,15 @@ impl Game {
             vehicle_bricks: ["plate".to_string()].into(),
             ..Default::default()
         })
+        .unwrap();
+        // What a host learns at setup (`HostSetup`): each image's barrel
+        // and the Blockhead's hands (here the made-up test rig's), so
+        // shots leave the muzzle in each body's hand.
+        s.set_image_barrels(barrels()).unwrap();
+        s.set_body_grips(
+            "v20.shape.m",
+            bri_sim::session::shape_grips(&bri_content::testing::avatar::rig(), &[]),
+        )
         .unwrap();
         s.install_packages(catalog(mode), None).unwrap();
         // The mode's mini-game spawns everyone here, behind where the
@@ -686,6 +715,160 @@ fn a_blockhead_bot_fights_the_runners() {
         }
     }
     assert!(hurt, "the bot hurt the Runner within a minute");
+}
+
+/// Pulls `owner`'s trigger and returns the shot as it leaves, before it
+/// can hit anything.
+fn shoot(g: &mut Game, owner: OwnerId) -> bri_weapons::Projectile {
+    let before: BTreeSet<u64> = g.s.weapon_view().fired().map(|s| s.id).collect();
+    g.cmd(owner, Command::WeaponTrigger { down: true }).unwrap();
+    let mut shot = None;
+    for _ in 0..4 {
+        g.steps(1);
+        shot = shot.or_else(|| {
+            g.s.weapon_view()
+                .fired()
+                .find(|p| p.source.0 == owner && !before.contains(&p.id))
+                .cloned()
+        });
+    }
+    g.cmd(owner, Command::WeaponTrigger { down: false })
+        .unwrap();
+    g.steps(30);
+    shot.expect("a shot")
+}
+
+/// v0.3.0 W2: the host fired every shot from the eye. The Runner's shot
+/// now leaves the Carbine's muzzle in its own right hand (its `sockets`,
+/// the Carbine's `muzzlePoint`), well away from its eye, and still flies
+/// at what the crosshair is on (`correct_muzzle`).
+#[test]
+fn the_runners_shot_leaves_the_carbines_muzzle_in_its_hand_and_meets_the_crosshair() {
+    let mut g = Game::new();
+    let p = g.join("Ann");
+    g.steps(40);
+    g.equip(p, CARBINE);
+    g.steps(300);
+    let state = g.state(p);
+    let eye = g.s.archetypes().eye(&state);
+    let shot = shoot(&mut g, p);
+    // Facing -Z: the right hand (0.5, 0.74, -0.14) holding the barrel
+    // (0, 0.14, -0.88).
+    let muzzle = Vec3::from(state.feet) + Vec3::new(0.5, 0.88, -1.02);
+    assert!(
+        shot.origin.distance(muzzle) < 1e-3,
+        "{} from {muzzle}",
+        shot.origin
+    );
+    assert!(shot.origin.distance(eye) > 1.0, "not from the eye");
+    // The crosshair is on the fort's wall straight ahead of the eye.
+    let aim = Vec3::new(eye.x, eye.y, WALL_Z + 0.25);
+    let along = shot.velocity.normalize();
+    let to = aim - shot.origin;
+    let miss = (to - along * to.dot(along)).length();
+    assert!(miss < 0.05, "passes {miss} from where the crosshair is");
+}
+
+/// A Carbine pushed into a wall fires from the eye, so a shot never
+/// starts on the far side of what the shooter stands against: pressed to
+/// the fort, the Runner's muzzle is in or past the wall, and the shot
+/// hits the wall's near face instead of flying on behind it.
+#[test]
+fn a_carbine_pressed_into_a_wall_fires_from_the_eye() {
+    let mut g = Game::new();
+    let p = g.join("Ann");
+    g.steps(40);
+    g.equip(p, CARBINE);
+    g.steps(300);
+    g.drive(
+        p,
+        MoveInput {
+            forward: 1.0,
+            ..Default::default()
+        },
+        600,
+    );
+    let state = g.state(p);
+    let muzzle_z = state.feet[2] - 1.02;
+    assert!(
+        muzzle_z < WALL_Z + 0.25,
+        "the muzzle is in the wall: {muzzle_z}"
+    );
+    g.cmd(p, Command::WeaponTrigger { down: true }).unwrap();
+    let mut fired = false;
+    for _ in 0..40 {
+        g.steps(1);
+        fired |= g.s.weapon_view().images[&p]
+            .iter()
+            .any(|i| i.state.eq_ignore_ascii_case("fire"));
+        let behind =
+            g.s.weapon_view()
+                .fired()
+                .filter(|s| s.source.0 == p)
+                .any(|s| s.position.z < WALL_Z);
+        assert!(!behind, "a shot came out behind the wall");
+        if fired {
+            g.cmd(p, Command::WeaponTrigger { down: false }).unwrap();
+        }
+    }
+    assert!(fired, "it fired");
+}
+
+/// The same Carbine in a different body: the Blockhead Bot (the made-up
+/// rig's hands here) fires it from its own hand, not the Runner's grip
+/// and not its eye.
+#[test]
+fn a_blockhead_bot_fires_the_carbine_from_its_own_hand() {
+    let mut world = World::new("Playground".into(), "playground".into(), vec![[1.0; 4]]);
+    fort(&mut world);
+    bot_spawn(&mut world, [12.0, 0.1, -6.25]);
+    let mut g = Game::with(world);
+    g.s.set_spawn_points(vec![SPAWN, Vec3::new(12.0, 0.05, -12.0)])
+        .unwrap();
+    let p = g.join("Ann");
+    let grips = bri_sim::session::shape_grips(&bri_content::testing::avatar::rig(), &[]);
+    let hand = glam::Mat4::from_cols_array(&grips["mount0"]);
+    let barrel = Vec3::from(barrels()[&weapons().items[CARBINE].image]);
+    let mut checked = 0;
+    for _ in 0..7200 {
+        let before: BTreeSet<u64> = g.s.weapon_view().fired().map(|s| s.id).collect();
+        let bot = g.s.names().keys().copied().find(|o| g.s.is_bot(*o));
+        let at = bot.map(|b| (b, g.state(b)));
+        g.steps(1);
+        let (Some((bot, state)), Some(shot)) = (
+            at,
+            g.s.weapon_view()
+                .fired()
+                .find(|s| !before.contains(&s.id) && bot.is_some_and(|b| s.source.0 == b))
+                .cloned(),
+        ) else {
+            continue;
+        };
+        assert_eq!(g.held(bot).as_deref(), Some(CARBINE));
+        let tuning = g.s.archetypes().resolve(state.archetype).movement.clone();
+        let grip = bri_weapons::muzzle::Grip {
+            hand,
+            pivot: Vec3::new(0.0, tuning.stand_eye, -tuning.eye_forward),
+        };
+        let eye = g.s.archetypes().eye(&state);
+        let feet = Vec3::from(state.feet);
+        let shift = glam::Quat::from_rotation_y(state.yaw) * (eye - feet) / state.scale
+            - Vec3::new(0.0, tuning.stand_eye, -tuning.eye_forward);
+        let muzzle = grip.muzzle(barrel, feet, state.yaw, state.pitch, state.scale, shift);
+        // A wall in the way fires from the eye; in the open, the muzzle.
+        if shot.origin.distance(eye) > 1e-3 {
+            assert!(
+                shot.origin.distance(muzzle) < 0.2,
+                "{} from {muzzle}",
+                shot.origin
+            );
+            checked += 1;
+        }
+        if checked >= 3 || !g.s.vitals()[&p].alive {
+            break;
+        }
+    }
+    assert!(checked > 0, "the bot fired the carbine from its hand");
 }
 
 /// A Stomper, a simple enemy from its own Add-On, is the shared bot brain

@@ -35,10 +35,18 @@ impl App {
                 .collect();
         let mut own_package_body = None;
         if let Some(catalog) = package_catalog {
-            for (owner, placement) in
+            for (owner, mut placement) in
                 crate::packages::body_placements(catalog, &view.archetypes, self.motion.presented())
             {
                 hidden.insert(owner);
+                // Seated, tilted with the seat and sitting, as its
+                // stand-in mesh times it.
+                if let Some(p) = &mut placement
+                    && let Some(mesh) = self.avatar.avatars.get(&owner)
+                    && mesh.body_kind().stand_in
+                {
+                    p.pose = Some(mesh.box_pose());
+                }
                 match placement {
                     Some(p) if owner == view.owner && !third_person => own_package_body = Some(p),
                     Some(p) => package_placements.push(p),

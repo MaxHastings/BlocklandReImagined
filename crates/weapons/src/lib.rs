@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 pub mod debris;
 mod merge;
+pub mod muzzle;
 mod references;
 pub use references::{Reference, add_on_of};
 pub mod rotation;
