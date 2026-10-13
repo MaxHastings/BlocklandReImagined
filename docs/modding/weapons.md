@@ -19,7 +19,9 @@ up, -z forward) relative to `assets/`, such as
 `ejectPoint` say where a gun fires and throws its casings. Each material names a PNG
 beside the model (`pick_wood` draws `pick_wood.png`, up to 1,024 pixels a
 side), as a vehicle model's do. A node called `mountPoint` is where the hand
-holds it. A `detail9999` detail is what the holder sees in first person
+holds it. A node called `supportPoint` is where a second hand holds a two-handed
+image (`aim_both`) on imported bodies; without it that hand goes halfway
+from `mountPoint` to `muzzlePoint`. A `detail9999` detail is what the holder sees in first person
 and the lower details what everyone else sees, so an image state's
 `sequence` (the pick's `"fire"`) can swing the first-person copy alone.
 Its box is its bounds for dropping; `bri-addon-check` names a model or

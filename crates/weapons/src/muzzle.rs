@@ -50,6 +50,28 @@ pub fn barrel(offset: [f32; 3], rotation_degrees: [f32; 3], shape: Option<&Shape
     }
 }
 
+/// Where the off hand holds an image held in the other, in that hand's
+/// frame: the image's `supportPoint` node (a foregrip) in the bind pose,
+/// else halfway from where the hand grips it to its `muzzlePoint`. `None`
+/// for an image with no model.
+pub fn support(
+    offset: [f32; 3],
+    rotation_degrees: [f32; 3],
+    shape: Option<&Shape>,
+) -> Option<Vec3> {
+    let shape = shape?;
+    let in_hand = Mat4::from_rotation_translation(
+        crate::rotation::native(rotation_degrees),
+        Vec3::from(offset),
+    );
+    let correction = node(shape, "mountPoint").map_or(Mat4::IDENTITY, |i| rest(shape, i).inverse());
+    let at = match node(shape, "supportPoint") {
+        Some(i) => (in_hand * correction * rest(shape, i)).w_axis.truncate(),
+        None => (in_hand.w_axis.truncate() + barrel(offset, rotation_degrees, Some(shape))) * 0.5,
+    };
+    (at.is_finite() && at.length() <= 16.0).then_some(at)
+}
+
 /// Where a body holds an image, for the host's shots: the hand's
 /// transform in the body's frame (feet at the origin, facing -Z, unscaled,
 /// level aim), and the point it turns about as the aim pitches.

@@ -1327,6 +1327,15 @@ impl ItemAssets {
             })
             .collect()
     }
+    /// Where the off hand holds image `id` when it is held in both hands,
+    /// in the frame of the hand holding it ([`bri_weapons::muzzle::support`]).
+    pub fn image_support(&self, id: &str) -> Option<Vec3> {
+        let image = self.presentation.images.get(id)?;
+        let shape = (!image.model.is_empty())
+            .then(|| self.shape(&image.model).ok())
+            .flatten();
+        bri_weapons::muzzle::support(image.offset, image.source_rotation_degrees, shape)
+    }
     pub fn node_transform(
         &self,
         model: &str,
