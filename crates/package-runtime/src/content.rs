@@ -529,11 +529,12 @@ pub struct Behaviour {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub listens: Vec<String>,
     /// `on_object(event)` as an object comes into the world, leaves it or
-    /// changes hands: `event` is `#{ kind, ref, definition, package, owner,
-    /// was, x, y, z }`, `kind` being `created`, `removed` or `changed`
-    /// (its owner or driver changed; `was` the one before). Objects are
-    /// vehicles, loose physics bodies, Add-On creatures and items lying in
-    /// the world. Delivered at the start of the next tick.
+    /// changes hands: `event` is `#{ kind, ref, object, definition, addon,
+    /// owner, driver, x, y, z }`, `kind` being `created`, `removed` or
+    /// `changed` (its owner or driver changed; `was` holds the old ones).
+    /// Objects are vehicles and loose physics bodies (`vehicle`), bots
+    /// (`player`), Add-On creatures (`entity`) and items lying in the world
+    /// (`drop`). Delivered at the start of the next tick.
     #[serde(default)]
     pub on_object: bool,
 }

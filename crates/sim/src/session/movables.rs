@@ -145,7 +145,7 @@ pub(super) struct Movables {
     /// Who moved an object last, and until which tick it counts.
     credits: BTreeMap<ObjectRef, (OwnerId, u64)>,
     /// Vehicles packages spawned, by package.
-    spawned: BTreeMap<u64, String>,
+    pub(super) spawned: BTreeMap<u64, String>,
     /// Players thrown by a hold: their velocity last tick, and the tick
     /// after which an impact no longer tumbles them.
     thrown: BTreeMap<OwnerId, (Vec3, u64)>,

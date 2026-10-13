@@ -42,6 +42,7 @@ pub(in crate::session) use game_hooks::Answer;
 pub use host_data::{AddOnData, MemoryAddOnData};
 pub(super) mod copy_hooks;
 mod item_hooks;
+mod object_hooks;
 mod reports;
 mod saved_games;
 mod settings;
@@ -362,6 +363,8 @@ pub(super) struct PackageHost {
     contacts: contacts::Contacts,
     /// Events Add-Ons sent each other (`emit`), for the next tick.
     addon_events: addon_events::AddOnEvents,
+    /// What stood in the world last tick, for `on_object`.
+    object_watch: object_hooks::ObjectWatch,
     /// What each Add-On keeps on the host ([`AddOnData`]), by package.
     host_data: BTreeMap<String, BTreeMap<String, serde_json::Value>>,
     /// Values rules keep on bricks (`set_brick_field`).
@@ -848,6 +851,7 @@ impl Session {
             game_hooks: Default::default(),
             contacts: Default::default(),
             addon_events: Default::default(),
+            object_watch: Default::default(),
             host_data: BTreeMap::new(),
             brick_fields: Default::default(),
             brick_watch: Default::default(),
@@ -3007,6 +3011,7 @@ impl Session {
         self.deliver_hits();
         self.deliver_minigame_events();
         self.deliver_addon_events();
+        self.deliver_object_changes();
         self.step_zones();
         self.step_paths();
         self.step_saved_copies();
