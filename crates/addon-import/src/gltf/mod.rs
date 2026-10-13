@@ -1696,8 +1696,6 @@ fn sample_clip(
             }
         }
         let k = new_index[node];
-        let rest_t = Vec3::from(shape_nodes[k].translation);
-        let rest_r = Quat::from_array(shape_nodes[k].rotation);
         let parent = g.parent.map_or(1.0, |p| sigma[p]);
         let nt: Vec<Vec3> = t.iter().map(|t| point(*t * parent)).collect();
         let nr: Vec<Quat> = r.iter().map(|r| turn(*r)).collect();
@@ -1709,21 +1707,22 @@ fn sample_clip(
             scale_rotations: Vec::new(),
         };
         match play {
+            // Every channel the clip has is an override, even one that holds
+            // the rest pose: an aim clip keeping an arm still must stop the
+            // run below it swinging that arm. Bones without a channel are
+            // left to the layer below.
             Play::Absolute { .. } => {
-                let still_t = nt.iter().all(|v| v.distance(rest_t) < 1e-4);
-                let still_r = nr.iter().all(|q| q.dot(rest_r).abs() > 1.0 - 1e-6);
-                if paths.contains("translation") && !still_t {
+                if paths.contains("translation") {
                     track.translations = nt.iter().map(|v| v.to_array()).collect();
                 }
-                if paths.contains("rotation") && !still_r {
+                if paths.contains("rotation") {
                     track.rotations = nr.iter().map(|q| q.to_array()).collect();
                 }
                 if paths.contains("scale") {
-                    let ratio: Vec<Vec3> =
-                        s.iter().map(|v| *v / g.s.max(Vec3::splat(1e-6))).collect();
-                    if ratio.iter().any(|v| v.distance(Vec3::ONE) > 1e-4) {
-                        track.scales = ratio.iter().map(|v| v.abs().to_array()).collect();
-                    }
+                    track.scales = s
+                        .iter()
+                        .map(|v| (*v / g.s.max(Vec3::splat(1e-6))).abs().to_array())
+                        .collect();
                 }
             }
             Play::Overlay { reference } => {

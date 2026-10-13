@@ -113,6 +113,69 @@ fn clips_play_as_a_gltf_viewer_shows_them() {
     );
 }
 
+/// A clip's channel that holds a bone at rest still overrides the clips
+/// below it: aiming holds the left hand still, so the run's swing of that
+/// hand does not show through (Mario's weapon hold broke this way). Bones
+/// the clip has no channel for still follow the run.
+#[test]
+fn a_channel_held_at_rest_still_overrides_the_layer_below() {
+    use bri_content::animation::{Layer, sample, sample_layers};
+    let c = convert_glb(&character(true).glb, &body_opts()).unwrap();
+    let clip = |name: &str| c.shape.animations.iter().find(|a| a.name == name).unwrap();
+    let (run, aim) = (clip("run"), clip("armreadyright"));
+    assert!(
+        aim.nodes
+            .iter()
+            .any(|t| t.node == "hand.L" && !t.rotations.is_empty()),
+        "the still hand's channel is kept: {:?}",
+        aim.nodes.iter().map(|t| &t.node).collect::<Vec<_>>()
+    );
+    let hand = c
+        .shape
+        .nodes
+        .iter()
+        .position(|n| n.name == "hand.L")
+        .unwrap();
+    let hips = c.shape.nodes.iter().position(|n| n.name == "hips").unwrap();
+    let rest = sample(&c.shape, None, 0.0).unwrap();
+    let running = sample(&c.shape, Some(run), 0.1).unwrap();
+    let aiming = sample_layers(
+        &c.shape,
+        &[
+            Layer {
+                animation: run,
+                time: 0.1,
+                weight: 1.0,
+            },
+            Layer {
+                animation: aim,
+                time: aim.duration,
+                weight: 1.0,
+            },
+        ],
+    )
+    .unwrap();
+    let turn = |pose: &bri_content::animation::Pose, n: usize| {
+        let (_, r, _) = pose.nodes[n].to_scale_rotation_translation();
+        r
+    };
+    assert!(
+        turn(&running, hand).dot(turn(&rest, hand)).abs() < 0.999,
+        "the run swings the left hand"
+    );
+    assert!(
+        turn(&aiming, hand).dot(turn(&rest, hand)).abs() > 0.9999,
+        "aiming holds it at rest"
+    );
+    assert!(
+        running.nodes[hips]
+            .w_axis
+            .distance(aiming.nodes[hips].w_axis)
+            < 1e-4,
+        "the hips still follow the run"
+    );
+}
+
 #[test]
 fn roles_take_the_blockheads_clip_names_and_play_the_way_the_body_needs() {
     let c = convert_glb(&character(true).glb, &body_opts()).unwrap();

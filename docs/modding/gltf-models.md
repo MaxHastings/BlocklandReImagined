@@ -95,6 +95,14 @@ Mario still looks up. Any other action (`stomp`, `wave`, `ground_pound`) is
 kept under its own name for rules to play. Blockland names also work
 (`root`, `armreadyright`, `death1`).
 
+A clip that is not layered (`aim_right`, `sit`, `crouch` over `run`)
+takes over exactly the bones it has keys for, even a bone it keys at rest:
+key the off hand still in `aim_right` and the run's swing of that hand stops
+while aiming. Bones it has no keys for keep following the clip below, so
+don't key the legs in an aim clip. Blender's exporter can drop keys that
+never change (Animation > Optimize Animation Size): turn that off if a
+"hold still" bone goes missing from a clip.
+
 Missing clips are fine: each missing role falls back (a body with only
 `idle` and `run` still works) and the report lists what each missing one
 costs.
