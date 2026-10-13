@@ -2720,6 +2720,21 @@ impl Session {
         // `serverCmdTripOut`: an administrator's joke.
         let typed_trip_out =
             request.package.is_empty() && request.command.eq_ignore_ascii_case("tripout");
+        // `/body`: become another body this game lets one pick.
+        let typed_body = request.package.is_empty() && request.command.eq_ignore_ascii_case("body");
+        let body_words = typed_body.then(|| {
+            request
+                .args
+                .iter()
+                .map(|a| match a {
+                    PackageArg::String(word) => word.clone(),
+                    PackageArg::Int(n) => n.to_string(),
+                    PackageArg::Float(n) => n.to_string(),
+                    PackageArg::Bool(b) => b.to_string(),
+                })
+                .collect::<Vec<_>>()
+                .join(" ")
+        });
         let request = match self.resolve_typed_command(request) {
             Ok(request) => request,
             Err(_) if typed_brick_count => {
@@ -2736,6 +2751,10 @@ impl Session {
             }
             Err(_) if typed_trip_out => {
                 self.trip_out(owner)?;
+                return Ok(Reply::Accepted);
+            }
+            Err(_) if typed_body => {
+                self.body_command(owner, body_words.as_deref().unwrap_or_default())?;
                 return Ok(Reply::Accepted);
             }
             Err(error) => return Err(error),

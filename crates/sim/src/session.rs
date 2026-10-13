@@ -36,7 +36,7 @@ mod dirty;
 mod events;
 pub use events::{
     EVENT_COST_PER_OWNER, EVENT_COST_PER_TICK, EVENT_UNIT_COST_NS, EVENT_WATCHDOG, EventWork,
-    SlowEventTicks, event_limits,
+    SlowEventTicks, event_bodies, event_limits,
 };
 mod quotas;
 use quotas::Quota;
@@ -52,6 +52,7 @@ mod trust;
 mod tutorial;
 mod world_shapes;
 pub use tutorial::{Abilities, BRICK_HAND_IMAGES, BrickHand};
+mod bodies;
 mod grips;
 pub use grips::shape_grips;
 mod riding;
@@ -781,9 +782,12 @@ struct Peer {
     last_input_tick: u64,
     /// The datablock a basketball shot swapped for `BallShootPlayer`.
     sport_datablock: Option<crate::archetype::ArchetypeId>,
-    /// A package's choice of archetype, kept across respawns; otherwise
-    /// the mini-game's player type decides.
-    package_archetype: Option<crate::archetype::ArchetypeId>,
+    /// A body chosen for this player, kept across respawns as
+    /// [`Session::kept_body`] says; otherwise the mini-game's player type
+    /// decides.
+    chosen_body: Option<bodies::ChosenBody>,
+    /// When `/body` last switched them.
+    body_command_tick: Option<u64>,
     /// Archetypes packages laid over this life's own (`push_archetype`).
     overlays: Option<Overlays>,
     window_tick: u64,
@@ -909,7 +913,8 @@ impl Peer {
             last_move_sequence: 0,
             last_input_tick: tick,
             sport_datablock: None,
-            package_archetype: None,
+            chosen_body: None,
+            body_command_tick: None,
             overlays: None,
             window_tick: tick,
             actions: 0,

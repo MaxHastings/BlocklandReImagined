@@ -1,0 +1,6 @@
+{
+  "schema_version": 1,
+  "name": "Statue",
+  "can_ride": false,
+  "uses_items": false
+}

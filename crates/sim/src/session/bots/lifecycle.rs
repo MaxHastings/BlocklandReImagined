@@ -201,7 +201,10 @@ impl Session {
         }
         let peer = self.peers.get_mut(&bot).context("No such bot")?;
         peer.avatar = avatar;
-        peer.package_archetype = body;
+        peer.chosen_body = body.map(|archetype| super::bodies::ChosenBody {
+            archetype,
+            by: super::bodies::Chooser::AddOn,
+        });
         let body = body.unwrap_or_else(|| crate::player_types::PlayerType::Standard.archetype());
         self.set_player_archetype(bot, body)
     }

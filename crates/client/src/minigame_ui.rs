@@ -62,6 +62,9 @@ pub fn settings(rules: &MiniGameRules) -> Result<Settings> {
         player_type: rules.player_type.clone(),
         loadout: rules.loadout.clone(),
         lives: bri_minigames::Lives::Unlimited,
+        // Add-On rules the dialog does not show; the host keeps the game's.
+        bodies: Default::default(),
+        keep_chosen_body: true,
     })
 }
 
@@ -212,22 +215,12 @@ pub fn state(
             })
             .collect(),
         invitations,
-        player_types: bri_sim::player_types::PlayerType::ALL
-            .map(|t| MiniGameChoice {
-                id: t.id().into(),
-                name: t.name().into(),
+        player_types: archetypes
+            .choosable()
+            .map(|(_, a)| MiniGameChoice {
+                id: a.id.clone(),
+                name: a.name.clone(),
             })
-            .into_iter()
-            .chain(
-                archetypes
-                    .iter()
-                    .skip(bri_sim::player_types::PlayerType::EVERY.len())
-                    .filter(|(_, a)| !a.name.is_empty())
-                    .map(|(_, a)| MiniGameChoice {
-                        id: a.id.clone(),
-                        name: a.name.clone(),
-                    }),
-            )
             .collect(),
         items: items
             .iter()

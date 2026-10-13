@@ -762,6 +762,8 @@ pub(super) fn mode_settings(
         },
         loadout,
         lives: mg::Lives::Unlimited,
+        bodies: m.bodies.iter().cloned().collect(),
+        keep_chosen_body: m.keep_chosen_body,
     }
 }
 
@@ -771,17 +773,7 @@ pub(super) fn new_world(
     mut catalog: mg::Catalog,
     archetypes: &crate::archetype::Archetypes,
 ) -> MinigamesWorld {
-    catalog.player_types = PlayerType::ALL
-        .map(|t| t.id().to_string())
-        .into_iter()
-        .chain(
-            archetypes
-                .iter()
-                .skip(PlayerType::EVERY.len())
-                .filter(|(_, a)| !a.name.is_empty())
-                .map(|(_, a)| a.id.clone()),
-        )
-        .collect();
+    catalog.player_types = archetypes.choosable().map(|(_, a)| a.id.clone()).collect();
     MinigamesWorld::new(catalog, mg::PolicyMode::Internet, true).unwrap_or_else(|_| {
         MinigamesWorld::new(
             mg::Catalog::minimal_vanilla(),
@@ -1734,7 +1726,9 @@ impl Session {
                         .map_err(|e| anyhow::anyhow!("Mini-game request rejected: {e}"))?;
                     return self.apply_minigame_effects(effects);
                 }
-                MiniGameRequest::Configure { settings } => manage(mg::Manage::Configure(settings))?,
+                MiniGameRequest::Configure { settings } => {
+                    manage(mg::Manage::Configure(Box::new(settings)))?
+                }
                 MiniGameRequest::Invite { target } => {
                     manage(mg::Manage::Invite(lookup(self, target)?))?
                 }
@@ -1983,11 +1977,12 @@ impl Session {
                         // Outside a minigame the body is a Standard Player
                         // (or the one an Add-On chose, as at respawn), and
                         // respawns at once.
+                        self.drop_stale_body(owner);
+                        let body = self
+                            .kept_body(owner)
+                            .unwrap_or_else(|| PlayerType::Standard.archetype());
                         let peer = self.peers.get_mut(&owner).unwrap();
                         peer.respawn_ms = None;
-                        let body = peer
-                            .package_archetype
-                            .unwrap_or_else(|| PlayerType::Standard.archetype());
                         self.set_player_archetype(owner, body)?;
                         self.set_player_scale(owner, 1.0)?;
                         let max = self.max_health(owner);
@@ -2008,7 +2003,7 @@ impl Session {
                         // type, as it does at respawn.
                         if change_player_type
                             && self.is_alive(owner)
-                            && self.peers[&owner].package_archetype.is_none()
+                            && self.kept_body(owner).is_none()
                         {
                             let archetype = self
                                 .archetypes
@@ -2254,6 +2249,8 @@ impl Session {
         self.weapons.clear_worn(ActorId(owner));
         self.release_riders(owner);
         let (feet, yaw) = self.pick_spawn(owner);
+        self.drop_stale_body(owner);
+        let kept = self.kept_body(owner);
         {
             let peer = self.peers.get_mut(&owner).context("Unknown connection")?;
             // The corpse is this same player: an early respawn removes it now.
@@ -2266,7 +2263,7 @@ impl Session {
             peer.player
                 .teleport(&mut self.simulation.physics, feet, yaw)?;
             // A new body: the minigame's player type, unscaled, full energy.
-            let archetype = peer.package_archetype.unwrap_or_else(|| {
+            let archetype = kept.unwrap_or_else(|| {
                 equipment
                     .as_ref()
                     .and_then(|e| self.archetypes.find(&e.player_type))
@@ -2732,7 +2729,14 @@ impl Session {
     pub fn archetypes(&self) -> &crate::archetype::Archetypes {
         &self.archetypes
     }
-    /// `Player::setDataBlock`, keeping the player's scale and damage taken.
+    /// `Player::setDataBlock`: the one transition into another body, which
+    /// every way of changing body takes (`choose_body`, respawns, laid-on
+    /// bodies, the ball shot). It keeps the player's scale, place, motion
+    /// and the share of health they had; a new movement controller starts
+    /// afresh (the motor). A body that cannot ride leaves its seat safely;
+    /// one that can stays seated and gets out later with room for the body
+    /// it is now. A body that uses no items puts its tool away, still
+    /// carried. Riders on this body move to its seats or get off.
     pub(super) fn set_player_archetype(
         &mut self,
         owner: OwnerId,
@@ -2740,16 +2744,40 @@ impl Session {
     ) -> Result<()> {
         let old = self.max_health(owner);
         let kind = self.archetypes.resolve(archetype);
-        let (movement, max, can_ride) = (kind.movement.clone(), kind.max_health, kind.can_ride);
+        let (movement, max, can_ride, uses_items) = (
+            kind.movement.clone(),
+            kind.max_health,
+            kind.can_ride,
+            kind.uses_items,
+        );
         let peer = self.peers.get_mut(&owner).context("Unknown connection")?;
         let scale = peer.player.state().scale;
         peer.player
             .set_archetype(&mut self.simulation.physics, archetype, movement, scale)?;
-        peer.combat.health = (max - (old - peer.combat.health)).clamp(0.0, max);
+        // Neither a free heal nor a death: the same share of a new maximum.
+        if peer.combat.alive {
+            let share = (peer.combat.health / old).clamp(0.0, 1.0);
+            peer.combat.health = share * max;
+        }
+        let body = {
+            let tuning = peer.player.tuning();
+            [tuning.width, tuning.stand_height]
+        };
+        if let Some(world) = &mut self.vehicles.world {
+            world.resize_occupant(bri_vehicles::OccupantId(owner), body);
+        }
         if !can_ride {
             self.eject(owner);
         }
         self.reseat_riders(owner);
+        if !uses_items
+            && self
+                .weapons
+                .actor(ActorId(owner))
+                .is_some_and(|a| a.selected.is_some())
+        {
+            self.weapons.equip(ActorId(owner), None)?;
+        }
         // `Armor::onNewDataBlock` swaps a held brick for the new datablock's.
         if self.holds_brick(owner) {
             self.hold_brick(owner)?;
