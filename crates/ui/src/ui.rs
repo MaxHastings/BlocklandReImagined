@@ -407,6 +407,9 @@ pub struct Core {
     pub name_tags: Vec<crate::api::NameTag>,
     /// HUD panels of enabled packages this frame (the `hud.overlay` slot).
     pub package_panels: Vec<crate::api::PackagePanel>,
+    /// HUD regions Add-Ons claim this frame, resolved; a claimed stock
+    /// region (the crosshair, energy bar, prints) hides the stock element.
+    pub hud_regions: Vec<crate::api::HudRegionDraw>,
     /// Keys package HUDs bind to package commands. Base game binds win.
     pub package_keys: Vec<crate::api::PackageKey>,
     /// Enabled packages' binds, listed in Controls after the game's own
@@ -472,6 +475,10 @@ pub struct Core {
 }
 
 impl Core {
+    /// An Add-On claims `region` this frame, so its stock element hides.
+    pub fn hud_claimed(&self, region: bri_content::hud::Region) -> bool {
+        self.hud_regions.iter().any(|r| r.region == region)
+    }
     /// Queue a request; returns its id.
     pub fn request(&mut self, a: UiAction) -> RequestId {
         let open_admin = matches!(a, UiAction::OpenAdmin);
@@ -570,6 +577,7 @@ impl Core {
         self.damage_flash = 0.0;
         self.energy = None;
         self.hide_crosshair = false;
+        self.hud_regions.clear();
         self.whiteout = 0.0;
         self.underwater.clear();
         self.lagging = false;
@@ -1539,6 +1547,7 @@ impl Ui {
             trust_invites: Vec::new(),
             name_tags: Vec::new(),
             package_panels: Vec::new(),
+            hud_regions: Vec::new(),
             package_keys: Vec::new(),
             package_binds: Vec::new(),
             server_name: String::new(),

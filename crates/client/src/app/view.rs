@@ -24,6 +24,10 @@ pub(super) struct ViewState {
     /// The rendered camera's roll about its forward axis (a rider's
     /// first-person view tilting with the seat), radians.
     pub(super) rendered_roll: f32,
+    /// Pixels one unit spans one unit in front of the last rendered camera:
+    /// how tall a body draws on screen, divided by its height over its
+    /// distance.
+    pub(super) pixels_per_unit: Option<f32>,
     /// The controls as the last tick sampled them. The tick poses the body,
     /// the held items and the eye from these; the redraw must draw the camera
     /// from them too. Mouse motion the window loop delivers between the tick
@@ -217,10 +221,7 @@ impl App {
         let avatar = avatars.get(&view.owner)?;
         if vitals.mounted.is_none() && vitals.ride.is_none() && !vitals.sitting {
             let (sit, standing) = avatar.getting_up().zip(standing)?;
-            let head = avatar
-                .animated_world_node(avatar_assets, "Eye")?
-                .w_axis
-                .truncate();
+            let head = avatar.eye_world(avatar_assets, true)?;
             let eye = standing.lerp(head, sit);
             return eye.is_finite().then_some(eye);
         }
@@ -236,12 +237,9 @@ impl App {
                 frame.position,
                 frame.rotation,
                 Vec3::from(seat.transform.position),
-                avatar.model_node(avatar_assets, "Eye")?.w_axis.truncate() * local.scale,
+                avatar.eye_local(avatar_assets, false)? * local.scale,
             ),
-            None => avatar
-                .animated_world_node(avatar_assets, "Eye")?
-                .w_axis
-                .truncate(),
+            None => avatar.eye_world(avatar_assets, true)?,
         };
         eye.is_finite().then_some(eye)
     }
@@ -376,7 +374,9 @@ impl App {
                 drawn_offset,
                 building,
                 collision,
-                first_person_eye,
+                // The body's camera profile moves the first-person camera
+                // (its `eye_offset` and bob); zero for the stock camera.
+                moved(first_person_eye, controls.body_eye_offset(yaw)),
                 look(yaw, pitch),
                 None,
                 passages,
@@ -445,13 +445,21 @@ impl App {
             Some((info, _, seat, _)) => vehicles
                 .seat(assets, info, seat)
                 .map(|(feet, _)| Self::player_camera(assets, &view.archetypes, local, feet, pos)),
-            _ if seated.is_none() => Some(Self::player_camera(
-                assets,
-                &view.archetypes,
-                local,
-                Vec3::from(local.feet),
-                pos,
-            )),
+            _ if seated.is_none() => {
+                let (distance, pivot, tilt) = Self::player_camera(
+                    assets,
+                    &view.archetypes,
+                    local,
+                    Vec3::from(local.feet),
+                    pos,
+                );
+                // Over the shoulder or higher, as the body's profile says.
+                Some((
+                    distance,
+                    moved(pivot, controls.body_pivot_offset(yaw)),
+                    tilt,
+                ))
+            }
             _ => None,
         };
         if let Some((distance, pivot, tilt)) = player_view {
@@ -641,4 +649,10 @@ impl App {
     pub(super) fn third_person_view(&self) -> bool {
         draws_third_person(&self.controls, self.local_alive())
     }
+}
+
+/// `at` moved by `by`; exactly `at` when `by` is zero, so the stock camera
+/// is the same to the bit.
+fn moved(at: Vec3, by: Vec3) -> Vec3 {
+    if by == Vec3::ZERO { at } else { at + by }
 }

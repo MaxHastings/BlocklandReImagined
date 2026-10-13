@@ -1549,10 +1549,25 @@ pub struct ArchetypeDef {
     /// `thirdPersonOnly`.
     #[serde(default)]
     pub third_person_only: Option<bool>,
+    /// The body's camera while it is active: `fov`, `eye_offset`, `bob`,
+    /// weapon `sway` and the `third_person` pivot; replacing the base's.
+    /// Left out, the stock camera.
+    #[serde(default)]
+    pub camera: Option<bri_content::camera::CameraProfile>,
     /// Whether it fires and uses items; `false` for a body that only
     /// waits (`PlayerData::onTrigger` doing nothing).
     #[serde(default)]
     pub uses_items: Option<bool>,
+    /// Where the body holds items, sees from and sits (`right_hand`,
+    /// `left_hand`, `eye`, `seat`), each a model node, an offset from the
+    /// feet, or both; replacing the base's.
+    #[serde(default)]
+    pub sockets: Option<bri_content::body::Sockets>,
+    /// The model's clip for each animation role (`idle`, `run`, `jump`,
+    /// `aim_right`, `sit`, `death`...); replacing the base's. A role left
+    /// out asks for the Blockhead's clip name, then falls back.
+    #[serde(default)]
+    pub animations: Option<bri_content::body::Animations>,
     /// Its own movement rules: a `controller` this Add-On or one it
     /// depends on provides (`namespace:controller/name`).
     #[serde(default)]
@@ -1589,6 +1604,15 @@ impl ArchetypeDef {
             self.model.as_ref().is_none_or(|m| text(m, 160)),
             "model must be a model id"
         );
+        if let Some(sockets) = &self.sockets {
+            sockets.validate()?;
+        }
+        if let Some(animations) = &self.animations {
+            bri_content::body::validate_animations(animations)?;
+        }
+        if let Some(camera) = &self.camera {
+            camera.validate()?;
+        }
         ensure!(
             self.controller.as_ref().is_none_or(|c| text(c, 160)),
             "controller must be a controller id"
@@ -2162,6 +2186,21 @@ impl HudPanel {
         }
         Ok(())
     }
+}
+/// Check a HUD region layout (`bri_content::hud::Layout`): its own rules,
+/// and that every rule state it reads is a binding a HUD panel row could
+/// read.
+pub fn hud_layout(layout: &bri_content::hud::Layout) -> Result<()> {
+    layout.validate()?;
+    for source in layout.sources() {
+        if let bri_content::hud::Source::State(bind) = source {
+            ensure!(
+                Binding::parse(&bind).is_some_and(|b| b.scope != Scope::Players),
+                "`{bind}` is not package:player/key or package:global/key"
+            );
+        }
+    }
+    Ok(())
 }
 /// A parsed state binding.
 #[derive(Debug, Clone, PartialEq, Eq)]
