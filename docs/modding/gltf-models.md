@@ -58,7 +58,9 @@ parts parented to a bone also work. Keep it under about 20,000 triangles and
 
 **Sockets.** Add an Empty (Plain Axes) for each, parented to the bone that
 carries it, placed where it should be in the rest pose. Their rotation does
-not matter: the importer lines each socket up with the body.
+not matter: the importer lines each socket up with the body, and the engine
+holds every weapon level as the Blockhead does whichever way the hand bone
+points (see "Grips on imported bodies" in `content-kinds.md`).
 
 | Empty name | What it is | If missing |
 |---|---|---|
@@ -143,6 +145,7 @@ A static mesh (no armature needed) with two Empties:
 | `mountPoint` | where the hand grips it |
 | `muzzlePoint` | the barrel's mouth: where shots and the flash come from |
 | `ejectPoint` (optional) | where shells fly out |
+| `supportPoint` (optional) | where the left hand holds a two-handed gun; without it the left hand goes halfway from `mountPoint` to `muzzlePoint` |
 
 The barrel points at -Y (toward you in Front view). The output model is named
 from a `weapons.json` item and image `model` (see
