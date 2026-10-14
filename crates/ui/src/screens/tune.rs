@@ -341,7 +341,14 @@ impl Tune {
             self.pending.retain(|(p, v, _)| {
                 *p != row.path || (v - field.value).abs() > 1e-4 * v.abs().max(1.0)
             });
-            if self.moved.iter().any(|(p, _)| *p == row.path)
+            // Nor does a slider the mouse holds: the host's answer to an
+            // earlier position never pulls it from under the hand.
+            let held = self
+                .view
+                .id(&slider_name(i))
+                .is_some_and(|n| self.view.pressed.is_some_and(|(p, _)| p == n));
+            if held
+                || self.moved.iter().any(|(p, _)| *p == row.path)
                 || self.pending.iter().any(|(p, _, _)| *p == row.path)
             {
                 continue;
