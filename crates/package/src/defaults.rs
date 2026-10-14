@@ -636,8 +636,9 @@ mod tests {
         assert!(ours().contains(&"brick_mirror"));
         // On by default: the Duplicator, the Stunt Plane and the Mirror,
         // the Workshop vocabulary proof (which adds no tools), the brick packs
-        // (the_bundled_brick_packs_are_the_chosen_ones_in_v20_order) and
-        // the Modular Terrain prints their ModTer bricks wear.
+        // (the_bundled_brick_packs_are_the_chosen_ones_in_v20_order),
+        // the Modular Terrain prints their ModTer bricks wear and the
+        // community maps the game comes with.
         let on: Vec<&str> = listed()
             .iter()
             .filter(|a| a.enabled && (!a.id.starts_with("brick_") || a.id == "brick_mirror"))
@@ -650,7 +651,13 @@ mod tests {
                 "vehicle_stunt_plane",
                 "brick_mirror",
                 "rule-workshop-toys",
-                "print_modter_default"
+                "print_modter_default",
+                "map_arcticchallenge3",
+                "map_avp",
+                "map_emeraldisles4",
+                "map_paradise",
+                "map_creek",
+                "map_forest"
             ]
         );
         let mut available: Vec<(String, String)> = PackageSet::base()
