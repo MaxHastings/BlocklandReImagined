@@ -72,7 +72,21 @@ pub(super) struct Vehicles {
     tumbling: BTreeSet<OwnerId>,
     /// Player/vehicle pairs in contact last tick, so run-overs fire on contact.
     touching: BTreeSet<(OwnerId, VehicleId)>,
+    /// Vehicles each player's own move ran into since the last contact
+    /// check (Torque queues `onCollision` from `Player::updatePos`'s
+    /// hits): boarding takes one of these, not a body merely resting on
+    /// or walking across a vehicle.
+    pub(super) struck: BTreeSet<(OwnerId, VehicleId)>,
     pub(super) scanned: bool,
+    /// Stand-ins of players on foot part way through openings, beyond the
+    /// partners, for this tick's physics step: who, the stand-in's body
+    /// and colliders, and the opening's carry.
+    player_twins: Vec<(
+        OwnerId,
+        RigidBodyHandle,
+        Vec<ColliderHandle>,
+        glam::Affine3A,
+    )>,
 }
 /// Queue length past which a seated player's backlog drains fast (a stall).
 const SEATED_FLOOD: usize = 30;
@@ -671,7 +685,7 @@ impl Session {
                 position,
                 forward.x.atan2(-forward.z),
             )?;
-            peer.inputs.clear();
+            peer.discard_inputs();
             self.follow_player_mounts();
             return Ok(Some((position, scale)));
         }
@@ -1473,7 +1487,12 @@ impl Session {
                 }
                 let above = feet.y > v.transform.position[1] + MOUNT_ABOVE * v.scale;
                 let free = v.seats.iter().any(|s| s.occupant.is_none());
-                let boards = above && !v.seats.is_empty() && may_board;
+                // v20 boards from `onCollision`, which only a hit of the
+                // player's own move raises: landing on the vehicle, not
+                // standing or walking on it (a rider jetted out onto its
+                // roof walks off it without being seated again).
+                let landed = self.vehicles.struck.contains(&(*owner, v.id));
+                let boards = above && landed && !v.seats.is_empty() && may_board;
                 if boards && self.can_ride(*owner, v.owner.0) {
                     if free {
                         boarding.push((*owner, v.id));
@@ -1493,6 +1512,7 @@ impl Session {
             .copied()
             .collect();
         self.vehicles.touching = touching;
+        self.vehicles.struck.clear();
         for (owner, vehicle, vehicle_owner) in refused {
             if begun.contains(&(owner, vehicle)) {
                 let message = self.ride_refusal(owner, vehicle_owner);
@@ -1708,7 +1728,82 @@ impl Session {
         }
         Ok(())
     }
+    /// The shared physics step, with the contact rules of vehicles and of
+    /// players on foot part way through openings
+    /// ([`bri_physics::portal`]). A player there walks on the motor, which
+    /// meets both sides itself; for the step, free bodies behind the
+    /// opening stop meeting the part of them past it, and a stand-in
+    /// beyond the partner lets those there meet it instead.
+    pub(super) fn step_physics(&mut self) -> Result<()> {
+        use bri_physics::portal::{ACTIVE_HOOKS, straddled, twin};
+        let mut rules = self
+            .vehicles
+            .world
+            .as_ref()
+            .map(|w| w.portal_contacts().clone())
+            .unwrap_or_default();
+        let passages = self.simulation.links().passages().clone();
+        let mut cut = Vec::new();
+        if !passages.list.is_empty() {
+            let walking: Vec<_> = self
+                .peers
+                .iter()
+                .filter(|(owner, peer)| !self.vehicles.is_mounted(**owner) && peer.combat.alive)
+                .map(|(owner, peer)| (*owner, peer.player.body()))
+                .collect();
+            let physics = &mut self.simulation.physics;
+            for (owner, body) in walking {
+                for opening in straddled(physics, body, &passages) {
+                    let (stand_in, colliders) = twin(physics, body, &opening, &mut rules);
+                    self.vehicles
+                        .player_twins
+                        .push((owner, stand_in, colliders, opening.carry));
+                    cut.push(body);
+                }
+            }
+            for body in &cut {
+                for c in physics.bodies[*body].colliders().to_vec() {
+                    physics.colliders[c].set_active_hooks(ACTIVE_HOOKS);
+                }
+            }
+        }
+        let stepped = if rules.is_empty() {
+            self.simulation.step()
+        } else {
+            self.simulation.step_with(&rules)
+        };
+        let physics = &mut self.simulation.physics;
+        for body in cut {
+            for c in physics.bodies[body].colliders().to_vec() {
+                physics.colliders[c].set_active_hooks(ActiveHooks::empty());
+            }
+        }
+        stepped
+    }
+    /// What vehicles beyond an opening did to the stand-ins of players part
+    /// way through it, shared with those players as `share_contacts` does,
+    /// carried back; then the stand-ins go.
+    fn share_through_openings(&mut self) {
+        for (owner, body, colliders, carry) in std::mem::take(&mut self.vehicles.player_twins) {
+            if let Some(world) = &self.vehicles.world {
+                let back = carry.inverse();
+                let kick: Vec3 = colliders
+                    .iter()
+                    .map(|c| {
+                        world.share_contacts(&mut self.simulation.physics, *c, combat::PLAYER_MASS)
+                    })
+                    .sum();
+                if kick != Vec3::ZERO
+                    && let Some(peer) = self.peers.get_mut(&owner)
+                {
+                    peer.player.push(back.transform_vector3(kick));
+                }
+            }
+            self.simulation.physics.remove_body(body);
+        }
+    }
     pub(super) fn vehicle_post_step(&mut self) -> Result<()> {
+        self.share_through_openings();
         if self.vehicles.world.is_none() {
             return Ok(());
         }
@@ -2032,7 +2127,7 @@ impl Session {
                         peer.player.push(Vec3::from(velocity));
                         peer.player
                             .set_solid(&mut self.simulation.physics, peer.combat.alive);
-                        peer.inputs.clear();
+                        peer.discard_inputs();
                     }
                 }
                 Intent::Effect {

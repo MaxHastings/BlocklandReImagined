@@ -897,6 +897,16 @@ struct Peer {
     respawn_ms: Option<u32>,
 }
 impl Peer {
+    /// Drop the queued moves when the host moves the body itself (a
+    /// dismount, teleport, death). They count as consumed: the next pose
+    /// acknowledges them, so the client stops replaying moves the host will
+    /// never run, the way it drops every move a pose acknowledges.
+    fn discard_inputs(&mut self) {
+        if let Some(&(sequence, _)) = self.inputs.back() {
+            self.processed_move = self.processed_move.max(sequence);
+        }
+        self.inputs.clear();
+    }
     /// A connection's player as it first arrives in a world: a new body and
     /// everything else at its start. Joins, resumes and map changes build
     /// on it, so state a field adds starts over unless one of them keeps it.
@@ -3279,7 +3289,7 @@ impl Session {
         self.tell_package_problems();
         self.step_holds();
         contain("vehicles", self.vehicle_pre_step());
-        contain("physics", self.simulation.step());
+        contain("physics", self.step_physics());
         contain("vehicles", self.vehicle_post_step());
         self.player_mount_contacts();
         self.sync_seated();

@@ -53,6 +53,11 @@ fn brick(definition: &str, position: [f32; 3], turns: u8, name: Option<&str>) ->
 }
 
 fn simulation(bricks: Vec<Brick>) -> Simulation {
+    simulation_with(bricks, vec![])
+}
+
+/// [`simulation`] with more fixed colliders on the ground.
+fn simulation_with(bricks: Vec<Brick>, more: Vec<ColliderBuilder>) -> Simulation {
     let mut world = World::new("Portals".into(), "test".into(), vec![[1.0; 4]]);
     for (i, brick) in bricks.into_iter().enumerate() {
         world.bricks.insert(i as u64 + 1, brick);
@@ -61,7 +66,11 @@ fn simulation(bricks: Vec<Brick>) -> Simulation {
     Simulation::new(
         world,
         definitions(),
-        vec![ColliderBuilder::cuboid(100.0, 0.5, 100.0).translation(Vector::new(0.0, -0.5, 0.0))],
+        std::iter::once(
+            ColliderBuilder::cuboid(100.0, 0.5, 100.0).translation(Vector::new(0.0, -0.5, 0.0)),
+        )
+        .chain(more)
+        .collect(),
     )
     .unwrap()
 }
@@ -594,13 +603,34 @@ mod vehicles {
         carried: Option<(glam::Affine3A, Motion, Motion)>,
         centre: Vec3,
         velocity: Vec3,
+        /// The middle after every tick, and whether it had been carried.
+        path: Vec<(Vec3, bool)>,
+        /// The most its nose (-z) pointed up before it was carried.
+        nose_up: f32,
+        /// The most openings it was part way into at once, and how many it
+        /// still is at the end.
+        most_straddles: usize,
+        straddles_left: usize,
     }
 
     /// `definition` sent at `velocity` from `at` for `ticks`, the host's
     /// order each tick: vehicles before, the world, vehicles after, then
     /// through any opening.
     fn run(pack: Pack, definition: &str, at: Vec3, velocity: Vec3, ticks: usize) -> Run {
-        let mut sim = portals();
+        run_in(portals(), pack, definition, at, velocity, ticks)
+    }
+
+    /// [`run`] in `sim`. Vehicles step against its openings as the host's
+    /// do, and the shared step keeps the contact rules of bodies part way
+    /// through them.
+    fn run_in(
+        mut sim: Simulation,
+        pack: Pack,
+        definition: &str,
+        at: Vec3,
+        velocity: Vec3,
+        ticks: usize,
+    ) -> Run {
         let mut world = VehiclesWorld::new(pack).unwrap();
         let id = VehicleId(1);
         world
@@ -632,10 +662,13 @@ mod vehicles {
             )
         };
         let mut carried = None;
+        let (mut path, mut most_straddles, mut nose_up) = (Vec::new(), 0, f32::MIN);
         for _ in 0..ticks {
-            world.pre_step(&mut sim.physics, &[]).unwrap();
+            sim.step_vehicle_bodies(&mut world, &[]).unwrap();
+            most_straddles = most_straddles.max(world.straddles());
             let before = BTreeMap::from([(id, world.centre(&sim.physics, id).unwrap())]);
-            sim.step().unwrap();
+            let hooks = world.portal_contacts().clone();
+            sim.step_with(&hooks).unwrap();
             world.post_step(&mut sim.physics).unwrap();
             let going = motion(&world, &sim);
             let passages = sim.passages().clone();
@@ -647,6 +680,10 @@ mod vehicles {
                 assert!(carried.is_none(), "{definition}: carried twice");
                 carried = Some((carry, going, motion(&world, &sim)));
             }
+            path.push((world.centre(&sim.physics, id).unwrap(), carried.is_some()));
+            if carried.is_none() {
+                nose_up = nose_up.max((motion(&world, &sim).2 * Vec3::NEG_Z).y);
+            }
             world.drain_intents();
         }
         let (velocity, _, _) = motion(&world, &sim);
@@ -654,6 +691,10 @@ mod vehicles {
             carried,
             centre: world.centre(&sim.physics, id).unwrap(),
             velocity,
+            path,
+            nose_up,
+            most_straddles,
+            straddles_left: world.straddles(),
         }
     }
 
@@ -734,6 +775,123 @@ mod vehicles {
         }
     }
 
+    /// The two big portals of [`portals`] alone, with `more` fixed colliders.
+    fn big_pair_with(more: Vec<ColliderBuilder>) -> Simulation {
+        simulation_with(
+            vec![
+                brick(BIG, [0.0, 3.0, -4.25], 0, Some("Portal_a")),
+                brick(BIG, [20.25, 3.0, -4.0], 1, Some("Portal_a")),
+            ],
+            more,
+        )
+    }
+
+    #[test]
+    fn a_jeep_drives_through_a_portal_set_against_a_wall() {
+        // A wall flush behind the first portal: the part of the jeep past
+        // its plane is beyond the partner, so the wall never stops it.
+        let wall = ColliderBuilder::cuboid(10.0, 5.0, 0.5).translation(Vector::new(0.0, 5.0, -5.0));
+        let at = Vec3::new(0.0, 1.7, -4.25 + 3.5);
+        let run = run_in(
+            big_pair_with(vec![wall]),
+            pack(),
+            JEEP,
+            at,
+            Vec3::new(0.0, 0.0, -30.0),
+            120,
+        );
+        kept(&run, JEEP);
+        assert!(
+            run.centre.x > 22.0 && run.velocity.x > 5.0,
+            "at {} going {}",
+            run.centre,
+            run.velocity
+        );
+        assert!(run.most_straddles >= 1);
+        assert_eq!(run.straddles_left, 0, "nothing straddled once through");
+    }
+
+    #[test]
+    fn a_wall_just_past_the_partner_stops_the_nose_before_the_middle_crosses() {
+        // The jeep is 5.36 long. The partner's opening is its brick's face
+        // at x = 20, and a wall 2 past it meets the jeep's nose while its
+        // middle is still 0.68 short of the first opening (z = -4), so it
+        // stops there, never carried, and never thrown back.
+        let face = 20.0 + 2.0;
+        let wall =
+            ColliderBuilder::cuboid(0.5, 5.0, 10.0).translation(Vector::new(face + 0.5, 5.0, -4.0));
+        let at = Vec3::new(0.0, 1.7, -4.25 + 3.5);
+        let run = run_in(
+            big_pair_with(vec![wall]),
+            pack(),
+            JEEP,
+            at,
+            Vec3::new(0.0, 0.0, -10.0),
+            200,
+        );
+        assert!(
+            run.carried.is_none(),
+            "carried into the wall: {}",
+            run.centre
+        );
+        // Stopped against it: the nose at the wall, the middle 2.68 back.
+        let short = run.centre.z + 4.0;
+        assert!(
+            (0.6..1.0).contains(&short),
+            "middle {short} short of the opening"
+        );
+        assert!(run.velocity.length() < 1.0, "still going {}", run.velocity);
+        // It came to rest against it after a small rebound, as off a wall
+        // standing there (it meets it while riding the sill, so it tips a
+        // little), not thrown back through the portal.
+        let nearest = run.path.iter().map(|(p, _)| p.z).fold(f32::MAX, f32::min);
+        assert!(
+            run.centre.z - nearest < 0.4,
+            "bounced back {}",
+            run.centre.z - nearest
+        );
+    }
+
+    #[test]
+    fn a_car_s_front_wheels_ride_onto_a_plank_past_the_partner_before_it_crosses() {
+        // A plank 0.3 high just past the partner. The front wheels go past
+        // the first opening's plane well before the car's middle does, and
+        // they ride up onto it there, lifting the car's nose early.
+        let face = 20.0;
+        let plank = ColliderBuilder::cuboid(1.0, 0.15, 3.0).translation(Vector::new(
+            face + 0.3 + 1.0,
+            0.15,
+            -4.0,
+        ));
+        let car = bri_vehicles::testing::CAR;
+        let at = Vec3::new(0.0, 0.6, -4.25 + 5.0);
+        let run = run_in(
+            big_pair_with(vec![plank]),
+            // Coasting, with nothing braking it.
+            bri_vehicles::testing::pack_with(|d| d.engine_brake = 0.0),
+            car,
+            at,
+            Vec3::new(0.0, 0.0, -15.0),
+            240,
+        );
+        kept(&run, car);
+        // 0.3 up over the 3.2 between its axles.
+        assert!(
+            run.nose_up > 0.06,
+            "nose up {} before crossing",
+            run.nose_up
+        );
+        // And the crossing itself is smooth: no tick moves the middle much
+        // further than the car travels.
+        for pair in run.path.windows(2) {
+            let ((a, ca), (b, cb)) = (pair[0], pair[1]);
+            if ca == cb {
+                assert!((b - a).y.abs() < 0.08, "jolted {} at {a}", (b - a).y);
+            }
+        }
+        assert_eq!(run.straddles_left, 0);
+    }
+
     #[test]
     fn the_small_portal_stops_what_does_not_fit() {
         let cases = [
@@ -747,6 +905,149 @@ mod vehicles {
             assert!(run.carried.is_none(), "{definition} went through");
             assert!(run.centre.z > -4.25, "{definition}: at {}", run.centre);
         }
+    }
+
+    /// The ticks of `count` jeeps parked, each in front of its own pair of
+    /// big portals: part way into the first (`into`) or well back from it.
+    /// Returns the time of each tick's host order and every jeep's final
+    /// pose, bit for bit.
+    fn parked(
+        count: usize,
+        into: bool,
+        ticks: usize,
+    ) -> (Vec<std::time::Duration>, Vec<[u32; 7]>, usize, f32) {
+        let mut bricks = Vec::new();
+        for i in 0..count {
+            let x = i as f32 * 60.0;
+            let name = format!("Portal_{i}");
+            bricks.push(brick(BIG, [x, 3.0, -4.25], 0, Some(&name)));
+            bricks.push(brick(BIG, [x + 20.25, 3.0, -4.0], 1, Some(&name)));
+        }
+        let ground =
+            ColliderBuilder::cuboid(2000.0, 0.5, 200.0).translation(Vector::new(0.0, -0.5, 0.0));
+        let mut sim = simulation_with(bricks, vec![ground]);
+        let mut world = VehiclesWorld::new(pack()).unwrap();
+        for i in 0..count {
+            // The jeep is 5.36 long: its middle 0.7 short of the plane puts
+            // two units of its nose past it.
+            let z = if into { -4.0 + 0.7 } else { 20.0 };
+            world
+                .spawn(
+                    &mut sim.physics,
+                    Spawn {
+                        id: VehicleId(i as u64 + 1),
+                        owner: OwnerId(1),
+                        definition: JEEP.into(),
+                        transform: Transform {
+                            position: [i as f32 * 60.0, 1.7, z],
+                            ..Default::default()
+                        },
+                        spawn_id: None,
+                        respawn_ticks: None,
+                        scale: 1.0,
+                    },
+                )
+                .unwrap();
+        }
+        // Kept awake, so both layouts pay for the same simulated bodies and
+        // the difference is what the split costs.
+        for (_, body) in sim
+            .physics
+            .bodies
+            .iter_mut()
+            .filter(|(_, b)| b.is_dynamic())
+        {
+            body.activation_mut().normalized_linear_threshold = -1.0;
+            body.activation_mut().angular_threshold = -1.0;
+        }
+        // The top of the first opening's sill, which the jeep rests on.
+        let sill = 5.0
+            - sim
+                .physics
+                .query_pipeline_with_filter(QueryFilter::only_fixed())
+                .cast_ray(
+                    &Ray::new(Vec3::new(0.0, 5.0, -4.25), Vec3::NEG_Y),
+                    10.0,
+                    true,
+                )
+                .unwrap()
+                .1;
+        let mut times = Vec::new();
+        let mut most = 0;
+        for _ in 0..ticks {
+            let started = std::time::Instant::now();
+            sim.step_vehicle_bodies(&mut world, &[]).unwrap();
+            most = most.max(world.straddles());
+            let before: BTreeMap<_, _> = (0..count)
+                .map(|i| VehicleId(i as u64 + 1))
+                .map(|id| (id, world.centre(&sim.physics, id).unwrap()))
+                .collect();
+            let hooks = world.portal_contacts().clone();
+            sim.step_with(&hooks).unwrap();
+            world.post_step(&mut sim.physics).unwrap();
+            let passages = sim.passages().clone();
+            carry_through_openings(&mut world, &mut sim.physics, &passages, &before).unwrap();
+            times.push(started.elapsed());
+        }
+        let poses = (0..count)
+            .map(|i| {
+                let t = world
+                    .vehicle_snapshot(&sim.physics, VehicleId(i as u64 + 1))
+                    .unwrap()
+                    .transform;
+                let [a, b, c] = t.position;
+                let [d, e, f, g] = t.rotation;
+                [a, b, c, d, e, f, g].map(f32::to_bits)
+            })
+            .collect();
+        (times, poses, most, sill)
+    }
+
+    #[test]
+    fn stress_vehicles_part_way_through_openings_cost_and_repeat() {
+        // Diagnostic timings are printed, never thresholded; the repeat is
+        // checked bit for bit. `BRI_STRESS_VEHICLES` sets the count.
+        let count = std::env::var("BRI_STRESS_VEHICLES")
+            .ok()
+            .and_then(|n| n.parse().ok())
+            .unwrap_or(8);
+        // The box jeep is a Tumble, cleared at 240 ticks when slow.
+        let ticks = 230;
+        let median = |mut t: Vec<std::time::Duration>| {
+            let t = t.split_off(60);
+            let mut micros: Vec<_> = t.iter().map(|d| d.as_secs_f64() * 1e6).collect();
+            micros.sort_by(f64::total_cmp);
+            (micros[micros.len() / 2], micros[micros.len() * 99 / 100])
+        };
+        let (mut back, back_poses, none, sill) = parked(count, false, ticks);
+        let (mut into, into_poses, most, _) = parked(count, true, ticks);
+        let (more, again, _, _) = parked(count, true, ticks);
+        into.extend(more.into_iter().skip(60));
+        back.extend(parked(count, false, ticks).0.into_iter().skip(60));
+        assert_eq!(none, 0, "parked back, nothing is part way in");
+        assert_eq!(most, count, "each is part way into its opening");
+        assert_eq!(into_poses, again, "the same run comes out the same");
+        // Parked, they stay put: no creep, hop or carry from the split.
+        // Part way in, each rests on the opening's sill.
+        for (a, b) in into_poses.iter().zip(&back_poses) {
+            let y = |p: &[u32; 7]| f32::from_bits(p[1]);
+            assert!(
+                (y(a) - y(b) - sill).abs() < 0.05,
+                "rests on the {sill} sill: {} vs {}",
+                y(a),
+                y(b)
+            );
+            assert!(
+                (f32::from_bits(a[2]) + 3.3).abs() < 0.1,
+                "and stays where it was parked: {}",
+                f32::from_bits(a[2])
+            );
+        }
+        let (back, back99) = median(back);
+        let (into, into99) = median(into);
+        eprintln!(
+            "{count} jeeps, host order per tick (median / p99 us): back {back:.0} / {back99:.0}, part way in {into:.0} / {into99:.0}"
+        );
     }
 }
 

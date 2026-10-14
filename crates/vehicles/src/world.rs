@@ -400,6 +400,11 @@ struct Instance {
     /// The aim the turret collider was last posed at, so a still turret
     /// is not re-posed (a collider update) every tick.
     turret_aim: Option<f32>,
+    /// The openings the body is part way into, as this step began, and
+    /// what stands beyond their partners brought back for the step
+    /// ([`bri_physics::portal`]); never saved, found again each step.
+    straddles: Vec<bri_content::passage::Passage>,
+    fills: Vec<(bri_content::passage::Passage, bri_physics::portal::Fill)>,
 }
 impl Instance {
     fn weapon_available(&self, d: &Definition) -> bool {
@@ -531,6 +536,9 @@ pub struct VehiclesWorld {
     /// steps skipped because the body was asleep.
     wheel_rays: u64,
     resting_skips: u64,
+    /// The solver-contact rules of the bodies part way through openings,
+    /// for this step's physics hooks ([`Self::portal_contacts`]).
+    portal: bri_physics::portal::PortalContacts,
 }
 fn pose(t: &Transform) -> Pose {
     Pose::from_parts(Vec3::from_array(t.position), Quat::from_array(t.rotation))
@@ -611,9 +619,21 @@ impl VehiclesWorld {
             held: BTreeSet::new(),
             wheel_rays: 0,
             resting_skips: 0,
+            portal: Default::default(),
         })
     }
     /// Wheel rays cast so far (one per wheel per vehicle step while awake).
+    /// The physics hooks for the next step: contacts of the bodies part
+    /// way through openings, as their twins beyond stand for them. Pass
+    /// these to the shared step that follows [`Self::pre_step_through`].
+    pub fn portal_contacts(&self) -> &bri_physics::portal::PortalContacts {
+        &self.portal
+    }
+    /// How many openings vehicles are part way into as this step began
+    /// (for tests).
+    pub fn straddles(&self) -> usize {
+        self.instances.values().map(|v| v.straddles.len()).sum()
+    }
     pub fn wheel_rays(&self) -> u64 {
         self.wheel_rays
     }
@@ -719,11 +739,27 @@ impl VehiclesWorld {
                 .sum::<Vec3>()
                 * sign;
             if impulse.is_finite() && impulse.length_squared() > 0. {
-                kicks.push((body, impulse, v.previous_velocity));
+                kicks.push((body, impulse, v.previous_velocity, None));
+            }
+        }
+        // A vehicle part way into an opening that ran into the body beyond
+        // its partner, met through it: the same share, the body's carried
+        // there.
+        for v in self.instances.values() {
+            if v.actor.is_some() {
+                continue;
+            }
+            for (opening, fill) in &v.fills {
+                if fill.source == collider
+                    && let Some((impulse, _)) = bri_physics::portal::impulse(world, fill, v.body)
+                    && impulse.y.abs() < SIDE_HIT * impulse.length()
+                {
+                    kicks.push((v.body, impulse, v.previous_velocity, Some(opening.carry)));
+                }
             }
         }
         let mut change = Vec3::ZERO;
-        for (body, impulse, before) in kicks {
+        for (body, impulse, before, carry) in kicks {
             let b = &mut world.bodies[body];
             let total = b.mass() + mass;
             // The share never sends the vehicle on into the body faster
@@ -735,7 +771,8 @@ impl VehiclesWorld {
             let room = (b.linvel().dot(away) + (-before.dot(away)).max(0.)).max(0.);
             let impulse = impulse.clamp_length_max(room * total);
             b.apply_impulse(-impulse * (b.mass() / total), true);
-            change -= impulse / total;
+            let kick = -impulse / total;
+            change += carry.map_or(kick, |c| c.transform_vector3(kick));
         }
         change
     }
@@ -896,6 +933,8 @@ impl VehiclesWorld {
                 actor,
                 relocations: 0,
                 turret_aim: None,
+                straddles: Vec::new(),
+                fills: Vec::new(),
             },
         );
         Ok(())
@@ -1170,6 +1209,7 @@ impl VehiclesWorld {
             self.dismount(world, o.owner, o.id, true)?;
         }
         let v = self.instances.remove(&id).unwrap();
+        bri_physics::portal::unfill(world, v.fills.into_iter().map(|(_, f)| f));
         world.remove_body(v.body);
         self.intents.push(Intent::Removed { vehicle: id });
         Ok(())
@@ -2016,6 +2056,23 @@ impl VehiclesWorld {
             v.jump_held = c.jump;
             if !v.wheels.is_empty() {
                 self.wheel_rays += v.wheels.len() as u64;
+                let through = if passages.list.is_empty() {
+                    tires::Through::default()
+                } else {
+                    let b = &world.bodies[v.body];
+                    let reach = d
+                        .wheels
+                        .iter()
+                        .map(|w| Vec3::from_array(w.position).length() + w.rest_length + w.radius)
+                        .fold(0., f32::max)
+                        * v.spawn.scale;
+                    tires::Through {
+                        openings: bri_content::passage::Passages {
+                            list: passages.near(b.center_of_mass(), reach).copied().collect(),
+                            closed: vec![],
+                        },
+                    }
+                };
                 // `throttle_brakes`: a throttle against the roll brakes.
                 let against = d.throttle_brakes && {
                     let b = &world.bodies[v.body];
@@ -2036,17 +2093,90 @@ impl VehiclesWorld {
                         wake,
                     },
                     FIXED_DT,
+                    &through,
                 );
             }
             if alive {
                 weapon_step(self.tick, *id, v, d, world, &mut self.intents);
             }
         }
+        self.straddle(world, passages);
         Ok(carried)
+    }
+    /// Bring back what stands beyond the partner of each opening a body is
+    /// part way into, for the step about to run, and keep the contact
+    /// rules that let each side touch only its own world
+    /// ([`bri_physics::portal`]). Player-type mounts walk on the motor,
+    /// which already meets both sides.
+    fn straddle(&mut self, world: &mut PhysicsWorld, passages: &bri_content::passage::Passages) {
+        use bri_physics::portal::{ACTIVE_HOOKS, fill, unfill};
+        self.portal.clear();
+        // Fills of a step that never ran.
+        for v in self.instances.values_mut() {
+            unfill(world, v.fills.drain(..).map(|(_, f)| f));
+        }
+        if passages.list.is_empty() && self.instances.values().all(|v| v.straddles.is_empty()) {
+            return;
+        }
+        let mut skip = Vec::new();
+        for v in self.instances.values_mut() {
+            let d = &self.catalog[&v.spawn.definition];
+            let openings = if d.is_actor() {
+                vec![]
+            } else {
+                bri_physics::portal::straddled(world, v.body, passages)
+            };
+            let hooks = if openings.is_empty() {
+                ActiveHooks::empty()
+            } else {
+                ACTIVE_HOOKS
+            };
+            let colliders = world.bodies[v.body].colliders().to_vec();
+            for c in &colliders {
+                if world.colliders[*c].active_hooks() != hooks {
+                    world.colliders[*c].set_active_hooks(hooks);
+                }
+            }
+            for opening in &openings {
+                self.portal.cut(opening, &colliders);
+                for f in fill(world, v.body, opening, &skip, &mut self.portal) {
+                    skip.push(f.collider);
+                    v.fills.push((*opening, f));
+                }
+            }
+            v.straddles = openings;
+        }
     }
     pub fn post_step(&mut self, world: &mut PhysicsWorld) -> Result<()> {
         ensure!(self.step_pending, "post_step needs pre_step");
         self.step_pending = false;
+        // A free body beyond an opening, met through it, was solid as a
+        // wall for the step: they share the hit as two free bodies would
+        // (see `share_contacts`), the far one taking its part carried there.
+        for v in self.instances.values() {
+            for (opening, fill) in &v.fills {
+                let Some(other) = fill.source_body.filter(|b| {
+                    *b != v.body && world.bodies.get(*b).is_some_and(|b| b.is_dynamic())
+                }) else {
+                    continue;
+                };
+                let Some((impulse, at)) = bri_physics::portal::impulse(world, fill, v.body) else {
+                    continue;
+                };
+                let (mass, theirs) = (world.bodies[v.body].mass(), world.bodies[other].mass());
+                let total = mass + theirs;
+                if total.partial_cmp(&0.) != Some(std::cmp::Ordering::Greater) {
+                    continue;
+                }
+                let carry = opening.carry;
+                world.bodies[v.body].apply_impulse(-impulse * (mass / total), true);
+                world.bodies[other].apply_impulse_at_point(
+                    carry.transform_vector3(-impulse) * (theirs / total),
+                    carry.transform_point3(at),
+                    true,
+                );
+            }
+        }
         self.tick = self.tick.checked_add(1).context("vehicle tick overflow")?;
         let mut removed = vec![];
         let mut wrecks = vec![];
@@ -2097,10 +2227,17 @@ impl VehiclesWorld {
                 }
             } else {
                 let b = &world.bodies[v.body];
+                // What lies beyond an opening, met through it: struck there.
+                let beyond = |other: ColliderHandle| {
+                    v.fills
+                        .iter()
+                        .find(|(_, f)| f.collider == other)
+                        .map(|(opening, _)| opening.carry)
+                };
                 if let Some(smash) = &d.smash {
-                    for c in b.colliders() {
-                        for p in world.contact_pairs_with(*c) {
-                            let (other, outward) = if p.collider1 == *c {
+                    for &c in b.colliders() {
+                        for p in world.contact_pairs_with(c) {
+                            let (other, outward) = if p.collider1 == c {
                                 (p.collider2, 1.)
                             } else {
                                 (p.collider1, -1.)
@@ -2143,14 +2280,17 @@ impl VehiclesWorld {
                             if let Some((point, speed, part)) = hit
                                 && let Some(collider) = world.colliders.get(other)
                             {
+                                let carry = beyond(other).unwrap_or(glam::Affine3A::IDENTITY);
                                 self.intents.push(Intent::Struck {
                                     vehicle: *id,
                                     owner: v.spawn.owner,
                                     other: collider.user_data,
                                     other_part: part,
-                                    point: point.to_array(),
+                                    point: carry.transform_point3(point).to_array(),
                                     speed,
-                                    velocity: v.previous_velocity.to_array(),
+                                    velocity: carry
+                                        .transform_vector3(v.previous_velocity)
+                                        .to_array(),
                                 });
                             }
                         }
@@ -2224,6 +2364,10 @@ impl VehiclesWorld {
                     }
                 }
             }
+        }
+        // The step's fills go back out of the world.
+        for v in self.instances.values_mut() {
+            bri_physics::portal::unfill(world, v.fills.drain(..).map(|(_, f)| f));
         }
         if self.prediction {
             removed.clear();

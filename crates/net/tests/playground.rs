@@ -138,6 +138,9 @@ fn session() -> (bri_sim::session::Session, u64) {
         }
     }
     let mut session = common::session_with(world);
+    // The mode respawns players where the host spawns them: behind the
+    // buggy, not on it.
+    session.set_spawn_points(vec![SPAWN]).unwrap();
     // The carbine's weapons and the buggy's gun, merged as a host merges
     // every package's.
     let load = |dir: &str| {
@@ -254,6 +257,20 @@ async fn board(
     seat: &mut Option<SeatSince>,
     vehicle: u64,
 ) -> Result<(u8, f32)> {
+    // Up to it first: the spawn is a few strides away.
+    for _ in 0..40 {
+        let at = Vec3::from(client.replica.vehicle_poses[&vehicle].position);
+        let to = at - feet(client, client.owner);
+        if Vec3::new(to.x, 0.0, to.z).length() < 4.0 {
+            break;
+        }
+        let walk = MoveInput {
+            forward: 1.0,
+            yaw: to.x.atan2(-to.z),
+            ..Default::default()
+        };
+        hold(client, seat, walk, 6).await?;
+    }
     for _ in 0..20 {
         let at = Vec3::from(client.replica.vehicle_poses[&vehicle].position);
         let to = at - feet(client, client.owner);

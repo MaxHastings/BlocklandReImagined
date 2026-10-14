@@ -2,6 +2,7 @@
 
 use rapier3d::prelude::*;
 pub mod content;
+pub mod portal;
 pub mod terrain;
 
 pub const FIXED_DT: f32 = 1.0 / 120.0;
