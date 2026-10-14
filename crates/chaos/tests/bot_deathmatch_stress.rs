@@ -37,7 +37,9 @@
 //!   For playing a map with a vehicle it was not built with, the tank in
 //!   Afghanistan DM say.
 //!
-//! What it prints: the host's step time (percentiles, how many ticks ran
+//! What it prints: one `BRI_STRESS_SUMMARY {json}` line (the step mean,
+//! p99 and worst in ms, for `tools/gate.py`'s performance budget), and the
+//! host's step time (percentiles, how many ticks ran
 //! over the 8.3 ms a 120 Hz tick has, the worst one-second window), the
 //! bots' share of it, failed bot steps, and per-bot motion faults: ticks a
 //! living bot on foot ran no input (it stood frozen for that tick) and
@@ -58,6 +60,9 @@ use std::time::Instant;
 
 const SLAYER: &str = "gamemode_slayer-rules";
 const TICK_BUDGET_NS: u128 = 1_000_000_000 / 120;
+/// Starts the one JSON line of the run's results (`tools/gate.py` reads
+/// `step_mean_ms` from it for its performance budget).
+const SUMMARY_PREFIX: &str = "BRI_STRESS_SUMMARY";
 /// Farther than a body moves in one tick on foot at any speed v20 allows
 /// (jets and falls included): a jump past this is a teleport.
 const TELEPORT: f32 = 2.0;
@@ -492,6 +497,25 @@ fn bots_fight_a_free_for_all_on_real_content() -> Result<()> {
         percentile(&sorted, 1.0),
         steps.len(),
         over as f64 * 100.0 / steps.len() as f64,
+    );
+    // One machine-readable line for tools/gate.py's performance budget.
+    eprintln!(
+        "{SUMMARY_PREFIX} {}",
+        serde_json::json!({
+            "world": name,
+            "bricks": bricks,
+            "bots": bots.len(),
+            "teams": teams,
+            "seconds": seconds,
+            "ticks": steps.len(),
+            "build": if cfg!(debug_assertions) { "debug" } else { "release" },
+            "step_mean_ms": mean,
+            "step_p99_ms": percentile(&sorted, 0.99),
+            "step_max_ms": percentile(&sorted, 1.0),
+            "over_budget_pct": over as f64 * 100.0 / steps.len() as f64,
+            "bot_think_ms_per_tick": think,
+            "deaths": deaths,
+        })
     );
     let (sampled, arcs, edges, forgotten) = s.nav_work_counts();
     eprintln!(
