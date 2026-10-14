@@ -375,6 +375,146 @@ fn spawn_brick_vehicle_mounts_drives_dismounts_and_respawns(f: &Fixture) -> anyh
 }
 
 on_both! {
+/// Moves still queued when the host dismounts a rider are dropped, and the
+/// next pose acknowledges them: the client must not keep replaying moves the
+/// host will never run.
+fn moves_queued_at_a_dismount_are_acknowledged(f: &Fixture) -> anyhow::Result<()> {
+    let (mut s, owner) = session(f)?;
+    let mut sequence = 0;
+    let ack = |s: &Session| {
+        s.motion_states()
+            .into_iter()
+            .find(|(p, _)| p.owner == owner)
+            .unwrap()
+            .1
+    };
+    for _ in 0..120 {
+        sequence += 1;
+        s.movement(owner, sequence, MoveInput::default())?;
+        s.step()?;
+    }
+    // Hop onto the jeep, as above.
+    'board: for i in 0..60 {
+        let input = MoveInput {
+            forward: 1.0,
+            jump: i % 3 == 0,
+            ..Default::default()
+        };
+        for _ in 0..10 {
+            sequence += 1;
+            s.movement(owner, sequence, input)?;
+            s.step()?;
+            if s.mounted(owner).is_some() {
+                break 'board;
+            }
+        }
+    }
+    assert!(s.mounted(owner).is_some(), "boarded the jeep");
+    for _ in 0..60 {
+        sequence += 1;
+        s.movement(owner, sequence, MoveInput::default())?;
+        s.step()?;
+    }
+    // Jet, then a burst of moves that arrives in the same datagram.
+    for i in 0..8 {
+        sequence += 1;
+        let input = MoveInput {
+            jet: i < 2,
+            ..Default::default()
+        };
+        s.movement(owner, sequence, input)?;
+    }
+    for _ in 0..20 {
+        s.step()?;
+    }
+    assert_eq!(s.mounted(owner), None, "jet leaves the jeep");
+    assert_eq!(ack(&s), sequence, "every move sent before the dismount is acknowledged");
+    // The next move runs on foot and is acknowledged as usual.
+    sequence += 1;
+    s.movement(owner, sequence, MoveInput::default())?;
+    s.step()?;
+    assert_eq!(ack(&s), sequence);
+    Ok(())
+}
+}
+
+on_both! {
+/// A rider jetted out lands on the car's roof (`doDismount`'s first point
+/// is 2.2 up the seat) and may stand there: v20 seats a player from
+/// `onCollision`, which only a hit of their own move raises, so standing
+/// on a vehicle long past MinMountTime does not seat them again; landing
+/// on it from a hop does.
+fn standing_on_a_vehicle_does_not_seat_a_rider_but_landing_on_it_does(f: &Fixture) -> anyhow::Result<()> {
+    let (mut s, owner) = session(f)?;
+    let mut sequence = 0;
+    let mut feed = |s: &mut Session, input: MoveInput, ticks: usize| -> anyhow::Result<()> {
+        for _ in 0..ticks {
+            sequence += 1;
+            s.movement(owner, sequence, input)?;
+            s.step()?;
+        }
+        Ok(())
+    };
+    feed(&mut s, MoveInput::default(), 120)?;
+    for i in 0..60 {
+        let input = MoveInput {
+            forward: 1.0,
+            jump: i % 3 == 0,
+            ..Default::default()
+        };
+        feed(&mut s, input, 10)?;
+        if s.mounted(owner).is_some() {
+            break;
+        }
+    }
+    assert!(s.mounted(owner).is_some(), "boarded the car");
+    feed(&mut s, MoveInput::default(), 120)?;
+    feed(
+        &mut s,
+        MoveInput {
+            jet: true,
+            ..Default::default()
+        },
+        2,
+    )?;
+    feed(&mut s, MoveInput::default(), 60)?;
+    assert_eq!(s.mounted(owner), None, "jet leaves the car");
+    let car = Vec3::from(s.vehicle_poses()[0].position);
+    let feet = |s: &Session| {
+        Vec3::from(
+            s.motion_states()
+                .into_iter()
+                .find(|(p, _)| p.owner == owner)
+                .unwrap()
+                .0
+                .feet,
+        )
+    };
+    assert!(
+        feet(&s).y > car.y + 0.5,
+        "the rider stands on the roof: feet {} over the car at {car}",
+        feet(&s)
+    );
+    // Long past MinMountTime, still standing there.
+    feed(&mut s, MoveInput::default(), 360)?;
+    assert_eq!(s.mounted(owner), None, "standing on the roof does not seat him");
+    assert!(feet(&s).y > car.y + 0.5, "still on the roof");
+    // A hop lands on it again: that seats him.
+    feed(
+        &mut s,
+        MoveInput {
+            jump: true,
+            ..Default::default()
+        },
+        4,
+    )?;
+    feed(&mut s, MoveInput::default(), 240)?;
+    assert!(s.mounted(owner).is_some(), "landing on the car seats him");
+    Ok(())
+}
+}
+
+on_both! {
 fn bot_brick_spawns_a_bot_that_fights_inside_its_owners_minigame(f: &Fixture) -> anyhow::Result<()> {
     use bri_sim::session::{InspectMode, MiniGameRequest, Notice, ToolCatalog, WrenchProperties};
     let definitions = f.bricks();
@@ -2290,4 +2430,76 @@ fn respawning_from_a_parked_jeeps_roof_leaves_it_parked() -> anyhow::Result<()> 
         "the parked jeep was thrown: {fastest} u/s, {spin} rad/s, {parked} -> {after}"
     );
     Ok(())
+}
+
+on_both! {
+/// A player standing part way into a doorway has a part beyond its
+/// partner: a car driven at the partner meets that part, as it would the
+/// player standing there, instead of driving into the opening through it.
+fn a_car_meets_the_part_of_a_player_beyond_a_portal(f: &Fixture) -> anyhow::Result<()> {
+    const PORTAL: &str = "test.walk-portal";
+    let car = f.vehicle_definition(Vehicle::Car);
+    let width = bri_sim::player::PlayerTuning::default().width;
+    let mut fronts = Vec::new();
+    let mut pasts = Vec::new();
+    for standing in [true, false] {
+        let mut definitions = f.bricks();
+        definitions.entries.insert(PORTAL.into(), bri_sim::testing::portal(PORTAL, Some([14, 1, 30])));
+        let mut world = World::new("Portals".into(), "test".into(), vec![[1.0; 4]]);
+        // The first opening faces +z at z = -24; its partner faces +x at x = 30.
+        for (id, position, turns) in [(2, [0., 3., -24.25], 0), (3, [30.25, 3., -24.], 1)] {
+            let mut portal = Brick::new(ContentRef::Resolved(PORTAL.into()), position, 0);
+            portal.quarter_turns = turns;
+            portal.name = Some("walk-doorway".into());
+            world.bricks.insert(id, portal);
+        }
+        world.next_brick_id = 4;
+        let mut s = Session::new(Simulation::new(world, definitions, vec![ground()])?);
+        s.set_weapon_pack(f.weapons.clone())?;
+        // Rolling freely, without the driverless engine brake.
+        let mut pack = f.vehicles();
+        pack.definitions.iter_mut().for_each(|d| d.engine_brake = 0.);
+        s.set_vehicle_pack(pack, Vec::new())?;
+        // Walking in until a third of the body is past the first opening's
+        // plane (z = -24, facing +z), or standing well away from it.
+        let target = -24. + width * 0.5 - width / 3.;
+        let owner = s.join("Walker".into(), Vec3::new(if standing { 0. } else { -20. }, 0.05, -20.), true)?;
+        let mut p = Feeder { owner, sequence: 0 };
+        p.feed(&mut s, MoveInput::default(), 30)?;
+        let feet = |s: &Session| Vec3::from(s.motion_states().into_iter().find(|(m, _)| m.owner == owner).unwrap().0.feet);
+        if standing {
+            for _ in 0..240 {
+                if feet(&s).z < target + 0.4 {
+                    break;
+                }
+                p.feed(&mut s, MoveInput { forward: 1., ..Default::default() }, 1)?;
+            }
+        }
+        p.feed(&mut s, MoveInput::default(), 30)?;
+        let stood = feet(&s);
+        if standing {
+            assert!(stood.x.abs() < 1. && (stood.z - target).abs() < 0.5, "the walker is part way in: {stood}");
+        }
+        pasts.push(-24. - (stood.z - width * 0.5));
+        // A car rolling at the partner along -x, nose first.
+        s.spawn_vehicle_at(0, &car.id, Vec3::new(40., 0.6, -24.), -std::f32::consts::FRAC_PI_2, Vec3::new(-15., 0., 0.))?;
+        let mut front = f32::MAX;
+        for _ in 0..400 {
+            p.feed(&mut s, MoveInput::default(), 1)?;
+            let pose = &s.vehicle_poses()[0];
+            // Its nose is the hull's -z end, turned to -x.
+            front = front.min(pose.position[0] + car.bounds_min[2]);
+            if pose.position[0] < 25. {
+                break;
+            }
+        }
+        fronts.push(front);
+    }
+    let past = pasts[0];
+    // With the walker there it stops at their part beyond the partner;
+    // without, it goes on into the opening.
+    assert!(fronts[0] > 30. + past * 0.5, "nose reached {} (the walker's part ends at {})", fronts[0], 30. + past);
+    assert!(fronts[1] < 29., "with nobody there the car goes in: {}", fronts[1]);
+    Ok(())
+}
 }

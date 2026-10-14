@@ -486,7 +486,9 @@ impl Drive {
             .into_iter()
             .find_map(|(id, carry)| (id == self.id).then_some(carry));
         let before = self.world.centre(&mirror.physics, self.id);
-        mirror.physics.step();
+        mirror
+            .physics
+            .step_with_events(self.world.portal_contacts(), &());
         self.world.post_step(&mut mirror.physics)?;
         self.world.drain_intents();
         self.previous = self.current.clone();
