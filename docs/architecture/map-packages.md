@@ -95,31 +95,33 @@ dependency graph (AGENTS.md).
 
 ## The format
 
-A `map` entry in `package.json`'s `provides`, id `<package>:map/<name>`,
-pointing at a `*.map.json`:
+As built: a `map` entry in `package.json`'s `provides`, id
+`<package>:map/<name>`, points at a **native map bundle's `bundle.json`**,
+the same format the v20 converter already writes for the vanilla maps. So
+there is one reader (`NativeMap::load`, `scene_loader::load_bundle`) and
+moving vanilla onto the kind is packaging, not a second format. An Add-On
+bundle lists exactly one map, under the Add-On's namespace, with its files
+flat beside it (`packages/samples/sample-map`):
 
 ```json
 {
   "schema_version": 1,
-  "name": "Bedroom Extended",
-  "description": "The Bedroom with a hallway and a bathroom.",
-  "preview": "maps/bedroom-extended.png",
-  "models": [
-    { "id": "room", "model": "models/room.shape.json" }
-  ],
-  "nodes": [
-    { "kind": "model", "model": "room", "transform": [16 floats] },
-    { "kind": "spawn", "transform": [16 floats] },
-    { "kind": "light", "transform": [16 floats],
-      "light": { "type": "omni", "color": [1.0, 0.85, 0.6], "falloff": [2.0, 12.0] } },
-    { "kind": "light", "transform": [16 floats],
-      "light": { "type": "strobe", "color": [1, 0, 0], "color2": [0, 0, 0],
-                 "speed": "fast", "falloff": [1.0, 8.0] } }
-  ],
-  "environment": { "sun": { "azimuth": 30, "elevation": 50, "color": [1,1,1], "ambient": [0.3,0.3,0.35] },
-                   "sky": "v20:environment/sky_blue2" }
+  "maps": [{ "id": "sample-map:map/sample-map", "name": "Sample Map", "file": "sample-map.scene.json" }],
+  "assets": { "sample-map:map/sample-map/model": "sample-map.shape.json" },
+  "textures": { "sample-map_wood.png": "sample-map_wood.png" },
+  "bindings": [{ "asset": "sample-map:map/sample-map/model", "shape_material": 0, "skin": "", "texture": "sample-map_wood.png" }],
+  "lighting": {},
+  "terrains": { "sample-map:map/sample-map": [] },
+  "environments": {}
 }
 ```
+
+The scene (`bri_content::scene::Scene`) holds a `sun` node, `static_model`
+nodes, `spawn` nodes and `light` nodes. A light node's properties are
+`type` (map2dif's types below), `color` (`"r g b"`), `brightness`,
+`inner` and `outer` (its falloff, in units), plus the type's own settings
+(`speed`, `color2`, `inner_cone`, `outer_cone`...). `Scene::lights` reads
+and checks them; the renderer adds them to the map's Dynamic lights.
 
 - **Geometry** is one of two native asset types, both already loaded by
   today's map path:
@@ -131,24 +133,20 @@ pointing at a `*.map.json`:
     lightmaps and authored collision. This is what converted v20 maps use,
     so they keep their Classic and Unified look. Authoring tools are not
     required to produce it.
-- **Nodes** are a flat list of absolute transforms in native space (x right,
-  y up, -z forward; 1 unit = 1 Blender metre), the scene's existing rule.
-  Kinds start with `model`, `spawn`, `light` and `terrain`; water, foliage
-  and bounds follow the existing scene node kinds when a map needs them.
-- **Terrain** is a heightfield the Add-On ships (a 16-bit PNG height image,
-  its square size and height scale) plus texture layers and their blend
-  masks, loaded into the same `TerrainField` and terrain mesh that converted
-  `.ter` files produce (`crates/content/src/terrain_field.rs`). Sculpted in
-  any tool that exports a height image (Blender, World Machine, Gaea).
+- **Nodes** are absolute transforms in native space (x right, y up, -z
+  forward; 1 unit = 1 Blender metre), the scene's existing rule.
+- **Terrain** (not built yet) is a heightfield the Add-On ships (a 16-bit
+  PNG height image, its square size and height scale) plus texture layers
+  and their blend masks, loaded into the same `TerrainField` and terrain
+  mesh that converted `.ter` files produce
+  (`crates/content/src/terrain_field.rs`).
 - **Lights** are map lights in map2dif's own types, not brick lights (see
   below): `omni`, `spot` (with cone angles), and the animated `strobe`,
-  `pulse`, `pulse2`, `flicker` and `runway`, each with the parameters and
-  timing Torque's interior lights had (colours, speed, falloff, and for
-  runway the chain order). A node-level `shadows` flag says whether it may
-  take one of the live shadow slots.
-- **Environment** names a sky from the Environment pack or ships its own
-  faces, plus the sun. Weather stays the Environment window's.
-- Unknown fields are errors, as in every manifest.
+  `pulse`, `pulse2`, `flicker` and `runway`. Today all draw as steady omni
+  lights; the type and its settings are kept so maps need no change when
+  animation and cones arrive.
+- **Environment** (not built yet) names a sky from the Environment pack or
+  ships its own faces. Weather stays the Environment window's.
 
 ## Map lights and brick lights stay separate
 
@@ -248,15 +246,15 @@ adds one format reader at most.
 **The core, which we would keep anyway.** Every piece reuses an existing
 mechanism; the new code is glue.
 
-1. **`map` content kind and loader.** A `*.map.json` places existing
+1. **`map` content kind and loader (built).** A map bundle places existing
    `*.shape.json` models and `*.interior.json` architecture (drawn and
    collided as today's map path already does), spawns and lights. Terrain
    uses the existing `TerrainField`, Start Game lists Add-On maps, and
    joiners download it as they do any shared Add-On. Tested with a
    hand-written fixture map.
-2. **glTF map import**, extending `bri-import-addon gltf` rather than adding
+2. **glTF map import (built: `--kind map`, docs/modding/maps.md)**, extending `bri-import-addon gltf` rather than adding
    a tool. Its only new reads are Empties named `spawn` and Blender lights
-   (`KHR_lights_punctual`, point only). glTF stays the one interchange
+   (`KHR_lights_punctual` point and spot lights, with `bri_` custom properties). glTF stays the one interchange
    format we support.
 3. **Export of a converted map to `.glb`**: geometry, textures and the
    recovered lights from `lighting-parameters.json`. This gives pharzedia

@@ -936,7 +936,10 @@ fn validate_scene(root: &Path, entry: &MapEntry, bundle: &Bundle) -> Result<()> 
             node.parent.is_none_or(|p| p < i),
             "Invalid/cyclic scene parent at node {i}"
         );
-        if matches!(node.kind, Kind::Interior | Kind::Terrain) {
+        // A map Add-On's own models collide through their collision detail.
+        if matches!(node.kind, Kind::Interior | Kind::Terrain)
+            || (matches!(node.kind, Kind::StaticModel) && node.asset.is_some())
+        {
             let asset = node
                 .asset
                 .as_ref()

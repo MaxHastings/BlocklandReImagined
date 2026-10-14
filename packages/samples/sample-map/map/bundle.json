@@ -1,0 +1,36 @@
+{
+  "assets": {
+    "sample-map:map/sample-map/model": "sample-map.shape.json"
+  },
+  "bindings": [
+    {
+      "asset": "sample-map:map/sample-map/model",
+      "shape_material": 0,
+      "skin": "",
+      "texture": "sample-map_wood.png"
+    },
+    {
+      "asset": "sample-map:map/sample-map/model",
+      "shape_material": 1,
+      "skin": "",
+      "texture": "sample-map_paint.png"
+    }
+  ],
+  "environments": {},
+  "lighting": {},
+  "maps": [
+    {
+      "file": "sample-map.scene.json",
+      "id": "sample-map:map/sample-map",
+      "name": "Sample Map"
+    }
+  ],
+  "schema_version": 1,
+  "terrains": {
+    "sample-map:map/sample-map": []
+  },
+  "textures": {
+    "sample-map_paint.png": "sample-map_paint.png",
+    "sample-map_wood.png": "sample-map_wood.png"
+  }
+}

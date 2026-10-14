@@ -70,7 +70,29 @@ pub enum Kind {
     Precipitation,
     Foliage,
     Bounds,
+    /// An authored map light (a map Add-On's; [`AuthoredLight`]). Its
+    /// `properties` hold `type`, `color`, `brightness`, `inner` and `outer`.
+    Light,
     Unadapted,
+}
+
+/// map2dif's light types, which a map light keeps
+/// (docs/architecture/map-packages.md).
+pub const LIGHT_TYPES: [&str; 7] = [
+    "omni", "spot", "strobe", "pulse", "pulse2", "flicker", "runway",
+];
+
+/// A [`Kind::Light`] node read: where it is, its type and how it lights.
+#[derive(Clone, Debug, PartialEq)]
+pub struct AuthoredLight {
+    pub node: usize,
+    pub kind: String,
+    pub position: [f32; 3],
+    /// Linear colour times brightness.
+    pub color: [f32; 3],
+    /// Full brightness within `inner`, none beyond `outer`.
+    pub inner: f32,
+    pub outer: f32,
 }
 
 /// Height of one brick plate: v20 stacks bricks on this lattice, anchored at
@@ -179,6 +201,71 @@ impl Scene {
             max = [max[0].max(p.x), max[1].max(p.z)];
         }
         Some(Plate { top, min, max })
+    }
+    /// Every [`Kind::Light`] node, read and checked.
+    pub fn lights(&self) -> anyhow::Result<Vec<AuthoredLight>> {
+        use anyhow::{Context, ensure};
+        let number = |node: &Node, key: &str, default: f32| -> anyhow::Result<f32> {
+            let value = node
+                .properties
+                .get(key)
+                .map(|v| v.trim().parse::<f32>())
+                .transpose()
+                .with_context(|| format!("Light {}: {key} is not a number", node.name))?
+                .unwrap_or(default);
+            ensure!(
+                value.is_finite(),
+                "Light {}: {key} is not finite",
+                node.name
+            );
+            Ok(value)
+        };
+        let mut out = Vec::new();
+        for (index, node) in self.nodes.iter().enumerate() {
+            if !matches!(node.kind, Kind::Light) {
+                continue;
+            }
+            let kind = node.properties.get("type").map_or("omni", String::as_str);
+            ensure!(
+                LIGHT_TYPES.contains(&kind),
+                "Light {}: type {kind} is not one of {}",
+                node.name,
+                LIGHT_TYPES.join(", ")
+            );
+            let color: Vec<f32> = node
+                .properties
+                .get("color")
+                .map_or("1 1 1", String::as_str)
+                .split_whitespace()
+                .map(str::parse)
+                .collect::<Result<_, _>>()
+                .with_context(|| format!("Light {}: color is three numbers", node.name))?;
+            ensure!(
+                color.len() == 3 && color.iter().all(|c| c.is_finite() && *c >= 0.0),
+                "Light {}: color is three numbers of 0 or more",
+                node.name
+            );
+            let brightness = number(node, "brightness", 1.0)?;
+            let (inner, outer) = (number(node, "inner", 0.0)?, number(node, "outer", 10.0)?);
+            ensure!(
+                brightness >= 0.0 && inner >= 0.0 && outer > inner && outer <= 10_000.0,
+                "Light {}: needs brightness 0 or more and 0 <= inner < outer <= 10000",
+                node.name
+            );
+            out.push(AuthoredLight {
+                node: index,
+                kind: kind.to_owned(),
+                position: [node.transform[12], node.transform[13], node.transform[14]],
+                color: [
+                    color[0] * brightness,
+                    color[1] * brightness,
+                    color[2] * brightness,
+                ],
+                inner,
+                outer,
+            });
+        }
+        Ok(out)
     }
     /// Move every placement up by `height` (see [`Scene::floor_lift`]).
     /// Terrain origins and water volumes live outside the scene; callers

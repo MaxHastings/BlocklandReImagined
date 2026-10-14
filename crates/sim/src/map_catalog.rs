@@ -27,6 +27,10 @@ pub struct MapSource {
     pub root: PathBuf,
     /// The Add-On that provides it; `None` for the base game's maps.
     pub package: Option<String>,
+    /// Offered in map lists: every Add-On map, and the base maps in
+    /// [`crate::map::LOADABLE_MAPS`]. The base bundle's other maps still
+    /// load for a world that names them.
+    pub listed: bool,
 }
 
 /// An Add-On's declared `map` content: the provided id and the bundle
@@ -46,20 +50,18 @@ pub struct MapCatalog {
 }
 
 impl MapCatalog {
-    /// The base bundle's integrated maps ([`crate::map::LOADABLE_MAPS`])
-    /// and each provider's map. A provider whose bundle does not hold
+    /// The base bundle's maps and each provider's map. A provider whose bundle does not hold
     /// exactly its declared map, or a map id given twice, is an error.
     pub fn new(base: &Path, providers: &[MapProvider]) -> Result<Self> {
         let mut maps = Vec::new();
         for (id, name) in bundle_index(&base.join("bundle.json"))? {
-            if crate::map::LOADABLE_MAPS.contains(&id.as_str()) {
-                maps.push(MapSource {
-                    id,
-                    name,
-                    root: base.to_path_buf(),
-                    package: None,
-                });
-            }
+            maps.push(MapSource {
+                listed: crate::map::LOADABLE_MAPS.contains(&id.as_str()),
+                id,
+                name,
+                root: base.to_path_buf(),
+                package: None,
+            });
         }
         for provider in providers {
             let prefix = format!(
@@ -114,6 +116,7 @@ impl MapCatalog {
                 name,
                 root,
                 package: Some(provider.package.clone()),
+                listed: true,
             });
         }
         let mut seen = BTreeSet::new();
@@ -140,6 +143,10 @@ impl MapCatalog {
     }
     pub fn iter(&self) -> impl Iterator<Item = &MapSource> {
         self.maps.iter()
+    }
+    /// The maps players choose from ([`MapSource::listed`]).
+    pub fn listed(&self) -> impl Iterator<Item = &MapSource> {
+        self.maps.iter().filter(|m| m.listed)
     }
 }
 
@@ -215,7 +222,7 @@ mod tests {
         );
         let added = bundle(&dir.path().join("hall"), &[("hall:map/main", "Hall")]);
         let catalog = MapCatalog::new(&base, &[provider("hall", "hall:map/main", added)]).unwrap();
-        let ids: Vec<_> = catalog.iter().map(|m| m.id.as_str()).collect();
+        let ids: Vec<_> = catalog.listed().map(|m| m.id.as_str()).collect();
         assert_eq!(ids, [crate::map::LOADABLE_MAPS[0], "hall:map/main"]);
         assert_eq!(
             catalog.root("hall:map/main").unwrap(),
@@ -225,7 +232,11 @@ mod tests {
             catalog.get("hall:map/main").unwrap().package.as_deref(),
             Some("hall")
         );
-        assert!(!catalog.contains("v20/add-ons/map_other/other.mis"));
+        // An unlisted base map still loads for a world that names it.
+        assert_eq!(
+            catalog.root("v20/add-ons/map_other/other.mis").unwrap(),
+            base
+        );
         assert!(catalog.root("missing").is_err());
     }
 

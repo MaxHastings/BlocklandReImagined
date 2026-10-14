@@ -44,3 +44,30 @@ Pulse, Pulse2, Flicker, Runway) were a separate system from brick
 `FxLightData`. The design now keeps them separate: map lights use map2dif's
 types and timing on the lamp-shadow path, and brick lights stay
 `FxLightData`. Spot lights move into the first version.
+
+Built (same day, branch claude/project-thread-w9trq5, for v0.3.1):
+
+- `map` content kind (shared): a native map bundle's `bundle.json` holding
+  one map in the Add-On's namespace. `bri_sim::map_catalog::MapCatalog`
+  lists base and Add-On maps; collision, rendering, Start Game, Change Map,
+  dedicated servers and joins all resolve a map's files through it. Base
+  maps outside `LOADABLE_MAPS` still load for a world that names them but
+  are not listed.
+- Scene `light` nodes (map2dif types, `Scene::lights`), drawn in Dynamic as
+  steady omni lights for now.
+- `bri-import-addon gltf --kind map`: meshes, `col_` collision (or
+  everything drawn), `spawn` Empties, `KHR_lights_punctual` lights with
+  `bri_` custom properties.
+- `packages/samples/sample-map` with its `.glb`, kept identical to a fresh
+  import by `crates/addon-import/tests/sample_map.rs` (`BRI_BLESS=1`
+  rewrites it). Guide: `docs/modding/maps.md`.
+- `bri-addon-check` follows a map's bundle: scene, spawn points, light
+  types, models, collision and textures, each with a fix.
+
+Evidence: `a_guest_downloads_a_map_add_on_and_plays_on_it` (client, a
+guest downloads a map Add-On and plays on it), the gltf map tests (files,
+catalog, `NativeMap::load` collision, render loader lights), the sample
+test, `map_problems_name_what_to_fix`, quick and focused checks.
+
+Next: export a converted map to `.glb` with its recovered lights (step 3),
+then light animation and spot cones, then vanilla on the kind.

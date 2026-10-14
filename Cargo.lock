@@ -364,6 +364,7 @@ dependencies = [
  "bri-package",
  "bri-package-runtime",
  "bri-physics",
+ "bri-render",
  "bri-sim",
  "bri-vehicles",
  "bri-vehicles-import",
@@ -377,6 +378,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
+ "tempfile",
  "tokio",
  "zip",
 ]

@@ -238,7 +238,7 @@ pub fn catalog(content_root: &Path, packages: &PackageSet) -> Result<MapCatalog>
 }
 
 fn change_map_list(maps: &MapCatalog) -> Vec<MapListing> {
-    maps.iter()
+    maps.listed()
         .filter(|m| m.id != bri_sim::tutorial::MAP_ID)
         .map(|m| MapListing {
             id: m.id.clone(),
@@ -258,10 +258,10 @@ pub fn blank_world(
 ) -> Result<bri_world::World> {
     let wanted = name.to_ascii_lowercase().replace(['_', ' '], "");
     let map = maps
-        .iter()
+        .listed()
         .find(|m| m.id.eq_ignore_ascii_case(name) || short(&m.id) == wanted)
         .with_context(|| {
-            let mut names: Vec<_> = maps.iter().map(|m| short(&m.id)).collect();
+            let mut names: Vec<_> = maps.listed().map(|m| short(&m.id)).collect();
             names.sort();
             format!("Unknown map `{name}`. Maps: {}", names.join(", "))
         })?;
