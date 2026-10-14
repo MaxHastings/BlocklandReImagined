@@ -277,6 +277,13 @@ mechanism; the new code is glue.
    when the map format freezes with the other schemas; after that, changes
    only add fields.
 
+**Order after v0.3.1 (Maxwell, 2026-10-14).** Step 3 (the Bedroom in
+Blender), then the map's environment: a sky and weather picked from the
+packs the game ships, water from a Blender plane named `water`, and a
+heightmap terrain option beside mesh terrain, all on the systems converted
+maps already use. Then old Blockland map Add-On import (step 5), then light
+animation and spot cones.
+
 **Deferred until someone needs it.** Each item below is a feature to
 maintain, and none is needed for the workflow above.
 
