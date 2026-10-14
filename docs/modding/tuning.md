@@ -14,8 +14,9 @@ play, for the host of the game:
   the host rebuilds the body from its archetype file with the new number,
   by the same code that loaded it, and every player's game gets the tuned
   body. Players of that body carry on with the new numbers.
-- Every number takes hold at once for everyone playing that body, the host
-  too: no save, respawn or new game is needed to feel it. A typed number is
+- Every number takes hold at once for every player and bot playing that
+  body, the host too (Add-On creatures built from it take the new numbers
+  when they next spawn): no save, respawn or new game is needed to feel it. A typed number is
   sent when you press Enter or click away from its box.
 - **Save to Add-On** writes the changes into the body's archetype file.
   Only the changed numbers are written; the rest of the file keeps its

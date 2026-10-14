@@ -525,8 +525,8 @@ Chest sample drags items between a backpack and a shared chest; Wire Lite
 wires gates by dragging one onto another.
 
 **Pass groups.** `set_pass_group(target, group)` (`physics`) puts a player
-(a player id or `"player:3"`), a creature or a vehicle into pass group 1 to
-15, or 0 for none. Bodies in the same group move through each other, as
+(a player id or `"player:3"`) or a creature into pass group 1 to 15, or 0
+for none (vehicles can't join a group yet). Bodies in the same group move through each other, as
 Gmod's no-collide and Roblox's collision groups; bodies in different
 groups, or none, still block. A group stays with a player through
 respawns, and the player's own prediction moves the same way. A player may

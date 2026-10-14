@@ -59,19 +59,13 @@ impl Perform for ops::SetPassGroup {
                 .context("No such entity")?
                 .body
                 .set_pass_group(physics, group),
-            ObjectRef::Vehicle(v) => {
-                let body = session
-                    .vehicles
-                    .world
-                    .as_ref()
-                    .and_then(|w| w.body_of(VehicleId(v)))
-                    .context("No such vehicle")?;
-                let groups = crate::player::pass_groups(group);
-                let colliders = physics.bodies[body].colliders().to_vec();
-                for collider in colliders {
-                    physics.colliders[collider].set_collision_groups(groups);
-                }
-                Ok(())
+            // A vehicle's group would have to be saved, sent to clients and
+            // given to the driver's prediction like a player's; until then
+            // a grouped vehicle would rubber-band its driver.
+            ObjectRef::Vehicle(_) => {
+                anyhow::bail!(
+                    "set_pass_group takes players and creatures, not vehicles, in this version"
+                )
             }
         }
     }

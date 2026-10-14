@@ -130,6 +130,10 @@ Each topic has its own page:
 7. [Old v20 Add-Ons and new bricks](old-addons.md)
 8. [What players are asked to trust](trust.md)
 9. [Tuning bodies in the game](tuning.md)
+10. [Models from Blender (glTF)](gltf-models.md)
+11. [Bodies that move their own way](../architecture/movement-controllers.md): movement controllers
+12. [Client code: cameras, controls and effects](../architecture/client-sandbox.md)
+13. [Experimental bot objectives](bot-objectives.md)
 
 Porting an old Add-On's scripts is [porting.md](porting.md), and the
 TorqueScript functions they used map to [torque-equivalents.md](torque-equivalents.md).

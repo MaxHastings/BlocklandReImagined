@@ -71,15 +71,6 @@ impl PortalContacts {
             .or_default()
             .push(Rule::Fill(*opening, body));
     }
-    /// Everything `other` lists too.
-    pub fn extend(&mut self, other: &PortalContacts) {
-        for (c, rules) in &other.rules {
-            self.rules
-                .entry(*c)
-                .or_default()
-                .extend(rules.iter().copied());
-        }
-    }
     /// Whether `collider` may touch a collider of `other` at all.
     fn pairs(&self, collider: ColliderHandle, other: Option<RigidBodyHandle>) -> bool {
         self.rules.get(&collider).is_none_or(|rules| {
