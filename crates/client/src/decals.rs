@@ -18,7 +18,8 @@ const LIFT: f32 = 0.006;
 const FADE_SECONDS: f32 = 1.0;
 
 struct Mark {
-    brick: u64,
+    /// None: on the map, which stays.
+    brick: Option<u64>,
     transform: Mat4,
     color: [f32; 4],
     seconds: f32,
@@ -35,10 +36,11 @@ pub struct Decals {
 }
 
 impl Decals {
-    /// Mark `brick` at `at` on the face turned to `normal`, `size` across.
+    /// Mark `brick` (None: the map) at `at` on the face turned to
+    /// `normal`, `size` across.
     pub fn add(
         &mut self,
-        brick: u64,
+        brick: Option<u64>,
         at: Vec3,
         normal: Vec3,
         decal: &bri_weapons::Decal,
@@ -89,7 +91,7 @@ impl Decals {
         let transforms = &mut self.transforms;
         self.live.retain_mut(|mark| {
             mark.age += dt;
-            if mark.age >= mark.seconds || !exists(mark.brick) {
+            if mark.age >= mark.seconds || mark.brick.is_some_and(|b| !exists(b)) {
                 return false;
             }
             let fade = ((mark.seconds - mark.age) / FADE_SECONDS).min(1.0);
@@ -207,7 +209,7 @@ mod tests {
     fn a_mark_lies_flat_on_the_face_it_hit_at_its_size() {
         let mut decals = Decals::default();
         let at = Vec3::new(1.0, 2.0, 3.0);
-        decals.add(7, at, Vec3::X * 2.0, &hole(), 1.5);
+        decals.add(Some(7), at, Vec3::X * 2.0, &hole(), 1.5);
         decals.advance(0.0, |_| true);
         let m = decals.transforms[0].transform;
         let centre = m.transform_point3(Vec3::ZERO);
@@ -234,10 +236,10 @@ mod tests {
     #[test]
     fn marks_fade_at_the_end_and_go_with_their_brick() {
         let mut decals = Decals::default();
-        decals.add(1, Vec3::ZERO, Vec3::Y, &hole(), 1.0);
-        decals.add(2, Vec3::ZERO, Vec3::Y, &hole(), 1.0);
-        decals.add(3, Vec3::ZERO, Vec3::ZERO, &hole(), 1.0);
-        decals.add(3, Vec3::NAN, Vec3::Y, &hole(), 1.0);
+        decals.add(Some(1), Vec3::ZERO, Vec3::Y, &hole(), 1.0);
+        decals.add(Some(2), Vec3::ZERO, Vec3::Y, &hole(), 1.0);
+        decals.add(Some(3), Vec3::ZERO, Vec3::ZERO, &hole(), 1.0);
+        decals.add(Some(3), Vec3::NAN, Vec3::Y, &hole(), 1.0);
         assert_eq!(decals.live_count(), 2, "broken marks are dropped");
         // Frames of at most a quarter second.
         for _ in 0..4 {
@@ -257,15 +259,19 @@ mod tests {
             decals.advance(0.25, |_| true);
         }
         assert_eq!(decals.live_count(), 0);
+        // A mark on the map stays whatever bricks go.
+        decals.add(None, Vec3::ZERO, Vec3::Y, &hole(), 1.0);
+        decals.advance(0.25, |_| false);
+        assert_eq!(decals.live_count(), 1);
     }
 
     #[test]
     fn the_oldest_marks_give_way() {
         let mut decals = Decals::default();
         for brick in 0..MAX_LIVE as u64 + 10 {
-            decals.add(brick + 1, Vec3::ZERO, Vec3::Y, &hole(), 1.0);
+            decals.add(Some(brick + 1), Vec3::ZERO, Vec3::Y, &hole(), 1.0);
         }
         assert_eq!(decals.live_count(), MAX_LIVE);
-        assert_eq!(decals.live[0].brick, 11);
+        assert_eq!(decals.live[0].brick, Some(11));
     }
 }

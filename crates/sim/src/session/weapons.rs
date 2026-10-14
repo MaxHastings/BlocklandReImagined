@@ -599,8 +599,13 @@ impl Session {
                     self.tutorial_contact(&impact);
                     self.spray_player(&impact);
                     // A projectile that marks what it hits leaves its decal
-                    // on the brick, for every player to draw.
-                    if let TargetId::Brick(brick) = impact.target
+                    // on the brick or the map, for every player to draw.
+                    let surface = match impact.target {
+                        TargetId::Brick(brick) => Some(Some(brick)),
+                        TargetId::Map(_) => Some(None),
+                        _ => None,
+                    };
+                    if let Some(brick) = surface
                         && self
                             .weapons
                             .pack

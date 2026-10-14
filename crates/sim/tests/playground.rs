@@ -1468,8 +1468,9 @@ fn a_carbine_shot_marks_the_brick_it_hits() {
             .collect();
     assert_eq!(decals.len(), 1, "one mark for one shot");
     let (brick, normal, projectile, scale, at) = &decals[0];
+    let brick = brick.expect("on a brick");
     assert!(
-        g.s.simulation().state().bricks.contains_key(brick),
+        g.s.simulation().state().bricks.contains_key(&brick),
         "on a brick of the fort"
     );
     assert!(
@@ -1486,4 +1487,21 @@ fn a_carbine_shot_marks_the_brick_it_hits() {
         weapons().projectiles[projectile.as_str()].decal.is_some(),
         "the pack says how it looks"
     );
+    // Shot at the ground, the mark is on the map itself.
+    g.looks.get_mut(&p).unwrap().pitch = -1.4;
+    g.steps(300);
+    g.s.take_cues();
+    g.fire(p);
+    let ground: Vec<_> = g
+        .s
+        .take_cues()
+        .into_iter()
+        .filter_map(|c| match c.kind {
+            bri_sim::presentation::CueKind::Decal { brick, normal, .. } => Some((brick, normal)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(ground.len(), 1, "{ground:?}");
+    assert_eq!(ground[0].0, None, "on the map, not a brick");
+    assert!(Vec3::from(ground[0].1).y > 0.9, "on the ground's face");
 }

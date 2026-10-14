@@ -148,11 +148,12 @@ pub enum CueKind {
         hand: u8,
     },
     /// A projectile that leaves a mark (`ProjectileDef::decal`) hit `brick`
-    /// at the cue position, on the face turned to `normal`. Clients draw
-    /// the projectile's own decal there, `scale` times its size, until it
-    /// fades or the brick goes.
+    /// (None: the map itself, its meshes and ground) at the cue position,
+    /// on the face turned to `normal`. Clients draw the projectile's own
+    /// decal there, `scale` times its size, until it fades or the brick
+    /// goes.
     Decal {
-        brick: u64,
+        brick: Option<u64>,
         normal: [f32; 3],
         projectile: String,
         scale: f32,
@@ -292,7 +293,7 @@ impl Cue {
                 projectile,
                 scale,
             } => ensure!(
-                *brick > 0
+                brick.is_none_or(|b| b > 0)
                     && normal.iter().all(|v| v.is_finite())
                     && (normal.iter().map(|v| v * v).sum::<f32>() - 1.).abs() < 0.01
                     && !projectile.is_empty()
