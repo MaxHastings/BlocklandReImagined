@@ -6,7 +6,7 @@ const USAGE: &str = "Usage:
   bri-import-addon ADDON(.zip|folder) FRESH_OUTPUT_DIR [--reference V20_ROOT] [--core RECOVERED_SCRIPT.cs]... [--installed CONTENT_ROOT] [--version 1.0.0] [--json]
   bri-import-addon port ADDON(.zip|folder) FRESH_WORK_DIR [--reference V20_ROOT] [--core RECOVERED_SCRIPT.cs]... [--installed CONTENT_ROOT]
   bri-import-addon check-port WORK_DIR
-  bri-import-addon gltf MODEL(.glb|.gltf) FRESH_OUTPUT_DIR [--kind body|item|prop|map] [--id NAME] [--name MENU_NAME]
+  bri-import-addon gltf MODEL(.glb|.gltf) FRESH_OUTPUT_DIR [--kind body|item|prop|map|brick] [--id NAME] [--name MENU_NAME]
       [--height UNITS | --scale FACTOR] [--fps 30] [--right-hand NODE] [--left-hand NODE] [--eye NODE] [--loop CLIP]...
       [--lod TRIANGLES] [--lod-pixels 100] [--box-width UNITS] [--box-height UNITS] [--json]
 
@@ -22,8 +22,9 @@ port, runs the checks and prints the entry for the ports list.
 
 `gltf` converts a Blender (glTF 2.0) model: a body becomes a package with an
 archetype, an item or prop a `models/` folder for weapons.json or
-vehicles.json, a map a map Add-On with its spawn points and lights. Names,
-scale and clips: docs/modding/gltf-models.md; maps: docs/modding/maps.md.";
+vehicles.json, a map a map Add-On with its spawn points and lights, a brick
+a brick Add-On for the brick menu. Names, scale and clips:
+docs/modding/gltf-models.md; maps: docs/modding/maps.md.";
 
 fn main() -> Result<()> {
     if std::env::args().nth(1).as_deref() == Some("gltf") {

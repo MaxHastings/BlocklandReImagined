@@ -28,6 +28,7 @@ then what players are asked to trust when your Add-On runs code on their PC
 | A package-owned bot pickup/return objective | [Experimental bot objectives](bot-objectives.md) | a bounded read-only declaration of existing pickup, carriage, zone and completion policy |
 | Effects drawn on every player's screen | [`gravity-gun-fx`](../../packages/showcase/gravity-gun-fx) | WebAssembly and WGSL shaders reading what the game shows ([Other content kinds](content-kinds.md)) |
 | New bricks | a v20-style brick Add-On you import ([Old v20 Add-Ons and new bricks](old-addons.md)) | a brick catalog the importer writes |
+| A brick modelled in Blender: a table, a statue, a sign | [Models from Blender (glTF)](gltf-models.md#bricks) | `bri-import-addon gltf --kind brick` turns a `.glb` into a brick Add-On |
 | A map: a level built in Blender, with spawn points and lights | [`sample-map`](../../packages/samples/sample-map) | `bri-import-addon gltf --kind map` turns a `.glb` into a map Add-On ([Making maps](maps.md)) |
 | A game mode in Start Game | [`stresslab-mode`](../../packages/stresslab/stresslab-mode) | a `mode` file naming Add-Ons and a map |
 | A game mode on a world players dig into, with its own mini-game | [`crates/sim/tests/mode_and_voxels.rs`](../../crates/sim/tests/mode_and_voxels.rs) | rules with a generated world, a tool and a mode whose `minigame` block runs the game ([Other content kinds](content-kinds.md)) |
