@@ -84,6 +84,35 @@ how see-through it is. These are custom properties on the water object:
 | `bri_depth` | how deep it goes below its surface, in units | down to the bottom of the map |
 | `bri_liquid` | `water` or `lava` (lava hurts), or one of v20's liquid types | `water` |
 
+**Terrain.** For rolling ground bigger than you want to model, make a
+folder holding:
+
+- `height.png`: a grey heightmap, black the lowest and white the highest,
+  seen from above with Blender's +Y at the top. 16-bit PNGs keep slopes
+  smooth. It is resampled to a square power of two (up to 1024) if it
+  isn't one.
+- `layer0.png` to `layer7.png` (or JPEG): up to eight ground textures. Each
+  covers 8 of the terrain's squares before it repeats.
+- `weight1.png` to `weight7.png`: grey masks, the size of the heightmap,
+  white where that layer shows. `layer0` fills whatever the others leave,
+  unless it has a `weight0.png` too.
+- `detail.png`, optional: a fine grain blended over the ground up close.
+
+Import with `--terrain that-folder`, and size and place it with these
+custom properties on the **Scene**:
+
+| Property | Meaning | Default |
+|---|---|---|
+| `bri_terrain_size` | how wide the terrain is, in metres | `512` |
+| `bri_terrain_height` | how far white is above black, in metres | `64` |
+| `bri_terrain_center` | `[x, y, z]` in Blender: the middle of the terrain, at the height of black | `[0, 0, 0]` |
+
+Players walk on it, and bricks build on it as they did on v20's terrain.
+The sun's light and the terrain's own shadows are baked into it on import
+for Classic and Unified lighting; your models don't cast shadows on it
+there yet. Heightmaps and masks from World Machine or Gaea work, and so
+does a greyscale picture you paint.
+
 Today every light draws as a steady omni light, whatever its type; the
 type is saved, so your map plays strobes, pulses and spot cones without
 changes once the engine does. Map lights are separate from brick lights
@@ -105,7 +134,7 @@ scene.
 ## 3. Import, check and play
 
 From a checkout of this repository (see the main [README](../../README.md)).
-Add `--sky FOLDER` for a picture sky:
+Add `--sky FOLDER` for a picture sky and `--terrain FOLDER` for terrain:
 
 ```sh
 cargo run -p bri-addon-import --bin bri-import-addon -- gltf my-map.glb addons/my-map --kind map --name "My Map"
@@ -138,6 +167,6 @@ cargo run -p bri-addon-import --bin bri-import-addon -- export-map content bedro
 
 ## Not yet
 
-- Terrain from a heightmap, and baking lighting on import.
+- Baking your models' lighting and shadows on import.
 - Strobe, pulse, flicker and runway animation, and spot cones, in the
   renderer (the types are kept in your map already).

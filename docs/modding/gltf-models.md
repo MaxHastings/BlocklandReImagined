@@ -194,12 +194,19 @@ gun's sound goes in the vehicle pack's `weapons.json` `sounds`, as above.
   texture becomes its plain colour.
 - Normal, roughness, metallic, emission and occlusion maps are ignored and
   listed in the report. Vertex colours and shape keys are ignored too.
+- **Metal**: a material whose Metallic value is 0.5 or more draws as bare
+  metal, at its Roughness value, reflecting the world. Its Base Color is the
+  metal's colour (steel about 0.56, gold 1.0 0.71 0.29).
+- **Glow**: a material whose Emission Strength times its brightest Emission
+  colour channel is 0.5 or more draws at full brightness, like an Unlit one.
+  Fainter glow is ignored and named in the report.
 - Alpha: Blend mode "Alpha Blend" and "Alpha Clip" draw see-through
   where the texture is; "Opaque" draws solid and ignores the texture's
   alpha (a specular or colour-change mask left there does no harm).
 - Every material takes the map's light, sun and shadow as a Blockhead
-  does. Only an "Unlit" (emission shader / KHR_materials_unlit) material
-  draws at full brightness whatever the light: keep that for glowing parts.
+  does. Only an "Unlit" (emission shader / KHR_materials_unlit) or glowing
+  material draws at full brightness whatever the light: keep that for
+  glowing parts.
 
 ## 6. Export settings (File > Export > glTF 2.0)
 

@@ -1045,3 +1045,121 @@ fn a_map_brings_its_own_sun_sky_and_water() {
             .any(|m| m.kind == bri_render::scene::MaterialKind::Water)
     );
 }
+
+/// A stated metallic factor makes bare metal at the material's roughness,
+/// and a strong glow draws self-lit; plain and faint surfaces stay as they
+/// were.
+#[test]
+fn metal_and_glow_come_from_the_material() {
+    let doc = super::read::Document::from_bytes(
+        serde_json::to_string(&json!({
+            "asset": { "version": "2.0" },
+            "materials": [
+                { "name": "Steel", "pbrMetallicRoughness": { "metallicFactor": 1.0, "roughnessFactor": 0.3 } },
+                { "name": "Paint", "pbrMetallicRoughness": { "metallicFactor": 0.0 } },
+                { "name": "Lamp", "emissiveFactor": [1.0, 0.9, 0.5] },
+                { "name": "Ember", "emissiveFactor": [0.2, 0.0, 0.0] },
+            ]
+        }))
+        .unwrap()
+        .as_bytes(),
+        None,
+    )
+    .unwrap();
+    let mut report = Report::default();
+    let mut taken = BTreeSet::new();
+    let mut get = |i| {
+        super::make_material(&doc, None, Some(i), "", &mut taken, &mut report)
+            .unwrap()
+            .0
+    };
+    let (steel, paint, lamp, ember) = (get(0), get(1), get(2), get(3));
+    let metal = steel.metal.expect("steel is metal");
+    assert_eq!((metal.color, metal.roughness), ([1.0; 3], 0.3));
+    assert!(paint.metal.is_none() && !paint.unlit);
+    assert!(lamp.unlit && lamp.metal.is_none());
+    assert!(!ember.unlit);
+    assert!(
+        report
+            .warnings
+            .iter()
+            .any(|w| w.contains("`Ember` glows too faintly"))
+    );
+}
+
+/// A `--terrain` folder becomes the native heightmap terrain: shaped as its
+/// picture is from above in Blender, sized and placed by the scene's
+/// properties, with its ground textures where their masks say, and lit.
+#[test]
+fn a_map_brings_its_own_heightmap_terrain() {
+    let root = tempfile::tempdir().unwrap();
+    let mut g = super::testing::Gltf::new();
+    let (p, n, uv, i) = super::testing::cuboid(Vec3::new(0.0, 6.0, 0.0), Vec3::splat(2.0));
+    let flat = |v: &[Vec3]| v.iter().flat_map(|v| v.to_array()).collect::<Vec<f32>>();
+    let (a, b, c, d) = (
+        g.floats(&flat(&p), 3),
+        g.floats(&flat(&n), 3),
+        g.floats(&uv.concat(), 2),
+        g.uints(&i, 1),
+    );
+    let stone = g.material("Stone", [0.5, 0.5, 0.5, 1.0], None, json!({}));
+    let mesh = g.mesh("Rock", vec![json!({ "attributes": { "POSITION": a, "NORMAL": b, "TEXCOORD_0": c }, "indices": d, "material": stone })]);
+    g.node(json!({ "name": "Rock", "mesh": mesh }), None);
+    g.json["scenes"][0]["extras"] = json!({
+        "bri_terrain_size": 64.0, "bri_terrain_height": 10.0, "bri_terrain_center": [0.0, 0.0, -5.0],
+    });
+    let input = root.path().join("hills.glb");
+    std::fs::write(&input, g.glb()).unwrap();
+    // Rising towards Blender's +X (the picture's right); grass everywhere,
+    // sand over the picture's top half (Blender's +Y).
+    let dir = root.path().join("terrain");
+    std::fs::create_dir_all(&dir).unwrap();
+    image::GrayImage::from_fn(32, 32, |x, _| image::Luma([(x * 255 / 31) as u8]))
+        .save(dir.join("height.png"))
+        .unwrap();
+    image::RgbImage::from_pixel(8, 8, image::Rgb([40, 160, 40]))
+        .save(dir.join("layer0.png"))
+        .unwrap();
+    image::RgbImage::from_pixel(8, 8, image::Rgb([220, 200, 120]))
+        .save(dir.join("layer1.jpg"))
+        .unwrap();
+    image::GrayImage::from_fn(32, 32, |_, y| image::Luma([if y < 16 { 255 } else { 0 }]))
+        .save(dir.join("weight1.png"))
+        .unwrap();
+    let mut opts = Options::new(&input, root.path().join("hills"), Kind::Map);
+    opts.terrain = Some(dir);
+    let report = import(&opts).unwrap();
+    let out = root.path().join("hills");
+    let check = bri_package_runtime::check::check(&out);
+    assert!(check.ok, "{check}");
+
+    let native = bri_sim::map::NativeMap::load(&out.join("map"), &report.model).unwrap();
+    assert_eq!(native.terrain.len(), 1);
+    let field = &native.terrain[0];
+    // Blender (x, y) is native (-x, -y) on the ground.
+    let at = |x: f32, y: f32| field.height(-x, -y);
+    let (east, west) = (at(30.0, 0.0).unwrap(), at(-30.0, 0.0).unwrap());
+    assert!(
+        (east - 4.7).abs() < 0.3 && (west + 4.7).abs() < 0.3,
+        "{east} {west}"
+    );
+    assert!(at(40.0, 0.0).is_none(), "nothing past the picture's edge");
+    let north = |x: usize, y: usize| field.terrain.layers[1].weights[y * 32 + x];
+    assert_eq!((north(3, 5), north(3, 25)), (255, 0));
+
+    // It draws in both lighting modes, with its baked sunlight.
+    let bundle: Value =
+        serde_json::from_slice(&std::fs::read(out.join("map/bundle.json")).unwrap()).unwrap();
+    let light = &bundle["lighting"][&report.model]["terrain"][0];
+    assert!(
+        out.join("map")
+            .join(light["file"].as_str().unwrap())
+            .is_file()
+    );
+    for drawn in [
+        bri_render::scene_loader::load_map_bundle(&out.join("map"), &report.model).unwrap(),
+        bri_render::scene_loader::load_map_bundle_dynamic(&out.join("map"), &report.model).unwrap(),
+    ] {
+        assert_eq!(drawn.terrain.len(), 1);
+    }
+}

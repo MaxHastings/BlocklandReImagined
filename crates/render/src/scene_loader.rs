@@ -570,6 +570,29 @@ fn load_static_shape(
         if authored.unlit && !legacy {
             material.kind = MaterialKind::Unlit;
         }
+        // Bare metal on an Add-On map: its texture tints the reflectance and
+        // a flat detail leaves the authored roughness as it is.
+        if let Some(metal) = authored
+            .metal
+            .as_ref()
+            .filter(|_| !authored.unlit && !legacy)
+        {
+            material.kind = MaterialKind::Metal;
+            material.images[1] = out.images.len();
+            out.images.push(SceneImage {
+                label: "flat metal detail".into(),
+                width: 1,
+                height: 1,
+                rgba: vec![128, 255, 128, 128],
+                srgb: false,
+            });
+            material.parameters = Some([
+                [metal.roughness, 1.0, 0.0, 0.0],
+                [metal.color[0], metal.color[1], metal.color[2], 0.0],
+                [0.0; 4],
+                [0.0; 4],
+            ]);
+        }
         material.alpha = match authored.blend.as_str() {
             "opaque" => AlphaMode::Opaque,
             "alpha" => alpha(&out.images[diffuse]),

@@ -8,7 +8,7 @@ const USAGE: &str = "Usage:
   bri-import-addon check-port WORK_DIR
   bri-import-addon gltf MODEL(.glb|.gltf) FRESH_OUTPUT_DIR [--kind body|item|prop|map] [--id NAME] [--name MENU_NAME]
       [--height UNITS | --scale FACTOR] [--fps 30] [--right-hand NODE] [--left-hand NODE] [--eye NODE] [--loop CLIP]...
-      [--lod TRIANGLES] [--lod-pixels 100] [--box-width UNITS] [--box-height UNITS] [--sky DIR] [--json]
+      [--lod TRIANGLES] [--lod-pixels 100] [--box-width UNITS] [--box-height UNITS] [--sky DIR] [--terrain DIR] [--json]
   bri-import-addon export-map CONTENT_OR_BUNDLE_DIR MAP OUTPUT.glb
 
 Converts one legacy Blockland Add-On into a native package directory and writes
@@ -170,6 +170,7 @@ fn gltf(mut args: impl Iterator<Item = String>) -> Result<()> {
             "--box-width" => opts.box_width = Some(number(value()?)?),
             "--box-height" => opts.box_height = Some(number(value()?)?),
             "--sky" => opts.sky = Some(PathBuf::from(value()?)),
+            "--terrain" => opts.terrain = Some(PathBuf::from(value()?)),
             "--version" => opts.version = value()?,
             "--json" => json = true,
             "-h" | "--help" => {

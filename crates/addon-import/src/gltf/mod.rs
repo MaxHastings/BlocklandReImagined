@@ -13,6 +13,7 @@ mod export;
 mod lod;
 mod map;
 mod map_environment;
+mod map_terrain;
 mod read;
 mod write;
 pub use export::{ExportReport, export_map, find_map};
@@ -22,7 +23,8 @@ pub mod testing;
 use anyhow::{Context, Result, bail, ensure};
 use bri_console::Clamp;
 use bri_content::shape::{
-    Animation, Detail, Influence, Material, Mesh, Node, NodeTrack, Object, Primitive, Shape, Skin,
+    Animation, Detail, Influence, Material, Mesh, Metal, Node, NodeTrack, Object, Primitive, Shape,
+    Skin,
 };
 use glam::{Mat4, Quat, Vec3};
 pub use read::Document;
@@ -97,6 +99,10 @@ pub struct Options {
     /// A map's sky: a folder of six pictures (`front`, `right`, `back`,
     /// `left`, `up`, `down`, PNG or JPEG).
     pub sky: Option<PathBuf>,
+    /// A map's heightmap terrain: a folder holding `height.png`, ground
+    /// textures `layer0`..`layer7` with masks `weight0`..`weight7`, and an
+    /// optional `detail` texture.
+    pub terrain: Option<PathBuf>,
 }
 impl Options {
     pub fn new(input: impl Into<PathBuf>, out: impl Into<PathBuf>, kind: Kind) -> Self {
@@ -119,6 +125,7 @@ impl Options {
             box_width: None,
             box_height: None,
             sky: None,
+            terrain: None,
         }
     }
 }
@@ -1949,7 +1956,6 @@ fn make_material(
     let ignored: Vec<&str> = [
         ("normalTexture", "normal map"),
         ("occlusionTexture", "occlusion map"),
-        ("emissiveTexture", "emission map"),
     ]
     .iter()
     .filter(|(k, _)| m.get(*k).is_some())
@@ -2038,6 +2044,42 @@ fn make_material(
             "opaque"
         }
     };
+    // A material that glows at half strength or more draws self-lit, at its
+    // own colour whatever the world's light; dimmer glow is left out.
+    let glow = m["emissiveFactor"].as_array().map_or(0.0, |a| {
+        a.iter().filter_map(Value::as_f64).fold(0.0, f64::max)
+    }) * m["extensions"]["KHR_materials_emissive_strength"]["emissiveStrength"]
+        .as_f64()
+        .unwrap_or(1.0);
+    let unlit = m["extensions"].get("KHR_materials_unlit").is_some() || glow >= 0.5;
+    if m.get("emissiveTexture").is_some() {
+        report.warnings.push(format!(
+            "material `{source}`: its emission map is ignored{}",
+            if glow >= 0.5 {
+                "; the whole surface glows"
+            } else {
+                ""
+            }
+        ));
+    } else if glow > 0.0 && glow < 0.5 {
+        report.warnings.push(format!(
+            "material `{source}` glows too faintly to draw self-lit; raise its emission strength to 0.5 or more"
+        ));
+    }
+    // Bare metal: glTF's default metallic factor is 1, but exporters write
+    // 0 for every plain surface, so only a stated factor of 0.5 or more makes
+    // metal. The baked texture already carries the base colour, which for
+    // metal is its reflectance.
+    let metal = pbr["metallicFactor"]
+        .as_f64()
+        .filter(|f| *f >= 0.5 && !unlit)
+        .map(|_| Metal {
+            color: [1.0; 3],
+            roughness: (pbr["roughnessFactor"].as_f64().unwrap_or(1.0) as f32).clamped(0.0, 1.0),
+            detail: None,
+            detail_scale: 1.0,
+            detail_strength: 1.0,
+        });
     let mut png = Vec::new();
     image::DynamicImage::ImageRgba8(pixels)
         .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)?;
@@ -2047,7 +2089,7 @@ fn make_material(
             wrap_u: wrap.0,
             wrap_v: wrap.1,
             blend: blend.into(),
-            unlit: m["extensions"].get("KHR_materials_unlit").is_some(),
+            unlit,
             environment: false,
             mipmaps: true,
             detail_map: None,
@@ -2055,7 +2097,7 @@ fn make_material(
             reflectance_map: None,
             detail_scale: 1.0,
             reflectance: 0.0,
-            metal: None,
+            metal,
         },
         png,
     ))

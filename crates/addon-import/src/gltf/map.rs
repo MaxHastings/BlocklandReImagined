@@ -7,7 +7,7 @@
 //! and Blender lights (`KHR_lights_punctual`) are map lights in map2dif's
 //! types. The result is an Add-On folder holding `package.json` and a
 //! native map bundle in `map/`, the same files the converted v20 maps use.
-use super::{Converted, Document, Options, Point, Report, map_environment, title};
+use super::{Converted, Document, Options, Point, Report, map_environment, map_terrain, title};
 use anyhow::{Context, Result, ensure};
 use bri_content::scene::{Kind as NodeKind, LIGHT_TYPES, Node as SceneNode, Scene};
 use bri_content::shape::Shape;
@@ -286,7 +286,37 @@ pub(super) fn write(
         }
         Ok(())
     };
-    let environment = map_environment::sky(doc, opts.sky.as_deref(), report.width, &mut keep)?;
+    let sun = nodes[0].properties.clone();
+    let terrain = match &opts.terrain {
+        Some(dir) => {
+            let scene = doc.json["scene"].as_u64().unwrap_or(0) as usize;
+            let mut built = map_terrain::terrain(
+                dir,
+                &doc.json["scenes"][scene]["extras"],
+                &map_id,
+                nodes.len(),
+                &sun,
+                &mut report,
+                &mut keep,
+            )?;
+            nodes.extend(built.node.take());
+            // A spawn placed for want of one lands on the terrain too.
+            if report.points.is_empty() {
+                for spawn in nodes
+                    .iter_mut()
+                    .filter(|n| matches!(n.kind, NodeKind::Spawn))
+                {
+                    spawn.transform[13] = spawn.transform[13].max(built.top + 1.0);
+                }
+            }
+            Some(built)
+        }
+        None => None,
+    };
+    let reach = terrain
+        .as_ref()
+        .map_or(report.width, |t| report.width.max(2.0 * t.reach));
+    let environment = map_environment::sky(doc, opts.sky.as_deref(), reach, &mut keep)?;
     let bottom = lowest_point(&shape, &globals);
     let folder = opts.input.parent();
     let first_water = nodes.len();
@@ -332,7 +362,7 @@ pub(super) fn write(
         put(&format!("map/{file}"), png, &mut report)?;
         texture_files.insert(file.clone(), file);
     }
-    let bindings: Vec<Value> = shape
+    let mut bindings: Vec<Value> = shape
         .materials
         .iter()
         .enumerate()
@@ -340,14 +370,32 @@ pub(super) fn write(
             json!({ "asset": model, "shape_material": slot, "skin": "", "texture": format!("{}.png", m.name) })
         })
         .collect();
+    let mut assets = json!({ model.clone(): model_file });
+    let (mut instances, mut lighting) = (Vec::new(), json!({}));
+    if let Some(t) = terrain {
+        put(
+            &format!("map/{}", t.file),
+            &serde_json::to_vec(&t.terrain)?,
+            &mut report,
+        )?;
+        assets[&t.asset] = json!(t.file);
+        for b in &t.bindings {
+            if let Some(file) = b["texture"].as_str() {
+                texture_files.insert(file.to_string(), file.to_string());
+            }
+        }
+        bindings.extend(t.bindings);
+        instances.push(t.instance);
+        lighting = json!({ map_id.clone(): { "terrain": [t.lighting] } });
+    }
     let bundle = json!({
         "schema_version": 1,
         "maps": [{ "id": map_id, "name": name, "file": scene_file }],
-        "assets": { model.clone(): model_file },
+        "assets": assets,
         "textures": texture_files,
         "bindings": bindings,
-        "lighting": {},
-        "terrains": { map_id.clone(): [] },
+        "lighting": lighting,
+        "terrains": { map_id.clone(): instances },
         "environments": { map_id.clone(): environment },
         "waters": { map_id.clone(): waters },
     });
