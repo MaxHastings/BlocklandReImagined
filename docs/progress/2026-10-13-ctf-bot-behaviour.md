@@ -115,3 +115,12 @@ planner without a rework. Neither does yet:
 - `bri-net/soak` (`two_players_stay_consistent_through_a_lossy_jittery_link`)
   ran 1097 of 1200 ticks on one Windows runner: a wall-clock pace check with
   no bots in it, not this change.
+- **Jet drop cost on stacked builds.** The 32-unit jet drop made each
+  floor sample list every storey down to 32 units below (up to
+  `MAX_LAYERS`), about 1.3 ms a tick on Collage with 32 bots per the lag
+  thread's measurement (`2026-10-13-collage-bot-cpu.md`). Past the walked
+  drop (`nav::SHALLOW_DROP`, 4 units) a body only falls and lands on the
+  first floor below, so a sample now stops after that one
+  (`nav::tests::a_deep_drop_samples_only_the_first_storey_below`: 3 floors
+  where it listed 8). Bodies with a 4-unit drop sample as before. Not yet
+  re-measured on Collage (no generated content in this container).

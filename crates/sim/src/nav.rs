@@ -1398,8 +1398,12 @@ fn sample(ground: &Ground, body: &Body, x: i32, z: i32, from: f32) -> Floors {
     let mut top = (from + reach).min(ceiling - body.crouch_height) + 0.05;
     let bottom = from - body.drop - 0.1;
     let mut floors = Vec::new();
+    // Past a walked drop, a body only falls, and lands on the first floor
+    // below it: the floors beneath that one are out of its reach. A deep
+    // drop (jets) looked through every storey of a stacked build.
+    let shallow = from - body.drop.min(SHALLOW_DROP);
     for _ in 0..MAX_LAYERS {
-        if top <= bottom {
+        if top <= bottom || floors.last().is_some_and(|f: &Floor| f.y < shallow) {
             break;
         }
         let origin = Vec3::new(px, top, pz);
@@ -1446,6 +1450,9 @@ fn sample_reach(body: &Body) -> f32 {
 
 /// Surfaces one column's sample looks through, top to bottom.
 const MAX_LAYERS: usize = 8;
+/// How far below its hint a sample lists every floor (a walking body's
+/// `Body::drop`); deeper, only the first.
+const SHALLOW_DROP: f32 = 4.0;
 
 #[derive(Clone, Copy, PartialEq)]
 struct Open {
@@ -2721,6 +2728,37 @@ mod tests {
             .unwrap()
             .feet;
         assert!(end.distance(to) < 1.0, "down by the drop: {end:?}");
+    }
+
+    /// A deep drop lists the first floor below a walked drop, not every
+    /// storey beneath it: a body falling off an edge lands on that one.
+    #[test]
+    fn a_deep_drop_samples_only_the_first_storey_below() {
+        let mut boxes = vec![floor()];
+        for storey in 1..=8 {
+            let y = storey as f32 * 3.0;
+            boxes.push((Vec3::new(-6.0, y - 0.4, -6.0), Vec3::new(6.0, y, 6.0)));
+        }
+        let physics = world(&boxes);
+        let ground = Ground {
+            physics: &physics,
+            terrain: &no_terrain,
+            passages: &NO_PASSAGES,
+            waters: &[],
+            bodies: &[],
+            motions: &[],
+        };
+        let jetter = Body {
+            drop: 32.0,
+            ..body()
+        };
+        let floors = sample(&ground, &jetter, 0, 0, 24.0);
+        let ys: Vec<f32> = floors.iter().map(|f| f.y).collect();
+        assert_eq!(
+            ys.len(),
+            3,
+            "the roof, one storey within the walked drop, one below: {ys:?}"
+        );
     }
 
     /// Two equal ways round a wall: a seeded search ([`Costs::veer`]) takes
