@@ -399,6 +399,11 @@ pub enum Call {
         reason: String,
     },
     Step,
+    /// The host skipped ticks to catch up after a stall
+    /// ([`Session::skipped_ticks`]).
+    SkippedTicks {
+        ticks: u64,
+    },
     /// The host took what the session made for it to send or act on. What
     /// it took is compared, and taking happens at the same moment.
     Take(Take),
@@ -584,6 +589,10 @@ fn apply(
         }
         // The host's own step function: a test may make it fail.
         Call::Step => Returned::Unit(s.step()),
+        Call::SkippedTicks { ticks } => {
+            s.skipped_ticks(ticks);
+            Returned::Unit(Ok(()))
+        }
         Call::Take(take) => Returned::Taken(take.run(s)),
     }
 }
@@ -1215,6 +1224,9 @@ impl Recorder {
     ) -> Result<()> {
         self.unit(s, Call::CameraReport { owner, view })
     }
+    pub fn skipped_ticks(&mut self, s: &mut Session, ticks: u64) {
+        let _ = self.unit(s, Call::SkippedTicks { ticks });
+    }
     pub fn private_chat(&mut self, s: &mut Session, owner: OwnerId, text: String) {
         let _ = self.unit(s, Call::PrivateChat { owner, text });
     }
@@ -1626,6 +1638,7 @@ fn label(call: &Call) -> String {
         Call::PrivateChat { owner, .. } => format!("A message to player {owner}"),
         Call::MapChangeFailed { admin, .. } => format!("Player {admin}'s failed map change"),
         Call::Step => "The tick".into(),
+        Call::SkippedTicks { ticks } => format!("The host skipping {ticks} ticks"),
         Call::Take(take) => format!("The host taking {take:?}"),
     }
 }
