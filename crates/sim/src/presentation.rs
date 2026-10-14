@@ -147,6 +147,13 @@ pub enum CueKind {
         actor: u64,
         hand: u8,
     },
+    /// A see-through `color` over `owner`'s body, just outside it, fading
+    /// over `seconds` (rules' `body_flash`).
+    BodyFlash {
+        owner: u64,
+        color: [f32; 4],
+        seconds: f32,
+    },
     /// A projectile that leaves a mark (`ProjectileDef::decal`) hit `brick`
     /// (None: the map itself, its meshes and ground) at the cue position,
     /// on the face turned to `normal`. Clients draw the projectile's own
@@ -287,6 +294,19 @@ impl Cue {
             CueKind::Tracer { actor, hand } => {
                 ensure!(*actor > 0 && *hand < 2, "Invalid tracer cue")
             }
+            CueKind::BodyFlash {
+                owner,
+                color,
+                seconds,
+            } => ensure!(
+                *owner > 0
+                    && color
+                        .iter()
+                        .all(|c| c.is_finite() && (0.0..=1.0).contains(c))
+                    && seconds.is_finite()
+                    && (0.05..=60.0).contains(seconds),
+                "Invalid body flash cue"
+            ),
             CueKind::Decal {
                 brick,
                 normal,

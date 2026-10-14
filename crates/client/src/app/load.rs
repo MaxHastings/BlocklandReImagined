@@ -286,6 +286,7 @@ impl App {
                 beams: Default::default(),
                 decals: Default::default(),
                 footsteps: Default::default(),
+                body_flashes: Default::default(),
                 tutorial_targets,
                 explosion_debris,
                 weapon_shells,

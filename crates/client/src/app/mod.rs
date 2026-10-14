@@ -1688,6 +1688,7 @@ impl PlatformApp for App {
         self.fx.explosion_shapes.gpu_stopped();
         self.fx.beams.gpu_stopped();
         self.fx.decals.gpu_stopped();
+        self.fx.body_flashes.gpu_stopped();
         self.fx.tutorial_targets.gpu_stopped();
         self.gpu.shell_gpu = None;
         for avatar in self.avatar.avatars.values_mut() {
@@ -1839,6 +1840,7 @@ impl PlatformApp for App {
         self.fx.explosion_shapes.gpu_stopped();
         self.fx.beams.gpu_stopped();
         self.fx.decals.gpu_stopped();
+        self.fx.body_flashes.gpu_stopped();
         self.fx.tutorial_targets.gpu_stopped();
         self.gpu.shell_gpu = None;
         self.avatar.gpu_stopped();

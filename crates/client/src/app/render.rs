@@ -838,6 +838,13 @@ impl App {
             bodies_drawn.insert(*owner);
         }
         whole.note();
+        self.fx.body_flashes.upload(
+            renderer,
+            frame.device,
+            frame.queue,
+            &self.avatar.avatars,
+            |owner| bodies_drawn.contains(&owner),
+        )?;
         // Horses likewise: posed every frame (riders sit on their nodes),
         // their mesh built and drawn only where it can show.
         let mut mounts_drawn = BTreeSet::new();
@@ -1267,6 +1274,11 @@ impl App {
                 .map(|(_, draw)| *draw),
         );
         item_draws.extend(shared_draws.iter().copied());
+        item_draws.extend(
+            self.fx.body_flashes.draws(|owner| {
+                bodies_drawn.contains(&owner) && (owner != view.owner || third_person)
+            }),
+        );
         use bri_render::scene::ShadowCasters;
         // Every view's shadow casters: mirror and window planes draw their
         // own sun shadows from them.

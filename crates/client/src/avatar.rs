@@ -1435,6 +1435,15 @@ impl AvatarMesh {
         let scale = self.model_transform.x_axis.truncate().length();
         self.model_transform.w_axis.truncate() + Vec3::Y * bri_sim::player::nominal_middle(scale)
     }
+    /// What carries the mesh's vertices into the world: the body transform
+    /// for an `instanced` mesh, nothing for one built in world space.
+    pub fn drawn_transform(&self) -> Mat4 {
+        if self.instanced {
+            self.model_transform
+        } else {
+            Mat4::IDENTITY
+        }
+    }
     pub fn bounding_sphere(&self) -> (Vec3, f32) {
         let scale = self.model_transform.x_axis.truncate().length();
         let feet = self.model_transform.w_axis.truncate();

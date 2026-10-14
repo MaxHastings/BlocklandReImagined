@@ -11,6 +11,7 @@ pub mod audio;
 pub mod avatar;
 pub mod avatar_mesh;
 pub mod beams;
+pub mod body_flash;
 pub mod brick_cover;
 pub mod brick_debris;
 pub mod brick_fade;

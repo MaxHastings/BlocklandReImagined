@@ -2916,6 +2916,20 @@ fn register_presentation(engine: &mut Engine) {
             muzzle,
         }))
     }
+    engine.register_fn(
+        "body_flash",
+        |player: Dynamic, color: Array, seconds: Dynamic| {
+            let color = match color.as_slice() {
+                [r, g, b, a] => [float(r)?, float(g)?, float(b)?, float(a)?],
+                _ => return fail("a colour is [r, g, b, a] from 0 to 1"),
+            };
+            push(Op::BodyFlash(ops::BodyFlash {
+                player: id(&player)?,
+                color,
+                seconds: float(&seconds)?,
+            }))
+        },
+    );
     engine.register_fn("beam", |from: Array, to: Array| beam(from, to, Map::new()));
     engine.register_fn("beam", beam);
     // `%player.playThread(thread, sequence)`, or its `schedule(ms, ...)`

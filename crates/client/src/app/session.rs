@@ -112,6 +112,7 @@ impl App {
         self.fx.explosion_shapes.reset(0);
         self.fx.beams.clear();
         self.fx.decals.clear();
+        self.fx.body_flashes.clear();
         self.fx.tutorial_targets.update(&[], 0.0);
         self.fx.explosion_debris.reset(0);
         self.fx.weapon_shells.clear();

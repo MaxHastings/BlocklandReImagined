@@ -126,6 +126,7 @@ macro_rules! for_each_op {
             ReportColumn = minigame,
             Sound = effects,
             Beam = effects,
+            BodyFlash = effects,
             PlayThread = effects,
             SetMapLights = lighting,
             SetEnvironment = environment,
