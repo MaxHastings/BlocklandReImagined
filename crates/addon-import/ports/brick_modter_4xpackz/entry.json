@@ -1,0 +1,17 @@
+{
+  "addon": "Brick_ModTer_4xPackZ",
+  "title": "4x Mod Ter (No Overlap)",
+  "port": "brick_modter_4xpackz",
+  "status": "verified",
+  "sha256": [
+    "2eed90209613bc73f2594d91d98529d1088ef8a83f23c14f0a0613975301007f"
+  ],
+  "covers": {
+    "Server.cs": {
+      "category": "category\\s*=\\s*\\(\\s*isFile\\(\\s*\"Add-ons/Brick_Modified_ModTer\\.zip\"\\s*\\)\\s*&&\\s*\\$Addon__Brick_Modified_ModTer\\s*==\\s*1\\s*&&\\s*\\$Pref::Server::ModifiedModter::CategoryChange\\s*\\?\\s*\"ModTer\"\\s*:\\s*\"Baseplates\"\\s*\\)"
+    }
+  },
+  "tests": [
+    "crates/addon-import/tests/ports.rs modter_no_overlap_port_files_its_bricks_under_baseplates"
+  ]
+}

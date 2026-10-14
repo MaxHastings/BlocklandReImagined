@@ -142,8 +142,14 @@ fn load_packages_in(
     let brick_extras = content_identity::brick_catalog_providers(content_root, packages)?;
     // Add-On bricks are named, printed and wrenched like base ones.
     let catalog = bri_sim::definitions::catalog_with(&catalog_dir, &brick_extras)?;
-    let materials =
-        serde_json::from_slice(&std::fs::read(materials_dir.join("brick-materials.json"))?)?;
+    // Add-On print packs (Print_ModTer_Default) join the base game's prints.
+    let (materials, print_notes) = content_identity::brick_materials_with(
+        &materials_dir,
+        &content_identity::print_providers(content_root, packages)?,
+    )?;
+    for note in print_notes {
+        eprintln!("Add-On prints: {note}");
+    }
     let effects = serde_json::from_slice(&std::fs::read(effects_dir.join("effects.json"))?)?;
     let mut tools = ToolCatalog::from_native(&catalog, &effects, &materials)?;
     tools.install_items(weapons.item_choices.iter().map(|(id, _)| id.clone()))?;

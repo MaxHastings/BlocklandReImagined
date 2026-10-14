@@ -391,7 +391,7 @@ impl Package {
                     parse::<bri_content::shape::Shape>(asset, &id, |s| s.validate(), out);
                 }
                 // Read and validated by the engine systems that merge them.
-                Kind::Weapons | Kind::Vehicles | Kind::Bricks | Kind::Bots => {}
+                Kind::Weapons | Kind::Vehicles | Kind::Bricks | Kind::Bots | Kind::Prints => {}
                 Kind::Mode => {
                     if let Some(m) = parse::<content::GameMode>(asset, &id, |m| m.validate(), out) {
                         self.modes.insert(asset.id.clone(), m);

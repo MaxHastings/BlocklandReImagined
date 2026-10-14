@@ -73,9 +73,13 @@ pub enum Kind {
     /// side: every player draws it, so an Add-On with a player type and its
     /// body is shared and joiners download both.
     Body,
+    /// A print pack (`prints.json`, `bri_content::brick_materials::PrintPack`)
+    /// joining the base game's prints, merged by the engine's content
+    /// loading like weapons. Client side: every player draws the prints.
+    Prints,
 }
 impl Kind {
-    pub const NAMES: [&str; 21] = [
+    pub const NAMES: [&str; 22] = [
         "behaviour",
         "script",
         "world",
@@ -97,6 +101,7 @@ impl Kind {
         "splash",
         "controller",
         "body",
+        "prints",
     ];
     pub fn parse(text: &str) -> Option<Self> {
         Some(match text {
@@ -121,6 +126,7 @@ impl Kind {
             "splash" => Self::Splash,
             "controller" => Self::Controller,
             "body" => Self::Body,
+            "prints" => Self::Prints,
             _ => return None,
         })
     }
@@ -147,7 +153,8 @@ impl Kind {
             | Self::Help
             | Self::Image
             | Self::Splash
-            | Self::Body => Side::Client,
+            | Self::Body
+            | Self::Prints => Side::Client,
         }
     }
     /// Largest accepted file of this kind.
@@ -157,6 +164,7 @@ impl Kind {
             Self::Data => 1024 * 1024,
             Self::Image => 4 * 1024 * 1024,
             Self::Weapons | Self::Vehicles | Self::Bricks | Self::Body => 32 * 1024 * 1024,
+            Self::Prints => 8 * 1024 * 1024,
             Self::Controller => 64 * 1024,
             _ => 128 * 1024,
         }

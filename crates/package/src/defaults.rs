@@ -813,13 +813,14 @@ mod tests {
 
     /// The brick packs bundled on at start are exactly the ones Maxwell
     /// chose (2026-10-02: those defining bricks at least two of his
-    /// Halloween Block Party 2026, Jazz CityRPG and 2023 XMas saves use), and they load in v20's order,
+    /// Halloween Block Party 2026, Jazz CityRPG and 2023 XMas saves use,
+    /// and on 2026-10-14 the five Modular Terrain packs), and they load in v20's order,
     /// Add-On name order. Where two define a brick of the same name, the
     /// one loaded later is the one a save gets, as in v20, so the order
     /// decides between GIANT, BlackDragonIV and its Filler.
     #[test]
     fn the_bundled_brick_packs_are_the_chosen_ones_in_v20_order() {
-        const CHOSEN: [&str; 43] = [
+        const CHOSEN: [&str; 48] = [
             "Brick_DemiansCBFix",
             "Brick_DemiansBP_2x_Tall",
             "Brick_VerticalPlatePack",
@@ -863,6 +864,11 @@ mod tests {
             "Brick_ExtraPrints",
             "Brick_Window",
             "Brick_Christmas_Tree",
+            "Brick_ModTer_BasicPack",
+            "Brick_ModTer_InvertedPack",
+            "Brick_ModTer_4xPack",
+            "Brick_ModTer_4xPackZ",
+            "Brick_ModTer_siba",
         ];
         let packs: Vec<&DefaultAddOn> = listed()
             .iter()

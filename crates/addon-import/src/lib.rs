@@ -439,6 +439,7 @@ pub fn import_with(opts: &Options, ports: &ports::Ports) -> Result<Report> {
     datablocks(&mut cx, &scripts);
     references(&mut cx);
     convert_files(&mut cx)?;
+    prints(&mut cx)?;
     weapons(&mut cx, &scripts)?;
     vehicles(&mut cx, &scripts)?;
     bricks(&mut cx, &scripts)?;
@@ -1123,7 +1124,9 @@ fn datablocks(cx: &mut Ctx, scripts: &[Script]) {
         let dir = s.path.rsplit_once('/').map_or(s.path.as_str(), |(d, _)| d);
         for d in &s.datablocks {
             let key = d.name.to_ascii_lowercase();
-            if cx.owned.contains_key(&key) {
+            // A port's `datablocks.cs` declares it in the Add-On's place.
+            let ported = cx.ported.contains_key(&s.path.to_ascii_lowercase());
+            if cx.owned.contains_key(&key) && !ported {
                 cx.ambiguous(
                     format!("datablock {}", d.name),
                     Some(Location::new(&s.path, d.line)),
@@ -1491,6 +1494,129 @@ fn convert_files(cx: &mut Ctx) -> Result<()> {
             _ => {}
         }
     }
+    Ok(())
+}
+
+/// A `Print_<aspect>_<name>` Add-On's prints: v20 adds each `prints/*.png`
+/// with its `icons/<stem>.png` to the print list under the aspect its name
+/// carries (`Print_ModTer_Default` prints fit `printAspectRatio = "ModTer"`
+/// bricks), as the stock print packages are converted
+/// (`brick_material_bundle`). Written as `assets/prints.json` with copies
+/// of the images, kind `prints`, which the game merges onto its own.
+fn prints(cx: &mut Ctx) -> Result<()> {
+    use bri_content::brick_materials::{
+        Image, PRINT_PACK_SCHEMA, Package, Print, PrintPack, Source as Origin,
+    };
+    let name = cx.src.name.clone();
+    let Some(aspect) = name
+        .get(..6)
+        .filter(|p| p.eq_ignore_ascii_case("print_"))
+        .and_then(|_| name[6..].split_once('_'))
+        .map(|(aspect, _)| aspect.to_owned())
+        .filter(|a| !a.is_empty())
+    else {
+        return Ok(());
+    };
+    let archive = format!("Add-Ons/{name}.zip");
+    let lower = name.to_ascii_lowercase();
+    let files: Vec<_> = cx.src.files.values().cloned().collect();
+    let mut pack = PrintPack {
+        schema_version: PRINT_PACK_SCHEMA,
+        packages: vec![Package {
+            name: name.clone(),
+            archive: archive.clone(),
+            archive_sha256: cx.src.sha256.clone(),
+            // Not in the base game's default list; the bundle requires a line.
+            default_list_line: 1,
+        }],
+        prints: vec![],
+    };
+    let image = |cx: &Ctx, bytes: &[u8], member: &str, out: String| -> Result<Image> {
+        let (width, height) =
+            image::ImageReader::with_format(std::io::Cursor::new(bytes), image::ImageFormat::Png)
+                .into_dimensions()
+                .with_context(|| format!("{member} is not a PNG"))?;
+        cx.write(&format!("assets/{out}"), bytes)?;
+        Ok(Image {
+            path: out,
+            width,
+            height,
+            sha256: hash(bytes),
+            source: Origin {
+                path: member.into(),
+                archive: Some(archive.clone()),
+                sha256: hash(bytes),
+            },
+        })
+    };
+    for f in &files {
+        let member = rel_member(cx, &f.path);
+        let Some(stem) = member
+            .get(..7)
+            .filter(|p| p.eq_ignore_ascii_case("prints/"))
+            .and_then(|_| {
+                member[7..]
+                    .strip_suffix(".png")
+                    .or(member[7..].strip_suffix(".PNG"))
+            })
+            .filter(|s| !s.is_empty() && !s.contains(['/', ' ']))
+        else {
+            continue;
+        };
+        let Some(icon_file) = cx
+            .src
+            .get(&format!("{}/icons/{stem}.png", cx.src.dir()))
+            .cloned()
+        else {
+            cx.report.diagnostics.push(format!(
+                "{member}: no icons/{stem}.png, so v20 lists no such print"
+            ));
+            continue;
+        };
+        let icon_member = rel_member(cx, &icon_file.path);
+        let base = format!("prints/{}", stem.to_ascii_lowercase());
+        let made = image(cx, &f.bytes, &member, format!("{base}.png")).and_then(|diffuse| {
+            Ok((
+                diffuse,
+                image(
+                    cx,
+                    &icon_file.bytes,
+                    &icon_member,
+                    format!("{base}-icon.png"),
+                )?,
+            ))
+        });
+        match made {
+            Ok((diffuse, icon)) => {
+                let id = format!("print/{lower}/{}", stem.to_ascii_lowercase());
+                pack.prints.push(Print {
+                    id,
+                    name: stem.into(),
+                    aspect: aspect.clone(),
+                    package: name.clone(),
+                    aliases: vec![format!("{aspect}/{stem}")],
+                    diffuse,
+                    icon,
+                });
+                for (path, note) in [(&f.path, "print"), (&icon_file.path, "print icon")] {
+                    set_asset(
+                        cx,
+                        path,
+                        "converted",
+                        Some("assets/prints.json".into()),
+                        None,
+                        Some(format!("{aspect} {note} {stem}")),
+                    );
+                }
+            }
+            Err(e) => set_asset(cx, &f.path, "failed", None, None, Some(format!("{e:#}"))),
+        }
+    }
+    if pack.prints.is_empty() {
+        return Ok(());
+    }
+    pack.prints.sort_by(|a, b| a.id.cmp(&b.id));
+    cx.write("assets/prints.json", &serde_json::to_vec_pretty(&pack)?)?;
     Ok(())
 }
 
@@ -2839,11 +2965,17 @@ fn bricks(cx: &mut Ctx, scripts: &[Script]) -> Result<()> {
                 }
             }
             Err(e) => {
-                for d in s
-                    .datablocks
+                // Bricks a port's `datablocks.cs` declares in their place
+                // are read from there.
+                let redeclared: BTreeSet<String> = scripts
                     .iter()
-                    .filter(|d| d.class.eq_ignore_ascii_case("fxDTSBrickData"))
-                {
+                    .filter(|p| cx.ported.contains_key(&p.path.to_ascii_lowercase()))
+                    .flat_map(|p| p.datablocks.iter().map(|d| d.name.to_ascii_lowercase()))
+                    .collect();
+                for d in s.datablocks.iter().filter(|d| {
+                    d.class.eq_ignore_ascii_case("fxDTSBrickData")
+                        && !redeclared.contains(&d.name.to_ascii_lowercase())
+                }) {
                     cx.unsupported(
                         format!("brick {}", d.name),
                         Some(Location::new(&s.path, d.line)),
@@ -2965,7 +3097,18 @@ fn loadable_bricks(cx: &mut Ctx, catalog: bri_content::brick::Catalog) -> Result
         };
         let bytes = std::fs::read(cx.out.join("assets").join(rel))?;
         let brick: bri_content::brick::Brick = serde_json::from_slice(&bytes)?;
-        match bri_convert::collision::bake(entry.id.clone(), &brick, None) {
+        // A brick with `collisionShapeName` (ModTer's slopes) collides
+        // with that shape's collision details, as the stock catalog bakes
+        // the base game's (`stock_catalog`).
+        let external = entry
+            .collision_source
+            .as_ref()
+            .and_then(|source| {
+                cx.shapes
+                    .get(&source.replace('\\', "/").to_ascii_lowercase())
+            })
+            .map(|(_, shape)| shape);
+        match bri_convert::collision::bake(entry.id.clone(), &brick, external) {
             Ok(body) => bodies.push(body),
             Err(e) => {
                 cx.report
@@ -3925,6 +4068,7 @@ fn runtime_provides(out: &Path, namespace: &str) -> Vec<serde_json::Value> {
         ("vehicles", "assets/vehicles.json"),
         ("bricks", "assets/brick-catalog/stock-catalog.json"),
         ("bots", "assets/bots.json"),
+        ("prints", "assets/prints.json"),
     ]
     .into_iter()
     .filter(|(_, file)| out.join(file).is_file())

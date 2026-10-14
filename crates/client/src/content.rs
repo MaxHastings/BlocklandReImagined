@@ -44,6 +44,8 @@ pub struct ContentPaths {
     pub weapon_extras: Vec<(String, PathBuf)>,
     pub vehicle_extras: Vec<(String, PathBuf)>,
     pub brick_extras: Vec<(String, PathBuf)>,
+    /// Each Add-On's print pack (`content_identity::print_providers`).
+    pub print_extras: Vec<(String, PathBuf)>,
     /// Each Add-On's bot kinds file (`content_identity::bot_providers`).
     pub bot_extras: Vec<(String, PathBuf)>,
     pub map_bundle: PathBuf,
@@ -360,6 +362,7 @@ impl ContentPaths {
             )?,
             brick_extras: bri_net::content_identity::brick_catalog_providers(&root, packages)?,
             bot_extras: bri_net::content_identity::bot_providers(&root, packages)?,
+            print_extras: bri_net::content_identity::print_providers(&root, packages)?,
             packages: packages.clone(),
             root,
             shared: Default::default(),
@@ -411,8 +414,9 @@ impl ContentPaths {
         if let Some(materials) = &*kept {
             return Ok(materials.clone());
         }
-        let materials = Arc::new(crate::materials::BrickMaterials::load(
+        let materials = Arc::new(crate::materials::BrickMaterials::load_with(
             &self.brick_materials,
+            &self.print_extras,
         )?);
         *kept = Some(materials.clone());
         Ok(materials)
@@ -693,6 +697,9 @@ impl ClientContent {
                 &shape_icons,
             )
             .with_context(|| format!("Loading bricks of {dir}"))?;
+        }
+        for (dir, assets) in &paths.print_extras {
+            install_print_icons(&mut schema, dir, assets);
         }
         // Add-On bricks are named, printed and wrenched like base ones.
         bri_sim::definitions::extend_catalog(&mut catalog, &paths.brick_extras)?;
@@ -1088,6 +1095,67 @@ fn base_icon(source: &str) -> String {
         .or_else(|| icon.strip_suffix(".jpg"))
         .unwrap_or(&icon)
         .to_string()
+}
+/// An Add-On print pack's icons, under the key the print selector names
+/// them by (`ToolUi::new`): the original package and icon path, as the base
+/// game's are. An icon that does not load leaves its print without one
+/// (`crate::cosmetic`).
+fn install_print_icons(schema: &mut UiPack, dir: &str, assets: &Path) {
+    let pack = file(assets, "prints.json", INDEX_LIMIT)
+        .and_then(|path| read_json::<bri_content::brick_materials::PrintPack>(&path, INDEX_LIMIT));
+    let pack = match pack {
+        Ok(pack) => pack,
+        Err(error) => {
+            let label = bri_package::library::add_on_label(assets.parent().unwrap_or(assets), dir);
+            crate::cosmetic::add_on_fault(&label, "prints.json", format!("{error:#}"));
+            return;
+        }
+    };
+    for print in &pack.prints {
+        let icon = &print.icon;
+        let Some(key) = print_icon_key(icon) else {
+            continue;
+        };
+        let loaded = file(assets, &icon.path, INDEX_LIMIT).and_then(|path| {
+            let bytes = fs::read(&path)?;
+            ensure!(
+                format!("{:x}", sha2::Sha256::digest(&bytes)) == icon.sha256,
+                "Print icon checksum mismatch: {}",
+                print.id
+            );
+            Ok(path)
+        });
+        match loaded {
+            Ok(path) => {
+                schema.images.insert(
+                    key,
+                    bri_ui::schema::ImageEntry {
+                        file: path.to_string_lossy().into_owned(),
+                        width: icon.width,
+                        height: icon.height,
+                        sha256: icon.sha256.clone(),
+                        source: format!(
+                            "{}:{}",
+                            icon.source.archive.as_deref().unwrap_or_default(),
+                            icon.source.path
+                        ),
+                    },
+                );
+            }
+            Err(error) => {
+                let label =
+                    bri_package::library::add_on_label(assets.parent().unwrap_or(assets), dir);
+                crate::cosmetic::add_on_fault(&label, &icon.path, format!("{error:#}"));
+            }
+        }
+    }
+}
+/// The UI pack key of a print's icon: its original package and file
+/// (`add-ons/print_letters_default/icons/a`).
+pub(crate) fn print_icon_key(icon: &bri_content::brick_materials::Image) -> Option<String> {
+    let archive = icon.source.archive.as_deref()?.strip_suffix(".zip")?;
+    let source = icon.source.path.strip_suffix(".png")?;
+    Some(format!("{archive}/{source}").to_ascii_lowercase())
 }
 /// Another package's selectable bricks join the brick menu under the
 /// category and subcategory they declare, with the icons the package stores
