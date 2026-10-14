@@ -880,6 +880,63 @@ fn a_dropped_flag_falls_in_its_colour_and_its_team_recovers_it() {
     g.quiet();
 }
 
+/// What its rules offer a bot to do (`bot_objectives`): a carrier keeps
+/// its way home while its own flag is away (it waits there for it), and a
+/// team is offered its own dropped flag to recover.
+#[test]
+fn bots_are_offered_the_way_home_and_their_own_dropped_flag() {
+    let mut g = Game::new("bot goals");
+    let (red, blue, red_flag, blue_flag) = capture_the_flag(&mut g, &[]);
+    let offered = |g: &mut Game, p: OwnerId, flag: BrickId| {
+        g.s.bot_objective_report(p)
+            .contains(&format!("return:{flag}"))
+    };
+    // Each takes the other's flag: neither can score until theirs is back,
+    // and each still has its way home.
+    g.goto(blue, Vec3::new(-8.5, 0.25, 0.25));
+    g.settle();
+    g.goto(red, Vec3::new(8.5, 0.25, 0.25));
+    g.settle();
+    assert!(g.carried(blue).is_some() && g.carried(red).is_some());
+    assert!(
+        offered(&mut g, blue, red_flag),
+        "{}",
+        g.s.bot_objective_report(blue)
+    );
+    assert!(
+        offered(&mut g, red, blue_flag),
+        "{}",
+        g.s.bot_objective_report(red)
+    );
+
+    g.quiet();
+
+    // Blue falls with Red's flag mid-field: once it can be touched, Red is
+    // offered it to recover, and walking onto it recovers it.
+    let mut g = Game::new("bot recovery");
+    let (red, blue, red_flag, _) = capture_the_flag(&mut g, &[]);
+    g.goto(blue, Vec3::new(-8.5, 0.25, 0.25));
+    g.settle();
+    g.goto(blue, Vec3::new(0.0, 0.25, 6.0));
+    g.steps(4);
+    g.cmd(blue, Command::Suicide).unwrap();
+    g.steps(240);
+    let report = g.s.bot_objective_report(red);
+    assert!(offered(&mut g, red, red_flag), "{report}");
+    assert!(report.contains("Drop"), "from where it lies: {report}");
+    let at =
+        g.s.weapon_view()
+            .drops
+            .iter()
+            .find(|d| d.item == FLAG_ITEM && d.paint == Some(RED))
+            .expect("Red's flag lies there")
+            .position;
+    g.goto(red, at + Vec3::new(0.0, 0.1, 0.0));
+    g.settle();
+    assert_eq!(g.flag_on(red_flag), Some(Some(RED)), "recovered");
+    g.quiet();
+}
+
 fn key(rules: &str, key: &str) -> String {
     format!("{rules}:{key}")
 }

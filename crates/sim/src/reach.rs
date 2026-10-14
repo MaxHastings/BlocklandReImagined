@@ -667,6 +667,13 @@ fn ledge(tuning: &PlayerTuning, crawl: bool) -> f32 {
 /// it may fall into is not counted, so that is an upper bound there.
 /// `None` when it cannot be flown at all.
 ///
+/// `parts` names the bricks inside `ground`'s merged chunk colliders, as
+/// the motor's own step is given them (`Simulation::chunks`): the copies
+/// keep their colliders' ids, so the flight meets only the bricks near
+/// it. Without them each motor tick turned every brick of every chunk it
+/// touched into polygons; on a 188,000-brick build that was a quarter of
+/// the host's tick with 32 bots fighting.
+///
 /// Not covered: the target steering in the air (it is flown with no input),
 /// other bodies and vehicles in the way, and openings it would pass through.
 pub fn shove_landing(
@@ -674,6 +681,7 @@ pub fn shove_landing(
     feet: Vec3,
     velocity: Vec3,
     ground: &crate::nav::Ground,
+    parts: &dyn bri_motor::torque::PartTags,
     allowance: &mut u32,
 ) -> Option<Shoved> {
     // As far as the flight can go before the allowance runs out: its own
@@ -708,7 +716,7 @@ pub fn shove_landing(
     while *allowance > 0 {
         *allowance -= 1;
         let events = player
-            .step_in_water(&mut physics, MoveInput::default(), ground.waters)
+            .step_among(&mut physics, MoveInput::default(), ground.waters, parts)
             .ok()?;
         physics.step();
         if events.impact.length() > hardest.length() {
@@ -778,7 +786,7 @@ mod tests {
         };
         // Two seconds of flight.
         let mut allowance = TICKS as u32 * 2;
-        let landing = shove_landing(&standard(), feet, velocity, &ground, &mut allowance);
+        let landing = shove_landing(&standard(), feet, velocity, &ground, &(), &mut allowance);
         (landing, allowance)
     }
 
@@ -959,5 +967,50 @@ mod tests {
         if reach.crawl_step < t.step_height {
             assert!(!crawls_onto(&t, reach.crawl_step + LEDGE_TOLERANCE * 2.0));
         }
+    }
+
+    /// Dropped from `height` over a floor, holding its jets whenever
+    /// `route::brake_fall` says (or never): how fast it meets the floor.
+    fn fall_from(t: &PlayerTuning, height: f32, brake: bool) -> f32 {
+        let mut physics = world(&[]);
+        let mut player = Player::spawn(&mut physics, 1, Vec3::new(0.0, height, 0.0), t.clone())
+            .expect("spawns in the air");
+        let mut down = 0.0;
+        for _ in 0..(TICKS * 30.0) as usize {
+            let state = player.state();
+            if state.grounded {
+                return down;
+            }
+            down = -state.velocity[1];
+            let jet = brake && crate::route::brake_fall(state.feet[1], down, IMPACT, t);
+            step(
+                &mut player,
+                &mut physics,
+                Vec3::ZERO,
+                Press {
+                    jet,
+                    ..Press::default()
+                },
+            );
+        }
+        panic!("never landed from {height}");
+    }
+    /// The speed a fall hurts from (a Blockhead's `minImpactSpeed`).
+    const IMPACT: f32 = 30.0;
+
+    /// A body with jets drops off any height and holds them only near the
+    /// floor, landing slower than a fall hurts; without them it lands hard.
+    #[test]
+    fn jets_held_late_break_a_fall_from_any_height() {
+        let t = standard();
+        assert!(fall_from(&t, 60.0, false) > IMPACT);
+        for height in [16.0, 32.0, 60.0, 150.0] {
+            let landed = fall_from(&t, height, true);
+            assert!(landed < IMPACT, "from {height} it landed at {landed}");
+        }
+        // Nothing to brake: a short drop never fires the jets.
+        assert!(!crate::route::brake_fall(10.0, 5.0, IMPACT, &t));
+        // Far up, the jets wait (energy kept for when they are needed).
+        assert!(!crate::route::brake_fall(100.0, 20.0, IMPACT, &t));
     }
 }

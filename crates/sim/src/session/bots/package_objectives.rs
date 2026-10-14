@@ -84,8 +84,16 @@ pub(super) enum Action {
         destination: BrickId,
         zone: usize,
         rearming: bool,
+        /// Since when it has stood in the zone with the carriage on and
+        /// nothing scored (the rules wait on something else, such as its
+        /// own flag coming home): after [`REENTER_TICKS`] it steps out and
+        /// back in, as the zone counts only an entry.
+        inside_since: Option<u64>,
     },
 }
+/// Ticks a carrier stands in a destination that has not taken the delivery
+/// before it steps out and comes back in.
+const REENTER_TICKS: u64 = 120 * 2;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Carried {
     Empty,
@@ -239,19 +247,40 @@ impl Action {
         }
     }
     pub(super) fn advance(&mut self, session: &Session, bot: OwnerId) {
-        if let Self::Visit {
+        let Self::Visit {
             stamp,
             destination,
             rearming,
+            inside_since,
             ..
         } = self
-            && *rearming
-            && session
-                .package_objective_zone(bot, &stamp.package, *destination)
-                .is_some_and(|(_, _, _, inside)| !inside)
-        {
+        else {
+            return;
+        };
+        let Some((_, _, _, inside)) =
+            session.package_objective_zone(bot, &stamp.package, *destination)
+        else {
+            return;
+        };
+        if !inside {
+            *inside_since = None;
             *rearming = false;
+        } else if !*rearming && stamp.carried(session, bot) == Some(Carried::ThisSource) {
+            // Arrived with it and nothing scored: the rules wait on
+            // something else. It waits there, stepping out and back in now
+            // and then so that the zone sees it come in again.
+            let tick = session.simulation.state().tick;
+            if tick >= *inside_since.get_or_insert(tick) + REENTER_TICKS {
+                *inside_since = None;
+                *rearming = true;
+            }
         }
+    }
+    /// It stands at (or steps round) a destination with the carriage on,
+    /// waiting for the rules to take the delivery: no stalled approach.
+    pub(super) fn waiting_at_destination(&self) -> bool {
+        matches!(self, Self::Visit { rearming, inside_since, .. }
+            if *rearming || inside_since.is_some())
     }
     /// Delivering what it picked up (a visit with the carriage on).
     pub(super) fn carrying(&self, session: &Session, bot: OwnerId) -> bool {
@@ -325,6 +354,7 @@ impl Session {
         let round = g.round;
         let peer = self.peers.get(&bot).ok_or(planning::Failure::NoPlan)?;
         let spawn_tick = peer.combat.spawn_tick;
+        let feet = Vec3::from(peer.player.state().feet);
         let team = self
             .minigames
             .player(peer.combat.player)
@@ -380,21 +410,36 @@ impl Session {
             let Some(after) = stamp.baseline.checked_add(1) else {
                 continue;
             };
-            if stamp.carried(self, bot) == Some(Carried::Other) {
+            let carried = stamp.carried(self, bot);
+            if carried == Some(Carried::Other) {
                 continue;
             }
-            result.push(DesiredState {
-                id: format!("{}:{}", stamp.package, offer.goal.id),
-                predicates: Goal(vec![Predicate {
-                    key: stamp.counter_key(),
-                    compare: Compare::AtLeast,
-                    value: FactValue::Number(after),
-                }]),
-                completion: Completion::PackageCounter(Box::new(stamp)),
-            });
+            // Nearest first: what it carries, then the nearest thing to
+            // pick up, so a side spreads over what is offered (its own
+            // dropped flag beside it before the enemy's far off).
+            let far = if carried == Some(Carried::ThisSource) {
+                0.0
+            } else {
+                stamp
+                    .pickup_point(self)
+                    .map_or(f32::MAX, |at| at.distance(feet))
+            };
+            result.push((
+                far,
+                DesiredState {
+                    id: format!("{}:{}", stamp.package, offer.goal.id),
+                    predicates: Goal(vec![Predicate {
+                        key: stamp.counter_key(),
+                        compare: Compare::AtLeast,
+                        value: FactValue::Number(after),
+                    }]),
+                    completion: Completion::PackageCounter(Box::new(stamp)),
+                },
+            ));
         }
+        result.sort_by(|a, b| a.0.total_cmp(&b.0));
         Ok(Discovery {
-            desired: result,
+            desired: result.into_iter().map(|(_, d)| d).collect(),
             unsupported: discovered.unsupported,
         })
     }
@@ -476,6 +521,7 @@ impl Session {
                     destination,
                     zone,
                     rearming: inside,
+                    inside_since: None,
                 },
                 point,
                 vec![Predicate {
