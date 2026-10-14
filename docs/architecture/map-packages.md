@@ -1,6 +1,6 @@
 # Map Add-Ons: authored maps from Blender, TrenchBroom and converted v20
 
-Status: proposed design, not started. Waiting for Maxwell's approval; build
+Status: proposed design, not started. The first version is scoped in "Keeping it small"; the rest of this page is direction, not commitment. Waiting for Maxwell's approval; build
 after the release blockers in [STATUS.md](../STATUS.md). Nothing here changes
 the alpha contract.
 
@@ -222,30 +222,57 @@ playtests show Classic and Unified players need it.
   later missing loads its bricks and reports the map, as principle 1
   requires from beta on.
 
-## Order of work
+## Keeping it small
 
-Each step is useful by itself.
+Maxwell's constraint (2026-10-14): help pharzedia without creating
+technical debt we must maintain. So the first version reuses what exists and
+adds one format reader at most.
 
-1. **One light system** (renderer: spot lights, shadow flag, one list;
-   brick and image lights can cast shadows).
-2. **`map` content kind and loader** (manifest kind, `*.map.json`, map lists
-   from Add-Ons, physics from model collision, heightfield terrain, join
-   download). Tested with a
+**The core, which we would keep anyway.** Every piece reuses an existing
+mechanism; the new code is glue.
+
+1. **`map` content kind and loader.** A `*.map.json` places existing
+   `*.shape.json` models (drawn, and collided through their collision
+   detail, as map static models already are), spawns and lights. Terrain
+   uses the existing `TerrainField`, Start Game lists Add-On maps, and
+   joiners download it as they do any shared Add-On. Tested with a
    hand-written fixture map.
-3. **glTF map import**, with Blender lights, spawns and `extras`; doc page in
-   `docs/modding/`.
-4. **Export of converted maps** to a map Add-On and `.glb`, with the
-   round-trip test. This is when pharzedia's Bedroom workflow works end to
-   end.
-5. **TrenchBroom import** and its game configuration.
-6. **Vanilla on the kind**: the converted bundle provides its maps as `map`
-   content, and `LOADABLE_MAPS` goes away.
-7. **Lightmap bake at import** (option (a)), only if needed.
+2. **glTF map import**, extending `bri-import-addon gltf` rather than adding
+   a tool. Its only new reads are Empties named `spawn` and Blender lights
+   (`KHR_lights_punctual`, point only). glTF stays the one interchange
+   format we support.
+3. **Export of a converted map to `.glb`**: geometry, textures and the
+   recovered lights from `lighting-parameters.json`. This gives pharzedia
+   Bedroom in Blender with its lamps in place, and it goes back in through
+   step 2. A round-trip test guards both directions.
+4. **Map lights reuse the existing light definition** (`FxLightData`, so
+   rainbow, strobe and blink by id) and the existing lamp-shadow path.
+   Authored lights join the recovered ones in `pick_lamps`; no second light
+   system.
+
+**Deferred until someone needs it.** Each item below is a feature to
+maintain, and none is needed for the workflow above.
+
+- **TrenchBroom import.** A second importer to maintain. Blender can import
+  Quake `.map` files with existing community add-ons, then export glTF.
+- **Spot lights.** New renderer work (cone shadows). Point lights first.
+- **Shadows on brick and image lights.** Worth doing, but it touches the
+  effects pipeline and the shadow budget everywhere; it is its own change.
+- **A lightmap bake for Classic and Unified.** Authored maps render as
+  Dynamic (option (b) above).
+- **A Blender Python reader for `*.interior.json`.** It would be a third
+  format reader, and step 3 replaces it.
+
+**The one debt this creates, and how it ends.** Until vanilla's converted
+maps are provided as `map` content too, there are two map loading paths
+(the `map_bundle` role with `LOADABLE_MAPS`, and Add-On maps). Moving
+vanilla onto the kind removes the old path and the hard-coded list, and
+the step-3 exporter is most of that work. It should happen before beta,
+when schemas freeze; until then the two paths share the loader below the
+manifest (scene nodes, models, terrain, physics).
 
 ## Open questions for Maxwell
 
-- Approve (b), authored maps always Dynamic, as the starting point?
-- Should step 1 (shadow-casting brick lights) go ahead on its own soon? It
-  is the part the community can use without any new tools.
-- Is step 6 (vanilla on the kind) wanted before beta, when schemas freeze?
-  It is what proves the kind, and it removes the hard-coded map list.
+- Approve the core (steps 1 to 4), with authored maps Dynamic-only?
+- Commit to moving vanilla onto the kind before beta, so the second map
+  path is temporary?

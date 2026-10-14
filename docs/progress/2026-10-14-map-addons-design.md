@@ -23,5 +23,12 @@ with spot cones, curves and a shadow flag. Authored maps start Dynamic-only.
 The order of work and the open questions for Maxwell are in the doc. No code
 changed; nothing was built or tested.
 
+Scope cut (Maxwell, same day: avoid technical debt): the first version is the
+map kind, glTF map import, export of converted maps to `.glb`, and map lights
+on the existing light definition and lamp-shadow path. Deferred: TrenchBroom
+import, spot lights, shadows on brick lights, the lightmap bake, and a Blender
+reader for `*.interior.json`. The two map loading paths stay temporary only if
+vanilla moves onto the kind before beta.
+
 Next: Maxwell approves or amends the open questions; work starts after the
 release blockers.
