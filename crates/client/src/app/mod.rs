@@ -765,7 +765,7 @@ fn aimed_at(camera: Vec3, aim: Vec3, feet: Vec3, eye: Vec3, radius: f32) -> bool
     let along_body = if denominator.abs() < 1e-6 || c < 1e-6 {
         0.0
     } else {
-        ((a * e - b * d) / denominator).clamp(0.0, 1.0)
+        ((a * e - b * d) / denominator).clamped(0.0, 1.0)
     };
     let point = feet + axis * along_body;
     let along_aim = (point - camera).dot(aim) / a.max(1e-6);
