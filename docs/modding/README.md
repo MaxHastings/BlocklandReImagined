@@ -112,9 +112,19 @@ why.
 
 **Edit while you play.** A game keeps the Add-Ons it started with. Edit a
 file while you host, switch back to the game, and chat names the Add-Ons
-that changed; host again to play them. A body's numbers are the exception:
-`/tune` changes them live for everyone and saves them back to its file
-([Tuning bodies in the game](tuning.md)).
+that changed; host again to play them. Two exceptions skip hosting again:
+
+- **Rules scripts.** Type `/reloadrules` (the host only) after saving a
+  `.rhai` file. Every running Add-On's script is read again and the
+  changed ones swap in at once. Everything the rules keep carries on:
+  state, host data, settings, creatures, cooldowns and the players, so
+  the next hook simply runs your new functions. Nothing re-runs `on_join`
+  for players already in. If the new script has a mistake, chat says what
+  and where, and the old one keeps running. Only the script is read
+  again: a change to `behaviour.json` (commands, state, hooks turned on)
+  or any other file still needs hosting again.
+- **A body's numbers.** `/tune` changes them live for everyone and saves
+  them back to its file ([Tuning bodies in the game](tuning.md)).
 
 **Share it** as one ZIP that installs byte for byte:
 
