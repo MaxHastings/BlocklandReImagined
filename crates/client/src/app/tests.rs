@@ -2153,3 +2153,20 @@ fn a_save_picture_is_drawn_in_a_submission_of_its_own() -> anyhow::Result<()> {
     gpu.queue.submit([held.finish()]);
     Ok(())
 }
+
+#[test]
+fn aim_on_a_body_finds_it_and_aim_beside_or_behind_does_not() {
+    use glam::Vec3;
+    let (feet, eye) = (Vec3::new(0.0, 0.0, -10.0), Vec3::new(0.0, 2.0, -10.0));
+    let camera = Vec3::new(0.0, 1.5, 0.0);
+    // Straight at the chest.
+    assert!(super::aimed_at(camera, Vec3::NEG_Z, feet, eye, 0.5));
+    // Two units to the side at ten away misses a half-unit body.
+    let beside = (Vec3::new(2.0, 0.0, -10.0)).normalize();
+    assert!(!super::aimed_at(camera, beside, feet, eye, 0.5));
+    // Looking away.
+    assert!(!super::aimed_at(camera, Vec3::Z, feet, eye, 0.5));
+    // Over the head.
+    let over = (Vec3::new(0.0, 2.0, -10.0)).normalize();
+    assert!(!super::aimed_at(camera, over, feet, eye, 0.5));
+}

@@ -768,6 +768,12 @@ pub struct Image {
     /// Blockhead's (`lhand`, `rhand`, `lhook`, `rhook`). Up to 16 names.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub hide_nodes: Vec<String>,
+    /// Help aiming at bodies the holder could hurt, as console shooters
+    /// give a thumbstick: shots bend onto a body near the aim, and the
+    /// holder's own game slows their look while the aim is on one. None
+    /// for v20's unaided aim.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub aim_assist: Option<AimAssist>,
     /// Held up with both arms (`armReadyBoth`), as `onMount`'s
     /// `%obj.playThread(2, armReadyBoth)` did, not with the mount hand's
     /// arm alone.
@@ -1650,6 +1656,34 @@ pub fn is_image_command(c: &str) -> bool {
                 && c.bytes()
                     .all(|b| b.is_ascii_alphanumeric() || b"_-:".contains(&b))
         })
+}
+
+/// [`Image::aim_assist`].
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AimAssist {
+    /// A shot turns onto the middle of the nearest such body whose middle
+    /// is within this many radians of the aim (0 to 0.35), in sight,
+    /// before its spread. 0 bends nothing.
+    #[serde(default)]
+    pub angle: f32,
+    /// How far away a body is helped, in units at the holder's scale
+    /// (1 to 1000).
+    pub range: f32,
+    /// Look speed's multiple while the aim is on such a body within
+    /// range (0.1 to 1); 1 does not slow it.
+    #[serde(default = "full_speed")]
+    pub slowdown: f32,
+}
+fn full_speed() -> f32 {
+    1.0
+}
+impl AimAssist {
+    pub fn valid(&self) -> bool {
+        (0.0..=0.35).contains(&self.angle)
+            && (1.0..=1000.0).contains(&self.range)
+            && (0.1..=1.0).contains(&self.slowdown)
+    }
 }
 
 /// What v20 Add-Ons scripted in `onFire` with the common spread code
@@ -3068,6 +3102,10 @@ impl Pack {
                  moving_speed 0 to 50, scale 0.1 to 10, rested after 1 to 1200 ticks, kick amplitude 0 to 1, \
                  frequency 0.1 to 30, seconds 0.05 to 2, radius 0 to 100, a lob within its limits and \
                  without hitscan"
+            );
+            ensure!(
+                image.aim_assist.as_ref().is_none_or(AimAssist::valid),
+                "Invalid image aim_assist {id}: angle 0 to 0.35 radians, range 1 to 1000, slowdown 0.1 to 1"
             );
             ensure!(
                 image.state_shots.len() <= 8

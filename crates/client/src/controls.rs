@@ -73,6 +73,10 @@ pub struct Controls {
     vehicle_mouse_plain: bool,
     /// The held weapon's aim (`Image::zoom`), while one is held.
     aim: Option<bri_weapons::Zoom>,
+    /// Look speed's multiple from the held image's aim assist this frame;
+    /// None for full speed. Set by the frame drawn, which holds the
+    /// controls only to read them.
+    assist_slowdown: std::cell::Cell<Option<f32>>,
     /// The aim's wheel step (`Zoom::levels`), kept while it is held.
     aim_level: usize,
     /// The aim's sway (`Zoom::sway`), eased in while aiming and out after.
@@ -333,7 +337,10 @@ impl Controls {
                 }
                 // `getMouseAdjustAmount`: sensitivity × `$cameraFov` / 90,
                 // then the aim's own `sensitivity` while aiming.
-                let scale = self.fov() / 90.0 * self.aim_sensitivity();
+                // An aim assist slows it while the aim is on a body.
+                let scale = self.fov() / 90.0
+                    * self.aim_sensitivity()
+                    * self.assist_slowdown.get().unwrap_or(1.0);
                 // OS mouse Y increases downwards; simulation pitch increases up.
                 self.look(yaw * scale, -pitch * scale);
             }
@@ -983,6 +990,16 @@ impl Controls {
     /// The held weapon's aim, or `None` when it has none: holding Zoom (or
     /// Jet, when the aim is `on_jet`) then aims at its FOV in place of the
     /// wheel's zoom.
+    /// Look speed's multiple from an aim assist (`AimAssist::slowdown`),
+    /// 0.1 to 1.
+    pub fn set_assist_slowdown(&self, slowdown: f32) {
+        self.assist_slowdown.set(
+            slowdown
+                .is_finite()
+                .then(|| slowdown.clamped(0.1, 1.0))
+                .filter(|s| *s < 1.0),
+        );
+    }
     pub fn set_aim(&mut self, aim: Option<bri_weapons::Zoom>) {
         let aim = aim.filter(|a| a.validate().is_ok());
         if aim != self.aim {
@@ -2217,6 +2234,25 @@ mod tests {
         c.set_aim(None);
         assert!(c.movement().jet);
         assert_eq!(c.scope_overlay(), None);
+    }
+    /// An aim assist on a body slows look by its `slowdown`, and look is
+    /// whole again once the aim leaves it.
+    #[test]
+    fn an_aim_assist_slows_look_while_on_a_body() {
+        let c = &mut Controls::default();
+        let turn = |c: &mut Controls| {
+            let before = c.yaw;
+            c.action(&GameAction::Look {
+                yaw: 0.1,
+                pitch: 0.0,
+            });
+            c.yaw - before
+        };
+        let whole = turn(c);
+        c.set_assist_slowdown(0.4);
+        assert!((turn(c) - whole * 0.4).abs() < 1e-6);
+        c.set_assist_slowdown(1.0);
+        assert!((turn(c) - whole).abs() < 1e-6);
     }
     /// A third-person player aiming a first-person scope sees its picture
     /// only once the camera is in the eye.

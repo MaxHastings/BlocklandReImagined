@@ -552,6 +552,7 @@ pub fn lower(definitions: Vec<Definition>) -> Result<Pack> {
                 crosshair: true,
                 follow_arm: false,
                 hide_nodes: Vec::new(),
+                aim_assist: None,
                 both_arms: false,
                 paint_tint: false,
                 left_image: None,

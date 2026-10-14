@@ -1047,7 +1047,20 @@ impl App {
             controls.observer().is_none(),
             &passages,
             |drop| self.world_items.drop_center(drop),
+            self.ui
+                .core
+                .hud_regions
+                .iter()
+                .find(|r| r.region == bri_content::hud::Region::NameTags),
         );
+        let slowdown = assist_slowdown(
+            view,
+            self.motion.presented(),
+            &self.content.weapons.pack,
+            glam::Mat4::from_cols_array(&camera.view_projection),
+            eye,
+        );
+        self.controls.set_assist_slowdown(slowdown);
         // Plants keep their authored tint, scaled by the live outdoor light
         // relative to the mission's own daylight. All other views share it.
         let live_up = (-glam::Vec3::from_slice(&camera.sun_direction)

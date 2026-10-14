@@ -1395,6 +1395,7 @@ fn teleport_image() -> bri_weapons::Image {
         crosshair: true,
         follow_arm: false,
         hide_nodes: Vec::new(),
+        aim_assist: None,
         both_arms: false,
         paint_tint: false,
         left_image: None,

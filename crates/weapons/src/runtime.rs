@@ -3146,6 +3146,56 @@ impl WeaponsWorld {
         Advance::Drop
     }
     /// Play each of the holder's state cues whose time has come.
+    /// [`AimAssist::angle`]: the aim turned onto the middle of the body
+    /// nearest it within the cone and range that the holder could hurt and
+    /// sees, or the aim unchanged.
+    fn assisted_aim(
+        &self,
+        id: ActorId,
+        frame: &Frame,
+        assist: &AimAssist,
+        q: &mut impl Query,
+    ) -> Vec3 {
+        let aim = frame.direction.normalize_or(Vec3::NEG_Z);
+        if assist.angle <= 0.0 {
+            return aim;
+        }
+        let reach = assist.range * frame.scale.max(0.01);
+        let mut best: Option<(f32, Vec3)> = None;
+        for (other, actor) in &self.actors {
+            let target = TargetId::Actor(*other);
+            if *other == id || !q.can_affect(id, target) || q.is_ally(id, target) {
+                continue;
+            }
+            let o = &actor.frame;
+            let middle = o.middle.unwrap_or((o.position + o.eye) * 0.5);
+            let to = middle - frame.eye;
+            let distance = to.length();
+            if !(distance > 0.01 && distance <= reach) {
+                continue;
+            }
+            let angle = aim.angle_between(to / distance);
+            if angle > assist.angle || best.is_some_and(|(b, _)| b <= angle) {
+                continue;
+            }
+            let seen = q
+                .sweep(
+                    frame.eye,
+                    middle,
+                    Filter {
+                        projectile_age_ticks: None,
+                        source: id,
+                        players: true,
+                        world_only: false,
+                    },
+                )
+                .is_none_or(|hit| hit.target == target);
+            if seen {
+                best = Some((angle, to / distance));
+            }
+        }
+        best.map_or(aim, |(_, to)| to)
+    }
     fn play_cues(&mut self, id: ActorId, a: &mut Actor) {
         if a.cues.is_empty() {
             return;
@@ -3366,7 +3416,10 @@ impl WeaponsWorld {
                 } else {
                     a.frame.muzzle[e.hand as usize]
                 };
-                let direction = a.frame.direction.normalize();
+                let direction = image.aim_assist.as_ref().map_or_else(
+                    || a.frame.direction.normalize(),
+                    |assist| self.assisted_aim(id, &a.frame, assist, q),
+                );
                 let mut speed = p.speed;
                 if image.melee {
                     if let Some(hit) = q.sweep(

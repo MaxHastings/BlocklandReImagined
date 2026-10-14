@@ -1840,6 +1840,7 @@ fn add_launcher(
         riding_image: None,
         scripts: Default::default(),
         hide_nodes: Vec::new(),
+        aim_assist: None,
         both_arms: false,
         states,
     };
