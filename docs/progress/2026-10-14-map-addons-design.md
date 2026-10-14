@@ -1,0 +1,27 @@
+# 2026-10-14 Map Add-Ons design
+
+pharzedia asked how to bring the converted Bedroom into Blender. They want to
+extend it, keep its recovered lights, and ship the result as an Add-On,
+because map2dif produced broken `.dif` files. Wilfred asked for new maps
+straight from Blender or TrenchBroom. pharzedia also noted that no native
+format can add a new map with terrain and interiors to the map list, and that
+only converted-map lamps cast shadows.
+
+Finding: no doc or importer exists for `*.interior.json` or `*.shape.json`
+into Blender. More importantly, maps can only come from v20 conversion: there
+is no `map` content kind, `LOADABLE_MAPS` hard-codes the list, and joiners
+never download maps. A Blender reader alone would not let anything come back
+in, so Maxwell asked for the long-term fix instead of the literal request.
+
+Decision: proposed only, in
+[docs/architecture/map-packages.md](../architecture/map-packages.md), with a
+row in `seams.md`. Maps become `shared` Add-On content (`*.map.json` holding
+native models, spawns, lights and heightfield terrain). The import tools are
+glTF (Blender) and TrenchBroom. Converted maps get an export to the same format
+with a round-trip test. Brick, image and map lights become one engine light
+with spot cones, curves and a shadow flag. Authored maps start Dynamic-only.
+The order of work and the open questions for Maxwell are in the doc. No code
+changed; nothing was built or tested.
+
+Next: Maxwell approves or amends the open questions; work starts after the
+release blockers.
