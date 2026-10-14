@@ -422,9 +422,11 @@ impl App {
                         SeatRole::Gunner => Some(crate::controls::Ride::Hull(frame.rotation)),
                         SeatRole::Actor => None,
                     });
+                    let toward_look = role == SeatRole::StrafeDriver && d.steering.toward_look;
                     self.controls.hold_world_look(
-                        (role == SeatRole::StrafeDriver && d.steering.toward_look)
-                            .then(|| forward.x.atan2(-forward.z)),
+                        toward_look.then(|| forward.x.atan2(-forward.z)),
+                        (toward_look && d.family == bri_vehicles::Family::Flying)
+                            .then(|| forward.y.clamped(-1.0, 1.0).asin()),
                     );
                     Some((
                         role,
@@ -994,6 +996,17 @@ impl App {
                     })
                 },
             );
+            let mut shown = shown;
+            let vehicles = &self.vehicles;
+            crate::shot_origins::ride_bodies(&mut shown, |target| match target {
+                bri_weapons::TargetId::Actor(actor) => presented
+                    .get(&actor.0)
+                    .map(|p| bri_weapons::attach_frame(Vec3::from(p.feet), p.yaw)),
+                bri_weapons::TargetId::Vehicle(id) => {
+                    vehicles.frame(id).map(|f| (f.position, f.rotation))
+                }
+                _ => None,
+            });
             let weapons: &bri_sim::session::WeaponView = &shown;
             // Rebuilt only when the liquids or the paint change; they were
             // cloned (textures' names and all) several times every frame.

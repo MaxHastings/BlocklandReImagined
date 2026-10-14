@@ -2268,6 +2268,11 @@ pub struct ProjectileDef {
     /// as v20's own projectiles.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub decal: Option<Decal>,
+    /// It sticks to any player or vehicle it hits, whatever the speed or
+    /// angle, and rides along with it (a sticky grenade). Off: v20's
+    /// sticking, in place, only to what it meets fast and steep enough.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub stick_to_bodies: bool,
 }
 /// A projectile's mark on a brick: a soft disc flat on the face it hit,
 /// darkest in the middle, fading out over its last second.
@@ -2511,6 +2516,7 @@ impl Default for ProjectileDef {
             sport_hit: None,
             turns_into: None,
             decal: None,
+            stick_to_bodies: false,
         }
     }
 }

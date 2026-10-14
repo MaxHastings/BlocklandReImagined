@@ -167,6 +167,7 @@ fn rocket_pack() -> bri_weapons::Pack {
         sport_hit: None,
         turns_into: None,
         decal: None,
+        stick_to_bodies: false,
     };
     let pack = bri_weapons::Pack {
         effects: Default::default(),

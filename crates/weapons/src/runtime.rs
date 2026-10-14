@@ -318,6 +318,10 @@ pub trait Query {
     /// The first opening of a linked brick (a portal) the move from `start`
     /// to `end` goes in through: how far along, and the rigid move that
     /// carries what went in to where it comes out.
+    /// A vehicle's body pose, for a projectile stuck to it.
+    fn vehicle_frame(&mut self, _id: u64) -> Option<(Vec3, Quat)> {
+        None
+    }
     fn passage(&mut self, _start: Vec3, _end: Vec3) -> Option<(f32, glam::Affine3A)> {
         None
     }
@@ -617,6 +621,10 @@ pub struct Projectile {
     /// The direction a stuck projectile flew in: its velocity is zero, but
     /// its model keeps pointing that way (v20 keeps the last transform).
     pub heading: Option<Vec3>,
+    /// The player or vehicle a stuck projectile rides on
+    /// ([`crate::ProjectileDef::stick_to_bodies`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stuck_to: Option<Attached>,
     /// Bounces so far, for `max_bounces`. Host bookkeeping, not replicated.
     #[serde(skip)]
     pub bounces: u32,
@@ -624,6 +632,25 @@ pub struct Projectile {
     /// Host bookkeeping, not replicated.
     #[serde(skip)]
     pub spawned: u64,
+}
+/// Where on a player or vehicle a stuck projectile rides.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct Attached {
+    /// [`TargetId::Actor`] or [`TargetId::Vehicle`].
+    pub target: TargetId,
+    /// Its place in the target's frame ([`attach_frame`]).
+    pub offset: Vec3,
+}
+impl Attached {
+    /// Its place in the world on a target at `frame`.
+    pub fn place(&self, (position, rotation): (Vec3, Quat)) -> Vec3 {
+        position + rotation * self.offset
+    }
+}
+/// The frame a projectile stuck to a player rides in: their feet turned to
+/// their heading (`yaw`, right positive). A vehicle's is its body's pose.
+pub fn attach_frame(feet: Vec3, yaw: f32) -> (Vec3, Quat) {
+    (feet, Quat::from_rotation_y(-yaw))
 }
 /// Vertical speed a projectile loses each tick of flight (`gravityMod`);
 /// none unless it is ballistic.
@@ -2693,6 +2720,7 @@ impl WeaponsWorld {
                 age: 0,
                 bounced: false,
                 stuck: false,
+                stuck_to: None,
                 origin: position,
                 was_thrown: false,
                 paint: None,
@@ -2748,6 +2776,7 @@ impl WeaponsWorld {
             age: 0,
             bounced: false,
             stuck: false,
+            stuck_to: None,
             origin: position,
             was_thrown: false,
             paint: None,
@@ -3829,12 +3858,32 @@ impl WeaponsWorld {
             });
         }
     }
+    /// Where a player or vehicle a projectile can ride on is now
+    /// ([`attach_frame`]).
+    fn target_frame(&self, q: &mut impl Query, target: TargetId) -> Option<(Vec3, Quat)> {
+        match target {
+            TargetId::Actor(id) => self
+                .actors
+                .get(&id)
+                .map(|a| attach_frame(a.frame.position, a.frame.body_yaw)),
+            TargetId::Vehicle(id) => q.vehicle_frame(id),
+            _ => None,
+        }
+        .filter(|(at, turn)| at.is_finite() && turn.is_finite())
+    }
     /// One tick of a projectile's flight. [`coast`] is the same motion when
     /// it hits nothing.
     fn projectile_step(&mut self, p: &mut Projectile, q: &mut impl Query) -> bool {
         let pack = Arc::clone(&self.pack);
         let d = &pack.projectiles[&p.definition];
         p.age += 1;
+        if let Some(attached) = p.stuck_to {
+            match self.target_frame(q, attached.target) {
+                Some(frame) => p.position = attached.place(frame),
+                // Its target is gone: it stays where it was last.
+                None => p.stuck_to = None,
+            }
+        }
         if let Some(bursts) = expires(d, p.age, self.fuses.get(&p.id).copied()) {
             if bursts {
                 self.explode(p, d, q, None);
@@ -3993,8 +4042,22 @@ impl WeaponsWorld {
             if stopped {
                 return false;
             }
-            let (velocity, last) = match rebound(d, p.velocity, normal, p.bounces) {
+            let body = matches!(hit.target, TargetId::Actor(_) | TargetId::Vehicle(_));
+            let sticks = d.stick_to_bodies && body;
+            let rebounded = if sticks {
+                Rebound::Stuck
+            } else {
+                rebound(d, p.velocity, normal, p.bounces)
+            };
+            let (velocity, last) = match rebounded {
                 Rebound::Stuck => {
+                    if sticks && let Some((at, turn)) = self.target_frame(q, hit.target) {
+                        p.position = hit.position;
+                        p.stuck_to = Some(Attached {
+                            target: hit.target,
+                            offset: turn.inverse() * (hit.position - at),
+                        });
+                    }
                     p.stuck = true;
                     p.heading = p.velocity.try_normalize();
                     p.velocity = Vec3::ZERO;
@@ -4501,6 +4564,7 @@ impl WeaponsWorld {
             age: d.arm_ticks,
             bounced: landing > 0,
             stuck: false,
+            stuck_to: None,
             origin: from,
             was_thrown: false,
             paint: None,
@@ -4865,6 +4929,7 @@ fn redirect_projectile(
     p.position += velocity.normalize_or_zero() * 0.002;
     p.age = 0;
     p.stuck = false;
+    p.stuck_to = None;
     Ok(Event::Bounced {
         projectile: p.id,
         position: p.position,

@@ -738,6 +738,7 @@ fn each_hand_that_shot_kicks_once() {
         age: 0,
         bounced: false,
         stuck: false,
+        stuck_to: None,
         origin: Vec3::ZERO,
         was_thrown: false,
         paint: None,

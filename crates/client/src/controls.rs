@@ -61,6 +61,9 @@ pub struct Controls {
     /// the view holds its direction in the world and the vehicle turns to
     /// meet it ([`Self::hold_world_look`]).
     look_heading: Option<f32>,
+    /// The nose pitch of such a vehicle that flies, as last seen: the head
+    /// tips back by each pitch the nose makes, likewise.
+    look_nose: Option<f32>,
     /// A passenger's body turn on the seat (`mRot.z` relative to the mount).
     body_turn: f32,
     /// Mounted on anything (a vehicle, a player-type mount, another player).
@@ -450,6 +453,7 @@ impl Controls {
             self.body_turn = 0.0;
             self.free_yaw = 0.0;
             self.look_heading = None;
+            self.look_nose = None;
         }
         self.ride = ride;
     }
@@ -520,15 +524,26 @@ impl Controls {
     /// `heading`: the head turns back by however far the vehicle turned
     /// since the last frame, holding the view's direction in the world.
     /// `None` drives anything else.
-    pub fn hold_world_look(&mut self, heading: Option<f32>) {
+    /// A flying one also passes its `nose` pitch, which the head's pitch
+    /// holds against the same way.
+    pub fn hold_world_look(&mut self, heading: Option<f32>, nose: Option<f32>) {
         let heading = heading.filter(|h| h.is_finite());
+        let nose = nose.filter(|n| n.is_finite() && heading.is_some());
+        let driving = self.seat_look() == Some(SeatLook::StrafeDriver);
         if let (Some(now), Some(before)) = (heading, self.look_heading)
-            && self.seat_look() == Some(SeatLook::StrafeDriver)
+            && driving
         {
             self.free_yaw =
                 (self.free_yaw - wrap(now - before)).clamped(-MAX_FREELOOK, MAX_FREELOOK);
         }
+        if let (Some(now), Some(before)) = (nose, self.look_nose)
+            && driving
+        {
+            self.head_pitch = (self.head_pitch - (now - before)).clamped(-FRAC_PI_2, FRAC_PI_2);
+            self.driver_head = HeadTicks::at(self.head_pitch);
+        }
         self.look_heading = heading;
+        self.look_nose = nose;
     }
     /// A passenger's body turn on the seat, radians (right positive); 0 in
     /// any other seat.

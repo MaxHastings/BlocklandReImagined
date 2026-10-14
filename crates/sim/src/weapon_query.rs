@@ -450,6 +450,16 @@ impl Query for WeaponQuery<'_> {
     fn can_affect_radius(&self, source: ActorId, target: TargetId) -> bool {
         (self.affect_radius)(source, target)
     }
+    fn vehicle_frame(&mut self, id: u64) -> Option<(Vec3, Quat)> {
+        let tag = (2u128 << 64) | u128::from(id);
+        let physics = &self.simulation.physics;
+        let (_, collider) = physics.colliders.iter().find(|(_, c)| c.user_data == tag)?;
+        let pose = match collider.parent() {
+            Some(body) => *physics.bodies.get(body)?.position(),
+            None => *collider.position(),
+        };
+        Some((Vec3::from_array(pose.translation.to_array()), pose.rotation))
+    }
     fn can_catch(&self, source: ActorId, target: ActorId) -> bool {
         (self.catch)(source, target)
     }

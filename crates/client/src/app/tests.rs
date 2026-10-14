@@ -704,6 +704,7 @@ fn app_weapon_effect_path_consumes_cues_once_and_syncs_projectile_trails(
         age: 0,
         bounced: false,
         stuck: false,
+        stuck_to: None,
         origin: Vec3::ZERO,
         was_thrown: false,
     });

@@ -34,8 +34,20 @@ mechanism with no game-specific names; the Add-On's own polish waits.
   the presented motion. `bri-addon-check` checks the squeal like an engine
   sound.
 
+- **Flyers steer by look.** A `Flying` vehicle with `steering.toward_look`
+  pitches its nose to the driver's look as well as turning to it (the
+  client holds the look still in the world as the nose moves), so a hover
+  craft or a flyer goes where the driver looks.
+- **Sticky projectiles.** A projectile's `stick_to_bodies` sticks it to any
+  player or vehicle it hits and it rides along (`Projectile::stuck_to`);
+  clients draw it on the body as they draw it, with no position traffic.
+
+Steering toward the look already existed for wheeled vehicles (the
+Playground buggy has the Warthog's tags), so the handling gap named in the
+assessment was content, not engine.
+
 Protocol notes: `footsteps`, `map-decals`, `screen-flash`, `body-flash`,
-`move-seen-tick` in `crates/net/protocol-changes/`.
+`move-seen-tick`, `projectile-stuck-to` in `crates/net/protocol-changes/`.
 
 ## Decisions
 
