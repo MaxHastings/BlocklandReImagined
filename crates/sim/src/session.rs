@@ -2100,6 +2100,18 @@ impl Session {
         peer.last_move_sequence = sequence;
         Ok(())
     }
+    /// The host skipped `ticks` ticks of real time to catch up after a
+    /// stall. Clients kept making one move a tick through it, so each
+    /// player's move allowance gets those ticks too: the allowance holds a
+    /// client to real time, and without them every stall left a player's
+    /// moves refused on arrival until their own client next hitched, each
+    /// move taken only from a later datagram's copy, late, or lost.
+    pub fn skipped_ticks(&mut self, ticks: u64) {
+        let ticks = ticks.min(INPUT_BURST as u64) as f32;
+        for peer in self.peers.values_mut() {
+            peer.input_budget = (peer.input_budget + ticks).min(INPUT_BURST);
+        }
+    }
     /// The `UseStrafeSteering` and `UseAutoReturnSteering` the host steers
     /// this player's moves by.
     pub fn steering_prefs(&self, owner: OwnerId) -> (bool, bool) {
