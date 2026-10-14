@@ -1931,11 +1931,26 @@ impl Simulation {
             Vector::from_array(origin.to_array()),
             Vector::from_array(direction.to_array()),
         );
+        // Bricks first: the nearest one bounds the map ray, which on a
+        // dense build otherwise walks the broad phase the whole way only to
+        // turn down every brick chunk it passes. The map, then terrain,
+        // still win a tie with a brick.
+        let mut brick = None;
+        self.walk_bricks(
+            origin,
+            direction,
+            max_distance,
+            &mut brick,
+            |_, brick, d| accept(brick, d),
+        )?;
+        let reach = brick.as_ref().map_or(max_distance, |hit: &Hit| {
+            (hit.distance + 1e-3).min(max_distance)
+        });
         let filter = |_: ColliderHandle, c: &Collider| c.user_data == MAP_TAG;
         let mut nearest = self
             .physics
             .query_pipeline_with_filter(QueryFilter::default().predicate(&filter))
-            .cast_ray_and_get_normal(&ray, max_distance, true)
+            .cast_ray_and_get_normal(&ray, reach, true)
             .map(|(_, hit)| Hit {
                 brick: None,
                 position: origin + direction * hit.time_of_impact,
@@ -1953,13 +1968,11 @@ impl Simulation {
                 distance,
             });
         }
-        self.walk_bricks(
-            origin,
-            direction,
-            max_distance,
-            &mut nearest,
-            |_, brick, d| accept(brick, d),
-        )?;
+        if let Some(hit) = brick
+            && nearest.as_ref().is_none_or(|n| hit.distance < n.distance)
+        {
+            nearest = Some(hit);
+        }
         Ok(nearest)
     }
     /// The nearest brick `accept` takes along a ray (normalized direction),

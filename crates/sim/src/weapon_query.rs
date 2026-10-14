@@ -210,21 +210,6 @@ impl Query for WeaponQuery<'_> {
                     fraction: time / distance,
                     color: None,
                 });
-        let physical = self
-            .simulation
-            .physics
-            .query_pipeline_with_filter(QueryFilter::default().predicate(&predicate))
-            .cast_ray_and_get_normal(&ray, distance, true)
-            .and_then(|(handle, hit)| {
-                let target = target(self.simulation.physics.colliders[handle].user_data)?;
-                Some(Hit {
-                    target,
-                    position: start + direction * hit.time_of_impact,
-                    normal: hit_normal(Vec3::from_array(hit.normal.to_array()), direction),
-                    fraction: hit.time_of_impact / distance,
-                    color: None,
-                })
-            });
         // A ray never hits the brick it starts inside, so a projectile can
         // leave the brick it spawned in (event `spawnProjectile` starts at
         // the brick's centre).
@@ -251,6 +236,30 @@ impl Query for WeaponQuery<'_> {
                         .palette
                         .get(usize::from(brick.color))
                         .map(|c| [c[0], c[1], c[2]]),
+                })
+            });
+        // The nearest brick or terrain hit bounds the physics ray: on a
+        // dense build the ray otherwise walks the whole broad phase along
+        // its length only to turn down every brick chunk it passes. A hair past
+        // it, so a body level with that hit still wins the tie as it did.
+        let near = [&brick, &terrain]
+            .into_iter()
+            .flatten()
+            .map(|hit| hit.fraction * distance + 1e-3)
+            .fold(distance, f32::min);
+        let physical = self
+            .simulation
+            .physics
+            .query_pipeline_with_filter(QueryFilter::default().predicate(&predicate))
+            .cast_ray_and_get_normal(&ray, near, true)
+            .and_then(|(handle, hit)| {
+                let target = target(self.simulation.physics.colliders[handle].user_data)?;
+                Some(Hit {
+                    target,
+                    position: start + direction * hit.time_of_impact,
+                    normal: hit_normal(Vec3::from_array(hit.normal.to_array()), direction),
+                    fraction: hit.time_of_impact / distance,
+                    color: None,
                 })
             });
         // Script-moved shapes stop shots and aim rays, not world-only probes.
