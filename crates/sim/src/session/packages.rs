@@ -680,10 +680,17 @@ pub(super) fn archetype(
         (&mut sounds.jump, &def.sounds.jump),
         (&mut sounds.pain, &def.sounds.pain),
         (&mut sounds.death, &def.sounds.death),
+        (&mut sounds.land, &def.sounds.land),
     ] {
         if from.is_some() {
             to.clone_from(from);
         }
+    }
+    if !def.sounds.footsteps.is_empty() {
+        sounds.footsteps.clone_from(&def.sounds.footsteps);
+    }
+    if def.sounds.stride.is_some() {
+        sounds.stride = def.sounds.stride;
     }
     archetype.validate()?;
     Ok(archetype)

@@ -1506,6 +1506,24 @@ impl App {
             self.fx.decals.advance(game_elapsed.as_secs_f32(), |brick| {
                 building.brick_stands(brick)
             });
+            // Bodies with their own footfalls step and land where they are
+            // drawn; riders and sitters do neither.
+            let walking = presented
+                .values()
+                .filter(|p| {
+                    view.vitals.get(&p.owner).is_none_or(|v| {
+                        v.mounted.is_none() && v.ride.is_none() && !v.sitting
+                    })
+                })
+                .map(crate::footsteps::Walk::from);
+            for (sound, at) in
+                self.fx
+                    .footsteps
+                    .update(game_elapsed.as_secs_f32(), walking, &view.archetypes)
+            {
+                self.audio
+                    .profile(&sound, bri_audio::Placement::World(at));
+            }
             self.fx
                 .explosion_debris
                 .advance(game_elapsed.as_secs_f32(), |from, to| {

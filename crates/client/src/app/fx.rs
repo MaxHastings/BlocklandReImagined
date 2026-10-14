@@ -16,6 +16,7 @@ pub(super) struct Effects {
     pub(super) beams: crate::beams::Beams,
     /// Marks projectiles leave on bricks: bullet holes.
     pub(super) decals: crate::decals::Decals,
+    pub(super) footsteps: crate::footsteps::Footsteps,
     /// The Tutorial's target practice targets.
     pub(super) tutorial_targets: crate::tutorial_targets::TutorialTargets,
     /// Pieces thrown by explosions with `debris` (vehicle wrecks, tank shells).

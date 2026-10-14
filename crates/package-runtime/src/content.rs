@@ -1756,6 +1756,16 @@ pub struct ArchetypeSounds {
     pub pain: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub death: Option<String>,
+    /// Footfall sounds, one picked each step (at most 8).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub footsteps: Vec<String>,
+    /// Ground between footfalls in units (0.25 to 32); none is 1.1 times
+    /// the body's standing height.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stride: Option<f32>,
+    /// The sound of landing from a fall.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub land: Option<String>,
 }
 /// One rider seat: the model node riders follow, its rest position from
 /// the feet (facing -Z, at scale 1) and the rider's action (`root`, `sit`).
@@ -1817,11 +1827,27 @@ impl ArchetypeDef {
             "controller must be a controller id"
         );
         ensure!(
-            [&self.sounds.jump, &self.sounds.pain, &self.sounds.death]
-                .into_iter()
-                .flatten()
-                .all(|s| s.is_empty() || text(s, 128)),
+            [
+                &self.sounds.jump,
+                &self.sounds.pain,
+                &self.sounds.death,
+                &self.sounds.land
+            ]
+            .into_iter()
+            .flatten()
+            .all(|s| s.is_empty() || text(s, 128)),
             "sounds name sound profiles"
+        );
+        ensure!(
+            self.sounds.footsteps.len() <= 8
+                && self.sounds.footsteps.iter().all(|s| text(s, 128)),
+            "sounds.footsteps names 1 to 8 sound profiles"
+        );
+        ensure!(
+            self.sounds
+                .stride
+                .is_none_or(|s| s.is_finite() && (0.25..=32.0).contains(&s)),
+            "sounds.stride must be 0.25 to 32 units"
         );
         if let Some(stock) = &self.adjusts {
             ensure!(
