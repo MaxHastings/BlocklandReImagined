@@ -9,6 +9,7 @@ const USAGE: &str = "Usage:
   bri-import-addon gltf MODEL(.glb|.gltf) FRESH_OUTPUT_DIR [--kind body|item|prop|map] [--id NAME] [--name MENU_NAME]
       [--height UNITS | --scale FACTOR] [--fps 30] [--right-hand NODE] [--left-hand NODE] [--eye NODE] [--loop CLIP]...
       [--lod TRIANGLES] [--lod-pixels 100] [--box-width UNITS] [--box-height UNITS] [--json]
+  bri-import-addon export-map CONTENT_OR_BUNDLE_DIR MAP OUTPUT.glb
 
 Converts one legacy Blockland Add-On into a native package directory and writes
 import-report.json and IMPORT-REPORT.md into it. Never executes scripts.
@@ -23,11 +24,19 @@ port, runs the checks and prints the entry for the ports list.
 `gltf` converts a Blender (glTF 2.0) model: a body becomes a package with an
 archetype, an item or prop a `models/` folder for weapons.json or
 vehicles.json, a map a map Add-On with its spawn points and lights. Names,
-scale and clips: docs/modding/gltf-models.md; maps: docs/modding/maps.md.";
+scale and clips: docs/modding/gltf-models.md; maps: docs/modding/maps.md.
+
+`export-map` writes a converted map (`bedroom`, `slate`, or any map id) as a
+.glb for Blender: its geometry and textures, `col_` collision, `spawn`
+empties and its lights, ready to edit and import again with `gltf --kind map`.
+Give it the game's `content` folder or a map bundle folder.";
 
 fn main() -> Result<()> {
     if std::env::args().nth(1).as_deref() == Some("gltf") {
         return gltf(std::env::args().skip(2));
+    }
+    if std::env::args().nth(1).as_deref() == Some("export-map") {
+        return export_map(std::env::args().skip(2));
     }
     let mut args = std::env::args_os().skip(1);
     let mut positional = vec![];
@@ -184,5 +193,35 @@ fn gltf(mut args: impl Iterator<Item = String>) -> Result<()> {
         print!("{}", report.markdown());
         println!("\nWritten to {}", out.display());
     }
+    Ok(())
+}
+
+/// The map bundle folder in `dir` holding `map`: `dir` itself, or one of
+/// its folders (the game's `content` folder holds the map bundle pack).
+fn bundle_dir(dir: &std::path::Path, map: &str) -> Result<PathBuf> {
+    use bri_addon_import::gltf::find_map;
+    if dir.join("bundle.json").is_file() {
+        return Ok(dir.to_path_buf());
+    }
+    let mut dirs: Vec<_> = std::fs::read_dir(dir)
+        .with_context(|| format!("reading {}", dir.display()))?
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p.join("bundle.json").is_file())
+        .collect();
+    dirs.sort();
+    dirs.into_iter()
+        .find(|d| find_map(d, map).is_ok())
+        .with_context(|| format!("no map bundle with map `{map}` in {}", dir.display()))
+}
+
+fn export_map(args: impl Iterator<Item = String>) -> Result<()> {
+    let args: Vec<String> = args.collect();
+    let [dir, map, out] = <[String; 3]>::try_from(args).map_err(|_| anyhow::anyhow!(USAGE))?;
+    let root = bundle_dir(std::path::Path::new(&dir), &map)?;
+    let (glb, report) = bri_addon_import::gltf::export_map(&root, &map)?;
+    std::fs::write(&out, glb).with_context(|| format!("writing {out}"))?;
+    print!("{}", report.markdown());
+    println!("\nWritten to {out}. Open it in Blender with File > Import > glTF 2.0.");
     Ok(())
 }

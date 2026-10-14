@@ -9,9 +9,12 @@
 //! child translations, mesh vertices and inverse bind matrices. Animation
 //! clips are sampled at a fixed rate; clips named after a body's animation
 //! roles take the Blockhead's clip names, so a body needs no mapping.
+mod export;
 mod lod;
 mod map;
 mod read;
+mod write;
+pub use export::{ExportReport, export_map, find_map};
 #[doc(hidden)]
 pub mod testing;
 
