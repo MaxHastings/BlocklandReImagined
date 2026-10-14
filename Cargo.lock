@@ -582,6 +582,7 @@ dependencies = [
  "glam 0.33.10",
  "image",
  "libm",
+ "parry3d",
  "serde",
  "serde_json",
  "sha2",
