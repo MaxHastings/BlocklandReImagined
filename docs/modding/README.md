@@ -16,6 +16,10 @@ then what players are asked to trust when your Add-On runs code on their PC
 | You want | Start from | It is |
 |---|---|---|
 | A game rule: points, rounds, commands | [`sample-survival-points`](../../packages/samples/sample-survival-points) | a `behaviour` file and a Rhai script, run by the host |
+| A framework other Add-Ons build on (an economy, a roleplay core), with data kept across restarts | [`sample-rp-bank`](../../packages/samples/sample-rp-bank) | a rule that exports functions and sends events ([Game rules](rules.md), **Add-Ons that build on each other**) |
+| A window the rules open: a shop, a backpack and chest, an editor | [`sample-rp-inventory`](../../packages/samples/sample-rp-inventory) | `show_panel` and `on_panel`, with rows dragged between lists ([Game rules](rules.md), **Panels**) |
+| Wiring and logic on bricks, in the spirit of Wiremod | [`sample-wire-lite`](../../packages/samples/sample-wire-lite) | a rule using aim, empty-hand clicks, brick colours and a circuit panel |
+| A camera of your own, or taking over some controls | [`sample-overhead-camera`](../../packages/samples/sample-overhead-camera) | client code with `camera.control` and `input.capture` ([client sandbox](../architecture/client-sandbox.md)) |
 | A HUD panel for a rule | [`sample-points-hud`](../../packages/samples/sample-points-hud) | a JSON panel each player draws |
 | A weapon | [`sample-bubble-blaster`](../../packages/samples/sample-bubble-blaster) | an `assets/weapons.json` file |
 | A tool that grabs, holds and throws players and vehicles | [`gravity-gun`](../../packages/showcase/gravity-gun) | a rule using the `physics` operations ([Game rules](rules.md)), its tool, and client effects |

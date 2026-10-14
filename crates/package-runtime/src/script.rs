@@ -23,12 +23,14 @@ use std::sync::Arc;
 
 mod bots;
 mod games;
+pub mod interop;
 mod lint;
 mod math;
 mod physics;
 pub mod view;
 pub use bots::BotKindView;
 pub use games::{BrickView, DropView, MAX_BRICKS_LISTED, MinigameView, TeamView, brick_map};
+pub use interop::{Emitted, Nested};
 use view::{Of, view_in};
 
 /// Operation budgets per kind of call.
@@ -350,6 +352,29 @@ pub trait World {
     fn lan(&self) -> bool {
         false
     }
+    /// Another package's state as the host holds it, for a call into its
+    /// exported functions (`call_addon`).
+    fn addon_state(&self, _package: &str) -> Option<Namespace> {
+        None
+    }
+    /// Another package's entity variables, for the same.
+    fn addon_vars(&self, _package: &str) -> Arc<EntityVars> {
+        Arc::default()
+    }
+    /// Run `f` with this world as another package's call sees it (its host
+    /// data, settings, data files), for a call into that package's exports
+    /// (`call_addon`); `None` where the world has no per-package view.
+    fn as_package(&self, _package: &str, f: &mut dyn FnMut(Option<&dyn World>)) {
+        f(None)
+    }
+}
+
+/// A world reference as a running call keeps it (see `with_world`): the
+/// caller keeps the reference alive for as long as the pointer is used.
+pub(crate) fn erase_world(w: &dyn World) -> *const (dyn World + 'static) {
+    let w: *const (dyn World + '_) = w;
+    // SAFETY: only the trait object's lifetime bound changes.
+    unsafe { std::mem::transmute::<*const (dyn World + '_), *const (dyn World + 'static)>(w) }
 }
 /// A placed brick as a script reads it ([`World::brick`]).
 #[derive(Debug, Clone, PartialEq)]
@@ -578,9 +603,17 @@ pub struct Outcome {
     /// The complete variables of each entity the call wrote to.
     pub entity_vars: EntityVars,
     pub output: Vec<String>,
+    /// Events the call sent (`emit`), for the Add-Ons that listen.
+    pub events: Vec<Emitted>,
+    /// What other Add-Ons' exported functions did for this call
+    /// (`call_addon`): each one's part, to commit under its own name and
+    /// capabilities, or not at all when this call is not kept.
+    pub nested: Vec<Nested>,
 }
 
 struct Invocation {
+    /// The package whose function runs.
+    package: String,
     snapshot: Arc<Snapshot>,
     caller: Option<u64>,
     aim: Option<Aim>,
@@ -613,6 +646,7 @@ struct Invocation {
     views: BTreeMap<Of, view::View>,
     views_made: usize,
     view_writes: usize,
+    events: Vec<Emitted>,
 }
 thread_local! {
     static CURRENT: RefCell<Option<Invocation>> = const { RefCell::new(None) };
@@ -765,6 +799,8 @@ fn player_map(p: &PlayerView) -> Dynamic {
     map([
         ("id", Dynamic::from_int(p.id as i64)),
         ("name", p.name.clone().into()),
+        ("uid", p.key.uid().into()),
+        ("durable", p.key.durable().into()),
         x,
         y,
         z,
@@ -3577,16 +3613,22 @@ fn sandbox() -> Engine {
     // engine may run while the world it asks is borrowed.
     engine.set_max_operations(Budget::Tick.operations().max(Budget::Generate.operations()) + 1);
     engine.on_progress(|operations| {
+        // A call into another Add-On's exports evaluates on its own and
+        // counts from 0: the offset carries what the chain used before it.
+        let operations = operations + OFFSET.with(std::cell::Cell::get);
         OPERATIONS.with(|o| o.set(operations));
         (operations > LIMIT.with(std::cell::Cell::get)).then_some(Dynamic::UNIT)
     });
     register_api(&mut engine);
+    interop::register(&mut engine);
     engine
 }
 
 thread_local! {
     /// Operations the running call has used so far.
     static OPERATIONS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    /// Operations the running evaluation's call chain used before it began.
+    static OFFSET: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
 }
 
 /// Compiled scripts for every package with behaviour.
@@ -3595,6 +3637,8 @@ pub struct Runtime {
     scripts: BTreeMap<String, Arc<AST>>,
     /// Script file per package, for diagnostics.
     sources: BTreeMap<String, String>,
+    /// What each package exports and sends, and whose exports it may call.
+    interop: BTreeMap<String, interop::Interop>,
 }
 impl Default for Runtime {
     fn default() -> Self {
@@ -3602,6 +3646,7 @@ impl Default for Runtime {
             engine: sandbox(),
             scripts: BTreeMap::new(),
             sources: BTreeMap::new(),
+            interop: BTreeMap::new(),
         }
     }
 }
@@ -3747,6 +3792,9 @@ impl Runtime {
             if behaviour.on_drop_key {
                 need("on_drop_key".into(), 1, "on_drop_key");
             }
+            if behaviour.on_panel {
+                need("on_panel".into(), 2, "on_panel");
+            }
             if behaviour.on_contact {
                 need("on_contact".into(), 1, "on_contact");
             }
@@ -3756,6 +3804,19 @@ impl Runtime {
             for policy in &behaviour.policies {
                 need(format!("allow_{policy}"), 1, &format!("policy `{policy}`"));
             }
+            for export in &behaviour.exports {
+                need(
+                    format!("api_{}", export.name),
+                    1 + usize::from(export.args),
+                    &format!("export `{}`", export.name),
+                );
+            }
+            if !behaviour.listens.is_empty() {
+                need("on_addon_event".into(), 3, "listens");
+            }
+            if behaviour.on_object {
+                need("on_object".into(), 1, "on_object");
+            }
             if behaviour.tick_interval.is_some() {
                 need("on_tick".into(), 0, "tick_interval");
             }
@@ -3764,6 +3825,48 @@ impl Runtime {
             }
             for e in package.entities.values() {
                 need(e.think.clone(), 1, &format!("entity `{}`", e.name));
+            }
+            for name in &behaviour.listens {
+                let namespace = name.split(':').next().unwrap_or_default();
+                let known = namespace == id
+                    || package.manifest.dependencies.contains_key(namespace)
+                    || package
+                        .manifest
+                        .optional_dependencies
+                        .contains_key(namespace);
+                if !known {
+                    problems.push(
+                        Diagnostic::error(
+                            "behaviour.listens",
+                            format!(
+                                "listens: `{name}` is an event of `{namespace}`, which this Add-On \
+                                 does not depend on"
+                            ),
+                        )
+                        .at(location(id, &behaviour.script))
+                        .hint(format!(
+                            "add \"{namespace}\" to dependencies or optional_dependencies in package.json"
+                        )),
+                    );
+                } else if let Some(other) = set.packages.get(namespace)
+                    && let Some((_, event)) = name.split_once(':')
+                    && event != "*"
+                    && !other
+                        .behaviour
+                        .as_ref()
+                        .is_some_and(|b| b.events.iter().any(|e| e == event))
+                {
+                    problems.push(
+                        Diagnostic::error(
+                            "behaviour.listens",
+                            format!("listens: `{namespace}` sends no event `{event}`"),
+                        )
+                        .at(location(id, &behaviour.script))
+                        .hint(format!(
+                            "the events `{namespace}` sends are in its behaviour's `events`"
+                        )),
+                    );
+                }
             }
             let adds_events = follows
                 || !behaviour.brick_outputs.is_empty()
@@ -3787,6 +3890,28 @@ impl Runtime {
             }
             runtime.scripts.insert(id.clone(), Arc::new(ast));
             runtime.sources.insert(id.clone(), behaviour.script.clone());
+        }
+        let scripted: Vec<String> = runtime.scripts.keys().cloned().collect();
+        for id in &scripted {
+            let Some(behaviour) = set.packages.get(id).and_then(|p| p.behaviour.as_ref()) else {
+                continue;
+            };
+            runtime.interop.insert(
+                id.clone(),
+                interop::Interop {
+                    exports: behaviour
+                        .exports
+                        .iter()
+                        .map(|e| (e.name.clone(), e.args))
+                        .collect(),
+                    events: behaviour.events.iter().cloned().collect(),
+                    uses: scripted
+                        .iter()
+                        .filter(|other| *other != id && set.uses(id, other))
+                        .cloned()
+                        .collect(),
+                },
+            );
         }
         if problems.is_empty() {
             Ok(runtime)
@@ -3821,6 +3946,12 @@ impl Runtime {
     pub fn call(&self, package: &str, call: Call<'_>) -> Result<Outcome, Diagnostic> {
         self.call_impl(package, call, false)
     }
+    /// Whether `package` sends the event `name` (`emit`).
+    pub fn sends(&self, package: &str, name: &str) -> bool {
+        self.interop
+            .get(package)
+            .is_some_and(|o| o.events.contains(name))
+    }
     /// The same sandbox/budget, with attempted operations/state writes rejected.
     /// A script cannot hide a denied write by catching its error or restoring it.
     pub fn query(&self, package: &str, call: Call<'_>) -> Result<Outcome, Diagnostic> {
@@ -3832,24 +3963,50 @@ impl Runtime {
         call: Call<'_>,
         read_only: bool,
     ) -> Result<Outcome, Diagnostic> {
+        // The world reference outlives this function; the pointer is taken
+        // back out below, before `call.world`'s borrow ends, and is never
+        // reached after that (see `with_world`).
+        let world = call.world.map(erase_world);
+        let previous_limit = LIMIT.with(|l| l.replace(call.budget.operations()));
+        OPERATIONS.with(|o| o.set(0));
+        let previous_offset = OFFSET.with(|o| o.replace(0));
+        let previous_runtime = interop::RUNTIME.with(|r| r.replace(Some(self as *const Runtime)));
+        let previous_chain = interop::CHAIN.with(|c| std::mem::take(&mut *c.borrow_mut()));
+        let previous_transaction =
+            interop::TRANSACTION.with(|t| std::mem::take(&mut *t.borrow_mut()));
+        let result = self.run(package, call, read_only, world);
+        let nested = interop::TRANSACTION
+            .with(|t| std::mem::replace(&mut *t.borrow_mut(), previous_transaction));
+        interop::CHAIN.with(|c| *c.borrow_mut() = previous_chain);
+        interop::RUNTIME.with(|r| r.set(previous_runtime));
+        OFFSET.with(|o| o.set(previous_offset));
+        LIMIT.with(|l| l.set(previous_limit));
+        result.map(|mut outcome| {
+            outcome.nested = nested;
+            outcome
+        })
+    }
+    /// Run `call.function` of `package`, inside the outermost call (whose
+    /// budget, runtime and transaction [`Self::call_impl`] set up) or a call
+    /// into its exports (`call_addon`). `world` stands for `call.world`.
+    fn run(
+        &self,
+        package: &str,
+        call: Call<'_>,
+        read_only: bool,
+        world: Option<*const (dyn World + 'static)>,
+    ) -> Result<Outcome, Diagnostic> {
         let ast =
             self.scripts.get(package).cloned().ok_or_else(|| {
                 Diagnostic::error("script.none", "package has no script").at(package)
             })?;
-        let previous_limit = LIMIT.with(|l| l.replace(call.budget.operations()));
-        OPERATIONS.with(|o| o.set(0));
-        // The world reference outlives this function; the pointer is taken
-        // back out below, before `call.world`'s borrow ends, and is never
-        // reached after that (see `with_world`).
-        let world = call.world.map(|w| {
-            let w: *const (dyn World + '_) = w;
-            // SAFETY: only the trait object's lifetime bound changes.
-            unsafe {
-                std::mem::transmute::<*const (dyn World + '_), *const (dyn World + 'static)>(w)
-            }
-        });
+        // This evaluation counts its operations from 0; the offset carries
+        // what the chain spent before it, and afterwards what it spent too.
+        let offset = OFFSET.with(|o| o.replace(OPERATIONS.with(std::cell::Cell::get)));
+        interop::CHAIN.with(|c| c.borrow_mut().push(package.to_owned()));
         let previous = CURRENT.with(|c| {
             c.borrow_mut().replace(Invocation {
+                package: package.to_owned(),
                 snapshot: call.snapshot,
                 caller: call.caller,
                 aim: call.aim,
@@ -3867,6 +4024,7 @@ impl Runtime {
                 views: BTreeMap::new(),
                 views_made: 0,
                 view_writes: 0,
+                events: Vec::new(),
             })
         });
         let options = rhai::CallFnOptions::new()
@@ -3883,7 +4041,11 @@ impl Runtime {
         let invocation = CURRENT
             .with(|c| std::mem::replace(&mut *c.borrow_mut(), previous))
             .expect("set above");
-        LIMIT.with(|l| l.set(previous_limit));
+        interop::CHAIN.with(|c| c.borrow_mut().pop());
+        // What the chain spent, this evaluation included, for the
+        // evaluation that called this one to count on from.
+        let spent = OPERATIONS.with(std::cell::Cell::get);
+        OFFSET.with(|o| o.set(offset + spent.saturating_sub(OFFSET.with(std::cell::Cell::get))));
         if read_only && (invocation.write_attempted || !invocation.output.is_empty()) {
             return Err(Diagnostic::error(
                 "script.read_only",
@@ -3900,6 +4062,8 @@ impl Runtime {
                 state: invocation.state,
                 entity_vars: invocation.written,
                 output: invocation.output,
+                events: invocation.events,
+                nested: Vec::new(),
             }),
             Err(e) => {
                 let code = match e.unwrap_inner() {

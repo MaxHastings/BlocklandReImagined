@@ -308,6 +308,10 @@ impl Controls {
     pub fn held(&self, c: HeldControl) -> bool {
         self.held.contains(&c)
     }
+    /// Let go of `c` as if its key came up (an Add-On took it over).
+    pub fn let_go(&mut self, c: HeldControl) {
+        self.held.remove(&c);
+    }
     pub fn release(&mut self) {
         self.held.clear();
         self.free_yaw = 0.0;
@@ -1754,6 +1758,7 @@ mod tests {
             tick: Default::default(),
             tether: None,
             controller: None,
+            pass_group: 0,
         };
         let mut presented = BTreeMap::from([(1, body(1, 0.0)), (7, body(7, 5.0))]);
         assert_eq!(

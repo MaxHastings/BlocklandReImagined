@@ -236,6 +236,7 @@ fn eye_node(assets: &AvatarAssets, sitting: bool) -> Result<Vec3> {
         tick: Default::default(),
         tether: None,
         controller: None,
+        pass_group: 0,
     };
     for time in [0.0, 1.0] {
         body.pose_with_animation(

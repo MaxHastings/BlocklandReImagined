@@ -4,6 +4,7 @@
 fn kind() { "playground-stomper:bot/stomper" }
 
 fn on_contact(info) {
+    if info.target == () { return; }
     let target = player(info.target);
     if target == () || !target.alive || target.bot_kind != kind() { return; }
     let stomped = info.kind == "body" && info.from == "above" && info.velocity[1] < -2.0;

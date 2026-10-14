@@ -183,6 +183,23 @@ pub(super) fn register(engine: &mut Engine) {
                 }))
         })
     });
+    engine.register_fn("set_pass_group", |target: Dynamic, group: Dynamic| {
+        let group = match group.as_int() {
+            Ok(g) if (0..=INT::from(ops::MAX_PASS_GROUP)).contains(&g) => g as u8,
+            _ => {
+                return fail(format!(
+                    "a pass group is 0 (none) to {}",
+                    ops::MAX_PASS_GROUP
+                ));
+            }
+        };
+        // A bare number is a player, as everywhere a player is meant.
+        let target = match object_ref(&target) {
+            Ok(target) => target,
+            Err(_) => ObjectRef::Player(id(&target)?),
+        };
+        push(Op::SetPassGroup(ops::SetPassGroup { target, group }))
+    });
     engine.register_fn("let_go", |player: Dynamic| {
         push(Op::LetGo(ops::LetGo {
             player: id(&player)?,

@@ -71,12 +71,13 @@ fn variant(command: &Command) -> &'static str {
         Command::SteeringPrefs { .. } => "steering_prefs",
         Command::BuildGesture(_) => "build_gesture",
         Command::Package(_) => "package",
+        Command::Panel(_) => "panel",
         Command::SetName(_) => "set_name",
         Command::SetClan(_) => "set_clan",
     }
 }
 
-const VARIANTS: usize = 46;
+const VARIANTS: usize = 47;
 
 /// Owners in the fuzzed session: the host (an administrator) and a guest.
 const HOST: u64 = 1;
@@ -260,6 +261,20 @@ fn examples() -> Vec<Command> {
             package: String::new(),
             command: "spawn".into(),
             args: vec![PackageArg::Float(1e19), PackageArg::String("x".into())],
+        }),
+        Command::Panel(bri_sim::session::PanelCommand {
+            package: "shop".into(),
+            event: bri_package_runtime::panel::PanelEvent {
+                panel: "shop\u{202e}".into(),
+                control: "close".into(),
+                fields: [("x".into(), "y".repeat(5000))].into(),
+                lists: [("l".into(), Some(u16::MAX))].into(),
+                drop: Some(bri_package_runtime::panel::PanelDrop {
+                    from: "l\u{202e}".into(),
+                    row: u16::MAX,
+                    at: Some(u16::MAX),
+                }),
+            },
         }),
         Command::SetName("Blockhead \u{202e}".into()),
         Command::SetClan(bri_sim::session::Clan {

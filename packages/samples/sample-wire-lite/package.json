@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "id": "sample-wire-lite",
+  "version": "1.0.0",
+  "api": 1,
+  "name": "Wire Lite",
+  "description": "A sample in the spirit of Wiremod: turn bricks into switches, logic gates and lamps, wire them together by aiming or in a circuit window, and click a switch to watch the signal light the lamps.",
+  "authors": ["Blockland ReImagined"],
+  "license": "CC0-1.0",
+  "provenance": { "source": "original" },
+  "capabilities": ["chat", "world.edit"],
+  "provides": [
+    { "kind": "behaviour", "id": "sample-wire-lite:behaviour/wire", "file": "behaviour.json" },
+    { "kind": "script", "id": "sample-wire-lite:script/wire", "file": "wire.rhai" }
+  ]
+}

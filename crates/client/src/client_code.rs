@@ -88,6 +88,8 @@ pub struct ClientCode {
     /// game, or a server whose code they trusted.
     trusted: bool,
     time: f32,
+    /// The last frame's step, for `camera_frame`.
+    dt: f32,
     last: Option<f64>,
     messages: Vec<String>,
     /// The GPU's measured speed, once calibrated, and the adapter it was
@@ -111,6 +113,46 @@ pub struct ClientCode {
     /// The HUD regions each Add-On's layouts own now, by Add-On id, for
     /// `hud_region`.
     hud_owners: std::collections::BTreeMap<String, Vec<bri_content::hud::Region>>,
+    /// The game controls Add-Ons hold (`input.capture`), and what the
+    /// player did with them since the last frame.
+    captured: bri_client_sandbox::Captured,
+}
+
+/// Every held control, in `input.capture` bit order.
+pub const HELD_CONTROLS: [bri_ui::api::HeldControl; 11] = {
+    use bri_ui::api::HeldControl as H;
+    [
+        H::Forward,
+        H::Backward,
+        H::Left,
+        H::Right,
+        H::Jump,
+        H::Crouch,
+        H::Jet,
+        H::Fire,
+        H::Walk,
+        H::Zoom,
+        H::FreeLook,
+    ]
+};
+
+/// The `input.capture` bit of a held control.
+pub fn control_bit(control: bri_ui::api::HeldControl) -> u32 {
+    use bri_ui::api::HeldControl as H;
+    let index = match control {
+        H::Forward => 0,
+        H::Backward => 1,
+        H::Left => 2,
+        H::Right => 3,
+        H::Jump => 4,
+        H::Crouch => 5,
+        H::Jet => 6,
+        H::Fire => 7,
+        H::Walk => 8,
+        H::Zoom => 9,
+        H::FreeLook => 10,
+    };
+    1 << index
 }
 
 /// A node Add-On code placed: index, world position, world rotation.
@@ -289,6 +331,72 @@ impl ClientCode {
         }
     }
 
+    /// The game controls Add-Ons hold now: the game leaves them to them.
+    pub fn captured_controls(&self) -> u32 {
+        self.captured.granted
+    }
+
+    /// A held control pressed or let go: true when an Add-On holds it,
+    /// which then reads it in place of the game.
+    pub fn capture_held(&mut self, control: bri_ui::api::HeldControl, down: bool) -> bool {
+        let bit = control_bit(control);
+        if self.captured.granted & bit == 0 {
+            return false;
+        }
+        if down {
+            self.captured.held |= bit;
+        } else {
+            self.captured.held &= !bit;
+        }
+        true
+    }
+
+    /// Mouse look: true when an Add-On holds the look, which then reads it
+    /// (`look_delta`) and the view stays still. `yaw` and `pitch` are as
+    /// the game would turn the view, radians.
+    pub fn capture_look(&mut self, yaw: f32, pitch: f32) -> bool {
+        if self.captured.granted & bri_client_sandbox::host::LOOK_CONTROL == 0 {
+            return false;
+        }
+        if yaw.is_finite() && pitch.is_finite() {
+            let look = &mut self.captured.look;
+            look[0] = (look[0] + yaw).clamped(-100.0, 100.0);
+            look[1] = (look[1] + pitch).clamped(-100.0, 100.0);
+        }
+        true
+    }
+
+    /// Run every Add-On's `camera_frame` (`camera.control`) with the
+    /// camera the game would show; the first that places it decides.
+    pub fn camera_shot(
+        &mut self,
+        eye: glam::Vec3,
+        forward: glam::Vec3,
+    ) -> Option<bri_client_sandbox::Shot> {
+        let time = self.time;
+        let dt = self.dt;
+        let mut shot = None;
+        self.running.retain_mut(|r| {
+            if shot.is_some() || !r.addon.places_camera() {
+                return true;
+            }
+            match r
+                .addon
+                .camera_frame(time, dt, eye.to_array(), forward.to_array())
+            {
+                Ok(placed) => {
+                    shot = placed;
+                    true
+                }
+                Err(reason) => {
+                    bri_console::warn(format!("{} stopped: {reason}", r.addon.name));
+                    false
+                }
+            }
+        });
+        shot
+    }
+
     /// Sounds Add-Ons asked for since the last call.
     pub fn take_sounds(&mut self) -> Vec<AddOnSound> {
         std::mem::take(&mut self.sounds)
@@ -298,6 +406,7 @@ impl ClientCode {
     pub fn stop(&mut self) {
         self.running.clear();
         self.sounds.clear();
+        self.captured = Default::default();
         self.poses.clear();
         self.started = false;
         self.trusted = false;
@@ -442,6 +551,30 @@ impl ClientCode {
             .map_or(0.0, |last| (now - last).clamped(0.0, 0.25) as f32);
         self.last = Some(now);
         self.time += dt;
+        self.dt = dt;
+        // Each control goes to the first Add-On asking for it, in load
+        // order; what the player holds of a control no one holds now is
+        // forgotten.
+        let mut taken = 0u32;
+        let granted: Vec<u32> = self
+            .running
+            .iter()
+            .map(|r| {
+                let mine = r.addon.claims() & !taken;
+                taken |= mine;
+                mine
+            })
+            .collect();
+        let captured = bri_client_sandbox::Captured {
+            granted: taken,
+            held: self.captured.held & taken,
+            look: self.captured.look,
+        };
+        self.captured = bri_client_sandbox::Captured {
+            look: [0.0; 2],
+            ..captured
+        };
+        let mut granted = granted.into_iter();
         let sounds = &mut self.sounds;
         let poses = &mut self.poses;
         poses.clear();
@@ -472,9 +605,19 @@ impl ClientCode {
                     bits | (1 << at)
                 })
             });
+            let mine = granted.next().unwrap_or(0);
             let input = FrameInput {
                 time: self.time,
                 dt,
+                controls: bri_client_sandbox::Captured {
+                    granted: mine,
+                    held: captured.held & mine,
+                    look: if mine & bri_client_sandbox::host::LOOK_CONTROL != 0 {
+                        captured.look
+                    } else {
+                        [0.0; 2]
+                    },
+                },
                 eye: eye.to_array(),
                 forward: forward.to_array(),
                 world: world.clone(),
@@ -528,6 +671,10 @@ impl ClientCode {
                 r.physics.apply(&[command]);
             }
         }
+        // What the frames just asked for holds from now, not a frame on.
+        let taken = self.running.iter().fold(0, |t, r| t | r.addon.claims());
+        self.captured.granted = taken;
+        self.captured.held &= taken;
     }
 
     /// Upload what is new and this frame's uniforms. Renderers are built

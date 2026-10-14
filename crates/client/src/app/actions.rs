@@ -29,6 +29,25 @@ impl App {
     /// a dead player's clicks, recorded macros and building actions.
     /// True when `action` was handled here.
     fn intercept_action(&mut self, id: RequestId, action: &UiAction) -> bool {
+        // Controls a running Add-On holds (`input.capture`) are its, not
+        // the game's.
+        let captured = match action {
+            UiAction::Game(GameAction::Held { control, down }) => {
+                self.addons.client_code.capture_held(*control, *down)
+            }
+            UiAction::Game(GameAction::Look { yaw, pitch }) => {
+                // As the game turns the view: pitch up, at its scale.
+                let scale = self.controls.fov() / 90.0;
+                self.addons
+                    .client_code
+                    .capture_look(yaw * scale, -pitch * scale)
+            }
+            _ => false,
+        };
+        if captured {
+            self.answer(id, Ok(()));
+            return true;
+        }
         note_trigger(&mut self.controls, action);
         // A spectator's keys go to the rules that hold them
         // (`Observer::onTrigger`, `serverCmdLight`).
@@ -738,6 +757,36 @@ impl App {
             UiAction::TuneClosed => {
                 self.close_tune();
                 Ok(())
+            }
+            UiAction::PanelEvent {
+                ref package,
+                ref panel,
+                ref control,
+                ref fields,
+                ref lists,
+                ref drop,
+            } => {
+                let request = Command::Panel(bri_sim::session::PanelCommand {
+                    package: package.clone(),
+                    event: bri_package_runtime::panel::PanelEvent {
+                        panel: panel.clone(),
+                        control: control.clone(),
+                        fields: fields.iter().cloned().collect(),
+                        lists: lists.iter().cloned().collect(),
+                        drop: drop
+                            .as_ref()
+                            .map(|d| bri_package_runtime::panel::PanelDrop {
+                                from: d.from.clone(),
+                                row: d.row,
+                                at: d.at,
+                            }),
+                    },
+                });
+                let result = self.command(id, request, action.clone());
+                if result.is_ok() {
+                    return Ok(());
+                }
+                result
             }
             UiAction::ChatCommand { ref name, .. } if name.eq_ignore_ascii_case("invite") => {
                 match self.net.invite.clone() {

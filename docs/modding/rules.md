@@ -56,6 +56,11 @@ refused. The engine calls:
 | `on_zone(player, brick, event)` | a living player enters (`"enter"`), stays in (`"tick"`, with `"ticks": true`) or leaves (`"leave"`) the space over a brick of a kind listed in `zones` (a Torque trigger made with `createTrigger`) |
 | `on_trigger(player, trigger, down)` | a living player with nothing in their hand presses (`down` true) or lets go of a trigger (v20's `Armor::onTrigger`), when `"on_trigger": true`. Trigger `0` is fire: the empty-hand click, whose press comes before `on_activate`. Return `true` to take it, anything else to pass it on: Add-Ons are asked in load order, presses and releases alike, and a press nobody takes goes on to `on_activate` and the usual click. A charged throw starts on the press and lets fly on the release |
 | `on_drop_key(player)` | a living player with nothing in their hand presses the Drop Tool key (v20's `serverCmdDropTool` while `currTool` is -1), when `"on_drop_key": true`. Return `true` to take it; Add-Ons are asked in load order. Capture the Flag drops a carried flag this way |
+| `on_contact(info)` | two bodies begin to touch, when `"on_contact": true`: `info` is `#{ kind, by, target, vehicle, target_vehicle, from, speed, velocity }`, `kind` being `"body"` (one player's body meeting another's), `"vehicle"` (a vehicle running into a player) or `"vehicles"` (two vehicles crashing: `vehicle` ran into `target_vehicle`; `by` and `target` are their drivers or `()`). `from` is `"above"`, `"below"` or `"side"`; `velocity` is `by`'s less `target`'s as they met and `speed` its length. A stomp, a run-over or a crash means what the rules make it mean |
+| `on_object(event)` | an object comes into the world, leaves it or changes hands, whoever made it, when `"on_object": true` (see **Every object in the world**) |
+| `on_panel(player, event)` | a player does something in a panel your rules showed them, when `"on_panel": true` (see **Panels**) |
+| `on_addon_event(from, name, data)` | an Add-On you listen to sent an event (see **Add-Ons that build on each other**) |
+| `api_<name>(from, args...)` | another Add-On calls a function you export (see **Add-Ons that build on each other**) |
 | `cmd_<name>(player, args...)` | a player sends a command listed in `commands` |
 
 `player` is the player's id: pass it straight to `tell`, `get_player` and
@@ -442,6 +447,92 @@ Add-On reads it with `brick_field(brick, key)` (your own key) or
 bytes and goes with its brick. Slayer keeps a brick's locked team colours
 (`setTeamControlLocked`) as `locked`, and Capture the Flag refuses a locked
 flag from it.
+
+**Add-Ons that build on each other.** An Add-On can be a framework
+others extend: an economy, an inventory, a roleplay core. It lists the
+functions it offers in `exports` (`[{ "name": "pay", "args": 2 }]`, up to
+6 arguments) and defines each as `api_<name>(from, args...)`, `from` being
+the calling Add-On's id. An Add-On that depends on it (or lists it in
+`optional_dependencies`) calls one with `call_addon("bank", "pay", p,
+5)` and gets the answer at once. The function runs in the exporting
+Add-On's own sandbox: its state, its host data, its settings and its
+capabilities, never the caller's. What it writes joins the caller's
+transaction: if the caller then fails, neither keeps anything. A failed
+call (a `throw`, a missing export, too many arguments) is an error the
+caller can catch with `try`/`catch`. A chain passes through at most 3
+Add-Ons and never comes back into one already running; the whole chain
+spends the first caller's budget. `exports(addon)` lists what an Add-On
+offers. An Add-On also sends events, `emit("paid", #{ player: p, amount
+})`, naming them in `events`; others hear them with
+`on_addon_event(from, name, data)` by listing `"bank:paid"` (or
+`"bank:*"`) in `listens`, at the start of the next tick, in the order they
+were sent. Only an Add-On listed in your dependencies can be heard. Up to
+64 exports, events and listens each. The roleplay samples
+(`packages/samples/sample-rp-bank` and `sample-rp-inventory`) are built
+this way.
+
+**Kept on the host.** `host_data(key)` and `set_host_data(key, value)`
+(`storage`) keep up to 64 values of up to 256 KiB each for your Add-On on
+this host, across maps, games and restarts (the host keeps them
+in its `addon-data` folder). `()` clears a key. Keys are lower-case letters,
+digits and `_`, up to 48. A call reads back what it, and the chain of calls
+it is in, already wrote. To keep something for a player between visits,
+file it under `player(p).uid`: `p` and 24 hex digits of their account, the
+same on every visit, when `player(p).durable` is true;
+otherwise `s` and their session, which a reconnect changes. The Roleplay
+Bank keeps every balance in one map, `accounts`, by `uid`.
+
+**Every object in the world.** `on_object(event)` hears every object come
+into the world, leave it or change hands, whoever made it: a vehicle a
+brick spawned, another Add-On's creature, a gun a player dropped, a bot.
+`event` is `#{ kind, ref, object, definition, addon, owner, driver, x, y,
+z }`: `kind` is `"created"`, `"removed"` or `"changed"` (its owner or driver
+changed; `was` holds the old `#{ owner, driver }`); `object` is `"vehicle"`,
+`"player"` (a bot), `"entity"` or `"drop"`; `addon` is the Add-On that made
+it, or `""`. Events arrive at the start of the next tick; more than 512 in
+one tick are told as one `#{ kind: "overflow", dropped }`. A prop
+protection, a cleanup timer or an economy charging for cars needs nothing
+else from whatever made them. A game without the hook never pays for it.
+
+**Panels.** `show_panel(p, panel)` (`chat`) opens a window for player `p`,
+built from the game's own widgets, and replaces any panel they have open;
+`close_panel(p, id)` closes it. A shop, a bank, a job board or a gate editor
+needs no client code. `panel` is `#{ id, title, width, height, items }`,
+160 to 600 wide and 100 to 440 tall in the 640 by 480 screen, with up to
+24 items top to bottom:
+
+| `kind` | Fields |
+|---|---|
+| `"text"` | `text`: lines of plain text (no markup), up to 1024 characters |
+| `"list"` | `id`, `rows` (up to 256 lines of 96 characters), `selected` (a row or `()`), `height` (40 to 400, default 120), `drag` (`true`: rows can be dragged to another list with `drag`, or to another place in this one) |
+| `"field"` | `id`, `label`, `text` to start with, `max` characters (1 to 256, default 64) |
+| `"buttons"` | `buttons`: up to 6 `#{ id, label }` |
+
+Ids are 1 to 32 of a-z, 0-9 and `_`, each used once; `close` is the close
+box's. What the player does comes to `on_panel(player, event)`: a button
+pressed, a list row picked, a row dragged onto a list, or the window closed.
+`event` is `#{ panel, control, fields, lists, drop }`: `control` is the
+button's or list's id or `"close"`, `fields` every field's text, `lists`
+every list's picked row (or `()`), and `drop`, for a dragged row, `#{ from,
+row, at, text }`: the list it came from, its row there and that row's text
+as the player saw it, and the row of `control` it was let go over (`()`
+below its last row); otherwise `()`. The engine passes on only what the
+open panel could send. The player's list does not change by itself: move
+the row in your own data and show the panel again (or don't, to refuse).
+Check `text` against your data before moving anything, since another player
+may have changed it since the panel was drawn. The Roleplay Backpack and
+Chest sample drags items between a backpack and a shared chest; Wire Lite
+wires gates by dragging one onto another.
+
+**Pass groups.** `set_pass_group(target, group)` (`physics`) puts a player
+(a player id or `"player:3"`), a creature or a vehicle into pass group 1 to
+15, or 0 for none. Bodies in the same group move through each other, as
+Gmod's no-collide and Roblox's collision groups; bodies in different
+groups, or none, still block. A group stays with a player through
+respawns, and the player's own prediction moves the same way. A player may
+put themselves in a group, an administrator anyone, and otherwise a rule
+may change only what its caller may move. Team members walking through
+each other are `set_pass_group(p, team + 1)`.
 
 **Score reports.** `show_report(p, #{ title, banner, columns, sections })`
 opens a window of its own for player `p` with a score table, as Slayer's End

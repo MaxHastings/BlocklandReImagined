@@ -541,11 +541,14 @@ pub(super) fn register(engine: &mut Engine) {
         })
     });
     // What the host keeps for these rules between games and restarts.
+    // What this call (and the chain it runs in) already wrote reads back.
     engine.register_fn("host_data", |key: &str| {
-        with_world(|world, _| {
-            Ok(world
-                .host_data(key)
-                .map_or(Dynamic::UNIT, |v| to_dynamic(&v)))
+        with_world(|world, i| {
+            let value = match super::interop::written_host_data(i, key) {
+                Some(written) => written,
+                None => world.host_data(key),
+            };
+            Ok(value.map_or(Dynamic::UNIT, |v| to_dynamic(&v)))
         })
     });
     engine.register_fn("set_host_data", |key: &str, value: Dynamic| {
@@ -842,6 +845,28 @@ pub(super) fn register(engine: &mut Engine) {
         push(Op::ShowReport(ops::ShowReport {
             player: id(&player)?,
             report: Some(Box::new(report_from(report)?)),
+        }))
+    });
+    // A window of the game's own widgets (`show_panel(p, #{ id, title,
+    // width, height, items: [#{ kind: "text" | "list" | "field" |
+    // "buttons", ... }] })`): what the player does in it comes back to
+    // `on_panel`. `close_panel(p, id)` takes it away.
+    engine.register_fn("show_panel", |player: Dynamic, panel: Map| {
+        let panel: crate::panel::Panel =
+            rhai::serde::from_dynamic(&view::plain(&Dynamic::from_map(panel)))
+                .map_err(|e| format!("a panel is #{{ id, title, items: [...] }}: {e}"))?;
+        if let Some(problem) = panel.problem() {
+            return fail(problem);
+        }
+        push(Op::ShowPanel(ops::ShowPanel {
+            player: id(&player)?,
+            panel: Box::new(panel),
+        }))
+    });
+    engine.register_fn("close_panel", |player: Dynamic, panel: &str| {
+        push(Op::ClosePanel(ops::ClosePanel {
+            player: id(&player)?,
+            id: panel.into(),
         }))
     });
     engine.register_fn("hide_report", |player: Dynamic| {

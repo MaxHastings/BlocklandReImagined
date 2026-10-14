@@ -623,6 +623,155 @@ fn keys_are_only_readable_while_focused() {
 }
 
 #[test]
+fn captured_controls_are_read_only_while_granted() {
+    // Claims jump (bit 4) and the look (bit 11); reports whether jump is
+    // down, what the claim was granted and the look's yaw.
+    let wat = r#"(module
+      (import "bri" "input_claim" (func $claim (param i32) (result i32)))
+      (import "bri" "action_down" (func $down (param i32) (result i32)))
+      (import "bri" "look_delta" (func $look (param i32)))
+      (import "bri" "send" (func $send (param i32 i32) (result i32)))
+      (memory (export "memory") 1)
+      (func (export "frame") (param f32 f32)
+        (i32.store (i32.const 0) (call $claim (i32.const 2064)))
+        (i32.store (i32.const 4) (call $down (i32.const 4)))
+        (call $look (i32.const 8))
+        (drop (call $send (i32.const 0) (i32.const 16)))))"#;
+    let dir = make(wat, &["input.capture", "net.message"], &[]);
+    let mut addon = start(&load(dir.path()), budgets()).unwrap();
+    assert_eq!(addon.claims(), 0);
+    let held = |granted| FrameInput {
+        controls: bri_client_sandbox::Captured {
+            granted,
+            held: 16,
+            look: [0.25, -0.5],
+        },
+        ..Default::default()
+    };
+    let out = addon.frame(held(0)).unwrap().outbox[0].clone();
+    let word = |i: usize| u32::from_le_bytes(out[i..i + 4].try_into().unwrap());
+    // Not granted yet: nothing reads.
+    assert_eq!((word(0), word(4), word(8)), (0, 0, 0));
+    assert_eq!(addon.claims(), 2064);
+    let out = addon.frame(held(2064)).unwrap().outbox[0].clone();
+    let word = |i: usize| u32::from_le_bytes(out[i..i + 4].try_into().unwrap());
+    assert_eq!((word(0), word(4)), (2064, 1));
+    assert_eq!(f32::from_bits(word(8)), 0.25);
+    assert_eq!(f32::from_bits(word(12)), -0.5);
+    // Granted jump but not the look: the look reads still.
+    let out = addon.frame(held(16)).unwrap().outbox[0].clone();
+    assert_eq!(&out[8..16], &[0; 8]);
+}
+
+#[test]
+fn camera_frame_places_the_camera_and_bad_shots_are_refused() {
+    // Places the camera 5 up looking along -z with a 60 degree view;
+    // past time 1 it asks for a shot no camera can take.
+    let wat = r#"(module
+      (import "bri" "camera_set" (func $set (param i32) (result i32)))
+      (memory (export "memory") 1)
+      (data (i32.const 0) "\00\00\00\00\00\00\a0\40\00\00\00\00\00\00\00\00\00\00\00\00\00\00\80\bf\00\00\00\00\00\00\70\42")
+      (data (i32.const 32) "\00\00\00\00\00\00\00\00\00\00\00\00\00\00\00\00\00\00\00\00\00\00\00\00\00\00\00\00\00\00\00\00")
+      (func (export "camera_frame") (param $t f32) (param f32)
+        (drop (call $set (select (i32.const 32) (i32.const 0)
+          (f32.gt (local.get $t) (f32.const 1)))))))"#;
+    let dir = make(wat, &["camera.control"], &[]);
+    let mut addon = start(&load(dir.path()), budgets()).unwrap();
+    assert!(addon.places_camera());
+    let shot = addon
+        .camera_frame(0.5, 0.016, [0.0; 3], [0.0, 0.0, -1.0])
+        .unwrap()
+        .expect("placed");
+    assert_eq!(shot.eye, [0.0, 5.0, 0.0]);
+    assert_eq!(shot.forward, [0.0, 0.0, -1.0]);
+    assert_eq!(shot.fov, Some(60.0));
+    // A look of no length is no shot: the game's camera stays.
+    assert_eq!(
+        addon.camera_frame(2.0, 0.016, [0.0; 3], [0.0, 0.0, -1.0]),
+        Ok(None)
+    );
+    // Without the capability the export is never called.
+    let plain = r#"(module (memory (export "memory") 1)
+      (func (export "camera_frame") (param f32 f32) unreachable))"#;
+    let mut addon = start(&load(make(plain, &[], &[]).path()), budgets()).unwrap();
+    assert!(!addon.places_camera());
+    assert_eq!(
+        addon.camera_frame(0.0, 0.0, [0.0; 3], [0.0, 0.0, -1.0]),
+        Ok(None)
+    );
+}
+
+// ---- The Overhead Camera sample ----
+
+fn overhead_dir() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../packages/samples/sample-overhead-camera")
+}
+
+#[test]
+fn the_overhead_camera_module_is_built_from_its_source() {
+    let dir = overhead_dir();
+    let built = wat::parse_file(dir.join("client/main.wat")).unwrap();
+    let path = dir.join("client/main.wasm");
+    if std::env::var_os("BRI_BLESS").is_some() {
+        std::fs::write(&path, &built).unwrap();
+    }
+    assert_eq!(
+        std::fs::read(&path).unwrap(),
+        built,
+        "client/main.wasm is stale; rerun with BRI_BLESS=1"
+    );
+}
+
+#[test]
+fn the_free_look_key_switches_the_overhead_camera_on_and_off() {
+    let mut addon = start(&load(&overhead_dir()), budgets()).unwrap();
+    let world = std::sync::Arc::new(bri_client_sandbox::World {
+        local: 7,
+        players: vec![
+            bri_client_sandbox::world::Player {
+                id: 3,
+                feet: [50.0, 0.0, 50.0],
+                ..Default::default()
+            },
+            bri_client_sandbox::world::Player {
+                id: 7,
+                feet: [1.0, 2.0, 3.0],
+                ..Default::default()
+            },
+        ],
+        ..Default::default()
+    });
+    let free_look = 1 << 10;
+    let frame = |held| FrameInput {
+        world: world.clone(),
+        controls: bri_client_sandbox::Captured {
+            granted: free_look,
+            held,
+            look: [0.0; 2],
+        },
+        ..Default::default()
+    };
+    let shot = |addon: &mut bri_client_sandbox::AddOn| {
+        addon
+            .camera_frame(0.0, 0.016, [0.0; 3], [0.0, 0.0, -1.0])
+            .unwrap()
+    };
+    addon.frame(frame(0)).unwrap();
+    assert_eq!(addon.claims(), free_look);
+    assert_eq!(shot(&mut addon), None, "the game's camera until pressed");
+    addon.frame(frame(free_look)).unwrap();
+    let placed = shot(&mut addon).expect("overhead");
+    assert_eq!(placed.eye, [1.0, 16.0, 9.0]);
+    assert!(placed.forward[1] < -0.9 && placed.fov.is_none());
+    // Held, it stays; pressed again, the game's camera is back.
+    addon.frame(frame(free_look)).unwrap();
+    assert!(shot(&mut addon).is_some());
+    addon.frame(frame(0)).unwrap();
+    addon.frame(frame(free_look)).unwrap();
+    assert_eq!(shot(&mut addon), None);
+}
+
+#[test]
 fn messages_come_from_its_own_server_script_in_order() {
     // Echo every message back, reversed in order of arrival: none lost.
     let wat = r#"(module

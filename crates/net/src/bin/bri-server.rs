@@ -95,7 +95,9 @@ async fn main() -> Result<()> {
         .and_then(|file| file.strip_suffix(".mis"))
         .unwrap_or(&world.map_id)
         .to_string();
-    let mut host = dedicated::load(&content_root, world)?;
+    // What Add-Ons save (each map's Add-On state, and money, ranks and
+    // configs rules keep) stays in the state folder between restarts.
+    let mut host = dedicated::load_kept(&content_root, world, &state_dir)?;
     host.configure(&config)?;
     // A recording that cannot start leaves the match unrecorded.
     let recording = if record {

@@ -167,6 +167,7 @@ fn the_trench_shovel_digs_dirt_in_a_mini_game_once_the_add_on_is_on() -> Result<
         }),
         load_map: None,
         copies: None,
+        addon_data: None,
         game_version: None,
         bot_tuning: None,
         bot_overrides: None,

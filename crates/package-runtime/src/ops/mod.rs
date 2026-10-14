@@ -68,6 +68,8 @@ pub const MAX_SPAWN_VARS: usize = 16;
 pub const MAX_TELL_PLAYERS: usize = 256;
 /// Fastest a script may set anything moving, units per second.
 pub const MAX_PUSH_SPEED: f32 = 200.0;
+/// Highest pass group `set_pass_group` takes (the motor's own limit).
+pub const MAX_PASS_GROUP: u8 = 15;
 /// Fastest projectile `fire` launches, units a second (the weapons
 /// runtime's own limit).
 pub const MAX_FIRE_SPEED: f32 = 10_000.0;

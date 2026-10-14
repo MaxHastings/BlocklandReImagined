@@ -101,7 +101,7 @@ pub use inventory::{TOOL_SLOTS, ToolInventory};
 pub use packages::{
     AddOnData, AddOnSetting, ENTITY_TAG, EntityInfo, MAX_ADDON_SETTINGS, MemoryAddOnData,
     NamespaceView, PACKAGE_SAVE_SCHEMA, PackageArg, PackageCommand, PackageSave, PackageStateView,
-    PackageStats, SettingEdit, TeamEdit, WorldSave,
+    PackageStats, PanelCommand, PanelShown, SettingEdit, TeamEdit, WorldSave,
 };
 /// Stock emotes: the `Emote_*` add-ons (`/alarm`, `/love`, `/hate`,
 /// `/confusion`) and v20's built-in `/bsd`, `/sit` and `/hug` (`/zombie` is
@@ -445,6 +445,9 @@ pub enum Command {
     BuildGesture(BuildGesture),
     /// A command declared by an enabled package (v20 `commandToServer`).
     Package(PackageCommand),
+    /// What the player did in a panel an Add-On showed them
+    /// (`show_panel`): its rules hear it (`on_panel`).
+    Panel(PanelCommand),
     /// Avatar screen Done while connected: take this name now. v20 only
     /// applied `$pref::Player::LANName` on the next join.
     SetName(String),
@@ -482,6 +485,7 @@ impl Command {
             // The package's command declaration decides (`while_dead`);
             // checked with the rest of the declaration in `package_command`.
             Command::Package(_)
+            | Command::Panel(_)
             | Command::CancelBrick
             | Command::Admin(_)
             | Command::Tool(_)
@@ -1952,6 +1956,7 @@ impl Session {
             self.announce(owner, "has left the game.", "ClientDropSound");
         }
         self.package_leave(owner);
+        self.forget_panel(owner);
         self.eject(owner);
         self.release_riders(owner);
         let peer = self.peers.remove(&owner).context("Unknown connection")?;
@@ -2933,6 +2938,10 @@ impl Session {
                 Ok(Reply::Accepted)
             }
             Command::Package(request) => self.package_command(owner, request, direction),
+            Command::Panel(request) => {
+                self.panel_command(owner, request)?;
+                Ok(Reply::Accepted)
+            }
             Command::Chat(text) => {
                 peer.chats = peer.chats.saturating_add(1);
                 ensure!(peer.chats <= CHATS_PER_SECOND, "Chat rate exceeded");
@@ -3253,6 +3262,7 @@ impl Session {
         };
         self.push_contacts(push_contacts);
         self.package_body_contacts(&moving);
+        self.package_vehicle_crashes();
         impacts.retain(|(owner, _)| !smashers.contains(owner));
         self.fire_touches(touches);
         for (owner, carry) in crossed {

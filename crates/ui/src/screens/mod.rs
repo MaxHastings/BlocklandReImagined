@@ -18,6 +18,7 @@ pub mod modes;
 pub mod music;
 pub mod name;
 pub mod options;
+pub mod panel;
 pub mod perf;
 pub mod play;
 pub mod players;
@@ -148,6 +149,8 @@ pub enum ScreenId {
     LoadBricksColor,
     /// A score report the host showed (Slayer's End of Round Report).
     Report,
+    /// A window an Add-On's rules show (`show_panel`).
+    AddOnPanel,
     /// An Add-On's splash over the main menu (Slayer's Happy Holidays).
     Splash,
     /// `/tune`: the host's live numbers for an Add-On body (native).
@@ -267,6 +270,7 @@ pub fn make(id: ScreenId, core: &mut Core) -> Box<dyn Screen> {
         ScreenId::MusicFiles => return Box::new(music::MusicFiles::new(core)),
         ScreenId::LoadBricksColor => return Box::new(colorwarn::ColorWarning::new(core)),
         ScreenId::Report => return Box::new(report::Report::new(core)),
+        ScreenId::AddOnPanel => return Box::new(panel::AddOnPanel::new(core)),
         ScreenId::Splash => return Box::new(splash::Splash::new(core)),
         ScreenId::Tune => return Box::new(tune::Tune::new(core)),
         ScreenId::Options => return Box::new(options::Options::new(core)),

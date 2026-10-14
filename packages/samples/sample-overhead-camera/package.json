@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "id": "sample-overhead-camera",
+  "version": "1.0.0",
+  "api": 1,
+  "name": "Overhead Camera",
+  "description": "A sample of client code placing the camera and taking over a control: the free-look key switches to a camera high above and behind your player.",
+  "authors": ["Blockland ReImagined"],
+  "license": "CC0-1.0",
+  "provenance": { "source": "original" },
+  "client": {
+    "module": "client/main.wasm",
+    "capabilities": ["world.read", "camera.control", "input.capture"]
+  }
+}

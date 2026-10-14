@@ -47,6 +47,37 @@ const MOVES_AGAINST: InteractionGroups = InteractionGroups::new(
     Group::ALL.difference(CORPSE),
     InteractionTestMode::And,
 );
+/// Highest pass group ([`PlayerState::pass_group`]).
+pub const MAX_PASS_GROUP: u8 = 15;
+/// The collision group bit of pass group `group` (1 to 15), clear of the
+/// corpse group's.
+pub fn pass_bit(group: u8) -> Group {
+    Group::from_bits_truncate(1 << (15 + u32::from(group.clamp(1, MAX_PASS_GROUP))))
+}
+/// The collision groups of a body in pass group `group` (0 for none):
+/// it meets everything but another body of the same group.
+pub fn pass_groups(group: u8) -> InteractionGroups {
+    if group == 0 {
+        InteractionGroups::all()
+    } else {
+        let bit = pass_bit(group);
+        InteractionGroups::new(bit, Group::ALL.difference(bit), InteractionTestMode::And)
+    }
+}
+/// What a body in pass group `group` moves against: everything but
+/// corpses and the bodies of its own group.
+pub fn moves_against(group: u8) -> InteractionGroups {
+    if group == 0 {
+        MOVES_AGAINST
+    } else {
+        let bit = pass_bit(group);
+        InteractionGroups::new(
+            bit,
+            Group::ALL.difference(CORPSE).difference(bit),
+            InteractionTestMode::And,
+        )
+    }
+}
 #[derive(Debug, Default, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct MoveInput {
@@ -157,6 +188,12 @@ pub struct PlayerState {
     /// without a controller.
     #[serde(default)]
     pub controller: Option<crate::controller::ControllerState>,
+    /// An Add-On's pass group (`set_pass_group`), 0 for none: bodies and
+    /// vehicles in the same group (1 to 15) move through each other and
+    /// meet everything else. Part of the state so a client's prediction
+    /// lets its player through the same bodies the host does.
+    #[serde(default)]
+    pub pass_group: u8,
 }
 /// Longest a tether's rope may be, units: a bound on state a host or
 /// player sends, past any v20 rope (the Grapple Rope's hook flies 800).
@@ -505,6 +542,12 @@ impl PlayerState {
             && let Err(error) = tether.validate()
         {
             return reject("tether", format!("{tether:?}: {error}"));
+        }
+        if self.pass_group > MAX_PASS_GROUP {
+            return reject(
+                "pass group",
+                format!("{} (at most {MAX_PASS_GROUP} required)", self.pass_group),
+            );
         }
         Ok(())
     }
@@ -869,6 +912,8 @@ pub struct Player {
     /// Jumps the body made without travelling between: server teleports
     /// and openings that carried it to their partner ([`Player::relocations`]).
     relocations: u64,
+    /// The body is a corpse ([`Player::set_corpse`]).
+    corpse: bool,
 }
 pub struct MotionEvents {
     /// A 32 ms Torque tick ran this step; the other events come only with one.
@@ -1006,6 +1051,7 @@ impl Player {
                 tick: TorqueTick::default(),
                 tether: None,
                 controller: None,
+                pass_group: 0,
             },
             tuning,
             body,
@@ -1015,6 +1061,7 @@ impl Player {
             crouch: Default::default(),
             seated: false,
             relocations: 0,
+            corpse: false,
         })
     }
     /// Drive a player-type mount (horse, rowboat, cannon, turret) with the
@@ -1051,6 +1098,7 @@ impl Player {
                 tick: TorqueTick::default(),
                 tether: None,
                 controller: None,
+                pass_group: 0,
             },
             tuning,
             body,
@@ -1060,6 +1108,7 @@ impl Player {
             crouch: Default::default(),
             seated: false,
             relocations: 0,
+            corpse: false,
         })
     }
     /// Restored or scripted motion (`setVelocity`, checkpoints).
@@ -1118,8 +1167,10 @@ impl Player {
             crouch: Default::default(),
             seated: false,
             relocations: 0,
+            corpse: false,
         };
         player.restore(physics, state, tuning)?;
+        player.apply_groups(physics);
         Ok(player)
     }
     pub fn state(&self) -> &PlayerState {
@@ -1194,7 +1245,7 @@ impl Player {
                 QueryFilter::default()
                     .exclude_sensors()
                     .exclude_collider(self.collider)
-                    .groups(MOVES_AGAINST)
+                    .groups(moves_against(self.state.pass_group))
                     .predicate(&fixed),
             )
             .intersect_shape(tuning.pose(feet, crouched), tuning.shape(crouched).as_ref())
@@ -1240,7 +1291,11 @@ impl Player {
         if reshape {
             physics.colliders[self.collider].set_shape(self.tuning.shape(state.crouched));
         }
+        let regroup = state.pass_group != self.state.pass_group;
         self.state = state;
+        if regroup {
+            self.apply_groups(physics);
+        }
         self.contacts.clear();
         self.synchronize_pose(physics);
         Ok(())
@@ -1282,11 +1337,28 @@ impl Player {
     }
     /// A dead body stops blocking players (and being blocked by them) at
     /// once, but stays solid to everything else until it is cleared.
-    pub fn set_corpse(&self, physics: &mut PhysicsWorld, corpse: bool) {
-        let groups = if corpse {
+    pub fn set_corpse(&mut self, physics: &mut PhysicsWorld, corpse: bool) {
+        self.corpse = corpse;
+        self.apply_groups(physics);
+    }
+    /// Put the body in pass group `group` (0 for none, up to
+    /// [`MAX_PASS_GROUP`]): it moves through the bodies and vehicles of the
+    /// same group.
+    pub fn set_pass_group(&mut self, physics: &mut PhysicsWorld, group: u8) -> Result<()> {
+        ensure!(
+            group <= MAX_PASS_GROUP,
+            "Invalid pass group: 0 to {MAX_PASS_GROUP}"
+        );
+        self.state.pass_group = group;
+        self.apply_groups(physics);
+        Ok(())
+    }
+    /// The collider's groups as the corpse flag and pass group make them.
+    fn apply_groups(&self, physics: &mut PhysicsWorld) {
+        let groups = if self.corpse {
             InteractionGroups::new(CORPSE, Group::ALL, InteractionTestMode::And)
         } else {
-            InteractionGroups::all()
+            pass_groups(self.state.pass_group)
         };
         physics.colliders[self.collider].set_collision_groups(groups);
     }
@@ -1518,7 +1590,7 @@ impl Player {
         let filter = QueryFilter::default()
             .exclude_sensors()
             .exclude_rigid_body(self.body)
-            .groups(MOVES_AGAINST);
+            .groups(moves_against(self.state.pass_group));
         let query = physics.query_pipeline_with_filter(filter);
         // v20 updateMove (0x5ae2ea) crouches a fully submerged player as if
         // crouch were held, so swimmers under water use the crouch box.

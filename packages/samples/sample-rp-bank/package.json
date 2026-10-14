@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "id": "sample-rp-bank",
+  "version": "1.0.0",
+  "api": 1,
+  "name": "Roleplay Bank",
+  "description": "A sample roleplay core other Add-Ons build on: every player has money the host keeps across restarts, and other Add-Ons check, take and give it through the functions this one exports.",
+  "authors": ["Blockland ReImagined"],
+  "license": "CC0-1.0",
+  "provenance": { "source": "original" },
+  "capabilities": ["chat", "storage"],
+  "provides": [
+    { "kind": "behaviour", "id": "sample-rp-bank:behaviour/bank", "file": "behaviour.json" },
+    { "kind": "script", "id": "sample-rp-bank:script/bank", "file": "bank.rhai" }
+  ]
+}

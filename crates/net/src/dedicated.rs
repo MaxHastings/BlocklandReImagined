@@ -77,11 +77,36 @@ pub fn load(content_root: &Path, world: bri_world::World) -> Result<Dedicated> {
     load_packages(content_root, &PackageSet::load_root(content_root)?, world)
 }
 
+/// [`load`] for a server that keeps what Add-Ons save in `state_dir`
+/// between restarts: each map's Add-On state (`packages/`) and what rules
+/// keep on the host (`addon-data/`, `set_host_data`).
+pub fn load_kept(
+    content_root: &Path,
+    world: bri_world::World,
+    state_dir: &Path,
+) -> Result<Dedicated> {
+    load_packages_in(
+        content_root,
+        &PackageSet::load_root(content_root)?,
+        world,
+        Some(state_dir),
+    )
+}
+
 /// [`load`] with an explicit package list.
 pub fn load_packages(
     content_root: &Path,
     packages: &PackageSet,
     world: bri_world::World,
+) -> Result<Dedicated> {
+    load_packages_in(content_root, packages, world, None)
+}
+
+fn load_packages_in(
+    content_root: &Path,
+    packages: &PackageSet,
+    world: bri_world::World,
+    state_dir: Option<&Path>,
 ) -> Result<Dedicated> {
     packages.validate().into_result()?;
     let role = |role: &str| packages.role_dir(content_root, role);
@@ -198,10 +223,15 @@ pub fn load_packages(
         add_ons: (!server.packages.is_empty()).then(|| HostedAddOns {
             server: std::sync::Arc::new(server),
             mode: None,
-            saves: None,
+            saves: state_dir.map(|dir| dir.join("packages")),
         }),
         load_map: Some(maps.loader(palette.clone())),
         copies: None,
+        addon_data: state_dir.map(|dir| {
+            std::sync::Arc::new(crate::addon_data::AddOnDataFiles::new(
+                dir.join("addon-data"),
+            )) as std::sync::Arc<dyn bri_sim::session::AddOnData>
+        }),
         game_version: None,
         // `/botreload` reads the Add-Ons' bots.json again; a dedicated
         // server keeps no user overrides.

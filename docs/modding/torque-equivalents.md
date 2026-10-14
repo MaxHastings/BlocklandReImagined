@@ -157,6 +157,13 @@ with its line, rather than a failure the first time the line runs.
 | `serverCmdUseInventory`, `serverCmdInstantUseBrick` packaged to refuse bricks | The `equip` policy: taking bricks in hand puts the tool slot away, which it refuses |
 | `Armor::onTrigger` packaged (fire with an empty hand, pressed and let go) | `on_trigger(p, trigger, down)`: answer `true` to take a press |
 | `serverCmdUseTool`, `serverCmdUnUseTool`, `serverCmdUseSprayCan`, `serverCmdUseFXCan` packaged to refuse | The `equip` policy, `allow_equip(p)` |
+| A framework's global functions other Add-Ons call (`RP_GiveMoney(%client, 5)`), and `package { function X() { Parent::X(); ... } }` to hear when it runs | `exports` and `call_addon(addon, name, args...)`; `emit(name, data)` and `listens` with `on_addon_event(from, name, data)` | The caller must depend on it; the call runs on the callee's own state and capabilities |
+| `export("$RP::*", "config/server/rp.cs")` and `exec` of it on start | `set_host_data(key, v)`, `host_data(key)` | `storage`; kept by the host across restarts, per Add-On, filed per player under `player(p).uid` |
+| `onAdd` / `onRemove` packaged on vehicles, bots, items (prop protection, cleanup timers) | `on_object(event)` | Every object, whoever made it, from the next tick |
+| `setCollisionGroup`-style no-collide between teammates or a door and a team | `set_pass_group(target, group)` | `physics`; the same group passes through |
+| `Armor::onCollision` / `onImpact` between two vehicles | `on_contact(info)` with `kind: "vehicles"` | |
+| A `GuiWindowCtrl` sent with `commandToClient` and its buttons calling back with `commandToServer` (a shop, a bank, a job menu) | `show_panel(p, panel)`, `close_panel(p, id)`, `on_panel(p, event)` | `chat`; text, lists (rows can be dragged between lists), fields and buttons |
+| A client `GameConnection::setControlObject` camera trick, `moveMap.bind` that eats a key | client code with `camera.control` (`camera_set`) and `input.capture` (`input_claim`) | Changes only what the player sees and which keys the game hears |
 
 ## Not here yet
 

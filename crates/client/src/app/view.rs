@@ -20,6 +20,9 @@ pub(super) struct ViewState {
     pub(super) observer_eye: Option<Vec3>,
     /// The camera the last rendered frame was drawn from (eye, yaw, pitch).
     pub(super) rendered_camera: Option<(Vec3, f32, f32)>,
+    /// An Add-On placed the last frame's camera (`camera.control`), so
+    /// the player's own body draws as in third person.
+    pub(super) addon_camera: bool,
     /// Which driven vehicle is predicted, and one whose prediction failed.
     /// The rendered camera's roll about its forward axis (a rider's
     /// first-person view tilting with the seat), radians.

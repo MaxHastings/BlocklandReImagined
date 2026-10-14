@@ -721,6 +721,7 @@ impl Predictor {
                 held.feet == state.feet
                     && held.crouched == state.crouched
                     && held.yaw == state.yaw
+                    && held.pass_group == state.pass_group
                     && *other.tuning() == tuning
             };
             match self.others.get_mut(&state.owner) {

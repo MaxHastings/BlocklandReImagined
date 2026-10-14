@@ -190,6 +190,10 @@ the Add-On. Floats must be finite.
 | `hud_region(name_ptr, len, ptr) -> i32` | `render.layer` | Writes a named HUD region's box in screen space (8 f32): left, top, width, height, the size of one HUD unit (the screen is 480 units tall), 1 if this Add-On's layouts own the region now (else 0), 2 unused. Returns 1, or 0 for an unknown name. Draw into a region only while you own it; the claim itself is a `hud` layout file (see `docs/modding/hud.md`). |
 | `camera(ptr)` | `render.layer` | Writes the camera's eye and forward direction (6 f32, world units, Y up). |
 | `environment(ptr)` | `render.layer` | Writes the scene's lighting (12 f32): the direction sunlight travels, the sun's colour, the ambient colour, the fog and horizon colour. |
+| `camera_set(ptr) -> i32` | `camera.control` | Only inside the Add-On's `camera_frame(time, dt)` export, which the game calls before drawing: places the camera this frame from 8 f32, eye xyz, look xyz (any length above 0.001), roll (radians) and field of view (0 for the player's own, else 5 to 170). Returns 1, or 0 for a record no camera can take. What the player sees moves; where they aim, what the server sees and what they hit do not. `camera(ptr)` inside `camera_frame` reads the camera the game would show. The first Add-On in load order that places the camera wins the frame; with the camera placed the player's own body is drawn as in third person. |
+| `input_claim(mask) -> i32` | `input.capture` | Asks to hold game controls, bits of `forward, backward, left, right, jump, crouch, jet, fire, walk, zoom, free_look, look` (bit 0 to 11; `look` is the mouse look), until it asks again (0 lets go). Returns the bits it holds: one Add-On holds each control, the first in load order to ask. A held control no longer reaches the game: the Add-On reads it instead. Menus, chat, the pause key and the cursor are never among them, so a player can always leave. |
+| `action_down(control) -> i32` | `input.capture` | 1 if the control (its bit number) is one it holds and is down now. |
+| `look_delta(ptr)` | `input.capture` | Writes the mouse look this frame (2 f32, yaw and pitch in radians, as the game would have turned) while it holds `look`, else zeros. |
 | `shader(name_ptr, len) -> shader` | `render.shader` | One of the Add-On's shader files, checked at load. |
 | `sound_play(name_ptr, len, volume) -> i32` | `audio` | A sound file the Add-On lists, at the player's ears. |
 | `sound_at(name_ptr, len, volume, x, y, z) -> i32` | `audio` | The same, placed in the world: full within 10 units, gone by 90, on the effects channel. |
@@ -244,6 +248,14 @@ sharing `local_physics` with the debris) with Torque's gravity, fixed
 frame that makes them and the next frame reads the result. Shared bodies
 are how Add-Ons interact without seeing each other: any Add-On with
 `physics.local` can find, push and hold them.
+
+`camera.control` and `input.capture` are sandboxed: they change only
+this player's view and which of their keys the game hears, never what the
+server sees. The Overhead Camera sample (`packages/samples/sample-overhead-camera`)
+holds the free-look key and, while it is down, places the camera high above
+and behind the player (`crates/client-sandbox/tests/sandbox.rs`). Rules
+windows (shops, banks, editors) need no client code: the server rules
+describe them with `show_panel` (docs/modding/rules.md, **Panels**).
 
 Planned, same shape: `ui.panel` (draw into a panel the engine places),
 `render.texture` (images from the Add-On, render targets), `video.screen`

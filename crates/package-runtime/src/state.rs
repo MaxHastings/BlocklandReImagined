@@ -52,6 +52,22 @@ impl PlayerKey {
     pub fn durable(&self) -> bool {
         self.0.starts_with("principal:")
     }
+    /// A short name rules may file a player's saved data under
+    /// (`player.uid`, a host data key or map key): `p` and 24 hex digits
+    /// of their principal, the same every visit; else `s` and their
+    /// session, which a reconnect changes.
+    pub fn uid(&self) -> String {
+        match self.0.strip_prefix("principal:") {
+            Some(hex) => format!("p{}", &hex[..hex.len().min(24)]),
+            None => format!(
+                "s{}",
+                self.0
+                    .chars()
+                    .filter(char::is_ascii_digit)
+                    .collect::<String>()
+            ),
+        }
+    }
 }
 
 /// Values are JSON scalars, short strings, and small arrays or objects.

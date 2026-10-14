@@ -197,6 +197,7 @@ impl App {
                 tick: Default::default(),
                 tether: None,
                 controller: None,
+                pass_group: 0,
             };
             let input = crate::avatar::AvatarAnimationInput {
                 dead: info.destroyed,

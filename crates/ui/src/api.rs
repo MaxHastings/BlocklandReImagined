@@ -821,6 +821,17 @@ pub enum UiAction {
     },
     /// The Tune window closed.
     TuneClosed,
+    /// What the player did in an Add-On's panel: a button pressed, a list
+    /// row picked, or `close`; with every field's text and list's pick.
+    PanelEvent {
+        package: String,
+        panel: String,
+        control: String,
+        fields: Vec<(String, String)>,
+        lists: Vec<(String, Option<u16>)>,
+        /// A row dragged onto the list `control` names.
+        drop: Option<PanelDropView>,
+    },
     StartTyping,
     /// `SteeringPrefsEvent`: `$pref::Input::UseStrafeSteering` and
     /// `$pref::Input::UseAutoReturnSteering`, sent on joining and on change.
@@ -1520,6 +1531,48 @@ pub enum TrustAnswer {
     Reject,
     Ignore,
 }
+/// A window an Add-On's rules show (`show_panel`), laid out top to bottom
+/// from the game's widgets by the panel screen.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct PanelView {
+    /// The Add-On whose rules hear its events.
+    pub package: String,
+    pub id: String,
+    pub title: String,
+    pub width: u16,
+    pub height: u16,
+    pub items: Vec<PanelItemView>,
+}
+/// A panel list's row dragged from list `from` (row `row`, from 0) and let
+/// go over row `at` of the list an event names (none: below its rows).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PanelDropView {
+    pub from: String,
+    pub row: u16,
+    pub at: Option<u16>,
+}
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum PanelItemView {
+    /// Lines of plain text.
+    Text(String),
+    /// Rows to pick one of; with `drag`, rows drag to other such lists.
+    List {
+        id: String,
+        rows: Vec<String>,
+        selected: Option<u16>,
+        height: u16,
+        drag: bool,
+    },
+    /// A line to type in, with a label.
+    Field {
+        id: String,
+        label: String,
+        text: String,
+        max: u16,
+    },
+    /// A row of buttons: id and label.
+    Buttons(Vec<(String, String)>),
+}
 /// A score report the host showed (Slayer's End of Round Report): plain
 /// text, laid out by the Report window.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -1764,6 +1817,8 @@ pub enum UiUpdate {
     MiniGameInvite(MiniGameInvitation),
     /// Open the Report window on this report, or close it.
     Report(Option<ReportView>),
+    /// Open an Add-On's panel in place of any open one, or close it.
+    Panel(Option<PanelView>),
     /// Server `MessageBoxOK`.
     MessageBox {
         title: String,

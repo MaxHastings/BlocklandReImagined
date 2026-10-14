@@ -386,16 +386,28 @@ pub struct Behaviour {
     #[serde(default)]
     pub on_bot_ability: bool,
     /// `on_contact(info)` as two bodies begin to touch: `info` is
-    /// `#{ kind, by, target, vehicle, from, speed, velocity }`. `kind` is
-    /// `"body"` (a player's body meeting another's) or `"vehicle"` (a
-    /// vehicle running into a player); `by` is the one that came down on,
-    /// ran into or drove into `target` (the upper body, the quicker one, the
-    /// vehicle's driver or `()`); `from` is `"above"`, `"below"` or
+    /// `#{ kind, by, target, vehicle, target_vehicle, from, speed, velocity }`.
+    /// `kind` is `"body"` (a player's body meeting another's), `"vehicle"`
+    /// (a vehicle running into a player) or `"vehicles"` (two vehicles
+    /// crashing: `vehicle` ran into `target_vehicle`, and `by` and
+    /// `target` are their drivers or `()`); `by` is the one that came down
+    /// on, ran into or drove into `target` (the upper body, the quicker one,
+    /// the vehicle's driver or `()`); `from` is `"above"`, `"below"` or
     /// `"side"`; `velocity` is `by`'s (the vehicle's) less `target`'s as
     /// they met, `[x, y, z]`, and `speed` its length. A stomp, a run-over
     /// or a shove means what the rules make it mean.
     #[serde(default)]
     pub on_contact: bool,
+    /// `on_panel(player, event)` when a player presses a button or picks
+    /// a list row in a panel this Add-On showed them (`show_panel`), drags
+    /// a row onto a list, or closes it: `event` is `#{ panel, control,
+    /// fields, lists, drop }`, with `control` the button's or list's id or
+    /// `"close"`, `fields` each field's text, `lists` each list's picked
+    /// row (or `()`), and `drop` for a dragged row `#{ from, row, at, text
+    /// }` (the list it came from, its row and text there, and the row of
+    /// `control` it was let go over, or `()` below the last), else `()`.
+    #[serde(default)]
+    pub on_panel: bool,
     /// `on_tick()` every `tick_interval` ticks, when set.
     #[serde(default)]
     pub tick_interval: Option<u32>,
@@ -509,6 +521,56 @@ pub struct Behaviour {
     /// command's own `cooldown_ticks`.
     #[serde(default)]
     pub command_cooldown_ticks: u32,
+    /// Functions other Add-Ons call with `call_addon(id, name, args...)`
+    /// and get an answer from at once: an economy's `balance` and
+    /// `charge`, an inventory's `give`. Each runs as `api_<name>(from,
+    /// args...)` in this Add-On's own sandbox, on its own state and with its
+    /// own capabilities, `from` being the calling Add-On's id. Only an
+    /// Add-On that depends on this one (or lists it in
+    /// `optional_dependencies`) may call them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub exports: Vec<ExportDef>,
+    /// Events these rules send with `emit(name, data)`, for Add-Ons built
+    /// on this one to hear (`listens`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub events: Vec<String>,
+    /// Events these rules hear with `on_addon_event(from, name, data)`:
+    /// `"economy:paid"`, or `"economy:*"` for all of one Add-On's. Each
+    /// names this Add-On or one it depends on. Delivered at the start of the
+    /// next tick, in the order they were sent.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub listens: Vec<String>,
+    /// `on_object(event)` as an object comes into the world, leaves it or
+    /// changes hands: `event` is `#{ kind, ref, object, definition, addon,
+    /// owner, driver, x, y, z }`, `kind` being `created`, `removed` or
+    /// `changed` (its owner or driver changed; `was` holds the old ones).
+    /// Objects are vehicles and loose physics bodies (`vehicle`), bots
+    /// (`player`), Add-On creatures (`entity`) and items lying in the world
+    /// (`drop`). Delivered at the start of the next tick.
+    #[serde(default)]
+    pub on_object: bool,
+}
+/// A function an Add-On offers others ([`Behaviour::exports`]).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ExportDef {
+    /// The name callers use; the script function is `api_<name>`.
+    pub name: String,
+    /// How many arguments callers pass, 0 to [`MAX_EXPORT_ARGS`]; the
+    /// function takes one more, the caller's id, first.
+    #[serde(default)]
+    pub args: u8,
+}
+/// Most arguments an exported function takes from its callers.
+pub const MAX_EXPORT_ARGS: u8 = 6;
+/// Most exports, events and listens one behaviour declares, each.
+pub const MAX_INTEROP: usize = 64;
+/// Whether `name` is an event another Add-On may listen for: `ns:event`
+/// or `ns:*`, `ns` an Add-On id.
+pub fn is_event_ref(name: &str) -> bool {
+    name.split_once(':').is_some_and(|(ns, event)| {
+        bri_package::id::namespace_problem(ns).is_none() && (event == "*" || identifier(event))
+    })
 }
 /// A mini-game's own settings as these rules start them and bound them
 /// ([`Behaviour::minigame_settings`]); what is left out stays v20's.
@@ -1087,6 +1149,45 @@ impl Behaviour {
             self.command_cooldown_ticks <= 120 * 60,
             "command_cooldown_ticks is at most a minute"
         );
+        ensure!(
+            self.exports.len() <= MAX_INTEROP
+                && self.events.len() <= MAX_INTEROP
+                && self.listens.len() <= MAX_INTEROP,
+            "at most {MAX_INTEROP} exports, events and listens each"
+        );
+        for (i, e) in self.exports.iter().enumerate() {
+            ensure!(
+                identifier(&e.name),
+                "export name `{}` must be lowercase a-z, 0-9, _",
+                e.name
+            );
+            ensure!(
+                e.args <= MAX_EXPORT_ARGS,
+                "export `{}` takes at most {MAX_EXPORT_ARGS} arguments",
+                e.name
+            );
+            ensure!(
+                !self.exports[..i].iter().any(|o| o.name == e.name),
+                "export `{}` declared twice",
+                e.name
+            );
+        }
+        for (i, name) in self.events.iter().enumerate() {
+            ensure!(
+                identifier(name),
+                "event name `{name}` must be lowercase a-z, 0-9, _"
+            );
+            ensure!(
+                !self.events[..i].contains(name),
+                "event `{name}` declared twice"
+            );
+        }
+        for name in &self.listens {
+            ensure!(
+                is_event_ref(name),
+                "listens: `{name}` is not `add-on:event` or `add-on:*`"
+            );
+        }
         for (i, policy) in self.policies.iter().enumerate() {
             ensure!(
                 POLICIES.contains(&policy.as_str()),
