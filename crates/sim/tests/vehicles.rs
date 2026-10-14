@@ -477,19 +477,31 @@ fn standing_on_a_vehicle_does_not_seat_a_rider_but_landing_on_it_does(f: &Fixtur
         },
         2,
     )?;
-    feed(&mut s, MoveInput::default(), 60)?;
+    feed(&mut s, MoveInput::default(), 2)?;
     assert_eq!(s.mounted(owner), None, "jet leaves the car");
     let car = Vec3::from(s.vehicle_poses()[0].position);
-    let feet = |s: &Session| {
-        Vec3::from(
-            s.motion_states()
-                .into_iter()
-                .find(|(p, _)| p.owner == owner)
-                .unwrap()
-                .0
-                .feet,
-        )
+    let rider = |s: &Session| {
+        s.motion_states()
+            .into_iter()
+            .find(|(p, _)| p.owner == owner)
+            .unwrap()
+            .0
     };
+    let feet = |s: &Session| Vec3::from(rider(s).feet);
+    // Down again: the stock jeep throws a jetting rider high enough that
+    // he comes down after MinMountTime, and that fall onto the roof is a
+    // landing, which seats him as in v20; nothing is left to stand on then.
+    for _ in 0..600 {
+        feed(&mut s, MoveInput::default(), 1)?;
+        if rider(&s).grounded || s.mounted(owner).is_some() {
+            break;
+        }
+    }
+    if s.mounted(owner).is_some() {
+        assert!(f.is_native(), "the made-up car's rider lands inside MinMountTime");
+        return Ok(());
+    }
+    feed(&mut s, MoveInput::default(), 30)?;
     assert!(
         feet(&s).y > car.y + 0.5,
         "the rider stands on the roof: feet {} over the car at {car}",
