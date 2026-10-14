@@ -884,12 +884,20 @@ impl Nav {
             }
             boxes.push((min, max));
         }
+        // A sample looks no farther across than the body it places, pushed
+        // at most half a cell off its column's centre (`sample`, `place`):
+        // only columns whose centre lies within that of a box are forgotten.
+        // A rocket's crater on a dense build forgot four times the columns
+        // it could change, and the bots sampled them all again.
+        let across = sample_reach(body);
         // A sample's ray starts up to a jump plus a body above its hint.
         let cells: Vec<_> = boxes
             .iter()
             .map(|&(min, max)| {
-                let (x0, z0) = cell_of(min - Vec3::splat(reach));
-                let (x1, z1) = cell_of(max + Vec3::splat(reach));
+                let first = |v: f32| ((v - across) / CELL).ceil() as i32;
+                let last = |v: f32| ((v + across) / CELL).floor() as i32;
+                let (x0, z0) = (first(min.x), first(min.z));
+                let (x1, z1) = (last(max.x), last(max.z));
                 let low = min.y - body.height - body.jump - HINT_BAND * 2.0;
                 let high = max.y + body.drop + HINT_BAND * 2.0;
                 (x0..=x1, z0..=z1, low, high)
@@ -1429,6 +1437,13 @@ fn sample(ground: &Ground, body: &Body, x: i32, z: i32, from: f32) -> Floors {
     floors.into()
 }
 
+/// How far across from its column's centre a [`sample`] looks: the full
+/// body's half width (`Ground::fits`), off a centre pushed by up to half a
+/// cell (`Ground::place`), past touching by `SETTLE_GAP`, and a margin.
+fn sample_reach(body: &Body) -> f32 {
+    CELL * 0.5 + body.width * 0.5 + SETTLE_GAP + 0.05
+}
+
 /// Surfaces one column's sample looks through, top to bottom.
 const MAX_LAYERS: usize = 8;
 
@@ -1496,6 +1511,9 @@ pub struct Search {
     came: FxHashMap<Node, Came>,
     best: Option<(Node, f32)>,
     expanded: u32,
+    /// Nodes it expands before it settles for the closest it reached
+    /// ([`MAX_EXPANSIONS`] unless [`Search::limited`]).
+    limit: u32,
     /// Nodes farther than this from the start (or from where an opening
     /// lets out), across, are not visited.
     bound: f32,
@@ -1528,6 +1546,7 @@ impl Search {
             came: FxHashMap::default(),
             best: None,
             expanded: 0,
+            limit: MAX_EXPANSIONS,
             bound,
             links: Vec::new(),
             pending: None,
@@ -1537,6 +1556,12 @@ impl Search {
             jet_tests: 0,
             walk_speed: 1.0,
         }
+    }
+    /// This search settling for the closest it reached after `limit`
+    /// expansions instead of [`MAX_EXPANSIONS`].
+    pub fn limited(mut self, limit: u32) -> Self {
+        self.limit = limit.min(MAX_EXPANSIONS);
+        self
     }
     /// Whether this search takes swim legs for `body`.
     fn swims(&self, body: &Body) -> bool {
@@ -1843,7 +1868,7 @@ impl Search {
                 self.best = Some((node, 0.0));
                 return Some(self.finish(ground, body, true));
             }
-            if self.expanded >= MAX_EXPANSIONS {
+            if self.expanded >= self.limit {
                 return Some(self.finish(ground, body, false));
             }
             if nav.expansions == 0 {
@@ -2346,10 +2371,12 @@ mod tests {
             &body(),
         );
         let body = body();
-        let reach = body.width + CELL;
-        let (x0, z0) = cell_of(Vec3::new(20.0 - reach, 0.0, 20.0 - reach));
-        let (x1, z1) = cell_of(Vec3::new(21.0 + reach, 0.0, 21.0 + reach));
-        let columns = ((x1 - x0 + 1) * (z1 - z0 + 1)) as u64;
+        let across = sample_reach(&body);
+        let (x0, x1) = (
+            ((20.0 - across) / CELL).ceil() as i32,
+            ((21.0 + across) / CELL).floor() as i32,
+        );
+        let columns = ((x1 - x0 + 1) * (x1 - x0 + 1)) as u64;
         assert_eq!(
             nav.forgotten, columns,
             "forgot {} of {before}",
@@ -2359,6 +2386,52 @@ mod tests {
         // A change over everything still empties the cache.
         nav.invalidate(Vec3::splat(-100.0), Vec3::splat(100.0), &body);
         assert!(nav.is_empty());
+    }
+
+    /// Every column whose sample a brick changes is one its box forgets:
+    /// the narrow reach leaves out only columns that sample the same with
+    /// the brick or without it, wherever it sits against the cells.
+    #[test]
+    fn a_change_forgets_every_column_it_alters() {
+        let body = body();
+        let base = world(&[floor()]);
+        for (i, offset) in [0.0, 0.1, 0.13, 0.25, 0.37].into_iter().enumerate() {
+            for size in [
+                Vec3::new(0.5, 0.2, 0.5),
+                Vec3::new(1.0, 1.2, 0.25),
+                Vec3::new(0.25, 3.0, 2.0),
+            ] {
+                let min = Vec3::new(2.0 + offset, 0.0, -1.0 + offset * 0.5);
+                let brick = (min, min + size);
+                let built = world(&[floor(), brick]);
+                let mut nav = Nav::default();
+                for x in -4..16 {
+                    for z in -10..10 {
+                        nav.floors.insert((x, z, 0), Floors::from([]));
+                    }
+                }
+                nav.invalidate(brick.0, brick.1, &body);
+                let ground = |physics| Ground {
+                    physics,
+                    terrain: &no_terrain,
+                    passages: &NO_PASSAGES,
+                    waters: &[],
+                    bodies: &[],
+                    motions: &[],
+                };
+                for x in -4..16 {
+                    for z in -10..10 {
+                        let before = sample(&ground(&base), &body, x, z, 0.0);
+                        let after = sample(&ground(&built), &body, x, z, 0.0);
+                        assert!(
+                            before == after || !nav.floors.contains_key(&(x, z, 0)),
+                            "case {i} {size:?}: column {x},{z} changed but was kept: \
+                             {before:?} -> {after:?}"
+                        );
+                    }
+                }
+            }
+        }
     }
 
     /// A wall with a window up it too low to stand in: the only way on is
