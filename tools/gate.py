@@ -24,6 +24,13 @@ Checks, cheapest first, on the exact commit being pushed:
      in tools/gate-known-failures.toml tolerated
   7. the fixed save corpus (crates/client/tests/save-corpus.json), only when
      the change touches a path in SAVE_CORPUS_PATHS
+  8. the performance budget (PERF_RUNS): 32 bots for 30 game seconds on
+     the owner's Crazy Collage Madness save and Team Deathmatch on
+     Afghanistan, release build; fails when the host's step mean is over
+     budget. Skipped with a message when the content or save is missing;
+     --skip-perf (or BRI_GATE_SKIP_PERF=1) skips it, and then the pass is
+     not recorded for reuse. `--perf-only` runs just this step on the
+     current checkout (`--dry-run` prints what it would run).
 
 Builds run in one shared gate worktree and target dir next to the main
 checkout (default ../.bri-gate), serialized by a lock, so parallel sessions
@@ -115,6 +122,29 @@ REUSE_CANDIDATES = 50
 # rewrites addons/ from the build itself, and .downloads/ is a cache.
 CONTENT_DERIVED = {"addons", ".downloads", "_regeneration"}
 SAVE_CORPUS_TEST = "the_fixed_save_corpus_hosts_like_the_game"
+
+# ---- Performance budget (step 8), the one place its numbers live.
+# The host's mean step time (ms) over a 32-bot, 30-game-second headless
+# round of crates/chaos/tests/bot_deathmatch_stress.rs in a release build.
+# Measured at v0.3.0 on a 4-core 2.1 GHz cloud Xeon (slower than the owner's
+# PC): Collage 5.9-6.1 ms, Afghan about 4.5 ms
+# (docs/progress/2026-10-13-collage-bot-cpu.md, "#138 at 4539126").
+# The budgets leave about a millisecond of headroom over that. Override one
+# with BRI_PERF_BUDGET_<NAME>_MS (e.g. BRI_PERF_BUDGET_COLLAGE_MS=8).
+PERF_BUDGETS_MS = {"collage": 7.0, "afghan": 5.5}
+PERF_LOADOUT = ("v20.weapon.rocketlauncheritem,v20.weapon.spearitem,"
+                "weapon_hegrenade:weapon/hegrenadeitem,v20.weapon.gunitem,v20.weapon.sworditem")
+# Each run: the save it fights in (looked up by name in the owner's saves,
+# `perf_saves_dirs`, or given as a path by BRI_PERF_<NAME>_WORLD), the
+# bundled worlds-pack save to use when that save is missing (None: skip),
+# and its extra harness settings.
+PERF_RUNS = (
+    ("collage", "Crazy Collage Madness", None, {}),
+    ("afghan", "TDM Afghan", "Afghanistan DM", {"BRI_STRESS_TEAMS": "2"}),
+)
+PERF_TEST = "bots_fight_a_free_for_all_on_real_content"
+PERF_SUMMARY = "BRI_STRESS_SUMMARY"
+SKIP_PERF = False
 
 
 class GateError(Exception):
@@ -719,6 +749,155 @@ def save_corpus(binaries, log, env=None):
     return ok
 
 
+def perf_budget_ms(name, environ=None):
+    environ = os.environ if environ is None else environ
+    override = environ.get(f"BRI_PERF_BUDGET_{name.upper()}_MS")
+    if override:
+        try:
+            return float(override)
+        except ValueError:
+            raise GateError(f"BRI_PERF_BUDGET_{name.upper()}_MS={override!r} is not a number")
+    return PERF_BUDGETS_MS[name]
+
+
+def parse_stress_summary(output):
+    """The last BRI_STRESS_SUMMARY {json} line of a stress run, as a dict,
+    or None when the run printed none."""
+    found = None
+    for line in output.splitlines():
+        line = line.strip()
+        if line.startswith(PERF_SUMMARY + " "):
+            try:
+                found = json.loads(line[len(PERF_SUMMARY) + 1:])
+            except ValueError:
+                continue
+    return found
+
+
+def perf_saves_dirs(environ=None):
+    """Where the owner's saves may be: BRI_PERF_SAVES, then the game's own
+    saves folder (the client's default state directory + saves), then the
+    main checkout's saves/."""
+    environ = os.environ if environ is None else environ
+    dirs = []
+    if environ.get("BRI_PERF_SAVES"):
+        dirs.append(Path(environ["BRI_PERF_SAVES"]))
+    if os.name == "nt" and environ.get("LOCALAPPDATA"):
+        dirs.append(Path(environ["LOCALAPPDATA"]) / "BlocklandReImagined" / "saves")
+    elif sys.platform == "darwin" and environ.get("HOME"):
+        dirs.append(Path(environ["HOME"]) / "Library/Application Support/BlocklandReImagined/saves")
+    elif environ.get("XDG_DATA_HOME"):
+        dirs.append(Path(environ["XDG_DATA_HOME"]) / "blockland-reimagined" / "saves")
+    elif environ.get("HOME"):
+        dirs.append(Path(environ["HOME"]) / ".local/share/blockland-reimagined/saves")
+    try:
+        dirs.append(main_checkout() / "saves")
+    except GateError:
+        pass
+    return dirs
+
+
+def find_save(name, dirs):
+    """The first `<name>.world.json` (case and trailing spaces ignored) in
+    any of `dirs` or their subfolders, or None."""
+    wanted = f"{name.strip()}.world.json".lower()
+    for folder in dirs:
+        if not folder.is_dir():
+            continue
+        for path in sorted(folder.rglob("*.world.json")):
+            if path.name.lower() == wanted:
+                return path
+    return None
+
+
+def perf_plan(environ):
+    """[(name, budget ms, harness env or None, what it fights in / why skipped)]."""
+    content = environ.get("BRI_CONTENT")
+    plan = []
+    for name, save, fallback, extra in PERF_RUNS:
+        budget = perf_budget_ms(name, environ)
+        if not content or not Path(content).is_dir():
+            plan.append((name, budget, None, f"no generated content (BRI_CONTENT={content!r})"))
+            continue
+        run_env = dict(environ, BRI_STRESS="1", BRI_STRESS_BOTS="32", BRI_STRESS_SECONDS="30",
+                       BRI_STRESS_LOADOUT=PERF_LOADOUT, **extra)
+        for key in ("BRI_STRESS_WORLD", "BRI_STRESS_MAP", "BRI_STRESS_WORLD_NAME",
+                    "BRI_STRESS_VEHICLE", "BRI_STRESS_ADDONS", "BRI_STRESS_DUMP"):
+            run_env.pop(key, None)
+        given = environ.get(f"BRI_PERF_{name.upper()}_WORLD")
+        path = Path(given) if given else find_save(save, perf_saves_dirs(environ))
+        if path and path.is_file():
+            run_env["BRI_STRESS_WORLD"] = str(path)
+            plan.append((name, budget, run_env, str(path)))
+        elif fallback:
+            run_env["BRI_STRESS_WORLD_NAME"] = fallback
+            plan.append((name, budget, run_env, f"the worlds pack's {fallback!r} ({save!r} not found)"))
+        else:
+            plan.append((name, budget, None, f"save {save!r} not found in "
+                         f"{', '.join(str(d) for d in perf_saves_dirs(environ))} "
+                         f"(or set BRI_PERF_{name.upper()}_WORLD)"))
+    return plan
+
+
+def perf_verdict(name, budget, output, code):
+    """(ok, message) for one stress run's output."""
+    if code != 0:
+        return False, f"{name}: the stress run FAILED (exit {code})"
+    summary = parse_stress_summary(output)
+    if summary is None:
+        skipped = next((line.strip() for line in output.splitlines()
+                        if line.strip().startswith("skipped:")), None)
+        if skipped:
+            return True, f"{name}: SKIPPED ({skipped.removeprefix('skipped:').strip()})"
+        return False, f"{name}: FAILED, the run printed no {PERF_SUMMARY} line"
+    mean = float(summary["step_mean_ms"])
+    detail = (f"step mean {mean:.2f} ms (budget {budget:.2f}), p99 "
+              f"{float(summary.get('step_p99_ms', 0)):.1f} ms, {summary.get('bots')} bots, "
+              f"{summary.get('ticks')} ticks, {summary.get('build')} build, "
+              f"world {summary.get('world')!r}")
+    if summary.get("build") != "release":
+        return False, f"{name}: FAILED, not a release build: {detail}"
+    if mean > budget:
+        return False, f"{name}: OVER BUDGET: {detail}"
+    return True, f"{name}: ok, {detail}"
+
+
+def perf_budget(cwd, log, env, target=(), dry_run=False):
+    """Step 8: every PERF_RUNS round within its budget. True when each passed
+    or was skipped for want of content."""
+    if SKIP_PERF or os.environ.get("BRI_GATE_SKIP_PERF"):
+        say("performance budget: skipped (--skip-perf / BRI_GATE_SKIP_PERF)")
+        return True
+    command = ["cargo", "test", "--release", "--locked", "-p", "bri-chaos",
+               "--test", "bot_deathmatch_stress", *target, "--",
+               "--ignored", "--exact", PERF_TEST, "--nocapture"]
+    ok = True
+    for name, budget, run_env, what in perf_plan(env):
+        if run_env is None:
+            say(f"performance budget: {name}: SKIPPED, {what}")
+            continue
+        say(f"performance budget: {name} on {what}, budget {budget:.2f} ms")
+        if dry_run:
+            shown = {k: v for k, v in run_env.items()
+                     if k.startswith("BRI_STRESS") or k == "BRI_CONTENT"}
+            say("  " + " ".join(f"{k}={v}" for k, v in sorted(shown.items())))
+            say("  " + " ".join(command))
+            continue
+        started = time.time()
+        result = subprocess.run(command, cwd=cwd, stdout=subprocess.PIPE,
+                                stderr=subprocess.STDOUT, text=True, errors="replace",
+                                env=run_env)
+        if log is not None:
+            with open(log, "a", encoding="utf-8", errors="replace") as handle:
+                handle.write(f"\n===== performance budget: {name} =====\n{result.stdout}\n")
+        passed, message = perf_verdict(name, budget, result.stdout, result.returncode)
+        say(f"performance budget: {message} ({time.time() - started:.0f}s)")
+        if not passed:
+            print("\n".join(result.stdout.splitlines()[-40:]))
+            ok = False
+    return ok
+
+
 def already_passed(root, sha, inputs, needs_corpus):
     if (root / "passed" / sha).exists():
         say(f"{sha[:9]} already passed the gate")
@@ -886,8 +1065,16 @@ def full_gate(sha, root, changed=()):
         if needs_corpus and not save_corpus(binaries, log, env):
             say(f"full log: {log}")
             return False
+        perf_started = time.time()
+        if not perf_budget(worktree, log, env, target):
+            say(f"full log: {log}")
+            return False
+        phases["perf"] = time.time() - perf_started
         if not tree_intact(worktree, sha):
             return False
+        if SKIP_PERF or os.environ.get("BRI_GATE_SKIP_PERF"):
+            say(f"PASSED {sha[:9]} without the performance budget; not recorded as a pass")
+            return True
         passed.parent.mkdir(exist_ok=True)
         passed.write_text(time.strftime("%Y-%m-%d %H:%M:%S"), encoding="utf-8")
         # Content regenerated during the run leaves the tree unrecorded.
@@ -1364,7 +1551,7 @@ def forget_hook_repository():
 
 
 def main():
-    global TEST_JOBS, BINARY_TIMEOUT
+    global TEST_JOBS, BINARY_TIMEOUT, SKIP_PERF
     forget_hook_repository()
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     parser.add_argument("--hook", nargs="*", help=argparse.SUPPRESS)
@@ -1386,8 +1573,16 @@ def main():
                         help="stop a test binary still running after this long "
                         f"(default {BINARY_TIMEOUT // 60}; CI passes more, since its "
                         "software renderer draws a frame far slower than a GPU)")
+    parser.add_argument("--skip-perf", action="store_true",
+                        help="skip the performance budget step (the pass is then not "
+                        "recorded); BRI_GATE_SKIP_PERF=1 does the same for the hook")
+    parser.add_argument("--perf-only", action="store_true",
+                        help="only run the performance budget, on this checkout")
+    parser.add_argument("--dry-run", action="store_true",
+                        help="with --perf-only: print the runs and commands, run nothing")
     parser.add_argument("commit", nargs="?", default="HEAD")
     args = parser.parse_args()
+    SKIP_PERF = args.skip_perf
     if args.binary_timeout:
         BINARY_TIMEOUT = args.binary_timeout * 60
     if args.jobs:
@@ -1410,6 +1605,11 @@ def main():
             return 1 if problems else 0
         if args.ci_test:
             return 0 if ci_test(args.shard, args.tier) else 1
+        if args.perf_only:
+            top = Path(git("rev-parse", "--show-toplevel").strip())
+            env = dict(os.environ, CARGO_TERM_COLOR="never")
+            env.setdefault("BRI_CONTENT", str(main_checkout() / "content"))
+            return 0 if perf_budget(top, None, env, dry_run=args.dry_run) else 1
         if args.push:
             return 0 if push_main() else 1
         if args.hook is not None:

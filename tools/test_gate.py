@@ -309,5 +309,64 @@ class ContentFingerprint(unittest.TestCase):
         self.assertIsNone(gate.content_fingerprint(Path(folder) / "gone"))
 
 
+class PerfBudget(unittest.TestCase):
+    output = ("world=\"Collage\" map=x bricks=5\n"
+              "BRI_STRESS_SUMMARY {\"world\": \"Collage\", \"bots\": 32, \"ticks\": 3600, "
+              "\"build\": \"release\", \"step_mean_ms\": 6.25, \"step_p99_ms\": 14.0}\n"
+              "test bots_fight_a_free_for_all_on_real_content ... ok\n")
+
+    def test_the_summary_line_is_read(self):
+        summary = gate.parse_stress_summary(self.output)
+        self.assertEqual(summary["step_mean_ms"], 6.25)
+        self.assertIsNone(gate.parse_stress_summary("step_ms mean=6.0\n"))
+
+    def test_a_mean_over_budget_fails_and_under_passes(self):
+        self.assertTrue(gate.perf_verdict("collage", 7.0, self.output, 0)[0])
+        ok, message = gate.perf_verdict("collage", 6.0, self.output, 0)
+        self.assertFalse(ok)
+        self.assertIn("OVER BUDGET", message)
+
+    def test_a_debug_build_a_crash_or_a_missing_line_fails(self):
+        debug = self.output.replace('"release"', '"debug"')
+        self.assertFalse(gate.perf_verdict("collage", 9.0, debug, 0)[0])
+        self.assertFalse(gate.perf_verdict("collage", 9.0, self.output, 101)[0])
+        self.assertFalse(gate.perf_verdict("collage", 9.0, "test x ... ok\n", 0)[0])
+
+    def test_a_harness_skip_is_a_skip(self):
+        ok, message = gate.perf_verdict("afghan", 5.5, "skipped: content not found (no save)\n", 0)
+        self.assertTrue(ok)
+        self.assertIn("SKIPPED", message)
+
+    def test_budgets_default_and_env_overrides(self):
+        self.assertEqual(gate.perf_budget_ms("collage", {}), 7.0)
+        self.assertEqual(gate.perf_budget_ms("afghan", {}), 5.5)
+        self.assertEqual(gate.perf_budget_ms("afghan", {"BRI_PERF_BUDGET_AFGHAN_MS": "6.5"}), 6.5)
+        with self.assertRaises(gate.GateError):
+            gate.perf_budget_ms("afghan", {"BRI_PERF_BUDGET_AFGHAN_MS": "fast"})
+
+    def test_saves_are_found_by_name_and_missing_ones_skip_or_fall_back(self):
+        with tempfile.TemporaryDirectory() as folder:
+            saves = Path(folder) / "saves"
+            (saves / "Bedroom").mkdir(parents=True)
+            (saves / "Bedroom" / "Crazy Collage Madness.world.json").write_text("{}")
+            self.assertEqual(gate.find_save("Crazy Collage Madness ", [saves]).name,
+                             "Crazy Collage Madness.world.json")
+            content = Path(folder) / "content"
+            content.mkdir()
+            plan = {name: (env, what) for name, _, env, what in
+                    gate.perf_plan({"BRI_CONTENT": str(content), "BRI_PERF_SAVES": str(saves)})}
+            self.assertTrue(plan["collage"][0]["BRI_STRESS_WORLD"].endswith(
+                "Crazy Collage Madness.world.json"))
+            self.assertEqual(plan["collage"][0]["BRI_STRESS_BOTS"], "32")
+            self.assertEqual(plan["afghan"][0]["BRI_STRESS_WORLD_NAME"], "Afghanistan DM")
+            self.assertEqual(plan["afghan"][0]["BRI_STRESS_TEAMS"], "2")
+            empty = Path(folder) / "none"
+            plan = {name: env for name, _, env, _ in
+                    gate.perf_plan({"BRI_CONTENT": str(content), "BRI_PERF_SAVES": str(empty)})}
+            self.assertIsNone(plan["collage"])
+            self.assertTrue(all(env is None for _, _, env, _ in
+                                gate.perf_plan({"BRI_CONTENT": str(empty)})))
+
+
 if __name__ == "__main__":
     unittest.main()
