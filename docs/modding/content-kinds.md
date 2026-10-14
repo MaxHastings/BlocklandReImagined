@@ -132,10 +132,34 @@ crosshair, falling back to the eye when the barrel is inside a wall. The
 host reads an imported body's hand nodes from its package with the arm
 raised to aim (its `aim_right` clip), as the Blockhead's.
 
-A held item takes the socket node's own axes, so author the socket nodes
-(`socket_right_hand`, `socket_left_hand` in glTF) with no turn of their own
-against the body (`crates/client/tests/gltf_body.rs` holds level that
-way): a bare hand bone's axes point the item along the bone.
+**Grips on imported bodies.** An imported glTF body holds every image as
+the Blockhead does, whatever way its hand bones point
+(`crates/content/src/hold.rs`). The engine takes the hand socket's
+position and ignores its turn: a held hand faces the Blockhead's aiming
+hand (forward along -Z, up +Y), pitched with the look. An arm the body has
+no `aim_right` (`aim_left`) clip for is raised in front of the chest by
+two-bone IK, to the spot the Blockhead's arm reaches, scaled to the arm's
+length. An arm with its own aim clip keeps that pose and only the hand
+turns. A socket `offset` on a node is measured in that aiming hand's
+frame, so the same image sits the same way in every body's hand. A
+two-handed image (`aim_both`) pulls the left hand to its `supportPoint`
+node (glTF `supportPoint` Empty), else halfway from the grip to the
+muzzle. The host fires from the same fitted hand, pitching about the
+shoulder. v20 shapes and the Blockhead keep their authored `Mount0` and
+`Mount1`.
+
+In first person an imported body draws its held images where the
+Blockhead's are, at the same spot from the eye, so a gun sits in view the
+same on every body. Its own arms are not drawn there: the view shows the
+gun alone, as for v20 images with an `eye_offset`.
+
+A rider whose body has a `sit` clip is moved so its hip sits where the
+Blockhead's hip sits in its own `sit` pose; a seat authored for the
+Blockhead seats every body. A seat tuned to one body's pelvis (a vehicle
+from another game) still seats that body as it was tuned. Tests:
+`crates/content/src/hold.rs`,
+`the_blockheads_aiming_hand_is_the_frame_fitted_hands_take` in
+`crates/client/src/avatar.rs` and `crates/client/tests/gltf_body.rs`.
 
 **Movement controller intents.** An archetype's `intent_clips` maps the
 animation intents a movement `controller` reports to the model's clips, and

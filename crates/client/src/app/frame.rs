@@ -1101,8 +1101,13 @@ impl App {
                 }
                 let mut ready_hands = Vec::new();
                 let mut hidden_nodes = Vec::new();
+                // Where the off hand goes on what the right hand holds.
+                let mut support = None;
                 if let Some(images) = view.weapons.images.get(owner) {
                     for mounted in images {
+                        if mounted.hand == 0 {
+                            support = self.world_items.assets().image_support(&mounted.image);
+                        }
                         let image = self.content.weapons.pack.images.get(&mounted.image);
                         if let Some(image) = image {
                             hidden_nodes.extend(image.hide_nodes.iter().cloned());
@@ -1195,6 +1200,7 @@ impl App {
                         .copied()
                         .filter(|_| !dead)
                         .unwrap_or_default(),
+                    support,
                     held_tool_pose: if dead {
                         self.combat.hugging.remove(owner);
                         crate::avatar::HeldToolPose::None
@@ -1356,7 +1362,8 @@ impl App {
                     // and the eye is the camera: it pitches, rolls and loops
                     // with any seat, so the image stays where it sits on
                     // screen.
-                    let eye = if owner == view.owner && !third_person {
+                    let own_view = owner == view.owner && !third_person;
+                    let eye = if own_view {
                         // The body's weapon sway and bob ride the view.
                         crate::controls::view_frame(eye, yaw, pitch, roll).map(|frame| {
                             match self.controls.view_model_sway() {
@@ -1386,11 +1393,19 @@ impl App {
                                 } else {
                                     player.pitch
                                 };
-                                let node = avatar.mount_socket(
-                                    &self.avatar.avatar_assets,
-                                    n as usize,
-                                    aim,
-                                );
+                                // A fitted body's hand in first person is
+                                // where it holds from its eye, on screen.
+                                let node = own_view
+                                    .then(|| avatar.first_person_hand(n as usize))
+                                    .flatten()
+                                    .map(|hand| eye * hand)
+                                    .or_else(|| {
+                                        avatar.mount_socket(
+                                            &self.avatar.avatar_assets,
+                                            n as usize,
+                                            aim,
+                                        )
+                                    });
                                 match node {
                                     Some(node) => Some((n, node)),
                                     None if n < 2 => None,

@@ -109,8 +109,13 @@ pub fn package_body_grips(
             match body_rig(&dir, &model, provided.get(&model).map(String::as_str)) {
                 Ok(rig) => {
                     let mut grips = BTreeMap::new();
+                    // An imported glTF body is fitted; a converted v20
+                    // shape keeps its authored mounts.
+                    let fitted = provided.contains_key(&model);
                     for (sockets, animations) in &looks {
-                        grips.extend(bri_sim::session::body_grips(&rig, sockets, animations));
+                        grips.extend(bri_sim::session::body_grips(
+                            &rig, sockets, animations, fitted,
+                        ));
                     }
                     if !grips.is_empty() {
                         out.insert(model, grips);

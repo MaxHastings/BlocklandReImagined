@@ -38,6 +38,13 @@ pub struct AvatarAssets {
     mount_nodes: [Option<usize>; 32],
     /// The node tree Add-Ons with `avatar.pose` see.
     tree: Arc<NodeTree>,
+    /// An imported glTF `body`: its hands are fitted to hold as the
+    /// Blockhead's do ([`bri_content::hold`]). A converted v20 shape keeps
+    /// the mounts its artist placed.
+    fitted: bool,
+    /// The Blockhead's hip while it sits ([`bri_content::hold::sit_hip`]):
+    /// where a seat puts a fitted body's hip.
+    seat_hip: Option<Vec3>,
 }
 /// Farthest a posed node may be put from the body's feet; a pose further
 /// away is not drawn.
@@ -288,6 +295,13 @@ impl AvatarAssets {
             detail,
             lods: Vec::new(),
             bodies: BTreeMap::new(),
+            fitted: false,
+            seat_hip: None,
+        })
+        .map(|mut assets: Self| {
+            assets.seat_hip =
+                bri_content::hold::sit_hip(&assets.rig.shape, assets.rig.sequence(SIT));
+            assets
         })
     }
     /// Load `HorseArmor`'s shape, sequence aliases and paint textures from
@@ -392,6 +406,8 @@ impl AvatarAssets {
             detail,
             lods: Vec::new(),
             bodies: BTreeMap::new(),
+            fitted: false,
+            seat_hip: None,
         });
         self.bodies.insert(HORSE_SHAPE.into(), horse);
         Ok(())
@@ -438,6 +454,7 @@ impl AvatarAssets {
                 .map(str::to_owned)
                 .with_context(|| format!("{id} is not in its package"))
         };
+        let fitted = shape_file.is_some();
         let shape_file = match shape_file {
             Some(f) => f.to_owned(),
             None => file(model)?,
@@ -519,6 +536,8 @@ impl AvatarAssets {
             detail,
             lods,
             bodies: BTreeMap::new(),
+            fitted,
+            seat_hip: self.seat_hip,
         })
     }
     /// Whether `model` draws a body other than the Blockhead.
@@ -779,6 +798,8 @@ impl AvatarAssets {
             model_transform: Mat4::IDENTITY,
             kind: BodyKind::default(),
             roles: None,
+            fits: None,
+            held: ([false; 2], 0.0),
             skipped: Vec::new(),
         }
     }
@@ -877,8 +898,26 @@ pub struct AvatarMesh {
     /// The body's clip for each animation role, resolved against its rig
     /// the first time it is posed after `kind` changes.
     roles: Option<Arc<RoleClips>>,
+    /// How a fitted body holds with each hand, worked out with `roles`.
+    fits: Option<Arc<Fits>>,
+    /// The hands the last pose held something up in, and its aim's pitch:
+    /// a fitted body's held hand points along the aim.
+    held: ([bool; 2], f32),
     /// Clips the last pose asked for that the body lacks, left out.
     skipped: Vec<String>,
+}
+
+/// How a fitted body ([`AvatarAssets::fitted`]) holds with each hand: the
+/// turn that lines its hand socket up with the Blockhead's `Mount0`, the
+/// raise for an arm it has no aim clip for and where the hand holds from
+/// its shoulder ([`bri_content::hold::fit`]).
+#[derive(Debug, Default, PartialEq)]
+struct Fits {
+    hands: [Option<bri_content::hold::Fit>; 2],
+    /// How far a rider is moved (model frame, unscaled) so its hip sits
+    /// where the Blockhead's does in its `sit` pose: every seat is
+    /// authored for the Blockhead.
+    seat: Option<Vec3>,
 }
 
 /// How a player's archetype fits the mesh drawn for it: where its sockets
@@ -1004,6 +1043,19 @@ pub fn report_body(archetype: &str, model: &str, mesh: &mut AvatarMesh, assets: 
     }
 }
 
+/// How a pose's arms hold on after its clips ([`AvatarMesh::fit_hands`]).
+#[derive(Clone, Copy, Debug, Default)]
+struct Holds {
+    /// Hands raised to hold an item.
+    raised: [bool; 2],
+    /// The aim's pitch, up positive.
+    pitch: f32,
+    /// [`AvatarAnimationInput::support`].
+    support: Option<Vec3>,
+    /// [`AvatarAnimationInput::hand_holds`].
+    seat: [Option<Vec3>; 2],
+}
+
 /// Authored right/left hand readiness selected by mounted vanilla images.
 /// Hammer, wrench and printer images normally select `Right`; dual images may
 /// select either or both hands from their original `armReady` fields.
@@ -1070,6 +1122,10 @@ pub struct AvatarAnimationInput {
     /// (a seat's `hands`): each arm reaches its hand there after the clip
     /// pose ([`reach_hands`]).
     pub hand_holds: [Option<Vec3>; 2],
+    /// Where the off hand holds what the right hand holds in both hands,
+    /// in the right hand's frame (`ItemAssets::image_support`). A fitted
+    /// body reaches its left hand there.
+    pub support: Option<Vec3>,
     /// Script threads 0 and 1 (`playThread(0 or 1, ...)`): body animations
     /// a package plays, such as a hit's flinch. Each holds until replaced
     /// or stopped by `root`.
@@ -1098,123 +1154,10 @@ pub struct AvatarAnimationInput {
     pub intent_clip: Option<String>,
 }
 
+pub use bri_content::hold::reach as reach_hands;
+
 /// A clip name as the action thread holds it. Intent clips come from
 /// archetype data, a bounded table, so each distinct name is kept once.
-/// Reach the arm that ends at node `end` so `end` lies at `target` (model
-/// space), for seat hand holds. The arm is `end`'s ancestors below the
-/// first one it shares with `landmark` (the other hand, else the eye),
-/// so the chest and everything above stay put. Of that chain the
-/// shoulder and elbow are the pair giving the most even upper and lower
-/// arm; an even arm bends at its elbow (two-bone IK, kept in the clip's
-/// bend plane) and then swings from its shoulder, while a rigid arm (a
-/// Blockhead's, one piece with a short hand) only swings. A target past
-/// the arm's reach gets the arm held straight toward it.
-pub fn reach_hands(
-    parents: &[Option<usize>],
-    nodes: &mut [Mat4],
-    end: usize,
-    landmark: Option<usize>,
-    target: Vec3,
-) {
-    let count = nodes.len();
-    if end >= count || parents.len() != count || !target.is_finite() {
-        return;
-    }
-    let ancestors = |mut i: usize| {
-        let mut up = Vec::new();
-        while let Some(p) = parents[i].filter(|p| *p < count) {
-            if up.len() > count {
-                break;
-            }
-            up.push(p);
-            i = p;
-        }
-        up
-    };
-    let trunk = landmark.filter(|l| *l < count).map(|l| {
-        let mut t = ancestors(l);
-        t.push(l);
-        t
-    });
-    let arm: Vec<usize> = ancestors(end)
-        .into_iter()
-        .take_while(|i| trunk.as_ref().is_none_or(|t| !t.contains(i)))
-        .take(if trunk.is_some() { usize::MAX } else { 3 })
-        .collect();
-    let at = |nodes: &[Mat4], i: usize| nodes[i].w_axis.truncate();
-    let under = |root: usize| -> Vec<usize> {
-        (0..count)
-            .filter(|&i| i == root || ancestors(i).contains(&root))
-            .collect()
-    };
-    let turn = |nodes: &mut [Mat4], root: usize, about: Vec3, by: Quat| {
-        if !by.is_finite() {
-            return;
-        }
-        let m =
-            Mat4::from_translation(about) * Mat4::from_quat(by) * Mat4::from_translation(-about);
-        for i in under(root) {
-            nodes[i] = m * nodes[i];
-        }
-    };
-    let end_at = at(nodes, end);
-    // The most even (shoulder, elbow) pair.
-    let mut best: Option<(usize, usize, f32)> = None;
-    for (k, &mid) in arm.iter().enumerate() {
-        for &root in &arm[k + 1..] {
-            let (a, b) = (
-                at(nodes, mid).distance(at(nodes, root)),
-                end_at.distance(at(nodes, mid)),
-            );
-            let even = a.min(b);
-            if best.is_none_or(|(_, _, e)| even > e) && even > 1e-4 {
-                best = Some((root, mid, even));
-            }
-        }
-    }
-    let two_bone = best.filter(|&(root, mid, even)| {
-        let longer = at(nodes, mid)
-            .distance(at(nodes, root))
-            .max(end_at.distance(at(nodes, mid)));
-        even >= 0.35 * longer
-    });
-    let shoulder_node = match two_bone {
-        Some((root, mid, _)) => {
-            let (s, e, h) = (at(nodes, root), at(nodes, mid), end_at);
-            let (a, b) = (e.distance(s), h.distance(e));
-            let d = target
-                .distance(s)
-                .clamped((a - b).abs() + 1e-4, a + b - 1e-4);
-            let want = ((a * a + b * b - d * d) / (2.0 * a * b))
-                .clamped(-1.0, 1.0)
-                .acos();
-            let (u, v) = ((s - e).normalize(), (h - e).normalize());
-            let current = u.dot(v).clamped(-1.0, 1.0).acos();
-            let axis = [u.cross(v), u.cross(target - s), Vec3::NEG_X]
-                .into_iter()
-                .find(|k| k.length_squared() > 1e-8)
-                .unwrap_or(Vec3::NEG_X)
-                .normalize();
-            turn(nodes, mid, e, Quat::from_axis_angle(axis, want - current));
-            root
-        }
-        None => match best.map(|(root, _, _)| root).or(arm.last().copied()) {
-            Some(root) => root,
-            None => return,
-        },
-    };
-    let s = at(nodes, shoulder_node);
-    let (from, to) = (at(nodes, end) - s, target - s);
-    if from.length_squared() > 1e-8 && to.length_squared() > 1e-8 {
-        turn(
-            nodes,
-            shoulder_node,
-            s,
-            Quat::from_rotation_arc(from.normalize(), to.normalize()),
-        );
-    }
-}
-
 fn interned(name: &str) -> &'static str {
     static NAMES: std::sync::Mutex<std::collections::BTreeSet<&'static str>> =
         std::sync::Mutex::new(std::collections::BTreeSet::new());
@@ -1629,6 +1572,7 @@ impl AvatarMesh {
         if self.kind != kind {
             self.kind = kind;
             self.roles = None;
+            self.fits = None;
         }
     }
     pub fn body_kind(&self) -> &BodyKind {
@@ -1651,6 +1595,70 @@ impl AvatarMesh {
                 }))
             })
             .clone()
+    }
+    /// How the body holds with each hand ([`Fits`]): nothing for the
+    /// Blockhead, a v20 body or a stand-in. Its aim pose is the host's
+    /// (`bri_sim::session::body_grips`): idle, the hand's aim clip at its
+    /// end and the look level, with the arm raised where it has no aim clip.
+    fn fits(&mut self, assets: &AvatarAssets) -> Arc<Fits> {
+        if let Some(fits) = &self.fits {
+            return fits.clone();
+        }
+        let roles = self.roles(assets);
+        let assets = assets.for_mesh(self);
+        let mut fits = Fits::default();
+        if assets.fitted && !self.kind.stand_in {
+            let clip = |role: Role| assets.rig.sequence(roles.clip(role)?.0);
+            let parents: Vec<Option<usize>> =
+                assets.rig.shape.nodes.iter().map(|n| n.parent).collect();
+            let ends = [0, 1].map(|n| self.mount_index(assets, n));
+            for (hand, aim) in [Role::AimRight, Role::AimLeft].into_iter().enumerate() {
+                let Some(end) = ends[hand] else {
+                    continue;
+                };
+                let mut layers: Vec<Layer<'_>> = [
+                    (clip(Role::Idle), 0.0),
+                    (clip(aim), 1.0),
+                    (clip(Role::Look), 0.5),
+                ]
+                .into_iter()
+                .filter_map(|(animation, at)| {
+                    let animation = animation?;
+                    Some(Layer {
+                        animation,
+                        time: animation.duration * at,
+                        weight: 1.0,
+                    })
+                })
+                .collect();
+                layers.sort_by_key(|l| (l.animation.additive, l.animation.priority));
+                let Ok(mut pose) =
+                    bri_content::animation::sample_layers(&assets.rig.shape, &layers)
+                else {
+                    continue;
+                };
+                let landmark = ends[1 - hand].or_else(|| assets.node("eye"));
+                if let Some(fit) = bri_content::hold::fit(
+                    &parents,
+                    &mut pose.nodes,
+                    end,
+                    landmark,
+                    clip(aim).is_none(),
+                    hand == 0,
+                ) {
+                    fits.hands[hand] = Some(fit);
+                }
+            }
+            let hip = bri_content::hold::sit_hip(&assets.rig.shape, clip(Role::Sit));
+            fits.seat = assets
+                .seat_hip
+                .zip(hip)
+                .map(|(blockhead, own)| blockhead - own)
+                .filter(|shift| shift.is_finite() && shift.length() < 8.0);
+        }
+        let fits = Arc::new(fits);
+        self.fits = Some(fits.clone());
+        fits
     }
     /// What the body lacks for the archetype drawn with it, one line each:
     /// a socket whose node the rig does not have (or, on a box body, any
@@ -1711,9 +1719,52 @@ impl AvatarMesh {
             Some(socket) => Vec3::from(socket.offset),
             None => Vec3::ZERO,
         };
-        self.posed_nodes
-            .get(index)
-            .map(|node| self.model_transform * *node * Mat4::from_translation(offset))
+        let node = *self.posed_nodes.get(index)?;
+        let hand = match self.held_hand(n) {
+            // Where the arm put it, pointing along the aim.
+            Some(aim) => Mat4::from_rotation_translation(aim, node.w_axis.truncate()),
+            None => node * self.hand_turn(n),
+        };
+        Some(self.model_transform * hand * Mat4::from_translation(offset))
+    }
+    /// A fitted body's hand `n` while it holds something up: how it turns
+    /// in the body's frame, along the aim ([`bri_content::hold::Raise::aim`]).
+    fn held_hand(&self, n: usize) -> Option<Quat> {
+        let (held, pitch) = self.held;
+        let fit = self.fits.as_ref()?.hands.get(n)?.as_ref()?;
+        (*held.get(n)? && fit.hold.is_some()).then(|| bri_content::hold::Raise::aim(pitch))
+    }
+    /// The turn after a fitted body's hand socket node that lines it up
+    /// with the Blockhead's `Mount0` ([`bri_content::hold::Fit`]).
+    fn hand_turn(&self, n: usize) -> Mat4 {
+        self.fits
+            .as_ref()
+            .and_then(|f| f.hands.get(n)?.as_ref())
+            .map_or(Mat4::IDENTITY, |fit| Mat4::from_quat(fit.correction))
+    }
+    /// Where a fitted body's hand `n` holds in first person, in the eye's
+    /// frame (the camera, scaled with the body): where the Blockhead's
+    /// aiming hand is from its eye ([`bri_content::hold::FIRST_PERSON_HAND`]).
+    /// A first-person image without an eye offset is drawn there, so a
+    /// gun sits on screen as it does for a Blockhead and turns with the
+    /// view, whatever the body's size or arm animation.
+    /// `None` for the Blockhead and v20 bodies, which hold in the hand.
+    pub fn first_person_hand(&self, n: usize) -> Option<Mat4> {
+        self.fits.as_ref()?.hands.get(n)?.as_ref()?;
+        let offset = self
+            .kind
+            .sockets
+            .hand(n as u32)
+            .map_or(Vec3::ZERO, |s| Vec3::from(s.offset));
+        let mut at = bri_content::hold::FIRST_PERSON_HAND;
+        if n == 1 {
+            at.x = -at.x;
+        }
+        let scale = self.model_transform.x_axis.truncate().length();
+        let local = Mat4::from_scale(Vec3::splat(scale))
+            * Mat4::from_rotation_translation(bri_content::hold::AIM_HAND, at)
+            * Mat4::from_translation(offset);
+        local.is_finite().then_some(local)
     }
     /// Where image mount point `n` attaches in the world. A hand socket
     /// that is an offset (a box body's hand) holds what it carries pitched
@@ -1735,8 +1786,8 @@ impl AvatarMesh {
     /// moves it. A first-person image rides this on its eye offset.
     pub fn mount_action(&self, assets: &AvatarAssets, n: usize) -> Option<Mat4> {
         let index = self.mount_index(assets, n)?;
-        let rest = self.unacted_nodes.get(index)?;
-        let moved = rest.inverse() * *self.posed_nodes.get(index)?;
+        let rest = *self.unacted_nodes.get(index)? * self.hand_turn(n);
+        let moved = rest.inverse() * *self.posed_nodes.get(index)? * self.hand_turn(n);
         (moved.is_finite() && !moved.abs_diff_eq(Mat4::IDENTITY, 1e-6)).then_some(moved)
     }
     /// How far into the `sit` pose the body is: 1 seated, easing from 0
@@ -2153,12 +2204,29 @@ impl AvatarMesh {
             self.unacted_nodes = rest.nodes;
         }
         self.channels = Some(channels);
+        // A fitted body raises an arm it has no aim clip for, and puts its
+        // off hand on what it holds in both.
+        let raised = match animation_input.held_tool_pose {
+            HeldToolPose::None => [false; 2],
+            HeldToolPose::Right => [true, false],
+            HeldToolPose::Left => [false, true],
+            HeldToolPose::Both => [true; 2],
+        };
+        let support = animation_input
+            .support
+            .filter(|_| animation_input.held_tool_pose == HeldToolPose::Both);
+        self.fits(assets);
         self.finish_pose(
             assets,
             player,
             pose,
             animation_input.mount_rotation,
-            animation_input.hand_holds,
+            Holds {
+                raised,
+                pitch: player.pitch,
+                support,
+                seat: animation_input.hand_holds,
+            },
         )
     }
 
@@ -2168,8 +2236,9 @@ impl AvatarMesh {
         player: &PlayerState,
         mut pose: bri_content::animation::Pose,
         mount_rotation: Option<Quat>,
-        hand_holds: [Option<Vec3>; 2],
+        holds: Holds,
     ) -> Result<()> {
+        let hand_holds = holds.seat;
         // `setScale` scales the whole shape about the feet.
         let model_transform = Mat4::from_scale_rotation_translation(
             Vec3::splat(player.scale),
@@ -2178,7 +2247,16 @@ impl AvatarMesh {
                 .unwrap_or_else(|| Quat::from_rotation_y(-player.body_yaw())),
             Vec3::from(player.feet),
         );
+        // A rider sits with its hip where the Blockhead's is.
+        let model_transform = match self.fits.as_ref().and_then(|f| f.seat) {
+            Some(shift) if mount_rotation.is_some() => {
+                model_transform * Mat4::from_translation(shift)
+            }
+            _ => model_transform,
+        };
         self.model_transform = model_transform;
+        self.held = (holds.raised, holds.pitch);
+        self.fit_hands(assets, &mut pose.nodes, &holds);
         if hand_holds.iter().any(Option::is_some) {
             let inverse = model_transform.inverse();
             let ends = [0, 1].map(|n| self.mount_index(assets, n));
@@ -2214,6 +2292,78 @@ impl AvatarMesh {
             Ok(())
         } else {
             self.build_mesh(assets, &pose)
+        }
+    }
+    /// A fitted body's arms after its clips: each held hand it has no aim
+    /// clip for raised in front of the chest and pitched with the aim
+    /// ([`bri_content::hold::Raise`]), then the left hand on the support
+    /// point of what the right holds in both. Seat holds come after.
+    fn fit_hands(&self, assets: &AvatarAssets, nodes: &mut [Mat4], holds: &Holds) {
+        let Some(fits) = self.fits.clone() else {
+            return;
+        };
+        if fits.hands.iter().all(Option::is_none) {
+            return;
+        }
+        let assets = assets.for_mesh(self);
+        let parents: Vec<Option<usize>> = assets.rig.shape.nodes.iter().map(|n| n.parent).collect();
+        if parents.len() != nodes.len() {
+            return;
+        }
+        let ends = [0, 1].map(|n| self.mount_index(assets, n));
+        let landmark = |n: usize| ends[1 - n].or_else(|| assets.node("eye"));
+        let pitch = if holds.pitch.is_finite() {
+            holds.pitch
+        } else {
+            0.0
+        };
+        for (n, end) in ends.into_iter().enumerate() {
+            if !holds.raised[n] || holds.seat[n].is_some() {
+                continue;
+            }
+            let (Some(end), Some(fit)) = (end, &fits.hands[n]) else {
+                continue;
+            };
+            if let Some(raise) = fit.hold
+                && raise.shoulder < nodes.len()
+            {
+                let shoulder = nodes[raise.shoulder].w_axis.truncate();
+                bri_content::hold::reach(
+                    &parents,
+                    nodes,
+                    end,
+                    landmark(n),
+                    raise.target(shoulder, pitch),
+                );
+            }
+        }
+        if let (Some(point), Some(right), Some(left), Some(fit)) =
+            (holds.support, ends[0], ends[1], &fits.hands[0])
+            && holds.seat[1].is_none()
+            && point.is_finite()
+        {
+            let offset = self
+                .kind
+                .sockets
+                .hand(0)
+                .map_or(Vec3::ZERO, |s| Vec3::from(s.offset));
+            // The right hand as `mount_node` draws it.
+            let hand = if holds.raised[0] && fit.hold.is_some() {
+                Mat4::from_rotation_translation(
+                    bri_content::hold::Raise::aim(pitch),
+                    nodes[right].w_axis.truncate(),
+                )
+            } else {
+                nodes[right] * Mat4::from_quat(fit.correction)
+            };
+            let grip = hand * Mat4::from_translation(offset);
+            bri_content::hold::reach(
+                &parents,
+                nodes,
+                left,
+                Some(right),
+                grip.transform_point3(point),
+            );
         }
     }
     /// Write the posed vertices into `data`, reusing the last frame's
@@ -2854,6 +3004,7 @@ mod tests {
         new_outfits_bind_the_textures_bodies_already_uploaded,
         a_respawned_body_stands_in_root_without_getting_up_from_the_corpse,
         item_mounts_use_the_same_sampled_avatar_pose_and_body_transform,
+        the_blockheads_aiming_hand_is_the_frame_fitted_hands_take,
         held_and_action_arm_layers_keep_locomotion_and_mounts_coherent,
         absolute_actions_take_over_the_nodes_they_animate,
         held_arm_pose_precedes_additive_look_and_pack_headup_layers,
@@ -2871,34 +3022,6 @@ mod tests {
         ragdoll_keeps_accessories_on,
         a_corpse_vanishes_where_its_body_is_drawn,
     );
-
-    #[test]
-    fn an_even_arm_bends_its_elbow_to_reach_a_hold() {
-        // Chest, shoulder, elbow, hand, and the other hand on the chest.
-        let parents = [None, Some(0), Some(1), Some(2), Some(0)];
-        let rest = [
-            Vec3::new(0.0, 1.5, 0.0),
-            Vec3::new(0.5, 1.5, 0.0),
-            Vec3::new(0.5, 1.0, 0.0),
-            Vec3::new(0.5, 0.5, 0.0),
-            Vec3::new(-0.5, 0.5, 0.0),
-        ]
-        .map(Mat4::from_translation);
-        let at = |nodes: &[Mat4], i: usize| nodes[i].w_axis.truncate();
-        let target = Vec3::new(0.2, 1.3, -0.6);
-        let mut nodes = rest;
-        reach_hands(&parents, &mut nodes, 3, Some(4), target);
-        assert!(at(&nodes, 3).distance(target) < 1e-3, "{}", at(&nodes, 3));
-        assert!((at(&nodes, 2).distance(at(&nodes, 1)) - 0.5).abs() < 1e-4);
-        assert!((at(&nodes, 3).distance(at(&nodes, 2)) - 0.5).abs() < 1e-4);
-        assert_eq!(nodes[0], rest[0], "the chest stays");
-        assert_eq!(nodes[4], rest[4], "the other arm stays");
-        // Out of reach: held straight toward it.
-        let far = Vec3::new(0.5, 1.5, -3.0);
-        let mut nodes = rest;
-        reach_hands(&parents, &mut nodes, 3, Some(4), far);
-        assert!(at(&nodes, 3).abs_diff_eq(Vec3::new(0.5, 1.5, -1.0), 1e-3));
-    }
 
     #[test]
     #[ignore = "requires generated v20 avatar content and an offscreen adapter"]
@@ -3825,6 +3948,39 @@ mod tests {
         Ok(())
     }
 
+    /// `bri_content::hold::AIM_HAND` is the real Blockhead's aiming hand:
+    /// a fitted body's hand is turned to it, so an image held in either
+    /// points the same way.
+    fn the_blockheads_aiming_hand_is_the_frame_fitted_hands_take(fx: &Avatar) -> Result<()> {
+        let assets = &fx.assets;
+        let mut mesh = assets.mesh(assets.package.defaults.clone())?;
+        let input = AvatarAnimationInput {
+            held_tool_pose: HeldToolPose::Right,
+            ..Default::default()
+        };
+        mesh.pose_with_animation(assets, &player(), 0.0, &input)?;
+        mesh.pose_with_animation(assets, &player(), 1.0, &input)?;
+        let (_, rotation, at) = (mesh.body_transform().inverse()
+            * mesh.mount_node(assets, 0).context("mount0")?)
+        .to_scale_rotation_translation();
+        let eye = mesh.eye_local(assets, false).context("eye")?;
+        eprintln!(
+            "Blockhead aiming Mount0: {rotation} at {at}, from the eye {}",
+            at - eye
+        );
+        if fx.content {
+            assert!(
+                (at - eye).abs_diff_eq(bri_content::hold::FIRST_PERSON_HAND, 0.01),
+                "{}",
+                at - eye
+            );
+            assert!(
+                rotation.angle_between(bri_content::hold::AIM_HAND) < 0.05,
+                "{rotation}"
+            );
+        }
+        Ok(())
+    }
     fn item_mounts_use_the_same_sampled_avatar_pose_and_body_transform(fx: &Avatar) -> Result<()> {
         let assets = &fx.assets;
         let mut mesh = assets.mesh(assets.package.defaults.clone())?;

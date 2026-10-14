@@ -238,7 +238,7 @@ impl Session {
         peer.player
             .teleport(&mut self.simulation.physics, feet, yaw)?;
         peer.player.push(new_velocity);
-        peer.inputs.clear();
+        peer.discard_inputs();
         peer.special.last_teledoor = tick;
         self.fire_input(from, "onTeledoorEnter", Some(owner));
         self.fire_input(target, "onTeledoorExit", Some(owner));
