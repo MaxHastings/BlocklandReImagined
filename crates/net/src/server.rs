@@ -1623,6 +1623,7 @@ async fn run(
     let mut ticker = tokio::time::interval(Duration::from_secs_f64(1.0 / 120.0));
     ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let mut clock = crate::tick_clock::TickClock::default();
+    let mut recorded_dropped = 0_u64;
     let mut previous = std::time::Instant::now();
     let mut perf_window = PerfWindow::default();
     let mut fuse = PanicFuse::default();
@@ -1790,6 +1791,8 @@ async fn run(
             players.store((peers.len()+lobbies.len()) as u32,std::sync::atomic::Ordering::Relaxed);
             let now=std::time::Instant::now();
             let steps=clock.advance(now.duration_since(previous).mul_f32(session.time_scale()));previous=now;
+            // Ticks the clock dropped still passed for every client.
+            let skipped=clock.dropped-recorded_dropped;if skipped>0{recorded_dropped=clock.dropped;recorder.skipped_ticks(&mut session,skipped);}
             for _ in 0..steps {
             let started=std::time::Instant::now();
             let stepped=match fuse.guard("a server tick",||recorder.step(&mut session,step))? {Ok(stepped)=>stepped,Err(fault)=>Err(anyhow::anyhow!("{fault}"))};

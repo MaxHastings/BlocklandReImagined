@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # macOS counterpart of package_playtest.ps1: BlocklandReImagined.app with the
-# release client, the Add-On importer and the same content the Windows zip
+# release client, the Add-On importer, the Add-On checker and runner for
+# modders and the same content the Windows zip
 # carries (the packs the package list selects, the default Add-Ons from
 # packages/default-addons.json, the bundled originals from the Add-On bundle
 # (tools/addon_bundle.py) with their CREDITS.md and, with --stress-lab,
@@ -8,7 +9,7 @@
 # ad-hoc signed, in a folder with the docs and a checksummed MANIFEST.json,
 # zipped with ditto.
 #
-#   BRI_VERSION=<v> cargo build --release --locked -p bri-client -p bri-addon-import
+#   BRI_VERSION=<v> cargo build --release --locked -p bri-client -p bri-addon-import -p bri-package-runtime --bin bri-addon-check -p bri-sim --bin bri-addon-run
 #   tools/package_mac.sh --version <v> --sha256 <bri-client sha256> [--stress-lab]
 #   tools/package_mac.sh --validate-only [--stress-lab]
 #   tools/package_mac.sh --verify dist/BlocklandReImagined-macos.zip
@@ -49,6 +50,8 @@ while [[ $# -gt 0 ]]; do
 done
 [[ "$(uname -s)" == Darwin ]] || die "run this on macOS (it needs codesign and ditto)"
 importer="${importer:-$(dirname "$executable")/bri-import-addon}"
+addon_check="$(dirname "$executable")/bri-addon-check"
+addon_run="$(dirname "$executable")/bri-addon-run"
 
 # The release folder in $1: every file listed in MANIFEST.json with its size
 # and hash, nothing else, the app's signature intact and every default Add-On
@@ -183,6 +186,8 @@ for doc in "${docs[@]}"; do
 done
 [[ -f "$executable" && ! -L "$executable" && -s "$executable" ]] || die "release client missing; build it first: $executable"
 [[ -f "$importer" && ! -L "$importer" && -s "$importer" ]] || die "Add-On importer missing; build it first (cargo build --release --locked -p bri-addon-import): $importer"
+[[ -f "$addon_check" && ! -L "$addon_check" && -s "$addon_check" ]] || die "Add-On checker missing; build it first (cargo build --release --locked -p bri-package-runtime --bin bri-addon-check): $addon_check"
+[[ -f "$addon_run" && ! -L "$addon_run" && -s "$addon_run" ]] || die "Add-On runner missing; build it first (cargo build --release --locked -p bri-sim --bin bri-addon-run): $addon_run"
 sha="$(shasum -a 256 "$executable" | cut -d' ' -f1)"
 mods="$(field 'print(", ".join(m["id"] for m in plan["mods"]))')"
 if [[ "$validate_only" -eq 1 ]]; then
@@ -215,6 +220,10 @@ mkdir -p "$app/Contents/MacOS" "$content"
 install -m 755 "$executable" "$app/Contents/MacOS/bri-client"
 # The Add-Ons screen's Import runs bri-import-addon from beside the client.
 install -m 755 "$importer" "$app/Contents/MacOS/bri-import-addon"
+# Modders check, try and pack Add-Ons with these, without Rust
+# (docs/modding/README.md). Inside the app so the app's signature covers them.
+install -m 755 "$addon_check" "$app/Contents/MacOS/bri-addon-check"
+install -m 755 "$addon_run" "$app/Contents/MacOS/bri-addon-run"
 cat > "$app/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">

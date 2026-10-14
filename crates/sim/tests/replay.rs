@@ -207,6 +207,10 @@ fn record_match() -> Vec<u8> {
     let mut sequence = [0u64; 2];
     let mut moves = [0u64; 2];
     for tick in 0..MATCH_TICKS {
+        // A host stall's skipped ticks replay with the match.
+        if tick == 60 {
+            host.skipped_ticks(&mut s, 12);
+        }
         for (i, owner) in [a, b].into_iter().enumerate() {
             moves[i] += 1;
             let t = tick as f32 / 120.0 + i as f32;

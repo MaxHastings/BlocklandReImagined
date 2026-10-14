@@ -169,6 +169,76 @@ fn server_input_queue_ignores_duplicates_and_bounds_rate() {
     assert!(rejected);
 }
 
+/// A host stall (its clock skips the ticks it could not run) while a
+/// client kept making a move a tick, as a hosting player's own client
+/// does. Returns the moves the host refused over the last five seconds and
+/// how many moves the host's acknowledgement trailed by at the end.
+fn after_a_host_stall(credit_skipped: bool) -> (u32, u64) {
+    let mut session = server();
+    let owner = session
+        .join("a".into(), Vec3::new(0.0, 0.05, 0.0), false)
+        .unwrap();
+    let (initial, _) = session.motion_states().remove(0);
+    let mirror = CollisionMirror::new(Definitions::default(), map(), vec![]);
+    let mut prediction = Predictor::new(mirror, initial, Default::default()).unwrap();
+    let mut refused = 0;
+    let mut stalled = 0;
+    for tick in 1..=120 * 15_u64 {
+        prediction
+            .step(MoveInput {
+                forward: 1.0,
+                yaw: tick as f32 * 0.01 % 6.0 - 3.0,
+                jet: tick % 240 < 100,
+                ..Default::default()
+            })
+            .unwrap();
+        // A datagram about every 14 ms with the usual twelve recent moves.
+        if tick % 12 == 5 || tick % 2 == 0 && tick % 12 != 6 {
+            let recent: Vec<_> = prediction.recent(12).map(|(_, i)| *i).collect();
+            let first = prediction.sequence() + 1 - recent.len() as u64;
+            for (i, input) in recent.into_iter().enumerate() {
+                let late = tick > 120 * 10;
+                if session.movement(owner, first + i as u64, input).is_err() && late {
+                    refused += 1;
+                }
+            }
+        }
+        // Half a second at the third second the host runs nothing, then
+        // catches up as the tick clock does: eight ticks, the rest skipped.
+        if (360..420).contains(&tick) {
+            stalled += 1;
+            continue;
+        }
+        let catch_up = std::mem::take(&mut stalled);
+        for _ in 0..1 + catch_up.min(8) {
+            session.step().unwrap();
+        }
+        if credit_skipped && catch_up > 8 {
+            session.skipped_ticks(catch_up - 8);
+        }
+    }
+    let (_, ack) = session.motion_states().remove(0);
+    (refused, prediction.sequence() - ack)
+}
+
+#[test]
+fn a_host_stall_does_not_leave_a_players_moves_refused() {
+    // The bug: the allowance only refilled with ticks the host ran, so the
+    // moves the client made through the stall used it up for good, and
+    // every later move was refused on arrival and taken late from a
+    // later datagram's copy, or lost when it fell out of the datagrams.
+    let (refused, behind) = after_a_host_stall(false);
+    assert!(refused > 100, "{refused} refused");
+    // The host credits the ticks its clock skipped: no move is refused
+    // and the host runs each one as soon as it arrives.
+    let (refused, trail) = after_a_host_stall(true);
+    assert_eq!(refused, 0);
+    assert!(
+        trail < behind,
+        "{trail} moves behind, {behind} without credit"
+    );
+}
+
 #[test]
 fn stale_and_forged_corrections_are_rejected_and_history_is_bounded() {
     let session = {

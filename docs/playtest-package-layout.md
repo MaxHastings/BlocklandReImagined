@@ -21,6 +21,9 @@ Package layout:
 BlocklandReImagined-<version>-windows/
   bri-client.exe
   bri-import-addon.exe    imports v20 Add-Ons (Start Game > Add-Ons > Import)
+  bri-server.exe          dedicated server
+  bri-addon-check.exe     checks and packs an Add-On, for modders without Rust
+  bri-addon-run.exe       runs an Add-On's rules headless, for modders
   content/
     packages.json
     <the listed native packages, recursively copied>
@@ -94,7 +97,7 @@ for updates):
 
 ```powershell
 $env:BRI_VERSION = '2026-09-28-a14'
-cargo build --release --locked -p bri-client --bin bri-client
+cargo build --release --locked -p bri-client --bin bri-client -p bri-addon-import --bin bri-import-addon -p bri-net --bin bri-server -p bri-package-runtime --bin bri-addon-check -p bri-sim --bin bri-addon-run
 .\tools\package_playtest.ps1 -Version 2026-09-28-a14 -ExpectedExecutableSha256 <hash>
 ```
 
@@ -121,7 +124,7 @@ the packs the package list gives a role, every default Add-On from
 
 ```sh
 export BRI_VERSION=2026-09-29-a21
-cargo build --release --locked -p bri-client -p bri-addon-import
+cargo build --release --locked -p bri-client -p bri-addon-import -p bri-package-runtime --bin bri-addon-check -p bri-sim --bin bri-addon-run
 tools/package_mac.sh --version "$BRI_VERSION" \
     --sha256 "$(shasum -a 256 target/release/bri-client | cut -d' ' -f1)"
 tools/package_mac.sh --verify dist/BlocklandReImagined-macos.zip
@@ -131,7 +134,7 @@ tools/package_mac.sh --verify dist/BlocklandReImagined-macos.zip
 BlocklandReImagined-<version>-macos/
   BlocklandReImagined.app/
     Contents/Info.plist
-    Contents/MacOS/bri-client, bri-import-addon
+    Contents/MacOS/bri-client, bri-import-addon, bri-addon-check, bri-addon-run
     Contents/Resources/content/     packs, addons/, stresslab/, packages.json
   PLAYTEST.md, PLAYTEST-MAC.md, KNOWN-ISSUES.md, TESTER-GUIDE.md, FEATURES.md
   MANIFEST.json                     every other file, size and SHA-256
