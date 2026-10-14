@@ -240,8 +240,8 @@ adds one format reader at most.
 mechanism; the new code is glue.
 
 1. **`map` content kind and loader.** A `*.map.json` places existing
-   `*.shape.json` models (drawn, and collided through their collision
-   detail, as map static models already are), spawns and lights. Terrain
+   `*.shape.json` models and `*.interior.json` architecture (drawn and
+   collided as today's map path already does), spawns and lights. Terrain
    uses the existing `TerrainField`, Start Game lists Add-On maps, and
    joiners download it as they do any shared Add-On. Tested with a
    hand-written fixture map.
@@ -257,6 +257,13 @@ mechanism; the new code is glue.
    rainbow, strobe and blink by id) and the existing lamp-shadow path.
    Authored lights join the recovered ones in `pick_lamps`; no second light
    system.
+5. **Vanilla on the kind (decided).** The v20 converter writes its maps as
+   map Add-Ons, carrying their lightmapped architecture. The `map_bundle`
+   role's own map list, `LOADABLE_MAPS` and the second loading path go
+   away. There is then one place for maps and one pipeline, and the
+   converter is just an importer like the glTF one. This lands before beta,
+   when the map format freezes with the other schemas; after that, changes
+   only add fields.
 
 **Deferred until someone needs it.** Each item below is a feature to
 maintain, and none is needed for the workflow above.
@@ -270,14 +277,6 @@ maintain, and none is needed for the workflow above.
   Dynamic (option (b) above).
 - **A Blender Python reader for `*.interior.json`.** It would be a third
   format reader, and step 3 replaces it.
-
-5. **Vanilla on the kind (decided).** The v20 converter writes its maps as
-   map Add-Ons, carrying their lightmapped architecture. The `map_bundle`
-   role's own map list, `LOADABLE_MAPS` and the second loading path go
-   away. There is then one place for maps and one pipeline, and the
-   converter is just an importer like the glTF one. This lands before beta,
-   when the map format freezes with the other schemas; after that, changes
-   only add fields.
 
 ## Decisions (Maxwell, 2026-10-14)
 
