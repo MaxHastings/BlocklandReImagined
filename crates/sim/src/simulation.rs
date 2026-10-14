@@ -1557,9 +1557,15 @@ impl Simulation {
         self.authority.set_tick(tick);
     }
     pub fn step(&mut self) -> Result<()> {
+        self.step_with(&())
+    }
+    /// [`Self::step`] with physics hooks for the shared step: the contact
+    /// rules of bodies part way through openings
+    /// ([`bri_physics::portal::PortalContacts`]).
+    pub fn step_with(&mut self, hooks: &dyn rapier3d::prelude::PhysicsHooks) -> Result<()> {
         self.authority.step()?;
         self.flush_chunks();
-        self.physics.step();
+        self.physics.step_with_events(hooks, &());
         self.stream_terrain();
         Ok(())
     }
