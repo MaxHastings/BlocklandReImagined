@@ -779,6 +779,14 @@ fn a_map_imports_as_an_add_on_the_game_loads() {
     // Players stand on the floor (no `col_` meshes: solid where drawn) and
     // start at the spawn Empty, half a turn about Y like every model.
     let native = bri_sim::map::NativeMap::load(map_root, &report.model).unwrap();
+    // The level blocks bricks like an interior, not like a prop.
+    assert!(!native.colliders.is_empty());
+    for c in &native.colliders {
+        assert_eq!(
+            bri_sim::map::MapSurface::from_tag(c.user_data),
+            Some(bri_sim::map::MapSurface::Interior)
+        );
+    }
     let scene = &native.scene;
     let spawn = scene
         .nodes

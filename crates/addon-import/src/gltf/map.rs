@@ -219,7 +219,8 @@ pub(super) fn write(
         kind: NodeKind::StaticModel,
         transform: Mat4::IDENTITY.to_cols_array(),
         asset: Some(model.clone()),
-        properties: BTreeMap::new(),
+        // The level itself: bricks treat it as they treat an interior.
+        properties: BTreeMap::from([("surface".to_string(), "level".to_string())]),
     });
     for (k, node) in shape.nodes.iter().enumerate() {
         if node.name.to_ascii_lowercase().starts_with("spawn") {

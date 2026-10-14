@@ -919,9 +919,17 @@ pub fn convert(
                     names[k]
                 );
             }
-            let material = material(p["material"].as_u64().map(|m| m as usize), &mut report)?;
+            // Collision is never drawn, so it needs no texture.
+            let material = if is_collision {
+                None
+            } else {
+                Some(material(
+                    p["material"].as_u64().map(|m| m as usize),
+                    &mut report,
+                )?)
+            };
             mesh.primitives.push(Primitive {
-                material: Some(material),
+                material,
                 triangles: triangles
                     .into_iter()
                     .map(|t| {
@@ -1150,7 +1158,10 @@ pub fn convert(
         }
     }
     report.points = points(&shape, opts.kind);
-    report.hulls = hulls(&shape)?;
+    if opts.kind != Kind::Map {
+        // A vehicle's hulls; a map's collision is the level itself.
+        report.hulls = hulls(&shape)?;
+    }
     shape
         .validate()
         .context("the converted model does not validate")?;
@@ -2093,7 +2104,12 @@ impl Report {
             let _ = writeln!(s);
         }
         if !self.points.is_empty() {
-            let _ = writeln!(s, "## Points (for weapons.json or vehicles.json)\n");
+            let heading = if self.kind == Some(Kind::Map) {
+                "## Spawn points"
+            } else {
+                "## Points (for weapons.json or vehicles.json)"
+            };
+            let _ = writeln!(s, "{heading}\n");
             for p in &self.points {
                 let _ = writeln!(s, "- `{}` at {:?}", p.node, p.position);
             }

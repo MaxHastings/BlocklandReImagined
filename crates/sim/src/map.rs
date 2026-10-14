@@ -258,10 +258,20 @@ impl NativeMap {
                     let shape: bri_content::shape::Shape =
                         serde_json::from_slice(&std::fs::read(path)?)?;
                     let first = colliders.len();
+                    // A map Add-On's whole level is one model marked
+                    // `surface: level`: bricks may not be buried in it or
+                    // reach through it, as with an interior. Other models
+                    // are props, which v20's plant never asks about.
+                    let surface =
+                        if node.properties.get("surface").map(String::as_str) == Some("level") {
+                            MapSurface::Interior
+                        } else {
+                            MapSurface::Static
+                        };
                     colliders.extend(
                         bri_physics::content::static_shape_colliders(&shape, transform)?
                             .into_iter()
-                            .map(|c| c.user_data(MapSurface::Static as u128)),
+                            .map(|c| c.user_data(surface as u128)),
                     );
                     let datablock = node.properties.get("datablock");
                     if let Some((name, (explosion, sound))) =
