@@ -77,6 +77,8 @@ pub struct View {
     pub weapon_settings: Arc<BTreeMap<String, String>>,
     pub vehicles: BTreeMap<u64, bri_sim::session::VehicleInfo>,
     pub vehicle_poses: BTreeMap<u64, bri_sim::session::VehiclePose>,
+    /// Vehicles whose newest pose left out the crew's prediction state.
+    pub viewed_vehicles: std::collections::BTreeSet<u64>,
     /// The host's player archetypes; poses name them by index.
     pub archetypes: Arc<bri_sim::archetype::Archetypes>,
     /// The running Add-Ons' settings (the Add-On Settings window).
@@ -437,6 +439,7 @@ fn publish(
         weapon_settings: Arc::new(client.replica.weapon_settings.clone()),
         vehicles: client.replica.vehicles.clone(),
         vehicle_poses: client.replica.vehicle_poses.clone(),
+        viewed_vehicles: client.replica.viewed_vehicles.clone(),
         archetypes: client.replica.archetypes.clone(),
         addon_settings: client.replica.addon_settings.clone(),
         addon_teams_shown_when: client.replica.addon_teams_shown_when.clone(),

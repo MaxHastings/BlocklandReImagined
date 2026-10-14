@@ -1343,7 +1343,7 @@ fn send_state(
         .filter_map(|(item, audience)| {
             let kind = match item {
                 Datagram::Pose(_) | Datagram::Remote(_) => Kind::Pose,
-                Datagram::Vehicle(_) => Kind::Vehicle,
+                Datagram::Vehicle(_) | Datagram::VehicleView(_) => Kind::Vehicle,
                 Datagram::Orb(_) => Kind::Orb,
             };
             match codec::encode_datagram_item(&item) {
@@ -1807,6 +1807,7 @@ async fn run(
             }
             if tick.is_multiple_of(POSE_INTERVAL) {
                 let viewers:Vec<_>=peers.keys().map(|owner|(*owner,session.viewpoint(*owner))).collect();
+                state_stream.set_crews(vehicles.iter().map(|v|(v.id,v.occupants.iter().flatten().copied().collect())).collect());
                 send_state(&peers,&traffic,state_stream.interval(tick,poses(&session),session.vehicle_poses(),session.camera_orbs(),&viewers,session.simulation().passages()));
             }
             if tick.is_multiple_of(UPDATE_INTERVAL) {
