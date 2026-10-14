@@ -1,0 +1,24 @@
+{
+  "api": 1,
+  "authors": [
+    "Blockland ReImagined"
+  ],
+  "capabilities": [],
+  "dependencies": {},
+  "description": "A sample map Add-On to copy: a room with a spawn point and two lights, imported from blender/sample-map.glb (docs/modding/maps.md).",
+  "id": "sample-map",
+  "license": "CC0-1.0",
+  "name": "Sample Map",
+  "provenance": {
+    "source": "original"
+  },
+  "provides": [
+    {
+      "file": "map/bundle.json",
+      "id": "sample-map:map/sample-map",
+      "kind": "map"
+    }
+  ],
+  "schema_version": 1,
+  "version": "1.0.0"
+}

@@ -131,7 +131,7 @@ impl App {
 "
             )
         );
-        self.content.maps.retain(|m| !m.id.contains(':'));
+        self.content.maps.retain(|m| !m.id.contains(":world/"));
         if let Some(catalog) = &server {
             let worlds = crate::packages::world_maps(catalog, &self.content.maps);
             self.content.maps.extend(worlds);
@@ -780,7 +780,7 @@ impl PreparedPackages {
         let (client, mut rules) = crate::packages::load_set(root, set, false);
         let (server, more) = crate::packages::load_set(root, set, true);
         rules.extend(more);
-        content.maps.retain(|m| !m.id.contains(':'));
+        content.maps.retain(|m| !m.id.contains(":world/"));
         if let Some(catalog) = &server {
             content
                 .maps

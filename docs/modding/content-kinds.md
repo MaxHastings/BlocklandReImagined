@@ -21,6 +21,7 @@ visuals depending on the rules. `bri-addon-check` tells you which it is.
 | `bricks`, `vehicles` | everyone | written by Import Add-On ([Old v20 Add-Ons and new bricks](old-addons.md)), or a `vehicles.json` you write (fields below) | `packages/showcase/steel-ball-kit` |
 | `bots` | everyone | bots a Vehicle Spawn brick can hold: name and how they play (fields below) | `packages/blockhead_bot` |
 | `body` | everyone | a player body: a native shape (`.shape.json`) an `archetype` names as its `model`, its PNGs listed in `assets/content.json`. Carried with its archetype, it makes the Add-On everyone's, so joiners download the body and see it ([glTF models](gltf-models.md)) | `crates/client/tests/add_on_join.rs` |
+| `map` | everyone | a map in Start Game: a native map bundle's `bundle.json` holding one map, `<id>:map/<name>`, with its scene, models, textures, spawn points and lights beside it ([Making maps](maps.md)) | `packages/samples/sample-map` |
 | `texture`, `block` | everyone | a PNG for block faces (up to 1024 px a side); textures or flipbooks per face with named states | `crates/sim/tests/blocks.rs` |
 
 Entities may spawn only their own Add-On's entity kinds.

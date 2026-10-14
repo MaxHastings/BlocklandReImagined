@@ -144,15 +144,20 @@ fn game() -> Result<()> {
             &app.content.paths.map_bundle,
         )
         .context("Modern light parameters are missing or invalid; refresh the content with tools/bootstrap.py")?;
-        for map in &app.content.maps {
+        // An Add-On map without its own light parameters draws with the
+        // live sun and ambient (`scene_loader::load_map_bundle_dynamic`).
+        let base: Vec<_> = app
+            .content
+            .maps
+            .iter()
+            .filter(|m| bri_client::content::LOADABLE_MAPS.contains(&m.id.as_str()))
+            .collect();
+        for map in &base {
             lighting.lights(&map.id).with_context(|| {
                 format!("Modern light parameters are missing for map {}", map.id)
             })?;
         }
-        println!(
-            "Modern light parameters: {} maps validated.",
-            app.content.maps.len()
-        );
+        println!("Modern light parameters: {} maps validated.", base.len());
         // The release gate reads the full list from logs/add-on-health.json.
         let health = app.add_on_health();
         println!(

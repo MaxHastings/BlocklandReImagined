@@ -649,3 +649,96 @@ pub fn rifle() -> Vec<u8> {
     );
     g.glb()
 }
+
+/// A small room the way `docs/modding/maps.md` asks: a floor and four walls,
+/// a `spawn` Empty, a strobe point light and a spot light from
+/// `KHR_lights_punctual` with `bri_` custom properties, and, with
+/// `col_floor`, a separate collision floor.
+pub fn room(col_floor: bool) -> Vec<u8> {
+    let mut g = Gltf::new();
+    let flat = |v: &[Vec3]| v.iter().flat_map(|v| v.to_array()).collect::<Vec<f32>>();
+    let part = |g: &mut Gltf, name: &str, center: Vec3, size: Vec3, material: usize| {
+        let (p, n, uv, i) = cuboid(center, size);
+        let (a, b, c, d) = (
+            g.floats(&flat(&p), 3),
+            g.floats(&flat(&n), 3),
+            g.floats(&uv.concat(), 2),
+            g.uints(&i, 1),
+        );
+        let mesh = g.mesh(name, vec![json!({ "attributes": { "POSITION": a, "NORMAL": b, "TEXCOORD_0": c }, "indices": d, "material": material })]);
+        g.node(json!({ "name": name, "mesh": mesh }), None);
+    };
+    let wood = g.material(
+        "Wood",
+        [1.0, 1.0, 1.0, 1.0],
+        Some((
+            2,
+            2,
+            [[150u8, 100, 60, 255], [120, 80, 50, 255]]
+                .repeat(2)
+                .concat(),
+        )),
+        json!({}),
+    );
+    let paint = g.material("Paint", [0.8, 0.8, 0.9, 1.0], None, json!({}));
+    part(
+        &mut g,
+        "Floor",
+        Vec3::new(0.0, -0.25, 0.0),
+        Vec3::new(20.0, 0.5, 20.0),
+        wood,
+    );
+    for (name, center, size) in [
+        (
+            "WallN",
+            Vec3::new(0.0, 2.0, -10.0),
+            Vec3::new(20.0, 4.0, 0.5),
+        ),
+        (
+            "WallS",
+            Vec3::new(0.0, 2.0, 10.0),
+            Vec3::new(20.0, 4.0, 0.5),
+        ),
+        (
+            "WallE",
+            Vec3::new(10.0, 2.0, 0.0),
+            Vec3::new(0.5, 4.0, 20.0),
+        ),
+        (
+            "WallW",
+            Vec3::new(-10.0, 2.0, 0.0),
+            Vec3::new(0.5, 4.0, 20.0),
+        ),
+    ] {
+        part(&mut g, name, center, size, paint);
+    }
+    if col_floor {
+        part(
+            &mut g,
+            "col_floor",
+            Vec3::new(0.0, -0.5, 0.0),
+            Vec3::new(20.0, 1.0, 20.0),
+            paint,
+        );
+    }
+    g.node(
+        json!({ "name": "spawn", "translation": [2.0, 0.0, 3.0] }),
+        None,
+    );
+    g.json["extensionsUsed"] = json!(["KHR_lights_punctual"]);
+    g.json["extensions"] = json!({ "KHR_lights_punctual": { "lights": [
+        { "name": "Lamp", "type": "point", "color": [1.0, 0.8, 0.6], "intensity": 100.0 },
+        { "name": "Spot", "type": "spot", "color": [0.5, 0.5, 1.0], "range": 6.0,
+          "spot": { "innerConeAngle": 0.3, "outerConeAngle": 0.6 } },
+    ] } });
+    g.node(json!({ "name": "Lamp", "translation": [0.0, 3.0, 0.0],
+        "extensions": { "KHR_lights_punctual": { "light": 0 } },
+        "extras": { "bri_light_type": "strobe", "bri_radius": 8.0, "bri_brightness": 1.5, "bri_speed": 2.0 } }), None);
+    g.node(
+        json!({ "name": "Spot", "translation": [-5.0, 3.5, -5.0],
+        "rotation": Quat::from_rotation_x(-1.2).to_array(),
+        "extensions": { "KHR_lights_punctual": { "light": 1 } } }),
+        None,
+    );
+    g.glb()
+}

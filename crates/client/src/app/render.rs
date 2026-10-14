@@ -1561,8 +1561,9 @@ impl App {
     /// the avatar preview, the splash and the map bake's lightmap patches.
     fn prepare_render(&mut self, frame: &mut RenderContext<'_>) -> Result<()> {
         if let Some(current) = &self.scene.cpu_scene
+            && let Ok(root) = self.content.paths.maps.root(&current.id)
             && let Some((visual, compatibility_source)) = self.lighting.light_volume.poll_source(
-                &self.content.paths.map_bundle,
+                root,
                 &current.id,
                 self.graphics.lighting == 3,
             )

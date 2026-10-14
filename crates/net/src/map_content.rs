@@ -12,7 +12,8 @@ use bri_content::{
 use bri_package::packages::PackageSet;
 use bri_sim::{
     definitions::Definitions,
-    map::{Breakable, LOADABLE_MAPS, NativeMap},
+    map::{Breakable, NativeMap},
+    map_catalog::{MapCatalog, short},
     session::MapListing,
     simulation::Simulation,
     tutorial::TutorialMap,
@@ -27,7 +28,9 @@ use std::{
 /// The packs a host loads maps from.
 #[derive(Clone)]
 pub struct MapContent {
-    pub map_bundle: PathBuf,
+    /// Every map this content can load, base and Add-On
+    /// ([`bri_sim::map_catalog`]).
+    pub maps: MapCatalog,
     pub brick_catalog: PathBuf,
     pub geometry: PathBuf,
     /// The Tutorial's lessons; a root without them cannot host the Tutorial.
@@ -89,7 +92,7 @@ impl MapContent {
     ) -> Result<Self> {
         let role = |role: &str| packages.role_dir(content_root, role);
         Ok(Self {
-            map_bundle: role("map_bundle")?,
+            maps: catalog(content_root, packages)?,
             brick_catalog: role("brick_catalog")?,
             geometry: role("geometry")?,
             tutorial: role("tutorial").ok(),
@@ -104,7 +107,7 @@ impl MapContent {
     /// The maps Change Map offers: every loadable base map but the Tutorial,
     /// in the bundle's order.
     pub fn maps(&self) -> Result<Vec<MapListing>> {
-        change_map_list(&self.map_bundle)
+        Ok(change_map_list(&self.maps))
     }
 
     /// Every brick's definition, Add-On bricks included (see
@@ -128,13 +131,13 @@ impl MapContent {
         Ok(definitions)
     }
     /// Loads `world` on its map. Start Game and Change Map offer only
-    /// [`LOADABLE_MAPS`]; a saved world names its own.
+    /// [`MapCatalog`] maps; a saved world names its own.
     pub fn load(&self, mut world: bri_world::World) -> Result<LoadedMap> {
         let map_id = world.map_id.clone();
         let mut unresolved_items = self.weapons.resolve_world_items(&mut world)?;
         let definitions = self.definitions()?;
-        let native =
-            NativeMap::load(&self.map_bundle, &map_id).context("Loading native map collision")?;
+        let native = NativeMap::load(self.maps.root(&map_id)?, &map_id)
+            .context("Loading native map collision")?;
         ensure!(
             native
                 .scene
@@ -202,7 +205,7 @@ impl MapContent {
     /// with `palette` (the server's colorset).
     pub fn loader(self, palette: Vec<[f32; 4]>) -> LoadMap {
         Arc::new(move |map: &str| {
-            let world = blank_world(&self.map_bundle, palette.clone(), map)?;
+            let world = blank_world(&self.maps, palette.clone(), map)?;
             Ok(self.load(world)?.into_session())
         })
     }
@@ -225,59 +228,44 @@ pub fn environments(
     }
 }
 
-/// The loadable maps in the bundle at `map_bundle`, by id and name.
-fn bundle_maps(map_bundle: &Path) -> Result<Vec<(String, String)>> {
-    let bundle: serde_json::Value =
-        serde_json::from_slice(&std::fs::read(map_bundle.join("bundle.json"))?)?;
-    Ok(bundle["maps"]
-        .as_array()
-        .context("Missing native map index")?
-        .iter()
-        .filter_map(|m| {
-            let id = m["id"].as_str()?;
-            LOADABLE_MAPS.contains(&id).then(|| {
-                let name = m["name"].as_str().map_or_else(|| short(id), str::to_string);
-                (id.to_string(), name)
-            })
+/// Every map `packages` makes loadable under `content_root`: the base
+/// bundle's and each enabled Add-On's.
+pub fn catalog(content_root: &Path, packages: &PackageSet) -> Result<MapCatalog> {
+    MapCatalog::new(
+        &packages.role_dir(content_root, "map_bundle")?,
+        &crate::content_identity::map_providers(content_root, packages)?,
+    )
+}
+
+fn change_map_list(maps: &MapCatalog) -> Vec<MapListing> {
+    maps.listed()
+        .filter(|m| m.id != bri_sim::tutorial::MAP_ID)
+        .map(|m| MapListing {
+            id: m.id.clone(),
+            name: m.name.clone(),
         })
-        .collect())
+        .collect()
 }
 
-fn change_map_list(map_bundle: &Path) -> Result<Vec<MapListing>> {
-    Ok(bundle_maps(map_bundle)?
-        .into_iter()
-        .filter(|(id, _)| id != bri_sim::tutorial::MAP_ID)
-        .map(|(id, name)| MapListing { id, name })
-        .collect())
-}
-
-/// `slate` for `v20/add-ons/map_slate/slate.mis`.
-fn short(id: &str) -> String {
-    let file = id.rsplit('/').next().unwrap_or(id);
-    file.strip_suffix(".mis")
-        .unwrap_or(file)
-        .to_ascii_lowercase()
-}
-
-/// A new empty world on the base map `name`: its full map id or the map's
-/// short name (`slate`, `bedroom`, `slatedesert`), with the game's default
-/// paint palette, like choosing a map in Start Game.
+/// A new empty world on the map `name`: its full map id or the map's
+/// short name (`slate`, `bedroom`, `slatedesert`, an Add-On map's own
+/// name), with the game's default paint palette, like choosing a map in
+/// Start Game.
 pub fn blank_world(
-    map_bundle: &Path,
+    maps: &MapCatalog,
     palette: Vec<[f32; 4]>,
     name: &str,
 ) -> Result<bri_world::World> {
-    let maps = bundle_maps(map_bundle)?;
     let wanted = name.to_ascii_lowercase().replace(['_', ' '], "");
-    let (map_id, map_name) = maps
-        .iter()
-        .find(|(id, _)| id.eq_ignore_ascii_case(name) || short(id) == wanted)
+    let map = maps
+        .listed()
+        .find(|m| m.id.eq_ignore_ascii_case(name) || short(&m.id) == wanted)
         .with_context(|| {
-            let mut names: Vec<_> = maps.iter().map(|(id, _)| short(id)).collect();
+            let mut names: Vec<_> = maps.listed().map(|m| short(&m.id)).collect();
             names.sort();
             format!("Unknown map `{name}`. Maps: {}", names.join(", "))
         })?;
-    let world = bri_world::World::new(map_name.clone(), map_id.clone(), palette);
+    let world = bri_world::World::new(map.name.clone(), map.id.clone(), palette);
     world.validate()?;
     Ok(world)
 }
@@ -301,7 +289,7 @@ pub fn ui_palette(ui_pack: &Path) -> Result<Vec<[f32; 4]>> {
 mod tests {
     use super::*;
 
-    fn fixture() -> Result<(tempfile::TempDir, PathBuf, PathBuf)> {
+    fn fixture() -> Result<(tempfile::TempDir, MapCatalog, PathBuf)> {
         let dir = tempfile::tempdir()?;
         let (maps, ui) = (dir.path().join("maps"), dir.path().join("ui"));
         std::fs::create_dir_all(&maps)?;
@@ -314,7 +302,8 @@ mod tests {
             ui.join("ui-pack.json"),
             r#"{"data":{"brick_colorset":[{"name":"A","colors":[[1,0,0,1],[0,1,0,1]]},{"name":"B","colors":[[0,0,1,1]]}]}}"#,
         )?;
-        Ok((dir, maps, ui))
+        let catalog = MapCatalog::new(&maps, &[])?;
+        Ok((dir, catalog, ui))
     }
 
     #[test]
@@ -344,10 +333,7 @@ mod tests {
     #[test]
     fn change_map_offers_the_loadable_maps_but_the_tutorial() -> Result<()> {
         let (_dir, maps, _ui) = fixture()?;
-        let listed: Vec<_> = change_map_list(&maps)?
-            .into_iter()
-            .map(|m| m.name)
-            .collect();
+        let listed: Vec<_> = change_map_list(&maps).into_iter().map(|m| m.name).collect();
         assert_eq!(listed, ["Slate", "Slate Desert"]);
         Ok(())
     }

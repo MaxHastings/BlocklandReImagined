@@ -10,6 +10,7 @@
 //! clips are sampled at a fixed rate; clips named after a body's animation
 //! roles take the Blockhead's clip names, so a body needs no mapping.
 mod lod;
+mod map;
 mod read;
 #[doc(hidden)]
 pub mod testing;
@@ -38,6 +39,9 @@ pub enum Kind {
     /// Anything else drawn from a package's own models: vehicles, wheels,
     /// projectiles, props.
     Prop,
+    /// A whole scene as a map Add-On: its meshes, spawn points and lights
+    /// (docs/modding/maps.md).
+    Map,
 }
 impl Kind {
     pub fn parse(s: &str) -> Result<Self> {
@@ -45,7 +49,8 @@ impl Kind {
             "body" | "character" | "player" => Kind::Body,
             "item" | "weapon" | "tool" => Kind::Item,
             "prop" | "vehicle" | "model" => Kind::Prop,
-            _ => bail!("--kind is body, item or prop (vehicles, wheels and anything else)"),
+            "map" | "level" => Kind::Map,
+            _ => bail!("--kind is body, item, prop (vehicles, wheels and anything else) or map"),
         })
     }
 }
@@ -386,6 +391,12 @@ pub fn import(opts: &Options) -> Result<Report> {
         .file_name()
         .map(|s| s.to_string_lossy().into_owned())
         .unwrap_or_default();
+    if opts.kind == Kind::Map {
+        let mut report = map::write(opts, &id, converted, &doc)?;
+        report.files.push("IMPORT-REPORT.md".into());
+        std::fs::write(opts.out.join("IMPORT-REPORT.md"), report.markdown())?;
+        return Ok(report);
+    }
     write(opts, &id, converted)
 }
 
@@ -463,6 +474,7 @@ fn write(opts: &Options, id: &str, converted: Converted) -> Result<Report> {
                 &mut report,
             )?;
         }
+        Kind::Map => unreachable!("maps are written by map::write"),
         Kind::Item | Kind::Prop => {
             report.id = id.into();
             report.model = format!("models/{id}.shape.json");
@@ -977,6 +989,10 @@ pub fn convert(
         }
     }
     ensure!(!visible.is_empty(), "the model has no visible mesh");
+    if opts.kind == Kind::Map && collision.is_empty() {
+        // A map with no `col_` meshes is solid where it is drawn.
+        collision = visible.clone();
+    }
     let mut objects = Vec::new();
     let mut meshes = Vec::new();
     let mut details = Vec::new();
@@ -1490,7 +1506,7 @@ fn points(shape: &Shape, kind: Kind) -> Vec<Point> {
     let wanted = |name: &str| {
         let n = name.to_ascii_lowercase();
         match kind {
-            Kind::Body => false,
+            Kind::Body | Kind::Map => false,
             Kind::Item => matches!(
                 n.as_str(),
                 "mountpoint" | "muzzlepoint" | "ejectpoint" | "supportpoint"
@@ -2006,6 +2022,7 @@ impl Report {
         let kind = match self.kind {
             Some(Kind::Body) => "body",
             Some(Kind::Item) => "item",
+            Some(Kind::Map) => "map",
             _ => "model",
         };
         let _ = writeln!(s, "# {} ({kind}) from {}\n", self.id, self.source);

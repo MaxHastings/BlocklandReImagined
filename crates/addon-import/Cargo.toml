@@ -35,5 +35,7 @@ bri-net = { path = "../net" }
 bri-sim = { path = "../sim" }
 bri-world = { path = "../world" }
 bri-physics = { path = "../physics" }
+bri-render = { path = "../render" }
 rapier3d.workspace = true
+tempfile.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time"] }
