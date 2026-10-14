@@ -189,7 +189,7 @@ impl App {
         if let Err(error) = offered.set_sky_for(
             scene,
             &map,
-            map_root.as_deref(),
+            map_root,
             wanted.sky.as_deref(),
             plate.is_some() && planes.ground_shows(),
         ) {
