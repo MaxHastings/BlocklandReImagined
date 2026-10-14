@@ -34,6 +34,7 @@ fn field(group: &str, path: &str, label: &str, value: f32) -> TuneField {
         value,
         min: 0.0,
         max: value * 2.0,
+        unsaved: false,
     }
 }
 
@@ -135,17 +136,48 @@ fn moved_numbers_go_to_the_host_and_save_waits_for_a_change() {
     event(&mut ui, "TB_Group", EventKind::Changed);
     let v = view(&ui);
     assert_eq!(v.text_of(v.id("TB_Value0").unwrap()), "0.5");
-    event(&mut ui, "TB_Save", EventKind::Click);
+    // Unsaved numbers are marked, by part and by row, and named.
+    let mut tuned = runner(9.5, true);
+    tuned.fields[0].unsaved = true;
+    ui.apply(UiUpdate::Tune(Some(tuned)));
+    ui.update(0);
+    let v = view(&ui);
+    assert!(
+        v.text_of(v.id("TB_Status").unwrap())
+            .contains("not saved (*): Forward")
+    );
+    assert_eq!(
+        v.node(v.id("TB_Group").unwrap()).state.items[0].0,
+        "Movement *"
+    );
+    assert_eq!(v.node(v.id("TB_Group").unwrap()).state.items[1].0, "Hands");
+    assert_eq!(v.text_of(v.id("TB_Label0").unwrap()), "Right hand X");
+    // Done with numbers unsaved says so first; Done again closes.
     event(&mut ui, "TB_Done", EventKind::Click);
+    assert!(actions(&mut ui).is_empty());
+    assert!(ui.is_open(ScreenId::Tune));
+    let v = view(&ui);
+    assert!(
+        v.text_of(v.id("TB_Status").unwrap())
+            .contains("Not saved: Forward. Save to Add-On keeps them")
+    );
+    event(&mut ui, "TB_Save", EventKind::Click);
     assert_eq!(
         actions(&mut ui),
-        [
-            UiAction::TuneSave {
-                body: "runner:archetype/runner".into()
-            },
-            UiAction::TuneClosed
-        ]
+        [UiAction::TuneSave {
+            body: "runner:archetype/runner".into()
+        }]
     );
+    // Saved: nothing is marked, and Done closes at once.
+    ui.apply(UiUpdate::Tune(Some(runner(9.5, false))));
+    ui.update(0);
+    let v = view(&ui);
+    assert_eq!(
+        v.node(v.id("TB_Group").unwrap()).state.items[0].0,
+        "Movement"
+    );
+    event(&mut ui, "TB_Done", EventKind::Click);
+    assert_eq!(actions(&mut ui), [UiAction::TuneClosed]);
     ui.update(0);
     assert!(!ui.is_open(ScreenId::Tune));
 }
@@ -167,6 +199,15 @@ fn a_sent_number_holds_its_row_and_a_typed_one_needs_no_enter() {
     let v = view(&ui);
     assert_eq!(v.text_of(v.id("TB_Value0").unwrap()), "9.5");
     assert_eq!(v.num(v.id("TB_Slider0").unwrap()), 9.5);
+    let mut tuned = runner(9.5, true);
+    tuned.fields[0].unsaved = true;
+    ui.apply(UiUpdate::Tune(Some(tuned)));
+    ui.update(0);
+    let v = view(&ui);
+    assert_eq!(v.text_of(v.id("TB_Label0").unwrap()), "Forward *");
+    assert_eq!(v.text_of(v.id("TB_Label1").unwrap()), "Jump");
+    ui.apply(UiUpdate::Tune(Some(runner(7.0, false))));
+    ui.update(0);
     // A number the host never shows lets the row go after a while.
     ui.update(2500);
     let v = view(&ui);

@@ -22,8 +22,12 @@ play, for the host of the game:
   text, key order and spacing. A part the file leaves out (a `camera.bob`,
   a hand's socket) is added with the values the body plays now, so adding
   one number changes nothing else.
-- **Undo Changes** puts back every number changed since the window opened
-  or last saved.
+- A number played but not yet in the file is marked `*`, on its row and on
+  its part in the Part list, and the status line names them. Closing the
+  window with marked numbers says so once; Done again closes, and they keep
+  playing for this game. Reopening `/tune` in the same game shows them
+  marked still.
+- **Undo Changes** puts back every number changed since the last save.
 
 Tuned bodies last for the game: a map change or a new game loads the files
 again, so save what you want to keep.

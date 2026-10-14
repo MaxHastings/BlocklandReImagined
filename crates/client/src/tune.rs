@@ -33,12 +33,15 @@ pub struct TuneWindow {
 }
 
 impl TuneWindow {
-    /// The window over `body`, as it plays now.
-    pub fn open(body: &Archetype) -> Self {
+    /// The window over `body`, as it plays now. `saved` is the numbers its
+    /// file holds, when an earlier window this game knew them (it changed
+    /// numbers and closed without saving); else the numbers it plays.
+    pub fn open(body: &Archetype, saved: Option<BTreeMap<String, f32>>) -> Self {
         let fields = tuning::fields(body);
         Self {
             body: body.id.clone(),
-            saved: fields.iter().map(|f| (f.path.clone(), f.value)).collect(),
+            saved: saved
+                .unwrap_or_else(|| fields.iter().map(|f| (f.path.clone(), f.value)).collect()),
             ranges: fields.iter().map(|f| (f.path.clone(), f.range())).collect(),
             sent: BTreeMap::new(),
             status: String::new(),
@@ -104,9 +107,14 @@ impl TuneWindow {
             self.saved = values;
         }
     }
+    /// The numbers the body's file holds, as this window knows them.
+    pub fn baseline(&self) -> &BTreeMap<String, f32> {
+        &self.saved
+    }
     /// The window's model; `cannot_save` says why Save to Add-On is off.
     pub fn view(&self, archetypes: &Archetypes, cannot_save: &str) -> Option<TuneView> {
         let body = self.current(archetypes)?;
+        let changed: Vec<String> = self.changes(archetypes).into_iter().map(|c| c.0).collect();
         let fields = tuning::fields(body)
             .into_iter()
             .map(|f| {
@@ -117,6 +125,7 @@ impl TuneWindow {
                     value: f.value,
                     min: min.min(f.value),
                     max: max.max(f.value),
+                    unsaved: changed.contains(&f.path),
                     path: f.path,
                 }
             })
@@ -130,7 +139,7 @@ impl TuneWindow {
             },
             fields,
             status: self.status.clone(),
-            unsaved: !self.changes(archetypes).is_empty(),
+            unsaved: !changed.is_empty(),
             cannot_save: cannot_save.into(),
             movement_note: if body.movement.controller.is_some() || body.controller.is_some() {
                 "This body has its own movement controller, which can set its speed and \
@@ -215,7 +224,7 @@ mod tests {
         runner.id = "runner:archetype/runner".into();
         runner.name = "Runner".into();
         let id = table.add(runner.clone()).unwrap();
-        let mut window = TuneWindow::open(&runner);
+        let mut window = TuneWindow::open(&runner, None);
         let view = window.view(&table, "").unwrap();
         assert_eq!(view.name, "Runner");
         assert!(!view.unsaved);

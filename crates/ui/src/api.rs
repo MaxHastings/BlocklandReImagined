@@ -1197,6 +1197,9 @@ pub struct TuneField {
     pub value: f32,
     pub min: f32,
     pub max: f32,
+    /// Played now but not in the Add-On's file yet.
+    #[serde(default)]
+    pub unsaved: bool,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]

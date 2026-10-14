@@ -40,6 +40,11 @@ the slider to the body that moves.
   window's status line, and what was waiting on it is dropped.
 - A body with its own movement controller shows a note on the Movement
   part: the controller may set its speed and jumps itself.
+- Max also found `/tune` clunky. What is saved is now plain: every number
+  played but not in the file is marked `*` on its row and its part, the
+  status line names them, Done with unsaved numbers says which once (Done
+  again closes; they keep playing for the game), and reopening the window
+  in the same game still shows them unsaved instead of forgetting them.
 - `docs/modding/tuning.md` says what applies when.
 
 ## Evidence
@@ -53,6 +58,8 @@ the slider to the body that moves.
   `a_sent_number_holds_its_row_and_a_typed_one_needs_no_enter`.
 - `crates/client/src/tune.rs` unit test: sent numbers saved, refused and
   settled; an unreadable result is never written.
+- `crates/client/tests/modder_screens.rs` renders the window offscreen with
+  marked rows and after Done with unsaved numbers (1024x768, 1920x1080).
 - `python tools/check.py quick --base origin/v0.3.0-experimental` passed;
   `cargo clippy -p bri-sim -p bri-ui -p bri-client -p bri-net --all-targets
   -- -D warnings` clean.

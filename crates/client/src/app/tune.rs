@@ -10,6 +10,10 @@ const NOT_HOSTED_HERE: &str =
 pub(super) struct Tuning {
     window: Option<crate::tune::TuneWindow>,
     shown: Option<Arc<bri_sim::archetype::Archetypes>>,
+    /// By body, the numbers its file holds, from windows closed with
+    /// changes unsaved: reopening the window still shows them unsaved.
+    /// For this game only.
+    baselines: BTreeMap<String, BTreeMap<String, f32>>,
 }
 
 impl App {
@@ -52,7 +56,9 @@ impl App {
                 &body.name
             }
         );
-        self.tuning.window = Some(crate::tune::TuneWindow::open(&body));
+        self.keep_baseline();
+        let saved = self.tuning.baselines.get(&body.id).cloned();
+        self.tuning.window = Some(crate::tune::TuneWindow::open(&body, saved));
         self.tuning.shown = None;
         self.show_tune();
         Ok(())
@@ -87,7 +93,8 @@ impl App {
         };
         let shown = window.view(&archetypes, &cannot_save);
         if shown.is_none() {
-            self.tuning = Tuning::default();
+            self.tuning.window = None;
+            self.tuning.shown = None;
         } else {
             self.tuning.shown = Some(archetypes);
         }
@@ -127,7 +134,17 @@ impl App {
     }
     /// The window closed itself (Done or Escape).
     pub(super) fn close_tune(&mut self) {
-        self.tuning = Tuning::default();
+        self.keep_baseline();
+        self.tuning.window = None;
+        self.tuning.shown = None;
+    }
+    /// Remember what the open window knows of its body's file.
+    fn keep_baseline(&mut self) {
+        if let Some(window) = &self.tuning.window {
+            self.tuning
+                .baselines
+                .insert(window.body.clone(), window.baseline().clone());
+        }
     }
     fn tune_command(&mut self, id: RequestId, body: &str, changes: &[(String, f32)]) -> Result<()> {
         ensure!(!changes.is_empty(), "Nothing to change.");

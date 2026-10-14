@@ -49,6 +49,32 @@ fn slider_name(i: usize) -> String {
 fn value_name(i: usize) -> String {
     format!("TB_Value{i}")
 }
+fn label_name(i: usize) -> String {
+    format!("TB_Label{i}")
+}
+/// A row's or part's name, marked when it plays a number its file does not
+/// hold yet.
+fn marked(name: &str, unsaved: bool) -> String {
+    if unsaved {
+        format!("{name} *")
+    } else {
+        name.into()
+    }
+}
+/// The unsaved numbers' names, for the status line.
+fn unsaved_names(tune: &TuneView) -> String {
+    let names: Vec<&str> = tune
+        .fields
+        .iter()
+        .filter(|f| f.unsaved)
+        .map(|f| f.label.as_str())
+        .collect();
+    match names.len() {
+        0 => "the last change".into(),
+        1..=4 => names.join(", "),
+        n => format!("{} and {} more", names[..3].join(", "), n - 3),
+    }
+}
 /// A number as the value box shows it: short, without trailing zeros.
 fn shown(value: f32) -> String {
     let text = format!("{value:.3}");
@@ -80,6 +106,9 @@ pub struct Tune {
     /// The value box typed in last, sent when it loses focus as well as on
     /// Enter.
     typing: Option<usize>,
+    /// Done (or Escape) was pressed with numbers unsaved: the status line
+    /// says so, and pressing it again closes.
+    closing: bool,
 }
 
 impl Tune {
@@ -154,6 +183,7 @@ impl Tune {
             idle_ms: 0,
             pending: Vec::new(),
             typing: None,
+            closing: false,
         };
         screen.refresh(core);
         screen
@@ -177,35 +207,60 @@ impl Tune {
             self.group = picked
                 .and_then(|g| self.groups.iter().position(|n| *n == g))
                 .unwrap_or(0);
-            if let Some(n) = self.view.id(GROUP) {
-                self.view.state(n).items = self
-                    .groups
-                    .iter()
-                    .enumerate()
-                    .map(|(i, g)| (g.clone(), i as i64))
-                    .collect();
-                self.view.select(n, Some(self.group as i64));
-            }
             self.build_rows(tune);
         } else {
             self.show_values(tune);
+        }
+        // Each part, and each row, marked while it plays unsaved numbers.
+        if let Some(n) = self.view.id(GROUP) {
+            let items: Vec<(String, i64)> = self
+                .groups
+                .iter()
+                .enumerate()
+                .map(|(i, g)| {
+                    let unsaved = tune.fields.iter().any(|f| f.group == *g && f.unsaved);
+                    (marked(g, unsaved), i as i64)
+                })
+                .collect();
+            if self.view.state(n).items != items {
+                self.view.state(n).items = items;
+                self.view.select(n, Some(self.group as i64));
+            }
+        }
+        for (i, row) in self.rows.iter().enumerate() {
+            let unsaved = tune.fields.iter().any(|f| f.path == row.path && f.unsaved);
+            if let Some(n) = self.view.id(&label_name(i)) {
+                self.view.set_text(n, marked(&row.label, unsaved));
+            }
+        }
+        if !tune.unsaved {
+            self.closing = false;
         }
         if let Some(win) = self.view.id(WINDOW) {
             self.view.nodes[win].ctrl.text = Some(format!("Tune Body: {}", tune.name));
         }
         if let Some(n) = self.view.id(STATUS) {
             let movement = self.groups.get(self.group).map(String::as_str) == Some("Movement");
-            let status = if !tune.status.is_empty() {
+            let status = if self.closing {
+                format!(
+                    "Not saved: {}. Save to Add-On keeps them; Done again keeps them for this game only.",
+                    unsaved_names(tune)
+                )
+            } else if !tune.status.is_empty() {
                 tune.status.clone()
             } else if !tune.cannot_save.is_empty() {
                 tune.cannot_save.clone()
             } else if movement && !tune.movement_note.is_empty() {
                 tune.movement_note.clone()
             } else if tune.unsaved {
-                "Everyone plays these numbers now. Save to Add-On keeps them in the Add-On's file."
-                    .into()
+                format!(
+                    "Playing now, not saved (*): {}. Save to Add-On keeps them in its file.",
+                    unsaved_names(tune)
+                )
             } else {
-                "Move a slider or type a number: everyone in the game plays it at once.".into()
+                "Everything here is in the Add-On's file. Move a slider or type a number: \
+                 everyone in the game plays it at once."
+                    .into()
             };
             self.view.set_text(n, format!("<font:Arial:14>{status}"));
         }
@@ -235,7 +290,14 @@ impl Tune {
             let y = i as i32 * ROW_HEIGHT + 4;
             self.view.add(
                 rows,
-                text("GuiTextProfile", Rect::new(6, y + 1, 170, 20), &field.label),
+                named(
+                    text(
+                        "GuiTextProfile",
+                        Rect::new(6, y + 1, 170, 20),
+                        &marked(&field.label, field.unsaved),
+                    ),
+                    &label_name(i),
+                ),
             );
             let mut slider = named(
                 ctrl(
@@ -354,7 +416,17 @@ impl Tune {
         if let Some(i) = self.typing {
             self.submit_typed(i, core);
         }
+        let sent = !self.moved.is_empty();
         self.send(core);
+        // Numbers the file does not hold yet: say which, once, before the
+        // window goes (they keep playing for this game either way).
+        let unsaved = sent || core.tune.as_ref().is_some_and(|t| t.unsaved);
+        let can_save = core.tune.as_ref().is_some_and(|t| t.cannot_save.is_empty());
+        if unsaved && can_save && !self.closing {
+            self.closing = true;
+            self.refresh(core);
+            return;
+        }
         core.tune = None;
         core.request(UiAction::TuneClosed);
         core.pop(ScreenId::Tune);
@@ -457,6 +529,9 @@ impl Screen for Tune {
                 self.submit_typed(i, core);
             }
             return;
+        }
+        if name != DONE {
+            self.closing = false;
         }
         match name.as_str() {
             UNDO => {
