@@ -32,3 +32,9 @@ vanilla moves onto the kind before beta.
 
 Next: Maxwell approves or amends the open questions; work starts after the
 release blockers.
+
+Approved (Maxwell, same day): one place for maps and one pipeline, with the
+vanilla maps moved onto it. The format keeps optional lightmapped
+architecture (`*.interior.json`) beside plain models, so converted maps keep
+their Classic and Unified look and Blender maps render Dynamic. Building
+starts with the `map` kind and loader.

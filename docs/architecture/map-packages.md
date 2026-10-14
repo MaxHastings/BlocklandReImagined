@@ -1,8 +1,9 @@
 # Map Add-Ons: authored maps from Blender, TrenchBroom and converted v20
 
-Status: proposed design, not started. The first version is scoped in "Keeping it small"; the rest of this page is direction, not commitment. Waiting for Maxwell's approval; build
-after the release blockers in [STATUS.md](../STATUS.md). Nothing here changes
-the alpha contract.
+Status: approved by Maxwell on 2026-10-14 ("one place for maps, one
+pipeline", vanilla included); building. The first version is scoped in
+"Keeping it small"; sections marked deferred are direction, not commitment.
+Nothing here changes the alpha contract.
 
 ## The problem
 
@@ -120,9 +121,16 @@ pointing at a `*.map.json`:
 }
 ```
 
-- **Geometry** is ordinary native models (`*.shape.json`), drawn and
-  collided as map static models already are. Collision is the model's
-  collision detail, a triangle mesh, so editor geometry can be exact.
+- **Geometry** is one of two native asset types, both already loaded by
+  today's map path:
+  - ordinary models (`*.shape.json`), drawn and collided as map static
+    models already are. Collision is the model's collision detail, a
+    triangle mesh, so editor geometry can be exact. This is what Blender
+    maps use.
+  - lightmapped architecture (`*.interior.json`), with lightmap UVs, its
+    lightmaps and authored collision. This is what converted v20 maps use,
+    so they keep their Classic and Unified look. Authoring tools are not
+    required to produce it.
 - **Nodes** are a flat list of absolute transforms in native space (x right,
   y up, -z forward; 1 unit = 1 Blender metre), the scene's existing rule.
   Kinds start with `model`, `spawn`, `light` and `terrain`; water, foliage
@@ -188,7 +196,8 @@ All three end in the same files.
 
 ## Lighting modes
 
-Authored maps have no lightmaps. Dynamic lights them live and needs nothing
+Converted vanilla maps keep their lightmaps (lightmapped architecture
+above), so every mode looks as it does today. Authored maps have no lightmaps. Dynamic lights them live and needs nothing
 more. Classic and Unified (the default) read lightmaps, so a map Add-On
 needs one of:
 
@@ -209,8 +218,7 @@ playtests show Classic and Unified players need it.
 - Map ids are namespaced (`bedroom-extended:map/main`), as principle 2
   requires. The protocol already sends the map id as a string
   (`crates/net/src/protocol.rs:587`).
-- `LOADABLE_MAPS` stays for the converted bundle until vanilla moves onto
-  the kind; the map lists in Start Game, Change Map and the dedicated server
+- `LOADABLE_MAPS` goes away when vanilla moves onto the kind; the map lists in Start Game, Change Map and the dedicated server
   also take every enabled Add-On's maps. `GameMode.map` already accepts a
   package id.
 - A map Add-On is `shared`: the host's copy downloads on join and its hash
@@ -263,16 +271,16 @@ maintain, and none is needed for the workflow above.
 - **A Blender Python reader for `*.interior.json`.** It would be a third
   format reader, and step 3 replaces it.
 
-**The one debt this creates, and how it ends.** Until vanilla's converted
-maps are provided as `map` content too, there are two map loading paths
-(the `map_bundle` role with `LOADABLE_MAPS`, and Add-On maps). Moving
-vanilla onto the kind removes the old path and the hard-coded list, and
-the step-3 exporter is most of that work. It should happen before beta,
-when schemas freeze; until then the two paths share the loader below the
-manifest (scene nodes, models, terrain, physics).
+5. **Vanilla on the kind (decided).** The v20 converter writes its maps as
+   map Add-Ons, carrying their lightmapped architecture. The `map_bundle`
+   role's own map list, `LOADABLE_MAPS` and the second loading path go
+   away. There is then one place for maps and one pipeline, and the
+   converter is just an importer like the glTF one. This lands before beta,
+   when the map format freezes with the other schemas; after that, changes
+   only add fields.
 
-## Open questions for Maxwell
+## Decisions (Maxwell, 2026-10-14)
 
-- Approve the core (steps 1 to 4), with authored maps Dynamic-only?
-- Commit to moving vanilla onto the kind before beta, so the second map
-  path is temporary?
+- One map format, one loader and one map list for every map, vanilla
+  included, meant to last for years. The core (steps 1 to 5) is approved.
+- Authored maps without lightmaps render as Dynamic.
