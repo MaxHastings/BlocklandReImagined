@@ -333,7 +333,7 @@ fn an_objective_resumes_after_an_ordinary_combat_interruption_and_disconnect() {
     let mut actual_hit = false;
     let mut actual_injury = false;
     let mut attacker_selected = false;
-    let author_health = s.vitals()[&owner].health;
+    let mut author_targeted = false;
     let mut trace = Vec::new();
     let mut previous_health = s.vitals()[&bot].health;
     let mut last_injury = None;
@@ -388,6 +388,14 @@ fn an_objective_resumes_after_an_ordinary_combat_interruption_and_disconnect() {
                     && t.visible == Some(enemy)
                     && matches!(t.behaviour, "fight" | "fly" | "chase")
             });
+        // The author stands far off: a stray round of the scripted
+        // attacker's that misses the bot can still carry on to them, so
+        // retaliation is judged by whom the bot takes on, not their health.
+        author_targeted |= s.bot_thoughts().iter().any(|t| {
+            t.bot == bot
+                && t.visible == Some(owner)
+                && matches!(t.behaviour, "fight" | "fly" | "chase")
+        });
         interruptions += usize::from(
             s.bot_thoughts()
                 .iter()
@@ -413,9 +421,8 @@ fn an_objective_resumes_after_an_ordinary_combat_interruption_and_disconnect() {
         actual_hit && actual_injury && attacker_selected,
         "both ordinary weapons must actually damage their opponents during combat preemption"
     );
-    assert_eq!(
-        s.vitals()[&owner].health,
-        author_health,
+    assert!(
+        !author_targeted,
         "a real attacker must not redirect retaliation onto the passive author"
     );
     assert_eq!(
