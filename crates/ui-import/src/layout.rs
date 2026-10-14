@@ -101,6 +101,14 @@ pub fn styles(
             cur = p.parent.as_deref();
         }
         let get = |k: &str| chain.iter().find_map(|p| p.fields.get(k));
+        // `fontColorLink`/`fontColorLinkHL` are Torque aliases of
+        // `fontColors[4]`/`[5]` (ColorUser0/1), so the nearest profile that
+        // sets either name decides the slot.
+        let get_any = |keys: [&str; 2]| {
+            chain
+                .iter()
+                .find_map(|p| keys.iter().find_map(|k| p.fields.get(*k)))
+        };
         let text = |k: &str| get(k).map(|v| v.as_text().to_string());
         let col = |k: &str| text(k).and_then(|v| color(&v));
         let font = match (
@@ -125,7 +133,17 @@ pub fn styles(
             font_color_hl: col("fontColorHL"),
             font_color_na: col("fontColorNA"),
             font_color_sel: col("fontColorSEL"),
-            font_colors: (0..10).map(|i| col(&format!("fontColors[{i}]"))).collect(),
+            font_colors: (0..10)
+                .map(|i| {
+                    let key = format!("fontColors[{i}]");
+                    match i {
+                        4 => get_any([&key, "fontColorLink"]),
+                        5 => get_any([&key, "fontColorLinkHL"]),
+                        _ => get(&key),
+                    }
+                    .and_then(|v| color(v.as_text()))
+                })
+                .collect(),
             fill_color: col("fillColor"),
             fill_color_hl: col("fillColorHL"),
             fill_color_na: col("fillColorNA"),
@@ -274,5 +292,44 @@ mod tests {
         assert_eq!(color("255 150 0 255"), Some([255, 150, 0, 255]));
         assert_eq!(color("0.2 0.5 1 1"), Some([51, 128, 255, 255]));
         assert_eq!(color("50 130 255"), Some([50, 130, 255, 255]));
+    }
+
+    #[test]
+    fn link_colours_alias_palette_slots_four_and_five() {
+        let text = r#"
+new GuiControlProfile(GuiTextProfile)
+{
+    fontColorLink = "255 96 96";
+    fontColorLinkHL = "0 0 255";
+};
+new GuiControlProfile(PlayerListProfile : GuiTextProfile)
+{
+    fontColors[5] = "0 0 255";
+};
+new GuiControlProfile(ServerListProfile : GuiTextProfile)
+{
+    fontColors[4] = "0 255 255";
+    fontColors[5] = "255 0 255";
+};
+"#;
+        let profiles: BTreeMap<String, Object> = crate::torque::parse_objects(text)
+            .into_iter()
+            .map(|o| (o.name.clone().unwrap(), o))
+            .collect();
+        let styles = styles(&profiles, &|_, _| None, &mut Vec::new());
+        let slots = |n: &str| (styles[n].font_colors[4], styles[n].font_colors[5]);
+        assert_eq!(
+            slots("GuiTextProfile"),
+            (Some([255, 96, 96, 255]), Some([0, 0, 255, 255]))
+        );
+        // The nearest profile naming either alias of a slot decides it.
+        assert_eq!(
+            slots("PlayerListProfile"),
+            (Some([255, 96, 96, 255]), Some([0, 0, 255, 255]))
+        );
+        assert_eq!(
+            slots("ServerListProfile"),
+            (Some([0, 255, 255, 255]), Some([255, 0, 255, 255]))
+        );
     }
 }

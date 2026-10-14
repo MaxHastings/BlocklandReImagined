@@ -812,6 +812,11 @@ impl View {
         Font::get(pack, Self::font_id(pack, style)?)
     }
 
+    /// Line height of a profile's font, or 0 without one.
+    pub fn profile_line_height(pack: &Pack, profile: &str) -> i32 {
+        Self::profile_font(pack, profile).map_or(0, |font| font.line_height())
+    }
+
     /// Height a `GuiMLTextCtrl` of this profile reflows `text` to at
     /// `width`, line by line as `draw_ml` lays it out.
     pub fn ml_height(pack: &Pack, profile: &str, text: &str, width: i32) -> i32 {
@@ -877,8 +882,8 @@ impl View {
             allow_color_chars: true,
             justify: Justify::Left,
             line_spacing,
-            link: ml::DEFAULT_LINK,
-            link_hl: ml::DEFAULT_LINK_HL,
+            link: ml::profile_link(&style.font_colors, 4).unwrap_or(ml::DEFAULT_LINK),
+            link_hl: ml::profile_link(&style.font_colors, 5).unwrap_or(ml::DEFAULT_LINK_HL),
         };
         Some(ml::layout(pack, text, width, &defaults))
     }
@@ -899,7 +904,17 @@ impl View {
         if !n.state.visible {
             return;
         }
-        if !dl.push_clip(self.bounds(id)) {
+        // A font outline draws a pixel past each glyph, and descenders reach
+        // the bottom of the line, so a control as tall as its text (chat,
+        // the mouse tip) would cut the outline under `g` and `y`.
+        let mut clip = self.bounds(id);
+        if self
+            .style(pack, id)
+            .is_some_and(|s| s.font_outline.is_some())
+        {
+            clip = clip.inset(-1);
+        }
+        if !dl.push_clip(clip) {
             return;
         }
         self.draw_self(pack, dl, id);

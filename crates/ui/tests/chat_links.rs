@@ -9,7 +9,7 @@ use bri_ui::{
     pack::Pack,
     screens::{
         ScreenId,
-        play::{chat_link_at, mouse_tip},
+        play::{chat_bottom, chat_box_height, chat_link_at, mouse_tip, mouse_tip_rect},
     },
     ui::{Ui, UiConfig},
 };
@@ -84,6 +84,22 @@ fn clicking_a_chat_link_asks_before_opening_it_on(pack: Rc<Pack>) {
 
     // A shown link brings up v20's "TIP: Press M ..." under the chat.
     assert!(mouse_tip(&ui.core));
+    // While typing, the tip sits under the input box rather than on it.
+    for size in [0, 4, 10] {
+        let input = ScreenId::MessageInput(ChatChannel::Say);
+        ui.core.prefs.set("$Pref::Gui::ChatSize", size.to_string());
+        ui.core.push(input);
+        ui.update(16);
+        assert!(ui.core.chat_input_open);
+        let tip = mouse_tip_rect(&ui.core).unwrap();
+        assert!(
+            tip.y >= chat_bottom(&ui.core) + chat_box_height(&ui.core),
+            "chat size {size}: tip {tip:?} overlaps the input box"
+        );
+        ui.core.pop(input);
+        ui.update(16);
+        assert!(!ui.core.chat_input_open);
+    }
 
     // Without the cursor a click is gameplay input and asks nothing.
     click(&mut ui, hit.0 as f32 + 1.0, hit.1 as f32 + 1.0);
