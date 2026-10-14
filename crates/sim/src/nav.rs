@@ -1492,9 +1492,6 @@ pub struct Search {
     came: FxHashMap<Node, Came>,
     best: Option<(Node, f32)>,
     expanded: u32,
-    /// Nodes it expands before it settles for the closest it reached
-    /// ([`MAX_EXPANSIONS`] unless [`Search::limited`]).
-    limit: u32,
     /// Nodes farther than this from the start (or from where an opening
     /// lets out), across, are not visited.
     bound: f32,
@@ -1527,7 +1524,6 @@ impl Search {
             came: FxHashMap::default(),
             best: None,
             expanded: 0,
-            limit: MAX_EXPANSIONS,
             bound,
             links: Vec::new(),
             pending: None,
@@ -1537,12 +1533,6 @@ impl Search {
             jet_tests: 0,
             walk_speed: 1.0,
         }
-    }
-    /// This search settling for the closest it reached after `limit`
-    /// expansions instead of [`MAX_EXPANSIONS`].
-    pub fn limited(mut self, limit: u32) -> Self {
-        self.limit = limit.min(MAX_EXPANSIONS);
-        self
     }
     /// Whether this search takes swim legs for `body`.
     fn swims(&self, body: &Body) -> bool {
@@ -1832,7 +1822,7 @@ impl Search {
                 self.best = Some((node, 0.0));
                 return Some(self.finish(ground, body, true));
             }
-            if self.expanded >= self.limit {
+            if self.expanded >= MAX_EXPANSIONS {
                 return Some(self.finish(ground, body, false));
             }
             if nav.expansions == 0 {

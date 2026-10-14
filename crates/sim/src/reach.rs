@@ -667,13 +667,6 @@ fn ledge(tuning: &PlayerTuning, crawl: bool) -> f32 {
 /// it may fall into is not counted, so that is an upper bound there.
 /// `None` when it cannot be flown at all.
 ///
-/// `parts` names the bricks inside `ground`'s merged chunk colliders, as
-/// the motor's own step is given them (`Simulation::chunks`): the copies
-/// keep their colliders' ids, so the flight meets only the bricks near
-/// it. Without them each motor tick turned every brick of every chunk it
-/// touched into polygons; on a 188,000-brick build that was a quarter of
-/// the host's tick with 32 bots fighting.
-///
 /// Not covered: the target steering in the air (it is flown with no input),
 /// other bodies and vehicles in the way, and openings it would pass through.
 pub fn shove_landing(
@@ -681,7 +674,6 @@ pub fn shove_landing(
     feet: Vec3,
     velocity: Vec3,
     ground: &crate::nav::Ground,
-    parts: &dyn bri_motor::torque::PartTags,
     allowance: &mut u32,
 ) -> Option<Shoved> {
     // As far as the flight can go before the allowance runs out: its own
@@ -716,7 +708,7 @@ pub fn shove_landing(
     while *allowance > 0 {
         *allowance -= 1;
         let events = player
-            .step_among(&mut physics, MoveInput::default(), ground.waters, parts)
+            .step_in_water(&mut physics, MoveInput::default(), ground.waters)
             .ok()?;
         physics.step();
         if events.impact.length() > hardest.length() {
@@ -786,7 +778,7 @@ mod tests {
         };
         // Two seconds of flight.
         let mut allowance = TICKS as u32 * 2;
-        let landing = shove_landing(&standard(), feet, velocity, &ground, &(), &mut allowance);
+        let landing = shove_landing(&standard(), feet, velocity, &ground, &mut allowance);
         (landing, allowance)
     }
 
