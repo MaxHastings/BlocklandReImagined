@@ -35,7 +35,8 @@ checks do not replace your playtest.
   they drop out of the doorway's back. A Steel Ball rolled along the ground
   bumps the doorway's sill and loses speed; one thrown through keeps it.
   Stock portal bricks stand upright only, so floor and ceiling portals
-  can't be built.
+  can't be built. A jeep driven into a portal can pass through a player
+  standing halfway into the other opening instead of hitting them.
 - **Firefight crash:** a Windows v0.2.0 main-thread NaN panic during a mixed
   Zombie/Blockhead battle remains unreproduced. The headless reproduction passes,
   but does not cover Windows rendering/audio. v0.2.1 improves crash reports and

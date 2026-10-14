@@ -33,6 +33,14 @@ test = "fair_by_dial"
 reason = "Bot tuning tool (fair metric against the alertness dial); opt-in only. docs/architecture/bots.md, Tuning."
 
 [[skip]]
+test = "heeding_allies_harm_against_ignoring_it"
+reason = "Bot tuning tool (A/B of bots deaf to allies' harm, eight matches); the deaf side breaks the behaviour bands by design. Opt-in only."
+
+[[skip]]
+test = "a_gltf_model_from_disk_renders"
+reason = "Renders a .glb named by BRI_GLTF for a look; run by hand with BRI_GLTF set."
+
+[[skip]]
 test = "a_new_player_plays_the_tutorial_through_target_practice"
 reason = "Scripted three-minute walkthrough; opt-in only (Max, 2026-09-29). Run it by hand with cargo test -p bri-client --test tutorial_walkthrough -- --ignored."
 
@@ -161,3 +169,10 @@ test = "steady_play_builds_and_uploads_nothing_whole::content"
 owner = "v0.2.7 stabilization sweep"
 reason = "The soak's rocket knocks none of its floating test wall out after the v0.2.4 merge; check the wall against the new brick-damage rules."
 
+# The v0.3.0 release gate on the owner's PC (1bdfd4d7, 2026-10-14); the
+# owner chose to ship with it as a known issue (2026-10-14 06:42).
+
+[[failure]]
+test = "a_car_meets_the_part_of_a_player_beyond_a_portal::content"
+owner = "v0.3.1 portal follow-up"
+reason = "With the v20 jeep the car drives through a walker's part beyond the partner opening (nose reached -3.06); passes with the synthetic car. Not diagnosed yet."

@@ -434,7 +434,7 @@ impl Session {
                 continue;
             }
             let vehicle = collider.user_data as u64;
-            if contact.removed_speed > 0.0 {
+            if contact.removed_speed > super::vehicles::LANDING_SPEED {
                 let tick = self.simulation.state().tick;
                 self.vehicles
                     .struck
