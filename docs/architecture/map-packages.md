@@ -1,4 +1,4 @@
-# Map Add-Ons: authored maps from Blender, TrenchBroom and converted v20
+# Map Add-Ons: one pipeline for Blender maps and converted v20 maps
 
 Status: approved by Maxwell on 2026-10-14 ("one place for maps, one
 pipeline", vanilla included); building. The first version is scoped in
@@ -18,7 +18,8 @@ Four requests from the community (2026-10-14) all come back to that:
 
 - pharzedia wants to open the *converted* Bedroom (our native format, not
   the original `.dif`), extend it, keep its recovered dynamic lights, add,
-  move, recolour and remove lights (point or spot; rainbow, strobe, blink),
+  move, recolour and remove lights (omni or spot; strobe, pulse, flicker and
+  the other map2dif types),
   and ship the result as an Add-On. They expect to do their own collision.
 - Wilfred wants new maps made directly in Blender, or in a Quake-style
   editor such as TrenchBroom, without touching Blockland's maps at all.
@@ -109,12 +110,11 @@ pointing at a `*.map.json`:
   "nodes": [
     { "kind": "model", "model": "room", "transform": [16 floats] },
     { "kind": "spawn", "transform": [16 floats] },
-    { "kind": "light", "light": "lamp-bulb", "transform": [16 floats], "shadows": true },
-    { "kind": "light", "light": "v20:light/rainbow", "transform": [16 floats] }
-  ],
-  "lights": [
-    { "id": "lamp-bulb", "type": "point", "color": [1.0, 0.85, 0.6],
-      "brightness": 1.0, "radius": 12.0 }
+    { "kind": "light", "transform": [16 floats],
+      "light": { "type": "omni", "color": [1.0, 0.85, 0.6], "falloff": [2.0, 12.0] } },
+    { "kind": "light", "transform": [16 floats],
+      "light": { "type": "strobe", "color": [1, 0, 0], "color2": [0, 0, 0],
+                 "speed": "fast", "falloff": [1.0, 8.0] } }
   ],
   "environment": { "sun": { "azimuth": 30, "elevation": 50, "color": [1,1,1], "ambient": [0.3,0.3,0.35] },
                    "sky": "v20:environment/sky_blue2" }
@@ -140,30 +140,38 @@ pointing at a `*.map.json`:
   masks, loaded into the same `TerrainField` and terrain mesh that converted
   `.ter` files produce (`crates/content/src/terrain_field.rs`). Sculpted in
   any tool that exports a height image (Blender, World Machine, Gaea).
-- **Lights** are one engine light definition, the existing `FxLightData`
-  shape (colour, brightness, radius, optional curves, flare) plus `type`
-  (`point` or `spot`, with cone angles) and a node-level `shadows` flag.
-  A node names a light defined in this file or any light id the Add-On can
-  see, so the v20 rainbow, strobe and blink lights are available by id, and
-  an author's own animated light is a curve in the same format.
+- **Lights** are map lights in map2dif's own types, not brick lights (see
+  below): `omni`, `spot` (with cone angles), and the animated `strobe`,
+  `pulse`, `pulse2`, `flicker` and `runway`, each with the parameters and
+  timing Torque's interior lights had (colours, speed, falloff, and for
+  runway the chain order). A node-level `shadows` flag says whether it may
+  take one of the live shadow slots.
 - **Environment** names a sky from the Environment pack or ships its own
   faces, plus the sun. Weather stays the Environment window's.
 - Unknown fields are errors, as in every manifest.
 
-## Lights become one system
+## Map lights and brick lights stay separate
 
-Brick lights, image lights and map lights should all be the same engine
-light: a definition (with optional animation curves) placed at a transform,
-optionally casting shadows. The renderer's shadow budget (4 lamps at Best,
-`pick_lamps`) then chooses among every shadowed light near the camera, not
-only lamps recovered from lightmaps.
+pharzedia pointed out (2026-10-14) that Torque kept these as two systems,
+and the design follows that.
 
-That answers pharzedia's last point directly: a brick light, a light on a
-model or a light in a map Add-On can cast shadows, and the rainbow, strobe
-and blink they know from v20 are animation curves the engine already
-samples (`Light::sample`). It is a renderer change (spot cones, per-light
-shadow flag, one light list) independent of the map kind, and it is useful
-even before map Add-Ons exist.
+- **Map lights** are map2dif's light entities: `OmniLight`, `SpotLight`,
+  `StrobeLight`, `PulseLight`, `Pulse2Light`, `FlickerLight` and
+  `RunwayLight`. map2dif baked them into the `.dif`, the animated ones as
+  extra lightmap states the engine cycled; our converter already keeps those
+  animated-light records but does not play them yet
+  (`docs/content-conversion.md`). In a map Add-On they are live lights of
+  the same types and timing, drawn through the lamp-shadow path
+  (`LampLight`, `pick_lamps`), the only lights that cast shadows today.
+- **Brick and image lights** stay v20 `FxLightData` with its colour,
+  brightness and radius curves (rainbow and the wrench's other lights),
+  drawn as unshadowed point lights as now.
+
+The type list and its parameters come from Torque's interior light code
+and map2dif, so a light means the same thing whether it came from a
+converted `.dif` or from Blender. For converted maps, playing the retained
+animated-light records is then the same mechanism: their lights strobe,
+pulse and flicker again.
 
 ## Authoring paths
 
@@ -175,11 +183,11 @@ All three end in the same files.
      vehicles;
    - Empties named `spawn`, `spawn.001`, ... become spawn nodes;
    - Blender lights, exported with `KHR_lights_punctual`, become light nodes
-     (point and spot keep their colour, power-derived brightness, range and
-     cone);
+     (a point light is `omni`, a spot light `spot`, keeping colour,
+     power-derived brightness, range and cone);
    - glTF `extras` (Blender custom properties) carry what glTF cannot say:
-     `bri_light: "v20:light/strobe"` to use a named animated light,
-     `bri_shadows: false`.
+     `bri_light_type: "strobe"` and that type's settings (`bri_color2`,
+     `bri_speed`, ...), `bri_shadows: false`.
 2. **Converted v20 maps as templates.** `bri-export-map <bundle> <map-id>
    <out>` writes a converted map as a map Add-On *and* a `.glb` with its
    recovered lights as glTF lights and its textures attached. That `.glb`
@@ -253,10 +261,10 @@ mechanism; the new code is glue.
    recovered lights from `lighting-parameters.json`. This gives pharzedia
    Bedroom in Blender with its lamps in place, and it goes back in through
    step 2. A round-trip test guards both directions.
-4. **Map lights reuse the existing light definition** (`FxLightData`, so
-   rainbow, strobe and blink by id) and the existing lamp-shadow path.
-   Authored lights join the recovered ones in `pick_lamps`; no second light
-   system.
+4. **Map lights in map2dif's types** (omni, spot, strobe, pulse, pulse2,
+   flicker, runway) on the existing lamp-shadow path. Authored lights join
+   the recovered ones in `pick_lamps`. Spot cones are new renderer work,
+   but they are in the first version because map2dif had them.
 5. **Vanilla on the kind (decided).** The v20 converter writes its maps as
    map Add-Ons, carrying their lightmapped architecture. The `map_bundle`
    role's own map list, `LOADABLE_MAPS` and the second loading path go
@@ -270,7 +278,6 @@ maintain, and none is needed for the workflow above.
 
 - **TrenchBroom import.** A second importer to maintain. Blender can import
   Quake `.map` files with existing community add-ons, then export glTF.
-- **Spot lights.** New renderer work (cone shadows). Point lights first.
 - **Shadows on brick and image lights.** Worth doing, but it touches the
   effects pipeline and the shadow budget everywhere; it is its own change.
 - **A lightmap bake for Classic and Unified.** Authored maps render as

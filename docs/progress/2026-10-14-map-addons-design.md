@@ -38,3 +38,9 @@ vanilla maps moved onto it. The format keeps optional lightmapped
 architecture (`*.interior.json`) beside plain models, so converted maps keep
 their Classic and Unified look and Blender maps render Dynamic. Building
 starts with the `map` kind and loader.
+
+Light types (pharzedia, same day): map2dif's lights (Omni, Spot, Strobe,
+Pulse, Pulse2, Flicker, Runway) were a separate system from brick
+`FxLightData`. The design now keeps them separate: map lights use map2dif's
+types and timing on the lamp-shadow path, and brick lights stay
+`FxLightData`. Spot lights move into the first version.
