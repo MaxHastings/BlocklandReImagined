@@ -12,6 +12,7 @@
 mod export;
 mod lod;
 mod map;
+mod map_environment;
 mod read;
 mod write;
 pub use export::{ExportReport, export_map, find_map};
@@ -93,6 +94,9 @@ pub struct Options {
     /// Blockhead's width for that height.
     pub box_width: Option<f32>,
     pub box_height: Option<f32>,
+    /// A map's sky: a folder of six pictures (`front`, `right`, `back`,
+    /// `left`, `up`, `down`, PNG or JPEG).
+    pub sky: Option<PathBuf>,
 }
 impl Options {
     pub fn new(input: impl Into<PathBuf>, out: impl Into<PathBuf>, kind: Kind) -> Self {
@@ -114,6 +118,7 @@ impl Options {
             lod_pixels: LOD_PIXELS,
             box_width: None,
             box_height: None,
+            sky: None,
         }
     }
 }
@@ -360,6 +365,19 @@ pub struct Converted {
     /// Material name to PNG bytes.
     pub textures: BTreeMap<String, Vec<u8>>,
     pub report: Report,
+    /// A map's meshes named `water...`, left out of the model: each
+    /// becomes a body of water.
+    pub waters: Vec<WaterMesh>,
+}
+
+/// A map mesh named `water...`: its corners in its node's frame (native,
+/// scaled) and the glTF material it is painted with.
+#[derive(Clone, Debug)]
+pub struct WaterMesh {
+    pub name: String,
+    pub node: usize,
+    pub positions: Vec<[f32; 3]>,
+    pub material: Option<usize>,
 }
 
 /// Convert and write the model as `opts.kind` says. `opts.out` must not
@@ -408,6 +426,7 @@ fn write(opts: &Options, id: &str, converted: Converted) -> Result<Report> {
         shape,
         textures,
         mut report,
+        ..
     } = converted;
     let out = &opts.out;
     let put = |rel: &str, bytes: &[u8], report: &mut Report| -> Result<()> {
@@ -702,6 +721,7 @@ pub fn convert(
     // Meshes: one native object per node with a mesh.
     let mut visible: Vec<(Object, Mesh)> = Vec::new();
     let mut collision: Vec<(Object, Mesh)> = Vec::new();
+    let mut waters: Vec<WaterMesh> = Vec::new();
     let mut warned = BTreeSet::new();
     for (k, &n) in order.iter().enumerate() {
         let Some(m) = nodes[n].mesh else { continue };
@@ -735,6 +755,7 @@ pub fn convert(
             let lower = names[k].to_ascii_lowercase();
             lower.starts_with("col_") || lower.starts_with("col-") || lower.starts_with("collision")
         };
+        let is_water = opts.kind == Kind::Map && names[k].to_ascii_lowercase().starts_with("water");
         // Rigid meshes take the node's own (possibly uneven) scale and its
         // parents' even scale; skinned meshes are already in model space.
         let own_scale = nodes[n].s * parent_sigma(n);
@@ -920,7 +941,7 @@ pub fn convert(
                 );
             }
             // Collision is never drawn, so it needs no texture.
-            let material = if is_collision {
+            let material = if is_collision || is_water {
                 None
             } else {
                 Some(material(
@@ -993,7 +1014,17 @@ pub fn convert(
             frame: 0,
             material_frame: 0,
         };
-        if is_collision {
+        if is_water {
+            waters.push(WaterMesh {
+                name: names[k].clone(),
+                node: k,
+                positions: mesh.positions,
+                material: array(gmesh, "primitives")
+                    .first()
+                    .and_then(|p| p["material"].as_u64())
+                    .map(|m| m as usize),
+            });
+        } else if is_collision {
             collision.push((object, mesh));
         } else {
             visible.push((object, mesh));
@@ -1169,6 +1200,7 @@ pub fn convert(
         shape,
         textures,
         report,
+        waters,
     })
 }
 

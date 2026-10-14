@@ -897,3 +897,151 @@ fn a_map_without_a_spawn_or_with_col_meshes_says_what_it_did() {
         report.warnings
     );
 }
+
+/// A map brings its own sun, sky and water: a Blender Sun light, the
+/// scene's `bri_sky_color` and `bri_fog`, a `--sky` folder, and a mesh
+/// named `water` that becomes a body of water instead of a wall.
+#[test]
+fn a_map_brings_its_own_sun_sky_and_water() {
+    let root = tempfile::tempdir().unwrap();
+    let mut g = super::testing::Gltf::new();
+    let flat = |v: &[Vec3]| v.iter().flat_map(|v| v.to_array()).collect::<Vec<f32>>();
+    let part = |g: &mut super::testing::Gltf,
+                name: &str,
+                center: Vec3,
+                size: Vec3,
+                extras: Value| {
+        let (p, n, uv, i) = super::testing::cuboid(center, size);
+        let (a, b, c, d) = (
+            g.floats(&flat(&p), 3),
+            g.floats(&flat(&n), 3),
+            g.floats(&uv.concat(), 2),
+            g.uints(&i, 1),
+        );
+        let lava = g.material("Lava", [0.9, 0.3, 0.1, 0.5], None, json!({}));
+        let mesh = g.mesh(name, vec![json!({ "attributes": { "POSITION": a, "NORMAL": b, "TEXCOORD_0": c }, "indices": d, "material": lava })]);
+        g.node(
+            json!({ "name": name, "mesh": mesh, "extras": extras }),
+            None,
+        );
+    };
+    part(
+        &mut g,
+        "Floor",
+        Vec3::new(0.0, -0.25, 0.0),
+        Vec3::new(20.0, 0.5, 20.0),
+        json!({}),
+    );
+    part(
+        &mut g,
+        "Water.001",
+        Vec3::new(0.0, 1.0, 0.0),
+        Vec3::new(10.0, 0.0, 10.0),
+        json!({ "bri_liquid": "lava" }),
+    );
+    g.node(
+        json!({ "name": "spawn", "translation": [8.0, 0.0, 8.0] }),
+        None,
+    );
+    g.json["extensionsUsed"] = json!(["KHR_lights_punctual"]);
+    g.json["extensions"] = json!({ "KHR_lights_punctual": { "lights": [
+        { "name": "Sun", "type": "directional", "color": [1.0, 0.9, 0.8] },
+    ] } });
+    // Shining down at 45 degrees towards glTF -Z (Blender +Y): from the
+    // Torque north, azimuth 0.
+    g.node(json!({ "name": "Sun", "rotation": Quat::from_rotation_x(-std::f32::consts::FRAC_PI_4).to_array(),
+        "extensions": { "KHR_lights_punctual": { "light": 0 } }, "extras": { "bri_ambient": 0.3 } }), None);
+    g.json["scenes"][0]["extras"] =
+        json!({ "bri_sky_color": [0.2, 0.3, 0.4], "bri_fog": [100.0, 400.0] });
+    let input = root.path().join("pond.glb");
+    std::fs::write(&input, g.glb()).unwrap();
+    let sky = root.path().join("sky");
+    std::fs::create_dir_all(&sky).unwrap();
+    for (k, face) in super::map_environment::SKY_FACES.iter().enumerate() {
+        let img = image::RgbaImage::from_pixel(4, 4, image::Rgba([k as u8 * 40, 100, 200, 255]));
+        img.save(sky.join(format!("{face}.png"))).unwrap();
+    }
+    let mut opts = Options::new(&input, root.path().join("pond"), Kind::Map);
+    opts.sky = Some(sky);
+    let report = import(&opts).unwrap();
+    let dir = root.path().join("pond");
+    let check = bri_package_runtime::check::check(&dir);
+    assert!(check.ok, "{check}");
+
+    let native = bri_sim::map::NativeMap::load(&dir.join("map"), &report.model).unwrap();
+    let sun = native
+        .scene
+        .nodes
+        .iter()
+        .find(|n| matches!(n.kind, bri_content::scene::Kind::Sun))
+        .unwrap();
+    let number = |k: &str| sun.properties[k].parse::<f32>().unwrap();
+    assert!(
+        (number("elevation") - 45.0).abs() < 0.01,
+        "{:?}",
+        sun.properties
+    );
+    assert!(
+        number("azimuth") < 0.01 || number("azimuth") > 358.99,
+        "{:?}",
+        sun.properties
+    );
+    assert_eq!(sun.properties["color"], "1 0.9 0.8");
+    assert_eq!(sun.properties["ambient"], "0.3 0.3 0.3");
+
+    // The water is a lava pool from its surface to the floor, not a wall.
+    assert_eq!(native.waters.len(), 1);
+    let water = &native.waters[0];
+    assert_eq!(water.liquid_type, "Lava");
+    assert!(
+        (water.max[1] - 1.0).abs() < 0.01 && water.min[1] <= -0.4,
+        "{water:?}"
+    );
+    assert!((water.opacity - 0.5).abs() < 0.01);
+    use rapier3d::prelude::{Ray, Vector};
+    let ground = native
+        .colliders
+        .iter()
+        .filter_map(|c| {
+            let c = c.build();
+            c.shape().cast_ray(
+                c.position(),
+                &Ray::new(Vector::new(0.0, 5.0, 0.0), -Vector::Y),
+                10.0,
+                true,
+            )
+        })
+        .fold(f32::MAX, f32::min);
+    assert!(
+        (ground - 5.0).abs() < 0.01,
+        "water does not collide: {ground}"
+    );
+
+    // The sky: its six pictures, colour and fog.
+    let bundle: Value =
+        serde_json::from_slice(&std::fs::read(dir.join("map/bundle.json")).unwrap()).unwrap();
+    let environment: bri_content::environment::Environment =
+        serde_json::from_value(bundle["environments"][&report.model].clone()).unwrap();
+    environment.validate().unwrap();
+    assert_eq!(environment.faces.len(), 6);
+    assert!(
+        environment
+            .faces
+            .iter()
+            .all(|f| dir.join("map").join(&f.file).is_file())
+    );
+    assert_eq!(environment.solid_color, [0.2, 0.3, 0.4]);
+    assert_eq!((environment.fog.start, environment.fog.end), (100.0, 400.0));
+
+    // The renderer draws the map with its water and sky.
+    let drawn =
+        bri_render::scene_loader::load_map_bundle_dynamic(&dir.join("map"), &report.model).unwrap();
+    assert!(!drawn.scene.vertices.is_empty());
+    assert!(
+        drawn
+            .scene
+            .materials
+            .iter()
+            .any(|m| m.kind == bri_render::scene::MaterialKind::Water)
+    );
+}

@@ -46,8 +46,43 @@ not physical: set these as custom properties on the light object
 | `bri_light_type` | `omni`, `spot`, `strobe`, `pulse`, `pulse2`, `flicker` or `runway`, map2dif's light types | `spot` for a Spot light, `omni` otherwise |
 
 Any other `bri_` property is kept with the light for its type (`bri_speed`
-on a strobe, for example). A Spot light's cone angles are kept too. Sun
-lights are left out: every map has one sun of its own.
+on a strobe, for example). A Spot light's cone angles are kept too.
+
+**The sun.** Add a Sun light and point it the way the sunlight falls. Its
+colour is the sunlight's; `bri_ambient` on it (a number, or a colour as
+three numbers) is how bright the shade is, 0.45 by default. Without a Sun
+the map gets a high, slightly warm one. A map has one sun; any other Sun
+lights are left out.
+
+**The sky.** Without anything set, the sky is a plain daytime blue. Set
+these as custom properties on the Blender *scene* (**Scene Properties >
+Custom Properties**):
+
+| Property | Meaning | Default |
+|---|---|---|
+| `bri_sky_color` | the sky's colour, three numbers from 0 to 1 | `[0.55, 0.7, 0.9]` |
+| `bri_fog` | `[start, end]` in units: clear out to start, thick at end; nothing past end is drawn | starts at 70% of end; end is twice the map's width, at least 1000 |
+| `bri_fog_color` | the fog's colour | the sky colour |
+
+For a picture sky, put six pictures named `front`, `right`, `back`,
+`left`, `up` and `down` (PNG or JPEG) in a folder and import with
+`--sky that-folder`. `front` faces Blender's +Y, and the rest go round in
+that order. This is the order and layout of a Blockland skybox's `.dml`
+list, so a Blockland sky's six pictures work renamed. Hosts can still pick
+another sky in the Environment window, and the map's own comes back when
+they clear their pick.
+
+**Water.** Name a flat mesh `water` (or `water.001`, `water_pond` and so
+on). It isn't drawn as a model or collided with. Instead it becomes a body
+of water players swim in: its top is the surface, and it goes down to the
+lowest point of the map. Its material's picture is the water's surface,
+or a gentle ripple in its base colour when it has none, and its alpha is
+how see-through it is. These are custom properties on the water object:
+
+| Property | Meaning | Default |
+|---|---|---|
+| `bri_depth` | how deep it goes below its surface, in units | down to the bottom of the map |
+| `bri_liquid` | `water` or `lava` (lava hurts), or one of v20's liquid types | `water` |
 
 Today every light draws as a steady omni light, whatever its type; the
 type is saved, so your map plays strobes, pulses and spot cones without
@@ -69,7 +104,8 @@ scene.
 
 ## 3. Import, check and play
 
-From a checkout of this repository (see the main [README](../../README.md)):
+From a checkout of this repository (see the main [README](../../README.md)).
+Add `--sky FOLDER` for a picture sky:
 
 ```sh
 cargo run -p bri-addon-import --bin bri-import-addon -- gltf my-map.glb addons/my-map --kind map --name "My Map"
@@ -90,10 +126,18 @@ To change the map, edit it in Blender, export again and import into a
 fresh folder; then replace the old folder with it. Keep the same id (the
 same file name or `--id`) so saved worlds and servers still find it.
 
+## Start from a v20 map
+
+`bri-import-addon export-map` writes a converted map (the Bedroom, Slate or
+any other) as a `.glb`, with its textures, `col_` collision, `spawn`
+Empties and lights, ready to open in Blender and import again:
+
+```sh
+cargo run -p bri-addon-import --bin bri-import-addon -- export-map content bedroom bedroom.glb
+```
+
 ## Not yet
 
-- Opening a converted v20 map (the Bedroom, Slate...) in Blender, with its
-  lights, to build on. This is next, through the same import.
 - Terrain from a heightmap, and baking lighting on import.
 - Strobe, pulse, flicker and runway animation, and spot cones, in the
   renderer (the types are kept in your map already).

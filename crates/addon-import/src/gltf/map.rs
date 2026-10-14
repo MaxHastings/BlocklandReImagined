@@ -7,7 +7,7 @@
 //! and Blender lights (`KHR_lights_punctual`) are map lights in map2dif's
 //! types. The result is an Add-On folder holding `package.json` and a
 //! native map bundle in `map/`, the same files the converted v20 maps use.
-use super::{Converted, Document, Options, Point, Report, title};
+use super::{Converted, Document, Options, Point, Report, map_environment, title};
 use anyhow::{Context, Result, ensure};
 use bri_content::scene::{Kind as NodeKind, LIGHT_TYPES, Node as SceneNode, Scene};
 use bri_content::shape::Shape;
@@ -75,9 +75,7 @@ fn lights(
             .with_context(|| format!("light node `{name}` names missing light {index}"))?;
         let gltf_type = light["type"].as_str().unwrap_or("point");
         if gltf_type == "directional" {
-            report.warnings.push(format!(
-                "`{name}` is a sun light; the map has one sun of its own, so it is left out"
-            ));
+            // The map's sun (`map_environment::sun`).
             continue;
         }
         let kind = extra(node, light, "bri_light_type")
@@ -174,6 +172,27 @@ fn lights(
     Ok(out)
 }
 
+/// The lowest point of the model's meshes, posed at rest: where water with
+/// no `bri_depth` reaches down to.
+fn lowest_point(shape: &Shape, globals: &[Mat4]) -> f32 {
+    let mut lowest = f32::MAX;
+    for object in &shape.objects {
+        let at = object
+            .node
+            .and_then(|n| globals.get(n))
+            .copied()
+            .unwrap_or(Mat4::IDENTITY);
+        for &m in &object.meshes {
+            if let Some(Some(mesh)) = shape.meshes.get(m) {
+                for p in &mesh.positions {
+                    lowest = lowest.min(at.transform_point3(Vec3::from(*p)).y);
+                }
+            }
+        }
+    }
+    if lowest == f32::MAX { 0.0 } else { lowest }
+}
+
 /// Writes the map Add-On into `opts.out`.
 pub(super) fn write(
     opts: &Options,
@@ -185,6 +204,7 @@ pub(super) fn write(
         shape,
         textures,
         mut report,
+        waters: water_meshes,
     } = converted;
     let out = &opts.out;
     let put = |rel: &str, bytes: &[u8], report: &mut Report| -> Result<()> {
@@ -207,10 +227,13 @@ pub(super) fn write(
         kind: NodeKind::Sun,
         transform: Mat4::IDENTITY.to_cols_array(),
         asset: None,
-        properties: SUN
-            .iter()
-            .map(|(k, v)| ((*k).to_string(), (*v).to_string()))
-            .collect(),
+        properties: match map_environment::sun(doc, &shape, &globals, &mut report)? {
+            Some(sun) => sun,
+            None => SUN
+                .iter()
+                .map(|(k, v)| ((*k).to_string(), (*v).to_string()))
+                .collect(),
+        },
     }];
     let model = format!("{map_id}/model");
     nodes.push(SceneNode {
@@ -255,6 +278,33 @@ pub(super) fn write(
         });
     }
     nodes.extend(lights(doc, &shape, &globals, &mut report)?);
+    // Sky and water pictures, written into `map/` under their hashes.
+    let mut pictures: Vec<(String, Vec<u8>)> = Vec::new();
+    let mut keep = |file: &str, bytes: &[u8]| -> Result<()> {
+        if !pictures.iter().any(|(f, _)| f == file) {
+            pictures.push((file.to_string(), bytes.to_vec()));
+        }
+        Ok(())
+    };
+    let environment = map_environment::sky(doc, opts.sky.as_deref(), report.width, &mut keep)?;
+    let bottom = lowest_point(&shape, &globals);
+    let folder = opts.input.parent();
+    let first_water = nodes.len();
+    let (water_nodes, waters) = map_environment::waters(
+        doc,
+        folder,
+        &water_meshes,
+        &globals,
+        bottom,
+        &map_id,
+        first_water,
+        &mut keep,
+        &mut report,
+    )?;
+    nodes.extend(water_nodes);
+    for (file, bytes) in &pictures {
+        put(&format!("map/{file}"), bytes, &mut report)?;
+    }
     let scene = Scene {
         schema_version: 1,
         id: map_id.clone(),
@@ -298,7 +348,8 @@ pub(super) fn write(
         "bindings": bindings,
         "lighting": {},
         "terrains": { map_id.clone(): [] },
-        "environments": {},
+        "environments": { map_id.clone(): environment },
+        "waters": { map_id.clone(): waters },
     });
     put(
         "map/bundle.json",
