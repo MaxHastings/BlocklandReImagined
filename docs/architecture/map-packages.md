@@ -268,7 +268,12 @@ mechanism; the new code is glue.
    map Add-Ons, carrying their lightmapped architecture. The `map_bundle`
    role's own map list, `LOADABLE_MAPS` and the second loading path go
    away. There is then one place for maps and one pipeline, and the
-   converter is just an importer like the glTF one. This lands before beta,
+   converter is just an importer like the glTF one. The same importer then takes
+   any old Blockland map Add-On (`Map_*.zip`: a `.mis` and its `.dif`
+   interiors) and writes a map Add-On with its lightmaps, so v19/v20/RTB
+   community maps come over without Blender (asked by Dhorkan, 2026-10-14).
+   Maps from other games go through Blender and glTF instead of an
+   importer per game. This lands before beta,
    when the map format freezes with the other schemas; after that, changes
    only add fields.
 
