@@ -609,6 +609,8 @@ fn load_static_shape(
         material.alpha = match authored.blend.as_str() {
             "opaque" => AlphaMode::Opaque,
             "alpha" => alpha(&out.images[diffuse]),
+            // Torque's additive DTS materials (glass, glows).
+            "additive" => AlphaMode::Additive,
             other => anyhow::bail!("Unsupported static material blend {other} for {id}"),
         };
         // Torque culls DTS back faces and blends only Translucent materials;

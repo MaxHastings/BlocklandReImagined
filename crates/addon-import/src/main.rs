@@ -253,10 +253,11 @@ fn v20_map(args: impl Iterator<Item = String>) -> Result<()> {
     opts.input = input;
     opts.out = out;
     let made = bri_addon_import::v20_map::import(&opts)?;
+    for (mission, map) in made.missions.iter().zip(&made.map_ids) {
+        println!("Imported {mission} as the map {map}");
+    }
     println!(
-        "Imported {} as the map {} ({} files) into {}. Check it with bri-addon-check.",
-        made.mission,
-        made.map_id,
+        "{} files in {}. Check it with bri-addon-check.",
         made.files,
         opts.out.display()
     );

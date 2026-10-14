@@ -24,9 +24,14 @@ fn flag(p: &BTreeMap<String, String>, key: &str, default: bool) -> Result<bool> 
         _ => anyhow::bail!("Invalid water flag {key}"),
     }
 }
-pub fn resource(root: &Path, reference: &str, output: &Path) -> Result<Image> {
+pub fn resource(root: &Path, source: &str, reference: &str, output: &Path) -> Result<Image> {
+    let reference = reference.replace('\\', "/");
     // Authored v20 missions retain both pre-v9 map paths and core ~/data paths.
-    let path = if let Some(rest) = reference.strip_prefix("~/data/") {
+    let path = if let Some(rest) = reference.strip_prefix("./") {
+        // Beside the mission, as a map Add-On's own water texture is.
+        let folder = source.rsplit_once('/').map_or("", |(folder, _)| folder);
+        format!("{folder}/{rest}")
+    } else if let Some(rest) = reference.strip_prefix("~/data/") {
         format!("base/data/{rest}")
     } else if let Some(rest) = reference.strip_prefix("~/Map_") {
         format!("Add-Ons/Map_{rest}")
@@ -67,6 +72,7 @@ pub fn resource(root: &Path, reference: &str, output: &Path) -> Result<Image> {
 }
 pub fn convert(
     root: &Path,
+    source: &str,
     scene: &Scene,
     environment: Option<&Environment>,
     output: &Path,
@@ -87,24 +93,40 @@ pub fn convert(
         );
         let surface = resource(
             root,
+            source,
             p.get("surfacetexture")
                 .context("Water surface texture absent")?,
             output,
         )?;
         let shore = resource(
             root,
+            source,
             p.get("shoretexture")
                 .context("Water shore texture absent")?,
             output,
         )?;
         let reflection_intensity = number(p, "envmapintensity", 0.4)?;
+        let mut missing_reflection = None;
         let reflection = if reflection_intensity <= 0.0 {
             None
         } else if let Some(path) = p
             .get("envmapovertexture")
             .or_else(|| p.get("envmaptexture"))
         {
-            Some(resource(root, path, output)?)
+            // Community maps name reflection maps from other games
+            // (`common/data/skies/...`): fall back to the sky's reflection map.
+            match resource(root, source, path, output) {
+                Ok(image) => Some(image),
+                Err(error) => {
+                    // Never silently: only onto the sky's own reflection map.
+                    let sky = environment.and_then(|e| e.reflection.clone());
+                    if sky.is_none() {
+                        return Err(error);
+                    }
+                    missing_reflection = Some(path.clone());
+                    sky
+                }
+            }
         } else {
             environment.and_then(|e| e.reflection.clone())
         };
@@ -114,6 +136,11 @@ pub fn convert(
         let mut warnings=vec!["Water shader adaptation still needs original multi-pass reflection/specular/shore fidelity and underwater composition".into(),"Water coverage is a native bounded volume; original terrain accept masks/edge snapping and container overlap need fidelity review".into()];
         if repeat_period.is_some() {
             warnings.push("Authored repeatTerrain uses the classic 2048-unit period; camera-following rendering/LOD remains required".into());
+        }
+        if let Some(path) = missing_reflection {
+            warnings.push(format!(
+                "Reflection map {path} is not in the installation; the sky's is used"
+            ));
         }
         if p.contains_key("watercolor") {
             warnings.push("Authored waterColor retained in source scene; classic water texture rendering does not infer a new blue tint".into());
@@ -207,7 +234,14 @@ mod tests {
                     .into(),
                 }],
             };
-            let water = convert(&root, &scene, None, &root.join("out"))?.remove(0);
+            let water = convert(
+                &root,
+                "base/data/missions/fixture.mis",
+                &scene,
+                None,
+                &root.join("out"),
+            )?
+            .remove(0);
             assert_eq!(water.min, [2., -91., -61.]);
             assert_eq!(water.max, [34., 9., 3.]);
             assert_eq!(water.repeat_period, Some(2048.));
@@ -220,7 +254,14 @@ mod tests {
                 .properties
                 .insert("envmapintensity".into(), "0.4".into());
             assert!(
-                convert(&root, &scene, None, &root.join("out")).is_err(),
+                convert(
+                    &root,
+                    "base/data/missions/fixture.mis",
+                    &scene,
+                    None,
+                    &root.join("out")
+                )
+                .is_err(),
                 "Required reflection must not silently fall back"
             );
             Ok(())

@@ -196,10 +196,25 @@ cargo run -p bri-package-runtime --bin bri-addon-check -- addons/something
 
 `--v20` names your Blockland v20 folder, for the textures, skies and
 models a map borrows from the base game; without it, a map that borrows
-any fails and says to add it. When the Add-On holds more than one mission,
-pick one with `--mission NAME`. The id comes from the file name without
-`Map_` (`something`), or `--id`; the menu name from the mission, or
-`--name`.
+any fails and says to add it. A map that borrows buildings or terrain
+textures from another map Add-On (`Map_Slate`, `Map_Slopes`) takes them
+from v20's `Add-Ons` folder or the folder beside the map. File names match
+whatever their case, as on Windows. A terrain texture the map never
+shipped gets a plain grey stand-in, listed in the bundle's
+`stand_in_textures`.
+
+Every mission in the Add-On becomes one of its maps (a day and a night
+version, say), named after its mission file, each in its own `map/<id>/`
+folder; `--mission NAME` imports just
+one. A single map's id comes from the file name without `Map_`
+(`something`), or `--id`; the menu name from the mission, or `--name`.
+
+A shape replicator (Torque's scattered trees and rocks) is placed once,
+on import, as ordinary models on the terrain: from its own seed and
+settings, keeping off water and slopes steeper than it allows. The
+original also kept copies apart and off buildings, so a forest can differ
+tree for tree. A mission's scripts, triggers and sounds are left behind:
+game rules are Rhai scripts in this engine.
 
 ## Not yet
 

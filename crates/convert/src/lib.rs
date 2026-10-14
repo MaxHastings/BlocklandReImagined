@@ -12,6 +12,7 @@ pub mod environment;
 pub mod interior;
 pub mod map_bundle;
 pub mod mission;
+pub mod replicator;
 pub mod scene_lighting;
 pub mod shape;
 pub mod terrain;

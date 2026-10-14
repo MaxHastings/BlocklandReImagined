@@ -61,16 +61,22 @@ fn shape_texture(root: &Path, source: &str, name: &str) -> Result<Option<String>
 pub fn run(args: Vec<String>) -> Result<()> {
     ensure!(
         args.len() >= 4,
-        "Usage: map_bundle <v20-root> <converted-dir> <new-output-dir> [--core-script <recovered-core-cs>] <mission-virtual-path> ..."
+        "Usage: map_bundle <v20-root> <converted-dir> <new-output-dir> [--core-script <recovered-core-cs>] [--stand-in-missing-terrain-textures] <mission-virtual-path> ..."
     );
     let root = PathBuf::from(&args[0]).canonicalize()?;
     let content = PathBuf::from(&args[1]).canonicalize()?;
     let output = PathBuf::from(&args[2]);
     let mut missions = Vec::new();
     let mut core_script = None;
+    // Community maps can name a terrain texture they never shipped; Blockland
+    // drew those layers without one. With this option each such layer gets a
+    // plain grey stand-in and is listed under `stand_in_textures`.
+    let mut stand_in = false;
     let mut at = 3;
     while at < args.len() {
-        if args[at] == "--core-script" {
+        if args[at] == "--stand-in-missing-terrain-textures" {
+            stand_in = true;
+        } else if args[at] == "--core-script" {
             ensure!(core_script.is_none(), "Duplicate core script");
             at += 1;
             core_script = Some(PathBuf::from(args.get(at).context("Missing core script")?));
@@ -135,6 +141,7 @@ pub fn run(args: Vec<String>) -> Result<()> {
     let mut bindings = Vec::new();
     let mut textures = BTreeMap::new();
     let mut unresolved = Vec::new();
+    let mut stand_ins: Vec<String> = Vec::new();
     let mut lighting = BTreeMap::new();
     let mut environments = BTreeMap::new();
     let mut waters = BTreeMap::new();
@@ -203,6 +210,41 @@ pub fn run(args: Vec<String>) -> Result<()> {
                     }
                 }
             }
+        }
+        // Shape replicators (scattered trees and rocks) become static models
+        // on the scene's terrain.
+        let terrain = match scene.nodes.iter().find(|n| matches!(n.kind, Kind::Terrain)) {
+            Some(node) => {
+                let id = node.asset.as_ref().context("Terrain lacks asset")?;
+                let terrain: Terrain =
+                    serde_json::from_slice(&std::fs::read(content.join(lookup(id)?))?)?;
+                let spacing = node
+                    .properties
+                    .get("squaresize")
+                    .and_then(|v| v.trim().parse::<f32>().ok())
+                    .filter(|v| *v > 0.0)
+                    .unwrap_or(8.0);
+                let origin = glam::Mat4::from_cols_array(&node.transform)
+                    .w_axis
+                    .truncate()
+                    .to_array();
+                Some((terrain, origin, spacing))
+            }
+            None => None,
+        };
+        let ground = terrain
+            .as_ref()
+            .map(|(terrain, origin, spacing)| crate::replicator::Ground {
+                terrain,
+                origin: *origin,
+                spacing: *spacing,
+            });
+        let source = path.strip_prefix("v20/").unwrap_or(path).to_string();
+        let placed = crate::replicator::expand(&mut scene, ground.as_ref(), &|reference| {
+            crate::mission::reference(&source, reference)
+        })?;
+        if placed > 0 {
+            println!("{path}: {placed} models placed by shape replicators");
         }
         scenes.push((scene_file.to_string(), scene));
     }
@@ -295,7 +337,19 @@ pub fn run(args: Vec<String>) -> Result<()> {
             } else if file.ends_with(".terrain.json") {
                 let terrain: Terrain = serde_json::from_slice(&std::fs::read(content.join(file))?)?;
                 for layer in terrain.layers {
-                    let texture = export_texture(&layer.material)?;
+                    let mut texture = export_texture(&layer.material)?;
+                    if texture.is_none() && stand_in {
+                        let mut png = Vec::new();
+                        image::RgbaImage::from_pixel(4, 4, image::Rgba([128, 128, 128, 255]))
+                            .write_to(
+                                &mut std::io::Cursor::new(&mut png),
+                                image::ImageFormat::Png,
+                            )?;
+                        let file = format!("{:x}.png", Sha256::digest(&png));
+                        std::fs::write(output.join(&file), png)?;
+                        stand_ins.push(layer.material.clone());
+                        texture = Some(file);
+                    }
                     if texture.is_none() {
                         unresolved.push(layer.material.clone());
                     }
@@ -362,7 +416,7 @@ pub fn run(args: Vec<String>) -> Result<()> {
         }
         waters.insert(
             scene.id.clone(),
-            crate::water::convert(&root, scene, environments.get(&scene.id), &output)?,
+            crate::water::convert(&root, path, scene, environments.get(&scene.id), &output)?,
         );
         let source = |id: &str| -> Result<String> {
             let file = assets.get(id).context("Unknown lit asset")?;
@@ -388,7 +442,7 @@ pub fn run(args: Vec<String>) -> Result<()> {
             .with_context(|| format!("Lighting {}", scene.id))?,
         );
     }
-    let report = serde_json::json!({"schema_version":1,"maps":maps,"assets":assets,"textures":textures,"bindings":bindings,"lighting":lighting,"environments":environments,"waters":waters,"terrains":terrains,"static_datablocks":declarations.entries,"static_script_sha256":script_hash,"static_script_diagnostics":declarations.diagnostics,"unresolved_textures":unresolved,"scope":"native architecture/terrain/static models/water, original textures/lighting/skies and initial static shape states; remaining dynamic map behavior, water fidelity and weather require integration"});
+    let report = serde_json::json!({"schema_version":1,"maps":maps,"assets":assets,"textures":textures,"bindings":bindings,"lighting":lighting,"environments":environments,"waters":waters,"terrains":terrains,"static_datablocks":declarations.entries,"static_script_sha256":script_hash,"static_script_diagnostics":declarations.diagnostics,"unresolved_textures":unresolved,"stand_in_textures":stand_ins,"scope":"native architecture/terrain/static models/water, original textures/lighting/skies and initial static shape states; remaining dynamic map behavior, water fidelity and weather require integration"});
     std::fs::write(
         output.join("bundle.json"),
         serde_json::to_vec_pretty(&report)?,
@@ -400,6 +454,10 @@ pub fn run(args: Vec<String>) -> Result<()> {
         textures.len(),
         unresolved.len()
     );
-    ensure!(unresolved.is_empty(), "Bundle has unresolved textures");
+    ensure!(
+        unresolved.is_empty(),
+        "Bundle has unresolved textures: {}",
+        unresolved.join(", ")
+    );
     Ok(())
 }

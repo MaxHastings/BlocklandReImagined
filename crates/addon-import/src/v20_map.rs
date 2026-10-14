@@ -7,7 +7,7 @@
 //! scratch folder: `Add-Ons/<Map_Name>` beside the install's `base/` (hard
 //! links, or copies across drives) when `--v20` names one, for the
 //! textures, skies and models a map borrows from the base game.
-use anyhow::{Context, Result, bail, ensure};
+use anyhow::{Context, Result, ensure};
 use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
 
@@ -26,8 +26,9 @@ pub struct Options {
 
 /// What the import made.
 pub struct Imported {
-    pub map_id: String,
-    pub mission: String,
+    /// One map per mission, in the missions' order.
+    pub map_ids: Vec<String>,
+    pub missions: Vec<String>,
     pub files: usize,
 }
 
@@ -53,6 +54,56 @@ fn mirror(from: &Path, to: &Path) -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// Other Add-Ons named by the map's missions and terrains (a terrain's
+/// layers can be another map's textures).
+fn borrowed(input: &Path, stem: &str) -> Result<Vec<String>> {
+    let mut missions = Vec::new();
+    if input.is_dir() {
+        for entry in std::fs::read_dir(input)? {
+            let path = entry?.path();
+            if path
+                .extension()
+                .is_some_and(|e| e.eq_ignore_ascii_case("mis") || e.eq_ignore_ascii_case("ter"))
+            {
+                missions.push(std::fs::read(path)?);
+            }
+        }
+    } else {
+        let mut zip = zip::ZipArchive::new(std::fs::File::open(input)?)?;
+        for i in 0..zip.len() {
+            let mut member = zip.by_index(i)?;
+            let name = member.name().to_ascii_lowercase();
+            if (name.ends_with(".mis") || name.ends_with(".ter")) && member.size() < 16 << 20 {
+                let mut bytes = Vec::new();
+                std::io::Read::read_to_end(&mut member, &mut bytes)?;
+                missions.push(bytes);
+            }
+        }
+    }
+    let mut names = std::collections::BTreeSet::new();
+    for text in missions {
+        let text = String::from_utf8_lossy(&text).replace('\\', "/");
+        let lower = text.to_ascii_lowercase();
+        // `add-ons/Name/...` and the mission's mod-root form `~/Name/...`.
+        let starts = lower
+            .match_indices("add-ons/")
+            .map(|(at, m)| at + m.len())
+            .chain(lower.match_indices("~/").map(|(at, m)| at + m.len()));
+        for start in starts {
+            let name: String = text[start..]
+                .chars()
+                .take_while(|c| c.is_ascii_alphanumeric() || *c == '_' || *c == '-')
+                .collect();
+            // A folder name, so followed by a slash.
+            let folder = text[start + name.len()..].starts_with('/');
+            if folder && !name.is_empty() && !name.eq_ignore_ascii_case(stem) {
+                names.insert(name);
+            }
+        }
+    }
+    Ok(names.into_iter().collect())
 }
 
 pub fn import(opts: &Options) -> Result<Imported> {
@@ -93,6 +144,34 @@ pub fn import(opts: &Options) -> Result<Imported> {
             v20.display()
         );
         mirror(&base, &root.join("base"))?;
+        // Other Add-Ons the mission borrows from (a v20 map's buildings).
+        // They are looked for in the install's Add-Ons, then beside the map.
+        let beside = input.parent().map(Path::to_path_buf);
+        let places: Vec<PathBuf> = [Some(v20.join("Add-Ons")), beside]
+            .into_iter()
+            .flatten()
+            .collect();
+        for other in borrowed(&input, &stem)? {
+            let found = places.iter().find_map(|place| {
+                let zip = place.join(format!("{other}.zip"));
+                let folder = place.join(&other);
+                (zip.is_file() || folder.is_dir()).then_some((zip, folder))
+            });
+            match found {
+                Some((zip, _)) if zip.is_file() => {
+                    std::fs::copy(&zip, root.join("Add-Ons").join(format!("{other}.zip")))?;
+                }
+                Some((_, folder)) => mirror(&folder, &root.join("Add-Ons").join(&other))?,
+                None => eprintln!(
+                    "warning: the map uses files from {other}, which is not in {}",
+                    places
+                        .iter()
+                        .map(|p| p.display().to_string())
+                        .collect::<Vec<_>>()
+                        .join(" or ")
+                ),
+            }
+        }
     }
 
     let converted = scratch.0.join("converted");
@@ -110,96 +189,133 @@ pub fn import(opts: &Options) -> Result<Imported> {
         })
         .map(str::to_owned)
         .collect();
-    let mission = match (&opts.mission, missions.as_slice()) {
-        (Some(wanted), _) => missions
-            .iter()
-            .find(|m| {
-                let m = m.to_ascii_lowercase();
-                m.ends_with(&format!("/{}", wanted.to_ascii_lowercase()))
-                    || m.ends_with(&format!("/{}.mis", wanted.to_ascii_lowercase()))
-            })
-            .cloned()
-            .with_context(|| {
-                format!("no mission {wanted} in it; it has {}", missions.join(", "))
-            })?,
-        (None, [one]) => one.clone(),
-        (None, []) => bail!("{} holds no .mis mission", input.display()),
-        (None, many) => bail!(
-            "it holds {} missions ({}); pick one with --mission",
-            many.len(),
-            many.join(", ")
-        ),
+    let mut chosen: Vec<String> = match &opts.mission {
+        Some(wanted) => vec![
+            missions
+                .iter()
+                .find(|m| {
+                    let m = m.to_ascii_lowercase();
+                    m.ends_with(&format!("/{}", wanted.to_ascii_lowercase()))
+                        || m.ends_with(&format!("/{}.mis", wanted.to_ascii_lowercase()))
+                })
+                .cloned()
+                .with_context(|| {
+                    format!("no mission {wanted} in it; it has {}", missions.join(", "))
+                })?,
+        ],
+        // Every mission becomes a map of the one Add-On (a day and a night
+        // version of the same place).
+        None => missions.clone(),
     };
+    ensure!(
+        !chosen.is_empty(),
+        "{} holds no .mis mission",
+        input.display()
+    );
+    // map_bundle lists its maps in mission order.
+    chosen.sort();
 
-    let bundle_dir = scratch.0.join("bundle");
-    bri_convert::map_bundle::run(vec![
-        root.to_string_lossy().into_owned(),
-        converted.to_string_lossy().into_owned(),
-        bundle_dir.to_string_lossy().into_owned(),
-        mission.clone(),
-    ])
-    .with_context(|| {
-        format!(
-            "packaging {mission}{}",
-            if opts.v20.is_none() {
-                " (if it names base textures or models, add --v20 with your Blockland v20 folder)"
-            } else {
-                ""
-            }
-        )
-    })?;
-
-    // One map under the Add-On's own name.
-    let id = opts.id.clone().unwrap_or_else(|| {
+    // The maps under the Add-On's own name: one map takes the Add-On's id,
+    // several take their missions' names. Each map is its own bundle (a
+    // map's bundle.json lists just that map), in map/ for one and
+    // map/<id>/ for several.
+    let addon_id = opts.id.clone().unwrap_or_else(|| {
         let lower = stem.to_ascii_lowercase();
         lower.strip_prefix("map_").unwrap_or(&lower).to_string()
     });
-    let ns = crate::namespace_for(&id)?;
-    let map_id = format!("{ns}:map/{id}");
-    let mut bundle: Value =
-        serde_json::from_slice(&std::fs::read(bundle_dir.join("bundle.json"))?)?;
-    let entry = bundle["maps"][0].clone();
-    let old = entry["id"]
-        .as_str()
-        .context("the bundle names no map")?
-        .to_string();
-    let scene_file = entry["file"]
-        .as_str()
-        .context("the bundle names no scene")?
-        .to_string();
-    let mut scene: Value = serde_json::from_slice(&std::fs::read(bundle_dir.join(&scene_file))?)?;
-    let name = opts
-        .name
-        .clone()
-        .or_else(|| entry["name"].as_str().map(str::to_owned))
-        .unwrap_or_else(|| id.clone());
-    scene["id"] = json!(map_id);
-    scene["name"] = json!(name);
-    bundle["maps"] = json!([{ "id": map_id, "name": name, "file": scene_file }]);
-    if let Value::Object(top) = &mut bundle {
-        for (_, value) in top.iter_mut() {
-            if let Value::Object(by_map) = value
-                && let Some(record) = by_map.remove(&old)
-            {
-                by_map.insert(map_id.clone(), record);
+    let ns = crate::namespace_for(&addon_id)?;
+    let mut maps = Vec::new();
+    let mut files = 0;
+    for (k, mission) in chosen.iter().enumerate() {
+        let bundle_dir = scratch.0.join(format!("bundle{k}"));
+        bri_convert::map_bundle::run(vec![
+            root.to_string_lossy().into_owned(),
+            converted.to_string_lossy().into_owned(),
+            bundle_dir.to_string_lossy().into_owned(),
+            "--stand-in-missing-terrain-textures".into(),
+            mission.clone(),
+        ])
+        .with_context(|| {
+            format!(
+                "packaging {mission}{}",
+                if opts.v20.is_none() {
+                    " (if it names base textures or models, add --v20 with your Blockland v20 folder)"
+                } else {
+                    ""
+                }
+            )
+        })?;
+        let mut bundle: Value =
+            serde_json::from_slice(&std::fs::read(bundle_dir.join("bundle.json"))?)?;
+        let entry = bundle["maps"][0].clone();
+        let old = entry["id"]
+            .as_str()
+            .context("the bundle names no map")?
+            .to_string();
+        let scene_file = entry["file"]
+            .as_str()
+            .context("the bundle names no scene")?
+            .to_string();
+        let id = if chosen.len() == 1 {
+            addon_id.clone()
+        } else {
+            let stem = mission.rsplit('/').next().unwrap_or(mission);
+            let stem = stem.rsplit_once('.').map_or(stem, |(stem, _)| stem);
+            crate::namespace_for(stem)?
+        };
+        let map_id = format!("{ns}:map/{id}");
+        let mut scene: Value =
+            serde_json::from_slice(&std::fs::read(bundle_dir.join(&scene_file))?)?;
+        let name = match (&opts.name, chosen.len()) {
+            (Some(name), 1) => name.clone(),
+            _ => entry["name"]
+                .as_str()
+                .map(str::to_owned)
+                .unwrap_or_else(|| id.clone()),
+        };
+        scene["id"] = json!(map_id);
+        scene["name"] = json!(name);
+        bundle["maps"] = json!([{ "id": map_id, "name": name, "file": scene_file }]);
+        if let Value::Object(top) = &mut bundle {
+            for (_, value) in top.iter_mut() {
+                if let Value::Object(by_map) = value
+                    && let Some(record) = by_map.remove(&old)
+                {
+                    by_map.insert(map_id.clone(), record);
+                }
             }
         }
+        let folder = if chosen.len() == 1 {
+            "map".to_string()
+        } else {
+            format!("map/{id}")
+        };
+        let dir = opts.out.join(&folder);
+        std::fs::create_dir_all(&dir)?;
+        for entry in std::fs::read_dir(&bundle_dir)? {
+            let entry = entry?;
+            let file = entry.file_name();
+            if file == "bundle.json" || file == *scene_file.as_str() {
+                continue;
+            }
+            std::fs::copy(entry.path(), dir.join(&file))?;
+            files += 1;
+        }
+        std::fs::write(dir.join(&scene_file), serde_json::to_vec_pretty(&scene)?)?;
+        std::fs::write(dir.join("bundle.json"), serde_json::to_vec_pretty(&bundle)?)?;
+        files += 2;
+        maps.push((map_id, name, format!("{folder}/bundle.json")));
     }
 
-    let map = opts.out.join("map");
-    std::fs::create_dir_all(&map)?;
-    let mut files = 0;
-    for entry in std::fs::read_dir(&bundle_dir)? {
-        let entry = entry?;
-        let file = entry.file_name();
-        if file == "bundle.json" || file == *scene_file.as_str() {
-            continue;
-        }
-        std::fs::copy(entry.path(), map.join(&file))?;
-        files += 1;
-    }
-    std::fs::write(map.join(&scene_file), serde_json::to_vec_pretty(&scene)?)?;
-    std::fs::write(map.join("bundle.json"), serde_json::to_vec_pretty(&bundle)?)?;
+    let name = match (&opts.name, maps.as_slice()) {
+        (Some(name), _) => name.clone(),
+        (None, [(_, name, _)]) => name.clone(),
+        (None, _) => stem.clone(),
+    };
+    let provides: Vec<Value> = maps
+        .iter()
+        .map(|(id, _, file)| json!({ "kind": "map", "id": id, "file": file }))
+        .collect();
     let manifest = json!({
         "schema_version": 1,
         "id": ns,
@@ -209,21 +325,19 @@ pub fn import(opts: &Options) -> Result<Imported> {
         "description": format!("{name}, a Blockland map ({stem}) imported by bri-import-addon map."),
         "authors": [],
         "license": "proprietary",
-        "provenance": { "source": format!("Blockland map Add-On {stem}, mission {mission}"), "notes": "Imported by bri-import-addon map. Set the licence of the original map." },
+        "provenance": { "source": format!("Blockland map Add-On {stem}, missions {}", chosen.join(", ")), "notes": "Imported by bri-import-addon map. Set the licence of the original map." },
         "dependencies": {},
         "capabilities": [],
-        "provides": [
-            { "kind": "map", "id": map_id, "file": "map/bundle.json" },
-        ],
+        "provides": provides,
     });
     std::fs::write(
         opts.out.join("package.json"),
         serde_json::to_vec_pretty(&manifest)?,
     )?;
     Ok(Imported {
-        map_id,
-        mission,
-        files: files + 3,
+        map_ids: maps.into_iter().map(|(id, _, _)| id).collect(),
+        missions: chosen,
+        files: files + 1,
     })
 }
 
@@ -284,6 +398,23 @@ new SimGroup(MissionGroup) {\r\n\
             zip.write_all(&bytes).unwrap();
         }
         zip.finish().unwrap();
+        // The plain Import (the Add-Ons screen's, and the release bundle's)
+        // hands a map Add-On to this converter, with its report.
+        let report = crate::import(&crate::Options {
+            input: zip_path.clone(),
+            out: dir.path().join("hills-plain"),
+            reference: None,
+            core: vec![],
+            installed: None,
+            version: "1.0.0".into(),
+        })
+        .unwrap();
+        assert_eq!(report.package.id, "map_hills");
+        assert_eq!(report.source.title, "Rolling Hills");
+        assert_eq!(report.summary.verdict, "converted");
+        assert!(dir.path().join("hills-plain/import-report.json").is_file());
+        assert!(dir.path().join("hills-plain/map/bundle.json").is_file());
+
         let out = dir.path().join("hills");
         let made = import(&Options {
             input: zip_path,
@@ -295,15 +426,15 @@ new SimGroup(MissionGroup) {\r\n\
             version: "1.0.0".into(),
         })
         .unwrap();
-        assert_eq!(made.map_id, "hills:map/hills");
+        assert_eq!(made.map_ids, ["hills:map/hills"]);
         let check = bri_package_runtime::check::check(&out);
         assert!(check.ok, "{check}");
-        let native = bri_sim::map::NativeMap::load(&out.join("map"), &made.map_id).unwrap();
+        let native = bri_sim::map::NativeMap::load(&out.join("map"), &made.map_ids[0]).unwrap();
         assert_eq!(native.terrain.len(), 1);
         assert_eq!(native.scene.name, "Rolling Hills");
         for drawn in [
-            bri_render::scene_loader::load_map_bundle(&out.join("map"), &made.map_id).unwrap(),
-            bri_render::scene_loader::load_map_bundle_dynamic(&out.join("map"), &made.map_id)
+            bri_render::scene_loader::load_map_bundle(&out.join("map"), &made.map_ids[0]).unwrap(),
+            bri_render::scene_loader::load_map_bundle_dynamic(&out.join("map"), &made.map_ids[0])
                 .unwrap(),
         ] {
             assert_eq!(drawn.terrain.len(), 1);
