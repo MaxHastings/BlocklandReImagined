@@ -1877,8 +1877,9 @@ impl Session {
     }
     /// `GameConnection::startLoad` and `spawnPlayer`'s first spawn: the
     /// default `$Pref::Server::WelcomeMessage` to the joiner, "connected."
-    /// to everyone else as the connection is accepted; "spawned." when the
-    /// player enters the world, then the auto-admin line to all.
+    /// to everyone else as the connection is accepted, then the auto-admin
+    /// line to all (v20's `autoAdminCheck` runs on connect, not on spawn);
+    /// "spawned." when the player enters the world.
     fn greet(
         &mut self,
         owner: OwnerId,
@@ -1893,6 +1894,15 @@ impl Session {
                 Notice::Chat(format!("\u{E002}Welcome to Blockland {name}.")),
             );
             self.announce(owner, "connected.", "ClientJoinSound");
+            let how = match (role, host) {
+                (bri_admin::Role::SuperAdmin, true) => Some("Super Admin (Host)"),
+                (bri_admin::Role::SuperAdmin, false) => Some("Super Admin (Auto)"),
+                (bri_admin::Role::Admin, _) => Some("Admin (Auto)"),
+                _ => None,
+            };
+            if let Some(how) = how {
+                self.admin_announce(format!("\u{E002}{name} has become {how}"));
+            }
         }
         if greeting == Greeting::Connected {
             return;
@@ -1900,13 +1910,6 @@ impl Session {
         for other in self.human_peers_except(owner) {
             self.notify(other, Notice::Chat(format!("\u{E001}{name} spawned.")));
         }
-        let how = match (role, host) {
-            (bri_admin::Role::SuperAdmin, true) => "Super Admin (Host)",
-            (bri_admin::Role::SuperAdmin, false) => "Super Admin (Auto)",
-            (bri_admin::Role::Admin, _) => "Admin (Auto)",
-            _ => return,
-        };
-        self.admin_announce(format!("\u{E002}{name} has become {how}"));
     }
     /// Every player but `owner` and the bots, those still loading included.
     fn human_peers_except(&self, owner: OwnerId) -> Vec<OwnerId> {
