@@ -298,14 +298,8 @@ impl ContentParts {
         }
         let actor_effects =
             crate::actor_effects::ActorEffects::new(actor_pack, weapon_pack, Default::default())?;
-        let material_path = content.paths.brick_materials.join("brick-materials.json");
-        ensure!(
-            std::fs::metadata(&material_path)?.len() <= 8 * 1024 * 1024,
-            "Oversized material manifest"
-        );
-        let material_bundle: bri_content::brick_materials::Bundle =
-            serde_json::from_slice(&std::fs::read(material_path)?)?;
-        material_bundle.validate()?;
+        // The prints the game draws, Add-Ons' print packs included.
+        let material_bundle = content.paths.materials()?.bundle.clone();
         let mut tool_ui = crate::tool_ui::ToolUi::new(
             &content.catalog,
             &content.effects,

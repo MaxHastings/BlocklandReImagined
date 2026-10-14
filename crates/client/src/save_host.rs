@@ -37,7 +37,10 @@ impl SaveHost {
         let weapons = content.paths.weapon_content()?;
         let item_bounds = content.paths.item_physics(&weapons)?.bounds;
         let vehicles = content.paths.vehicle_pack()?;
-        let materials = crate::materials::BrickMaterials::load(&content.paths.brick_materials)?;
+        let materials = crate::materials::BrickMaterials::load_with(
+            &content.paths.brick_materials,
+            &content.paths.print_extras,
+        )?;
         let palette = crate::world_chunks::BrickPalette::new(&materials)?;
         let mut host = Self {
             content,

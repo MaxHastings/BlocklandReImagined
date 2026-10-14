@@ -198,6 +198,45 @@ pub fn brick_catalog_providers(
             .collect(),
     )
 }
+/// Each enabled Add-On's print pack (`assets/prints.json`), as
+/// (content-root-relative dir, absolute dir) like [`kind_providers`].
+pub fn print_providers(
+    content_root: &Path,
+    packages: &bri_package::packages::PackageSet,
+) -> Result<Vec<(String, PathBuf)>> {
+    kind_providers(content_root, packages, "prints.json")
+}
+/// The base game's brick materials (`brick-materials.json` in
+/// `materials_dir`) with every print pack in `extras` after its prints
+/// ([`bri_content::brick_materials::Bundle::with_print_packs`]), and what
+/// was left out and why. A print pack's images keep its folder as their
+/// path prefix: the extras' dirs map them back to files.
+pub fn brick_materials_with(
+    materials_dir: &Path,
+    extras: &[(String, PathBuf)],
+) -> Result<(bri_content::brick_materials::Bundle, Vec<String>)> {
+    let base: bri_content::brick_materials::Bundle = serde_json::from_slice(&bounded_bytes(
+        &materials_dir.join("brick-materials.json"),
+        8 * 1024 * 1024,
+    )?)?;
+    base.validate()?;
+    let mut notes = vec![];
+    let mut packs = vec![];
+    for (dir, abs) in extras {
+        let read = bounded_bytes(&abs.join("prints.json"), 8 * 1024 * 1024).and_then(|bytes| {
+            Ok(serde_json::from_slice::<
+                bri_content::brick_materials::PrintPack,
+            >(&bytes)?)
+        });
+        match read {
+            Ok(pack) => packs.push((dir.as_str(), pack)),
+            Err(e) => notes.push(format!("{dir}: print pack unreadable: {e:#}")),
+        }
+    }
+    let (bundle, merged) = base.with_print_packs(packs);
+    notes.extend(merged);
+    Ok((bundle, notes))
+}
 /// Native brick geometry from enabled Add-Ons, including asset-only packs.
 /// The source path binding is used by inherited `brickFile` references.
 pub fn brick_geometry_assets(

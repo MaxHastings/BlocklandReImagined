@@ -16,6 +16,7 @@ imbl = "7"
 png = "0.18"
 pollster = "0.4"
 rapier3d = { version = "=0.36.0", features = ["enhanced-determinism"] }
+parry3d = { version = "=0.31.1", features = ["enhanced-determinism"] }
 regex = "1.12"
 ring = "0.17.14"
 rmp-serde = "1.3"

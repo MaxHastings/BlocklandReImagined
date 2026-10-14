@@ -251,6 +251,84 @@ impl Bundle {
             .values()
             .chain(self.prints.iter().flat_map(|p| [&p.diffuse, &p.icon]))
     }
+    /// This bundle with enabled Add-Ons' print packs ([`PrintPack`]) after
+    /// its own prints, as v20 adds every enabled `Print_*` Add-On's prints
+    /// to the print list. Each pack is keyed by its folder, which prefixes
+    /// its image paths ([`Bundle::print_pack_of`] finds it again). A print
+    /// package or print the bundle already has (the base game's own, or an
+    /// earlier pack's) keeps the first; a pack that does not validate is
+    /// left out whole. Returns what was left out and why.
+    pub fn with_print_packs<'a>(
+        mut self,
+        packs: impl IntoIterator<Item = (&'a str, PrintPack)>,
+    ) -> (Self, Vec<String>) {
+        let mut notes = vec![];
+        for (key, pack) in packs {
+            let mut next = self.clone();
+            let known: BTreeSet<String> = next.packages.iter().map(|p| p.name.clone()).collect();
+            let fresh: Vec<Package> = pack
+                .packages
+                .into_iter()
+                .filter(|p| {
+                    let new = !known.contains(&p.name);
+                    if !new {
+                        notes.push(format!("{key}: print package {} is already loaded", p.name));
+                    }
+                    new
+                })
+                .collect();
+            if fresh.is_empty() || pack.schema_version != PRINT_PACK_SCHEMA {
+                if pack.schema_version != PRINT_PACK_SCHEMA {
+                    notes.push(format!("{key}: unsupported print pack schema"));
+                }
+                continue;
+            }
+            for mut print in pack.prints {
+                if !fresh.iter().any(|p| p.name == print.package) {
+                    continue;
+                }
+                if next.resolve(&print.id).is_some()
+                    || print.aliases.iter().any(|a| next.resolve(a).is_some())
+                {
+                    notes.push(format!("{key}: print {} is already loaded", print.id));
+                    continue;
+                }
+                for image in [&mut print.diffuse, &mut print.icon] {
+                    image.path = format!("{key}/{}", image.path);
+                }
+                next.prints.push(print);
+            }
+            next.packages.extend(fresh);
+            match next.validate() {
+                Ok(()) => self = next,
+                Err(e) => notes.push(format!("{key}: print pack left out: {e:#}")),
+            }
+        }
+        (self, notes)
+    }
+    /// The print pack key (see [`Bundle::with_print_packs`]) an image path
+    /// belongs to, with its path inside that pack; `None` for the bundle's
+    /// own images.
+    pub fn print_pack_of<'a>(path: &'a str, keys: &[&'a str]) -> Option<(&'a str, &'a str)> {
+        keys.iter().find_map(|key| {
+            path.strip_prefix(key)
+                .and_then(|rest| rest.strip_prefix('/'))
+                .map(|rest| (*key, rest))
+        })
+    }
+}
+
+pub const PRINT_PACK_SCHEMA: u32 = 1;
+/// An Add-On's prints (`assets/prints.json`, kind `prints`), written by
+/// Import Add-On from a `Print_<aspect>_<name>` Add-On's `prints/` and
+/// `icons/`, as the base game's are in [`Bundle`]. Image paths are relative
+/// to the file's folder.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PrintPack {
+    pub schema_version: u32,
+    pub packages: Vec<Package>,
+    pub prints: Vec<Print>,
 }
 
 #[cfg(test)]
@@ -377,5 +455,55 @@ mod tests {
         let mut b = bundle();
         b.surfaces.remove("top");
         assert!(b.validate().is_err());
+    }
+    fn pack(package: &str, aspect: &str, stem: &str) -> PrintPack {
+        let lower = package.to_ascii_lowercase();
+        PrintPack {
+            schema_version: PRINT_PACK_SCHEMA,
+            packages: vec![Package {
+                name: package.into(),
+                archive: format!("Add-Ons/{package}.zip"),
+                archive_sha256: "c".repeat(64),
+                default_list_line: 1,
+            }],
+            prints: vec![Print {
+                id: format!("print/{lower}/{}", stem.to_ascii_lowercase()),
+                name: stem.into(),
+                aspect: aspect.into(),
+                package: package.into(),
+                aliases: vec![format!("{aspect}/{stem}")],
+                diffuse: image(&format!("prints/{stem}.png")),
+                icon: image(&format!("prints/{stem}-icon.png")),
+            }],
+        }
+    }
+    #[test]
+    fn add_on_print_packs_join_after_the_base_prints() {
+        let modter = pack("Print_ModTer_Default", "ModTer", "brickRAMP");
+        let (b, notes) = bundle().with_print_packs([
+            ("addons/print_modter_default/assets", modter.clone()),
+            // A second copy of the same package, and one of the base game's.
+            ("addons/copy/assets", modter),
+            (
+                "addons/letters/assets",
+                pack("Print_Letters_Default", "Letters", "A"),
+            ),
+        ]);
+        assert_eq!(notes.len(), 2, "{notes:?}");
+        assert_eq!(b.prints.len(), 2);
+        let ramp = b.resolve("ModTer/brickramp").unwrap();
+        assert_eq!(ramp.id, "print/print_modter_default/brickramp");
+        assert!(ramp.compatible("ModTer") && !ramp.compatible("2x2f"));
+        assert_eq!(
+            Bundle::print_pack_of(&ramp.diffuse.path, &["addons/print_modter_default/assets"]),
+            Some(("addons/print_modter_default/assets", "prints/brickRAMP.png"))
+        );
+        assert_eq!(Bundle::print_pack_of("a.png", &["addons/x/assets"]), None);
+        b.validate().unwrap();
+        // A pack that does not validate is left out whole.
+        let mut bad = pack("Print_Bad_Default", "Bad", "x");
+        bad.prints[0].diffuse.path = "../x.png".into();
+        let (b, notes) = bundle().with_print_packs([("addons/bad/assets", bad)]);
+        assert_eq!((b.prints.len(), b.packages.len(), notes.len()), (1, 1, 1));
     }
 }
