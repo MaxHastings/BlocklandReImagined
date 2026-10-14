@@ -205,21 +205,22 @@ All three end in the same files.
 ## Lighting modes
 
 Converted vanilla maps keep their lightmaps (lightmapped architecture
-above), so every mode looks as it does today. Authored maps have no lightmaps. Dynamic lights them live and needs nothing
-more. Classic and Unified (the default) read lightmaps, so a map Add-On
-needs one of:
+above), so every mode looks as it does today. Authored maps have no
+lightmaps, and the player's lighting choice is still respected:
 
-- **(a) Bake at import.** The importer bakes lightmaps from the authored
-  lights and sun with the existing offline bake (`scene_lighting.rs`, a port
-  of v20's `SceneLighting`), so every mode looks right. Extra importer work,
-  bigger downloads, and lights that move or animate are baked at one state.
-- **(b) Dynamic for authored maps.** A map Add-On always renders as Dynamic,
-  whatever the menu says, with a note in the map's description. No bake;
-  needs Dynamic's quality and performance to hold up on authored maps.
+- **Dynamic** lights them live: their map lights, animation and shadows.
+- **Classic** draws them with the map's sun and ambient only: no lamps, no
+  shadows, the flat look many builders prefer (v21's "shaders off"). The
+  loaders already fall back to sun and ambient when a map has no light data.
+- **Unified** (the default) behaves like Classic on an authored map until
+  there is something to unify with.
 
-Recommendation: (b) first, because Dynamic is where the renderer is heading
-and it is what makes animated and movable lights real; add (a) only if
-playtests show Classic and Unified players need it.
+A map is never forced into Dynamic. If authors want their lamps visible
+without Dynamic, the later option is a **bake at import**: the importer
+bakes lightmaps from the authored lights and sun with the existing offline
+bake (`scene_lighting.rs`, a port of v20's `SceneLighting`). It costs
+importer work and bigger downloads, and animated lights bake at one state,
+so it waits until playtests ask for it.
 
 ## Identity, joining and limits
 
@@ -280,8 +281,8 @@ maintain, and none is needed for the workflow above.
   Quake `.map` files with existing community add-ons, then export glTF.
 - **Shadows on brick and image lights.** Worth doing, but it touches the
   effects pipeline and the shadow budget everywhere; it is its own change.
-- **A lightmap bake for Classic and Unified.** Authored maps render as
-  Dynamic (option (b) above).
+- **A lightmap bake for Classic and Unified.** Authored maps show their
+  lamps in Dynamic and sun and ambient elsewhere (Lighting modes above).
 - **A Blender Python reader for `*.interior.json`.** It would be a third
   format reader, and step 3 replaces it.
 
@@ -289,4 +290,6 @@ maintain, and none is needed for the workflow above.
 
 - One map format, one loader and one map list for every map, vanilla
   included, meant to last for years. The core (steps 1 to 5) is approved.
-- Authored maps without lightmaps render as Dynamic.
+- Authored maps without lightmaps follow the player's lighting choice:
+  live lights in Dynamic, sun and ambient only in Classic and Unified. Never
+  forced into Dynamic (Sauce's "no lights, no shaders" for building).

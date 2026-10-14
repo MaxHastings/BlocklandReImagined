@@ -19,7 +19,7 @@ row in `seams.md`. Maps become `shared` Add-On content (`*.map.json` holding
 native models, spawns, lights and heightfield terrain). The import tools are
 glTF (Blender) and TrenchBroom. Converted maps get an export to the same format
 with a round-trip test. Brick, image and map lights become one engine light
-with spot cones, curves and a shadow flag. Authored maps start Dynamic-only.
+with spot cones, curves and a shadow flag. Authored maps show their lamps in Dynamic and sun and ambient in Classic.
 The order of work and the open questions for Maxwell are in the doc. No code
 changed; nothing was built or tested.
 
@@ -36,7 +36,7 @@ release blockers.
 Approved (Maxwell, same day): one place for maps and one pipeline, with the
 vanilla maps moved onto it. The format keeps optional lightmapped
 architecture (`*.interior.json`) beside plain models, so converted maps keep
-their Classic and Unified look and Blender maps render Dynamic. Building
+their Classic and Unified look; Blender maps light live in Dynamic and fall back to sun and ambient in Classic (Sauce asked that no map force shaders on). Building
 starts with the `map` kind and loader.
 
 Light types (pharzedia, same day): map2dif's lights (Omni, Spot, Strobe,
