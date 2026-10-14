@@ -2784,6 +2784,52 @@ fn a_picked_water_floods_a_flat_map_and_lava_burns() {
     assert_eq!(s.vitals()[&admin].health, 65.0);
 }
 
+/// An auto admin is admin from the moment they connect: everyone is told
+/// while they still load, and spawning does not say it again.
+#[test]
+fn a_loading_auto_admin_is_announced_on_connect() {
+    use bri_admin::Principal;
+    use bri_sim::session::{Clan, Notice};
+
+    let mut s = session();
+    let ann = s
+        .join_verified("Ann".into(), Vec3::Y, false, Some(Principal([5; 32])))
+        .unwrap();
+    s.take_private_notices();
+    let host = s
+        .arrive(
+            "Host".into(),
+            &Clan::default(),
+            true,
+            Some(Principal([1; 32])),
+        )
+        .unwrap();
+    let chat = |n: &[(u64, Notice)], to: u64| -> Vec<String> {
+        n.iter()
+            .filter_map(|(o, n)| match n {
+                Notice::Chat(text) if *o == to => Some(text.clone()),
+                _ => None,
+            })
+            .collect()
+    };
+    let arrived = s.take_private_notices();
+    assert_eq!(
+        chat(&arrived, ann),
+        [
+            "\u{E001}Host connected.",
+            "\u{E002}Host has become Super Admin (Host)",
+        ]
+    );
+    assert_eq!(
+        s.admin_state(host).unwrap().role,
+        bri_admin::Role::SuperAdmin
+    );
+    s.enter_arrival(host, Vec3::new(4., 1., 0.)).unwrap();
+    let spawned = s.take_private_notices();
+    assert_eq!(chat(&spawned, ann), ["\u{E001}Host spawned."]);
+    assert!(s.is_administrator(host));
+}
+
 /// v20 accepts a connection before the client loads: `onConnect` tells
 /// everyone "connected." while the player downloads and loads, they chat
 /// meanwhile and do nothing else, and `onClientEnterGame` spawns them and

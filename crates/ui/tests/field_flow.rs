@@ -1040,6 +1040,7 @@ fn players(u: &mut Ui) {
         super_admin: false,
         bl_id: Some(id * 1000),
         trust: trust.into(),
+        loading: false,
     };
     u.apply(UiUpdate::Players {
         rows: vec![
