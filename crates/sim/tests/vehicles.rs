@@ -2431,3 +2431,75 @@ fn respawning_from_a_parked_jeeps_roof_leaves_it_parked() -> anyhow::Result<()> 
     );
     Ok(())
 }
+
+on_both! {
+/// A player standing part way into a doorway has a part beyond its
+/// partner: a car driven at the partner meets that part, as it would the
+/// player standing there, instead of driving into the opening through it.
+fn a_car_meets_the_part_of_a_player_beyond_a_portal(f: &Fixture) -> anyhow::Result<()> {
+    const PORTAL: &str = "test.walk-portal";
+    let car = f.vehicle_definition(Vehicle::Car);
+    let width = bri_sim::player::PlayerTuning::default().width;
+    let mut fronts = Vec::new();
+    let mut pasts = Vec::new();
+    for standing in [true, false] {
+        let mut definitions = f.bricks();
+        definitions.entries.insert(PORTAL.into(), bri_sim::testing::portal(PORTAL, Some([14, 1, 30])));
+        let mut world = World::new("Portals".into(), "test".into(), vec![[1.0; 4]]);
+        // The first opening faces +z at z = -24; its partner faces +x at x = 30.
+        for (id, position, turns) in [(2, [0., 3., -24.25], 0), (3, [30.25, 3., -24.], 1)] {
+            let mut portal = Brick::new(ContentRef::Resolved(PORTAL.into()), position, 0);
+            portal.quarter_turns = turns;
+            portal.name = Some("walk-doorway".into());
+            world.bricks.insert(id, portal);
+        }
+        world.next_brick_id = 4;
+        let mut s = Session::new(Simulation::new(world, definitions, vec![ground()])?);
+        s.set_weapon_pack(f.weapons.clone())?;
+        // Rolling freely, without the driverless engine brake.
+        let mut pack = f.vehicles();
+        pack.definitions.iter_mut().for_each(|d| d.engine_brake = 0.);
+        s.set_vehicle_pack(pack, Vec::new())?;
+        // Walking in until a third of the body is past the first opening's
+        // plane (z = -24, facing +z), or standing well away from it.
+        let target = -24. + width * 0.5 - width / 3.;
+        let owner = s.join("Walker".into(), Vec3::new(if standing { 0. } else { -20. }, 0.05, -20.), true)?;
+        let mut p = Feeder { owner, sequence: 0 };
+        p.feed(&mut s, MoveInput::default(), 30)?;
+        let feet = |s: &Session| Vec3::from(s.motion_states().into_iter().find(|(m, _)| m.owner == owner).unwrap().0.feet);
+        if standing {
+            for _ in 0..240 {
+                if feet(&s).z < target + 0.4 {
+                    break;
+                }
+                p.feed(&mut s, MoveInput { forward: 1., ..Default::default() }, 1)?;
+            }
+        }
+        p.feed(&mut s, MoveInput::default(), 30)?;
+        let stood = feet(&s);
+        if standing {
+            assert!(stood.x.abs() < 1. && (stood.z - target).abs() < 0.5, "the walker is part way in: {stood}");
+        }
+        pasts.push(-24. - (stood.z - width * 0.5));
+        // A car rolling at the partner along -x, nose first.
+        s.spawn_vehicle_at(0, &car.id, Vec3::new(40., 0.6, -24.), -std::f32::consts::FRAC_PI_2, Vec3::new(-15., 0., 0.))?;
+        let mut front = f32::MAX;
+        for _ in 0..400 {
+            p.feed(&mut s, MoveInput::default(), 1)?;
+            let pose = &s.vehicle_poses()[0];
+            // Its nose is the hull's -z end, turned to -x.
+            front = front.min(pose.position[0] + car.bounds_min[2]);
+            if pose.position[0] < 25. {
+                break;
+            }
+        }
+        fronts.push(front);
+    }
+    let past = pasts[0];
+    // With the walker there it stops at their part beyond the partner;
+    // without, it goes on into the opening.
+    assert!(fronts[0] > 30. + past * 0.5, "nose reached {} (the walker's part ends at {})", fronts[0], 30. + past);
+    assert!(fronts[1] < 29., "with nobody there the car goes in: {}", fronts[1]);
+    Ok(())
+}
+}
