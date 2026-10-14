@@ -14,12 +14,13 @@ use crate::presentation::BrickDeath;
 /// from below the brick for anything that reads the blast fields.
 const KILL_POP_FORCE: f32 = 12.0;
 
-/// Most bricks one blast throws as debris. A client draws at most 2048
-/// debris bodies at its highest Physics Quality (v20's
-/// `$pref::Physics::MaxBricks`), and like a v20 client over that limit it
-/// only hides the rest. A blast through a huge build (the Mini-Nuke takes
-/// out thousands) would otherwise fill the presentation queue with kill
-/// cues and push out its own explosion and sound.
+/// Most bricks one blast throws, or one chain kill drops, as debris. A
+/// client draws at most 2048 debris bodies at its highest Physics Quality
+/// (v20's `$pref::Physics::MaxBricks`), and like a v20 client over that
+/// limit it only hides the rest. A blast through a huge build (the
+/// Mini-Nuke takes out thousands) or a Destructo Wand hit that strands one
+/// would otherwise fill the presentation queue with kill cues, push out its
+/// own explosion and sound, and send clients a burst they cannot draw.
 pub const MAX_BLAST_DEBRIS: usize = 2048;
 
 /// Where debris is thrown from, as v20 `transmitBrickExplosion(center, force,
@@ -67,7 +68,6 @@ impl Session {
         // Each brick's look is captured, then all are removed in one pass:
         // a collapse costs one collision refresh, not one per brick.
         let mut fallen = Vec::new();
-        let mut cues = Vec::new();
         for id in stranded {
             let Some(b) = self.simulation.state().bricks.get(&id) else {
                 continue;
@@ -75,13 +75,22 @@ impl Session {
             if self.simulation.definitions.get(b)?.indestructible {
                 continue;
             }
-            cues.push(self.brick_kill_cue(id, None)?);
             fallen.push(id);
         }
+        // At most `MAX_BLAST_DEBRIS` of them, spread evenly over the
+        // collapse, are announced as debris; the rest just vanish.
+        let stride = fallen.len().div_ceil(MAX_BLAST_DEBRIS).max(1);
+        let cues = fallen
+            .iter()
+            .step_by(stride)
+            .map(|&id| self.brick_kill_cue(id, None))
+            .collect::<Result<Vec<_>>>()?;
         self.simulation.remove_many(&engine, &fallen)?;
-        for (id, cue) in fallen.into_iter().zip(cues) {
+        for id in fallen {
             self.dirty.insert(id);
             self.events.respawns.remove(&id);
+        }
+        for cue in cues {
             self.emit_brick_kill(cue);
         }
         Ok(())
