@@ -170,3 +170,37 @@ fn load_from_directory_and_undecodable_clip() {
         Err(AudioError::Io { .. })
     ));
 }
+
+/// An Add-On sound runs at most 30 seconds; a music track (the music bus)
+/// may run longer, and streams rather than decoding into memory.
+#[test]
+fn an_add_on_music_track_may_run_past_a_sounds_thirty_seconds() {
+    use bri_audio::bank::{ClipData, SoundAsset};
+    let (rate, seconds) = (8000u32, 40u32);
+    let data = vec![0u8; (rate * seconds * 2) as usize];
+    let mut wav = Vec::new();
+    wav.extend_from_slice(b"RIFF");
+    wav.extend_from_slice(&(36 + data.len() as u32).to_le_bytes());
+    wav.extend_from_slice(b"WAVEfmt ");
+    wav.extend_from_slice(&16u32.to_le_bytes());
+    wav.extend_from_slice(&1u16.to_le_bytes()); // PCM
+    wav.extend_from_slice(&1u16.to_le_bytes()); // mono
+    wav.extend_from_slice(&rate.to_le_bytes());
+    wav.extend_from_slice(&(rate * 2).to_le_bytes());
+    wav.extend_from_slice(&2u16.to_le_bytes());
+    wav.extend_from_slice(&16u16.to_le_bytes());
+    wav.extend_from_slice(b"data");
+    wav.extend_from_slice(&(data.len() as u32).to_le_bytes());
+    wav.extend_from_slice(&data);
+    let dir = std::env::temp_dir().join(format!("bri-music-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("theme.wav");
+    std::fs::write(&path, &wav).unwrap();
+
+    assert!(SoundAsset::decoded_file("theme", &path, 1.0, 2.0).is_err());
+    let music = SoundAsset::music_file("theme", &path).unwrap();
+    assert_eq!(music.playback.bus, bri_audio::schema::Bus::Music);
+    assert!(music.playback.spatial.is_none());
+    assert!(matches!(&music.data, ClipData::Stream(s) if s.frames == u64::from(rate * seconds)));
+    std::fs::remove_dir_all(&dir).unwrap();
+}

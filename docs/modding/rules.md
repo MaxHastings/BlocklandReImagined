@@ -124,7 +124,7 @@ run are left out. Your rules remove a game's entry when it ends.
 | | | `cut_copy(p)`, `paint_copy(p, color)`, `paint_copy(p, paint)`, `wrench_copy(p)`, `super_cut(p, min, max)`, `fill_box(p, min, max, color)`, `paint_fill(p, brick, paint, options)`, `paint_vehicle(p, vehicle, paint, options)`: `world.edit` |
 | | | `push`, `tumble`, `hold`, `reach`, `hold_distance`, `let_go`, `tether`, `tether_length`, `untether`, `spawn_vehicle`, `remove_vehicle`, `mount_object(mount, rider, node, can_dismount[, turn])`, `unmount_object(rider)`: `physics` |
 | | | `heal(p, amount)`, `fire(...)`, `spawn_explosion(p, projectile, scale)`: `damage` |
-| | | `play_sound(p, sound)` at a player's ears, `sound_at(sound, x, y, z)`, `beam(from, to[, options])`, `play_thread(p, thread, sequence[, after])`, `show_box(p, min, max, tool)`, `hide_box(p)`, `show_shapes(owner, key, shapes)`, `hide_shapes(owner, key)`: `effects` |
+| | | `play_sound(p, sound)` at a player's ears, `sound_at(sound, x, y, z)`, `beam(from, to[, options])`, `play_thread(p, thread, sequence[, after])`, `play_music(p, track[, options])`, `play_music_all(track[, options])`, `stop_music(p[, fade])`, `stop_music_all([fade])` ([Music](#music)), `show_box(p, min, max, tool)`, `hide_box(p)`, `show_shapes(owner, key, shapes)`, `hide_shapes(owner, key)`: `effects` |
 | | | `center_print(p, text, seconds)`, `bottom_print(p, text, seconds[, hide_bar])` (`()` for everyone), `tell_minigame(game, text[, except])`, `center_print_minigame(game, text, seconds)`, `bottom_print_minigame(game, text, seconds)` (a mini-game's members, counted once), `ask(p, title, text, command)` (a yes/no box; yes sends the package's own argument-less `command` as if typed, as v20's `MessageBoxYesNo` did), `plant_error(p, error)`, `message_box(p, title, text)` (an OK box, v20's `MessageBoxOK`): `chat` |
 | `bot_kinds()` (each `#{ id, name, first_names }`, `first_names` a count), `bot_kind(id)`, `bot_first_name(kind, i)`, `bot_limit()`, `bot_name_limit()` (a longer name keeps its first characters) | | `add_bot(game, #{ kind, name[, team] })`, `remove_bot(bot)`, `rest_bot(bot, rest)`, `bot_tool(bot, slot or ())`: `bots` |
 | | | `set_map_lights([x, y, z], radius, options)`: `lighting` |
@@ -782,6 +782,28 @@ later (up to 60), on the first tick at or past that time, as
 what was still waiting, and one player holds at most 64 waiting.
 Prints, sounds, beams and animations share one allowance of 64 a second
 per Add-On.
+
+#### Music
+
+**Music** (`effects`) plays a track at a player's ears on the music bus:
+under their Music volume, silent while they have music turned off, and
+not placed in the world. `play_music(p, track)` plays it for one player,
+`play_music_all(track)` for everyone on the server, players who join later
+included, until `stop_music_all()` or a new map. A player hears one rule
+track at a time: a new one replaces the last. Options go in a map,
+`play_music_all(track, #{ looping: false, fade: 2.0 })`: `looping` (true
+unless set; `loop` is a Rhai keyword) plays it again from the start when
+it ends, and `fade` fades it in over that many seconds, up to 30.
+`stop_music(p, fade)` and `stop_music_all(fade)` fade it out (`fade`
+optional, 0 by default); a new track fades the last one out over its own
+`fade`. The track is a sound your Add-On's `assets/weapons.json` declares
+with `"music": true`, such as `"your-id:theme": { "file":
+"music/theme.ogg", "music": true }`, or one of the game's music loops by
+name (`"musicData_Peaceful"`, as a music brick plays). A `music` sound may
+last up to 10 minutes (8 MiB, WAV or Ogg Vorbis; Ogg keeps a long track
+small) where other sounds stop at 30 seconds, and is streamed while it
+plays. Each call spends one of the 64 prints and sounds a second. Brick
+music loops play on as before.
 
 **Map lights** (`lighting`) switch, dim and recolour the lamps, bulbs and
 tubes baked into the map, for everyone on the server, while they play.
