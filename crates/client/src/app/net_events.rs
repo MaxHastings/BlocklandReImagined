@@ -1243,10 +1243,19 @@ impl App {
             self.ui.apply_session(
                 a.id,
                 UiUpdate::Players {
+                    // Players still loading are listed from the moment they
+                    // connect, as v20's `onConnect` adds them.
                     rows: view
                         .names
                         .iter()
-                        .map(|(&owner, name)| PlayerRow {
+                        .map(|(&owner, name)| (owner, name, false))
+                        .chain(
+                            view.loading
+                                .iter()
+                                .filter(|(owner, _)| !view.names.contains_key(owner))
+                                .map(|(&owner, name)| (owner, name, true)),
+                        )
+                        .map(|(owner, name, loading)| PlayerRow {
                             id: owner,
                             name: plain_chat(name),
                             score: view.vitals.get(&owner).map_or(0, |v| {
@@ -1272,6 +1281,7 @@ impl App {
                             ))
                             .into(),
                             ignoring: a.trust.get(&owner).is_some_and(|t| t.ignoring),
+                            loading,
                         })
                         .collect(),
                     server_name: a.name.clone(),

@@ -1572,6 +1572,7 @@ async fn run(
     // they kept through a network drop.
     let mut backlog = crate::backlog::Backlog::new(cursor);
     let mut names = BTreeMap::new();
+    let mut loading = BTreeMap::new();
     let mut avatars = BTreeMap::new();
     let mut tools = BTreeMap::new();
     let mut weapons = crate::stream::WeaponStream::default();
@@ -1651,7 +1652,7 @@ async fn run(
                     close_admin_disconnects(&mut session,&mut recorder,&mut peers,&mut lobbies);
                     if let Ok(mut listing)=listing.lock(){listing.map=session.simulation().state().map_id.clone();}
                     spawn_points=session.spawn_points().to_vec();
-                    names=session.names();avatars=session.avatars();tools=session.tool_inventories();weapons.reset(session.weapon_view(),session.simulation().state().tick,session.projectile_falls());
+                    names=session.names();loading=session.arrivals();avatars=session.avatars();tools=session.tool_inventories();weapons.reset(session.weapon_view(),session.simulation().state().tick,session.projectile_falls());
                     palette=session.simulation().state().palette.clone();vitals=session.vitals();minigames=session.minigame_views();vehicles=session.vehicle_infos();broken_shapes=session.broken_shapes();targets=session.tutorial_targets();map_lights=session.map_light_rules();world_shapes=(session.world_shapes_revision(),session.world_shapes());environment=session.environment();tuned_revision=session.tuned_revision();weapon_settings=session.weapon_settings().clone();entities=session.package_entities().into_iter().map(|e|(e.id,e)).collect();joined_entities.clear();
                     backlog.reset(cursor);
                     let (checkpoint,bricks)=Checkpoint::from_session(&session,cursor);
@@ -1815,6 +1816,7 @@ async fn run(
                 let changed_weapons=weapons.delta(&session.weapon_view(),tick);
                 let current_palette=&session.simulation().state().palette;let changed_palette=if &palette!=current_palette{palette=current_palette.clone();Some(palette.clone())}else{None};
                 let current_names=session.names();let changed_names=if names!=current_names{names=current_names;Some(names.clone())}else{None};
+                let current_loading=session.arrivals();let changed_loading=if loading!=current_loading{loading=current_loading;Some(loading.clone())}else{None};
                 let changed_vitals=crate::stream::changed_entries(&mut vitals,session.vitals());
                 let changed_entities=EntityDelta::between_joined(&mut entities,&std::mem::take(&mut joined_entities),session.package_entities());
                 let current_minigames=session.minigame_views();let changed_minigames=if minigames!=current_minigames{minigames=current_minigames;Some(minigames.clone())}else{None};
@@ -1830,7 +1832,7 @@ async fn run(
                 if !chat.is_empty()&&!lobbies.is_empty(){broadcast(lobbies.values().map(|l|&l.peer),Kind::Notice,&Message::LobbyChat(chat.clone()));}
                 let next=cursor.checked_add(1).context("Replication sequence exhausted")?;
                 let cues=recorder.take_cues(&mut session);let dropped_cues=session.dropped_cues();
-                let delta=Delta{base:cursor,cursor:next,tick,bricks,names:changed_names,avatars:changed_avatars,tools:changed_tools,weapons:changed_weapons,palette:changed_palette,chat,cues,dropped_cues,vitals:changed_vitals,minigames:changed_minigames,vehicles:changed_vehicles,time_scale:changed_time_scale,broken_shapes:changed_broken,targets:changed_targets,map_lights:changed_lights,environment:changed_environment,archetypes:changed_archetypes,weapon_settings:changed_weapon_settings,entities:changed_entities,world_shapes:changed_shapes};
+                let delta=Delta{base:cursor,cursor:next,tick,bricks,names:changed_names,loading:changed_loading,avatars:changed_avatars,tools:changed_tools,weapons:changed_weapons,palette:changed_palette,chat,cues,dropped_cues,vitals:changed_vitals,minigames:changed_minigames,vehicles:changed_vehicles,time_scale:changed_time_scale,broken_shapes:changed_broken,targets:changed_targets,map_lights:changed_lights,environment:changed_environment,archetypes:changed_archetypes,weapon_settings:changed_weapon_settings,entities:changed_entities,world_shapes:changed_shapes};
                 // An update with nothing in it only moves the clients' clock.
                 // Clients coast projectiles on each update's tick, so they keep 20 Hz.
                 if !delta.is_empty() || dropped_cues!=sent_dropped_cues || weapons.in_flight() || tick.is_multiple_of(HEARTBEAT_INTERVAL) {

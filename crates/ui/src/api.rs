@@ -1245,6 +1245,8 @@ pub struct PlayerRow {
     /// Trust text as shown (`You`, `Full`, `Build`, `None`, or an ownership
     /// label chosen by the host).
     pub trust: String,
+    /// Connected but still downloading and loading: no body yet.
+    pub loading: bool,
 }
 
 /// Session-scoped minigame identities supplied by the authenticated host.
