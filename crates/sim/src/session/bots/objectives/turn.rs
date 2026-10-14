@@ -54,8 +54,12 @@ impl Session {
         }
         if let Some(step) = state.step.as_mut() {
             step.executor.observe_controls(self, bot);
+            // So is a carrier waiting where it delivers for the rules to
+            // take it (its own flag to come home): it holds on there.
             if step.waiting.is_none()
                 && matches!(&step.executor,Executor::Physical(action) if action.progressed())
+                || matches!(&step.executor, Executor::Package(action)
+                    if action.waiting_at_destination())
             {
                 step.deadline = tick.saturating_add(APPROACH_TIMEOUT);
             }

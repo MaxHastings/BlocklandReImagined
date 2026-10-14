@@ -56,7 +56,8 @@ fn prefs_of(game) {
 
 // Per game: the preferences, the captures by team id this round, and the
 // report's tallies (`CTF_numFlagPickups`, `CTF_numFlagReturns`) by row:
-// `team:<id>` and `player:<id>`.
+// `team:<id>` and `player:<id>`, and the recoveries the same way (which
+// bots read to know a recovery they set out for happened).
 fn game_state(game) {
     let games = get("games");
     let key = `${game}`;
@@ -65,12 +66,13 @@ fn game_state(game) {
         prefs: prefs_of(game),
         returns: if "returns" in kept { kept.returns } else { #{} },
         pickups_by: if "pickups_by" in kept { kept.pickups_by } else { #{} },
-        returns_by: if "returns_by" in kept { kept.returns_by } else { #{} }
+        returns_by: if "returns_by" in kept { kept.returns_by } else { #{} },
+        recoveries_by: if "recoveries_by" in kept { kept.recoveries_by } else { #{} }
     }
 }
 fn set_game_state(game, s) {
     let games = get("games");
-    games[`${game}`] = #{ returns: s.returns, pickups_by: s.pickups_by, returns_by: s.returns_by };
+    games[`${game}`] = #{ returns: s.returns, pickups_by: s.pickups_by, returns_by: s.returns_by, recoveries_by: s.recoveries_by };
     set("games", games);
 }
 // One more for the player and their team.
@@ -355,6 +357,7 @@ fn reset_flags(game, gone) {
     s.returns = #{};
     s.pickups_by = #{};
     s.returns_by = #{};
+    s.recoveries_by = #{};
     set_game_state(game, s);
 }
 
@@ -528,7 +531,10 @@ fn recover_flag(s, b, flags, dropped) {
     }
     flags.send_home(b);
     set("flags", flags);
-    let points = game_state(s.game.id).prefs.points_flagrecovery;
+    let state = game_state(s.game.id);
+    state.recoveries_by = tally(state.recoveries_by, s.me.id, s.team.id);
+    set_game_state(s.game.id, state);
+    let points = state.prefs.points_flagrecovery;
     add_score(s.me.id, points);
     if points > 0 {
         tell_game(s.game, `${c3()}${s.me.name} ${magenta()}recovered the ${flag_name(s.game, b)} ${magenta()}flag for ${c3()}${points} ${c5()}${if points == 1 { "point" } else { "points" }}.`);
@@ -810,6 +816,31 @@ fn return_described(s, home, b, flags) {
     }
     true
 }
+// Where a carrier takes a flag: every stand or return point a return
+// counts at, and one waiting only on its own team's flag coming home too
+// (the carrier waits there for it, as a player does). Its own flag goes
+// back to its own stand.
+fn return_way(s, home, b, flags) {
+    if b.game != s.game.id || home.game != s.game.id { return false; }
+    if home.color == s.team.color { return b.id == home.id; }
+    if return_described(s, home, b, flags) { return true; }
+    let prefs = game_state(s.game.id).prefs;
+    if prefs.returnwithoutown != 0 { return false; }
+    let neutral = teams_of_color(s.game, b.color).is_empty();
+    let at_return = b.kind == flag_return();
+    if !(b.kind == flag_spawn() || at_return) || !(b.color == s.team.color || (neutral && at_return)) || locked(b.id, s.team.color) { return false; }
+    if prefs.flagreturnonlyatreturnbrick != 0 && !at_return { return false; }
+    !(home.color == b.color && neutral)
+}
+// Whether this player's touch recovers (or, by hand, takes up) its own
+// team's dropped flag `d` of stand `b` (`on_pickup`).
+fn recovery_described(s, b, flags, dropped) {
+    if b.game != s.game.id || b.kind != flag_spawn() || b.color != s.team.color { return false; }
+    let f = flag_of(flags, b.id);
+    if f == () || !("epoch" in f) || f.state != "dropped" || tick() - f.since < pickup_guard_ticks() { return false; }
+    let mode = game_state(s.game.id).prefs.flagrecovery;
+    mode == 1 || (mode == 2 && get_player(s.me.id, "carrying") == ())
+}
 fn bot_objectives(p) {
     let s = side(p);
     if s == () || !s.me.alive { return []; }
@@ -820,14 +851,16 @@ fn bot_objectives(p) {
         if home.game != s.game.id { continue; }
         let f = flag_of(flags, home.id);
         if f == () || !("epoch" in f) { continue; }
+        let own = home.color == s.team.color;
         let source = ();
         if carrying == home.id && f.state == "carried" && f.carrier == p {
             source = #{ kind: "brick", brick: home.id };
-        } else if carrying == () && pickup_described(s, home, flags, ()) {
+        } else if carrying == () && !own && pickup_described(s, home, flags, ()) {
             source = #{ kind: "brick", brick: home.id };
         } else if carrying == () && f.state == "dropped" {
             for d in drops() {
-                if d.data != () && d.data.brick == home.id && pickup_described(s, home, flags, d.id) {
+                if d.data != () && d.data.brick == home.id
+                    && (if own { recovery_described(s, home, flags, d.id) } else { pickup_described(s, home, flags, d.id) }) {
                     source = #{ kind: "drop", drop: d.id, spawner: home.id };
                     break;
                 }
@@ -837,7 +870,7 @@ fn bot_objectives(p) {
         let destinations = [];
         for kind in [flag_spawn(), flag_return()] {
             for b in bricks(kind) {
-                if return_described(s, home, b, flags) {
+                if return_way(s, home, b, flags) {
                     destinations.push(b.id);
                     if destinations.len() == 8 { break; }
                 }
@@ -845,11 +878,13 @@ fn bot_objectives(p) {
             if destinations.len() == 8 { break; }
         }
         if destinations.is_empty() { continue; }
+        // A capture counts as a return; its own flag back home, as a recovery.
+        let done = if own { "recoveries_by" } else { "returns_by" };
         out.push(#{ kind: "carry_return", id: `return:${home.id}`, source: source,
             item: flag_item(), epoch: #{ scope: "global", key: "flags", path: [`${home.id}`, "epoch"] },
             destinations: destinations,
             carriage: #{ key: "carrying", worn: #{ slot: flag_slot(), image: flag_image() } },
-            completion: #{ scope: "global", key: "games", path: [`${s.game.id}`, "returns_by", `player:${p}`] } });
+            completion: #{ scope: "global", key: "games", path: [`${s.game.id}`, done, `player:${p}`] } });
         if out.len() == 8 { break; }
     }
     out

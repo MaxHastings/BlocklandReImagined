@@ -66,14 +66,20 @@ impl Session {
         if contested || at_the_body || play.enemy == Some(seen.owner) {
             return 1.0;
         }
-        let armed = super::hand_combat::holds_attack(self, seen.owner)
+        let harms = super::hand_combat::holds_harm(self, seen.owner)
             || self
                 .bots
                 .brains
                 .get(&seen.owner)
                 .and_then(|b| b.kind.melee.as_ref())
                 .is_some_and(|m| m.damage > 0.0);
-        if armed { ARMED } else { UNARMED }
+        if harms {
+            ARMED
+        } else if super::hand_combat::holds_attack(self, seen.owner) {
+            SHOVES
+        } else {
+            UNARMED
+        }
     }
 }
 /// What an enemy that hurt it is worth going after: more than any play
@@ -83,6 +89,11 @@ const HURT: f32 = 1.25;
 /// fight's or a chase's full score: less than the play (an objective's
 /// 0.65 against a fight's 0.8).
 const ARMED: f32 = 0.75;
+/// The same for an enemy that can only shove (a broom): less than the play
+/// by more than a held choice's margin (`bot_kind::HOLD_MARGIN`), so a
+/// shoving match begun at the play (knocking one off the ball) gives way
+/// to the play once the play moves off.
+const SHOVES: f32 = 0.7;
 /// The same for an enemy that holds no attack.
 const UNARMED: f32 = 0.25;
 
