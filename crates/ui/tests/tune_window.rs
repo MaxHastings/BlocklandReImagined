@@ -211,8 +211,12 @@ fn a_sent_number_holds_its_row_and_a_typed_one_needs_no_enter() {
     // A slider held by the mouse stays under it whatever arrives, even
     // after its sent number gives up waiting.
     let held = view(&ui).id("TB_Slider0").unwrap();
+    ui.dialogs.last_mut().unwrap().view_mut().set_num(held, 9.5);
     ui.dialogs.last_mut().unwrap().view_mut().pressed =
         Some((held, bri_ui::input::MouseButton::Left));
+    event(&mut ui, "TB_Slider0", EventKind::Changed);
+    ui.update(300);
+    assert_eq!(actions(&mut ui).len(), 1, "sent while held still");
     ui.update(2500);
     ui.apply(UiUpdate::Tune(Some(runner(7.0, false))));
     ui.update(0);

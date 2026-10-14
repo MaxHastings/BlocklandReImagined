@@ -45,6 +45,10 @@ the slider to the body that moves.
   status line names them, Done with unsaved numbers says which once (Done
   again closes; they keep playing for the game), and reopening the window
   in the same game still shows them unsaved instead of forgetting them.
+- Max saw sliders snap back or jitter while dragging. The old window put
+  the replica's number back on a slider as soon as its value was sent, even
+  under the mouse; now a sent number holds its row, and a slider the mouse
+  holds is never moved by an update.
 - `docs/modding/tuning.md` says what applies when.
 
 ## Evidence
@@ -62,7 +66,11 @@ the slider to the body that moves.
   marked rows and after Done with unsaved numbers (1024x768, 1920x1080).
 - `python tools/check.py quick --base origin/v0.3.0-experimental` passed;
   `cargo clippy -p bri-sim -p bri-ui -p bri-client -p bri-net --all-targets
-  -- -D warnings` clean.
+  -- -D warnings` clean. `cargo test -p` for bri-sim, bri-ui and bri-net
+  passed; bri-client passed except `launch.rs`
+  `a_startup_failure_tells_the_player_and_points_at_the_logs`, which fails
+  in this Linux container because `libxkbcommon-x11.so.0` is not installed
+  (unrelated to this change).
 
 ## Next
 
