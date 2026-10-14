@@ -553,6 +553,12 @@ pub struct Definition {
     /// go forward (`maxBackwardSpeed` is only a hover vehicle's).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub reverse_limited: bool,
+    /// The use key (the empty-hand click) on the vehicle within reach
+    /// seats the player in the free seat nearest them; an upturned one
+    /// still flips. Off, v20's: riders board
+    /// only by landing on it.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub board_on_use: bool,
     #[serde(default)]
     pub steering: SteeringSettings,
     /// Blockland's flying forces for a `Wheeled` or `Skis` vehicle; `None`

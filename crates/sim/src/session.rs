@@ -2916,7 +2916,9 @@ impl Session {
                     .simulation
                     .target_through(eye, direction, 10.0)?
                     .and_then(|(hit, _)| Some((hit.brick?, hit.distance)));
-                if self.flip_vehicle(owner, eye, direction, hit.map(|(_, d)| d)) {
+                if self.board_vehicle_by_use(owner, eye, direction, hit.map(|(_, d)| d), tick)
+                    || self.flip_vehicle(owner, eye, direction, hit.map(|(_, d)| d))
+                {
                     return Ok(Reply::Activated(None));
                 }
                 let hit = hit

@@ -31,6 +31,9 @@ const MOUNT_ABOVE: f32 = 0.2;
 /// top edge, until the next moves settle it on top (moves reach the host in
 /// batches), so the seat is taken from the next contact within this.
 const LANDING_TICKS: u64 = bri_world::TICKS_PER_SECOND / 4;
+/// How far a `board_on_use` vehicle may be clicked from the eye, in units
+/// at scale 1: arm's reach to a seat from beside the hull.
+const USE_BOARD_REACH: f32 = 6.0;
 /// The speed (units a second) a move must lose against a vehicle to count
 /// as landing on it. A hop lands at 7 or more; standing on a hull that
 /// rocks on its suspension loses a fraction of one, every few ticks.
@@ -1593,6 +1596,75 @@ impl Session {
             }
         }
         Ok(())
+    }
+    /// A `board_on_use` vehicle clicked within reach while upright seats
+    /// the player in its free seat nearest their feet.
+    /// Returns whether the click was taken: a full vehicle, or one the
+    /// player may not ride, takes it too (with v20's refusal said), so it
+    /// does not flip under them. An upturned one is left to the flip.
+    pub(super) fn board_vehicle_by_use(
+        &mut self,
+        owner: OwnerId,
+        eye: Vec3,
+        direction: Vec3,
+        brick: Option<f32>,
+        tick: u64,
+    ) -> bool {
+        let Some((id, distance)) = self.vehicle_click_target(owner, eye, direction, brick) else {
+            return false;
+        };
+        let Some(peer) = self.peers.get(&owner) else {
+            return false;
+        };
+        let state = peer.player.state();
+        let (feet, scale, archetype) = (Vec3::from(state.feet), state.scale, state.archetype);
+        let world = self.vehicles.world.as_ref().unwrap();
+        let Some(v) = world.vehicle_snapshot(&self.simulation.physics, id) else {
+            return false;
+        };
+        if !world
+            .definition(&v.definition)
+            .is_some_and(|d| d.board_on_use)
+            || distance > USE_BOARD_REACH * scale.max(0.2)
+            || v.seats.is_empty()
+            || self.seated(owner)
+            || !self.archetypes.resolve(archetype).can_ride
+        {
+            return false;
+        }
+        let up = glam::Quat::from_array(v.transform.rotation) * Vec3::Y;
+        if up.y < 0.5 {
+            return false;
+        }
+        if !self.vehicles.may_remount(owner, tick) {
+            return true;
+        }
+        if !self.can_ride(owner, v.owner.0) {
+            let message = self.ride_refusal(owner, v.owner.0);
+            self.center_print(owner, message);
+            return true;
+        }
+        let nearest = v
+            .seats
+            .iter()
+            .filter(|s| s.occupant.is_none())
+            .min_by(|a, b| {
+                let d = |s: &&bri_vehicles::SeatSnapshot| {
+                    Vec3::from(s.transform.position).distance_squared(feet)
+                };
+                d(a).total_cmp(&d(b))
+            })
+            .map(|s| (s.index, s.transform.position));
+        let Some((seat, position)) = nearest else {
+            return true;
+        };
+        if !self.package_ride(owner, id.0) {
+            return true;
+        }
+        let rider = occupant(&self.peers, owner);
+        let world = self.vehicles.world.as_mut().unwrap();
+        let _ = world.mount(&self.simulation.physics, id, seat, rider, position);
+        true
     }
     /// `Vehicle::onActivate`: clicking a slow vehicle you may use flips it
     /// with an impulse of five times its mass, up and away from you.

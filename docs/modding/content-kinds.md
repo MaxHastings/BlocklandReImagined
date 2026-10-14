@@ -256,8 +256,8 @@ the standard player its own jump sound in two files; test
 Footfalls and landings are a body's own too:
 
 ```json
-"sounds": { "footsteps": ["halo-spartan:step_1", "halo-spartan:step_2"],
-            "stride": 3.2, "land": "halo-spartan:land" }
+"sounds": { "footsteps": ["your-id:step_1", "your-id:step_2"],
+            "stride": 3.2, "land": "your-id:land" }
 ```
 
 `footsteps` (up to 8) plays one sound each `stride` units the body covers
@@ -397,6 +397,7 @@ engine changes. The fields that decide how it flies and looks:
 | `wheels[].rebound_damping` | damping while the spring extends, apart from `damping` while it compresses: long, soft springs that soak a landing without bouncing. 0, the default: `damping` both ways, as v20 | none (new) |
 | `gravity_scale` | gravity on this vehicle as a share (0 to 4) of the game's (0.85 floats its jumps). Absent: the game's | none (new) |
 | `wheels[].tire.lateral_grip` | the tyre's grip across as a share (0.05 to 20) of its grip along (`static_friction`, `kinetic_friction`), stretching the friction circle into an ellipse: Halo's Warthog front tyres 0.6, rear 1.44. 1, the default: v20's circle | none (new) |
+| `board_on_use` | the use key (the empty-hand click) on the vehicle within 6 units seats the player in the free seat nearest them; an upturned one still flips. Off: riders board only by landing on it, as in v20 | none (new) |
 | `throttle_brakes` | the throttle against the way the vehicle rolls brakes it with `brake_force` until it stops, then drives the other way (Halo's hard stop when you pull back). Off: v20's reversed engine, which does next to nothing near top speed | none (new) |
 | `reverse_limited` | a wheeled vehicle's engine stops pushing it backward at `reverse_speed`. Off: v20's wheeled vehicles back up as fast as they go forward | none (new) |
 | `weapon.automatic` | the gun fires for as long as the trigger is held: `rate` [first, last] rounds a second rising over `spin_up_ticks`, and `spread` [first, last] radians each round may stray from the aim, rising over `spread_ticks` (120 ticks a second); letting go starts both again from the first. Absent: one shot a pull, at most every `cooldown_ticks` | none (new; Halo's `weap` rate of fire and error angle) |

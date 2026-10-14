@@ -644,6 +644,39 @@ fn the_runner_drives_the_buggy_through_the_fort_and_climbs_out() {
     assert!(g.carries(p, CARBINE));
 }
 
+/// The buggy is `board_on_use`: the use key aimed at it from beside it
+/// seats the Runner without hopping on.
+#[test]
+fn the_use_key_aimed_at_the_buggy_seats_the_runner() {
+    let mut g = Game::new();
+    let p = g.join("Ann");
+    g.steps(40);
+    let feet = Vec3::from(g.state(p).feet);
+    let buggy =
+        g.s.spawn_vehicle_at(p, BUGGY, feet + Vec3::new(0.0, 1.0, -5.0), 0.0, Vec3::ZERO)
+            .unwrap();
+    g.steps(60);
+    // Facing -z, a little down, at the hull; no keys.
+    g.drive(
+        p,
+        MoveInput {
+            yaw: 0.0,
+            pitch: -0.2,
+            ..Default::default()
+        },
+        2,
+    );
+    assert_eq!(g.s.mounted(p), None, "standing beside it");
+    // Empty hands: the click with a gun out fires it.
+    g.cmd(p, Command::EquipTool { slot: None }).unwrap();
+    g.steps(1);
+    g.cmd(p, Command::Activate).unwrap();
+    g.cmd(p, Command::ActivateRelease).unwrap();
+    g.steps(2);
+    let (vehicle, _) = g.s.mounted(p).expect("the use key seated the Runner");
+    assert_eq!(vehicle, buggy);
+}
+
 /// The passenger's seat lets its rider use their weapon: a second Runner
 /// takes it and fires the carbine from the moving buggy.
 #[test]
