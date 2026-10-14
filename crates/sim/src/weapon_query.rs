@@ -23,6 +23,9 @@ pub struct WeaponQuery<'a> {
     pub truncated_targets: usize,
     /// Script-moved map shapes shots can hit (the Tutorial's targets).
     pub shapes: &'a [ShapeTarget],
+    /// Lag compensation: where each shooter saw the other bodies. Aim
+    /// rays and hitscan shots (no projectile age) meet them there.
+    pub rewound: Option<&'a crate::rewind::Rewound>,
 }
 
 /// A moving map shape outside the physics world: its collision parts at
@@ -166,6 +169,14 @@ impl Query for WeaponQuery<'_> {
         }
         let origin = Vector::from_array(start.to_array());
         let simulation = self.simulation;
+        // The bodies this shooter saw elsewhere: met there, not here.
+        let moved = self
+            .rewound
+            .filter(|_| {
+                filter.players && !filter.world_only && filter.projectile_age_ticks.is_none()
+            })
+            .and_then(|r| r.for_shooter(filter.source.0))
+            .unwrap_or_default();
         let predicate = |_: ColliderHandle, collider: &Collider| {
             let Some(target) = target(collider.user_data) else {
                 return false;
@@ -184,6 +195,9 @@ impl Query for WeaponQuery<'_> {
             }
             if let TargetId::Actor(actor) = target {
                 if !filter.players || filter.world_only {
+                    return false;
+                }
+                if moved.iter().any(|m| m.owner == actor.0) {
                     return false;
                 }
                 // Aim rays never hit the shooter's body. Projectiles may return
@@ -262,6 +276,29 @@ impl Query for WeaponQuery<'_> {
                     color: None,
                 })
             });
+        let near_physical = physical.as_ref().map_or(near, |h| h.fraction * distance);
+        let rewound = moved
+            .iter()
+            .filter_map(|m| {
+                let collider = self.simulation.physics.colliders.get(m.collider)?;
+                let pose = Pose::from_parts(
+                    collider.position().translation + Vector::from_array(m.offset.to_array()),
+                    collider.position().rotation,
+                );
+                let hit =
+                    collider
+                        .shape()
+                        .cast_ray_and_get_normal(&pose, &ray, near_physical, true)?;
+                Some((m.owner, hit))
+            })
+            .min_by(|a, b| a.1.time_of_impact.total_cmp(&b.1.time_of_impact))
+            .map(|(owner, hit)| Hit {
+                target: TargetId::Actor(ActorId(owner)),
+                position: start + direction * hit.time_of_impact,
+                normal: hit_normal(Vec3::from_array(hit.normal.to_array()), direction),
+                fraction: hit.time_of_impact / distance,
+                color: None,
+            });
         // Script-moved shapes stop shots and aim rays, not world-only probes.
         let shape = (!filter.world_only)
             .then(|| {
@@ -278,7 +315,7 @@ impl Query for WeaponQuery<'_> {
                 fraction: time / distance,
                 color: None,
             });
-        [physical, brick, terrain, shape]
+        [physical, rewound, brick, terrain, shape]
             .into_iter()
             .flatten()
             .min_by(|a, b| a.fraction.total_cmp(&b.fraction))

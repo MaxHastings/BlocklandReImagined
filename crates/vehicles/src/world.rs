@@ -2586,6 +2586,7 @@ fn actor_step(
         (0., 0.)
     };
     let input = MoveInput {
+        seen: 0,
         forward: throttle,
         right: strafe,
         yaw,

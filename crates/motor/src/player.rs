@@ -96,6 +96,11 @@ pub struct MoveInput {
     /// their own trigger messages as before; the motor ignores this.
     #[serde(default)]
     pub attack: bool,
+    /// The host tick the player's game showed everyone else at when this
+    /// move was made, 0 when not known: the host meets their aimed shots
+    /// with other bodies where they saw them (`bri_sim::rewind`).
+    #[serde(default)]
+    pub seen: u64,
 }
 impl MoveInput {
     pub fn validate(&self) -> Result<()> {

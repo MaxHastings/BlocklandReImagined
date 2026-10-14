@@ -278,7 +278,10 @@ out, with a note.
 
 An image's `shot` can say more of how it fires. `hitscan` (`range`, and
 `moving_range`) lands each projectile at once along a ray, with its
-damage and push; `explosion` names another projectile exploded there in
+damage and push. The ray meets other players where the shooter's own game
+showed them when they fired (lag compensation, up to half a second back),
+so a shot that was on target on their screen hits; a flying projectile
+meets them where they are; `explosion` names another projectile exploded there in
 place of its own, `player_sound` and `other_sound` play there by what it
 hit, `flown` names a projectile flown from the muzzle to that point, and
 `tracer` (`color`, `width`, `seconds`) draws a streak to it. A ray from

@@ -1063,6 +1063,8 @@ pub struct Session {
     weapon_triggers: BTreeMap<OwnerId, weapons::Triggers>,
     /// Items used once without switching to them (`quick_use`).
     quick_uses: BTreeMap<OwnerId, quick_use::QuickUse>,
+    /// Where bodies stood over the last half second, for lag compensation.
+    body_history: crate::rewind::History,
     weapon_gaps: BTreeMap<String, u64>,
     /// `$Pref::Server::FootballRecord`, in feet, for this server run.
     football_record: u32,
@@ -1229,6 +1231,7 @@ impl Session {
             weapon_values: BTreeMap::new(),
             weapon_triggers: BTreeMap::new(),
             quick_uses: BTreeMap::new(),
+            body_history: Default::default(),
             weapon_gaps: BTreeMap::new(),
             football_record: 0,
             ammo_shown: BTreeSet::new(),

@@ -474,6 +474,28 @@ impl Session {
                     == games.get(&target.0).copied().flatten()
         };
         let shapes = self.tutorial_shape_targets();
+        // Lag compensation: each living body's place now, and each
+        // shooter's aimed shots meet the others where they saw them.
+        let now = self.simulation.state().tick;
+        let bodies: Vec<_> = self
+            .peers
+            .iter()
+            .filter(|(_, p)| p.combat.alive)
+            .map(|(owner, p)| {
+                (
+                    *owner,
+                    p.player.collider(),
+                    Vec3::from(p.player.state().feet),
+                )
+            })
+            .collect();
+        self.body_history
+            .record(now, bodies.iter().map(|(owner, _, feet)| (*owner, *feet)));
+        let rewound = self.body_history.rewound(
+            now,
+            self.peers.iter().map(|(owner, p)| (*owner, p.input.seen)),
+            &bodies,
+        );
         let mut query = crate::weapon_query::WeaponQuery {
             simulation: &self.simulation,
             affect: &affect,
@@ -483,6 +505,7 @@ impl Session {
             responses: &self.events.projectile_responses,
             truncated_targets: 0,
             shapes: &shapes,
+            rewound: Some(&rewound),
         };
         let events = self.weapons.step(&mut query);
         let truncated = query.truncated_targets;

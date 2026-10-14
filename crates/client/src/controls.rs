@@ -900,6 +900,7 @@ impl Controls {
             1.0
         };
         MoveInput {
+            seen: 0,
             forward: self.axis(HeldControl::Forward, HeldControl::Backward) * walk,
             right: self.axis(HeldControl::Right, HeldControl::Left) * walk,
             yaw,

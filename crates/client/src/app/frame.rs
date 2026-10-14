@@ -260,7 +260,7 @@ impl App {
                     self.controls.let_go(control);
                 }
             }
-            let input = if alive {
+            let mut input = if alive {
                 rider_input(self.net.abilities, self.controls.movement(), mounted)
             } else {
                 // Corpses ignore controls; keep aim so the server agrees.
@@ -287,6 +287,9 @@ impl App {
                 })
             });
             self.motion.set_tool_jet(tool_jet);
+            // When this move saw everyone else, for the host to meet our
+            // shots with them there.
+            input.seen = self.motion.seen_tick();
             if let Some((newest, inputs)) = self.motion.advance(
                 game_elapsed.as_secs_f32(),
                 input,

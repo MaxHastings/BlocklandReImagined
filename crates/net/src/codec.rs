@@ -434,6 +434,7 @@ mod tests {
             jump: true,
             crouch: true,
             jet: true,
+            seen: u64::MAX,
         };
         let movement = Movement {
             version: VERSION,

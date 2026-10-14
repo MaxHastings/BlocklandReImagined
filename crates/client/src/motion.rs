@@ -905,6 +905,22 @@ impl Motion {
         }
         &self.presented
     }
+    /// The host tick this game shows other players at now, for the host's
+    /// lag compensation (`MoveInput::seen`): the latest of their drawn
+    /// ticks, 0 while none is drawn.
+    pub fn seen_tick(&self) -> u64 {
+        let Some(now) = self.server_tick() else {
+            return 0;
+        };
+        self.remote_delays
+            .values()
+            .map(|delay| now - delay)
+            .filter(|t| t.is_finite() && *t > 0.0)
+            .fold(None, |best: Option<f64>, t| {
+                Some(best.map_or(t, |b| b.max(t)))
+            })
+            .map_or(0, |t| t.floor() as u64)
+    }
     /// The server tick `owner` renders at this frame: its delay eases toward
     /// its pose rate's ([`remote_delay`]) so its motion never jumps.
     fn remote_render_tick(&mut self, owner: OwnerId, server_tick: f64) -> Option<f64> {
