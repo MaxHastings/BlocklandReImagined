@@ -49,19 +49,30 @@ Old Blockland v20 Add-Ons (`.zip` files) also work: see [Old v20 Add-Ons and new
 3. Change `name`, `description` and `authors`, then make it your own.
 
 A weapon only needs a new id. A rule needs its commands and state changed in
-`behaviour.json` and its script rewritten ([Game rules](rules.md)).
+`behaviour.json` and its script rewritten ([Game rules](rules.md)). Rules
+are written in Rhai, a small scripting language; [Rhai in ten
+minutes](rhai.md) teaches the parts rules use.
 
 ## 2. Check it and try it
 
-You need a checkout of this repository and Rust (see the main
-[README](../../README.md)); neither the game nor v20 content is needed.
+You don't need Rust. The game's download carries two tools for this beside
+the game itself: `bri-addon-check` and `bri-addon-run` (`.exe` on Windows;
+on a Mac they are in `BlocklandReImagined.app/Contents/MacOS/`). Open a
+terminal in the game's folder (on Windows, type `cmd` in the folder's
+address bar) and run them from there. The samples are in this repository:
+on GitHub, **Code > Download ZIP** gets them without git.
 
 **Check** that the game can load it. Put the Add-Ons it depends on in the
 same parent folder as it (for a HUD, next to its rule):
 
 ```sh
-cargo run -p bri-package-runtime --bin bri-addon-check -- path/to/coin-rain
+bri-addon-check path/to/coin-rain
 ```
+
+(`.\bri-addon-check` in PowerShell, `./bri-addon-check` on Linux and Mac.)
+In a checkout of this repository, `cargo run -p bri-package-runtime --bin
+bri-addon-check --` and `cargo run -p bri-sim --bin bri-addon-run --` do the
+same, built from your checkout.
 
 It prints who needs the Add-On (the host only, each player, or everyone),
 what it provides and may do, and every mistake with its file, line and a
@@ -78,8 +89,7 @@ Add-Ons it needs in an empty world with two players, `Host` (an admin) and
 chat, the state players receive and any script problem:
 
 ```sh
-cargo run -p bri-sim --bin bri-addon-run -- path/to/coin-rain \
-  --send coins --wait 20 --send "gift 1" --send "Guest: coins"
+bri-addon-run path/to/coin-rain --send coins --wait 20 --send "gift 1" --send "Guest: coins"
 ```
 
 `--wait N` waits N more seconds before the next command, `--seconds N` runs
@@ -108,7 +118,7 @@ that changed; host again to play them. A body's numbers are the exception:
 **Share it** as one ZIP that installs byte for byte:
 
 ```sh
-cargo run -p bri-package-runtime --bin bri-addon-check -- path/to/coin-rain --package
+bri-addon-check path/to/coin-rain --package
 ```
 
 It runs the check above first and packs nothing when the check fails. The
@@ -124,7 +134,8 @@ and the game installs it as it is.
 
 Each topic has its own page:
 
-3. [Game rules](rules.md)
+3. [Game rules](rules.md), and [Rhai in ten minutes](rhai.md) if the
+   scripting language is new to you
 4. [HUD panels](hud.md)
 5. [Weapons](weapons.md)
 6. [Other content kinds](content-kinds.md)

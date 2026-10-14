@@ -13,8 +13,9 @@ The workflow runs the same recipe as a release built by hand
 1. Fetch the generated v20 content and the Add-On bundle (below). It stops
    here with a clear error when either was never uploaded or lacks a pack or
    an original this commit needs.
-2. `cargo build --release --locked` of `bri-client`, `bri-import-addon` and
-   `bri-server`, with `BRI_VERSION` set to the version.
+2. `cargo build --release --locked` of `bri-client`, `bri-import-addon`,
+   `bri-server` and the modder tools `bri-addon-check` and `bri-addon-run`
+   (the Mac build has no `bri-server`), with `BRI_VERSION` set to the version.
 3. `bri-client --check` against the content.
 4. `tools/package_playtest.ps1 -Version <v> -ExpectedExecutableSha256 <hash>`
    (releases leave the Stress Lab test Add-Ons out), writing

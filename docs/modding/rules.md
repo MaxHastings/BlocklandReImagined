@@ -110,11 +110,11 @@ run are left out. Your rules remove a game's entry when it ends.
 
 | Read | Change state | Act on the world (needs capability) |
 |---|---|---|
-| `tick()`, `seed()`, `caller()` | `get(key)`, `set(key, value)` | `tell(player, text)`, `broadcast(text)`: `chat` |
+| `tick()`, `seed()`, `caller()`, `game_version()` (the host's, as the main menu shows it) | `get(key)`, `set(key, value)` | `tell(player, text)`, `broadcast(text)`: `chat` |
 | `players()`, `bots()`, `player(id)` | `get_player(p, key)`, `set_player(p, key, v)` | `remove_brick`, `place_brick`, `set_block_state(brick, state)`: `world.edit` |
 | `aim()`, `me()`, `entities()` | `add_player(p, key, amount)` | `damage(target, amount[, by[, type]])`, `explode(...)`: `damage` |
 | `noise(seed, x, z)`, `hash3(seed, x, y, z)` | `entity_get(e, key)`, `entity_set(e, key, v)` | `spawn_entity`, `remove_entity`, `steer`, `label`: `entity` |
-| `object(ref)`, `objects()`, `objects_near(x, y, z, r)`, `held(p)`, `tethered(p)` | | `teleport`, `respawn`, `set_archetype`, `push_archetype`, `pop_archetype`, `control(p, entity)`, `release(p)`, `give_item(p, item, equip)`, `take_item(p, item)`, `drop_item(item, x, y, z[, vx, vy, vz[, data]])`, `drop_item(item, #{ ... })`, `remove_drop(id)`, `name_drop(id, text, c)`: `player` |
+| `object(ref)`, `objects()`, `objects_near(x, y, z, r)`, `held(p)`, `tethered(p)` | | `teleport`, `respawn`, `remove_body(p)` (takes the body away without a death: no score, no death line, no `on_death`; they wait to respawn like the dead), `scroll_mode(p, mode)` (what the mouse wheel and number keys pick: `"none"`, `"bricks"`, `"paint"` or `"tools"`, leaving what is in hand), `set_archetype`, `push_archetype`, `pop_archetype`, `control(p, entity)`, `release(p)`, `give_item(p, item, equip)`, `take_item(p, item)`, `drop_item(item, x, y, z[, vx, vy, vz[, data]])`, `drop_item(item, #{ ... })`, `remove_drop(id)`, `name_drop(id, text, c)`: `player` |
 | `raycast(from, dir, range[, ignore])`, `can_damage(by, target)`, `enabled(add_on)`, `lan()` | | `set_fov(p, fov)`, `set_speed_scale(p, scale)`, `set_image_ammo(p, ammo)`, `set_image_loaded(p, loaded)`, `mount_image(p, image)`, `mount_image(p, image, slot[, paint or #{ paint, keep }])`, `unmount_image(p)`, `emote(p, image[, skip_spam])`, `set_scale(p, scale)`, `set_look_limits(p, up, down)`, `orbit_camera(p, target[, nearest, farthest], distance[, body])`: `player` |
 | | | `give_ammo(p, ammo, rounds)`, `set_reserve(p, ammo, rounds)`, `set_rounds(p, item, rounds)`, `reload(p)`, `set_image_state(p, state)`, `quick_use(p, item)`: `player` |
 | `minigames()`, `minigame(id)`, `setting(game, key)`, `team_setting(game, team, key)`, `server_setting(key)`, `pref(global)`, `bricks(kind)`, `brick(id)`, `palette()`, `drops()` | | `set_teams(game, teams, options)`, `set_team(p, team)`, `set_score(p, n)`, `add_score(p, n)`, `reset_minigame(game)`, `set_setting(game, key, v)`, `set_team_setting(game, team, key, v)`, `hold_respawn(p, held)`, `end_round(game, winners)`, `report_column(game, key, title, cells)`: `minigame`; `show_report(p, report)`, `hide_report(p)`: `chat`; `watch(p, target)`, `follow_path(p, knots)`, `free_camera(p)`, `orbit_point(p, at, distance)`: `player`; `set_brick_item(brick, item)`, `set_brick_color(brick, c)`, `set_brick_shown(brick, rendering, colliding, raycasting)`: `world.edit`; `fire_brick_input(brick, input, p)`, `fire_game_input(game, input, p, killer)`, `set_brick_field(brick, key, v)`: `brick_events`; `brick_field(brick, key)` reads |
@@ -129,6 +129,14 @@ run are left out. Your rules remove a game's entry when it ends.
 | `bot_kinds()` (each `#{ id, name, first_names }`, `first_names` a count), `bot_kind(id)`, `bot_first_name(kind, i)`, `bot_limit()`, `bot_name_limit()` (a longer name keeps its first characters) | | `add_bot(game, #{ kind, name[, team] })`, `remove_bot(bot)`, `rest_bot(bot, rest)`, `bot_tool(bot, slot or ())`: `bots` |
 | | | `set_map_lights([x, y, z], radius, options)`: `lighting` |
 | `environment()` | | `set_environment(#{ ... })`, `reset_environment()`: `environment` |
+
+**Data files.** A UTF-8 text file your Add-On provides as kind `data`
+(`{ "kind": "data", "id": "coin-rain:data/names", "file": "names.txt" }`
+in `provides`: a list of names, a table) is read a line at a time, by its
+id or its last part: `data_line_count("names")` is how many lines it has
+(`()` when there is no such file) and `data_line("names", i)` is line `i`,
+from 0 (`()` past the end). Reading a line at a time keeps a long file
+within a script value's text limit.
 
 A string literal in your rules may colour its text as v20's did: `\c0`
 to `\c9` pick the profile's colours, `\cr`, `\cp` and `\co` reset, push
@@ -202,6 +210,14 @@ range, trajectory, reach and available ammunition. A provider can select a tool
 with `bot_tool(bot, slot)`; `bot_tool(bot, ())` puts its tools
 away), and respawns as soon as its game lets it. `rest_bot(bot, true)`
 holds it still with its fire held, `rest_bot(bot, false)` lets it go.
+`bot_intent(bot, intent)` tells the brain where to keep to; it still
+walks, rides and fights on its own, and a fight comes first within those
+bounds. `#{ guard: [x, y, z], radius }` keeps it within `radius` (6 by
+default) of a point; `#{ patrol: [[x, y, z], ...], radius }` walks up to 16
+points in turn (radius 12 by default); `#{ follow: p, distance }` keeps it
+within `distance` (4) of a player or bot; `#{ flee: p, seconds }` runs from
+`p`, or from every enemy it knows with `()`, for `seconds` (5); `()` drops
+the intent. Radii are 0.5 to 256.
 `remove_bot(bot)` takes it away; it also leaves when its game ends or it
 is put out of it. Arming/removing is restricted to the package that added it.
 Resting is also available to the bot kind's provider and companions explicitly
@@ -322,6 +338,11 @@ teammates from hurting each other while `friendly_fire` is off, sends team
 chat to the team, and tells `on_minigame` about every change. These need
 the `minigame` capability. A rule set like Slayer's sorts players with
 `on_minigame` and spawns them on their team's bricks with `on_pick_spawn`.
+`minigame_snapshot(game)` reads a game as a saved build keeps it (its
+settings, Add-On settings, teams and per-game state), or `()`, and
+`restore_minigame(game, snapshot)` puts such a snapshot into a game, for
+presets like Slayer's saved configs. `revive_bricks(game)` brings back at
+once every knocked-out brick of the game's builders (Slayer's reset).
 
 **Add-On settings.** A rule declares the settings a mini-game's owner picks
 in its behaviour's `settings`, and the host shows them in its Mini-Game
@@ -384,7 +405,12 @@ default when unset), `server_setting(key)` a server-wide one, and
 global whichever running Add-On declares it, or `()` when none does (an
 unset global), as every script read the one global; `set_setting(game, key, value)` and
 `set_team_setting(game, team, key, value)` change it, `()` putting the
-default back (`minigame` capability). `on_minigame` gets `kind ==
+default back (`minigame` capability). `setting_text(game, key)` and
+`team_setting_text(game, team, key)` give a value as players read it
+(`True`/`False`, a list choice's or an item's name, a number or the text),
+for announcing a change, and `setting_info(key)` how a setting is declared
+(its title, category, scope, kind, and whether a change is `quiet` or
+`resets` the game), or `()` for no such setting. `on_minigame` gets `kind ==
 "settings"` when anyone changes them: `keys` maps each changed
 `namespace:key` to `true` (`"my_rules:points" in event.keys`), and
 `changes` maps each to the teams it changed for (`()` for the game's own),
@@ -1015,6 +1041,11 @@ its pivot on the grid. `pivot_copy(p, "start")` makes the copy turn about,
 and go against what is clicked by, the brick it was taken from first (the
 clicked brick of a stack) instead of its whole box (`"whole"`, the
 default); the player's game is told, as the turn keys are theirs.
+`shift_copy(p, x, y, z, super_shift)` moves the copy the player is placing
+as their shift keys would: `x` studs away along their facing, `y` studs to
+their left and `z` plates up, or by the copy's own size with `super_shift`
+true. `rotate_copy(p, 1)` turns it a quarter turn clockwise seen from
+above, `-1` the other way.
 `plant_as(p, target, admin)` plants the player's copies into another brick
 group: `target` is a player's name or part of it, or a BL_ID with bricks in
 the world; `""` plants into their own again. They need build trust with
@@ -1125,7 +1156,10 @@ face each last their own time and end when the player respawns.
 **Paint pickers.** An image with `paint_picker: true` stays in hand when its
 holder picks a colour or FX can (v20 Add-Ons packaged `serverCmdUseSprayCan`
 and `serverCmdUseFXCan` to remount theirs); the pick shows in
-`player(p).paint` and `fx_can`.
+`player(p).paint` and `fx_can`. `take_paint(p, true)` (`build`) goes
+further while it holds: picking a colour or FX can runs the held image's
+`paint` command (in its `commands`) and no can comes out, as the
+Duplicator's fill colour does; `take_paint(p, false)` stops it.
 
 **Uniforms.** `set_avatar_colors(p, #{ torso: [0.8, 0.1, 0.1], rarm: [...] })`
 paints parts of a player's own look with the rule's colours (`player`),
