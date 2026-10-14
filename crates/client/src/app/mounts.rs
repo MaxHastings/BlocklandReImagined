@@ -79,6 +79,9 @@ impl App {
         let wanted = driven.and_then(|id| {
             let info = view.vehicles.get(&id)?;
             let pose = view.vehicle_poses.get(&id)?;
+            // Seated before the host's crew list says so: its pose carries
+            // nothing to predict from yet, so the next one is waited for.
+            (!view.viewed_vehicles.contains(&id)).then_some(())?;
             motion
                 .drive_anchor_ready(id, pose.tick, pose.driver_input, pose.passage_frame)
                 .then_some(())?;

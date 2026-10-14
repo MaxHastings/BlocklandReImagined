@@ -211,12 +211,13 @@ struct Viewer {
 impl Viewer {
     fn tick(&mut self, d: &bri_vehicles::Definition, pose: &VehiclePose) -> Result<usize> {
         let pose = if self.wire {
-            // A guest's copy, as the host's datagram carries it.
-            let bytes = bri_net::codec::encode_datagram(&bri_net::protocol::Datagram::Vehicle(
-                pose.clone(),
-            ))?;
+            // A guest's copy, as the host's datagram carries it to a player
+            // not riding the vehicle.
+            let bytes = bri_net::codec::encode_datagram(
+                &bri_net::protocol::Datagram::VehicleView(bri_net::protocol::VehicleView::of(pose)),
+            )?;
             match bri_net::codec::decode_datagram(&bytes)? {
-                bri_net::protocol::Datagram::Vehicle(p) => p,
+                bri_net::protocol::Datagram::VehicleView(v) => v.into_pose(),
                 other => anyhow::bail!("decoded {other:?}"),
             }
         } else {

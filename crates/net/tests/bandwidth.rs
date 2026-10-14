@@ -7,6 +7,8 @@ mod common;
 use anyhow::{Context, Result};
 use bri_net::{
     client::Client,
+    codec::encode_datagram_item,
+    protocol::{Datagram, VehicleView},
     server::{self, ServerHandle},
     traffic::{Kind, TrafficSample},
 };
@@ -547,31 +549,12 @@ async fn bandwidth_table() -> Result<()> {
     finish(clients, server).await?;
     // Vehicles need the converted vehicle pack; their datagram is priced
     // here instead. A parked vehicle settles like a still player.
-    let jeep = bri_net::protocol::Datagram::Vehicle(bri_sim::session::VehiclePose {
-        passage_frame: Default::default(),
-        id: 1000,
-        tick: 1_000_000,
-        position: [12.5, 1.25, -40.0],
-        rotation: [0.01, 0.7, 0.01, 0.7],
-        velocity: [8.0, 0.1, -3.0],
-        steering: 0.2,
-        wheel_suspension: vec![0.1; 4],
-        wheel_rotation: vec![1.5; 4],
-        wheel_contact: vec![true; 4],
-        wheel_tire: vec![Default::default(); 4],
-        turret_aim: [0.0; 2],
-        jetting: false,
-        angular_velocity: [0.1, 0.4, 0.0],
-        mouse_steering: [0.3, 0.0],
-        driver_input: 123_456,
-        driver_steering: (false, false),
-        steering_quiet: 0,
-        actor: None,
-    });
-    let size = bri_net::codec::encode_datagram_item(&jeep)?.len();
+    let crew = encode_datagram_item(&Datagram::Vehicle(driving_jeep()))?.len();
+    let view =
+        encode_datagram_item(&Datagram::VehicleView(VehicleView::of(&driving_jeep())))?.len();
     eprintln!(
-        "a driving four-wheel vehicle: {size} B per pose, {} B/s to each player at 40 Hz",
-        size * 40
+        "a driving four-wheel vehicle: {view} B per pose, {} B/s to each player at 40 Hz ({crew} B to its crew)",
+        view * 40
     );
     for bricks in [10_000, 100_000] {
         let server = host(big_world(bricks))?;
@@ -625,6 +608,41 @@ fn knocked_out(client: &Client) -> usize {
         .values()
         .filter(|b| !b.visible)
         .count()
+}
+
+/// A jeep driven at speed, as the host replicates it.
+fn driving_jeep() -> bri_sim::session::VehiclePose {
+    bri_sim::session::VehiclePose {
+        passage_frame: Default::default(),
+        id: 1000,
+        tick: 1_000_000,
+        position: [12.5, 1.25, -40.0],
+        rotation: [0.01, 0.7, 0.01, 0.7],
+        velocity: [8.0, 0.1, -3.0],
+        steering: 0.2,
+        wheel_suspension: vec![0.1; 4],
+        wheel_rotation: vec![1.5; 4],
+        wheel_contact: vec![true; 4],
+        wheel_tire: vec![Default::default(); 4],
+        turret_aim: [0.0; 2],
+        jetting: false,
+        angular_velocity: [0.1, 0.4, 0.0],
+        mouse_steering: [0.3, 0.0],
+        driver_input: 123_456,
+        driver_steering: (false, false),
+        steering_quiet: 0,
+        actor: None,
+    }
+}
+
+/// Players not riding a vehicle get only what draws it: 101 B a pose, 276 B when
+/// everyone got the crew's prediction state too.
+#[test]
+fn a_driving_vehicle_costs_watchers_under_its_byte_budget() -> Result<()> {
+    let view =
+        encode_datagram_item(&Datagram::VehicleView(VehicleView::of(&driving_jeep())))?.len();
+    assert!(view < 130, "a driving jeep costs watchers {view} B a pose");
+    Ok(())
 }
 
 // Budgets: about twice what each scene measured when they were set (see the

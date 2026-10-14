@@ -1,0 +1,18 @@
+{
+  "schema_version": 1,
+  "notes": "Brick_ModTer_4xPackZ chooses each brick's category with an expression that reads Brick_Modified_ModTer's install state and preferences. That Add-On is not bundled, so the expression is Baseplates, as it is in v20 without it. datablocks.cs declares the twelve bricks with that category and the copy's other fields.",
+  "replaces": [
+    "brick4Cube1ModTerData",
+    "brick4Wedge1ModTerData",
+    "brick4Ramp1ModTerData",
+    "brick4Ramp1invModTerData",
+    "brick4CornerA1ModTerData",
+    "brick4CornerA1invModTerData",
+    "brick4CornerB1ModTerData",
+    "brick4CornerB1invModTerData",
+    "brick4CornerC1ModTerData",
+    "brick4CornerC1invModTerData",
+    "brick4CornerD1ModTerData",
+    "brick4CornerD1invModTerData"
+  ]
+}

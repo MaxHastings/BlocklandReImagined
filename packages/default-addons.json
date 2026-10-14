@@ -1083,6 +1083,78 @@
       }
     },
     {
+      "id": "brick_modter_4xpack",
+      "original": {
+        "addon": "Brick_ModTer_4xPack",
+        "title": "Modular Terrain 4x Pack",
+        "authors": [
+          "[GSF]Ghost"
+        ],
+        "version": "1.0.0",
+        "sha256": [
+          "2b02971a072b45e718bb2d6aa928bd1fa3b25afe7d498fbe974a4e81ff611d4d"
+        ]
+      }
+    },
+    {
+      "id": "brick_modter_4xpackz",
+      "original": {
+        "addon": "Brick_ModTer_4xPackZ",
+        "title": "Modular Terrain 4x Pack (No Overlap)",
+        "authors": [
+          "[GSF]Ghost",
+          "Trinko"
+        ],
+        "version": "1.0.0",
+        "sha256": [
+          "2eed90209613bc73f2594d91d98529d1088ef8a83f23c14f0a0613975301007f"
+        ]
+      }
+    },
+    {
+      "id": "brick_modter_basicpack",
+      "original": {
+        "addon": "Brick_ModTer_BasicPack",
+        "title": "Modular Terrain Basic Pack",
+        "authors": [
+          "[GSF]Ghost"
+        ],
+        "version": "1.0.0",
+        "sha256": [
+          "1e9d96e1ca92db4842518985ae553ced96cf766b23f58604dc74f552f4959ef4"
+        ]
+      }
+    },
+    {
+      "id": "brick_modter_invertedpack",
+      "original": {
+        "addon": "Brick_ModTer_InvertedPack",
+        "title": "Modular Terrain Inverted Pack",
+        "authors": [
+          "[GSF]Ghost"
+        ],
+        "version": "1.0.0",
+        "sha256": [
+          "2b64f67a43ef47f48ec8cc4a7685a04d2171fabc8eb6826a6a0fbac52b8b6d06"
+        ]
+      }
+    },
+    {
+      "id": "brick_modter_siba",
+      "original": {
+        "addon": "Brick_ModTer_siba",
+        "title": "ModTer Bricks by siba",
+        "authors": [
+          "siba",
+          "Masterlegodude"
+        ],
+        "version": "1.0.0",
+        "sha256": [
+          "a6b6704bc78cf07c00733f826bf4f89e5bcbbc9983e0d83c00612ff9bbb45ee8"
+        ]
+      }
+    },
+    {
       "id": "brick_morerounds",
       "original": {
         "addon": "Brick_MoreRounds",
@@ -1343,6 +1415,20 @@
         ]
       },
       "enabled": false
+    },
+    {
+      "id": "print_modter_default",
+      "original": {
+        "addon": "Print_ModTer_Default",
+        "title": "Modular Terrain Default Prints",
+        "authors": [
+          "[GSF]Ghost"
+        ],
+        "version": "1.0.0",
+        "sha256": [
+          "2f5e141ebabb6f0a6ad59eebe0806f81d1d3fb0daa770a9ba13a11c1e953d3b9"
+        ]
+      }
     }
   ]
 }

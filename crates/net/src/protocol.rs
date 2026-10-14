@@ -433,10 +433,89 @@ pub enum Datagram {
     /// Another player's pose.
     #[serde(rename = "r")]
     Remote(RemotePose),
+    /// A vehicle's pose for its crew, who predict it.
     #[serde(rename = "v")]
     Vehicle(bri_sim::session::VehiclePose),
+    /// A vehicle's pose for everyone else.
+    #[serde(rename = "w")]
+    VehicleView(VehicleView),
     #[serde(rename = "o")]
     Orb(Orb),
+}
+/// A vehicle's pose for players not riding it: what drawing it needs,
+/// without what only its crew's prediction reads (its spin, the driver's
+/// mouse steering, acknowledged move and steering prefs, the tyres' state,
+/// a mount's motor). Position, rotation and velocity are quantized like
+/// [`RemotePose`]'s, and the usual passage frame is left out. A driving
+/// jeep's pose was 276 bytes to every player at 40 Hz.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct VehicleView {
+    pub id: u64,
+    pub tick: u64,
+    /// Centimetres.
+    pub position: [i32; 3],
+    /// The rotation quaternion in ten-thousandths.
+    pub rotation: [i16; 4],
+    /// Centimetres per second.
+    pub velocity: [i16; 3],
+    pub steering: f32,
+    pub wheel_suspension: Vec<f32>,
+    pub wheel_rotation: Vec<f32>,
+    pub wheel_contact: Vec<bool>,
+    pub turret_aim: [f32; 2],
+    pub jetting: bool,
+    /// None for the identity frame (no passage crossed). Last and left out
+    /// when none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub passage_frame: Option<bri_content::passage::PassageFrame>,
+}
+impl VehicleView {
+    pub fn of(pose: &bri_sim::session::VehiclePose) -> Self {
+        Self {
+            id: pose.id,
+            tick: pose.tick,
+            position: pose.position.map(|x| (x * CENTIMETRES).round() as i32),
+            rotation: pose.rotation.map(|q| quantize(q, LOOK_UNITS)),
+            velocity: pose.velocity.map(|v| quantize(v, CENTIMETRES)),
+            steering: pose.steering,
+            wheel_suspension: pose.wheel_suspension.clone(),
+            wheel_rotation: pose.wheel_rotation.clone(),
+            wheel_contact: pose.wheel_contact.clone(),
+            turret_aim: pose.turret_aim,
+            jetting: pose.jetting,
+            passage_frame: (pose.passage_frame != Default::default()).then_some(pose.passage_frame),
+        }
+    }
+    /// The pose with the crew's prediction state blank, as for a vehicle
+    /// nobody drives.
+    pub fn into_pose(self) -> bri_sim::session::VehiclePose {
+        let rotation = glam::Quat::from_array(self.rotation.map(|q| f32::from(q) / LOOK_UNITS));
+        bri_sim::session::VehiclePose {
+            id: self.id,
+            tick: self.tick,
+            position: self.position.map(|x| x as f32 / CENTIMETRES),
+            rotation: if rotation.length_squared() > 0.25 {
+                rotation.normalize().to_array()
+            } else {
+                glam::Quat::IDENTITY.to_array()
+            },
+            velocity: self.velocity.map(|v| f32::from(v) / CENTIMETRES),
+            steering: self.steering,
+            wheel_suspension: self.wheel_suspension,
+            wheel_rotation: self.wheel_rotation,
+            wheel_contact: self.wheel_contact,
+            wheel_tire: Vec::new(),
+            turret_aim: self.turret_aim,
+            jetting: self.jetting,
+            angular_velocity: [0.0; 3],
+            mouse_steering: [0.0; 2],
+            driver_input: 0,
+            passage_frame: self.passage_frame.unwrap_or_default(),
+            driver_steering: bri_sim::session::DEFAULT_STEERING,
+            steering_quiet: 0,
+            actor: None,
+        }
+    }
 }
 /// Where an admin's free camera is: its `cameraImage` orb, seen by others.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]

@@ -255,7 +255,12 @@ impl Report {
             }),
             verdict: String::new(),
         };
-        let verdict = if s.datablocks_converted == 0 {
+        // A print pack has no datablocks: its prints are what it carries.
+        let prints = self
+            .assets
+            .iter()
+            .any(|a| a.output.as_deref() == Some("assets/prints.json"));
+        let verdict = if s.datablocks_converted == 0 && !prints {
             "recognised_only"
         } else if s.needs_behaviour - s.needs_behaviour_ported
             + s.unsupported
