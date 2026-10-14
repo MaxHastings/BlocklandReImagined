@@ -737,15 +737,22 @@ impl App {
                     }
                 }
                 self.audio.sync_image_loops(&loops);
-                let engines = view
-                    .vehicles
-                    .iter()
-                    .filter_map(|(id, info)| {
-                        let d = self.vehicle_assets.definition(&info.definition)?;
-                        let frame = self.vehicles.frame(*id)?;
-                        crate::audio::engine_loop(d, info, frame).map(|e| (*id, e))
-                    })
-                    .collect();
+                let mut engines = BTreeMap::new();
+                for (id, info) in &view.vehicles {
+                    let (Some(d), Some(frame)) = (
+                        self.vehicle_assets.definition(&info.definition),
+                        self.vehicles.frame(*id),
+                    ) else {
+                        continue;
+                    };
+                    if let Some(e) = crate::audio::engine_loop(d, info, frame) {
+                        engines.insert(*id, e);
+                    }
+                    // The squeal plays beside the engine, keyed apart from it.
+                    if let Some(e) = crate::audio::skid_loop(d, info, frame) {
+                        engines.insert(*id | 1 << 63, e);
+                    }
+                }
                 self.audio.sync_engines(&engines);
                 if self
                     .music_world

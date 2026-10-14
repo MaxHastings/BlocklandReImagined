@@ -369,7 +369,7 @@ pub fn check(folder: &Path) -> Report {
     }
 }
 
-/// What is wrong with the engine sounds a vehicles pack (`bytes`, at
+/// What is wrong with the engine and skid sounds a vehicles pack (`bytes`, at
 /// `at`) names: an Add-On sound (a namespaced key) that no weapons pack in
 /// the set declares, or one that does not loop. A key without a namespace
 /// is one of the game's own sounds.
@@ -384,33 +384,35 @@ fn engine_sound_problems(
     let definitions = pack.get("definitions").and_then(|d| d.as_array());
     let mut problems = Vec::new();
     for d in definitions.into_iter().flatten() {
-        let Some(sound) = d
-            .get("engine_sound")
-            .and_then(|e| e.get("sound"))
-            .and_then(|s| s.as_str())
-        else {
-            continue;
-        };
         let vehicle = d.get("id").and_then(|i| i.as_str()).unwrap_or("?");
-        match sounds.get(&sound.to_ascii_lowercase()) {
-            Some(true) => {}
-            Some(false) => problems.push(
-                Diagnostic::warning(
-                    "check.vehicles.engine_sound",
-                    format!("{vehicle}'s engine sound {sound} plays once instead of looping"),
-                )
-                .at(at.to_owned())
-                .hint("declare it with \"looping\": true in the weapons pack's sounds"),
-            ),
-            None if sound.contains(':') => problems.push(
-                Diagnostic::error(
-                    "check.vehicles.engine_sound",
-                    format!("{vehicle}'s engine sound {sound} is not declared"),
-                )
-                .at(at.to_owned())
-                .hint("add it to the sounds of the Add-On's assets/weapons.json, with \"looping\": true"),
-            ),
-            None => {}
+        for (field, what) in [("engine_sound", "engine sound"), ("skid", "skid sound")] {
+            let Some(sound) = d
+                .get(field)
+                .and_then(|e| e.get("sound"))
+                .and_then(|s| s.as_str())
+            else {
+                continue;
+            };
+            match sounds.get(&sound.to_ascii_lowercase()) {
+                Some(true) => {}
+                Some(false) => problems.push(
+                    Diagnostic::warning(
+                        "check.vehicles.engine_sound",
+                        format!("{vehicle}'s {what} {sound} plays once instead of looping"),
+                    )
+                    .at(at.to_owned())
+                    .hint("declare it with \"looping\": true in the weapons pack's sounds"),
+                ),
+                None if sound.contains(':') => problems.push(
+                    Diagnostic::error(
+                        "check.vehicles.engine_sound",
+                        format!("{vehicle}'s {what} {sound} is not declared"),
+                    )
+                    .at(at.to_owned())
+                    .hint("add it to the sounds of the Add-On's assets/weapons.json, with \"looping\": true"),
+                ),
+                None => {}
+            }
         }
     }
     problems

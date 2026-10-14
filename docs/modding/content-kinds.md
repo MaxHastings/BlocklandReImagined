@@ -360,6 +360,17 @@ no seats cannot be mounted. Three fields exist for Add-Ons:
   `bri-addon-check` fails an engine sound no weapons pack declares, and
   warns when it does not loop.
 
+- `"skid": { "emitter": "your-id:skid", "sound": "your-id:squeal" }`
+  makes its tyres skid. A grounded wheel whose contact slides sideways
+  (the vehicle's motion across the wheel's steered axle) faster than
+  `min_slip` units a second (3) runs `emitter` at the contact, harder the
+  harder it slides, and the vehicle plays `sound` (a looping sound, as for
+  `engine_sound`) louder and a little higher up to `full_slip` (12). Name
+  either or both; the emitter is one of the vehicle's `effects` or a base
+  game emitter. Every player sees and hears it from the vehicle's motion
+  as they see it; nothing is sent for it, and v20's vehicles have none.
+  `bri-addon-check` checks the sound as it does an engine sound.
+
 Every vehicle can be placed from a vehicle spawn brick and spawned by a
 rule (`spawn_vehicle`).
 

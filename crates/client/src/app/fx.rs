@@ -387,6 +387,7 @@ impl App {
                 continue;
             };
             sprays.extend(crate::actor_effects::tire_sprays(*id, d, frame));
+            sprays.extend(crate::actor_effects::tire_skids(*id, d, frame).0);
             trails.extend(crate::actor_effects::vehicle_trails(*id, d, frame));
         }
         actor_effects.update_tires(&sprays)?;

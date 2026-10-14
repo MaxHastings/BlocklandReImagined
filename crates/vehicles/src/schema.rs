@@ -635,10 +635,79 @@ pub struct Definition {
     /// from the vehicle's presented motion. v20's vehicles have none.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub engine_sound: Option<EngineSound>,
+    /// Tyres that skid: dust or smoke at each grounded wheel and a squeal
+    /// while it slides across or spins along the ground. Cosmetic: each
+    /// client derives the slide from the vehicle's presented motion.
+    /// v20's vehicles have none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub skid: Option<Skid>,
     /// Authored fields retained as metadata only. Runtime reads typed native fields above.
     pub authored: BTreeMap<String, String>,
     pub adaptations: Vec<String>,
 }
+/// [`Definition::skid`].
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Skid {
+    /// An emitter run at a sliding wheel's contact with the ground: one
+    /// of the definition's `effects`, or a base game emitter.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub emitter: Option<String>,
+    /// A looping sound played at the vehicle while any wheel slides,
+    /// louder and higher the harder it slides (like `engine_sound`'s).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sound: Option<String>,
+    /// How fast a tyre must slide, in units per second, to skid.
+    #[serde(default = "Skid::default_min_slip")]
+    pub min_slip: f32,
+    /// The slide at which the squeal is at its loudest.
+    #[serde(default = "Skid::default_full_slip")]
+    pub full_slip: f32,
+}
+impl Skid {
+    fn default_min_slip() -> f32 {
+        3.0
+    }
+    fn default_full_slip() -> f32 {
+        12.0
+    }
+    pub fn validate(&self) -> Result<()> {
+        let name = |n: &Option<String>| {
+            n.as_deref().is_none_or(|n| {
+                !n.trim().is_empty() && n.len() <= 128 && !n.chars().any(char::is_control)
+            })
+        };
+        ensure!(
+            name(&self.emitter)
+                && name(&self.sound)
+                && (self.emitter.is_some() || self.sound.is_some()),
+            "skid names an emitter or a sound"
+        );
+        ensure!(
+            self.min_slip.is_finite()
+                && self.full_slip.is_finite()
+                && (0.1..=100.0).contains(&self.min_slip)
+                && self.full_slip > self.min_slip
+                && self.full_slip <= 200.0,
+            "skid min_slip must be 0.1 to 100, below full_slip (at most 200)"
+        );
+        Ok(())
+    }
+    /// How hard a tyre sliding at `slip` units per second skids, 0 (below
+    /// `min_slip`) to 1 (at `full_slip` or more).
+    pub fn strength(&self, slip: f32) -> f32 {
+        if !(slip.is_finite() && slip >= self.min_slip) {
+            return 0.0;
+        }
+        bri_console::Clamp::clamped(
+            (slip - self.min_slip) / (self.full_slip - self.min_slip),
+            0.0,
+            1.0,
+        )
+        .max(0.05)
+    }
+}
+
 /// A vehicle's engine sound ([`Definition::engine_sound`]). It plays while
 /// someone sits in the seat that drives the vehicle (any seat, for a
 /// vehicle no seat drives), and stops when they get out or the vehicle is
@@ -995,6 +1064,9 @@ impl Pack {
             d.effects.validate()?;
             if let Some(engine) = &d.engine_sound {
                 engine.validate()?;
+            }
+            if let Some(skid) = &d.skid {
+                skid.validate()?;
             }
             ensure!(d.trails.len() <= 16, "too many trails");
             for t in &d.trails {
