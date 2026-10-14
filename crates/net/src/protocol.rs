@@ -624,6 +624,11 @@ pub struct Checkpoint {
     pub tick: u64,
     pub world: PublicWorld,
     pub names: BTreeMap<OwnerId, String>,
+    /// Players connected but still downloading and loading the map, by
+    /// owner, with their names: they have no body yet, but they are on the
+    /// player list.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub loading: BTreeMap<OwnerId, String>,
     pub avatars: BTreeMap<OwnerId, bri_content::avatar::Appearance>,
     pub chat: Vec<ChatLine>,
     pub poses: Vec<Pose>,
@@ -711,6 +716,7 @@ impl Checkpoint {
                 bricks: bri_world::Bricks::new(),
             },
             names: session.names(),
+            loading: session.arrivals(),
             avatars: session.avatars(),
             chat: session.chat(),
             poses: poses(session),
@@ -1077,6 +1083,9 @@ pub struct Delta {
     pub bricks: BTreeMap<BrickId, Option<Brick>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub names: Option<BTreeMap<OwnerId, String>>,
+    /// Every player still loading, when that set changed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub loading: Option<BTreeMap<OwnerId, String>>,
     /// Appearances that changed, by owner.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub avatars: BTreeMap<OwnerId, bri_content::avatar::Appearance>,
@@ -1136,6 +1145,7 @@ impl Delta {
             tick: _,
             bricks,
             names,
+            loading,
             avatars,
             palette,
             chat,
@@ -1157,6 +1167,7 @@ impl Delta {
             && cues.is_empty()
             && bricks.is_empty()
             && names.is_none()
+            && loading.is_none()
             && avatars.is_empty()
             && palette.is_none()
             && chat.is_empty()

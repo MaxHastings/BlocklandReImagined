@@ -84,6 +84,20 @@ async fn chat_line(client: &mut Client, name: &str, text: &str) -> Result<()> {
     .await?
 }
 
+/// Read `client` until its list of loading players is `wanted(loading)`.
+async fn loading_until(
+    client: &mut Client,
+    wanted: impl Fn(&std::collections::BTreeMap<u64, String>) -> bool,
+) -> Result<()> {
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while !wanted(&client.replica.loading) {
+            client.receive().await?;
+        }
+        anyhow::Ok(())
+    })
+    .await?
+}
+
 /// Read the loading connection until a chat line from `name` saying `text`.
 async fn arrival_line(arrival: &mut Arrival, name: &str, text: &str) -> Result<()> {
     tokio::time::timeout(Duration::from_secs(10), async {
@@ -132,6 +146,9 @@ async fn a_joiner_is_connected_and_chats_while_downloading_then_spawns() -> Resu
         "{said:?}"
     );
     assert!(!ann.replica.names.contains_key(&bob.owner));
+    // He is on her player list already, as loading.
+    let bob_owner = bob.owner;
+    loading_until(&mut ann, |l| l.get(&bob_owner).is_some_and(|n| n == "Bob")).await?;
 
     // Both ways while he waits.
     bob.say("hi, still loading".into())?;
@@ -202,6 +219,7 @@ async fn a_joiner_is_connected_and_chats_while_downloading_then_spawns() -> Resu
         anyhow::Ok(())
     })
     .await??;
+    loading_until(&mut ann, |l| !l.contains_key(&bob_owner)).await?;
     // The game join ends the loading connection without a departure.
     tokio::time::timeout(Duration::from_secs(10), async {
         loop {
@@ -252,8 +270,11 @@ async fn a_joiner_who_leaves_while_loading_never_spawns() -> Result<()> {
     .await?;
     let mut said = Vec::new();
     notice(&mut ann, "Bob connected.", &mut said).await?;
+    let bob_owner = bob.owner;
+    loading_until(&mut ann, |l| l.contains_key(&bob_owner)).await?;
     drop(bob);
     notice(&mut ann, "Bob has left the game.", &mut said).await?;
+    loading_until(&mut ann, |l| !l.contains_key(&bob_owner)).await?;
     assert!(
         !said.iter().any(|s| s.ends_with("Bob spawned.")),
         "{said:?}"
