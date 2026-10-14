@@ -10,8 +10,9 @@ param(
     # Also ship the Stress Lab mod packages (packages/stresslab), enabled in
     # content/packages.json.
     [switch]$StressLab,
-    # Tools the client runs, shipped beside bri-client.exe from the same build.
-    [string[]]$CompanionExecutables = @('bri-import-addon.exe', 'bri-server.exe'),
+    # Tools shipped beside bri-client.exe from the same build: the ones the
+    # client runs, and the Add-On checker and runner modders use without Rust.
+    [string[]]$CompanionExecutables = @('bri-import-addon.exe', 'bri-server.exe', 'bri-addon-check.exe', 'bri-addon-run.exe'),
     # Code signing, for when there is a certificate: the SHA-1 thumbprint of
     # a code-signing certificate in the current user's or machine's store.
     # Every shipped .exe is signed and timestamped, which stops Windows

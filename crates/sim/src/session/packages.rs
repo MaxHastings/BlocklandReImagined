@@ -346,7 +346,6 @@ pub(super) struct PackageHost {
     /// When each Add-On's problem (by package and code) was last told, by
     /// tick: a failing hook is told once a minute, not every tick.
     told: BTreeMap<(String, String), u64>,
-    output: VecDeque<String>,
     /// Deaths since the last tick, for `on_death` hooks: victim, killer.
     deaths: VecDeque<(OwnerId, Option<OwnerId>)>,
     /// Players whose items were set afresh since the last tick, for
@@ -846,7 +845,6 @@ impl Session {
             unheard: VecDeque::new(),
             untaken: VecDeque::new(),
             told: BTreeMap::new(),
-            output: VecDeque::new(),
             deaths: VecDeque::new(),
             loadouts: VecDeque::new(),
             spawns: VecDeque::new(),
@@ -1527,12 +1525,12 @@ impl Session {
             output,
             events,
         });
+        // A script's `print` lines go to the host's console and log, as
+        // TorqueScript's `echo` did, so a modder sees them in the game's
+        // console and in `bri-addon-run`.
         for part in &parts {
             for line in &part.output {
-                if host.output.len() == MAX_DIAGNOSTICS {
-                    host.output.pop_front();
-                }
-                host.output.push_back(format!("{}: {line}", part.package));
+                bri_console::echo(format!("{}: {line}", part.package));
             }
         }
         let mut growth = 0_isize;

@@ -79,8 +79,8 @@ jobs:
           shared-key: release-linux
       - uses: mozilla-actions/sccache-action@v0.0.9
 
-      - name: Build the game and Add-On importer
-        run: cargo build --release --locked -p bri-client --bin bri-client -p bri-addon-import --bin bri-import-addon -p bri-net --bin bri-server
+      - name: Build the game, Add-On importer, dedicated server and modder tools
+        run: cargo build --release --locked -p bri-client --bin bri-client -p bri-addon-import --bin bri-import-addon -p bri-net --bin bri-server -p bri-package-runtime --bin bri-addon-check -p bri-sim --bin bri-addon-run
 
       - name: Verify release panic capture
         run: cargo test --release --locked -p bri-crash --test capture
@@ -90,7 +90,7 @@ jobs:
       - name: Retain matching unstripped executables
         run: |
           mkdir -p "$RUNNER_TEMP/linux-symbols"
-          for binary in bri-client bri-import-addon bri-server; do
+          for binary in bri-client bri-import-addon bri-server bri-addon-check bri-addon-run; do
             cp "target/release/$binary" "$RUNNER_TEMP/linux-symbols/$binary"
           done
           python3 - "$RUNNER_TEMP/linux-symbols" <<'PY'
