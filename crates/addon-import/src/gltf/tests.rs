@@ -1,4 +1,4 @@
-use super::testing::{ARMATURE_SCALE, BONES, character, rifle};
+use super::testing::{ARMATURE_SCALE, BONES, character, rifle, room};
 use super::*;
 use bri_content::animation;
 
@@ -721,4 +721,171 @@ fn a_bodys_box_can_be_set() {
     assert!(c.report.markdown().contains("0.74 wide, 1.5 tall"));
     opts.box_width = Some(0.0);
     assert!(convert_glb(&character(true).glb, &opts).is_err());
+}
+
+/// `--kind map`: an Add-On the map list, the collision loader and the
+/// renderer all read, with its spawn and lights where Blender put them.
+fn import_room(col_floor: bool) -> (tempfile::TempDir, Report) {
+    let root = tempfile::tempdir().unwrap();
+    let input = root.path().join("Test Room.glb");
+    std::fs::write(&input, room(col_floor)).unwrap();
+    let opts = Options::new(&input, root.path().join("test_room"), Kind::Map);
+    let report = import(&opts).unwrap();
+    (root, report)
+}
+
+#[test]
+fn a_map_imports_as_an_add_on_the_game_loads() {
+    let (root, report) = import_room(false);
+    let dir = root.path().join("test_room");
+    assert_eq!(report.id, "test_room");
+    assert_eq!(report.model, "test_room:map/test_room");
+    for f in [
+        "package.json",
+        "map/bundle.json",
+        "map/test_room.scene.json",
+        "map/test_room.shape.json",
+        "map/test_room_wood.png",
+        "IMPORT-REPORT.md",
+    ] {
+        assert!(dir.join(f).is_file(), "{f}: {:?}", report.files);
+    }
+    let check = bri_package_runtime::check::check(&dir);
+    assert!(check.ok, "{check}");
+    let info: bri_package::library::PackageInfo =
+        serde_json::from_slice(&std::fs::read(dir.join("package.json")).unwrap()).unwrap();
+    assert_eq!(info.side(), Some(bri_package::packages::Side::Shared));
+
+    // The map list finds it beside the base game's maps.
+    let base = root.path().join("base");
+    std::fs::create_dir_all(&base).unwrap();
+    std::fs::write(
+        base.join("bundle.json"),
+        r#"{"schema_version":1,"maps":[]}"#,
+    )
+    .unwrap();
+    let catalog = bri_sim::map_catalog::MapCatalog::new(
+        &base,
+        &[bri_sim::map_catalog::MapProvider {
+            package: "test_room".into(),
+            id: report.model.clone(),
+            bundle: dir.join("map/bundle.json"),
+        }],
+    )
+    .unwrap();
+    let map_root = catalog.root(&report.model).unwrap();
+    assert_eq!(catalog.get(&report.model).unwrap().name, "Test Room");
+
+    // Players stand on the floor (no `col_` meshes: solid where drawn) and
+    // start at the spawn Empty, half a turn about Y like every model.
+    let native = bri_sim::map::NativeMap::load(map_root, &report.model).unwrap();
+    let scene = &native.scene;
+    let spawn = scene
+        .nodes
+        .iter()
+        .find(|n| matches!(n.kind, bri_content::scene::Kind::Spawn))
+        .unwrap();
+    assert!(near(
+        Vec3::new(
+            spawn.transform[12],
+            spawn.transform[13],
+            spawn.transform[14]
+        ),
+        Vec3::new(-2.0, 0.0, -3.0)
+    ));
+    let lights = scene.lights().unwrap();
+    assert_eq!(lights.len(), 2, "{lights:?}");
+    let lamp = lights
+        .iter()
+        .find(|l| scene.nodes[l.node].name == "Lamp")
+        .unwrap();
+    assert_eq!(lamp.kind, "strobe");
+    assert!(near(Vec3::from(lamp.position), Vec3::new(0.0, 3.0, 0.0)));
+    assert!((lamp.outer - 8.0).abs() < 1e-4);
+    assert!(
+        (lamp.color[0] - 1.5).abs() < 1e-4,
+        "brightness scales colour"
+    );
+    let lamp_node = scene.nodes.iter().find(|n| n.name == "Lamp").unwrap();
+    assert_eq!(lamp_node.properties["speed"], "2");
+    let spot = lights
+        .iter()
+        .find(|l| scene.nodes[l.node].name == "Spot")
+        .unwrap();
+    assert_eq!(spot.kind, "spot");
+    assert!((spot.outer - 6.0).abs() < 1e-4, "glTF range is the radius");
+    let spot_node = scene.nodes.iter().find(|n| n.name == "Spot").unwrap();
+    let cone: f32 = spot_node.properties["outer_cone"].parse().unwrap();
+    assert!((cone - 0.6f32.to_degrees()).abs() < 1e-3);
+
+    use rapier3d::prelude::{Ray, Vector};
+    let floor = native
+        .colliders
+        .iter()
+        .filter_map(|c| {
+            let c = c.build();
+            c.shape().cast_ray(
+                c.position(),
+                &Ray::new(Vector::new(2.0, 3.0, 2.0), -Vector::Y),
+                10.0,
+                true,
+            )
+        })
+        .fold(f32::MAX, f32::min);
+    assert!(
+        (floor - 3.0).abs() < 0.01,
+        "players stand on the floor: {floor}"
+    );
+
+    // The renderer draws it with its lights in Dynamic.
+    let drawn = bri_render::scene_loader::load_map_bundle_dynamic(map_root, &report.model).unwrap();
+    assert!(!drawn.scene.vertices.is_empty());
+    let modern = drawn.modern_lights.unwrap();
+    assert_eq!(modern.len(), 2);
+    assert!(
+        modern
+            .iter()
+            .any(|l| near(Vec3::from(l.position), Vec3::new(0.0, 3.0, 0.0)))
+    );
+
+    let md = std::fs::read_to_string(dir.join("IMPORT-REPORT.md")).unwrap();
+    assert!(md.contains("(map)") && md.contains("steady omni"), "{md}");
+}
+
+#[test]
+fn a_map_without_a_spawn_or_with_col_meshes_says_what_it_did() {
+    let (root, report) = import_room(true);
+    let shape: Shape = serde_json::from_slice(
+        &std::fs::read(root.path().join("test_room/map/test_room.shape.json")).unwrap(),
+    )
+    .unwrap();
+    let collision = shape.details.iter().find(|d| d.collision).unwrap();
+    assert_eq!(collision.object_count, 1, "only col_floor collides");
+    assert!(
+        report
+            .warnings
+            .iter()
+            .all(|w| !w.contains("no Empty named"))
+    );
+
+    let mut g = super::testing::Gltf::new();
+    let (p, _, _, i) = super::testing::cuboid(Vec3::ZERO, Vec3::new(4.0, 1.0, 4.0));
+    let flat: Vec<f32> = p.iter().flat_map(|v| v.to_array()).collect();
+    let (a, b) = (g.floats(&flat, 3), g.uints(&i, 1));
+    let mesh = g.mesh(
+        "Slab",
+        vec![json!({ "attributes": { "POSITION": a }, "indices": b })],
+    );
+    g.node(json!({ "name": "Slab", "mesh": mesh }), None);
+    let input = root.path().join("slab.glb");
+    std::fs::write(&input, g.glb()).unwrap();
+    let report = import(&Options::new(&input, root.path().join("slab"), Kind::Map)).unwrap();
+    assert!(
+        report
+            .warnings
+            .iter()
+            .any(|w| w.contains("no Empty named `spawn`")),
+        "{:?}",
+        report.warnings
+    );
 }

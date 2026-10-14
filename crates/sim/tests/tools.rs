@@ -2082,9 +2082,12 @@ fn a_full_environment_quota_leaves_a_new_light_and_emitter_off(f: &Fixture) {
 /// plays `hammerHitSound`, the Destructo Wand its explosion's `wandHitSound`,
 /// and each `killBrick` one brick death (the client's break sound).
 fn hit_cues(s: &mut Session) -> Vec<String> {
+    hit_cues_of(&s.take_cues())
+}
+fn hit_cues_of(cues: &[bri_sim::presentation::Cue]) -> Vec<String> {
     use bri_sim::presentation::CueKind;
-    s.take_cues()
-        .into_iter()
+    cues.iter()
+        .cloned()
         .filter_map(|c| match c.kind {
             CueKind::WeaponSound { profile } => Some(format!("sound {profile}")),
             CueKind::WeaponEffect {
@@ -2145,6 +2148,71 @@ fn destructo_wand_breaks_a_brick_like_the_hammer_with_its_own_hit_sound(f: &Fixt
             format!("kill {second}"),
         ]
     );
+}
+}
+
+// A Destructo Wand hit that strands a big build drops all of it, but
+// announces at most `MAX_BLAST_DEBRIS` bricks as debris, as a blast does:
+// clients cannot draw more, and the wand's own explosion and sound stay in
+// the presentation queue.
+on_both! {
+fn a_destructo_wand_collapse_announces_bounded_debris(f: &Fixture) {
+    use bri_admin::{Action, Request};
+    use bri_sim::presentation::CueKind;
+    // A 60 x 60 running-bond wall held up by one brick at the bottom.
+    let mut wall = vec![Brick::new(
+        ContentRef::Resolved("plate".into()),
+        [0.5, 0.1, -3.25],
+        0,
+    )];
+    for layer in 1..=60 {
+        for i in 0..60 {
+            let x = (i - 30) as f32 + 0.5 + 0.5 * (layer % 2) as f32;
+            wall.push(Brick::new(
+                ContentRef::Resolved("plate".into()),
+                [x, 0.1 + 0.2 * layer as f32, -3.25],
+                0,
+            ));
+        }
+    }
+    let total = wall.len();
+    let mut s = session(f, wall, false);
+    s.set_tool_catalog(catalog()).unwrap();
+    let admin = s
+        .join("Admin".into(), Vec3::new(0.5, 0.05, 0.0), true)
+        .unwrap();
+    while !s.snapshot().weapons.projectiles.is_empty() {
+        s.step().unwrap();
+    }
+    aim(&mut s, admin, 1, [0.5, 0.1, -3.01]);
+    s.command(
+        admin,
+        2,
+        Command::Admin(Request::new(Action::DestructoWand)),
+    )
+    .unwrap();
+    hold_still(&mut s, admin);
+    s.take_cues();
+    s.command(admin, 3, Command::WeaponTrigger { down: true })
+        .unwrap();
+    let mut cues = Vec::new();
+    for _ in 0..20 {
+        s.step().unwrap();
+        cues.extend(s.take_cues());
+    }
+    assert!(bricks(&s).is_empty(), "{} of {total} left", bricks(&s).len());
+    let kills = cues
+        .iter()
+        .filter(|c| matches!(c.kind, CueKind::BrickKill { .. }))
+        .count();
+    assert!(
+        kills <= bri_sim::session::MAX_BLAST_DEBRIS + 1 && kills > total / 3,
+        "{kills} kill cues for {total} bricks"
+    );
+    assert_eq!(s.dropped_cues(), 0);
+    let names = hit_cues_of(&cues);
+    assert!(names.contains(&"explosion AdminWandExplosion".to_string()));
+    assert!(names.contains(&"sound wandHitSound".to_string()));
 }
 }
 

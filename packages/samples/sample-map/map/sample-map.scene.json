@@ -1,0 +1,153 @@
+{
+  "schema_version": 1,
+  "id": "sample-map:map/sample-map",
+  "name": "Sample Map",
+  "nodes": [
+    {
+      "name": "sun",
+      "parent": null,
+      "kind": "sun",
+      "transform": [
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "asset": null,
+      "properties": {
+        "ambient": "0.45 0.45 0.5",
+        "azimuth": "30",
+        "color": "0.85 0.82 0.75",
+        "elevation": "50"
+      }
+    },
+    {
+      "name": "sample-map",
+      "parent": null,
+      "kind": "static_model",
+      "transform": [
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "asset": "sample-map:map/sample-map/model",
+      "properties": {}
+    },
+    {
+      "name": "spawn",
+      "parent": null,
+      "kind": "spawn",
+      "transform": [
+        1.0,
+        -0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        -0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        -2.0,
+        0.0,
+        -3.0,
+        1.0
+      ],
+      "asset": null,
+      "properties": {}
+    },
+    {
+      "name": "Lamp",
+      "parent": null,
+      "kind": "light",
+      "transform": [
+        1.0,
+        -0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        -0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        -0.0,
+        3.0,
+        -0.0,
+        1.0
+      ],
+      "asset": null,
+      "properties": {
+        "brightness": "1.5",
+        "color": "1 0.8 0.6",
+        "inner": "0",
+        "outer": "8",
+        "speed": "2",
+        "type": "strobe"
+      }
+    },
+    {
+      "name": "Spot",
+      "parent": null,
+      "kind": "light",
+      "transform": [
+        1.0,
+        0.0,
+        -0.0,
+        0.0,
+        0.0,
+        0.36235774,
+        0.93203914,
+        0.0,
+        0.0,
+        -0.93203914,
+        0.36235774,
+        0.0,
+        5.0,
+        3.5,
+        5.0,
+        1.0
+      ],
+      "asset": null,
+      "properties": {
+        "brightness": "1",
+        "color": "0.5 0.5 1",
+        "inner": "0",
+        "inner_cone": "17.188734",
+        "outer": "6",
+        "outer_cone": "34.37747",
+        "type": "spot"
+      }
+    }
+  ],
+  "pending_scripts": []
+}

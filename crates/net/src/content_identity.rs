@@ -319,6 +319,41 @@ pub fn bot_providers(
     }
     Ok(out)
 }
+/// Each enabled Add-On's `map` content: the map id it provides and the
+/// map's `bundle.json` ([`bri_sim::map_catalog::MapCatalog`]).
+pub fn map_providers(
+    content_root: &Path,
+    packages: &bri_package::packages::PackageSet,
+) -> Result<Vec<bri_sim::map_catalog::MapProvider>> {
+    let mut out = Vec::new();
+    for entry in packages.packages.iter().filter(|p| p.role.is_none()) {
+        let dir = bri_package::packages::package_dir(content_root, entry)?;
+        let Ok(bytes) = bounded_bytes(&dir.join("package.json"), 256 * 1024) else {
+            continue;
+        };
+        let Ok(manifest) = serde_json::from_slice::<serde_json::Value>(&bytes) else {
+            continue;
+        };
+        for provided in manifest["provides"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter(|p| p["kind"] == "map")
+        {
+            let (Some(id), Some(file)) = (provided["id"].as_str(), provided["file"].as_str())
+            else {
+                anyhow::bail!("Add-On {}: a map needs an id and a file", entry.dir);
+            };
+            out.push(bri_sim::map_catalog::MapProvider {
+                package: entry.id.clone(),
+                id: id.to_owned(),
+                bundle: contained(&dir.canonicalize()?, file)
+                    .with_context(|| format!("Add-On {}: {file}", entry.dir))?,
+            });
+        }
+    }
+    Ok(out)
+}
 /// The `file` of each `kind` entry in the manifest's `provides` under
 /// `dir`, in order; none when it has no readable manifest.
 fn declared_files(dir: &Path, kind: &str) -> Vec<String> {

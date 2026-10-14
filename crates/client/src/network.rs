@@ -44,6 +44,8 @@ pub struct View {
     pub world_revision: u64,
     pub world_log: Arc<WorldLog>,
     pub names: BTreeMap<OwnerId, String>,
+    /// Players connected but still loading, with their names.
+    pub loading: BTreeMap<OwnerId, String>,
     pub avatars: BTreeMap<OwnerId, bri_content::avatar::Appearance>,
     pub poses: BTreeMap<OwnerId, Pose>,
     /// Each player's recent poses, oldest first: every pose received, even
@@ -416,6 +418,7 @@ fn publish(
         world_revision: world.revision,
         world_log: world.log.clone(),
         names: client.replica.names.clone(),
+        loading: client.replica.loading.clone(),
         avatars: client.replica.avatars.clone(),
         poses: client.replica.poses.clone(),
         pose_history: client.replica.pose_history().clone(),

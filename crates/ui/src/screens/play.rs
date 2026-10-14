@@ -97,6 +97,27 @@ pub fn chat_link_at(core: &Core, x: i32, y: i32) -> Option<String> {
 }
 /// Bottom of the chat text, where `newMessageHud::updatePosition` puts the
 /// typing box.
+/// Where the mouse tip goes, when it shows. MouseToolTip (g:2083, 336x18
+/// at x 2, BlockChatTextProfile) sits one tip height below the chat text.
+/// v20 left it there while typing, where the input box (its font's height
+/// plus 4) overlaps it at larger chat sizes; it goes under the box instead.
+pub fn mouse_tip_rect(core: &Core) -> Option<Rect> {
+    if !mouse_tip(core) {
+        return None;
+    }
+    let gap = if core.chat_input_open {
+        chat_box_height(core).max(18)
+    } else {
+        18
+    };
+    Some(Rect::new(2, chat_bottom(core) + gap, 336, 18))
+}
+/// newMessageHud's box height: its text field's font plus 4, as
+/// `place_chat_box` sizes it.
+pub fn chat_box_height(core: &Core) -> i32 {
+    let size = super::options::chat_size(&core.prefs);
+    View::profile_line_height(&core.pack, &format!("HUDChatTextEditSize{size}Profile")) + 4
+}
 pub fn chat_bottom(core: &Core) -> i32 {
     chat_rect(core, &chat_text(core)).bottom()
 }
@@ -570,20 +591,13 @@ fn hud(core: &Core) -> View {
             &names,
         );
     }
-    let rect = add_chat(&mut v, core);
-    // MouseToolTip (g:2083, 336x18 at x 2, BlockChatTextProfile): one tip
-    // height below the chat text.
-    if mouse_tip(core) {
+    add_chat(&mut v, core);
+    if let Some(r) = mouse_tip_rect(core) {
         let tip = format!(
             "\u{E006}TIP: Press {} to toggle mouse and click on links",
             core.key_name("toggleCursor")
         );
-        markup(
-            &mut v,
-            Rect::new(2, rect.bottom() + 18, 336, 18),
-            &tip,
-            "BlockChatTextProfile",
-        );
+        markup(&mut v, r, &tip, "BlockChatTextProfile");
     }
     v.layout(w, h);
     v

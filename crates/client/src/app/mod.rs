@@ -1,6 +1,6 @@
 //! UI → native application → asynchronous authoritative server integration.
 use crate::{
-    content::{ClientContent, LOADABLE_MAPS},
+    content::ClientContent,
     controls::Controls,
     network::{self, Connected, Worker},
     platform::{PlatformApp, PlatformCommand, RenderContext},
@@ -396,7 +396,8 @@ fn prepare_map(
     lighting: u8,
 ) -> Result<Prepared> {
     let map = map.to_owned();
-    let visual = load_visual_map(&paths.map_bundle, &map, lighting)?;
+    let root = paths.maps.root(&map)?;
+    let visual = load_visual_map(root, &map, lighting)?;
     let mut light_volume =
         LightVolumeState::start(&visual.scene, light_cache, visual.modern_lights.as_deref());
     // The same definitions the host's session loads, Add-On bricks included.
@@ -409,7 +410,7 @@ fn prepare_map(
             .collect(),
     );
     let mirror_shapes = Arc::new(crate::mirrors::shapes(&definitions));
-    let native_map = bri_sim::map::NativeMap::load(&paths.map_bundle, &map)?;
+    let native_map = bri_sim::map::NativeMap::load(root, &map)?;
     let materials = paths.materials()?;
     let palette = Arc::new(crate::world_chunks::BrickPalette::new(&materials)?);
     let mut mirror = bri_sim::prediction::CollisionMirror::new(

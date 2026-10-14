@@ -646,6 +646,13 @@ async fn an_idle_server_stays_under_its_byte_budget() -> Result<()> {
     // Still players' poses go out for a few intervals, then once a second.
     let poses = report.rate(report.host.messages(Kind::Pose));
     assert!(poses < 300.0, "idle host sends {poses:.0} poses/s");
+    // What a player uploads is input: 13 KB/s on the wire with six moves a
+    // datagram, 24 KB/s with twelve (v0.3.0). v20's Broadband was 32 KB/s.
+    assert!(
+        report.upload() < 32_000.0,
+        "an idle player uploads {:.0} B/s",
+        report.upload()
+    );
     Ok(())
 }
 

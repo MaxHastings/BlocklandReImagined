@@ -73,13 +73,17 @@ pub enum Kind {
     /// side: every player draws it, so an Add-On with a player type and its
     /// body is shared and joiners download both.
     Body,
+    /// A map: its native map bundle's `bundle.json`, beside the scene and
+    /// assets it names (`bri_sim::map_catalog`). Shared: everyone loads the
+    /// map, so joiners download it.
+    Map,
     /// A print pack (`prints.json`, `bri_content::brick_materials::PrintPack`)
     /// joining the base game's prints, merged by the engine's content
     /// loading like weapons. Client side: every player draws the prints.
     Prints,
 }
 impl Kind {
-    pub const NAMES: [&str; 22] = [
+    pub const NAMES: [&str; 23] = [
         "behaviour",
         "script",
         "world",
@@ -101,6 +105,7 @@ impl Kind {
         "splash",
         "controller",
         "body",
+        "map",
         "prints",
     ];
     pub fn parse(text: &str) -> Option<Self> {
@@ -126,6 +131,7 @@ impl Kind {
             "splash" => Self::Splash,
             "controller" => Self::Controller,
             "body" => Self::Body,
+            "map" => Self::Map,
             "prints" => Self::Prints,
             _ => return None,
         })
@@ -154,6 +160,7 @@ impl Kind {
             | Self::Image
             | Self::Splash
             | Self::Body
+            | Self::Map
             | Self::Prints => Side::Client,
         }
     }
@@ -161,7 +168,7 @@ impl Kind {
     pub fn max_bytes(self) -> usize {
         match self {
             Self::Script => 256 * 1024,
-            Self::Data => 1024 * 1024,
+            Self::Data | Self::Map => 1024 * 1024,
             Self::Image => 4 * 1024 * 1024,
             Self::Weapons | Self::Vehicles | Self::Bricks | Self::Body => 32 * 1024 * 1024,
             Self::Prints => 8 * 1024 * 1024,
@@ -2397,6 +2404,29 @@ impl HudPanel {
 /// Check a HUD region layout (`bri_content::hud::Layout`): its own rules,
 /// and that every rule state it reads is a binding a HUD panel row could
 /// read.
+/// Checks a `map` file: a native map bundle index (`bundle.json`) listing
+/// exactly the provided map. The scene and assets beside it are checked when
+/// the map loads (`bri_sim::map::NativeMap::load`).
+pub fn map_index(bytes: &[u8], provided: &str) -> Result<()> {
+    let index: serde_json::Value = serde_json::from_slice(bytes)?;
+    ensure!(
+        index["schema_version"].as_u64() == Some(1),
+        "a map file is a native map bundle's bundle.json (schema_version 1)"
+    );
+    let maps = index["maps"]
+        .as_array()
+        .map(Vec::as_slice)
+        .unwrap_or_default();
+    ensure!(
+        maps.len() == 1 && maps[0]["id"].as_str() == Some(provided),
+        "a map's bundle.json lists exactly one map, with the provided id `{provided}`"
+    );
+    ensure!(
+        maps[0]["file"].as_str().is_some_and(|f| !f.is_empty()),
+        "the map in bundle.json names its scene `file`"
+    );
+    Ok(())
+}
 pub fn hud_layout(layout: &bri_content::hud::Layout) -> Result<()> {
     layout.validate()?;
     for source in layout.sources() {

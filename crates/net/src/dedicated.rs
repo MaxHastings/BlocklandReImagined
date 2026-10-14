@@ -356,12 +356,12 @@ impl ServerConfig {
     }
 }
 
-/// A new empty world on the base map `name` (`slate`, or a full map id),
+/// A new empty world on the map `name` (`slate`, or a full map id),
 /// with the game's default paint palette, like choosing a map in Start Game.
 pub fn blank_world(content_root: &Path, name: &str) -> Result<bri_world::World> {
     let packages = PackageSet::load_root(content_root)?;
     crate::map_content::blank_world(
-        &packages.role_dir(content_root, "map_bundle")?,
+        &crate::map_content::catalog(content_root, &packages)?,
         crate::map_content::ui_palette(&packages.role_dir(content_root, "ui_pack")?)?,
         name,
     )
@@ -544,7 +544,7 @@ mod tests {
         crate::testing::write_root(scratch.path(), &[slate, bedroom])?;
         let set = PackageSet::load_root(scratch.path())?;
         let world = crate::map_content::blank_world(
-            &set.role_dir(scratch.path(), "map_bundle")?,
+            &crate::map_content::catalog(scratch.path(), &set)?,
             vec![[1.0; 4]],
             "slate",
         )?;

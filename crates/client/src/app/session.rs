@@ -507,7 +507,7 @@ impl App {
                     None
                 };
                 let loaded = paths.map_content()?.load(start_world)?;
-                let visual = load_visual_map(&paths.map_bundle, &base_map, lighting)?;
+                let visual = load_visual_map(paths.maps.root(&base_map)?, &base_map, lighting)?;
                 let mut light_volume = LightVolumeState::start(
                     &visual.scene,
                     &light_cache,
@@ -1036,7 +1036,9 @@ impl App {
             // The map loads before the player spawns, as v20's mission
             // load comes before `onClientEnterGame`.
             let ready = async move {
-                let Some(map) = map_early.filter(|m| LOADABLE_MAPS.contains(&m.as_str())) else {
+                // An Add-On map this player has not downloaded yet loads
+                // after the download, when the join starts again.
+                let Some(map) = map_early.filter(|m| early.0.maps.contains(m)) else {
                     return Ok(());
                 };
                 let (paths, selected, catalog, light_cache, load_limit) = early;
@@ -1107,6 +1109,9 @@ impl App {
                                         || fresh.weapon_extras != paths.weapon_extras
                                         || fresh.vehicle_extras != paths.vehicle_extras
                                         || fresh.bot_extras != paths.bot_extras
+                                        // A host's Add-On map loads from the
+                                        // reloaded content.
+                                        || fresh.maps.iter().ne(paths.maps.iter())
                                 },
                             )
                                 // A body the host's players may wear (an
@@ -1179,7 +1184,7 @@ impl App {
             .await;
             let map = client.replica.world.map_id.clone();
             ensure!(
-                LOADABLE_MAPS.contains(&map.as_str()),
+                paths.maps.contains(&map),
                 "Server map has no supported native render bundle yet"
             );
             let early = early_scene.lock().ok().and_then(|mut slot| slot.take());

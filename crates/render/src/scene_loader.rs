@@ -331,15 +331,54 @@ fn load_bundle(root: &Path, map_id: &str, legacy: bool) -> Result<MapScene> {
             .into(),
     );
     out.omissions.push("Translucent geometry sorts by mesh-batch center; intersecting translucent surfaces need finer sorting".into());
+    // A map Add-On's own lights (`Kind::Light`) join any recovered ones.
+    let authored = scene.lights()?;
     let modern_lights = if legacy {
         None
     } else {
-        let result =
-            crate::lighting_parameters::Parameters::read(&root).and_then(|p| p.lights(map_id));
-        Some(result.unwrap_or_else(|e| {
-            let warning = format!("Dynamic uses live sun/ambient only: {e:#}. Prepare source lights with prepare_lighting {}",root.display());
-            eprintln!("{warning}"); out.omissions.push(warning); Vec::new()
-        }))
+        let prepared = root.join(crate::lighting_parameters::FILE).is_file();
+        let mut lights = if authored.is_empty() || prepared {
+            let result =
+                crate::lighting_parameters::Parameters::read(&root).and_then(|p| p.lights(map_id));
+            result.unwrap_or_else(|e| {
+                let warning = format!("Dynamic uses live sun/ambient only: {e:#}. Prepare source lights with prepare_lighting {}",root.display());
+                eprintln!("{warning}"); out.omissions.push(warning); Vec::new()
+            })
+        } else {
+            Vec::new()
+        };
+        for light in &authored {
+            if lights.len() >= crate::map_lighting::MAX_LIGHTS {
+                out.omissions.push(format!(
+                    "Map light at node {} left out: a map draws at most {} lights",
+                    light.node,
+                    crate::map_lighting::MAX_LIGHTS
+                ));
+                continue;
+            }
+            if !crate::lighting_parameters::valid_geometry(light.position, light.inner, light.outer)
+            {
+                out.omissions.push(format!(
+                    "Map light at node {} left out: its falloff is too small to draw",
+                    light.node
+                ));
+                continue;
+            }
+            if light.kind != "omni" {
+                out.omissions.push(format!(
+                    "Map light at node {} ({}) draws as a steady omni light: map light animation and spot cones are not played yet",
+                    light.node, light.kind
+                ));
+            }
+            lights.push(crate::map_lighting::MapLight {
+                position: light.position,
+                color: light.color,
+                inner: light.inner,
+                outer: light.outer,
+                channel: None,
+            });
+        }
+        Some(lights)
     };
     out.validate()?;
     Ok(MapScene {

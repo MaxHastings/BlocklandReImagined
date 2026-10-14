@@ -49,6 +49,14 @@ pub const MAX_SHADOW: i32 = 8;
 pub const DEFAULT_LINK: Rgba = [0, 0, 204, 255];
 pub const DEFAULT_LINK_HL: Rgba = [85, 26, 139, 255];
 
+/// A profile's link colour: Torque's `fontColorLink`/`fontColorLinkHL` are
+/// `fontColors[4]`/`[5]` (ColorUser0/1, read by `GuiMLTextCtrl::reflow`), so
+/// `BlockChatTextProfile`'s chat links are its `\c4` cyan, highlighted `\c5`
+/// magenta.
+pub fn profile_link(palette: &[Option<Rgba>], slot: usize) -> Option<Rgba> {
+    palette.get(slot).copied().flatten()
+}
+
 const CODE_RESET: u32 = COLOR_CODE_BASE + 10;
 const CODE_PUSH: u32 = COLOR_CODE_BASE + 11;
 const CODE_POP: u32 = COLOR_CODE_BASE + 12;

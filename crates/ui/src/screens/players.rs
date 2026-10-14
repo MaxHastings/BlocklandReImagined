@@ -87,7 +87,8 @@ impl Players {
                             } else {
                                 "-"
                             },
-                            p.name.replace(['\t', '\n', '\r'], " "),
+                            p.name.replace(['\t', '\n', '\r'], " ")
+                                + if p.loading { " (loading)" } else { "" },
                             member
                                 .filter(|m| m.in_local_game)
                                 .map_or(i64::from(p.score), |m| m.score),
@@ -408,6 +409,7 @@ mod tests {
                 bl_id: Some(12),
                 trust: "Build".into(),
                 ignoring: false,
+                loading: false,
             },
             PlayerRow {
                 id: 2,
@@ -418,11 +420,15 @@ mod tests {
                 bl_id: None,
                 trust: "None".into(),
                 ignoring: false,
+                loading: true,
             },
         ];
         let mut s = Players::new(&ui.core);
         let n = s.view.id("NPL_List").unwrap();
         assert_eq!(s.ids, vec![2, u64::MAX]);
+        // A player still loading is listed, and says so.
+        assert!(s.view.state(n).items[0].0.contains("\tAda (loading)\t"));
+        assert!(s.view.state(n).items[1].0.contains("\tZed\t"));
         s.view.select(n, Some(1));
         s.sort = 2;
         s.refresh(&ui.core);

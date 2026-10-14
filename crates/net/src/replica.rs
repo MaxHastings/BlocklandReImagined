@@ -15,6 +15,8 @@ pub struct Replica {
     pub tick: u64,
     pub world: PublicWorld,
     pub names: BTreeMap<OwnerId, String>,
+    /// Players still loading ([`Checkpoint::loading`]).
+    pub loading: BTreeMap<OwnerId, String>,
     pub avatars: BTreeMap<OwnerId, bri_content::avatar::Appearance>,
     pub chat: VecDeque<bri_sim::session::ChatLine>,
     pub poses: BTreeMap<OwnerId, Pose>,
@@ -220,6 +222,7 @@ impl Replica {
                 && !checkpoint.world.palette.is_empty()
                 && checkpoint.world.palette.len() <= 256
                 && checkpoint.names.len() <= 64
+                && checkpoint.loading.len() <= 64
                 && checkpoint.chat.len() <= 100,
             "Invalid checkpoint bounds"
         );
@@ -287,6 +290,7 @@ impl Replica {
             tick: checkpoint.tick,
             world: checkpoint.world,
             names: checkpoint.names,
+            loading: checkpoint.loading,
             avatars: checkpoint.avatars,
             chat: checkpoint.chat.into(),
             poses: BTreeMap::new(),
@@ -336,6 +340,7 @@ impl Replica {
                 && delta.cues.len() <= bri_sim::presentation::MAX_CUES
                 && delta.dropped_cues >= self.dropped_cues
                 && delta.names.as_ref().is_none_or(|n| n.len() <= 64)
+                && delta.loading.as_ref().is_none_or(|n| n.len() <= 64)
                 && delta.chat.len() <= 100,
             "Invalid delta bounds"
         );
@@ -467,6 +472,9 @@ impl Replica {
             } else {
                 self.world.bricks.remove(&id);
             }
+        }
+        if let Some(loading) = delta.loading {
+            self.loading = loading;
         }
         if let Some(names) = delta.names {
             self.names = names;

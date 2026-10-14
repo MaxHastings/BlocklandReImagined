@@ -332,6 +332,15 @@ pub fn check(folder: &Path) -> Report {
             ));
         }
     }
+    // Each map, the way the game will load it: scene, models, textures,
+    // spawn points and lights.
+    for (manifest, dir) in &found {
+        for provided in manifest.provides.iter().filter(|p| p.kind == "map") {
+            let bundle = parent.join(dir).join(&provided.file);
+            let at = format!("{}/{}", manifest.id, provided.file);
+            diagnostics.extend(map_problems(&bundle, &provided.id, &at));
+        }
+    }
     // The state each behaviour declares, against the limits it will meet.
     for (manifest, dir) in &found {
         for provided in manifest.provides.iter().filter(|p| p.kind == "behaviour") {
@@ -485,5 +494,237 @@ impl std::fmt::Display for Report {
         } else {
             write!(f, "Not loadable: fix the errors above.")
         }
+    }
+}
+
+/// What keeps the map in `bundle` (a map Add-On's `bundle.json`, `at` for
+/// messages) from loading or playing as its author expects. The index
+/// itself is checked with the rest of the Add-On (`content.map`); this
+/// follows what it names.
+fn map_problems(bundle: &Path, id: &str, at: &str) -> Vec<Diagnostic> {
+    use bri_content::scene::{Kind, Scene};
+    const GUIDE: &str =
+        "see docs/modding/maps.md, or reimport the map with bri-import-addon gltf --kind map";
+    let mut out = Vec::new();
+    let Some(root) = bundle.parent() else {
+        return out;
+    };
+    let Ok(index) = std::fs::read(bundle)
+        .map_err(|e| e.to_string())
+        .and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).map_err(|e| e.to_string()))
+    else {
+        return out;
+    };
+    // Bundle files sit flat beside bundle.json.
+    let file = |name: &str| {
+        (!name.is_empty() && !name.contains(['/', '\\']) && name != "..")
+            .then(|| root.join(name))
+            .filter(|p| p.is_file())
+    };
+    let map = index["maps"]
+        .as_array()
+        .and_then(|m| m.iter().find(|m| m["id"].as_str() == Some(id)));
+    let Some(scene_file) = map.and_then(|m| m["file"].as_str()) else {
+        return out;
+    };
+    let Some(scene_path) = file(scene_file) else {
+        out.push(
+            Diagnostic::error(
+                "check.map",
+                format!("the map's scene {scene_file} is not beside bundle.json"),
+            )
+            .at(at)
+            .hint(GUIDE),
+        );
+        return out;
+    };
+    let scene: Scene = match std::fs::read(&scene_path)
+        .map_err(anyhow::Error::from)
+        .and_then(|b| Ok(serde_json::from_slice(&b)?))
+    {
+        Ok(scene) => scene,
+        Err(e) => {
+            out.push(
+                Diagnostic::error(
+                    "check.map",
+                    format!("scene {scene_file} does not read: {e:#}"),
+                )
+                .at(at)
+                .hint(GUIDE),
+            );
+            return out;
+        }
+    };
+    let scene_at = format!("{at} → {scene_file}");
+    if scene.id != id {
+        out.push(
+            Diagnostic::error(
+                "check.map",
+                format!(
+                    "scene {scene_file} is map {}, but bundle.json says {id}",
+                    scene.id
+                ),
+            )
+            .at(&scene_at),
+        );
+    }
+    if !scene.nodes.iter().any(|n| matches!(n.kind, Kind::Spawn)) {
+        out.push(
+            Diagnostic::error("check.map", "the map has no spawn point, so players have nowhere to start")
+                .at(&scene_at)
+                .hint("in Blender, add an Empty named spawn where players start (spawn.001 and so on for more), then reimport"),
+        );
+    }
+    match scene.lights() {
+        Ok(lights) => {
+            let animated: Vec<_> = lights
+                .iter()
+                .filter(|l| l.kind != "omni")
+                .map(|l| format!("{} ({})", scene.nodes[l.node].name, l.kind))
+                .collect();
+            if !animated.is_empty() {
+                out.push(
+                    Diagnostic::warning(
+                        "check.map.light",
+                        format!("{} keep their type, but draw as steady omni lights for now", animated.join(", ")),
+                    )
+                    .at(&scene_at)
+                    .hint("nothing to change: they play as their type once the engine supports map light animation and spot cones"),
+                );
+            }
+        }
+        Err(e) => out.push(
+            Diagnostic::error("check.map.light", format!("{e:#}"))
+                .at(&scene_at)
+                .hint("a light's bri_light_type is omni, spot, strobe, pulse, pulse2, flicker or runway, and its radius is more than bri_inner; see docs/modding/maps.md"),
+        ),
+    }
+    // Every model the scene places, its collision, and every texture.
+    let assets = index["assets"].as_object();
+    let textures = index["textures"].as_object();
+    for node in scene
+        .nodes
+        .iter()
+        .filter(|n| matches!(n.kind, Kind::StaticModel))
+    {
+        let Some(asset) = node.asset.as_deref() else {
+            out.push(
+                Diagnostic::error(
+                    "check.map",
+                    format!("model node {} names no model", node.name),
+                )
+                .at(&scene_at),
+            );
+            continue;
+        };
+        let Some(model_file) = assets.and_then(|a| a.get(asset)).and_then(|f| f.as_str()) else {
+            out.push(
+                Diagnostic::error(
+                    "check.map",
+                    format!("model {asset} is not in bundle.json's assets"),
+                )
+                .at(at)
+                .hint(GUIDE),
+            );
+            continue;
+        };
+        let shape = file(model_file)
+            .and_then(|p| std::fs::read(p).ok())
+            .and_then(|b| serde_json::from_slice::<bri_content::shape::Shape>(&b).ok());
+        let Some(shape) = shape else {
+            out.push(
+                Diagnostic::error(
+                    "check.map",
+                    format!("model {model_file} is missing or does not read"),
+                )
+                .at(at)
+                .hint(GUIDE),
+            );
+            continue;
+        };
+        if !shape.details.iter().any(|d| d.collision) {
+            out.push(
+                Diagnostic::warning("check.map", format!("model {model_file} has no collision: players fall through it"))
+                    .at(at)
+                    .hint("name the meshes players stand on col_..., or leave out col_ meshes so everything drawn is solid, then reimport"),
+            );
+        }
+    }
+    for binding in index["bindings"].as_array().into_iter().flatten() {
+        let Some(texture) = binding["texture"].as_str() else {
+            continue;
+        };
+        let found = textures
+            .and_then(|t| t.get(texture))
+            .and_then(|f| f.as_str())
+            .and_then(file);
+        if found.is_none() {
+            out.push(
+                Diagnostic::error(
+                    "check.map",
+                    format!("texture {texture} is missing beside bundle.json"),
+                )
+                .at(at)
+                .hint(GUIDE),
+            );
+        }
+    }
+    out
+}
+
+#[cfg(test)]
+mod map_tests {
+    use super::map_problems;
+
+    fn write(dir: &std::path::Path, scene: serde_json::Value) -> std::path::PathBuf {
+        std::fs::write(
+            dir.join("m.scene.json"),
+            serde_json::to_vec(&scene).unwrap(),
+        )
+        .unwrap();
+        let bundle = dir.join("bundle.json");
+        std::fs::write(
+            &bundle,
+            serde_json::to_vec(&serde_json::json!({
+                "schema_version": 1,
+                "maps": [{ "id": "a:map/m", "name": "M", "file": "m.scene.json" }],
+                "assets": { "a:map/m/model": "m.shape.json" },
+                "textures": {},
+                "bindings": [{ "asset": "a:map/m/model", "shape_material": 0, "skin": "", "texture": "wood.png" }],
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        bundle
+    }
+    fn node(kind: &str, asset: Option<&str>, properties: serde_json::Value) -> serde_json::Value {
+        serde_json::json!({ "name": kind, "parent": null, "kind": kind,
+            "transform": [1.0,0.0,0.0,0.0, 0.0,1.0,0.0,0.0, 0.0,0.0,1.0,0.0, 0.0,0.0,0.0,1.0],
+            "asset": asset, "properties": properties })
+    }
+
+    #[test]
+    fn map_problems_name_what_to_fix() {
+        let dir = tempfile::tempdir().unwrap();
+        let bundle = write(
+            dir.path(),
+            serde_json::json!({ "schema_version": 1, "id": "a:map/m", "name": "M", "nodes": [
+                node("static_model", Some("a:map/m/model"), serde_json::json!({})),
+                node("light", None, serde_json::json!({ "type": "disco" })),
+            ] }),
+        );
+        let found = map_problems(&bundle, "a:map/m", "a/map/bundle.json");
+        let text: Vec<String> = found
+            .iter()
+            .map(|d| format!("{} {}", d.message, d.hint.clone().unwrap_or_default()))
+            .collect();
+        let has = |s: &str| text.iter().any(|t| t.contains(s));
+        assert!(
+            has("no spawn point") && has("Empty named spawn"),
+            "{text:#?}"
+        );
+        assert!(has("disco"), "{text:#?}");
+        assert!(has("m.shape.json is missing"), "{text:#?}");
+        assert!(has("texture wood.png is missing"), "{text:#?}");
     }
 }

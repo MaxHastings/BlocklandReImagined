@@ -48,7 +48,11 @@ pub struct ContentPaths {
     pub print_extras: Vec<(String, PathBuf)>,
     /// Each Add-On's bot kinds file (`content_identity::bot_providers`).
     pub bot_extras: Vec<(String, PathBuf)>,
+    /// The base game's converted map bundle.
     pub map_bundle: PathBuf,
+    /// Every map this content can load: the base bundle's and each
+    /// enabled Add-On's ([`bri_sim::map_catalog`]).
+    pub maps: bri_sim::map_catalog::MapCatalog,
     pub brick_catalog: PathBuf,
     pub geometry: PathBuf,
     pub effects: PathBuf,
@@ -332,6 +336,7 @@ impl ContentPaths {
         let role = |role: &str| packages.role_dir(&root, role);
         Ok(Self {
             map_bundle: role("map_bundle")?,
+            maps: bri_net::map_content::catalog(&root, packages)?,
             brick_catalog: role("brick_catalog")?,
             geometry: role("geometry")?,
             effects: role("effects")?,
@@ -384,7 +389,7 @@ impl ContentPaths {
             return Ok(content.clone());
         }
         let content = bri_net::map_content::MapContent {
-            map_bundle: self.map_bundle.clone(),
+            maps: self.maps.clone(),
             brick_catalog: self.brick_catalog.clone(),
             geometry: self.geometry.clone(),
             tutorial: Some(self.tutorial.clone()),
@@ -500,17 +505,14 @@ impl ContentPaths {
             world_id.is_none() || palette.is_none(),
             "Cannot replace a saved world's colorset"
         );
-        ensure!(
-            LOADABLE_MAPS.contains(&map_id),
-            "Map is not integrated for native loading yet: {map_id}"
-        );
-        let bundle = load_bundle(&self.map_bundle)?;
+        let root = self.maps.root(map_id)?;
+        let bundle = load_bundle(root)?;
         let entry = bundle
             .maps
             .iter()
             .find(|m| m.id == map_id)
             .context("Selected map is missing from native map bundle")?;
-        validate_scene(&self.map_bundle, entry, &bundle)?;
+        validate_scene(root, entry, &bundle)?;
         validate_catalog(self)?;
         Ok(if let Some(id) = world_id {
             let index = world_index(&self.worlds)?;
@@ -659,6 +661,25 @@ impl ClientContent {
                 maps.iter().any(|m| m.id == *expected),
                 "Required integrated map missing: {expected}"
             );
+        }
+        // Add-On maps follow the base game's, named by their own bundles.
+        for source in paths.maps.iter().filter(|m| m.package.is_some()) {
+            let bundle =
+                load_bundle(&source.root).with_context(|| format!("Add-On map {}", source.id))?;
+            let entry = bundle
+                .maps
+                .iter()
+                .find(|m| m.id == source.id)
+                .context("Add-On map is missing from its bundle")?;
+            validate_scene(&source.root, entry, &bundle)
+                .with_context(|| format!("Add-On map {}", source.id))?;
+            maps.push(MapInfo {
+                id: source.id.clone(),
+                name: source.name.clone(),
+                // Player-facing: "Add-On", never "package".
+                description: format!("Add-On {}", source.package.as_deref().unwrap_or_default()),
+                preview: IconRef::None,
+            });
         }
         let mut catalog = validate_catalog(&paths)?;
         let mut bricks = Vec::new();
@@ -922,7 +943,10 @@ fn validate_scene(root: &Path, entry: &MapEntry, bundle: &Bundle) -> Result<()> 
             node.parent.is_none_or(|p| p < i),
             "Invalid/cyclic scene parent at node {i}"
         );
-        if matches!(node.kind, Kind::Interior | Kind::Terrain) {
+        // A map Add-On's own models collide through their collision detail.
+        if matches!(node.kind, Kind::Interior | Kind::Terrain)
+            || (matches!(node.kind, Kind::StaticModel) && node.asset.is_some())
+        {
             let asset = node
                 .asset
                 .as_ref()

@@ -17,6 +17,7 @@ pub mod id_map;
 pub mod item_spawners;
 pub mod links;
 pub mod map;
+pub mod map_catalog;
 pub mod mirror;
 pub mod nav;
 pub mod parking;

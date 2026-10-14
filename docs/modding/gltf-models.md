@@ -17,6 +17,7 @@ cargo run -p bri-addon-import --bin bri-import-addon -- gltf buggy.glb buggy-mod
 | `body` (default) | a whole Add-On: `package.json`, the model and its PNGs under `assets/`, `assets/content.json` and an archetype (`assets/archetypes/<id>.json`) whose `model` is the imported body (`<id>:body/<id>`, provided as `body` content). Everyone draws it, so the Add-On is shared: friends who join download the body and its textures | check it with `bri-addon-check`, adjust the archetype's `movement` (its collision box, sized from the model; see Bodies), name it in a mode or `set_archetype` |
 | `item` | `models/<id>.shape.json` and its PNGs | copy `models/` into your weapon Add-On's `assets/` and name `models/<id>.shape.json` as the item's and image's `model` in `weapons.json` ([Weapons](weapons.md)) |
 | `prop` | the same, for vehicles, wheels, projectiles and props | name it from `vehicles.json`; the report lists the `mount` and `hub` empties' positions for its seats and wheels |
+| `map` | a whole map Add-On: `package.json` and `map/` with the scene, model, PNGs and `bundle.json`; `spawn` empties are spawn points and lights are map lights | turn it on and pick it in Start Game ([Making maps](maps.md)) |
 
 Every run writes `IMPORT-REPORT.md` beside the output: size, sockets, each
 clip and how it plays, the animation roles the body has no clip for and

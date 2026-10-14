@@ -406,6 +406,7 @@ fn main() -> Result<()> {
                 bl_id: None,
                 trust: "You".into(),
                 ignoring: false,
+                loading: false,
             }],
             server_name: "Native UI verification".into(),
             max_players: 8,

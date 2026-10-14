@@ -65,6 +65,13 @@ pub struct Hosted {
     pub save_key: String,
 }
 
+/// An Add-On's `map` content (`<package>:map/<name>`): played like a base
+/// map, its files found by the map catalog when it loads.
+fn is_add_on_map(map: &str) -> bool {
+    map.split_once(':')
+        .is_some_and(|(_, rest)| rest.starts_with("map/"))
+}
+
 /// Resolve Start Game's choice of `map` and game `mode` (None: Custom).
 /// Custom on a package world runs every enabled Add-On except those needing
 /// another world; Custom on a base map runs the enabled Add-Ons that need
@@ -95,7 +102,7 @@ pub fn hosted(server: Option<&Arc<Catalog>>, map: &str, mode: Option<&str>) -> R
                 anyhow::ensure!(*world == map, "{} plays on its own world", def.name);
             } else {
                 anyhow::ensure!(
-                    !map.contains(':'),
+                    !map.contains(':') || is_add_on_map(&map),
                     "{} does not bring that world; pick a map",
                     def.name
                 );
@@ -108,7 +115,7 @@ pub fn hosted(server: Option<&Arc<Catalog>>, map: &str, mode: Option<&str>) -> R
             map.to_owned(),
             map.to_owned(),
         ),
-        (Some(_), None) if map.contains(':') => {
+        (Some(_), None) if map.contains(':') && !is_add_on_map(map) => {
             anyhow::bail!("No Add-On that is turned on provides {map}")
         }
         (Some(server), None) => (
