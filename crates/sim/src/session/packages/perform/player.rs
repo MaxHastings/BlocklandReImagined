@@ -451,6 +451,21 @@ impl Perform for ops::Reload {
             .map(|_| ())
     }
 }
+impl Perform for ops::SetImageState {
+    fn perform(self, session: &mut Session, _cx: OpCall<'_>) -> Result<()> {
+        let ops::SetImageState { player, state } = self;
+        ensure!(session.peers.contains_key(&player), "No such player");
+        session
+            .weapons
+            .set_state(bri_weapons::ActorId(player), &state)
+    }
+}
+impl Perform for ops::QuickUse {
+    fn perform(self, session: &mut Session, _cx: OpCall<'_>) -> Result<()> {
+        let ops::QuickUse { player, item } = self;
+        session.quick_use(player, &item)
+    }
+}
 impl Perform for ops::SetImageAmmo {
     fn perform(self, session: &mut Session, _cx: OpCall<'_>) -> Result<()> {
         let ops::SetImageAmmo { player, ammo } = self;

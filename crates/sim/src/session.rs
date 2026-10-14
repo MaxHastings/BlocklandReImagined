@@ -82,6 +82,7 @@ pub use copy_store::{CopyStore, LoadedCopy, MemoryCopies, Saved, StoreDone, name
 mod movables;
 mod packages;
 mod paint_fill;
+mod quick_use;
 mod rules;
 pub use paint_fill::{Fill, FillRules};
 mod script_world;
@@ -1060,6 +1061,8 @@ pub struct Session {
     /// The values of the settings the weapons play with, by binding name.
     weapon_values: BTreeMap<String, String>,
     weapon_triggers: BTreeMap<OwnerId, weapons::Triggers>,
+    /// Items used once without switching to them (`quick_use`).
+    quick_uses: BTreeMap<OwnerId, quick_use::QuickUse>,
     weapon_gaps: BTreeMap<String, u64>,
     /// `$Pref::Server::FootballRecord`, in feet, for this server run.
     football_record: u32,
@@ -1225,6 +1228,7 @@ impl Session {
             started_settings: BTreeMap::new(),
             weapon_values: BTreeMap::new(),
             weapon_triggers: BTreeMap::new(),
+            quick_uses: BTreeMap::new(),
             weapon_gaps: BTreeMap::new(),
             football_record: 0,
             ammo_shown: BTreeSet::new(),

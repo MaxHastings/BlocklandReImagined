@@ -116,7 +116,7 @@ run are left out. Your rules remove a game's entry when it ends.
 | `noise(seed, x, z)`, `hash3(seed, x, y, z)` | `entity_get(e, key)`, `entity_set(e, key, v)` | `spawn_entity`, `remove_entity`, `steer`, `label`: `entity` |
 | `object(ref)`, `objects()`, `objects_near(x, y, z, r)`, `held(p)`, `tethered(p)` | | `teleport`, `respawn`, `set_archetype`, `push_archetype`, `pop_archetype`, `control(p, entity)`, `release(p)`, `give_item(p, item, equip)`, `take_item(p, item)`, `drop_item(item, x, y, z[, vx, vy, vz[, data]])`, `drop_item(item, #{ ... })`, `remove_drop(id)`, `name_drop(id, text, c)`: `player` |
 | `raycast(from, dir, range[, ignore])`, `can_damage(by, target)`, `enabled(add_on)`, `lan()` | | `set_fov(p, fov)`, `set_speed_scale(p, scale)`, `set_image_ammo(p, ammo)`, `set_image_loaded(p, loaded)`, `mount_image(p, image)`, `mount_image(p, image, slot[, paint or #{ paint, keep }])`, `unmount_image(p)`, `emote(p, image[, skip_spam])`, `set_scale(p, scale)`, `set_look_limits(p, up, down)`, `orbit_camera(p, target[, nearest, farthest], distance[, body])`: `player` |
-| | | `give_ammo(p, ammo, rounds)`, `set_reserve(p, ammo, rounds)`, `set_rounds(p, item, rounds)`, `reload(p)`: `player` |
+| | | `give_ammo(p, ammo, rounds)`, `set_reserve(p, ammo, rounds)`, `set_rounds(p, item, rounds)`, `reload(p)`, `set_image_state(p, state)`, `quick_use(p, item)`: `player` |
 | `minigames()`, `minigame(id)`, `setting(game, key)`, `team_setting(game, team, key)`, `server_setting(key)`, `pref(global)`, `bricks(kind)`, `brick(id)`, `palette()`, `drops()` | | `set_teams(game, teams, options)`, `set_team(p, team)`, `set_score(p, n)`, `add_score(p, n)`, `reset_minigame(game)`, `set_setting(game, key, v)`, `set_team_setting(game, team, key, v)`, `hold_respawn(p, held)`, `end_round(game, winners)`, `report_column(game, key, title, cells)`: `minigame`; `show_report(p, report)`, `hide_report(p)`: `chat`; `watch(p, target)`, `follow_path(p, knots)`, `free_camera(p)`, `orbit_point(p, at, distance)`: `player`; `set_brick_item(brick, item)`, `set_brick_color(brick, c)`, `set_brick_shown(brick, rendering, colliding, raycasting)`: `world.edit`; `fire_brick_input(brick, input, p)`, `fire_game_input(game, input, p, killer)`, `set_brick_field(brick, key, v)`: `brick_events`; `brick_field(brick, key)` reads |
 | `brick_box(brick)`, `voxel(brick)`, `can_place_voxel(x, y, z)` | | `place_voxel(x, y, z, material)`: `world.edit`; `set_avatar_colors(p, colors)`, `temp_look(p, look, seconds)`: `player` |
 | `brick(id)`, `bricks_in(min, max)`, `can_plant(kind, [x, y, z], turns)`, `can_edit(brick)` | | `plant_brick(kind, [x, y, z], turns, color, owner)`: `world.edit` |
@@ -242,6 +242,25 @@ the next 30% the `"torso"`, the rest the `"legs"` (Torque's
 anyone else. The engine measures the same for `raycast`, `on_damage` and
 `on_projectile_hit`, so a headshot rule reads `info.region == "head"`
 instead of working it out.
+
+**Keys of your own for held things.** Bind a key to a command
+(`binds.json`, see [content-kinds.md](content-kinds.md)) and let the
+command act on what the player carries:
+
+- `set_image_state(p, state)` sends the image in their hand to its state
+  named `state`, entered as a trigger would enter it: a melee swing with
+  whatever gun is out (a `Melee` state with its own sequence, sound and
+  short shot), an inspect, a special move. Its transitions then run as
+  usual, so a timeout back to `Ready` ends it.
+- `quick_use(p, item)` uses a carried item once without switching to it:
+  the item comes out, its trigger is pulled until its image leaves the
+  state it was pulled in, then let go (a charged throw releases), and the
+  item held before comes back once the used one may be put away, or at
+  once when it is used up. A grenade key, a quick heal. One at a time per
+  player; given up after 10 seconds.
+
+Test: `crates/sim/tests/script_api.rs`
+`quick_use_throws_a_carried_item_and_puts_the_gun_back_and_a_state_can_be_entered`.
 
 **Held images.** `mount_image(p, image)` puts another image of your
 weapons (or a dependency's) in the player's hand and keeps their tool

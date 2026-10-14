@@ -442,6 +442,40 @@ impl ScriptOp for Reload {
     }
 }
 
+/// Send the image in a player's hand to its state named `state`, as a
+/// trigger would: a melee swing with whatever is held, an inspect, a
+/// special move a key of the Add-On's starts.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SetImageState {
+    pub player: u64,
+    pub state: String,
+}
+impl ScriptOp for SetImageState {
+    const CAPABILITY: &str = "player";
+    const NAME: &str = "set_image_state";
+    fn bounded(&self) -> bool {
+        !self.state.trim().is_empty()
+            && self.state.len() <= 64
+            && !self.state.chars().any(char::is_control)
+    }
+}
+
+/// Use a carried item once without switching to it for good: take it out,
+/// pull its trigger until it fires (a thrown grenade, a quick heal), then
+/// put the item held before back in hand.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct QuickUse {
+    pub player: u64,
+    pub item: String,
+}
+impl ScriptOp for QuickUse {
+    const CAPABILITY: &str = "player";
+    const NAME: &str = "quick_use";
+    fn bounded(&self) -> bool {
+        item(&self.item)
+    }
+}
+
 /// Whether the image in a player's hand has ammo (`setImageAmmo`), which
 /// its states' `ammo` transitions read.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

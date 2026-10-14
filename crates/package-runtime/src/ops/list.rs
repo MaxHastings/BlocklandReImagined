@@ -134,6 +134,8 @@ macro_rules! for_each_op {
             SetReserve = player,
             SetRounds = player,
             Reload = player,
+            SetImageState = player,
+            QuickUse = player,
             SetImageAmmo = player,
             SetImageLoaded = player,
             MountImage = player,

@@ -278,6 +278,7 @@ impl Session {
 
     pub(super) fn step_weapons(&mut self) -> Result<()> {
         self.end_gun_slows()?;
+        self.step_quick_uses()?;
         let tick = self.simulation.state().tick;
         let mut prepared_triggers = Vec::with_capacity(self.peers.len());
         let owners: Vec<OwnerId> = self.peers.keys().copied().collect();

@@ -3141,6 +3141,18 @@ fn register_presentation(engine: &mut Engine) {
             player: id(&player)?,
         }))
     });
+    engine.register_fn("set_image_state", |player: Dynamic, state: &str| {
+        push(Op::SetImageState(ops::SetImageState {
+            player: id(&player)?,
+            state: state.into(),
+        }))
+    });
+    engine.register_fn("quick_use", |player: Dynamic, item: &str| {
+        push(Op::QuickUse(ops::QuickUse {
+            player: id(&player)?,
+            item: item.into(),
+        }))
+    });
     engine.register_fn("set_image_ammo", |player: Dynamic, ammo: bool| {
         push(Op::SetImageAmmo(ops::SetImageAmmo {
             player: id(&player)?,

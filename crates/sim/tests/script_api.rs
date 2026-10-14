@@ -61,6 +61,10 @@ fn cmd_ammo_box(p, n) { give_ammo(p, "probe", n); }
 fn cmd_endless(p) { set_reserve(p, "probe", ()); }
 fn cmd_load(p, n) { set_rounds(p, "probe:weapon/rifle", n); }
 fn cmd_reload_gun(p) { reload(p); }
+fn cmd_nade(p) { give_item(p, "probe:weapon/nade", false); }
+fn cmd_quick(p) { quick_use(p, "probe:weapon/nade"); }
+fn cmd_bash(p) { set_image_state(p, "Bash"); }
+fn cmd_held(p) { let me = player(p); note("held", me.item + "|" + me.image_state); }
 fn cmd_boom(p, look) {
     if look == "" { explode(0.0, 1.0, 30.0, 2.0, 0.0, 0.0); }
     else { explode(0.0, 1.0, 30.0, 2.0, 0.0, 0.0, look); }
@@ -207,6 +211,10 @@ fn behaviour() -> Value {
             command("endless", &[]),
             command("load", &["int"]),
             command("reload_gun", &[]),
+            command("nade", &[]),
+            command("quick", &[]),
+            command("bash", &[]),
+            command("held", &[]),
             command("boom", &["string"]),
             command("again", &[]),
             command("dart", &["float", "float", "float", "float"]),
@@ -246,6 +254,7 @@ fn behaviour() -> Value {
             "env": { "default": "", "visible": "everyone" },
             "struck": { "default": "", "visible": "everyone" },
             "mag": { "default": "", "visible": "everyone" },
+            "held": { "default": "", "visible": "everyone" },
             "heard": { "default": "", "visible": "everyone" },
             "kinds": { "default": "", "visible": "everyone" },
             "bots": { "default": "", "visible": "everyone" },
@@ -264,7 +273,8 @@ fn weapons() -> bri_weapons::Pack {
         "id": "probe",
         "items": {
             "probe:weapon/gun": { "ui_name": "Probe Gun", "image": "probe:image/gun" },
-            "probe:weapon/rifle": { "ui_name": "Probe Rifle", "image": "probe:image/rifle" }
+            "probe:weapon/rifle": { "ui_name": "Probe Rifle", "image": "probe:image/rifle" },
+            "probe:weapon/nade": { "ui_name": "Probe Nade", "image": "probe:image/nade" }
         },
         "images": {
             "probe:image/gun": {
@@ -272,7 +282,16 @@ fn weapons() -> bri_weapons::Pack {
                 "states": [
                     { "name": "Activate", "ticks": 6, "timeout": 1 },
                     { "name": "Ready", "no_ammo": 2 },
-                    { "name": "Empty", "ammo": 1 }
+                    { "name": "Empty", "ammo": 1 },
+                    { "name": "Bash", "ticks": 12, "timeout": 1 }
+                ]
+            },
+            "probe:image/nade": {
+                "states": [
+                    { "name": "Activate", "ticks": 6, "timeout": 1 },
+                    { "name": "Ready", "down": 2, "allow_change": true },
+                    { "name": "Throw", "ticks": 12, "timeout": 3 },
+                    { "name": "Done", "ticks": 6, "up": 1 }
                 ]
             },
             "probe:image/scope": { "states": [{ "name": "Scoped" }] },
@@ -2172,5 +2191,50 @@ fn a_call_to_no_function_is_told_when_the_add_on_loads() {
     assert_eq!(
         told[0].location.as_deref(),
         Some(format!("probe/main.rhai:{line}").as_str())
+    );
+}
+
+/// A key of an Add-On's own (here a command) uses an item once without
+/// switching to it, as a grenade key does, and sends the held image to a
+/// named state, as a melee key does with whatever is held.
+#[test]
+fn quick_use_throws_a_carried_item_and_puts_the_gun_back_and_a_state_can_be_entered() {
+    let mut g = Game::new();
+    let p = g.join(Vec3::new(0.0, 0.05, 0.0));
+    g.steps(3);
+    g.run(p, "arm", vec![]);
+    g.run(p, "nade", vec![]);
+    g.steps(10);
+    g.run(p, "held", vec![]);
+    assert_eq!(g.text("held"), "probe:weapon/gun|Ready");
+    g.run(p, "quick", vec![]);
+    let mut seen = Vec::new();
+    for _ in 0..50 {
+        g.steps(1);
+        g.run(p, "held", vec![]);
+        let now = g.text("held");
+        if seen.last() != Some(&now) {
+            seen.push(now);
+        }
+    }
+    assert!(
+        seen.iter().any(|s| s == "probe:weapon/nade|Throw"),
+        "the nade came out and was thrown: {seen:?}"
+    );
+    assert_eq!(
+        seen.last().map(String::as_str),
+        Some("probe:weapon/gun|Ready"),
+        "the gun is back in hand: {seen:?}"
+    );
+    g.run(p, "bash", vec![]);
+    g.steps(1);
+    g.run(p, "held", vec![]);
+    assert_eq!(g.text("held"), "probe:weapon/gun|Bash");
+    g.steps(14);
+    g.run(p, "held", vec![]);
+    assert_eq!(
+        g.text("held"),
+        "probe:weapon/gun|Ready",
+        "back after its timeout"
     );
 }

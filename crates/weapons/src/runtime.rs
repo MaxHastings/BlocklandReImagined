@@ -1069,6 +1069,22 @@ impl WeaponsWorld {
         let equipped = self.actors.get(&id)?.images.get(hand as usize)?.as_ref()?;
         Some(&equipped.image)
     }
+    /// Send the right hand's image to its state named `name` (any case),
+    /// entered afresh on the next advance as a transition enters it.
+    pub fn set_state(&mut self, id: ActorId, name: &str) -> Result<()> {
+        let a = self.actors.get_mut(&id).context("Unknown actor")?;
+        let e = a.images[0].as_mut().context("Nothing in hand")?;
+        let image = self.pack.images.get(&e.image).context("Unknown image")?;
+        let state = image
+            .states
+            .iter()
+            .position(|s| s.name.eq_ignore_ascii_case(name))
+            .with_context(|| format!("{} has no state {name}", e.image))?;
+        e.state = state;
+        e.entered = false;
+        e.remaining = 0;
+        Ok(())
+    }
     pub fn image_state(&self, id: ActorId, hand: u8) -> Option<(&Image, &State)> {
         let equipped = self.actors.get(&id)?.images.get(hand as usize)?.as_ref()?;
         let image = self.pack.images.get(&equipped.image)?;
