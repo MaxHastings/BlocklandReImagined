@@ -94,7 +94,7 @@ impl MountPoint {
 /// `deathSound` under `useCustomPainEffects`), each an `AudioProfile` name.
 /// None makes the standard player's sound; an empty name makes none, as a
 /// Bot_Hole bot's `jumpSound = ""` did.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Sounds {
     #[serde(default, skip_serializing_if = "Option::is_none")]

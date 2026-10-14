@@ -252,6 +252,21 @@ the standard player its own jump sound in two files; test
 `PlayerData` converts `jumpSound`, and `painSound`/`deathSound` under
 `useCustomPainEffects`, to these.
 
+
+Footfalls and landings are a body's own too:
+
+```json
+"sounds": { "footsteps": ["halo-spartan:step_1", "halo-spartan:step_2"],
+            "stride": 3.2, "land": "halo-spartan:land" }
+```
+
+`footsteps` (up to 8) plays one sound each `stride` units the body covers
+on the ground (0.25 to 32; left out, 1.1 times its standing height), never
+the same one twice running; `land` plays where it lands after falling faster
+than 4 units a second. Each client plays them for every body it draws, so
+they cost nothing on the network; riders and sitters make none. v20's
+Blockhead has neither. Test: `crates/client/src/footsteps.rs`.
+
 An archetype with `"adjusts": "v20.player.<datablock>"` (and no `base` or
 `name`) is no new body: it changes the constants it names on one of v20's
 own player types while the Add-On is on, as a v20 Add-On's

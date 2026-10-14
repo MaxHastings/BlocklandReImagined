@@ -1511,9 +1511,9 @@ impl App {
             let walking = presented
                 .values()
                 .filter(|p| {
-                    view.vitals.get(&p.owner).is_none_or(|v| {
-                        v.mounted.is_none() && v.ride.is_none() && !v.sitting
-                    })
+                    view.vitals
+                        .get(&p.owner)
+                        .is_none_or(|v| v.mounted.is_none() && v.ride.is_none() && !v.sitting)
                 })
                 .map(crate::footsteps::Walk::from);
             for (sound, at) in
@@ -1521,8 +1521,7 @@ impl App {
                     .footsteps
                     .update(game_elapsed.as_secs_f32(), walking, &view.archetypes)
             {
-                self.audio
-                    .profile(&sound, bri_audio::Placement::World(at));
+                self.audio.profile(&sound, bri_audio::Placement::World(at));
             }
             self.fx
                 .explosion_debris

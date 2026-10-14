@@ -1839,8 +1839,7 @@ impl ArchetypeDef {
             "sounds name sound profiles"
         );
         ensure!(
-            self.sounds.footsteps.len() <= 8
-                && self.sounds.footsteps.iter().all(|s| text(s, 128)),
+            self.sounds.footsteps.len() <= 8 && self.sounds.footsteps.iter().all(|s| text(s, 128)),
             "sounds.footsteps names 1 to 8 sound profiles"
         );
         ensure!(
