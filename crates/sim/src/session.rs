@@ -55,7 +55,7 @@ pub use tutorial::{Abilities, BRICK_HAND_IMAGES, BrickHand};
 mod bodies;
 pub use bodies::AbsentBody;
 mod tuning;
-pub use tuning::apply_tuned;
+pub use tuning::{NOT_TUNED, apply_tuned};
 mod grips;
 pub use grips::{body_grips, shape_grips};
 mod riding;

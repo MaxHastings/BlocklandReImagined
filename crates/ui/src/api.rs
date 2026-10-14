@@ -1192,6 +1192,10 @@ pub struct TuneView {
     /// Why Save to Add-On is unavailable (no file on this computer);
     /// empty when it is.
     pub cannot_save: String,
+    /// What the Movement part should know about this body (it has its own
+    /// movement controller); empty when nothing.
+    #[serde(default)]
+    pub movement_note: String,
 }
 
 /// One number a body can tune: its archetype-file path, the part of the
@@ -1204,6 +1208,9 @@ pub struct TuneField {
     pub value: f32,
     pub min: f32,
     pub max: f32,
+    /// Played now but not in the Add-On's file yet.
+    #[serde(default)]
+    pub unsaved: bool,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]

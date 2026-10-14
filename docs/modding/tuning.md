@@ -14,13 +14,20 @@ play, for the host of the game:
   the host rebuilds the body from its archetype file with the new number,
   by the same code that loaded it, and every player's game gets the tuned
   body. Players of that body carry on with the new numbers.
+- Every number takes hold at once for everyone playing that body, the host
+  too: no save, respawn or new game is needed to feel it. A typed number is
+  sent when you press Enter or click away from its box.
 - **Save to Add-On** writes the changes into the body's archetype file.
   Only the changed numbers are written; the rest of the file keeps its
   text, key order and spacing. A part the file leaves out (a `camera.bob`,
   a hand's socket) is added with the values the body plays now, so adding
   one number changes nothing else.
-- **Undo Changes** puts back every number changed since the window opened
-  or last saved.
+- A number played but not yet in the file is marked `*`, on its row and on
+  its part in the Part list, and the status line names them. Closing the
+  window with marked numbers says so once; Done again closes, and they keep
+  playing for this game. Reopening `/tune` in the same game shows them
+  marked still.
+- **Undo Changes** puts back every number changed since the last save.
 
 Tuned bodies last for the game: a map change or a new game loads the files
 again, so save what you want to keep.
@@ -41,7 +48,18 @@ A field is the number's path in the archetype file.
 | Health | `max_health` |
 
 The host checks every value as the archetype file is checked when it loads,
-so a value the file could not hold is refused with the reason in chat.
+so a value the file could not hold is refused, with the reason on the
+window's status line and in chat, and the slider goes back to the number
+the body plays.
+
+Save to Add-On is only for keeping the numbers: it writes what the body
+plays now, including a change sent a moment ago that has not come back
+from the host yet. It never changes how the body plays in this game.
+
+A body with its own movement controller (`movement.controller` or
+`controller`) may set its speed and jumps itself. Its Movement numbers
+still change, but the controller can ignore them while it is in charge;
+the window says so on its Movement part.
 
 ## What it does not tune
 

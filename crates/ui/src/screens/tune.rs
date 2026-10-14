@@ -22,6 +22,8 @@ const DONE: &str = "TB_Done";
 const ROW_HEIGHT: i32 = 26;
 /// How long a slider stays still before its number goes to the host.
 const LIVE_DELAY_MS: u64 = 200;
+/// How long a sent number holds its row before the host's answer shows.
+const PENDING_MS: u64 = 2000;
 const WIDTH: i32 = 480;
 const HEIGHT: i32 = 400;
 
@@ -47,6 +49,32 @@ fn slider_name(i: usize) -> String {
 fn value_name(i: usize) -> String {
     format!("TB_Value{i}")
 }
+fn label_name(i: usize) -> String {
+    format!("TB_Label{i}")
+}
+/// A row's or part's name, marked when it plays a number its file does not
+/// hold yet.
+fn marked(name: &str, unsaved: bool) -> String {
+    if unsaved {
+        format!("{name} *")
+    } else {
+        name.into()
+    }
+}
+/// The unsaved numbers' names, for the status line.
+fn unsaved_names(tune: &TuneView) -> String {
+    let names: Vec<&str> = tune
+        .fields
+        .iter()
+        .filter(|f| f.unsaved)
+        .map(|f| f.label.as_str())
+        .collect();
+    match names.len() {
+        0 => "the last change".into(),
+        1..=4 => names.join(", "),
+        n => format!("{} and {} more", names[..3].join(", "), n - 3),
+    }
+}
 /// A number as the value box shows it: short, without trailing zeros.
 fn shown(value: f32) -> String {
     let text = format!("{value:.3}");
@@ -71,6 +99,16 @@ pub struct Tune {
     /// still.
     moved: Vec<(String, f32)>,
     idle_ms: u64,
+    /// Numbers sent and not yet back from the host, with how long ago: the
+    /// row keeps showing them, rather than jumping back to the old number
+    /// until the tuned body arrives.
+    pending: Vec<(String, f32, u64)>,
+    /// The value box typed in last, sent when it loses focus as well as on
+    /// Enter.
+    typing: Option<usize>,
+    /// Done (or Escape) was pressed with numbers unsaved: the status line
+    /// says so, and pressing it again closes.
+    closing: bool,
 }
 
 impl Tune {
@@ -143,6 +181,9 @@ impl Tune {
             rows: Vec::new(),
             moved: Vec::new(),
             idle_ms: 0,
+            pending: Vec::new(),
+            typing: None,
+            closing: false,
         };
         screen.refresh(core);
         screen
@@ -166,32 +207,60 @@ impl Tune {
             self.group = picked
                 .and_then(|g| self.groups.iter().position(|n| *n == g))
                 .unwrap_or(0);
-            if let Some(n) = self.view.id(GROUP) {
-                self.view.state(n).items = self
-                    .groups
-                    .iter()
-                    .enumerate()
-                    .map(|(i, g)| (g.clone(), i as i64))
-                    .collect();
-                self.view.select(n, Some(self.group as i64));
-            }
             self.build_rows(tune);
         } else {
             self.show_values(tune);
+        }
+        // Each part, and each row, marked while it plays unsaved numbers.
+        if let Some(n) = self.view.id(GROUP) {
+            let items: Vec<(String, i64)> = self
+                .groups
+                .iter()
+                .enumerate()
+                .map(|(i, g)| {
+                    let unsaved = tune.fields.iter().any(|f| f.group == *g && f.unsaved);
+                    (marked(g, unsaved), i as i64)
+                })
+                .collect();
+            if self.view.state(n).items != items {
+                self.view.state(n).items = items;
+                self.view.select(n, Some(self.group as i64));
+            }
+        }
+        for (i, row) in self.rows.iter().enumerate() {
+            let unsaved = tune.fields.iter().any(|f| f.path == row.path && f.unsaved);
+            if let Some(n) = self.view.id(&label_name(i)) {
+                self.view.set_text(n, marked(&row.label, unsaved));
+            }
+        }
+        if !tune.unsaved {
+            self.closing = false;
         }
         if let Some(win) = self.view.id(WINDOW) {
             self.view.nodes[win].ctrl.text = Some(format!("Tune Body: {}", tune.name));
         }
         if let Some(n) = self.view.id(STATUS) {
-            let status = if !tune.status.is_empty() {
+            let movement = self.groups.get(self.group).map(String::as_str) == Some("Movement");
+            let status = if self.closing {
+                format!(
+                    "Not saved: {}. Save to Add-On keeps them; Done again keeps them for this game only.",
+                    unsaved_names(tune)
+                )
+            } else if !tune.status.is_empty() {
                 tune.status.clone()
             } else if !tune.cannot_save.is_empty() {
                 tune.cannot_save.clone()
+            } else if movement && !tune.movement_note.is_empty() {
+                tune.movement_note.clone()
             } else if tune.unsaved {
-                "Everyone plays these numbers now. Save to Add-On keeps them in the Add-On's file."
-                    .into()
+                format!(
+                    "Playing now, not saved (*): {}. Save to Add-On keeps them in its file.",
+                    unsaved_names(tune)
+                )
             } else {
-                "Move a slider or type a number: everyone in the game plays it at once.".into()
+                "Everything here is in the Add-On's file. Move a slider or type a number: \
+                 everyone in the game plays it at once."
+                    .into()
             };
             self.view.set_text(n, format!("<font:Arial:14>{status}"));
         }
@@ -208,6 +277,7 @@ impl Tune {
             return;
         };
         self.view.clear_children(rows);
+        self.typing = None;
         let group = self.groups.get(self.group).cloned().unwrap_or_default();
         self.rows = tune
             .fields
@@ -220,7 +290,14 @@ impl Tune {
             let y = i as i32 * ROW_HEIGHT + 4;
             self.view.add(
                 rows,
-                text("GuiTextProfile", Rect::new(6, y + 1, 170, 20), &field.label),
+                named(
+                    text(
+                        "GuiTextProfile",
+                        Rect::new(6, y + 1, 170, 20),
+                        &marked(&field.label, field.unsaved),
+                    ),
+                    &label_name(i),
+                ),
             );
             let mut slider = named(
                 ctrl(
@@ -259,8 +336,21 @@ impl Tune {
             let Some(field) = tune.fields.iter().find(|f| f.path == row.path) else {
                 continue;
             };
-            // A number moved here and not yet answered stays where it is.
-            if self.moved.iter().any(|(p, _)| *p == row.path) {
+            // A number moved here and not yet answered stays where it is,
+            // until the host's tuned body shows it.
+            self.pending.retain(|(p, v, _)| {
+                *p != row.path || (v - field.value).abs() > 1e-4 * v.abs().max(1.0)
+            });
+            // Nor does a slider the mouse holds: the host's answer to an
+            // earlier position never pulls it from under the hand.
+            let held = self
+                .view
+                .id(&slider_name(i))
+                .is_some_and(|n| self.view.pressed.is_some_and(|(p, _)| p == n));
+            if held
+                || self.moved.iter().any(|(p, _)| *p == row.path)
+                || self.pending.iter().any(|(p, _, _)| *p == row.path)
+            {
                 continue;
             }
             row.value = field.value;
@@ -290,13 +380,60 @@ impl Tune {
             return;
         }
         let changes = std::mem::take(&mut self.moved);
+        for (path, value) in &changes {
+            self.pending.retain(|(p, _, _)| p != path);
+            self.pending.push((path.clone(), *value, 0));
+        }
         core.request(UiAction::TuneSet {
             body: self.body.clone(),
             changes,
         });
     }
+    /// Send the number typed in row `i`'s box; a typo says so.
+    fn submit_typed(&mut self, i: usize, core: &mut Core) {
+        self.typing = None;
+        let Some(n) = self.view.id(&value_name(i)) else {
+            return;
+        };
+        // A typed number may go past the slider's ends: the host checks it
+        // against what the body allows.
+        let typed = self.view.text_of(n);
+        match typed.trim().parse::<f32>() {
+            Ok(value) if value.is_finite() => {
+                if self.rows.get(i).is_some_and(|r| r.value == value) {
+                    return;
+                }
+                self.moved(i, value);
+                if let Some(slider) = self.view.id(&slider_name(i))
+                    && let Some(row) = self.rows.get(i)
+                {
+                    self.view.set_num(slider, value.clamped(row.min, row.max));
+                }
+                self.send(core);
+            }
+            _ => {
+                if let Some(tune) = &mut core.tune {
+                    tune.status = format!("{} is not a number.", typed.trim());
+                }
+                self.refresh(core);
+            }
+        }
+    }
     fn close(&mut self, core: &mut Core) {
+        if let Some(i) = self.typing {
+            self.submit_typed(i, core);
+        }
+        let sent = !self.moved.is_empty();
         self.send(core);
+        // Numbers the file does not hold yet: say which, once, before the
+        // window goes (they keep playing for this game either way).
+        let unsaved = sent || core.tune.as_ref().is_some_and(|t| t.unsaved);
+        let can_save = core.tune.as_ref().is_some_and(|t| t.cannot_save.is_empty());
+        if unsaved && can_save && !self.closing {
+            self.closing = true;
+            self.refresh(core);
+            return;
+        }
         core.tune = None;
         core.request(UiAction::TuneClosed);
         core.pop(ScreenId::Tune);
@@ -331,6 +468,27 @@ impl Screen for Tune {
         if self.idle_ms >= LIVE_DELAY_MS {
             self.send(core);
         }
+        // A box typed in and left without Enter still counts.
+        if let Some(i) = self.typing
+            && self
+                .view
+                .id(&value_name(i))
+                .is_some_and(|n| self.view.focus != Some(n))
+        {
+            self.submit_typed(i, core);
+        }
+        // A number the host never shows (it refused it, and chat or the
+        // status line says why) stops holding its row.
+        let before = self.pending.len();
+        for (_, _, age) in &mut self.pending {
+            *age = age.saturating_add(dt_ms);
+        }
+        self.pending.retain(|(_, _, age)| *age < PENDING_MS);
+        if self.pending.len() != before
+            && let Some(tune) = core.tune.clone()
+        {
+            self.show_values(&tune);
+        }
     }
     fn on_key(&mut self, key: Key, _mods: Modifiers, core: &mut Core) -> bool {
         if key == Key::Escape {
@@ -359,6 +517,8 @@ impl Screen for Tune {
                         self.build_rows(&tune);
                     }
                 }
+            } else if let Some(i) = Self::row_of(&name, "TB_Value") {
+                self.typing = Some(i);
             } else if let Some(i) = Self::row_of(&name, "TB_Slider") {
                 let value = self.view.num(ev.node);
                 self.moved(i, value);
@@ -372,37 +532,27 @@ impl Screen for Tune {
             return;
         }
         if let Some(i) = Self::row_of(&name, "TB_Value") {
-            // A typed number may go past the slider's ends: the host checks
-            // it against what the body allows.
-            let typed = self.view.text_of(ev.node);
-            match typed.trim().parse::<f32>() {
-                Ok(value) if value.is_finite() => {
-                    self.moved(i, value);
-                    if let Some(n) = self.view.id(&slider_name(i))
-                        && let Some(row) = self.rows.get(i)
-                    {
-                        self.view.set_num(n, value.clamped(row.min, row.max));
-                    }
-                    self.idle_ms = LIVE_DELAY_MS;
-                    self.send(core);
-                }
-                _ => {
-                    if let Some(tune) = &mut core.tune {
-                        tune.status = format!("{} is not a number.", typed.trim());
-                    }
-                    self.refresh(core);
-                }
+            if ev.kind == EventKind::Submit {
+                self.submit_typed(i, core);
             }
             return;
+        }
+        if name != DONE {
+            self.closing = false;
         }
         match name.as_str() {
             UNDO => {
                 self.moved.clear();
+                self.pending.clear();
+                self.typing = None;
                 core.request(UiAction::TuneUndo {
                     body: self.body.clone(),
                 });
             }
             SAVE => {
+                if let Some(i) = self.typing {
+                    self.submit_typed(i, core);
+                }
                 self.send(core);
                 core.request(UiAction::TuneSave {
                     body: self.body.clone(),

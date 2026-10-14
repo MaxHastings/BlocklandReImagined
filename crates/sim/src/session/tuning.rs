@@ -6,6 +6,10 @@
 use super::*;
 use crate::archetype::{Archetype, ArchetypeId};
 
+/// How the host's private answer to a refused `/tune` change begins, so
+/// the host's Tune window can say it where the change was made.
+pub const NOT_TUNED: &str = "Not tuned:";
+
 /// The tuned bodies: each one's archetype file as tuned so far, and a count
 /// that rises with every change, for the host loop to send them.
 #[derive(Default)]
@@ -66,13 +70,37 @@ impl Session {
         // The same module: keep the controller already bound to it.
         tuned.movement.controller = old.movement.controller.clone();
         self.archetypes.replace(index, tuned)?;
-        if let Err(error) = self.fill_body_mount_points() {
+        if let Err(error) = self
+            .fill_body_mount_points()
+            .and_then(|()| self.retune_players(index))
+        {
             self.archetypes.replace(index, old)?;
+            self.retune_players(index)?;
             return Err(error);
         }
         self.tuned.defs.insert(id, json);
         self.tuned.revision += 1;
         Ok(())
+    }
+    /// Give every living player of body `index` its numbers as the table
+    /// has them now: a player keeps the motor constants it spawned with
+    /// ([`Self::set_player_archetype`]), so without this a tuned speed or
+    /// size would wait for their next spawn.
+    fn retune_players(&mut self, index: ArchetypeId) -> Result<()> {
+        let players: Vec<OwnerId> = self
+            .peers
+            .iter()
+            .filter(|(_, p)| p.player.state().archetype == index)
+            .map(|(owner, _)| *owner)
+            .collect();
+        for owner in players {
+            self.set_player_archetype(owner, index)?;
+        }
+        Ok(())
+    }
+    /// The motor numbers `owner` moves by now (their body's, at their scale).
+    pub fn player_tuning(&self, owner: OwnerId) -> Option<&crate::player::PlayerTuning> {
+        self.peers.get(&owner).map(|p| p.player.tuning())
     }
     /// The archetype file of each tuned body, as tuned so far.
     pub fn tuned_archetype_files(&self) -> &BTreeMap<String, serde_json::Value> {
@@ -118,7 +146,7 @@ impl Session {
                     .collect();
                 match changes.and_then(|c| self.tune_archetype(owner, body, &c)) {
                     Ok(()) => return,
-                    Err(error) => format!("Not tuned: {error:#}"),
+                    Err(error) => format!("{NOT_TUNED} {error:#}"),
                 }
             }
             _ => "Each field needs a value: /tune <body> <field> <value>.".to_string(),
