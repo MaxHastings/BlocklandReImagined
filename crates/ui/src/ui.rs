@@ -464,6 +464,8 @@ pub struct Core {
     /// The scope picture drawn over the screen while aiming, if any.
     pub scope_overlay: Option<(u64, f32)>,
     pub cursor_forced: bool,
+    /// The chat input (newMessageHud) is open under the chat.
+    pub chat_input_open: bool,
     /// Open print selector aspect ratio and last print per aspect.
     pub print_aspect: Option<String>,
     pub last_print: BTreeMap<String, String>,
@@ -1587,6 +1589,7 @@ impl Ui {
             aim_wheel: false,
             scope_overlay: None,
             cursor_forced: false,
+            chat_input_open: false,
             print_aspect: None,
             last_print: BTreeMap::new(),
             next_id: 0,
@@ -1761,6 +1764,10 @@ impl Ui {
                 self.apply_cmd(c);
             }
         }
+        self.core.chat_input_open = self
+            .dialogs
+            .iter()
+            .any(|d| matches!(d.id(), ScreenId::MessageInput(_)));
     }
 
     fn apply_cmd(&mut self, c: StackCmd) {
