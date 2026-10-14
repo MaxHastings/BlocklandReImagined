@@ -26,6 +26,12 @@ pub struct MapScene {
     pub shape_indices: BTreeMap<u32, std::ops::Range<u32>>,
     /// Set only by the modern loader, which never decodes illumination images.
     pub modern_lights: Option<Vec<crate::map_lighting::MapLight>>,
+    /// Animated map lights: an index into `modern_lights` and how it
+    /// changes over time (applied as its run-time tint).
+    pub light_animations: Vec<(usize, bri_content::light_animation::LightAnimation)>,
+    /// Spot lights: an index into `modern_lights` and its cone words
+    /// (`scene::spot_words`), for `SceneRenderer::set_map_light_spots`.
+    pub light_spots: Vec<(usize, [f32; 4])>,
 }
 
 pub(crate) fn file(root: &Path, name: &str) -> Result<PathBuf> {
@@ -333,6 +339,8 @@ fn load_bundle(root: &Path, map_id: &str, legacy: bool) -> Result<MapScene> {
     out.omissions.push("Translucent geometry sorts by mesh-batch center; intersecting translucent surfaces need finer sorting".into());
     // A map Add-On's own lights (`Kind::Light`) join any recovered ones.
     let authored = scene.lights()?;
+    let mut light_animations = Vec::new();
+    let mut light_spots = Vec::new();
     let modern_lights = if legacy {
         None
     } else {
@@ -364,11 +372,14 @@ fn load_bundle(root: &Path, map_id: &str, legacy: bool) -> Result<MapScene> {
                 ));
                 continue;
             }
-            if light.kind != "omni" {
-                out.omissions.push(format!(
-                    "Map light at node {} ({}) draws as a steady omni light: map light animation and spot cones are not played yet",
-                    light.node, light.kind
+            if let Some(spot) = light.spot {
+                light_spots.push((
+                    lights.len(),
+                    crate::scene::spot_words(Vec3::from(spot.direction), spot.inner, spot.outer),
                 ));
+            }
+            if let Some(animation) = light.animation {
+                light_animations.push((lights.len(), animation));
             }
             lights.push(crate::map_lighting::MapLight {
                 position: light.position,
@@ -386,6 +397,8 @@ fn load_bundle(root: &Path, map_id: &str, legacy: bool) -> Result<MapScene> {
         terrain,
         shape_indices,
         modern_lights,
+        light_animations,
+        light_spots,
     })
 }
 

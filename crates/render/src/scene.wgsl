@@ -718,7 +718,9 @@ fn light_given(l:MapLight,position:vec3<f32>)->vec3<f32> {
     let distance=length(l.position_inner.xyz-position);
     let outer=l.color_outer.w;
     let inner=l.position_inner.w;
-    return l.color_outer.rgb*clamp((outer-distance)/max(outer-inner,0.001),0.0,1.0);
+    let toward=(position-l.position_inner.xyz)/max(distance,0.0001);
+    let cone=clamp(dot(toward,l.spot.xyz)-l.spot.w,0.0,1.0);
+    return l.color_outer.rgb*clamp((outer-distance)/max(outer-inner,0.001),0.0,1.0)*cone;
 }
 // Light channel `c` of a decomposed material in the Dynamic mode: two light
 // indices to a parameter float (map_lighting::pack_channels).
@@ -771,7 +773,9 @@ fn relit_terrain(lightmap:vec3<f32>,position:vec3<f32>,normal:vec3<f32>)->vec3<f
 // (channels 3-6), each padded by one copied layer. dims.w==0: no volume, so
 // the sun reaches everywhere and there are no map lights.
 // channel: visibility channel, then the run-time tint (`light_tint`).
-struct MapLight { position_inner:vec4<f32>, color_outer:vec4<f32>, channel:vec4<f32> };
+// spot: a spot light's cone as (direction / (cos inner - cos outer),
+// cos outer / (cos inner - cos outer)); (0, 0, 0, -1) lights all round.
+struct MapLight { position_inner:vec4<f32>, color_outer:vec4<f32>, channel:vec4<f32>, spot:vec4<f32> };
 // A light's colour and brightness now against the fitted light: 1 as
 // fitted, 0 switched off (a broken bulb, an Add-On). count.y is 1 while any
 // light differs, which is the only time map surfaces pay for it.

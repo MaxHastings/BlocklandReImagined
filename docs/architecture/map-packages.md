@@ -142,9 +142,10 @@ and checks them; the renderer adds them to the map's Dynamic lights.
   (`crates/content/src/terrain_field.rs`).
 - **Lights** are map lights in map2dif's own types, not brick lights (see
   below): `omni`, `spot` (with cone angles), and the animated `strobe`,
-  `pulse`, `pulse2`, `flicker` and `runway`. Today all draw as steady omni
-  lights; the type and its settings are kept so maps need no change when
-  animation and cones arrive.
+  `pulse`, `pulse2`, `flicker` and `runway`. The animated types play in
+  Dynamic lighting (`bri_content::light_animation`, applied as each light's
+  run-time tint on wall-clock time, so every player sees them together).
+  Spot lights light their cone (`SpotCone`, `scene::spot_words`).
 - **Environment** (not built yet) names a sky from the Environment pack or
   ships its own faces. Weather stays the Environment window's.
 
@@ -271,7 +272,7 @@ mechanism; the new code is glue.
    converter is just an importer like the glTF one. The same importer then takes
    any old Blockland map Add-On (`Map_*.zip`: a `.mis` and its `.dif`
    interiors) and writes a map Add-On with its lightmaps, so v19/v20/RTB
-   community maps come over without Blender (asked by Dhorkan, 2026-10-14).
+   community maps come over without Blender (asked by Dhorkan, 2026-10-14). Built as `bri-import-addon map` (`crates/addon-import/src/v20_map.rs`), which lays the Add-On out as a v20 install in a scratch folder and runs `bri_convert::convert_root` and `bri_convert::map_bundle`; moving the vanilla maps onto the kind is still to do.
    Maps from other games go through Blender and glTF instead of an
    importer per game. This lands before beta,
    when the map format freezes with the other schemas; after that, changes
@@ -281,8 +282,8 @@ mechanism; the new code is glue.
 Blender), then the map's environment: a sky and weather picked from the
 packs the game ships, water from a Blender plane named `water`, and a
 heightmap terrain option beside mesh terrain, all on the systems converted
-maps already use. Then old Blockland map Add-On import (step 5), then light
-animation and spot cones.
+maps already use, then light animation and spot cones (all built), then
+old Blockland map Add-On import (step 5).
 
 **Deferred until someone needs it.** Each item below is a feature to
 maintain, and none is needed for the workflow above.

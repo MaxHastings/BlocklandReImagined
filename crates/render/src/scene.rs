@@ -2210,9 +2210,22 @@ const CUBE_FACES_PER_FRAME: usize = 24;
 /// per row and a face's share of a layer; face resolution, world texel per
 /// unit of distance and the soft lights' bits (`shadow::soft_cube_mask`);
 /// and each light's six face matrices.
+/// A map light's cone words for a light that shines all round.
+const ALL_ROUND: [f32; 4] = [0.0, 0.0, 0.0, -1.0];
+/// A spot light's cone words: full light within `inner` degrees of
+/// `direction`, fading to none at `outer`.
+pub fn spot_words(direction: Vec3, inner: f32, outer: f32) -> [f32; 4] {
+    let direction = direction.normalize_or_zero();
+    let (inner, outer) = (inner.to_radians().cos(), outer.to_radians().cos());
+    if direction == Vec3::ZERO || !(inner.is_finite() && outer.is_finite()) {
+        return ALL_ROUND;
+    }
+    let k = 1.0 / (inner - outer).max(0.001);
+    [direction.x * k, direction.y * k, direction.z * k, outer * k]
+}
 const MAP_LIGHTS_BYTES: usize = MAP_LIGHT_CUBES + 32 + crate::map_lighting::MAX_LIGHTS * 6 * 64;
 const MAP_LIGHT_CUBES: usize =
-    48 + crate::map_lighting::MAX_LIGHTS * 48 + crate::map_lighting::MAX_LIGHTS * 4;
+    48 + crate::map_lighting::MAX_LIGHTS * 64 + crate::map_lighting::MAX_LIGHTS * 4;
 fn validate_light_parameters(lights: &[crate::map_lighting::MapLight]) -> Result<()> {
     ensure!(
         lights.len() <= crate::map_lighting::MAX_LIGHTS
@@ -2338,13 +2351,17 @@ impl MapLightBinding {
                 words.extend([l.color[0], l.color[1], l.color[2], l.outer]);
                 let channel = if every_light { None } else { l.channel };
                 words.extend([channel.map_or(-1.0, f32::from), 1.0, 1.0, 1.0]);
+                words.extend(ALL_ROUND);
             }
             // Each `MapLighting::lights` index's place in the uniform.
             let mut slots = [-1.0f32; crate::map_lighting::MAX_LIGHTS];
             for (slot, &(index, _)) in lights.iter().enumerate() {
                 slots[index] = slot as f32;
             }
-            words.resize(12 + crate::map_lighting::MAX_LIGHTS * 12, 0.0);
+            for _ in lights.len()..crate::map_lighting::MAX_LIGHTS {
+                words.extend([0.0; 12]);
+                words.extend(ALL_ROUND);
+            }
             words.extend(slots);
             let bytes: &[u8] = bytemuck::cast_slice(&words);
             uniform[..bytes.len()].copy_from_slice(bytes);
@@ -2363,6 +2380,18 @@ impl MapLightBinding {
             shaded,
         }
     }
+    /// Cones of the shaded lights: `spot(i)` for light `i` of the lights
+    /// set ([`spot_words`]); `None` lights all round.
+    fn set_spots(&self, queue: &wgpu::Queue, spot: impl Fn(usize) -> Option<[f32; 4]>) {
+        for (slot, &(index, _)) in self.shaded.iter().enumerate() {
+            let words = spot(index).unwrap_or(ALL_ROUND);
+            queue.write_buffer(
+                &self.lights,
+                (48 + slot * 64 + 48) as u64,
+                bytemuck::cast_slice(&words),
+            );
+        }
+    }
     /// Tints the shaded lights: `tint(i)` for light `i` of
     /// `MapLighting::lights` (1 as fitted, 0 off). Lamps then pick their
     /// shadow slots by the light they give now.
@@ -2379,9 +2408,9 @@ impl MapLightBinding {
             if let Some(lamp) = self.lamps.get_mut(slot) {
                 lamp.color = color * *t;
             }
-            // Each light is 48 bytes after the 48-byte header; its tint is
-            // the last three words.
-            let offset = 48 + slot * 48 + 36;
+            // Each light is 64 bytes after the 48-byte header; its tint is
+            // words 9 to 11.
+            let offset = 48 + slot * 64 + 36;
             queue.write_buffer(
                 &self.lights,
                 offset as u64,
@@ -3682,6 +3711,14 @@ impl SceneRenderer {
     /// off). The light leaves objects and its share of the map's baked light
     /// alike; the rest of the baked light stays. Nothing is uploaded when
     /// the tints did not change.
+    /// Spot cones of the Dynamic mode's lights: `(index, cone)` for light
+    /// `index` of the lights last given `set_dynamic_lights`, the cone from
+    /// [`spot_words`]. Every other light shines all round.
+    pub fn set_map_light_spots(&mut self, queue: &wgpu::Queue, spots: &[(usize, [f32; 4])]) {
+        self.map_lights.set_spots(queue, |i| {
+            spots.iter().find(|(index, _)| *index == i).map(|(_, w)| *w)
+        });
+    }
     pub fn set_map_light_tints(&mut self, queue: &wgpu::Queue, tints: &[Vec3]) {
         self.map_lights
             .set_tints(queue, |i| tints.get(i).copied().unwrap_or(Vec3::ONE));

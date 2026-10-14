@@ -856,8 +856,19 @@ fn a_map_imports_as_an_add_on_the_game_loads() {
             .any(|l| near(Vec3::from(l.position), Vec3::new(0.0, 3.0, 0.0)))
     );
 
+    // The strobe blinks: a light animation for the lamp's light.
+    assert_eq!(drawn.light_animations.len(), 1);
+    let (lamp, strobe) = drawn.light_animations[0];
+    assert!(near(
+        Vec3::from(modern[lamp].position),
+        Vec3::new(0.0, 3.0, 0.0)
+    ));
+    assert_ne!(strobe.tint_at(0.1), strobe.tint_at(0.6));
+
     let md = std::fs::read_to_string(dir.join("IMPORT-REPORT.md")).unwrap();
-    assert!(md.contains("(map)") && md.contains("steady omni"), "{md}");
+    assert!(md.contains("(map)"), "{md}");
+    // The spot light shines down its cone.
+    assert_eq!(drawn.light_spots.len(), 1);
 }
 
 #[test]

@@ -20,6 +20,7 @@ pub mod reference;
 pub mod report;
 pub mod rtb;
 pub mod source;
+pub mod v20_map;
 mod vehicle_script;
 mod weapon_fx;
 

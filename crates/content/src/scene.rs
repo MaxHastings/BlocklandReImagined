@@ -93,6 +93,20 @@ pub struct AuthoredLight {
     /// Full brightness within `inner`, none beyond `outer`.
     pub inner: f32,
     pub outer: f32,
+    /// How a strobe, pulse, pulse2, flicker or runway light changes.
+    pub animation: Option<crate::light_animation::LightAnimation>,
+    /// A spot light's cone.
+    pub spot: Option<SpotCone>,
+}
+
+/// Where a spot light shines: full light within `inner` degrees of
+/// `direction` (the node's +Z, the native frame's turn of glTF's -Z),
+/// fading to none at `outer`.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SpotCone {
+    pub direction: [f32; 3],
+    pub inner: f32,
+    pub outer: f32,
 }
 
 /// Height of one brick plate: v20 stacks bricks on this lattice, anchored at
@@ -252,8 +266,47 @@ impl Scene {
                 "Light {}: needs brightness 0 or more and 0 <= inner < outer <= 10000",
                 node.name
             );
+            let animation = crate::light_animation::LightAnimation::read(
+                kind,
+                &node.properties,
+                [
+                    color[0] * brightness,
+                    color[1] * brightness,
+                    color[2] * brightness,
+                ],
+                brightness,
+            )
+            .with_context(|| format!("Light {}", node.name))?;
+            let spot = if kind == "spot" {
+                let (inner, outer) = (
+                    number(node, "inner_cone", 0.0)?,
+                    number(node, "outer_cone", 45.0)?,
+                );
+                ensure!(
+                    (0.0..90.0).contains(&inner) && inner <= outer && outer <= 90.0,
+                    "Light {}: needs 0 <= inner_cone <= outer_cone <= 90 degrees",
+                    node.name
+                );
+                let direction = Mat4::from_cols_array(&node.transform)
+                    .transform_vector3(Vec3::Z)
+                    .normalize_or_zero();
+                ensure!(
+                    direction != Vec3::ZERO,
+                    "Light {}: a spot light needs a direction",
+                    node.name
+                );
+                Some(SpotCone {
+                    direction: direction.to_array(),
+                    inner,
+                    outer,
+                })
+            } else {
+                None
+            };
             out.push(AuthoredLight {
                 node: index,
+                animation,
+                spot,
                 kind: kind.to_owned(),
                 position: [node.transform[12], node.transform[13], node.transform[14]],
                 color: [

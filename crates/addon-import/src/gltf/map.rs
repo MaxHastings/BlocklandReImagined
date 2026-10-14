@@ -158,17 +158,6 @@ fn lights(
             properties,
         });
     }
-    let animated: Vec<_> = out
-        .iter()
-        .filter(|n| n.properties["type"] != "omni")
-        .map(|n| format!("`{}` ({})", n.name, n.properties["type"]))
-        .collect();
-    if !animated.is_empty() {
-        report.warnings.push(format!(
-            "{} keep their type, but draw as steady omni lights until the engine plays map light animation and spot cones",
-            animated.join(", ")
-        ));
-    }
     Ok(out)
 }
 

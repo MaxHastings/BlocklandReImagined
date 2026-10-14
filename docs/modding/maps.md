@@ -113,10 +113,27 @@ for Classic and Unified lighting; your models don't cast shadows on it
 there yet. Heightmaps and masks from World Machine or Gaea work, and so
 does a greyscale picture you paint.
 
-Today every light draws as a steady omni light, whatever its type; the
-type is saved, so your map plays strobes, pulses and spot cones without
-changes once the engine does. Map lights are separate from brick lights
-(the wrench's FxLightData), as they were in Torque.
+**Blinking lights.** A `strobe`, `pulse`, `pulse2`, `flicker` or
+`runway` light goes between its colour and a second one, in step for every
+player. Set these on the light too:
+
+| Property | Meaning | Default |
+|---|---|---|
+| `bri_speed` | `very slow`, `slow`, `normal`, `fast` or `very fast` (or 0 to 4): 4, 2, 1, 0.5 or 0.25 seconds a cycle | `normal` |
+| `bri_period` | the cycle in seconds, instead of `bri_speed` | |
+| `bri_color2` | the second colour, three numbers | off (black) |
+| `bri_phase` | 0 to 1: how far through its cycle it starts, to set lights in a row apart | 0 |
+| `bri_attack`, `bri_sustain1`, `bri_decay`, `bri_sustain2` | pulse2 only: seconds fading up, held, fading down, held off | 0.25 each |
+| `bri_steps` | runway only: it is on for 1/steps of each cycle | 4 |
+
+A strobe snaps between its colours, a pulse fades smoothly, and a flicker
+jumps to a random level eight times a cycle. For a runway, give each light
+in the row its place as `bri_phase` (0, 0.25, 0.5 ...).
+
+A Spot light lights only its cone: full brightness inside Blender's
+**Spot Size** less its **Blend**, fading to nothing at the edge of Spot
+Size. Map lights are separate from brick lights (the wrench's
+FxLightData), as they were in Torque.
 
 **Classic and Unified lighting.** Map lights draw in Dynamic lighting.
 Players who choose Classic or Unified see your map lit by its sun and
@@ -165,8 +182,27 @@ Empties and lights, ready to open in Blender and import again:
 cargo run -p bri-addon-import --bin bri-import-addon -- export-map content bedroom bedroom.glb
 ```
 
+## Bring over an old Blockland map
+
+An old Blockland map Add-On (`Map_Something.zip`, or its folder: a `.mis`
+mission with its `.dif` buildings, `.ter` terrain, textures and sky)
+imports straight into a map Add-On, with its baked lighting, through the
+same converter that makes v20's own maps. No Blender needed:
+
+```sh
+cargo run -p bri-addon-import --bin bri-import-addon -- map Map_Something.zip addons/something --v20 "/path/to/Blockland v20"
+cargo run -p bri-package-runtime --bin bri-addon-check -- addons/something
+```
+
+`--v20` names your Blockland v20 folder, for the textures, skies and
+models a map borrows from the base game; without it, a map that borrows
+any fails and says to add it. When the Add-On holds more than one mission,
+pick one with `--mission NAME`. The id comes from the file name without
+`Map_` (`something`), or `--id`; the menu name from the mission, or
+`--name`.
+
 ## Not yet
 
 - Baking your models' lighting and shadows on import.
-- Strobe, pulse, flicker and runway animation, and spot cones, in the
-  renderer (the types are kept in your map already).
+- Blinking lights in Classic and Unified lighting, which draw map lights
+  baked.

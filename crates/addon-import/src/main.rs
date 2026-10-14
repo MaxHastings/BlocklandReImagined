@@ -10,6 +10,7 @@ const USAGE: &str = "Usage:
       [--height UNITS | --scale FACTOR] [--fps 30] [--right-hand NODE] [--left-hand NODE] [--eye NODE] [--loop CLIP]...
       [--lod TRIANGLES] [--lod-pixels 100] [--box-width UNITS] [--box-height UNITS] [--sky DIR] [--terrain DIR] [--json]
   bri-import-addon export-map CONTENT_OR_BUNDLE_DIR MAP OUTPUT.glb
+  bri-import-addon map MAP_ADDON(.zip|folder) FRESH_OUTPUT_DIR [--v20 V20_ROOT] [--mission NAME] [--id NAME] [--name MENU_NAME] [--version 1.0.0]
 
 Converts one legacy Blockland Add-On into a native package directory and writes
 import-report.json and IMPORT-REPORT.md into it. Never executes scripts.
@@ -29,11 +30,19 @@ scale and clips: docs/modding/gltf-models.md; maps: docs/modding/maps.md.
 `export-map` writes a converted map (`bedroom`, `slate`, or any map id) as a
 .glb for Blender: its geometry and textures, `col_` collision, `spawn`
 empties and its lights, ready to edit and import again with `gltf --kind map`.
-Give it the game's `content` folder or a map bundle folder.";
+Give it the game's `content` folder or a map bundle folder.
+
+`map` converts an old Blockland map Add-On (`Map_*.zip`: a .mis mission, its
+.dif interiors, .ter terrain, textures and sky) into a map Add-On, with its
+lightmaps, through the converter that makes v20's own maps. `--v20` names a
+Blockland v20 folder for the textures and models the map borrows from it.";
 
 fn main() -> Result<()> {
     if std::env::args().nth(1).as_deref() == Some("gltf") {
         return gltf(std::env::args().skip(2));
+    }
+    if std::env::args().nth(1).as_deref() == Some("map") {
+        return v20_map(std::env::args().skip(2));
     }
     if std::env::args().nth(1).as_deref() == Some("export-map") {
         return export_map(std::env::args().skip(2));
@@ -215,6 +224,43 @@ fn bundle_dir(dir: &std::path::Path, map: &str) -> Result<PathBuf> {
     dirs.into_iter()
         .find(|d| find_map(d, map).is_ok())
         .with_context(|| format!("no map bundle with map `{map}` in {}", dir.display()))
+}
+
+fn v20_map(args: impl Iterator<Item = String>) -> Result<()> {
+    let mut positional = vec![];
+    let mut opts = bri_addon_import::v20_map::Options {
+        input: PathBuf::new(),
+        out: PathBuf::new(),
+        v20: None,
+        mission: None,
+        id: None,
+        name: None,
+        version: "1.0.0".into(),
+    };
+    let mut args = args;
+    while let Some(a) = args.next() {
+        let mut value = || args.next().context(USAGE);
+        match a.as_str() {
+            "--v20" => opts.v20 = Some(PathBuf::from(value()?)),
+            "--mission" => opts.mission = Some(value()?),
+            "--id" => opts.id = Some(value()?),
+            "--name" => opts.name = Some(value()?),
+            "--version" => opts.version = value()?,
+            _ => positional.push(PathBuf::from(a)),
+        }
+    }
+    let [input, out] = <[PathBuf; 2]>::try_from(positional).map_err(|_| anyhow::anyhow!(USAGE))?;
+    opts.input = input;
+    opts.out = out;
+    let made = bri_addon_import::v20_map::import(&opts)?;
+    println!(
+        "Imported {} as the map {} ({} files) into {}. Check it with bri-addon-check.",
+        made.mission,
+        made.map_id,
+        made.files,
+        opts.out.display()
+    );
+    Ok(())
 }
 
 fn export_map(args: impl Iterator<Item = String>) -> Result<()> {

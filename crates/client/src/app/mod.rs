@@ -406,6 +406,8 @@ fn prepare_map(
     let visual = load_visual_map(root, &map, lighting)?;
     let mut light_volume =
         LightVolumeState::start(&visual.scene, light_cache, visual.modern_lights.as_deref());
+    light_volume.animations = visual.light_animations.clone();
+    light_volume.spots = visual.light_spots.clone();
     // The same definitions the host's session loads, Add-On bricks included.
     let definitions = paths.map_content()?.definitions()?;
     let meshes = Arc::new(

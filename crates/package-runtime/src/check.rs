@@ -575,29 +575,12 @@ fn map_problems(bundle: &Path, id: &str, at: &str) -> Vec<Diagnostic> {
                 .hint("in Blender, add an Empty named spawn where players start (spawn.001 and so on for more), then reimport"),
         );
     }
-    match scene.lights() {
-        Ok(lights) => {
-            let animated: Vec<_> = lights
-                .iter()
-                .filter(|l| l.kind != "omni")
-                .map(|l| format!("{} ({})", scene.nodes[l.node].name, l.kind))
-                .collect();
-            if !animated.is_empty() {
-                out.push(
-                    Diagnostic::warning(
-                        "check.map.light",
-                        format!("{} keep their type, but draw as steady omni lights for now", animated.join(", ")),
-                    )
-                    .at(&scene_at)
-                    .hint("nothing to change: they play as their type once the engine supports map light animation and spot cones"),
-                );
-            }
-        }
-        Err(e) => out.push(
+    if let Err(e) = scene.lights() {
+        out.push(
             Diagnostic::error("check.map.light", format!("{e:#}"))
                 .at(&scene_at)
-                .hint("a light's bri_light_type is omni, spot, strobe, pulse, pulse2, flicker or runway, and its radius is more than bri_inner; see docs/modding/maps.md"),
-        ),
+                .hint("a light's bri_light_type is omni, spot, strobe, pulse, pulse2, flicker or runway, its radius is more than bri_inner, and its blinking settings are as docs/modding/maps.md lists"),
+        );
     }
     // Every model the scene places, its collision, and every texture.
     let assets = index["assets"].as_object();
@@ -654,10 +637,14 @@ fn map_problems(bundle: &Path, id: &str, at: &str) -> Vec<Diagnostic> {
         let Some(texture) = binding["texture"].as_str() else {
             continue;
         };
-        let found = textures
-            .and_then(|t| t.get(texture))
-            .and_then(|f| f.as_str())
-            .and_then(file);
+        // The binding names the file the game reads; `textures` maps a
+        // converted map's original texture paths to those files.
+        let found = file(texture).or_else(|| {
+            textures
+                .and_then(|t| t.get(texture))
+                .and_then(|f| f.as_str())
+                .and_then(file)
+        });
         if found.is_none() {
             out.push(
                 Diagnostic::error(
