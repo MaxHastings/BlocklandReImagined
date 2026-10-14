@@ -31,6 +31,10 @@ const MOUNT_ABOVE: f32 = 0.2;
 /// top edge, until the next moves settle it on top (moves reach the host in
 /// batches), so the seat is taken from the next contact within this.
 const LANDING_TICKS: u64 = bri_world::TICKS_PER_SECOND / 4;
+/// The speed (units a second) a move must lose against a vehicle to count
+/// as landing on it. A hop lands at 7 or more; standing on a hull that
+/// rocks on its suspension loses a fraction of one, every few ticks.
+pub(super) const LANDING_SPEED: f32 = 2.0;
 /// Collider tag namespace for vehicles (players use 1 << 64).
 pub(super) const VEHICLE_TAG: u128 = 2 << 64;
 

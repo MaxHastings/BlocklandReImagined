@@ -33,6 +33,14 @@ test = "fair_by_dial"
 reason = "Bot tuning tool (fair metric against the alertness dial); opt-in only. docs/architecture/bots.md, Tuning."
 
 [[skip]]
+test = "heeding_allies_harm_against_ignoring_it"
+reason = "Bot tuning tool (A/B of bots deaf to allies' harm, eight matches); the deaf side breaks the behaviour bands by design. Opt-in only."
+
+[[skip]]
+test = "a_gltf_model_from_disk_renders"
+reason = "Renders a .glb named by BRI_GLTF for a look; run by hand with BRI_GLTF set."
+
+[[skip]]
 test = "a_new_player_plays_the_tutorial_through_target_practice"
 reason = "Scripted three-minute walkthrough; opt-in only (Max, 2026-09-29). Run it by hand with cargo test -p bri-client --test tutorial_walkthrough -- --ignored."
 

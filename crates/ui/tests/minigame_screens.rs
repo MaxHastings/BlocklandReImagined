@@ -1916,13 +1916,15 @@ fn source_minigame_tasks_render_offscreen() -> anyhow::Result<()> {
             ui.apply(UiUpdate::MiniGames(state));
             ui.core.push(ScreenId::MiniGameSettings);
             ui.update(0);
-            tab(&mut ui, 4);
-            addon_event(&mut ui, &format!("AOS_{page}"), EventKind::Click);
-            if page == "Setup" {
-                pick_category(&mut ui, "Rounds");
-            }
-            if page == "Teams" {
-                pick_category(&mut ui, "Equipment");
+            // Setup is More Settings on its Rounds category; Teams and
+            // Players are their own tabs.
+            match page {
+                "Setup" => {
+                    tab(&mut ui, 4);
+                    pick_category(&mut ui, "Rounds");
+                }
+                "Teams" => tab(&mut ui, 1),
+                _ => tab(&mut ui, 3),
             }
             let draw = ui.draw();
             let pixels = gpu.render_rgba(

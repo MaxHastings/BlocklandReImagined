@@ -238,26 +238,23 @@ mod tests {
         .await?;
         let client = UdpSocket::bind("127.0.0.1:0").await?;
         let datagram = vec![7u8; 1000];
-        // Sent in small bursts, so the loopback's own buffers never drop
-        // any: what the link loses is the link's. A pause sleeps between
-        // bursts (at least 1 ms, about 15 ms on Windows' timer, so under
-        // the link's rate there); without one the bursts only yield, far
-        // faster than the link drains.
+        // Sent in bursts that fit the loopback's own buffers (64 kB on
+        // Windows), with a sleep between them (at least 1 ms, about 15 ms on
+        // Windows' timer) so the link reads each burst before the next even
+        // on one core: what the link loses is the link's. Bursts of 10 go
+        // under the link's rate on Windows; bursts of 50 overrun it
+        // everywhere.
         async fn send(
             client: &UdpSocket,
             to: SocketAddr,
             datagram: &[u8],
             n: usize,
-            pause: bool,
+            burst: usize,
         ) -> Result<()> {
             for i in 0..n {
                 client.send_to(datagram, to).await?;
-                if i % 10 == 9 {
-                    if pause {
-                        tokio::time::sleep(Duration::from_millis(1)).await;
-                    } else {
-                        tokio::task::yield_now().await;
-                    }
+                if i % burst == burst - 1 {
+                    tokio::time::sleep(Duration::from_millis(1)).await;
                 }
             }
             Ok(())
@@ -275,10 +272,16 @@ mod tests {
         }
         let start = std::time::Instant::now();
         // 100 kB: a tenth of a second at 1 MB/s, within the buffer.
-        send(&client, link.address, &datagram, 100, true).await?;
-        let mut buffer = vec![0u8; 2048];
-        tokio::time::timeout(Duration::from_secs(5), host.recv_from(&mut buffer)).await??;
-        let arrived = 1 + receive(&host).await;
+        // The host reads while the client sends: a socket nobody reads
+        // overflows its receive buffer (64 kB on Windows) on its own.
+        let first = async {
+            let mut buffer = vec![0u8; 2048];
+            tokio::time::timeout(Duration::from_secs(5), host.recv_from(&mut buffer)).await??;
+            anyhow::Ok(1 + receive(&host).await)
+        };
+        let (sent, arrived) = tokio::join!(send(&client, link.address, &datagram, 100, 10), first);
+        sent?;
+        let arrived = arrived?;
         let took = start.elapsed() - Duration::from_millis(500);
         let forwarded = link.stats.forwarded.load(Ordering::Relaxed);
         assert_eq!(link.stats.dropped.load(Ordering::Relaxed), 0);
@@ -289,13 +292,17 @@ mod tests {
         assert!(forwarded >= 90, "{forwarded} of 100 reached the link");
         let least = Duration::from_secs_f64((forwarded - 1) as f64 * 1000.0 / rate as f64);
         assert!(took >= least, "{forwarded} kB at 1 MB/s took {took:?}");
-        // 500 kB as fast as the client sends it: what would wait longer
-        // than 200 ms is dropped, the rest arrives.
-        send(&client, link.address, &datagram, 500, false).await?;
-        let arrived = arrived + receive(&host).await;
+        // 1 MB well over the link's rate: what would wait longer than
+        // 200 ms is dropped, the rest arrives.
+        let (sent, more) = tokio::join!(
+            send(&client, link.address, &datagram, 1000, 50),
+            receive(&host)
+        );
+        sent?;
+        let arrived = arrived + more;
         let dropped = link.stats.dropped.load(Ordering::Relaxed);
         let forwarded = link.stats.forwarded.load(Ordering::Relaxed);
-        assert!(dropped >= 50, "dropped {dropped} of 500");
+        assert!(dropped >= 50, "dropped {dropped} of 1000");
         // (A loaded machine's loopback can lose a few on its own.)
         assert!(
             arrived * 10 >= forwarded * 9,
