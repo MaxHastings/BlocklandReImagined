@@ -20,6 +20,9 @@ pub struct Asset {
 
 #[derive(Debug, Clone)]
 pub struct Package {
+    /// The folder it was read from, for reading its rules again
+    /// ([`Package::reread_script`]).
+    pub dir: std::path::PathBuf,
     pub side: Side,
     pub manifest: Manifest,
     pub version: Version,
@@ -198,6 +201,7 @@ impl Package {
             );
         }
         let mut package = Self {
+            dir: dir.to_path_buf(),
             side: entry.side,
             version: Version::parse(&manifest.version).unwrap_or(Version {
                 major: 0,
@@ -461,6 +465,29 @@ impl Package {
     pub fn script_source(&self) -> Option<&str> {
         let b = self.behaviour.as_ref()?;
         std::str::from_utf8(&self.asset(&b.script)?.bytes).ok()
+    }
+    /// Its rules script as the file is now, when it differs from the one
+    /// loaded: `Ok(None)` when it is unchanged or the package has no rules.
+    pub fn reread_script(&self) -> Result<Option<String>, String> {
+        let Some(b) = &self.behaviour else {
+            return Ok(None);
+        };
+        let path = bri_package::path::inside(&self.dir, &b.script)?;
+        let bytes = std::fs::read(&path).map_err(|e| format!("cannot read {}: {e}", b.script))?;
+        if bytes.len() > MAX_PACKAGE_BYTES {
+            return Err(format!("{} is over 32 MiB", b.script));
+        }
+        let source = String::from_utf8(bytes).map_err(|_| format!("{} is not UTF-8", b.script))?;
+        Ok((self.script_source() != Some(source.as_str())).then_some(source))
+    }
+    /// Swap in a new rules script (from [`Package::reread_script`]).
+    pub fn set_script(&mut self, source: String) {
+        let Some(file) = self.behaviour.as_ref().map(|b| b.script.clone()) else {
+            return;
+        };
+        if let Some(asset) = self.assets.iter_mut().find(|a| a.file == file) {
+            asset.bytes = source.into_bytes();
+        }
     }
 }
 
