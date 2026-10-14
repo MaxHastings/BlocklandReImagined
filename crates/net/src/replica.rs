@@ -27,6 +27,9 @@ pub struct Replica {
     pub minigames: Vec<bri_sim::session::MiniGameView>,
     pub vehicles: BTreeMap<u64, bri_sim::session::VehicleInfo>,
     pub vehicle_poses: BTreeMap<u64, bri_sim::session::VehiclePose>,
+    /// Vehicles whose newest pose came as a [`crate::protocol::VehicleView`]:
+    /// without the crew's prediction state, so not to predict from.
+    pub viewed_vehicles: BTreeSet<u64>,
     /// Admin free cameras by owner, while their orbs stream.
     pub orbs: BTreeMap<OwnerId, Orb>,
     pub time_scale: f32,
@@ -303,6 +306,7 @@ impl Replica {
                 .into_iter()
                 .map(|p| (p.id, p))
                 .collect(),
+            viewed_vehicles: BTreeSet::new(),
             orbs: BTreeMap::new(),
             time_scale: checkpoint.time_scale,
             broken_shapes: checkpoint.broken_shapes,
@@ -531,6 +535,8 @@ impl Replica {
             self.vehicles = vehicles.into_iter().map(|v| (v.id, v)).collect();
             self.vehicle_poses
                 .retain(|id, _| self.vehicles.contains_key(id));
+            self.viewed_vehicles
+                .retain(|id| self.vehicles.contains_key(id));
         }
         self.vitals.retain(|id, _| self.names.contains_key(id));
         self.avatars.retain(|id, _| self.names.contains_key(id));
@@ -561,12 +567,24 @@ impl Replica {
     }
     /// Newest-tick vehicle motion; older or unknown datagrams are ignored.
     pub fn vehicle_pose(&mut self, pose: bri_sim::session::VehiclePose) -> Result<()> {
+        self.vehicle(pose, false)
+    }
+    /// A vehicle's pose as seen by a player not riding it.
+    pub fn vehicle_view(&mut self, view: crate::protocol::VehicleView) -> Result<()> {
+        self.vehicle(view.into_pose(), true)
+    }
+    fn vehicle(&mut self, pose: bri_sim::session::VehiclePose, viewed: bool) -> Result<()> {
         validate_vehicle_pose(&pose)?;
         if self
             .vehicle_poses
             .get(&pose.id)
             .is_none_or(|old| old.tick < pose.tick)
         {
+            if viewed {
+                self.viewed_vehicles.insert(pose.id);
+            } else {
+                self.viewed_vehicles.remove(&pose.id);
+            }
             self.vehicle_poses.insert(pose.id, pose);
         }
         Ok(())
