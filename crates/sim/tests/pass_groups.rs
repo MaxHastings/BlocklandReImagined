@@ -23,6 +23,10 @@ use std::{
 const TEAMS: &str = r#"
 fn cmd_team(p, group) { for q in players() { set_pass_group(q.id, group); } }
 fn cmd_solo(p, group) { set_pass_group(p, group); }
+fn on_contact(info) {
+    if info.kind != "body" { return; }
+    set("touches", get("touches") + 1);
+}
 "#;
 
 struct Root(PathBuf);
@@ -58,7 +62,8 @@ fn catalog() -> Arc<Catalog> {
     write(
         "behaviour.json",
         json!({
-            "schema_version": 1, "script": "main.rhai",
+            "schema_version": 1, "script": "main.rhai", "on_contact": true,
+            "state": { "global": { "touches": { "default": 0, "visible": "everyone" } } },
             "commands": [{ "name": "team", "args": group }, { "name": "solo", "args": group }]
         })
         .to_string(),
@@ -180,6 +185,26 @@ fn different_groups_and_no_group_still_block() {
     // Leaving the group (0) leaves A as solid as ever.
     g.teams(g.a, "team", 0);
     assert_eq!(g.state(g.b).pass_group, 0);
+}
+
+fn touches(s: &Session) -> i64 {
+    s.package_state().packages["teams"].global["touches"]
+        .as_i64()
+        .unwrap()
+}
+
+/// `on_contact` "body" hears only bodies that meet: a team in one group
+/// walks through each other without a touch, as the physics lets them.
+#[test]
+fn bodies_in_one_pass_group_do_not_touch_for_on_contact() {
+    let mut g = Game::new();
+    g.teams(g.a, "team", 4);
+    g.walk(240);
+    assert_eq!(touches(&g.s), 0, "walked through a teammate");
+    let mut g = Game::new();
+    g.teams(g.a, "solo", 4);
+    g.walk(240);
+    assert!(touches(&g.s) > 0, "A, alone in a group, ran into B");
 }
 
 #[test]

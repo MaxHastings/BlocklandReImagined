@@ -1457,6 +1457,10 @@ impl Session {
             let pose =
                 Pose::from_translation((Vec3::from(bounds.min) + Vec3::from(bounds.max)) * 0.5);
             let feet = Vec3::from(peer.player.state().feet);
+            // A vehicle in the player's pass group goes through them: no
+            // run-over, contact or boarding, as the physics already lets
+            // them pass.
+            let groups = bri_motor::player::moves_against(peer.player.state().pass_group);
             // A body that cannot ride lands on a vehicle as on anything else.
             let may_board = !self.bots.is_bot(*owner)
                 && self.vehicles.may_remount(*owner, tick)
@@ -1478,14 +1482,15 @@ impl Session {
                     .filter(|(_, aabb)| aabb.intersects(&reach))
                     .any(|(c, _)| {
                         let collider = &self.simulation.physics.colliders[*c];
-                        rapier3d::parry::query::contact(
-                            &pose,
-                            &body,
-                            collider.position(),
-                            collider.shape(),
-                            0.0,
-                        )
-                        .is_ok_and(|c| c.is_some())
+                        collider.collision_groups().test(groups)
+                            && rapier3d::parry::query::contact(
+                                &pose,
+                                &body,
+                                collider.position(),
+                                collider.shape(),
+                                0.0,
+                            )
+                            .is_ok_and(|c| c.is_some())
                     });
                 if !contact {
                     continue;

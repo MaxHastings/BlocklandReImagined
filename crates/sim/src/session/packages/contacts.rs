@@ -76,11 +76,17 @@ impl Session {
                 )
             })
             .collect();
+        // Bodies in one pass group go through each other: they never touch.
+        let group = |o: &OwnerId| self.peers.get(o).map_or(0, |p| p.player.state().pass_group);
         let mut touching = BTreeSet::new();
         let mut begun = Vec::new();
         let was = &self.packages.as_ref().unwrap().contacts.bodies;
         for (i, a) in boxes.iter().enumerate() {
             for b in &boxes[i + 1..] {
+                let shared = group(&a.0);
+                if shared != 0 && shared == group(&b.0) {
+                    continue;
+                }
                 let lo = a.1.max(b.1);
                 let hi = a.2.min(b.2);
                 let overlap = hi - lo + Vec3::splat(TOUCH);
