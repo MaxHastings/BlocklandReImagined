@@ -390,6 +390,16 @@ impl Package {
                 Kind::Body => {
                     parse::<bri_content::shape::Shape>(asset, &id, |s| s.validate(), out);
                 }
+                // Loaded by the map catalog and map loaders; checked here so
+                // a broken one is named before anyone picks it.
+                Kind::Map => {
+                    if let Err(e) = content::map_index(&asset.bytes, &asset.id) {
+                        out.push(
+                            Diagnostic::error("content.map", format!("{e:#}"))
+                                .at(location(&id, &asset.file)),
+                        );
+                    }
+                }
                 // Read and validated by the engine systems that merge them.
                 Kind::Weapons | Kind::Vehicles | Kind::Bricks | Kind::Bots => {}
                 Kind::Mode => {
@@ -940,11 +950,14 @@ impl Catalog {
                 }
                 if let Some(map) = mode.map.as_ref().filter(|m| m.contains(':')) {
                     let roots = mode.add_ons.iter().map(String::as_str).chain([id.as_str()]);
-                    if !self
-                        .closure(roots)
-                        .iter()
-                        .any(|p| self.packages[*p].worlds.contains_key(map))
-                    {
+                    if !self.closure(roots).iter().any(|p| {
+                        let package = &self.packages[*p];
+                        package.worlds.contains_key(map)
+                            || package
+                                .assets
+                                .iter()
+                                .any(|a| a.kind == Kind::Map && &a.id == map)
+                    }) {
                         out.push(
                             Diagnostic::error(
                                 "set.mode.map",

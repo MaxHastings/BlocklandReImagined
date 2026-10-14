@@ -26,6 +26,7 @@ synthetic_and_content!(
     a_host_with_the_blockhead_bot_on_spawns_bots_and_one_without_offers_none,
     a_guest_downloads_an_imported_body_and_sees_the_host_as_it,
     a_guest_hears_an_add_ons_own_jump_sound_it_downloaded,
+    a_guest_downloads_a_map_add_on_and_plays_on_it,
 );
 
 const SIZE: (u32, u32) = (960, 720);
@@ -891,6 +892,110 @@ fn a_guest_downloads_an_imported_body_and_sees_the_host_as_it(f: &ContentRoot) -
         30,
         |a| a[1].avatar_model(host_owner) == Some(Some(MODEL)),
     )?;
+    leave(&mut [&mut guest, &mut host_app])?;
+    Ok(())
+}
+
+/// A map Add-On (docs/architecture/map-packages.md): its map is offered in
+/// Start Game beside the base maps, the host plays on it, and a guest who
+/// lacks the Add-On downloads it with the host's other Add-Ons and loads
+/// the map from the download.
+fn a_guest_downloads_a_map_add_on_and_plays_on_it(f: &ContentRoot) -> Result<()> {
+    const ADD_ON: &str = "test_hall";
+    const MAP: &str = "test_hall:map/hall";
+    let content = f.root.clone();
+    let folder = format!(".map-add-on-{}-{}", std::process::id(), next_stage());
+    let staged = Staged(content.join(&folder));
+    let _ = std::fs::remove_dir_all(&staged.0);
+    let dir = staged.0.join(ADD_ON);
+    let mut room = bri_content::testing::map_bundle::rooms_for(&[MAP]).remove(0);
+    room.name = "Test Hall".into();
+    bri_content::testing::map_bundle::write_bundle(&dir.join("map"), &[room])?;
+    std::fs::write(
+        dir.join("package.json"),
+        serde_json::to_vec(&serde_json::json!({
+            "schema_version": 1, "id": ADD_ON, "version": "1.0.0", "api": 1,
+            "name": "Test Hall", "description": "A room to build in.",
+            "authors": [], "license": "CC0-1.0", "provenance": { "source": "original" },
+            "dependencies": {}, "capabilities": [],
+            "provides": [{ "kind": "map", "id": MAP, "file": "map/bundle.json" }]
+        }))?,
+    )?;
+    let info: bri_package::library::PackageInfo =
+        serde_json::from_slice(&std::fs::read(dir.join("package.json"))?)?;
+    let side = info.side().context("a side")?;
+    ensure!(
+        side == bri_package::packages::Side::Shared,
+        "a map Add-On is {side:?}, so guests never download it"
+    );
+    let listed = bri_package::packages::PackageSet::load_root(&content)?;
+    let mut set = listed.clone();
+    set.packages.push(bri_package::packages::PackageEntry {
+        id: ADD_ON.into(),
+        version: info.version,
+        side,
+        dir: format!("{folder}/{ADD_ON}"),
+        role: None,
+    });
+    let mut host_app = app(&content, "MapHost")?;
+    host_app
+        .apply_packages(&set)
+        .context("the host loads the map Add-On")?;
+    let offered: Vec<_> = host_app
+        .ui
+        .core
+        .maps
+        .iter()
+        .map(|m| m.id.as_str())
+        .collect();
+    ensure!(
+        offered.contains(&MAP) && offered.contains(&SLATE),
+        "Start Game offers {offered:?}; the map catalog holds {:?}",
+        host_app
+            .content
+            .paths
+            .maps
+            .iter()
+            .map(|m| &m.id)
+            .collect::<Vec<_>>()
+    );
+    let mut guest = app(&content, "MapGuest")?;
+    guest
+        .apply_packages(&listed)
+        .context("the guest has no map Add-On")?;
+    ensure!(
+        !guest.ui.core.maps.iter().any(|m| m.id == MAP),
+        "the guest offers a map it does not have"
+    );
+    host_app.host_on_any_port();
+    request(
+        &mut host_app,
+        UiAction::HostGame {
+            map: MAP.into(),
+            mode: ServerMode::Lan,
+            game_mode: None,
+            max_players: 4,
+            server_name: "Map Add-On".into(),
+            password: String::new(),
+            admin_password: String::new(),
+            super_admin_password: String::new(),
+        },
+    )?;
+    until(&mut [&mut host_app], "host in game", 180, |a| in_game(a[0]))?;
+    ensure!(host_app.network_view().context("view")?.world.map_id == MAP);
+    join(&mut guest, &host_app)?;
+    until(
+        &mut [&mut host_app, &mut guest],
+        "guest in game",
+        300,
+        |a| in_game(a[1]),
+    )?;
+    let cache = guest_cache_ids(&guest);
+    ensure!(
+        cache.iter().any(|id| id == ADD_ON),
+        "{ADD_ON} was not downloaded: {cache:?}"
+    );
+    ensure!(guest.network_view().context("view")?.world.map_id == MAP);
     leave(&mut [&mut guest, &mut host_app])?;
     Ok(())
 }
