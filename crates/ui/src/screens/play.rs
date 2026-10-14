@@ -417,6 +417,20 @@ fn hud(core: &Core) -> View {
             [255, 255, 255, (core.whiteout * 255.0) as u8],
         );
     }
+    for (color, left, all) in &core.flashes {
+        let byte = |v: f32| (v.clamped(0.0, 1.0) * 255.0).round() as u8;
+        let fade = (left / all.max(0.001)).clamped(0.0, 1.0);
+        fill(
+            &mut v,
+            Rect::new(0, 0, w, h),
+            [
+                byte(color[0]),
+                byte(color[1]),
+                byte(color[2]),
+                byte(color[3] * fade),
+            ],
+        );
+    }
     for tint in &core.underwater {
         let byte = |v: f32| (v.clamped(0.0, 1.0) * 255.0).round() as u8;
         fill(

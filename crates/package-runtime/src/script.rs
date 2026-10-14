@@ -2566,6 +2566,25 @@ fn register_api(engine: &mut Engine) {
             }))
         },
     );
+    // `()` as the player flashes everyone's screen.
+    engine.register_fn(
+        "screen_flash",
+        |player: Dynamic, color: Array, seconds: Dynamic| {
+            let color = match color.as_slice() {
+                [r, g, b, a] => [float(r)?, float(g)?, float(b)?, float(a)?],
+                _ => return fail("a colour is [r, g, b, a] from 0 to 1"),
+            };
+            push(Op::ScreenFlash(ops::ScreenFlash {
+                player: if player.is_unit() {
+                    None
+                } else {
+                    Some(id(&player)?)
+                },
+                color,
+                seconds: float(&seconds)?,
+            }))
+        },
+    );
     // Every member of a mini-game, counted once.
     engine.register_fn("tell_minigame", |game: Dynamic, text: &str| {
         push(Op::TellMinigame(ops::TellMinigame {

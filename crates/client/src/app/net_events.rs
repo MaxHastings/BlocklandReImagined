@@ -734,6 +734,9 @@ impl App {
                             self.audio.profile(&profile, bri_audio::Placement::Listener);
                             continue;
                         }
+                        bri_sim::session::Notice::Flash { color, seconds } => {
+                            UiUpdate::Flash { color, seconds }
+                        }
                         bri_sim::session::Notice::Ammo(held) => {
                             self.net.next_print_is_ammo = held.as_ref().is_some_and(|h| h.printed);
                             self.net.held_ammo = held;

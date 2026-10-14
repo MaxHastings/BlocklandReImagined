@@ -1791,6 +1791,12 @@ pub enum UiUpdate {
     Caption(String),
     /// Red damage flash (`Armor::onDamage`: +delta/maxDamage*2, capped 0.75).
     DamageFlash(f32),
+    /// The screen tinted `color` (RGBA 0..1), fading over `seconds`: a
+    /// rule's `screen_flash`.
+    Flash {
+        color: [f32; 4],
+        seconds: f32,
+    },
     /// Jet energy fraction for `HUD_EnergyBar`; `None` hides it
     /// (`clientCmdShowEnergyBar`, from the datablock's `showEnergyBar`).
     Energy(Option<f32>),

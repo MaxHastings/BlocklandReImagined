@@ -63,6 +63,7 @@ fn cmd_load(p, n) { set_rounds(p, "probe:weapon/rifle", n); }
 fn cmd_reload_gun(p) { reload(p); }
 fn cmd_nade(p) { give_item(p, "probe:weapon/nade", false); }
 fn cmd_quick(p) { quick_use(p, "probe:weapon/nade"); }
+fn cmd_flash(p) { screen_flash(p, [0.3, 0.6, 1.0, 0.5], 0.4); }
 fn cmd_bash(p) { set_image_state(p, "Bash"); }
 fn cmd_held(p) { let me = player(p); note("held", me.item + "|" + me.image_state); }
 fn cmd_boom(p, look) {
@@ -213,6 +214,7 @@ fn behaviour() -> Value {
             command("reload_gun", &[]),
             command("nade", &[]),
             command("quick", &[]),
+            command("flash", &[]),
             command("bash", &[]),
             command("held", &[]),
             command("boom", &["string"]),
@@ -682,6 +684,14 @@ fn view_beams_and_animations_reach_players_as_notices_and_cues() {
             })
             .collect();
     assert_eq!(fovs, [Some(30.0), None]);
+    g.run(a, "flash", vec![]);
+    assert!(
+        g.s.take_private_notices()
+            .iter()
+            .any(|(owner, n)| *owner == a
+                && matches!(n, Notice::Flash { color, seconds }
+            if *color == [0.3, 0.6, 1.0, 0.5] && *seconds == 0.4))
+    );
     g.s.take_cues();
     g.run(a, "show", vec![]);
     let cues = g.s.take_cues();

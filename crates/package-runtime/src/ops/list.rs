@@ -116,6 +116,7 @@ macro_rules! for_each_op {
             SpawnExplosion = damage,
             Heal = damage,
             Print = chat,
+            ScreenFlash = chat,
             PlantError = chat,
             MessageBox = chat,
             Ask = chat,
