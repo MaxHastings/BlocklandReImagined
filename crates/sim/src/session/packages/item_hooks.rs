@@ -33,7 +33,7 @@ pub(in crate::session) struct ItemHooks {
     /// What `on_drop` returned, by drop id.
     drop_data: BTreeMap<u64, serde_json::Value>,
     /// The package that put each `drop_item` pickup in the world.
-    package_drops: BTreeMap<u64, String>,
+    pub(super) package_drops: BTreeMap<u64, String>,
 }
 
 /// Whether `package` may speak for `id` (`namespace:kind/name`): its own

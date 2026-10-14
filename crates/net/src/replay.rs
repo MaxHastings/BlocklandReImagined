@@ -308,6 +308,7 @@ pub fn rebuild(content_root: &Path, header: &Header) -> Result<Rebuilt> {
         copies: host
             .copies
             .then(|| Arc::new(NoCopies) as Arc<dyn CopyStore>),
+        addon_data: None,
         game_version: host.game_version.clone(),
         bot_tuning: host
             .bot_tuning

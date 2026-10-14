@@ -18,6 +18,24 @@ impl ScriptOp for Push {
     }
 }
 
+/// Put `target` (a player, bot, creature or vehicle) in pass group
+/// `group`, 1 to [`MAX_PASS_GROUP`], or out of any with 0: objects in the
+/// same group move through each other and still meet everything else (a
+/// team that walks through its own members, a ghost car that passes its
+/// convoy). A player keeps their group through respawns.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SetPassGroup {
+    pub target: ObjectRef,
+    pub group: u8,
+}
+impl ScriptOp for SetPassGroup {
+    const CAPABILITY: &str = "physics";
+    const NAME: &str = "set_pass_group";
+    fn bounded(&self) -> bool {
+        self.group <= MAX_PASS_GROUP
+    }
+}
+
 /// Knock a player off their feet into a tumble, flying at `velocity`;
 /// for `seconds` (0.1 to 60) when given, else until it settles.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

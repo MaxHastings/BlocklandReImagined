@@ -76,6 +76,7 @@ fn pose(tick: u64, x: f32, yaw: f32) -> Pose {
             tick: Default::default(),
             tether: None,
             controller: None,
+            pass_group: 0,
         },
     }
 }

@@ -305,6 +305,9 @@ impl Sandbox {
             inbox: VecDeque::new(),
             focused: false,
             keys: BTreeSet::new(),
+            claims: 0,
+            controls: Captured::default(),
+            shot: None,
             camera: [0.0, 0.0, 0.0, 0.0, 0.0, -1.0],
             world: Arc::new(World::default()),
             view: View::default(),
@@ -332,12 +335,22 @@ impl Sandbox {
         let frame = instance
             .get_typed_func::<(f32, f32), ()>(&mut store, "frame")
             .ok();
+        let camera_frame = code
+            .capabilities
+            .contains(&Capability::CameraControl)
+            .then(|| {
+                instance
+                    .get_typed_func::<(f32, f32), ()>(&mut store, "camera_frame")
+                    .ok()
+            })
+            .flatten();
         let mut addon = AddOn {
             id: code.id.clone(),
             name: code.name.clone(),
             store,
             instance,
             frame,
+            camera_frame,
             stopped: None,
             gpu_strikes: 0,
             init_log: Vec::new(),
@@ -496,6 +509,8 @@ pub struct FrameInput {
     /// otherwise, whatever is pressed.
     pub focused: bool,
     pub keys_down: Vec<u32>,
+    /// The game controls this Add-On holds now (`input.capture`).
+    pub controls: Captured,
     /// Messages from the Add-On's server script, oldest first.
     pub messages: Vec<Vec<u8>>,
     /// Where the player's camera is and looks, in world units (Y up).
@@ -510,6 +525,80 @@ pub struct FrameInput {
     pub bodies: Arc<BTreeMap<u32, BodyState>>,
     /// Every Add-On's shared bodies, for `rigid_find`.
     pub shared: Arc<BTreeMap<u32, BodyState>>,
+}
+
+/// The game controls an Add-On may take over (`input.capture`), one bit
+/// each in this order: `action_down` takes the index. Menus, chat and the
+/// pause key are never among them, so a player can always leave.
+pub const CONTROLS: [&str; 12] = [
+    "forward",
+    "backward",
+    "left",
+    "right",
+    "jump",
+    "crouch",
+    "jet",
+    "fire",
+    "walk",
+    "zoom",
+    "free_look",
+    "look",
+];
+/// Every control bit.
+pub const ALL_CONTROLS: u32 = (1 << CONTROLS.len()) - 1;
+/// The bit of the mouse look among [`CONTROLS`].
+pub const LOOK_CONTROL: u32 = 1 << 11;
+
+/// The game controls an Add-On holds this frame and what the player does
+/// with them, which the game no longer sees.
+#[derive(Debug, Default, Clone, Copy, PartialEq)]
+pub struct Captured {
+    /// The controls the game gave this Add-On (it asked with
+    /// `input_claim`; one Add-On holds each control, the first to ask).
+    pub granted: u32,
+    /// Which of them are held down.
+    pub held: u32,
+    /// Mouse look since the last frame while it holds `look`, as the game
+    /// would have turned the view: yaw right and pitch up, radians at the
+    /// normal field of view.
+    pub look: [f32; 2],
+}
+
+/// Where an Add-On puts the camera this frame (`camera_set`).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Shot {
+    pub eye: [f32; 3],
+    /// Unit direction it looks.
+    pub forward: [f32; 3],
+    /// Turn about the look, radians.
+    pub roll: f32,
+    /// Horizontal field of view in degrees, or `None` for the player's.
+    pub fov: Option<f32>,
+}
+/// Floats `camera_set` reads.
+pub const SHOT_RECORD: usize = 8;
+impl Shot {
+    /// A shot from `camera_set`'s record: eye xyz, look xyz (any length
+    /// above 0.001), roll, field of view (0 for the player's, else 5 to
+    /// 170). `None` for a record no camera can take.
+    pub fn from_record(r: &[f32]) -> Option<Self> {
+        let [x, y, z, dx, dy, dz, roll, fov] = <[f32; SHOT_RECORD]>::try_from(r).ok()?;
+        let eye = glam::Vec3::new(x, y, z);
+        let forward = glam::Vec3::new(dx, dy, dz);
+        let fine = eye.is_finite()
+            && eye.abs().max_element() <= 1.0e6
+            && forward.is_finite()
+            && forward.length() > 0.001
+            && roll.is_finite()
+            && roll.abs() <= std::f32::consts::TAU
+            && (fov == 0.0 || (5.0..=170.0).contains(&fov));
+        fine.then(|| Self {
+            eye: eye.to_array(),
+            forward: forward.normalize().to_array(),
+            roll,
+            fov: (fov != 0.0).then_some(fov),
+        })
+    }
 }
 
 /// Floats `view` writes.
@@ -615,6 +704,11 @@ struct HostState {
     inbox: VecDeque<Vec<u8>>,
     focused: bool,
     keys: BTreeSet<u32>,
+    /// The controls it asks for (`input_claim`), and what it holds.
+    claims: u32,
+    controls: Captured,
+    /// Where `camera_set` put the camera during `camera_frame`.
+    shot: Option<Shot>,
     camera: [f32; 6],
     world: Arc<World>,
     view: View,
@@ -646,6 +740,8 @@ pub struct AddOn {
     store: Store<HostState>,
     instance: Instance,
     frame: Option<TypedFunc<(f32, f32), ()>>,
+    /// Its `camera_frame` export, when it places the camera.
+    camera_frame: Option<TypedFunc<(f32, f32), ()>>,
     stopped: Option<Stopped>,
     gpu_strikes: u32,
     init_log: Vec<String>,
@@ -666,6 +762,7 @@ impl AddOn {
                 ..Frame::default()
             };
             state.focused = input.focused;
+            state.controls = input.controls;
             let (eye, forward) = (input.eye, input.forward);
             state.camera = [eye[0], eye[1], eye[2], forward[0], forward[1], forward[2]];
             state.world = input.world;
@@ -696,9 +793,62 @@ impl AddOn {
         Ok(&self.store.data().frame)
     }
 
+    /// Whether it places the camera (`camera.control` and a
+    /// `camera_frame` export).
+    pub fn places_camera(&self) -> bool {
+        self.stopped.is_none() && self.camera_frame.is_some()
+    }
+
+    /// Run `camera_frame` before the game draws, with the camera the game
+    /// would show (`camera`), and return where the Add-On put it, if it
+    /// did. It reads the world as the last frame drew it.
+    pub fn camera_frame(
+        &mut self,
+        time: f32,
+        dt: f32,
+        eye: [f32; 3],
+        forward: [f32; 3],
+    ) -> Result<Option<Shot>, Stopped> {
+        if let Some(stopped) = &self.stopped {
+            return Err(stopped.clone());
+        }
+        let Some(call) = self.camera_frame.clone() else {
+            return Ok(None);
+        };
+        let budgets = self.store.data().budgets.clone();
+        {
+            let state = self.store.data_mut();
+            state.shot = None;
+            state.camera = [eye[0], eye[1], eye[2], forward[0], forward[1], forward[2]];
+        }
+        self.store
+            .set_fuel(budgets.frame_fuel)
+            .expect("fuel is enabled");
+        self.store.set_epoch_deadline(ticks(budgets.hang_time));
+        if let Err(e) = call.call(&mut self.store, (time, dt)) {
+            let reason = stopped(&mut self.store, e);
+            return Err(self.stop(reason));
+        }
+        // Lines it logged arrive with the next frame.
+        let log = std::mem::take(&mut self.store.data_mut().frame.log);
+        self.init_log.extend(log);
+        Ok(self.store.data_mut().shot.take())
+    }
+
+    /// The game controls it asks to hold (`input_claim`), [`CONTROLS`]
+    /// bits; none once it stops.
+    pub fn claims(&self) -> u32 {
+        if self.stopped.is_some() {
+            0
+        } else {
+            self.store.data().claims
+        }
+    }
+
     /// Stop the Add-On and drop everything it holds.
     pub fn stop(&mut self, reason: Stopped) -> Stopped {
         let state = self.store.data_mut();
+        state.claims = 0;
         state.layer = Layer::default();
         state.frame = Frame::default();
         state.inbox.clear();
@@ -1263,6 +1413,48 @@ fn link(linker: &mut Linker<HostState>, declared: &BTreeSet<Capability>) -> wasm
             let state = caller.data();
             (state.focused && state.keys.contains(&(key as u32))) as i32
         })?;
+    }
+    if has(Capability::InputCapture) {
+        linker.func_wrap(m, "input_claim", |mut caller: Host<'_>, mask: i32| -> i32 {
+            let state = caller.data_mut();
+            state.claims = mask as u32 & ALL_CONTROLS;
+            state.controls.granted as i32
+        })?;
+        linker.func_wrap(m, "action_down", |caller: Host<'_>, action: i32| -> i32 {
+            let c = caller.data().controls;
+            let bit = 1u32.checked_shl(action as u32).unwrap_or(0);
+            (c.granted & c.held & bit != 0) as i32
+        })?;
+        linker.func_wrap(
+            m,
+            "look_delta",
+            |mut caller: Host<'_>, ptr: i32| -> wasmtime::Result<()> {
+                let c = caller.data().controls;
+                let look = if c.granted & LOOK_CONTROL != 0 {
+                    c.look
+                } else {
+                    [0.0; 2]
+                };
+                let bytes: Vec<u8> = look.iter().flat_map(|v| v.to_le_bytes()).collect();
+                write(&mut caller, ptr, &bytes)
+            },
+        )?;
+    }
+    if has(Capability::CameraControl) {
+        linker.func_wrap(
+            m,
+            "camera_set",
+            |mut caller: Host<'_>, ptr: i32| -> wasmtime::Result<i32> {
+                let bytes = read(&mut caller, ptr, (SHOT_RECORD * 4) as i32, SHOT_RECORD * 4)?;
+                match Shot::from_record(&floats(&bytes)) {
+                    Some(shot) => {
+                        caller.data_mut().shot = Some(shot);
+                        Ok(1)
+                    }
+                    None => Ok(0),
+                }
+            },
+        )?;
     }
     if has(Capability::NetMessage) {
         linker.func_wrap(

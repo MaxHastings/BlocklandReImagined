@@ -494,6 +494,7 @@ mod tests {
                     intent: u8::MAX,
                     heading: Some(i16::MIN),
                 }),
+                pass_group: u8::MAX,
             },
         });
         let vehicle = Datagram::Vehicle(bri_sim::session::VehiclePose {

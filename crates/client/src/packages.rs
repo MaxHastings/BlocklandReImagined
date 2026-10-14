@@ -664,6 +664,7 @@ mod tests {
             tick: Default::default(),
             tether: None,
             controller: None,
+            pass_group: 0,
         };
         let players = BTreeMap::from([(1, player(Default::default(), 0.0)), (2, player(id, 7.0))]);
         let bodies = body_placements(&catalog, &archetypes, &players);
@@ -710,6 +711,7 @@ mod tests {
             tick: Default::default(),
             tether: None,
             controller: None,
+            pass_group: 0,
         };
         let bodies = body_placements(&catalog, &archetypes, &BTreeMap::from([(3, player)]));
         assert_eq!(bodies.len(), 1);

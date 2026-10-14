@@ -682,6 +682,13 @@ impl App {
                     }
                 }
                 network::Event::Notice(notice) => {
+                    // A change the Tune window sent and the host refused:
+                    // said in the window too, where it was made.
+                    if let bri_sim::session::Notice::Chat(text) = &notice
+                        && text.starts_with(bri_sim::session::NOT_TUNED)
+                    {
+                        self.tune_refused(text);
+                    }
                     let update = match notice {
                         bri_sim::session::Notice::Chat(text) => UiUpdate::Chat {
                             text: bri_ui::ml::sanitize(&text),
@@ -911,6 +918,9 @@ impl App {
                                 bri_console::echo(format!("Selection box ignored: {error:#}"));
                             }
                             continue;
+                        }
+                        bri_sim::session::Notice::Panel(panel) => {
+                            UiUpdate::Panel(panel.map(|p| panel_view(*p)))
                         }
                         bri_sim::session::Notice::Report(report) => {
                             let palette = a.view.as_ref().map_or(&[][..], |v| &v.world.palette[..]);
@@ -1282,5 +1292,45 @@ fn log_entered(a: &mut Attempt) {
             "Loading {map}: IN GAME (after {} ms)",
             since.elapsed().as_millis()
         ));
+    }
+}
+
+/// An Add-On's panel as the panel screen lays it out.
+fn panel_view(shown: bri_sim::session::PanelShown) -> bri_ui::api::PanelView {
+    use bri_package_runtime::panel::PanelKind;
+    use bri_ui::api::PanelItemView;
+    let panel = shown.panel;
+    bri_ui::api::PanelView {
+        package: shown.package,
+        id: panel.id,
+        title: panel.title,
+        width: panel.width,
+        height: panel.height,
+        items: panel
+            .items
+            .into_iter()
+            .map(|item| {
+                let max = item.max_chars();
+                match item.kind {
+                    PanelKind::Text => PanelItemView::Text(item.text),
+                    PanelKind::List => PanelItemView::List {
+                        id: item.id,
+                        rows: item.rows,
+                        selected: item.selected,
+                        height: item.height.unwrap_or(120),
+                        drag: item.drag,
+                    },
+                    PanelKind::Field => PanelItemView::Field {
+                        id: item.id,
+                        label: item.label,
+                        text: item.text,
+                        max,
+                    },
+                    PanelKind::Buttons => PanelItemView::Buttons(
+                        item.buttons.into_iter().map(|b| (b.id, b.label)).collect(),
+                    ),
+                }
+            })
+            .collect(),
     }
 }

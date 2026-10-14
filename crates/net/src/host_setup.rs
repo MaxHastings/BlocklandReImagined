@@ -177,6 +177,9 @@ pub struct HostSetup {
     pub load_map: Option<LoadMap>,
     /// Where duplicators' saved copies are kept; None keeps none.
     pub copies: Option<Arc<dyn CopyStore>>,
+    /// Where Add-Ons' rules keep data between games and restarts
+    /// (`set_host_data`); None keeps it only while the host runs.
+    pub addon_data: Option<Arc<dyn bri_sim::session::AddOnData>>,
     /// The game version players are told (the New Duplicator's
     /// `/DupVersion`); None leaves the session's own.
     pub game_version: Option<String>,
@@ -273,6 +276,9 @@ impl HostSetup {
         session.set_map_list(self.maps.clone())?;
         if let Some(copies) = &self.copies {
             session.set_copy_store(copies.clone());
+        }
+        if let Some(data) = &self.addon_data {
+            session.set_addon_data(data.clone());
         }
         if let Some(version) = &self.game_version {
             session.set_game_version(version.clone());

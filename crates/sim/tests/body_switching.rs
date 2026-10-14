@@ -1249,8 +1249,13 @@ fn the_host_tunes_a_body_live_and_clients_get_it() {
     let host = g.s.join("Host".into(), SPAWN, true).unwrap();
     g.steps(5);
     g.told(ann);
+    g.slash_body(ann, RUNNER);
+    assert_eq!(g.body(ann), RUNNER);
+    g.told(ann);
     let before = g.s.archetypes().clone();
     let index = before.find(RUNNER).unwrap();
+    let speed = g.s.player_tuning(ann).unwrap().forward;
+    let ann_state = g.state(ann);
     // A player may not.
     let refused =
         g.s.tune_archetype(ann, RUNNER, &[("movement.forward".into(), 20.0)]);
@@ -1272,6 +1277,13 @@ fn the_host_tunes_a_body_live_and_clients_get_it() {
     assert_eq!(tuned.movement.forward, 20.0);
     assert_eq!(tuned.sockets.hand(0).unwrap().offset[1], 0.125);
     assert_eq!(g.s.tuned_revision(), 1);
+    // Ann, playing the Runner, moves by it now, not at the next spawn.
+    let live = g.s.player_tuning(ann).unwrap().forward;
+    assert!(
+        live != speed && (live - 20.0).abs() < 1e-3,
+        "{speed} -> {live}"
+    );
+    assert_eq!(g.body(ann), RUNNER);
     let file = &g.s.tuned_archetype_files()[RUNNER];
     assert_eq!(file["movement"]["forward"], serde_json::json!(20.0));
     // Everything else is as it was.
@@ -1280,10 +1292,16 @@ fn the_host_tunes_a_body_live_and_clients_get_it() {
         before.resolve(index).movement.jump_speed
     );
     assert_eq!(tuned.look, before.resolve(index).look);
-    // A client's table takes it.
+    // A client's table takes it, and so does the body it predicts.
     let mut client = before.clone();
     bri_sim::session::apply_tuned(&mut client, g.s.tuned_archetypes()).unwrap();
     assert_eq!(client.resolve(index), &tuned);
+    let mirror = bri_sim::prediction::CollisionMirror::new(definitions(), map(), vec![]);
+    let mut predicted =
+        bri_sim::prediction::Predictor::new(mirror, ann_state, before.clone()).unwrap();
+    assert_eq!(predicted.tuning().forward, speed);
+    predicted.set_archetypes(client.clone()).unwrap();
+    assert!((predicted.tuning().forward - 20.0).abs() < 1e-3);
     // A change the body refuses changes nothing.
     for bad in [
         ("movement.forward", f32::NAN),

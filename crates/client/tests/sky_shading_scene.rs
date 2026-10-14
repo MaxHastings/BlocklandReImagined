@@ -118,6 +118,7 @@ fn mixed_scene(avatar: AvatarFixture, car: VehicleFixture) -> Result<()> {
         tick: Default::default(),
         tether: None,
         controller: None,
+        pass_group: 0,
     };
     let mut mesh = avatar.assets.mesh(avatar.assets.package.defaults.clone())?;
     mesh.pose(&avatar.assets, &player, 0.)?;

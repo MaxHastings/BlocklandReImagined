@@ -42,6 +42,7 @@ pub mod manifest;
 pub mod noise;
 pub mod ops;
 pub mod package;
+pub mod panel;
 pub mod report;
 pub mod script;
 pub mod state;

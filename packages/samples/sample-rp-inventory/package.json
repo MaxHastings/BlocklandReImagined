@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "id": "sample-rp-inventory",
+  "version": "1.0.0",
+  "api": 1,
+  "name": "Roleplay Backpack and Chest",
+  "description": "A sample roleplay inventory built on the Roleplay Bank: a window with your backpack, a chest everyone shares and a shop, where items are dragged between the backpack and the chest and bought with the bank's money.",
+  "authors": ["Blockland ReImagined"],
+  "license": "CC0-1.0",
+  "provenance": { "source": "original" },
+  "capabilities": ["chat", "storage"],
+  "dependencies": { "sample-rp-bank": "^1.0.0" },
+  "provides": [
+    { "kind": "behaviour", "id": "sample-rp-inventory:behaviour/inventory", "file": "behaviour.json" },
+    { "kind": "script", "id": "sample-rp-inventory:script/inventory", "file": "inventory.rhai" }
+  ]
+}

@@ -25,54 +25,96 @@ pub struct TuneWindow {
     /// Each number's slider range, fixed while the window is open so a
     /// slider does not move under the mouse as its value changes.
     ranges: BTreeMap<String, (f32, f32)>,
+    /// Numbers sent to the host that its tuned body does not show yet: a
+    /// save straight after a change writes them too.
+    sent: BTreeMap<String, f32>,
     /// What the last change or save did.
     pub status: String,
 }
 
 impl TuneWindow {
-    /// The window over `body`, as it plays now.
-    pub fn open(body: &Archetype) -> Self {
+    /// The window over `body`, as it plays now. `saved` is the numbers its
+    /// file holds, when an earlier window this game knew them (it changed
+    /// numbers and closed without saving); else the numbers it plays.
+    pub fn open(body: &Archetype, saved: Option<BTreeMap<String, f32>>) -> Self {
         let fields = tuning::fields(body);
         Self {
             body: body.id.clone(),
-            saved: fields.iter().map(|f| (f.path.clone(), f.value)).collect(),
+            saved: saved
+                .unwrap_or_else(|| fields.iter().map(|f| (f.path.clone(), f.value)).collect()),
             ranges: fields.iter().map(|f| (f.path.clone(), f.range())).collect(),
+            sent: BTreeMap::new(),
             status: String::new(),
         }
     }
     fn current<'a>(&self, archetypes: &'a Archetypes) -> Option<&'a Archetype> {
         archetypes.find(&self.body).map(|i| archetypes.resolve(i))
     }
+    /// Every number as the body plays it, or as just sent to the host.
+    fn values(&self, archetypes: &Archetypes) -> BTreeMap<String, f32> {
+        let Some(body) = self.current(archetypes) else {
+            return BTreeMap::new();
+        };
+        let mut values: BTreeMap<String, f32> = tuning::fields(body)
+            .into_iter()
+            .map(|f| (f.path, f.value))
+            .collect();
+        values.extend(self.sent.iter().map(|(p, v)| (p.clone(), *v)));
+        values
+    }
     /// The numbers changed since the window opened or last saved.
     pub fn changes(&self, archetypes: &Archetypes) -> Vec<(String, f32)> {
-        let Some(body) = self.current(archetypes) else {
-            return Vec::new();
-        };
-        tuning::fields(body)
+        self.values(archetypes)
             .into_iter()
-            .filter(|f| self.saved.get(&f.path).is_none_or(|v| !same(*v, f.value)))
-            .map(|f| (f.path, f.value))
+            .filter(|(path, value)| self.saved.get(path).is_none_or(|v| !same(*v, *value)))
             .collect()
+    }
+    /// `changes` went to the host.
+    pub fn sending(&mut self, changes: &[(String, f32)]) {
+        self.sent.extend(changes.iter().cloned());
+    }
+    /// The host's tuned body arrived: what it shows is no longer waiting.
+    pub fn settle(&mut self, archetypes: &Archetypes) {
+        let Some(body) = self.current(archetypes) else {
+            return;
+        };
+        let now: BTreeMap<String, f32> = tuning::fields(body)
+            .into_iter()
+            .map(|f| (f.path, f.value))
+            .collect();
+        self.sent
+            .retain(|path, value| now.get(path).is_none_or(|v| !same(*v, *value)));
+    }
+    /// The host refused the last change: nothing sent is waiting any more.
+    pub fn refused(&mut self, why: &str) {
+        self.sent.clear();
+        self.status = why.to_string();
     }
     /// What Undo Changes sends: each changed number as it was.
-    pub fn undo(&self, archetypes: &Archetypes) -> Vec<(String, f32)> {
-        self.changes(archetypes)
+    pub fn undo(&mut self, archetypes: &Archetypes) -> Vec<(String, f32)> {
+        let undo: Vec<(String, f32)> = self
+            .changes(archetypes)
             .into_iter()
             .filter_map(|(path, _)| Some((path.clone(), *self.saved.get(&path)?)))
-            .collect()
+            .collect();
+        self.sent.clear();
+        undo
     }
-    /// The body's numbers are now its file's.
+    /// The body's numbers, and those just sent, are now its file's.
     pub fn saved(&mut self, archetypes: &Archetypes) {
-        if let Some(body) = self.current(archetypes) {
-            self.saved = tuning::fields(body)
-                .into_iter()
-                .map(|f| (f.path, f.value))
-                .collect();
+        let values = self.values(archetypes);
+        if !values.is_empty() {
+            self.saved = values;
         }
+    }
+    /// The numbers the body's file holds, as this window knows them.
+    pub fn baseline(&self) -> &BTreeMap<String, f32> {
+        &self.saved
     }
     /// The window's model; `cannot_save` says why Save to Add-On is off.
     pub fn view(&self, archetypes: &Archetypes, cannot_save: &str) -> Option<TuneView> {
         let body = self.current(archetypes)?;
+        let changed: Vec<String> = self.changes(archetypes).into_iter().map(|c| c.0).collect();
         let fields = tuning::fields(body)
             .into_iter()
             .map(|f| {
@@ -83,6 +125,7 @@ impl TuneWindow {
                     value: f.value,
                     min: min.min(f.value),
                     max: max.max(f.value),
+                    unsaved: changed.contains(&f.path),
                     path: f.path,
                 }
             })
@@ -96,8 +139,15 @@ impl TuneWindow {
             },
             fields,
             status: self.status.clone(),
-            unsaved: !self.changes(archetypes).is_empty(),
+            unsaved: !changed.is_empty(),
             cannot_save: cannot_save.into(),
+            movement_note: if body.movement.controller.is_some() || body.controller.is_some() {
+                "This body has its own movement controller, which can set its speed and \
+                 jumps itself: a Movement number here may change nothing while it is in charge."
+                    .into()
+            } else {
+                String::new()
+            },
         })
     }
 }
@@ -149,6 +199,12 @@ pub fn save(path: &Path, body: &Archetype, changes: &[(String, f32)]) -> Result<
         paths.push(field.split('.').map(str::to_owned).collect::<Vec<_>>());
     }
     let out = bri_package::json_edit::set_paths(&text, &def, &paths)?;
+    // The host checked these numbers as it applied them; check that the
+    // file still reads as a body, so a save never leaves one the next game
+    // cannot load.
+    let check: bri_package_runtime::content::ArchetypeDef =
+        serde_json::from_str(&out).context("The saved body would not load")?;
+    check.validate().context("The saved body would not load")?;
     // The file is swapped whole, so a crash never leaves half of it.
     let partial = path.with_extension("json.partial");
     std::fs::write(&partial, &out).with_context(|| format!("Writing {}", partial.display()))?;
@@ -168,7 +224,7 @@ mod tests {
         runner.id = "runner:archetype/runner".into();
         runner.name = "Runner".into();
         let id = table.add(runner.clone()).unwrap();
-        let mut window = TuneWindow::open(&runner);
+        let mut window = TuneWindow::open(&runner, None);
         let view = window.view(&table, "").unwrap();
         assert_eq!(view.name, "Runner");
         assert!(!view.unsaved);
@@ -194,13 +250,14 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("bri-tune-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let file = dir.join("runner.json");
-        let text = "{\n  \"name\": \"Runner\",\n  \"max_health\": 100\n}\n";
+        let text =
+            "{\n  \"schema_version\": 1,\n  \"name\": \"Runner\",\n  \"max_health\": 100\n}\n";
         std::fs::write(&file, text).unwrap();
         save(&file, &tuned, &changes).unwrap();
         let out = std::fs::read_to_string(&file).unwrap();
         assert!(
             out.starts_with(
-                "{\n  \"name\": \"Runner\",\n  \"max_health\": 100,\n  \"movement\": {\n    \""
+                "{\n  \"schema_version\": 1,\n  \"name\": \"Runner\",\n  \"max_health\": 100,\n  \"movement\": {\n    \""
             ),
             "{out}"
         );
@@ -208,6 +265,36 @@ mod tests {
         assert_eq!(back["movement"].as_object().unwrap().len(), 1);
         window.saved(&table);
         assert!(window.changes(&table).is_empty());
+        // Sent and not yet shown by the host: a save writes it anyway.
+        let jump = view
+            .fields
+            .iter()
+            .find(|f| f.path != field.path && f.path.starts_with("movement."))
+            .unwrap()
+            .clone();
+        window.sending(&[(jump.path.clone(), jump.value + 2.0)]);
+        assert_eq!(
+            window.changes(&table),
+            [(jump.path.clone(), jump.value + 2.0)]
+        );
+        // The host refused it: nothing waits, and the window says why.
+        window.refused("Not tuned: too fast");
+        assert!(window.changes(&table).is_empty());
+        assert_eq!(
+            window.view(&table, "").unwrap().status,
+            "Not tuned: too fast"
+        );
+        // Once the table shows a sent number it is the table's.
+        window.sending(&[(field.path.clone(), field.value + 1.5)]);
+        window.settle(&table);
+        assert!(window.changes(&table).is_empty());
+        // A file the game could not read is never written.
+        std::fs::write(&file, "{\n  \"name\": \"Runner\"\n}\n").unwrap();
+        assert!(save(&file, &tuned, &changes).is_err());
+        assert_eq!(
+            std::fs::read_to_string(&file).unwrap(),
+            "{\n  \"name\": \"Runner\"\n}\n"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

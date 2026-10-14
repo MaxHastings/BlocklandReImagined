@@ -199,3 +199,17 @@ impl Perform for ops::Print {
         Ok(())
     }
 }
+impl Perform for ops::ShowPanel {
+    fn perform(self, session: &mut Session, cx: OpCall<'_>) -> Result<()> {
+        let OpCall { package, .. } = cx;
+        let ops::ShowPanel { player, panel } = self;
+        session.package_show_panel(package, player, *panel)
+    }
+}
+impl Perform for ops::ClosePanel {
+    fn perform(self, session: &mut Session, cx: OpCall<'_>) -> Result<()> {
+        let OpCall { package, .. } = cx;
+        let ops::ClosePanel { player, id } = self;
+        session.package_close_panel(package, player, &id)
+    }
+}

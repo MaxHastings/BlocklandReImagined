@@ -479,7 +479,8 @@ pub struct RemotePose {
     /// Yaw, pitch and head turn in ten-thousandths of a radian.
     pub look: [i16; 3],
     /// [`RemotePose::GROUNDED`], [`RemotePose::CROUCHED`], [`RemotePose::JETTING`],
-    /// [`RemotePose::JET_FLIGHT`].
+    /// [`RemotePose::JET_FLIGHT`] in the low four bits; the body's pass
+    /// group (`PlayerState::pass_group`, 0 to 15) in the high four.
     pub flags: u8,
     pub archetype: bri_sim::archetype::ArchetypeId,
     /// None for the normal size.
@@ -510,6 +511,8 @@ impl RemotePose {
     pub const CROUCHED: u8 = 2;
     pub const JETTING: u8 = 4;
     pub const JET_FLIGHT: u8 = 8;
+    /// Where the pass group sits in `flags`.
+    pub const PASS_GROUP_SHIFT: u8 = 4;
     pub fn of(tick: u64, p: &PlayerState) -> Self {
         let flag = |on: bool, bit: u8| if on { bit } else { 0 };
         Self {
@@ -523,7 +526,8 @@ impl RemotePose {
             flags: flag(p.grounded, Self::GROUNDED)
                 | flag(p.crouched, Self::CROUCHED)
                 | flag(p.jetting, Self::JETTING)
-                | flag(p.jump.jet_flight, Self::JET_FLIGHT),
+                | flag(p.jump.jet_flight, Self::JET_FLIGHT)
+                | (p.pass_group.min(bri_sim::player::MAX_PASS_GROUP) << Self::PASS_GROUP_SHIFT),
             archetype: p.archetype,
             scale: (p.scale != 1.0).then_some(p.scale),
             controller: p
@@ -572,6 +576,7 @@ impl RemotePose {
                         heading: c.heading,
                         ..Default::default()
                     }),
+                pass_group: self.flags >> Self::PASS_GROUP_SHIFT,
             },
         }
     }

@@ -26,6 +26,11 @@ const MIN_MOUNT_TICKS: u64 = 120;
 /// `WheeledVehicleData::onCollision`/`Armor::onCollision`: a player mounts
 /// only from above, feet this far over the mount's origin.
 const MOUNT_ABOVE: f32 = 0.2;
+/// How long a landing on a vehicle stays good for boarding: the move that
+/// lands can leave the body a hair clear of the hull, or still beside its
+/// top edge, until the next moves settle it on top (moves reach the host in
+/// batches), so the seat is taken from the next contact within this.
+const LANDING_TICKS: u64 = bri_world::TICKS_PER_SECOND / 4;
 /// Collider tag namespace for vehicles (players use 1 << 64).
 pub(super) const VEHICLE_TAG: u128 = 2 << 64;
 
@@ -72,11 +77,11 @@ pub(super) struct Vehicles {
     tumbling: BTreeSet<OwnerId>,
     /// Player/vehicle pairs in contact last tick, so run-overs fire on contact.
     touching: BTreeSet<(OwnerId, VehicleId)>,
-    /// Vehicles each player's own move ran into since the last contact
-    /// check (Torque queues `onCollision` from `Player::updatePos`'s
-    /// hits): boarding takes one of these, not a body merely resting on
-    /// or walking across a vehicle.
-    pub(super) struck: BTreeSet<(OwnerId, VehicleId)>,
+    /// Vehicles each player's own move ran into, and the tick it last did
+    /// (Torque queues `onCollision` from `Player::updatePos`'s hits):
+    /// boarding takes one of these within `LANDING_TICKS`, not a body
+    /// merely resting on or walking across a vehicle.
+    pub(super) struck: BTreeMap<(OwnerId, VehicleId), u64>,
     pub(super) scanned: bool,
     /// Stand-ins of players on foot part way through openings, beyond the
     /// partners, for this tick's physics step: who, the stand-in's body
@@ -1491,7 +1496,11 @@ impl Session {
                 // player's own move raises: landing on the vehicle, not
                 // standing or walking on it (a rider jetted out onto its
                 // roof walks off it without being seated again).
-                let landed = self.vehicles.struck.contains(&(*owner, v.id));
+                let landed = self
+                    .vehicles
+                    .struck
+                    .get(&(*owner, v.id))
+                    .is_some_and(|at| tick.saturating_sub(*at) <= LANDING_TICKS);
                 let boards = above && landed && !v.seats.is_empty() && may_board;
                 if boards && self.can_ride(*owner, v.owner.0) {
                     if free {
@@ -1512,7 +1521,9 @@ impl Session {
             .copied()
             .collect();
         self.vehicles.touching = touching;
-        self.vehicles.struck.clear();
+        self.vehicles
+            .struck
+            .retain(|_, at| tick.saturating_sub(*at) <= LANDING_TICKS);
         for (owner, vehicle, vehicle_owner) in refused {
             if begun.contains(&(owner, vehicle)) {
                 let message = self.ride_refusal(owner, vehicle_owner);

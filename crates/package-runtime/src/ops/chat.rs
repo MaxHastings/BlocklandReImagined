@@ -197,3 +197,32 @@ impl ScriptOp for ShowReport {
         report.as_ref().is_none_or(|r| r.is_bounded())
     }
 }
+
+/// Show `player` a panel ([`crate::panel::Panel`]), in place of any panel
+/// they have open.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ShowPanel {
+    pub player: u64,
+    pub panel: Box<crate::panel::Panel>,
+}
+impl ScriptOp for ShowPanel {
+    const CAPABILITY: &str = "chat";
+    const NAME: &str = "show_panel";
+    fn bounded(&self) -> bool {
+        self.panel.is_bounded()
+    }
+}
+
+/// Close `player`'s panel `id`, when it is this Add-On's and open.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ClosePanel {
+    pub player: u64,
+    pub id: String,
+}
+impl ScriptOp for ClosePanel {
+    const CAPABILITY: &str = "chat";
+    const NAME: &str = "close_panel";
+    fn bounded(&self) -> bool {
+        crate::panel::is_panel_id(&self.id)
+    }
+}

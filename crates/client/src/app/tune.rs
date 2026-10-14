@@ -10,6 +10,10 @@ const NOT_HOSTED_HERE: &str =
 pub(super) struct Tuning {
     window: Option<crate::tune::TuneWindow>,
     shown: Option<Arc<bri_sim::archetype::Archetypes>>,
+    /// By body, the numbers its file holds, from windows closed with
+    /// changes unsaved: reopening the window still shows them unsaved.
+    /// For this game only.
+    baselines: BTreeMap<String, BTreeMap<String, f32>>,
 }
 
 impl App {
@@ -52,7 +56,9 @@ impl App {
                 &body.name
             }
         );
-        self.tuning.window = Some(crate::tune::TuneWindow::open(&body));
+        self.keep_baseline();
+        let saved = self.tuning.baselines.get(&body.id).cloned();
+        self.tuning.window = Some(crate::tune::TuneWindow::open(&body, saved));
         self.tuning.shown = None;
         self.show_tune();
         Ok(())
@@ -87,7 +93,8 @@ impl App {
         };
         let shown = window.view(&archetypes, &cannot_save);
         if shown.is_none() {
-            self.tuning = Tuning::default();
+            self.tuning.window = None;
+            self.tuning.shown = None;
         } else {
             self.tuning.shown = Some(archetypes);
         }
@@ -106,13 +113,38 @@ impl App {
         if !same {
             if let Some(window) = &mut self.tuning.window {
                 window.status.clear();
+                if let Some(archetypes) = &current {
+                    window.settle(archetypes);
+                }
             }
             self.show_tune();
         }
     }
+    /// The host refused a change (a private "Not tuned:" notice): said in
+    /// the window, and what was waiting on it is not. False when no Tune
+    /// window is open.
+    pub(super) fn tune_refused(&mut self, why: &str) -> bool {
+        let Some(window) = &mut self.tuning.window else {
+            return false;
+        };
+        window.refused(why);
+        self.tuning.shown = None;
+        self.show_tune();
+        true
+    }
     /// The window closed itself (Done or Escape).
     pub(super) fn close_tune(&mut self) {
-        self.tuning = Tuning::default();
+        self.keep_baseline();
+        self.tuning.window = None;
+        self.tuning.shown = None;
+    }
+    /// Remember what the open window knows of its body's file.
+    fn keep_baseline(&mut self) {
+        if let Some(window) = &self.tuning.window {
+            self.tuning
+                .baselines
+                .insert(window.body.clone(), window.baseline().clone());
+        }
     }
     fn tune_command(&mut self, id: RequestId, body: &str, changes: &[(String, f32)]) -> Result<()> {
         ensure!(!changes.is_empty(), "Nothing to change.");
@@ -141,19 +173,25 @@ impl App {
     /// A Tune window request: answered here when it succeeds, by the
     /// caller when it fails.
     pub(super) fn tune_action(&mut self, id: RequestId, action: &UiAction) -> Result<()> {
-        let Some(window) = &self.tuning.window else {
+        if self.tuning.window.is_none() {
             self.ui.apply(UiUpdate::Tune(None));
             self.answer(id, Ok(()));
             return Ok(());
-        };
+        }
         let archetypes = self
             .network_view()
             .map(|v| v.archetypes.clone())
             .context("Not in a game")?;
+        let Some(window) = &mut self.tuning.window else {
+            return Ok(());
+        };
         match action {
             UiAction::TuneSet { body, changes } if *body == window.body => {
                 let changes = changes.clone();
                 let body = body.clone();
+                // Save straight after writes these too, before the host's
+                // tuned body arrives.
+                window.sending(&changes);
                 self.tune_command(id, &body, &changes)
             }
             UiAction::TuneUndo { body } if *body == window.body => {

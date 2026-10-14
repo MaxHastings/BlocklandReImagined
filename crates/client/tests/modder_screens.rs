@@ -61,12 +61,20 @@ fn runner() -> TuneView {
     let mut body = table.resolve(Default::default()).clone();
     body.id = "playground-runner:archetype/runner".into();
     body.name = "Runner".into();
-    let window = bri_client::tune::TuneWindow::open(&body);
+    let window = bri_client::tune::TuneWindow::open(&body, None);
     let mut table = table;
     table.add(body).unwrap();
     let mut view = window.view(&table, "").unwrap();
-    // As after a change from the slider.
+    // As after two changes from the sliders.
     view.unsaved = true;
+    for f in view
+        .fields
+        .iter_mut()
+        .filter(|f| f.group == "Movement")
+        .take(2)
+    {
+        f.unsaved = true;
+    }
     view
 }
 
@@ -140,7 +148,15 @@ fn modder_screens_render_offscreen() -> anyhow::Result<()> {
             save(&mut ui, &format!("tune-{}", part.to_lowercase()), size)?;
         }
         let mut ui = open_ui(&pack, size, scale);
+        ui.apply(UiUpdate::Tune(Some(runner())));
+        ui.update(0);
+        event(&mut ui, ScreenId::Tune, "TB_Done", EventKind::Click);
+        save(&mut ui, "tune-done-unsaved", size)?;
+        let mut ui = open_ui(&pack, size, scale);
         let mut saved = runner();
+        for f in &mut saved.fields {
+            f.unsaved = false;
+        }
         saved.unsaved = false;
         saved.status = "Saved to addons/playground-runner/runner.json.".into();
         ui.apply(UiUpdate::Tune(Some(saved)));

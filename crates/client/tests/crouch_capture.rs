@@ -35,6 +35,7 @@ fn player(crouched: bool) -> PlayerState {
         tick: Default::default(),
         tether: None,
         controller: None,
+        pass_group: 0,
     }
 }
 

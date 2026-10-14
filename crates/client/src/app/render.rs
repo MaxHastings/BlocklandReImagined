@@ -24,7 +24,7 @@ impl App {
         let third_person = draws_third_person(
             controls,
             view.vitals.get(&view.owner).is_none_or(|v| v.alive),
-        );
+        ) || self.view.addon_camera;
         let mut hidden = self.combat.hidden_bodies(&view.vitals);
         // Players whose archetype looks like a package model draw as it, in
         // place of the Blockhead; the local player's in first person only
@@ -615,6 +615,27 @@ impl App {
             &self.motion.passages(),
             orbit_drawn_offset(controls, &self.avatar.avatars),
         )?;
+        // An Add-On may place the camera (`camera.control`): what the
+        // player sees, never where they aim or move.
+        let shot = if self.addons.client_code.is_started() {
+            let look = Vec3::new(
+                yaw.sin() * pitch.cos(),
+                pitch.sin(),
+                -yaw.cos() * pitch.cos(),
+            );
+            self.addons.client_code.camera_shot(eye, look)
+        } else {
+            None
+        };
+        self.view.addon_camera = shot.is_some();
+        let (eye, yaw, pitch, roll) = match shot {
+            Some(shot) => {
+                let (yaw, pitch) = crate::controls::angles(Vec3::from(shot.forward), Vec3::Y);
+                (Vec3::from(shot.eye), yaw, pitch, shot.roll)
+            }
+            None => (eye, yaw, pitch, roll),
+        };
+        let shown_fov = shot.and_then(|s| s.fov).unwrap_or_else(|| controls.fov());
         self.view.rendered_camera = Some((eye, yaw, pitch));
         self.view.rendered_roll = roll;
         // Explosion `CameraShake`: 10 degrees of view rotation per unit of offset.
@@ -625,14 +646,14 @@ impl App {
             roll,
         );
         let aspect = frame.size.0 as f32 / frame.size.1 as f32;
-        let fov = vertical_fov(controls.fov().to_radians(), aspect);
+        let fov = vertical_fov(shown_fov.to_radians(), aspect);
         self.view.pixels_per_unit = Some(frame.size.1 as f32 / (2.0 * (fov * 0.5).tan()));
         let mut camera = Camera::oriented(
             eye.to_array(),
             forward.to_array(),
             up.to_array(),
             aspect,
-            vertical_fov(controls.fov().to_radians(), aspect),
+            fov,
             0.05,
             FAR_PLANE,
         );

@@ -499,7 +499,11 @@ impl Motion {
                 .as_ref()
                 .is_some_and(|seen| !Arc::ptr_eq(seen, &view.archetypes))
         {
-            predictor.set_archetypes((*view.archetypes).clone());
+            // A tuned body the predictor cannot take keeps predicting as
+            // before; the host's poses still correct it.
+            if let Err(error) = predictor.set_archetypes((*view.archetypes).clone()) {
+                bri_console::warn(format!("Predicting a tuned body: {error:#}"));
+            }
         }
         self.archetypes = Some(view.archetypes.clone());
         match (&mut self.predictor, &mut self.mirror) {
@@ -1182,6 +1186,7 @@ mod tests {
             tick: Default::default(),
             tether: None,
             controller: None,
+            pass_group: 0,
         }
     }
     fn pose(tick: u64, x: f32, yaw: f32) -> bri_net::protocol::Pose {

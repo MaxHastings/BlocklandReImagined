@@ -31,6 +31,13 @@ pub enum Capability {
     /// Read keys, only while the Add-On's panel has focus.
     #[serde(rename = "input.focused")]
     InputFocused,
+    /// Take over chosen game controls (moving, jumping, firing, mouse
+    /// look) and read them instead of the game.
+    #[serde(rename = "input.capture")]
+    InputCapture,
+    /// Place the player's camera: what they see, never where they aim.
+    #[serde(rename = "camera.control")]
+    CameraControl,
     /// Exchange messages with the Add-On's own server script.
     #[serde(rename = "net.message")]
     NetMessage,
@@ -66,6 +73,8 @@ impl Capability {
         Self::RenderShader,
         Self::Audio,
         Self::InputFocused,
+        Self::InputCapture,
+        Self::CameraControl,
         Self::NetMessage,
         Self::WorldRead,
         Self::PhysicsLocal,
@@ -81,6 +90,8 @@ impl Capability {
             Self::RenderShader => "render.shader",
             Self::Audio => "audio",
             Self::InputFocused => "input.focused",
+            Self::InputCapture => "input.capture",
+            Self::CameraControl => "camera.control",
             Self::NetMessage => "net.message",
             Self::WorldRead => "world.read",
             Self::PhysicsLocal => "physics.local",
@@ -101,6 +112,8 @@ impl Capability {
             | Self::RenderShader
             | Self::Audio
             | Self::InputFocused
+            | Self::InputCapture
+            | Self::CameraControl
             | Self::NetMessage
             | Self::WorldRead
             | Self::PhysicsLocal
@@ -123,6 +136,10 @@ impl Capability {
             Self::RenderShader => "Use its own graphics effects (shaders)",
             Self::Audio => "Play sounds that come with it",
             Self::InputFocused => "Read your keys while its panel is selected",
+            Self::InputCapture => {
+                "Take over some of your controls (moving, jumping, firing, mouse look) in this game"
+            }
+            Self::CameraControl => "Move your camera (what you see, not where you aim)",
             Self::NetMessage => "Talk to its part running on the server",
             Self::WorldRead => "See where players and vehicles are, as your screen shows them",
             Self::PhysicsLocal => "Throw its own objects around with physics on your screen only",
@@ -154,6 +171,8 @@ pub fn function_capability(name: &str) -> Result<Option<Capability>, UnknownFunc
         "shader" => Some(Capability::RenderShader),
         "sound_play" | "sound_at" => Some(Capability::Audio),
         "key_down" => Some(Capability::InputFocused),
+        "input_claim" | "action_down" | "look_delta" => Some(Capability::InputCapture),
+        "camera_set" => Some(Capability::CameraControl),
         "send" | "recv" => Some(Capability::NetMessage),
         "players" | "vehicles" | "entities" | "vehicle_kind" | "archetype_kind" | "image_kind"
         | "state_num" | "local_player" | "life" | "held" | "image_mesh" | "sight" => {

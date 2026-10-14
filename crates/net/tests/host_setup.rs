@@ -134,6 +134,7 @@ async fn change_map_runs_the_add_ons_the_host_started_with_and_keeps_their_state
         add_ons: Some(add_ons(saves.path())),
         load_map: Some(Arc::new(|id: &str| Ok(map(id)))),
         copies: None,
+        addon_data: None,
         game_version: None,
         bot_tuning: None,
         bot_overrides: None,
@@ -204,6 +205,7 @@ fn a_session_from_the_setup_has_everything_the_host_installs() -> Result<()> {
         add_ons: Some(add_ons(saves.path())),
         load_map: None,
         copies: None,
+        addon_data: None,
         game_version: None,
         bot_tuning: None,
         bot_overrides: None,
@@ -276,6 +278,122 @@ fn a_game_runs_only_the_bots_whose_bodies_it_has() -> Result<()> {
     Ok(())
 }
 
+/// What an Add-On's rules keep on the host (`set_host_data`) is there in
+/// the next game after a restart: a roleplay server's bank, kept in the
+/// host's own `addon-data` folder.
+#[test]
+fn what_rules_keep_on_the_host_outlives_a_restart() -> Result<()> {
+    let root = tempfile::tempdir()?;
+    let dir = root.path().join("bank");
+    std::fs::create_dir_all(&dir)?;
+    let write = |file: &str, value: serde_json::Value| {
+        std::fs::write(dir.join(file), value.to_string()).unwrap()
+    };
+    write(
+        "package.json",
+        serde_json::json!({
+            "schema_version": 1, "id": "bank", "version": "1.0.0", "api": 1,
+            "name": "Bank", "license": "CC0-1.0", "capabilities": ["storage"],
+            "provides": [
+                { "kind": "behaviour", "id": "bank:behaviour/main", "file": "behaviour.json" },
+                { "kind": "script", "id": "bank:script/main", "file": "main.rhai" }
+            ]
+        }),
+    );
+    write(
+        "behaviour.json",
+        serde_json::json!({
+            "schema_version": 1, "script": "main.rhai",
+            "commands": [{ "name": "deposit", "args": ["int"] }, { "name": "look" }],
+            "state": { "global": { "seen": { "default": 0, "visible": "everyone" } } }
+        }),
+    );
+    std::fs::write(
+        dir.join("main.rhai"),
+        r#"
+fn cmd_deposit(p, n) {
+    let vault = host_data("vault");
+    set_host_data("vault", if vault == () { n } else { vault + n });
+}
+fn cmd_look(p) { set("seen", host_data("vault")); }
+"#,
+    )?;
+    let set = PackageSet {
+        schema_version: 1,
+        packages: vec![PackageEntry {
+            id: "bank".into(),
+            version: "1.0.0".into(),
+            side: Side::Server,
+            dir: "bank".into(),
+            role: None,
+        }],
+    };
+    let state = tempfile::tempdir()?;
+    let setup = || HostSetup {
+        lan: true,
+        content: content(),
+        maps: vec![],
+        settings: None,
+        passwords: None,
+        add_ons: Some(HostedAddOns {
+            server: Arc::new(Catalog::load(root.path(), &set, true).unwrap()),
+            mode: None,
+            saves: None,
+        }),
+        load_map: None,
+        copies: None,
+        addon_data: Some(Arc::new(bri_net::addon_data::AddOnDataFiles::new(
+            state.path().join("addon-data"),
+        ))),
+        game_version: None,
+        bot_tuning: None,
+        bot_overrides: None,
+    };
+    let send = |session: &mut bri_sim::session::Session, owner, seq, command: &str, args| {
+        session
+            .command(
+                owner,
+                seq,
+                Command::Package(PackageCommand {
+                    package: "bank".into(),
+                    command: command.into(),
+                    args,
+                }),
+            )
+            .map(drop)
+    };
+    {
+        let host = setup();
+        let (mut session, spawns) = host.session(&host.hosted("fixture")?, map("fixture"))?;
+        let p = session.join("P".into(), spawns[0], true)?;
+        send(
+            &mut session,
+            p,
+            1,
+            "deposit",
+            vec![bri_sim::session::PackageArg::Int(40)],
+        )?;
+        send(
+            &mut session,
+            p,
+            2,
+            "deposit",
+            vec![bri_sim::session::PackageArg::Int(2)],
+        )?;
+    }
+    // The host is gone; a new one starts on the same state folder.
+    let host = setup();
+    let (mut session, spawns) = host.session(&host.hosted("fixture")?, map("fixture"))?;
+    let p = session.join("P".into(), spawns[0], true)?;
+    send(&mut session, p, 1, "look", vec![])?;
+    assert_eq!(
+        session.package_state().packages["bank"].global["seen"],
+        serde_json::json!(42)
+    );
+    assert!(state.path().join("addon-data/bank.json").is_file());
+    Ok(())
+}
+
 /// `/botreload` while a game runs reads every enabled Add-On's bots again,
 /// and keeps only those the game can run, as hosting did: a bot whose body
 /// is in an Add-On this game leaves out (a mode claims it) is left out
@@ -304,6 +422,7 @@ fn bot_reload_keeps_only_the_bots_the_game_can_run() -> Result<()> {
         add_ons: None,
         load_map: None,
         copies: None,
+        addon_data: None,
         game_version: None,
         bot_tuning: Some(bri_sim::session::BotTuning {
             reload: Some(Arc::new(move || {

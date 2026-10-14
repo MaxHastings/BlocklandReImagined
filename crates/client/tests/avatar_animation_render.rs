@@ -80,6 +80,7 @@ fn player(
         tick: Default::default(),
         tether: None,
         controller: None,
+        pass_group: 0,
     };
     if new_tick {
         *tick_state = Some(state.clone());
@@ -313,6 +314,7 @@ fn builder_animations_render_on_the_avatar(f: &AvatarFixture) -> Result<()> {
         tick: Default::default(),
         tether: None,
         controller: None,
+        pass_group: 0,
     };
     let gestures = [
         "shiftAway",

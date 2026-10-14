@@ -34,6 +34,7 @@ fn field(group: &str, path: &str, label: &str, value: f32) -> TuneField {
         value,
         min: 0.0,
         max: value * 2.0,
+        unsaved: false,
     }
 }
 
@@ -49,6 +50,7 @@ fn runner(forward: f32, unsaved: bool) -> TuneView {
         status: String::new(),
         unsaved,
         cannot_save: String::new(),
+        movement_note: String::new(),
     }
 }
 
@@ -134,17 +136,125 @@ fn moved_numbers_go_to_the_host_and_save_waits_for_a_change() {
     event(&mut ui, "TB_Group", EventKind::Changed);
     let v = view(&ui);
     assert_eq!(v.text_of(v.id("TB_Value0").unwrap()), "0.5");
-    event(&mut ui, "TB_Save", EventKind::Click);
+    // Unsaved numbers are marked, by part and by row, and named.
+    let mut tuned = runner(9.5, true);
+    tuned.fields[0].unsaved = true;
+    ui.apply(UiUpdate::Tune(Some(tuned)));
+    ui.update(0);
+    let v = view(&ui);
+    assert!(
+        v.text_of(v.id("TB_Status").unwrap())
+            .contains("not saved (*): Forward")
+    );
+    assert_eq!(
+        v.node(v.id("TB_Group").unwrap()).state.items[0].0,
+        "Movement *"
+    );
+    assert_eq!(v.node(v.id("TB_Group").unwrap()).state.items[1].0, "Hands");
+    assert_eq!(v.text_of(v.id("TB_Label0").unwrap()), "Right hand X");
+    // Done with numbers unsaved says so first; Done again closes.
     event(&mut ui, "TB_Done", EventKind::Click);
+    assert!(actions(&mut ui).is_empty());
+    assert!(ui.is_open(ScreenId::Tune));
+    let v = view(&ui);
+    assert!(
+        v.text_of(v.id("TB_Status").unwrap())
+            .contains("Not saved: Forward. Save to Add-On keeps them")
+    );
+    event(&mut ui, "TB_Save", EventKind::Click);
     assert_eq!(
         actions(&mut ui),
-        [
-            UiAction::TuneSave {
-                body: "runner:archetype/runner".into()
-            },
-            UiAction::TuneClosed
-        ]
+        [UiAction::TuneSave {
+            body: "runner:archetype/runner".into()
+        }]
     );
+    // Saved: nothing is marked, and Done closes at once.
+    ui.apply(UiUpdate::Tune(Some(runner(9.5, false))));
+    ui.update(0);
+    let v = view(&ui);
+    assert_eq!(
+        v.node(v.id("TB_Group").unwrap()).state.items[0].0,
+        "Movement"
+    );
+    event(&mut ui, "TB_Done", EventKind::Click);
+    assert_eq!(actions(&mut ui), [UiAction::TuneClosed]);
     ui.update(0);
     assert!(!ui.is_open(ScreenId::Tune));
+}
+
+#[test]
+fn a_sent_number_holds_its_row_and_a_typed_one_needs_no_enter() {
+    let mut ui = ui();
+    ui.apply(UiUpdate::Tune(Some(runner(7.0, false))));
+    ui.update(0);
+    let n = view(&ui).id("TB_Slider0").unwrap();
+    ui.dialogs.last_mut().unwrap().view_mut().set_num(n, 9.5);
+    event(&mut ui, "TB_Slider0", EventKind::Changed);
+    ui.update(300);
+    assert_eq!(actions(&mut ui).len(), 1, "sent");
+    // Another update arrives before the tuned body: the row keeps 9.5
+    // rather than jumping back to 7 and forward again.
+    ui.apply(UiUpdate::Tune(Some(runner(7.0, false))));
+    ui.update(0);
+    let v = view(&ui);
+    assert_eq!(v.text_of(v.id("TB_Value0").unwrap()), "9.5");
+    assert_eq!(v.num(v.id("TB_Slider0").unwrap()), 9.5);
+    let mut tuned = runner(9.5, true);
+    tuned.fields[0].unsaved = true;
+    ui.apply(UiUpdate::Tune(Some(tuned)));
+    ui.update(0);
+    let v = view(&ui);
+    assert_eq!(v.text_of(v.id("TB_Label0").unwrap()), "Forward *");
+    assert_eq!(v.text_of(v.id("TB_Label1").unwrap()), "Jump");
+    ui.apply(UiUpdate::Tune(Some(runner(7.0, false))));
+    ui.update(0);
+    // A slider held by the mouse stays under it whatever arrives, even
+    // after its sent number gives up waiting.
+    let held = view(&ui).id("TB_Slider0").unwrap();
+    ui.dialogs.last_mut().unwrap().view_mut().set_num(held, 9.5);
+    ui.dialogs.last_mut().unwrap().view_mut().pressed =
+        Some((held, bri_ui::input::MouseButton::Left));
+    event(&mut ui, "TB_Slider0", EventKind::Changed);
+    ui.update(300);
+    assert_eq!(actions(&mut ui).len(), 1, "sent while held still");
+    ui.update(2500);
+    ui.apply(UiUpdate::Tune(Some(runner(7.0, false))));
+    ui.update(0);
+    assert_eq!(view(&ui).num(held), 9.5);
+    ui.dialogs.last_mut().unwrap().view_mut().pressed = None;
+    ui.apply(UiUpdate::Tune(Some(runner(7.0, false))));
+    ui.update(0);
+    // A number the host never shows lets the row go after a while.
+    let v = view(&ui);
+    assert_eq!(v.text_of(v.id("TB_Value0").unwrap()), "7");
+    // A number typed and left without Enter is sent too.
+    let n = view(&ui).id("TB_Value1").unwrap();
+    ui.dialogs.last_mut().unwrap().view_mut().set_text(n, "12");
+    event(&mut ui, "TB_Value1", EventKind::Changed);
+    ui.update(16);
+    assert_eq!(
+        actions(&mut ui),
+        [UiAction::TuneSet {
+            body: "runner:archetype/runner".into(),
+            changes: vec![("movement.jump".into(), 12.0)],
+        }]
+    );
+    // A typo says so, and sends nothing.
+    ui.dialogs
+        .last_mut()
+        .unwrap()
+        .view_mut()
+        .set_text(n, "fast");
+    event(&mut ui, "TB_Value1", EventKind::Submit);
+    assert!(actions(&mut ui).is_empty());
+    let mut controlled = runner(7.0, false);
+    controlled.movement_note = "This body has its own movement controller.".into();
+    ui.apply(UiUpdate::Tune(Some(controlled)));
+    ui.update(0);
+    let v = view(&ui);
+    let text = (0..v.nodes.len())
+        .map(|i| v.text_of(i))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(text.contains("its own movement controller"), "{text}");
 }

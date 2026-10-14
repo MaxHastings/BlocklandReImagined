@@ -76,6 +76,16 @@ const WHEELED_SPEED_CAP: f32 = 200.;
 /// 120 Hz ticks in one of v20's 32 ms moves, rounded up: a driver's move
 /// steers without auto-return until this long has passed without a turn.
 const AUTO_RETURN_QUIET: u8 = 4;
+/// A vehicle nobody drives that has moved slower than these for
+/// `SETTLE_TICKS` in a row is put to sleep, whatever Rapier's own check
+/// says. On a stud-covered build a parked jeep can rock between two
+/// contact poses every tick with no real speed (about 1e-4 u/s): Rapier
+/// measures that rocking as motion, so the body never slept and its hull
+/// kept colliding with the brick chunks under it every tick.
+const SETTLE_SPEED: f32 = 0.05;
+const SETTLE_SPIN: f32 = 0.05;
+/// One second of 120 Hz ticks.
+const SETTLE_TICKS: u8 = 120;
 /// Contacts whose normal is closer to level than this (|y| of the unit
 /// normal, about 45 degrees) are hits from the side.
 const SIDE_HIT: f32 = 0.7;
@@ -375,6 +385,8 @@ struct Instance {
     energy: f32,
     jetting: bool,
     energy_phase: u8,
+    /// Ticks in a row this vehicle sat undriven and still (`SETTLE_TICKS`).
+    still: u8,
     /// Torque `mSteering`: accumulated mouse steering (yaw, pitch), radians.
     mouse_steering: [f32; 2],
     /// 120 Hz ticks since the driver's move last turned, up to
@@ -915,6 +927,7 @@ impl VehiclesWorld {
                 energy: 0.,
                 jetting: false,
                 energy_phase: 0,
+                still: 0,
                 mouse_steering: [0.; 2],
                 steering_quiet: AUTO_RETURN_QUIET,
                 actor,
@@ -1690,6 +1703,7 @@ impl VehiclesWorld {
             if wake && world.bodies[v.body].is_sleeping() {
                 world.bodies[v.body].wake_up(true);
             }
+            settle(v, world, wake);
             let resting = world.bodies[v.body].is_sleeping();
             let b = &world.bodies[v.body];
             let p = b.translation();
@@ -2499,6 +2513,44 @@ fn explosion(
         origin: (world.bodies[v.body].translation() + Vec3::Y * offset * v.spawn.scale).to_array(),
         direction: Vec3::Y.to_array(),
         velocity: Vec3::Y.to_array(),
+    }
+}
+/// Puts a vehicle nobody drives to sleep once it has sat still for
+/// `SETTLE_TICKS`. A hit, a push, a driver, a brick removed from under it
+/// or anything awake touching it wakes it as before.
+///
+/// A body moved by the physics step counts as still below `SETTLE_SPEED`
+/// and `SETTLE_SPIN`. A player-type mount (the horse) is a kinematic body
+/// Rapier only lets sleep at exactly zero speed, which it never reaches:
+/// the speed it derives from the same pose twice is rounding noise (about
+/// 0.002 u/s 150 units from the origin). Asleep or not, it stays in the
+/// island of whatever it leans on, so a horse parked against a tank kept
+/// the tank awake too. It counts as still while its motor holds it
+/// grounded and unmoving at the pose it already has; its next pose that
+/// differs wakes it.
+fn settle(v: &mut Instance, world: &mut PhysicsWorld, driven: bool) {
+    let b = &world.bodies[v.body];
+    let still = !driven
+        && !b.is_sleeping()
+        && match &v.actor {
+            Some(actor) => {
+                let state = actor.state();
+                state.grounded && state.velocity == [0.; 3] && b.position() == b.next_position()
+            }
+            None => {
+                b.is_dynamic()
+                    && b.linvel().length() < SETTLE_SPEED
+                    && b.angvel().length() < SETTLE_SPIN
+            }
+        };
+    if !still {
+        v.still = 0;
+        return;
+    }
+    v.still = v.still.saturating_add(1);
+    if v.still >= SETTLE_TICKS {
+        v.still = 0;
+        world.bodies[v.body].sleep();
     }
 }
 /// Player-type mounts (PlayerData: Horse, Rowboat, Pirate Cannon, Tank

@@ -26,6 +26,6 @@ pub mod world;
 
 pub use addon::AddOnCode;
 pub use capability::{Capability, Tier};
-pub use host::{AddOn, Blend, Budgets, FrameInput, Sandbox, Space, Stopped, View};
+pub use host::{AddOn, Blend, Budgets, Captured, FrameInput, Sandbox, Shot, Space, Stopped, View};
 pub use trust::{TrustDecision, TrustLevel, TrustPrompt, TrustStore};
 pub use world::World;

@@ -114,6 +114,36 @@ pub enum EventKind {
     /// click, no double-click, so a list can be ticked down row by row.
     /// [`View::selected`] is the row, selected by the same click.
     Toggle,
+    /// A row dragged out of a list that lets rows be dragged (its
+    /// `dragRows`) was let go over this list, which lets them too.
+    /// [`View::take_drop`] says which row went where.
+    Drop,
+}
+
+/// A row being dragged out of a list with `dragRows`.
+#[derive(Debug, Clone)]
+struct RowDrag {
+    list: NodeId,
+    item: i64,
+    text: String,
+    from: (i32, i32),
+    /// Moved far enough from the press to be a drag, not a click.
+    moving: bool,
+}
+
+/// How far a pressed row moves before it is dragged.
+const ROW_DRAG_START: i32 = 4;
+
+/// A row let go over a list: [`EventKind::Drop`]'s detail.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RowDrop {
+    /// The list the row came from, and the row's item id there.
+    pub from: NodeId,
+    pub item: i64,
+    /// The list it was dropped on, and the row it was dropped on there
+    /// (none when let go below the last row).
+    pub to: NodeId,
+    pub at: Option<i64>,
 }
 
 /// A text list cell drawn as a check box in the list's `checkColumn`:
@@ -328,6 +358,8 @@ pub struct View {
     pressed_rebuilt: Option<(NodeId, String)>,
     /// The same for a detached control whose dropdown is still open.
     popup_rebuilt: Option<(NodeId, String)>,
+    row_drag: Option<RowDrag>,
+    dropped: Option<RowDrop>,
 }
 
 /// How close to a resizable window's right or bottom edge a press resizes it.
@@ -370,6 +402,8 @@ impl View {
             popup: None,
             pressed_rebuilt: None,
             popup_rebuilt: None,
+            row_drag: None,
+            dropped: None,
             popup_query: String::new(),
             popup_keys: Vec::new(),
             popup_shown: Vec::new(),
@@ -426,6 +460,9 @@ impl View {
                 && *pressed == old
             {
                 *pressed = id;
+                if let Some(drag) = self.row_drag.as_mut().filter(|d| d.list == old) {
+                    drag.list = id;
+                }
             }
             if let Some((old, _)) = self.popup_rebuilt.take_if(|(_, p)| p == n)
                 && let Some(open) = &mut self.popup
@@ -713,6 +750,36 @@ impl View {
         self.draw_node(pack, dl, self.root);
         if let Some(p) = &self.popup {
             self.draw_popup_list(pack, dl, p);
+        }
+        if let Some(drag) = self.row_drag.as_ref().filter(|d| d.moving) {
+            self.draw_dragged_row(pack, dl, drag);
+        }
+    }
+
+    /// The dragged row follows the pointer, highlighted as its list
+    /// draws a selected row.
+    fn draw_dragged_row(&self, pack: &Pack, dl: &mut DrawList, drag: &RowDrag) {
+        let Some(style) = self.style(pack, drag.list) else {
+            return;
+        };
+        let rh = self.list_row_height(pack, drag.list);
+        let w = self.nodes[drag.list].rect.w;
+        let row = Rect::new(self.mouse.0 + 8, self.mouse.1 - rh / 2, w, rh);
+        dl.fill(row, style.fill_color_hl.unwrap_or([128, 128, 255, 255]));
+        let text = drag.text.split('\t').collect::<Vec<_>>().join("  ");
+        let cell = Rect::new(row.x + 2, row.y, row.w - 2, rh);
+        if dl.push_clip(cell) {
+            self.draw_text_outlined(
+                pack,
+                dl,
+                drag.list,
+                cell,
+                &text,
+                Some(Justify::Left),
+                None,
+                false,
+            );
+            dl.pop_clip();
         }
     }
 
@@ -2282,6 +2349,7 @@ impl View {
         self.scroll_drag = None;
         self.window_drag = None;
         self.window_resize = None;
+        self.row_drag = None;
         self.close_hot = false;
     }
 
@@ -2307,6 +2375,11 @@ impl View {
             self.resize_window(id, if w { x - lx } else { 0 }, if h { y - ly } else { 0 });
             self.window_resize = Some((id, x, y, w, h));
             return;
+        }
+        if let Some(drag) = &mut self.row_drag
+            && !drag.moving
+        {
+            drag.moving = (x - drag.from.0).abs().max((y - drag.from.1).abs()) >= ROW_DRAG_START;
         }
         if let Some((id, MouseButton::Left)) = self.pressed
             && self.nodes[id].ctrl.class == "GuiSliderCtrl"
@@ -2494,10 +2567,81 @@ impl View {
                         });
                     }
                     self.last_click = Some((t, self.time_ms));
+                    if self.drags_rows(t) {
+                        self.row_drag = Some(RowDrag {
+                            list: t,
+                            item,
+                            text,
+                            from: (x, y),
+                            moving: false,
+                        });
+                    }
                 }
             }
             _ => {}
         }
+    }
+
+    /// A text list whose rows can be dragged to another such list.
+    fn drags_rows(&self, id: NodeId) -> bool {
+        let n = &self.nodes[id];
+        n.ctrl.class == "GuiTextListCtrl" && n.ctrl.field("dragRows") == Some("1") && n.state.active
+    }
+
+    /// The row-dragging list under a point: the list itself, or the
+    /// scroll holding it when the point is below its last row.
+    fn drop_list_at(&self, x: i32, y: i32) -> Option<NodeId> {
+        let mut id = self.hit(x, y)?;
+        loop {
+            if self.drags_rows(id) {
+                return Some(id);
+            }
+            if self.nodes[id].ctrl.class == "GuiScrollCtrl"
+                && let Some(&list) = self.nodes[id]
+                    .children
+                    .iter()
+                    .find(|&&k| self.drags_rows(k))
+            {
+                return Some(list);
+            }
+            id = self.nodes[id].parent?;
+        }
+    }
+
+    /// Where the last [`EventKind::Drop`] put its row, once.
+    pub fn take_drop(&mut self) -> Option<RowDrop> {
+        self.dropped.take()
+    }
+
+    /// End a row drag at the point: a [`EventKind::Drop`] on the list it
+    /// was let go over. True when the release was a drag, not a click.
+    fn drop_row(&mut self, pack: &Pack, x: i32, y: i32, out: &mut Vec<ViewEvent>) -> bool {
+        let Some(drag) = self.row_drag.take() else {
+            return false;
+        };
+        if !drag.moving {
+            return false;
+        }
+        let Some(to) = self.drop_list_at(x, y) else {
+            return true;
+        };
+        let r = self.nodes[to].rect;
+        let rh = self.list_row_height(pack, to).max(1);
+        let at = (r.contains(x, y))
+            .then(|| self.nodes[to].state.items.get(((y - r.y) / rh) as usize))
+            .flatten()
+            .map(|(_, item)| *item);
+        self.dropped = Some(RowDrop {
+            from: drag.list,
+            item: drag.item,
+            to,
+            at,
+        });
+        out.push(ViewEvent {
+            node: to,
+            kind: EventKind::Drop,
+        });
+        true
     }
 
     pub fn mouse_up(
@@ -2522,6 +2666,10 @@ impl View {
                     self.popup = Some(open);
                 }
             }
+            self.pressed = None;
+            return;
+        }
+        if b == MouseButton::Left && self.drop_row(_pack, x, y, out) {
             self.pressed = None;
             return;
         }

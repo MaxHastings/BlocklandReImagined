@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "script": "inventory.rhai",
+  "commands": [
+    { "name": "chest", "cooldown_ticks": 15 }
+  ],
+  "state": {
+    "global": {
+      "viewers": { "default": [], "persist": false }
+    }
+  },
+  "on_panel": true,
+  "on_leave": true,
+  "listens": ["sample-rp-bank:given"]
+}

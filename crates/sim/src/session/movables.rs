@@ -145,7 +145,7 @@ pub(super) struct Movables {
     /// Who moved an object last, and until which tick it counts.
     credits: BTreeMap<ObjectRef, (OwnerId, u64)>,
     /// Vehicles packages spawned, by package.
-    spawned: BTreeMap<u64, String>,
+    pub(super) spawned: BTreeMap<u64, String>,
     /// Players thrown by a hold: their velocity last tick, and the tick
     /// after which an impact no longer tumbles them.
     thrown: BTreeMap<OwnerId, (Vec3, u64)>,
@@ -435,7 +435,10 @@ impl Session {
             }
             let vehicle = collider.user_data as u64;
             if contact.removed_speed > 0.0 {
-                self.vehicles.struck.insert((owner, VehicleId(vehicle)));
+                let tick = self.simulation.state().tick;
+                self.vehicles
+                    .struck
+                    .insert((owner, VehicleId(vehicle)), tick);
             }
             let target = ObjectRef::Vehicle(vehicle);
             if !self.may_move(owner, target) || self.object_held(target) {

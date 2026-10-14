@@ -647,8 +647,16 @@ impl Predictor {
     /// Whether the tool in hand takes the jet button ([`motor_input`]).
     /// The host's archetype table changed (a body tuned live): later ticks
     /// run the new numbers.
-    pub fn set_archetypes(&mut self, archetypes: Archetypes) {
+    /// The predicted body takes its new numbers now, as the host's does.
+    pub fn set_archetypes(&mut self, archetypes: Archetypes) -> Result<()> {
         self.archetypes = archetypes;
+        let state = self.player.state().clone();
+        let tuning = self.archetypes.tuning(state.archetype, state.scale);
+        if &tuning != self.player.tuning() {
+            self.player
+                .restore(&mut self.world.physics, state, tuning)?;
+        }
+        Ok(())
     }
     pub fn set_tool_jet(&mut self, takes: bool) {
         self.tool_jet = takes;
@@ -721,6 +729,7 @@ impl Predictor {
                 held.feet == state.feet
                     && held.crouched == state.crouched
                     && held.yaw == state.yaw
+                    && held.pass_group == state.pass_group
                     && *other.tuning() == tuning
             };
             match self.others.get_mut(&state.owner) {

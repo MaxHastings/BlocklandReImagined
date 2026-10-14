@@ -30,6 +30,52 @@ impl Perform for ops::Push {
         Ok(())
     }
 }
+impl Perform for ops::SetPassGroup {
+    fn perform(self, session: &mut Session, cx: OpCall<'_>) -> Result<()> {
+        let OpCall { caller, .. } = cx;
+        let ops::SetPassGroup { target, group } = self;
+        // A group hurts no one, so a player's command may set their own,
+        // an administrator's anyone's, and otherwise only what the player
+        // may move; the rules' own hooks decide for themselves.
+        let free = caller.is_none_or(|c| {
+            target == ObjectRef::Player(c)
+                || session.peers.get(&c).is_some_and(|p| p.actor.administrator)
+        });
+        if !free {
+            session.ensure_may_move(caller, target, None)?;
+        }
+        let physics = &mut session.simulation.physics;
+        match target {
+            ObjectRef::Player(p) => session
+                .peers
+                .get_mut(&p)
+                .context("No such player")?
+                .player
+                .set_pass_group(physics, group),
+            ObjectRef::Entity(e) => session
+                .packages
+                .as_mut()
+                .and_then(|h| h.entities.get_mut(&e))
+                .context("No such entity")?
+                .body
+                .set_pass_group(physics, group),
+            ObjectRef::Vehicle(v) => {
+                let body = session
+                    .vehicles
+                    .world
+                    .as_ref()
+                    .and_then(|w| w.body_of(VehicleId(v)))
+                    .context("No such vehicle")?;
+                let groups = crate::player::pass_groups(group);
+                let colliders = physics.bodies[body].colliders().to_vec();
+                for collider in colliders {
+                    physics.colliders[collider].set_collision_groups(groups);
+                }
+                Ok(())
+            }
+        }
+    }
+}
 impl Perform for ops::Tumble {
     fn perform(self, session: &mut Session, cx: OpCall<'_>) -> Result<()> {
         let OpCall { caller, .. } = cx;
