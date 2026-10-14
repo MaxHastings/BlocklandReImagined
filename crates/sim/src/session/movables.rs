@@ -436,7 +436,9 @@ impl Session {
             let vehicle = collider.user_data as u64;
             if contact.removed_speed > 0.0 {
                 let tick = self.simulation.state().tick;
-                self.vehicles.struck.insert((owner, VehicleId(vehicle)), tick);
+                self.vehicles
+                    .struck
+                    .insert((owner, VehicleId(vehicle)), tick);
             }
             let target = ObjectRef::Vehicle(vehicle);
             if !self.may_move(owner, target) || self.object_held(target) {
