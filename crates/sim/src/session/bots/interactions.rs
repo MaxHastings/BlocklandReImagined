@@ -1992,9 +1992,12 @@ impl Session {
             };
             input.jump = input.forward == 0.0;
             // Driven to where its objective's step needs its feet (a flag
-            // to take up): near enough, it pulls up and walks the rest.
+            // to take up): near enough, it pulls up and walks the rest. A
+            // step that is itself the drive (the vehicle delivered) keeps it
+            // at the controls.
             let brain = &self.bots.brains[&bot];
             let arrived = behaviour == Behaviour::Objective
+                && brain.objective.drive(self, bot).is_none()
                 && brain.goal.is_some_and(|g| {
                     matches!(g, Goal::Objective(_))
                         && flat(g.point(brain.home) - at).length() <= standoff + OBJECTIVE_WALK

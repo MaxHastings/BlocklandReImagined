@@ -405,6 +405,24 @@ pub(super) fn holds_attack(session: &Session, owner: OwnerId) -> bool {
         .is_some_and(|image| attack_of(session, image, scale).is_some())
 }
 
+/// Whether `owner` holds an attack that can hurt by itself: one that does
+/// damage, or a mechanism read only by its states. A shove alone (a broom)
+/// is not one.
+pub(super) fn holds_harm(session: &Session, owner: OwnerId) -> bool {
+    let scale = session
+        .peers
+        .get(&owner)
+        .map_or(1.0, |p| p.player.state().scale);
+    session
+        .weapons
+        .actor(ActorId(owner))
+        .and_then(|a| a.selected.and_then(|s| a.inventory.get(s)?.as_deref()))
+        .and_then(|item| session.weapons.pack.items.get(item))
+        .and_then(|item| session.weapons.pack.images.get(&item.image))
+        .and_then(|image| attack_of(session, image, scale))
+        .is_some_and(|cap| cap.is_none_or(|c| c.direct_damage > 0.0 || c.splash_damage > 0.0))
+}
+
 /// An item whose image has a native attack that does damage: one worth
 /// picking up to fight with. Unlike `has_possible_attack`, an unknown
 /// mechanism does not count.

@@ -93,3 +93,25 @@ planner without a rework. Neither does yet:
   and damage share `can_radius_damage`), so it would need a new `nav::Mode`,
   reach tables keyed by weapon as well as tuning, a leg controller and a
   health budget.
+
+## CI follow-up
+
+- **Delivered vehicle left behind.** The pull-up near a feet-only step
+  (`bot_seated_input`, `arrived`) also fired when the step was the drive
+  itself, so a bot delivering a vehicle got out beside it, could not board
+  again ("Just dismounted"), gave the seat up and went for the passive
+  creator. It now pulls up only when the objective's step is not the drive
+  (`objectives::State::drive`). Found by
+  `bot_physical_objectives::unfamiliar_ground_vehicle_uses_its_own_control_seat_and_actual_round_outcome`.
+- **Broom brawls away from the ball.** A fight begun at the ball scored
+  `0.8 * ARMED` (0.6) once the ball rolled off, and the play's 0.65 never
+  beat that by the held choice's 10% margin, so four bots shoved each other
+  harmlessly for a minute (`bot_soccer_match`, Broom seed 1; the base does
+  the same for shorter spells: combat about 400 of 600 bot-s). An enemy
+  that can only shove is now worth `SHOVES` (0.7) away from the play, below
+  the margin; one with a damaging attack keeps `ARMED` (lowering that
+  instead stopped bots ever seeing an enemy through glass in
+  `acceptance_unfamiliar`).
+- `bri-net/soak` (`two_players_stay_consistent_through_a_lossy_jittery_link`)
+  ran 1097 of 1200 ticks on one Windows runner: a wall-clock pace check with
+  no bots in it, not this change.
