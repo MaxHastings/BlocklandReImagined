@@ -2684,6 +2684,13 @@ impl Session {
             if self.bot_tuning_command(owner, &request.command, &request.args) {
                 return Ok(Reply::Accepted);
             }
+            if request.command.eq_ignore_ascii_case("reloadrules") {
+                let lines = self.reload_rules_command(owner);
+                for line in lines {
+                    self.private_chat(owner, line);
+                }
+                return Ok(Reply::Accepted);
+            }
             if request.command.eq_ignore_ascii_case("rulelab") {
                 let mode = match request.args.first() {
                     Some(PackageArg::String(s)) => s.as_str(),
@@ -4017,6 +4024,68 @@ impl Session {
             }),
         })
     }
+    /// Read every running Add-On's rules script from its folder again and
+    /// swap in the ones that changed, without hosting again. State, host
+    /// data, settings, creatures and cooldowns carry on as they are: only
+    /// the functions change, and the next hook runs the new ones. The
+    /// scripts are checked together first; any problem keeps every old
+    /// script and is returned. `behaviour.json` and other files are not
+    /// read again. Returns the Add-Ons whose rules changed.
+    pub fn reload_rules(&mut self) -> Result<Vec<String>, Vec<Diagnostic>> {
+        let Some(host) = self.packages.as_mut() else {
+            return Ok(Vec::new());
+        };
+        let mut catalog = (*host.catalog).clone();
+        let mut changed = Vec::new();
+        let mut problems = Vec::new();
+        for (id, package) in &mut catalog.packages {
+            match package.reread_script() {
+                Ok(Some(source)) => {
+                    package.set_script(source);
+                    changed.push(id.clone());
+                }
+                Ok(None) => {}
+                Err(problem) => {
+                    problems.push(Diagnostic::error("script.reload", problem).at(id.clone()));
+                }
+            }
+        }
+        if !problems.is_empty() {
+            return Err(problems);
+        }
+        if changed.is_empty() {
+            return Ok(changed);
+        }
+        let runtime = Runtime::compile(&catalog)?;
+        for diagnostic in runtime.unknown_calls() {
+            note(host, diagnostic);
+        }
+        host.runtime = runtime;
+        host.catalog = Arc::new(catalog);
+        Ok(changed)
+    }
+
+    /// `/reloadrules`, typed by `owner`: only the host, whose computer
+    /// holds the Add-Ons' files.
+    fn reload_rules_command(&mut self, owner: OwnerId) -> Vec<String> {
+        if !self.admin.rank(owner).1 {
+            return vec![
+                "Only the host reloads rules: the Add-Ons' files are on the host's computer."
+                    .into(),
+            ];
+        }
+        match self.reload_rules() {
+            Ok(changed) if changed.is_empty() => vec!["No rules changed.".into()],
+            Ok(changed) => vec![format!(
+                "Reloaded the rules of {}. State carries on as it was.",
+                changed.join(", ")
+            )],
+            Err(problems) => std::iter::once("Rules not reloaded; the old ones still run:".into())
+                .chain(problems.iter().map(ToString::to_string))
+                .collect(),
+        }
+    }
+
     /// Package problems since the last call, oldest first (at most the
     /// last [`MAX_UNHEARD`]): what the host records as Add-On health.
     pub fn take_package_problems(&mut self) -> Vec<Diagnostic> {
