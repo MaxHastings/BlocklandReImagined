@@ -176,6 +176,7 @@ impl VehiclesWorld {
             held: BTreeSet::new(),
             wheel_rays: self.wheel_rays,
             resting_skips: self.resting_skips,
+            portal: Default::default(),
             catalog: self.catalog.clone(),
             catalog_fingerprint: self.catalog_fingerprint.clone(),
             instances: BTreeMap::new(),
@@ -286,10 +287,13 @@ impl VehiclesWorld {
                     actor,
                     relocations: 0,
                     turret_aim: None,
+                    straddles: Vec::new(),
+                    fills: Vec::new(),
                 },
             );
         }
-        for old in self.instances.values() {
+        for old in std::mem::take(&mut self.instances).into_values() {
+            bri_physics::portal::unfill(world, old.fills.into_iter().map(|(_, f)| f));
             world.remove_body(old.body);
         }
         *self = next;
