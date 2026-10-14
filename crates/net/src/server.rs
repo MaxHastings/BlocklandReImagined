@@ -666,7 +666,14 @@ pub fn transport() -> quinn::TransportConfig {
         // Cubic reads that as congestion and stalled reliable replies for
         // 3-8 s at 5% loss in the soak test. BBR paces by measured bandwidth
         // and RTT: the same link answers within ~0.5 s.
-        .congestion_controller_factory(Arc::new(quinn::congestion::BbrConfig::default()));
+        .congestion_controller_factory(Arc::new(quinn::congestion::BbrConfig::default()))
+        // A packet counts as lost once a later one is acknowledged and it
+        // is still unacknowledged after this many round trips. QUIC's 9/8
+        // read jitter as loss: 60 ms with 40 ms of jitter and nothing
+        // dropped showed 10% loss on the net graph, and 5% real loss showed
+        // 13%, each retransmitting reliable data that had arrived. 1.5
+        // reports both truly (`link_loss.rs`).
+        .time_threshold(1.5);
     t
 }
 pub fn start(session: Session, options: ServerOptions) -> Result<ServerHandle> {
@@ -1336,7 +1343,7 @@ fn send_state(
         .filter_map(|(item, audience)| {
             let kind = match item {
                 Datagram::Pose(_) | Datagram::Remote(_) => Kind::Pose,
-                Datagram::Vehicle(_) => Kind::Vehicle,
+                Datagram::Vehicle(_) | Datagram::VehicleView(_) => Kind::Vehicle,
                 Datagram::Orb(_) => Kind::Orb,
             };
             match codec::encode_datagram_item(&item) {
@@ -1616,6 +1623,7 @@ async fn run(
     let mut ticker = tokio::time::interval(Duration::from_secs_f64(1.0 / 120.0));
     ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let mut clock = crate::tick_clock::TickClock::default();
+    let mut recorded_dropped = 0_u64;
     let mut previous = std::time::Instant::now();
     let mut perf_window = PerfWindow::default();
     let mut fuse = PanicFuse::default();
@@ -1783,6 +1791,8 @@ async fn run(
             players.store((peers.len()+lobbies.len()) as u32,std::sync::atomic::Ordering::Relaxed);
             let now=std::time::Instant::now();
             let steps=clock.advance(now.duration_since(previous).mul_f32(session.time_scale()));previous=now;
+            // Ticks the clock dropped still passed for every client.
+            let skipped=clock.dropped-recorded_dropped;if skipped>0{recorded_dropped=clock.dropped;recorder.skipped_ticks(&mut session,skipped);}
             for _ in 0..steps {
             let started=std::time::Instant::now();
             let stepped=match fuse.guard("a server tick",||recorder.step(&mut session,step))? {Ok(stepped)=>stepped,Err(fault)=>Err(anyhow::anyhow!("{fault}"))};
@@ -1800,6 +1810,7 @@ async fn run(
             }
             if tick.is_multiple_of(POSE_INTERVAL) {
                 let viewers:Vec<_>=peers.keys().map(|owner|(*owner,session.viewpoint(*owner))).collect();
+                state_stream.set_crews(vehicles.iter().map(|v|(v.id,v.occupants.iter().flatten().copied().collect())).collect());
                 send_state(&peers,&traffic,state_stream.interval(tick,poses(&session),session.vehicle_poses(),session.camera_orbs(),&viewers,session.simulation().passages()));
             }
             if tick.is_multiple_of(UPDATE_INTERVAL) {

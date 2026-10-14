@@ -4597,3 +4597,35 @@ fn written(text: &str) -> String {
         })
         .collect()
 }
+
+/// Brick_ModTer_4xPackZ picks each brick's category with an expression on
+/// Brick_Modified_ModTer, which is not bundled: its port declares the
+/// bricks under Baseplates, as v20 loads them without it.
+#[test]
+fn modter_no_overlap_port_files_its_bricks_under_baseplates() {
+    let dir = fresh("modter-4xpackz");
+    let out = dir.join("package");
+    let report = import(&options(fixture("ports/Brick_ModTer_4xPackZ"), out.clone())).unwrap();
+    let brick = report
+        .datablocks
+        .iter()
+        .find(|d| d.name.eq_ignore_ascii_case("brick4Cube1ModTerData"))
+        .unwrap();
+    assert_ne!(brick.status, "unsupported", "{brick:?}");
+    let catalog: bri_content::brick::Catalog = serde_json::from_slice(
+        &std::fs::read(out.join("assets/brick-catalog/stock-catalog.json")).unwrap(),
+    )
+    .unwrap();
+    let cube = catalog
+        .bricks
+        .iter()
+        .find(|b| b.display_name == "4x Cube - No Overlap")
+        .unwrap();
+    assert_eq!(
+        (cube.category.as_str(), cube.subcategory.as_str()),
+        ("Baseplates", "ModTer 4x")
+    );
+    assert_eq!(cube.print_aspect_ratio.as_deref(), Some("ModTer"));
+    assert!(!cube.mesh_id.is_empty());
+    std::fs::remove_dir_all(dir).unwrap();
+}

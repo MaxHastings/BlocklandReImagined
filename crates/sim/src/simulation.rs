@@ -1589,29 +1589,37 @@ impl Simulation {
         Ok(!self.stranded_by(id)?.is_empty())
     }
     /// The bricks `killBrick` chain-kills with this one: those left without
-    /// a path to the ground once it is gone, nearest first. Bricks connect
+    /// a path to the ground once it is gone, lowest first. Bricks connect
     /// by studs, up or down, and grounded bricks hold up everything joined
     /// to them.
+    ///
+    /// The ground is below, so each search steps to the lowest brick it has
+    /// found yet: a hit near the top of a big build reaches the ground in
+    /// about the build's height instead of flooding everything between
+    /// (the Destructo Wand's and hammer's swing cost on large builds).
     pub fn stranded_by(&self, id: BrickId) -> Result<Vec<BrickId>> {
+        use std::{cmp::Reverse, collections::BinaryHeap};
         ensure!(self.state().bricks.contains_key(&id), "Unknown brick");
-        let (mut supported, mut stranded) = (BTreeSet::new(), Vec::new());
+        let (mut supported, mut stranded) = (BTreeSet::new(), BTreeSet::new());
+        let mut out = Vec::new();
+        let lowest_first = |brick: BrickId| Reverse((self.index.bounds(brick).min[1], brick));
         for start in self.connected_bricks(id)? {
             if supported.contains(&start) || stranded.contains(&start) {
                 continue;
             }
             let mut seen = BTreeSet::from([id, start]);
-            let mut order = vec![start];
-            let mut next = 0;
+            let mut queue = BinaryHeap::from([lowest_first(start)]);
+            let mut order = Vec::new();
             let mut grounded = false;
-            while let Some(&brick) = order.get(next) {
-                next += 1;
+            while let Some(Reverse((_, brick))) = queue.pop() {
                 if supported.contains(&brick) || self.grounded_root(brick)? {
                     grounded = true;
                     break;
                 }
+                order.push(brick);
                 for other in self.connected_bricks(brick)? {
                     if seen.insert(other) {
-                        order.push(other);
+                        queue.push(lowest_first(other));
                     }
                 }
             }
@@ -1619,10 +1627,11 @@ impl Simulation {
                 seen.remove(&id);
                 supported.extend(seen);
             } else {
-                stranded.extend(order);
+                stranded.extend(order.iter().copied());
+                out.extend(order);
             }
         }
-        Ok(stranded)
+        Ok(out)
     }
     /// Bricks joined to this one by studs above or below (`getUpBrick`,
     /// `getDownBrick`).

@@ -18,6 +18,7 @@ enum Incoming {
     Reliable(Box<Message>),
     Pose(Pose),
     Vehicle(bri_sim::session::VehiclePose),
+    VehicleView(crate::protocol::VehicleView),
     Orb(Orb),
     Closed(String),
 }
@@ -774,6 +775,7 @@ impl Client {
                         Datagram::Pose(pose) => Incoming::Pose(pose),
                         Datagram::Remote(pose) => Incoming::Pose(pose.into_pose()),
                         Datagram::Vehicle(pose) => Incoming::Vehicle(pose),
+                        Datagram::VehicleView(view) => Incoming::VehicleView(view),
                         Datagram::Orb(orb) => Incoming::Orb(orb),
                     });
                 }
@@ -915,14 +917,20 @@ impl Client {
                         }
                         _ => anyhow::bail!("Unexpected message during a map transfer"),
                     },
-                    Incoming::Pose(_) | Incoming::Vehicle(_) | Incoming::Orb(_) => {}
+                    Incoming::Pose(_)
+                    | Incoming::Vehicle(_)
+                    | Incoming::VehicleView(_)
+                    | Incoming::Orb(_) => {}
                     Incoming::Closed(reason) => anyhow::bail!("Connection closed: {reason}"),
                 }
                 continue;
             }
             if matches!(
                 &incoming,
-                Incoming::Pose(_) | Incoming::Vehicle(_) | Incoming::Orb(_)
+                Incoming::Pose(_)
+                    | Incoming::Vehicle(_)
+                    | Incoming::VehicleView(_)
+                    | Incoming::Orb(_)
             ) || matches!(&incoming, Incoming::Reliable(m) if matches!(**m, Message::Update(_)))
             {
                 self.updates
@@ -982,6 +990,11 @@ impl Client {
                 Incoming::Vehicle(pose) => {
                     let id = pose.id;
                     self.replica.vehicle_pose(pose)?;
+                    Ok(ClientEvent::Vehicle(id))
+                }
+                Incoming::VehicleView(view) => {
+                    let id = view.id;
+                    self.replica.vehicle_view(view)?;
                     Ok(ClientEvent::Vehicle(id))
                 }
                 Incoming::Orb(orb) => {

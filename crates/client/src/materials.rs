@@ -13,7 +13,46 @@ impl BrickMaterials {
         let root = root.canonicalize()?;
         let bytes = read_resource(&root, "brick-materials.json", 8 * 1024 * 1024)?;
         let bundle: Bundle = serde_json::from_slice(&bytes)?;
+        Self::with_bundle(&root, bundle, &[])
+    }
+    /// The base game's materials in `root` with the enabled Add-Ons' print
+    /// packs (`ContentPaths::print_extras`) after its prints. An Add-On
+    /// print whose images do not load is left out and said once.
+    pub fn load_with(root: &Path, extras: &[(String, std::path::PathBuf)]) -> Result<Self> {
+        let root = root.canonicalize()?;
+        let (bundle, notes) = bri_net::content_identity::brick_materials_with(&root, extras)?;
+        for note in notes {
+            bri_console::warn(format!("Add-On prints: {note}"));
+        }
+        Self::with_bundle(&root, bundle, extras)
+    }
+    fn with_bundle(
+        root: &Path,
+        mut bundle: Bundle,
+        extras: &[(String, std::path::PathBuf)],
+    ) -> Result<Self> {
         bundle.validate()?;
+        let keys: Vec<&str> = extras.iter().map(|(key, _)| key.as_str()).collect();
+        let mut images = BTreeMap::new();
+        let mut dropped = vec![];
+        for print in &bundle.prints {
+            for entry in [&print.diffuse, &print.icon] {
+                let Some((key, rel)) = Bundle::print_pack_of(&entry.path, &keys) else {
+                    continue;
+                };
+                let dir = &extras[keys.iter().position(|k| *k == key).unwrap()].1;
+                match load_image_at(dir, rel, entry) {
+                    Ok(image) => {
+                        images.insert(entry.path.clone(), image);
+                    }
+                    Err(e) => {
+                        bri_console::warn(format!("Add-On print {} left out: {e:#}", print.id));
+                        dropped.push(print.id.clone());
+                    }
+                }
+            }
+        }
+        bundle.prints.retain(|p| !dropped.contains(&p.id));
         ensure!(
             bundle
                 .images()
@@ -22,10 +61,12 @@ impl BrickMaterials {
                 <= 512 * 1024 * 1024,
             "Decoded brick materials exceed 512 MiB budget"
         );
-        let mut images = BTreeMap::new();
         for entry in bundle.images() {
-            images.insert(entry.path.clone(), load_image(&root, entry)?);
+            if !images.contains_key(&entry.path) {
+                images.insert(entry.path.clone(), load_image(root, entry)?);
+            }
         }
+        images.retain(|path, _| bundle.images().any(|i| &i.path == path));
         Ok(Self { bundle, images })
     }
     /// Plain 1x1 surfaces and one `Letters/A` print, held in memory, for
@@ -147,7 +188,11 @@ impl BrickMaterials {
     }
 }
 fn load_image(root: &Path, entry: &Image) -> Result<SceneImage> {
-    let bytes = read_resource(root, &entry.path, 32 * 1024 * 1024)?;
+    load_image_at(root, &entry.path, entry)
+}
+/// `entry`'s image, read from `relative` under `root`.
+fn load_image_at(root: &Path, relative: &str, entry: &Image) -> Result<SceneImage> {
+    let bytes = read_resource(root, relative, 32 * 1024 * 1024)?;
     ensure!(
         format!("{:x}", Sha256::digest(&bytes)) == entry.sha256,
         "Native brick image checksum mismatch: {}",

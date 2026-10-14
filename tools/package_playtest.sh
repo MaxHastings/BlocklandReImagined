@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Linux counterpart of package_playtest.ps1: the same release folder (the
-# client, the Add-On importer, the dedicated server, every pack the package list selects, the
+# client, the Add-On importer, the dedicated server, the Add-On checker and
+# runner for modders, every pack the package list selects, the
 # default Add-Ons turned on, the tester docs and a checksummed manifest) plus
 # the zip players download. The bundled original Add-Ons come from the
 # Add-On bundle (tools/addon_bundle.py; dist/addon-bundle by default), with
@@ -13,7 +14,7 @@
 #   [--addon-bundle DIR] [--without-originals]   (the latter only for packaging tests)
 #
 # Build the client first with BRI_VERSION set to the version, as on Windows:
-#   BRI_VERSION=<version> cargo build --release --locked -p bri-client --bin bri-client -p bri-addon-import --bin bri-import-addon -p bri-net --bin bri-server
+#   BRI_VERSION=<version> cargo build --release --locked -p bri-client --bin bri-client -p bri-addon-import --bin bri-import-addon -p bri-net --bin bri-server -p bri-package-runtime --bin bri-addon-check -p bri-sim --bin bri-addon-run
 set -euo pipefail
 
 repo="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -45,6 +46,7 @@ done
 command -v python3 >/dev/null || die "python3 is required"
 
 export BRI_REPO="$repo" BRI_EXECUTABLE="$executable" BRI_IMPORTER="${importer:-$(dirname "$executable")/bri-import-addon}" BRI_SERVER="$(dirname "$executable")/bri-server"
+export BRI_ADDON_CHECK="$(dirname "$executable")/bri-addon-check" BRI_ADDON_RUN="$(dirname "$executable")/bri-addon-run"
 export BRI_DESTINATION="$destination" BRI_VERSION_ARG="$version" BRI_EXPECTED="$expected"
 export BRI_ADDON_BUNDLE="$addon_bundle" BRI_WITHOUT_ORIGINALS="$without_originals"
 export BRI_VALIDATE_ONLY="$validate_only" BRI_VERIFY="$verify" BRI_STRESS_LAB="$stress_lab" BRI_SKIP_VERSION_CHECK="$skip_version_check"
@@ -62,7 +64,7 @@ without_originals = env['BRI_WITHOUT_ORIGINALS'] == '1'
 FIELDS = ['map_bundle', 'brick_catalog', 'geometry', 'effects', 'worlds', 'ui_pack', 'brick_materials', 'avatar',
           'effects_runtime', 'audio', 'weather', 'foliage', 'weapons', 'item_presentation', 'weapon_debris',
           'vehicles', 'events', 'tutorial']
-EXECUTABLES = ('bri-client', 'bri-import-addon', 'bri-server', 'launch.sh')
+EXECUTABLES = ('bri-client', 'bri-import-addon', 'bri-server', 'bri-addon-check', 'bri-addon-run', 'launch.sh')
 VERSION = re.compile(r'^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$')
 
 
@@ -185,9 +187,13 @@ stress_lab = env['BRI_STRESS_LAB'] == '1'
 executable = pathlib.Path(env['BRI_EXECUTABLE'])
 importer = pathlib.Path(env['BRI_IMPORTER'])
 server = pathlib.Path(env['BRI_SERVER'])
+addon_check = pathlib.Path(env['BRI_ADDON_CHECK'])
+addon_run = pathlib.Path(env['BRI_ADDON_RUN'])
 for path, what in ((executable, 'release client missing; build it first'),
                    (importer, 'Add-On importer missing; build it with the client (cargo build --release --locked -p bri-addon-import)'),
-                   (server, 'dedicated server missing; build it with the client (cargo build --release --locked -p bri-net --bin bri-server)')):
+                   (server, 'dedicated server missing; build it with the client (cargo build --release --locked -p bri-net --bin bri-server)'),
+                   (addon_check, 'Add-On checker missing; build it with the client (cargo build --release --locked -p bri-package-runtime --bin bri-addon-check)'),
+                   (addon_run, 'Add-On runner missing; build it with the client (cargo build --release --locked -p bri-sim --bin bri-addon-run)')):
     if path.is_symlink() or not path.is_file() or path.stat().st_size == 0:
         die(f'{what}: {path}')
 sha = hashlib.sha256(executable.read_bytes()).hexdigest()
@@ -267,10 +273,14 @@ try:
     shutil.copyfile(importer, release / 'bri-import-addon')
     # A dedicated server for a VPS, run from this folder (docs/dedicated-server.md).
     shutil.copyfile(server, release / 'bri-server')
+    # Modders check, try and pack Add-Ons with these, without Rust
+    # (docs/modding/README.md).
+    shutil.copyfile(addon_check, release / 'bri-addon-check')
+    shutil.copyfile(addon_run, release / 'bri-addon-run')
     # Line tables stay in target/release for crash reports (the Windows .pdb
     # is kept apart the same way); players get the binaries without them.
     if shutil.which('strip'):
-        subprocess.run(['strip', '--strip-debug', str(release / 'bri-client'), str(release / 'bri-import-addon'), str(release / 'bri-server')], check=True)
+        subprocess.run(['strip', '--strip-debug'] + [str(release / name) for name in EXECUTABLES if name != 'launch.sh'], check=True)
     for source, name in docs:
         shutil.copyfile(repo / source, release / name)
     import package_guides

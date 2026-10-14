@@ -14,7 +14,7 @@
 //! other at 40 Hz, and the host's upload grew with the square of the player
 //! count: 2.1 MB/s (17 Mbit/s) for 32 players running. Clients render each
 //! remote player far enough in the past for its own rate.
-use crate::protocol::{Datagram, Orb, POSE_INTERVAL, Pose, RemotePose, WeaponDelta};
+use crate::protocol::{Datagram, Orb, POSE_INTERVAL, Pose, RemotePose, VehicleView, WeaponDelta};
 use bri_content::passage::Passages;
 use bri_sim::session::WeaponView;
 use bri_sim::{player::PlayerState, session::VehiclePose};
@@ -194,9 +194,16 @@ pub struct StateStream {
     /// Every player's pose at the previous interval, to tell who is moving.
     previous: BTreeMap<OwnerId, PlayerState>,
     vehicles: BTreeMap<u64, Sent<VehiclePose>>,
+    /// Who rides each vehicle: they get its full pose, which their
+    /// prediction reads; everyone else gets a [`VehicleView`].
+    crews: BTreeMap<u64, Vec<OwnerId>>,
     orbs: BTreeMap<u64, Sent<[f32; 3]>>,
 }
 impl StateStream {
+    /// Each vehicle's occupants, from the vehicle listing.
+    pub fn set_crews(&mut self, crews: BTreeMap<u64, Vec<OwnerId>>) {
+        self.crews = crews;
+    }
     /// The datagram items of the interval at `tick`, in send order, with
     /// who gets each. `viewers` are the connected players with where each
     /// sees from (None: anywhere, so full rate). Distances run the shortest
@@ -324,6 +331,22 @@ impl StateStream {
             }
         }
         for vehicle in vehicles {
+            let crew = self.crews.get(&vehicle.id).map_or(&[][..], Vec::as_slice);
+            let (riding, watching): (Vec<OwnerId>, Vec<OwnerId>) = viewers
+                .iter()
+                .map(|(viewer, _)| *viewer)
+                .partition(|viewer| crew.contains(viewer));
+            let mut push = |pose: VehiclePose| {
+                if !watching.is_empty() {
+                    out.push((
+                        Datagram::VehicleView(VehicleView::of(&pose)),
+                        Audience::Listed(watching.clone()),
+                    ));
+                }
+                if !riding.is_empty() {
+                    out.push((Datagram::Vehicle(pose), Audience::Listed(riding.clone())));
+                }
+            };
             match decide(
                 &mut self.vehicles,
                 vehicle.id,
@@ -334,15 +357,12 @@ impl StateStream {
             ) {
                 Decision::Skip => continue,
                 Decision::Send => {}
-                Decision::HoldThenSend(held) => out.push((
-                    Datagram::Vehicle(VehiclePose {
-                        tick: tick - POSE_INTERVAL,
-                        ..held
-                    }),
-                    Audience::All,
-                )),
+                Decision::HoldThenSend(held) => push(VehiclePose {
+                    tick: tick - POSE_INTERVAL,
+                    ..held
+                }),
             }
-            out.push((Datagram::Vehicle(vehicle), Audience::All));
+            push(vehicle);
         }
         for (owner, eye) in orbs {
             match decide(
@@ -972,6 +992,51 @@ mod tests {
         }
         // The still one settled: its first pose and SETTLE more.
         assert_eq!(sent.get(&31), Some(&(SETTLE as usize)));
+    }
+
+    #[test]
+    fn a_vehicles_crew_gets_its_full_pose_and_everyone_else_a_view() {
+        let mut stream = StateStream::default();
+        stream.set_crews(BTreeMap::from([(7, vec![2])]));
+        let vehicle = VehiclePose {
+            passage_frame: Default::default(),
+            id: 7,
+            tick: 3,
+            position: [1.0; 3],
+            rotation: [0.0, 0.0, 0.0, 1.0],
+            velocity: [5.0, 0.0, 0.0],
+            steering: 0.1,
+            wheel_suspension: vec![0.1; 4],
+            wheel_rotation: vec![0.5; 4],
+            wheel_contact: vec![true; 4],
+            wheel_tire: vec![Default::default(); 4],
+            turret_aim: [0.0; 2],
+            jetting: false,
+            angular_velocity: [0.0, 0.4, 0.0],
+            mouse_steering: [0.2, 0.0],
+            driver_input: 42,
+            driver_steering: (false, false),
+            steering_quiet: 0,
+            actor: None,
+        };
+        let items = stream.interval(
+            3,
+            vec![],
+            vec![vehicle.clone()],
+            vec![],
+            VIEWERS,
+            &Passages::default(),
+        );
+        assert_eq!(
+            items,
+            vec![
+                (
+                    Datagram::VehicleView(VehicleView::of(&vehicle)),
+                    Audience::Listed(vec![1])
+                ),
+                (Datagram::Vehicle(vehicle), Audience::Listed(vec![2])),
+            ]
+        );
     }
 
     #[test]

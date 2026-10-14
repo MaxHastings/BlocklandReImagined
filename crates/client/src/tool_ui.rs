@@ -70,33 +70,24 @@ impl ToolUi {
             .collect();
         let mut prints: BTreeMap<String, Vec<PrintInfo>> = BTreeMap::new();
         for print in &materials.prints {
-            let archive = print
-                .icon
-                .source
-                .archive
-                .as_deref()
-                .context("Print icon has no original package")?;
-            let archive = archive
-                .strip_suffix(".zip")
-                .context("Print icon package is not a ZIP")?;
-            let source = print
-                .icon
-                .source
-                .path
-                .strip_suffix(".png")
-                .context("Print icon is not a PNG")?;
-            let icon = format!("{archive}/{source}").to_ascii_lowercase();
-            ensure!(
-                pack.data.images.contains_key(&icon),
-                "UI pack lacks original print icon: {icon}"
-            );
+            let icon = crate::content::print_icon_key(&print.icon)
+                .context("Print icon is not a PNG of a ZIP package")?;
+            // The base game's icons are in the UI pack, an Add-On's are
+            // added beside them (`content::install_print_icons`); a print
+            // whose icon did not load shows none (`crate::cosmetic`).
+            let icon = if pack.data.images.contains_key(&icon) {
+                IconRef::Pack(icon)
+            } else {
+                bri_console::warn(format!("UI pack lacks print icon: {icon}"));
+                IconRef::None
+            };
             prints
                 .entry(print.aspect.clone())
                 .or_default()
                 .push(PrintInfo {
                     id: print.id.clone(),
                     name: print.name.clone(),
-                    icon: IconRef::Pack(icon),
+                    icon,
                 });
         }
         let datablocks = [

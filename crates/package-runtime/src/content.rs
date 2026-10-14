@@ -77,9 +77,13 @@ pub enum Kind {
     /// assets it names (`bri_sim::map_catalog`). Shared: everyone loads the
     /// map, so joiners download it.
     Map,
+    /// A print pack (`prints.json`, `bri_content::brick_materials::PrintPack`)
+    /// joining the base game's prints, merged by the engine's content
+    /// loading like weapons. Client side: every player draws the prints.
+    Prints,
 }
 impl Kind {
-    pub const NAMES: [&str; 22] = [
+    pub const NAMES: [&str; 23] = [
         "behaviour",
         "script",
         "world",
@@ -102,6 +106,7 @@ impl Kind {
         "controller",
         "body",
         "map",
+        "prints",
     ];
     pub fn parse(text: &str) -> Option<Self> {
         Some(match text {
@@ -127,6 +132,7 @@ impl Kind {
             "controller" => Self::Controller,
             "body" => Self::Body,
             "map" => Self::Map,
+            "prints" => Self::Prints,
             _ => return None,
         })
     }
@@ -154,7 +160,8 @@ impl Kind {
             | Self::Image
             | Self::Splash
             | Self::Body
-            | Self::Map => Side::Client,
+            | Self::Map
+            | Self::Prints => Side::Client,
         }
     }
     /// Largest accepted file of this kind.
@@ -164,6 +171,7 @@ impl Kind {
             Self::Data | Self::Map => 1024 * 1024,
             Self::Image => 4 * 1024 * 1024,
             Self::Weapons | Self::Vehicles | Self::Bricks | Self::Body => 32 * 1024 * 1024,
+            Self::Prints => 8 * 1024 * 1024,
             Self::Controller => 64 * 1024,
             _ => 128 * 1024,
         }
