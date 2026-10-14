@@ -666,7 +666,14 @@ pub fn transport() -> quinn::TransportConfig {
         // Cubic reads that as congestion and stalled reliable replies for
         // 3-8 s at 5% loss in the soak test. BBR paces by measured bandwidth
         // and RTT: the same link answers within ~0.5 s.
-        .congestion_controller_factory(Arc::new(quinn::congestion::BbrConfig::default()));
+        .congestion_controller_factory(Arc::new(quinn::congestion::BbrConfig::default()))
+        // A packet counts as lost once a later one is acknowledged and it
+        // is still unacknowledged after this many round trips. QUIC's 9/8
+        // read jitter as loss: 60 ms with 40 ms of jitter and nothing
+        // dropped showed 10% loss on the net graph, and 5% real loss showed
+        // 13%, each retransmitting reliable data that had arrived. 1.5
+        // reports both truly (`link_loss.rs`).
+        .time_threshold(1.5);
     t
 }
 pub fn start(session: Session, options: ServerOptions) -> Result<ServerHandle> {
