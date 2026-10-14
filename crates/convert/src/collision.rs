@@ -84,6 +84,9 @@ pub fn bake(id: String, brick: &Brick, external: Option<&Shape>) -> Result<Colli
     Ok(body)
 }
 
+/// A convex piece's points and its outward triangles.
+type Piece = (Vec<[f32; 3]>, Vec<[u32; 3]>);
+
 /// Whether `vertices` span a volume: four points not on one plane.
 fn has_volume(vertices: &[[f32; 3]]) -> bool {
     let points: Vec<Vec3> = vertices.iter().copied().map(Vec3::from).collect();
@@ -109,13 +112,10 @@ fn has_volume(vertices: &[[f32; 3]]) -> bool {
 /// into parts, and each piece is the convex hull of the authored surface
 /// inside one part, so no piece reaches across the hollow. Pieces without
 /// volume are dropped.
-fn decompose(vertices: &[[f32; 3]], triangles: &[[u32; 3]]) -> Vec<(Vec<[f32; 3]>, Vec<[u32; 3]>)> {
+fn decompose(vertices: &[[f32; 3]], triangles: &[[u32; 3]]) -> Vec<Piece> {
     use parry3d::{
         math::Vector,
-        transformation::{
-            convex_hull,
-            vhacd::{VHACD, VHACDParameters},
-        },
+        transformation::vhacd::{VHACD, VHACDParameters},
     };
     let points: Vec<Vector> = vertices
         .iter()
@@ -131,17 +131,54 @@ fn decompose(vertices: &[[f32; 3]], triangles: &[[u32; 3]]) -> Vec<(Vec<[f32; 3]
     VHACD::decompose(&params, &points, triangles, true)
         .compute_exact_convex_hulls(&points, triangles)
         .into_iter()
-        // The hull of each part's points, made again: V-HACD's own faces
-        // are not always a closed convex surface.
-        .map(|(part, _)| convex_hull(&part))
-        .map(|(hull, triangles)| {
-            (
-                hull.iter().map(|p| [p.x, p.y, p.z]).collect::<Vec<_>>(),
-                triangles,
-            )
-        })
-        .filter(|(points, triangles)| !triangles.is_empty() && has_volume(points))
+        // The hull of each part's points, made again: V-HACD's faces, and
+        // a float hull of a thin part, are not always convex.
+        .filter_map(|(part, _)| hull(&part.iter().map(|p| [p.x, p.y, p.z]).collect::<Vec<_>>()))
         .collect()
+}
+
+/// The convex hull of a few points, exactly: every triangle of them with
+/// no point beyond its plane (in f64, within a tolerance of the points'
+/// extent), facing out. `None` for more than 96 points or no volume.
+fn hull(points: &[[f32; 3]]) -> Option<Piece> {
+    let mut unique: Vec<[f32; 3]> = vec![];
+    for p in points {
+        if !unique.contains(p) {
+            unique.push(*p);
+        }
+    }
+    if unique.len() > 96 || !has_volume(&unique) {
+        return None;
+    }
+    let v: Vec<glam::DVec3> = unique.iter().map(|p| Vec3::from(*p).as_dvec3()).collect();
+    let (lo, hi) = v
+        .iter()
+        .fold((v[0], v[0]), |(lo, hi), p| (lo.min(*p), hi.max(*p)));
+    let eps = (hi - lo).max_element() * 1e-6;
+    let mut triangles = vec![];
+    for i in 0..v.len() {
+        for j in i + 1..v.len() {
+            for k in j + 1..v.len() {
+                let normal = (v[j] - v[i]).cross(v[k] - v[i]);
+                if normal.length() <= eps * eps {
+                    continue;
+                }
+                let normal = normal.normalize();
+                let (mut below, mut above) = (false, false);
+                for p in &v {
+                    let d = normal.dot(*p - v[i]);
+                    below |= d < -eps;
+                    above |= d > eps;
+                }
+                match (below, above) {
+                    (true, false) => triangles.push([i as u32, j as u32, k as u32]),
+                    (false, true) => triangles.push([i as u32, k as u32, j as u32]),
+                    _ => {}
+                }
+            }
+        }
+    }
+    (!triangles.is_empty()).then_some((unique, triangles))
 }
 
 /// A convex hull would silently fill a concavity. Reject authored faces with

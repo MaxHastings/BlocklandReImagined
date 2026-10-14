@@ -36,6 +36,15 @@ prints themselves and the bricks' collision.
   `brick_modter_4xpackz` declares the twelve bricks under Baseplates, as v20
   loads them without that Add-On; the importer no longer reports the
   replaced declarations as refused or duplicated.
+- **Concave collision** (Max: "of course mod ter goes in", so all of it).
+  `collision::bake` refused an authored collision piece that is not convex.
+  It now splits such a piece with V-HACD (parry3d, already in the lockfile
+  through rapier) and makes each part the exact convex hull of the authored
+  points in it, so an inside corner stays open instead of being filled by
+  one hull (Torque's own convex collision would have filled it). Pieces
+  with no volume (flat leftovers in 4x CornerD Inv.) are dropped. Convex
+  pieces are unchanged, so stock bricks bake as before. This applies to
+  every brick with concave authored collision, Add-On or stock.
 
 ## Default list
 
@@ -49,13 +58,15 @@ must be rebuilt and uploaded (`python tools/addon_bundle.py upload --search
 ## Evidence
 
 Imported with the branch's `bri-import-addon` against the main content and
-the v20 reference: all six "converted"; 316 of 322 ModTer bricks placeable.
-Left out: `4x CornerD` and `4x CornerD Inv.` (4xPack and 4xPackZ: one concave
-collision piece, one empty piece) and siba's two streetlights (concave
-collision), which `collision::bake` refuses rather than hull.
+the v20 reference: all six "converted", all 322 ModTer bricks placeable
+(316 before the concave split; 4x CornerD now bakes to 25 convex pieces,
+siba's streetlights to 20 and 42). `bri-client --check` on a hard-linked
+copy of the content with the six installed: 963 -> 1285 brick definitions,
+Add-On health clean. An offscreen render (a local probe test, not
+committed) drew the ModTer prints tiled across 4x and 16x shapes and tinted
+by paint, and the print selector's ModTer tab listed 22 prints with icons.
 
 ## Next
 
 - Rebuild and upload the Add-On bundle with the six copies.
-- Decide whether concave Add-On collision should hull per mesh, as Torque's
-  convex collision did, to bring back the six left-out bricks.
+- Maxwell's playtest of the ModTer slopes and corners (walking up them).
