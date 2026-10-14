@@ -60,9 +60,13 @@ fn a_print_add_on_imports_its_prints_under_its_aspect() {
     );
 
     // The game adds it after its own prints; a save's `Turf/Grass` finds it.
+    let surfaces: serde_json::Map<_, _> = bri_content::brick_materials::SURFACES
+        .map(|s| (s.to_string(), image(&format!("{s}.png"))))
+        .into_iter()
+        .collect();
     let base: Bundle = serde_json::from_value(serde_json::json!({
         "schema_version": 1,
-        "surfaces": ["top", "side", "bottom_edge", "bottom_loop", "ramp"].map(|s| (s.to_string(), image(&format!("{s}.png")))).into_iter().collect::<serde_json::Map<_, _>>(),
+        "surfaces": surfaces,
         "prints": [], "packages": [], "evidence": [],
         "excluded_installed_packages": [], "warnings": []
     }))
