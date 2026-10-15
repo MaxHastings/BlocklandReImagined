@@ -684,7 +684,12 @@ go (and `"tick"` while they stay, with `"ticks": true`). A zone with
 `"objects": true` also notices every vehicle (any loose physics body: a
 golf ball reaching its cup, a crate pushed onto a plate, a car crossing a
 line) whose box meets it, calling `on_zone_object(object, brick, event)`
-with the object's reference and the same events.
+with the object's reference and the same events. Builders get the same
+without code from the wrench: a brick with an `onObjectEnter`,
+`onObjectLeave` or `onObjectStay` row is a detection region that notices
+vehicles from their own spawn bricks (see the Rule Workshop's
+`PLAYTEST.md`). Zones are for an Add-On's own objects and zones it
+declares itself.
 `set_zone_period(zone, ms)` (`minigame`) changes how often zone `zone` (its
 index in `zones`) is checked, as a script setting the trigger datablock's
 `tickPeriodMS` did.
