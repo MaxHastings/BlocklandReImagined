@@ -192,6 +192,7 @@ struct SpinClock {
 }
 #[derive(Clone)]
 struct MountedPose {
+    first_person: bool,
     image: String,
     model: String,
     transform: Mat4,
@@ -647,6 +648,7 @@ impl WorldItems {
             self.mounted.insert(
                 (owner, hand),
                 MountedPose {
+                    first_person: local_first,
                     image: image_id.clone(),
                     model: image.model.clone(),
                     transform,
@@ -1289,6 +1291,21 @@ impl WorldItems {
             mounted.pose.sequence.as_deref(),
             f32::from_bits(mounted.pose.seconds),
         )?;
+        let node = if mounted.first_person {
+            self.assets
+                .presentation
+                .images
+                .get(image)
+                .and_then(|image| {
+                    image
+                        .first_person_nodes
+                        .iter()
+                        .find(|(logical, _)| logical.eq_ignore_ascii_case(node))
+                })
+                .map_or(node, |(_, actual)| actual.as_str())
+        } else {
+            node
+        };
         self.assets
             .node_transform(&mounted.model, &pose, mounted.transform, node)
     }
@@ -1404,7 +1421,8 @@ impl WorldItems {
         }
         Some(bri_fx_runtime::SourceTransform {
             position: transform.w_axis.truncate(),
-            rotation: Quat::from_rotation_arc(Vec3::Y, direction),
+            rotation: transform.to_scale_rotation_translation().1
+                * Quat::from_rotation_arc(Vec3::Y, Vec3::NEG_Z),
             velocity: mounted.velocity,
         })
     }

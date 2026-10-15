@@ -48,6 +48,7 @@ pub struct VehicleAssets {
     /// Each definition's place in `pack.definitions`, by id.
     index: std::collections::HashMap<String, usize>,
     models: BTreeMap<String, Model>,
+    weapon_nodes: BTreeMap<String, BTreeMap<String, Mat4>>,
     /// Gunner models with a `look` clip (tank turret, pirate cannon), keyed
     /// by the model's asset path.
     looks: BTreeMap<String, LookRig>,
@@ -228,6 +229,7 @@ impl VehicleAssets {
             .map(|d| d.attachment_model.clone().unwrap_or(d.model.clone()))
             .collect();
         let mut models = BTreeMap::new();
+        let mut weapon_nodes = BTreeMap::new();
         let mut lamps: BTreeMap<String, Vec<(Vec3, [f32; 3], f32)>> = BTreeMap::new();
         let mut looks = BTreeMap::new();
         let mut threads = BTreeMap::new();
@@ -251,6 +253,18 @@ impl VehicleAssets {
                     continue;
                 }
             };
+            if gunner_models.contains(&asset.path) {
+                let rest = bri_content::animation::sample(&shape, None, 0.0)?;
+                weapon_nodes.insert(
+                    asset.path.clone(),
+                    shape
+                        .nodes
+                        .iter()
+                        .enumerate()
+                        .map(|(i, node)| (node.name.to_ascii_lowercase(), rest.nodes[i]))
+                        .collect(),
+                );
+            }
             let folder = asset
                 .virtual_path
                 .rsplit_once('/')
@@ -475,6 +489,7 @@ impl VehicleAssets {
             pack,
             index,
             models,
+            weapon_nodes,
             looks,
             threads,
             sources,
@@ -604,6 +619,27 @@ pub fn wheel_transform(wheel: &Wheel, suspension: f32, spin: f32, steering: f32)
         * Mat4::from_rotation_y(-wheel.steer_angle(steering))
         * Mat4::from_rotation_x(-spin)
         * Mat4::from_quat(Quat::from_array(wheel.model_rotation))
+}
+
+/// Models without a barrel look clip aim the complete attachment. Models
+/// with one keep their fixed base level and pose the barrel separately.
+fn weapon_attachment(
+    d: &Definition,
+    frame: &VehicleFrame,
+    has_look: bool,
+    sway: Option<Quat>,
+) -> Option<Mat4> {
+    let mount = d.attachment_mount.as_ref()?;
+    let mut local = to_transform(Vec3::from(mount.position), Quat::from_array(mount.rotation))
+        * Mat4::from_rotation_y(frame.turret_aim[0]);
+    if !has_look {
+        local *=
+            Mat4::from_rotation_x(frame.turret_aim[1].clamped(d.look_pitch[0], d.look_pitch[1]));
+    }
+    if let Some(sway) = sway {
+        local *= Mat4::from_quat(sway);
+    }
+    Some(local)
 }
 
 fn to_transform(position: Vec3, rotation: Quat) -> Mat4 {
@@ -890,6 +926,42 @@ impl ClientVehicles {
         };
         frame.turret_aim = [yaw, look_pitch.clamped(d.look_pitch[0], d.look_pitch[1])];
     }
+    /// An attachment socket follows the same yaw, pitch and sway as its geometry.
+    pub fn weapon_node(
+        &self,
+        assets: &VehicleAssets,
+        info: &VehicleInfo,
+        node: &str,
+    ) -> Option<Mat4> {
+        let d = assets.definition(&info.definition)?;
+        let frame = self.frame(info.id)?;
+        let model = d.attachment_model.as_ref()?;
+        let local_node = if let Some(rig) = assets.looks.get(model) {
+            let pose = bri_content::animation::sample(
+                &rig.shape,
+                Some(&rig.clip),
+                bri_vehicles::muzzle::look_phase(frame.turret_aim[1]) * rig.clip.duration,
+            )
+            .ok()?;
+            let index = rig
+                .shape
+                .nodes
+                .iter()
+                .position(|n| n.name.eq_ignore_ascii_case(node))?;
+            pose.nodes[index]
+        } else {
+            *assets
+                .weapon_nodes
+                .get(model)?
+                .get(&node.to_ascii_lowercase())?
+        };
+        let sway = self.sways.get(&info.id).map(|spring| spring.rotation());
+        Some(
+            to_transform(frame.position, frame.rotation)
+                * weapon_attachment(d, frame, assets.looks.contains_key(model), sway)?
+                * local_node,
+        )
+    }
     /// World transform of a seat node (players' feet ride there).
     pub fn seat(
         &self,
@@ -1058,17 +1130,18 @@ impl ClientVehicles {
                 push(&wheel.model, body * local, [1.0; 4]);
             }
             // A broken turret flew off as its explosion's debris.
-            if let (Some(model), Some(mount)) = (&d.attachment_model, &d.attachment_mount)
+            if let (Some(model), Some(_mount)) = (&d.attachment_model, &d.attachment_mount)
                 && !info.turret_broken
             {
-                let mut local =
-                    to_transform(Vec3::from(mount.position), Quat::from_array(mount.rotation))
-                        * Mat4::from_rotation_y(frame.turret_aim[0]);
-                if let Some(sway) = &d.turret_sway {
+                let sway = if let Some(sway) = &d.turret_sway {
                     let spring = self.sways.entry(*id).or_default();
                     spring.step(sway, self.clock / TICK_RATE, frame.velocity, frame.rotation);
-                    local *= Mat4::from_quat(spring.rotation());
-                }
+                    Some(spring.rotation())
+                } else {
+                    None
+                };
+                let local = weapon_attachment(d, frame, looks.contains_key(model), sway)
+                    .expect("attachment mount present");
                 push(model, body * local, tint);
             }
         }

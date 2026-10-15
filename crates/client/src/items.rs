@@ -60,6 +60,8 @@ pub struct ImagePresentation {
     pub mount_point: u32,
     pub offset: [f32; 3],
     pub eye_offset: [f32; 3],
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub first_person_nodes: BTreeMap<String, String>,
     pub source_rotation_degrees: [f32; 3],
     pub eye_rotation_degrees: [f32; 3],
     pub tint: [f32; 4],
@@ -1598,6 +1600,7 @@ fn present_gaps(
                 mount_point: image.mount_point,
                 offset: image.offset,
                 eye_offset: image.eye_offset,
+                first_person_nodes: image.first_person_nodes.clone(),
                 source_rotation_degrees: image.source_rotation_degrees,
                 eye_rotation_degrees: image.eye_rotation,
                 // As the stock importer does: the colour shows only when
@@ -2469,6 +2472,7 @@ mod add_on_icon_tests {
                 mount_point: 0,
                 offset: [0.; 3],
                 eye_offset: [0.; 3],
+                first_person_nodes: BTreeMap::new(),
                 source_rotation_degrees: [0.; 3],
                 eye_rotation_degrees: [0.; 3],
                 tint: [0.2, 0.4, 0.6, 1.],
@@ -3349,6 +3353,7 @@ mod placement_tests {
             mount_point: 0,
             offset: [0.1, -0.2, 0.05],
             eye_offset,
+            first_person_nodes: BTreeMap::new(),
             source_rotation_degrees: [0., 90., 0.],
             eye_rotation_degrees: eye_rotation,
             tint: [1.; 4],

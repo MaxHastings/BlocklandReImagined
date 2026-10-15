@@ -725,6 +725,9 @@ pub struct Image {
     pub mount_point: u32,
     pub offset: [f32; 3],
     pub eye_offset: [f32; 3],
+    /// Logical attachment name to authored node for the local first-person model.
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub first_person_nodes: BTreeMap<String, String>,
     /// Euler XYZ degrees in the original Z-up frame, explicitly transformed by presentation.
     pub source_rotation_degrees: [f32; 3],
     pub correct_muzzle: bool,
@@ -3084,6 +3087,18 @@ impl Pack {
             );
         }
         for (id, image) in &self.images {
+            ensure!(
+                image.first_person_nodes.len() <= 16
+                    && image
+                        .first_person_nodes
+                        .iter()
+                        .all(|(from, to)| !from.is_empty()
+                            && !to.is_empty()
+                            && from.len() <= 128
+                            && to.len() <= 128
+                            && !from.chars().chain(to.chars()).any(char::is_control)),
+                "Invalid first-person attachment map of image {id}"
+            );
             ensure!(
                 image.shell_effect.len() <= 160
                     && !image.shell_effect.chars().any(char::is_control),

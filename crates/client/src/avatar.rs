@@ -794,6 +794,7 @@ impl AvatarAssets {
             animated_nodes: Vec::new(),
             node_bounds: None,
             unacted_nodes: Vec::new(),
+            tool_only_actions: [None; 2],
             wants_unacted: true,
             model_transform: Mat4::IDENTITY,
             kind: BodyKind::default(),
@@ -838,6 +839,8 @@ pub struct AvatarMesh {
     /// `posed_nodes` without the thread-2/3 action layers, while one plays;
     /// empty otherwise (`mount_action`).
     unacted_nodes: Vec<Mat4>,
+    /// Reference tool motion for bodies without that action; never deforms the body.
+    tool_only_actions: [Option<Mat4>; 2],
     /// Sample `unacted_nodes` while an action plays. Only a first-person
     /// image reads them, so the game asks for them for the player's own
     /// body alone: a second skeleton sample per acting body otherwise.
@@ -1813,7 +1816,17 @@ impl AvatarMesh {
             Some(aim) => Mat4::from_rotation_translation(aim, node.w_axis.truncate()),
             None => node * self.hand_turn(n),
         };
-        Some(self.model_transform * hand * Mat4::from_translation(offset))
+        Some(
+            self.model_transform
+                * hand
+                * Mat4::from_translation(offset)
+                * self
+                    .tool_only_actions
+                    .get(n)
+                    .copied()
+                    .flatten()
+                    .unwrap_or(Mat4::IDENTITY),
+        )
     }
     /// A fitted body's hand `n` while it holds something up: how it turns
     /// in the body's frame, along the aim ([`bri_content::hold::Raise::aim`]).
@@ -1863,7 +1876,13 @@ impl AvatarMesh {
             Some(socket) if socket.node.is_none() && aim_pitch.is_finite() => Some(
                 self.seated_frame()
                     * Mat4::from_translation(Vec3::from(socket.offset))
-                    * Mat4::from_rotation_x(aim_pitch),
+                    * Mat4::from_rotation_x(aim_pitch)
+                    * self
+                        .tool_only_actions
+                        .get(n)
+                        .copied()
+                        .flatten()
+                        .unwrap_or(Mat4::IDENTITY),
             ),
             _ => self.mount_node(assets, n),
         }
@@ -1873,6 +1892,9 @@ impl AvatarMesh {
     /// pose (locomotion, armReady, look) is left out. None while no action
     /// moves it. A first-person image rides this on its eye offset.
     pub fn mount_action(&self, assets: &AvatarAssets, n: usize) -> Option<Mat4> {
+        if let Some(action) = self.tool_only_actions.get(n).copied().flatten() {
+            return Some(action);
+        }
         let index = self.mount_index(assets, n)?;
         let rest = *self.unacted_nodes.get(index)? * self.hand_turn(n);
         let moved = rest.inverse() * *self.posed_nodes.get(index)? * self.hand_turn(n);
@@ -1987,9 +2009,11 @@ impl AvatarMesh {
         time: f64,
         animation_input: &AvatarAnimationInput,
     ) -> Result<()> {
+        let reference_assets = assets;
         let assets = assets.for_mesh(self);
         let roles = self.roles(assets);
         self.skipped.clear();
+        self.tool_only_actions = [None; 2];
         // A role's clip, played reversed when it stands in for walking
         // back; `None` leaves the layer out.
         let role = |role: Role| -> Option<(&bri_content::shape::Animation, bool)> {
@@ -2221,6 +2245,40 @@ impl AvatarMesh {
                     time: at,
                     weight: 1.0,
                 });
+            }
+        }
+        // A foreign body need not borrow a punch/throw to use a stock tool.
+        // Sample only the reference tool action's socket displacement, keeping
+        // every vertex and bone of the foreign body on its own animation.
+        if animation_input.held_tool_pose != HeldToolPose::None
+            && let Some(action) = &animation_input.action
+            && Role::from_blockhead_clip(&action.sequence).is_none()
+            && named(&action.sequence).is_none()
+            && let Some(clip) = reference_assets.rig.sequence(&action.sequence)
+        {
+            let mut base = Vec::new();
+            if let Some(ready) = reference_assets.rig.sequence("armreadyright") {
+                base.push(Layer {
+                    animation: ready,
+                    time: ready.duration,
+                    weight: 1.0,
+                });
+            }
+            let rest = bri_content::animation::sample_layers(&reference_assets.rig.shape, &base)?;
+            base.push(Layer {
+                animation: clip,
+                time: (time - action.started_at).max(0.0) as f32,
+                weight: 1.0,
+            });
+            base.sort_by_key(|layer| (layer.animation.additive, layer.animation.priority));
+            let moved = bri_content::animation::sample_layers(&reference_assets.rig.shape, &base)?;
+            for (hand, index) in reference_assets.mount_nodes.iter().take(2).enumerate() {
+                if let Some(index) = index {
+                    let delta = rest.nodes[*index].inverse() * moved.nodes[*index];
+                    if delta.is_finite() && !delta.abs_diff_eq(Mat4::IDENTITY, 1e-6) {
+                        self.tool_only_actions[hand] = Some(delta);
+                    }
+                }
             }
         }
         // Absolute clips establish the base pose before additive deltas. The

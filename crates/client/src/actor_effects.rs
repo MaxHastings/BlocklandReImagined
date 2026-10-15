@@ -1481,6 +1481,7 @@ fn teleport_image() -> bri_weapons::Image {
     let ticks = |seconds: f32| (seconds * bri_weapons::TICK_HZ as f32).round() as u32;
     bri_weapons::Image {
         shell_effect: String::new(),
+        first_person_nodes: BTreeMap::new(),
         id: bri_weapons::native_id("image", "PlayerTeleportImage"),
         name: "PlayerTeleportImage".into(),
         model: "base/data/shapes/empty.dts".into(),

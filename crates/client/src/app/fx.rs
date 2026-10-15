@@ -1,6 +1,7 @@
 //! Weapon, actor and world effects fed by the session's cues.
 use super::*;
 use bri_console::Clamp;
+use glam::{Mat4, Quat};
 
 /// How far past a blast's radius a knocked-out brick's centre may lie: the
 /// blast reaches the brick's box, not its centre.
@@ -346,12 +347,17 @@ impl App {
                 let info = view.vehicles.get(&vehicle)?;
                 let definition = vehicle_assets.definition(&info.definition)?;
                 let frame = vehicles.frame(vehicle)?;
-                crate::actor_effects::muzzle(
-                    frame.position,
-                    frame.rotation,
-                    frame.turret_aim,
-                    definition,
-                )
+                vehicles
+                    .weapon_node(vehicle_assets, info, "muzzlePoint")
+                    .map(|at| at * Mat4::from_quat(Quat::from_rotation_arc(Vec3::Y, Vec3::NEG_Z)))
+                    .or_else(|| {
+                        crate::actor_effects::muzzle(
+                            frame.position,
+                            frame.rotation,
+                            frame.turret_aim,
+                            definition,
+                        )
+                    })
             }
         };
         // `serverCmdLight` attaches `PlayerLight` to the player; v20's
@@ -423,7 +429,15 @@ impl App {
         // Casings a vehicle's gun threw leave from where it fires, carried
         // on with the vehicle.
         for ejected in actor_effects.take_ejected() {
-            let Some(at) = pose(ejected.anchor) else {
+            let socket = match ejected.anchor {
+                crate::actor_effects::Anchor::Muzzle { vehicle } => view
+                    .vehicles
+                    .get(&vehicle)
+                    .and_then(|info| vehicles.weapon_node(vehicle_assets, info, "ejectPoint"))
+                    .map(|at| at * Mat4::from_quat(Quat::from_rotation_arc(Vec3::Y, Vec3::NEG_Z))),
+                _ => None,
+            };
+            let Some(at) = socket.or_else(|| pose(ejected.anchor)) else {
                 continue;
             };
             let carried = match ejected.anchor {
