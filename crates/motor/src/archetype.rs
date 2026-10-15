@@ -109,6 +109,10 @@ pub struct Sounds {
     /// so they cost nothing on the wire.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub footsteps: Vec<String>,
+    /// Footfalls by the surface kind underfoot (`bri_content::surface`),
+    /// in place of `footsteps` on that kind.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub surfaces: std::collections::BTreeMap<String, Vec<String>>,
     /// Ground covered between two footfalls, in units at scale 1. None
     /// steps once per 1.1 standing heights, a stride most bodies take.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -123,6 +127,8 @@ impl Sounds {
     pub const MAX_NAME: usize = 128;
     /// Most footstep variants.
     pub const MAX_FOOTSTEPS: usize = 8;
+    /// Most surface kinds with their own footfalls.
+    pub const MAX_SURFACES: usize = 16;
     /// The falling speed (units/s) a landing must reach to be heard.
     pub const LAND_SPEED: f32 = 4.0;
     pub fn is_standard(&self) -> bool {
@@ -136,11 +142,23 @@ impl Sounds {
             .all(|s| s.len() <= Self::MAX_NAME && !s.chars().any(char::is_control))
             && self.footsteps.len() <= Self::MAX_FOOTSTEPS
             && self.footsteps.iter().all(|s| !s.is_empty())
+            && self.surfaces.len() <= Self::MAX_SURFACES
+            && self.surfaces.iter().all(|(kind, ids)| {
+                bri_content::surface::valid_name(kind)
+                    && (1..=Self::MAX_FOOTSTEPS).contains(&ids.len())
+                    && ids
+                        .iter()
+                        .all(|s| s.len() <= Self::MAX_NAME && !s.chars().any(char::is_control))
+            })
             && self
                 .stride
                 .is_none_or(|s| s.is_finite() && (0.25..=32.0).contains(&s))
     }
     /// Ground between footfalls for a body `stand_height` tall at `scale`.
+    /// The footfalls on surface `kind`.
+    pub fn footsteps_on(&self, kind: &str) -> &[String] {
+        self.surfaces.get(kind).unwrap_or(&self.footsteps)
+    }
     pub fn stride_for(&self, stand_height: f32, scale: f32) -> f32 {
         self.stride.unwrap_or(stand_height * 1.1) * scale
     }

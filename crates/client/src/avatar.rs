@@ -1121,6 +1121,10 @@ pub struct AvatarAnimationInput {
     /// A seated rider's full mount rotation, in place of the upright yaw,
     /// so they sit flush with a tilted seat.
     pub mount_rotation: Option<Quat>,
+    /// A seated gunner's aim across the gun's pitch range, 0 highest to 1
+    /// lowest: the body's `seat_aim` clip holds there in place of `look`,
+    /// so the whole seated pose bends with the gun.
+    pub seat_aim: Option<f32>,
     /// Where a seated rider's right and left hands hold on, in the world
     /// (a seat's `hands`): each arm reaches its hand there after the clip
     /// pose ([`reach_hands`]).
@@ -2242,7 +2246,17 @@ impl AvatarMesh {
                 weight: 1.0,
             });
         }
-        if let Some((look, _)) = role(Role::Look) {
+        let seat_aim = animation_input
+            .seat_aim
+            .filter(|a| a.is_finite())
+            .zip(role(Role::SeatAim));
+        if let Some((aim, (clip, _))) = seat_aim {
+            overlays.push(Layer {
+                animation: clip,
+                time: aim.clamped(0.0, 1.0) * clip.duration,
+                weight: 1.0,
+            });
+        } else if let Some((look, _)) = role(Role::Look) {
             overlays.push(Layer {
                 animation: look,
                 time: look_position(player.pitch, animation_input.look_limits) * look.duration,

@@ -26,9 +26,10 @@ const MIN_BACK_OFF_SHARE: f32 = 0.05;
 ///
 /// `position`/`rotation` is the vehicle, `bounds_center` its shape box
 /// center in vehicle space, and `pos` how far the view has slid out to
-/// third person. `free_look` is the head's turn while Free Look is held: only
-/// then does v20 build the camera from the rider's head, turned by it and
-/// pitched by `cameraTilt`, before levelling it. `solid` casts a ray from the
+/// third person. `head` is the driver's head turn and pitch on the vehicle:
+/// v20 builds the camera from the rider's head, turned by it and pitched by
+/// `cameraTilt`, before levelling it, so only the turn counts. A camera with
+/// an `orbit` swings round by both instead ([`orbit_view`]). `solid` casts a ray from the
 /// first point to the second against terrain, interiors and colliding bricks
 /// (mask 0x300000c), returning the hit's distance and surface normal.
 #[allow(clippy::too_many_arguments)]
@@ -37,7 +38,7 @@ pub fn driver_view(
     rotation: Quat,
     bounds_center: Vec3,
     camera: &bri_vehicles::schema::VehicleCamera,
-    free_look: Option<f32>,
+    head: Option<(f32, f32)>,
     pos: f32,
     solid: impl FnOnce(Vec3, Vec3) -> Result<Option<(f32, Vec3)>>,
 ) -> Result<(Vec3, f32, f32)> {
@@ -52,7 +53,19 @@ pub fn driver_view(
             && pos.is_finite(),
         "Invalid vehicle camera"
     );
-    let local = match free_look {
+    if let Some(orbit) = &camera.orbit {
+        return orbit_view(
+            position,
+            rotation,
+            bounds_center,
+            camera.max_dist,
+            orbit,
+            head.unwrap_or_default(),
+            pos,
+            solid,
+        );
+    }
+    let local = match head.map(|(yaw, _)| yaw) {
         Some(yaw) => {
             let pitch = -camera.tilt;
             Vec3::new(
@@ -84,13 +97,58 @@ pub fn driver_view(
         look.y.clamped(-1.0, 1.0).asin(),
     );
     let start = center + Vec3::Y * RAY_LIFT;
+    Ok((boom(start, end, solid)?, yaw, pitch))
+}
+
+/// The free-orbit camera ([`bri_vehicles::schema::CameraOrbit`]): `head`
+/// (yaw, pitch) on the vehicle turns it round the pivot over the box center,
+/// heading and pitch both levelled, so the vehicle tipping never swings it.
+/// Looking down by the head's pitch raises it by as much, within the orbit's
+/// range; it looks at the pivot.
+#[allow(clippy::too_many_arguments)]
+pub fn orbit_view(
+    position: Vec3,
+    rotation: Quat,
+    bounds_center: Vec3,
+    max_dist: f32,
+    orbit: &bri_vehicles::schema::CameraOrbit,
+    head: (f32, f32),
+    pos: f32,
+    solid: impl FnOnce(Vec3, Vec3) -> Result<Option<(f32, Vec3)>>,
+) -> Result<(Vec3, f32, f32)> {
+    let (low, high) = orbit.pitch_range();
+    ensure!(
+        head.0.is_finite() && head.1.is_finite() && low.is_finite() && high.is_finite(),
+        "Invalid vehicle orbit"
+    );
+    let forward = rotation * Quat::from_rotation_y(-head.0) * Vec3::NEG_Z;
+    let up = rotation * Vec3::Y;
+    let heading = Vec3::new(forward.x, 0.0, forward.z)
+        .try_normalize()
+        .or_else(|| Vec3::new(-up.x, 0.0, -up.z).try_normalize())
+        .unwrap_or(Vec3::NEG_Z);
+    let elevation = (-head.1).clamped(low, high.max(low));
+    let pivot = position + rotation * bounds_center + Vec3::Y * orbit.height;
+    let away = -heading * elevation.cos() + Vec3::Y * elevation.sin();
+    let end = pivot + away * (max_dist * pos.clamped(0.0, 1.0));
+    let yaw = heading.x.atan2(-heading.z);
+    Ok((boom(pivot, end, solid)?, yaw, -elevation))
+}
+
+/// The camera at `end` on a boom from `start`, pulled in by whatever
+/// `solid` finds between and eased in by a wall just past it.
+fn boom(
+    start: Vec3,
+    end: Vec3,
+    solid: impl FnOnce(Vec3, Vec3) -> Result<Option<(f32, Vec3)>>,
+) -> Result<Vec3> {
     let reach = end - start;
     let length = reach.length();
     if length < 0.001 {
-        return Ok((end, yaw, pitch));
+        return Ok(end);
     }
     let direction = reach / length;
-    let eye = match solid(start, start + reach * RAY_REACH)? {
+    Ok(match solid(start, start + reach * RAY_REACH)? {
         Some((distance, normal)) => {
             let back_off =
                 -direction * (1.0 + normal.dot(direction)).max(MIN_BACK_OFF_SHARE) * BACK_OFF;
@@ -104,8 +162,7 @@ pub fn driver_view(
             }
         }
         None => end,
-    };
-    Ok((eye, yaw, pitch))
+    })
 }
 
 /// Where the rider controlling a player-type mount (horse, rowboat, cannon)
@@ -149,6 +206,7 @@ mod tests {
             tilt: 0.4,
             lag: 0.0,
             decay: 0.75,
+            orbit: None,
         }
     }
     fn open(_: Vec3, _: Vec3) -> Result<Option<(f32, Vec3)>> {
@@ -206,7 +264,7 @@ mod tests {
             Quat::IDENTITY,
             Vec3::ZERO,
             &jeep(),
-            Some(FRAC_PI_2),
+            Some((FRAC_PI_2, 0.0)),
             1.0,
             open,
         )
@@ -310,6 +368,152 @@ mod tests {
             eye.distance(end - direction * 0.05 * 0.8 * 0.5) < 1e-4,
             "{eye}"
         );
+    }
+
+    fn orbiting() -> bri_vehicles::schema::VehicleCamera {
+        bri_vehicles::schema::VehicleCamera {
+            orbit: Some(bri_vehicles::schema::CameraOrbit {
+                min_pitch: -10.0,
+                max_pitch: 80.0,
+                height: 1.0,
+                lag: 0.0,
+            }),
+            ..jeep()
+        }
+    }
+
+    #[test]
+    fn an_orbiting_camera_swings_round_and_over_with_the_drivers_look() {
+        let at = Vec3::new(0.0, 2.0, 0.0);
+        let pivot = at + Vec3::Y;
+        // Level, looking ahead: straight behind the pivot at its height.
+        let (eye, yaw, pitch) = driver_view(
+            at,
+            Quat::IDENTITY,
+            Vec3::ZERO,
+            &orbiting(),
+            Some((0.0, 0.0)),
+            1.0,
+            open,
+        )
+        .unwrap();
+        assert!(
+            eye.distance(pivot + Vec3::new(0.0, 0.0, 13.0)) < 1e-4,
+            "{eye}"
+        );
+        assert!(yaw.abs() < 1e-6 && pitch.abs() < 1e-6);
+        // Turned right a quarter: behind to the left, facing +X.
+        let (eye, yaw, _) = driver_view(
+            at,
+            Quat::IDENTITY,
+            Vec3::ZERO,
+            &orbiting(),
+            Some((FRAC_PI_2, 0.0)),
+            1.0,
+            open,
+        )
+        .unwrap();
+        assert!((yaw - FRAC_PI_2).abs() < 1e-5);
+        assert!(
+            eye.distance(pivot + Vec3::new(-13.0, 0.0, 0.0)) < 1e-4,
+            "{eye}"
+        );
+        // Looking down 60 degrees: 60 up over the pivot, looking down at it.
+        let down = 60f32.to_radians();
+        let (eye, _, pitch) = driver_view(
+            at,
+            Quat::IDENTITY,
+            Vec3::ZERO,
+            &orbiting(),
+            Some((0.0, -down)),
+            1.0,
+            open,
+        )
+        .unwrap();
+        let expected = pivot + Vec3::new(0.0, down.sin(), down.cos()) * 13.0;
+        assert!(eye.distance(expected) < 1e-4, "{eye}");
+        assert!((pitch + down).abs() < 1e-5);
+        // The range holds it: no higher than 80, no lower than -10.
+        let (eye, _, pitch) = driver_view(
+            at,
+            Quat::IDENTITY,
+            Vec3::ZERO,
+            &orbiting(),
+            Some((0.0, -1.5)),
+            1.0,
+            open,
+        )
+        .unwrap();
+        assert!((pitch + 80f32.to_radians()).abs() < 1e-5, "{pitch}");
+        assert!((eye.y - (pivot.y + 13.0 * 80f32.to_radians().sin())).abs() < 1e-4);
+        let (_, _, pitch) = driver_view(
+            at,
+            Quat::IDENTITY,
+            Vec3::ZERO,
+            &orbiting(),
+            Some((0.0, 1.5)),
+            1.0,
+            open,
+        )
+        .unwrap();
+        assert!((pitch - 10f32.to_radians()).abs() < 1e-5, "{pitch}");
+    }
+
+    #[test]
+    fn an_orbiting_camera_stays_level_and_out_of_the_ground() {
+        let at = Vec3::new(0.0, 2.0, 0.0);
+        // A vehicle pitched and rolled keeps the orbit level.
+        let (level, ..) = driver_view(
+            at,
+            Quat::IDENTITY,
+            Vec3::ZERO,
+            &orbiting(),
+            Some((0.0, 0.1)),
+            1.0,
+            open,
+        )
+        .unwrap();
+        let (tipped, ..) = driver_view(
+            at,
+            Quat::from_rotation_x(0.4) * Quat::from_rotation_z(0.3),
+            Vec3::ZERO,
+            &orbiting(),
+            Some((0.0, 0.1)),
+            1.0,
+            open,
+        )
+        .unwrap();
+        assert!((tipped.y - level.y).abs() < 1e-4, "{tipped} {level}");
+        // Swung low, a rise at y 1.5 stops it short: the boom runs from
+        // the pivot and the hit pulls the camera in above the ground.
+        let pivot = at + Vec3::Y;
+        let (eye, ..) = driver_view(
+            at,
+            Quat::IDENTITY,
+            Vec3::ZERO,
+            &orbiting(),
+            Some((0.0, 1.5)),
+            1.0,
+            |from: Vec3, to: Vec3| {
+                assert!(from.distance(pivot) < 1e-5);
+                let t = (from.y - 1.5) / (from.y - to.y);
+                Ok((to.y < 1.5).then(|| (from.distance(to) * t, Vec3::Y)))
+            },
+        )
+        .unwrap();
+        assert!(eye.y > 1.5 && eye.z < 13.0 * 0.9, "{eye}");
+        // In first person it sits at the pivot.
+        let (eye, ..) = driver_view(
+            at,
+            Quat::IDENTITY,
+            Vec3::ZERO,
+            &orbiting(),
+            Some((0.7, -0.5)),
+            0.0,
+            open,
+        )
+        .unwrap();
+        assert!(eye.distance(pivot) < 1e-5);
     }
 
     #[test]

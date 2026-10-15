@@ -381,6 +381,9 @@ pub struct Converted {
     /// Material name to PNG bytes.
     pub textures: BTreeMap<String, Vec<u8>>,
     pub report: Report,
+    /// The glTF material each of `shape.materials` was made from, in order
+    /// (None for primitives with none).
+    pub material_sources: Vec<Option<usize>>,
     /// A map's meshes named `water...`, left out of the model: each
     /// becomes a body of water.
     pub waters: Vec<WaterMesh>,
@@ -725,6 +728,7 @@ pub fn convert(
     let mut materials: Vec<Material> = Vec::new();
     let mut textures: BTreeMap<String, Vec<u8>> = BTreeMap::new();
     let mut material_index: BTreeMap<Option<usize>, usize> = BTreeMap::new();
+    let mut material_sources: Vec<Option<usize>> = Vec::new();
     let mut material_names = BTreeSet::new();
     let mut material = |index: Option<usize>, report: &mut Report| -> Result<usize> {
         if let Some(i) = material_index.get(&index) {
@@ -737,6 +741,7 @@ pub fn convert(
         let at = materials.len();
         let name = m.name.clone();
         materials.push(m);
+        material_sources.push(index);
         material_index.insert(index, at);
         // Each surface map is a material of its own, which the surface names.
         for (suffix, png) in maps.named() {
@@ -750,6 +755,7 @@ pub fn convert(
             helper.surface = None;
             textures.insert(helper.name.clone(), png);
             materials.push(helper);
+            material_sources.push(None);
             let k = Some(materials.len() - 1);
             let surface = materials[at]
                 .surface
@@ -1249,6 +1255,7 @@ pub fn convert(
         shape,
         textures,
         report,
+        material_sources,
         waters,
     })
 }

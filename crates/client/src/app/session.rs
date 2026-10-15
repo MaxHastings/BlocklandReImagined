@@ -214,6 +214,7 @@ impl App {
         self.mounts.seat_report = None;
         self.mounts.rider_rotations.clear();
         self.mounts.rider_hands.clear();
+        self.mounts.rider_aims.clear();
         self.mounts.posed_eye = None;
         self.mounts.tumble = None;
         self.view.observer_eye = None;

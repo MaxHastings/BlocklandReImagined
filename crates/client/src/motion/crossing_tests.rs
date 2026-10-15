@@ -566,6 +566,7 @@ fn a_vehicle_driver_camera_uses_portal_cuts_and_keeps_surface_normals() {
         tilt: 0.0,
         lag: 0.0,
         decay: 0.75,
+        orbit: None,
     };
     // The ordinary source-wall ray sees the backing plane. This is the
     // production failure before the driver chooses the clipped camera soup.

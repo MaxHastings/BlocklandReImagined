@@ -1805,6 +1805,10 @@ pub struct ArchetypeSounds {
     /// Footfall sounds, one picked each step (at most 8).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub footsteps: Vec<String>,
+    /// Footfall sounds by the surface kind underfoot (`dirt`, `metal`; a
+    /// map material's `bri_surface`), in place of `footsteps` on that kind.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub surfaces: BTreeMap<String, Vec<String>>,
     /// Ground between footfalls in units (0.25 to 32); none is 1.1 times
     /// the body's standing height.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1890,6 +1894,15 @@ impl ArchetypeDef {
         ensure!(
             self.sounds.footsteps.len() <= 8 && self.sounds.footsteps.iter().all(|s| text(s, 128)),
             "sounds.footsteps names 1 to 8 sound profiles"
+        );
+        ensure!(
+            self.sounds.surfaces.len() <= 16
+                && self.sounds.surfaces.iter().all(|(kind, ids)| {
+                    bri_content::surface::valid_name(kind)
+                        && (1..=8).contains(&ids.len())
+                        && ids.iter().all(|s| text(s, 128))
+                }),
+            "sounds.surfaces names up to 16 surface kinds, each with 1 to 8 sound profiles"
         );
         ensure!(
             self.sounds

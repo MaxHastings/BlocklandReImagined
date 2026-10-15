@@ -181,6 +181,10 @@ pub struct Building {
     outline: Option<bri_sim::blueprint::Outline>,
     ghost_generation: u64,
     map: PhysicsWorld,
+    /// Each map collider's place in the map's collider list.
+    map_colliders: std::collections::HashMap<rapier3d::prelude::ColliderHandle, usize>,
+    /// What the map's triangles are made of (`NativeMap::surfaces`).
+    surfaces: bri_sim::map::MapSurfaces,
     /// See [`Self::map_generation`].
     map_generation: u64,
     broken: bri_sim::prediction::BrokenShapes,
@@ -200,10 +204,11 @@ pub struct Building {
 impl Building {
     pub fn new(definitions: Definitions, map_colliders: Vec<ColliderBuilder>) -> Result<Self> {
         let mut map = PhysicsWorld::new();
-        let handles = map_colliders
+        let handles: Vec<_> = map_colliders
             .into_iter()
             .map(|collider| map.insert_collider(two_sided(collider), None))
             .collect();
+        let map_colliders = handles.iter().enumerate().map(|(i, h)| (*h, i)).collect();
         bri_physics::detect_collisions(&mut map);
         Ok(Self {
             archetypes: Default::default(),
@@ -248,6 +253,8 @@ impl Building {
             ghost_generation: 0,
             map,
             broken: bri_sim::prediction::BrokenShapes::new(handles, &[]),
+            map_colliders,
+            surfaces: Default::default(),
             terrain: Vec::new(),
             bricks: Default::default(),
             index: Index::default(),
@@ -259,6 +266,55 @@ impl Building {
         })
     }
 
+    /// What the map's colliders are made of (`NativeMap::surfaces`).
+    pub fn set_map_surfaces(&mut self, surfaces: bri_sim::map::MapSurfaces) {
+        self.surfaces = surfaces;
+    }
+    /// The first solid thing between two points and its surface kind
+    /// (`bri_sim::map::MapSurfaces`): what a body stands on or a shot
+    /// strikes. Bricks are `brick`, terrain `terrain`, and a map triangle
+    /// whose material the map names no kind for is `default`.
+    pub fn surface_at(&self, start: Vec3, end: Vec3) -> Result<Option<(Hit, &str)>> {
+        use bri_sim::map::{BRICK_SURFACE, DEFAULT_SURFACE, TERRAIN_SURFACE};
+        let Some(hit) = self.solid_segment(start, end)? else {
+            return Ok(None);
+        };
+        if hit.brick.is_some() {
+            return Ok(Some((hit, BRICK_SURFACE)));
+        }
+        let direction = (end - start).normalize();
+        let ray = Ray::new(
+            Vector::from_array(start.to_array()),
+            Vector::from_array(direction.to_array()),
+        );
+        let kind = self
+            .map
+            .query_pipeline_with_filter(QueryFilter::default().exclude_sensors())
+            .cast_ray_and_get_normal(&ray, hit.distance + 0.01, true)
+            .filter(|(_, at)| (at.time_of_impact - hit.distance).abs() < 0.01)
+            .map(|(handle, at)| {
+                self.map_colliders
+                    .get(&handle)
+                    .and_then(|i| self.surfaces.kind(*i, at.subshape))
+                    .unwrap_or(DEFAULT_SURFACE)
+            });
+        let kind = match kind {
+            Some(kind) => kind,
+            None if !self.terrain.is_empty()
+                && bri_sim::map::cast_terrain(
+                    &self.terrain,
+                    start,
+                    direction,
+                    hit.distance + 0.01,
+                )
+                .is_some() =>
+            {
+                TERRAIN_SURFACE
+            }
+            None => DEFAULT_SURFACE,
+        };
+        Ok(Some((hit, kind)))
+    }
     /// The map's breakable shapes (`NativeMap::breakables`).
     pub fn set_breakables(&mut self, shapes: &[bri_sim::map::Breakable]) {
         self.broken.set_shapes(shapes);

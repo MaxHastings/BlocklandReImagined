@@ -17,6 +17,7 @@ pub mod light_animation;
 pub mod passage;
 pub mod scene;
 pub mod shape;
+pub mod surface;
 pub mod terrain_field;
 pub mod terrain_mesh;
 pub mod testing;

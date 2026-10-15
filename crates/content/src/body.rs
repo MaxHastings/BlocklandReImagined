@@ -123,9 +123,10 @@ pub enum Role {
     Look,
     HeadSide,
     HeadUp,
+    SeatAim,
 }
 impl Role {
-    pub const ALL: [Role; 19] = [
+    pub const ALL: [Role; 20] = [
         Role::Idle,
         Role::Run,
         Role::Back,
@@ -145,6 +146,7 @@ impl Role {
         Role::Look,
         Role::HeadSide,
         Role::HeadUp,
+        Role::SeatAim,
     ];
     /// The role's name in an archetype's `animations`.
     pub fn name(self) -> &'static str {
@@ -168,6 +170,7 @@ impl Role {
             Role::Look => "look",
             Role::HeadSide => "head_side",
             Role::HeadUp => "head_up",
+            Role::SeatAim => "seat_aim",
         }
     }
     /// The Blockhead's clip for the role (m.dts sequence names, lower case):
@@ -193,6 +196,7 @@ impl Role {
             Role::Look => "look",
             Role::HeadSide => "headside",
             Role::HeadUp => "headup",
+            Role::SeatAim => "seataim",
         }
     }
     pub fn from_name(name: &str) -> Option<Self> {
@@ -231,6 +235,7 @@ impl Role {
             Role::Look => &[],
             Role::HeadSide => &[],
             Role::HeadUp => &[],
+            Role::SeatAim => &[],
         }
     }
     /// The way a locomotion role's clip carries the body, facing -Z (v20's
@@ -253,6 +258,7 @@ impl Role {
             Role::Look => "it does not look up and down",
             Role::HeadSide => "its head does not turn in free look",
             Role::HeadUp => "its head does not tilt under a pack",
+            Role::SeatAim => "a seated gunner bends only with its `look` clip",
             Role::Swim => "it swims in its locomotion pose",
             _ => "that layer is left out",
         }

@@ -428,6 +428,16 @@ impl App {
                         (toward_look && d.family == bri_vehicles::Family::Flying)
                             .then(|| forward.y.clamped(-1.0, 1.0).asin()),
                     );
+                    let orbit = matches!(role, SeatRole::StrafeDriver | SeatRole::MouseDriver)
+                        .then_some(d.camera.orbit.as_ref())
+                        .flatten();
+                    self.controls
+                        .set_driver_orbit(orbit.map(|o| o.pitch_range()));
+                    self.controls.trail_orbit(
+                        orbit.map(|_| frame.position),
+                        orbit.map_or(0.0, |o| o.lag),
+                        game_elapsed.as_secs_f32(),
+                    );
                     Some((
                         role,
                         forward.x.atan2(-forward.z),
@@ -439,6 +449,7 @@ impl App {
                     ))
                 });
                 if riding.is_none() {
+                    self.controls.trail_orbit(None, 0.0, 0.0);
                     // A passenger on another player (no control object)
                     // turns on its seat like one on a vehicle.
                     let seat = ride.filter(|r| !r.steers).and_then(|r| {
@@ -555,6 +566,7 @@ impl App {
                 // with it (`Player::processTick` takes the mount transform).
                 self.mounts.rider_rotations.clear();
                 self.mounts.rider_hands.clear();
+                self.mounts.rider_aims.clear();
                 self.mounts.posed_eye = None;
                 for (owner, vitals) in &view.vitals {
                     let Some((vehicle, seat)) = vitals.mounted else {
@@ -619,6 +631,12 @@ impl App {
                                 .hand_holds(&self.vehicle_assets, info, usize::from(seat));
                         if hands.iter().any(Option::is_some) {
                             self.mounts.rider_hands.insert(*owner, hands);
+                        }
+                        if let Some(aim) =
+                            self.vehicles
+                                .seat_aim(&self.vehicle_assets, info, usize::from(seat))
+                        {
+                            self.mounts.rider_aims.insert(*owner, aim);
                         }
                         let velocity = self
                             .vehicles
@@ -1224,6 +1242,7 @@ impl App {
                 let input = crate::avatar::AvatarAnimationInput {
                     look_limits,
                     mount_rotation: self.mounts.rider_rotations.get(owner).copied(),
+                    seat_aim: self.mounts.rider_aims.get(owner).copied().filter(|_| !dead),
                     hand_holds: self
                         .mounts
                         .rider_hands
@@ -1552,11 +1571,20 @@ impl App {
                         .is_none_or(|v| v.mounted.is_none() && v.ride.is_none() && !v.sitting)
                 })
                 .map(crate::footsteps::Walk::from);
-            for (sound, at) in
-                self.fx
-                    .footsteps
-                    .update(game_elapsed.as_secs_f32(), walking, &view.archetypes)
-            {
+            for (sound, at) in self.fx.footsteps.update(
+                game_elapsed.as_secs_f32(),
+                walking,
+                &view.archetypes,
+                |feet| {
+                    let feet = Vec3::from(feet);
+                    building
+                        .surface_at(feet + Vec3::Y * 0.5, feet - Vec3::Y)
+                        .ok()
+                        .flatten()
+                        .map_or(bri_content::surface::DEFAULT, |(_, kind)| kind)
+                        .to_string()
+                },
+            ) {
                 self.audio.profile(&sound, bri_audio::Placement::World(at));
             }
             self.fx

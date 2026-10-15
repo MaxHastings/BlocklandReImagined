@@ -426,6 +426,7 @@ fn prepare_map(
     mirror.set_breakables(&native_map.breakables);
     light_volume.set_light_shapes(&native_map.breakables);
     let mut building = crate::building::Building::new(definitions, native_map.colliders)?;
+    building.set_map_surfaces(native_map.surfaces);
     building.set_breakables(&native_map.breakables);
     building.attach_terrain(native_map.terrain);
     building.set_catalog(selected)?;

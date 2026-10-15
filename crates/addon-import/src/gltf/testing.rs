@@ -470,9 +470,14 @@ pub fn room(col_floor: bool) -> Vec<u8> {
                 .repeat(2)
                 .concat(),
         )),
-        json!({}),
+        json!({ "extras": { "bri_surface": "dirt" } }),
     );
-    let paint = g.material("Paint", [0.8, 0.8, 0.9, 1.0], None, json!({}));
+    let paint = g.material(
+        "Paint",
+        [0.8, 0.8, 0.9, 1.0],
+        None,
+        json!({ "extras": { "bri_surface": "metal" } }),
+    );
     part(
         &mut g,
         "Floor",

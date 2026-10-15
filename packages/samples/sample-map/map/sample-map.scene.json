@@ -86,6 +86,64 @@
       "properties": {}
     },
     {
+      "name": "teleport_in",
+      "parent": null,
+      "kind": "teleporter",
+      "transform": [
+        1.0,
+        -0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        -0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        5.0,
+        0.0,
+        5.0,
+        1.0
+      ],
+      "asset": null,
+      "properties": {
+        "channel": "a",
+        "radius": "1.5",
+        "role": "entrance"
+      }
+    },
+    {
+      "name": "teleport_out.001",
+      "parent": null,
+      "kind": "teleporter",
+      "transform": [
+        5.9604645e-8,
+        0.0,
+        0.9999999,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        -0.9999999,
+        0.0,
+        5.9604645e-8,
+        0.0,
+        -5.0,
+        0.0,
+        -5.0,
+        1.0
+      ],
+      "asset": null,
+      "properties": {
+        "channel": "a",
+        "radius": "1",
+        "role": "exit"
+      }
+    },
+    {
       "name": "Lamp",
       "parent": null,
       "kind": "light",

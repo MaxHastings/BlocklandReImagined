@@ -160,6 +160,11 @@ ambient light, never dark. If you want your lighting baked into the
 textures for them, use Blender's **Bake** (Cycles, Combined or Diffuse) to
 a texture and use that as the material's base colour.
 
+Give a material the custom property `bri_surface` (a short word such as
+`dirt`, `grass` or `metal`) to say what it is made of: footsteps and
+impacts look it up by the triangle that is hit. Put it on the `col_`
+meshes' materials when they are separate.
+
 ## 2. Export
 
 **File > Export > glTF 2.0**, format **glTF Binary (.glb)**, and under

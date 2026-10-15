@@ -56,12 +56,14 @@ pub struct Footsteps {
 
 impl Footsteps {
     /// Advance `seconds` for the bodies drawn now (`players`, without those
-    /// in a seat) and return the sounds to play and where.
+    /// in a seat) and return the sounds to play and where. `surface` names
+    /// the surface kind under a footfall (`bri_content::surface`).
     pub fn update(
         &mut self,
         seconds: f32,
         players: impl IntoIterator<Item = Walk>,
         archetypes: &Archetypes,
+        mut surface: impl FnMut([f32; 3]) -> String,
     ) -> Vec<(String, [f32; 3])> {
         let mut out = Vec::new();
         let mut seen = Vec::new();
@@ -94,7 +96,7 @@ impl Footsteps {
                 walker.falling.max(-velocity.y)
             };
             walker.grounded = player.grounded;
-            if sounds.footsteps.is_empty() || !player.grounded {
+            if (sounds.footsteps.is_empty() && sounds.surfaces.is_empty()) || !player.grounded {
                 continue;
             }
             let speed = Vec3::new(velocity.x, 0.0, velocity.z).length();
@@ -105,14 +107,22 @@ impl Footsteps {
             let stride = sounds.stride_for(archetype.movement.stand_height, player.scale.max(0.01));
             if walker.covered >= stride {
                 walker.covered %= stride;
-                let count = sounds.footsteps.len();
+                let steps = if sounds.surfaces.is_empty() {
+                    &sounds.footsteps[..]
+                } else {
+                    sounds.footsteps_on(&surface(player.feet))
+                };
+                let count = steps.len();
+                if count == 0 {
+                    continue;
+                }
                 self.turn = self.turn.wrapping_mul(1_103_515_245).wrapping_add(12_345);
                 let mut pick = (self.turn >> 16) as usize % count;
                 if count > 1 && pick == walker.last {
                     pick = (pick + 1) % count;
                 }
                 walker.last = pick;
-                out.push((sounds.footsteps[pick].clone(), player.feet));
+                out.push((steps[pick].clone(), player.feet));
             }
         }
         self.walkers.retain(|owner, _| seen.contains(owner));
@@ -154,10 +164,32 @@ mod tests {
         let mut heard = Vec::new();
         // Two seconds at 9 units a second: 18 units, six 3-unit strides.
         for _ in 0..120 {
-            heard.extend(steps.update(1.0 / 60.0, [runner], &archetypes));
+            heard.extend(steps.update(1.0 / 60.0, [runner], &archetypes, |_| "default".into()));
         }
         assert!((5..=6).contains(&heard.len()), "{heard:?}");
         assert!(heard.windows(2).all(|w| w[0].0 != w[1].0), "{heard:?}");
+    }
+
+    #[test]
+    fn the_surface_underfoot_picks_its_own_steps() {
+        let (mut archetypes, walker) = walker_body();
+        let mut body = archetypes.resolve(walker).clone();
+        body.id = "test:archetype/soldier".into();
+        body.sounds.surfaces = [("metal".to_string(), vec!["test:clang".to_string()])].into();
+        let id = archetypes.add(body).expect("valid body");
+        let mut steps = Footsteps::default();
+        let runner = player(id, [9.0, 0.0, 0.0], true);
+        let mut heard = Vec::new();
+        for i in 0..120 {
+            let kind = if i < 60 { "metal" } else { "dirt" };
+            heard.extend(steps.update(1.0 / 60.0, [runner], &archetypes, |_| kind.into()));
+        }
+        let names: Vec<_> = heard.iter().map(|h| h.0.as_str()).collect();
+        assert!(names.contains(&"test:clang"), "{names:?}");
+        assert!(
+            names.iter().any(|n| n.starts_with("test:step")),
+            "{names:?}"
+        );
     }
 
     #[test]
@@ -165,15 +197,27 @@ mod tests {
         let (archetypes, id) = walker_body();
         let mut steps = Footsteps::default();
         let still = player(id, [0.1, 0.0, 0.0], true);
-        assert!(steps.update(1.0, [still], &archetypes).is_empty());
+        assert!(
+            steps
+                .update(1.0, [still], &archetypes, |_| "default".into())
+                .is_empty()
+        );
         let falling = player(id, [9.0, -12.0, 0.0], false);
         for _ in 0..30 {
-            assert!(steps.update(1.0 / 60.0, [falling], &archetypes).is_empty());
+            assert!(
+                steps
+                    .update(1.0 / 60.0, [falling], &archetypes, |_| "default".into())
+                    .is_empty()
+            );
         }
         let landed = player(id, [0.0, 0.0, 0.0], true);
-        let heard = steps.update(1.0 / 60.0, [landed], &archetypes);
+        let heard = steps.update(1.0 / 60.0, [landed], &archetypes, |_| "default".into());
         assert_eq!(heard, vec![("test:land".to_string(), landed.feet)]);
-        assert!(steps.update(1.0 / 60.0, [landed], &archetypes).is_empty());
+        assert!(
+            steps
+                .update(1.0 / 60.0, [landed], &archetypes, |_| "default".into())
+                .is_empty()
+        );
     }
 
     #[test]
@@ -184,7 +228,7 @@ mod tests {
         for _ in 0..120 {
             assert!(
                 steps
-                    .update(1.0 / 60.0, [blockhead], &archetypes)
+                    .update(1.0 / 60.0, [blockhead], &archetypes, |_| "default".into())
                     .is_empty()
             );
         }

@@ -64,6 +64,13 @@ pub struct Controls {
     /// the view holds its direction in the world and the vehicle turns to
     /// meet it ([`Self::hold_world_look`]).
     look_heading: Option<f32>,
+    /// Driving a vehicle whose camera orbits (`VehicleCamera::orbit`): the
+    /// head's pitch stays where the camera can follow it, between minus the
+    /// highest elevation and minus the lowest (radians, up positive).
+    orbit_pitch: Option<(f32, f32)>,
+    /// Where an orbiting camera's trailing pivot is (`CameraOrbit::lag`),
+    /// with the vehicle's place it trails, both this frame.
+    orbit_trail: Option<(glam::Vec3, glam::Vec3)>,
     /// The nose pitch of such a vehicle that flies, as last seen: the head
     /// tips back by each pitch the nose makes, likewise.
     look_nose: Option<f32>,
@@ -375,7 +382,11 @@ impl Controls {
             // none (`Player::processTick` 0x5b2df7 zeroes the vehicle's yaw
             // and pitch), and `pitch()` goes back to Invert Mouse.
             self.free_yaw = (self.free_yaw + yaw).clamped(-MAX_FREELOOK, MAX_FREELOOK);
-            self.head_pitch = (self.head_pitch + pitch).clamped(-FRAC_PI_2, FRAC_PI_2);
+            let (low, high) = self
+                .orbit_pitch
+                .filter(|_| self.driver_head_yaw().is_some())
+                .unwrap_or((-FRAC_PI_2, FRAC_PI_2));
+            self.head_pitch = (self.head_pitch + pitch).clamped(low, high);
             self.driver_head = HeadTicks::at(self.head_pitch);
         } else if self.free_looking() {
             // Only the turn is free; pitch still tilts the body's look
@@ -569,6 +580,51 @@ impl Controls {
             Some(SeatLook::StrafeDriver | SeatLook::MouseDriver)
         )
         .then_some(self.free_yaw)
+    }
+    /// The driver's head (turn, pitch) on the vehicle, which an orbiting
+    /// camera swings round by; `None` off a driver's seat.
+    pub fn driver_head(&self) -> Option<(f32, f32)> {
+        self.driver_head_yaw().map(|yaw| (yaw, self.head_pitch))
+    }
+    /// The orbit range (lowest and highest elevation, radians) of the
+    /// camera of the vehicle this player drives, or `None`: the head's
+    /// pitch then stays where the camera can follow it.
+    pub fn set_driver_orbit(&mut self, range: Option<(f32, f32)>) {
+        self.orbit_pitch = range
+            .filter(|(low, high)| low.is_finite() && high.is_finite() && low <= high)
+            .map(|(low, high)| (-high, -low));
+        if let Some((low, high)) = self.orbit_pitch
+            && self.driver_head_yaw().is_some()
+        {
+            self.head_pitch = self.head_pitch.clamped(low, high);
+        }
+    }
+    /// Trail the orbiting camera's pivot behind the driven vehicle at
+    /// `position` by `lag` seconds over the last `seconds`; `None` off an
+    /// orbiting driver's seat. A jump of over 20 units (a respawn, a
+    /// teleport) catches up at once.
+    pub fn trail_orbit(&mut self, position: Option<glam::Vec3>, lag: f32, seconds: f32) {
+        let Some(position) = position.filter(|p| p.is_finite()) else {
+            self.orbit_trail = None;
+            return;
+        };
+        let trailed = match self.orbit_trail {
+            Some((trailed, _))
+                if lag > 0.0
+                    && seconds.is_finite()
+                    && trailed.distance_squared(position) < 20.0 * 20.0 =>
+            {
+                let keep = (-seconds.clamped(0.0, 0.25) / lag).exp();
+                position + (trailed - position) * keep
+            }
+            _ => position,
+        };
+        self.orbit_trail = Some((trailed, position));
+    }
+    /// How far the orbiting camera's pivot trails the vehicle this frame.
+    pub fn orbit_lag(&self) -> glam::Vec3 {
+        self.orbit_trail
+            .map_or(glam::Vec3::ZERO, |(trailed, position)| trailed - position)
     }
     /// The first-person view's rotation while riding (looking down -Z, up
     /// +Y): the ride's frame turned by the head.
@@ -1218,15 +1274,15 @@ impl Controls {
     /// weapon is drawn in. `None` when there is none to apply.
     pub fn view_model_sway(&self) -> Option<glam::Mat4> {
         let b = &self.body_camera;
-        let sway = b.profile.sway.as_ref()?;
+        b.profile.sway.as_ref()?;
         if !self.body_owns_view() || b.motion.at_rest() {
             return None;
         }
-        let (side, dip) = b.motion.bob(&b.profile);
+        let (side, dip) = b.motion.weapon_bob(&b.profile);
         let (yaw, pitch) = b.motion.trail;
         let m = glam::Mat4::from_rotation_translation(
             glam::Quat::from_rotation_y(-yaw) * glam::Quat::from_rotation_x(pitch),
-            glam::Vec3::new(side, dip, 0.0) * sway.bob * b.scale,
+            glam::Vec3::new(side, dip, 0.0) * b.scale,
         );
         m.is_finite().then_some(m)
     }
@@ -1235,9 +1291,9 @@ impl Controls {
     pub fn view_model_record(&self) -> [f32; 5] {
         let b = &self.body_camera;
         match (&b.profile.sway, self.body_owns_view()) {
-            (Some(sway), true) => {
-                let (side, dip) = b.motion.bob(&b.profile);
-                let k = sway.bob * b.scale;
+            (Some(_), true) => {
+                let (side, dip) = b.motion.weapon_bob(&b.profile);
+                let k = b.scale;
                 [b.motion.trail.0, b.motion.trail.1, side * k, dip * k, 0.0]
             }
             _ => [0.0; 5],

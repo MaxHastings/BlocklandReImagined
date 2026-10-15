@@ -691,6 +691,9 @@ pub(super) fn archetype(
     if !def.sounds.footsteps.is_empty() {
         sounds.footsteps.clone_from(&def.sounds.footsteps);
     }
+    if !def.sounds.surfaces.is_empty() {
+        sounds.surfaces.clone_from(&def.sounds.surfaces);
+    }
     if def.sounds.stride.is_some() {
         sounds.stride = def.sounds.stride;
     }
