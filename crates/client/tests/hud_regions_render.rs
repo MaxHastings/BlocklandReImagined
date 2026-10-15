@@ -389,6 +389,34 @@ fn the_hud_and_camera_follow_the_body(f: &ContentRoot) -> Result<()> {
     let armed = capture(&mut app, &gpu, &mut renderer)?;
     save(&artifact.join("runner-ammo.png"), &armed)?;
 
+    // F8 parks this same custom body and weapon: only the control object
+    // changes. The orb must release every claim and stock prompt override.
+    app.ui
+        .core
+        .request(UiAction::Game(GameAction::DropCameraAtPlayer));
+    until(&mut app, "the admin orb's stock HUD", |a| {
+        a.network_view().is_some_and(|v| {
+            v.vitals
+                .get(&v.owner)
+                .is_some_and(|v| v.control == bri_sim::session::ControlObject::Camera)
+        }) && claimed(a).is_empty()
+            && a.ui.core.stock_texts.is_empty()
+            && a.ui.core.package_panels.is_empty()
+    })?;
+    ensure!(body(&app).as_deref() == Some(RUNNER));
+    ensure!(!app.ui.core.hud_claimed(Region::Crosshair));
+    app.ui
+        .core
+        .request(UiAction::Game(GameAction::DropPlayerAtCamera));
+    until(&mut app, "the body's restored HUD", |a| {
+        a.network_view().is_some_and(|v| {
+            v.vitals
+                .get(&v.owner)
+                .is_some_and(|v| v.control == bri_sim::session::ControlObject::Player)
+        }) && a.ui.core.hud_claimed(Region::Crosshair)
+            && a.ui.core.hud_claimed(Region::Ammo)
+    })?;
+
     // Become the Trooper: its camera owns the view, and the stock HUD is
     // back, for the Runner's HUD claimed only the Runner's body.
     let stock_fov = app.controls.fov();

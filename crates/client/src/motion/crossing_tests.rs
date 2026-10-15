@@ -290,6 +290,7 @@ fn camera_test_player(feet: Vec3) -> PlayerState {
         tether: None,
         controller: None,
         pass_group: 0,
+        posture: Default::default(),
     };
     player.tick.feet = player.feet;
     player.tick.from = player.feet;
@@ -565,6 +566,7 @@ fn a_vehicle_driver_camera_uses_portal_cuts_and_keeps_surface_normals() {
         tilt: 0.0,
         lag: 0.0,
         decay: 0.75,
+        orbit: None,
     };
     // The ordinary source-wall ray sees the backing plane. This is the
     // production failure before the driver chooses the clipped camera soup.

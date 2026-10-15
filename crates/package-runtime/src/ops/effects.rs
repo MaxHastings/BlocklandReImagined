@@ -61,6 +61,27 @@ impl ScriptOp for Sound {
     }
 }
 
+/// A see-through `color` (RGBA 0..1) drawn over a player's body, just
+/// outside it, fading over `seconds`: a shield taking a hit, a power-up's
+/// glow, a cloak shimmering. Every player sees it. Presentation only.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct BodyFlash {
+    pub player: u64,
+    pub color: [f32; 4],
+    pub seconds: f32,
+}
+impl ScriptOp for BodyFlash {
+    const CAPABILITY: &str = "effects";
+    const NAME: &str = "body_flash";
+    fn bounded(&self) -> bool {
+        self.color
+            .iter()
+            .all(|c| c.is_finite() && (0.0..=1.0).contains(c))
+            && self.seconds.is_finite()
+            && (0.05..=60.0).contains(&self.seconds)
+    }
+}
+
 /// Play a music track (a sound an Add-On marks `music`, or one of the
 /// game's music loops) at a player's ears on the music bus, or stop it
 /// (`track` none), fading over `fade` seconds. For one player, or for
@@ -85,6 +106,49 @@ impl ScriptOp for Music {
 }
 /// The longest fade in or out `play_music` and `stop_music` take, in seconds.
 pub const MAX_MUSIC_FADE: f32 = 30.0;
+
+/// Play a looping ambient bed (wind, a canyon's hum, a generator) under a
+/// key, on the effects bus apart from music: at the player's ears, or
+/// placed in the world at `at`, heard out to `range` units. Another play
+/// under the same key replaces it; `track` none stops it. For one player,
+/// or for everyone (`player` none), joiners included until stopped.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Ambient {
+    pub player: Option<u64>,
+    pub key: String,
+    pub track: Option<String>,
+    pub volume: f32,
+    pub fade: f32,
+    pub at: Option<[f32; 3]>,
+    pub range: f32,
+}
+impl ScriptOp for Ambient {
+    const CAPABILITY: &str = "effects";
+    const NAME: &str = "play_ambient";
+    fn bounded(&self) -> bool {
+        let Ambient {
+            key,
+            track,
+            volume,
+            fade,
+            at,
+            range,
+            ..
+        } = self;
+        let name = |t: &str| !t.is_empty() && t.len() <= 128 && !t.chars().any(char::is_control);
+        name(key)
+            && key.len() <= 32
+            && track.as_deref().is_none_or(name)
+            && (0.0..=1.0).contains(volume)
+            && (0.0..=MAX_MUSIC_FADE).contains(fade)
+            && at.is_none_or(|p| p.iter().all(|v| v.is_finite() && v.abs() <= 1.0e6))
+            && (1.0..=MAX_AMBIENT_RANGE).contains(range)
+    }
+}
+/// The farthest a placed ambient sound carries, in units.
+pub const MAX_AMBIENT_RANGE: f32 = 2000.0;
+/// Most ambient keys playing for everyone at once.
+pub const MAX_AMBIENT: usize = 16;
 
 /// A straight beam from `from` to `to` for `seconds`, fading out: a
 /// tracer, a laser, a bolt. With `muzzle`, clients start it at that

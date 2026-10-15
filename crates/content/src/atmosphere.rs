@@ -84,7 +84,7 @@ pub struct Vignette {
 }
 
 /// Every setting's name, as [`Settings::unset`] takes them.
-pub const KEYS: [&str; 20] = [
+pub const KEYS: [&str; 22] = [
     "day_cycle",
     "sun_azimuth",
     "sun_elevation",
@@ -95,6 +95,8 @@ pub const KEYS: [&str; 20] = [
     "visible_distance",
     "fog_distance",
     "fog_color",
+    "fog_height",
+    "fog_max",
     "overcast",
     "sky_color",
     "vignette",
@@ -142,6 +144,14 @@ pub struct Settings {
     pub fog_distance: Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub fog_color: Option<[f32; 3]>,
+    /// Units the fog thins by an e-fold for above the eye
+    /// (`environment::Fog::height`): smaller keeps it near the ground.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fog_height: Option<f32>,
+    /// The most the fog ever covers, above 0 to 1 (`environment::Fog::max`):
+    /// below 1 it is a haze far cliffs stay visible through.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fog_max: Option<f32>,
     /// Cloud cover, 0 clear to 1 grey: dims the sun, flattens the light
     /// and greys the fog and sky.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -247,6 +257,15 @@ impl Settings {
             "Fog distance must be 0 to 1000"
         );
         ensure!(
+            self.fog_height
+                .is_none_or(|h| crate::environment::FOG_HEIGHTS.contains(&h)),
+            "Fog height must be 1 to 100000"
+        );
+        ensure!(
+            self.fog_max.is_none_or(|m| m > 0.0 && m <= 1.0),
+            "Fog max must be above 0, at most 1"
+        );
+        ensure!(
             self.overcast.is_none_or(|o| (0.0..=1.0).contains(&o)),
             "Overcast must be 0 to 1"
         );
@@ -295,6 +314,8 @@ impl Settings {
             visible_distance,
             fog_distance,
             fog_color,
+            fog_height,
+            fog_max,
             overcast,
             sky_color,
             vignette,
@@ -321,6 +342,8 @@ impl Settings {
             "visible_distance" => self.visible_distance = None,
             "fog_distance" => self.fog_distance = None,
             "fog_color" => self.fog_color = None,
+            "fog_height" => self.fog_height = None,
+            "fog_max" => self.fog_max = None,
             "overcast" => self.overcast = None,
             "sky_color" => self.sky_color = None,
             "vignette" => self.vignette = None,
@@ -360,6 +383,8 @@ impl Settings {
             visible_distance,
             fog_distance,
             fog_color,
+            fog_height,
+            fog_max,
             overcast,
             sky_color,
             vignette,
@@ -409,6 +434,10 @@ pub struct Live {
     /// 0: no fog.
     pub fog_end: f32,
     pub fog_color: [f32; 3],
+    /// The fog's height and most cover when set; `None` keeps the map's
+    /// own (`environment::Fog::height`, `max`).
+    pub fog_height: Option<f32>,
+    pub fog_max: Option<f32>,
     /// Multiplies the map's sky.
     pub sky_tint: [f32; 3],
     /// The disc and glow's colour (alpha: strength) and size; none drawn
@@ -531,6 +560,8 @@ pub fn resolve(authored: &Authored, settings: &Settings, tick: f64) -> Live {
         fog_start,
         fog_end,
         fog_color,
+        fog_height: settings.fog_height,
+        fog_max: settings.fog_max,
         sky_tint: sky,
         flare,
         vignette: settings.vignette,
@@ -827,6 +858,36 @@ mod tests {
         assert_eq!(s.overcast, Some(0.5));
         assert!(!s.same(&full, "sky"));
         assert!(!s.take(&full, "nonsense"));
+    }
+    #[test]
+    fn fog_height_and_max_override_the_map_only_when_set() {
+        let live = resolve(&map(), &Settings::default(), 0.0);
+        assert_eq!((live.fog_height, live.fog_max), (None, None));
+        let mut s = Settings {
+            fog_height: Some(20.0),
+            fog_max: Some(0.6),
+            ..Default::default()
+        };
+        s.validate().unwrap();
+        let live = resolve(&map(), &s, 0.0);
+        assert_eq!((live.fog_height, live.fog_max), (Some(20.0), Some(0.6)));
+        assert!(s.unset("fog_height") && s.unset("fog_max") && s.is_empty());
+        for bad in [
+            Settings {
+                fog_height: Some(0.5),
+                ..Default::default()
+            },
+            Settings {
+                fog_max: Some(0.0),
+                ..Default::default()
+            },
+            Settings {
+                fog_max: Some(1.1),
+                ..Default::default()
+            },
+        ] {
+            assert!(bad.validate().is_err(), "{bad:?}");
+        }
     }
     #[test]
     fn skies_are_names_that_merge_and_unset() {

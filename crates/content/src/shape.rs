@@ -28,6 +28,81 @@ pub struct Object {
     pub visibility: f32,
     pub frame: u32,
     pub material_frame: u32,
+    /// Shows a digit of a value taken from what the model belongs to (the
+    /// rounds left in a held gun) by choosing its material
+    /// frame, so a counter on the model itself follows the game.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub live: Option<Live>,
+}
+/// One digit of a live value, drawn by an object's material frame
+/// (`Object::live`): frame `d` shows digit `d`. With `uv_step` the mesh
+/// needs only one texture-coordinate frame: frame `d` is it moved by
+/// `d * uv_step`, so ten digits side by side in a strip need no more.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Live {
+    /// The value, by name ([`LiveValues::get`]).
+    pub value: String,
+    /// Which digit: 0 the ones, 1 the tens, and so on.
+    #[serde(default)]
+    pub place: u32,
+    /// Digits per place (10 decimal), also the number of frames used.
+    #[serde(default = "Live::ten")]
+    pub base: u32,
+    /// Multiplies the value before its digits are taken.
+    #[serde(default = "Live::one")]
+    pub scale: f32,
+    /// Hide this digit while the value has no digit this high (no leading
+    /// zeros); the ones digit always shows.
+    #[serde(default)]
+    pub blank_leading: bool,
+    /// Texture-coordinate shift from one digit's frame to the next.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub uv_step: Option<[f32; 2]>,
+}
+impl Live {
+    fn ten() -> u32 {
+        10
+    }
+    fn one() -> f32 {
+        1.0
+    }
+    /// The digit `value` shows here, or `None` when it is hidden.
+    pub fn digit(&self, value: u32) -> Option<u32> {
+        let scaled = (value as f32 * self.scale).max(0.0) as u64;
+        let base = u64::from(self.base.max(2));
+        let unit = base.checked_pow(self.place).unwrap_or(u64::MAX);
+        if self.blank_leading && self.place > 0 && scaled < unit {
+            return None;
+        }
+        Some(((scaled / unit) % base) as u32)
+    }
+}
+/// The values a model's live objects (`Object::live`) can show, from what
+/// the model belongs to; `None` where it has no such value (another
+/// player's gun, whose magazine this client does not know).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct LiveValues {
+    /// Rounds ready to fire in a held gun (its magazine).
+    pub rounds: Option<u32>,
+    /// Rounds carried for it beyond the magazine.
+    pub reserve: Option<u32>,
+    /// A full magazine.
+    pub magazine: Option<u32>,
+}
+impl LiveValues {
+    pub const NAMES: [&str; 3] = ["rounds", "reserve", "magazine"];
+    pub fn get(&self, name: &str) -> Option<u32> {
+        match name {
+            "rounds" => self.rounds,
+            "reserve" => self.reserve,
+            "magazine" => self.magazine,
+            _ => None,
+        }
+    }
+    pub fn is_empty(&self) -> bool {
+        *self == Self::default()
+    }
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Detail {
@@ -84,6 +159,74 @@ pub struct Material {
     /// sharp highlights instead of a painted, diffusely lit surface.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub metal: Option<Metal>,
+    /// The full physically based look a modern model brings (glTF's
+    /// metallic-roughness material): surface relief, metal and roughness
+    /// per texel, ambient occlusion and glow. Drawn with it instead of
+    /// `metal` when both are set.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub surface: Option<Surface>,
+}
+/// Physically based maps for a [`Material`], each naming another material
+/// (by index) whose texture holds it, as [`Metal::detail`] does. The
+/// material's own texture is the base colour.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Surface {
+    /// Tangent-space normal map (glTF and OpenGL convention: green up).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub normal: Option<usize>,
+    /// How strongly the normal map tilts the surface (0 flat).
+    #[serde(default = "Metal::one")]
+    pub normal_scale: f32,
+    /// Metal in blue and roughness in green (glTF's layout), multiplying
+    /// `metallic` and `roughness`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub metallic_roughness: Option<usize>,
+    /// 0 a painted (dielectric) surface, 1 bare metal.
+    pub metallic: f32,
+    /// 0 a perfect mirror, 1 fully matte.
+    pub roughness: f32,
+    /// Ambient occlusion in red: how much surrounding light reaches a
+    /// crevice.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub occlusion: Option<usize>,
+    #[serde(default = "Metal::one")]
+    pub occlusion_strength: f32,
+    /// Glow colour map (sRGB), multiplying `emissive`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub emissive_map: Option<usize>,
+    /// Light the surface gives off whatever the world's light, linear RGB.
+    #[serde(default)]
+    pub emissive: [f32; 3],
+    /// A small texture repeated `detail_scale` times across the colour map
+    /// for close-up grain (linear: mid-grey leaves the colour as it is,
+    /// white doubles it), as Torque and Halo lay detail over a stretched
+    /// base map.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detail: Option<usize>,
+    #[serde(default = "Metal::one")]
+    pub detail_scale: f32,
+    /// Authored environment reflection over diffuse paint, instead of an
+    /// inferred metallic response. Maps and colours belong to the Add-On.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reflection: Option<SurfaceReflection>,
+}
+/// A display-space reflection layer, useful for imported fixed-function
+/// materials. The mask's red channel controls reflection coverage.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SurfaceReflection {
+    /// Equirectangular environment image: +Z at u=.5, +X at u=.75,
+    /// +Y at v=0. Referenced textures are other materials, as for Surface.
+    pub environment: usize,
+    pub mask: usize,
+    /// Reflection colour times brightness, looking straight at the face.
+    pub perpendicular: [f32; 3],
+    /// Reflection colour times brightness, looking along the face.
+    pub parallel: [f32; 3],
+    /// Restrict diffuse detail to the inverse of the reflection mask.
+    #[serde(default)]
+    pub detail_inverse_mask: bool,
 }
 /// A physically based metal surface (the metallic workflow real-time
 /// engines use): it has no diffuse colour, only reflection.
@@ -156,6 +299,30 @@ pub struct ClipSet {
 }
 
 impl Shape {
+    /// Give every mesh a live object draws with `Live::uv_step` its digit
+    /// frames: frame `d` is its first texture-coordinate frame moved by
+    /// `d * uv_step`. Run once after loading, before posing.
+    pub fn expand_live_frames(&mut self) {
+        for object in &self.objects {
+            let Some(live) = &object.live else { continue };
+            let Some(step) = live.uv_step else { continue };
+            for &m in &object.meshes {
+                let Some(Some(mesh)) = self.meshes.get_mut(m) else {
+                    continue;
+                };
+                let n = mesh.frame_vertices;
+                if n == 0 || mesh.uv.len() != n {
+                    continue;
+                }
+                let first = mesh.uv.clone();
+                for d in 1..live.base {
+                    let shift = [step[0] * d as f32, step[1] * d as f32];
+                    mesh.uv
+                        .extend(first.iter().map(|uv| [uv[0] + shift[0], uv[1] + shift[1]]));
+                }
+            }
+        }
+    }
     pub fn validate(&self) -> Result<()> {
         ensure!(
             self.schema_version == 1 && !self.id.is_empty(),
@@ -191,6 +358,19 @@ impl Shape {
                 object.visibility.is_finite(),
                 "Non-finite object visibility"
             );
+            if let Some(live) = &object.live {
+                ensure!(
+                    LiveValues::NAMES.contains(&live.value.as_str())
+                        && (2..=64).contains(&live.base)
+                        && live.place < 10
+                        && live.scale.is_finite()
+                        && live.scale >= 0.0
+                        && live.uv_step.is_none_or(|s| s.iter().all(|v| v.is_finite())),
+                    "Invalid live value on {}: values are {}",
+                    object.name,
+                    LiveValues::NAMES.join(", ")
+                );
+            }
         }
         for mesh in self.meshes.iter().flatten() {
             ensure!(
@@ -250,6 +430,32 @@ impl Shape {
             }
         }
         for material in &self.materials {
+            if let Some(surface) = &material.surface {
+                let index = |m: Option<usize>| m.is_none_or(|m| m < self.materials.len());
+                ensure!(
+                    index(surface.normal)
+                        && index(surface.metallic_roughness)
+                        && index(surface.occlusion)
+                        && index(surface.emissive_map)
+                        && index(surface.detail)
+                        && surface.reflection.as_ref().is_none_or(|r| {
+                            r.environment < self.materials.len()
+                                && r.mask < self.materials.len()
+                                && r.perpendicular
+                                    .iter()
+                                    .chain(&r.parallel)
+                                    .all(|c| (0.0..=1000.0).contains(c))
+                        })
+                        && (0.01..=4096.0).contains(&surface.detail_scale)
+                        && (0.0..=8.0).contains(&surface.normal_scale)
+                        && (0.0..=1.0).contains(&surface.metallic)
+                        && (0.0..=1.0).contains(&surface.roughness)
+                        && (0.0..=1.0).contains(&surface.occlusion_strength)
+                        && surface.emissive.iter().all(|c| (0.0..=1000.0).contains(c)),
+                    "Invalid surface material {}",
+                    material.name
+                );
+            }
             if let Some(metal) = &material.metal {
                 ensure!(
                     metal.color.iter().all(|c| (0.0..=1.0).contains(c))

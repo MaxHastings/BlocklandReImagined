@@ -250,19 +250,33 @@ impl Choices {
         id: Option<&str>,
         ground: bool,
     ) -> Result<()> {
+        self.set_sky_for(scene, map, None, id, ground)
+    }
+    /// [`Self::set_sky`] for a map that may live in a bundle of its own (a
+    /// map Add-On's, at `map_root`): its own sky comes from there when the
+    /// base bundle does not have it.
+    pub fn set_sky_for(
+        &self,
+        scene: &mut SceneData,
+        map: &str,
+        map_root: Option<&Path>,
+        id: Option<&str>,
+        ground: bool,
+    ) -> Result<()> {
         let picked = id.and_then(|id| self.sky(id));
-        let Some(own) = self.maps.get(map) else {
-            // A map without a sky keeps none unless one is picked.
-            strip_sky(scene);
-            return match picked {
-                Some(choice) => self.append_choice(scene, choice, ground),
-                None => Ok(()),
-            };
+        let own = match self.maps.get(map) {
+            Some(own) => Some((self.root.clone(), own.clone())),
+            None => match map_root {
+                Some(root) if root != self.root => own_sky(root, map)?,
+                _ => None,
+            },
         };
         strip_sky(scene);
-        match picked {
-            Some(choice) => self.append_choice(scene, choice, ground),
-            None => append_sky(&self.root, scene, own),
+        match (picked, own) {
+            (Some(choice), _) => self.append_choice(scene, choice, ground),
+            (None, Some((root, own))) => append_sky(&root, scene, &own),
+            // A map without a sky keeps none unless one is picked.
+            (None, None) => Ok(()),
         }
     }
     fn append_choice(&self, scene: &mut SceneData, choice: &SkyChoice, ground: bool) -> Result<()> {
@@ -286,6 +300,16 @@ impl Choices {
             crate::environment_scene::append(scene, &environment, &[white; 6], &[])
         }
     }
+}
+
+/// The sky a map bundle at `root` gives `map`, and where its pictures are.
+fn own_sky(root: &Path, map: &str) -> Result<Option<(PathBuf, Environment)>> {
+    let root = root.canonicalize().context("Opening the map's bundle")?;
+    let bundle: Value = serde_json::from_slice(&read(&root, "bundle.json")?)?;
+    bundle["environments"]
+        .get(map)
+        .map(|e| -> Result<_> { Ok((root.clone(), serde_json::from_value(e.clone())?)) })
+        .transpose()
 }
 
 /// The plain sky: six white sides, which Sky Color tints.
@@ -312,6 +336,7 @@ fn plain_sky() -> Environment {
             start: 500.0,
             end: 600.0,
             color: [1.0; 3],
+            ..Default::default()
         },
         warnings: Vec::new(),
     }
@@ -571,6 +596,33 @@ mod tests {
                 [rgba[0], rgba[1], rgba[2], rgba[3]]
             })
             .collect()
+    }
+
+    /// A map Add-On's own sky lives in its own bundle: unpicking a sky
+    /// draws that again, not nothing.
+    #[test]
+    fn a_map_add_on_gets_its_own_sky_back() {
+        let dir = tempfile::tempdir().unwrap();
+        let choices = bundle(dir.path());
+        let addon = tempfile::tempdir().unwrap();
+        let own = sky(addon.path(), "plain colour", [40, 160, 60, 255], true);
+        std::fs::write(
+            addon.path().join("bundle.json"),
+            serde_json::to_vec(&json!({ "environments": { "pond:map/pond": own } })).unwrap(),
+        )
+        .unwrap();
+        let mut scene = map(&choices);
+        for id in [Some(PLAIN_SKY), None] {
+            choices
+                .set_sky_for(&mut scene, "pond:map/pond", Some(addon.path()), id, false)
+                .unwrap();
+        }
+        assert_eq!(drawn_sky_colors(&scene), vec![[40, 160, 60, 255]; 5]);
+        // Without its bundle it keeps none, as before.
+        choices
+            .set_sky(&mut scene, "pond:map/pond", None, false)
+            .unwrap();
+        assert!(drawn_sky_colors(&scene).is_empty());
     }
 
     #[test]

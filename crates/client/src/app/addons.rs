@@ -609,6 +609,8 @@ impl App {
             self.ui.set_package_binds(Vec::new());
             self.ui.core.addon_help.clear();
             self.addons.client_code.set_hud_owners(Default::default());
+            self.addons.hud_regions.forget_drawn();
+            self.ui.core.stock_texts.clear();
             return;
         };
         let Some(catalog) = packages_for(&self.addons.package_catalog, view) else {
@@ -618,6 +620,8 @@ impl App {
             self.ui.set_package_binds(Vec::new());
             self.ui.core.addon_help.clear();
             self.addons.client_code.set_hud_owners(Default::default());
+            self.addons.hud_regions.forget_drawn();
+            self.ui.core.stock_texts.clear();
             return;
         };
         let mac = self.ui.core.platform == Platform::MacOs;
@@ -627,6 +631,22 @@ impl App {
         if self.ui.core.addon_help != help {
             self.ui.core.addon_help = help;
             self.ui.welcome_addons();
+        }
+        // The admin orb is the control object, while the parked body's
+        // archetype and held item still replicate. Its HUD is always stock;
+        // retain the catalog so the body's HUD returns on leaving the orb.
+        if view
+            .vitals
+            .get(&view.owner)
+            .is_some_and(|v| v.control == bri_sim::session::ControlObject::Camera)
+        {
+            self.ui.core.package_panels.clear();
+            self.ui.core.package_keys.clear();
+            self.ui.core.hud_regions.clear();
+            self.ui.core.stock_texts.clear();
+            self.addons.hud_regions.forget_drawn();
+            self.addons.client_code.set_hud_owners(Default::default());
+            return;
         }
         let binds = &self.ui.core.binds;
         let held = view
@@ -658,6 +678,7 @@ impl App {
             body,
             holding: held,
             vehicle,
+            minigame: vitals.is_some_and(|v| v.minigame.is_some()),
         };
         let energy = presented
             .filter(|p| view.archetypes.resolve(p.archetype).energy_bar)
@@ -684,10 +705,56 @@ impl App {
                 .as_ref()
                 .map_or_else(String::new, |(t, ..)| bri_content::hud::plain(t)),
             ammo: self.net.held_ammo.clone(),
+            respawn: None,
+            kills: Vec::new(),
+            contacts: Vec::new(),
         };
+        let mut game = game;
+        let tick = self.motion.server_tick().unwrap_or(view.tick as f64);
+        if let Some(v) = vitals.filter(|v| !v.alive && !v.respawn_held) {
+            game.respawn = Some((((v.respawn_tick as f64) - tick) / 120.0).max(0.0) as f32);
+        }
+        if self.addons.hud_regions.kill_feed() {
+            let now = std::time::Instant::now();
+            game.kills = crate::match_hud::feed(
+                self.combat
+                    .kills
+                    .iter()
+                    .map(|(at, k)| (now.duration_since(*at).as_secs_f32(), k)),
+                &view.vitals,
+                &view.minigames,
+                &view.world.palette,
+            );
+        }
+        if self.addons.hud_regions.tracker()
+            && let Some(me) = presented
+        {
+            let forward = glam::Vec3::new(me.yaw.sin(), 0.0, -me.yaw.cos());
+            let seen = self
+                .motion
+                .presented()
+                .values()
+                .map(|p| crate::match_hud::Seen {
+                    owner: p.owner,
+                    feet: glam::Vec3::from(p.feet),
+                    velocity: glam::Vec3::from(p.velocity),
+                    crouched: p.crouched,
+                });
+            game.contacts = crate::match_hud::contacts(
+                view.owner,
+                glam::Vec3::from(me.feet),
+                forward,
+                seen,
+                &view.vitals,
+                tick,
+            );
+        }
         let regions = &mut self.addons.hud_regions;
         regions.use_catalog(Some(catalog));
         self.ui.core.hud_regions = regions.draws(&view.package_state, view.owner, &viewer, &game);
+        if self.ui.core.stock_texts != *regions.texts() {
+            self.ui.core.stock_texts = regions.texts().clone();
+        }
         let owners = regions.owners(&view.package_state, &viewer);
         self.addons.client_code.set_hud_owners(owners);
     }

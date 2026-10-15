@@ -113,6 +113,7 @@ fn vehicles_render_with_wheels_and_paint(f: &VehicleFixture) -> Result<()> {
                 destroyed: false,
                 turret_broken: false,
                 scale: 1.0,
+                lights: false,
             },
         )]
         .into();
@@ -195,6 +196,7 @@ fn riders_tilt_with_a_car_on_a_slope(f: &VehicleFixture) -> Result<()> {
         destroyed: false,
         turret_broken: false,
         scale: 1.0,
+        lights: false,
     };
     // Nose up a 20 degree incline, heading 0.6 rad.
     let slope = glam::Quat::from_rotation_y(0.6) * glam::Quat::from_rotation_x(20f32.to_radians());

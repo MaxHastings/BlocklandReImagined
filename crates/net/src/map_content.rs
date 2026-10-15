@@ -67,6 +67,8 @@ pub struct LoadedMap {
     pub tutorial: Option<TutorialMap>,
     /// Glass shapes a fast player smashes.
     pub breakables: Vec<Breakable>,
+    /// Teleporter entrances and exits.
+    pub teleporters: Vec<bri_content::scene::Teleporter>,
     /// The plate a flat map stands on.
     pub plate: Option<bri_content::scene::Plate>,
 }
@@ -78,6 +80,7 @@ impl LoadedMap {
             simulation: self.simulation,
             spawn_points: self.spawn_points,
             breakables: self.breakables,
+            teleporters: self.teleporters,
             tutorial: self.tutorial,
         }
     }
@@ -197,6 +200,7 @@ impl MapContent {
             terrain,
             tutorial,
             breakables: native.breakables,
+            teleporters: native.teleporters,
             plate: native.plate,
         })
     }

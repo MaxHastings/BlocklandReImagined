@@ -2,8 +2,8 @@
 //! The offline assembler owns legacy fields; this module reads typed native data.
 use anyhow::{Context, Result, ensure};
 use bri_content::{
-    animation::{Pose, sample},
-    shape::{Animation, Shape},
+    animation::{Pose, sample, show_live},
+    shape::{Animation, LiveValues, Shape},
 };
 use bri_render::{
     scene::{AlphaMode, Material, MaterialKind, SceneData, SceneImage},
@@ -223,9 +223,22 @@ impl ItemMesh {
         sequence: Option<&str>,
         seconds: f32,
     ) -> Result<bool> {
+        self.pose_live(assets, transform, sequence, seconds, &LiveValues::default())
+    }
+    /// `pose`, with its live digits (`bri_content::shape::Live`) showing
+    /// `live`.
+    pub fn pose_live(
+        &mut self,
+        assets: &ItemAssets,
+        transform: Mat4,
+        sequence: Option<&str>,
+        seconds: f32,
+        live: &LiveValues,
+    ) -> Result<bool> {
         validate_transform(transform)?;
         let shape = assets.shape(&self.model)?;
-        let pose = assets.pose(&self.model, sequence, seconds)?;
+        let mut pose = assets.pose(&self.model, sequence, seconds)?;
+        show_live(shape, &mut pose, live);
         let Some(detail) = visible_detail(shape, self.first_person) else {
             let changed = !self.data.vertices.is_empty();
             self.data.vertices.clear();
@@ -406,6 +419,35 @@ pub fn native_shape_scene(
     let mut bindings = Vec::new();
     let mut image_bindings = BTreeMap::new();
     for (source, texture) in shape.materials.iter().zip(textures) {
+        if let Some(surface) = source.surface.as_ref().filter(|_| !source.unlit) {
+            // The full physically based look: its maps are other
+            // materials' textures, data except the glow.
+            let mut bind = |image: &SceneImage, srgb: bool| {
+                *image_bindings
+                    .entry((image.label.clone(), !srgb))
+                    .or_insert_with(|| {
+                        let mut image = image.clone();
+                        image.srgb = srgb;
+                        scene.images.push(image);
+                        scene.images.len() - 1
+                    })
+            };
+            let base = bind(texture, true);
+            let maps = bri_render::scene::SurfaceMap::ALL.map(|map| match map.of(surface) {
+                Some(m) => bind(textures[m], map.srgb()),
+                None => bind(&map.stand_in(), map.srgb()),
+            });
+            let mut material =
+                Material::physical(format!("item/{model}/{}", source.name), base, maps, surface);
+            material.ignore_texture_alpha = source.blend == "opaque";
+            material.alpha = match source.blend.as_str() {
+                "opaque" if node_color || tint[3] >= 1. => AlphaMode::Opaque,
+                _ => AlphaMode::Blend,
+            };
+            bindings.push(scene.materials.len());
+            scene.materials.push(material);
+            continue;
+        }
         if let Some(metal) = &source.metal {
             // Bare metal: its texture tints the reflectance (colour),
             // its detail material's texture is data (linear).
@@ -854,8 +896,9 @@ impl ItemAssets {
                     input_bytes + bytes.len() <= 256 * 1024 * 1024,
                     "Item aggregate input budget exceeded"
                 );
-                let shape: Shape = serde_json::from_slice(&bytes)?;
+                let mut shape: Shape = serde_json::from_slice(&bytes)?;
                 shape.validate()?;
+                shape.expand_live_frames();
                 let vertices = shape
                     .meshes
                     .iter()

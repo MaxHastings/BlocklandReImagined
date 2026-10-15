@@ -61,6 +61,11 @@ fn cmd_ammo_box(p, n) { give_ammo(p, "probe", n); }
 fn cmd_endless(p) { set_reserve(p, "probe", ()); }
 fn cmd_load(p, n) { set_rounds(p, "probe:weapon/rifle", n); }
 fn cmd_reload_gun(p) { reload(p); }
+fn cmd_nade(p) { give_item(p, "probe:weapon/nade", false); }
+fn cmd_quick(p) { quick_use(p, "probe:weapon/nade"); }
+fn cmd_flash(p) { screen_flash(p, [0.3, 0.6, 1.0, 0.5], 0.4); body_flash(p, [0.4, 0.8, 1.0, 0.6], 0.5); }
+fn cmd_bash(p) { set_image_state(p, "Bash"); }
+fn cmd_held(p) { let me = player(p); note("held", me.item + "|" + me.image_state); }
 fn cmd_boom(p, look) {
     if look == "" { explode(0.0, 1.0, 30.0, 2.0, 0.0, 0.0); }
     else { explode(0.0, 1.0, 30.0, 2.0, 0.0, 0.0, look); }
@@ -154,6 +159,8 @@ fn cmd_box(p) { message_box(p, "Probe", "A box"); }
 fn cmd_music(p, track) { play_music_all(track, #{ looping: false, fade: 2.0 }); }
 fn cmd_music_stop(p) { stop_music_all(1.5); }
 fn cmd_my_music(p) { play_music(p, "probe:sound/theme"); }
+fn cmd_bed(p, key) { play_ambient_all(key, "probe:sound/theme", #{ volume: 0.5, fade: 1.0, at: [1.0, 2.0, 3.0], range: 40.0 }); }
+fn cmd_bed_stop(p, key) { stop_ambient_all(key, 2.0); }
 fn cmd_keep_game(p, v) { let s = get("per_game"); s[`${player(p).minigame}`] = v; set("per_game", s); }
 fn cmd_keep_large_game(p) {
     let values = [];
@@ -210,6 +217,11 @@ fn behaviour() -> Value {
             command("endless", &[]),
             command("load", &["int"]),
             command("reload_gun", &[]),
+            command("nade", &[]),
+            command("quick", &[]),
+            command("flash", &[]),
+            command("bash", &[]),
+            command("held", &[]),
             command("boom", &["string"]),
             command("again", &[]),
             command("dart", &["float", "float", "float", "float"]),
@@ -235,6 +247,8 @@ fn behaviour() -> Value {
             command("music", &["string"]),
             command("music_stop", &[]),
             command("my_music", &[]),
+            command("bed", &["string"]),
+            command("bed_stop", &["string"]),
             command("keep_game", &["string"]),
             command("keep_large_game", &[]),
         ],
@@ -252,6 +266,7 @@ fn behaviour() -> Value {
             "env": { "default": "", "visible": "everyone" },
             "struck": { "default": "", "visible": "everyone" },
             "mag": { "default": "", "visible": "everyone" },
+            "held": { "default": "", "visible": "everyone" },
             "heard": { "default": "", "visible": "everyone" },
             "kinds": { "default": "", "visible": "everyone" },
             "bots": { "default": "", "visible": "everyone" },
@@ -270,7 +285,8 @@ fn weapons() -> bri_weapons::Pack {
         "id": "probe",
         "items": {
             "probe:weapon/gun": { "ui_name": "Probe Gun", "image": "probe:image/gun" },
-            "probe:weapon/rifle": { "ui_name": "Probe Rifle", "image": "probe:image/rifle" }
+            "probe:weapon/rifle": { "ui_name": "Probe Rifle", "image": "probe:image/rifle" },
+            "probe:weapon/nade": { "ui_name": "Probe Nade", "image": "probe:image/nade" }
         },
         "images": {
             "probe:image/gun": {
@@ -278,7 +294,16 @@ fn weapons() -> bri_weapons::Pack {
                 "states": [
                     { "name": "Activate", "ticks": 6, "timeout": 1 },
                     { "name": "Ready", "no_ammo": 2 },
-                    { "name": "Empty", "ammo": 1 }
+                    { "name": "Empty", "ammo": 1 },
+                    { "name": "Bash", "ticks": 12, "timeout": 1 }
+                ]
+            },
+            "probe:image/nade": {
+                "states": [
+                    { "name": "Activate", "ticks": 6, "timeout": 1 },
+                    { "name": "Ready", "down": 2, "allow_change": true },
+                    { "name": "Throw", "ticks": 12, "timeout": 3 },
+                    { "name": "Done", "ticks": 6, "up": 1 }
                 ]
             },
             "probe:image/scope": { "states": [{ "name": "Scoped" }] },
@@ -669,6 +694,17 @@ fn view_beams_and_animations_reach_players_as_notices_and_cues() {
             })
             .collect();
     assert_eq!(fovs, [Some(30.0), None]);
+    g.run(a, "flash", vec![]);
+    assert!(
+        g.s.take_private_notices()
+            .iter()
+            .any(|(owner, n)| *owner == a
+                && matches!(n, Notice::Flash { color, seconds }
+            if *color == [0.3, 0.6, 1.0, 0.5] && *seconds == 0.4))
+    );
+    assert!(g.s.take_cues().iter().any(|c| matches!(&c.kind,
+        CueKind::BodyFlash { owner, color, seconds }
+            if *owner == a && *color == [0.4, 0.8, 1.0, 0.6] && *seconds == 0.5)));
     g.s.take_cues();
     g.run(a, "show", vec![]);
     let cues = g.s.take_cues();
@@ -2178,6 +2214,98 @@ fn a_call_to_no_function_is_told_when_the_add_on_loads() {
     assert_eq!(
         told[0].location.as_deref(),
         Some(format!("probe/main.rhai:{line}").as_str())
+    );
+}
+
+/// Ambient beds play under their keys beside music, reach later joiners
+/// until stopped, and are capped in number.
+#[test]
+fn rules_play_ambient_beds_for_everyone_until_stopped() {
+    use bri_sim::session::AmbientPlay;
+    let beds = |g: &mut Game, who: OwnerId| -> Vec<AmbientPlay> {
+        g.s.take_private_notices()
+            .into_iter()
+            .filter_map(|(o, n)| match n {
+                Notice::Ambient(play) if o == who => Some(play),
+                _ => None,
+            })
+            .collect()
+    };
+    let mut g = Game::new();
+    let a = g.join(Vec3::new(0.0, 0.05, 0.0));
+    g.s.take_private_notices();
+    g.run(a, "bed", vec![PackageArg::String("wind".into())]);
+    g.steps(1);
+    let wind = AmbientPlay {
+        key: "wind".into(),
+        track: Some("probe:sound/theme".into()),
+        volume: 0.5,
+        fade: 1.0,
+        at: Some([1.0, 2.0, 3.0]),
+        range: 40.0,
+    };
+    assert_eq!(beds(&mut g, a), vec![wind.clone()]);
+    let b = g.join(Vec3::new(2.0, 0.05, 0.0));
+    assert_eq!(beds(&mut g, b), vec![wind]);
+
+    g.run(a, "bed_stop", vec![PackageArg::String("wind".into())]);
+    g.steps(1);
+    let stopped = beds(&mut g, b);
+    assert_eq!(stopped.len(), 1);
+    assert!(stopped[0].track.is_none() && stopped[0].fade == 2.0);
+    let c = g.join(Vec3::new(4.0, 0.05, 0.0));
+    assert!(beds(&mut g, c).is_empty());
+
+    for i in 0..=bri_package_runtime::ops::MAX_AMBIENT {
+        g.run(a, "bed", vec![PackageArg::String(format!("bed{i}"))]);
+        g.steps(1);
+    }
+    let d = g.join(Vec3::new(6.0, 0.05, 0.0));
+    assert_eq!(beds(&mut g, d).len(), bri_package_runtime::ops::MAX_AMBIENT);
+}
+
+/// A key of an Add-On's own (here a command) uses an item once without
+/// switching to it, as a grenade key does, and sends the held image to a
+/// named state, as a melee key does with whatever is held.
+#[test]
+fn quick_use_throws_a_carried_item_and_puts_the_gun_back_and_a_state_can_be_entered() {
+    let mut g = Game::new();
+    let p = g.join(Vec3::new(0.0, 0.05, 0.0));
+    g.steps(3);
+    g.run(p, "arm", vec![]);
+    g.run(p, "nade", vec![]);
+    g.steps(10);
+    g.run(p, "held", vec![]);
+    assert_eq!(g.text("held"), "probe:weapon/gun|Ready");
+    g.run(p, "quick", vec![]);
+    let mut seen = Vec::new();
+    for _ in 0..50 {
+        g.steps(1);
+        g.run(p, "held", vec![]);
+        let now = g.text("held");
+        if seen.last() != Some(&now) {
+            seen.push(now);
+        }
+    }
+    assert!(
+        seen.iter().any(|s| s == "probe:weapon/nade|Throw"),
+        "the nade came out and was thrown: {seen:?}"
+    );
+    assert_eq!(
+        seen.last().map(String::as_str),
+        Some("probe:weapon/gun|Ready"),
+        "the gun is back in hand: {seen:?}"
+    );
+    g.run(p, "bash", vec![]);
+    g.steps(1);
+    g.run(p, "held", vec![]);
+    assert_eq!(g.text("held"), "probe:weapon/gun|Bash");
+    g.steps(14);
+    g.run(p, "held", vec![]);
+    assert_eq!(
+        g.text("held"),
+        "probe:weapon/gun|Ready",
+        "back after its timeout"
     );
 }
 

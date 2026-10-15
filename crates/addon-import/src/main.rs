@@ -8,7 +8,9 @@ const USAGE: &str = "Usage:
   bri-import-addon check-port WORK_DIR
   bri-import-addon gltf MODEL(.glb|.gltf) FRESH_OUTPUT_DIR [--kind body|item|prop|map|brick] [--id NAME] [--name MENU_NAME]
       [--height UNITS | --scale FACTOR] [--fps 30] [--right-hand NODE] [--left-hand NODE] [--eye NODE] [--loop CLIP]...
-      [--lod TRIANGLES] [--lod-pixels 100] [--box-width UNITS] [--box-height UNITS] [--json]
+      [--lod TRIANGLES] [--lod-pixels 100] [--box-width UNITS] [--box-height UNITS] [--sky DIR] [--terrain DIR] [--json]
+  bri-import-addon export-map CONTENT_OR_BUNDLE_DIR MAP OUTPUT.glb
+  bri-import-addon map MAP_ADDON(.zip|folder) FRESH_OUTPUT_DIR [--v20 V20_ROOT] [--mission NAME] [--id NAME] [--name MENU_NAME] [--version 1.0.0]
 
 Converts one legacy Blockland Add-On into a native package directory and writes
 import-report.json and IMPORT-REPORT.md into it. Never executes scripts.
@@ -24,11 +26,27 @@ port, runs the checks and prints the entry for the ports list.
 archetype, an item or prop a `models/` folder for weapons.json or
 vehicles.json, a map a map Add-On with its spawn points and lights, a brick
 a brick Add-On for the brick menu. Names, scale and clips:
-docs/modding/gltf-models.md; maps: docs/modding/maps.md.";
+docs/modding/gltf-models.md; maps: docs/modding/maps.md.
+
+`export-map` writes a converted map (`bedroom`, `slate`, or any map id) as a
+.glb for Blender: its geometry and textures, `col_` collision, `spawn`
+empties and its lights, ready to edit and import again with `gltf --kind map`.
+Give it the game's `content` folder or a map bundle folder.
+
+`map` converts an old Blockland map Add-On (`Map_*.zip`: a .mis mission, its
+.dif interiors, .ter terrain, textures and sky) into a map Add-On, with its
+lightmaps, through the converter that makes v20's own maps. `--v20` names a
+Blockland v20 folder for the textures and models the map borrows from it.";
 
 fn main() -> Result<()> {
     if std::env::args().nth(1).as_deref() == Some("gltf") {
         return gltf(std::env::args().skip(2));
+    }
+    if std::env::args().nth(1).as_deref() == Some("map") {
+        return v20_map(std::env::args().skip(2));
+    }
+    if std::env::args().nth(1).as_deref() == Some("export-map") {
+        return export_map(std::env::args().skip(2));
     }
     let mut args = std::env::args_os().skip(1);
     let mut positional = vec![];
@@ -161,6 +179,8 @@ fn gltf(mut args: impl Iterator<Item = String>) -> Result<()> {
             "--lod-pixels" => opts.lod_pixels = number(value()?)?,
             "--box-width" => opts.box_width = Some(number(value()?)?),
             "--box-height" => opts.box_height = Some(number(value()?)?),
+            "--sky" => opts.sky = Some(PathBuf::from(value()?)),
+            "--terrain" => opts.terrain = Some(PathBuf::from(value()?)),
             "--version" => opts.version = value()?,
             "--json" => json = true,
             "-h" | "--help" => {
@@ -185,5 +205,73 @@ fn gltf(mut args: impl Iterator<Item = String>) -> Result<()> {
         print!("{}", report.markdown());
         println!("\nWritten to {}", out.display());
     }
+    Ok(())
+}
+
+/// The map bundle folder in `dir` holding `map`: `dir` itself, or one of
+/// its folders (the game's `content` folder holds the map bundle pack).
+fn bundle_dir(dir: &std::path::Path, map: &str) -> Result<PathBuf> {
+    use bri_addon_import::gltf::find_map;
+    if dir.join("bundle.json").is_file() {
+        return Ok(dir.to_path_buf());
+    }
+    let mut dirs: Vec<_> = std::fs::read_dir(dir)
+        .with_context(|| format!("reading {}", dir.display()))?
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p.join("bundle.json").is_file())
+        .collect();
+    dirs.sort();
+    dirs.into_iter()
+        .find(|d| find_map(d, map).is_ok())
+        .with_context(|| format!("no map bundle with map `{map}` in {}", dir.display()))
+}
+
+fn v20_map(args: impl Iterator<Item = String>) -> Result<()> {
+    let mut positional = vec![];
+    let mut opts = bri_addon_import::v20_map::Options {
+        input: PathBuf::new(),
+        out: PathBuf::new(),
+        v20: None,
+        mission: None,
+        id: None,
+        name: None,
+        version: "1.0.0".into(),
+    };
+    let mut args = args;
+    while let Some(a) = args.next() {
+        let mut value = || args.next().context(USAGE);
+        match a.as_str() {
+            "--v20" => opts.v20 = Some(PathBuf::from(value()?)),
+            "--mission" => opts.mission = Some(value()?),
+            "--id" => opts.id = Some(value()?),
+            "--name" => opts.name = Some(value()?),
+            "--version" => opts.version = value()?,
+            _ => positional.push(PathBuf::from(a)),
+        }
+    }
+    let [input, out] = <[PathBuf; 2]>::try_from(positional).map_err(|_| anyhow::anyhow!(USAGE))?;
+    opts.input = input;
+    opts.out = out;
+    let made = bri_addon_import::v20_map::import(&opts)?;
+    for (mission, map) in made.missions.iter().zip(&made.map_ids) {
+        println!("Imported {mission} as the map {map}");
+    }
+    println!(
+        "{} files in {}. Check it with bri-addon-check.",
+        made.files,
+        opts.out.display()
+    );
+    Ok(())
+}
+
+fn export_map(args: impl Iterator<Item = String>) -> Result<()> {
+    let args: Vec<String> = args.collect();
+    let [dir, map, out] = <[String; 3]>::try_from(args).map_err(|_| anyhow::anyhow!(USAGE))?;
+    let root = bundle_dir(std::path::Path::new(&dir), &map)?;
+    let (glb, report) = bri_addon_import::gltf::export_map(&root, &map)?;
+    std::fs::write(&out, glb).with_context(|| format!("writing {out}"))?;
+    print!("{}", report.markdown());
+    println!("\nWritten to {out}. Open it in Blender with File > Import > glTF 2.0.");
     Ok(())
 }

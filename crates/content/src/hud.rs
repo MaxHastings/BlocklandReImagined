@@ -21,6 +21,7 @@
 use anyhow::{Result, bail, ensure};
 use bri_console::Clamp;
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 
 /// The HUD's height in units.
 pub const HEIGHT: f32 = 480.0;
@@ -51,9 +52,19 @@ pub enum Region {
     /// print only while that print is the ammo display, so rules' other
     /// bottom prints still show.
     Ammo,
+    /// The stock chat lines: claiming it hides them (typing still works),
+    /// as a match HUD with its own kill feed does.
+    Chat,
+    /// The stock tool bar down the right edge (the five-slot inventory):
+    /// claiming it hides the bar, for a game that shows what is carried
+    /// its own way.
+    Tools,
+    /// The names drawn over other players' heads: claiming it hides the
+    /// stock ones, and a layout's `name_tags` draws them its own way.
+    NameTags,
 }
 impl Region {
-    pub const ALL: [Region; 13] = [
+    pub const ALL: [Region; 16] = [
         Region::TopLeft,
         Region::TopCenter,
         Region::TopRight,
@@ -67,6 +78,9 @@ impl Region {
         Region::CenterPrint,
         Region::BottomPrint,
         Region::Ammo,
+        Region::Chat,
+        Region::Tools,
+        Region::NameTags,
     ];
     pub fn name(self) -> &'static str {
         match self {
@@ -83,6 +97,9 @@ impl Region {
             Region::CenterPrint => "center_print",
             Region::BottomPrint => "bottom_print",
             Region::Ammo => "ammo",
+            Region::Chat => "chat",
+            Region::Tools => "tools",
+            Region::NameTags => "name_tags",
         }
     }
     pub fn parse(name: &str) -> Option<Self> {
@@ -96,6 +113,9 @@ impl Region {
             Region::CenterPrint => Some("center print"),
             Region::BottomPrint => Some("bottom print"),
             Region::Ammo => Some("ammo display"),
+            Region::Chat => Some("chat"),
+            Region::Tools => Some("tool bar"),
+            Region::NameTags => Some("player names"),
             _ => None,
         }
     }
@@ -122,6 +142,9 @@ impl Region {
             Region::CenterPrint => [center(480.0), 160.0, 480.0, 120.0],
             Region::BottomPrint => [0.0, 400.0, w, 80.0],
             Region::Ammo => [w - 240.0, 400.0, 240.0, 80.0],
+            Region::Chat => [0.0, 0.0, 320.0, 120.0],
+            Region::Tools => [w - 64.0, 0.0, 64.0, HEIGHT],
+            Region::NameTags => [0.0, 0.0, w, HEIGHT],
         }
     }
 }
@@ -148,7 +171,82 @@ pub struct Layout {
     /// into (`hud_region`).
     #[serde(default)]
     pub elements: Vec<Element>,
+    /// The game's own prompts restyled or hidden while this layout is
+    /// drawn, by key ([`STOCK_TEXTS`]): `""` hides one. Markup and colour
+    /// codes work as in a center print; `{}` is the respawn countdown's
+    /// seconds.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub texts: BTreeMap<String, String>,
+    /// How the names over other players' heads look, for a `name_tags`
+    /// claim. Left out, the claim hides them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name_tags: Option<NameTagStyle>,
 }
+
+/// Names over other players' heads, as a game shows them: whose, when,
+/// and in what colour.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct NameTagStyle {
+    /// Players on the viewer's team in the viewer's mini-game.
+    pub teammates: TagShow,
+    /// Everyone else.
+    pub others: TagShow,
+    /// One colour for every name (RGBA 0..1). Left out, the stock colour:
+    /// the team's, then the mini-game's, else white.
+    pub color: Option<[f32; 4]>,
+    /// The stock one-pixel dark outline around each name.
+    pub outline: bool,
+    /// How far above the eye the name sits, in units (the stock 0.85).
+    pub height: f32,
+}
+impl Default for NameTagStyle {
+    fn default() -> Self {
+        Self {
+            teammates: TagShow::Always,
+            others: TagShow::Always,
+            color: None,
+            outline: true,
+            height: 0.85,
+        }
+    }
+}
+
+impl NameTagStyle {
+    /// Whether a name shows: `teammate` on the viewer's team, `aimed` with
+    /// the viewer's aim on them.
+    pub fn shows(&self, teammate: bool, aimed: bool) -> bool {
+        match if teammate {
+            self.teammates
+        } else {
+            self.others
+        } {
+            TagShow::Always => true,
+            TagShow::Aimed => aimed,
+            TagShow::Never => false,
+        }
+    }
+}
+
+/// When a player's name shows.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TagShow {
+    /// Whenever they are in sight, as v20 shows every name.
+    #[default]
+    Always,
+    /// Only while the viewer's aim is on them.
+    Aimed,
+    Never,
+}
+
+/// The game's prompts a layout's `texts` can replace.
+pub const STOCK_TEXTS: [&str; 4] = [
+    "click_to_respawn",
+    "respawn_countdown",
+    "respawn_countdown_one",
+    "building_disabled",
+];
 
 /// When a claim applies: every list given must match (an empty list always
 /// does). Ids are full content ids.
@@ -164,10 +262,17 @@ pub struct When {
     /// The viewer sits in one of these vehicles (`namespace:vehicle/name`,
     /// or a v20 `v20.vehicle.<datablock>`).
     pub vehicle: Vec<String>,
+    /// `true` only while the viewer plays in a mini-game, `false` only
+    /// while they do not.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub minigame: Option<bool>,
 }
 impl When {
     pub fn is_always(&self) -> bool {
-        self.body.is_empty() && self.holding.is_empty() && self.vehicle.is_empty()
+        self.body.is_empty()
+            && self.holding.is_empty()
+            && self.vehicle.is_empty()
+            && self.minigame.is_none()
     }
 }
 
@@ -180,6 +285,8 @@ pub struct Viewer<'a> {
     pub holding: &'a str,
     /// The vehicle definition sat in, `""` on foot.
     pub vehicle: &'a str,
+    /// Playing in a mini-game.
+    pub minigame: bool,
 }
 fn same(a: &str, b: &str) -> bool {
     a.eq_ignore_ascii_case(b)
@@ -198,14 +305,17 @@ impl When {
                 }));
         let vehicle = self.vehicle.is_empty()
             || (!viewer.vehicle.is_empty() && self.vehicle.iter().any(|v| same(v, viewer.vehicle)));
-        body && holding && vehicle
+        let minigame = self.minigame.is_none_or(|m| m == viewer.minigame);
+        body && holding && vehicle && minigame
     }
     /// How specific the claim is: a vehicle seat (8), then a held item (4),
-    /// then a body (2), added together.
+    /// then a body (2), then being in a mini-game or not (1), added
+    /// together.
     pub fn specificity(&self) -> u8 {
         u8::from(!self.vehicle.is_empty()) * 8
             + u8::from(!self.holding.is_empty()) * 4
             + u8::from(!self.body.is_empty()) * 2
+            + u8::from(self.minigame.is_some())
     }
 }
 
@@ -282,9 +392,214 @@ pub enum Element {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         show: Option<Show>,
     },
+    /// The latest kills, one line each, oldest at the top: the killer, the
+    /// weapon (an icon or its name) and the victim, in their teams'
+    /// colours. While a layout with one is drawn, kills stay out of chat.
+    KillFeed {
+        /// Where the first line starts (or centres, or ends, by `align`).
+        at: [f32; 2],
+        #[serde(default)]
+        align: Align,
+        /// Most lines shown, 1 to 16.
+        #[serde(default = "feed_lines")]
+        lines: u8,
+        /// How long a line stays, 0.5 to 60 seconds; it fades out over the
+        /// last half second.
+        #[serde(default = "feed_seconds")]
+        seconds: f32,
+        /// Units from one line to the next; negative stacks upward.
+        #[serde(default = "feed_spacing")]
+        spacing: f32,
+        /// A kill's line: `{killer}`, `{weapon}` and `{victim}`.
+        #[serde(default = "feed_kill")]
+        format: String,
+        /// A death with no killer (a fall, a suicide): `{weapon}` and
+        /// `{victim}`.
+        #[serde(default = "feed_death")]
+        death: String,
+        #[serde(default = "white")]
+        color: [f32; 4],
+        /// Names in their teams' colours (else `color`).
+        #[serde(default = "yes")]
+        team_colors: bool,
+        /// A damage type's icon by its name (`Gun`, `Rocket Direct`, any
+        /// case), drawn for `{weapon}`.
+        #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+        icons: BTreeMap<String, String>,
+        /// An icon's drawn size, units.
+        #[serde(default = "feed_icon")]
+        icon_size: [f32; 2],
+        /// A damage type's name as the line writes it, by its name; one
+        /// left out is written as it is named.
+        #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+        names: BTreeMap<String, String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        show: Option<Show>,
+    },
+    /// A motion tracker: a blip for each player within `range` units who
+    /// moves faster than `min_speed` or fired within `fired_within`
+    /// seconds, placed by range and bearing from the middle of `rect`
+    /// (straight ahead is up), tinted by side.
+    Tracker {
+        rect: [f32; 4],
+        /// Units from the middle of `rect` to its edge.
+        range: f32,
+        blip: String,
+        /// Drawn for a contact more than `height` units above or below the
+        /// viewer, in place of `blip`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        blip_above: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        blip_below: Option<String>,
+        /// Each side's own blip, in place of `blip` (`blip_above` and
+        /// `blip_below` still win off the viewer's level).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        blip_ally: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        blip_enemy: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        blip_neutral: Option<String>,
+        #[serde(default = "tracker_height")]
+        height: f32,
+        #[serde(default = "tracker_blip")]
+        blip_size: [f32; 2],
+        #[serde(default = "tracker_ally")]
+        ally: [f32; 4],
+        #[serde(default = "tracker_enemy")]
+        enemy: [f32; 4],
+        /// A player in no team of the viewer's game, or in no game.
+        #[serde(default = "tracker_neutral")]
+        neutral: [f32; 4],
+        /// Slower movers do not show (a player standing still).
+        #[serde(default = "tracker_speed")]
+        min_speed: f32,
+        /// Show players moving crouched too; off, crouch-walkers stay off
+        /// the tracker.
+        #[serde(default)]
+        crouched: bool,
+        /// Seconds after a player fires during which they show however
+        /// they move; 0 never.
+        #[serde(default = "tracker_fired")]
+        fired_within: f32,
+        /// Which sides show.
+        #[serde(default = "yes")]
+        allies: bool,
+        #[serde(default = "yes")]
+        enemies: bool,
+        #[serde(default = "yes")]
+        others: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        show: Option<Show>,
+    },
 }
 fn white() -> [f32; 4] {
     [1.0; 4]
+}
+fn yes() -> bool {
+    true
+}
+fn feed_lines() -> u8 {
+    4
+}
+fn feed_seconds() -> f32 {
+    6.0
+}
+fn feed_spacing() -> f32 {
+    16.0
+}
+fn feed_kill() -> String {
+    "{killer} [{weapon}] {victim}".into()
+}
+fn feed_death() -> String {
+    "[{weapon}] {victim}".into()
+}
+fn feed_icon() -> [f32; 2] {
+    [24.0, 12.0]
+}
+fn tracker_height() -> f32 {
+    3.0
+}
+fn tracker_blip() -> [f32; 2] {
+    [8.0, 8.0]
+}
+fn tracker_ally() -> [f32; 4] {
+    [1.0, 0.85, 0.2, 1.0]
+}
+fn tracker_enemy() -> [f32; 4] {
+    [1.0, 0.2, 0.15, 1.0]
+}
+fn tracker_neutral() -> [f32; 4] {
+    [0.85, 0.85, 0.85, 1.0]
+}
+fn tracker_speed() -> f32 {
+    1.0
+}
+fn tracker_fired() -> f32 {
+    2.0
+}
+
+/// A kill as the feed shows it ([`Element::KillFeed`]).
+#[derive(Debug, Clone, PartialEq)]
+pub struct FeedKill {
+    /// Seconds since it happened.
+    pub age: f32,
+    /// The killer's name and team colour; `None` for a death with no
+    /// killer.
+    pub killer: Option<(String, Option<[f32; 4]>)>,
+    pub victim: (String, Option<[f32; 4]>),
+    /// The damage type's name (`Gun`).
+    pub weapon: String,
+}
+
+/// Which side another player is on, from the viewer's.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum Relation {
+    /// Not in the viewer's game, or no teams to tell.
+    #[default]
+    Neutral,
+    /// The viewer's team.
+    Ally,
+    /// Another team of the viewer's game, or anyone in a game without
+    /// teams.
+    Enemy,
+}
+
+/// Another player as a tracker sees them, from the viewer's eye and
+/// facing ([`Element::Tracker`]).
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct Contact {
+    pub id: u64,
+    /// Units to the viewer's right, ahead and above.
+    pub right: f32,
+    pub ahead: f32,
+    pub above: f32,
+    /// Units a second.
+    pub speed: f32,
+    pub crouched: bool,
+    /// Seconds since they last fired (0 while they hold the trigger).
+    pub fired: Option<f32>,
+    pub relation: Relation,
+}
+impl Contact {
+    /// Horizontal distance from the viewer.
+    pub fn range(&self) -> f32 {
+        self.right.hypot(self.ahead)
+    }
+    /// Whether a tracker that shows movers above `min_speed` (crouched
+    /// ones only with `crouched`) and shooters for `fired_within` seconds
+    /// shows this contact.
+    pub fn noticed(&self, min_speed: f32, crouched: bool, fired_within: f32) -> bool {
+        let fired = self.fired.is_some_and(|s| s < fired_within);
+        let moving = self.speed > min_speed && (crouched || !self.crouched);
+        fired || moving
+    }
+}
+
+/// What a frame's kill feeds and trackers read besides values.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct Live<'a> {
+    pub kills: &'a [FeedKill],
+    pub contacts: &'a [Contact],
 }
 
 /// A strip of equal frames in one texture, left to right then down. The
@@ -391,6 +706,9 @@ pub enum Source {
     AmmoMax,
     AmmoReserve,
     Reloading,
+    /// Seconds until the dead viewer may respawn, 0 once they may click;
+    /// missing while alive or while a rule holds their respawn.
+    Respawn,
     /// A rule's public state: `package:player/key` or `package:global/key`,
     /// read as a HUD panel row reads it.
     State(String),
@@ -408,6 +726,7 @@ impl Source {
             "ammo_max" => Source::AmmoMax,
             "ammo_reserve" => Source::AmmoReserve,
             "reloading" => Source::Reloading,
+            "respawn" => Source::Respawn,
             state => {
                 let (package, rest) = state.split_once(':')?;
                 let (scope, key) = rest.split_once('/')?;
@@ -459,7 +778,7 @@ fn rect_ok(r: &[f32; 4]) -> bool {
 fn source_ok(s: &str) -> Result<()> {
     ensure!(
         Source::parse(s).is_some(),
-        "`{s}` is not a HUD value: health, health_max, energy, alive, center_print, bottom_print, ammo, ammo_max, ammo_reserve, reloading, or a rule's package:player/key or package:global/key"
+        "`{s}` is not a HUD value: health, health_max, energy, alive, center_print, bottom_print, ammo, ammo_max, ammo_reserve, reloading, respawn, or a rule's package:player/key or package:global/key"
     );
     Ok(())
 }
@@ -510,6 +829,22 @@ impl Layout {
         ids(&self.when.body, "body")?;
         ids(&self.when.holding, "holding")?;
         ids(&self.when.vehicle, "vehicle")?;
+        if let Some(style) = &self.name_tags {
+            ensure!(
+                self.region == Region::NameTags,
+                "`name_tags` belongs in a `name_tags` region layout"
+            );
+            ensure!(
+                style.height.is_finite() && (-8.0..=8.0).contains(&style.height),
+                "name_tags height must be -8 to 8 units"
+            );
+            ensure!(
+                style
+                    .color
+                    .is_none_or(|c| c.iter().all(|v| v.is_finite() && (0.0..=1.0).contains(v))),
+                "name_tags color must be RGBA from 0 to 1"
+            );
+        }
         ensure!(
             self.elements.len() <= MAX_ELEMENTS,
             "at most {MAX_ELEMENTS} elements"
@@ -613,9 +948,139 @@ impl Layout {
                     }
                     show_ok(show)?;
                 }
+                Element::KillFeed {
+                    at,
+                    lines,
+                    seconds,
+                    spacing,
+                    format,
+                    death,
+                    color,
+                    icons,
+                    icon_size,
+                    names,
+                    show,
+                    ..
+                } => {
+                    ensure!(
+                        at.iter()
+                            .chain([spacing])
+                            .all(|v| v.is_finite() && v.abs() <= 4096.0),
+                        "kill feed position and spacing must be finite"
+                    );
+                    ensure!((1..=16).contains(lines), "a kill feed shows 1 to 16 lines");
+                    ensure!(
+                        (0.5..=60.0).contains(seconds),
+                        "a kill feed line stays 0.5 to 60 seconds"
+                    );
+                    for line in [format, death] {
+                        ensure!(
+                            line.chars().count() <= 64 && !line.chars().any(char::is_control),
+                            "a kill feed format is at most 64 printable characters"
+                        );
+                    }
+                    ensure!(color_ok(color), "kill feed color must be 0..1 RGBA");
+                    ensure!(
+                        icons.len() <= 64 && names.len() <= 64,
+                        "a kill feed names at most 64 icons and 64 names"
+                    );
+                    for icon in icons.values() {
+                        texture_ok(icon)?;
+                    }
+                    for name in names.values() {
+                        ensure!(
+                            name.chars().count() <= 32 && !name.chars().any(char::is_control),
+                            "a kill feed weapon name is at most 32 printable characters"
+                        );
+                    }
+                    ensure!(
+                        icon_size
+                            .iter()
+                            .all(|v| v.is_finite() && *v > 0.0 && *v <= 480.0),
+                        "a kill feed icon size must be positive"
+                    );
+                    show_ok(show)?;
+                }
+                Element::Tracker {
+                    rect,
+                    range,
+                    blip,
+                    blip_above,
+                    blip_below,
+                    blip_ally,
+                    blip_enemy,
+                    blip_neutral,
+                    height,
+                    blip_size,
+                    ally,
+                    enemy,
+                    neutral,
+                    min_speed,
+                    fired_within,
+                    show,
+                    ..
+                } => {
+                    ensure!(
+                        rect_ok(rect),
+                        "tracker rect must be finite with no negative size"
+                    );
+                    ensure!(
+                        range.is_finite() && (1.0..=1000.0).contains(range),
+                        "a tracker's range is 1 to 1000 units"
+                    );
+                    for t in std::iter::once(blip)
+                        .chain(blip_above)
+                        .chain(blip_below)
+                        .chain(blip_ally)
+                        .chain(blip_enemy)
+                        .chain(blip_neutral)
+                    {
+                        texture_ok(t)?;
+                    }
+                    ensure!(
+                        [height, min_speed, fired_within]
+                            .iter()
+                            .all(|v| v.is_finite() && (0.0..=1000.0).contains(*v)),
+                        "a tracker's height, min_speed and fired_within are 0 to 1000"
+                    );
+                    ensure!(
+                        blip_size
+                            .iter()
+                            .all(|v| v.is_finite() && *v > 0.0 && *v <= 480.0),
+                        "a tracker's blip size must be positive"
+                    );
+                    ensure!(
+                        [ally, enemy, neutral].into_iter().all(color_ok),
+                        "tracker colors must be 0..1 RGBA"
+                    );
+                    show_ok(show)?;
+                }
             }
         }
+        ensure!(self.texts.len() <= STOCK_TEXTS.len(), "too many texts");
+        for (key, text) in &self.texts {
+            ensure!(
+                STOCK_TEXTS.contains(&key.as_str()),
+                "`{key}` is not a stock text: {}",
+                STOCK_TEXTS.join(", ")
+            );
+            ensure!(
+                text.chars().count() <= 256 && !text.chars().any(|c| c.is_control() && c != '\n'),
+                "text `{key}` is at most 256 characters"
+            );
+        }
         Ok(())
+    }
+    /// Whether the layout draws a kill feed (kills then stay out of chat).
+    pub fn has_kill_feed(&self) -> bool {
+        self.elements
+            .iter()
+            .any(|e| matches!(e, Element::KillFeed { .. }))
+    }
+    pub fn has_tracker(&self) -> bool {
+        self.elements
+            .iter()
+            .any(|e| matches!(e, Element::Tracker { .. }))
     }
     /// Every texture id the layout draws.
     pub fn textures(&self) -> Vec<&str> {
@@ -631,6 +1096,24 @@ impl Layout {
                 Element::Text { glyphs, .. } => {
                     out.extend(glyphs.as_ref().map(|g| g.texture.as_str()));
                 }
+                Element::KillFeed { icons, .. } => out.extend(icons.values().map(String::as_str)),
+                Element::Tracker {
+                    blip,
+                    blip_above,
+                    blip_below,
+                    blip_ally,
+                    blip_enemy,
+                    blip_neutral,
+                    ..
+                } => out.extend(
+                    std::iter::once(blip)
+                        .chain(blip_above)
+                        .chain(blip_below)
+                        .chain(blip_ally)
+                        .chain(blip_enemy)
+                        .chain(blip_neutral)
+                        .map(String::as_str),
+                ),
             }
         }
         out
@@ -661,6 +1144,9 @@ impl Layout {
                 }
                 Element::Text { value, show, .. } => {
                     names.extend(value.as_deref());
+                    names.extend(show.as_ref().map(|s| s.value.as_str()));
+                }
+                Element::KillFeed { show, .. } | Element::Tracker { show, .. } => {
                     names.extend(show.as_ref().map(|s| s.value.as_str()));
                 }
             }
@@ -694,6 +1180,28 @@ pub enum Item {
         color: [f32; 4],
         align: Align,
     },
+    /// A line of text in several colours and icons, placed as a whole by
+    /// `align` (a kill feed's line).
+    Line {
+        at: [f32; 2],
+        align: Align,
+        spans: Vec<Span>,
+    },
+}
+
+/// Part of a [`Item::Line`].
+#[derive(Debug, Clone, PartialEq)]
+pub enum Span {
+    Text {
+        text: String,
+        color: [f32; 4],
+    },
+    /// A texture drawn `size` units, its bottom on the text's.
+    Image {
+        texture: u64,
+        size: [f32; 2],
+        tint: [f32; 4],
+    },
 }
 
 /// A texture a layout draws: its key for the renderer and its size in
@@ -707,6 +1215,16 @@ pub fn resolve(
     layout: &Layout,
     value: &dyn Fn(&Source) -> Option<Value>,
     texture: &dyn Fn(&str) -> Option<TextureInfo>,
+) -> Vec<Item> {
+    resolve_live(layout, value, texture, &Live::default())
+}
+
+/// [`resolve`] with this frame's kills and tracker contacts.
+pub fn resolve_live(
+    layout: &Layout,
+    value: &dyn Fn(&Source) -> Option<Value>,
+    texture: &dyn Fn(&str) -> Option<TextureInfo>,
+    live: &Live<'_>,
 ) -> Vec<Item> {
     let read = |name: &str| Source::parse(name).and_then(|s| value(&s));
     let number = |name: &str| read(name).and_then(|v| v.number());
@@ -856,6 +1374,155 @@ pub fn resolve(
                     }
                 }
             }
+            Element::KillFeed {
+                at,
+                align,
+                lines,
+                seconds,
+                spacing,
+                format,
+                death,
+                color,
+                team_colors,
+                icons,
+                icon_size,
+                names,
+                show,
+            } => {
+                if !shown(show) {
+                    continue;
+                }
+                let recent: Vec<&FeedKill> = live
+                    .kills
+                    .iter()
+                    .filter(|k| k.age.is_finite() && k.age >= 0.0 && k.age < *seconds)
+                    .collect();
+                let first = recent.len().saturating_sub(usize::from(*lines));
+                for (row, kill) in recent[first..].iter().enumerate() {
+                    // Fades over its last half second.
+                    let fade = ((seconds - kill.age) / 0.5).clamped(0.0, 1.0);
+                    let faded = |c: [f32; 4]| [c[0], c[1], c[2], c[3] * fade];
+                    let name = |(name, team): &(String, Option<[f32; 4]>)| Span::Text {
+                        text: name.clone(),
+                        color: faded(team.filter(|_| *team_colors).unwrap_or(*color)),
+                    };
+                    let weapon = icons
+                        .iter()
+                        .find(|(k, _)| same(k, &kill.weapon))
+                        .and_then(|(_, t)| texture(t))
+                        .map_or_else(
+                            || Span::Text {
+                                text: names
+                                    .iter()
+                                    .find(|(k, _)| same(k, &kill.weapon))
+                                    .map_or(kill.weapon.clone(), |(_, n)| n.clone()),
+                                color: faded(*color),
+                            },
+                            |(key, _)| Span::Image {
+                                texture: key,
+                                size: *icon_size,
+                                tint: faded([1.0; 4]),
+                            },
+                        );
+                    let template = if kill.killer.is_some() { format } else { death };
+                    let mut spans = Vec::new();
+                    let mut rest = template.as_str();
+                    while !rest.is_empty() {
+                        let next = ["{killer}", "{weapon}", "{victim}"]
+                            .into_iter()
+                            .filter_map(|tag| rest.find(tag).map(|at| (at, tag)))
+                            .min();
+                        let Some((start, tag)) = next else {
+                            spans.push(Span::Text {
+                                text: rest.to_string(),
+                                color: faded(*color),
+                            });
+                            break;
+                        };
+                        if start > 0 {
+                            spans.push(Span::Text {
+                                text: rest[..start].to_string(),
+                                color: faded(*color),
+                            });
+                        }
+                        match tag {
+                            "{killer}" => spans.extend(kill.killer.as_ref().map(name)),
+                            "{weapon}" => spans.push(weapon.clone()),
+                            _ => spans.push(name(&kill.victim)),
+                        }
+                        rest = &rest[start + tag.len()..];
+                    }
+                    out.push(Item::Line {
+                        at: [at[0], at[1] + row as f32 * spacing],
+                        align: *align,
+                        spans,
+                    });
+                }
+            }
+            Element::Tracker {
+                rect,
+                range,
+                blip,
+                blip_above,
+                blip_below,
+                blip_ally,
+                blip_enemy,
+                blip_neutral,
+                height,
+                blip_size,
+                ally,
+                enemy,
+                neutral,
+                min_speed,
+                crouched,
+                fired_within,
+                allies,
+                enemies,
+                others,
+                show,
+            } => {
+                if !shown(show) {
+                    continue;
+                }
+                let [x, y, w, h] = *rect;
+                let (cx, cy) = (x + w / 2.0, y + h / 2.0);
+                for c in live.contacts {
+                    let side = match c.relation {
+                        Relation::Ally => allies.then_some((ally, blip_ally)),
+                        Relation::Enemy => enemies.then_some((enemy, blip_enemy)),
+                        Relation::Neutral => others.then_some((neutral, blip_neutral)),
+                    };
+                    let Some((tint, own)) = side else {
+                        continue;
+                    };
+                    if c.range() > *range || !c.noticed(*min_speed, *crouched, *fired_within) {
+                        continue;
+                    }
+                    let id = if c.above > *height {
+                        blip_above.as_ref().unwrap_or(blip)
+                    } else if c.above < -height {
+                        blip_below.as_ref().unwrap_or(blip)
+                    } else {
+                        own.as_ref().unwrap_or(blip)
+                    };
+                    let Some((key, _)) = texture(id) else {
+                        continue;
+                    };
+                    let px = cx + c.right / range * w / 2.0;
+                    let py = cy - c.ahead / range * h / 2.0;
+                    out.push(Item::Image {
+                        texture: key,
+                        uv: [0.0, 0.0, 1.0, 1.0],
+                        rect: [
+                            px - blip_size[0] / 2.0,
+                            py - blip_size[1] / 2.0,
+                            blip_size[0],
+                            blip_size[1],
+                        ],
+                        tint: *tint,
+                    });
+                }
+            }
         }
     }
     out
@@ -928,6 +1595,32 @@ pub fn region(name: &str) -> Result<Region> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_name_tags_claim_styles_whose_names_show_and_a_tools_claim_is_a_region() {
+        let style = layout(
+            serde_json::json!({ "schema_version": 1, "region": "name_tags",
+            "name_tags": { "teammates": "always", "others": "aimed", "outline": false,
+                "color": [0.4, 0.8, 1.0, 1.0] } }),
+        );
+        let s = style.name_tags.as_ref().unwrap();
+        assert!(s.shows(true, false));
+        assert!(!s.shows(false, false) && s.shows(false, true));
+        assert!(!s.outline && s.height == 0.85);
+        // Stock: every name; a bare claim hides them (no style).
+        assert!(NameTagStyle::default().shows(false, false));
+        let bare = layout(serde_json::json!({ "schema_version": 1, "region": "name_tags" }));
+        assert!(bare.name_tags.is_none());
+        // A style anywhere else is refused.
+        let wrong: Layout = serde_json::from_value(serde_json::json!({ "schema_version": 1,
+            "region": "top_left", "name_tags": {} }))
+        .unwrap();
+        assert!(wrong.validate().is_err());
+        let tools = layout(serde_json::json!({ "schema_version": 1, "region": "tools" }));
+        assert_eq!(tools.region.stock(), Some("tool bar"));
+        assert_eq!(Region::parse("name_tags"), Some(Region::NameTags));
+        assert_eq!(Region::Tools.rect(640.0), [576.0, 0.0, 64.0, HEIGHT]);
+    }
 
     fn layout(json: serde_json::Value) -> Layout {
         let l: Layout = serde_json::from_value(json).unwrap();
@@ -1110,11 +1803,13 @@ mod tests {
             body: vec!["a:archetype/runner".into()],
             holding: vec!["guns".into()],
             vehicle: vec![],
+            minigame: None,
         };
         let viewer = |body, holding| Viewer {
             body,
             holding,
             vehicle: "",
+            minigame: false,
         };
         assert!(when.matches(&viewer("a:archetype/runner", "guns:image/rifle")));
         assert!(!when.matches(&viewer("a:archetype/runner", "")));
@@ -1123,6 +1818,145 @@ mod tests {
             "guns:image/rifle"
         )));
         assert!(When::default().matches(&viewer("", "")));
+    }
+
+    #[test]
+    fn when_can_ask_for_a_minigame() {
+        let viewer = |minigame| Viewer {
+            body: "",
+            holding: "",
+            vehicle: "",
+            minigame,
+        };
+        let playing = When {
+            minigame: Some(true),
+            ..When::default()
+        };
+        assert!(playing.matches(&viewer(true)) && !playing.matches(&viewer(false)));
+        assert!(!playing.is_always());
+    }
+
+    fn feed_kill(age: f32, killer: Option<&str>, victim: &str, weapon: &str) -> FeedKill {
+        FeedKill {
+            age,
+            killer: killer.map(|k| (k.to_string(), Some([1.0, 0.0, 0.0, 1.0]))),
+            victim: (victim.to_string(), None),
+            weapon: weapon.into(),
+        }
+    }
+    fn spans_text(item: &Item) -> String {
+        let Item::Line { spans, .. } = item else {
+            panic!("{item:?}")
+        };
+        spans
+            .iter()
+            .map(|s| match s {
+                Span::Text { text, .. } => text.clone(),
+                Span::Image { texture, .. } => format!("#{texture}"),
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_kill_feed_writes_the_newest_lines_with_icons_and_team_colours() {
+        let l = layout(serde_json::json!({
+            "schema_version": 1, "region": "top_right",
+            "elements": [{ "type": "kill_feed", "at": [100, 10], "lines": 2,
+                "seconds": 5, "icons": { "gun": "pack:texture/bar" },
+                "names": { "Fall": "fell" } }]
+        }));
+        assert!(l.has_kill_feed());
+        let kills = [
+            feed_kill(4.0, Some("old"), "x", "Gun"),
+            feed_kill(1.0, Some("amy"), "bob", "Gun"),
+            feed_kill(4.9, None, "cat", "Fall"),
+            feed_kill(9.0, Some("gone"), "y", "Gun"),
+        ];
+        let live = Live {
+            kills: &kills,
+            contacts: &[],
+        };
+        let items = resolve_live(&l, &values, &textures, &live);
+        // Three are recent; the newest two show, one line apart.
+        assert_eq!(items.len(), 2);
+        assert_eq!(spans_text(&items[0]), "amy [#3] bob");
+        assert_eq!(spans_text(&items[1]), "[fell] cat");
+        let Item::Line { at, spans, .. } = &items[0] else {
+            panic!()
+        };
+        assert_eq!(*at, [100.0, 10.0]);
+        assert!(matches!(spans[0], Span::Text { color, .. } if color == [1.0, 0.0, 0.0, 1.0]));
+        let Item::Line { at, spans, .. } = &items[1] else {
+            panic!()
+        };
+        assert_eq!(at[1], 26.0);
+        // Fading in its last half second.
+        assert!(matches!(spans[3], Span::Text { color, .. } if (color[3] - 0.2).abs() < 1e-4));
+    }
+
+    fn contact(id: u64, right: f32, ahead: f32, speed: f32, relation: Relation) -> Contact {
+        Contact {
+            id,
+            right,
+            ahead,
+            above: 0.0,
+            speed,
+            crouched: false,
+            fired: None,
+            relation,
+        }
+    }
+
+    #[test]
+    fn a_tracker_places_moving_contacts_by_bearing_and_hides_the_quiet() {
+        let l = layout(serde_json::json!({
+            "schema_version": 1, "region": "bottom_left",
+            "elements": [{ "type": "tracker", "rect": [0, 0, 100, 100], "range": 25,
+                "blip": "pack:texture/bar", "blip_size": [4, 4] }]
+        }));
+        assert!(l.has_tracker());
+        let mut crouching = contact(4, 0.0, 5.0, 3.0, Relation::Enemy);
+        crouching.crouched = true;
+        let mut shooting = crouching;
+        shooting.id = 5;
+        shooting.fired = Some(0.5);
+        let contacts = [
+            contact(1, 12.5, 0.0, 3.0, Relation::Ally),
+            contact(2, 0.0, 25.0, 3.0, Relation::Enemy),
+            contact(3, 0.0, 30.0, 3.0, Relation::Enemy),
+            crouching,
+            shooting,
+            contact(6, 0.0, 5.0, 0.0, Relation::Enemy),
+        ];
+        let live = Live {
+            kills: &[],
+            contacts: &contacts,
+        };
+        let items = resolve_live(&l, &values, &textures, &live);
+        let at: Vec<[f32; 2]> = items
+            .iter()
+            .map(|i| match i {
+                Item::Image { rect, .. } => [rect[0] + 2.0, rect[1] + 2.0],
+                _ => panic!("{i:?}"),
+            })
+            .collect();
+        // Right is right, ahead is up; out of range, crouch-walking and
+        // standing still do not show; firing does.
+        assert_eq!(at, [[75.0, 50.0], [50.0, 0.0], [50.0, 40.0]]);
+    }
+
+    #[test]
+    fn stock_texts_are_known_keys() {
+        let l = layout(serde_json::json!({
+            "schema_version": 1, "region": "chat",
+            "texts": { "respawn_countdown": "Respawn in {}", "building_disabled": "" }
+        }));
+        assert_eq!(l.texts["building_disabled"], "");
+        let bad: Layout = serde_json::from_value(serde_json::json!({
+            "schema_version": 1, "region": "chat", "texts": { "nope": "x" }
+        }))
+        .unwrap();
+        assert!(bad.validate().is_err());
     }
 
     #[test]
@@ -1141,10 +1975,10 @@ mod tests {
         }
         assert!(
             serde_json::from_value::<Layout>(
-                serde_json::json!({ "schema_version": 1, "region": "chat" })
+                serde_json::json!({ "schema_version": 1, "region": "radar" })
             )
             .is_err(),
-            "chat is the player's"
+            "unknown regions are refused"
         );
     }
 }

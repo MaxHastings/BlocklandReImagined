@@ -3624,6 +3624,7 @@ fn lines(g: &mut Game) -> Vec<(OwnerId, String)> {
         .into_iter()
         .filter_map(|(o, n)| match n {
             Notice::Chat(t) => Some((o, readable(&t))),
+            Notice::Kill(k) => Some((o, readable(&k.line))),
             _ => None,
         })
         .collect()
@@ -3802,7 +3803,7 @@ fn kill_lines_follow_slayers_death_messages_bonus_kills_and_teamkills() {
     assert!(
         notices
             .iter()
-            .any(|(_, n)| matches!(n, Notice::Chat(t) if readable(t).contains("(Teamkill)"))),
+            .any(|(_, n)| matches!(n, Notice::Kill(k) if readable(&k.line).contains("(Teamkill)"))),
         "{notices:?}"
     );
     assert!(notices.iter().any(|(p, n)| *p == mover

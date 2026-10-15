@@ -2,6 +2,7 @@
 //! path selects Device. Sound failures remain diagnostic, never gameplay failures.
 use anyhow::Result;
 use bri_audio::*;
+use bri_console::Clamp;
 use bri_sim::presentation::{Cue, CueKind};
 use bri_ui::screens::options::{MUSIC_VOLUME, MUTE_IN_BACKGROUND, volume};
 use bri_ui::{api::Settings, prefs::Prefs};
@@ -134,6 +135,28 @@ pub fn engine_loop(
     })
 }
 
+/// The squeal of vehicle `info`'s sliding tyres this frame, if its
+/// definition has a skid sound and a wheel skids
+/// ([`crate::actor_effects::tire_skids`]): louder and a little higher the
+/// harder it slides.
+pub fn skid_loop(
+    d: &bri_vehicles::Definition,
+    info: &bri_sim::session::VehicleInfo,
+    frame: &crate::vehicles::VehicleFrame,
+) -> Option<EngineLoop> {
+    let sound = d.skid.as_ref()?.sound.as_ref()?;
+    if info.destroyed || !frame.position.is_finite() {
+        return None;
+    }
+    let (_, strength) = crate::actor_effects::tire_skids(0, d, frame);
+    (strength > 0.0).then(|| EngineLoop {
+        sound: sound.clone(),
+        position: frame.position.to_array(),
+        volume: strength,
+        pitch: 0.9 + 0.2 * strength,
+    })
+}
+
 /// The world's music bricks (a resolved `sound`), kept in step with each
 /// replica revision from what changed in it (`Bricks::diff` skips the
 /// shared tree), so a world change costs its changed bricks, not a pass
@@ -235,6 +258,9 @@ pub struct ClientAudio {
     windows: Vec<bri_audio::Window>,
     /// The track an Add-On rule plays ([`ClientAudio::play_music`]).
     rule_music: Option<RuleMusic>,
+    /// The ambient beds Add-On rules play, by key
+    /// ([`ClientAudio::play_ambient`]).
+    rule_ambient: BTreeMap<String, RuleMusic>,
 }
 /// A rule's music track as it plays, fading in over `fade` seconds.
 struct RuleMusic {
@@ -318,6 +344,7 @@ impl ClientAudio {
             music: BTreeMap::new(),
             music_bricks: MusicBricks::default(),
             rule_music: None,
+            rule_ambient: BTreeMap::new(),
             projectiles: BTreeSet::new(),
             image_loops: BTreeMap::new(),
             engines: BTreeMap::new(),
@@ -445,7 +472,8 @@ impl ClientAudio {
             | CueKind::WeaponShell { .. }
             | CueKind::Beam { .. }
             | CueKind::Tracer { .. }
-            | CueKind::Decal { .. } => return,
+            | CueKind::Decal { .. }
+            | CueKind::BodyFlash { .. } => return,
             CueKind::WeaponSound { profile } => {
                 // A looping state sound belongs to the state, not to its
                 // entry; `sync_image_loops` owns it.
@@ -610,6 +638,49 @@ impl ClientAudio {
                     fade,
                     elapsed: 0.0,
                 });
+            }
+            Err(error) => self.record(Err(error)),
+        }
+    }
+    /// Play an Add-On rule's ambient bed under its key on the effects bus,
+    /// looping at the ears or at a point in the world, replacing the bed
+    /// under that key, or stop it (`track` none); either fades over
+    /// `fade` seconds.
+    pub fn play_ambient(&mut self, play: &bri_sim::session::AmbientPlay) {
+        if let Some(old) = self.rule_ambient.remove(&play.key) {
+            let result = self.runtime.stop_with_fade(old.handle, play.fade);
+            self.record(result);
+        }
+        let Some(track) = &play.track else {
+            return;
+        };
+        let found = match self.pack_sounds.get(&track.to_ascii_lowercase()) {
+            Some((asset, volume)) => Ok((asset.clone(), *volume)),
+            None => self.runtime.bank().resolve(track).map(|a| (a.clone(), 1.0)),
+        };
+        let (asset, volume) = match found {
+            Ok(found) => found,
+            Err(error) => return self.record(Err(error)),
+        };
+        let volume = volume * play.volume.clamped(0.0, 1.0);
+        let fade = play.fade.max(0.0);
+        let start = if fade == 0.0 { 1.0 } else { 0.0 };
+        let (placement, range) = match play.at {
+            Some(at) => (Placement::World(at), Some(play.range)),
+            None => (Placement::Listener, None),
+        };
+        let asset = Arc::new(asset.as_ambient(range));
+        match self.runtime.play_asset(asset, placement, volume * start) {
+            Ok(handle) => {
+                self.rule_ambient.insert(
+                    play.key.clone(),
+                    RuleMusic {
+                        handle,
+                        volume,
+                        fade,
+                        elapsed: 0.0,
+                    },
+                );
             }
             Err(error) => self.record(Err(error)),
         }
@@ -794,6 +865,7 @@ impl ClientAudio {
         self.music.clear();
         self.music_bricks = MusicBricks::default();
         self.rule_music = None;
+        self.rule_ambient.clear();
         self.projectiles.clear();
         self.image_loops.clear();
         self.engines.clear();
@@ -811,10 +883,17 @@ impl ClientAudio {
             let result = self.start(&id, placement).map(|_| ());
             self.record(result);
         }
-        if let Some(m) = self.rule_music.as_mut().filter(|m| m.elapsed < m.fade) {
-            m.elapsed += seconds;
-            let gain = m.volume * (m.elapsed / m.fade).min(1.0);
-            let handle = m.handle;
+        let fading: Vec<(SoundHandle, f32)> = self
+            .rule_music
+            .iter_mut()
+            .chain(self.rule_ambient.values_mut())
+            .filter(|m| m.elapsed < m.fade)
+            .map(|m| {
+                m.elapsed += seconds;
+                (m.handle, m.volume * (m.elapsed / m.fade).min(1.0))
+            })
+            .collect();
+        for (handle, gain) in fading {
             let result = self.runtime.set_voice_params(handle, gain, 1.0);
             self.record(result);
         }
@@ -848,6 +927,7 @@ mod tests {
             destroyed: false,
             turret_broken: false,
             scale: 1.0,
+            lights: false,
         };
         let frame = |speed: f32| crate::vehicles::VehicleFrame {
             position: glam::Vec3::new(1.0, 2.0, 3.0),
@@ -877,6 +957,68 @@ mod tests {
         info.destroyed = false;
         d.engine_sound = None;
         assert_eq!(engine_loop(&d, &info, &frame(15.0)), None);
+    }
+
+    /// A car sliding sideways skids at its grounded wheels, harder and
+    /// louder the faster it slides; rolling straight or airborne it does not.
+    #[test]
+    fn sliding_tyres_skid_and_squeal_with_the_slide() {
+        let mut d = bri_vehicles::testing::car();
+        d.skid = Some(
+            serde_json::from_value(serde_json::json!({
+                "emitter": "car:skid", "sound": "car:squeal"
+            }))
+            .unwrap(),
+        );
+        d.skid.as_ref().unwrap().validate().unwrap();
+        let info = bri_sim::session::VehicleInfo {
+            id: 1,
+            definition: d.id.clone(),
+            color: None,
+            occupants: vec![None; 4],
+            destroyed: false,
+            lights: false,
+            turret_broken: false,
+            scale: 1.0,
+        };
+        let wheels = d.wheels.len();
+        let frame = |velocity: glam::Vec3, grounded: bool| crate::vehicles::VehicleFrame {
+            position: glam::Vec3::ZERO,
+            rotation: glam::Quat::IDENTITY,
+            velocity,
+            steering: 0.0,
+            wheel_suspension: vec![],
+            wheel_rotation: vec![],
+            wheel_contact: vec![grounded; wheels],
+            turret_aim: [0.0; 2],
+        };
+        let straight = frame(glam::Vec3::new(0.0, 0.0, 25.0), true);
+        assert!(
+            crate::actor_effects::tire_skids(1, &d, &straight)
+                .0
+                .is_empty()
+        );
+        assert_eq!(skid_loop(&d, &info, &straight), None);
+        let drift = frame(glam::Vec3::new(7.5, 0.0, 20.0), true);
+        let (sprays, hardest) = crate::actor_effects::tire_skids(1, &d, &drift);
+        assert_eq!(sprays.len(), wheels);
+        assert!(
+            sprays
+                .iter()
+                .all(|s| s.emitter == "car:skid" && s.wheel >= wheels)
+        );
+        assert!((hardest - 0.5).abs() < 1e-4, "{hardest}");
+        let squeal = skid_loop(&d, &info, &drift).unwrap();
+        assert_eq!(squeal.sound, "car:squeal");
+        let hard = skid_loop(&d, &info, &frame(glam::Vec3::new(30.0, 0.0, 0.0), true)).unwrap();
+        assert!(hard.volume > squeal.volume && hard.pitch > squeal.pitch);
+        let airborne = frame(glam::Vec3::new(30.0, 0.0, 0.0), false);
+        assert!(
+            crate::actor_effects::tire_skids(1, &d, &airborne)
+                .0
+                .is_empty()
+        );
+        assert_eq!(skid_loop(&d, &info, &airborne), None);
     }
 
     /// A world change costs the bricks it changed: only the first replica

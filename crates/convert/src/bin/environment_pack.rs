@@ -381,6 +381,7 @@ fn sky(root: &Path, out: &Path, dml: &str) -> Result<Sky> {
                 .max(0.0),
             end: visible.max(MIN_VISIBLE_DISTANCE),
             color: rgb(fog),
+            ..Default::default()
         },
         warnings,
     };

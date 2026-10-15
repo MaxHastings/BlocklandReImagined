@@ -64,6 +64,16 @@ pub struct Bob {
 fn stride() -> f32 {
     2.4
 }
+impl Bob {
+    /// (right, up) at `phase` through a cycle and strength `gain`: it dips
+    /// at each footfall and rocks once a cycle.
+    fn offset(&self, phase: f32, gain: f32) -> (f32, f32) {
+        let turn = phase * std::f32::consts::TAU;
+        let side = self.side * turn.sin() * gain;
+        let dip = -self.height * (0.5 - 0.5 * (2.0 * turn).cos()) * gain;
+        (side, dip)
+    }
+}
 
 /// Weapon sway in first person.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -84,6 +94,12 @@ pub struct Sway {
     /// share of the camera's bob (0 keeps it still on screen).
     #[serde(default)]
     pub bob: f32,
+    /// The weapon's own bob on screen while walking, whatever the camera
+    /// does: it dips `height` at each footfall and swings `side` across a
+    /// cycle of `stride` units, in view space. With a faint or no camera
+    /// `bob` this moves the gun while the view barely does.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub walk: Option<Bob>,
 }
 fn max_degrees() -> f32 {
     5.0
@@ -137,6 +153,15 @@ impl CameraProfile {
                     && finite(s.bob, 4.0),
                 "camera sway needs lag 0 to 1, max_degrees 0 to 30, settle 0.1 to 60 and bob within 4"
             );
+            if let Some(w) = &s.walk {
+                ensure!(
+                    finite(w.height, 0.5)
+                        && finite(w.side, 0.5)
+                        && w.stride.is_finite()
+                        && (0.2..=20.0).contains(&w.stride),
+                    "camera sway walk needs height and side within 0.5 units and a stride of 0.2 to 20"
+                );
+            }
         }
         if let Some(t) = &self.third_person {
             ensure!(
@@ -167,6 +192,8 @@ pub struct CameraMotion {
     pub gain: f32,
     /// The weapon's trail behind the look, radians (yaw, pitch).
     pub trail: (f32, f32),
+    /// Through the weapon's own bob cycle (`Sway::walk`), 0 to 1.
+    pub weapon_phase: f32,
 }
 /// How fast the bob eases in and out, per second.
 const BOB_EASE: f32 = 4.0;
@@ -188,21 +215,26 @@ impl CameraMotion {
             return;
         }
         let seconds = seconds.min(0.25);
-        match &profile.bob {
-            Some(bob) => {
-                let walking = grounded && ground_speed.is_finite() && ground_speed > STILL_SPEED;
-                let target = if walking { 1.0 } else { 0.0 };
-                let step = BOB_EASE * seconds;
-                self.gain += (target - self.gain).clamped(-step, step);
-                if walking {
-                    self.phase = (self.phase + ground_speed * seconds / bob.stride).fract();
+        let walk = profile.sway.as_ref().and_then(|s| s.walk.as_ref());
+        if profile.bob.is_some() || walk.is_some() {
+            let walking = grounded && ground_speed.is_finite() && ground_speed > STILL_SPEED;
+            let target = if walking { 1.0 } else { 0.0 };
+            let step = BOB_EASE * seconds;
+            self.gain += (target - self.gain).clamped(-step, step);
+            if walking {
+                let advance =
+                    |phase: f32, stride: f32| (phase + ground_speed * seconds / stride).fract();
+                if let Some(bob) = &profile.bob {
+                    self.phase = advance(self.phase, bob.stride);
+                }
+                if let Some(walk) = walk {
+                    self.weapon_phase = advance(self.weapon_phase, walk.stride);
                 }
             }
-            None => {
-                *self = Self {
-                    trail: self.trail,
-                    ..Self::default()
-                }
+        } else {
+            *self = Self {
+                trail: self.trail,
+                ..Self::default()
             }
         }
         match &profile.sway {
@@ -221,13 +253,23 @@ impl CameraMotion {
     /// The bob's offset this moment: (right, up) in units at scale 1. The
     /// camera dips at each footfall and rocks once a cycle.
     pub fn bob(&self, profile: &CameraProfile) -> (f32, f32) {
-        let Some(bob) = &profile.bob else {
+        match &profile.bob {
+            Some(bob) => bob.offset(self.phase, self.gain),
+            None => (0.0, 0.0),
+        }
+    }
+    /// The held weapon's bob against the view this moment: (right, up) in
+    /// view-space units at scale 1. The camera's bob times `Sway::bob`,
+    /// plus the weapon's own `Sway::walk`.
+    pub fn weapon_bob(&self, profile: &CameraProfile) -> (f32, f32) {
+        let Some(sway) = &profile.sway else {
             return (0.0, 0.0);
         };
-        let turn = self.phase * std::f32::consts::TAU;
-        let side = bob.side * turn.sin() * self.gain;
-        let dip = -bob.height * (0.5 - 0.5 * (2.0 * turn).cos()) * self.gain;
-        (side, dip)
+        let (side, dip) = self.bob(profile);
+        let (own_side, own_dip) = sway
+            .walk
+            .map_or((0.0, 0.0), |w| w.offset(self.weapon_phase, self.gain));
+        (side * sway.bob + own_side, dip * sway.bob + own_dip)
     }
     /// At rest: no bob and no trail, as the stock camera.
     pub fn at_rest(&self) -> bool {
@@ -304,6 +346,7 @@ mod tests {
                 max_degrees: 4.0,
                 settle: 8.0,
                 bob: 0.0,
+                walk: None,
             }),
             ..Default::default()
         };
@@ -325,6 +368,47 @@ mod tests {
     }
 
     #[test]
+    fn the_weapon_bobs_on_its_own_while_the_view_stays_still() {
+        let p: CameraProfile = serde_json::from_str(
+            r#"{"sway": {"walk": {"height": 0.04, "side": 0.03, "stride": 2.0}}}"#,
+        )
+        .unwrap();
+        p.validate().unwrap();
+        let mut m = CameraMotion::default();
+        let (mut lowest, mut widest) = (0.0f32, 0.0f32);
+        for _ in 0..90 {
+            m.advance(&p, 1.0 / 60.0, 6.0, true, (0.0, 0.0));
+            assert_eq!(m.bob(&p), (0.0, 0.0), "the view never bobs");
+            let (side, dip) = m.weapon_bob(&p);
+            lowest = lowest.min(dip);
+            widest = widest.max(side.abs());
+        }
+        assert!(lowest < -0.035 && widest > 0.025, "{lowest} {widest}");
+        // Standing, it eases out.
+        for _ in 0..30 {
+            m.advance(&p, 1.0 / 60.0, 0.0, true, (0.0, 0.0));
+        }
+        assert_eq!(m.weapon_bob(&p), (0.0, 0.0));
+        // With a camera bob too, the shares add.
+        let p: CameraProfile = serde_json::from_str(
+            r#"{"bob": {"height": 0.1, "stride": 2.0},
+                "sway": {"bob": 0.5, "walk": {"height": 0.04, "stride": 2.0}}}"#,
+        )
+        .unwrap();
+        let mut m = CameraMotion::default();
+        for _ in 0..47 {
+            m.advance(&p, 1.0 / 60.0, 6.0, true, (0.0, 0.0));
+        }
+        let (_, dip) = m.weapon_bob(&p);
+        let (_, view) = m.bob(&p);
+        assert!(view < -0.01);
+        assert!(
+            (dip - (view * 0.5 + view * 0.4)).abs() < 1e-5,
+            "{dip} {view}"
+        );
+    }
+
+    #[test]
     fn bad_profiles_are_refused() {
         for bad in [
             r#"{"fov": 10}"#,
@@ -332,6 +416,7 @@ mod tests {
             r#"{"bob": {"height": 2}}"#,
             r#"{"bob": {"stride": 0}}"#,
             r#"{"sway": {"lag": 3}}"#,
+            r#"{"sway": {"walk": {"height": 3}}}"#,
             r#"{"third_person": {"side": 9}}"#,
         ] {
             let p: CameraProfile = serde_json::from_str(bad).unwrap();

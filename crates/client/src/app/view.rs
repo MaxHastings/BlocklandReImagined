@@ -315,7 +315,19 @@ impl App {
         };
         let (eye, (yaw, pitch, roll)) =
             crate::portal_view::through(eye, look, boom, middle, passages);
-        Ok((eye, yaw, pitch, roll))
+        // A lean tilts the first-person view with the head: right side down
+        // leaning right. The eye already slid with it.
+        let on_foot = view
+            .vitals
+            .get(&view.owner)
+            .and_then(|v| v.mounted)
+            .is_none();
+        let tilt = if on_foot && boom.is_none() && controls.camera_pos() == 0.0 {
+            local.lean_tilt(&view.archetypes.tuning(local.archetype, local.scale))
+        } else {
+            0.0
+        };
+        Ok((eye, yaw, pitch, roll - tilt))
     }
     /// The view camera where the body is, and the carry of any opening the
     /// chase camera's boom went back through.
@@ -408,11 +420,12 @@ impl App {
                 // as a player's chase camera's does.
                 let mut boom = None;
                 let (eye, yaw, pitch) = crate::vehicle_camera::driver_view(
-                    frame.position,
+                    // An orbiting camera trails the vehicle by its lag.
+                    frame.position + controls.orbit_lag(),
                     frame.rotation,
                     center,
                     &d.camera,
-                    controls.driver_head_yaw(),
+                    controls.driver_head(),
                     pos,
                     |from, to| {
                         let (hit, through) =
@@ -563,7 +576,21 @@ impl App {
                 }
                 point
             });
+        // A mini-game's death view holds the corpse camera still a while.
+        let death_view = view.vitals.get(&view.owner).is_some_and(|v| {
+            let hold = view
+                .minigames
+                .iter()
+                .find(|g| Some(g.id) == v.minigame)
+                .map_or(0, |g| bri_minigames::ticks_for_ms(g.settings.death_view_ms));
+            !v.alive
+                && hold > 0
+                && v.died_tick
+                    .zip(self.motion.server_tick())
+                    .is_some_and(|(died, now)| now - (died as f64) < hold as f64)
+        });
         let owner = view.owner;
+        self.controls.death_view = control == bri_sim::session::ControlObject::Corpse && death_view;
         self.controls.follow(control, owner, eye);
         if let Some(path) = path {
             self.controls.fly_path(path);

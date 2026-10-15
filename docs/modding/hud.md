@@ -94,14 +94,39 @@ down. Elements may reach outside the box.
 | `center_print` | centred, 160, 480, 120 | the center print |
 | `bottom_print` | 0, 400, full width, 80 | the bottom print, whatever it shows |
 | `ammo` | right edge, 400, 240, 80 | the bottom print only while it is the ammo display |
+| `chat` | 0, 0, 320, 120 | chat's passing lines; they show again while typing or paging up |
+| `tools` | right edge, 0, 64, 480 | the tool bar |
+| `name_tags` | 0, 0, full width, 480 | the names over players' heads |
 
 A region nobody claims shows the stock HUD as before. Claiming one of the
-last five hides that stock element while the claim applies; a layout with
+last eight hides that stock element while the claim applies; a layout with
 no elements just hides it, or saves the region for your client code.
+
+**Names over heads.** A `name_tags` claim hides the stock player names;
+give it `name_tags` to draw them your own way (item and shape labels stay):
+
+```json
+{ "schema_version": 1, "region": "name_tags",
+  "when": { "body": ["your-id:archetype/soldier"] },
+  "name_tags": { "teammates": "always", "others": "aimed",
+                 "color": [0.55, 0.8, 1.0, 1.0], "outline": false, "height": 0.6 } }
+```
+
+`teammates` (on the viewer's team in their mini-game) and `others` each
+take `always` (the stock), `aimed` (only while the viewer's aim is on the
+body) or `never`. `color` (RGBA 0..1) paints every name one colour instead
+of the team's; `outline` (default true) is the stock dark edge; `height`
+is units above the eye (default 0.85, -8 to 8).
+
+**Carrying fewer things.** A `tools` claim hides the five-slot tool bar.
+With rules that keep two guns (`on_pickup` returning false to swap with
+`drop_item` and `give_item`, or `set_tools`), and a layout showing the
+held weapon's `ammo`, that is a two-weapon game.
 
 **When.** `when` limits the claim to a body (`body`: archetype ids), a held
 item (`holding`: a weapons Add-On's id or an image id) and a vehicle seat
-(`vehicle`: vehicle ids). Every list given must match. The HUD switches
+(`vehicle`: vehicle ids), and to playing in a mini-game or not
+(`minigame`: true or false). Every condition given must match. The HUD switches
 with the body, the weapon and the seat the moment they change, and goes
 back to the stock HUD when nothing claims a region.
 
@@ -120,6 +145,27 @@ back to the stock HUD when nothing claims a region.
   font. With `glyphs` `{ "texture", "charset", "columns", "size": [w, h],
   "spacing" }` it draws from your sprite font, one equal cell per character
   of `charset`; a character not in it leaves a space.
+- `kill_feed`: the latest deaths, one line each from `at` (`align` as
+  for text), the newest at the bottom: `lines` (most shown, 4), `seconds`
+  (how long a line stays, 6; it fades over its last half second),
+  `spacing` (units between lines, 16; negative stacks upward), `format`
+  (`"{killer} [{weapon}] {victim}"`) and `death` for a death with no killer
+  (`"[{weapon}] {victim}"`), `color`, `team_colors` (names in their team's
+  colour, true), `icons` (a damage type's name, such as `"Gun"`, to one of
+  your textures drawn for `{weapon}`, at `icon_size` [24, 12]) and `names`
+  (a damage type's name to the word written for it). While a layout with a
+  kill feed is drawn, deaths stay out of chat.
+- `tracker`: a motion tracker. A blip for each other player within `range`
+  units, placed by bearing and distance from the middle of `rect` (straight
+  ahead is up, `range` at its edge). `blip` is the texture, with optional
+  `blip_above` and `blip_below` for players more than `height` (3) units
+  above or below you, and `blip_ally`, `blip_enemy` and `blip_neutral` per
+  side; `ally`, `enemy` and `neutral` tint them. A player shows while moving
+  faster than `min_speed` (1 unit a second), except crouched (unless
+  `crouched` is true), or within `fired_within` seconds (2) of firing,
+  however they move. `allies`, `enemies` and `others` (all true) pick which
+  sides show: your team, the other teams of your game, and everyone else.
+  Put a background image or a sweep under it as ordinary `image` elements.
 - Any element takes `show` `{ "value", "above", "below" }` to appear only
   while a value is in range: a low-health flash, a reload prompt.
 
@@ -136,6 +182,27 @@ missing when they never run out. A missing value reads as `-` in text and
 shows an element only with such a gun out. A `max` left out is the value's
 own (`health_max` for `health`, `ammo_max` for `ammo`, else 1). A layout reading a rule's
 state is not drawn on a server that does not run that rule.
+
+`respawn` is the seconds until you may respawn while dead (0 once a click
+respawns you), missing while alive.
+
+**Stock prompts.** `texts` replaces the game's own words while the layout
+is drawn: `click_to_respawn`, `respawn_countdown` (`{}` is the seconds),
+`respawn_countdown_one` (one second left; `respawn_countdown` if left out)
+and `building_disabled`. An empty text hides that prompt, so a layout can
+draw its own from `respawn`:
+
+```json
+{
+  "schema_version": 1, "region": "chat", "when": { "minigame": true },
+  "texts": { "click_to_respawn": "", "respawn_countdown": "", "building_disabled": "" },
+  "elements": [
+    { "type": "kill_feed", "at": [8, 8], "icons": { "Gun": "my-hud:texture/rifle" } },
+    { "type": "text", "at": [160, 100], "align": "center", "text": "Respawn in {}",
+      "value": "respawn", "show": { "value": "respawn", "above": 0 } }
+  ]
+}
+```
 
 `pixelated: true` draws images with sharp pixels: pixel art and sprite
 fonts.
@@ -159,7 +226,7 @@ does ([client sandbox](../architecture/client-sandbox.md)).
 region names.
 
 Tests: `crates/content/src/hud.rs` (validation, conflict ranking, frames,
-sprite fonts), `crates/client/src/hud_regions.rs`, and the render check
+sprite fonts, kill feeds, trackers, stock texts), `crates/client/src/match_hud.rs`, `crates/client/src/hud_regions.rs`, and the render check
 `crates/client/tests/hud_regions_render.rs` (including the Runner's ammo
 counter), and `crates/sim/tests/script_api.rs`
 `a_held_guns_ammo_reaches_its_holder_for_hud_counters`.

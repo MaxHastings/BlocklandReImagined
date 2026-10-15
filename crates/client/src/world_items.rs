@@ -3,6 +3,7 @@
 use crate::items::{Appearance, ItemAssets, ItemMesh};
 use anyhow::{Context, Result, ensure};
 use bri_console::Clamp;
+use bri_content::shape::LiveValues;
 use bri_render::scene::{
     ClipPlane, GpuInstances, GpuScene, KEEP_ALL, MeshBatch, SceneRenderer, SceneTransform,
     SceneVertex,
@@ -46,6 +47,9 @@ pub struct WorldItemFrame {
     /// see them (`ItemIdentity::Reflected`), for mirrors, metal and the
     /// shadows they cast ([`WorldItems::reflection_draws`]).
     pub reflected_self: bool,
+    /// What the local player's held gun shows on its own model (its live
+    /// digits: rounds, reserve, magazine).
+    pub held_values: LiveValues,
 }
 /// World-space poses from the SAME sampled avatar used by its visible geometry.
 /// Mounts already include player scale and arm/look animation. No guessed nodes.
@@ -126,6 +130,8 @@ impl ModelKey {
 struct PoseKey {
     sequence: Option<String>,
     seconds: u32,
+    /// What its live digits show (`bri_content::shape::Live`).
+    live: LiveValues,
 }
 #[derive(Default)]
 struct Geometry {
@@ -598,7 +604,10 @@ impl WorldItems {
                     .is_some_and(|(skin, _)| skin.energy_states.iter().any(|s| s == state_name));
                 (id, energized)
             });
-            let pose_key = self.image_pose(owner, hand, image_id, state_name, frame.seconds)?;
+            let mut pose_key = self.image_pose(owner, hand, image_id, state_name, frame.seconds)?;
+            if frame.local_owner == Some(owner) && usize::from(hand) < bri_weapons::HAND_SLOTS {
+                pose_key.live = frame.held_values;
+            }
             let pose = poses.entry(owner).or_insert_with(|| host_pose(owner));
             let Some(pose) = pose.as_ref() else {
                 self.diagnostics.missing_poses += 1;
@@ -1089,7 +1098,7 @@ impl WorldItems {
                     .unwrap_or_else(|| Slot {
                         pose: PoseKey {
                             sequence: Some(String::new()),
-                            seconds: 0,
+                            ..PoseKey::default()
                         },
                         geometry: Geometry::default(),
                         transforms: Vec::new(),
@@ -1110,11 +1119,12 @@ impl WorldItems {
                     // in place, and `pose` says when it is not.
                     let mut geometry = std::mem::take(&mut slot.geometry);
                     geometry.swap(&mut model.mesh);
-                    let result = model.mesh.pose(
+                    let result = model.mesh.pose_live(
                         &self.assets,
                         Mat4::IDENTITY,
                         pose.sequence.as_deref(),
                         f32::from_bits(pose.seconds),
+                        &pose.live,
                     );
                     geometry.swap(&mut model.mesh);
                     slot.geometry = geometry;
@@ -1413,6 +1423,7 @@ fn normalized_pose(clip: &bri_content::shape::Animation, time: f64) -> PoseKey {
     PoseKey {
         sequence: Some(clip.name.clone()),
         seconds: (time as f32).to_bits(),
+        live: LiveValues::default(),
     }
 }
 fn valid_transform(t: Mat4) -> bool {

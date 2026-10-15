@@ -118,6 +118,8 @@ const FAR_PLANE: f32 = 4000.0;
 pub(crate) const PLAYER_CAMERA: (f32, f32, f32) = (8.0, 0.75, 0.261);
 struct Prepared {
     foliage: crate::foliage::PreparedFoliage,
+    /// The map's own particle emitters (`map_effects.json`).
+    map_effects: Option<bri_content::effects::MapEffects>,
     map_id: String,
     waters: Vec<bri_content::water::Water>,
     /// The plate a flat map stands on.
@@ -400,6 +402,8 @@ fn prepare_map(
     let visual = load_visual_map(root, &map, lighting)?;
     let mut light_volume =
         LightVolumeState::start(&visual.scene, light_cache, visual.modern_lights.as_deref());
+    light_volume.animations = visual.light_animations.clone();
+    light_volume.spots = visual.light_spots.clone();
     // The same definitions the host's session loads, Add-On bricks included.
     let definitions = paths.map_content()?.definitions()?;
     let meshes = Arc::new(
@@ -422,6 +426,7 @@ fn prepare_map(
     mirror.set_breakables(&native_map.breakables);
     light_volume.set_light_shapes(&native_map.breakables);
     let mut building = crate::building::Building::new(definitions, native_map.colliders)?;
+    building.set_map_surfaces(native_map.surfaces);
     building.set_breakables(&native_map.breakables);
     building.attach_terrain(native_map.terrain);
     building.set_catalog(selected)?;
@@ -434,10 +439,16 @@ fn prepare_map(
                 .collect(),
         )?;
     }
-    let foliage =
-        crate::foliage::PreparedFoliage::load(&paths.foliage, &map, &building, &native_map.waters)?;
+    let foliage = crate::foliage::PreparedFoliage::load_for_map(
+        &paths.foliage,
+        root,
+        &map,
+        &building,
+        &native_map.waters,
+    )?;
     Ok(Prepared {
         foliage,
+        map_effects: crate::effects::load_map_effects(root)?,
         map_id: map,
         waters: native_map.waters,
         plate: native_map.plate,
@@ -692,6 +703,79 @@ pub fn name_opacity(
         1.0 - (distance - fade) / (far - fade)
     })
 }
+/// `a` and `b` play on one team of one mini-game.
+fn teammates(view: &network::View, a: bri_world::OwnerId, b: bri_world::OwnerId) -> bool {
+    let team = |o| view.vitals.get(&o).and_then(|v| v.team);
+    team(a).is_some()
+        && team(a) == team(b)
+        && view
+            .minigames
+            .iter()
+            .any(|m| m.members.contains(&a) && m.members.contains(&b))
+}
+/// The aim through the screen's centre from `camera`.
+fn screen_aim(view_projection: glam::Mat4, camera: Vec3) -> Vec3 {
+    // Any depth inside the view is in front, whichever way depth runs.
+    (view_projection
+        .inverse()
+        .project_point3(Vec3::new(0.0, 0.0, 0.5))
+        - camera)
+        .normalize_or_zero()
+}
+/// Look speed's multiple from the held image's `aim_assist` this frame:
+/// its `slowdown` while the aim is on a living body within its range that
+/// is not a teammate, else 1. The server decides who can be hurt; this is
+/// the viewer's own game's best guess at it.
+fn assist_slowdown(
+    view: &network::View,
+    presented: &BTreeMap<bri_world::OwnerId, bri_sim::player::PlayerState>,
+    pack: &bri_weapons::Pack,
+    view_projection: glam::Mat4,
+    camera: Vec3,
+) -> f32 {
+    let alive = |o| view.vitals.get(&o).is_some_and(|v| v.alive);
+    let Some(assist) = view
+        .weapons
+        .images
+        .get(&view.owner)
+        .and_then(|m| m.iter().find(|m| m.hand == 0))
+        .and_then(|m| pack.images.get(&m.image))
+        .and_then(|i| i.aim_assist)
+        .filter(|a| a.slowdown < 1.0 && alive(view.owner))
+    else {
+        return 1.0;
+    };
+    let scale = presented.get(&view.owner).map_or(1.0, |p| p.scale);
+    let aim = screen_aim(view_projection, camera);
+    let on_one = presented.iter().any(|(owner, state)| {
+        if *owner == view.owner || !alive(*owner) || teammates(view, view.owner, *owner) {
+            return false;
+        }
+        let eye = view.archetypes.posed_eye(state, false);
+        let radius = view.archetypes.tuning(state.archetype, state.scale).width * 0.5;
+        camera.distance(eye) <= assist.range * scale
+            && aimed_at(camera, aim, Vec3::from(state.feet), eye, radius.max(0.25))
+    });
+    if on_one { assist.slowdown } else { 1.0 }
+}
+/// The aim from `camera` along `aim` passes within `radius` of a body
+/// standing from `feet` up to `eye`, in front of the camera.
+fn aimed_at(camera: Vec3, aim: Vec3, feet: Vec3, eye: Vec3, radius: f32) -> bool {
+    // Closest points between the aim ray and the body's upright segment.
+    let axis = eye - feet;
+    let w = camera - feet;
+    let (a, b, c) = (aim.dot(aim), aim.dot(axis), axis.dot(axis));
+    let (d, e) = (aim.dot(w), axis.dot(w));
+    let denominator = a * c - b * b;
+    let along_body = if denominator.abs() < 1e-6 || c < 1e-6 {
+        0.0
+    } else {
+        ((a * e - b * d) / denominator).clamped(0.0, 1.0)
+    };
+    let point = feet + axis * along_body;
+    let along_aim = (point - camera).dot(aim) / a.max(1e-6);
+    along_aim > 0.0 && (camera + aim * along_aim).distance(point) <= radius
+}
 /// `GuiShapeNameHud::onRender`: every other living player's name above their
 /// eye point (`verticalOffset` 0.85), and any named dropped item's, hidden behind the map and raycasting
 /// bricks ([`crate::building::Building::name_visible`]), faded by
@@ -715,14 +799,22 @@ fn name_tags(
     controlling_body: bool,
     passages: &bri_content::passage::Passages,
     drop_center: impl Fn(&bri_weapons::Drop) -> Vec3,
+    claim: Option<&bri_ui::api::HudRegionDraw>,
 ) -> Vec<bri_ui::api::NameTag> {
-    const VERTICAL_OFFSET: f32 = 0.85;
+    // A `name_tags` claim restyles players' names, or hides them with no
+    // style; item and shape labels stay.
+    let stock = bri_content::hud::NameTagStyle::default();
+    let style = match claim {
+        None => Some(&stock),
+        Some(claim) => claim.name_tags.as_ref(),
+    };
+    let aim = screen_aim(view_projection, camera);
     let sees =
         |from: Vec3, to: Vec3| building.is_none_or(|b| b.name_visible(from, to).unwrap_or(true));
     // Where a name anchored at `target` goes on screen, and how strongly:
     // where its body shows, straight on or in a portal's view, never
     // through a portal's view of somewhere else.
-    let place = |target: Vec3, name_distance: f32| -> Option<(f32, f32, f32)> {
+    let place = |target: Vec3, name_distance: f32, offset: f32| -> Option<(f32, f32, f32)> {
         let seen = crate::portal_view::seen_at(passages, camera, target)
             .into_iter()
             .find(|s| match s.through {
@@ -736,7 +828,7 @@ fn name_tags(
             fog_distance,
             visible_distance,
         )?;
-        let clip = view_projection * (target + Vec3::Y * VERTICAL_OFFSET).extend(1.0);
+        let clip = view_projection * (target + Vec3::Y * offset).extend(1.0);
         if clip.w <= 0.0 {
             return None;
         }
@@ -755,7 +847,9 @@ fn name_tags(
         Some([0, 1, 2].map(|i| (rgba[i].clamped(0.0, 1.0) * 255.0).round() as u8))
     };
     let mut tags = Vec::new();
-    for (owner, name) in &view.names {
+    // No style: the claim hides players' names.
+    for (owner, name) in view.names.iter().filter(|_| style.is_some()) {
+        let style = style.unwrap_or(&stock);
         if (*owner == view.owner && controlling_body)
             || !view.vitals.get(owner).is_some_and(|v| v.alive)
         {
@@ -769,8 +863,22 @@ fn name_tags(
             .and_then(|m| m.name_distance)
             .map_or(8192.0, |d| d as f32);
         let seated = sit_posed(view, vehicle_assets, presented, *owner);
-        let Some((x, y, opacity)) = place(view.archetypes.posed_eye(state, seated), name_distance)
-        else {
+        let eye_point = view.archetypes.posed_eye(state, seated);
+        let teammate = teammates(view, view.owner, *owner);
+        let aimed = || {
+            let radius = view.archetypes.tuning(state.archetype, state.scale).width * 0.5;
+            aimed_at(
+                camera,
+                aim,
+                Vec3::from(state.feet),
+                eye_point,
+                radius.max(0.25),
+            )
+        };
+        if !style.shows(teammate, aimed()) {
+            continue;
+        }
+        let Some((x, y, opacity)) = place(eye_point, name_distance, style.height) else {
             continue;
         };
         // A team member's name is in their team's paint colour.
@@ -789,7 +897,10 @@ fn name_tags(
             y,
             text: plain_chat(name),
             opacity,
-            color,
+            color: style.color.map_or(color, |c| {
+                [0, 1, 2].map(|i| (c[i].clamped(0.0, 1.0) * 255.0).round() as u8)
+            }),
+            outline: style.outline,
         });
     }
     // An item with a `label` (v20's `setShapeName` on an item: an ammo
@@ -814,7 +925,7 @@ fn name_tags(
         else {
             continue;
         };
-        let Some((x, y, opacity)) = place(at, 8192.0) else {
+        let Some((x, y, opacity)) = place(at, 8192.0, stock.height) else {
             continue;
         };
         tags.push(bri_ui::api::NameTag {
@@ -823,6 +934,7 @@ fn name_tags(
             text: label.clone(),
             opacity,
             color: [255; 3],
+            outline: true,
         });
     }
     // Add-On world shapes' labels, over each shape's top centre in its
@@ -833,7 +945,7 @@ fn name_tags(
         }
         let (min, max) = (Vec3::from(shape.min), Vec3::from(shape.max));
         let top = Vec3::new((min.x + max.x) / 2.0, max.y, (min.z + max.z) / 2.0);
-        let Some((x, y, opacity)) = place(top, 8192.0) else {
+        let Some((x, y, opacity)) = place(top, 8192.0, stock.height) else {
             continue;
         };
         tags.push(bri_ui::api::NameTag {
@@ -842,6 +954,7 @@ fn name_tags(
             text: shape.label.clone(),
             opacity,
             color: [shape.color[0], shape.color[1], shape.color[2]],
+            outline: true,
         });
     }
     // Any other shape's name sits above the middle of its box
@@ -850,7 +963,7 @@ fn name_tags(
         let Some(name) = &drop.name else {
             continue;
         };
-        let Some((x, y, opacity)) = place(drop_center(drop), 8192.0) else {
+        let Some((x, y, opacity)) = place(drop_center(drop), 8192.0, stock.height) else {
             continue;
         };
         tags.push(bri_ui::api::NameTag {
@@ -859,6 +972,7 @@ fn name_tags(
             text: plain_chat(&name.text),
             opacity,
             color: paint(name.color).unwrap_or([255; 3]),
+            outline: true,
         });
     }
     tags
@@ -1080,7 +1194,7 @@ fn plant_error(failure: bri_sim::simulation::PlantFailure) -> PlantError {
     }
 }
 
-fn plain_chat(text: &str) -> String {
+pub(crate) fn plain_chat(text: &str) -> String {
     text.chars()
         .filter(|c| !c.is_control() && !(0xE000..0xE010).contains(&(*c as u32)))
         .map(|c| match c {
@@ -1579,6 +1693,7 @@ impl PlatformApp for App {
         self.fx.explosion_shapes.gpu_stopped();
         self.fx.beams.gpu_stopped();
         self.fx.decals.gpu_stopped();
+        self.fx.body_flashes.gpu_stopped();
         self.fx.tutorial_targets.gpu_stopped();
         self.gpu.shell_gpu = None;
         for avatar in self.avatar.avatars.values_mut() {
@@ -1654,6 +1769,7 @@ impl PlatformApp for App {
         ));
         // Made again on the new device by the next scaled frame.
         self.gpu.upscale = None;
+        self.gpu.bloom = None;
         self.gpu.region_lines = Some(bri_render::lines::LineRenderer::new(
             device,
             format,
@@ -1730,6 +1846,7 @@ impl PlatformApp for App {
         self.fx.explosion_shapes.gpu_stopped();
         self.fx.beams.gpu_stopped();
         self.fx.decals.gpu_stopped();
+        self.fx.body_flashes.gpu_stopped();
         self.fx.tutorial_targets.gpu_stopped();
         self.gpu.shell_gpu = None;
         self.avatar.gpu_stopped();
@@ -1776,29 +1893,56 @@ impl PlatformApp for App {
     fn render_scene(&mut self, frame: &mut RenderContext<'_>) -> Result<bool> {
         self.gpu.display_size = frame.size;
         let size = bri_render::upscale::scaled_size(frame.size, self.graphics.render_scale);
-        if size == frame.size {
+        let bloom = self.graphics.bloom.then(|| {
+            self.gpu
+                .bloom
+                .take()
+                .filter(|b| b.format() == frame.format)
+                .unwrap_or_else(|| bri_render::bloom::Bloom::new(frame.device, frame.format))
+        });
+        if size == frame.size && bloom.is_none() {
             self.gpu.upscale = None;
+            self.gpu.bloom = None;
             return self.render_frame(frame);
         }
-        let mut upscale = self
-            .gpu
-            .upscale
-            .take()
-            .filter(|u| u.format() == frame.format)
-            .unwrap_or_else(|| bri_render::upscale::Upscale::new(frame.device, frame.format));
+        let mut upscale = (size != frame.size).then(|| {
+            self.gpu
+                .upscale
+                .take()
+                .filter(|u| u.format() == frame.format)
+                .unwrap_or_else(|| bri_render::upscale::Upscale::new(frame.device, frame.format))
+        });
+        // The world draws into the bloom's texture when it glows, else the
+        // render scale's; the bloom copies it out into the render scale's
+        // texture or the window, and the render scale stretches that.
+        let mut bloom = bloom;
+        let target = match (&mut bloom, &mut upscale) {
+            (Some(b), _) => b.target(frame.device, frame.queue, size),
+            (None, Some(u)) => u.target(frame.device, size),
+            (None, None) => unreachable!("drawn directly above"),
+        };
         let drawn = self.render_frame(&mut RenderContext {
             device: frame.device,
             queue: frame.queue,
             encoder: &mut *frame.encoder,
-            target: upscale.target(frame.device, size),
+            target,
             format: frame.format,
             size,
             ui_renderer: &mut *frame.ui_renderer,
         });
         if matches!(drawn, Ok(true)) {
-            upscale.draw(frame.encoder, frame.target);
+            if let Some(b) = &bloom {
+                match &mut upscale {
+                    Some(u) => b.draw(frame.encoder, u.target(frame.device, size)),
+                    None => b.draw(frame.encoder, frame.target),
+                }
+            }
+            if let Some(u) = &upscale {
+                u.draw(frame.encoder, frame.target);
+            }
         }
-        self.gpu.upscale = Some(upscale);
+        self.gpu.upscale = upscale;
+        self.gpu.bloom = bloom;
         drawn
     }
 }

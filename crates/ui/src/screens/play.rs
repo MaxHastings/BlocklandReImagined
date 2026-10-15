@@ -48,6 +48,14 @@ fn chat_text(core: &Core) -> String {
     // line's styles never leak into the next (c:14972-14982). Uncoloured
     // text is BlockChatTextProfile's base colour, `fontColors[0]` = 255 0 64
     // (see `pack::alias_font_colors`).
+    // A HUD layout claiming the chat region hides its passing lines; they
+    // come back while typing or paging up.
+    if core.hud_claimed(bri_content::hud::Region::Chat)
+        && !core.chat_input_open
+        && !core.chat.scrolled_up()
+    {
+        return String::new();
+    }
     core.chat
         .visible(core.time_ms)
         .iter()
@@ -80,12 +88,7 @@ pub fn mouse_tip(core: &Core) -> bool {
             ..
         }
     );
-    let links = !single
-        && core
-            .chat
-            .visible(core.time_ms)
-            .iter()
-            .any(|l| l.text.contains("<a:"));
+    let links = !single && chat_text(core).contains("<a:");
     links || core.cursor_forced
 }
 /// The chat link under a logical point, for a click while the cursor is
@@ -189,7 +192,7 @@ fn name_tags(pack: &Pack, dl: &mut DrawList, core: &Core) {
         let x = (tag.x - font.width(&tag.text) as f32 / 2.0).round();
         let y = (tag.y - font.line_height() as f32).round();
         let [r, g, b] = crate::api::name_outline(tag.color);
-        for dx in [-1.0, 0.0, 1.0] {
+        for dx in [-1.0, 0.0, 1.0].into_iter().filter(|_| tag.outline) {
             for dy in [-1.0, 0.0, 1.0] {
                 if dx != 0.0 || dy != 0.0 {
                     font.draw(dl, x + dx, y + dy, &tag.text, [r, g, b, alpha], &[]);
@@ -390,6 +393,45 @@ fn hud_regions(pack: &Pack, dl: &mut DrawList, core: &Core) {
                     };
                     font.draw(dl, x.round(), y.round(), text, rgba(*color), &[]);
                 }
+                Item::Line { at, align, spans } => {
+                    use bri_content::hud::Span;
+                    let Some(font) = font.as_ref() else {
+                        continue;
+                    };
+                    let gap = 2.0 * unit;
+                    let span_width = |span: &Span| match span {
+                        Span::Text { text, .. } => font.width(text) as f32,
+                        Span::Image { size, .. } => size[0] * unit,
+                    };
+                    let tw = spans.iter().map(span_width).sum::<f32>()
+                        + gap * spans.len().saturating_sub(1) as f32;
+                    let (x, y) = px(at[0], at[1]);
+                    let mut x = match align {
+                        Align::Left => x,
+                        Align::Center => x - tw / 2.0,
+                        Align::Right => x - tw,
+                    };
+                    let bottom = y + font.line_height() as f32;
+                    for span in spans {
+                        match span {
+                            Span::Text { text, color } => {
+                                font.draw(dl, x.round(), y.round(), text, rgba(*color), &[]);
+                            }
+                            Span::Image {
+                                texture,
+                                size,
+                                tint,
+                            } => dl.image(
+                                crate::pack::TexKey::External(*texture),
+                                [0.0, 0.0, 1.0, 1.0],
+                                [x, bottom - size[1] * unit, size[0] * unit, size[1] * unit],
+                                rgba(*tint),
+                                filter,
+                            ),
+                        }
+                        x += span_width(span) + gap;
+                    }
+                }
             }
         }
     }
@@ -415,6 +457,20 @@ fn hud(core: &Core) -> View {
             &mut v,
             Rect::new(0, 0, w, h),
             [255, 255, 255, (core.whiteout * 255.0) as u8],
+        );
+    }
+    for (color, left, all) in &core.flashes {
+        let byte = |v: f32| (v.clamped(0.0, 1.0) * 255.0).round() as u8;
+        let fade = (left / all.max(0.001)).clamped(0.0, 1.0);
+        fill(
+            &mut v,
+            Rect::new(0, 0, w, h),
+            [
+                byte(color[0]),
+                byte(color[1]),
+                byte(color[2]),
+                byte(color[3] * fade),
+            ],
         );
     }
     for tint in &core.underwater {
@@ -485,28 +541,31 @@ fn hud(core: &Core) -> View {
                 &format!("  Press {} to use bricks", core.key_name("useBricks")),
             );
         }
-        let ty = -m.tool_slide.offset;
-        let tx = w - cell;
-        for (i, t) in m.tools.iter().take(64).enumerate() {
-            let r = Rect::new(tx, ty + i as i32 * cell, cell, cell);
-            art(&mut v, r, "base/client/ui/itemicons/toolbg", WHITE);
-            if m.tool_active && m.cur_tool == Some(i) {
-                art(&mut v, r, "base/client/ui/itemicons/itemactive", WHITE);
+        // A `tools` claim shows what is carried its own way.
+        if !core.hud_claimed(bri_content::hud::Region::Tools) {
+            let ty = -m.tool_slide.offset;
+            let tx = w - cell;
+            for (i, t) in m.tools.iter().take(64).enumerate() {
+                let r = Rect::new(tx, ty + i as i32 * cell, cell, cell);
+                art(&mut v, r, "base/client/ui/itemicons/toolbg", WHITE);
+                if m.tool_active && m.cur_tool == Some(i) {
+                    art(&mut v, r, "base/client/ui/itemicons/itemactive", WHITE);
+                }
+                if let Some(t) = t {
+                    icon(&mut v, r, &t.icon, t.tint.unwrap_or(WHITE));
+                }
             }
-            if let Some(t) = t {
-                icon(&mut v, r, &t.icon, t.tint.unwrap_or(WHITE));
-            }
+            let label = Rect::new(tx, ty + m.tools.len().min(64) as i32 * cell, cell, 18);
+            art(&mut v, label, "base/client/ui/itemicons/toollabelbg", WHITE);
+            let tools_label = if m.mode == ScrollMode::Tools {
+                m.tool_name.clone()
+            } else if m.prefs.show_tooltips {
+                format!("{} = tools", core.key_name("useTools"))
+            } else {
+                String::new()
+            };
+            named_text(&mut v, "HUDCenterTextProfile", label, &tools_label);
         }
-        let label = Rect::new(tx, ty + m.tools.len().min(64) as i32 * cell, cell, 18);
-        art(&mut v, label, "base/client/ui/itemicons/toollabelbg", WHITE);
-        let tools_label = if m.mode == ScrollMode::Tools {
-            m.tool_name.clone()
-        } else if m.prefs.show_tooltips {
-            format!("{} = tools", core.key_name("useTools"))
-        } else {
-            String::new()
-        };
-        named_text(&mut v, "HUDCenterTextProfile", label, &tools_label);
         let px = -m.paint_slide.offset;
         let rows = m.paint_rows.iter().copied().max().unwrap_or(9).max(9) as i32;
         let py = h - (rows * 17 + 1) - 18;

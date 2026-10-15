@@ -845,6 +845,29 @@ impl Headless {
         scale: f32,
         background: [f64; 4],
     ) -> Result<Vec<u8>> {
+        self.render_rgba_with_timeout(
+            r,
+            pack,
+            dl,
+            size,
+            scale,
+            background,
+            std::time::Duration::from_secs(60),
+        )
+    }
+
+    /// Render and read back with a caller-selected budget for slow software GPUs.
+    #[allow(clippy::too_many_arguments)] // mirrors render_rgba and adds only its wait budget
+    pub fn render_rgba_with_timeout(
+        &self,
+        r: &mut UiRenderer,
+        pack: &Pack,
+        dl: &DrawList,
+        size: (u32, u32),
+        scale: f32,
+        background: [f64; 4],
+        timeout: std::time::Duration,
+    ) -> Result<Vec<u8>> {
         let format = wgpu::TextureFormat::Rgba8Unorm;
         let extent = wgpu::Extent3d {
             width: size.0,
@@ -909,7 +932,7 @@ impl Headless {
             });
         self.device.poll(wgpu::PollType::Wait {
             submission_index: None,
-            timeout: Some(std::time::Duration::from_secs(60)),
+            timeout: Some(timeout),
         })?;
         recv.recv()??;
         let data = readback

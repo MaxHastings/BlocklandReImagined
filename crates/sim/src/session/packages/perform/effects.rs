@@ -41,6 +41,32 @@ impl Perform for ops::Beam {
         Ok(())
     }
 }
+impl Perform for ops::BodyFlash {
+    fn perform(self, session: &mut Session, cx: OpCall<'_>) -> Result<()> {
+        let OpCall { package, tick, .. } = cx;
+        let ops::BodyFlash {
+            player,
+            color,
+            seconds,
+        } = self;
+        let feet = session
+            .peers
+            .get(&player)
+            .map(|peer| peer.player.state().feet)
+            .context("No such player")?;
+        session.take_cue(package)?;
+        session.cues.emit(
+            tick,
+            crate::presentation::CueKind::BodyFlash {
+                owner: player,
+                color,
+                seconds,
+            },
+            feet,
+        );
+        Ok(())
+    }
+}
 impl Perform for ops::PlayThread {
     fn perform(self, session: &mut Session, cx: OpCall<'_>) -> Result<()> {
         let OpCall { package, tick, .. } = cx;
@@ -78,6 +104,41 @@ impl Perform for ops::Sound {
                 tick,
                 crate::presentation::CueKind::WeaponSound { profile },
                 position,
+            ),
+        }
+        Ok(())
+    }
+}
+impl Perform for ops::Ambient {
+    fn perform(self, session: &mut Session, cx: OpCall<'_>) -> Result<()> {
+        let OpCall { package, .. } = cx;
+        let ops::Ambient {
+            player,
+            key,
+            track,
+            volume,
+            fade,
+            at,
+            range,
+        } = self;
+        session.take_cue(package)?;
+        let play = crate::session::AmbientPlay {
+            key,
+            track,
+            volume,
+            fade,
+            at,
+            range,
+        };
+        match player {
+            Some(player) => {
+                ensure!(session.peers.contains_key(&player), "No such player");
+                session.notify(player, Notice::Ambient(play));
+            }
+            None => ensure!(
+                session.play_ambient_all(play),
+                "at most {} ambient sounds play for everyone at once",
+                ops::MAX_AMBIENT
             ),
         }
         Ok(())

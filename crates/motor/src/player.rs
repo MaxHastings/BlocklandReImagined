@@ -96,6 +96,11 @@ pub struct MoveInput {
     /// their own trigger messages as before; the motor ignores this.
     #[serde(default)]
     pub attack: bool,
+    /// The host tick the player's game showed everyone else at when this
+    /// move was made, 0 when not known: the host meets their aimed shots
+    /// with other bodies where they saw them (`bri_sim::rewind`).
+    #[serde(default)]
+    pub seen: u64,
 }
 impl MoveInput {
     pub fn validate(&self) -> Result<()> {
@@ -194,6 +199,21 @@ pub struct PlayerState {
     /// lets its player through the same bodies the host does.
     #[serde(default)]
     pub pass_group: u8,
+    /// Lying prone and leaning, which an Add-On's rules set
+    /// (`set_prone`, `set_lean`) for a body whose archetype can.
+    #[serde(default)]
+    pub posture: Posture,
+}
+/// [`PlayerState::posture`].
+#[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
+pub struct Posture {
+    /// Lying down: the body is its archetype's `prone` box, eye and speeds
+    /// in place of its crouch ones, and stays crouched.
+    pub prone: bool,
+    /// How far it leans now, -1 (fully left) to 1 (fully right).
+    pub lean: f32,
+    /// The lean it is easing toward.
+    pub lean_to: f32,
 }
 /// Longest a tether's rope may be, units: a bound on state a host or
 /// player sends, past any v20 rope (the Grapple Rope's hook flies 800).
@@ -602,12 +622,28 @@ impl PlayerState {
     pub fn eye(&self, tuning: &PlayerTuning) -> Vec3 {
         Vec3::from(self.feet)
             + Vec3::Y
-                * if self.crouched {
-                    tuning.crouch_eye
-                } else {
-                    tuning.stand_eye
+                * match (self.crouched, self.posture.prone, tuning.prone) {
+                    (_, true, Some(prone)) => prone.eye,
+                    (true, ..) => tuning.crouch_eye,
+                    _ => tuning.stand_eye,
                 }
             + self.eye_ahead(tuning)
+            + self.lean_offset(tuning)
+    }
+    /// How far a lean moves the eye: sideways, to the body's right for a
+    /// lean right.
+    pub fn lean_offset(&self, tuning: &PlayerTuning) -> Vec3 {
+        let Some(lean) = tuning.lean else {
+            return Vec3::ZERO;
+        };
+        Vec3::new(self.yaw.cos(), 0.0, self.yaw.sin()) * (self.posture.lean * lean.distance)
+    }
+    /// How far a lean tilts the view and the body, radians (right
+    /// positive).
+    pub fn lean_tilt(&self, tuning: &PlayerTuning) -> f32 {
+        tuning
+            .lean
+            .map_or(0.0, |lean| self.posture.lean * lean.angle)
     }
     /// [`Self::eye`], or with `seated` the `Eye` node of the held `sit`
     /// pose (`/sit`, a seat whose pose is `sit`): it owns the node over
@@ -710,6 +746,10 @@ pub struct PlayerTuning {
     /// Water coverage from which the underwater speeds apply. A floating
     /// rowboat is always in the water.
     pub swim_coverage: f32,
+    /// Lying prone, when the body can: none for v20's bodies.
+    pub prone: Option<Prone>,
+    /// Leaning left and right, when the body can: none for v20's bodies.
+    pub lean: Option<Lean>,
     /// The archetype's movement controller, bound from its module by the
     /// side that runs it (`Archetypes::bind_controllers`). Never data: the
     /// archetype carries the module, and a table read from data has none
@@ -779,8 +819,46 @@ impl Default for PlayerTuning {
             min_jet_energy: 0.0,
             jet_drain: 0.0,
             swim_coverage: 0.9,
+            prone: None,
+            lean: None,
             controller: None,
         }
+    }
+}
+/// [`PlayerTuning::prone`]: the body lying down, in place of its crouch.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Prone {
+    /// The box's height lying down, above zero and at most the crouch's.
+    pub height: f32,
+    /// The eye's height above the feet lying down.
+    pub eye: f32,
+    /// Crawling speeds forward, backward and sideways.
+    pub forward: f32,
+    pub backward: f32,
+    pub sideways: f32,
+}
+/// [`PlayerTuning::lean`]: the eye slides sideways and the view tilts.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Lean {
+    /// How far the eye moves sideways at full lean, at most half the body's
+    /// width: the eye never leaves the body, so a lean around a corner
+    /// shows no more than it can be shot at.
+    pub distance: f32,
+    /// How far the view and the body tilt at full lean, radians, 0 to 0.6.
+    #[serde(default = "Lean::default_angle")]
+    pub angle: f32,
+    /// Seconds from upright to full lean, 0.05 to 2.
+    #[serde(default = "Lean::default_seconds")]
+    pub seconds: f32,
+}
+impl Lean {
+    fn default_angle() -> f32 {
+        0.3
+    }
+    fn default_seconds() -> f32 {
+        0.25
     }
 }
 impl PlayerTuning {
@@ -801,8 +879,28 @@ impl PlayerTuning {
             self.eye_forward *= scale;
             self.sit_eye *= scale;
             self.sit_eye_forward *= scale;
+            if let Some(prone) = &mut self.prone {
+                prone.height *= scale;
+                prone.eye *= scale;
+            }
+            if let Some(lean) = &mut self.lean {
+                lean.distance *= scale;
+            }
         }
         self
+    }
+    /// The tuning a body lying `prone` moves by: its crouch box, eye and
+    /// speeds become the prone ones. Unchanged standing or without them.
+    pub fn posed(&self, prone: bool) -> Self {
+        let mut posed = self.clone();
+        if prone && let Some(p) = self.prone {
+            posed.crouch_height = p.height;
+            posed.crouch_eye = p.eye;
+            posed.crouch_forward = p.forward;
+            posed.crouch_backward = p.backward;
+            posed.crouch_sideways = p.sideways;
+        }
+        posed
     }
     fn height(&self, crouched: bool) -> f32 {
         if crouched {
@@ -892,12 +990,42 @@ impl PlayerTuning {
                     || (self.stand_height == self.width && self.crouch_height == self.width)),
             "Invalid player tuning"
         );
+        if let Some(p) = &self.prone {
+            ensure!(
+                self.body == Body::Box
+                    && p.height.is_finite()
+                    && p.height > 0.0
+                    && p.height <= self.crouch_height
+                    && p.eye.is_finite()
+                    && (0.0..=self.crouch_height).contains(&p.eye)
+                    && [p.forward, p.backward, p.sideways]
+                        .iter()
+                        .all(|n| n.is_finite() && (0.0..=1000.0).contains(n)),
+                "Invalid prone: height above 0 and at most the crouch's, eye within the crouch, speeds 0 to 1000"
+            );
+        }
+        if let Some(l) = &self.lean {
+            ensure!(
+                l.distance.is_finite()
+                    && l.distance >= 0.0
+                    && l.distance <= self.width * 0.5 + 1e-4
+                    && l.angle.is_finite()
+                    && (0.0..=0.6).contains(&l.angle)
+                    && l.seconds.is_finite()
+                    && (0.05..=2.0).contains(&l.seconds),
+                "Invalid lean: distance 0 to half the body's width, angle 0 to 0.6, seconds 0.05 to 2"
+            );
+        }
         Ok(())
     }
 }
 pub struct Player {
     state: PlayerState,
+    /// The tuning it moves by: `base` as its posture makes it
+    /// ([`PlayerTuning::posed`]).
     tuning: PlayerTuning,
+    /// Its archetype's tuning at its scale.
+    base: PlayerTuning,
     body: RigidBodyHandle,
     collider: ColliderHandle,
     contacts: BTreeSet<BrickId>,
@@ -1052,7 +1180,9 @@ impl Player {
                 tether: None,
                 controller: None,
                 pass_group: 0,
+                posture: Posture::default(),
             },
+            base: tuning.clone(),
             tuning,
             body,
             collider,
@@ -1099,7 +1229,9 @@ impl Player {
                 tether: None,
                 controller: None,
                 pass_group: 0,
+                posture: Posture::default(),
             },
+            base: tuning.clone(),
             tuning,
             body,
             collider,
@@ -1149,17 +1281,19 @@ impl Player {
     ) -> Result<Self> {
         tuning.validate()?;
         ensure!(state.owner > 0, "Invalid player owner");
-        let pose = tuning.pose(Vec3::from(state.feet), state.crouched);
+        let posed = tuning.posed(state.posture.prone);
+        let pose = posed.pose(Vec3::from(state.feet), state.crouched);
         let (body, collider) = physics.insert(
             RigidBodyBuilder::kinematic_position_based()
                 .pose(pose)
                 .can_sleep(false),
-            ColliderBuilder::new(tuning.shape(state.crouched))
+            ColliderBuilder::new(posed.shape(state.crouched))
                 .user_data((1_u128 << 64) | u128::from(state.owner)),
         );
         let mut player = Self {
             state: state.clone(),
-            tuning: tuning.clone(),
+            tuning: tuning.posed(state.posture.prone),
+            base: tuning.clone(),
             body,
             collider,
             contacts: BTreeSet::new(),
@@ -1217,7 +1351,16 @@ impl Player {
         self.state.archetype = archetype;
         self.state.scale = scale;
         self.state.energy = self.state.energy.min(tuning.max_energy);
-        self.tuning = tuning;
+        // A body that cannot lie down or lean stands up straight.
+        if tuning.prone.is_none() {
+            self.state.posture.prone = false;
+        }
+        if tuning.lean.is_none() {
+            self.state.posture.lean = 0.0;
+            self.state.posture.lean_to = 0.0;
+        }
+        self.tuning = tuning.posed(self.state.posture.prone);
+        self.base = tuning;
         physics.colliders[self.collider].set_shape(self.tuning.shape(self.state.crouched));
         self.synchronize_pose(physics);
         Ok(())
@@ -1283,10 +1426,15 @@ impl Player {
         // motor swaps it as the flag changes), so it is replaced only when
         // one of them did: a new shape marks the collider modified and the
         // broad and narrow phases redo its pairs on the next step.
-        let reshape = tuning != self.tuning || state.crouched != self.state.crouched;
-        if tuning != self.tuning {
+        let reshape = tuning != self.base
+            || state.crouched != self.state.crouched
+            || state.posture.prone != self.state.posture.prone;
+        if tuning != self.base {
             tuning.validate()?;
-            self.tuning = tuning;
+            self.base = tuning;
+        }
+        if reshape {
+            self.tuning = self.base.posed(state.posture.prone);
         }
         if reshape {
             physics.colliders[self.collider].set_shape(self.tuning.shape(state.crouched));
@@ -1323,6 +1471,54 @@ impl Player {
         Vec3::from(self.state.feet)
             + Vec3::Y * self.tuning.eye_height(fraction)
             + self.state.eye_ahead(&self.tuning)
+            + self.state.lean_offset(&self.tuning)
+    }
+    /// Lie down or get up, for an Add-On's rules (`set_prone`). Lying down
+    /// takes the prone box at once (no taller than the crouch's) and keeps
+    /// the body crouched; getting up needs room for the crouch box, and
+    /// the crouch key or the room above then decides whether it stands.
+    /// False when it cannot: no prone for this body, or no room to rise.
+    pub fn set_prone(&mut self, physics: &mut PhysicsWorld, prone: bool) -> bool {
+        if prone == self.state.posture.prone {
+            return true;
+        }
+        if prone {
+            if self.base.prone.is_none() || self.mount {
+                return false;
+            }
+            self.state.crouched = true;
+        } else {
+            let feet = Vec3::from(self.state.feet) + Vec3::Y * ROOM_LIFT;
+            let shape = self.base.shape(true);
+            let blocked = physics
+                .query_pipeline_with_filter(
+                    QueryFilter::default()
+                        .exclude_sensors()
+                        .exclude_rigid_body(self.body)
+                        .groups(moves_against(self.state.pass_group)),
+                )
+                .intersect_shape(self.base.pose(feet, true), shape.as_ref())
+                .next()
+                .is_some();
+            if blocked {
+                return false;
+            }
+        }
+        self.state.posture.prone = prone;
+        self.tuning = self.base.posed(prone);
+        physics.colliders[self.collider].set_shape(self.tuning.shape(self.state.crouched));
+        self.synchronize_pose(physics);
+        true
+    }
+    /// Lean toward `to`, -1 (left) to 1 (right), 0 upright, for an
+    /// Add-On's rules (`set_lean`); the motor eases there. False for a body
+    /// that cannot lean.
+    pub fn set_lean(&mut self, to: f32) -> bool {
+        if self.base.lean.is_none() || !to.is_finite() {
+            return false;
+        }
+        self.state.posture.lean_to = to.clamped(-1.0, 1.0);
+        true
     }
     /// Whether the body is held in the `sit` pose, which moves the eye.
     pub fn set_seated(&mut self, seated: bool) {
@@ -1584,6 +1780,20 @@ impl Player {
         let drain = if jet { t.jet_drain } else { 0.0 };
         self.state.energy =
             (self.state.energy - drain * dt + t.recharge * dt).clamped(0.0, t.max_energy);
+        // A lean eases toward where the rules set it.
+        let posture = &mut self.state.posture;
+        match t.lean {
+            Some(lean) => {
+                let most = dt / lean.seconds;
+                posture.lean += (posture.lean_to - posture.lean).clamped(-most, most);
+            }
+            None => {
+                *posture = Posture {
+                    prone: posture.prone,
+                    ..Posture::default()
+                }
+            }
+        }
         let was_grounded = self.state.grounded;
         let was_crouched = self.state.crouched;
         let feet = Vec3::from(self.state.feet);
@@ -1597,7 +1807,8 @@ impl Player {
         let submerged =
             bri_content::water::submersion(waters, feet.to_array(), t.height(self.state.crouched))
                 .is_some_and(|(_, coverage)| coverage >= 1.0);
-        if input.crouch || submerged {
+        // Lying down holds the (prone) crouch box until the rules get it up.
+        if input.crouch || submerged || self.state.posture.prone {
             self.state.crouched = true;
         } else if self.state.crouched {
             let standing = t.shape(false);

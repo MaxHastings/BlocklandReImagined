@@ -704,6 +704,7 @@ fn app_weapon_effect_path_consumes_cues_once_and_syncs_projectile_trails(
         age: 0,
         bounced: false,
         stuck: false,
+        stuck_to: None,
         origin: Vec3::ZERO,
         was_thrown: false,
     });
@@ -1425,6 +1426,7 @@ fn the_client_predicts_the_live_vehicles_and_mounts_it_controls(fx: &Mounts) -> 
         destroyed: false,
         turret_broken: false,
         scale: 1.0,
+        lights: false,
     };
     let target = |info: &bri_sim::session::VehicleInfo, strafe: bool| {
         super::drive_target(info, assets.definition(&info.definition).unwrap(), strafe)
@@ -1452,6 +1454,7 @@ fn the_client_predicts_the_live_vehicles_and_mounts_it_controls(fx: &Mounts) -> 
         },
         bri_sim::session::VehicleInfo {
             scale: 2.0,
+            lights: false,
             ..jeep.clone()
         },
         bri_sim::session::VehicleInfo {
@@ -2152,4 +2155,21 @@ fn a_save_picture_is_drawn_in_a_submission_of_its_own() -> anyhow::Result<()> {
     // The frame itself still submits after the picture.
     gpu.queue.submit([held.finish()]);
     Ok(())
+}
+
+#[test]
+fn aim_on_a_body_finds_it_and_aim_beside_or_behind_does_not() {
+    use glam::Vec3;
+    let (feet, eye) = (Vec3::new(0.0, 0.0, -10.0), Vec3::new(0.0, 2.0, -10.0));
+    let camera = Vec3::new(0.0, 1.5, 0.0);
+    // Straight at the chest.
+    assert!(super::aimed_at(camera, Vec3::NEG_Z, feet, eye, 0.5));
+    // Two units to the side at ten away misses a half-unit body.
+    let beside = (Vec3::new(2.0, 0.0, -10.0)).normalize();
+    assert!(!super::aimed_at(camera, beside, feet, eye, 0.5));
+    // Looking away.
+    assert!(!super::aimed_at(camera, Vec3::Z, feet, eye, 0.5));
+    // Over the head.
+    let over = (Vec3::new(0.0, 2.0, -10.0)).normalize();
+    assert!(!super::aimed_at(camera, over, feet, eye, 0.5));
 }

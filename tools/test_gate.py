@@ -117,6 +117,36 @@ class CiKnownFailures(unittest.TestCase):
         self.assertFalse(gate.ci_tolerated("bri-chaos/bot_gauntlet", "", self.known))
 
 
+class CiFlakyRetries(unittest.TestCase):
+    binaries = [("bri-client/avatar_editor_preview", "avatar-preview.exe", ".", "Running preview")]
+
+    def test_a_named_failure_that_passes_alone_is_reported_as_flaky(self):
+        label = self.binaries[0][0]
+        failed = [(label, "test portrait::synthetic ... FAILED\n")]
+        with patch.object(gate, "run_binary", return_value=(
+                "test portrait::synthetic ... ok\n", 0)) as retry:
+            remaining = gate.retry_ci_failures(failed, self.binaries)
+        self.assertEqual(remaining, [])
+        retry.assert_called_once_with(label, "avatar-preview.exe", ["--exact", "portrait::synthetic"], ".")
+
+    def test_a_failure_that_repeats_alone_still_blocks_ci(self):
+        label = self.binaries[0][0]
+        failed = [(label, "test portrait::synthetic ... FAILED\n")]
+        with patch.object(gate, "run_binary", return_value=(
+                "test portrait::synthetic ... FAILED\n", 101)):
+            remaining = gate.retry_ci_failures(failed, self.binaries)
+        self.assertEqual(len(remaining), 1)
+        self.assertIn("test portrait::synthetic ... FAILED", remaining[0][1])
+
+    def test_an_unnamed_process_failure_is_not_retried(self):
+        label = self.binaries[0][0]
+        failed = [(label, "process exited without a test report\n")]
+        with patch.object(gate, "run_binary") as retry:
+            remaining = gate.retry_ci_failures(failed, self.binaries)
+        self.assertEqual(remaining, failed)
+        retry.assert_not_called()
+
+
 class GateEnvironment(unittest.TestCase):
     def test_content_backed_tests_get_the_main_content(self):
         env = gate_env_for({"PATH": "x", "CARGO_TARGET_DIR": "elsewhere"})

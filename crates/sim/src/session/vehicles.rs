@@ -31,6 +31,9 @@ const MOUNT_ABOVE: f32 = 0.2;
 /// top edge, until the next moves settle it on top (moves reach the host in
 /// batches), so the seat is taken from the next contact within this.
 const LANDING_TICKS: u64 = bri_world::TICKS_PER_SECOND / 4;
+/// How far a `board_on_use` vehicle may be clicked from the eye, in units
+/// at scale 1: arm's reach to a seat from beside the hull.
+const USE_BOARD_REACH: f32 = 6.0;
 /// The speed (units a second) a move must lose against a vehicle to count
 /// as landing on it. A hop lands at 7 or more; standing on a hull that
 /// rocks on its suspension loses a fraction of one, every few ticks.
@@ -49,6 +52,8 @@ pub(super) struct Vehicles {
     /// Each vehicle's colour (`%vehicle.color`), red, green, blue and
     /// alpha; `None` draws it as its model is.
     pub(super) colors: BTreeMap<VehicleId, Option<[f32; 4]>>,
+    /// Vehicles whose drivers turned their lamps on (`Definition::lights`).
+    pub(super) lit: std::collections::BTreeSet<VehicleId>,
     /// The spawn brick's paint (`fxDTSBrick::colorVehicle`) each spawned
     /// vehicle last took. A brick change that alters it repaints the live
     /// vehicle; one that leaves it alone keeps independent paint.
@@ -87,6 +92,10 @@ pub(super) struct Vehicles {
     /// merely resting on or walking across a vehicle.
     pub(super) struck: BTreeMap<(OwnerId, VehicleId), u64>,
     pub(super) scanned: bool,
+    /// Each brick-spawned vehicle's home (its centre when first seen) and
+    /// the tick it was last left empty away from home, for returning
+    /// abandoned vehicles ([`Session::return_abandoned_vehicles`]).
+    abandoned: BTreeMap<VehicleId, Abandoned>,
     /// Stand-ins of players on foot part way through openings, beyond the
     /// partners, for this tick's physics step: who, the stand-in's body
     /// and colliders, and the opening's carry.
@@ -97,6 +106,16 @@ pub(super) struct Vehicles {
         glam::Affine3A,
     )>,
 }
+/// Where a brick-spawned vehicle was spawned and since when it has stood
+/// empty somewhere else.
+#[derive(Clone, Copy, Debug)]
+struct Abandoned {
+    home: Vec3,
+    empty_since: Option<u64>,
+}
+/// A vehicle within this many units of its home has not been moved off.
+const HOME_RADIUS: f32 = 3.0;
+
 /// Queue length past which a seated player's backlog drains fast (a stall).
 const SEATED_FLOOD: usize = 30;
 /// Ticks a seated player's queue is watched before a lasting excess drains.
@@ -170,6 +189,9 @@ pub struct VehicleInfo {
     pub turret_broken: bool,
     /// The spawn's uniform scale: a driving client predicts the vehicle at it.
     pub scale: f32,
+    /// Its driver has its lamps on (`Definition::lights`).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub lights: bool,
 }
 /// Replicated vehicle motion (unreliable datagrams, 40 Hz).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -249,6 +271,7 @@ pub fn driver_controls(
         strafe: input.right,
         look_delta: [wrap(input.yaw - last.0), wrap_half(input.pitch - last.1)],
         look_yaw: input.head_yaw,
+        look_pitch: input.pitch,
         strafe_steering_off: strafe_off,
         auto_return_off,
         ..Default::default()
@@ -458,8 +481,30 @@ impl Session {
                     .turret_damage
                     .is_some_and(|damage| damage >= veh::TURRET_MAX_DAMAGE),
                 scale: v.scale,
+                lights: self.vehicles.lit.contains(&v.id) && !v.destroyed,
             })
             .collect()
+    }
+    /// The light key in a driving seat turns the vehicle's lamps on or off;
+    /// false when `owner` drives nothing with lamps.
+    pub(super) fn toggle_vehicle_lights(&mut self, owner: OwnerId) -> bool {
+        let Some(mount) = self.vehicles.mounted.get(&owner) else {
+            return false;
+        };
+        let Some(world) = &self.vehicles.world else {
+            return false;
+        };
+        let drives = world.definition_of(mount.vehicle).is_some_and(|d| {
+            !d.lights.is_empty() && d.seats.get(mount.seat).is_some_and(|s| s.controls)
+        });
+        if !drives {
+            return false;
+        }
+        let vehicle = mount.vehicle;
+        if !self.vehicles.lit.remove(&vehicle) {
+            self.vehicles.lit.insert(vehicle);
+        }
+        true
     }
     /// Same-tick vehicle basis for the rider's canonical body frame.
     pub fn passage_vehicle(
@@ -920,6 +965,74 @@ impl Session {
         }
         self.vehicles.colors.remove(&id);
         self.vehicles.brick_paint.remove(&id);
+        self.vehicles.abandoned.remove(&id);
+    }
+    /// How long a vehicle from `brick_owner`'s spawn brick may stand empty
+    /// before it goes home, in ticks: the owner's mini-game's
+    /// `vehicle_return_ms`, else the vehicle's own `return_seconds`.
+    /// `None` never returns it.
+    fn return_ticks(&self, brick_owner: OwnerId, definition: &veh::Definition) -> Option<u64> {
+        let game = self
+            .owner_game(brick_owner)
+            .and_then(|g| self.minigames.game(g).ok());
+        let ms = match game.and_then(|g| g.settings.vehicle_return_ms) {
+            Some(ms) => ms,
+            None => (definition.return_seconds? * 1000.0).round() as u32,
+        };
+        (ms > 0).then(|| mg::ticks_for_ms(ms))
+    }
+    /// Abandoned vehicles: a brick-spawned vehicle left empty away
+    /// from its spawn for its return time goes back to the brick as a
+    /// fresh one, as the brick's `< Respawn >` does.
+    pub(super) fn return_abandoned_vehicles(&mut self) -> Result<()> {
+        let tick = self.simulation.state().tick;
+        let Some(world) = self.vehicles.world.as_ref() else {
+            return Ok(());
+        };
+        let occupied: BTreeSet<VehicleId> =
+            self.vehicles.mounted.values().map(|m| m.vehicle).collect();
+        let mut watched = Vec::new();
+        for (&brick, &id) in &self.vehicles.by_brick {
+            let (Some(centre), Some(definition), Some((owner, false))) = (
+                world.centre(&self.simulation.physics, id),
+                world.definition_of(id),
+                world.owner_of(id),
+            ) else {
+                continue;
+            };
+            let brick_owner = self
+                .simulation
+                .state()
+                .bricks
+                .get(&brick)
+                .map_or(owner.0, |b| b.owner);
+            watched.push((
+                brick,
+                id,
+                centre,
+                occupied.contains(&id),
+                self.return_ticks(brick_owner, definition),
+            ));
+        }
+        let mut due = Vec::new();
+        for (brick, id, centre, occupied, wait) in watched {
+            let entry = self.vehicles.abandoned.entry(id).or_insert(Abandoned {
+                home: centre,
+                empty_since: None,
+            });
+            if occupied || centre.distance(entry.home) <= HOME_RADIUS {
+                entry.empty_since = None;
+                continue;
+            }
+            let since = *entry.empty_since.get_or_insert(tick);
+            if wait.is_some_and(|wait| tick.saturating_sub(since) >= wait) {
+                due.push(brick);
+            }
+        }
+        for brick in due {
+            self.respawn_vehicle_brick(brick)?;
+        }
+        Ok(())
     }
     /// Wrench Send reapplies the spawn's paint to its existing vehicle.
     /// Unrelated brick edits must leave independently painted vehicles alone.
@@ -1593,6 +1706,75 @@ impl Session {
             }
         }
         Ok(())
+    }
+    /// A `board_on_use` vehicle clicked within reach while upright seats
+    /// the player in its free seat nearest their feet.
+    /// Returns whether the click was taken: a full vehicle, or one the
+    /// player may not ride, takes it too (with v20's refusal said), so it
+    /// does not flip under them. An upturned one is left to the flip.
+    pub(super) fn board_vehicle_by_use(
+        &mut self,
+        owner: OwnerId,
+        eye: Vec3,
+        direction: Vec3,
+        brick: Option<f32>,
+        tick: u64,
+    ) -> bool {
+        let Some((id, distance)) = self.vehicle_click_target(owner, eye, direction, brick) else {
+            return false;
+        };
+        let Some(peer) = self.peers.get(&owner) else {
+            return false;
+        };
+        let state = peer.player.state();
+        let (feet, scale, archetype) = (Vec3::from(state.feet), state.scale, state.archetype);
+        let world = self.vehicles.world.as_ref().unwrap();
+        let Some(v) = world.vehicle_snapshot(&self.simulation.physics, id) else {
+            return false;
+        };
+        if !world
+            .definition(&v.definition)
+            .is_some_and(|d| d.board_on_use)
+            || distance > USE_BOARD_REACH * scale.max(0.2)
+            || v.seats.is_empty()
+            || self.seated(owner)
+            || !self.archetypes.resolve(archetype).can_ride
+        {
+            return false;
+        }
+        let up = glam::Quat::from_array(v.transform.rotation) * Vec3::Y;
+        if up.y < 0.5 {
+            return false;
+        }
+        if !self.vehicles.may_remount(owner, tick) {
+            return true;
+        }
+        if !self.can_ride(owner, v.owner.0) {
+            let message = self.ride_refusal(owner, v.owner.0);
+            self.center_print(owner, message);
+            return true;
+        }
+        let nearest = v
+            .seats
+            .iter()
+            .filter(|s| s.occupant.is_none())
+            .min_by(|a, b| {
+                let d = |s: &&bri_vehicles::SeatSnapshot| {
+                    Vec3::from(s.transform.position).distance_squared(feet)
+                };
+                d(a).total_cmp(&d(b))
+            })
+            .map(|s| (s.index, s.transform.position));
+        let Some((seat, position)) = nearest else {
+            return true;
+        };
+        if !self.package_ride(owner, id.0) {
+            return true;
+        }
+        let rider = occupant(&self.peers, owner);
+        let world = self.vehicles.world.as_mut().unwrap();
+        let _ = world.mount(&self.simulation.physics, id, seat, rider, position);
+        true
     }
     /// `Vehicle::onActivate`: clicking a slow vehicle you may use flips it
     /// with an impulse of five times its mass, up and away from you.
@@ -2548,6 +2730,9 @@ mod tests {
 
     /// A session with one test tank parked at the origin.
     fn tank_session() -> (Session, u64) {
+        tank_session_with(bri_vehicles::testing::pack())
+    }
+    fn tank_session_with(pack: bri_vehicles::Pack) -> (Session, u64) {
         let simulation = Simulation::new(
             bri_world::World::new("Lab".into(), "lab".into(), vec![[1.0; 4]]),
             Definitions {
@@ -2560,8 +2745,7 @@ mod tests {
         )
         .unwrap();
         let mut s = Session::new(simulation);
-        s.set_vehicle_pack(bri_vehicles::testing::pack(), Vec::new())
-            .unwrap();
+        s.set_vehicle_pack(pack, Vec::new()).unwrap();
         let id = VehicleId(1);
         s.vehicles
             .world
@@ -2607,6 +2791,53 @@ mod tests {
             VehicleHarm::Weapon { projectile: None },
         )
         .unwrap();
+    }
+
+    #[test]
+    fn the_light_key_in_the_driving_seat_turns_the_lamps_on_and_off() {
+        let lamp = bri_vehicles::schema::Lamp {
+            node: "mount0".into(),
+            offset: [0.0, 0.0, -1.0],
+            color: [1.0; 3],
+            radius: 20.0,
+        };
+        let (mut s, tank) = tank_session_with(bri_vehicles::testing::pack_with(|d| {
+            d.lights = vec![lamp.clone()]
+        }));
+        let seats = s
+            .vehicles
+            .world
+            .as_ref()
+            .unwrap()
+            .definition(bri_vehicles::testing::TANK)
+            .unwrap()
+            .seats
+            .clone();
+        let driver = seats.iter().position(|seat| seat.controls).unwrap();
+        let vehicle = VehicleId(tank);
+        // Not riding: the key is the player's own light.
+        assert!(!s.toggle_vehicle_lights(7));
+        if let Some(other) = seats.iter().position(|seat| !seat.controls) {
+            s.vehicles.mounted.insert(
+                7,
+                Mount {
+                    vehicle,
+                    seat: other,
+                },
+            );
+            assert!(!s.toggle_vehicle_lights(7), "a passenger");
+        }
+        s.vehicles.mounted.insert(
+            7,
+            Mount {
+                vehicle,
+                seat: driver,
+            },
+        );
+        assert!(s.toggle_vehicle_lights(7));
+        assert!(s.vehicle_infos()[0].lights, "on for everyone");
+        assert!(s.toggle_vehicle_lights(7));
+        assert!(!s.vehicle_infos()[0].lights, "and off again");
     }
 
     #[test]

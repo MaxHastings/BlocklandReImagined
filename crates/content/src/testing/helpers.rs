@@ -144,6 +144,7 @@ pub fn material(name: &str, blend: &str) -> Material {
         detail_scale: 1.0,
         reflectance: 0.0,
         metal: None,
+        surface: None,
     }
 }
 
@@ -183,6 +184,7 @@ pub fn rigid_shape(
                 visibility: 1.0,
                 frame: 0,
                 material_frame: 0,
+                live: None,
             })
             .collect(),
         details: vec![Detail {

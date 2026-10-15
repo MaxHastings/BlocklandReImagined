@@ -194,6 +194,55 @@ fn warthog(edit: impl Fn(&mut Definition)) -> Pack {
     pack
 }
 
+#[test]
+fn authored_wheel_angles_do_not_lose_their_lock_to_the_v20_curve() {
+    let make = |linear| {
+        warthog(|d| {
+            d.max_steering = 30.0_f32.to_radians();
+            d.steering.toward_look = true;
+            for wheel in &mut d.wheels {
+                wheel.linear_steering = linear;
+            }
+        })
+    };
+    let (old, _) = drive_toward_look(make(false), std::f32::consts::FRAC_PI_2, 1.0);
+    let (corrected, _) = drive_toward_look(make(true), std::f32::consts::FRAC_PI_2, 1.0);
+    eprintln!("squared angle heading {old}, actual wheel angle heading {corrected}");
+    assert!(corrected > old + 0.15, "old {old}, corrected {corrected}");
+}
+
+#[test]
+fn look_steering_keys_can_override_an_opposing_camera() {
+    let pack = warthog(|d| {
+        d.steering.toward_look = true;
+        d.steering.keyboard_override = true;
+    });
+    let (mut vehicles, mut physics) = spawn(pack, [0., 1.5, 0.]);
+    settle(&mut vehicles, &mut physics);
+    board(&mut vehicles, &physics);
+    let mut controls = throttle();
+    controls.strafe = 1.0;
+    controls.look_yaw = -1.5;
+    let mut snapshot = step(&mut vehicles, &mut physics, controls);
+    for _ in 0..30 {
+        snapshot = step(&mut vehicles, &mut physics, controls);
+    }
+    assert!(
+        snapshot.steering > 0.1,
+        "right key owns the turn: {}",
+        snapshot.steering
+    );
+    controls.strafe = 0.0;
+    for _ in 0..60 {
+        snapshot = step(&mut vehicles, &mut physics, controls);
+    }
+    assert!(
+        snapshot.steering < -0.1,
+        "release resumes the camera: {}",
+        snapshot.steering
+    );
+}
+
 /// Full throttle at full lock for `secs`: the most it rolled over, radians.
 fn worst_roll(pack: Pack, secs: f32) -> f32 {
     let (mut v, mut w) = spawn(pack, [0., 1.5, 0.]);

@@ -26,6 +26,12 @@ pub struct MapScene {
     pub shape_indices: BTreeMap<u32, std::ops::Range<u32>>,
     /// Set only by the modern loader, which never decodes illumination images.
     pub modern_lights: Option<Vec<crate::map_lighting::MapLight>>,
+    /// Animated map lights: an index into `modern_lights` and how it
+    /// changes over time (applied as its run-time tint).
+    pub light_animations: Vec<(usize, bri_content::light_animation::LightAnimation)>,
+    /// Spot lights: an index into `modern_lights` and its cone words
+    /// (`scene::spot_words`), for `SceneRenderer::set_map_light_spots`.
+    pub light_spots: Vec<(usize, [f32; 4])>,
 }
 
 pub(crate) fn file(root: &Path, name: &str) -> Result<PathBuf> {
@@ -284,13 +290,25 @@ fn load_bundle(root: &Path, map_id: &str, legacy: bool) -> Result<MapScene> {
         out.clear_color = [c[0], c[1], c[2], 1.0];
     }
     let mut cache = BTreeMap::new();
-    if let Some(environment) = bundle.get("environments").and_then(|e| e.get(&scene.id)) {
+    let sky = bundle.get("environments").and_then(|e| e.get(&scene.id));
+    if let Some(environment) = sky {
         let environment: bri_content::environment::Environment =
             serde_json::from_value(environment.clone())?;
         crate::environment_choices::append_sky(&root, &mut out, &environment)?;
     } else {
         out.omissions
             .push("Native environment binding missing: authored sky/cloud/fog not rendered".into());
+    }
+    // A map Add-On's own fog (its `maps` entry's `fog`) replaces its sky's;
+    // with no sky, the fog colour is what lies behind the world.
+    if let Some(fog) = record.get("fog") {
+        let fog: bri_content::environment::Fog =
+            serde_json::from_value(fog.clone()).context("Reading the map's fog")?;
+        fog.validate().context("The map's fog")?;
+        if sky.is_none() {
+            out.clear_color = [fog.color[0], fog.color[1], fog.color[2], 1.0];
+        }
+        out.fog = fog;
     }
     let fields = terrain_fields(&root, &bundle, &scene, lift)?;
     let water_bound = load_waters(&root, &bundle, &scene, lift, &fields, &mut out, &mut cache)?;
@@ -333,6 +351,8 @@ fn load_bundle(root: &Path, map_id: &str, legacy: bool) -> Result<MapScene> {
     out.omissions.push("Translucent geometry sorts by mesh-batch center; intersecting translucent surfaces need finer sorting".into());
     // A map Add-On's own lights (`Kind::Light`) join any recovered ones.
     let authored = scene.lights()?;
+    let mut light_animations = Vec::new();
+    let mut light_spots = Vec::new();
     let modern_lights = if legacy {
         None
     } else {
@@ -364,11 +384,14 @@ fn load_bundle(root: &Path, map_id: &str, legacy: bool) -> Result<MapScene> {
                 ));
                 continue;
             }
-            if light.kind != "omni" {
-                out.omissions.push(format!(
-                    "Map light at node {} ({}) draws as a steady omni light: map light animation and spot cones are not played yet",
-                    light.node, light.kind
+            if let Some(spot) = light.spot {
+                light_spots.push((
+                    lights.len(),
+                    crate::scene::spot_words(Vec3::from(spot.direction), spot.inner, spot.outer),
                 ));
+            }
+            if let Some(animation) = light.animation {
+                light_animations.push((lights.len(), animation));
             }
             lights.push(crate::map_lighting::MapLight {
                 position: light.position,
@@ -386,6 +409,8 @@ fn load_bundle(root: &Path, map_id: &str, legacy: bool) -> Result<MapScene> {
         terrain,
         shape_indices,
         modern_lights,
+        light_animations,
+        light_spots,
     })
 }
 
@@ -570,9 +595,64 @@ fn load_static_shape(
         if authored.unlit && !legacy {
             material.kind = MaterialKind::Unlit;
         }
+        // The full physically based look on an Add-On map: its maps are the
+        // textures bound to the materials it names.
+        let physical = authored
+            .surface
+            .as_ref()
+            .filter(|_| !authored.unlit && !legacy);
+        if let Some(surface) = physical {
+            let mut maps = [0; 7];
+            for (k, map) in crate::scene::SurfaceMap::ALL.into_iter().enumerate() {
+                maps[k] = match map.of(surface) {
+                    Some(m) => {
+                        let file = bindings
+                            .iter()
+                            .find(|b| {
+                                b["asset"].as_str() == Some(id)
+                                    && b["shape_material"].as_u64() == Some(m as u64)
+                                    && b["skin"].as_str().unwrap_or("") == skin
+                            })
+                            .and_then(|b| b["texture"].as_str())
+                            .with_context(|| format!("Missing static surface map {id}/{m}"))?;
+                        texture(root, file, map.srgb(), out, cache)?
+                    }
+                    None => {
+                        out.images.push(map.stand_in());
+                        out.images.len() - 1
+                    }
+                };
+            }
+            material = Material::physical(material.name.clone(), diffuse, maps, surface);
+        }
+        // Bare metal on an Add-On map: its texture tints the reflectance and
+        // a flat detail leaves the authored roughness as it is.
+        if let Some(metal) = authored
+            .metal
+            .as_ref()
+            .filter(|_| !authored.unlit && !legacy && physical.is_none())
+        {
+            material.kind = MaterialKind::Metal;
+            material.images[1] = out.images.len();
+            out.images.push(SceneImage {
+                label: "flat metal detail".into(),
+                width: 1,
+                height: 1,
+                rgba: vec![128, 255, 128, 128],
+                srgb: false,
+            });
+            material.parameters = Some([
+                [metal.roughness, 1.0, 0.0, 0.0],
+                [metal.color[0], metal.color[1], metal.color[2], 0.0],
+                [0.0; 4],
+                [0.0; 4],
+            ]);
+        }
         material.alpha = match authored.blend.as_str() {
             "opaque" => AlphaMode::Opaque,
             "alpha" => alpha(&out.images[diffuse]),
+            // Torque's additive DTS materials (glass, glows).
+            "additive" => AlphaMode::Additive,
             other => anyhow::bail!("Unsupported static material blend {other} for {id}"),
         };
         // Torque culls DTS back faces and blends only Translucent materials;

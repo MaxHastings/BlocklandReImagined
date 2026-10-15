@@ -867,7 +867,7 @@ fn physical_capture(catalog: Arc<Catalog>, kind: bri_sim::bot_kind::BotKind, max
     let notices = s.take_private_notices();
     assert!(
         notices.iter().any(|(owner, notice)| *owner == human
-            && matches!(notice, bri_sim::session::Notice::Chat(text) if *text == expected)),
+            && matches!(notice, bri_sim::session::Notice::Kill(k) if k.line == expected && k.victim == human && k.killer == holder)),
         "actual MiniGame capture death must use the source type and bitmap: expected {expected:?}, notices={notices:?}"
     );
     let bot = holder.unwrap();

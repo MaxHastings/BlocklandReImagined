@@ -7,8 +7,9 @@
 // colour (silver on a mirror).
 struct Frame {
     view_projection:mat4x4<f32>, eye:vec4<f32>, fog_color:vec4<f32>,
-    // Fog start, visible distance, unused, fog enabled.
-    atmosphere:vec4<f32>,
+    // Fog start, visible distance, unused, fog enabled; the fog's height and
+    // most cover (fog.wgsl's h).
+    atmosphere:vec4<f32>, haze:vec4<f32>,
     screen:vec4<f32>,
 };
 @group(0) @binding(0) var<uniform> frame:Frame;
@@ -39,7 +40,7 @@ struct VertexOut {
     return out;
 }
 fn fog_amount(position:vec3<f32>)->f32 {
-    return fog_along(position-frame.eye.xyz,frame.atmosphere,frame.fog_color.w);
+    return fog_along(position-frame.eye.xyz,frame.atmosphere,frame.fog_color.w,frame.haze);
 }
 // Where the echoed plane's picture holds this point, held to the part it
 // drew (the edge stretches over what that view did not see), or a
@@ -72,7 +73,7 @@ fn echo_trust()->f32 {
     return 1.0-smoothstep(ECHO_TRUE,ECHO_FALSE,sideways/depth);
 }
 @fragment fn fs_main(v:VertexOut)->@location(0) vec4<f32> {
-    if faded_out(v.position.xy,v.world-frame.eye.xyz,frame.atmosphere) {discard;}
+    if faded_out(v.position.xy,v.world-frame.eye.xyz,frame.atmosphere,frame.haze) {discard;}
     let screen=v.position.xy/frame.screen.xy;
     var uv=vec2<f32>(select(screen.x,slot.sample.x-screen.x,slot.sample.z>0.5),screen.y);
     var shown=select(0.0,1.0,slot.sample.y>0.5);

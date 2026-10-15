@@ -116,8 +116,8 @@ run are left out. Your rules remove a game's entry when it ends.
 | `aim()`, `me()`, `entities()` | `add_player(p, key, amount)` | `damage(target, amount[, by[, type]])`, `explode(...)`: `damage` |
 | `noise(seed, x, z)`, `hash3(seed, x, y, z)` | `entity_get(e, key)`, `entity_set(e, key, v)` | `spawn_entity`, `remove_entity`, `steer`, `label`: `entity` |
 | `object(ref)`, `objects()`, `objects_near(x, y, z, r)`, `held(p)`, `tethered(p)` | | `teleport`, `respawn`, `remove_body(p)` (takes the body away without a death: no score, no death line, no `on_death`; they wait to respawn like the dead), `scroll_mode(p, mode)` (what the mouse wheel and number keys pick: `"none"`, `"bricks"`, `"paint"` or `"tools"`, leaving what is in hand), `set_archetype`, `push_archetype`, `pop_archetype`, `control(p, entity)`, `release(p)`, `give_item(p, item, equip)`, `take_item(p, item)`, `drop_item(item, x, y, z[, vx, vy, vz[, data]])`, `drop_item(item, #{ ... })`, `remove_drop(id)`, `name_drop(id, text, c)`: `player` |
-| `raycast(from, dir, range[, ignore])`, `can_damage(by, target)`, `enabled(add_on)`, `lan()` | | `set_fov(p, fov)`, `set_speed_scale(p, scale)`, `set_image_ammo(p, ammo)`, `set_image_loaded(p, loaded)`, `mount_image(p, image)`, `mount_image(p, image, slot[, paint or #{ paint, keep }])`, `unmount_image(p)`, `emote(p, image[, skip_spam])`, `set_scale(p, scale)`, `set_look_limits(p, up, down)`, `orbit_camera(p, target[, nearest, farthest], distance[, body])`: `player` |
-| | | `give_ammo(p, ammo, rounds)`, `set_reserve(p, ammo, rounds)`, `set_rounds(p, item, rounds)`, `reload(p)`: `player` |
+| `raycast(from, dir, range[, ignore])`, `can_damage(by, target)`, `enabled(add_on)`, `lan()` | | `set_fov(p, fov)`, `set_speed_scale(p, scale)`, `set_prone(p, prone)`, `set_lean(p, lean)`, `set_image_ammo(p, ammo)`, `set_image_loaded(p, loaded)`, `mount_image(p, image)`, `mount_image(p, image, slot[, paint or #{ paint, keep }])`, `unmount_image(p)`, `emote(p, image[, skip_spam])`, `set_scale(p, scale)`, `set_look_limits(p, up, down)`, `orbit_camera(p, target[, nearest, farthest], distance[, body])`: `player` |
+| | | `give_ammo(p, ammo, rounds)`, `set_reserve(p, ammo, rounds)`, `set_rounds(p, item, rounds)`, `reload(p)`, `set_image_state(p, state)`, `quick_use(p, item)`: `player` |
 | `minigames()`, `minigame(id)`, `setting(game, key)`, `team_setting(game, team, key)`, `server_setting(key)`, `pref(global)`, `bricks(kind)`, `brick(id)`, `palette()`, `drops()` | | `set_teams(game, teams, options)`, `set_team(p, team)`, `set_score(p, n)`, `add_score(p, n)`, `reset_minigame(game)`, `set_setting(game, key, v)`, `set_team_setting(game, team, key, v)`, `hold_respawn(p, held)`, `end_round(game, winners)`, `report_column(game, key, title, cells)`: `minigame`; `show_report(p, report)`, `hide_report(p)`: `chat`; `watch(p, target)`, `follow_path(p, knots)`, `free_camera(p)`, `orbit_point(p, at, distance)`, `orbit_object(p, object, distance)`: `player`; `set_brick_item(brick, item)`, `set_brick_color(brick, c)`, `set_brick_shown(brick, rendering, colliding, raycasting)`: `world.edit`; `fire_brick_input(brick, input, p)`, `fire_game_input(game, input, p, killer)`, `set_brick_field(brick, key, v)`: `brick_events`; `brick_field(brick, key)` reads |
 | `brick_box(brick)`, `voxel(brick)`, `can_place_voxel(x, y, z)` | | `place_voxel(x, y, z, material)`: `world.edit`; `set_avatar_colors(p, colors)`, `temp_look(p, look, seconds)`: `player` |
 | `brick(id)`, `bricks_in(min, max)`, `can_plant(kind, [x, y, z], turns)`, `can_edit(brick)` | | `plant_brick(kind, [x, y, z], turns, color, owner)`: `world.edit` |
@@ -125,8 +125,8 @@ run are left out. Your rules remove a game's entry when it ends.
 | | | `cut_copy(p)`, `paint_copy(p, color)`, `paint_copy(p, paint)`, `wrench_copy(p)`, `super_cut(p, min, max)`, `fill_box(p, min, max, color)`, `paint_fill(p, brick, paint, options)`, `paint_vehicle(p, vehicle, paint, options)`: `world.edit` |
 | | | `push`, `tumble`, `hold`, `reach`, `hold_distance`, `let_go`, `tether`, `tether_length`, `untether`, `spawn_vehicle`, `remove_vehicle`, `mount_object(mount, rider, node, can_dismount[, turn])`, `unmount_object(rider)`: `physics` |
 | | | `heal(p, amount)`, `fire(...)`, `spawn_explosion(p, projectile, scale)`: `damage` |
-| | | `play_sound(p, sound)` at a player's ears, `sound_at(sound, x, y, z)`, `beam(from, to[, options])`, `play_thread(p, thread, sequence[, after])`, `play_music(p, track[, options])`, `play_music_all(track[, options])`, `stop_music(p[, fade])`, `stop_music_all([fade])` ([Music](#music)), `show_box(p, min, max, tool)`, `hide_box(p)`, `show_shapes(owner, key, shapes)`, `hide_shapes(owner, key)`: `effects` |
-| | | `center_print(p, text, seconds)`, `bottom_print(p, text, seconds[, hide_bar])` (`()` for everyone), `tell_minigame(game, text[, except])`, `center_print_minigame(game, text, seconds)`, `bottom_print_minigame(game, text, seconds)` (a mini-game's members, counted once), `ask(p, title, text, command)` (a yes/no box; yes sends the package's own argument-less `command` as if typed, as v20's `MessageBoxYesNo` did), `plant_error(p, error)`, `message_box(p, title, text)` (an OK box, v20's `MessageBoxOK`): `chat` |
+| | | `play_sound(p, sound)` at a player's ears, `body_flash(p, [r, g, b, a], seconds)` (a see-through colour drawn over the body, just outside it, fading over 0.05 to 60 seconds, for everyone: a shield taking a hit, a glow), `sound_at(sound, x, y, z)`, `beam(from, to[, options])`, `play_thread(p, thread, sequence[, after])`, `play_music(p, track[, options])`, `play_music_all(track[, options])`, `stop_music(p[, fade])`, `stop_music_all([fade])` ([Music](#music)), `play_ambient(p, key, track[, options])`, `play_ambient_all(key, track[, options])`, `stop_ambient(p, key[, fade])`, `stop_ambient_all(key[, fade])` ([Ambient sound](#ambient-sound)), `show_box(p, min, max, tool)`, `hide_box(p)`, `show_shapes(owner, key, shapes)`, `hide_shapes(owner, key)`: `effects` |
+| | | `center_print(p, text, seconds)`, `bottom_print(p, text, seconds[, hide_bar])` (`()` for everyone), `screen_flash(p, [r, g, b, a], seconds)` (the screen tinted that colour, fading over 0.05 to 10 seconds; `()` for everyone: a shield breaking, a hit taken), `tell_minigame(game, text[, except])`, `center_print_minigame(game, text, seconds)`, `bottom_print_minigame(game, text, seconds)` (a mini-game's members, counted once), `ask(p, title, text, command)` (a yes/no box; yes sends the package's own argument-less `command` as if typed, as v20's `MessageBoxYesNo` did), `plant_error(p, error)`, `message_box(p, title, text)` (an OK box, v20's `MessageBoxOK`): `chat` |
 | `bot_kinds()` (each `#{ id, name, first_names }`, `first_names` a count), `bot_kind(id)`, `bot_first_name(kind, i)`, `bot_limit()`, `bot_name_limit()` (a longer name keeps its first characters) | | `add_bot(game, #{ kind, name[, team] })`, `remove_bot(bot)`, `rest_bot(bot, rest)`, `bot_tool(bot, slot or ())`: `bots` |
 | | | `set_map_lights([x, y, z], radius, options)`: `lighting` |
 | `environment()` | | `set_environment(#{ ... })`, `reset_environment()`: `environment` |
@@ -260,6 +260,25 @@ anyone else. The engine measures the same for `raycast`, `on_damage` and
 `on_projectile_hit`, so a headshot rule reads `info.region == "head"`
 instead of working it out.
 
+**Keys of your own for held things.** Bind a key to a command
+(`binds.json`, see [content-kinds.md](content-kinds.md)) and let the
+command act on what the player carries:
+
+- `set_image_state(p, state)` sends the image in their hand to its state
+  named `state`, entered as a trigger would enter it: a melee swing with
+  whatever gun is out (a `Melee` state with its own sequence, sound and
+  short shot), an inspect, a special move. Its transitions then run as
+  usual, so a timeout back to `Ready` ends it.
+- `quick_use(p, item)` uses a carried item once without switching to it:
+  the item comes out, its trigger is pulled until its image leaves the
+  state it was pulled in, then let go (a charged throw releases), and the
+  item held before comes back once the used one may be put away, or at
+  once when it is used up. A grenade key, a quick heal. One at a time per
+  player; given up after 10 seconds.
+
+Test: `crates/sim/tests/script_api.rs`
+`quick_use_throws_a_carried_item_and_puts_the_gun_back_and_a_state_can_be_entered`.
+
 **Held images.** `mount_image(p, image)` puts another image of your
 weapons (or a dependency's) in the player's hand and keeps their tool
 slot: a scope over a rifle, a second fire mode. `mount_image(p, ())` puts
@@ -278,7 +297,15 @@ turns the image's `spin` sequence while it is in that state: the New
 Duplicator spins while a job runs this way.
 `set_speed_scale(p, scale)` moves a player at that share of their running,
 crouching and swimming speeds (0 to 4) until they respawn: a heavy gun's
-slowdown. `set_fov(p, fov)` sets the player's field of view (5 to 120
+slowdown. `set_prone(p, true)` lays a player down and `set_prone(p, false)`
+gets them up, for a body whose archetype's `movement` has `prone`; getting
+up under something too low to crouch leaves them down (ask again later).
+`set_lean(p, lean)` leans them from -1 (fully left) through 0 (upright) to
+1 (fully right), easing over the archetype's `lean.seconds`, for a body
+with `movement.lean`. Bind them to keys with an Add-On's `binds.json`
+(a `"hold": true` bind sends `true` down and `false` up), so leaning and
+lying down reach the host as commands: a lean shows one round trip after
+the key. Both refuse a body that cannot. `set_fov(p, fov)` sets the player's field of view (5 to 120
 degrees), and `set_fov(p, ())` hands it back to their own setting; aiming
 and the zoom key still work on top of it. `unmount_image(p)` empties the
 player's hand (`unMountImage(0)`): a tool, a spray can or bricks, which the
@@ -309,7 +336,9 @@ the lowest free slot, and a team left out is removed. A team map's `body`
 game's `player_type`. `set_minigame(game, #{ bodies, keep_chosen_body })`
 sets which bodies members may pick with `/body` and whether a pick is kept
 through respawns (it is unless the game says `keep_chosen_body: false`;
-a kept pick outranks the team's body). Team ids are slots,
+a kept pick outranks the team's body); it also takes
+`spawn_protection_ms`, `vehicle_return_ms` (`()` for each vehicle's own)
+and `death_view_ms`, as a mode's `minigame` block sets them in seconds. Team ids are slots,
 1 to 64; 0 is never a team (a Team condition reads 0 for none). `set_team(p, team)` puts a
 member on a team (or `()` for none), `set_score` and `add_score` change
 their score, `add_team_points(game, team, n)` and `set_team_points(game,
@@ -818,6 +847,24 @@ small) where other sounds stop at 30 seconds, and is streamed while it
 plays. Each call spends one of the 64 prints and sounds a second. Brick
 music loops play on as before.
 
+#### Ambient sound
+
+**Ambient beds** (`effects`) loop a sound under the game on the effects
+bus, beside any music: wind over a canyon, a river, distant battle. Music
+off leaves them playing. Each has a `key` your rule names it by; a new
+bed under the same key replaces it, and different keys play together (up
+to 16 for everyone). `play_ambient_all(key, track)` plays it for everyone
+on the server, players who join later included, until
+`stop_ambient_all(key)` or a new map; `play_ambient(p, key, track)` for one
+player. Options go in a map, `play_ambient_all("wind", "your-id:wind", #{
+volume: 0.6, fade: 3.0, at: [10.0, 4.0, -20.0], range: 80.0 })`: `volume`
+0 to 1 (1), `fade` seconds in, up to 30 (0), and `at` places it in the
+world, heard out to `range` units (up to 2000; 100 by default); without
+`at` it plays at the ears. `stop_ambient(p, key, fade)` and
+`stop_ambient_all(key, fade)` fade it out. The track is any sound your
+Add-On declares, `"music": true` for long ones, or a game sound by name.
+Each call spends one of the 64 prints and sounds a second.
+
 **Map lights** (`lighting`) switch, dim and recolour the lamps, bulbs and
 tubes baked into the map, for everyone on the server, while they play.
 `set_map_lights([x, y, z], radius, #{ on: false })` switches off every map
@@ -848,6 +895,8 @@ map starts with none set.
 | `shadow_color` | `[r, g, b]`: the light where the sun does not reach, in place of the ambient light |
 | `sun_flare_color`, `sun_flare_size` | `[r, g, b, a]` (a is how strong) and 0.1 to 4: a glow around the sun |
 | `visible_distance`, `fog_distance` | units: where fog is complete (20 to 1000) and where it starts (0 to 1000) |
+| `fog_height` | units, 1 to 100000: how quickly the fog thins with height (it halves about every 0.7 times this above you, so a small value leaves the haze lying low; the map's own, 60 unless it says) |
+| `fog_max` | above 0 to 1: the most the fog ever covers. Below 1 it is a haze: far cliffs soften into it but stay visible, and nothing fades out before the visible distance (1, complete fog, unless the map says) |
 | `fog_color`, `sky_color` | `[r, g, b]`: the fog, and a tint over the map's sky |
 | `overcast` | 0 to 1, cloud cover: dims the sun, spreads its light and greys the fog and sky |
 | `vignette_color`, `vignette_multiply` | `[r, g, b, a]` darkening the screen's edges; `true` multiplies instead of blending |

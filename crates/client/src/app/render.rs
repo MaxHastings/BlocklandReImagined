@@ -146,6 +146,10 @@ impl App {
                 frame.queue,
                 &view.broken_shapes,
                 &view.map_lights,
+                // Wall-clock time, so every player's lights blink together.
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map_or(0.0, |d| d.as_secs_f64()),
             );
         }
         let span = crate::frame_trace::span("chunk uploads");
@@ -838,6 +842,13 @@ impl App {
             bodies_drawn.insert(*owner);
         }
         whole.note();
+        self.fx.body_flashes.upload(
+            renderer,
+            frame.device,
+            frame.queue,
+            &self.avatar.avatars,
+            |owner| bodies_drawn.contains(&owner),
+        )?;
         // Horses likewise: posed every frame (riders sit on their nodes),
         // their mesh built and drawn only where it can show.
         let mut mounts_drawn = BTreeSet::new();
@@ -1047,7 +1058,20 @@ impl App {
             controls.observer().is_none(),
             &passages,
             |drop| self.world_items.drop_center(drop),
+            self.ui
+                .core
+                .hud_regions
+                .iter()
+                .find(|r| r.region == bri_content::hud::Region::NameTags),
         );
+        let slowdown = assist_slowdown(
+            view,
+            self.motion.presented(),
+            &self.content.weapons.pack,
+            glam::Mat4::from_cols_array(&camera.view_projection),
+            eye,
+        );
+        self.controls.set_assist_slowdown(slowdown);
         // Plants keep their authored tint, scaled by the live outdoor light
         // relative to the mission's own daylight. All other views share it.
         let live_up = (-glam::Vec3::from_slice(&camera.sun_direction)
@@ -1086,13 +1110,31 @@ impl App {
                 color: light.color.extend(0.).to_array(),
             })
             .collect();
+        // Vehicle lamps their drivers turned on light the world too.
+        let mut lights = lights;
+        if let Some(view) = self.net.attempt.as_ref().and_then(|a| a.view.as_ref()) {
+            let vehicles = &self.vehicles;
+            lights.extend(
+                self.vehicle_assets
+                    .lamp_lights(view.vehicles.values().filter_map(|info| {
+                        let f = vehicles.frame(info.id)?;
+                        let body = glam::Mat4::from_scale_rotation_translation(
+                            glam::Vec3::splat(info.scale),
+                            f.rotation,
+                            f.position,
+                        );
+                        Some((body, info.lights, info.definition.clone()))
+                    })),
+            );
+        }
+        lights.truncate(bri_render::scene::MAX_POINT_LIGHTS);
         renderer.update_lights(frame.queue, &lights)?;
         let effects_renderer = self
             .gpu
             .effects_renderer
             .as_mut()
             .context("Effects GPU not initialized")?;
-        effects_renderer.set_fog(camera.atmosphere, camera.fog_color);
+        effects_renderer.set_fog(camera.atmosphere, camera.fog_color, camera.haze);
         effects_renderer.prepare(frame.queue, &effects_camera, &effects_frame)?;
         // A sky's rain or snow changed the weather pack: its pictures go up.
         if self.gpu.weather_revision != self.weather.revision {
@@ -1254,6 +1296,11 @@ impl App {
                 .map(|(_, draw)| *draw),
         );
         item_draws.extend(shared_draws.iter().copied());
+        item_draws.extend(
+            self.fx.body_flashes.draws(|owner| {
+                bodies_drawn.contains(&owner) && (owner != view.owner || third_person)
+            }),
+        );
         use bri_render::scene::ShadowCasters;
         // Every view's shadow casters: mirror and window planes draw their
         // own sun shadows from them.
@@ -1481,7 +1528,7 @@ impl App {
                         size,
                         camera.view_projection,
                         [camera.eye[0], camera.eye[1], camera.eye[2]],
-                        (camera.atmosphere, camera.fog_color[3]),
+                        (camera.atmosphere, camera.fog_color[3], camera.haze),
                         (renderer, &scenes, &item_draws),
                     );
                     renderer.mark(encoder, "occlusion");
@@ -1573,6 +1620,8 @@ impl App {
                 &self.state_dir.join("light-volumes"),
                 visual.modern_lights.as_deref(),
             );
+            self.lighting.light_volume.animations = visual.light_animations;
+            self.lighting.light_volume.spots = visual.light_spots;
             self.scene.cpu_scene = Some(visual.scene);
             self.scene.cpu_terrain = visual.terrain.into_iter().map(Arc::new).collect();
             self.scene.scenery.reset();

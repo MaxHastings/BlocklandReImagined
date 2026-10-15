@@ -67,6 +67,9 @@ pub fn settings(rules: &MiniGameRules) -> Result<Settings> {
         // Add-On rules the dialog does not show; the host keeps the game's.
         bodies: Default::default(),
         keep_chosen_body: true,
+        spawn_protection_ms: bri_minigames::DEFAULT_SPAWN_PROTECTION_MS,
+        vehicle_return_ms: None,
+        death_view_ms: 0,
     })
 }
 

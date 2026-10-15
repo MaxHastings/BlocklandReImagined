@@ -382,6 +382,7 @@ mod tests {
                 start: 10.0,
                 end: 100.0,
                 color: [1.0; 3],
+                ..Default::default()
             },
             warnings: vec![],
         };

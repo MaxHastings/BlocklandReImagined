@@ -1572,7 +1572,7 @@ fn main() -> Result<()> {
                                 (width, height),
                                 camera.view_projection,
                                 [camera.eye[0], camera.eye[1], camera.eye[2]],
-                                (camera.atmosphere, camera.fog_color[3]),
+                                (camera.atmosphere, camera.fog_color[3], camera.haze),
                                 (renderer, &scenes, &terrain_draws),
                             );
                             renderer.mark(encoder, "occlusion");

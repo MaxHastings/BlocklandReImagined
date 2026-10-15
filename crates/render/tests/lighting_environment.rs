@@ -44,6 +44,8 @@ fn a_changed_environment_relights_the_maps_lightmaps() -> Result<()> {
         fog_start: 0.0,
         fog_end: 0.0,
         fog_color: [0.0; 3],
+        fog_height: None,
+        fog_max: None,
         sky_tint: [1.0; 3],
         flare: ([0.0; 4], 1.0),
         vignette: None,
@@ -210,6 +212,7 @@ fn sky_with(fog_start: f32, bottom: bool) -> SceneData {
             start: fog_start,
             end: 1000.0,
             color: [0.5, 0.6, 0.5],
+            ..Default::default()
         },
         warnings: vec![],
     };
@@ -372,7 +375,7 @@ fn occlusion_case(
             SIZE,
             camera.view_projection,
             eye,
-            (camera.atmosphere, camera.fog_color[3]),
+            (camera.atmosphere, camera.fog_color[3], camera.haze),
             (&renderer, &scenes, &[]),
         )
     };

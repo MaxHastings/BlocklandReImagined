@@ -26,6 +26,7 @@ fn frame() -> WorldItemFrame {
         local_owner: None,
         first_person: false,
         reflected_self: false,
+        held_values: Default::default(),
     }
 }
 fn static_item(f: &ItemFixture, brick: u64, position: [f32; 3]) -> StaticItem {
@@ -740,6 +741,7 @@ fn a_stuck_arrow_keeps_pointing_the_way_it_flew(f: &ItemFixture) -> Result<()> {
         was_thrown: false,
         paint: None,
         heading: None,
+        stuck_to: None,
         bounces: 0,
         spawned: 0,
     };

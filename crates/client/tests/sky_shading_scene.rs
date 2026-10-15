@@ -71,6 +71,7 @@ fn mixed_scene(avatar: AvatarFixture, car: VehicleFixture) -> Result<()> {
             destroyed: false,
             turret_broken: false,
             scale: 1.,
+            lights: false,
         },
     )]);
     let poses = BTreeMap::from([(
@@ -119,6 +120,7 @@ fn mixed_scene(avatar: AvatarFixture, car: VehicleFixture) -> Result<()> {
         tether: None,
         controller: None,
         pass_group: 0,
+        posture: Default::default(),
     };
     let mut mesh = avatar.assets.mesh(avatar.assets.package.defaults.clone())?;
     mesh.pose(&avatar.assets, &player, 0.)?;
@@ -251,7 +253,7 @@ fn mixed_scene(avatar: AvatarFixture, car: VehicleFixture) -> Result<()> {
                             SIZE,
                             camera.view_projection,
                             eye.to_array(),
-                            (camera.atmosphere, camera.fog_color[3]),
+                            (camera.atmosphere, camera.fog_color[3], camera.haze),
                             (&renderer, &scenes, &models),
                         )
                     };

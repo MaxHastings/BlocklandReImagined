@@ -1401,6 +1401,16 @@ pub struct ModeMiniGame {
     /// A player who picks a body (a brick event, `/body`) respawns as it.
     /// On by default; a mode that forces its bodies turns it off.
     pub keep_chosen_body: bool,
+    /// Seconds a new life cannot be hurt until the player fires (v20's
+    /// 2.5); 0 turns spawn protection off.
+    pub spawn_protection_seconds: f32,
+    /// Seconds a spawned vehicle may stand empty before it goes back to
+    /// its spawn brick; 0 never. Left out, each vehicle's own
+    /// `return_seconds`.
+    pub vehicle_return_seconds: Option<f32>,
+    /// Seconds a dead player's view holds still on their body before they
+    /// may look around it (0: at once, as v20).
+    pub death_view_seconds: f32,
 }
 impl Default for ModeMiniGame {
     fn default() -> Self {
@@ -1426,6 +1436,9 @@ impl Default for ModeMiniGame {
             use_all_players_bricks: false,
             bodies: Vec::new(),
             keep_chosen_body: true,
+            spawn_protection_seconds: 2.5,
+            vehicle_return_seconds: None,
+            death_view_seconds: 0.0,
         }
     }
 }
@@ -1471,6 +1484,19 @@ impl ModeMiniGame {
         ensure!(
             (0.0..=300.0).contains(&self.vehicle_respawn_seconds),
             "vehicle_respawn_seconds must be 0 to 300"
+        );
+        ensure!(
+            (0.0..=60.0).contains(&self.spawn_protection_seconds),
+            "spawn_protection_seconds must be 0 to 60"
+        );
+        ensure!(
+            self.vehicle_return_seconds
+                .is_none_or(|s| (0.0..=3600.0).contains(&s)),
+            "vehicle_return_seconds must be 0 to 3600"
+        );
+        ensure!(
+            (0.0..=30.0).contains(&self.death_view_seconds),
+            "death_view_seconds must be 0 to 30"
         );
         Ok(())
     }
@@ -1736,6 +1762,11 @@ pub struct ArchetypeDef {
     /// out asks for the Blockhead's clip name, then falls back.
     #[serde(default)]
     pub animations: Option<bri_content::body::Animations>,
+    /// The model's own death clips by the side the killing hit came from
+    /// (`front`, `back`, `left`, `right`) and at random (`any`); replacing
+    /// the base's.
+    #[serde(default)]
+    pub deaths: Option<bri_content::body::Deaths>,
     /// The model's clip for each of its movement controller's intents
     /// (`{"11": "triple"}`), replacing the base's.
     #[serde(default)]
@@ -1771,6 +1802,20 @@ pub struct ArchetypeSounds {
     pub pain: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub death: Option<String>,
+    /// Footfall sounds, one picked each step (at most 8).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub footsteps: Vec<String>,
+    /// Footfall sounds by the surface kind underfoot (`dirt`, `metal`; a
+    /// map material's `bri_surface`), in place of `footsteps` on that kind.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub surfaces: BTreeMap<String, Vec<String>>,
+    /// Ground between footfalls in units (0.25 to 32); none is 1.1 times
+    /// the body's standing height.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stride: Option<f32>,
+    /// The sound of landing from a fall.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub land: Option<String>,
 }
 /// One rider seat: the model node riders follow, its rest position from
 /// the feet (facing -Z, at scale 1) and the rider's action (`root`, `sit`).
@@ -1819,6 +1864,9 @@ impl ArchetypeDef {
         if let Some(speeds) = &self.ground_speeds {
             bri_content::body::validate_ground_speeds(speeds)?;
         }
+        if let Some(deaths) = &self.deaths {
+            deaths.validate()?;
+        }
         ensure!(
             self.max_time_scale
                 .is_none_or(|v| v.is_finite() && (0.1..=16.0).contains(&v)),
@@ -1832,11 +1880,35 @@ impl ArchetypeDef {
             "controller must be a controller id"
         );
         ensure!(
-            [&self.sounds.jump, &self.sounds.pain, &self.sounds.death]
-                .into_iter()
-                .flatten()
-                .all(|s| s.is_empty() || text(s, 128)),
+            [
+                &self.sounds.jump,
+                &self.sounds.pain,
+                &self.sounds.death,
+                &self.sounds.land
+            ]
+            .into_iter()
+            .flatten()
+            .all(|s| s.is_empty() || text(s, 128)),
             "sounds name sound profiles"
+        );
+        ensure!(
+            self.sounds.footsteps.len() <= 8 && self.sounds.footsteps.iter().all(|s| text(s, 128)),
+            "sounds.footsteps names 1 to 8 sound profiles"
+        );
+        ensure!(
+            self.sounds.surfaces.len() <= 16
+                && self.sounds.surfaces.iter().all(|(kind, ids)| {
+                    bri_content::surface::valid_name(kind)
+                        && (1..=8).contains(&ids.len())
+                        && ids.iter().all(|s| text(s, 128))
+                }),
+            "sounds.surfaces names up to 16 surface kinds, each with 1 to 8 sound profiles"
+        );
+        ensure!(
+            self.sounds
+                .stride
+                .is_none_or(|s| s.is_finite() && (0.25..=32.0).contains(&s)),
+            "sounds.stride must be 0.25 to 32 units"
         );
         if let Some(stock) = &self.adjusts {
             ensure!(
@@ -2432,6 +2504,15 @@ pub fn map_index(bytes: &[u8], provided: &str) -> Result<()> {
         maps[0]["file"].as_str().is_some_and(|f| !f.is_empty()),
         "the map in bundle.json names its scene `file`"
     );
+    if let Some(fog) = maps[0].get("fog") {
+        let fog: bri_content::environment::Fog =
+            serde_json::from_value(fog.clone()).map_err(|e| {
+                anyhow::anyhow!(
+                    "the map's `fog` is start, end, color, and optionally height and max: {e}"
+                )
+            })?;
+        fog.validate()?;
+    }
     Ok(())
 }
 pub fn hud_layout(layout: &bri_content::hud::Layout) -> Result<()> {
@@ -2621,5 +2702,30 @@ mod tests {
             input(Some("onTouch(Team1)"), &[]).is_err(),
             "one of the engine's, plain"
         );
+    }
+
+    #[test]
+    fn a_map_may_give_its_own_fog() {
+        let index = |fog: serde_json::Value| {
+            let mut map =
+                serde_json::json!({ "id": "a:map/a", "name": "A", "file": "a.scene.json" });
+            if !fog.is_null() {
+                map["fog"] = fog;
+            }
+            let bundle = serde_json::json!({ "schema_version": 1, "maps": [map] });
+            map_index(&serde_json::to_vec(&bundle).unwrap(), "a:map/a")
+        };
+        assert!(index(serde_json::Value::Null).is_ok());
+        let haze = serde_json::json!({ "start": 50, "end": 900, "color": [0.7, 0.7, 0.8], "height": 30, "max": 0.8 });
+        assert!(index(haze).is_ok());
+        let plain = serde_json::json!({ "start": 50, "end": 900, "color": [0.7, 0.7, 0.8] });
+        assert!(index(plain).is_ok());
+        for bad in [
+            serde_json::json!({ "start": 50, "end": 900 }),
+            serde_json::json!({ "start": 50, "end": 900, "color": [0.7, 0.7, 0.8], "max": 1.5 }),
+            serde_json::json!({ "start": 50, "end": 900, "color": [0.7, 0.7, 0.8], "density": 2 }),
+        ] {
+            assert!(index(bad.clone()).is_err(), "{bad}");
+        }
     }
 }

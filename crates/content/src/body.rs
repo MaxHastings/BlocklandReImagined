@@ -123,9 +123,10 @@ pub enum Role {
     Look,
     HeadSide,
     HeadUp,
+    SeatAim,
 }
 impl Role {
-    pub const ALL: [Role; 19] = [
+    pub const ALL: [Role; 20] = [
         Role::Idle,
         Role::Run,
         Role::Back,
@@ -145,6 +146,7 @@ impl Role {
         Role::Look,
         Role::HeadSide,
         Role::HeadUp,
+        Role::SeatAim,
     ];
     /// The role's name in an archetype's `animations`.
     pub fn name(self) -> &'static str {
@@ -168,6 +170,7 @@ impl Role {
             Role::Look => "look",
             Role::HeadSide => "head_side",
             Role::HeadUp => "head_up",
+            Role::SeatAim => "seat_aim",
         }
     }
     /// The Blockhead's clip for the role (m.dts sequence names, lower case):
@@ -193,6 +196,7 @@ impl Role {
             Role::Look => "look",
             Role::HeadSide => "headside",
             Role::HeadUp => "headup",
+            Role::SeatAim => "seataim",
         }
     }
     pub fn from_name(name: &str) -> Option<Self> {
@@ -231,6 +235,7 @@ impl Role {
             Role::Look => &[],
             Role::HeadSide => &[],
             Role::HeadUp => &[],
+            Role::SeatAim => &[],
         }
     }
     /// The way a locomotion role's clip carries the body, facing -Z (v20's
@@ -253,6 +258,7 @@ impl Role {
             Role::Look => "it does not look up and down",
             Role::HeadSide => "its head does not turn in free look",
             Role::HeadUp => "its head does not tilt under a pack",
+            Role::SeatAim => "a seated gunner bends only with its `look` clip",
             Role::Swim => "it swims in its locomotion pose",
             _ => "that layer is left out",
         }
@@ -276,6 +282,88 @@ pub fn validate_animations(animations: &Animations) -> Result<()> {
         );
     }
     Ok(())
+}
+
+/// An archetype's `deaths`: the body's own death clips by the side the
+/// killing hit came from, and others to pick from at random. A side with no
+/// clips takes one from `any`; with none at all the body plays its `death`
+/// role. Every player's game picks the same clip (the host sends the side
+/// and a roll).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Deaths {
+    /// Hit from in front: the body falls backward.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub front: Vec<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub back: Vec<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub left: Vec<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub right: Vec<String>,
+    /// Whatever the side, and for a death with no side (a fall, lava).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub any: Vec<String>,
+}
+/// Most clips one side of [`Deaths`] lists.
+pub const MAX_DEATH_CLIPS: usize = 8;
+/// A side of the body, for [`Deaths::pick`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Side {
+    Front,
+    Back,
+    Left,
+    Right,
+}
+impl Deaths {
+    pub fn is_empty(&self) -> bool {
+        *self == Self::default()
+    }
+    pub fn validate(&self) -> Result<()> {
+        for (side, clips) in [
+            ("front", &self.front),
+            ("back", &self.back),
+            ("left", &self.left),
+            ("right", &self.right),
+            ("any", &self.any),
+        ] {
+            ensure!(
+                clips.len() <= MAX_DEATH_CLIPS,
+                "deaths.{side} lists at most {MAX_DEATH_CLIPS} clips"
+            );
+            for clip in clips {
+                ensure!(
+                    !clip.is_empty() && clip.len() <= 64 && !clip.chars().any(char::is_control),
+                    "deaths.{side} needs clip names of up to 64 characters"
+                );
+            }
+        }
+        Ok(())
+    }
+    /// The clip for a death from `side` with `roll`, among those the body
+    /// has (`has` takes a lower-case clip name), lower case; `None` plays
+    /// the `death` role.
+    pub fn pick(&self, side: Option<Side>, roll: u8, has: impl Fn(&str) -> bool) -> Option<String> {
+        let sided = match side {
+            Some(Side::Front) => &self.front,
+            Some(Side::Back) => &self.back,
+            Some(Side::Left) => &self.left,
+            Some(Side::Right) => &self.right,
+            None => &self.any,
+        };
+        let owned = |clips: &Vec<String>| -> Vec<String> {
+            clips
+                .iter()
+                .map(|c| c.to_ascii_lowercase())
+                .filter(|c| has(c))
+                .collect()
+        };
+        let mut clips = owned(sided);
+        if clips.is_empty() {
+            clips = owned(&self.any);
+        }
+        (!clips.is_empty()).then(|| clips.swap_remove(usize::from(roll) % clips.len()))
+    }
 }
 
 /// An archetype's `ground_speeds`: locomotion role name to the speed, in
@@ -377,6 +465,38 @@ impl RoleClips {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_death_takes_its_sides_clip_else_any_else_the_role() {
+        let deaths = Deaths {
+            front: vec!["Die_Back".into()],
+            any: vec!["die1".into(), "die2".into(), "missing".into()],
+            ..Default::default()
+        };
+        let has = |c: &str| matches!(c, "die_back" | "die1" | "die2");
+        assert_eq!(
+            deaths.pick(Some(Side::Front), 7, has).as_deref(),
+            Some("die_back")
+        );
+        assert_eq!(
+            deaths.pick(Some(Side::Left), 0, has).as_deref(),
+            Some("die1")
+        );
+        assert_eq!(
+            deaths.pick(Some(Side::Left), 1, has).as_deref(),
+            Some("die2")
+        );
+        assert_eq!(deaths.pick(None, 3, has).as_deref(), Some("die2"));
+        assert_eq!(Deaths::default().pick(None, 3, has), None);
+        assert!(
+            Deaths {
+                any: vec!["x".into(); 9],
+                ..Default::default()
+            }
+            .validate()
+            .is_err()
+        );
+    }
 
     #[test]
     fn the_blockhead_resolves_every_role_to_its_own_clip() {

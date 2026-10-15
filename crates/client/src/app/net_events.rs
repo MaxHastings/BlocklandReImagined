@@ -64,6 +64,18 @@ impl App {
                 bri_net::client::ArrivalEvent::Notice(bri_sim::session::Notice::Music(play)) => {
                     self.audio.play_music(&play);
                 }
+                bri_net::client::ArrivalEvent::Notice(bri_sim::session::Notice::Ambient(play)) => {
+                    self.audio.play_ambient(&play);
+                }
+                bri_net::client::ArrivalEvent::Notice(bri_sim::session::Notice::Kill(kill)) => {
+                    self.ui.apply_session(
+                        id,
+                        UiUpdate::Chat {
+                            text: bri_ui::ml::sanitize(&kill.line),
+                        },
+                    );
+                    self.combat.note_kill(kill);
+                }
                 bri_net::client::ArrivalEvent::Notice(_) => {}
                 // The game join spawned the player, or the host is gone:
                 // the join itself says which.
@@ -696,6 +708,15 @@ impl App {
                         bri_sim::session::Notice::Chat(text) => UiUpdate::Chat {
                             text: bri_ui::ml::sanitize(&text),
                         },
+                        // A drawn kill feed shows it in place of chat.
+                        bri_sim::session::Notice::Kill(kill) => {
+                            let text = bri_ui::ml::sanitize(&kill.line);
+                            self.combat.note_kill(kill);
+                            if self.addons.hud_regions.kill_feed() {
+                                continue;
+                            }
+                            UiUpdate::Chat { text }
+                        }
                         bri_sim::session::Notice::Center { text, seconds } => {
                             UiUpdate::CenterPrint {
                                 text: print_markup(&self.ui.core.binds, &text),
@@ -737,8 +758,15 @@ impl App {
                             self.audio.profile(&profile, bri_audio::Placement::Listener);
                             continue;
                         }
+                        bri_sim::session::Notice::Flash { color, seconds } => {
+                            UiUpdate::Flash { color, seconds }
+                        }
                         bri_sim::session::Notice::Music(play) => {
                             self.audio.play_music(&play);
+                            continue;
+                        }
+                        bri_sim::session::Notice::Ambient(play) => {
+                            self.audio.play_ambient(&play);
                             continue;
                         }
                         bri_sim::session::Notice::Ammo(held) => {
@@ -978,6 +1006,9 @@ impl App {
             }
             self.scene.scene_map = Some(prepared.map_id.clone());
             self.foliage.set_map(prepared.foliage);
+            self.fx
+                .effects
+                .set_map_effects(prepared.map_effects.as_ref())?;
             self.weather
                 .set_map(&prepared.map_id, prepared.waters.clone())?;
             self.scene.scenery.set_map(prepared.plate, prepared.waters);

@@ -350,12 +350,15 @@ impl MinigamesWorld {
         }
         out.push(Effect::Ended { game: id });
     }
-    /// The Mini-Game dialog has no fields for the bodies rules an Add-On
-    /// set; an edit there keeps them.
+    /// The Mini-Game dialog has no fields for the bodies and match rules
+    /// an Add-On set; an edit there keeps them.
     fn keep_add_on_rules(&self, game: GameId, settings: &mut Settings) {
         if let Some(old) = self.games.get(&game).map(|g| &g.settings) {
             settings.bodies = old.bodies.clone();
             settings.keep_chosen_body = old.keep_chosen_body;
+            settings.spawn_protection_ms = old.spawn_protection_ms;
+            settings.vehicle_return_ms = old.vehicle_return_ms;
+            settings.death_view_ms = old.death_view_ms;
         }
     }
     pub(crate) fn configure(

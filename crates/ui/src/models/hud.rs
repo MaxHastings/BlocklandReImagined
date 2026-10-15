@@ -38,6 +38,10 @@ pub enum ScrollMode {
     None,
 }
 
+/// The prompt for building while a mini-game disables it; a HUD layout's
+/// `building_disabled` text replaces it (`Core::stock_texts`).
+pub const BUILDING_DISABLED: &str = "\u{E005}Building is currently disabled.";
+
 /// Requests and client-side notices produced by models.
 #[derive(Debug, Default, Clone, PartialEq)]
 pub struct Outbox {
@@ -540,7 +544,7 @@ impl HudModel {
             return true;
         } else {
             let msg = if self.building_disabled {
-                ("\u{E005}Building is currently disabled.".to_string(), 2.0)
+                (BUILDING_DISABLED.to_string(), 2.0)
             } else {
                 (
                     format!(
@@ -569,8 +573,7 @@ impl HudModel {
     /// deselects it. The wheel still returns to any other slot.
     pub fn use_bricks(&mut self, open_bsd_key: &str, out: &mut Outbox) {
         if self.building_disabled {
-            out.center_prints
-                .push(("\u{E005}Building is currently disabled.".into(), 2.0));
+            out.center_prints.push((BUILDING_DISABLED.into(), 2.0));
             return;
         }
         let first = (0..NUM_BRICK_SLOTS)

@@ -77,6 +77,7 @@ fn rocket_pack() -> bri_weapons::Pack {
         crosshair: true,
         follow_arm: false,
         hide_nodes: Vec::new(),
+        aim_assist: None,
         both_arms: false,
         paint_tint: false,
         left_image: None,
@@ -166,6 +167,8 @@ fn rocket_pack() -> bri_weapons::Pack {
         sport_hit: None,
         turns_into: None,
         decal: None,
+        stick_to_bodies: false,
+        impacts: Default::default(),
     };
     let pack = bri_weapons::Pack {
         effects: Default::default(),

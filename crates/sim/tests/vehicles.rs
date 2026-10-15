@@ -375,6 +375,64 @@ fn spawn_brick_vehicle_mounts_drives_dismounts_and_respawns(f: &Fixture) -> anyh
 }
 
 on_both! {
+/// A vehicle left empty away from its spawn brick for its return time goes
+/// back to the brick as a fresh one; while ridden it stays.
+fn an_abandoned_vehicle_returns_to_its_spawn(f: &Fixture) -> anyhow::Result<()> {
+    let mut s = session_changing(f, None, |car| car.return_seconds = Some(1.0))?;
+    let owner = s.join("Driver".into(), Vec3::new(0.0, 0.05, 0.0), true)?;
+    let mut sequence = 0;
+    let mut feed = |s: &mut Session, input: MoveInput, ticks: usize| -> anyhow::Result<()> {
+        for _ in 0..ticks {
+            sequence += 1;
+            s.movement(owner, sequence, input)?;
+            s.step()?;
+        }
+        Ok(())
+    };
+    feed(&mut s, MoveInput::default(), 120)?;
+    let home = Vec3::from(s.vehicle_poses()[0].position);
+    for i in 0..60 {
+        let input = MoveInput {
+            forward: 1.0,
+            jump: i % 3 == 0,
+            ..Default::default()
+        };
+        feed(&mut s, input, 10)?;
+        if s.mounted(owner).is_some() {
+            break;
+        }
+    }
+    assert!(s.mounted(owner).is_some(), "mounted the car");
+    let first = s.vehicle_infos()[0].id;
+    let forward = MoveInput {
+        forward: 1.0,
+        ..Default::default()
+    };
+    feed(&mut s, forward, 360)?;
+    assert_eq!(s.vehicle_infos()[0].id, first, "ridden vehicles stay");
+    feed(&mut s, MoveInput::default(), 120)?;
+    let jet = MoveInput {
+        jet: true,
+        ..Default::default()
+    };
+    feed(&mut s, jet, 2)?;
+    feed(&mut s, MoveInput::default(), 10)?;
+    assert_eq!(s.mounted(owner), None);
+    let away = Vec3::from(s.vehicle_poses()[0].position);
+    assert!(away.distance(home) > 5.0, "{home} -> {away}");
+    feed(&mut s, MoveInput::default(), 100)?;
+    assert_eq!(s.vehicle_infos()[0].id, first, "not yet");
+    feed(&mut s, MoveInput::default(), 60)?;
+    let infos = s.vehicle_infos();
+    assert_eq!(infos.len(), 1);
+    assert_ne!(infos[0].id, first, "returned as a fresh vehicle");
+    let back = Vec3::from(s.vehicle_poses()[0].position);
+    assert!(back.distance(home) < 3.0, "{home} -> {back}");
+    Ok(())
+}
+}
+
+on_both! {
 /// Moves still queued when the host dismounts a rider are dropped, and the
 /// next pose acknowledges them: the client must not keep replaying moves the
 /// host will never run.

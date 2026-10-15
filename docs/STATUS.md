@@ -1,31 +1,27 @@
 # Status
 
 One page so everyone starts from the same place: Max, or any new thread.
-Revised 2026-10-04. It summarises; the linked docs are the evidence, and
+Revised 2026-10-15. It summarises; the linked docs are the evidence, and
 [progress.md](progress.md) has the dated history of each build.
 
 ## Release state
 
-Current public release: [v0.2.3 Alpha](https://github.com/MaxHastings/BlocklandReImagined/releases/tag/v0.2.3),
-source `7089836612c1b0201096b815f4219cea7f5399fc`, with verified Windows x86-64,
-Apple silicon macOS and Linux x86-64 archives. The release source is on main;
-main is the only GitHub branch. See the
-[publication and cleanup evidence](progress/2026-10-04-v023-published-and-cleanup.md).
-The full content-backed local gate and
-[Windows CI](https://github.com/MaxHastings/BlocklandReImagined/actions/runs/37184136071)
-passed before publication. The local gate ran 351 test binaries; one native
-item-render check passed its isolated retry under the existing flake policy.
-External save-corpus coverage is 1/23: the available 6,275-brick A.T.C. Fort
-passed, while the other source saves are absent on this Mac.
+Current public release: [v0.3.0 Alpha](https://github.com/MaxHastings/BlocklandReImagined/releases/tag/v0.3.0),
+source `ee244a8449382516d24a7460c0e7b78e00128573`, with Windows x86-64,
+Apple silicon macOS and Linux x86-64 archives. The v0.3.1 engine candidate is
+being integrated on `v0.3.1-experimental`; release notes are in
+[docs/releases/v0.3.1.md](releases/v0.3.1.md). This is an alpha release, and
+interactive acceptance and the broader alpha definition of done remain open.
 
-Start with the [player checks](rule-workshop/V0.2.3-PLAYTEST.md) and
-[release notes](rule-workshop/V0.2.3-RELEASE-NOTES.md). The
+See the dated progress entries for each release's exact build and test
+evidence.
+
+Start with the [v0.3.0 release notes](releases/v0.3.0.md) and the current
+v0.3.1 notes above. The
 [current bot architecture](architecture/bots.md) and
 [objective integration audit](audits/objective-driven-integration.md)
 record the supported mechanisms and limits. The
-[v0.2.3 work plan](v023-work-plan.md) and dated progress entries preserve the
-investigation history; the [v0.2.2 mutation guide](rule-workshop/V0.2.2-PLAYTEST.md)
-is for that older release.
+dated progress entries preserve the investigation history.
 
 This increment hardens creator draft/acknowledgment flows, persistent Add-On
 choices, live vehicle recoloring, join preparation, copy authority/support,

@@ -282,7 +282,8 @@ impl Session {
                 | Op::PrintMinigame(_)
                 | Op::Broadcast(_)
                 | Op::Sound(_)
-                | Op::Music(_) => {}
+                | Op::Music(_)
+                | Op::Ambient(_) => {}
                 _ => return Err(F::Unsupported),
             }
         }

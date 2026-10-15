@@ -55,6 +55,19 @@ pub fn static_shape_colliders(
     shape: &bri_content::shape::Shape,
     transform: glam::Mat4,
 ) -> Result<Vec<ColliderBuilder>> {
+    Ok(static_shape_collider_materials(shape, transform)?
+        .into_iter()
+        .map(|(collider, _)| collider)
+        .collect())
+}
+
+/// [`static_shape_colliders`], each with its triangles' materials in order
+/// (an index into `shape.materials`): a ray's hit on triangle `i` of the
+/// collider (its `subshape`) struck that material.
+pub fn static_shape_collider_materials(
+    shape: &bri_content::shape::Shape,
+    transform: glam::Mat4,
+) -> Result<Vec<(ColliderBuilder, Vec<Option<usize>>)>> {
     anyhow::ensure!(
         transform.is_finite() && transform.determinant().abs() > 1e-8,
         "Invalid static shape placement"
@@ -84,11 +97,10 @@ pub fn static_shape_colliders(
         let indices = (0..triangles.len() as u32)
             .map(|i| [i * 3, i * 3 + 1, i * 3 + 2])
             .collect();
-        colliders.push(ColliderBuilder::trimesh_with_flags(
-            points,
-            indices,
-            TriMeshFlags::FIX_INTERNAL_EDGES,
-        )?);
+        colliders.push((
+            ColliderBuilder::trimesh_with_flags(points, indices, TriMeshFlags::FIX_INTERNAL_EDGES)?,
+            triangles.iter().map(|t| t.material).collect(),
+        ));
     }
     Ok(colliders)
 }
@@ -205,6 +217,7 @@ mod tests {
                 visibility: 0.0,
                 frame: 0,
                 material_frame: 0,
+                live: None,
             }],
             details: vec![
                 Detail {

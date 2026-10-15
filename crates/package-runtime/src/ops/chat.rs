@@ -109,6 +109,27 @@ impl ScriptOp for Print {
     }
 }
 
+/// The screen tinted `color` (RGBA 0..1) for one player, or everyone with
+/// no player, fading to nothing over `seconds`: a shield breaking, a hit
+/// taken, a power-up.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ScreenFlash {
+    pub player: Option<u64>,
+    pub color: [f32; 4],
+    pub seconds: f32,
+}
+impl ScriptOp for ScreenFlash {
+    const CAPABILITY: &str = "chat";
+    const NAME: &str = "screen_flash";
+    fn bounded(&self) -> bool {
+        self.color
+            .iter()
+            .all(|v| v.is_finite() && (0.0..=1.0).contains(v))
+            && self.seconds.is_finite()
+            && (0.05..=10.0).contains(&self.seconds)
+    }
+}
+
 /// One player's plant-error icon and sound, as v20's
 /// `messageClient(%client, 'MsgPlantError_…')`: one of
 /// [`PLANT_ERRORS`]. `flood` (planting too soon) shows what the

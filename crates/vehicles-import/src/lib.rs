@@ -343,6 +343,7 @@ pub fn lower(
             damping: number(spring, "damping", 10.),
             anti_sway: number(spring, "antiSwayForce", 1.),
             rebound_damping: 0.,
+            linear_steering: false,
             tire: Tire {
                 static_friction: number(tire, "staticFriction", 1.),
                 kinetic_friction: number(tire, "kineticFriction", 0.5),
@@ -524,6 +525,7 @@ pub fn lower(
         attachment_collision_hulls,
         attachment_mount,
         attachment_fallback_seat,
+        turret_sway: None,
         collision_hulls: hulls,
         bounds_min: lo.to_array(),
         bounds_max: hi.to_array(),
@@ -590,12 +592,15 @@ pub fn lower(
         strafe_steering,
         throttle_brakes: false,
         reverse_limited: false,
+        return_seconds: None,
+        board_on_use: false,
         steering: SteeringSettings {
             strafe_rate: number(b, "steeringStrafeSteeringRate", 0.1),
             auto_return: torque_bool(b, "steeringUseAutoReturn", true),
             auto_return_rate: number(b, "steeringAutoReturnRate", 0.9),
             auto_return_max_speed: number(b, "steeringAutoReturnMaxSpeed", 10.),
             toward_look: false,
+            keyboard_override: false,
             speed_lock: 1.,
         },
         wheeled_flight: match family {
@@ -633,6 +638,7 @@ pub fn lower(
             tilt: number(b, "cameraTilt", 0.),
             lag: number(b, "cameraLag", 0.),
             decay: number(b, "cameraDecay", 0.),
+            orbit: None,
         },
         look_limits: [number(b, "lookDownLimit", 0.), number(b, "lookUpLimit", 1.)],
         runover_speed: number(b, "minRunOverSpeed", f32::MAX),
@@ -651,6 +657,8 @@ pub fn lower(
         trails: vec![],
         effects: Default::default(),
         engine_sound: None,
+        lights: vec![],
+        skid: None,
         authored: b.fields.clone(),
         adaptations,
     })

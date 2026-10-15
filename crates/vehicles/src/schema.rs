@@ -124,6 +124,10 @@ pub struct Wheel {
     pub rebound_damping: f32,
     pub tire: Tire,
     pub steering: f32,
+    /// Steering is already a wheel angle in radians. Off preserves the
+    /// v20 squared-input curve. Useful for authored physical steering locks.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub linear_steering: bool,
     pub powered: bool,
     pub model: String,
     /// Turns the tire model, authored with its hub axis along forward, so the
@@ -195,7 +199,11 @@ impl Wheel {
     /// mouse steers gently and full lock sharply, and a wheel steering
     /// against the front (the Tank's rear, -0.8) turns a little less.
     pub fn steer_angle(&self, steering: f32) -> f32 {
-        let squared = steering * steering.abs();
+        let squared = if self.linear_steering {
+            steering
+        } else {
+            steering * steering.abs()
+        };
         (self.steering * squared.sin()).atan2(squared.cos())
     }
 }
@@ -340,6 +348,10 @@ pub struct SteeringSettings {
     /// where you drive where you look.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub toward_look: bool,
+    /// In look steering, a held strafe key requests full left/right lock
+    /// instead. Releasing it resumes steering toward the look.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub keyboard_override: bool,
     /// The share of `max_steering` the driver can still turn to at
     /// `max_speed`, narrowing in a straight line from the full lock
     /// standing: a fast truck that turns sharply in a yard but cannot spin
@@ -370,6 +382,7 @@ impl Default for SteeringSettings {
             auto_return_rate: 0.9,
             auto_return_max_speed: 10.,
             toward_look: false,
+            keyboard_override: false,
             speed_lock: 1.,
         }
     }
@@ -483,6 +496,80 @@ pub struct VehicleCamera {
     /// `Vehicle::getCameraTransform` (0x56cc10) never reads them.
     pub lag: f32,
     pub decay: f32,
+    /// The driver's third-person camera orbits the vehicle with the mouse
+    /// instead of sitting level behind it. Not a v20 mode. Left out, v20's
+    /// chase camera.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub orbit: Option<CameraOrbit>,
+}
+/// [`Definition::turret_sway`]: a damped spring that tips the turret
+/// against the vehicle's acceleration in its own frame (back as it speeds
+/// up, forward as it brakes, outward in a turn, down over a bump).
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TurretSway {
+    /// Radians the turret tips per unit/s² of acceleration.
+    pub response: f32,
+    /// How fast it wobbles, cycles a second.
+    #[serde(default = "sway_frequency")]
+    pub frequency: f32,
+    /// 0 rings on, 1 settles without overshooting.
+    #[serde(default = "sway_damping")]
+    pub damping: f32,
+    /// The furthest it tips, degrees.
+    #[serde(default = "sway_max")]
+    pub max_degrees: f32,
+}
+fn sway_frequency() -> f32 {
+    3.0
+}
+fn sway_damping() -> f32 {
+    0.3
+}
+fn sway_max() -> f32 {
+    4.0
+}
+impl TurretSway {
+    pub fn valid(&self) -> bool {
+        self.response.is_finite()
+            && (0. ..=0.1).contains(&self.response)
+            && self.frequency.is_finite()
+            && (0.2..=20.).contains(&self.frequency)
+            && self.damping.is_finite()
+            && (0. ..=2.).contains(&self.damping)
+            && self.max_degrees.is_finite()
+            && (0. ..=30.).contains(&self.max_degrees)
+    }
+}
+/// A free-orbit driver camera ([`VehicleCamera::orbit`]): it sits
+/// `max_dist` from a pivot over the vehicle's box center, swung round by the
+/// driver's look (its yaw and pitch, in the world for a `toward_look`
+/// vehicle), and looks at the pivot. Looking down lifts it overhead, looking
+/// up lowers it toward the ground; the same ground and wall check as the
+/// chase camera keeps it out of both.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CameraOrbit {
+    /// Lowest the camera swings, degrees of elevation over the pivot
+    /// (negative is below it, looking up at the vehicle).
+    pub min_pitch: f32,
+    /// Highest it swings, degrees (90 is straight overhead, looking down).
+    pub max_pitch: f32,
+    /// The pivot's height over the box center, units: the camera looks at
+    /// a point this far above the vehicle's middle.
+    #[serde(default)]
+    pub height: f32,
+    /// How far the camera trails the vehicle's motion, seconds: the pivot
+    /// follows the vehicle like a weight on a spring, a 0.1 lag closing
+    /// about 63% of the gap each tenth of a second. 0 follows exactly.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub lag: f32,
+}
+impl CameraOrbit {
+    /// The elevation range in radians, low then high.
+    pub fn pitch_range(&self) -> (f32, f32) {
+        (self.min_pitch.to_radians(), self.max_pitch.to_radians())
+    }
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Definition {
@@ -500,6 +587,11 @@ pub struct Definition {
     pub attachment_collision_hulls: Vec<Vec<[f32; 3]>>,
     pub attachment_mount: Option<Transform>,
     pub attachment_fallback_seat: Option<Transform>,
+    /// The turret (`attachment_model`) sways on a spring as the vehicle
+    /// speeds up, brakes, turns and bounces. Drawn only; aim and shots
+    /// are unchanged. Left out, the turret sits rigid, as in v20.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub turret_sway: Option<TurretSway>,
     pub collision_hulls: Vec<Vec<[f32; 3]>>,
     pub bounds_min: [f32; 3],
     pub bounds_max: [f32; 3],
@@ -553,6 +645,17 @@ pub struct Definition {
     /// go forward (`maxBackwardSpeed` is only a hover vehicle's).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub reverse_limited: bool,
+    /// Seconds the vehicle may stand empty before it goes back to its
+    /// spawn brick (Halo's abandoned Warthog). `None`, v20's: it stays
+    /// where it was left. A mini-game's `vehicle_return_ms` overrides it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub return_seconds: Option<f32>,
+    /// The use key (the empty-hand click) on the vehicle within reach
+    /// seats the player in the free seat nearest them; an upturned one
+    /// still flips. Off, v20's: riders board
+    /// only by landing on it.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub board_on_use: bool,
     #[serde(default)]
     pub steering: SteeringSettings,
     /// Blockland's flying forces for a `Wheeled` or `Skis` vehicle; `None`
@@ -629,10 +732,101 @@ pub struct Definition {
     /// from the vehicle's presented motion. v20's vehicles have none.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub engine_sound: Option<EngineSound>,
+    /// Lamps at nodes of its model (headlights) that light the world while
+    /// its driver has them on: the light key in the driving seat turns them
+    /// on and off. Who has them on is shared; the light is each client's.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub lights: Vec<Lamp>,
+    /// Tyres that skid: dust or smoke at each grounded wheel and a squeal
+    /// while it slides across or spins along the ground. Cosmetic: each
+    /// client derives the slide from the vehicle's presented motion.
+    /// v20's vehicles have none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub skid: Option<Skid>,
     /// Authored fields retained as metadata only. Runtime reads typed native fields above.
     pub authored: BTreeMap<String, String>,
     pub adaptations: Vec<String>,
 }
+/// A lamp on a vehicle ([`Definition::lights`]): a point light at a node
+/// of the vehicle's model, moved `offset` along the node's own axes (ahead
+/// of a headlight's lens, so it lights the road rather than the bonnet).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Lamp {
+    pub node: String,
+    #[serde(default, skip_serializing_if = "is_origin")]
+    pub offset: [f32; 3],
+    /// Linear RGB; above 1 is brighter.
+    pub color: [f32; 3],
+    /// How far it reaches, units.
+    pub radius: f32,
+}
+fn is_origin(v: &[f32; 3]) -> bool {
+    *v == [0.0; 3]
+}
+/// [`Definition::skid`].
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Skid {
+    /// An emitter run at a sliding wheel's contact with the ground: one
+    /// of the definition's `effects`, or a base game emitter.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub emitter: Option<String>,
+    /// A looping sound played at the vehicle while any wheel slides,
+    /// louder and higher the harder it slides (like `engine_sound`'s).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sound: Option<String>,
+    /// How fast a tyre must slide, in units per second, to skid.
+    #[serde(default = "Skid::default_min_slip")]
+    pub min_slip: f32,
+    /// The slide at which the squeal is at its loudest.
+    #[serde(default = "Skid::default_full_slip")]
+    pub full_slip: f32,
+}
+impl Skid {
+    fn default_min_slip() -> f32 {
+        3.0
+    }
+    fn default_full_slip() -> f32 {
+        12.0
+    }
+    pub fn validate(&self) -> Result<()> {
+        let name = |n: &Option<String>| {
+            n.as_deref().is_none_or(|n| {
+                !n.trim().is_empty() && n.len() <= 128 && !n.chars().any(char::is_control)
+            })
+        };
+        ensure!(
+            name(&self.emitter)
+                && name(&self.sound)
+                && (self.emitter.is_some() || self.sound.is_some()),
+            "skid names an emitter or a sound"
+        );
+        ensure!(
+            self.min_slip.is_finite()
+                && self.full_slip.is_finite()
+                && (0.1..=100.0).contains(&self.min_slip)
+                && self.full_slip > self.min_slip
+                && self.full_slip <= 200.0,
+            "skid min_slip must be 0.1 to 100, below full_slip (at most 200)"
+        );
+        Ok(())
+    }
+    /// How hard a tyre sliding at `slip` units per second skids, 0 (below
+    /// `min_slip`) to 1 (at `full_slip` or more).
+    pub fn strength(&self, slip: f32) -> f32 {
+        if !(slip.is_finite() && slip >= self.min_slip) {
+            return 0.0;
+        }
+        bri_console::Clamp::clamped(
+            (slip - self.min_slip) / (self.full_slip - self.min_slip),
+            0.0,
+            1.0,
+        )
+        .max(0.05)
+    }
+}
+
 /// A vehicle's engine sound ([`Definition::engine_sound`]). It plays while
 /// someone sits in the seat that drives the vehicle (any seat, for a
 /// vehicle no seat drives), and stops when they get out or the vehicle is
@@ -913,6 +1107,21 @@ impl Pack {
             );
             ensure!(d.per_player != Some(0), "a per-player cap of 0 allows none");
             ensure!(
+                d.lights.len() <= 16
+                    && d.lights.iter().all(|l| {
+                        !l.node.is_empty()
+                            && l.offset.iter().all(|v| v.is_finite() && v.abs() <= 100.)
+                            && l.color
+                                .iter()
+                                .all(|c| c.is_finite() && (0. ..=8.).contains(c))
+                            && l.radius.is_finite()
+                            && l.radius > 0.
+                            && l.radius <= 100.
+                    }),
+                "{}: at most 16 lights, each on a node, colour 0 to 8 and radius above 0 up to 100",
+                d.id
+            );
+            ensure!(
                 d.blast_scale
                     .is_none_or(|s| s.is_finite() && s > 0. && s <= 100.),
                 "blast_scale must be above 0 and at most 100"
@@ -989,6 +1198,9 @@ impl Pack {
             d.effects.validate()?;
             if let Some(engine) = &d.engine_sound {
                 engine.validate()?;
+            }
+            if let Some(skid) = &d.skid {
+                skid.validate()?;
             }
             ensure!(d.trails.len() <= 16, "too many trails");
             for t in &d.trails {
@@ -1114,6 +1326,10 @@ impl Pack {
                 "invalid timing/density"
             );
             ensure!(
+                d.return_seconds.is_none_or(|s| (0.0..=3600.0).contains(&s)),
+                "return_seconds must be 0 to 3600"
+            );
+            ensure!(
                 d.bounds_min
                     .iter()
                     .chain(d.bounds_max.iter())
@@ -1145,7 +1361,19 @@ impl Pack {
                     && c.lag >= 0.
                     && c.decay >= 0.
                     && d.look_limits.iter().all(|v| (0. ..=1.).contains(v))
-                    && d.look_limits[0] <= d.look_limits[1],
+                    && d.look_limits[0] <= d.look_limits[1]
+                    && c.orbit.is_none_or(|o| {
+                        o.min_pitch.is_finite()
+                            && o.max_pitch.is_finite()
+                            && o.height.is_finite()
+                            && -89. <= o.min_pitch
+                            && o.min_pitch <= o.max_pitch
+                            && o.max_pitch <= 89.
+                            && o.height.abs() <= 20.
+                            && o.lag.is_finite()
+                            && (0. ..=2.).contains(&o.lag)
+                    })
+                    && d.turret_sway.is_none_or(|s| s.valid()),
                 "invalid camera or look limits"
             );
             ensure!(
@@ -1299,6 +1527,7 @@ mod tests {
             rebound_damping: 0.,
             tire: Tire::default(),
             steering,
+            linear_steering: false,
             powered: false,
             model: String::new(),
             model_rotation: [0.0, 0.0, 0.0, 1.0],
@@ -1312,5 +1541,12 @@ mod tests {
             "{rear}"
         );
         assert_eq!(wheel(0.0).steer_angle(0.9785), 0.0);
+        let mut linear = wheel(1.0);
+        linear.linear_steering = true;
+        let lock = 30.0_f32.to_radians();
+        assert!((linear.steer_angle(lock) - lock).abs() < 1e-6);
+        assert!((linear.steer_angle(-lock) + lock).abs() < 1e-6);
+        // A speed lock is a share of the actual angle, not squared again.
+        assert!((linear.steer_angle(lock * 0.6) - lock * 0.6).abs() < 1e-6);
     }
 }

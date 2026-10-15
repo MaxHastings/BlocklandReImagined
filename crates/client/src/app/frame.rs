@@ -260,7 +260,7 @@ impl App {
                     self.controls.let_go(control);
                 }
             }
-            let input = if alive {
+            let mut input = if alive {
                 rider_input(self.net.abilities, self.controls.movement(), mounted)
             } else {
                 // Corpses ignore controls; keep aim so the server agrees.
@@ -287,6 +287,9 @@ impl App {
                 })
             });
             self.motion.set_tool_jet(tool_jet);
+            // When this move saw everyone else, for the host to meet our
+            // shots with them there.
+            input.seen = self.motion.seen_tick();
             if let Some((newest, inputs)) = self.motion.advance(
                 game_elapsed.as_secs_f32(),
                 input,
@@ -419,9 +422,21 @@ impl App {
                         SeatRole::Gunner => Some(crate::controls::Ride::Hull(frame.rotation)),
                         SeatRole::Actor => None,
                     });
+                    let toward_look = role == SeatRole::StrafeDriver && d.steering.toward_look;
                     self.controls.hold_world_look(
-                        (role == SeatRole::StrafeDriver && d.steering.toward_look)
-                            .then(|| forward.x.atan2(-forward.z)),
+                        toward_look.then(|| forward.x.atan2(-forward.z)),
+                        (toward_look && d.family == bri_vehicles::Family::Flying)
+                            .then(|| forward.y.clamped(-1.0, 1.0).asin()),
+                    );
+                    let orbit = matches!(role, SeatRole::StrafeDriver | SeatRole::MouseDriver)
+                        .then_some(d.camera.orbit.as_ref())
+                        .flatten();
+                    self.controls
+                        .set_driver_orbit(orbit.map(|o| o.pitch_range()));
+                    self.controls.trail_orbit(
+                        orbit.map(|_| frame.position),
+                        orbit.map_or(0.0, |o| o.lag),
+                        game_elapsed.as_secs_f32(),
                     );
                     Some((
                         role,
@@ -434,6 +449,7 @@ impl App {
                     ))
                 });
                 if riding.is_none() {
+                    self.controls.trail_orbit(None, 0.0, 0.0);
                     // A passenger on another player (no control object)
                     // turns on its seat like one on a vehicle.
                     let seat = ride.filter(|r| !r.steers).and_then(|r| {
@@ -550,6 +566,7 @@ impl App {
                 // with it (`Player::processTick` takes the mount transform).
                 self.mounts.rider_rotations.clear();
                 self.mounts.rider_hands.clear();
+                self.mounts.rider_aims.clear();
                 self.mounts.posed_eye = None;
                 for (owner, vitals) in &view.vitals {
                     let Some((vehicle, seat)) = vitals.mounted else {
@@ -614,6 +631,12 @@ impl App {
                                 .hand_holds(&self.vehicle_assets, info, usize::from(seat));
                         if hands.iter().any(Option::is_some) {
                             self.mounts.rider_hands.insert(*owner, hands);
+                        }
+                        if let Some(aim) =
+                            self.vehicles
+                                .seat_aim(&self.vehicle_assets, info, usize::from(seat))
+                        {
+                            self.mounts.rider_aims.insert(*owner, aim);
                         }
                         let velocity = self
                             .vehicles
@@ -734,15 +757,22 @@ impl App {
                     }
                 }
                 self.audio.sync_image_loops(&loops);
-                let engines = view
-                    .vehicles
-                    .iter()
-                    .filter_map(|(id, info)| {
-                        let d = self.vehicle_assets.definition(&info.definition)?;
-                        let frame = self.vehicles.frame(*id)?;
-                        crate::audio::engine_loop(d, info, frame).map(|e| (*id, e))
-                    })
-                    .collect();
+                let mut engines = BTreeMap::new();
+                for (id, info) in &view.vehicles {
+                    let (Some(d), Some(frame)) = (
+                        self.vehicle_assets.definition(&info.definition),
+                        self.vehicles.frame(*id),
+                    ) else {
+                        continue;
+                    };
+                    if let Some(e) = crate::audio::engine_loop(d, info, frame) {
+                        engines.insert(*id, e);
+                    }
+                    // The squeal plays beside the engine, keyed apart from it.
+                    if let Some(e) = crate::audio::skid_loop(d, info, frame) {
+                        engines.insert(*id | 1 << 63, e);
+                    }
+                }
                 self.audio.sync_engines(&engines);
                 if self
                     .music_world
@@ -984,6 +1014,17 @@ impl App {
                     })
                 },
             );
+            let mut shown = shown;
+            let vehicles = &self.vehicles;
+            crate::shot_origins::ride_bodies(&mut shown, |target| match target {
+                bri_weapons::TargetId::Actor(actor) => presented
+                    .get(&actor.0)
+                    .map(|p| bri_weapons::attach_frame(Vec3::from(p.feet), p.yaw)),
+                bri_weapons::TargetId::Vehicle(id) => {
+                    vehicles.frame(id).map(|f| (f.position, f.rotation))
+                }
+                _ => None,
+            });
             let weapons: &bri_sim::session::WeaponView = &shown;
             // Rebuilt only when the liquids or the paint change; they were
             // cloned (textures' names and all) several times every frame.
@@ -1201,6 +1242,7 @@ impl App {
                 let input = crate::avatar::AvatarAnimationInput {
                     look_limits,
                     mount_rotation: self.mounts.rider_rotations.get(owner).copied(),
+                    seat_aim: self.mounts.rider_aims.get(owner).copied().filter(|_| !dead),
                     hand_holds: self
                         .mounts
                         .rider_hands
@@ -1224,6 +1266,11 @@ impl App {
                     gesture: threads[3].clone(),
                     body: [threads[0].clone(), threads[1].clone()],
                     dead,
+                    death: view
+                        .vitals
+                        .get(owner)
+                        .and_then(|v| v.death)
+                        .filter(|_| dead),
                     sitting: !dead && sit_posed(view, &self.vehicle_assets, presented, *owner),
                     // Riders hold `root` (`Armor::onMount` sets the action
                     // thread to root and mountThread on thread 0); they do
@@ -1250,6 +1297,11 @@ impl App {
                     .map_or(0.0, |(_, c)| c),
                     // A rider's controller does not run, so its last
                     // intent says nothing about the seat.
+                    lean_tilt: if riding || dead {
+                        0.0
+                    } else {
+                        player.lean_tilt(&view.archetypes.tuning(player.archetype, player.scale))
+                    },
                     intent_clip: player.controller.filter(|_| !riding).and_then(|c| {
                         view.archetypes
                             .resolve(player.archetype)
@@ -1362,6 +1414,7 @@ impl App {
                     // Mirrors, metal and shadows show the player's own
                     // items as others see them, not at the eye.
                     reflected_self: true,
+                    held_values: held_values(self.net.held_ammo.as_ref()),
                 },
                 |owner| {
                     let avatar = self.avatar.avatars.get(&owner)?;
@@ -1481,6 +1534,7 @@ impl App {
                 .set_own_eye(own_jets_hidden.then_some(view.owner));
             let actors = Self::update_actor_effects(
                 &mut self.fx.actor_effects,
+                &mut self.fx.weapon_shells,
                 &self.avatar.avatar_assets,
                 &self.avatar.avatars,
                 &self.vehicles,
@@ -1503,9 +1557,36 @@ impl App {
                 .absorb("player and vehicle effects", actors);
             self.fx.explosion_shapes.advance(game_elapsed.as_secs_f32());
             self.fx.beams.advance(game_elapsed.as_secs_f32());
+            self.fx.body_flashes.advance(game_elapsed.as_secs_f32());
             self.fx.decals.advance(game_elapsed.as_secs_f32(), |brick| {
                 building.brick_stands(brick)
             });
+            // Bodies with their own footfalls step and land where they are
+            // drawn; riders and sitters do neither.
+            let walking = presented
+                .values()
+                .filter(|p| {
+                    view.vitals
+                        .get(&p.owner)
+                        .is_none_or(|v| v.mounted.is_none() && v.ride.is_none() && !v.sitting)
+                })
+                .map(crate::footsteps::Walk::from);
+            for (sound, at) in self.fx.footsteps.update(
+                game_elapsed.as_secs_f32(),
+                walking,
+                &view.archetypes,
+                |feet| {
+                    let feet = Vec3::from(feet);
+                    building
+                        .surface_at(feet + Vec3::Y * 0.5, feet - Vec3::Y)
+                        .ok()
+                        .flatten()
+                        .map_or(bri_content::surface::DEFAULT, |(_, kind)| kind)
+                        .to_string()
+                },
+            ) {
+                self.audio.profile(&sound, bri_audio::Placement::World(at));
+            }
             self.fx
                 .explosion_debris
                 .advance(game_elapsed.as_secs_f32(), |from, to| {
@@ -1685,4 +1766,13 @@ impl App {
         }
         Ok(())
     }
+}
+
+/// What the local player's held gun shows on its own model's live digits.
+fn held_values(ammo: Option<&bri_sim::session::HeldAmmo>) -> bri_content::shape::LiveValues {
+    ammo.map_or_else(Default::default, |a| bri_content::shape::LiveValues {
+        rounds: a.rounds,
+        reserve: a.reserve,
+        magazine: Some(a.size),
+    })
 }

@@ -1581,6 +1581,7 @@ pub(crate) mod tests {
             destroyed: false,
             turret_broken: false,
             scale,
+            lights: false,
         };
         let infos = BTreeMap::from([(1, info.clone())]);
         let (building, _) = building(&[]);

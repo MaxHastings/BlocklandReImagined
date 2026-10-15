@@ -1014,6 +1014,8 @@ fn environment_map(e: &bri_content::atmosphere::Settings, tick: u64) -> Dynamic 
     .chain([
         ("visible_distance", e.visible_distance),
         ("fog_distance", e.fog_distance),
+        ("fog_height", e.fog_height),
+        ("fog_max", e.fog_max),
         ("overcast", e.overcast),
     ]) {
         if let Some(v) = v {
@@ -1095,7 +1097,8 @@ fn set_environment(options: Map) -> Fallible<INT> {
                         .map_err(|_| "time_passes is true or false")?,
                 );
             }
-            "sun_azimuth" | "sun_elevation" | "visible_distance" | "fog_distance" | "overcast"
+            "sun_azimuth" | "sun_elevation" | "visible_distance" | "fog_distance"
+            | "fog_height" | "fog_max" | "overcast"
                 if clear =>
             {
                 remove(key.as_str())
@@ -1105,6 +1108,8 @@ fn set_environment(options: Map) -> Fallible<INT> {
             "sun_elevation" => changes.sun_elevation = Some(float(&value)?),
             "visible_distance" => changes.visible_distance = Some(float(&value)?),
             "fog_distance" => changes.fog_distance = Some(float(&value)?),
+            "fog_height" => changes.fog_height = Some(float(&value)?),
+            "fog_max" => changes.fog_max = Some(float(&value)?),
             "direct_light" | "ambient_light" | "shadow_color" | "fog_color" | "sky_color"
                 if clear =>
             {
@@ -1180,9 +1185,9 @@ fn set_environment(options: Map) -> Fallible<INT> {
                 return fail(format!(
                     "set_environment has no setting `{other}` (day_cycle, day_length, time_of_day, \
                      time_passes, overcast, sun_azimuth, sun_elevation, direct_light, ambient_light, shadow_color, \
-                     sun_flare_color, sun_flare_size, visible_distance, fog_distance, fog_color, \
-                     sky_color, vignette_color, vignette_multiply, sky, ground, ground_color, \
-                     water, water_height, water_color, underwater_color)"
+                     sun_flare_color, sun_flare_size, visible_distance, fog_distance, fog_height, \
+                     fog_max, fog_color, sky_color, vignette_color, vignette_multiply, sky, ground, \
+                     ground_color, water, water_height, water_color, underwater_color)"
                 ));
             }
         }
@@ -2566,6 +2571,25 @@ fn register_api(engine: &mut Engine) {
             }))
         },
     );
+    // `()` as the player flashes everyone's screen.
+    engine.register_fn(
+        "screen_flash",
+        |player: Dynamic, color: Array, seconds: Dynamic| {
+            let color = match color.as_slice() {
+                [r, g, b, a] => [float(r)?, float(g)?, float(b)?, float(a)?],
+                _ => return fail("a colour is [r, g, b, a] from 0 to 1"),
+            };
+            push(Op::ScreenFlash(ops::ScreenFlash {
+                player: if player.is_unit() {
+                    None
+                } else {
+                    Some(id(&player)?)
+                },
+                color,
+                seconds: float(&seconds)?,
+            }))
+        },
+    );
     // Every member of a mini-game, counted once.
     engine.register_fn("tell_minigame", |game: Dynamic, text: &str| {
         push(Op::TellMinigame(ops::TellMinigame {
@@ -2897,6 +2921,20 @@ fn register_presentation(engine: &mut Engine) {
             muzzle,
         }))
     }
+    engine.register_fn(
+        "body_flash",
+        |player: Dynamic, color: Array, seconds: Dynamic| {
+            let color = match color.as_slice() {
+                [r, g, b, a] => [float(r)?, float(g)?, float(b)?, float(a)?],
+                _ => return fail("a colour is [r, g, b, a] from 0 to 1"),
+            };
+            push(Op::BodyFlash(ops::BodyFlash {
+                player: id(&player)?,
+                color,
+                seconds: float(&seconds)?,
+            }))
+        },
+    );
     engine.register_fn("beam", |from: Array, to: Array| beam(from, to, Map::new()));
     engine.register_fn("beam", beam);
     // play_music(player, track[, options]) / play_music_all(track[, options]),
@@ -2952,6 +2990,78 @@ fn register_presentation(engine: &mut Engine) {
     engine.register_fn("stop_music_all", || stop_music(None, 0.0));
     engine.register_fn("stop_music_all", |fade: Dynamic| {
         stop_music(None, float(&fade)?)
+    });
+    // play_ambient(player, key, track[, options]) /
+    // play_ambient_all(key, track[, options]), stop_ambient(player, key[,
+    // fade]) / stop_ambient_all(key[, fade]). Options: `volume` (0 to 1),
+    // `fade` (seconds to fade in), `at` ([x, y, z] to place it in the
+    // world) and `range` (how far a placed one carries, default 60).
+    fn ambient(player: Option<u64>, key: &str, track: &str, options: Map) -> Fallible<INT> {
+        let mut op = ops::Ambient {
+            player,
+            key: key.into(),
+            track: Some(track.into()),
+            volume: 1.0,
+            fade: 0.0,
+            at: None,
+            range: 60.0,
+        };
+        for (name, value) in options {
+            match name.as_str() {
+                "volume" => op.volume = float(&value)?,
+                "fade" => op.fade = float(&value)?,
+                "range" => op.range = float(&value)?,
+                "at" => {
+                    let at = value
+                        .try_cast::<Array>()
+                        .ok_or("play_ambient's `at` is [x, y, z]")?;
+                    op.at = Some(vector(&at)?);
+                }
+                other => {
+                    return fail(format!(
+                        "play_ambient has no option `{other}` (volume, fade, at, range)"
+                    ));
+                }
+            }
+        }
+        push(Op::Ambient(op))
+    }
+    fn stop_ambient(player: Option<u64>, key: &str, fade: f32) -> Fallible<INT> {
+        push(Op::Ambient(ops::Ambient {
+            player,
+            key: key.into(),
+            track: None,
+            volume: 1.0,
+            fade,
+            at: None,
+            range: 60.0,
+        }))
+    }
+    engine.register_fn("play_ambient", |p: Dynamic, key: &str, track: &str| {
+        ambient(Some(id(&p)?), key, track, Map::new())
+    });
+    engine.register_fn(
+        "play_ambient",
+        |p: Dynamic, key: &str, track: &str, options: Map| {
+            ambient(Some(id(&p)?), key, track, options)
+        },
+    );
+    engine.register_fn("play_ambient_all", |key: &str, track: &str| {
+        ambient(None, key, track, Map::new())
+    });
+    engine.register_fn(
+        "play_ambient_all",
+        |key: &str, track: &str, options: Map| ambient(None, key, track, options),
+    );
+    engine.register_fn("stop_ambient", |p: Dynamic, key: &str| {
+        stop_ambient(Some(id(&p)?), key, 0.0)
+    });
+    engine.register_fn("stop_ambient", |p: Dynamic, key: &str, fade: Dynamic| {
+        stop_ambient(Some(id(&p)?), key, float(&fade)?)
+    });
+    engine.register_fn("stop_ambient_all", |key: &str| stop_ambient(None, key, 0.0));
+    engine.register_fn("stop_ambient_all", |key: &str, fade: Dynamic| {
+        stop_ambient(None, key, float(&fade)?)
     });
     // `%player.playThread(thread, sequence)`, or its `schedule(ms, ...)`
     // `after` seconds later.
@@ -3150,6 +3260,18 @@ fn register_presentation(engine: &mut Engine) {
             },
         }))
     });
+    engine.register_fn("set_prone", |player: Dynamic, prone: bool| {
+        push(Op::SetProne(ops::SetProne {
+            player: id(&player)?,
+            prone,
+        }))
+    });
+    engine.register_fn("set_lean", |player: Dynamic, lean: Dynamic| {
+        push(Op::SetLean(ops::SetLean {
+            player: id(&player)?,
+            lean: float(&lean)?,
+        }))
+    });
     engine.register_fn("set_speed_scale", |player: Dynamic, scale: Dynamic| {
         push(Op::SetSpeedScale(ops::SetSpeedScale {
             player: id(&player)?,
@@ -3193,6 +3315,18 @@ fn register_presentation(engine: &mut Engine) {
     engine.register_fn("reload", |player: Dynamic| {
         push(Op::Reload(ops::Reload {
             player: id(&player)?,
+        }))
+    });
+    engine.register_fn("set_image_state", |player: Dynamic, state: &str| {
+        push(Op::SetImageState(ops::SetImageState {
+            player: id(&player)?,
+            state: state.into(),
+        }))
+    });
+    engine.register_fn("quick_use", |player: Dynamic, item: &str| {
+        push(Op::QuickUse(ops::QuickUse {
+            player: id(&player)?,
+            item: item.into(),
         }))
     });
     engine.register_fn("set_image_ammo", |player: Dynamic, ammo: bool| {

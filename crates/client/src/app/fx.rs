@@ -16,6 +16,8 @@ pub(super) struct Effects {
     pub(super) beams: crate::beams::Beams,
     /// Marks projectiles leave on bricks: bullet holes.
     pub(super) decals: crate::decals::Decals,
+    pub(super) footsteps: crate::footsteps::Footsteps,
+    pub(super) body_flashes: crate::body_flash::BodyFlashes,
     /// The Tutorial's target practice targets.
     pub(super) tutorial_targets: crate::tutorial_targets::TutorialTargets,
     /// Pieces thrown by explosions with `debris` (vehicle wrecks, tank shells).
@@ -220,6 +222,14 @@ impl App {
                 *scale,
             );
         }
+        if let bri_sim::presentation::CueKind::BodyFlash {
+            owner,
+            color,
+            seconds,
+        } = &cue.kind
+        {
+            self.fx.body_flashes.add(*owner, *color, *seconds);
+        }
         self.fx.actor_effects.cue(&cue);
         self.fx.explosion_shapes.cue(&cue);
         self.fx.explosion_debris.cue(&cue);
@@ -248,6 +258,7 @@ impl App {
     #[allow(clippy::too_many_arguments)]
     pub(super) fn update_actor_effects(
         actor_effects: &mut crate::actor_effects::ActorEffects,
+        shells: &mut crate::weapon_debris::WeaponDebris,
         assets: &crate::avatar::AvatarAssets,
         avatars: &BTreeMap<bri_world::OwnerId, crate::avatar::AvatarMesh>,
         vehicles: &crate::vehicles::ClientVehicles,
@@ -377,6 +388,7 @@ impl App {
                 continue;
             };
             sprays.extend(crate::actor_effects::tire_sprays(*id, d, frame));
+            sprays.extend(crate::actor_effects::tire_skids(*id, d, frame).0);
             trails.extend(crate::actor_effects::vehicle_trails(*id, d, frame));
         }
         actor_effects.update_tires(&sprays)?;
@@ -396,7 +408,25 @@ impl App {
                 .map(|(owner, orb)| (*owner, Vec3::from(orb.eye)))
                 .collect(),
         );
-        actor_effects.advance(elapsed, pose, &jets, &burning, &lights)
+        actor_effects.advance(elapsed, pose, &jets, &burning, &lights)?;
+        // Casings a vehicle's gun threw leave from where it fires, carried
+        // on with the vehicle.
+        for ejected in actor_effects.take_ejected() {
+            let Some(at) = pose(ejected.anchor) else {
+                continue;
+            };
+            let carried = match ejected.anchor {
+                crate::actor_effects::Anchor::Muzzle { vehicle }
+                | crate::actor_effects::Anchor::Vehicle { vehicle } => {
+                    vehicles.frame(vehicle).map_or(Vec3::ZERO, |f| f.velocity)
+                }
+                crate::actor_effects::Anchor::Actor { actor, .. } => presented
+                    .get(&actor)
+                    .map_or(Vec3::ZERO, |p| Vec3::from(p.velocity)),
+            };
+            shells.eject(&ejected.image, at, carried)?;
+        }
+        Ok(())
     }
     pub(super) fn reset_weapon_effect_session(
         &mut self,
@@ -411,6 +441,7 @@ impl App {
         self.fx.explosion_shapes.reset(checkpoint_cursor);
         self.fx.beams.clear();
         self.fx.decals.clear();
+        self.fx.body_flashes.clear();
         self.fx.explosion_debris.reset(checkpoint_cursor);
         self.fx.weapon_shells.reset(checkpoint_cursor);
         self.fx
