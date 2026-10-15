@@ -117,3 +117,5 @@ All six ModTer and six community-map source entries have local candidate
 copies and pinned hashes. The main content root's remembered search now also
 includes E:\Downloads while retaining its previous search folder; the release
 refresh will verify/reimport them using the candidate importer.
+
+Release refresh stopped on stale nested research-importer lockfiles: bri-convert now depends on the collision conversion stack. Refreshed both standalone importer locks offline, then verified cargo metadata --locked --offline succeeds for each. Runtime sources and the root lockfile are unchanged by this packaging repair.
