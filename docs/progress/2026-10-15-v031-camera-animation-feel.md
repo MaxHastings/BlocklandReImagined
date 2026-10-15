@@ -18,8 +18,10 @@ engine field; nothing Halo-specific is in the engine.
   attachment model against the hull's acceleration.
 - **Gun bob** (`camera.sway.walk`): the weapon's own bob, independent of
   the view's.
-- **Footsteps** (archetype `footsteps`): a sound per `stride` walked on
-  the ground, by the surface kind underfoot, played on each client.
+- **Footsteps by surface** (archetype `sounds.surfaces`): the footfalls
+  #159 added (`sounds.footsteps`) now pick per surface kind underfoot.
+  This branch's own `look.footsteps` was dropped in the merge with the
+  integration branch in favour of #159's.
 
 Protocol: `archetype-footsteps-weapon-bob.md`.
 

@@ -156,6 +156,153 @@ impl Definition {
         Ok(())
     }
 }
+/// A grass (`fxGrassReplicator`) or foliage (`fxFoliageReplicator`) node's
+/// image, as its scene node names it: the authored reference with `.png`
+/// added when it has no extension, and whether it is grass.
+pub fn replicator_image(properties: &BTreeMap<String, String>) -> Result<(String, bool)> {
+    let grass = match properties.get("source_class").map(String::as_str) {
+        Some("fxgrassreplicator") => true,
+        Some("fxfoliagereplicator") => false,
+        _ => anyhow::bail!("unsupported foliage class"),
+    };
+    let prefix = if grass { "grass" } else { "foliage" };
+    let resource = properties
+        .get(&format!("{prefix}file"))
+        .context("image resource")?;
+    let image = if Path::new(resource).extension().is_none() {
+        format!("{resource}.png")
+    } else {
+        resource.clone()
+    };
+    Ok((image, grass))
+}
+
+impl Definition {
+    /// A replicator scene node's plants: `properties` are the node's
+    /// (lowercase keys), `origin` its native position, `texture` the pack
+    /// index of its image.
+    pub fn from_replicator(
+        scene: &str,
+        node: usize,
+        origin: [f32; 3],
+        properties: &BTreeMap<String, String>,
+        texture: usize,
+        mut evidence: Evidence,
+    ) -> Result<Self> {
+        let f = properties;
+        let (_, grass) = replicator_image(f)?;
+        ensure!(
+            f.get("scale").is_none_or(|s| s == "1 1 1"),
+            "scaled foliage placement requires a policy"
+        );
+        ensure!(
+            f.get("surfacetype").is_none_or(|v| v == "Any"),
+            "unsupported authored grass surface filter"
+        );
+        let raw = |key: &str| f.get(key).map(String::as_str);
+        let number = |key: &str, default: f32| -> Result<f32> {
+            Ok(raw(key).map(str::parse).transpose()?.unwrap_or(default))
+        };
+        let flag = |key: &str, default: bool| -> Result<bool> {
+            match raw(key) {
+                None => Ok(default),
+                Some("1" | "true") => Ok(true),
+                Some("0" | "false") => Ok(false),
+                _ => anyhow::bail!("invalid flag {key}"),
+            }
+        };
+        let integer = |key: &str| -> Result<u32> {
+            raw(key)
+                .context(format!("missing {key}"))?
+                .parse()
+                .map_err(Into::into)
+        };
+        let color = |key: &str| -> Result<[f32; 4]> {
+            let v: Vec<f32> = raw(key)
+                .unwrap_or("1 1 1 1")
+                .split_whitespace()
+                .map(str::parse)
+                .collect::<std::result::Result<_, _>>()?;
+            v.try_into().map_err(|_| anyhow::anyhow!("invalid color"))
+        };
+        // Torque draws between the two values in either order (Paradise
+        // gives its sway 10 to 5 seconds).
+        let range =
+            |low: &str, low_default: f32, high: &str, high_default: f32| -> Result<[f32; 2]> {
+                let (a, b) = (number(low, low_default)?, number(high, high_default)?);
+                Ok([a.min(b), a.max(b)])
+            };
+        let prefix = if grass { "grass" } else { "foliage" };
+        evidence.adaptations.extend([
+            "Pinned OpenMBG 9c5673f9a1c26348da445bb1dbfd88bf1ed3c3b7 engine-family foliage/LCG evidence; closed Blockland engine parity unverified".to_string(),
+            "Native bounded resumable placement preserves retry ordering; absolute sway/light time advances culled instances instead of pausing their phase".into(),
+            "Conservative native grid bounds replace source quadtree; typed placement ignores editor-only placementAreaHeight/debug flags".into(),
+        ]);
+        if grass {
+            evidence.adaptations.push("fxGrassReplicator implementation unavailable: seeded random fixed vertical plane rotation, square placement and vertex color are native interpretations of authored fields; base foliage algorithm reused".into());
+        }
+        let use_color = grass && flag("usecolour", false)?;
+        let definition = Self {
+            id: format!("{scene}/foliage/{node}"),
+            scene: scene.into(),
+            node,
+            texture,
+            origin,
+            seed: integer("seed")?,
+            count: integer(&format!("{prefix}count"))?,
+            retries: integer(&format!("{prefix}retries"))?,
+            inner: [number("innerradiusx", 0.)?, number("innerradiusy", 0.)?],
+            outer: [number("outerradiusx", 100.)?, number("outerradiusy", 100.)?],
+            square: flag("issquarearea", false)?,
+            offset: number("offsetz", 0.)?,
+            allowed_slope: number("allowedterrainslope", 90.)?,
+            allow_terrain: flag("allowonterrain", true)?,
+            allow_interior: flag("allowoninteriors", false)?,
+            allow_static: flag("allowonstatics", false)?,
+            allow_water: flag("allowonwater", false)?,
+            water_surface: flag("allowwatersurface", false)?,
+            width: range("minwidth", 1., "maxwidth", 1.)?,
+            height: range("minheight", 1., "maxheight", 1.)?,
+            fixed_size: flag("fixsizetomax", false)?,
+            fixed_aspect: flag("fixaspectratio", false)?,
+            flip: flag("randomflip", false)?,
+            billboard: !grass,
+            random_rotation: grass && flag("israndomrot", false)?,
+            rotation: number("rotationangle", 0.)?.to_radians(),
+            sway: flag("swayon", false)?,
+            sway_sync: flag("swaysync", false)?,
+            sway_magnitude: [number("swaymagside", 0.)?, number("swaymagfront", 0.)?],
+            sway_seconds: range("minswaytime", 1., "maxswaytime", 1.)?,
+            light: flag("lighton", false)?,
+            light_sync: flag("lightsync", false)?,
+            light_seconds: number("lighttime", 1.)?,
+            luminance: range("minluminance", 1., "maxluminance", 1.)?,
+            color_top: if use_color {
+                color("foilagecolourtop")?
+            } else {
+                [1.; 4]
+            },
+            color_bottom: if use_color {
+                color("foilagecolourbtm")?
+            } else {
+                [1.; 4]
+            },
+            ground_alpha: number("groundalpha", 1.)?,
+            alpha_cutoff: number("alphacutoff", 0.5)?,
+            closest: number("viewclosest", 1.)?,
+            distance: number("viewdistance", 70.)?,
+            fade_near: number("fadeoutregion", 1.)?,
+            fade_far: number("fadeinregion", 20.)?,
+            cull_size: number("cullresolution", 32.)?,
+            culling: flag("useculling", true)?,
+            hidden: flag(&format!("hide{prefix}"), false)?,
+            evidence,
+        };
+        definition.validate()?;
+        Ok(definition)
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct FoliagePack {
     pub schema_version: u32,

@@ -204,6 +204,7 @@ impl App {
                 tether: None,
                 controller: None,
                 pass_group: 0,
+                posture: Default::default(),
             };
             let input = crate::avatar::AvatarAnimationInput {
                 dead: info.destroyed,

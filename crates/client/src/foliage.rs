@@ -11,8 +11,30 @@ pub struct PreparedFoliage {
     pub fields: Vec<FoliageField>,
     pub placement: Vec<PlacementStats>,
     pub elapsed_ms: f64,
+    /// The map's own pack and images, when its bundle carries one (an
+    /// imported map's grass); otherwise the shared pack's plants are drawn.
+    pub own: Option<(FoliagePack, Vec<Image>)>,
 }
 impl PreparedFoliage {
+    /// The plants of `map`: from `foliage.json` beside its bundle in
+    /// `map_root` when there is one, else from the shared pack in `root`.
+    pub fn load_for_map(
+        root: &Path,
+        map_root: &Path,
+        map: &str,
+        building: &Building,
+        waters: &[Water],
+    ) -> Result<Self> {
+        let own = map_root.join("foliage.json");
+        if !own.is_file() {
+            return Self::load(root, map, building, waters);
+        }
+        let mut prepared = Self::load(map_root, map, building, waters)?;
+        let pack = FoliagePack::load(&own)?;
+        let images = pack.images(map_root)?;
+        prepared.own = Some((pack, images));
+        Ok(prepared)
+    }
     pub fn load(root: &Path, map: &str, building: &Building, waters: &[Water]) -> Result<Self> {
         let start = Instant::now();
         let pack = FoliagePack::load(root.join("foliage.json"))?;
@@ -91,6 +113,8 @@ pub fn static_hit(
 pub struct ClientFoliage {
     pack: FoliagePack,
     images: Vec<Image>,
+    /// The current map's own pack, in place of the shared one above.
+    own: Option<(FoliagePack, Vec<Image>)>,
     pub prepared: PreparedFoliage,
     renderer: Option<FoliageRenderer>,
     illumination: [f32; 3],
@@ -106,6 +130,7 @@ impl ClientFoliage {
         Ok(Self {
             pack,
             images,
+            own: None,
             prepared: PreparedFoliage::default(),
             renderer: None,
             illumination: [1.0; 3],
@@ -114,8 +139,9 @@ impl ClientFoliage {
             stats: RenderStats::default(),
         })
     }
-    pub fn set_map(&mut self, prepared: PreparedFoliage) {
+    pub fn set_map(&mut self, mut prepared: PreparedFoliage) {
         self.clear();
+        self.own = prepared.own.take();
         self.prepared = prepared;
     }
     pub fn clear(&mut self) {
@@ -148,11 +174,15 @@ impl ClientFoliage {
             return Ok(());
         }
         if self.renderer.is_none() {
+            let (pack, images) = self
+                .own
+                .as_ref()
+                .map_or((&self.pack, &self.images), |(p, i)| (p, i));
             self.renderer = Some(FoliageRenderer::new(
                 frame.device,
                 frame.queue,
-                &self.pack,
-                &self.images,
+                pack,
+                images,
                 self.prepared.fields.clone(),
                 RenderConfig {
                     target: frame.format,

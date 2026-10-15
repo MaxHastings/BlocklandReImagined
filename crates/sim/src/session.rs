@@ -20,6 +20,7 @@ pub use bots::{
 };
 mod breakables;
 mod build_load;
+mod teleporters;
 pub use build_load::LoadPace;
 mod combat;
 mod death_results;
@@ -82,6 +83,7 @@ pub use copy_store::{CopyStore, LoadedCopy, MemoryCopies, Saved, StoreDone, name
 mod movables;
 mod packages;
 mod paint_fill;
+mod quick_use;
 mod rules;
 pub use paint_fill::{Fill, FillRules};
 mod script_world;
@@ -1060,6 +1062,10 @@ pub struct Session {
     /// The values of the settings the weapons play with, by binding name.
     weapon_values: BTreeMap<String, String>,
     weapon_triggers: BTreeMap<OwnerId, weapons::Triggers>,
+    /// Items used once without switching to them (`quick_use`).
+    quick_uses: BTreeMap<OwnerId, quick_use::QuickUse>,
+    /// Where bodies stood over the last half second, for lag compensation.
+    body_history: crate::rewind::History,
     weapon_gaps: BTreeMap<String, u64>,
     /// `$Pref::Server::FootballRecord`, in feet, for this server run.
     football_record: u32,
@@ -1150,6 +1156,8 @@ pub struct Session {
     /// Bodies' hands and images' barrels, for shots from the muzzle.
     grips: grips::Grips,
     breakables: breakables::Breakables,
+    /// The map's teleporters (`set_teleporters`).
+    map_teleporters: teleporters::MapTeleporters,
     /// Add-On map light rules (`set_map_lights`), replicated to clients.
     map_lights: Vec<map_lights::MapLightRule>,
     /// The music an Add-On rule plays for everyone (`play_music_all`),
@@ -1192,6 +1200,7 @@ impl Session {
             body_mounts: BTreeMap::new(),
             grips: Default::default(),
             breakables: Default::default(),
+            map_teleporters: Default::default(),
             map_lights: Vec::new(),
             music: None,
             world_shapes: Default::default(),
@@ -1229,6 +1238,8 @@ impl Session {
             started_settings: BTreeMap::new(),
             weapon_values: BTreeMap::new(),
             weapon_triggers: BTreeMap::new(),
+            quick_uses: BTreeMap::new(),
+            body_history: Default::default(),
             weapon_gaps: BTreeMap::new(),
             football_record: 0,
             ammo_shown: BTreeSet::new(),
@@ -2932,7 +2943,9 @@ impl Session {
                     .simulation
                     .target_through(eye, direction, 10.0)?
                     .and_then(|(hit, _)| Some((hit.brick?, hit.distance)));
-                if self.flip_vehicle(owner, eye, direction, hit.map(|(_, d)| d)) {
+                if self.board_vehicle_by_use(owner, eye, direction, hit.map(|(_, d)| d), tick)
+                    || self.flip_vehicle(owner, eye, direction, hit.map(|(_, d)| d))
+                {
                     return Ok(Reply::Activated(None));
                 }
                 let hit = hit
@@ -3284,6 +3297,7 @@ impl Session {
         self.package_vehicle_crashes();
         impacts.retain(|(owner, _)| !smashers.contains(owner));
         self.fire_touches(touches);
+        contain("map teleporters", self.map_teleports());
         for (owner, carry) in crossed {
             self.crossed(bri_package_runtime::ops::ObjectRef::Player(owner), carry);
         }

@@ -7,14 +7,19 @@ publish = false
 [dependencies]
 bri-console = { path = "../console" }
 anyhow.workspace = true
-bri-render = { path = "../render" }
+bri-render = { path = "../render", optional = true }
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
 glam = { workspace = true, features = ["serde"] }
-bytemuck.workspace = true
+bytemuck = { workspace = true, optional = true }
 image.workspace = true
-wgpu.workspace = true
+wgpu = { workspace = true, optional = true }
+[features]
+# The renderer; content tools (the map importer) leave it out.
+default = ["gpu"]
+gpu = ["dep:bri-render", "dep:bytemuck", "dep:wgpu"]
+
 [dev-dependencies]
 bri-package = { path = "../package" }
 bri-content = { path = "../content" }

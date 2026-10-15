@@ -2203,6 +2203,7 @@ mod tests {
             tether: None,
             controller: None,
             pass_group: 0,
+            posture: Default::default(),
         }
     }
     fn fire() -> UiAction {

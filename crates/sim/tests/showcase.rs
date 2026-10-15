@@ -1840,6 +1840,7 @@ fn add_launcher(
         riding_image: None,
         scripts: Default::default(),
         hide_nodes: Vec::new(),
+        aim_assist: None,
         both_arms: false,
         states,
     };
@@ -1911,6 +1912,7 @@ fn add_launcher(
         sport_hit: None,
         turns_into: None,
         decal: None,
+        stick_to_bodies: false,
     };
     pack.items.insert(item_id, item);
     pack.images.insert(image_id, image);

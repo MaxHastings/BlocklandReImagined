@@ -144,6 +144,7 @@ pub fn material(name: &str, blend: &str) -> Material {
         detail_scale: 1.0,
         reflectance: 0.0,
         metal: None,
+        surface: None,
     }
 }
 

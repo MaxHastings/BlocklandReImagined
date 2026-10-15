@@ -815,7 +815,37 @@ pub fn bake(
                 .rects
                 .get(level)
                 .context("Interior lightmap rectangles missing")?;
-            for surface in &detail.surfaces {
+            // Each texel inside a surface's stored rectangle is that surface's;
+            // the border around it is filled only where no rectangle lies, and
+            // once. Stock interiors leave the border free, but community
+            // exporters pack rectangles two texels apart, and adding the
+            // neighbours' borders on top saturated every edge to white.
+            let mut owners: Vec<Option<(u32, Vec<u32>)>> = vec![None; detail.lightmaps.len()];
+            let mut filled: Vec<Vec<bool>> = vec![Vec::new(); detail.lightmaps.len()];
+            for (index, surface) in detail.surfaces.iter().enumerate() {
+                let (Some(slot), Some(rect)) = (surface.lightmap, rects.get(surface.source_index))
+                else {
+                    continue;
+                };
+                let Some(lightmap) = detail.lightmaps.get(slot) else {
+                    continue;
+                };
+                let (w, h) = match &owners[slot] {
+                    Some((w, owner)) => (*w, owner.len() as u32 / *w),
+                    None => image::load_from_memory(&lightmap.png)?
+                        .to_rgb8()
+                        .dimensions(),
+                };
+                let (_, owner) =
+                    owners[slot].get_or_insert_with(|| (w, vec![u32::MAX; (w * h) as usize]));
+                let [ox, oy, sx, sy] = rect.map(u32::from);
+                for y in oy..(oy + sy).min(h) {
+                    for x in ox..(ox + sx).min(w) {
+                        owner[(y * w + x) as usize] = index as u32;
+                    }
+                }
+            }
+            for (index, surface) in detail.surfaces.iter().enumerate() {
                 if surface.flags & OUTSIDE_VISIBLE == 0 || surface.vertices.is_empty() {
                     continue;
                 }
@@ -831,12 +861,27 @@ pub fn bake(
                         .insert(image::load_from_memory(&detail.lightmaps[slot].png)?.to_rgb8()),
                 };
                 let (w, h) = image.dimensions();
+                let owner = owners[slot]
+                    .as_ref()
+                    .map(|(_, o)| o.as_slice())
+                    .unwrap_or(&[]);
+                let filled = &mut filled[slot];
+                if filled.is_empty() {
+                    *filled = vec![false; (w * h) as usize];
+                }
                 let normal = normals
                     .transform_vector3(Vec3::from(surface.vertices[0].normal))
                     .normalize_or_zero();
                 let dot = normal.dot(toward);
-                let fill = |image: &mut image::RgbImage, x: u32, y: u32, color: Vec3| {
-                    if x < w && y < h {
+                let mut fill = |image: &mut image::RgbImage, x: u32, y: u32, color: Vec3| {
+                    if x >= w || y >= h {
+                        return;
+                    }
+                    let i = (y * w + x) as usize;
+                    let free = owner.get(i).is_none_or(|o| *o == u32::MAX);
+                    let ours = owner.get(i) == Some(&(index as u32));
+                    if ours || free && !filled[i] {
+                        filled[i] = true;
                         let add = [to_byte(color.x), to_byte(color.y), to_byte(color.z)];
                         let px = image.get_pixel_mut(x, y);
                         for (channel, add) in px.0.iter_mut().zip(add) {

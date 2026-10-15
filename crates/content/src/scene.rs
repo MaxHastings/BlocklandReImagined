@@ -73,6 +73,10 @@ pub enum Kind {
     /// An authored map light (a map Add-On's; [`AuthoredLight`]). Its
     /// `properties` hold `type`, `color`, `brightness`, `inner` and `outer`.
     Light,
+    /// A map teleporter's entrance or exit ([`Teleporter`]). Its
+    /// `properties` hold `role` (`entrance` or `exit`), `channel` and
+    /// `radius`.
+    Teleporter,
     Unadapted,
 }
 
@@ -91,6 +95,20 @@ pub struct AuthoredLight {
     /// Linear colour times brightness.
     pub color: [f32; 3],
     /// Full brightness within `inner`, none beyond `outer`.
+    pub inner: f32,
+    pub outer: f32,
+    /// How a strobe, pulse, pulse2, flicker or runway light changes.
+    pub animation: Option<crate::light_animation::LightAnimation>,
+    /// A spot light's cone.
+    pub spot: Option<SpotCone>,
+}
+
+/// Where a spot light shines: full light within `inner` degrees of
+/// `direction` (the node's +Z, the native frame's turn of glTF's -Z),
+/// fading to none at `outer`.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SpotCone {
+    pub direction: [f32; 3],
     pub inner: f32,
     pub outer: f32,
 }
@@ -252,8 +270,47 @@ impl Scene {
                 "Light {}: needs brightness 0 or more and 0 <= inner < outer <= 10000",
                 node.name
             );
+            let animation = crate::light_animation::LightAnimation::read(
+                kind,
+                &node.properties,
+                [
+                    color[0] * brightness,
+                    color[1] * brightness,
+                    color[2] * brightness,
+                ],
+                brightness,
+            )
+            .with_context(|| format!("Light {}", node.name))?;
+            let spot = if kind == "spot" {
+                let (inner, outer) = (
+                    number(node, "inner_cone", 0.0)?,
+                    number(node, "outer_cone", 45.0)?,
+                );
+                ensure!(
+                    (0.0..90.0).contains(&inner) && inner <= outer && outer <= 90.0,
+                    "Light {}: needs 0 <= inner_cone <= outer_cone <= 90 degrees",
+                    node.name
+                );
+                let direction = Mat4::from_cols_array(&node.transform)
+                    .transform_vector3(Vec3::Z)
+                    .normalize_or_zero();
+                ensure!(
+                    direction != Vec3::ZERO,
+                    "Light {}: a spot light needs a direction",
+                    node.name
+                );
+                Some(SpotCone {
+                    direction: direction.to_array(),
+                    inner,
+                    outer,
+                })
+            } else {
+                None
+            };
             out.push(AuthoredLight {
                 node: index,
+                animation,
+                spot,
                 kind: kind.to_owned(),
                 position: [node.transform[12], node.transform[13], node.transform[14]],
                 color: [
@@ -276,6 +333,91 @@ impl Scene {
         }
     }
 }
+/// Most teleporter nodes a scene may hold.
+pub const MAX_TELEPORTERS: usize = 256;
+/// Largest teleporter entrance radius, units.
+pub const MAX_TELEPORTER_RADIUS: f32 = 100.0;
+
+/// A [`Kind::Teleporter`] node read: a player who steps within `radius` of
+/// an entrance comes out at an exit of the same `channel`, facing `yaw`.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Teleporter {
+    pub node: usize,
+    pub entrance: bool,
+    pub channel: String,
+    /// Feet position.
+    pub position: [f32; 3],
+    /// Facing about +Y, as a player's yaw: the node's local +Z (a map
+    /// Add-On Empty's Blender +Y), so 0 faces native -Z and a quarter turn
+    /// faces +X.
+    pub yaw: f32,
+    pub radius: f32,
+}
+impl Scene {
+    /// Every [`Kind::Teleporter`] node, read and checked.
+    pub fn teleporters(&self) -> anyhow::Result<Vec<Teleporter>> {
+        use anyhow::{Context, ensure};
+        let mut out = Vec::new();
+        for (index, node) in self.nodes.iter().enumerate() {
+            if !matches!(node.kind, Kind::Teleporter) {
+                continue;
+            }
+            let entrance = match node.properties.get("role").map(String::as_str) {
+                Some("entrance") => true,
+                Some("exit") => false,
+                other => anyhow::bail!(
+                    "Teleporter {}: role {other:?} is neither entrance nor exit",
+                    node.name
+                ),
+            };
+            let channel = node.properties.get("channel").cloned().unwrap_or_default();
+            ensure!(
+                channel.len() <= 64,
+                "Teleporter {}: channel is longer than 64 bytes",
+                node.name
+            );
+            let radius = node
+                .properties
+                .get("radius")
+                .map(|v| v.trim().parse::<f32>())
+                .transpose()
+                .with_context(|| format!("Teleporter {}: radius is not a number", node.name))?
+                .unwrap_or(1.0);
+            ensure!(
+                radius.is_finite() && radius > 0.0 && radius <= MAX_TELEPORTER_RADIUS,
+                "Teleporter {}: radius must be above 0 and at most {MAX_TELEPORTER_RADIUS}",
+                node.name
+            );
+            let matrix = Mat4::from_cols_array(&node.transform);
+            let position = matrix.w_axis.truncate();
+            let forward = matrix.transform_vector3(Vec3::Z);
+            ensure!(
+                position.is_finite() && forward.is_finite(),
+                "Teleporter {}: placement is not finite",
+                node.name
+            );
+            let yaw = if forward.x.abs() + forward.z.abs() > 1e-6 {
+                forward.x.atan2(-forward.z)
+            } else {
+                0.0
+            };
+            out.push(Teleporter {
+                node: index,
+                entrance,
+                channel,
+                position: position.to_array(),
+                yaw,
+                radius,
+            });
+        }
+        ensure!(
+            out.len() <= MAX_TELEPORTERS,
+            "A map holds at most {MAX_TELEPORTERS} teleporters"
+        );
+        Ok(out)
+    }
+}
+
 /// The invisible plate a flat map stands on ([`Scene::plate`]).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Plate {
@@ -308,6 +450,54 @@ mod tests {
             asset: asset.map(str::to_owned),
             properties: BTreeMap::new(),
         }
+    }
+
+    #[test]
+    fn teleporters_read_their_role_channel_radius_and_facing() {
+        let mut entrance = node(Kind::Teleporter, 2.0, None);
+        entrance.name = "in".into();
+        entrance.properties = BTreeMap::from([
+            ("role".into(), "entrance".into()),
+            ("channel".into(), "blue".into()),
+            ("radius".into(), "2.5".into()),
+        ]);
+        // A quarter turn about +Y turns local +Z to +X.
+        let mut exit = node(Kind::Teleporter, 0.0, None);
+        exit.transform = Mat4::from_rotation_translation(
+            glam::Quat::from_rotation_y(std::f32::consts::FRAC_PI_2),
+            Vec3::new(10.0, 1.0, -4.0),
+        )
+        .to_cols_array();
+        exit.properties = BTreeMap::from([("role".into(), "exit".into())]);
+        let scene = Scene {
+            schema_version: 1,
+            id: "test".into(),
+            name: "test".into(),
+            nodes: vec![node(Kind::Spawn, 0.0, None), entrance, exit],
+            pending_scripts: vec![],
+        };
+        let found = scene.teleporters().unwrap();
+        assert_eq!(found.len(), 2);
+        assert!(found[0].entrance);
+        assert_eq!(
+            (found[0].node, found[0].channel.as_str(), found[0].radius),
+            (1, "blue", 2.5)
+        );
+        assert_eq!(found[0].position, [0.0, 2.0, 0.0]);
+        // Unturned, it faces native +Z: half a turn.
+        assert!((found[0].yaw.abs() - std::f32::consts::PI).abs() < 1e-5);
+        assert!(!found[1].entrance);
+        assert_eq!((found[1].channel.as_str(), found[1].radius), ("", 1.0));
+        assert!((found[1].yaw - std::f32::consts::FRAC_PI_2).abs() < 1e-5);
+
+        let mut bad = scene;
+        bad.nodes[1].properties.insert("role".into(), "door".into());
+        assert!(bad.teleporters().is_err());
+        bad.nodes[1]
+            .properties
+            .insert("role".into(), "entrance".into());
+        bad.nodes[1].properties.insert("radius".into(), "0".into());
+        assert!(bad.teleporters().is_err());
     }
 
     #[test]

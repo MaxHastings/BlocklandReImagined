@@ -138,6 +138,7 @@ fn weapons() -> Arc<Pack> {
         sport_hit: None,
         turns_into: None,
         decal: None,
+        stick_to_bodies: false,
     };
     Arc::new(Pack {
         effects: Default::default(),
@@ -172,6 +173,7 @@ fn view() -> WeaponView {
             age: 0,
             bounced: false,
             stuck: false,
+            stuck_to: None,
             origin: Vec3::ZERO,
             was_thrown: false,
         }],

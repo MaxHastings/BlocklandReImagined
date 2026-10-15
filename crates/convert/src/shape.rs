@@ -406,7 +406,13 @@ fn mesh(
     if kind == 4 {
         return Ok(None);
     }
-    ensure!(kind == 0 || kind == 1, "Unsupported DTS mesh kind {kind}");
+    // 3 is a sorted mesh (TSSortedMesh): a standard mesh plus the clusters
+    // that ordered its translucent faces (tree leaves). Its faces draw as
+    // they are; the clusters are read past.
+    ensure!(
+        kind == 0 || kind == 1 || kind == 3,
+        "Unsupported DTS mesh kind {kind}"
+    );
     t.guard("mesh header")?;
     let _frames = t.wide.count(MAX)?;
     let _material_frames = t.wide.count(MAX)?;
@@ -451,10 +457,38 @@ fn mesh(
     provenance
         .opaque_sections
         .push(collect(count, || Ok(t.short.u16()? as u32))?);
-    let frame_vertices = t.wide.count(MAX)?;
+    let mut frame_vertices = t.wide.count(MAX)?;
     let mesh_flags = t.wide.u32()?;
     provenance.mesh_flags.push(mesh_flags);
     t.guard("mesh data")?;
+    if kind == 3 {
+        // TSSortedMesh::assemble: clusters (start and end primitive,
+        // normal, k, front and back cluster: eight words each), then the
+        // start cluster, first vertex, vertex count and first texture
+        // vertex of each frame, then alwaysWriteDepth.
+        let clusters = t.wide.count(MAX)?;
+        for _ in 0..clusters * 8 {
+            t.wide.u32()?;
+        }
+        for _ in 0..4 {
+            let count = t.wide.count(MAX)?;
+            for _ in 0..count {
+                t.wide.u32()?;
+            }
+        }
+        t.wide.u32()?;
+        t.guard("sorted mesh data")?;
+        // A sorted mesh's frames each name their own vertex range, so its
+        // vertices-per-frame need not divide the vertex list (map trees
+        // store 0). Its faces index the whole list: draw it as one frame.
+        if frame_vertices == 0 || positions.len() % frame_vertices != 0 {
+            frame_vertices = positions.len();
+        }
+        let note = "Sorted mesh faces draw in mesh order; their sort clusters are not used";
+        if !provenance.warnings.iter().any(|w| w == note) {
+            provenance.warnings.push(note.into());
+        }
+    }
     let skin = if kind == 1 {
         let count = t.wide.count(MAX)?;
         positions = shared(
@@ -840,6 +874,7 @@ pub fn read_dts(data: &[u8], id: String) -> Result<(Shape, Provenance)> {
             detail_scale: detail_scale[i],
             reflectance: reflection[i],
             metal: None,
+            surface: None,
         });
     }
     for (material, f) in materials.iter().zip(&flags) {

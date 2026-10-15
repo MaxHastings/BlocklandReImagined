@@ -184,6 +184,7 @@ fn main() -> Result<()> {
             if tick % 60 == i % 60 {
                 inputs[i] = MoveInput {
                     attack: false,
+                    seen: 0,
                     forward: rng.next() * 2.0 - 1.0,
                     right: rng.next() * 2.0 - 1.0,
                     yaw: rng.next() * std::f32::consts::TAU - std::f32::consts::PI,

@@ -656,6 +656,7 @@ impl RemotePose {
                         ..Default::default()
                     }),
                 pass_group: self.flags >> Self::PASS_GROUP_SHIFT,
+                posture: Default::default(),
             },
         }
     }

@@ -378,6 +378,36 @@ impl ScriptOp for SetSpeedScale {
     }
 }
 
+/// Lay a player down or get them up, for a body whose archetype can lie
+/// prone (`movement.prone`). Getting up needs room to crouch.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SetProne {
+    pub player: u64,
+    pub prone: bool,
+}
+impl ScriptOp for SetProne {
+    const CAPABILITY: &str = "player";
+    const NAME: &str = "set_prone";
+    fn bounded(&self) -> bool {
+        true
+    }
+}
+
+/// Lean a player, -1 (left) to 1 (right), 0 upright, for a body whose
+/// archetype can lean (`movement.lean`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SetLean {
+    pub player: u64,
+    pub lean: f32,
+}
+impl ScriptOp for SetLean {
+    const CAPABILITY: &str = "player";
+    const NAME: &str = "set_lean";
+    fn bounded(&self) -> bool {
+        self.lean.is_finite() && (-1.0..=1.0).contains(&self.lean)
+    }
+}
+
 /// Add rounds of `ammo` to a player's reserve (an ammo box), up to the
 /// most its magazines carry.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -439,6 +469,40 @@ impl ScriptOp for Reload {
     const NAME: &str = "reload";
     fn bounded(&self) -> bool {
         true
+    }
+}
+
+/// Send the image in a player's hand to its state named `state`, as a
+/// trigger would: a melee swing with whatever is held, an inspect, a
+/// special move a key of the Add-On's starts.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SetImageState {
+    pub player: u64,
+    pub state: String,
+}
+impl ScriptOp for SetImageState {
+    const CAPABILITY: &str = "player";
+    const NAME: &str = "set_image_state";
+    fn bounded(&self) -> bool {
+        !self.state.trim().is_empty()
+            && self.state.len() <= 64
+            && !self.state.chars().any(char::is_control)
+    }
+}
+
+/// Use a carried item once without switching to it for good: take it out,
+/// pull its trigger until it fires (a thrown grenade, a quick heal), then
+/// put the item held before back in hand.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct QuickUse {
+    pub player: u64,
+    pub item: String,
+}
+impl ScriptOp for QuickUse {
+    const CAPABILITY: &str = "player";
+    const NAME: &str = "quick_use";
+    fn bounded(&self) -> bool {
+        item(&self.item)
     }
 }
 

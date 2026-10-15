@@ -1,50 +1,132 @@
-//! Footfall sounds: each body whose archetype has `footsteps` plays one of
-//! its sounds every `stride` it walks on the ground, chosen by the surface
-//! under its feet (`Building::surface_at`). Cosmetic, on each client.
-use bri_world::OwnerId;
+//! Footfalls and landings for bodies that bring their own (`sounds.footsteps`,
+//! `sounds.land` on an archetype). Each client plays them for every body it
+//! draws, from the poses it already has, so they cost nothing on the wire:
+//! a step each stride of ground covered while grounded, and a landing when
+//! a body that was falling fast touches down. v20's Blockhead has neither.
+use bri_sim::archetype::{ArchetypeId, Archetypes, Sounds};
+use bri_sim::player::PlayerState;
 use glam::Vec3;
 use std::collections::BTreeMap;
 
-/// Each walking body's feet when last seen, the ground covered since its
-/// last footfall, and how many it has made.
-#[derive(Default)]
-pub struct Footfalls {
-    walked: BTreeMap<OwnerId, (Vec3, f32, usize)>,
+/// Slower than this on the ground is standing still: no steps.
+const MIN_STEP_SPEED: f32 = 0.5;
+
+type OwnerId = u64;
+
+/// What a footfall needs to know about a body drawn this frame.
+#[derive(Clone, Copy, Debug)]
+pub struct Walk {
+    pub owner: OwnerId,
+    pub archetype: ArchetypeId,
+    pub feet: [f32; 3],
+    pub velocity: [f32; 3],
+    pub grounded: bool,
+    pub scale: f32,
+}
+impl From<&PlayerState> for Walk {
+    fn from(p: &PlayerState) -> Self {
+        Self {
+            owner: p.owner,
+            archetype: p.archetype,
+            feet: p.feet,
+            velocity: p.velocity,
+            grounded: p.grounded,
+            scale: p.scale,
+        }
+    }
 }
 
-/// A body moving further than this between frames teleported or respawned.
-const JUMP: f32 = 4.0;
+#[derive(Default)]
+struct Walker {
+    /// Ground covered since the last footfall.
+    covered: f32,
+    /// The variant played last, so two steps in a row differ.
+    last: usize,
+    grounded: bool,
+    /// The fastest it fell since it last stood.
+    falling: f32,
+}
 
-impl Footfalls {
-    /// Note `owner`'s feet at `feet`, on the ground or not, for a body
-    /// that steps every `stride` units. Returns the footfall's count when
-    /// the body has just covered another stride on the ground.
-    pub fn advance(
+#[derive(Default)]
+pub struct Footsteps {
+    walkers: BTreeMap<OwnerId, Walker>,
+    /// Picks variants; any sequence that is not the same twice will do.
+    turn: u32,
+}
+
+impl Footsteps {
+    /// Advance `seconds` for the bodies drawn now (`players`, without those
+    /// in a seat) and return the sounds to play and where. `surface` names
+    /// the surface kind under a footfall (`bri_content::surface`).
+    pub fn update(
         &mut self,
-        owner: OwnerId,
-        feet: Vec3,
-        grounded: bool,
-        stride: f32,
-    ) -> Option<usize> {
-        let (last, walked, count) = self.walked.entry(owner).or_insert((feet, 0.0, 0));
-        let moved = Vec3::new(feet.x - last.x, 0.0, feet.z - last.z).length();
-        *last = feet;
-        if !grounded || !moved.is_finite() || moved > JUMP || stride.is_nan() || stride <= 0.0 {
-            // Off the ground the count starts again, so landing steps first.
-            *walked = if grounded { 0.0 } else { stride };
-            return None;
+        seconds: f32,
+        players: impl IntoIterator<Item = Walk>,
+        archetypes: &Archetypes,
+        mut surface: impl FnMut([f32; 3]) -> String,
+    ) -> Vec<(String, [f32; 3])> {
+        let mut out = Vec::new();
+        let mut seen = Vec::new();
+        if !(seconds.is_finite() && seconds > 0.0) {
+            return out;
         }
-        *walked += moved;
-        if *walked < stride {
-            return None;
+        let seconds = seconds.min(0.25);
+        for player in players {
+            seen.push(player.owner);
+            let archetype = archetypes.resolve(player.archetype);
+            let sounds = &archetype.sounds;
+            let walker = self.walkers.entry(player.owner).or_default();
+            let velocity = Vec3::from(player.velocity);
+            if !velocity.is_finite() {
+                continue;
+            }
+            // A landing: on the ground now, falling fast a moment ago.
+            if player.grounded && !walker.grounded {
+                if walker.falling >= Sounds::LAND_SPEED
+                    && let Some(land) = sounds.land.as_ref().filter(|s| !s.is_empty())
+                {
+                    out.push((land.clone(), player.feet));
+                }
+                // Feet down: the next step is a whole stride away.
+                walker.covered = 0.0;
+            }
+            walker.falling = if player.grounded {
+                0.0
+            } else {
+                walker.falling.max(-velocity.y)
+            };
+            walker.grounded = player.grounded;
+            if (sounds.footsteps.is_empty() && sounds.surfaces.is_empty()) || !player.grounded {
+                continue;
+            }
+            let speed = Vec3::new(velocity.x, 0.0, velocity.z).length();
+            if speed < MIN_STEP_SPEED {
+                continue;
+            }
+            walker.covered += speed * seconds;
+            let stride = sounds.stride_for(archetype.movement.stand_height, player.scale.max(0.01));
+            if walker.covered >= stride {
+                walker.covered %= stride;
+                let steps = if sounds.surfaces.is_empty() {
+                    &sounds.footsteps[..]
+                } else {
+                    sounds.footsteps_on(&surface(player.feet))
+                };
+                let count = steps.len();
+                if count == 0 {
+                    continue;
+                }
+                self.turn = self.turn.wrapping_mul(1_103_515_245).wrapping_add(12_345);
+                let mut pick = (self.turn >> 16) as usize % count;
+                if count > 1 && pick == walker.last {
+                    pick = (pick + 1) % count;
+                }
+                walker.last = pick;
+                out.push((steps[pick].clone(), player.feet));
+            }
         }
-        *walked %= stride;
-        *count = count.wrapping_add(1);
-        Some(*count)
-    }
-    /// Forget bodies no longer present.
-    pub fn retain(&mut self, present: impl Fn(OwnerId) -> bool) {
-        self.walked.retain(|owner, _| present(*owner));
+        self.walkers.retain(|owner, _| seen.contains(owner));
+        out
     }
 }
 
@@ -52,21 +134,103 @@ impl Footfalls {
 mod tests {
     use super::*;
 
-    #[test]
-    fn a_step_sounds_each_stride_walked_on_the_ground() {
-        let mut f = Footfalls::default();
-        let mut steps = 0;
-        for i in 0..=100 {
-            let feet = Vec3::new(i as f32 * 0.1, 0.0, 0.0);
-            steps += usize::from(f.advance(1, feet, true, 1.2).is_some());
+    fn walker_body() -> (Archetypes, ArchetypeId) {
+        let mut archetypes = Archetypes::default();
+        let mut body = archetypes.resolve(ArchetypeId(0)).clone();
+        body.id = "test:archetype/walker".into();
+        body.sounds.footsteps = vec!["test:step_1".into(), "test:step_2".into()];
+        body.sounds.stride = Some(3.0);
+        body.sounds.land = Some("test:land".into());
+        let id = archetypes.add(body).expect("valid body");
+        (archetypes, id)
+    }
+
+    fn player(archetype: ArchetypeId, velocity: [f32; 3], grounded: bool) -> Walk {
+        Walk {
+            owner: 7,
+            archetype,
+            feet: [1.0, 2.0, 3.0],
+            velocity,
+            grounded,
+            scale: 1.0,
         }
-        assert_eq!(steps, 8, "10 units at 1.2 a stride");
-        // Standing still or in the air makes none; landing steps at once.
-        let at = Vec3::new(10.0, 0.0, 0.0);
-        assert!(f.advance(1, at, true, 1.2).is_none());
-        assert!(f.advance(1, at + Vec3::X * 0.5, false, 1.2).is_none());
-        assert!(f.advance(1, at + Vec3::X * 0.6, true, 1.2).is_some());
-        // A teleport is not a step.
-        assert!(f.advance(1, at + Vec3::X * 50.0, true, 1.2).is_none());
+    }
+
+    #[test]
+    fn a_running_body_steps_each_stride_alternating_its_sounds() {
+        let (archetypes, id) = walker_body();
+        let mut steps = Footsteps::default();
+        let runner = player(id, [9.0, 0.0, 0.0], true);
+        let mut heard = Vec::new();
+        // Two seconds at 9 units a second: 18 units, six 3-unit strides.
+        for _ in 0..120 {
+            heard.extend(steps.update(1.0 / 60.0, [runner], &archetypes, |_| "default".into()));
+        }
+        assert!((5..=6).contains(&heard.len()), "{heard:?}");
+        assert!(heard.windows(2).all(|w| w[0].0 != w[1].0), "{heard:?}");
+    }
+
+    #[test]
+    fn the_surface_underfoot_picks_its_own_steps() {
+        let (mut archetypes, walker) = walker_body();
+        let mut body = archetypes.resolve(walker).clone();
+        body.id = "test:archetype/soldier".into();
+        body.sounds.surfaces = [("metal".to_string(), vec!["test:clang".to_string()])].into();
+        let id = archetypes.add(body).expect("valid body");
+        let mut steps = Footsteps::default();
+        let runner = player(id, [9.0, 0.0, 0.0], true);
+        let mut heard = Vec::new();
+        for i in 0..120 {
+            let kind = if i < 60 { "metal" } else { "dirt" };
+            heard.extend(steps.update(1.0 / 60.0, [runner], &archetypes, |_| kind.into()));
+        }
+        let names: Vec<_> = heard.iter().map(|h| h.0.as_str()).collect();
+        assert!(names.contains(&"test:clang"), "{names:?}");
+        assert!(
+            names.iter().any(|n| n.starts_with("test:step")),
+            "{names:?}"
+        );
+    }
+
+    #[test]
+    fn standing_or_falling_makes_no_steps_and_a_hard_landing_is_heard_once() {
+        let (archetypes, id) = walker_body();
+        let mut steps = Footsteps::default();
+        let still = player(id, [0.1, 0.0, 0.0], true);
+        assert!(
+            steps
+                .update(1.0, [still], &archetypes, |_| "default".into())
+                .is_empty()
+        );
+        let falling = player(id, [9.0, -12.0, 0.0], false);
+        for _ in 0..30 {
+            assert!(
+                steps
+                    .update(1.0 / 60.0, [falling], &archetypes, |_| "default".into())
+                    .is_empty()
+            );
+        }
+        let landed = player(id, [0.0, 0.0, 0.0], true);
+        let heard = steps.update(1.0 / 60.0, [landed], &archetypes, |_| "default".into());
+        assert_eq!(heard, vec![("test:land".to_string(), landed.feet)]);
+        assert!(
+            steps
+                .update(1.0 / 60.0, [landed], &archetypes, |_| "default".into())
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn the_blockhead_makes_no_sound_walking() {
+        let archetypes = Archetypes::default();
+        let mut steps = Footsteps::default();
+        let blockhead = player(ArchetypeId(0), [7.0, 0.0, 0.0], true);
+        for _ in 0..120 {
+            assert!(
+                steps
+                    .update(1.0 / 60.0, [blockhead], &archetypes, |_| "default".into())
+                    .is_empty()
+            );
+        }
     }
 }

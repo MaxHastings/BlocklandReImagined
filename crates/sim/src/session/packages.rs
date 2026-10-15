@@ -662,9 +662,6 @@ pub(super) fn archetype(
     if let Some(v) = def.max_time_scale {
         archetype.look.max_time_scale = v;
     }
-    if let Some(v) = &def.footsteps {
-        archetype.look.footsteps = Some(v.clone());
-    }
     if let Some(v) = def.uses_items {
         archetype.uses_items = v;
     }
@@ -682,10 +679,20 @@ pub(super) fn archetype(
         (&mut sounds.jump, &def.sounds.jump),
         (&mut sounds.pain, &def.sounds.pain),
         (&mut sounds.death, &def.sounds.death),
+        (&mut sounds.land, &def.sounds.land),
     ] {
         if from.is_some() {
             to.clone_from(from);
         }
+    }
+    if !def.sounds.footsteps.is_empty() {
+        sounds.footsteps.clone_from(&def.sounds.footsteps);
+    }
+    if !def.sounds.surfaces.is_empty() {
+        sounds.surfaces.clone_from(&def.sounds.surfaces);
+    }
+    if def.sounds.stride.is_some() {
+        sounds.stride = def.sounds.stride;
     }
     archetype.validate()?;
     Ok(archetype)

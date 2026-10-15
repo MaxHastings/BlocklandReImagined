@@ -10,16 +10,22 @@
 //! clips are sampled at a fixed rate; clips named after a body's animation
 //! roles take the Blockhead's clip names, so a body needs no mapping.
 mod brick;
+mod export;
 mod lod;
 mod map;
+mod map_environment;
+mod map_terrain;
 mod read;
+mod write;
+pub use export::{ExportReport, export_map, find_map};
 #[doc(hidden)]
 pub mod testing;
 
 use anyhow::{Context, Result, bail, ensure};
 use bri_console::Clamp;
 use bri_content::shape::{
-    Animation, Detail, Influence, Material, Mesh, Node, NodeTrack, Object, Primitive, Shape, Skin,
+    Animation, Detail, Influence, Material, Mesh, Metal, Node, NodeTrack, Object, Primitive, Shape,
+    Skin, Surface,
 };
 use glam::{Mat4, Quat, Vec3};
 pub use read::Document;
@@ -97,6 +103,13 @@ pub struct Options {
     /// Blockhead's width for that height.
     pub box_width: Option<f32>,
     pub box_height: Option<f32>,
+    /// A map's sky: a folder of six pictures (`front`, `right`, `back`,
+    /// `left`, `up`, `down`, PNG or JPEG).
+    pub sky: Option<PathBuf>,
+    /// A map's heightmap terrain: a folder holding `height.png`, ground
+    /// textures `layer0`..`layer7` with masks `weight0`..`weight7`, and an
+    /// optional `detail` texture.
+    pub terrain: Option<PathBuf>,
 }
 impl Options {
     pub fn new(input: impl Into<PathBuf>, out: impl Into<PathBuf>, kind: Kind) -> Self {
@@ -118,6 +131,8 @@ impl Options {
             lod_pixels: LOD_PIXELS,
             box_width: None,
             box_height: None,
+            sky: None,
+            terrain: None,
         }
     }
 }
@@ -157,6 +172,8 @@ pub struct Report {
     /// A body's collision box and eye heights, as its archetype's
     /// `movement` gets them.
     pub movement: Option<Movement>,
+    /// A map's teleporters, one line each: name, role, channel, radius.
+    pub teleporters: Vec<String>,
     pub warnings: Vec<String>,
 }
 #[derive(Debug, Clone, Copy, Serialize)]
@@ -367,6 +384,19 @@ pub struct Converted {
     /// The glTF material each of `shape.materials` was made from, in order
     /// (None for primitives with none).
     pub material_sources: Vec<Option<usize>>,
+    /// A map's meshes named `water...`, left out of the model: each
+    /// becomes a body of water.
+    pub waters: Vec<WaterMesh>,
+}
+
+/// A map mesh named `water...`: its corners in its node's frame (native,
+/// scaled) and the glTF material it is painted with.
+#[derive(Clone, Debug)]
+pub struct WaterMesh {
+    pub name: String,
+    pub node: usize,
+    pub positions: Vec<[f32; 3]>,
+    pub material: Option<usize>,
 }
 
 /// Convert and write the model as `opts.kind` says. `opts.out` must not
@@ -704,18 +734,48 @@ pub fn convert(
         if let Some(i) = material_index.get(&index) {
             return Ok(*i);
         }
-        let (m, png) = make_material(doc, folder, index, prefix, &mut material_names, report)?;
+        let (m, png, maps) =
+            make_material(doc, folder, index, prefix, &mut material_names, report)?;
         textures.insert(m.name.clone(), png);
         report.materials.push(m.name.clone());
+        let at = materials.len();
+        let name = m.name.clone();
         materials.push(m);
         material_sources.push(index);
-        material_index.insert(index, materials.len() - 1);
-        Ok(materials.len() - 1)
+        material_index.insert(index, at);
+        // Each surface map is a material of its own, which the surface names.
+        for (suffix, png) in maps.named() {
+            let mut helper = materials[at].clone();
+            helper.name = format!("{name}_{suffix}");
+            while !material_names.insert(helper.name.clone()) {
+                helper.name.push('_');
+            }
+            helper.blend = "opaque".into();
+            helper.metal = None;
+            helper.surface = None;
+            textures.insert(helper.name.clone(), png);
+            materials.push(helper);
+            material_sources.push(None);
+            let k = Some(materials.len() - 1);
+            let surface = materials[at]
+                .surface
+                .as_mut()
+                .context("surface maps without a surface")?;
+            match suffix {
+                "normal" => surface.normal = k,
+                "metal_rough" => surface.metallic_roughness = k,
+                "occlusion" => surface.occlusion = k,
+                "detail" => surface.detail = k,
+                _ => surface.emissive_map = k,
+            }
+        }
+        Ok(at)
     };
 
     // Meshes: one native object per node with a mesh.
     let mut visible: Vec<(Object, Mesh)> = Vec::new();
     let mut collision: Vec<(Object, Mesh)> = Vec::new();
+    let mut waters: Vec<WaterMesh> = Vec::new();
     let mut warned = BTreeSet::new();
     for (k, &n) in order.iter().enumerate() {
         let Some(m) = nodes[n].mesh else { continue };
@@ -749,6 +809,7 @@ pub fn convert(
             let lower = names[k].to_ascii_lowercase();
             lower.starts_with("col_") || lower.starts_with("col-") || lower.starts_with("collision")
         };
+        let is_water = opts.kind == Kind::Map && names[k].to_ascii_lowercase().starts_with("water");
         // Rigid meshes take the node's own (possibly uneven) scale and its
         // parents' even scale; skinned meshes are already in model space.
         let own_scale = nodes[n].s * parent_sigma(n);
@@ -933,9 +994,17 @@ pub fn convert(
                     names[k]
                 );
             }
-            let material = material(p["material"].as_u64().map(|m| m as usize), &mut report)?;
+            // Collision is never drawn, so it needs no texture.
+            let material = if is_collision || is_water {
+                None
+            } else {
+                Some(material(
+                    p["material"].as_u64().map(|m| m as usize),
+                    &mut report,
+                )?)
+            };
             mesh.primitives.push(Primitive {
-                material: Some(material),
+                material,
                 triangles: triangles
                     .into_iter()
                     .map(|t| {
@@ -999,7 +1068,17 @@ pub fn convert(
             frame: 0,
             material_frame: 0,
         };
-        if is_collision {
+        if is_water {
+            waters.push(WaterMesh {
+                name: names[k].clone(),
+                node: k,
+                positions: mesh.positions,
+                material: array(gmesh, "primitives")
+                    .first()
+                    .and_then(|p| p["material"].as_u64())
+                    .map(|m| m as usize),
+            });
+        } else if is_collision {
             collision.push((object, mesh));
         } else {
             visible.push((object, mesh));
@@ -1164,7 +1243,10 @@ pub fn convert(
         }
     }
     report.points = points(&shape, opts.kind);
-    report.hulls = hulls(&shape)?;
+    if opts.kind != Kind::Map {
+        // A vehicle's hulls; a map's collision is the level itself.
+        report.hulls = hulls(&shape)?;
+    }
     shape
         .validate()
         .context("the converted model does not validate")?;
@@ -1173,6 +1255,7 @@ pub fn convert(
         textures,
         report,
         material_sources,
+        waters,
     })
 }
 
@@ -1875,7 +1958,7 @@ fn make_material(
     prefix: &str,
     taken: &mut BTreeSet<String>,
     report: &mut Report,
-) -> Result<(Material, Vec<u8>)> {
+) -> Result<(Material, Vec<u8>, SurfaceMaps)> {
     let null = Value::Null;
     let m = index.map_or(&null, |i| {
         array(&doc.json, "materials").get(i).unwrap_or(&null)
@@ -1918,71 +2001,11 @@ fn make_material(
         srgb(factor[2]),
         factor[3].clamped(0.0, 1.0),
     ];
-    let ignored: Vec<&str> = [
-        ("normalTexture", "normal map"),
-        ("occlusionTexture", "occlusion map"),
-        ("emissiveTexture", "emission map"),
-    ]
-    .iter()
-    .filter(|(k, _)| m.get(*k).is_some())
-    .map(|(_, v)| *v)
-    .chain(
-        pbr.get("metallicRoughnessTexture")
-            .map(|_| "metallic/roughness map"),
-    )
-    .collect();
-    if !ignored.is_empty() {
-        report.warnings.push(format!(
-            "material `{source}`: its {} is ignored",
-            ignored.join(", ")
-        ));
-    }
     let mut wrap = (true, true);
-    let pixels = match pbr["baseColorTexture"]["index"].as_u64() {
-        Some(t) => {
-            let info = &pbr["baseColorTexture"];
-            if info["texCoord"].as_u64().unwrap_or(0) != 0 {
-                report.warnings.push(format!(
-                    "material `{source}` uses a second UV map; the first is used"
-                ));
-            }
-            if info["extensions"].get("KHR_texture_transform").is_some() {
-                report.warnings.push(format!("material `{source}` has a texture transform, which is ignored; apply it to the UVs"));
-            }
-            let texture = array(&doc.json, "textures")
-                .get(t as usize)
-                .with_context(|| format!("material `{source}` names missing texture {t}"))?;
-            let image = texture["source"].as_u64().with_context(|| {
-                format!(
-                    "material `{source}`'s texture is not PNG or JPEG (KTX2 and WebP are not read)"
-                )
-            })? as usize;
-            if let Some(s) = texture["sampler"]
-                .as_u64()
-                .and_then(|s| array(&doc.json, "samplers").get(s as usize))
-            {
-                wrap = (
-                    s["wrapS"].as_u64().unwrap_or(10497) != 33071,
-                    s["wrapT"].as_u64().unwrap_or(10497) != 33071,
-                );
-            }
-            let bytes = doc.image(image, folder)?;
-            let mut rgba = image::load_from_memory(&bytes)
-                .with_context(|| format!("material `{source}`'s texture is not a PNG or JPEG"))?
-                .to_rgba8();
-            if rgba.width().max(rgba.height()) > 2048 {
-                let k = 2048.0 / rgba.width().max(rgba.height()) as f32;
-                let (w, h) = (
-                    ((rgba.width() as f32 * k) as u32).max(1),
-                    ((rgba.height() as f32 * k) as u32).max(1),
-                );
-                report.warnings.push(format!(
-                    "material `{source}`'s texture is {}x{}; scaled to {w}x{h}",
-                    rgba.width(),
-                    rgba.height()
-                ));
-                rgba = image::imageops::resize(&rgba, w, h, image::imageops::FilterType::Triangle);
-            }
+    let pixels = match pbr.get("baseColorTexture") {
+        Some(info) => {
+            let (mut rgba, sampler) = texture_image(doc, folder, info, &source, report)?;
+            wrap = sampler;
             if tint != [1.0; 4] {
                 for p in rgba.pixels_mut() {
                     for (channel, t) in p.0.iter_mut().zip(tint) {
@@ -2010,6 +2033,94 @@ fn make_material(
             "opaque"
         }
     };
+    // Glow: emissiveFactor times KHR_materials_emissive_strength, linear.
+    let strength = m["extensions"]["KHR_materials_emissive_strength"]["emissiveStrength"]
+        .as_f64()
+        .unwrap_or(1.0) as f32;
+    let emissive: [f32; 3] = match m["emissiveFactor"].as_array() {
+        Some(a) if a.len() == 3 => {
+            [0, 1, 2].map(|c| (a[c].as_f64().unwrap_or(0.0) as f32 * strength).clamped(0.0, 1000.0))
+        }
+        _ => [0.0; 3],
+    };
+    let glow = emissive.iter().copied().fold(0.0, f32::max);
+    let emissive_map = m.get("emissiveTexture").filter(|_| glow > 0.0);
+    // A material that glows at half strength or more over its whole surface
+    // draws self-lit, at its own colour whatever the world's light.
+    let unlit = m["extensions"].get("KHR_materials_unlit").is_some()
+        || (glow >= 0.5 && emissive_map.is_none());
+    let mut maps = SurfaceMaps::default();
+    let png_of = |info: &Value, report: &mut Report| -> Result<Vec<u8>> {
+        let (rgba, _) = texture_image(doc, folder, info, &source, report)?;
+        let mut png = Vec::new();
+        image::DynamicImage::ImageRgba8(rgba)
+            .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)?;
+        Ok(png)
+    };
+    if !unlit {
+        if let Some(info) = m.get("normalTexture") {
+            maps.normal = Some(png_of(info, report)?);
+        }
+        if let Some(info) = pbr.get("metallicRoughnessTexture") {
+            maps.metallic_roughness = Some(png_of(info, report)?);
+        }
+        if let Some(info) = m.get("occlusionTexture") {
+            maps.occlusion = Some(png_of(info, report)?);
+        }
+        if let Some(info) = emissive_map {
+            maps.emissive = Some(png_of(info, report)?);
+        }
+        // `extras.bri_detail`: a texture reference like glTF's own (its
+        // `index`), plus `scale`, how many times it repeats across the
+        // colour map.
+        if m["extras"]["bri_detail"].is_object() {
+            maps.detail = Some(png_of(&m["extras"]["bri_detail"], report)?);
+        }
+    }
+    let textured = maps.normal.is_some()
+        || maps.metallic_roughness.is_some()
+        || maps.occlusion.is_some()
+        || maps.emissive.is_some()
+        || maps.detail.is_some();
+    // glTF's default metallic factor is 1, but exporters write 0 for every
+    // plain surface: without a metal map only a stated factor counts.
+    let metallic = match pbr["metallicFactor"].as_f64() {
+        Some(f) => f as f32,
+        None if maps.metallic_roughness.is_some() => 1.0,
+        None => 0.0,
+    }
+    .clamped(0.0, 1.0);
+    let roughness = (pbr["roughnessFactor"].as_f64().unwrap_or(1.0) as f32).clamped(0.0, 1.0);
+    // The full look when the material has maps or a glow of its own;
+    // otherwise bare metal from a stated metallic factor of 0.5 or more.
+    // The baked texture already carries the base colour, which for metal
+    // is its reflectance.
+    let surface = (!unlit && (textured || glow > 0.0)).then(|| Surface {
+        normal: None,
+        normal_scale: (m["normalTexture"]["scale"].as_f64().unwrap_or(1.0) as f32)
+            .clamped(0.0, 8.0),
+        metallic_roughness: None,
+        metallic,
+        roughness,
+        occlusion: None,
+        occlusion_strength: (m["occlusionTexture"]["strength"].as_f64().unwrap_or(1.0) as f32)
+            .clamped(0.0, 1.0),
+        emissive_map: None,
+        emissive,
+        detail: None,
+        detail_scale: (m["extras"]["bri_detail"]["scale"].as_f64().unwrap_or(1.0) as f32)
+            .clamped(0.01, 4096.0),
+    });
+    let metal = pbr["metallicFactor"]
+        .as_f64()
+        .filter(|f| *f >= 0.5 && !unlit && surface.is_none())
+        .map(|_| Metal {
+            color: [1.0; 3],
+            roughness,
+            detail: None,
+            detail_scale: 1.0,
+            detail_strength: 1.0,
+        });
     let mut png = Vec::new();
     image::DynamicImage::ImageRgba8(pixels)
         .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)?;
@@ -2019,7 +2130,7 @@ fn make_material(
             wrap_u: wrap.0,
             wrap_v: wrap.1,
             blend: blend.into(),
-            unlit: m["extensions"].get("KHR_materials_unlit").is_some(),
+            unlit,
             environment: false,
             mipmaps: true,
             detail_map: None,
@@ -2027,10 +2138,97 @@ fn make_material(
             reflectance_map: None,
             detail_scale: 1.0,
             reflectance: 0.0,
-            metal: None,
+            metal,
+            surface,
         },
         png,
+        maps,
     ))
+}
+
+/// A material's texture (`info` a glTF textureInfo) as pixels, at most
+/// 2048 on a side, with whether it repeats along u and v.
+fn texture_image(
+    doc: &Document,
+    folder: Option<&Path>,
+    info: &Value,
+    source: &str,
+    report: &mut Report,
+) -> Result<(image::RgbaImage, (bool, bool))> {
+    let t = info["index"]
+        .as_u64()
+        .with_context(|| format!("material `{source}` has a texture with no index"))?;
+    if info["texCoord"].as_u64().unwrap_or(0) != 0 {
+        report.warnings.push(format!(
+            "material `{source}` uses a second UV map; the first is used"
+        ));
+    }
+    if info["extensions"].get("KHR_texture_transform").is_some() {
+        report.warnings.push(format!(
+            "material `{source}` has a texture transform, which is ignored; apply it to the UVs"
+        ));
+    }
+    let texture = array(&doc.json, "textures")
+        .get(t as usize)
+        .with_context(|| format!("material `{source}` names missing texture {t}"))?;
+    let image = texture["source"].as_u64().with_context(|| {
+        format!("material `{source}`'s texture is not PNG or JPEG (KTX2 and WebP are not read)")
+    })? as usize;
+    let mut wrap = (true, true);
+    if let Some(s) = texture["sampler"]
+        .as_u64()
+        .and_then(|s| array(&doc.json, "samplers").get(s as usize))
+    {
+        wrap = (
+            s["wrapS"].as_u64().unwrap_or(10497) != 33071,
+            s["wrapT"].as_u64().unwrap_or(10497) != 33071,
+        );
+    }
+    let bytes = doc.image(image, folder)?;
+    let mut rgba = image::load_from_memory(&bytes)
+        .with_context(|| format!("material `{source}`'s texture is not a PNG or JPEG"))?
+        .to_rgba8();
+    if rgba.width().max(rgba.height()) > 2048 {
+        let k = 2048.0 / rgba.width().max(rgba.height()) as f32;
+        let (w, h) = (
+            ((rgba.width() as f32 * k) as u32).max(1),
+            ((rgba.height() as f32 * k) as u32).max(1),
+        );
+        report.warnings.push(format!(
+            "material `{source}`'s texture is {}x{}; scaled to {w}x{h}",
+            rgba.width(),
+            rgba.height()
+        ));
+        rgba = image::imageops::resize(&rgba, w, h, image::imageops::FilterType::Triangle);
+    }
+    Ok((rgba, wrap))
+}
+
+/// The textures of a material's [`Surface`], as PNGs: each becomes a
+/// material of its own, named after the material with the suffix, whose
+/// index the surface takes.
+#[derive(Default)]
+pub(crate) struct SurfaceMaps {
+    pub normal: Option<Vec<u8>>,
+    pub metallic_roughness: Option<Vec<u8>>,
+    pub occlusion: Option<Vec<u8>>,
+    pub emissive: Option<Vec<u8>>,
+    pub detail: Option<Vec<u8>>,
+}
+impl SurfaceMaps {
+    /// Each map with the suffix its material takes.
+    pub fn named(self) -> Vec<(&'static str, Vec<u8>)> {
+        [
+            ("normal", self.normal),
+            ("metal_rough", self.metallic_roughness),
+            ("occlusion", self.occlusion),
+            ("glow", self.emissive),
+            ("detail", self.detail),
+        ]
+        .into_iter()
+        .filter_map(|(k, png)| Some((k, png?)))
+        .collect()
+    }
 }
 
 impl Report {
@@ -2109,9 +2307,21 @@ impl Report {
             let _ = writeln!(s);
         }
         if !self.points.is_empty() {
-            let _ = writeln!(s, "## Points (for weapons.json or vehicles.json)\n");
+            let heading = if self.kind == Some(Kind::Map) {
+                "## Spawn points"
+            } else {
+                "## Points (for weapons.json or vehicles.json)"
+            };
+            let _ = writeln!(s, "{heading}\n");
             for p in &self.points {
                 let _ = writeln!(s, "- `{}` at {:?}", p.node, p.position);
+            }
+            let _ = writeln!(s);
+        }
+        if !self.teleporters.is_empty() {
+            let _ = writeln!(s, "## Teleporters\n");
+            for t in &self.teleporters {
+                let _ = writeln!(s, "- {t}");
             }
             let _ = writeln!(s);
         }

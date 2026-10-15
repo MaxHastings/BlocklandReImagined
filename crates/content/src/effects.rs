@@ -319,6 +319,70 @@ impl Library {
     }
 }
 
+/// A map's own particle emitters (the waterfalls and mist of an old
+/// Blockland map's `ParticleEmitterNode`s), saved beside its bundle as
+/// `map_effects.json` and drawn where the map places them. Particles draw
+/// the game's own effect textures.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MapEffects {
+    pub schema_version: u32,
+    pub particles: Vec<Particle>,
+    pub emitters: Vec<Emitter>,
+    pub sources: Vec<MapEmitter>,
+}
+/// One placed emitter: native position and rotation (its local up is the
+/// direction it emits along), and the speed it passes on to particles that
+/// inherit velocity.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MapEmitter {
+    /// The scene node it came from.
+    pub node: usize,
+    pub emitter: String,
+    pub position: [f32; 3],
+    pub rotation: [f32; 4],
+    pub velocity: f32,
+}
+impl MapEffects {
+    pub fn validate(&self) -> Result<()> {
+        ensure!(
+            self.schema_version == 1
+                && self.particles.len() <= 256
+                && self.emitters.len() <= 256
+                && self.sources.len() <= 1024,
+            "Invalid map effects"
+        );
+        for e in &self.emitters {
+            ensure!(
+                !e.particles.is_empty()
+                    && e.particles
+                        .iter()
+                        .all(|p| self.particles.iter().any(|q| &q.id == p)),
+                "Map emitter {} names a particle the map lacks",
+                e.id
+            );
+        }
+        for s in &self.sources {
+            ensure!(
+                self.emitters.iter().any(|e| e.id == s.emitter),
+                "A map emitter names an unknown emitter {}",
+                s.emitter
+            );
+            ensure!(
+                s.position
+                    .iter()
+                    .chain(&s.rotation)
+                    .all(|v| v.is_finite() && v.abs() <= 1_000_000.0)
+                    && s.velocity.is_finite()
+                    && s.velocity.abs() <= 10_000.0,
+                "Invalid map emitter placement"
+            );
+        }
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

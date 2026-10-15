@@ -360,12 +360,14 @@ fn materials_become_pngs_with_their_colour_baked_in() {
         .unwrap()
         .to_rgba8();
     assert_eq!(boots.get_pixel(0, 0).0, [124, 89, 63, 255]);
-    assert!(
-        c.report
-            .warnings
-            .iter()
-            .any(|w| w.contains("`Skin Tone`: its normal map is ignored"))
-    );
+    // Its normal map comes along as a helper material the surface names.
+    let surface = skin
+        .surface
+        .as_ref()
+        .expect("the skin keeps its normal map");
+    let normal = surface.normal.expect("a normal map");
+    assert_eq!(c.shape.materials[normal].name, "skin_tone_normal");
+    assert!(c.textures.contains_key("skin_tone_normal"));
 }
 
 #[test]
@@ -779,6 +781,14 @@ fn a_map_imports_as_an_add_on_the_game_loads() {
     // Players stand on the floor (no `col_` meshes: solid where drawn) and
     // start at the spawn Empty, half a turn about Y like every model.
     let native = bri_sim::map::NativeMap::load(map_root, &report.model).unwrap();
+    // The level blocks bricks like an interior, not like a prop.
+    assert!(!native.colliders.is_empty());
+    for c in &native.colliders {
+        assert_eq!(
+            bri_sim::map::MapSurface::from_tag(c.user_data),
+            Some(bri_sim::map::MapSurface::Interior)
+        );
+    }
     let scene = &native.scene;
     let spawn = scene
         .nodes
@@ -793,6 +803,28 @@ fn a_map_imports_as_an_add_on_the_game_loads() {
         ),
         Vec3::new(-2.0, 0.0, -3.0)
     ));
+    // The teleporter pair, turned with the model.
+    let teleporters = scene.teleporters().unwrap();
+    assert_eq!(teleporters.len(), 2, "{teleporters:?}");
+    let (entrance, exit) = (&teleporters[0], &teleporters[1]);
+    assert!(entrance.entrance && !exit.entrance);
+    assert_eq!(
+        (entrance.channel.as_str(), exit.channel.as_str()),
+        ("a", "a")
+    );
+    assert!((entrance.radius - 1.5).abs() < 1e-5 && (exit.radius - 1.0).abs() < 1e-5);
+    assert!(near(
+        Vec3::from(entrance.position),
+        Vec3::new(5.0, 0.0, 5.0)
+    ));
+    assert!(near(Vec3::from(exit.position), Vec3::new(-5.0, 0.0, -5.0)));
+    // glTF +X is native -X after the half turn: a yaw of minus a quarter.
+    assert!(
+        (exit.yaw + std::f32::consts::FRAC_PI_2).abs() < 1e-4,
+        "{}",
+        exit.yaw
+    );
+    assert_eq!(native.teleporters.len(), 2);
     let lights = scene.lights().unwrap();
     assert_eq!(lights.len(), 2, "{lights:?}");
     let lamp = lights
@@ -876,8 +908,19 @@ fn a_map_imports_as_an_add_on_the_game_loads() {
             .any(|l| near(Vec3::from(l.position), Vec3::new(0.0, 3.0, 0.0)))
     );
 
+    // The strobe blinks: a light animation for the lamp's light.
+    assert_eq!(drawn.light_animations.len(), 1);
+    let (lamp, strobe) = drawn.light_animations[0];
+    assert!(near(
+        Vec3::from(modern[lamp].position),
+        Vec3::new(0.0, 3.0, 0.0)
+    ));
+    assert_ne!(strobe.tint_at(0.1), strobe.tint_at(0.6));
+
     let md = std::fs::read_to_string(dir.join("IMPORT-REPORT.md")).unwrap();
-    assert!(md.contains("(map)") && md.contains("steady omni"), "{md}");
+    assert!(md.contains("(map)"), "{md}");
+    // The spot light shines down its cone.
+    assert_eq!(drawn.light_spots.len(), 1);
 }
 
 #[test]
@@ -916,4 +959,268 @@ fn a_map_without_a_spawn_or_with_col_meshes_says_what_it_did() {
         "{:?}",
         report.warnings
     );
+}
+
+/// A map brings its own sun, sky and water: a Blender Sun light, the
+/// scene's `bri_sky_color` and `bri_fog`, a `--sky` folder, and a mesh
+/// named `water` that becomes a body of water instead of a wall.
+#[test]
+fn a_map_brings_its_own_sun_sky_and_water() {
+    let root = tempfile::tempdir().unwrap();
+    let mut g = super::testing::Gltf::new();
+    let flat = |v: &[Vec3]| v.iter().flat_map(|v| v.to_array()).collect::<Vec<f32>>();
+    let part = |g: &mut super::testing::Gltf,
+                name: &str,
+                center: Vec3,
+                size: Vec3,
+                extras: Value| {
+        let (p, n, uv, i) = super::testing::cuboid(center, size);
+        let (a, b, c, d) = (
+            g.floats(&flat(&p), 3),
+            g.floats(&flat(&n), 3),
+            g.floats(&uv.concat(), 2),
+            g.uints(&i, 1),
+        );
+        let lava = g.material("Lava", [0.9, 0.3, 0.1, 0.5], None, json!({}));
+        let mesh = g.mesh(name, vec![json!({ "attributes": { "POSITION": a, "NORMAL": b, "TEXCOORD_0": c }, "indices": d, "material": lava })]);
+        g.node(
+            json!({ "name": name, "mesh": mesh, "extras": extras }),
+            None,
+        );
+    };
+    part(
+        &mut g,
+        "Floor",
+        Vec3::new(0.0, -0.25, 0.0),
+        Vec3::new(20.0, 0.5, 20.0),
+        json!({}),
+    );
+    part(
+        &mut g,
+        "Water.001",
+        Vec3::new(0.0, 1.0, 0.0),
+        Vec3::new(10.0, 0.0, 10.0),
+        json!({ "bri_liquid": "lava" }),
+    );
+    g.node(
+        json!({ "name": "spawn", "translation": [8.0, 0.0, 8.0] }),
+        None,
+    );
+    g.json["extensionsUsed"] = json!(["KHR_lights_punctual"]);
+    g.json["extensions"] = json!({ "KHR_lights_punctual": { "lights": [
+        { "name": "Sun", "type": "directional", "color": [1.0, 0.9, 0.8] },
+    ] } });
+    // Shining down at 45 degrees towards glTF -Z (Blender +Y): from the
+    // Torque north, azimuth 0.
+    g.node(json!({ "name": "Sun", "rotation": Quat::from_rotation_x(-std::f32::consts::FRAC_PI_4).to_array(),
+        "extensions": { "KHR_lights_punctual": { "light": 0 } }, "extras": { "bri_ambient": 0.3 } }), None);
+    g.json["scenes"][0]["extras"] =
+        json!({ "bri_sky_color": [0.2, 0.3, 0.4], "bri_fog": [100.0, 400.0] });
+    let input = root.path().join("pond.glb");
+    std::fs::write(&input, g.glb()).unwrap();
+    let sky = root.path().join("sky");
+    std::fs::create_dir_all(&sky).unwrap();
+    for (k, face) in super::map_environment::SKY_FACES.iter().enumerate() {
+        let img = image::RgbaImage::from_pixel(4, 4, image::Rgba([k as u8 * 40, 100, 200, 255]));
+        img.save(sky.join(format!("{face}.png"))).unwrap();
+    }
+    let mut opts = Options::new(&input, root.path().join("pond"), Kind::Map);
+    opts.sky = Some(sky);
+    let report = import(&opts).unwrap();
+    let dir = root.path().join("pond");
+    let check = bri_package_runtime::check::check(&dir);
+    assert!(check.ok, "{check}");
+
+    let native = bri_sim::map::NativeMap::load(&dir.join("map"), &report.model).unwrap();
+    let sun = native
+        .scene
+        .nodes
+        .iter()
+        .find(|n| matches!(n.kind, bri_content::scene::Kind::Sun))
+        .unwrap();
+    let number = |k: &str| sun.properties[k].parse::<f32>().unwrap();
+    assert!(
+        (number("elevation") - 45.0).abs() < 0.01,
+        "{:?}",
+        sun.properties
+    );
+    assert!(
+        number("azimuth") < 0.01 || number("azimuth") > 358.99,
+        "{:?}",
+        sun.properties
+    );
+    assert_eq!(sun.properties["color"], "1 0.9 0.8");
+    assert_eq!(sun.properties["ambient"], "0.3 0.3 0.3");
+
+    // The water is a lava pool from its surface to the floor, not a wall.
+    assert_eq!(native.waters.len(), 1);
+    let water = &native.waters[0];
+    assert_eq!(water.liquid_type, "Lava");
+    assert!(
+        (water.max[1] - 1.0).abs() < 0.01 && water.min[1] <= -0.4,
+        "{water:?}"
+    );
+    assert!((water.opacity - 0.5).abs() < 0.01);
+    use rapier3d::prelude::{Ray, Vector};
+    let ground = native
+        .colliders
+        .iter()
+        .filter_map(|c| {
+            let c = c.build();
+            c.shape().cast_ray(
+                c.position(),
+                &Ray::new(Vector::new(0.0, 5.0, 0.0), -Vector::Y),
+                10.0,
+                true,
+            )
+        })
+        .fold(f32::MAX, f32::min);
+    assert!(
+        (ground - 5.0).abs() < 0.01,
+        "water does not collide: {ground}"
+    );
+
+    // The sky: its six pictures, colour and fog.
+    let bundle: Value =
+        serde_json::from_slice(&std::fs::read(dir.join("map/bundle.json")).unwrap()).unwrap();
+    let environment: bri_content::environment::Environment =
+        serde_json::from_value(bundle["environments"][&report.model].clone()).unwrap();
+    environment.validate().unwrap();
+    assert_eq!(environment.faces.len(), 6);
+    assert!(
+        environment
+            .faces
+            .iter()
+            .all(|f| dir.join("map").join(&f.file).is_file())
+    );
+    assert_eq!(environment.solid_color, [0.2, 0.3, 0.4]);
+    assert_eq!((environment.fog.start, environment.fog.end), (100.0, 400.0));
+
+    // The renderer draws the map with its water and sky.
+    let drawn =
+        bri_render::scene_loader::load_map_bundle_dynamic(&dir.join("map"), &report.model).unwrap();
+    assert!(!drawn.scene.vertices.is_empty());
+    assert!(
+        drawn
+            .scene
+            .materials
+            .iter()
+            .any(|m| m.kind == bri_render::scene::MaterialKind::Water)
+    );
+}
+
+/// A stated metallic factor makes bare metal at the material's roughness,
+/// a strong glow draws self-lit, a faint one glows on a lit surface, and a
+/// plain surface stays as it was.
+#[test]
+fn metal_and_glow_come_from_the_material() {
+    let doc = super::read::Document::from_bytes(
+        serde_json::to_string(&json!({
+            "asset": { "version": "2.0" },
+            "materials": [
+                { "name": "Steel", "pbrMetallicRoughness": { "metallicFactor": 1.0, "roughnessFactor": 0.3 } },
+                { "name": "Paint", "pbrMetallicRoughness": { "metallicFactor": 0.0 } },
+                { "name": "Lamp", "emissiveFactor": [1.0, 0.9, 0.5] },
+                { "name": "Ember", "emissiveFactor": [0.2, 0.0, 0.0] },
+            ]
+        }))
+        .unwrap()
+        .as_bytes(),
+        None,
+    )
+    .unwrap();
+    let mut report = Report::default();
+    let mut taken = BTreeSet::new();
+    let mut get = |i| {
+        super::make_material(&doc, None, Some(i), "", &mut taken, &mut report)
+            .unwrap()
+            .0
+    };
+    let (steel, paint, lamp, ember) = (get(0), get(1), get(2), get(3));
+    let metal = steel.metal.expect("steel is metal");
+    assert_eq!((metal.color, metal.roughness), ([1.0; 3], 0.3));
+    assert!(paint.metal.is_none() && !paint.unlit);
+    assert!(lamp.unlit && lamp.metal.is_none());
+    // A faint glow lights the surface from within instead.
+    assert!(!ember.unlit);
+    let glow = ember.surface.expect("ember keeps its glow");
+    assert_eq!(glow.emissive, [0.2, 0.0, 0.0]);
+    assert!(report.warnings.is_empty(), "{:?}", report.warnings);
+}
+
+/// A `--terrain` folder becomes the native heightmap terrain: shaped as its
+/// picture is from above in Blender, sized and placed by the scene's
+/// properties, with its ground textures where their masks say, and lit.
+#[test]
+fn a_map_brings_its_own_heightmap_terrain() {
+    let root = tempfile::tempdir().unwrap();
+    let mut g = super::testing::Gltf::new();
+    let (p, n, uv, i) = super::testing::cuboid(Vec3::new(0.0, 6.0, 0.0), Vec3::splat(2.0));
+    let flat = |v: &[Vec3]| v.iter().flat_map(|v| v.to_array()).collect::<Vec<f32>>();
+    let (a, b, c, d) = (
+        g.floats(&flat(&p), 3),
+        g.floats(&flat(&n), 3),
+        g.floats(&uv.concat(), 2),
+        g.uints(&i, 1),
+    );
+    let stone = g.material("Stone", [0.5, 0.5, 0.5, 1.0], None, json!({}));
+    let mesh = g.mesh("Rock", vec![json!({ "attributes": { "POSITION": a, "NORMAL": b, "TEXCOORD_0": c }, "indices": d, "material": stone })]);
+    g.node(json!({ "name": "Rock", "mesh": mesh }), None);
+    g.json["scenes"][0]["extras"] = json!({
+        "bri_terrain_size": 64.0, "bri_terrain_height": 10.0, "bri_terrain_center": [0.0, 0.0, -5.0],
+    });
+    let input = root.path().join("hills.glb");
+    std::fs::write(&input, g.glb()).unwrap();
+    // Rising towards Blender's +X (the picture's right); grass everywhere,
+    // sand over the picture's top half (Blender's +Y).
+    let dir = root.path().join("terrain");
+    std::fs::create_dir_all(&dir).unwrap();
+    image::GrayImage::from_fn(32, 32, |x, _| image::Luma([(x * 255 / 31) as u8]))
+        .save(dir.join("height.png"))
+        .unwrap();
+    image::RgbImage::from_pixel(8, 8, image::Rgb([40, 160, 40]))
+        .save(dir.join("layer0.png"))
+        .unwrap();
+    image::RgbImage::from_pixel(8, 8, image::Rgb([220, 200, 120]))
+        .save(dir.join("layer1.jpg"))
+        .unwrap();
+    image::GrayImage::from_fn(32, 32, |_, y| image::Luma([if y < 16 { 255 } else { 0 }]))
+        .save(dir.join("weight1.png"))
+        .unwrap();
+    let mut opts = Options::new(&input, root.path().join("hills"), Kind::Map);
+    opts.terrain = Some(dir);
+    let report = import(&opts).unwrap();
+    let out = root.path().join("hills");
+    let check = bri_package_runtime::check::check(&out);
+    assert!(check.ok, "{check}");
+
+    let native = bri_sim::map::NativeMap::load(&out.join("map"), &report.model).unwrap();
+    assert_eq!(native.terrain.len(), 1);
+    let field = &native.terrain[0];
+    // Blender (x, y) is native (-x, -y) on the ground.
+    let at = |x: f32, y: f32| field.height(-x, -y);
+    let (east, west) = (at(30.0, 0.0).unwrap(), at(-30.0, 0.0).unwrap());
+    assert!(
+        (east - 4.7).abs() < 0.3 && (west + 4.7).abs() < 0.3,
+        "{east} {west}"
+    );
+    assert!(at(40.0, 0.0).is_none(), "nothing past the picture's edge");
+    let north = |x: usize, y: usize| field.terrain.layers[1].weights[y * 32 + x];
+    assert_eq!((north(3, 5), north(3, 25)), (255, 0));
+
+    // It draws in both lighting modes, with its baked sunlight.
+    let bundle: Value =
+        serde_json::from_slice(&std::fs::read(out.join("map/bundle.json")).unwrap()).unwrap();
+    let light = &bundle["lighting"][&report.model]["terrain"][0];
+    assert!(
+        out.join("map")
+            .join(light["file"].as_str().unwrap())
+            .is_file()
+    );
+    for drawn in [
+        bri_render::scene_loader::load_map_bundle(&out.join("map"), &report.model).unwrap(),
+        bri_render::scene_loader::load_map_bundle_dynamic(&out.join("map"), &report.model).unwrap(),
+    ] {
+        assert_eq!(drawn.terrain.len(), 1);
+    }
 }

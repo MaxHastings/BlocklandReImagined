@@ -2566,6 +2566,25 @@ fn register_api(engine: &mut Engine) {
             }))
         },
     );
+    // `()` as the player flashes everyone's screen.
+    engine.register_fn(
+        "screen_flash",
+        |player: Dynamic, color: Array, seconds: Dynamic| {
+            let color = match color.as_slice() {
+                [r, g, b, a] => [float(r)?, float(g)?, float(b)?, float(a)?],
+                _ => return fail("a colour is [r, g, b, a] from 0 to 1"),
+            };
+            push(Op::ScreenFlash(ops::ScreenFlash {
+                player: if player.is_unit() {
+                    None
+                } else {
+                    Some(id(&player)?)
+                },
+                color,
+                seconds: float(&seconds)?,
+            }))
+        },
+    );
     // Every member of a mini-game, counted once.
     engine.register_fn("tell_minigame", |game: Dynamic, text: &str| {
         push(Op::TellMinigame(ops::TellMinigame {
@@ -2897,6 +2916,20 @@ fn register_presentation(engine: &mut Engine) {
             muzzle,
         }))
     }
+    engine.register_fn(
+        "body_flash",
+        |player: Dynamic, color: Array, seconds: Dynamic| {
+            let color = match color.as_slice() {
+                [r, g, b, a] => [float(r)?, float(g)?, float(b)?, float(a)?],
+                _ => return fail("a colour is [r, g, b, a] from 0 to 1"),
+            };
+            push(Op::BodyFlash(ops::BodyFlash {
+                player: id(&player)?,
+                color,
+                seconds: float(&seconds)?,
+            }))
+        },
+    );
     engine.register_fn("beam", |from: Array, to: Array| beam(from, to, Map::new()));
     engine.register_fn("beam", beam);
     // play_music(player, track[, options]) / play_music_all(track[, options]),
@@ -3150,6 +3183,18 @@ fn register_presentation(engine: &mut Engine) {
             },
         }))
     });
+    engine.register_fn("set_prone", |player: Dynamic, prone: bool| {
+        push(Op::SetProne(ops::SetProne {
+            player: id(&player)?,
+            prone,
+        }))
+    });
+    engine.register_fn("set_lean", |player: Dynamic, lean: Dynamic| {
+        push(Op::SetLean(ops::SetLean {
+            player: id(&player)?,
+            lean: float(&lean)?,
+        }))
+    });
     engine.register_fn("set_speed_scale", |player: Dynamic, scale: Dynamic| {
         push(Op::SetSpeedScale(ops::SetSpeedScale {
             player: id(&player)?,
@@ -3193,6 +3238,18 @@ fn register_presentation(engine: &mut Engine) {
     engine.register_fn("reload", |player: Dynamic| {
         push(Op::Reload(ops::Reload {
             player: id(&player)?,
+        }))
+    });
+    engine.register_fn("set_image_state", |player: Dynamic, state: &str| {
+        push(Op::SetImageState(ops::SetImageState {
+            player: id(&player)?,
+            state: state.into(),
+        }))
+    });
+    engine.register_fn("quick_use", |player: Dynamic, item: &str| {
+        push(Op::QuickUse(ops::QuickUse {
+            player: id(&player)?,
+            item: item.into(),
         }))
     });
     engine.register_fn("set_image_ammo", |player: Dynamic, ammo: bool| {

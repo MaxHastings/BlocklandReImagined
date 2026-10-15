@@ -62,6 +62,8 @@ pub struct NativeMap {
     pub pending_objects: Vec<String>,
     /// Static shapes a fast player smashes (v20 `Glass` class).
     pub breakables: Vec<Breakable>,
+    /// Teleporter entrances and exits (`Scene::teleporters`).
+    pub teleporters: Vec<bri_content::scene::Teleporter>,
     /// The plate a flat map stands on, where the Environment window's
     /// ground and water go; None on every other map.
     pub plate: Option<bri_content::scene::Plate>,
@@ -357,6 +359,16 @@ impl NativeMap {
                     let shape: bri_content::shape::Shape =
                         serde_json::from_slice(&std::fs::read(path)?)?;
                     let first = colliders.len();
+                    // A map Add-On's whole level is one model marked
+                    // `surface: level`: bricks may not be buried in it or
+                    // reach through it, as with an interior. Other models
+                    // are props, which v20's plant never asks about.
+                    let surface =
+                        if node.properties.get("surface").map(String::as_str) == Some("level") {
+                            MapSurface::Interior
+                        } else {
+                            MapSurface::Static
+                        };
                     for (collider, materials) in
                         bri_physics::content::static_shape_collider_materials(&shape, transform)?
                     {
@@ -367,7 +379,7 @@ impl NativeMap {
                             .as_trimesh()
                             .is_some_and(|m| m.indices().len() == materials.len());
                         surfaces.push(&surface_table, &shape, kept.then_some(&materials[..]))?;
-                        colliders.push(collider.user_data(MapSurface::Static as u128));
+                        colliders.push(collider.user_data(surface as u128));
                     }
                     let datablock = node.properties.get("datablock");
                     if let Some((name, (explosion, sound))) =
@@ -423,6 +435,7 @@ impl NativeMap {
             !colliders.is_empty() || !terrain.is_empty(),
             "Native map has no physical geometry"
         );
+        let teleporters = scene.teleporters()?;
         Ok(Self {
             scene,
             colliders,
@@ -430,6 +443,7 @@ impl NativeMap {
             waters,
             pending_objects,
             breakables,
+            teleporters,
             plate,
             surfaces,
         })

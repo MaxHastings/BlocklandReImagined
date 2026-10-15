@@ -151,6 +151,18 @@ socket. Set it yourself with `--box-width UNITS` and `--box-height UNITS`
 The box, not the mesh, is what bullets, explosions, other players and
 vehicles hit.
 
+**Prone and lean (optional).** `movement.prone` lets the body lie down
+(`set_prone` in rules): `{ "height": 0.5, "eye": 0.35, "forward": 1,
+"backward": 0.5, "sideways": 0.5 }`, its box height (at most the crouch's),
+eye height and crawling speeds. The body is drawn face down along its
+facing, its middle over the box, so its head and feet reach past the box:
+a lying body is hit only around its middle. `movement.lean` lets it lean
+(`set_lean`): `{ "distance": 0.5, "angle": 0.3, "seconds": 0.25 }`, how
+far the eye slides sideways (at most half the box's width, so a lean
+never sees past the body it can be shot at), how far the view and the
+body tilt (radians, up to 0.6) and how long a full lean takes. v20's
+bodies have neither.
+
 **Distant detail (optional, off by default).** Classic-era models are light
 enough to skip this. For a heavy model, `--lod TRIANGLES` adds a lighter
 copy with that many triangles that the body draws when it is small on
@@ -216,14 +228,31 @@ gun's sound goes in the vehicle pack's `weapons.json` `sounds`, as above.
 - One **Base Color** image texture per material, PNG or JPEG, up to 2048x2048
   (1024 is plenty). The Base Color factor multiplies it; a material with no
   texture becomes its plain colour.
-- Normal, roughness, metallic, emission and occlusion maps are ignored and
-  listed in the report. Vertex colours and shape keys are ignored too.
+- **Full materials**: a material's **Normal** map, **Metallic/Roughness**
+  texture (glTF packs metal in blue and roughness in green, as Blender's
+  exporter writes it), **Occlusion** map and **Emission** texture come
+  along with it, each up to 2048x2048. The surface then draws physically
+  based: bumps catch the sun, metal reflects the world at its roughness,
+  creases darken, and the emission glows in the dark. The Normal Map
+  Strength, Metallic, Roughness and Emission Strength values apply as in
+  Blender. Each map is saved as a texture named after the material with
+  `_normal`, `_metal_rough`, `_occlusion` or `_glow`. Vertex colours and
+  shape keys are ignored.
+- **Metal**: a material without those maps whose Metallic value is
+  0.5 or more draws as bare metal, at its Roughness value, reflecting the
+  world. Its Base Color is the metal's colour (steel about 0.56, gold 1.0
+  0.71 0.29).
+- **Glow**: a material whose Emission Strength times its brightest Emission
+  colour channel is 0.5 or more and has no Emission texture draws at full
+  brightness, like an Unlit one. Fainter glow, or an Emission texture,
+  glows on top of the lit surface.
 - Alpha: Blend mode "Alpha Blend" and "Alpha Clip" draw see-through
   where the texture is; "Opaque" draws solid and ignores the texture's
   alpha (a specular or colour-change mask left there does no harm).
 - Every material takes the map's light, sun and shadow as a Blockhead
-  does. Only an "Unlit" (emission shader / KHR_materials_unlit) material
-  draws at full brightness whatever the light: keep that for glowing parts.
+  does. Only an "Unlit" (emission shader / KHR_materials_unlit) or glowing
+  material draws at full brightness whatever the light: keep that for
+  glowing parts.
 
 ## 6. Export settings (File > Export > glTF 2.0)
 

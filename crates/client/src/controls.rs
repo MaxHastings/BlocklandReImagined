@@ -68,6 +68,9 @@ pub struct Controls {
     /// Where an orbiting camera's trailing pivot is (`CameraOrbit::lag`),
     /// with the vehicle's place it trails, both this frame.
     orbit_trail: Option<(glam::Vec3, glam::Vec3)>,
+    /// The nose pitch of such a vehicle that flies, as last seen: the head
+    /// tips back by each pitch the nose makes, likewise.
+    look_nose: Option<f32>,
     /// A passenger's body turn on the seat (`mRot.z` relative to the mount).
     body_turn: f32,
     /// Mounted on anything (a vehicle, a player-type mount, another player).
@@ -80,6 +83,10 @@ pub struct Controls {
     vehicle_mouse_plain: bool,
     /// The held weapon's aim (`Image::zoom`), while one is held.
     aim: Option<bri_weapons::Zoom>,
+    /// Look speed's multiple from the held image's aim assist this frame;
+    /// None for full speed. Set by the frame drawn, which holds the
+    /// controls only to read them.
+    assist_slowdown: std::cell::Cell<Option<f32>>,
     /// The aim's wheel step (`Zoom::levels`), kept while it is held.
     aim_level: usize,
     /// The aim's sway (`Zoom::sway`), eased in while aiming and out after.
@@ -340,7 +347,10 @@ impl Controls {
                 }
                 // `getMouseAdjustAmount`: sensitivity × `$cameraFov` / 90,
                 // then the aim's own `sensitivity` while aiming.
-                let scale = self.fov() / 90.0 * self.aim_sensitivity();
+                // An aim assist slows it while the aim is on a body.
+                let scale = self.fov() / 90.0
+                    * self.aim_sensitivity()
+                    * self.assist_slowdown.get().unwrap_or(1.0);
                 // OS mouse Y increases downwards; simulation pitch increases up.
                 self.look(yaw * scale, -pitch * scale);
             }
@@ -454,6 +464,7 @@ impl Controls {
             self.body_turn = 0.0;
             self.free_yaw = 0.0;
             self.look_heading = None;
+            self.look_nose = None;
         }
         self.ride = ride;
     }
@@ -524,15 +535,26 @@ impl Controls {
     /// `heading`: the head turns back by however far the vehicle turned
     /// since the last frame, holding the view's direction in the world.
     /// `None` drives anything else.
-    pub fn hold_world_look(&mut self, heading: Option<f32>) {
+    /// A flying one also passes its `nose` pitch, which the head's pitch
+    /// holds against the same way.
+    pub fn hold_world_look(&mut self, heading: Option<f32>, nose: Option<f32>) {
         let heading = heading.filter(|h| h.is_finite());
+        let nose = nose.filter(|n| n.is_finite() && heading.is_some());
+        let driving = self.seat_look() == Some(SeatLook::StrafeDriver);
         if let (Some(now), Some(before)) = (heading, self.look_heading)
-            && self.seat_look() == Some(SeatLook::StrafeDriver)
+            && driving
         {
             self.free_yaw =
                 (self.free_yaw - wrap(now - before)).clamped(-MAX_FREELOOK, MAX_FREELOOK);
         }
+        if let (Some(now), Some(before)) = (nose, self.look_nose)
+            && driving
+        {
+            self.head_pitch = (self.head_pitch - (now - before)).clamped(-FRAC_PI_2, FRAC_PI_2);
+            self.driver_head = HeadTicks::at(self.head_pitch);
+        }
         self.look_heading = heading;
+        self.look_nose = nose;
     }
     /// A passenger's body turn on the seat, radians (right positive); 0 in
     /// any other seat.
@@ -949,6 +971,7 @@ impl Controls {
             1.0
         };
         MoveInput {
+            seen: 0,
             forward: self.axis(HeldControl::Forward, HeldControl::Backward) * walk,
             right: self.axis(HeldControl::Right, HeldControl::Left) * walk,
             yaw,
@@ -1039,6 +1062,16 @@ impl Controls {
     /// The held weapon's aim, or `None` when it has none: holding Zoom (or
     /// Jet, when the aim is `on_jet`) then aims at its FOV in place of the
     /// wheel's zoom.
+    /// Look speed's multiple from an aim assist (`AimAssist::slowdown`),
+    /// 0.1 to 1.
+    pub fn set_assist_slowdown(&self, slowdown: f32) {
+        self.assist_slowdown.set(
+            slowdown
+                .is_finite()
+                .then(|| slowdown.clamped(0.1, 1.0))
+                .filter(|s| *s < 1.0),
+        );
+    }
     pub fn set_aim(&mut self, aim: Option<bri_weapons::Zoom>) {
         let aim = aim.filter(|a| a.validate().is_ok());
         if aim != self.aim {
@@ -1816,6 +1849,7 @@ mod tests {
             tether: None,
             controller: None,
             pass_group: 0,
+            posture: Default::default(),
         };
         let mut presented = BTreeMap::from([(1, body(1, 0.0)), (7, body(7, 5.0))]);
         assert_eq!(
@@ -2274,6 +2308,25 @@ mod tests {
         c.set_aim(None);
         assert!(c.movement().jet);
         assert_eq!(c.scope_overlay(), None);
+    }
+    /// An aim assist on a body slows look by its `slowdown`, and look is
+    /// whole again once the aim leaves it.
+    #[test]
+    fn an_aim_assist_slows_look_while_on_a_body() {
+        let c = &mut Controls::default();
+        let turn = |c: &mut Controls| {
+            let before = c.yaw;
+            c.action(&GameAction::Look {
+                yaw: 0.1,
+                pitch: 0.0,
+            });
+            c.yaw - before
+        };
+        let whole = turn(c);
+        c.set_assist_slowdown(0.4);
+        assert!((turn(c) - whole * 0.4).abs() < 1e-6);
+        c.set_assist_slowdown(1.0);
+        assert!((turn(c) - whole).abs() < 1e-6);
     }
     /// A third-person player aiming a first-person scope sees its picture
     /// only once the camera is in the eye.

@@ -1752,10 +1752,6 @@ pub struct ArchetypeDef {
     /// `maxTimeScale`, 1.5).
     #[serde(default)]
     pub max_time_scale: Option<f32>,
-    /// A sound at each footfall by the surface underfoot (`stride`, and
-    /// `sounds` by surface kind with a `default`), replacing the base's.
-    #[serde(default)]
-    pub footsteps: Option<bri_content::body::Footsteps>,
     /// Its own movement rules: a `controller` this Add-On or one it
     /// depends on provides (`namespace:controller/name`).
     #[serde(default)]
@@ -1775,6 +1771,20 @@ pub struct ArchetypeSounds {
     pub pain: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub death: Option<String>,
+    /// Footfall sounds, one picked each step (at most 8).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub footsteps: Vec<String>,
+    /// Footfall sounds by the surface kind underfoot (`dirt`, `metal`; a
+    /// map material's `bri_surface`), in place of `footsteps` on that kind.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub surfaces: BTreeMap<String, Vec<String>>,
+    /// Ground between footfalls in units (0.25 to 32); none is 1.1 times
+    /// the body's standing height.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stride: Option<f32>,
+    /// The sound of landing from a fall.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub land: Option<String>,
 }
 /// One rider seat: the model node riders follow, its rest position from
 /// the feet (facing -Z, at scale 1) and the rider's action (`root`, `sit`).
@@ -1831,19 +1841,40 @@ impl ArchetypeDef {
         if let Some(camera) = &self.camera {
             camera.validate()?;
         }
-        if let Some(f) = &self.footsteps {
-            f.validate()?;
-        }
         ensure!(
             self.controller.as_ref().is_none_or(|c| text(c, 160)),
             "controller must be a controller id"
         );
         ensure!(
-            [&self.sounds.jump, &self.sounds.pain, &self.sounds.death]
-                .into_iter()
-                .flatten()
-                .all(|s| s.is_empty() || text(s, 128)),
+            [
+                &self.sounds.jump,
+                &self.sounds.pain,
+                &self.sounds.death,
+                &self.sounds.land
+            ]
+            .into_iter()
+            .flatten()
+            .all(|s| s.is_empty() || text(s, 128)),
             "sounds name sound profiles"
+        );
+        ensure!(
+            self.sounds.footsteps.len() <= 8 && self.sounds.footsteps.iter().all(|s| text(s, 128)),
+            "sounds.footsteps names 1 to 8 sound profiles"
+        );
+        ensure!(
+            self.sounds.surfaces.len() <= 16
+                && self.sounds.surfaces.iter().all(|(kind, ids)| {
+                    bri_content::surface::valid_name(kind)
+                        && (1..=8).contains(&ids.len())
+                        && ids.iter().all(|s| text(s, 128))
+                }),
+            "sounds.surfaces names up to 16 surface kinds, each with 1 to 8 sound profiles"
+        );
+        ensure!(
+            self.sounds
+                .stride
+                .is_none_or(|s| s.is_finite() && (0.25..=32.0).contains(&s)),
+            "sounds.stride must be 0.25 to 32 units"
         );
         if let Some(stock) = &self.adjusts {
             ensure!(

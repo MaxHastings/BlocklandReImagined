@@ -1,0 +1,1 @@
+`PlayerState` gains `posture: Posture { prone, lean, lean_to }` (serde default): a body lying prone and its lean, which rules set (`set_prone`, `set_lean`) and the motor eases; `PlayerTuning` gains `prone` and `lean` (archetype movement data, carried with the archetype table).

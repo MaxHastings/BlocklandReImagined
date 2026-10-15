@@ -373,7 +373,7 @@ pub fn check(folder: &Path) -> Report {
     }
 }
 
-/// What is wrong with the engine sounds a vehicles pack (`bytes`, at
+/// What is wrong with the engine and skid sounds a vehicles pack (`bytes`, at
 /// `at`) names: an Add-On sound (a namespaced key) that no weapons pack in
 /// the set declares, or one that does not loop. A key without a namespace
 /// is one of the game's own sounds.
@@ -388,33 +388,35 @@ fn engine_sound_problems(
     let definitions = pack.get("definitions").and_then(|d| d.as_array());
     let mut problems = Vec::new();
     for d in definitions.into_iter().flatten() {
-        let Some(sound) = d
-            .get("engine_sound")
-            .and_then(|e| e.get("sound"))
-            .and_then(|s| s.as_str())
-        else {
-            continue;
-        };
         let vehicle = d.get("id").and_then(|i| i.as_str()).unwrap_or("?");
-        match sounds.get(&sound.to_ascii_lowercase()) {
-            Some(true) => {}
-            Some(false) => problems.push(
-                Diagnostic::warning(
-                    "check.vehicles.engine_sound",
-                    format!("{vehicle}'s engine sound {sound} plays once instead of looping"),
-                )
-                .at(at.to_owned())
-                .hint("declare it with \"looping\": true in the weapons pack's sounds"),
-            ),
-            None if sound.contains(':') => problems.push(
-                Diagnostic::error(
-                    "check.vehicles.engine_sound",
-                    format!("{vehicle}'s engine sound {sound} is not declared"),
-                )
-                .at(at.to_owned())
-                .hint("add it to the sounds of the Add-On's assets/weapons.json, with \"looping\": true"),
-            ),
-            None => {}
+        for (field, what) in [("engine_sound", "engine sound"), ("skid", "skid sound")] {
+            let Some(sound) = d
+                .get(field)
+                .and_then(|e| e.get("sound"))
+                .and_then(|s| s.as_str())
+            else {
+                continue;
+            };
+            match sounds.get(&sound.to_ascii_lowercase()) {
+                Some(true) => {}
+                Some(false) => problems.push(
+                    Diagnostic::warning(
+                        "check.vehicles.engine_sound",
+                        format!("{vehicle}'s {what} {sound} plays once instead of looping"),
+                    )
+                    .at(at.to_owned())
+                    .hint("declare it with \"looping\": true in the weapons pack's sounds"),
+                ),
+                None if sound.contains(':') => problems.push(
+                    Diagnostic::error(
+                        "check.vehicles.engine_sound",
+                        format!("{vehicle}'s {what} {sound} is not declared"),
+                    )
+                    .at(at.to_owned())
+                    .hint("add it to the sounds of the Add-On's assets/weapons.json, with \"looping\": true"),
+                ),
+                None => {}
+            }
         }
     }
     problems
@@ -579,29 +581,12 @@ fn map_problems(bundle: &Path, id: &str, at: &str) -> Vec<Diagnostic> {
                 .hint("in Blender, add an Empty named spawn where players start (spawn.001 and so on for more), then reimport"),
         );
     }
-    match scene.lights() {
-        Ok(lights) => {
-            let animated: Vec<_> = lights
-                .iter()
-                .filter(|l| l.kind != "omni")
-                .map(|l| format!("{} ({})", scene.nodes[l.node].name, l.kind))
-                .collect();
-            if !animated.is_empty() {
-                out.push(
-                    Diagnostic::warning(
-                        "check.map.light",
-                        format!("{} keep their type, but draw as steady omni lights for now", animated.join(", ")),
-                    )
-                    .at(&scene_at)
-                    .hint("nothing to change: they play as their type once the engine supports map light animation and spot cones"),
-                );
-            }
-        }
-        Err(e) => out.push(
+    if let Err(e) = scene.lights() {
+        out.push(
             Diagnostic::error("check.map.light", format!("{e:#}"))
                 .at(&scene_at)
-                .hint("a light's bri_light_type is omni, spot, strobe, pulse, pulse2, flicker or runway, and its radius is more than bri_inner; see docs/modding/maps.md"),
-        ),
+                .hint("a light's bri_light_type is omni, spot, strobe, pulse, pulse2, flicker or runway, its radius is more than bri_inner, and its blinking settings are as docs/modding/maps.md lists"),
+        );
     }
     // Every model the scene places, its collision, and every texture.
     let assets = index["assets"].as_object();
@@ -658,10 +643,14 @@ fn map_problems(bundle: &Path, id: &str, at: &str) -> Vec<Diagnostic> {
         let Some(texture) = binding["texture"].as_str() else {
             continue;
         };
-        let found = textures
-            .and_then(|t| t.get(texture))
-            .and_then(|f| f.as_str())
-            .and_then(file);
+        // The binding names the file the game reads; `textures` maps a
+        // converted map's original texture paths to those files.
+        let found = file(texture).or_else(|| {
+            textures
+                .and_then(|t| t.get(texture))
+                .and_then(|f| f.as_str())
+                .and_then(file)
+        });
         if found.is_none() {
             out.push(
                 Diagnostic::error(
