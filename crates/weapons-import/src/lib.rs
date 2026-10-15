@@ -390,6 +390,7 @@ pub fn lower(definitions: Vec<Definition>) -> Result<Pack> {
             turns_into: None,
             decal: None,
             stick_to_bodies: false,
+            impacts: Default::default(),
         };
         pack.projectiles.insert(id, p);
     }

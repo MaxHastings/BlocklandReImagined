@@ -139,6 +139,7 @@ fn weapons() -> Arc<Pack> {
         turns_into: None,
         decal: None,
         stick_to_bodies: false,
+        impacts: Default::default(),
     };
     Arc::new(Pack {
         effects: Default::default(),

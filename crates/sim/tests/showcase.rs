@@ -1913,6 +1913,7 @@ fn add_launcher(
         turns_into: None,
         decal: None,
         stick_to_bodies: false,
+        impacts: Default::default(),
     };
     pack.items.insert(item_id, item);
     pack.images.insert(image_id, image);

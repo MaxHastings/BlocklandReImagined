@@ -2308,6 +2308,37 @@ pub struct ProjectileDef {
     /// sticking, in place, only to what it meets fast and steep enough.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub stick_to_bodies: bool,
+    /// The explosion effect it makes by what it lands on, in place of
+    /// `explosion.effect`: sparks off a vehicle, dust off the ground.
+    /// Effects only: the blast's damage and push stay `explosion`'s.
+    #[serde(skip_serializing_if = "Impacts::is_empty")]
+    pub impacts: Impacts,
+}
+/// A projectile's explosion effect by what it lands on, each an explosion
+/// effect as `Explosion::effect` names one. One left empty, and a burst in
+/// the air, play `explosion.effect`.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Impacts {
+    /// A player, or a creature or object an Add-On spawned.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub player: String,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub vehicle: String,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub brick: String,
+    /// The map: its terrain, buildings and the shapes its script moves.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub map: String,
+}
+impl Impacts {
+    pub fn is_empty(&self) -> bool {
+        self.all().iter().all(|e| e.is_empty())
+    }
+    /// Every surface's effect: player, vehicle, brick, map.
+    pub fn all(&self) -> [&str; 4] {
+        [&self.player, &self.vehicle, &self.brick, &self.map]
+    }
 }
 /// A projectile's mark on a brick: a soft disc flat on the face it hit,
 /// darkest in the middle, fading out over its last second.
@@ -2552,6 +2583,7 @@ impl Default for ProjectileDef {
             turns_into: None,
             decal: None,
             stick_to_bodies: false,
+            impacts: Impacts::default(),
         }
     }
 }
@@ -3338,6 +3370,13 @@ impl Pack {
                     .as_ref()
                     .is_none_or(|t| !t.is_empty() && t.len() <= 128),
                 "Invalid turns_into of projectile {id}: a player type id"
+            );
+            ensure!(
+                p.impacts
+                    .all()
+                    .iter()
+                    .all(|e| e.len() <= 160 && !e.chars().any(char::is_control)),
+                "Invalid impacts of projectile {id}: explosion effect names"
             );
             ensure!(
                 p.decal.as_ref().is_none_or(Decal::valid),
