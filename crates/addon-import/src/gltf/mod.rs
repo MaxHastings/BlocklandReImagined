@@ -364,6 +364,9 @@ pub struct Converted {
     /// Material name to PNG bytes.
     pub textures: BTreeMap<String, Vec<u8>>,
     pub report: Report,
+    /// The glTF material each of `shape.materials` was made from, in order
+    /// (None for primitives with none).
+    pub material_sources: Vec<Option<usize>>,
 }
 
 /// Convert and write the model as `opts.kind` says. `opts.out` must not
@@ -416,6 +419,7 @@ fn write(opts: &Options, id: &str, converted: Converted) -> Result<Report> {
         shape,
         textures,
         mut report,
+        ..
     } = converted;
     let out = &opts.out;
     let put = |rel: &str, bytes: &[u8], report: &mut Report| -> Result<()> {
@@ -694,6 +698,7 @@ pub fn convert(
     let mut materials: Vec<Material> = Vec::new();
     let mut textures: BTreeMap<String, Vec<u8>> = BTreeMap::new();
     let mut material_index: BTreeMap<Option<usize>, usize> = BTreeMap::new();
+    let mut material_sources: Vec<Option<usize>> = Vec::new();
     let mut material_names = BTreeSet::new();
     let mut material = |index: Option<usize>, report: &mut Report| -> Result<usize> {
         if let Some(i) = material_index.get(&index) {
@@ -703,6 +708,7 @@ pub fn convert(
         textures.insert(m.name.clone(), png);
         report.materials.push(m.name.clone());
         materials.push(m);
+        material_sources.push(index);
         material_index.insert(index, materials.len() - 1);
         Ok(materials.len() - 1)
     };
@@ -1166,6 +1172,7 @@ pub fn convert(
         shape,
         textures,
         report,
+        material_sources,
     })
 }
 

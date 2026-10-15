@@ -837,6 +837,34 @@ fn a_map_imports_as_an_add_on_the_game_loads() {
         "players stand on the floor: {floor}"
     );
 
+    // Each material's `bri_surface` is what its triangles are made of.
+    let kind_at = |from: Vector, to: Vector| {
+        native
+            .colliders
+            .iter()
+            .enumerate()
+            .filter_map(|(i, c)| {
+                let c = c.build();
+                let hit = c.shape().cast_ray_and_get_normal(
+                    c.position(),
+                    &Ray::new(from, to),
+                    20.0,
+                    true,
+                )?;
+                Some((hit.time_of_impact, native.surfaces.kind(i, hit.subshape)))
+            })
+            .min_by(|a, b| a.0.total_cmp(&b.0))
+            .and_then(|(_, kind)| kind)
+    };
+    assert_eq!(
+        kind_at(Vector::new(2.0, 3.0, 2.0), -Vector::Y),
+        Some("dirt")
+    );
+    assert_eq!(
+        kind_at(Vector::new(2.0, 2.0, 2.0), Vector::X),
+        Some("metal")
+    );
+
     // The renderer draws it with its lights in Dynamic.
     let drawn = bri_render::scene_loader::load_map_bundle_dynamic(map_root, &report.model).unwrap();
     assert!(!drawn.scene.vertices.is_empty());

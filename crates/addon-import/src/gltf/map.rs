@@ -185,6 +185,7 @@ pub(super) fn write(
         shape,
         textures,
         mut report,
+        material_sources,
     } = converted;
     let out = &opts.out;
     let put = |rel: &str, bytes: &[u8], report: &mut Report| -> Result<()> {
@@ -289,9 +290,33 @@ pub(super) fn write(
             json!({ "asset": model, "shape_material": slot, "skin": "", "texture": format!("{}.png", m.name) })
         })
         .collect();
+    // A material's custom property `bri_surface` names what it is made of
+    // (`dirt`, `metal`), for footsteps and impacts.
+    let mut surfaces = serde_json::Map::new();
+    for (m, source) in shape.materials.iter().zip(&material_sources) {
+        let Some(kind) = source
+            .and_then(|i| doc.json["materials"].get(i))
+            .and_then(|g| g["extras"].get("bri_surface"))
+        else {
+            continue;
+        };
+        match kind
+            .as_str()
+            .filter(|k| bri_content::surface::valid_name(k))
+        {
+            Some(kind) => {
+                surfaces.insert(m.name.clone(), kind.into());
+            }
+            None => report.warnings.push(format!(
+                "material `{}`'s bri_surface must be 1 to 32 letters, digits, `_` or `-`; left out",
+                m.name
+            )),
+        }
+    }
     let bundle = json!({
         "schema_version": 1,
         "maps": [{ "id": map_id, "name": name, "file": scene_file }],
+        "surfaces": { map_id.clone(): surfaces },
         "assets": { model.clone(): model_file },
         "textures": texture_files,
         "bindings": bindings,

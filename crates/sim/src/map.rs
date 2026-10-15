@@ -9,6 +9,7 @@ use bri_content::{
 use bri_physics::terrain::{BodyFocusPolicy, Focus, StreamingConfig, TerrainColliders};
 use glam::Vec3;
 use rapier3d::prelude::{ColliderBuilder, PhysicsWorld};
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -64,6 +65,101 @@ pub struct NativeMap {
     /// The plate a flat map stands on, where the Environment window's
     /// ground and water go; None on every other map.
     pub plate: Option<bri_content::scene::Plate>,
+    /// What each collider's triangles are made of, for footsteps and
+    /// impacts ([`MapSurfaces`]).
+    pub surfaces: MapSurfaces,
+}
+
+/// The surface kind a body stands on or a shot strikes, a short name a map
+/// gives its materials (`dirt`, `metal`, `grass`). The engine gives kinds
+/// no meaning; bodies and effects say what each sounds and looks like.
+/// A map names them in its bundle's `surfaces`, by map id: material name
+/// (any case) to kind. Brick hits are [`BRICK_SURFACE`], terrain is
+/// [`TERRAIN_SURFACE`], and anything unnamed is [`DEFAULT_SURFACE`].
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct MapSurfaces {
+    /// The kinds the map names, which `triangles` index.
+    pub kinds: Vec<String>,
+    /// For each of [`NativeMap::colliders`] in order, each triangle's kind
+    /// (an index into `kinds`, [`NO_KIND`] for none), or None when none of
+    /// its triangles has one.
+    pub triangles: Vec<Option<Arc<[u16]>>>,
+}
+/// A triangle the map names no kind for.
+pub const NO_KIND: u16 = u16::MAX;
+pub use bri_content::surface::{
+    BRICK as BRICK_SURFACE, DEFAULT as DEFAULT_SURFACE, TERRAIN as TERRAIN_SURFACE,
+    valid_name as surface_kind_name,
+};
+/// The most kinds a map may name.
+pub const MAX_SURFACE_KINDS: usize = 64;
+impl MapSurfaces {
+    /// The kind of triangle `triangle` of collider `collider`, when the map
+    /// names one.
+    pub fn kind(&self, collider: usize, triangle: u32) -> Option<&str> {
+        let kinds = self.triangles.get(collider)?.as_ref()?;
+        let kind = *kinds.get(usize::try_from(triangle).ok()?)?;
+        self.kinds.get(usize::from(kind)).map(String::as_str)
+    }
+    /// The bundle's `surfaces` for `map_id`: material name to kind.
+    fn table(bundle: &serde_json::Value, map_id: &str) -> Result<BTreeMap<String, String>> {
+        let Some(table) = bundle.get("surfaces").and_then(|s| s.get(map_id)) else {
+            return Ok(BTreeMap::new());
+        };
+        let table: BTreeMap<String, String> =
+            serde_json::from_value(table.clone()).context("Invalid map surfaces")?;
+        ensure!(
+            table.len() <= 4096
+                && table.iter().all(|(material, kind)| {
+                    !material.is_empty() && material.len() <= 128 && surface_kind_name(kind)
+                }),
+            "Map surfaces name materials with kinds of up to 32 letters, digits, `_` or `-`"
+        );
+        Ok(table
+            .into_iter()
+            .map(|(material, kind)| (material.to_ascii_lowercase(), kind))
+            .collect())
+    }
+    /// Each triangle's kind for a collider made of `materials`, or None.
+    fn push(
+        &mut self,
+        table: &BTreeMap<String, String>,
+        shape: &bri_content::shape::Shape,
+        materials: Option<&[Option<usize>]>,
+    ) -> Result<()> {
+        let mut any = false;
+        let ids = materials
+            .filter(|_| !table.is_empty())
+            .map(|materials| {
+                materials
+                    .iter()
+                    .map(|m| {
+                        let Some(kind) = m
+                            .and_then(|m| shape.materials.get(m))
+                            .and_then(|m| table.get(&m.name.to_ascii_lowercase()))
+                        else {
+                            return Ok(NO_KIND);
+                        };
+                        any = true;
+                        let at = match self.kinds.iter().position(|k| k == kind) {
+                            Some(at) => at,
+                            None => {
+                                ensure!(
+                                    self.kinds.len() < MAX_SURFACE_KINDS,
+                                    "A map names at most {MAX_SURFACE_KINDS} surface kinds"
+                                );
+                                self.kinds.push(kind.clone());
+                                self.kinds.len() - 1
+                            }
+                        };
+                        Ok(u16::try_from(at)?)
+                    })
+                    .collect::<Result<Arc<[u16]>>>()
+            })
+            .transpose()?;
+        self.triangles.push(ids.filter(|_| any));
+        Ok(())
+    }
 }
 
 /// A v20 `Glass`-class static shape (`glassA`, `lightBulbA`,
@@ -226,6 +322,8 @@ impl NativeMap {
             );
         }
         let glass = glass_datablocks(&bundle);
+        let surface_table = MapSurfaces::table(&bundle, map_id)?;
+        let mut surfaces = MapSurfaces::default();
         let mut breakables = Vec::new();
         let mut pending_objects: Vec<_> = scene
             .pending_scripts
@@ -246,6 +344,7 @@ impl NativeMap {
                         bri_physics::content::interior_collider(&interior.details[0], transform)?
                             .user_data(MapSurface::Interior as u128),
                     );
+                    surfaces.triangles.push(None);
                 }
                 Kind::StaticModel | Kind::DatablockModel if node.asset.is_some() => {
                     let id = node.asset.as_ref().context("Missing static model asset")?;
@@ -258,11 +357,18 @@ impl NativeMap {
                     let shape: bri_content::shape::Shape =
                         serde_json::from_slice(&std::fs::read(path)?)?;
                     let first = colliders.len();
-                    colliders.extend(
-                        bri_physics::content::static_shape_colliders(&shape, transform)?
-                            .into_iter()
-                            .map(|c| c.user_data(MapSurface::Static as u128)),
-                    );
+                    for (collider, materials) in
+                        bri_physics::content::static_shape_collider_materials(&shape, transform)?
+                    {
+                        // Each triangle stays where it was built, so a hit's
+                        // triangle is the material's.
+                        let kept = collider
+                            .shape
+                            .as_trimesh()
+                            .is_some_and(|m| m.indices().len() == materials.len());
+                        surfaces.push(&surface_table, &shape, kept.then_some(&materials[..]))?;
+                        colliders.push(collider.user_data(MapSurface::Static as u128));
+                    }
                     let datablock = node.properties.get("datablock");
                     if let Some((name, (explosion, sound))) =
                         datablock.and_then(|d| glass.get(&d.to_ascii_lowercase()).map(|g| (d, g)))
@@ -325,6 +431,7 @@ impl NativeMap {
             pending_objects,
             breakables,
             plate,
+            surfaces,
         })
     }
 }
