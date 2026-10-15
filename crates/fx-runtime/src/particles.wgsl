@@ -3,11 +3,24 @@ struct Camera { view_projection:mat4x4<f32>, right:vec4<f32>, up:vec4<f32>, posi
 @group(1) @binding(0) var images:texture_2d_array<f32>;
 @group(1) @binding(1) var image_sampler:sampler;
 struct Out { @builtin(position) position:vec4<f32>, @location(0) uv:vec2<f32>, @location(1) color:vec4<f32>, @location(2) @interpolate(flat) image:vec4<f32>, @location(3) world:vec3<f32>, @location(4) @interpolate(flat) origin:vec2<f32> }
-@vertex fn vs_main(@builtin(vertex_index) vertex:u32,@location(0) position_size:vec4<f32>,@location(1) color:vec4<f32>,@location(2) axis_spin:vec4<f32>,@location(3) image:vec4<f32>,@location(4) origin:vec2<f32>,@location(5) sprite_frame:vec4<f32>)->Out {
+@vertex fn vs_main(@builtin(vertex_index) vertex:u32,@location(0) position_size:vec4<f32>,@location(1) color:vec4<f32>,@location(2) axis_spin:vec4<f32>,@location(3) image:vec4<f32>,@location(4) origin:vec2<f32>,@location(5) sprite_frame:vec4<f32>,@location(6) plane_right:vec3<f32>)->Out {
     let corners=array<vec2<f32>,6>(vec2(-1.,-1.),vec2(1.,-1.),vec2(1.,1.),vec2(-1.,-1.),vec2(1.,1.),vec2(-1.,1.));
     let corner=corners[vertex];
     var right=camera.right.xyz;var up=camera.up.xyz;
-    if dot(axis_spin.xyz,axis_spin.xyz)>0.00001 {
+    if dot(plane_right,plane_right)>0.00001 && dot(axis_spin.xyz,axis_spin.xyz)>0.00001 {
+        let normal=normalize(axis_spin.xyz);
+        var projected=plane_right-normal*dot(normal,plane_right);
+        // A velocity-oriented normal can turn through the original right axis.
+        if dot(projected,projected)<0.00001 {
+            var fallback=vec3(1.,0.,0.);
+            if abs(normal.x)>0.9 {fallback=vec3(0.,0.,1.);}
+            projected=fallback-normal*dot(normal,fallback);
+        }
+        let base_right=normalize(projected);
+        let base_up=normalize(cross(normal,base_right));
+        let c=cos(axis_spin.w);let s=sin(axis_spin.w);
+        right=base_right*c+base_up*s;up=base_up*c-base_right*s;
+    } else if dot(axis_spin.xyz,axis_spin.xyz)>0.00001 {
         up=normalize(axis_spin.xyz);
         let crossed=cross(position_size.xyz-camera.position.xyz,up);
         if dot(crossed,crossed)>0.00001 {right=normalize(crossed);} else {right=normalize(cross(up,camera.right.xyz+camera.up.xyz*0.37));}

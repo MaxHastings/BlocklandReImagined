@@ -14,6 +14,7 @@ struct GpuParticle {
     image: [f32; 4],
     image_origin: [f32; 2],
     sprite_layout: [f32; 4],
+    plane_right: [f32; 3],
 }
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -256,7 +257,7 @@ impl EffectsRenderer {
         });
         let pipeline = |blend: wgpu::BlendState, depth_test: bool| {
             device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label:Some("native effects"),layout:Some(&layout),vertex:wgpu::VertexState {module:&shader,entry_point:Some("vs_main"),compilation_options:Default::default(),buffers:&[Some(wgpu::VertexBufferLayout {array_stride:std::mem::size_of::<GpuParticle>() as u64,step_mode:wgpu::VertexStepMode::Instance,attributes:&wgpu::vertex_attr_array![0=>Float32x4,1=>Float32x4,2=>Float32x4,3=>Float32x4,4=>Float32x2,5=>Float32x4]})]},
+            label:Some("native effects"),layout:Some(&layout),vertex:wgpu::VertexState {module:&shader,entry_point:Some("vs_main"),compilation_options:Default::default(),buffers:&[Some(wgpu::VertexBufferLayout {array_stride:std::mem::size_of::<GpuParticle>() as u64,step_mode:wgpu::VertexStepMode::Instance,attributes:&wgpu::vertex_attr_array![0=>Float32x4,1=>Float32x4,2=>Float32x4,3=>Float32x4,4=>Float32x2,5=>Float32x4,6=>Float32x3]})]},
             primitive:wgpu::PrimitiveState {cull_mode:None,..Default::default()},depth_stencil:Some(wgpu::DepthStencilState {format:depth_format,depth_write_enabled:Some(false),depth_compare:Some(if depth_test {bri_render::scene::DEPTH_NEARER}else{wgpu::CompareFunction::Always}),stencil:Default::default(),bias:Default::default()}),multisample:wgpu::MultisampleState {count:sample_count,..Default::default()},
             fragment:Some(wgpu::FragmentState {module:&shader,entry_point:Some("fs_main"),compilation_options:wgpu::PipelineCompilationOptions {constants:&bri_render::color::output_constants(color_format),..Default::default()},targets:&[Some(wgpu::ColorTargetState {format:color_format,blend:Some(blend),write_mask:wgpu::ColorWrites::ALL})]}),multiview_mask:None,cache:None,
         })
@@ -396,6 +397,10 @@ impl EffectsRenderer {
                     && p.size.is_finite()
                     && p.size >= 0.
                     && p.axis.is_finite()
+                    && p.plane_right.is_finite()
+                    && p.plane_right.length_squared().is_finite()
+                    && (p.plane_right == glam::Vec3::ZERO
+                        || (p.axis.length_squared().is_finite() && p.axis.length_squared() > 1e-8))
                     && p.layout.valid()
                     && p.spin.is_finite(),
                 "Invalid effects instance {i}: texture={} layers={} position={:?} color={:?} size={} axis={:?} spin={}",
@@ -414,6 +419,7 @@ impl EffectsRenderer {
                 BlendMode::AdditiveColor => 2.,
             };
             data.push(GpuParticle {
+                plane_right: p.plane_right.to_array(),
                 position_size: p.position.extend(p.size).to_array(),
                 color: p.color.to_array(),
                 axis_spin: p.axis.extend(p.spin).to_array(),

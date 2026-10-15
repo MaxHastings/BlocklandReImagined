@@ -23,6 +23,56 @@ fn camera() -> Camera {
 }
 
 #[test]
+fn planar_particles_preserve_source_roll_across_views_and_attachment_carry() {
+    let mut w = world(fixture(|l| {
+        l.particles[0].orientation = Some(ParticleOrientation::Plane);
+        l.emitters[0].speed = 0.;
+        l.emitters[0].orient_on_velocity = false;
+    }));
+    let initial = SourceTransform {
+        rotation: glam::Quat::from_euler(glam::EulerRot::XYZ, 0.3, 0.7, -0.6),
+        ..Default::default()
+    };
+    let h = w
+        .burst(
+            "emitter",
+            initial,
+            SourceOptions {
+                follow_source: true,
+                ..Default::default()
+            },
+            1,
+        )
+        .unwrap();
+    let a = w.snapshot(&camera()).particles[0];
+    let b = w
+        .snapshot(&Camera {
+            right: Vec3::Y,
+            up: Vec3::NEG_X,
+            ..camera()
+        })
+        .particles[0];
+    assert!(a.axis.abs_diff_eq(initial.rotation * Vec3::Y, 1e-6));
+    assert!(a.plane_right.abs_diff_eq(initial.rotation * Vec3::X, 1e-6));
+    assert_eq!(a.plane_right, b.plane_right);
+    assert_eq!(a.axis, b.axis);
+    let current = SourceTransform {
+        position: Vec3::new(3., 2., 1.),
+        rotation: glam::Quat::from_euler(glam::EulerRot::XYZ, -0.4, -0.2, 0.8),
+        ..Default::default()
+    };
+    w.carry_attachment(h, initial, current).unwrap();
+    let moved = w.snapshot(&camera()).particles[0];
+    assert!(moved.axis.abs_diff_eq(current.rotation * Vec3::Y, 1e-6));
+    assert!(
+        moved
+            .plane_right
+            .abs_diff_eq(current.rotation * Vec3::X, 1e-6)
+    );
+    assert!(moved.position.abs_diff_eq(current.position, 1e-6));
+}
+
+#[test]
 fn directional_coronas_follow_the_source_in_each_view_without_point_light() {
     let mut w = world(fixture(|l| {
         let light = &mut l.lights[0];

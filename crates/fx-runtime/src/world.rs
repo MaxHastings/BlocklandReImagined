@@ -231,6 +231,8 @@ pub struct ParticleInstance {
     pub spin: f32,
     /// Zero means camera-facing. Nonzero means a camera-facing ribbon along this axis.
     pub axis: Vec3,
+    /// Nonzero selects a fixed plane, preserving this authored in-plane right.
+    pub plane_right: Vec3,
     pub texture: u32,
     pub blend: BlendMode,
     pub depth_test: bool,
@@ -301,6 +303,7 @@ struct Source {
     seen: f64,
 }
 struct Particle {
+    plane_right: Vec3,
     rested_at: Option<f32>,
     rest_normal: Vec3,
     follow_source: bool,
@@ -586,6 +589,7 @@ impl EffectsWorld {
         {
             p.position = current.position + rotation * (p.position - previous.position);
             p.direction = rotation * p.direction;
+            p.plane_right = rotation * p.plane_right;
             p.velocity = rotation * p.velocity;
             p.acceleration = rotation * p.acceleration;
         }
@@ -1069,6 +1073,12 @@ impl EffectsWorld {
                 (rate, start, reverse)
             });
         let mut particle = Particle {
+            plane_right: if p.orientation == Some(bri_content::effects::ParticleOrientation::Plane)
+            {
+                t.rotation * Vec3::X
+            } else {
+                Vec3::ZERO
+            },
             rested_at: None,
             rest_normal: Vec3::ZERO,
             follow_source: s.options.follow_source,
@@ -1098,7 +1108,9 @@ impl EffectsWorld {
                 }
             }),
             wind: s.options.wind,
-            orient: e.orient,
+            orient: p.orientation.map_or(e.orient, |o| {
+                o != bri_content::effects::ParticleOrientation::Screen
+            }),
             orient_velocity: e.orient_on_velocity,
             blend: if let Some(blend) = s.options.recolor.and_then(|r| r.blend) {
                 blend
@@ -1208,6 +1220,7 @@ impl EffectsWorld {
                     p.velocity = turn * p.velocity;
                     p.acceleration = turn * p.acceleration;
                     p.direction = turn * p.direction;
+                    p.plane_right = turn * p.plane_right;
                     continue;
                 }
                 let Some(hit) = (contact.query)(start, end).filter(|h| h.valid()) else {
@@ -1257,6 +1270,7 @@ impl EffectsWorld {
             p.velocity = turn * p.velocity;
             p.acceleration = turn * p.acceleration;
             p.direction = turn * p.direction;
+            p.plane_right = turn * p.plane_right;
         }
     }
     fn free_step(
@@ -1370,6 +1384,7 @@ impl EffectsWorld {
         Some((
             camera.position.distance_squared(p.position),
             ParticleInstance {
+                plane_right: p.plane_right,
                 layout,
                 position: p.position,
                 size,
@@ -1487,6 +1502,7 @@ impl EffectsWorld {
                 drawn.push((
                     camera.position.distance_squared(s.transform.position),
                     ParticleInstance {
+                        plane_right: Vec3::ZERO,
                         layout: Default::default(),
                         position: s.transform.position,
                         size,
@@ -1728,6 +1744,7 @@ mod tests {
                     id: "particle".into(),
                     texture: "original".into(),
                     contact: None,
+                    orientation: None,
                     alpha_blend: true,
                     lifetime: 2.,
                     lifetime_variance: 0.,
@@ -1873,6 +1890,8 @@ mod tests {
             let pack = fixture(|l| {
                 l.emitters[0].speed = 10.;
                 l.emitters[0].theta_degrees = [0., 70.];
+                l.emitters[0].orient_on_velocity = false;
+                l.particles[0].orientation = Some(bri_content::effects::ParticleOrientation::Plane);
             });
             let carry = glam::Affine3A::from_translation(Vec3::new(20., 1., 0.))
                 * glam::Affine3A::from_rotation_z(std::f32::consts::FRAC_PI_2)
@@ -1912,6 +1931,15 @@ mod tests {
             assert_eq!(free.len(), through.len());
             let mut carried = 0;
             for (f, t) in free.iter().zip(&through) {
+                let expected_right = if passages.first(Vec3::ZERO, f.position).is_some() {
+                    carry.transform_vector3(f.plane_right)
+                } else {
+                    f.plane_right
+                };
+                assert!(
+                    t.plane_right.abs_diff_eq(expected_right, 1e-5),
+                    "portal carries the source plane's roll too"
+                );
                 // Straight from the emitter: through the opening or past it.
                 let (position, velocity) = match passages.first(Vec3::ZERO, f.position) {
                     Some(_) => {

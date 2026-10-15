@@ -167,6 +167,7 @@ pub fn particle(d: &Declaration) -> Result<(Particle, Vec<String>)> {
         id: id("particle", &d.name),
         texture: texture_path(f.text("texturename", ""), &d.source)?,
         contact: None,
+        orientation: None,
         alpha_blend: f.boolean("useinvalpha", false)?,
         lifetime: lifetime / 1000.0,
         lifetime_variance: variance.min(lifetime - 1.0) / 1000.0,

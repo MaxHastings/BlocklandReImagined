@@ -1296,6 +1296,7 @@ mod tests {
                     id: "crit:particle/critparticle".into(),
                     texture: "base/data/particles/dot".into(),
                     contact: None,
+                    orientation: None,
                     alpha_blend: false,
                     lifetime: 0.5,
                     lifetime_variance: 0.0,

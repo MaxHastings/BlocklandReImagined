@@ -204,6 +204,7 @@ fn mixed_scene(avatar: AvatarFixture, car: VehicleFixture) -> Result<()> {
                 &fx_camera,
                 &FrameEffects {
                     particles: vec![ParticleInstance {
+                        plane_right: Vec3::ZERO,
                         layout: Default::default(),
                         position: Vec3::new(-2., 3., 4.),
                         size: 1.,

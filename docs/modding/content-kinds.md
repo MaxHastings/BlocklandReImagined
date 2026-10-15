@@ -610,3 +610,15 @@ have the same `local` placement policy as their containing profile.
 Missing clips are diagnosed and omitted from selection. If none loads, `file`
 is tried as the fallback. Reloading a pack replaces its prepared choices.
 This mechanism does not model sequential audio continuations or layered loops.
+
+### Authored particle orientation
+
+Particles optionally declare `orientation` as `screen`, `axis` or `plane`.
+Omission preserves the emitter's legacy `orient` behavior. Screen sprites face
+the camera; axis sprites rotate toward it around their emission axis. Plane
+sprites preserve the emitter frame's right axis and are perpendicular to their
+emission direction (or velocity when `orient_on_velocity` requests it).
+
+Planes retain authored roll and particle spin without turning toward the camera.
+Attached particles and portal crossings carry the entire frame. Texture layout,
+pivot, depth testing, blending and fog retain their existing meanings.

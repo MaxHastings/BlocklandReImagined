@@ -252,6 +252,9 @@ pub struct Particle {
     pub variation: Option<ParticleVariation>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub contact: Option<ParticleContact>,
+    /// Overrides the emitter's legacy camera/axis-facing choice.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub orientation: Option<ParticleOrientation>,
     pub alpha_blend: bool,
     pub lifetime: f32,
     pub lifetime_variance: f32,
@@ -263,6 +266,14 @@ pub struct Particle {
     pub spin_degrees: f32,
     pub random_spin: [f32; 2],
     pub keys: Vec<ParticleKey>,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ParticleOrientation {
+    Screen,
+    Axis,
+    /// A source-oriented plane normal to the emission direction.
+    Plane,
 }
 impl Particle {
     pub fn textures(&self) -> impl Iterator<Item = &str> {

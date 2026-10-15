@@ -1044,6 +1044,7 @@ mod tests {
         };
         let effects = bri_fx_runtime::FrameEffects {
             particles: vec![bri_fx_runtime::ParticleInstance {
+                plane_right: Vec3::ZERO,
                 layout: Default::default(),
                 position: Vec3::ZERO,
                 size: 1.,

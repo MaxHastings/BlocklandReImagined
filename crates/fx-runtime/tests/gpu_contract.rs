@@ -5,6 +5,202 @@ use glam::{Mat4, Vec3, Vec4};
 use std::collections::BTreeMap;
 
 #[test]
+fn planar_sprites_keep_source_roll_spin_and_edge_on_geometry() {
+    pollster::block_on(async {
+        let library = Library {
+            schema_version: 1,
+            lights: vec![],
+            particles: vec![],
+            emitters: vec![],
+            textures: BTreeMap::from([("plane".into(), "plane.png".into())]),
+        };
+        let pack = EffectsPack::from_parts(
+            library,
+            Manifest {
+                schema_version: 1,
+                library_sha256: String::new(),
+                textures: BTreeMap::new(),
+                emitter_alpha: BTreeMap::new(),
+                bindings: vec![],
+                composites: vec![],
+                unresolved: vec![],
+            },
+            vec![TextureImage {
+                id: "plane".into(),
+                width: 2,
+                height: 1,
+                rgba: vec![255, 0, 0, 255, 0, 255, 0, 255],
+            }],
+        )
+        .unwrap();
+        let instance =
+            wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
+        let adapter = instance.request_adapter(&Default::default()).await.unwrap();
+        let (device, queue) = adapter.request_device(&Default::default()).await.unwrap();
+        let mut renderer = EffectsRenderer::new(
+            &device,
+            &queue,
+            &pack,
+            wgpu::TextureFormat::Rgba8Unorm,
+            wgpu::TextureFormat::Depth32Float,
+            1,
+            16,
+        )
+        .unwrap();
+        let size = wgpu::Extent3d {
+            width: 16,
+            height: 16,
+            depth_or_array_layers: 1,
+        };
+        let texture = |format, usage| {
+            device.create_texture(&wgpu::TextureDescriptor {
+                label: None,
+                size,
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format,
+                usage,
+                view_formats: &[],
+            })
+        };
+        let color = texture(
+            wgpu::TextureFormat::Rgba8Unorm,
+            wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+        );
+        let depth = texture(
+            wgpu::TextureFormat::Depth32Float,
+            wgpu::TextureUsages::RENDER_ATTACHMENT,
+        );
+        let cv = color.create_view(&Default::default());
+        let dv = depth.create_view(&Default::default());
+        let mut render = |axis: Vec3, plane_right: Vec3, spin: f32, rolled_camera: bool| {
+            renderer
+                .prepare(
+                    &queue,
+                    &Camera {
+                        view_projection: Mat4::IDENTITY,
+                        position: Vec3::Z * 2.,
+                        right: if rolled_camera { Vec3::Y } else { Vec3::X },
+                        up: if rolled_camera { Vec3::NEG_X } else { Vec3::Y },
+                    },
+                    &FrameEffects {
+                        particles: vec![ParticleInstance {
+                            layout: Default::default(),
+                            position: Vec3::Z * 0.5,
+                            size: 1.5,
+                            color: Vec4::ONE,
+                            spin,
+                            axis,
+                            plane_right,
+                            texture: 0,
+                            blend: BlendMode::Alpha,
+                            depth_test: true,
+                        }],
+                        lights: vec![],
+                    },
+                )
+                .unwrap();
+            let buffer = device.create_buffer(&wgpu::BufferDescriptor {
+                label: None,
+                size: 4096,
+                usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+                mapped_at_creation: false,
+            });
+            let mut encoder = device.create_command_encoder(&Default::default());
+            {
+                let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: None,
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view: &cv,
+                        depth_slice: None,
+                        resolve_target: None,
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                            store: wgpu::StoreOp::Store,
+                        },
+                    })],
+                    depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                        view: &dv,
+                        depth_ops: Some(wgpu::Operations {
+                            load: wgpu::LoadOp::Clear(0.),
+                            store: wgpu::StoreOp::Store,
+                        }),
+                        stencil_ops: None,
+                    }),
+                    timestamp_writes: None,
+                    occlusion_query_set: None,
+                    multiview_mask: None,
+                });
+                renderer.render(&mut pass);
+            }
+            encoder.copy_texture_to_buffer(
+                color.as_image_copy(),
+                wgpu::TexelCopyBufferInfo {
+                    buffer: &buffer,
+                    layout: wgpu::TexelCopyBufferLayout {
+                        offset: 0,
+                        bytes_per_row: Some(256),
+                        rows_per_image: Some(16),
+                    },
+                },
+                size,
+            );
+            queue.submit([encoder.finish()]);
+            buffer
+                .slice(..)
+                .map_async(wgpu::MapMode::Read, |r| r.unwrap());
+            device
+                .poll(wgpu::PollType::Wait {
+                    submission_index: None,
+                    timeout: Some(std::time::Duration::from_secs(20)),
+                })
+                .unwrap();
+            let mapped = buffer.slice(..).get_mapped_range().unwrap();
+            mapped
+                .chunks_exact(256)
+                .flat_map(|row| row[..64].to_vec())
+                .collect::<Vec<_>>()
+        };
+        let front = render(Vec3::Z, Vec3::X, 0., false);
+        let camera = render(Vec3::Z, Vec3::X, 0., true);
+        assert_eq!(front, camera, "a plane must not billboard with camera roll");
+        let at = |pixels: &[u8], x: usize, y: usize| {
+            let i = (y * 16 + x) * 4;
+            [pixels[i], pixels[i + 1], pixels[i + 2]]
+        };
+        let left = at(&front, 4, 8);
+        let right = at(&front, 12, 8);
+        assert!(left[0] > left[1] && right[1] > right[0]);
+        let rolled = render(Vec3::Z, Vec3::Y, 0., false);
+        let top = at(&rolled, 8, 4);
+        let bottom = at(&rolled, 8, 12);
+        assert!(
+            top[1] > top[0] && bottom[0] > bottom[1],
+            "authored roll changes texture axes"
+        );
+        let spun = render(Vec3::Z, Vec3::X, std::f32::consts::FRAC_PI_2, false);
+        assert!(
+            rolled
+                .iter()
+                .zip(&spun)
+                .all(|(a, b)| i16::from(*a).abs_diff(i16::from(*b)) <= 1)
+        );
+        let edge = render(Vec3::X, Vec3::Z, 0., false);
+        assert!(
+            edge.chunks_exact(4).all(|p| p[..3] == [0, 0, 0]),
+            "edge-on plane must not turn toward the viewer"
+        );
+        let diagonal = (Vec3::X + Vec3::Z).normalize();
+        let singular = render(diagonal, diagonal, 0., false);
+        assert!(
+            singular.chunks_exact(4).any(|p| p[0] > 0 || p[1] > 0),
+            "a direction crossing its authored right axis must retain a finite basis"
+        );
+    });
+}
+
+#[test]
 fn a_reloaded_pack_needs_its_own_atlas_and_invalid_values_remain_errors() {
     pollster::block_on(async {
         let make_pack = |ids: &[&str]| {
@@ -65,6 +261,7 @@ fn a_reloaded_pack_needs_its_own_atlas_and_invalid_values_remain_errors() {
         };
         let mut frame = FrameEffects {
             particles: vec![ParticleInstance {
+                plane_right: Vec3::ZERO,
                 layout: Default::default(),
                 position: Vec3::ZERO,
                 size: 1.,
@@ -270,6 +467,7 @@ fn billboard_blends_and_depth_match_the_host_pass() {
             renderer.set_fog(fogged, [0., 1., 0., 1.], [0.; 4]);
             let frame = FrameEffects {
                 particles: vec![ParticleInstance {
+                    plane_right: Vec3::ZERO,
                     layout: Default::default(),
                     position: Vec3::Z * 0.5,
                     size: 2.,
