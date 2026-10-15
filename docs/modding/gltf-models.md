@@ -18,6 +18,7 @@ cargo run -p bri-addon-import --bin bri-import-addon -- gltf buggy.glb buggy-mod
 | `item` | `models/<id>.shape.json` and its PNGs | copy `models/` into your weapon Add-On's `assets/` and name `models/<id>.shape.json` as the item's and image's `model` in `weapons.json` ([Weapons](weapons.md)) |
 | `prop` | the same, for vehicles, wheels, projectiles and props | name it from `vehicles.json`; the report lists the `mount` and `hub` empties' positions for its seats and wheels |
 | `map` | a whole map Add-On: `package.json` and `map/` with the scene, model, PNGs and `bundle.json`; `spawn` empties are spawn points and lights are map lights | turn it on and pick it in Start Game ([Making maps](maps.md)) |
+| `brick` | a brick Add-On: `package.json` and `assets/brick-catalog/` with the brick (`<id>.brick.json`, the format converted v20 bricks use), its catalog entry and its collision | turn it on; the brick is under Special > Models in the brick menu ([Bricks](#bricks)) |
 
 Every run writes `IMPORT-REPORT.md` beside the output: size, sockets, each
 clip and how it plays, the animation roles the body has no clip for and
@@ -49,6 +50,29 @@ detail).
 - **Apply transforms** (Ctrl+A, All Transforms) on meshes and the armature
   before export. Uniform scale on objects is handled; non-uniform scale on a
   bone parent is approximated and warned about.
+
+## Bricks
+
+`--kind brick` makes one brick from the whole model:
+
+```sh
+cargo run -p bri-addon-import --bin bri-import-addon -- gltf table.glb addons/table --kind brick --name "Table"
+```
+
+It is an ordinary brick once the Add-On is on: placed from the brick menu
+(Special > Models), painted, saved in builds, sent to players who join, and
+wired with events like any other brick, `onActivate` included.
+
+- **Size.** The brick's grid box is the model's bounds rounded up to whole
+  studs (0.5 units) across and plates (0.2 units) up, with the model
+  centred in it. A 1 x 1 x 1 unit table is a 2 x 2 brick 5 plates tall.
+  Model at 1 Blender metre = 1 unit, or pass `--scale`.
+- **Look.** Every face draws in the paint colour the player picks; the
+  model's textures and material colours are not used, and nothing animates.
+- **Collision.** Each `col_` mesh is a collision box the size of its
+  bounds. With none, the brick collides as its whole grid box.
+- **Bricks on it.** Like a basic brick, it has studs over its whole top and
+  takes bricks under its whole bottom.
 
 ## 2. Bodies (characters)
 

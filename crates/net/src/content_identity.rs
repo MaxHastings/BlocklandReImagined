@@ -1562,6 +1562,7 @@ mod tests {
                 volume: 1.0,
                 looping: false,
                 local: false,
+                music: false,
                 package: None,
                 stock: true,
             },

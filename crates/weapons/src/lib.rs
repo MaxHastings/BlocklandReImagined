@@ -478,6 +478,11 @@ pub struct SoundDef {
     /// click), rather than by everyone near where it happens.
     #[serde(default)]
     pub local: bool,
+    /// A music track for rules' `play_music`: heard at the ears under the
+    /// Music volume, streamed as it plays, and up to 10 minutes long
+    /// rather than 30 seconds.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub music: bool,
     /// Content-root-relative directory of the package holding `file`, set
     /// when packs are merged; None is this pack's own directory.
     #[serde(default, skip_serializing_if = "Option::is_none")]

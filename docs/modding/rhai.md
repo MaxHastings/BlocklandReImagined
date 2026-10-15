@@ -117,6 +117,10 @@ chat. Try a rule without opening the game:
 bri-addon-run path/to/my-rule --send go
 ```
 
+In a game you host, save your edit and type `/reloadrules` to run the new
+script at once, keeping the game's state
+([Making Add-Ons](README.md), "Edit while you play").
+
 ## Mistakes and what they mean
 
 `bri-addon-check` names the file and line of each problem. The usual ones:

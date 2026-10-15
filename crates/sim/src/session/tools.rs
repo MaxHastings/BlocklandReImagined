@@ -420,6 +420,17 @@ impl Session {
             owner,
             super::Notice::MusicTracks(self.tool_catalog.sounds.clone()),
         );
+        if let Some(play) = self.music.clone() {
+            self.notify(owner, super::Notice::Music(play));
+        }
+    }
+    /// Play (or stop) rule music for everyone, and for later joiners.
+    pub(super) fn play_music_all(&mut self, play: super::MusicPlay) {
+        self.music = play.track.is_some().then(|| play.clone());
+        let owners: Vec<_> = self.peers.keys().copied().collect();
+        for owner in owners {
+            self.notify(owner, super::Notice::Music(play.clone()));
+        }
     }
 
     /// Trusted host edit with a player's own brick authority, for scripted

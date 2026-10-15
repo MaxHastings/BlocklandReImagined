@@ -28,6 +28,7 @@ then what players are asked to trust when your Add-On runs code on their PC
 | A package-owned bot pickup/return objective | [Experimental bot objectives](bot-objectives.md) | a bounded read-only declaration of existing pickup, carriage, zone and completion policy |
 | Effects drawn on every player's screen | [`gravity-gun-fx`](../../packages/showcase/gravity-gun-fx) | WebAssembly and WGSL shaders reading what the game shows ([Other content kinds](content-kinds.md)) |
 | New bricks | a v20-style brick Add-On you import ([Old v20 Add-Ons and new bricks](old-addons.md)) | a brick catalog the importer writes |
+| A brick modelled in Blender: a table, a statue, a sign | [Models from Blender (glTF)](gltf-models.md#bricks) | `bri-import-addon gltf --kind brick` turns a `.glb` into a brick Add-On |
 | A map: a level built in Blender, with spawn points and lights | [`sample-map`](../../packages/samples/sample-map) | `bri-import-addon gltf --kind map` turns a `.glb` into a map Add-On ([Making maps](maps.md)) |
 | A game mode in Start Game | [`stresslab-mode`](../../packages/stresslab/stresslab-mode) | a `mode` file naming Add-Ons and a map |
 | A game mode on a world players dig into, with its own mini-game | [`crates/sim/tests/mode_and_voxels.rs`](../../crates/sim/tests/mode_and_voxels.rs) | rules with a generated world, a tool and a mode whose `minigame` block runs the game ([Other content kinds](content-kinds.md)) |
@@ -81,7 +82,9 @@ HUD row bound to a key players never receive, a broken weapons file. Each
 sound file a weapons pack ships is run through the game's own decoder, so a
 sound that would load and then play silence (an unreadable header, a codec
 the game does not play, such as ADPCM WAV) fails the check by name; the
-game plays PCM WAV and Ogg Vorbis files of up to 30 seconds and 8 MiB.
+game plays PCM WAV and Ogg Vorbis files of up to 30 seconds and 8 MiB (a
+sound marked `music`, which rules play with `play_music`, up to 10
+minutes).
 
 **Try** a rule without opening the game. `bri-addon-run` runs it with the
 Add-Ons it needs in an empty world with two players, `Host` (an admin) and
@@ -111,9 +114,19 @@ why.
 
 **Edit while you play.** A game keeps the Add-Ons it started with. Edit a
 file while you host, switch back to the game, and chat names the Add-Ons
-that changed; host again to play them. A body's numbers are the exception:
-`/tune` changes them live for everyone and saves them back to its file
-([Tuning bodies in the game](tuning.md)).
+that changed; host again to play them. Two exceptions skip hosting again:
+
+- **Rules scripts.** Type `/reloadrules` (the host only) after saving a
+  `.rhai` file. Every running Add-On's script is read again and the
+  changed ones swap in at once. Everything the rules keep carries on:
+  state, host data, settings, creatures, cooldowns and the players, so
+  the next hook simply runs your new functions. Nothing re-runs `on_join`
+  for players already in. If the new script has a mistake, chat says what
+  and where, and the old one keeps running. Only the script is read
+  again: a change to `behaviour.json` (commands, state, hooks turned on)
+  or any other file still needs hosting again.
+- **A body's numbers.** `/tune` changes them live for everyone and saves
+  them back to its file ([Tuning bodies in the game](tuning.md)).
 
 **Share it** as one ZIP that installs byte for byte:
 
