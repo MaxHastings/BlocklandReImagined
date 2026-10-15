@@ -635,6 +635,7 @@ impl ScriptOp for Camera {
         match camera {
             CameraOp::Free => true,
             CameraOp::Point { at, distance } => finite(at) && ORBIT_DISTANCES.contains(distance),
+            CameraOp::Object { distance, .. } => ORBIT_DISTANCES.contains(distance),
         }
     }
 }
