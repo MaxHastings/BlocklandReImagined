@@ -82,6 +82,10 @@ impl ControlObject {
 pub struct OrbitPoint {
     pub at: [f32; 3],
     pub distance: f32,
+    /// The object the point follows (`orbit_object`): `at` is its middle
+    /// at each tick, and clients circle it where they draw it.
+    #[serde(default)]
+    pub object: Option<bri_package_runtime::ops::ObjectRef>,
 }
 
 impl OrbitPoint {
@@ -307,6 +311,24 @@ impl Session {
             }
         }
         Ok(())
+    }
+    /// Keep each point camera that follows an object on that object's
+    /// middle. One whose object left the world stays where it was last.
+    pub(super) fn step_object_cameras(&mut self) {
+        let follows: Vec<(OwnerId, bri_package_runtime::ops::ObjectRef)> = self
+            .peers
+            .iter()
+            .filter(|(_, p)| p.control == ControlObject::Point)
+            .filter_map(|(o, p)| Some((*o, p.orbit?.object?)))
+            .collect();
+        for (owner, object) in follows {
+            let Some(at) = self.object_centre(object) else {
+                continue;
+            };
+            if let Some(orbit) = self.peers.get_mut(&owner).and_then(|p| p.orbit.as_mut()) {
+                orbit.at = at.to_array();
+            }
+        }
     }
     /// Whether the body has handed its moves to a camera while it can still
     /// act (a rules camera, an admin's spy): a body in that state takes no

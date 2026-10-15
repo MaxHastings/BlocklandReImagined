@@ -3024,6 +3024,7 @@ impl Session {
         self.deliver_object_changes();
         self.step_zones();
         self.step_paths();
+        self.step_object_cameras();
         self.step_saved_copies();
         self.deliver_copy_reports();
         let changed = self.dirty.read(super::dirty::Reader::Packages);

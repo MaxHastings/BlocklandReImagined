@@ -335,7 +335,8 @@ pub struct Behaviour {
     /// Touch zones over bricks (Torque triggers a brick made with
     /// `createTrigger`): `on_zone(player, brick, event)` as a living player
     /// enters (`"enter"`), stays in (`"tick"`, when `ticks` is set) or
-    /// leaves (`"leave"`) the box over a brick of one of `bricks`.
+    /// leaves (`"leave"`) the box over a brick of one of `bricks`; a zone
+    /// with `objects` also calls `on_zone_object(object, brick, event)`.
     #[serde(default)]
     pub zones: Vec<ZoneDef>,
     /// `on_copy(player, info)` after this package's `copy_build` or
@@ -966,6 +967,12 @@ pub struct ZoneDef {
     /// Also call `on_zone(player, brick, "tick")` for players staying in.
     #[serde(default)]
     pub ticks: bool,
+    /// Also notice objects: every vehicle (any loose physics body: a
+    /// car, a ball, a crate) whose box meets the zone calls
+    /// `on_zone_object(object, brick, event)`, `object` its reference
+    /// (`"vehicle:12"`), with the same events as players.
+    #[serde(default)]
+    pub objects: bool,
 }
 impl ZoneDef {
     fn default_above() -> f32 {
