@@ -147,6 +147,9 @@ pub struct Material {
     pub wrap_u: bool,
     pub wrap_v: bool,
     pub blend: String,
+    /// Solid cutout geometry: discard texels below this alpha, then write depth.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub alpha_cutoff: Option<f32>,
     pub unlit: bool,
     pub environment: bool,
     pub mipmaps: bool,
@@ -155,6 +158,9 @@ pub struct Material {
     pub reflectance_map: Option<usize>,
     pub detail_scale: f32,
     pub reflectance: f32,
+    /// None preserves legacy DTS paint-overlay semantics; false uses texture RGBA.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub paint_overlay: Option<bool>,
     /// Drawn as bare metal: tinted reflections of its surroundings and
     /// sharp highlights instead of a painted, diffusely lit surface.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -430,6 +436,12 @@ impl Shape {
             }
         }
         for material in &self.materials {
+            ensure!(
+                material
+                    .alpha_cutoff
+                    .is_none_or(|a| a.is_finite() && (0.0..=1.0).contains(&a)),
+                "Invalid material alpha cutoff"
+            );
             if let Some(surface) = &material.surface {
                 let index = |m: Option<usize>| m.is_none_or(|m| m < self.materials.len());
                 ensure!(

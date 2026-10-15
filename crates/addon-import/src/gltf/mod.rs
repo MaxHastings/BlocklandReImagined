@@ -2023,10 +2023,11 @@ fn make_material(
     // glTF ignores an OPAQUE material's alpha, and exporters leave masks and
     // specular maps in it; in a native shape an opaque texture with a
     // translucent texel is laid over the model's colour (v20's decal),
-    // which ignores the world's light. MASK cut-outs draw blended.
+    // which ignores the world's light. MASK retains its alpha cutoff and depth writes.
     let mut pixels = pixels;
     let blend = match m["alphaMode"].as_str() {
-        Some("BLEND" | "MASK") => "alpha",
+        Some("BLEND") => "alpha",
+        Some("MASK") => "opaque",
         _ => {
             for p in pixels.pixels_mut() {
                 p.0[3] = 255;
@@ -2140,6 +2141,9 @@ fn make_material(
             reflectance_map: None,
             detail_scale: 1.0,
             reflectance: 0.0,
+            paint_overlay: Some(false),
+            alpha_cutoff: (m["alphaMode"].as_str() == Some("MASK"))
+                .then(|| m["alphaCutoff"].as_f64().unwrap_or(0.5) as f32),
             metal,
             surface,
         },

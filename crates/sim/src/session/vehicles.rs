@@ -2796,6 +2796,8 @@ mod tests {
     #[test]
     fn the_light_key_in_the_driving_seat_turns_the_lamps_on_and_off() {
         let lamp = bri_vehicles::schema::Lamp {
+            activation: Default::default(),
+            effect: None,
             node: "mount0".into(),
             offset: [0.0, 0.0, -1.0],
             color: [1.0; 3],

@@ -74,6 +74,15 @@ impl Default for Transform {
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Seat {
+    /// A clip authored in this seat's model-origin frame. If the rider owns
+    /// it, preserve that clip's root; otherwise align its ordinary sit hip
+    /// to this seat. None keeps legacy Blockhead-relative seat fitting.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rider_pose: Option<String>,
+    /// Authored first-person eye offset in the seat frame. No FOV or camera
+    /// mode restriction. Host interaction rays use this same point.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub eye: Option<[f32; 3]>,
     pub node: String,
     pub transform: Transform,
     pub pose: String,
@@ -422,6 +431,10 @@ fn is_zero(x: &f32) -> bool {
 /// under a speed test, like the Stunt Plane's wing-tip contrails.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Trail {
+    /// Require this wheel to touch the ground; speed then excludes motion
+    /// along the suspension axis. None preserves airborne trails.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub contact_wheel: Option<usize>,
     /// The model node the image mounts at (`mount<mountPoint>`).
     pub node: String,
     /// The emitter's frame in the model: the node, then the image's offset
@@ -753,6 +766,11 @@ pub struct Definition {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Lamp {
+    #[serde(default)]
+    pub activation: LampActivation,
+    /// Native light definition for a mounted corona or other light presentation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effect: Option<String>,
     pub node: String,
     #[serde(default, skip_serializing_if = "is_origin")]
     pub offset: [f32; 3],
@@ -760,6 +778,23 @@ pub struct Lamp {
     pub color: [f32; 3],
     /// How far it reaches, units.
     pub radius: f32,
+}
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LampActivation {
+    #[default]
+    Switch,
+    Driver,
+    Always,
+}
+impl LampActivation {
+    pub fn enabled(self, switched: bool, driver: bool) -> bool {
+        match self {
+            Self::Switch => switched,
+            Self::Driver => driver,
+            Self::Always => true,
+        }
+    }
 }
 fn is_origin(v: &[f32; 3]) -> bool {
     *v == [0.0; 3]
@@ -1115,8 +1150,14 @@ impl Pack {
                                 .iter()
                                 .all(|c| c.is_finite() && (0. ..=8.).contains(c))
                             && l.radius.is_finite()
-                            && l.radius > 0.
+                            && (l.radius > 0. || l.effect.is_some())
+                            && l.radius >= 0.
                             && l.radius <= 100.
+                            && l.effect.as_ref().is_none_or(|id| {
+                                !id.is_empty()
+                                    && id.len() <= 160
+                                    && !id.chars().any(char::is_control)
+                            })
                     }),
                 "{}: at most 16 lights, each on a node, colour 0 to 8 and radius above 0 up to 100",
                 d.id
@@ -1204,6 +1245,10 @@ impl Pack {
             }
             ensure!(d.trails.len() <= 16, "too many trails");
             for t in &d.trails {
+                ensure!(
+                    t.contact_wheel.is_none_or(|i| i < d.wheels.len()),
+                    "trail names an unknown contact wheel"
+                );
                 let q = glam::Quat::from_array(t.transform.rotation);
                 ensure!(
                     !t.node.trim().is_empty()
@@ -1382,6 +1427,19 @@ impl Pack {
                     && (d.is_actor() || !d.seats.iter().any(|s| s.controls && s.weapon)),
                 "ambiguous vehicle control roles"
             );
+            for seat in &d.seats {
+                ensure!(
+                    seat.eye
+                        .is_none_or(|p| p.iter().all(|v| v.is_finite() && v.abs() <= 64.)),
+                    "invalid seat eye"
+                );
+                ensure!(
+                    seat.rider_pose.as_ref().is_none_or(|clip| !clip.is_empty()
+                        && clip.len() <= 64
+                        && !clip.chars().any(char::is_control)),
+                    "invalid authored rider pose"
+                );
+            }
             for wheel in &d.wheels {
                 ensure!(
                     wheel.position.iter().all(|v| v.is_finite())

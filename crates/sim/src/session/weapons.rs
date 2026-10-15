@@ -956,6 +956,21 @@ impl Session {
         for owner in ammo {
             self.show_ammo(owner);
         }
+        // Inventory mutations need not mount an image (pickup, quick use,
+        // loadout replacement). Compare the bounded projection, never equip
+        // a stowed item just to read it. Only its owner receives changes.
+        for owner in self.peers.keys().copied().collect::<Vec<_>>() {
+            let slots = std::array::from_fn(|slot| {
+                self.weapons
+                    .ammo_on_equip(ActorId(owner), slot)
+                    .as_ref()
+                    .map(inventory_ammo)
+            });
+            if self.inventory_ammo.get(&owner) != Some(&slots) {
+                self.inventory_ammo.insert(owner, slots.clone());
+                self.notify(owner, Notice::InventoryAmmo(Box::new(slots)));
+            }
+        }
         Ok(())
     }
     /// The ammo display: the held gun's magazine and reserve as a bottom
@@ -1122,6 +1137,16 @@ fn shooter(source: ActorId) -> Option<OwnerId> {
 /// The ammo display's line: `name  rounds / reserve`, right-aligned, with
 /// "Reloading" while a reload runs.
 /// A held gun's ammunition as its holder's HUD reads it.
+fn inventory_ammo(view: &bri_weapons::runtime::AmmoView) -> InventoryAmmo {
+    let held = held_ammo(view);
+    InventoryAmmo {
+        item: held.item,
+        rounds: held.rounds,
+        capacity: view.capacity,
+        reserve: held.reserve,
+        reloading: held.reloading,
+    }
+}
 fn held_ammo(view: &bri_weapons::runtime::AmmoView) -> HeldAmmo {
     use bri_weapons::runtime::Reserve;
     let reserve = match view.reserve {

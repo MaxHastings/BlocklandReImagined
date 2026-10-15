@@ -2,12 +2,14 @@
 // twin and says how it works. atmosphere: fog start, fog end, animation
 // seconds (scene passes; unused here), 1 when fog is on; below: 1 when the
 // sky goes on below the horizon (fog_color.w); h: the fog's height (units
-// per e-fold) and most cover (`Fog::haze_uniform`). A zero h is the
+// per e-fold), most cover and optional density end (`Fog::haze_uniform`). A zero h is the
 // standard fog (FOG_HEIGHT, complete), so a pass that never sets it keeps
 // today's look.
 fn fog_height(h:vec4<f32>)->f32 {return select(FOG_HEIGHT,h.x,h.x>0.0);}
 fn fog_max(h:vec4<f32>)->f32 {return select(1.0,min(h.y,1.0),h.y>0.0);}
-fn fog_density(a:vec4<f32>)->f32 {return FOG_DEPTH/max(a.y-a.x,0.001);}
+fn fog_density(a:vec4<f32>,h:vec4<f32>)->f32 {
+    return FOG_DEPTH/max(select(a.y,h.z,h.z>0.0)-a.x,0.001);
+}
 // How fast a ray whose direction rises `up` leaves the fog, per unit.
 fn fog_rising(up:f32,below:f32,h:vec4<f32>)->f32 {
     return select(max(up,0.0),abs(up),below>0.5)/fog_height(h);
@@ -16,7 +18,8 @@ fn fog_rising(up:f32,below:f32,h:vec4<f32>)->f32 {
 // world's edge in front of it.
 fn sky_fog_at(up:f32,a:vec4<f32>,below:f32,h:vec4<f32>)->f32 {
     if a.y<=0.0 {return 0.0;}
-    return (1.0-exp(-FOG_DEPTH*exp(-fog_rising(up,below,h)*a.y)))*fog_max(h)*a.w;
+    let depth=fog_density(a,h)*max(a.y-a.x,0.001);
+    return (1.0-exp(-depth*exp(-fog_rising(up,below,h)*a.y)))*fog_max(h)*a.w;
 }
 // Fog over a point at `offset` from the eye.
 fn fog_along(offset:vec3<f32>,a:vec4<f32>,below:f32,h:vec4<f32>)->f32 {
@@ -27,7 +30,7 @@ fn fog_along(offset:vec3<f32>,a:vec4<f32>,below:f32,h:vec4<f32>)->f32 {
     let rise=fog_rising(up,below,h);
     let x=rise*inside;
     let spread=select((1.0-exp(-x))/x,1.0-0.5*x,x<0.0001);
-    let depth=fog_density(a)*exp(-rise*a.x)*inside*spread;
+    let depth=fog_density(a,h)*exp(-rise*a.x)*inside*spread;
     return (1.0-exp(-depth))*fog_max(h)*a.w;
 }
 // How far a point at `offset` has faded out into what lies behind it: 0

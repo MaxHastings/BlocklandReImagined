@@ -1123,7 +1123,12 @@ impl App {
                             f.rotation,
                             f.position,
                         );
-                        Some((body, info.lights, info.definition.clone()))
+                        Some((
+                            body,
+                            info.lights,
+                            self.vehicle_assets.driver_present(info),
+                            info.definition.clone(),
+                        ))
                     })),
             );
         }

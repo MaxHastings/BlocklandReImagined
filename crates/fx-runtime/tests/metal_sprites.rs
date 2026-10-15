@@ -143,6 +143,7 @@ fn frame(sprites_in_probe: bool) -> Result<Vec<u8>> {
     )?;
     let sprite = || FrameEffects {
         particles: vec![ParticleInstance {
+            layout: Default::default(),
             position: Vec3::new(0.0, 0.0, 8.0),
             size: 12.0,
             color: Vec4::new(1.0, 0.0, 0.0, 1.0),

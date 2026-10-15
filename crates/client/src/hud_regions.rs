@@ -28,6 +28,7 @@ pub struct GameValues {
     pub bottom_print: String,
     /// The held gun's ammunition (`Notice::Ammo`).
     pub ammo: Option<bri_sim::session::HeldAmmo>,
+    pub inventory_ammo: bri_sim::session::InventoryAmmoSlots,
     /// Seconds until the dead viewer may respawn (0: click to), while dead
     /// and not held.
     pub respawn: Option<f32>,
@@ -198,6 +199,22 @@ impl HudRegions {
                     Value::Number(f32::from(u8::from(game.ammo.as_ref()?.reloading)))
                 }
                 Source::Respawn => Value::Number(game.respawn?),
+                Source::ItemAmmo { item, field } => {
+                    use bri_content::hud::AmmoField;
+                    let ammo = game
+                        .inventory_ammo
+                        .iter()
+                        .flatten()
+                        .find(|a| a.item == *item);
+                    let number = match (ammo, field) {
+                        (None, _) => 0.,
+                        (Some(a), AmmoField::Rounds) => a.rounds? as f32,
+                        (Some(a), AmmoField::Maximum) => a.capacity as f32,
+                        (Some(a), AmmoField::Reserve) => a.reserve? as f32,
+                        (Some(a), AmmoField::Reloading) => f32::from(u8::from(a.reloading)),
+                    };
+                    Value::Number(number)
+                }
                 Source::State(bind) => {
                     let binding = bri_package_runtime::content::Binding::parse(bind)?;
                     match state.get(&binding, owner)? {
@@ -486,5 +503,60 @@ mod tests {
         // Gun put away: the claim's `holding` no longer matches.
         let draws = regions.draws(&state, 1, &Viewer::default(), &game);
         assert!(draws.is_empty());
+    }
+    #[test]
+    fn stowed_item_counters_do_not_depend_on_the_held_gun() {
+        let counter = layout(
+            serde_json::json!({"schema_version":1,"region":"top_left","elements":[
+                {"type":"text","at":[0,0],"value":"item_ammo:items:weapon/nade"},
+            {"type":"text","at":[0,6],"value":"item_ammo_max:items:weapon/nade"},
+            {"type":"text","at":[0,12],"value":"item_ammo_reserve:items:weapon/nade"},
+            {"type":"text","at":[0,18],"value":"item_reloading:items:weapon/nade"},
+                {"type":"bar","rect":[0,20,100,4],"value":"item_ammo:items:weapon/nade","fill":{"color":[1,1,1,1]}}
+            ]}),
+        );
+        let mut regions = regions(&[("hud", vec![counter])]);
+        let state = PackageStateView::default();
+        let viewer = Viewer::default();
+        let mut game = GameValues::default();
+        game.inventory_ammo[4] = Some(bri_sim::session::InventoryAmmo {
+            item: "items:weapon/nade".into(),
+            rounds: Some(2),
+            capacity: 4,
+            reserve: Some(2),
+            reloading: false,
+        });
+        let draws = regions.draws(&state, 1, &viewer, &game);
+        let texts = |draws: &[HudRegionDraw]| {
+            draws[0]
+                .items
+                .iter()
+                .filter_map(|i| match i {
+                    Item::Text { text, .. } => Some(text.clone()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(texts(&draws), ["2", "4", "2", "0"]);
+        assert!(
+            draws[0]
+                .items
+                .iter()
+                .any(|i| matches!(i,Item::Fill{rect,..} if rect[2]==50.))
+        );
+        let ammo = game.inventory_ammo[4].as_mut().unwrap();
+        ammo.rounds = None;
+        ammo.reserve = None;
+        ammo.reloading = true;
+        let draws = regions.draws(&state, 1, &viewer, &game);
+        assert_eq!(texts(&draws), ["-", "4", "-", "1"]);
+        game.inventory_ammo = Default::default();
+        let draws = regions.draws(&state, 1, &viewer, &game);
+        assert!(
+            draws[0]
+                .items
+                .iter()
+                .any(|i| matches!(i,Item::Text{text,..} if text=="0"))
+        );
     }
 }

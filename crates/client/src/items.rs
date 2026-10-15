@@ -336,21 +336,35 @@ pub fn moves_visible_detail(shape: &Shape, clip: &Animation, first_person: bool)
             .iter()
             .any(|t| t.node.eq_ignore_ascii_case(&shape.nodes[node].name))
     };
-    objects
-        .filter_map(|i| shape.objects.get(i)?.node)
-        .any(|mut node| {
-            // The node and every ancestor.
-            for _ in 0..shape.nodes.len() {
-                if animated(node) {
-                    return true;
-                }
-                match shape.nodes[node].parent {
-                    Some(parent) => node = parent,
-                    None => return false,
-                }
+    let mut roots = Vec::new();
+    for i in objects {
+        let Some(object) = shape.objects.get(i) else {
+            continue;
+        };
+        roots.extend(object.node);
+        // Skinned objects hang from a root, but their vertices follow all
+        // authored skin bones. Ignoring those bones freezes imported rigs.
+        if let Some(Some(mesh)) = object
+            .meshes
+            .get(detail.mesh_offset)
+            .and_then(|m| shape.meshes.get(*m))
+            && let Some(skin) = &mesh.skin
+        {
+            roots.extend(skin.nodes.iter().copied());
+        }
+    }
+    roots.into_iter().any(|mut node| {
+        for _ in 0..shape.nodes.len() {
+            if animated(node) {
+                return true;
             }
-            true
-        })
+            match shape.nodes[node].parent {
+                Some(parent) => node = parent,
+                None => return false,
+            }
+        }
+        true
+    })
 }
 fn hash(bytes: &[u8]) -> String {
     format!("{:x}", Sha256::digest(bytes))
@@ -441,10 +455,15 @@ pub fn native_shape_scene(
             });
             let mut material =
                 Material::physical(format!("item/{model}/{}", source.name), base, maps, surface);
-            material.ignore_texture_alpha = source.blend == "opaque";
-            material.alpha = match source.blend.as_str() {
-                "opaque" if node_color || tint[3] >= 1. => AlphaMode::Opaque,
-                _ => AlphaMode::Blend,
+            material.ignore_texture_alpha =
+                source.blend == "opaque" && source.alpha_cutoff.is_none();
+            material.alpha = if let Some(cutoff) = source.alpha_cutoff {
+                AlphaMode::Mask(cutoff)
+            } else {
+                match source.blend.as_str() {
+                    "opaque" if node_color || tint[3] >= 1. => AlphaMode::Opaque,
+                    _ => AlphaMode::Blend,
+                }
             };
             bindings.push(scene.materials.len());
             scene.materials.push(material);
@@ -470,6 +489,9 @@ pub fn native_shape_scene(
             };
             let mut material = Material::vertex_lit(format!("item/{model}/{}", source.name), tint);
             material.kind = MaterialKind::Metal;
+            if let Some(cutoff) = source.alpha_cutoff {
+                material.alpha = AlphaMode::Mask(cutoff);
+            }
             material.images[1] = detail;
             material.parameters = Some([
                 [
@@ -490,8 +512,10 @@ pub fn native_shape_scene(
         // (`GL_DECAL`) only when the texture has a translucent texel; a
         // texture with none is the texture times the light, untinted.
         let decal = translucent_texel(texture);
-        let overlay =
-            decal && (source.blend == "opaque" || (node_color && source.blend == "alpha"));
+        let overlay = source.paint_overlay.unwrap_or(true)
+            && source.alpha_cutoff.is_none()
+            && decal
+            && (source.blend == "opaque" || (node_color && source.blend == "alpha"));
         let key = (texture.label.clone(), overlay);
         let image = *image_bindings.entry(key).or_insert_with(|| {
             let mut image = (*texture).clone();
@@ -513,11 +537,15 @@ pub fn native_shape_scene(
                 MaterialKind::Unlit
             };
         }
-        material.alpha = match source.blend.as_str() {
-            "opaque" if node_color || tint[3] >= 1. => AlphaMode::Opaque,
-            "opaque" | "alpha" => AlphaMode::Blend,
-            "additive" => AlphaMode::Additive,
-            other => anyhow::bail!("Unsupported item blend {other}"),
+        material.alpha = if let Some(cutoff) = source.alpha_cutoff {
+            AlphaMode::Mask(cutoff)
+        } else {
+            match source.blend.as_str() {
+                "opaque" if node_color || tint[3] >= 1. => AlphaMode::Opaque,
+                "opaque" | "alpha" => AlphaMode::Blend,
+                "additive" => AlphaMode::Additive,
+                other => anyhow::bail!("Unsupported item blend {other}"),
+            }
         };
         if source.environment || source.bump_map.is_some() || source.detail_map.is_some() {
             scene.omissions.push(format!(

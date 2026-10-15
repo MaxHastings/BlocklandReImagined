@@ -217,6 +217,7 @@ impl App {
                 attempt: None,
                 abilities: Default::default(),
                 held_ammo: None,
+                inventory_ammo: Default::default(),
                 next_print_is_ammo: false,
                 brick_hand: None,
                 steering_sent: None,

@@ -1060,6 +1060,8 @@ struct Holds {
     support: Option<Vec3>,
     /// [`AvatarAnimationInput::hand_holds`].
     seat: [Option<Vec3>; 2],
+    /// Explicit seat-frame shift; None retains legacy fitting.
+    seat_shift: Option<Vec3>,
 }
 
 /// Authored right/left hand readiness selected by mounted vanilla images.
@@ -1153,6 +1155,9 @@ pub struct AvatarAnimationInput {
     pub death: Option<bri_sim::session::DeathPose>,
     /// The `sit` emote holds the original sit sequence until the player moves.
     pub sitting: bool,
+    /// Authored seat clip in the seat's own model-origin frame. A body without
+    /// this clip keeps its own sit animation and aligns its hip to the seat.
+    pub seat_pose: Option<String>,
     /// The latest simulated tick state. v20 picks the action from the tick's
     /// own rotation and velocity, not from the render-interpolated body or the
     /// live mouse yaw; mixing those breaks the exact tie at 45 degrees.
@@ -2122,10 +2127,18 @@ impl AvatarMesh {
         // a death's) plays as it is. None: the body has no clip even to
         // stand in, and holds its bind pose under the other layers.
         let sequence = next.map_or(self.mode, |a| a.sequence);
-        let own = Role::from_blockhead_clip(sequence)
-            .is_none()
-            .then(|| assets.rig.sequence(sequence))
-            .flatten();
+        let seat_pose = animation_input.seat_pose.as_deref().filter(|_| {
+            (sequence == SIT || sequence == "root")
+                && animation_input.mount_rotation.is_some()
+                && !animation_input.dead
+        });
+        let authored_seat = seat_pose.and_then(|name| assets.rig.sequence(name));
+        let own = authored_seat.or_else(|| {
+            Role::from_blockhead_clip(sequence)
+                .is_none()
+                .then(|| assets.rig.sequence(sequence))
+                .flatten()
+        });
         let (clip, reversed) = match own
             .map(|c| (c, false))
             .or_else(|| role(movement_role(sequence)))
@@ -2397,9 +2410,27 @@ impl AvatarMesh {
             HeldToolPose::Left => [false, true],
             HeldToolPose::Both => [true; 2],
         };
+        // An authored hand action (reload, throw, etc.) owns its off hand.
+        // Static support IK must not pull it back onto the foregrip mid-action.
+        let hand_action = animation_input.action.as_ref().is_some_and(|action| {
+            named(&action.sequence).is_some_and(|clip| {
+                clip.looping || (time - action.started_at).max(0.0) < f64::from(clip.duration)
+            })
+        });
         let support = animation_input
             .support
-            .filter(|_| animation_input.held_tool_pose == HeldToolPose::Both);
+            .filter(|_| animation_input.held_tool_pose == HeldToolPose::Both && !hand_action);
+        let seat_shift = seat_pose.and_then(|_| {
+            if authored_seat.is_some() {
+                Some(Vec3::ZERO)
+            } else {
+                let parents: Vec<_> = assets.rig.shape.nodes.iter().map(|n| n.parent).collect();
+                let bind = bri_content::animation::sample(&assets.rig.shape, None, 0.0).ok()?;
+                let hip = bri_content::hold::hip(&parents, &bind.nodes)?;
+                let shift = -pose.nodes.get(hip)?.w_axis.truncate();
+                (shift.is_finite() && shift.length() < 8.).then_some(shift)
+            }
+        });
         self.fits(assets);
         self.finish_pose(
             assets,
@@ -2412,6 +2443,7 @@ impl AvatarMesh {
                 pitch: player.pitch,
                 support,
                 seat: animation_input.hand_holds,
+                seat_shift,
             },
         )
     }
@@ -2435,7 +2467,10 @@ impl AvatarMesh {
             Vec3::from(player.feet),
         );
         // A rider sits with its hip where the Blockhead's is.
-        let model_transform = match self.fits.as_ref().and_then(|f| f.seat) {
+        let model_transform = match holds
+            .seat_shift
+            .or_else(|| self.fits.as_ref().and_then(|f| f.seat))
+        {
             Some(shift) if mount_rotation.is_some() => {
                 model_transform * Mat4::from_translation(shift)
             }
@@ -3594,6 +3629,61 @@ mod tests {
                 .iter()
                 .any(|l| l.contains("`idle`") && l.starts_with("no `idle`"))
         );
+        Ok(())
+    }
+
+    #[test]
+    fn authored_seat_frames_preserve_owned_poses_and_anchor_foreign_hips() -> Result<()> {
+        let (assets, model, _dir) =
+            own_body("rider", &[], &[("root", "idle"), ("sit", "own_seat")])?;
+        let mut archetype = bri_sim::archetype::Archetypes::default()
+            .resolve(Default::default())
+            .clone();
+        archetype.look.model = model.clone();
+        archetype
+            .look
+            .animations
+            .insert("sit".into(), "own_seat".into());
+        let mut p = player();
+        p.feet = [3., 4., 5.];
+        let rotation = Quat::from_rotation_z(0.3) * Quat::from_rotation_y(0.8);
+        for owns_clip in [true, false] {
+            let mut mesh = assets.body_mesh(&model, assets.package.defaults.clone())?;
+            mesh.set_body_kind(BodyKind::of(&archetype, false));
+            let input = AvatarAnimationInput {
+                sitting: true,
+                mount_rotation: Some(rotation),
+                seat_pose: Some(
+                    if owns_clip {
+                        "own_seat"
+                    } else {
+                        "foreign_seat"
+                    }
+                    .into(),
+                ),
+                ..Default::default()
+            };
+            mesh.pose_with_animation(&assets, &p, 0., &input)?;
+            mesh.pose_with_animation(&assets, &p, 1., &input)?;
+            let rig = &assets.for_mesh(&mesh).rig;
+            let parents: Vec<_> = rig.shape.nodes.iter().map(|n| n.parent).collect();
+            let bind = bri_content::animation::sample(&rig.shape, None, 0.)?;
+            let hip = bri_content::hold::hip(&parents, &bind.nodes).context("fixture hip")?;
+            let hip_world = (mesh.model_transform * mesh.posed_nodes[hip])
+                .w_axis
+                .truncate();
+            let expected = if owns_clip {
+                let original =
+                    bri_content::animation::sample(&rig.shape, rig.sequence("own_seat"), 0.)?;
+                Vec3::from(p.feet) + rotation * original.nodes[hip].w_axis.truncate()
+            } else {
+                Vec3::from(p.feet)
+            };
+            assert!(
+                hip_world.distance(expected) < 1e-4,
+                "owned {owns_clip}: {hip_world} != {expected}"
+            );
+        }
         Ok(())
     }
 

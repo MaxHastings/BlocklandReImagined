@@ -711,3 +711,41 @@ fn the_gunners_chaingun_spins_up_spreads_and_does_not_kick() {
         "{again} rounds in the first half second again"
     );
 }
+
+#[test]
+fn authored_eye_follows_the_scaled_rotated_authoritative_seat() {
+    let mut pack = buggy_pack();
+    let d = pack.definitions.iter_mut().find(|d| d.id == BUGGY).unwrap();
+    d.seats[1].eye = Some([0.2, 0.9, -0.3]);
+    let mut vehicles = VehiclesWorld::new(pack).unwrap();
+    let mut physics = common::floor(4000.);
+    vehicles
+        .spawn(
+            &mut physics,
+            Spawn {
+                id: VehicleId(1),
+                owner: OwnerId(10),
+                definition: BUGGY.into(),
+                scale: 2.,
+                transform: Transform {
+                    position: [3., 10., 5.],
+                    rotation: (Quat::from_rotation_y(0.7) * Quat::from_rotation_z(0.3)).to_array(),
+                },
+                spawn_id: None,
+                respawn_ticks: None,
+            },
+        )
+        .unwrap();
+    let snapshot = vehicles.snapshot(&physics);
+    let seat = &snapshot.vehicles[0].seats[1].transform;
+    let expected =
+        Vec3::from(seat.position) + Quat::from_array(seat.rotation) * Vec3::new(0.4, 1.8, -0.6);
+    assert!(
+        vehicles
+            .seat_eye(&physics, VehicleId(1), 1)
+            .unwrap()
+            .distance(expected)
+            < 1e-5
+    );
+    assert!(vehicles.seat_eye(&physics, VehicleId(1), 0).is_none());
+}

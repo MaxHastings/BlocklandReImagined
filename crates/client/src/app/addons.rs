@@ -705,6 +705,7 @@ impl App {
                 .as_ref()
                 .map_or_else(String::new, |(t, ..)| bri_content::hud::plain(t)),
             ammo: self.net.held_ammo.clone(),
+            inventory_ammo: self.net.inventory_ammo.clone(),
             respawn: None,
             kills: Vec::new(),
             contacts: Vec::new(),
@@ -1043,6 +1044,7 @@ mod tests {
         };
         let effects = bri_fx_runtime::FrameEffects {
             particles: vec![bri_fx_runtime::ParticleInstance {
+                layout: Default::default(),
                 position: Vec3::ZERO,
                 size: 1.,
                 color: glam::Vec4::ONE,

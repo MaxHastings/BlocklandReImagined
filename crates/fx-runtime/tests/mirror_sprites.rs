@@ -104,6 +104,7 @@ fn frame(mirrored: bool) -> Result<Vec<u8>> {
     )?;
     let sprite = || FrameEffects {
         particles: vec![ParticleInstance {
+            layout: Default::default(),
             position: Vec3::new(1.2, 0.2, 6.0),
             size: 1.0,
             color: Vec4::new(1.0, 0.0, 0.0, 1.0),

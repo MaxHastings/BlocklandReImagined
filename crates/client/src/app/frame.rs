@@ -1272,6 +1272,23 @@ impl App {
                         .and_then(|v| v.death)
                         .filter(|_| dead),
                     sitting: !dead && sit_posed(view, &self.vehicle_assets, presented, *owner),
+                    seat_pose: view
+                        .vitals
+                        .get(owner)
+                        .filter(|_| !dead)
+                        .and_then(|v| v.mounted)
+                        .and_then(|(vehicle, seat)| {
+                            let info = view.vehicles.get(&vehicle)?;
+                            if info.destroyed || info.turret_broken {
+                                return None;
+                            }
+                            self.vehicle_assets
+                                .definition(&info.definition)?
+                                .seats
+                                .get(usize::from(seat))?
+                                .rider_pose
+                                .clone()
+                        }),
                     // Riders hold `root` (`Armor::onMount` sets the action
                     // thread to root and mountThread on thread 0); they do
                     // not run, jump or fall with their mount's motion.
@@ -1515,6 +1532,11 @@ impl App {
                 game_elapsed.as_secs_f32(),
             );
             self.cosmetic_faults.absorb("weapon effects", parts);
+            let lamp_effects = self
+                .vehicles
+                .lamp_effects(&self.vehicle_assets, &view.vehicles);
+            let lamps = self.fx.weapon_effects.sync_attached_lights(&lamp_effects);
+            self.cosmetic_faults.absorb("vehicle lamp effects", lamps);
             let trails = self
                 .fx
                 .actor_effects
@@ -1645,7 +1667,8 @@ impl App {
                             effect,
                             bri_fx_runtime::SourceTransform {
                                 position,
-                                rotation,
+                                rotation: rotation
+                                    * glam::Quat::from_rotation_arc(Vec3::Y, Vec3::NEG_Z),
                                 velocity: presented
                                     .get(actor)
                                     .map_or(Vec3::ZERO, |p| Vec3::from(p.velocity)),

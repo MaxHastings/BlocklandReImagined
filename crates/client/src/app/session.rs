@@ -8,6 +8,7 @@ pub(super) struct SessionState {
     /// The held gun's ammunition, as the server last said
     /// (`Notice::Ammo`), for HUD regions.
     pub(super) held_ammo: Option<bri_sim::session::HeldAmmo>,
+    pub(super) inventory_ammo: bri_sim::session::InventoryAmmoSlots,
     /// The next bottom print is the ammo display (`HeldAmmo::printed`).
     pub(super) next_print_is_ammo: bool,
     /// Last brick inventory state reported to the server.
@@ -98,6 +99,7 @@ impl App {
         self.scene.scene_map = None;
         self.net.abilities = Default::default();
         self.net.held_ammo = None;
+        self.net.inventory_ammo = Default::default();
         self.net.next_print_is_ammo = false;
         self.net.brick_hand = None;
         self.build.ghost_report = None;

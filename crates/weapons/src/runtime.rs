@@ -886,6 +886,8 @@ struct Reload {
 #[derive(Debug, Clone, PartialEq)]
 pub struct AmmoView {
     pub item: String,
+    /// Maximum ready rounds: magazine size, or reserve capacity for counted items.
+    pub capacity: u32,
     pub rounds: u32,
     pub size: u32,
     pub ammo: String,
@@ -943,6 +945,11 @@ fn ammo_view(
     reloading: bool,
 ) -> AmmoView {
     AmmoView {
+        capacity: if magazine.counts_reserve() {
+            magazine.max_reserve
+        } else {
+            magazine.size
+        },
         rounds: rounds.min(100_000),
         counted: magazine.counts_reserve(),
         supply: magazine.supply,
@@ -1714,6 +1721,14 @@ impl WeaponsWorld {
         }
         if !magazine.reload_sequence.is_empty() {
             self.animation(id, &magazine.reload_sequence);
+        }
+        if !magazine.reload_image_sequence.is_empty() {
+            self.events.push(Event::Animation {
+                actor: id,
+                thread: 0,
+                sequence: magazine.reload_image_sequence.clone(),
+                image_hand: Some(0),
+            });
         }
         if !magazine.reload_sound.is_empty() {
             self.events.push(Event::Sound {

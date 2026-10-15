@@ -2449,6 +2449,8 @@ fn placeholder() -> bri_content::shape::Shape {
             reflectance_map: None,
             detail_scale: 1.0,
             reflectance: 0.0,
+            paint_overlay: None,
+            alpha_cutoff: None,
             metal: None,
             surface: None,
         }],
@@ -2837,6 +2839,7 @@ fn vehicle_trail(
             Vec3::from(offset),
         ) * Mat4::from_quat(Quat::from_rotation_arc(Vec3::Y, Vec3::NEG_Z));
     Ok(bri_vehicles::schema::Trail {
+        contact_wheel: None,
         node,
         transform: bri_vehicles_import::transform(frame),
         emitter,

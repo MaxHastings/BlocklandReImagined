@@ -21,7 +21,8 @@ pub struct Cloud {
 }
 /// Fog, the one atmosphere every pass shares (its shader twin is
 /// `bri-render`'s fog.wgsl). Exponential fog: level with the eye it
-/// thickens from `start` to `FOG_DEPTH` optical depth at `end`; above the
+/// thickens from `start` to `FOG_DEPTH` optical depth at `density_end`
+/// (or `end` when unset); above the
 /// eye it thins with height (`height` units per e-fold, `FOG_HEIGHT` unless
 /// the map says). The sky is the backdrop at the world's edge, `end` away,
 /// and takes the fog of the air there: fog-coloured at the horizon, clear
@@ -43,7 +44,12 @@ pub const FOG_HEIGHT: f32 = 60.0;
 #[serde(deny_unknown_fields)]
 pub struct Fog {
     pub start: f32,
+    /// Geometry visibility cutoff. Density can reach its authored depth sooner.
     pub end: f32,
+    /// Distance at which level fog reaches FOG_DEPTH optical depth. Defaults
+    /// to `end`; a capped haze can thicken without hiding distant geometry.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub density_end: Option<f32>,
     pub color: [f32; 3],
     /// Units the fog thins by an e-fold for, above the eye (and below it
     /// when the sky goes on below the horizon): smaller keeps the haze
@@ -65,6 +71,7 @@ impl Default for Fog {
         Self {
             start: 0.0,
             end: 0.0,
+            density_end: None,
             color: [0.0; 3],
             height: FOG_HEIGHT,
             max: 1.0,
@@ -96,6 +103,11 @@ impl Fog {
             "Invalid fog range"
         );
         ensure!(
+            self.density_end
+                .is_none_or(|end| end.is_finite() && end > self.start && end <= 1_000_000.0),
+            "Invalid fog density distance"
+        );
+        ensure!(
             self.color
                 .iter()
                 .all(|x| x.is_finite() && (0.0..=1.0).contains(x)),
@@ -116,9 +128,9 @@ impl Fog {
     pub fn haze(&self) -> bool {
         self.max < 1.0
     }
-    /// The shaders' `haze` uniform: height, max (fog.wgsl's `h`).
+    /// The shaders' `haze` uniform: height, max, optional density end.
     pub fn haze_uniform(&self) -> [f32; 4] {
-        [self.height, self.max, 0.0, 0.0]
+        [self.height, self.max, self.density_end.unwrap_or(0.0), 0.0]
     }
     /// Fog over a point `distance` away, level with the eye.
     pub fn amount(&self, distance: f32) -> f32 {
@@ -165,11 +177,11 @@ impl Fog {
         if self.end <= 0.0 {
             return 0.0;
         }
-        (1.0 - (-FOG_DEPTH * (-rising(up, sky_below, self.height) * self.end).exp()).exp())
-            * self.max
+        let depth = self.density() * (self.end - self.start).max(0.001);
+        (1.0 - (-depth * (-rising(up, sky_below, self.height) * self.end).exp()).exp()) * self.max
     }
     fn density(&self) -> f32 {
-        FOG_DEPTH / (self.end - self.start).max(0.001)
+        FOG_DEPTH / (self.density_end.unwrap_or(self.end) - self.start).max(0.001)
     }
 }
 /// The fog heights a map or setting may give, units per e-fold.
@@ -268,9 +280,27 @@ mod tests {
             color: [0.5; 3],
             height,
             max,
+            density_end: None,
         }
     }
 
+    #[test]
+    fn a_capped_haze_can_thicken_without_clipping_distant_geometry() {
+        let mut haze = fog(FOG_HEIGHT, 0.4);
+        haze.end = 2000.0;
+        let thin = haze.amount(400.0);
+        haze.density_end = Some(400.0);
+        haze.validate().unwrap();
+        assert!(haze.amount(400.0) > thin);
+        assert!((haze.amount(400.0) - 0.4 * (1.0 - (-FOG_DEPTH).exp())).abs() < 1e-6);
+        assert_eq!(haze.edge(1500.0), 0.0);
+        assert_eq!(haze.edge(2000.0), 1.0);
+        assert!(haze.sky_amount(0.0, false) > 0.399);
+        for end in [f32::NAN, 0.0, haze.start, 1_000_001.0] {
+            haze.density_end = Some(end);
+            assert!(haze.validate().is_err());
+        }
+    }
     #[test]
     fn unset_haze_reads_as_the_fog_before_it() {
         let read: Fog =

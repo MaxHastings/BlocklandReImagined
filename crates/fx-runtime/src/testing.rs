@@ -30,6 +30,8 @@ pub fn library() -> Library {
             brightness_curve: None,
             radius_curve: None,
             flare: Some(Flare {
+                angles: None,
+                depth_test: false,
                 texture: TEXTURE.into(),
                 color: [1.; 3],
                 third_person: true,

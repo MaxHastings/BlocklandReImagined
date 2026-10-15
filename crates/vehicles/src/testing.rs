@@ -121,6 +121,8 @@ fn at(position: [f32; 3]) -> Transform {
 
 fn seat(node: &str, position: [f32; 3], controls: bool, weapon: bool) -> Seat {
     Seat {
+        rider_pose: None,
+        eye: None,
         node: node.into(),
         transform: at(position),
         pose: "sit".into(),

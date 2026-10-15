@@ -1037,6 +1037,7 @@ pub struct Player {
     /// Held in the `sit` pose (`/sit`, or a seat that poses its rider so):
     /// the eye is the sit's. Set by whoever seats the body.
     seated: bool,
+    mounted_eye_offset: Option<Vec3>,
     /// Jumps the body made without travelling between: server teleports
     /// and openings that carried it to their partner ([`Player::relocations`]).
     relocations: u64,
@@ -1190,6 +1191,7 @@ impl Player {
             mount: false,
             crouch: Default::default(),
             seated: false,
+            mounted_eye_offset: None,
             relocations: 0,
             corpse: false,
         })
@@ -1239,6 +1241,7 @@ impl Player {
             mount: true,
             crouch: Default::default(),
             seated: false,
+            mounted_eye_offset: None,
             relocations: 0,
             corpse: false,
         })
@@ -1300,6 +1303,7 @@ impl Player {
             mount: false,
             crouch: Default::default(),
             seated: false,
+            mounted_eye_offset: None,
             relocations: 0,
             corpse: false,
         };
@@ -1464,6 +1468,9 @@ impl Player {
     /// The eye on the crouch thread, the height the camera shows, and the
     /// `Eye` node's lead ahead of the body (`getEyePoint`).
     pub fn eye(&self) -> Vec3 {
+        if let Some(offset) = self.mounted_eye_offset {
+            return Vec3::from(self.state.feet) + offset;
+        }
         if self.seated {
             return self.state.posed_eye(&self.tuning, true);
         }
@@ -1523,6 +1530,17 @@ impl Player {
     /// Whether the body is held in the `sit` pose, which moves the eye.
     pub fn set_seated(&mut self, seated: bool) {
         self.seated = seated;
+        if !seated {
+            self.mounted_eye_offset = None;
+        }
+    }
+    /// Derived by the mount owner each tick; every interaction uses eye().
+    /// Store an offset so relocating the body cannot leave its eye behind.
+    pub fn set_mounted_eye(&mut self, eye: Option<Vec3>) {
+        self.mounted_eye_offset = eye
+            .filter(|p| p.is_finite())
+            .map(|p| p - Vec3::from(self.state.feet))
+            .filter(|p| p.is_finite());
     }
     pub fn seated(&self) -> bool {
         self.seated

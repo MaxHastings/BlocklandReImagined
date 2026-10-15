@@ -470,6 +470,7 @@ fn soak_crossover_four_players_and_sixteen_mixed_bots() -> Result<()> {
     let start = Instant::now();
     let mut tick = 0u64;
     let mut perf = Vec::new();
+    let mut next_perf_tick = 120;
     let mut bots_seen = BTreeSet::new();
     rt.block_on(async {
         while start.elapsed() < Duration::from_secs(seconds) {
@@ -527,8 +528,11 @@ fn soak_crossover_four_players_and_sixteen_mixed_bots() -> Result<()> {
             for owner in replica.names.keys().filter(|o| !humans.contains(o)) {
                 bots_seen.insert(*owner);
             }
-            if tick.is_multiple_of(120) {
+            // A catch-up batch can cross the second without ending exactly
+            // on its tick. Sample the crossed boundary, once per batch.
+            if tick >= next_perf_tick {
                 perf.push(server.perf.lock().unwrap().clone());
+                next_perf_tick = (tick / 120 + 1) * 120;
             }
             tokio::time::sleep(Duration::from_millis(4)).await;
         }
@@ -568,6 +572,10 @@ fn soak_crossover_four_players_and_sixteen_mixed_bots() -> Result<()> {
         .skip(5)
         .filter(|p| p.ticks_per_second > 0.0)
         .collect();
+    ensure!(
+        !windows.is_empty(),
+        "no host performance windows were sampled"
+    );
     let mean = |f: &dyn Fn(&bri_net::server::ServerPerf) -> f32| {
         windows.iter().map(|p| f(p)).sum::<f32>() / windows.len().max(1) as f32
     };

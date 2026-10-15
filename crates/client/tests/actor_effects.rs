@@ -49,6 +49,8 @@ fn effects() -> Arc<EffectsPack> {
                 brightness_curve: None,
                 radius_curve: None,
                 flare: Some(Flare {
+                    angles: None,
+                    depth_test: false,
                     texture: "texture".into(),
                     color: [1.; 3],
                     third_person: true,
@@ -143,6 +145,8 @@ fn image(name: &str, states: Vec<State>) -> (String, Image) {
     (
         id.clone(),
         Image {
+            first_person_nodes: Default::default(),
+            first_person_effects: Default::default(),
             shell_effect: String::new(),
             id,
             name: name.into(),
@@ -895,4 +899,40 @@ fn a_vehicle_gun_throws_casings_and_flashes_its_explosion_light() -> Result<()> 
         fx.diagnostics.messages
     );
     Ok(())
+}
+
+#[test]
+fn ground_trails_require_their_own_wheel_and_ignore_vertical_speed() {
+    use bri_client::{actor_effects::vehicle_trails, vehicles::VehicleFrame};
+    use glam::Quat;
+    let mut d = bri_vehicles::testing::car();
+    d.trails = serde_json::from_value(serde_json::json!([
+        {"node":"rear", "transform":{"position":[0,0,0],"rotation":[0,0,0,1]}, "emitter":"test:dirt", "min_speed":4, "contact_wheel":2},
+        {"node":"wing", "transform":{"position":[0,0,0],"rotation":[0,0,0,1]}, "emitter":"test:contrail", "min_speed":4}
+    ])).unwrap();
+    let mut frame = VehicleFrame {
+        position: Vec3::ZERO,
+        rotation: Quat::IDENTITY,
+        velocity: Vec3::new(0., -30., 0.),
+        steering: 0.,
+        wheel_suspension: vec![],
+        wheel_rotation: vec![],
+        wheel_contact: vec![false; 4],
+        turret_aim: [0.; 2],
+    };
+    assert_eq!(
+        vehicle_trails(1, &d, &frame)
+            .iter()
+            .map(|t| t.trail)
+            .collect::<Vec<_>>(),
+        vec![1]
+    );
+    frame.wheel_contact[0] = true; // Another wheel's contact cannot enable the rear emitter.
+    assert_eq!(vehicle_trails(1, &d, &frame).len(), 1);
+    frame.wheel_contact[2] = true;
+    assert_eq!(vehicle_trails(1, &d, &frame).len(), 1); // Landing speed alone is not tire travel.
+    frame.velocity = Vec3::new(0., 0., -10.);
+    assert_eq!(vehicle_trails(1, &d, &frame).len(), 2); // No driver/occupancy requirement.
+    frame.wheel_contact.clear();
+    assert_eq!(vehicle_trails(1, &d, &frame).len(), 1);
 }

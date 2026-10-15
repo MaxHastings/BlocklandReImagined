@@ -354,6 +354,8 @@ pub fn light(d: &Declaration) -> Result<(Light, Vec<String>)> {
         let constant = f.boolean("constantsizeon", false)?;
         let size = f.number("constantsize", 1.0)?;
         Some(Flare {
+            angles: None,
+            depth_test: false,
             texture: texture_path(f.text("flarebitmap", ""), &d.source)?,
             color: [color[0], color[1], color[2]],
             third_person: f.boolean("flaretp", true)?,

@@ -509,6 +509,7 @@ fn soak(host: Host, map: &str, seconds: u64) -> Result<()> {
     let start = Instant::now();
     let mut tick = 0u64;
     let mut perf = Vec::new();
+    let mut next_perf_tick = 120;
     let mut most_vehicles = 0;
     rt.block_on(async {
         while start.elapsed() < Duration::from_secs(seconds) {
@@ -527,8 +528,9 @@ fn soak(host: Host, map: &str, seconds: u64) -> Result<()> {
                 player.drain().await?;
             }
             most_vehicles = most_vehicles.max(players[1].client.replica.vehicles.len());
-            if tick.is_multiple_of(120) {
+            if tick >= next_perf_tick {
                 perf.push(server.perf.lock().unwrap().clone());
+                next_perf_tick = (tick / 120 + 1) * 120;
             }
             tokio::time::sleep(Duration::from_millis(4)).await;
         }

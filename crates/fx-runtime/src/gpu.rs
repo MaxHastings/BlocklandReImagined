@@ -13,6 +13,7 @@ struct GpuParticle {
     /// sprite's blend mode (0 alpha, 1 additive, 2 additive colour).
     image: [f32; 4],
     image_origin: [f32; 2],
+    sprite_layout: [f32; 4],
 }
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -255,7 +256,7 @@ impl EffectsRenderer {
         });
         let pipeline = |blend: wgpu::BlendState, depth_test: bool| {
             device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label:Some("native effects"),layout:Some(&layout),vertex:wgpu::VertexState {module:&shader,entry_point:Some("vs_main"),compilation_options:Default::default(),buffers:&[Some(wgpu::VertexBufferLayout {array_stride:std::mem::size_of::<GpuParticle>() as u64,step_mode:wgpu::VertexStepMode::Instance,attributes:&wgpu::vertex_attr_array![0=>Float32x4,1=>Float32x4,2=>Float32x4,3=>Float32x4,4=>Float32x2]})]},
+            label:Some("native effects"),layout:Some(&layout),vertex:wgpu::VertexState {module:&shader,entry_point:Some("vs_main"),compilation_options:Default::default(),buffers:&[Some(wgpu::VertexBufferLayout {array_stride:std::mem::size_of::<GpuParticle>() as u64,step_mode:wgpu::VertexStepMode::Instance,attributes:&wgpu::vertex_attr_array![0=>Float32x4,1=>Float32x4,2=>Float32x4,3=>Float32x4,4=>Float32x2,5=>Float32x4]})]},
             primitive:wgpu::PrimitiveState {cull_mode:None,..Default::default()},depth_stencil:Some(wgpu::DepthStencilState {format:depth_format,depth_write_enabled:Some(false),depth_compare:Some(if depth_test {bri_render::scene::DEPTH_NEARER}else{wgpu::CompareFunction::Always}),stencil:Default::default(),bias:Default::default()}),multisample:wgpu::MultisampleState {count:sample_count,..Default::default()},
             fragment:Some(wgpu::FragmentState {module:&shader,entry_point:Some("fs_main"),compilation_options:wgpu::PipelineCompilationOptions {constants:&bri_render::color::output_constants(color_format),..Default::default()},targets:&[Some(wgpu::ColorTargetState {format:color_format,blend:Some(blend),write_mask:wgpu::ColorWrites::ALL})]}),multiview_mask:None,cache:None,
         })
@@ -395,6 +396,7 @@ impl EffectsRenderer {
                     && p.size.is_finite()
                     && p.size >= 0.
                     && p.axis.is_finite()
+                    && p.layout.valid()
                     && p.spin.is_finite(),
                 "Invalid effects instance {i}: texture={} layers={} position={:?} color={:?} size={} axis={:?} spin={}",
                 p.texture,
@@ -417,6 +419,12 @@ impl EffectsRenderer {
                 axis_spin: p.axis.extend(p.spin).to_array(),
                 image,
                 image_origin: self.origins[p.texture as usize],
+                sprite_layout: [
+                    p.layout.scale[0],
+                    p.layout.scale[1],
+                    p.layout.pivot[0],
+                    p.layout.pivot[1],
+                ],
             });
             if let Some(run) = runs.last_mut()
                 && run.depth_test == p.depth_test

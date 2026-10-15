@@ -376,6 +376,18 @@ pub struct HeldAmmo {
     pub printed: bool,
 }
 
+/// Owner-private ammunition in one inventory slot, independent of selection.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct InventoryAmmo {
+    pub item: String,
+    pub rounds: Option<u32>,
+    pub capacity: u32,
+    pub reserve: Option<u32>,
+    pub reloading: bool,
+}
+pub type InventoryAmmoSlots = [Option<InventoryAmmo>; super::inventory::TOOL_SLOTS];
+
 /// The music a rule plays for a player ([`Notice::Music`]).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -573,6 +585,9 @@ pub enum Notice {
     /// that draw their own ammo counter, or `None` with no such gun. Sent
     /// as it changes, right after the ammo display's bottom print.
     Ammo(Option<HeldAmmo>),
+    /// This player's five inventory slots, including ammunition not held.
+    /// Fixed size bounds the wire representation; sent privately on change.
+    InventoryAmmo(Box<InventoryAmmoSlots>),
     /// The host emptied this player's hand (an Add-On's `unmount_image`):
     /// bricks, spray can and tools are put away on the client too.
     PutAway,

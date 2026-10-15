@@ -3,7 +3,7 @@ struct Camera { view_projection:mat4x4<f32>, right:vec4<f32>, up:vec4<f32>, posi
 @group(1) @binding(0) var images:texture_2d_array<f32>;
 @group(1) @binding(1) var image_sampler:sampler;
 struct Out { @builtin(position) position:vec4<f32>, @location(0) uv:vec2<f32>, @location(1) color:vec4<f32>, @location(2) @interpolate(flat) image:vec4<f32>, @location(3) world:vec3<f32>, @location(4) @interpolate(flat) origin:vec2<f32> }
-@vertex fn vs_main(@builtin(vertex_index) vertex:u32,@location(0) position_size:vec4<f32>,@location(1) color:vec4<f32>,@location(2) axis_spin:vec4<f32>,@location(3) image:vec4<f32>,@location(4) origin:vec2<f32>)->Out {
+@vertex fn vs_main(@builtin(vertex_index) vertex:u32,@location(0) position_size:vec4<f32>,@location(1) color:vec4<f32>,@location(2) axis_spin:vec4<f32>,@location(3) image:vec4<f32>,@location(4) origin:vec2<f32>,@location(5) sprite_frame:vec4<f32>)->Out {
     let corners=array<vec2<f32>,6>(vec2(-1.,-1.),vec2(1.,-1.),vec2(1.,1.),vec2(-1.,-1.),vec2(1.,1.),vec2(-1.,1.));
     let corner=corners[vertex];
     var right=camera.right.xyz;var up=camera.up.xyz;
@@ -16,7 +16,8 @@ struct Out { @builtin(position) position:vec4<f32>, @location(0) uv:vec2<f32>, @
         right=camera.right.xyz*c+camera.up.xyz*s;up=camera.up.xyz*c-camera.right.xyz*s;
     }
     var out:Out;
-    let world=position_size.xyz+(right*corner.x+up*corner.y)*position_size.w*0.5;
+    let local=(corner*0.5+0.5-vec2(sprite_frame.z,1.-sprite_frame.w))*sprite_frame.xy;
+    let world=position_size.xyz+(right*local.x+up*local.y)*position_size.w;
     out.position=camera.view_projection*vec4(world,1.);out.world=world;
     out.uv=vec2(corner.x*0.5+0.5,0.5-corner.y*0.5);out.color=color;out.image=image;out.origin=origin;return out;
 }

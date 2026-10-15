@@ -1081,6 +1081,14 @@ impl VehiclesWorld {
         (seat < d.seats.len())
             .then(|| effective_seat_pose(&world.bodies[v.body], d, v, seat).position)
     }
+    /// Authored eye in the same authoritative seat frame used for the rider.
+    pub fn seat_eye(&self, world: &PhysicsWorld, id: VehicleId, seat: usize) -> Option<Vec3> {
+        let v = self.instances.get(&id)?;
+        let d = &self.catalog[&v.spawn.definition];
+        let offset = Vec3::from(d.seats.get(seat)?.eye?) * v.spawn.scale;
+        let pose = effective_seat_pose(&world.bodies[v.body], d, v, seat);
+        Some(Vec3::from(pose.position) + Quat::from_array(pose.rotation) * offset)
+    }
     pub fn set_controls(
         &mut self,
         owner: OwnerId,

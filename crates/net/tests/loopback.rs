@@ -136,6 +136,8 @@ fn tool_pack() -> bri_weapons::Pack {
         images.insert(
             image.clone(),
             bri_weapons::Image {
+                first_person_nodes: Default::default(),
+                first_person_effects: Default::default(),
                 id: image.clone(),
                 name: format!("{stem}Image"),
                 model: String::new(),

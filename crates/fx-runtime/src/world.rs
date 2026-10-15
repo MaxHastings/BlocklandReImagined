@@ -43,6 +43,8 @@ impl SourceTransform {
 }
 #[derive(Clone, Debug, PartialEq)]
 pub struct SourceOptions {
+    /// Carry emitted particles with subsequent attachment-frame motion.
+    pub follow_source: bool,
     /// Cosmetic emission clock multiplier. Attached projectile/player sources use 1.
     pub time_scale: f32,
     /// Local rectangular placement volume; zero gives a point source.
@@ -76,6 +78,7 @@ pub struct SourceOptions {
 impl Default for SourceOptions {
     fn default() -> Self {
         Self {
+            follow_source: false,
             time_scale: 1.,
             half_extents: Vec3::ZERO,
             radius: None,
@@ -193,6 +196,7 @@ pub struct Camera {
 }
 #[derive(Clone, Copy, Debug)]
 pub struct ParticleInstance {
+    pub layout: bri_content::effects::SpriteLayout,
     pub position: Vec3,
     pub size: f32,
     pub color: Vec4,
@@ -269,6 +273,7 @@ struct Source {
     seen: f64,
 }
 struct Particle {
+    follow_source: bool,
     owner: EffectHandle,
     definition: usize,
     position: Vec3,
@@ -360,6 +365,9 @@ impl EffectsWorld {
             .iter()
             .map(|p| {
                 p.keys.iter().fold(0f32, |m, k| m.max(k.size.abs()))
+                    * p.animation.as_ref().map_or(1., |a| {
+                        a.layouts.values().fold(1f32, |r, l| r.max(l.reach()))
+                    })
                     * p.variation.as_ref().map_or(1., |v| v.size[1])
             })
             .collect();
@@ -522,6 +530,36 @@ impl EffectsWorld {
             .transform = transform;
         Ok(())
     }
+    /// A finite attachment may outlive its emission source through attached tails.
+    pub fn attachment_alive(&self, handle: EffectHandle) -> bool {
+        self.is_active(handle)
+            || self
+                .particles
+                .iter()
+                .any(|p| p.owner == handle && p.follow_source)
+    }
+    /// Carry only authored attached particles; preserve their group offsets and axes.
+    pub fn carry_attachment(
+        &mut self,
+        handle: EffectHandle,
+        previous: SourceTransform,
+        current: SourceTransform,
+    ) -> Result<()> {
+        previous.validate()?;
+        current.validate()?;
+        let rotation = current.rotation * previous.rotation.inverse();
+        for p in self
+            .particles
+            .iter_mut()
+            .filter(|p| p.owner == handle && p.follow_source)
+        {
+            p.position = current.position + rotation * (p.position - previous.position);
+            p.direction = rotation * p.direction;
+            p.velocity = rotation * p.velocity;
+            p.acceleration = rotation * p.acceleration;
+        }
+        Ok(())
+    }
     /// Move a source somewhere it did not travel to (through a portal):
     /// it emits from there on, with no streak back to where it was.
     pub fn jump_source(&mut self, handle: EffectHandle, transform: SourceTransform) -> Result<()> {
@@ -643,6 +681,7 @@ impl EffectsWorld {
                 (rng.range(b.count[0] as f32, b.count[1] as f32 + 1.) as u32).min(b.count[1]);
             let mut options = options.clone();
             options.radius = Some(b.radius);
+            options.follow_source = b.follow_source;
             let local_rotation =
                 Quat::from_rotation_arc(Vec3::Y, Vec3::from(b.direction).normalize());
             let group = SourceTransform {
@@ -961,6 +1000,7 @@ impl EffectsWorld {
                 (rate, start, reverse)
             });
         let mut particle = Particle {
+            follow_source: s.options.follow_source,
             animation_rate,
             animation_start,
             animation_reverse,
@@ -1135,12 +1175,25 @@ impl EffectsWorld {
         if p.orient && axis == Vec3::ZERO {
             return None;
         }
-        if !sees(p.position, size) {
+        let frame = def.animation.as_ref().map(|animation| {
+            animation.texture_at(
+                p.age,
+                p.animation_rate,
+                p.animation_start,
+                p.animation_reverse,
+            )
+        });
+        let layout = frame
+            .and_then(|f| def.animation.as_ref()?.layouts.get(f))
+            .copied()
+            .unwrap_or_default();
+        if !sees(p.position, size * layout.reach()) {
             return None;
         }
         Some((
             camera.position.distance_squared(p.position),
             ParticleInstance {
+                layout,
                 position: p.position,
                 size,
                 color: Vec4::from_array(color),
@@ -1215,15 +1268,17 @@ impl EffectsWorld {
             // team's colour).
             let color =
                 Vec3::from_array(color) * s.options.paint.map_or(Vec3::ONE, Vec3::from_array);
-            if radius <= 0. || color.max_element() <= 0. {
+            if color.max_element() <= 0. {
                 continue;
             }
-            lights.push(LightSnapshot {
-                handle: *handle,
-                position: s.transform.position,
-                color,
-                radius,
-            });
+            if radius > 0. {
+                lights.push(LightSnapshot {
+                    handle: *handle,
+                    position: s.transform.position,
+                    color,
+                    radius,
+                });
+            }
             if let (Some(f), Some(texture)) = (&def.flare, self.flare_texture[s.definition]) {
                 let own = (f.third_person && s.options.first_person_owner)
                     || s.options.hidden_from_own_eye;
@@ -1231,6 +1286,14 @@ impl EffectsWorld {
                     continue;
                 }
                 let distance = camera.position.distance(s.transform.position);
+                let angular = f.angles.map_or(1., |[falloff, cutoff]| {
+                    let toward = (camera.position - s.transform.position).normalize_or_zero();
+                    let cosine = (s.transform.rotation * Vec3::Y).dot(toward);
+                    ((cosine - cutoff.cos()) / (falloff.cos() - cutoff.cos())).clamped(0., 1.)
+                });
+                if angular <= 0. {
+                    continue;
+                }
                 // v20's `fxLight::renderObject` only shows flares nearer than 75 units.
                 if distance >= FLARE_MAX_DISTANCE {
                     continue;
@@ -1252,6 +1315,7 @@ impl EffectsWorld {
                 drawn.push((
                     camera.position.distance_squared(s.transform.position),
                     ParticleInstance {
+                        layout: Default::default(),
                         position: s.transform.position,
                         size,
                         // v20 divides the linked (brightness-scaled) colour by its
@@ -1261,7 +1325,7 @@ impl EffectsWorld {
                         } else {
                             Vec3::from_array(f.color)
                         }
-                        .extend(1.),
+                        .extend(angular),
                         spin: 0.,
                         axis: Vec3::ZERO,
                         texture,
@@ -1270,7 +1334,7 @@ impl EffectsWorld {
                             2 => BlendMode::AdditiveColor,
                             _ => BlendMode::Additive,
                         },
-                        depth_test: false,
+                        depth_test: f.depth_test,
                     },
                 ));
             }
@@ -1470,6 +1534,8 @@ mod tests {
                     brightness_curve: None,
                     radius_curve: None,
                     flare: Some(Flare {
+                        angles: None,
+                        depth_test: false,
                         texture: "original".into(),
                         color: [1.; 3],
                         third_person: true,

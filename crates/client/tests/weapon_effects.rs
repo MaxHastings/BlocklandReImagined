@@ -203,6 +203,112 @@ fn camera() -> Camera {
 }
 
 #[test]
+fn an_attached_corona_loads_its_own_art_and_stops_when_the_binding_disappears() -> Result<()> {
+    let mut pack = (*weapons()).clone();
+    let mut light = bri_fx_runtime::testing::library().lights.remove(0);
+    light.id = "kit:light/corona".into();
+    light.radius = 0.;
+    light.flare.as_mut().unwrap().texture = "kit/corona.png".into();
+    light.flare.as_mut().unwrap().third_person = false;
+    light.flare.as_mut().unwrap().depth_test = true;
+    pack.effects.lights.push(light);
+    let art = bri_render::scene::SceneImage {
+        label: "kit/corona.png".into(),
+        width: 1,
+        height: 1,
+        rgba: vec![255; 4],
+        srgb: true,
+    };
+    let mut fx = WeaponEffects::with_textures(
+        fixture(false),
+        Arc::new(pack),
+        EffectsLimits::default(),
+        |key| (key == art.label).then_some(&art),
+    )?;
+    fx.sync_attached_lights(&[bri_client::weapon_effects::AttachedLight {
+        owner: 17,
+        slot: 2,
+        definition: "kit:light/corona".into(),
+        transform: SourceTransform::default(),
+    }])?;
+    assert!(
+        fx.diagnostics.messages.is_empty(),
+        "{:?}",
+        fx.diagnostics.messages
+    );
+    let frame = fx.world().snapshot(&camera());
+    assert!(frame.lights.is_empty());
+    assert_eq!(frame.particles.len(), 1);
+    assert!(frame.particles[0].depth_test);
+    fx.sync_attached_lights(&[])?;
+    assert!(fx.world().snapshot(&camera()).particles.is_empty());
+    Ok(())
+}
+
+#[test]
+fn attached_bursts_keep_local_frames_while_detached_particles_stay_in_world() -> Result<()> {
+    let base = fixture(false);
+    let mut library = base.library.clone();
+    library.emitters[0].orient = true;
+    let mut manifest = base.manifest.clone();
+    manifest.composites.push(Composite {
+        id: "moving-burst".into(),
+        lifetime: 0.1,
+        emitters: vec![],
+        light: None,
+        burst: None,
+        bursts: vec![
+            Burst {
+                emitter: library.emitters[0].id.clone(),
+                follow_source: true,
+                offset: [1., 0., 0.],
+                ..Default::default()
+            },
+            Burst {
+                emitter: library.emitters[0].id.clone(),
+                offset: [-1., 0., 0.],
+                ..Default::default()
+            },
+        ],
+    });
+    let textures = base
+        .textures
+        .iter()
+        .map(|t| TextureImage {
+            id: t.id.clone(),
+            width: t.width,
+            height: t.height,
+            rgba: t.rgba.clone(),
+        })
+        .collect();
+    let pack = EffectsPack::from_parts(library, manifest, textures)?;
+    let mut fx = WeaponEffects::new(pack, weapons(), EffectsLimits::default())?;
+    fx.cues(&[cue(1, "moving-burst", 0.1)], pose)?;
+    assert_eq!(
+        fx.world().source_count(),
+        0,
+        "instant bursts have only particle tails"
+    );
+    let moved = SourceTransform {
+        position: Vec3::X * 10.,
+        rotation: glam::Quat::from_rotation_z(std::f32::consts::FRAC_PI_2),
+        ..Default::default()
+    };
+    fx.advance(0., Vec3::ZERO, |_| Some(moved))?;
+    let frame = fx.world().snapshot(&camera());
+    assert_eq!(frame.particles.len(), 2);
+    let attached = frame.particles.iter().find(|p| p.position.x > 0.).unwrap();
+    assert!(attached.position.distance(Vec3::new(10., 1., 0.)) < 0.0001);
+    assert!(attached.axis.distance(Vec3::NEG_X) < 0.0001);
+    let detached = frame.particles.iter().find(|p| p.position.x < 0.).unwrap();
+    assert!(detached.position.distance(Vec3::NEG_X) < 0.0001);
+    assert!(detached.axis.distance(Vec3::Y) < 0.0001);
+    fx.advance(3., Vec3::ZERO, |_| Some(moved))?;
+    assert!(fx.world().snapshot(&camera()).particles.is_empty());
+    Ok(())
+}
+
+#[test]
 fn projectile_update_late_join_remove_and_reset() -> Result<()> {
     let mut fx = WeaponEffects::new(fixture(false), weapons(), EffectsLimits::default())?;
     let mut v = view();

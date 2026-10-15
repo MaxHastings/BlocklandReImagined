@@ -493,3 +493,25 @@ fn held_ammo_keeps_a_custom_mount_while_slot_projection_uses_the_inventory() {
     assert_eq!(w.ammo(A).unwrap().ammo, "shells");
     assert_eq!(w.ammo_on_equip(A, slot).unwrap().ammo, "light");
 }
+
+#[test]
+fn reload_routes_body_and_image_animation_to_their_own_threads() {
+    let mut pack = Pack::from_json(GUNS.as_bytes()).unwrap();
+    let magazine = pack
+        .images
+        .get_mut("mag:image/pistol")
+        .unwrap()
+        .magazine
+        .as_mut()
+        .unwrap();
+    magazine.reload_sequence = "body_reload".into();
+    magazine.reload_image_sequence = "image_reload".into();
+    let mut world = WeaponsWorld::new(pack).unwrap();
+    world.add_actor(A, 5).unwrap();
+    holding(&mut world, A, "mag:weapon/pistol");
+    click(&mut world);
+    assert!(world.reload(A).unwrap());
+    let events = step(&mut world, 1);
+    assert!(events.iter().any(|event| matches!(event, Event::Animation { thread: 2, sequence, image_hand: None, .. } if sequence == "body_reload")));
+    assert!(events.iter().any(|event| matches!(event, Event::Animation { thread: 0, sequence, image_hand: Some(0), .. } if sequence == "image_reload")));
+}

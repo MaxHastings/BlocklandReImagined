@@ -2364,3 +2364,102 @@ fn rules_play_and_stop_music_for_everyone_and_one_player() {
         matches!(heard[0], (o, Notice::Music(MusicPlay { track: Some(t), looping: true, fade })) if *o == c && t == "probe:sound/theme" && *fade == 0.0)
     );
 }
+
+#[test]
+fn stowed_ammunition_updates_privately_without_equipping_or_repeating() {
+    let mut g = Game::new();
+    let mut pack = weapons();
+    let image = pack.images.get_mut("probe:image/nade").unwrap();
+    image.magazine = Some(
+        serde_json::from_value(
+            json!({"size":1,"ammo":"probe","reserve":4,"max_reserve":4,"from_reserve":true}),
+        )
+        .unwrap(),
+    );
+    image.projectile = Some("probe:projectile/dart".into());
+    image.states[2].script = "onFire".into();
+    g.s.set_weapon_pack(pack).unwrap();
+    let p = g.join(Vec3::new(0., 0.05, 0.));
+    let other = g.join(Vec3::new(6., 0.05, 0.));
+    g.steps(3);
+    g.run(p, "arm", vec![]);
+    g.steps(10);
+    g.s.take_private_notices();
+    g.run(p, "nade", vec![]);
+    g.steps(1);
+    let updates =
+        g.s.take_private_notices()
+            .into_iter()
+            .filter_map(|(who, n)| match n {
+                Notice::InventoryAmmo(slots) => Some((who, *slots)),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+    assert_eq!(updates.len(), 1);
+    assert_eq!(
+        updates[0].0, p,
+        "only the holder learns their inventory counts"
+    );
+    assert_ne!(updates[0].0, other);
+    let count = updates[0]
+        .1
+        .iter()
+        .flatten()
+        .find(|a| a.item == "probe:weapon/nade")
+        .unwrap();
+    assert_eq!((count.rounds, count.capacity), (Some(4), 4));
+    g.run(p, "held", vec![]);
+    assert_eq!(
+        g.text("held"),
+        "probe:weapon/gun|Ready",
+        "reading inventory never draws the grenade"
+    );
+    g.steps(3);
+    assert!(
+        !g.s.take_private_notices()
+            .iter()
+            .any(|(_, n)| matches!(n, Notice::InventoryAmmo(_))),
+        "unchanged counts are not resent"
+    );
+    g.run(p, "quick", vec![]);
+    g.steps(50);
+    let updates =
+        g.s.take_private_notices()
+            .into_iter()
+            .filter_map(|(who, n)| match n {
+                Notice::InventoryAmmo(slots) if who == p => Some(*slots),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+    let count = updates
+        .last()
+        .unwrap()
+        .iter()
+        .flatten()
+        .find(|a| a.item == "probe:weapon/nade")
+        .unwrap();
+    assert_eq!(count.rounds, Some(3), "quick use updates the stowed count");
+    g.run(p, "held", vec![]);
+    assert_eq!(g.text("held"), "probe:weapon/gun|Ready");
+    g.run(p, "endless", vec![]);
+    g.steps(1);
+    let updates =
+        g.s.take_private_notices()
+            .into_iter()
+            .filter_map(|(who, n)| match n {
+                Notice::InventoryAmmo(slots) if who == p => Some(*slots),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+    assert_eq!(
+        updates
+            .last()
+            .unwrap()
+            .iter()
+            .flatten()
+            .find(|a| a.item == "probe:weapon/nade")
+            .unwrap()
+            .rounds,
+        None
+    );
+}

@@ -117,3 +117,18 @@ fn a_lean_eases_the_eye_sideways_within_the_body() {
     .unwrap();
     assert!(!q.set_lean(1.0) && !q.set_prone(&mut w, true));
 }
+
+#[test]
+fn mounted_eye_is_shared_by_interactions_and_clears_on_dismount() {
+    let mut w = world(None);
+    let mut p = Player::spawn(&mut w, 1, Vec3::new(3., 4., 5.), soldier()).unwrap();
+    let standing = p.eye();
+    p.set_seated(true);
+    p.set_mounted_eye(Some(Vec3::new(3.25, 5.1, 4.8)));
+    assert!(p.eye().distance(Vec3::new(3.25, 5.1, 4.8)) < 1e-5);
+    p.set_mounted_eye(Some(Vec3::NAN));
+    assert!(p.eye().is_finite());
+    p.set_mounted_eye(Some(Vec3::new(3.25, 5.1, 4.8)));
+    p.set_seated(false);
+    assert!(p.eye().distance(standing) < 1e-5);
+}

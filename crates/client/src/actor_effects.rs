@@ -247,7 +247,15 @@ pub fn vehicle_trails(
     d.trails
         .iter()
         .enumerate()
-        .filter(|(_, t)| t.matches(speed))
+        .filter(|(_, t)| {
+            if let Some(wheel) = t.contact_wheel {
+                let up = frame.rotation * Vec3::Y;
+                frame.wheel_contact.get(wheel).copied().unwrap_or(false)
+                    && t.matches((frame.velocity - up * frame.velocity.dot(up)).length())
+            } else {
+                t.matches(speed)
+            }
+        })
         .map(|(i, t)| TrailSource {
             vehicle,
             trail: i,
@@ -1482,6 +1490,7 @@ fn teleport_image() -> bri_weapons::Image {
     bri_weapons::Image {
         shell_effect: String::new(),
         first_person_nodes: BTreeMap::new(),
+        first_person_effects: BTreeMap::new(),
         id: bri_weapons::native_id("image", "PlayerTeleportImage"),
         name: "PlayerTeleportImage".into(),
         model: "base/data/shapes/empty.dts".into(),

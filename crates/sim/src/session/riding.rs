@@ -196,8 +196,16 @@ impl Session {
         let owners: Vec<OwnerId> = self.peers.keys().copied().collect();
         for owner in owners {
             let seated = self.sit_posed(owner);
+            let eye = self.mounted(owner).and_then(|(vehicle, seat)| {
+                self.vehicles.world.as_ref()?.seat_eye(
+                    &self.simulation.physics,
+                    bri_vehicles::VehicleId(vehicle),
+                    usize::from(seat),
+                )
+            });
             if let Some(peer) = self.peers.get_mut(&owner) {
                 peer.player.set_seated(seated);
+                peer.player.set_mounted_eye(eye);
             }
         }
     }

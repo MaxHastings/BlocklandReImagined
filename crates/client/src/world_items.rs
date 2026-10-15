@@ -167,6 +167,7 @@ struct Model {
 }
 #[derive(Clone)]
 struct AnimationClock {
+    image_action: Option<(String, f64)>,
     image: String,
     state: String,
     sequence: Option<String>,
@@ -668,7 +669,10 @@ impl WorldItems {
                 {
                     let drawn_pose = match &pose_key.sequence {
                         Some(sequence) if !self.moves_drawn(&image.model, sequence, false) => {
-                            PoseKey::default()
+                            PoseKey {
+                                live: pose_key.live,
+                                ..PoseKey::default()
+                            }
                         }
                         _ => pose_key.clone(),
                     };
@@ -697,7 +701,10 @@ impl WorldItems {
             // rest pose, which every holder of the image shares.
             let drawn_pose = match &pose_key.sequence {
                 Some(sequence) if !self.moves_drawn(&image.model, sequence, local_first) => {
-                    PoseKey::default()
+                    PoseKey {
+                        live: pose_key.live,
+                        ..PoseKey::default()
+                    }
                 }
                 _ => pose_key,
             };
@@ -922,6 +929,7 @@ impl WorldItems {
             .clocks
             .entry((owner, hand))
             .or_insert_with(|| AnimationClock {
+                image_action: None,
                 image: String::new(),
                 state: String::new(),
                 sequence: None,
@@ -936,6 +944,7 @@ impl WorldItems {
                 },
             });
         if clock.image != image || clock.state != state {
+            clock.image_action = None;
             clock.spin.state_started = seconds;
             clock.spin.entered_speed = clock.spin.speed;
             if clock.image != image {
@@ -968,11 +977,18 @@ impl WorldItems {
         // `ShapeBase::setImageState` restarts the state's sequence on every
         // entry.
         if let Some(restart) = clock.restart.take()
-            && let Some(clip) = clip.filter(|c| c.name.eq_ignore_ascii_case(&restart))
+            && let Some(requested) = shape
+                .animations
+                .iter()
+                .find(|c| c.name.eq_ignore_ascii_case(&restart))
         {
-            clock.sequence = Some(clip.name.clone());
-            clock.started = seconds;
-            clock.frozen = false;
+            if clip.is_some_and(|c| c.name == requested.name) {
+                clock.sequence = Some(requested.name.clone());
+                clock.started = seconds;
+                clock.frozen = false;
+            } else if !requested.looping {
+                clock.image_action = Some((requested.name.clone(), seconds));
+            }
         }
         // The spin turns at the speed the state gives it, from where it was.
         let spin = &mut clock.spin;
@@ -996,7 +1012,14 @@ impl WorldItems {
             .flatten();
         // A state with its own sequence plays that; one without shows the
         // spin where it has turned to.
-        let result = if let Some(spin_clip) = spin_clip {
+        let image_action = clock.image_action.as_ref().and_then(|(name, start)| {
+            let clip = shape.animations.iter().find(|a| &a.name == name)?;
+            let age = (seconds - start).max(0.0);
+            (age < f64::from(clip.duration)).then_some((clip, age))
+        });
+        let result = if let Some((clip, age)) = image_action {
+            normalized_pose(clip, age)
+        } else if let Some(spin_clip) = spin_clip {
             let duration = f64::from(spin_clip.duration);
             let at = if duration > 0. {
                 spin.turned.rem_euclid(duration)
@@ -1391,6 +1414,29 @@ impl WorldItems {
     /// The item presentation this draws from.
     pub fn assets(&self) -> &Arc<ItemAssets> {
         &self.assets
+    }
+    /// Select the authored view-specific effect on the exact drawn image.
+    /// IDs, ticks and all authoritative cue data remain intact.
+    pub fn effect_cue(&self, mut cue: Cue, weapons: &bri_weapons::Pack) -> Cue {
+        if let CueKind::WeaponEffect {
+            source: bri_weapons::TargetId::Actor(actor),
+            image: Some(image),
+            hand: Some(hand),
+            definition,
+            ..
+        } = &mut cue.kind
+            && self
+                .mounted
+                .get(&(actor.0, *hand))
+                .is_some_and(|m| m.first_person && m.image == *image)
+            && let Some(replacement) = weapons
+                .images
+                .get(image)
+                .and_then(|image| image.first_person_effects.get(definition))
+        {
+            *definition = replacement.clone();
+        }
+        cue
     }
     /// Source engine falls back from a missing state emitter node to muzzlePoint,
     /// and an image without a muzzlePoint (brickWeapon.dts) emits from its own

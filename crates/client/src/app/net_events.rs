@@ -769,6 +769,10 @@ impl App {
                             self.audio.play_ambient(&play);
                             continue;
                         }
+                        bri_sim::session::Notice::InventoryAmmo(slots) => {
+                            self.net.inventory_ammo = *slots;
+                            continue;
+                        }
                         bri_sim::session::Notice::Ammo(held) => {
                             self.net.next_print_is_ammo = held.as_ref().is_some_and(|h| h.printed);
                             self.net.held_ammo = held;

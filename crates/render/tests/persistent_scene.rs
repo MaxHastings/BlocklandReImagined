@@ -431,6 +431,7 @@ fn a_haze_caps_the_fog_and_keeps_far_geometry() -> Result<()> {
     let (mut data, mut env) = sky_fixture();
     env.fog.max = 0.6;
     env.fog.height = 20.0;
+    env.fog.density_end = Some(2.0);
     bri_render::environment_scene::append(&mut data, &env, &[1, 2, 3, 4, 5, 6], &[])?;
     let sky = renderer.upload(&gpu.device, &gpu.queue, &data)?;
     let center = (32 * 64 + 32) * 4;
@@ -444,8 +445,9 @@ fn a_haze_caps_the_fog_and_keeps_far_geometry() -> Result<()> {
     );
     camera.apply_environment(&data);
     assert_eq!(camera.haze[..2], [20.0, 0.6]);
+    assert_eq!(camera.haze[2], 2.0);
     let edge = env.fog.sky_amount(0.0, env.bottom);
-    assert!((edge - 0.6 * (1.0 - (-4.0f32).exp())).abs() < 1e-4);
+    assert!((edge - 0.6 * (1.0 - (-8.0f32).exp())).abs() < 1e-4);
     let behind = [0.0, 0.0, 255.0].map(|c: f32| c * (1.0 - edge) + 255.0 * edge);
     // Black at 2.9 of a 1..3 range: a plain fog would have faded it out.
     assert_eq!(env.fog.edge(2.9), 0.0);

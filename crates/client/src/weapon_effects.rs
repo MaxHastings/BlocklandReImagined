@@ -67,9 +67,17 @@ pub struct HeldRope {
     pub from: Vec3,
     pub to: Vec3,
 }
+/// A native light attached to an independently identified owner and socket slot.
+pub struct AttachedLight {
+    pub owner: u64,
+    pub slot: u16,
+    pub definition: String,
+    pub transform: SourceTransform,
+}
 struct Timed {
     cue: Cue,
     handle: EffectHandle,
+    previous: SourceTransform,
 }
 
 /// Shell and avatar/image animation need the host's original posed models.
@@ -88,6 +96,7 @@ pub struct WeaponEffects {
     /// Mounted images' lights by holder and slot: the image and paint each
     /// was started for.
     image_lights: BTreeMap<(u64, u8), (String, Option<u8>, EffectHandle)>,
+    attached_lights: BTreeMap<(u64, u16), (String, EffectHandle)>,
     ropes: BTreeMap<u64, RopeSweep>,
     timed: Vec<Timed>,
     pending: VecDeque<HostRequest>,
@@ -257,6 +266,7 @@ impl WeaponEffects {
             bindings,
             trails: BTreeMap::new(),
             image_lights: BTreeMap::new(),
+            attached_lights: BTreeMap::new(),
             ropes: BTreeMap::new(),
             timed: Vec::new(),
             pending: VecDeque::new(),
@@ -271,6 +281,9 @@ impl WeaponEffects {
         })
     }
 
+    pub fn weapons(&self) -> &bri_weapons::Pack {
+        &self.weapons
+    }
     pub fn world(&self) -> &EffectsWorld {
         &self.world
     }
@@ -367,6 +380,7 @@ impl WeaponEffects {
         self.world.teardown();
         self.trails.clear();
         self.image_lights.clear();
+        self.attached_lights.clear();
         self.ropes.clear();
         self.timed.clear();
         self.pending.clear();
@@ -542,6 +556,57 @@ impl WeaponEffects {
             {
                 Ok(handle) => {
                     self.image_lights.insert(key, (image, paint, handle));
+                }
+                Err(_) => {
+                    self.diagnostics.capacity_rejections =
+                        self.diagnostics.capacity_rejections.saturating_add(1);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    pub fn sync_attached_lights(&mut self, lights: &[AttachedLight]) -> Result<()> {
+        let desired: BTreeMap<_, _> = lights
+            .iter()
+            .take(self.limits.sources)
+            .filter(|l| valid_transform(l.transform))
+            .map(|l| ((l.owner, l.slot), l))
+            .collect();
+        let world = &mut self.world;
+        self.attached_lights.retain(|key, (definition, handle)| {
+            let keep = desired
+                .get(key)
+                .is_some_and(|l| &l.definition == definition)
+                && world.is_active(*handle);
+            if !keep {
+                world.stop(*handle, StopMode::Immediate);
+            }
+            keep
+        });
+        for (key, light) in desired {
+            if let Some((_, handle)) = self.attached_lights.get(&key) {
+                self.world.update_source(*handle, light.transform)?;
+                continue;
+            }
+            let Some((binding, options)) = self.resolve(&light.definition) else {
+                self.missing(format!("Missing attached light {}", light.definition));
+                continue;
+            };
+            if !matches!(binding.kind, Kind::Light) {
+                self.missing(format!(
+                    "Attached light {} is not a light",
+                    light.definition
+                ));
+                continue;
+            }
+            match self
+                .world
+                .start_light(&binding.id, light.transform, options)
+            {
+                Ok(handle) => {
+                    self.attached_lights
+                        .insert(key, (light.definition.clone(), handle));
                 }
                 Err(_) => {
                     self.diagnostics.capacity_rejections =
@@ -756,10 +821,11 @@ impl WeaponEffects {
                                 self.diagnostics.accepted_cues.saturating_add(1);
                             if attached {
                                 for handle in handles {
-                                    if self.world.is_active(handle) {
+                                    if self.world.attachment_alive(handle) {
                                         self.timed.push(Timed {
                                             cue: cue.clone(),
                                             handle,
+                                            previous: transform,
                                         });
                                     }
                                 }
@@ -789,18 +855,23 @@ impl WeaponEffects {
             dt.is_finite() && (0.0..=86400.).contains(&dt) && wind.is_finite(),
             "Invalid weapon effects timestep/wind"
         );
-        self.timed.retain(|t| self.world.is_active(t.handle));
-        for timed in &self.timed {
+        self.timed.retain(|t| self.world.attachment_alive(t.handle));
+        for timed in &mut self.timed {
             if let Some(transform) = pose(&timed.cue).filter(|t| valid_transform(*t)) {
-                self.world.update_source(timed.handle, transform)?;
+                self.world
+                    .carry_attachment(timed.handle, timed.previous, transform)?;
+                if self.world.is_active(timed.handle) {
+                    self.world.update_source(timed.handle, transform)?;
+                }
+                timed.previous = transform;
             } else {
                 self.world.stop(timed.handle, StopMode::Drain);
                 self.diagnostics.missing_poses = self.diagnostics.missing_poses.saturating_add(1);
             }
         }
         self.world.advance(dt, wind)?;
-        self.timed.retain(|t| self.world.is_active(t.handle));
-        debug_assert!(self.timed.len() <= self.limits.sources);
+        self.timed.retain(|t| self.world.attachment_alive(t.handle));
+        debug_assert!(self.timed.len() <= self.limits.sources + self.limits.particles);
         Ok(())
     }
 }
@@ -881,11 +952,7 @@ fn add_add_on_textures<'t>(
 ) {
     let mut added = 0;
     let mut decoded_bytes = textures.iter().map(|t| t.rgba.len()).sum::<usize>();
-    for (p, name) in effects
-        .particles
-        .iter()
-        .flat_map(|p| p.textures().map(move |name| (p, name)))
-    {
+    for (id, name) in effects.textures() {
         if library.textures.contains_key(name) {
             continue;
         }
@@ -896,10 +963,10 @@ fn add_add_on_textures<'t>(
             fault(
                 notes,
                 Problem::new(
-                    owner(&p.id),
+                    owner(id),
                     health::Kind::Effect,
-                    &p.id,
-                    format!("left out: more than {ADD_ON_TEXTURES} Add-On particle textures"),
+                    id,
+                    format!("left out: more than {ADD_ON_TEXTURES} Add-On effect textures"),
                 ),
             );
             continue;
@@ -908,12 +975,12 @@ fn add_add_on_textures<'t>(
             fault(
                 notes,
                 Problem::new(
-                    owner(&p.id),
+                    owner(id),
                     health::Kind::Texture,
                     name,
-                    "is not a valid image, so its particle draws nothing",
+                    "is not a valid image, so its effect draws nothing",
                 )
-                .used_by(format!("particle {}", p.id)),
+                .used_by(format!("effect {id}")),
             );
             continue;
         };
@@ -921,7 +988,7 @@ fn add_add_on_textures<'t>(
             fault(
                 notes,
                 Problem::new(
-                    owner(&p.id),
+                    owner(id),
                     health::Kind::Texture,
                     name,
                     "exceeds the effects image memory budget",
@@ -961,7 +1028,7 @@ pub fn interface_textures(
     ui: &bri_ui::pack::Pack,
 ) -> BTreeMap<String, bri_render::scene::SceneImage> {
     let mut found = BTreeMap::new();
-    for texture in effects.particles.iter().flat_map(|p| p.textures()) {
+    for (_, texture) in effects.textures() {
         let id = texture.replace('\\', "/").to_ascii_lowercase();
         if !id.starts_with("base/client/ui/") || found.contains_key(texture) {
             continue;
@@ -1069,9 +1136,26 @@ fn add_pack_effects(
     }
     for l in &effects.lights {
         if !library.lights.iter().any(|x| x.id == l.id) {
+            let mut light = l.clone();
+            if light
+                .flare
+                .as_ref()
+                .is_some_and(|f| !library.textures.contains_key(&f.texture))
+            {
+                fault(
+                    notes,
+                    Problem::new(
+                        owner(&l.id),
+                        health::Kind::Texture,
+                        &l.id,
+                        "missing flare texture; light keeps its illumination without a corona",
+                    ),
+                );
+                light.flare = None;
+            }
             library.lights.push(bri_content::effects::Light {
                 name: String::new(),
-                ..l.clone()
+                ..light
             });
         }
     }

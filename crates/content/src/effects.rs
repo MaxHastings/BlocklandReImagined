@@ -39,6 +39,11 @@ impl Curve {
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Flare {
+    /// Optional angular brightness falloff/cutoff, radians from source +Y.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub angles: Option<[f32; 2]>,
+    #[serde(default)]
+    pub depth_test: bool,
     pub texture: String,
     pub color: [f32; 3],
     pub third_person: bool,
@@ -106,6 +111,8 @@ pub struct ParticleVariation {
 #[serde(default, deny_unknown_fields)]
 pub struct Burst {
     pub emitter: String,
+    /// Keep this group's particles in the moving attachment frame.
+    pub follow_source: bool,
     pub count: [u32; 2],
     pub radius: [f32; 2],
     pub offset: [f32; 3],
@@ -116,6 +123,7 @@ impl Default for Burst {
     fn default() -> Self {
         Self {
             emitter: String::new(),
+            follow_source: false,
             count: [1; 2],
             radius: [0.; 2],
             offset: [0.; 3],
@@ -143,6 +151,8 @@ impl Burst {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ParticleAnimation {
     pub frames: Vec<String>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub layouts: BTreeMap<String, SpriteLayout>,
     pub rate: [f32; 2],
     #[serde(default)]
     pub looping: bool,
@@ -150,6 +160,38 @@ pub struct ParticleAnimation {
     pub random_start: bool,
     #[serde(default)]
     pub reverse: bool,
+}
+/// Geometry relative to the particle's authored diameter, with a top-left image pivot.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct SpriteLayout {
+    pub scale: [f32; 2],
+    pub pivot: [f32; 2],
+}
+impl Default for SpriteLayout {
+    fn default() -> Self {
+        Self {
+            scale: [1.; 2],
+            pivot: [0.5; 2],
+        }
+    }
+}
+impl SpriteLayout {
+    pub fn reach(self) -> f32 {
+        self.scale
+            .iter()
+            .zip(self.pivot)
+            .map(|(s, p)| s * p.abs().max((1. - p).abs()))
+            .sum()
+    }
+    pub fn valid(self) -> bool {
+        self.scale
+            .iter()
+            .all(|v| v.is_finite() && (0.0001..=16.).contains(v))
+            && self
+                .pivot
+                .iter()
+                .all(|v| v.is_finite() && (-16.0..=16.).contains(v))
+    }
 }
 impl ParticleAnimation {
     pub fn texture_at(&self, seconds: f32, rate: f32, start: usize, reverse: bool) -> &str {
@@ -289,7 +331,11 @@ impl Library {
                         && a.rate
                             .iter()
                             .all(|r| r.is_finite() && (0.0..=240.0).contains(r))
-                        && a.rate[0] <= a.rate[1],
+                        && a.rate[0] <= a.rate[1]
+                        && a.layouts.len() <= a.frames.len()
+                        && a.layouts
+                            .iter()
+                            .all(|(frame, layout)| a.frames.contains(frame) && layout.valid()),
                     "Invalid particle animation"
                 );
             }
@@ -399,6 +445,10 @@ impl Library {
             if let Some(f) = &l.flare {
                 ensure!(
                     self.textures.contains_key(&f.texture)
+                        && f.angles.is_none_or(|a| a
+                            .iter()
+                            .all(|v| v.is_finite() && (0.0..=std::f32::consts::PI).contains(v))
+                            && a[0] < a[1])
                         && f.blend_mode <= 2
                         && f.far_distance > f.near_distance,
                     "Invalid flare"
@@ -499,6 +549,7 @@ mod tests {
     #[test]
     fn sprite_sequences_hold_loop_and_reverse_at_authored_rates() {
         let mut a = ParticleAnimation {
+            layouts: BTreeMap::new(),
             frames: vec!["a".into(), "b".into(), "c".into()],
             rate: [10.; 2],
             looping: false,

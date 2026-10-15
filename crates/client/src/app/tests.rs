@@ -1174,6 +1174,7 @@ fn temp_brick_options_colour_and_flash_the_ghost() {
 fn world_and_weapon_effects_share_depth_order_and_nearest_light_budget() {
     use glam::Vec3;
     let particle = |z, texture| bri_fx_runtime::ParticleInstance {
+        layout: Default::default(),
         position: Vec3::new(0., 0., z),
         size: 1.,
         color: Vec3::ONE.extend(1.),
@@ -1239,6 +1240,7 @@ fn three_full_effect_worlds_fit_the_renderer_and_overflow_drops_the_farthest() {
         particles: (0..limits.max_sprites())
             .rev()
             .map(|i| bri_fx_runtime::ParticleInstance {
+                layout: Default::default(),
                 position: Vec3::new(i as f32, 0., 0.),
                 size: 1.,
                 color: Vec3::ONE.extend(1.),

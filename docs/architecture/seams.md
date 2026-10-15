@@ -20,6 +20,7 @@ labels are retained so earlier progress notes remain traceable.
 
 | Seam | What it covers | Owner | State |
 |---|---|---|---|
+| Independent haze density and visibility | Authored fog density distance separate from geometry cutoff, shared CPU/GPU atmosphere | Codex v0.3.1 remaining capabilities | implementation in progress |
 | Authored reflection layers | Native surface environment image and mask, face/grazing colours, inverse-mask detail; preserves imported material inputs without inferred metalness | Codex Halo CE fidelity | codex/halo-ce-fidelity |
 | Authored contact and ejection effects | Material-selected impacts and decal textures; sprite frame playback, seeded tint/size/count/radius ranges and independently transformed burst groups; image `shell_effect` at the existing shell socket | Codex v0.3.1 fidelity completion | codex/v031-fidelity-completion; validation in progress |
 | Surface modulation | Unlit multiplicative scene layers; decals select alpha, additive, multiply or double-multiply and fade toward the underlying surface | Codex v0.3.1 fidelity completion | Original/modern offscreen blend regression passes |
@@ -112,3 +113,18 @@ labels are retained so earlier progress notes remain traceable.
 | Per-view image attachment nodes | Bounded authored logical-to-first-person socket mapping; posed image geometry and effects select the same view | Root reference-first corrections | source candidate; compiled, rendered acceptance open |
 | Foreign-body stock tool motion | Reference tool action socket delta moves only the held item when the body has no action clip; no foreign skeleton substitution | Root reference-first corrections | source candidate; compiled, human acceptance open |
 | Vehicle attachment effect sockets | Rendered attachment yaw/pitch/sway and original named muzzle/ejection nodes drive effects | Root reference-first corrections | source candidate; compiled, rendered acceptance open |
+
+| Native texture alpha semantics | Authored paint_overlay false preserves imported RGBA transparency instead of treating it as legacy node paint | Root rifle reference inspection | candidate; offscreen comparison pending |
+| Per-view image effects and reload animation | Authored first-person effect selection and independent one-shot image reload sequence; body action remains separate | Root rifle reference inspection | candidate; offscreen comparison pending |
+| Attached burst particles | Authored burst groups may follow the moving source frame while smoke and casings remain detached; preserve each group's local offset and direction | Root rifle reference inspection | implementation and rendered inspection pending |
+| Particle frame proportions and registration | Authored animation-frame layout retains aspect and normalized image pivot; default remains a centered square | Root rifle reference inspection | implementation and rendered inspection pending |
+| Native shape cutout materials | Authored alpha cutoff selects depth-writing masked geometry, preserved by glTF MASK import | Root Warthog inspection | candidate; overlap render comparison pending |
+| Vehicle lamp presentation | Authored switch/driver/always activation and mounted native light-effect bindings; per-view directional, depth-tested coronas | Root Warthog source audit | implementation pending; projected light cookies remain separate |
+
+| Contact-conditioned vehicle trails | Optional authored wheel index gates trail emission on authoritative contact and tangential chassis speed; airborne contrails preserve existing behavior | Root Warthog airborne-dust report | implementation and regression pending |
+
+| Turret spring coordinate frame | Inertial response measures acceleration in the same authored mount/aim frame that applies its pitch/roll rotation | Root Warthog handling audit | correction candidate; original yaw inertia/vertical travel remain open |
+
+| Authored vehicle rider poses | Optional seat-owned clip uses its original model-origin frame; missing clips retain the body sit and anchor its hip to the seat, legacy seats unchanged | Root reference-first passenger review | implementation and rendered comparison pending |
+
+| Authored seat eye origins | Optional seat-local eye drives both client first-person view and authoritative motor interaction eye; no FOV or camera-mode lock | Root passenger view comparison | implementation and comparison pending |

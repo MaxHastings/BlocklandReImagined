@@ -221,6 +221,16 @@ impl App {
         standing: Option<Vec3>,
     ) -> Option<Vec3> {
         let vitals = view.vitals.get(&view.owner)?;
+        if let Some(eye) = vitals
+            .mounted
+            .and_then(|(id, seat)| {
+                let info = view.vehicles.get(&id)?;
+                vehicles.seat_eye(vehicle_assets, info, usize::from(seat))
+            })
+            .filter(|p| p.is_finite())
+        {
+            return Some(eye);
+        }
         let avatar = avatars.get(&view.owner)?;
         if vitals.mounted.is_none() && vitals.ride.is_none() && !vitals.sitting {
             let (sit, standing) = avatar.getting_up().zip(standing)?;

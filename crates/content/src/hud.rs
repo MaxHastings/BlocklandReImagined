@@ -709,12 +709,43 @@ pub enum Source {
     /// Seconds until the dead viewer may respawn, 0 once they may click;
     /// missing while alive or while a rule holds their respawn.
     Respawn,
+    /// Owner-private ammunition for an inventory item, including stowed items.
+    ItemAmmo {
+        item: String,
+        field: AmmoField,
+    },
     /// A rule's public state: `package:player/key` or `package:global/key`,
     /// read as a HUD panel row reads it.
     State(String),
 }
+/// Which part of an inventory item's ammunition a HUD reads.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum AmmoField {
+    Rounds,
+    Maximum,
+    Reserve,
+    Reloading,
+}
 impl Source {
     pub fn parse(text: &str) -> Option<Self> {
+        for (prefix, field) in [
+            ("item_ammo:", AmmoField::Rounds),
+            ("item_ammo_max:", AmmoField::Maximum),
+            ("item_ammo_reserve:", AmmoField::Reserve),
+            ("item_reloading:", AmmoField::Reloading),
+        ] {
+            if let Some(item) = text.strip_prefix(prefix) {
+                return (!item.is_empty()
+                    && item.len() <= 160
+                    && item.chars().all(|c| {
+                        c.is_ascii_alphanumeric() || matches!(c, ':' | '/' | '.' | '_' | '-')
+                    }))
+                .then(|| Self::ItemAmmo {
+                    item: item.to_string(),
+                    field,
+                });
+            }
+        }
         Some(match text {
             "health" => Source::Health,
             "health_max" => Source::HealthMax,
@@ -748,6 +779,10 @@ impl Source {
         match self {
             Source::Health => Amount::Source("health_max".into()),
             Source::Ammo => Amount::Source("ammo_max".into()),
+            Source::ItemAmmo {
+                item,
+                field: AmmoField::Rounds,
+            } => Amount::Source(format!("item_ammo_max:{item}")),
             _ => Amount::Number(1.0),
         }
     }
@@ -1980,5 +2015,16 @@ mod tests {
             .is_err(),
             "unknown regions are refused"
         );
+    }
+    #[test]
+    fn inventory_sources_are_bounded_and_keep_their_capacity_binding() {
+        let source = Source::parse("item_ammo:gear:weapon/grenade").unwrap();
+        assert_eq!(
+            source.natural_max(),
+            Amount::Source("item_ammo_max:gear:weapon/grenade".into())
+        );
+        assert!(Source::parse("item_ammo:").is_none());
+        assert!(Source::parse("item_ammo:bad id").is_none());
+        assert!(Source::parse(&format!("item_ammo:{}", "x".repeat(161))).is_none());
     }
 }

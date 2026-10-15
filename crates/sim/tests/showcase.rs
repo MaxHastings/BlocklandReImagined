@@ -258,6 +258,8 @@ fn vehicles() -> bri_vehicles::Pack {
     tumble.shove = false;
     tumble.harms_only_in_minigames = false;
     tumble.seats = vec![Seat {
+        rider_pose: None,
+        eye: None,
         node: "mount0".into(),
         transform: Transform::default(),
         pose: "root".into(),
@@ -1801,6 +1803,8 @@ fn add_launcher(
         },
     ];
     let image = bri_weapons::Image {
+        first_person_nodes: Default::default(),
+        first_person_effects: Default::default(),
         id: image_id.clone(),
         name: "rocketLauncherImage".into(),
         model: String::new(),

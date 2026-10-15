@@ -96,8 +96,9 @@ pub use admin::{
 };
 pub use bri_world::authority::WrenchProperties;
 pub use combat::{
-    AmbientPlay, DEATH_PROJECTILE, DeathPose, HeldAmmo, HitSide, KillLine, MAX_HEALTH,
-    MiniGameRequest, MiniGameView, MusicPlay, Notice, SPAWN_PROJECTILE, Vitals,
+    AmbientPlay, DEATH_PROJECTILE, DeathPose, HeldAmmo, HitSide, InventoryAmmo, InventoryAmmoSlots,
+    KillLine, MAX_HEALTH, MiniGameRequest, MiniGameView, MusicPlay, Notice, SPAWN_PROJECTILE,
+    Vitals,
 };
 pub use inventory::{TOOL_SLOTS, ToolInventory};
 pub use packages::{
@@ -1071,6 +1072,7 @@ pub struct Session {
     football_record: u32,
     /// Players whose ammo display is up, so it clears when they put the gun away.
     ammo_shown: BTreeSet<OwnerId>,
+    inventory_ammo: BTreeMap<OwnerId, InventoryAmmoSlots>,
     cues: crate::presentation::Cues,
     simulation: Simulation,
     peers: BTreeMap<OwnerId, Peer>,
@@ -1247,6 +1249,7 @@ impl Session {
             weapon_gaps: BTreeMap::new(),
             football_record: 0,
             ammo_shown: BTreeSet::new(),
+            inventory_ammo: BTreeMap::new(),
             weapons,
             cues: Default::default(),
             simulation,
@@ -1989,6 +1992,7 @@ impl Session {
         self.weapon_triggers.remove(&owner);
         self.last_prints.remove(&owner);
         self.ammo_shown.remove(&owner);
+        self.inventory_ammo.remove(&owner);
         self.abandoned_at
             .insert(owner, self.simulation.state().tick);
         self.forget_copy_job(owner);

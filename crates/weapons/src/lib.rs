@@ -728,6 +728,9 @@ pub struct Image {
     /// Logical attachment name to authored node for the local first-person model.
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub first_person_nodes: BTreeMap<String, String>,
+    /// Logical effect to authored effect for the local first-person model.
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub first_person_effects: BTreeMap<String, String>,
     /// Euler XYZ degrees in the original Z-up frame, explicitly transformed by presentation.
     pub source_rotation_degrees: [f32; 3],
     pub correct_muzzle: bool,
@@ -1211,6 +1214,9 @@ pub struct Magazine {
     /// The holder's arm animation as a reload starts (`shiftDown`).
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub reload_sequence: String,
+    /// An animation of the held image itself, independent of body actions.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub reload_image_sequence: String,
     /// The sound as a reload starts, and as a click with nothing to shoot.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub reload_sound: String,
@@ -1433,7 +1439,12 @@ impl Magazine {
             "Invalid magazine ammo name"
         );
         ensure!(
-            self.reload_sequence.len() <= 64
+            self.reload_image_sequence.len() <= 64
+                && self
+                    .reload_image_sequence
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b == b'_')
+                && self.reload_sequence.len() <= 64
                 && self
                     .reload_sequence
                     .bytes()
@@ -2829,6 +2840,17 @@ pub fn effect_symbol(id: &str) -> &str {
     id.rsplit(['/', ':']).next().unwrap_or(id)
 }
 impl PackEffects {
+    pub fn textures(&self) -> impl Iterator<Item = (&str, &str)> {
+        self.particles
+            .iter()
+            .flat_map(|p| p.textures().map(move |t| (p.id.as_str(), t)))
+            .chain(self.lights.iter().filter_map(|l| {
+                l.flare
+                    .as_ref()
+                    .map(|f| (l.id.as_str(), f.texture.as_str()))
+            }))
+    }
+
     pub fn is_empty(&self) -> bool {
         self.particles.is_empty()
             && self.emitters.is_empty()
@@ -2840,11 +2862,7 @@ impl PackEffects {
     /// Add-On's item presentation textures (a relative path key). An
     /// explosion may use the base game's emitters (`v20/emitter/...`).
     pub fn validate(&self) -> Result<()> {
-        for (p, texture) in self
-            .particles
-            .iter()
-            .flat_map(|p| p.textures().map(move |t| (p, t)))
-        {
+        for (id, texture) in self.textures() {
             ensure!(
                 !texture.is_empty()
                     && texture.len() <= 256
@@ -2853,8 +2871,7 @@ impl PackEffects {
                     && !texture.chars().any(char::is_control)
                     && texture.split('/').all(|s| !s.is_empty() && s != "..")
                     && !texture.contains('\\'),
-                "particle {} names an invalid texture",
-                p.id
+                "effect {id} names an invalid texture"
             );
         }
         ensure!(
@@ -2874,12 +2891,8 @@ impl PackEffects {
             particles: self.particles.clone(),
             emitters: self.emitters.clone(),
             textures: self
-                .particles
-                .iter()
-                .flat_map(|p| {
-                    p.textures()
-                        .map(|t| (t.to_owned(), "texture.png".to_owned()))
-                })
+                .textures()
+                .map(|(_, t)| (t.to_owned(), "texture.png".to_owned()))
                 .collect(),
         };
         library.validate()?;
@@ -3087,6 +3100,18 @@ impl Pack {
             );
         }
         for (id, image) in &self.images {
+            ensure!(
+                image.first_person_effects.len() <= 16
+                    && image
+                        .first_person_effects
+                        .iter()
+                        .all(|(from, to)| !from.is_empty()
+                            && !to.is_empty()
+                            && from.len() <= 160
+                            && to.len() <= 160
+                            && !from.chars().chain(to.chars()).any(char::is_control)),
+                "Invalid first-person effect map of image {id}"
+            );
             ensure!(
                 image.first_person_nodes.len() <= 16
                     && image

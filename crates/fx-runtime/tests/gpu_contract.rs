@@ -65,6 +65,7 @@ fn a_reloaded_pack_needs_its_own_atlas_and_invalid_values_remain_errors() {
         };
         let mut frame = FrameEffects {
             particles: vec![ParticleInstance {
+                layout: Default::default(),
                 position: Vec3::ZERO,
                 size: 1.,
                 color: Vec4::ONE,
@@ -269,6 +270,7 @@ fn billboard_blends_and_depth_match_the_host_pass() {
             renderer.set_fog(fogged, [0., 1., 0., 1.], [0.; 4]);
             let frame = FrameEffects {
                 particles: vec![ParticleInstance {
+                    layout: Default::default(),
                     position: Vec3::Z * 0.5,
                     size: 2.,
                     color: tint,

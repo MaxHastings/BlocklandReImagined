@@ -21,6 +21,48 @@ fn camera() -> Camera {
         up: Vec3::Y,
     }
 }
+
+#[test]
+fn directional_coronas_follow_the_source_in_each_view_without_point_light() {
+    let mut w = world(fixture(|l| {
+        let light = &mut l.lights[0];
+        light.radius = 0.;
+        let flare = light.flare.as_mut().unwrap();
+        flare.angles = Some([0.4, 0.8]);
+        flare.depth_test = true;
+    }));
+    let h = w
+        .start_light(
+            "light",
+            SourceTransform::default(),
+            SourceOptions::default(),
+        )
+        .unwrap();
+    let mut front = camera();
+    front.position = Vec3::Y * 5.;
+    let mut rear = camera();
+    rear.position = Vec3::NEG_Y * 5.;
+    let frame = w.snapshot(&front);
+    assert!(
+        frame.lights.is_empty(),
+        "a corona does not add a duplicate point light"
+    );
+    assert_eq!(frame.particles.len(), 1);
+    assert!(frame.particles[0].depth_test);
+    assert!(w.snapshot(&rear).particles.is_empty());
+    w.update_source(
+        h,
+        SourceTransform {
+            rotation: glam::Quat::from_rotation_z(-std::f32::consts::FRAC_PI_2),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    assert!(w.snapshot(&front).particles.is_empty());
+    let mut side = camera();
+    side.position = Vec3::X * 5.;
+    assert_eq!(w.snapshot(&side).particles.len(), 1);
+}
 fn world(pack: Arc<EffectsPack>) -> EffectsWorld {
     EffectsWorld::new(pack, EffectsLimits::default(), 73).unwrap()
 }
@@ -33,6 +75,14 @@ fn authored_particle_frames_advance_without_wrapping_and_survive_split_frames() 
         library.textures.insert(id.into(), format!("{id}.png"));
     }
     library.particles[0].animation = Some(ParticleAnimation {
+        layouts: [(
+            "frame1".into(),
+            SpriteLayout {
+                scale: [0.5, 1.],
+                pivot: [0.25, 0.75],
+            },
+        )]
+        .into(),
         frames: frames.map(str::to_owned).to_vec(),
         rate: [10.; 2],
         looping: false,
@@ -65,11 +115,22 @@ fn authored_particle_frames_advance_without_wrapping_and_survive_split_frames() 
         .unwrap();
     }
     assert_eq!(a.snapshot(&camera()).particles[0].texture, index("frame0"));
+    assert_eq!(
+        a.snapshot(&camera()).particles[0].layout,
+        SpriteLayout::default()
+    );
     a.advance(0.15, Vec3::ZERO).unwrap();
     for _ in 0..3 {
         b.advance(0.05, Vec3::ZERO).unwrap();
     }
     assert_eq!(a.snapshot(&camera()).particles[0].texture, index("frame1"));
+    assert_eq!(
+        a.snapshot(&camera()).particles[0].layout,
+        SpriteLayout {
+            scale: [0.5, 1.],
+            pivot: [0.25, 0.75]
+        }
+    );
     assert_eq!(
         a.snapshot(&camera()).particles[0].texture,
         b.snapshot(&camera()).particles[0].texture

@@ -193,6 +193,15 @@ pub(super) fn sky(
     if let Some(v) = extras.get("bri_fog_color") {
         fog.color = color(v, "bri_fog_color")?;
     }
+    if let Some(v) = extras.get("bri_fog_density_end") {
+        fog.density_end = Some(number(v).context("bri_fog_density_end must be a distance")?);
+    }
+    if let Some(v) = extras.get("bri_fog_max") {
+        fog.max = number(v).context("bri_fog_max must be a number")?;
+    }
+    if let Some(v) = extras.get("bri_fog_height") {
+        fog.height = number(v).context("bri_fog_height must be a distance")?;
+    }
     ensure!(
         fog.end > 0.0 && fog.start >= 0.0 && fog.end >= fog.start,
         "bri_fog must be [start, end] with 0 <= start <= end and end above 0"

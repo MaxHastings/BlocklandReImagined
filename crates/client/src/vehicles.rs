@@ -59,7 +59,11 @@ pub struct VehicleAssets {
     sources: BTreeMap<String, String>,
     /// Each definition's lamps (`Definition::lights`) where its model has
     /// their nodes: body-local position, colour and radius.
-    lamps: BTreeMap<String, Vec<(Vec3, [f32; 3], f32)>>,
+    lamps: BTreeMap<String, Vec<BoundLamp>>,
+}
+struct BoundLamp {
+    transform: Mat4,
+    lamp: bri_vehicles::schema::Lamp,
 }
 
 /// A gunner model split into its fixed part and the parts its `look` clip
@@ -230,7 +234,7 @@ impl VehicleAssets {
             .collect();
         let mut models = BTreeMap::new();
         let mut weapon_nodes = BTreeMap::new();
-        let mut lamps: BTreeMap<String, Vec<(Vec3, [f32; 3], f32)>> = BTreeMap::new();
+        let mut lamps: BTreeMap<String, Vec<BoundLamp>> = BTreeMap::new();
         let mut looks = BTreeMap::new();
         let mut threads = BTreeMap::new();
         for asset in pack.assets.iter().filter(|a| a.kind == "model") {
@@ -295,11 +299,12 @@ impl VehicleAssets {
                         bri_console::warn(format!("{}: no node {} for its light", d.id, lamp.node));
                         continue;
                     };
-                    let at = rest.nodes[node].transform_point3(Vec3::from(lamp.offset));
-                    lamps
-                        .entry(d.id.clone())
-                        .or_default()
-                        .push((at, lamp.color, lamp.radius));
+                    let transform =
+                        rest.nodes[node] * Mat4::from_translation(Vec3::from(lamp.offset));
+                    lamps.entry(d.id.clone()).or_default().push(BoundLamp {
+                        transform,
+                        lamp: lamp.clone(),
+                    });
                 }
             }
             let look = gunner_models
@@ -500,22 +505,29 @@ impl VehicleAssets {
     /// from each vehicle's presented body.
     pub fn lamp_lights(
         &self,
-        infos: impl IntoIterator<Item = (Mat4, bool, String)>,
+        infos: impl IntoIterator<Item = (Mat4, bool, bool, String)>,
     ) -> Vec<bri_render::scene::PointLight> {
         let mut out = Vec::new();
-        for (body, on, definition) in infos {
-            if !on {
-                continue;
-            }
-            for (at, color, radius) in self.lamps.get(&definition).into_iter().flatten() {
-                let position = body.transform_point3(*at);
+        for (body, on, driver, definition) in infos {
+            for bound in self.lamps.get(&definition).into_iter().flatten() {
+                let lamp = &bound.lamp;
+                if !lamp.activation.enabled(on, driver) || lamp.radius <= 0. {
+                    continue;
+                }
+                let position = (body * bound.transform).w_axis.truncate();
                 out.push(bri_render::scene::PointLight {
-                    position_radius: position.extend(*radius).to_array(),
-                    color: [color[0], color[1], color[2], 0.],
+                    position_radius: position.extend(lamp.radius).to_array(),
+                    color: [lamp.color[0], lamp.color[1], lamp.color[2], 0.],
                 });
             }
         }
         out
+    }
+    pub fn driver_present(&self, info: &VehicleInfo) -> bool {
+        self.definition(&info.definition)
+            .and_then(Definition::control_seat)
+            .and_then(|seat| info.occupants.get(seat))
+            .is_some_and(Option::is_some)
     }
     /// The loaded vehicle definitions, as the host's vehicle code takes them.
     pub fn pack(&self) -> &Pack {
@@ -692,7 +704,7 @@ pub struct TurretSpring {
 }
 impl TurretSpring {
     /// Step to `clock` (seconds) with the vehicle at `velocity` (world)
-    /// turned by `rotation`.
+    /// turned by `rotation` (the complete frame in which the tip is applied).
     pub fn step(
         &mut self,
         sway: &bri_vehicles::schema::TurretSway,
@@ -708,7 +720,7 @@ impl TurretSpring {
             return;
         }
         let dt = dt.min(0.1);
-        // The vehicle's acceleration in its own frame (x right, y up, z back).
+        // Acceleration in the attachment's frame (x right, y up, z back).
         let accel = rotation.inverse() * (velocity - before) / dt;
         // Speeding up (toward -z) tips the turret back: up about +x; a turn
         // to the right (+x) leans it left; a bump up presses it down.
@@ -749,6 +761,58 @@ struct Warp {
 }
 
 impl ClientVehicles {
+    /// Mounted light effects share the exact vehicle-node frame in every view.
+    pub fn lamp_effects(
+        &self,
+        assets: &VehicleAssets,
+        infos: &BTreeMap<u64, VehicleInfo>,
+    ) -> Vec<crate::weapon_effects::AttachedLight> {
+        let mut out = Vec::new();
+        for (id, info) in infos {
+            if info.destroyed {
+                continue;
+            }
+            let Some(frame) = self.frame(*id) else {
+                continue;
+            };
+            let body = Mat4::from_scale_rotation_translation(
+                Vec3::splat(info.scale),
+                frame.rotation,
+                frame.position,
+            );
+            for (slot, bound) in assets
+                .lamps
+                .get(&info.definition)
+                .into_iter()
+                .flatten()
+                .enumerate()
+            {
+                let Some(effect) = &bound.lamp.effect else {
+                    continue;
+                };
+                if !bound
+                    .lamp
+                    .activation
+                    .enabled(info.lights, assets.driver_present(info))
+                {
+                    continue;
+                }
+                let (_, rotation, position) =
+                    (body * bound.transform).to_scale_rotation_translation();
+                out.push(crate::weapon_effects::AttachedLight {
+                    owner: *id,
+                    slot: slot as u16,
+                    definition: effect.clone(),
+                    transform: bri_fx_runtime::SourceTransform {
+                        position,
+                        rotation: rotation * Quat::from_rotation_arc(Vec3::Y, Vec3::NEG_Z),
+                        velocity: frame.velocity,
+                    },
+                });
+            }
+        }
+        out
+    }
     /// The openings of linked bricks: a vehicle part way through one draws
     /// on both sides of it.
     pub fn set_passages(&mut self, passages: &Passages) {
@@ -1006,6 +1070,17 @@ impl ClientVehicles {
         let (_, rotation, position) = world.to_scale_rotation_translation();
         Some((position, rotation))
     }
+    /// An authored seat eye, shared with the host's interaction origin.
+    pub fn seat_eye(
+        &self,
+        assets: &VehicleAssets,
+        info: &VehicleInfo,
+        seat: usize,
+    ) -> Option<Vec3> {
+        let offset = Vec3::from(assets.definition(&info.definition)?.seats.get(seat)?.eye?);
+        let (position, rotation) = self.seat_transform(assets, info, seat)?;
+        Some(position + rotation * offset * info.scale)
+    }
     /// Where seat `seat`'s rider holds on in the world, right hand then
     /// left (`Seat::hands`), turned with the turret and gun as drawn.
     /// None for a hand the seat leaves free, and for both while a broken
@@ -1135,7 +1210,18 @@ impl ClientVehicles {
             {
                 let sway = if let Some(sway) = &d.turret_sway {
                     let spring = self.sways.entry(*id).or_default();
-                    spring.step(sway, self.clock / TICK_RATE, frame.velocity, frame.rotation);
+                    // The spring rotation is applied after the authored mount and
+                    // gun aim. Measure acceleration in that same frame: chassis
+                    // axes here made a side-aimed gun lean in the wrong direction.
+                    let attachment = weapon_attachment(d, frame, looks.contains_key(model), None)
+                        .expect("attachment mount present");
+                    let (_, attachment_rotation, _) = attachment.to_scale_rotation_translation();
+                    spring.step(
+                        sway,
+                        self.clock / TICK_RATE,
+                        frame.velocity,
+                        frame.rotation * attachment_rotation,
+                    );
                     Some(spring.rotation())
                 } else {
                     None

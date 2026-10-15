@@ -874,6 +874,8 @@ pub fn read_dts(data: &[u8], id: String) -> Result<(Shape, Provenance)> {
             detail_map: optional(detail[i])?,
             detail_scale: detail_scale[i],
             reflectance: reflection[i],
+            paint_overlay: None,
+            alpha_cutoff: None,
             metal: None,
             surface: None,
         });

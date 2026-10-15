@@ -1014,8 +1014,8 @@ fn a_map_brings_its_own_sun_sky_and_water() {
     // Torque north, azimuth 0.
     g.node(json!({ "name": "Sun", "rotation": Quat::from_rotation_x(-std::f32::consts::FRAC_PI_4).to_array(),
         "extensions": { "KHR_lights_punctual": { "light": 0 } }, "extras": { "bri_ambient": 0.3 } }), None);
-    g.json["scenes"][0]["extras"] =
-        json!({ "bri_sky_color": [0.2, 0.3, 0.4], "bri_fog": [100.0, 400.0] });
+    g.json["scenes"][0]["extras"] = json!({ "bri_sky_color": [0.2, 0.3, 0.4], "bri_fog": [100.0, 400.0],
+                "bri_fog_density_end": 200.0, "bri_fog_max": 0.6, "bri_fog_height": 20.0 });
     let input = root.path().join("pond.glb");
     std::fs::write(&input, g.glb()).unwrap();
     let sky = root.path().join("sky");
@@ -1095,6 +1095,8 @@ fn a_map_brings_its_own_sun_sky_and_water() {
     );
     assert_eq!(environment.solid_color, [0.2, 0.3, 0.4]);
     assert_eq!((environment.fog.start, environment.fog.end), (100.0, 400.0));
+    assert_eq!(environment.fog.density_end, Some(200.0));
+    assert_eq!((environment.fog.max, environment.fog.height), (0.6, 20.0));
 
     // The renderer draws the map with its water and sky.
     let drawn =

@@ -289,6 +289,8 @@ pub fn lower(
         let node_index = number(b, &format!("mountNode[{i}]"), i as f32) as usize;
         let node = format!("mount{node_index}");
         seats.push(Seat {
+            rider_pose: None,
+            eye: None,
             transform: find_node(s, &n, &node)?,
             node,
             pose: if matches!(family, Family::Skis | Family::Tumble) {

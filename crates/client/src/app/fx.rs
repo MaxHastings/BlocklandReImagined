@@ -525,7 +525,10 @@ impl App {
             if needs_pose && world_items.effect_pose(cue).is_none() && *age < 0.5 {
                 break;
             }
-            ready.push(weapon_cues.pop_front().unwrap().0);
+            ready.push(
+                world_items
+                    .effect_cue(weapon_cues.pop_front().unwrap().0, weapon_effects.weapons()),
+            );
         }
         weapon_effects.cues(&ready, |cue| world_items.effect_pose(cue))?;
         // queue_weapon_cue already transfers these same reliable IDs into App's

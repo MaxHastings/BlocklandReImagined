@@ -82,6 +82,9 @@ Custom Properties**):
 | `bri_sky_color` | the sky's colour, three numbers from 0 to 1 | `[0.55, 0.7, 0.9]` |
 | `bri_fog` | `[start, end]` in units: clear out to start, thick at end; nothing past end is drawn | starts at 70% of end; end is twice the map's width, at least 1000 |
 | `bri_fog_color` | the fog's colour | the sky colour |
+| `bri_fog_density_end` | distance where fog reaches its density; independent of geometry visibility | `bri_fog` end |
+| `bri_fog_max` | maximum fog coverage, above 0 to 1 | 1 |
+| `bri_fog_height` | units per e-fold above the eye, 1 to 100000 | 60 |
 
 For a picture sky, put six pictures named `front`, `right`, `back`,
 `left`, `up` and `down` (PNG or JPEG) in a folder and import with
@@ -210,6 +213,10 @@ after importing):
 
 - `start` and `end`, units: the fog begins at `start` and is at its
   thickest by `end`, the visible distance; nothing past `end` is drawn.
+- `density_end` (optional, above `start`): distance where level fog reaches
+  its authored optical depth. Defaults to `end`. Set a nearer density distance
+  with `max` below 1 to haze distant cliffs without clipping them. `end` continues
+  to control geometry visibility. All distances are native world units.
 - `color`, `[r, g, b]` from 0 to 1: the fog, and with no sky of the map's
   own, the backdrop behind the world.
 - `height` (optional, 1 to 100000, default 60): how quickly the fog thins
