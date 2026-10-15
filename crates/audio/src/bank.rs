@@ -55,6 +55,8 @@ pub struct SoundAsset {
 
 /// Most bytes one clip from outside the bank may have (an Add-On's sound).
 pub const MAX_DECODED_CLIP_BYTES: usize = 8 * 1024 * 1024;
+/// Longest an Add-On's music track may play, in seconds (its sounds: 30).
+pub const MAX_MUSIC_SECONDS: f64 = 600.0;
 
 impl SoundAsset {
     /// A world sound from a WAV or Ogg Vorbis clip that is not in the bank
@@ -113,6 +115,67 @@ impl SoundAsset {
             .and_then(|e| e.to_str())
             .unwrap_or_default();
         Self::decoded(id, &bytes, extension, reference_distance, max_distance)
+    }
+    /// An Add-On's music track from a WAV or Ogg Vorbis file at `path`:
+    /// heard at the ears on the music bus, streamed while it plays, so it
+    /// may run up to [`MAX_MUSIC_SECONDS`] rather than a sound's 30. The
+    /// whole file is decoded once here, so a track that loads plays.
+    pub fn music_file(id: &str, path: &std::path::Path) -> Result<Self, String> {
+        use std::io::Read;
+        let mut bytes = Vec::new();
+        std::fs::File::open(path)
+            .and_then(|f| {
+                f.take(MAX_DECODED_CLIP_BYTES as u64 + 1)
+                    .read_to_end(&mut bytes)
+            })
+            .map_err(|e| e.to_string())?;
+        if bytes.len() > MAX_DECODED_CLIP_BYTES {
+            return Err(format!(
+                "more than the {MAX_DECODED_CLIP_BYTES} bytes a music track may have"
+            ));
+        }
+        let extension = match path
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or_default()
+            .to_ascii_lowercase()
+            .as_str()
+        {
+            "wav" => "wav",
+            "ogg" => "ogg",
+            other => return Err(format!("`.{other}` is not a WAV or Ogg Vorbis sound")),
+        };
+        let (clip, _) = crate::decode::decode_all(&bytes, Some(extension))?;
+        if clip.frames() == 0 || clip.duration_seconds() > MAX_MUSIC_SECONDS {
+            return Err(format!(
+                "a music track must last between a moment and {MAX_MUSIC_SECONDS} seconds"
+            ));
+        }
+        let data = ClipData::Stream(Arc::new(StreamingClip {
+            bytes: Arc::from(bytes.into_boxed_slice()),
+            extension,
+            sample_rate: clip.sample_rate,
+            channels: clip.channels,
+            frames: clip.frames() as u64,
+        }));
+        let mut asset = Self::world(id, data, 1.0, 2.0);
+        asset.playback.spatial = None;
+        asset.playback.bus = Bus::Music;
+        Ok(asset)
+    }
+    /// This sound as rule music plays it: at the ears, on the music bus,
+    /// looping or not; the clip is shared, not copied.
+    pub fn as_music(&self, looping: bool) -> Self {
+        let mut playback = self.playback.clone();
+        playback.spatial = None;
+        playback.bus = Bus::Music;
+        playback.looping = looping;
+        Self {
+            id: self.id.clone(),
+            name: self.name.clone(),
+            playback,
+            data: self.data.clone(),
+        }
     }
     /// A world sound `id` playing `data` (a decoded clip, or one of the
     /// bank's), heard as [`SoundAsset::decoded`] describes.

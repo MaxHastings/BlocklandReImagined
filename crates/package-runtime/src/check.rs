@@ -293,7 +293,11 @@ pub fn check(folder: &Path) -> Report {
             let loaded =
                 bri_package::path::inside(&bri_weapons::sound_root(&assets, def), &def.file)
                     .and_then(|path| {
-                        bri_audio::bank::SoundAsset::decoded_file(profile, &path, 1.0, 2.0)
+                        if def.music {
+                            bri_audio::bank::SoundAsset::music_file(profile, &path)
+                        } else {
+                            bri_audio::bank::SoundAsset::decoded_file(profile, &path, 1.0, 2.0)
+                        }
                     });
             if let Err(e) = loaded {
                 diagnostics.push(
@@ -302,7 +306,7 @@ pub fn check(folder: &Path) -> Report {
                         format!("sound {profile} will not play: {e}"),
                     )
                     .at(format!("{}/assets/{}", manifest.id, def.file))
-                    .hint("the game plays PCM WAV and Ogg Vorbis files of up to 30 seconds and 8 MiB; re-export it as 16-bit PCM WAV"),
+                    .hint("the game plays PCM WAV and Ogg Vorbis files of up to 8 MiB and 30 seconds (10 minutes for a `music` track); re-export it as 16-bit PCM WAV or Ogg Vorbis"),
                 );
             }
         }
