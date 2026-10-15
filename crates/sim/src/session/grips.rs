@@ -186,7 +186,10 @@ impl Session {
         model: &str,
         nodes: BTreeMap<String, [f32; 16]>,
     ) -> Result<()> {
-        self.set_body_grips_policy(model, false, nodes)
+        // Legacy/stock callers supply an already authored node map. There is
+        // no imported-body fitting policy to distinguish for those frames.
+        self.set_body_grips_policy(model, false, nodes.clone())?;
+        self.set_body_grips_policy(model, true, nodes)
     }
     /// Separate authored/fitted hand frames even when archetypes share a model.
     pub fn set_body_grips_policy(
@@ -320,6 +323,26 @@ impl Session {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn stock_grip_maps_remain_available_with_authored_hand_policy() -> Result<()> {
+        let world = bri_world::World::new("Grips".into(), "grips".into(), vec![[1.; 4]]);
+        let mut session = Session::new(Simulation::new(
+            world,
+            crate::testing::definitions(),
+            vec![],
+        )?);
+        let mut archetype = session.archetypes.resolve(Default::default()).clone();
+        let nodes = shape_grips(&bri_content::testing::avatar::rig(), &[]);
+        session.set_body_grips(&archetype.look.model, nodes)?;
+        let default = session.grip(&archetype, 0, true).context("stock grip")?;
+        archetype.sockets.preserve_hand_pose = true;
+        let authored = session
+            .grip(&archetype, 0, true)
+            .context("preserved stock grip")?;
+        assert_eq!(authored.hand, default.hand);
+        Ok(())
+    }
 
     #[test]
     fn authored_two_handed_grips_use_the_two_handed_role() {

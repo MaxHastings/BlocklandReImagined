@@ -38,3 +38,11 @@ Focused tier completed: all 20 steps passed in 948 seconds, including selected
 crate integration suites, actual imported-body rendering and the animated UV GPU
 check. Crossover/sized-join retained their existing thresholds. Final assembled
 candidate gate and Windows CI are still required before release.
+
+A follow-up found that legacy/stock set_body_grips callers supply already authored
+frames but only registered the default cache policy. A stock-model archetype opting
+into preservation would otherwise lose its host grip and fire from its eye.
+The legacy entry point now registers that same map under both policies; imported
+models still use the explicit per-policy entry point. A stock-body regression and
+the distinct-role regression pass. Sim-only focused tier passed all three steps
+(153 s, unchanged integration cases); no broad network/GPU suite was repeated.
