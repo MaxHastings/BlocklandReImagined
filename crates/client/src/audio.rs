@@ -848,6 +848,7 @@ mod tests {
             destroyed: false,
             turret_broken: false,
             scale: 1.0,
+            lights: false,
         };
         let frame = |speed: f32| crate::vehicles::VehicleFrame {
             position: glam::Vec3::new(1.0, 2.0, 3.0),

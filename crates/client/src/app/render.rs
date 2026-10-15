@@ -1086,6 +1086,24 @@ impl App {
                 color: light.color.extend(0.).to_array(),
             })
             .collect();
+        // Vehicle lamps their drivers turned on light the world too.
+        let mut lights = lights;
+        if let Some(view) = self.net.attempt.as_ref().and_then(|a| a.view.as_ref()) {
+            let vehicles = &self.vehicles;
+            lights.extend(
+                self.vehicle_assets
+                    .lamp_lights(view.vehicles.values().filter_map(|info| {
+                        let f = vehicles.frame(info.id)?;
+                        let body = glam::Mat4::from_scale_rotation_translation(
+                            glam::Vec3::splat(info.scale),
+                            f.rotation,
+                            f.position,
+                        );
+                        Some((body, info.lights, info.definition.clone()))
+                    })),
+            );
+        }
+        lights.truncate(bri_render::scene::MAX_POINT_LIGHTS);
         renderer.update_lights(frame.queue, &lights)?;
         let effects_renderer = self
             .gpu

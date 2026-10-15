@@ -71,6 +71,7 @@ fn mixed_scene(avatar: AvatarFixture, car: VehicleFixture) -> Result<()> {
             destroyed: false,
             turret_broken: false,
             scale: 1.,
+            lights: false,
         },
     )]);
     let poses = BTreeMap::from([(

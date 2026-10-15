@@ -629,9 +629,31 @@ pub struct Definition {
     /// from the vehicle's presented motion. v20's vehicles have none.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub engine_sound: Option<EngineSound>,
+    /// Lamps at nodes of its model (headlights) that light the world while
+    /// its driver has them on: the light key in the driving seat turns them
+    /// on and off. Who has them on is shared; the light is each client's.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub lights: Vec<Lamp>,
     /// Authored fields retained as metadata only. Runtime reads typed native fields above.
     pub authored: BTreeMap<String, String>,
     pub adaptations: Vec<String>,
+}
+/// A lamp on a vehicle ([`Definition::lights`]): a point light at a node
+/// of the vehicle's model, moved `offset` along the node's own axes (ahead
+/// of a headlight's lens, so it lights the road rather than the bonnet).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Lamp {
+    pub node: String,
+    #[serde(default, skip_serializing_if = "is_origin")]
+    pub offset: [f32; 3],
+    /// Linear RGB; above 1 is brighter.
+    pub color: [f32; 3],
+    /// How far it reaches, units.
+    pub radius: f32,
+}
+fn is_origin(v: &[f32; 3]) -> bool {
+    *v == [0.0; 3]
 }
 /// A vehicle's engine sound ([`Definition::engine_sound`]). It plays while
 /// someone sits in the seat that drives the vehicle (any seat, for a
@@ -912,6 +934,21 @@ impl Pack {
                 "duplicate/invalid vehicle identity"
             );
             ensure!(d.per_player != Some(0), "a per-player cap of 0 allows none");
+            ensure!(
+                d.lights.len() <= 16
+                    && d.lights.iter().all(|l| {
+                        !l.node.is_empty()
+                            && l.offset.iter().all(|v| v.is_finite() && v.abs() <= 100.)
+                            && l.color
+                                .iter()
+                                .all(|c| c.is_finite() && (0. ..=8.).contains(c))
+                            && l.radius.is_finite()
+                            && l.radius > 0.
+                            && l.radius <= 100.
+                    }),
+                "{}: at most 16 lights, each on a node, colour 0 to 8 and radius above 0 up to 100",
+                d.id
+            );
             ensure!(
                 d.blast_scale
                     .is_none_or(|s| s.is_finite() && s > 0. && s <= 100.),

@@ -49,6 +49,8 @@ pub(super) struct Vehicles {
     /// Each vehicle's colour (`%vehicle.color`), red, green, blue and
     /// alpha; `None` draws it as its model is.
     pub(super) colors: BTreeMap<VehicleId, Option<[f32; 4]>>,
+    /// Vehicles whose drivers turned their lamps on (`Definition::lights`).
+    pub(super) lit: std::collections::BTreeSet<VehicleId>,
     /// The spawn brick's paint (`fxDTSBrick::colorVehicle`) each spawned
     /// vehicle last took. A brick change that alters it repaints the live
     /// vehicle; one that leaves it alone keeps independent paint.
@@ -170,6 +172,9 @@ pub struct VehicleInfo {
     pub turret_broken: bool,
     /// The spawn's uniform scale: a driving client predicts the vehicle at it.
     pub scale: f32,
+    /// Its driver has its lamps on (`Definition::lights`).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub lights: bool,
 }
 /// Replicated vehicle motion (unreliable datagrams, 40 Hz).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -458,8 +463,30 @@ impl Session {
                     .turret_damage
                     .is_some_and(|damage| damage >= veh::TURRET_MAX_DAMAGE),
                 scale: v.scale,
+                lights: self.vehicles.lit.contains(&v.id) && !v.destroyed,
             })
             .collect()
+    }
+    /// The light key in a driving seat turns the vehicle's lamps on or off;
+    /// false when `owner` drives nothing with lamps.
+    pub(super) fn toggle_vehicle_lights(&mut self, owner: OwnerId) -> bool {
+        let Some(mount) = self.vehicles.mounted.get(&owner) else {
+            return false;
+        };
+        let Some(world) = &self.vehicles.world else {
+            return false;
+        };
+        let drives = world.definition_of(mount.vehicle).is_some_and(|d| {
+            !d.lights.is_empty() && d.seats.get(mount.seat).is_some_and(|s| s.controls)
+        });
+        if !drives {
+            return false;
+        }
+        let vehicle = mount.vehicle;
+        if !self.vehicles.lit.remove(&vehicle) {
+            self.vehicles.lit.insert(vehicle);
+        }
+        true
     }
     /// Same-tick vehicle basis for the rider's canonical body frame.
     pub fn passage_vehicle(
@@ -2548,6 +2575,9 @@ mod tests {
 
     /// A session with one test tank parked at the origin.
     fn tank_session() -> (Session, u64) {
+        tank_session_with(bri_vehicles::testing::pack())
+    }
+    fn tank_session_with(pack: bri_vehicles::Pack) -> (Session, u64) {
         let simulation = Simulation::new(
             bri_world::World::new("Lab".into(), "lab".into(), vec![[1.0; 4]]),
             Definitions {
@@ -2560,8 +2590,7 @@ mod tests {
         )
         .unwrap();
         let mut s = Session::new(simulation);
-        s.set_vehicle_pack(bri_vehicles::testing::pack(), Vec::new())
-            .unwrap();
+        s.set_vehicle_pack(pack, Vec::new()).unwrap();
         let id = VehicleId(1);
         s.vehicles
             .world
@@ -2607,6 +2636,53 @@ mod tests {
             VehicleHarm::Weapon { projectile: None },
         )
         .unwrap();
+    }
+
+    #[test]
+    fn the_light_key_in_the_driving_seat_turns_the_lamps_on_and_off() {
+        let lamp = bri_vehicles::schema::Lamp {
+            node: "mount0".into(),
+            offset: [0.0, 0.0, -1.0],
+            color: [1.0; 3],
+            radius: 20.0,
+        };
+        let (mut s, tank) = tank_session_with(bri_vehicles::testing::pack_with(|d| {
+            d.lights = vec![lamp.clone()]
+        }));
+        let seats = s
+            .vehicles
+            .world
+            .as_ref()
+            .unwrap()
+            .definition(bri_vehicles::testing::TANK)
+            .unwrap()
+            .seats
+            .clone();
+        let driver = seats.iter().position(|seat| seat.controls).unwrap();
+        let vehicle = VehicleId(tank);
+        // Not riding: the key is the player's own light.
+        assert!(!s.toggle_vehicle_lights(7));
+        if let Some(other) = seats.iter().position(|seat| !seat.controls) {
+            s.vehicles.mounted.insert(
+                7,
+                Mount {
+                    vehicle,
+                    seat: other,
+                },
+            );
+            assert!(!s.toggle_vehicle_lights(7), "a passenger");
+        }
+        s.vehicles.mounted.insert(
+            7,
+            Mount {
+                vehicle,
+                seat: driver,
+            },
+        );
+        assert!(s.toggle_vehicle_lights(7));
+        assert!(s.vehicle_infos()[0].lights, "on for everyone");
+        assert!(s.toggle_vehicle_lights(7));
+        assert!(!s.vehicle_infos()[0].lights, "and off again");
     }
 
     #[test]
