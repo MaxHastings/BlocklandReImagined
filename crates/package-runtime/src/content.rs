@@ -2425,6 +2425,15 @@ pub fn map_index(bytes: &[u8], provided: &str) -> Result<()> {
         maps[0]["file"].as_str().is_some_and(|f| !f.is_empty()),
         "the map in bundle.json names its scene `file`"
     );
+    if let Some(fog) = maps[0].get("fog") {
+        let fog: bri_content::environment::Fog =
+            serde_json::from_value(fog.clone()).map_err(|e| {
+                anyhow::anyhow!(
+                    "the map's `fog` is start, end, color, and optionally height and max: {e}"
+                )
+            })?;
+        fog.validate()?;
+    }
     Ok(())
 }
 pub fn hud_layout(layout: &bri_content::hud::Layout) -> Result<()> {
@@ -2614,5 +2623,30 @@ mod tests {
             input(Some("onTouch(Team1)"), &[]).is_err(),
             "one of the engine's, plain"
         );
+    }
+
+    #[test]
+    fn a_map_may_give_its_own_fog() {
+        let index = |fog: serde_json::Value| {
+            let mut map =
+                serde_json::json!({ "id": "a:map/a", "name": "A", "file": "a.scene.json" });
+            if !fog.is_null() {
+                map["fog"] = fog;
+            }
+            let bundle = serde_json::json!({ "schema_version": 1, "maps": [map] });
+            map_index(&serde_json::to_vec(&bundle).unwrap(), "a:map/a")
+        };
+        assert!(index(serde_json::Value::Null).is_ok());
+        let haze = serde_json::json!({ "start": 50, "end": 900, "color": [0.7, 0.7, 0.8], "height": 30, "max": 0.8 });
+        assert!(index(haze).is_ok());
+        let plain = serde_json::json!({ "start": 50, "end": 900, "color": [0.7, 0.7, 0.8] });
+        assert!(index(plain).is_ok());
+        for bad in [
+            serde_json::json!({ "start": 50, "end": 900 }),
+            serde_json::json!({ "start": 50, "end": 900, "color": [0.7, 0.7, 0.8], "max": 1.5 }),
+            serde_json::json!({ "start": 50, "end": 900, "color": [0.7, 0.7, 0.8], "density": 2 }),
+        ] {
+            assert!(index(bad.clone()).is_err(), "{bad}");
+        }
     }
 }

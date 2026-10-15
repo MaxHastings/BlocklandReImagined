@@ -1014,6 +1014,8 @@ fn environment_map(e: &bri_content::atmosphere::Settings, tick: u64) -> Dynamic 
     .chain([
         ("visible_distance", e.visible_distance),
         ("fog_distance", e.fog_distance),
+        ("fog_height", e.fog_height),
+        ("fog_max", e.fog_max),
         ("overcast", e.overcast),
     ]) {
         if let Some(v) = v {
@@ -1095,7 +1097,8 @@ fn set_environment(options: Map) -> Fallible<INT> {
                         .map_err(|_| "time_passes is true or false")?,
                 );
             }
-            "sun_azimuth" | "sun_elevation" | "visible_distance" | "fog_distance" | "overcast"
+            "sun_azimuth" | "sun_elevation" | "visible_distance" | "fog_distance"
+            | "fog_height" | "fog_max" | "overcast"
                 if clear =>
             {
                 remove(key.as_str())
@@ -1105,6 +1108,8 @@ fn set_environment(options: Map) -> Fallible<INT> {
             "sun_elevation" => changes.sun_elevation = Some(float(&value)?),
             "visible_distance" => changes.visible_distance = Some(float(&value)?),
             "fog_distance" => changes.fog_distance = Some(float(&value)?),
+            "fog_height" => changes.fog_height = Some(float(&value)?),
+            "fog_max" => changes.fog_max = Some(float(&value)?),
             "direct_light" | "ambient_light" | "shadow_color" | "fog_color" | "sky_color"
                 if clear =>
             {
@@ -1180,9 +1185,9 @@ fn set_environment(options: Map) -> Fallible<INT> {
                 return fail(format!(
                     "set_environment has no setting `{other}` (day_cycle, day_length, time_of_day, \
                      time_passes, overcast, sun_azimuth, sun_elevation, direct_light, ambient_light, shadow_color, \
-                     sun_flare_color, sun_flare_size, visible_distance, fog_distance, fog_color, \
-                     sky_color, vignette_color, vignette_multiply, sky, ground, ground_color, \
-                     water, water_height, water_color, underwater_color)"
+                     sun_flare_color, sun_flare_size, visible_distance, fog_distance, fog_height, \
+                     fog_max, fog_color, sky_color, vignette_color, vignette_multiply, sky, ground, \
+                     ground_color, water, water_height, water_color, underwater_color)"
                 ));
             }
         }

@@ -22,27 +22,70 @@ pub struct Cloud {
 /// Fog, the one atmosphere every pass shares (its shader twin is
 /// `bri-render`'s fog.wgsl). Exponential fog: level with the eye it
 /// thickens from `start` to `FOG_DEPTH` optical depth at `end`; above the
-/// eye it thins with height (`FOG_HEIGHT` units per e-fold). The sky is the
-/// backdrop at the world's edge, `end` away, and takes the fog of the air
-/// there: fog-coloured at the horizon, clear once its edge is a few
-/// `FOG_HEIGHT` above the eye, so thick fog (a near edge) covers more of it.
-/// Geometry does not fog into the sky: over the last quarter of the range
-/// it fades out into whatever is behind it, and past `end` it is not drawn,
-/// so nothing is cut out against the sky where the world ends. Below the
-/// eye the fog stays level-density, its backdrop the plain fog colour,
-/// unless the sky goes on below the horizon (a bottom face, Skylands'
-/// mirrored floor): then the fog is symmetric about the eye and the floor
-/// hazes only toward the horizon.
+/// eye it thins with height (`height` units per e-fold, `FOG_HEIGHT` unless
+/// the map says). The sky is the backdrop at the world's edge, `end` away,
+/// and takes the fog of the air there: fog-coloured at the horizon, clear
+/// once its edge is a few `height` above the eye, so thick fog (a near
+/// edge) covers more of it. Geometry does not fog into the sky: over the
+/// last quarter of the range it fades out into whatever is behind it, and
+/// past `end` it is not drawn, so nothing is cut out against the sky where
+/// the world ends. Below the eye the fog stays level-density, its backdrop
+/// the plain fog colour, unless the sky goes on below the horizon (a bottom
+/// face, Skylands' mirrored floor): then the fog is symmetric about the eye
+/// and the floor hazes only toward the horizon.
+///
+/// A haze (`max` below 1) never covers more than `max` of anything, so far
+/// cliffs soften into it but stay visible; geometry then does not fade out
+/// over the last quarter but stops at `end`.
 pub const FOG_DEPTH: f32 = 4.0;
 pub const FOG_HEIGHT: f32 = 60.0;
-#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Fog {
     pub start: f32,
     pub end: f32,
     pub color: [f32; 3],
+    /// Units the fog thins by an e-fold for, above the eye (and below it
+    /// when the sky goes on below the horizon): smaller keeps the haze
+    /// nearer the ground.
+    #[serde(
+        default = "Fog::default_height",
+        skip_serializing_if = "Fog::is_default_height"
+    )]
+    pub height: f32,
+    /// The most the fog ever covers, above 0 to 1 (complete fog).
+    #[serde(
+        default = "Fog::default_max",
+        skip_serializing_if = "Fog::is_default_max"
+    )]
+    pub max: f32,
+}
+impl Default for Fog {
+    fn default() -> Self {
+        Self {
+            start: 0.0,
+            end: 0.0,
+            color: [0.0; 3],
+            height: FOG_HEIGHT,
+            max: 1.0,
+        }
+    }
 }
 impl Fog {
+    fn default_height() -> f32 {
+        FOG_HEIGHT
+    }
+    fn default_max() -> f32 {
+        1.0
+    }
+    // Unset values stay out of the files, so packs written before them
+    // keep their bytes and digests.
+    fn is_default_height(height: &f32) -> bool {
+        *height == FOG_HEIGHT
+    }
+    fn is_default_max(max: &f32) -> bool {
+        *max == 1.0
+    }
     pub fn validate(&self) -> Result<()> {
         ensure!(
             self.start.is_finite()
@@ -58,7 +101,24 @@ impl Fog {
                 .all(|x| x.is_finite() && (0.0..=1.0).contains(x)),
             "Invalid fog color"
         );
+        ensure!(
+            FOG_HEIGHTS.contains(&self.height),
+            "Fog height must be 1 to 100000 units"
+        );
+        ensure!(
+            self.max > 0.0 && self.max <= 1.0,
+            "Fog max must be above 0, at most 1"
+        );
         Ok(())
+    }
+    /// A haze: the fog never covers everything, and geometry stops at
+    /// `end` instead of fading out before it.
+    pub fn haze(&self) -> bool {
+        self.max < 1.0
+    }
+    /// The shaders' `haze` uniform: height, max (fog.wgsl's `h`).
+    pub fn haze_uniform(&self) -> [f32; 4] {
+        [self.height, self.max, 0.0, 0.0]
     }
     /// Fog over a point `distance` away, level with the eye.
     pub fn amount(&self, distance: f32) -> f32 {
@@ -73,7 +133,7 @@ impl Fog {
         let distance = offset.iter().map(|v| v * v).sum::<f32>().sqrt();
         let up = offset[1] / distance.max(0.0001);
         let inside = (distance - self.start).max(0.0);
-        let rise = rising(up, sky_below);
+        let rise = rising(up, sky_below, self.height);
         let x = rise * inside;
         let spread = if x < 0.0001 {
             1.0 - 0.5 * x
@@ -81,13 +141,17 @@ impl Fog {
             (1.0 - (-x).exp()) / x
         };
         let depth = self.density() * (-rise * self.start).exp() * inside * spread;
-        1.0 - (-depth).exp()
+        (1.0 - (-depth).exp()) * self.max
     }
     /// How far a point `distance` away has faded out into what lies behind
-    /// it: 0 before the last quarter of the range, 1 from `end` on.
+    /// it: 0 before the last quarter of the range, 1 from `end` on. A haze
+    /// does not fade: 0 before `end`, 1 from it.
     pub fn edge(&self, distance: f32) -> f32 {
         if self.end <= 0.0 {
             return 0.0;
+        }
+        if self.haze() {
+            return if distance >= self.end { 1.0 } else { 0.0 };
         }
         let t = ((distance - self.start - 0.75 * (self.end - self.start))
             / (0.25 * (self.end - self.start)).max(0.001))
@@ -101,15 +165,19 @@ impl Fog {
         if self.end <= 0.0 {
             return 0.0;
         }
-        1.0 - (-FOG_DEPTH * (-rising(up, sky_below) * self.end).exp()).exp()
+        (1.0 - (-FOG_DEPTH * (-rising(up, sky_below, self.height) * self.end).exp()).exp())
+            * self.max
     }
     fn density(&self) -> f32 {
         FOG_DEPTH / (self.end - self.start).max(0.001)
     }
 }
-/// How fast a ray whose direction rises `up` leaves the fog, per unit.
-fn rising(up: f32, sky_below: bool) -> f32 {
-    (if sky_below { up.abs() } else { up.max(0.0) }) / FOG_HEIGHT
+/// The fog heights a map or setting may give, units per e-fold.
+pub const FOG_HEIGHTS: std::ops::RangeInclusive<f32> = 1.0..=100_000.0;
+/// How fast a ray whose direction rises `up` leaves fog that thins by an
+/// e-fold every `height` units, per unit.
+fn rising(up: f32, sky_below: bool, height: f32) -> f32 {
+    (if sky_below { up.abs() } else { up.max(0.0) }) / height.max(0.001)
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -186,5 +254,80 @@ impl Environment {
             );
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn fog(height: f32, max: f32) -> Fog {
+        Fog {
+            start: 100.0,
+            end: 500.0,
+            color: [0.5; 3],
+            height,
+            max,
+        }
+    }
+
+    #[test]
+    fn unset_haze_reads_as_the_fog_before_it() {
+        let read: Fog =
+            serde_json::from_str(r#"{"start":100,"end":500,"color":[0.5,0.5,0.5]}"#).unwrap();
+        assert_eq!((read.height, read.max), (FOG_HEIGHT, 1.0));
+        let unset = Fog::default();
+        assert_eq!((unset.height, unset.max), (FOG_HEIGHT, 1.0));
+        read.validate().unwrap();
+        assert!(!read.haze());
+        // The fog as it was before height and max: FOG_HEIGHT, no ceiling.
+        let before = |offset: [f32; 3]| {
+            let distance = offset.iter().map(|v| v * v).sum::<f32>().sqrt();
+            let rise = (offset[1] / distance).max(0.0) / FOG_HEIGHT;
+            let inside = (distance - 100.0f32).max(0.0);
+            let x = rise * inside;
+            let spread = if x < 0.0001 {
+                1.0 - 0.5 * x
+            } else {
+                (1.0 - (-x).exp()) / x
+            };
+            1.0 - (-(FOG_DEPTH / 400.0) * (-rise * 100.0).exp() * inside * spread).exp()
+        };
+        for offset in [[300.0, 0.0, 0.0], [400.0, 60.0, 30.0], [50.0, 200.0, 0.0]] {
+            assert!((read.amount_along(offset, false) - before(offset)).abs() < 1e-6);
+        }
+        let sky = 1.0 - (-FOG_DEPTH * (-0.2 / FOG_HEIGHT * 500.0f32).exp()).exp();
+        assert!((read.sky_amount(0.2, false) - sky).abs() < 1e-6);
+        assert_eq!(read.edge(400.0), 0.0);
+        assert!(read.edge(475.0) > 0.0 && read.edge(475.0) < 1.0);
+        assert_eq!(read.edge(500.0), 1.0);
+    }
+
+    #[test]
+    fn a_haze_never_covers_everything_and_stops_at_the_far_plane() {
+        let haze = fog(FOG_HEIGHT, 0.7);
+        assert!(haze.haze());
+        assert!((haze.amount(10_000.0) - 0.7).abs() < 1e-4);
+        let complete = fog(FOG_HEIGHT, 1.0);
+        assert!((haze.sky_amount(0.0, false) - 0.7 * complete.sky_amount(0.0, false)).abs() < 1e-6);
+        // No dithered fade-out: the far cliffs stay until the far plane.
+        assert_eq!(haze.edge(499.0), 0.0);
+        assert_eq!(haze.edge(500.0), 1.0);
+        assert!(fog(FOG_HEIGHT, 0.0).validate().is_err());
+        assert!(fog(FOG_HEIGHT, 1.5).validate().is_err());
+    }
+
+    #[test]
+    fn a_lower_fog_height_keeps_the_haze_near_the_ground() {
+        let (low, high) = (fog(15.0, 1.0), fog(240.0, 1.0));
+        let level = [400.0, 0.0, 0.0];
+        assert_eq!(
+            low.amount_along(level, false),
+            high.amount_along(level, false)
+        );
+        let raised = [400.0, 80.0, 0.0];
+        assert!(low.amount_along(raised, false) < high.amount_along(raised, false));
+        assert!(low.sky_amount(0.2, false) < high.sky_amount(0.2, false));
+        assert!(fog(0.5, 1.0).validate().is_err());
     }
 }

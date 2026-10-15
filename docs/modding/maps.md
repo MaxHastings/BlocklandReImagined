@@ -90,6 +90,34 @@ To change the map, edit it in Blender, export again and import into a
 fresh folder; then replace the old folder with it. Keep the same id (the
 same file name or `--id`) so saved worlds and servers still find it.
 
+## Fog and haze
+
+A map can bring its own fog: add a `fog` to its entry in
+`map/bundle.json`'s `maps` (the importer does not write one, so add it
+after importing):
+
+```json
+"maps": [{ "id": "my-map:map/my-map", "name": "My Map", "file": "my-map.scene.json",
+           "fog": { "start": 60, "end": 1200, "color": [0.72, 0.76, 0.82],
+                    "height": 30, "max": 0.85 } }]
+```
+
+- `start` and `end`, units: the fog begins at `start` and is at its
+  thickest by `end`, the visible distance; nothing past `end` is drawn.
+- `color`, `[r, g, b]` from 0 to 1: the fog, and with no sky of the map's
+  own, the backdrop behind the world.
+- `height` (optional, 1 to 100000, default 60): how quickly the fog thins
+  with height above you. A small value keeps a thick haze down in a canyon
+  and clear air over the cliff tops.
+- `max` (optional, above 0 to 1, default 1): the most the fog ever covers.
+  Below 1 it is a haze, as Halo's Blood Gulch has: far cliffs soften into
+  it but never vanish, and they do not fade out before `end` (they simply
+  stop there, so put `end` past your farthest geometry).
+
+`bri-addon-check` refuses a fog with a field it does not know or a value
+out of range. Rules can still change all of it while a game runs
+(`set_environment`'s `fog_height` and `fog_max`, [rules.md](rules.md)).
+
 ## Not yet
 
 - Opening a converted v20 map (the Bedroom, Slate...) in Blender, with its

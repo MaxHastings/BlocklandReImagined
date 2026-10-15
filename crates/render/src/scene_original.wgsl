@@ -5,12 +5,14 @@
 // own sun and ambient, as its lightmaps were baked; baked_sun_direction.w
 // is 1 while the live light differs from them, and lightmaps are relit.
 // sky_bands is the authored sky's colour by direction (scene.rs `SkyBands`).
+// haze is the fog's height and most cover (fog.wgsl's h).
 struct Camera {
     view_projection:mat4x4<f32>, eye:vec4<f32>, sun_direction:vec4<f32>,
     sun_color:vec4<f32>, ambient:vec4<f32>, fog_color:vec4<f32>, atmosphere:vec4<f32>,
     sky:vec4<f32>, flare:vec4<f32>, shadow_color:vec4<f32>,
     baked_sun_direction:vec4<f32>, baked_sun_color:vec4<f32>, baked_ambient:vec4<f32>,
     sky_bands:array<vec4<f32>,128>,
+    shading:vec4<f32>, haze:vec4<f32>,
 };
 @group(0) @binding(0) var<uniform> camera:Camera;
 struct PointLight { position_radius:vec4<f32>, color:vec4<f32> };
@@ -938,7 +940,7 @@ fn sun_flare(along:vec3<f32>)->vec3<f32> {
     return camera.flare.rgb*camera.flare.a*(disc+0.55*glow);
 }
 fn fog_amount(position:vec3<f32>)->f32 {
-    return fog_along(position-camera.eye.xyz,camera.atmosphere,camera.fog_color.w);
+    return fog_along(position-camera.eye.xyz,camera.atmosphere,camera.fog_color.w,camera.haze);
 }
 // One band of the sky's faces (8 around, 16 up), tinted; the fog backdrop
 // where they leave it uncovered.
@@ -964,7 +966,7 @@ fn fog_target(position:vec3<f32>)->vec3<f32> {
         mix(sky_band(column,row),sky_band(column+1,row),wa),
         mix(sky_band(column,above),sky_band(column+1,above),wa),
         up-floor(up));
-    return mix(face,camera.fog_color.rgb,sky_fog_at(along.y,camera.atmosphere,camera.fog_color.w));
+    return mix(face,camera.fog_color.rgb,sky_fog_at(along.y,camera.atmosphere,camera.fog_color.w,camera.haze));
 }
 fn fogged(display:vec3<f32>,position:vec3<f32>)->vec3<f32> {
     return output_color(mix(display,fog_target(position),fog_amount(position)));
@@ -1026,7 +1028,7 @@ fn slot_size(slot:u32)->vec2<f32> {
     // The sky (faces, clouds, fog backdrop) is what lies behind the world:
     // everything else fades out into it toward the visible distance.
     if material[0].x!=4.0 && material[0].x!=5.0
-        && faded_out(v.position.xy,v.world_position-camera.eye.xyz,camera.atmosphere) {discard;}
+        && faded_out(v.position.xy,v.world_position-camera.eye.xyz,camera.atmosphere,camera.haze) {discard;}
     if material[0].x==6.0 {
         let time=camera.atmosphere.z;
         // Fluid space: Torque x/y plus the terrain's 1024 offset.
@@ -1097,7 +1099,7 @@ fn slot_size(slot:u32)->vec2<f32> {
             let fog=min(camera.fog_color.rgb+sun_flare(along),vec3<f32>(1.0));
             return vec4<f32>(output_color(fog),v.color.a);
         }
-        let fog=sky_fog_at(along.y,camera.atmosphere,camera.fog_color.w);
+        let fog=sky_fog_at(along.y,camera.atmosphere,camera.fog_color.w,camera.haze);
         var sky=textureSample(layer0,clamped,v.uv);
         if material[0].x==5.0 {
             sky=textureSample(layer0,tiled,v.uv);

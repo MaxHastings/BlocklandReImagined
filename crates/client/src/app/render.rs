@@ -1110,7 +1110,7 @@ impl App {
             .effects_renderer
             .as_mut()
             .context("Effects GPU not initialized")?;
-        effects_renderer.set_fog(camera.atmosphere, camera.fog_color);
+        effects_renderer.set_fog(camera.atmosphere, camera.fog_color, camera.haze);
         effects_renderer.prepare(frame.queue, &effects_camera, &effects_frame)?;
         // A sky's rain or snow changed the weather pack: its pictures go up.
         if self.gpu.weather_revision != self.weather.revision {
@@ -1499,7 +1499,7 @@ impl App {
                         size,
                         camera.view_projection,
                         [camera.eye[0], camera.eye[1], camera.eye[2]],
-                        (camera.atmosphere, camera.fog_color[3]),
+                        (camera.atmosphere, camera.fog_color[3], camera.haze),
                         (renderer, &scenes, &item_draws),
                     );
                     renderer.mark(encoder, "occlusion");

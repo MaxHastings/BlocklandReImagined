@@ -252,7 +252,7 @@ fn mixed_scene(avatar: AvatarFixture, car: VehicleFixture) -> Result<()> {
                             SIZE,
                             camera.view_projection,
                             eye.to_array(),
-                            (camera.atmosphere, camera.fog_color[3]),
+                            (camera.atmosphere, camera.fog_color[3], camera.haze),
                             (&renderer, &scenes, &models),
                         )
                     };

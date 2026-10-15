@@ -284,13 +284,25 @@ fn load_bundle(root: &Path, map_id: &str, legacy: bool) -> Result<MapScene> {
         out.clear_color = [c[0], c[1], c[2], 1.0];
     }
     let mut cache = BTreeMap::new();
-    if let Some(environment) = bundle.get("environments").and_then(|e| e.get(&scene.id)) {
+    let sky = bundle.get("environments").and_then(|e| e.get(&scene.id));
+    if let Some(environment) = sky {
         let environment: bri_content::environment::Environment =
             serde_json::from_value(environment.clone())?;
         crate::environment_choices::append_sky(&root, &mut out, &environment)?;
     } else {
         out.omissions
             .push("Native environment binding missing: authored sky/cloud/fog not rendered".into());
+    }
+    // A map Add-On's own fog (its `maps` entry's `fog`) replaces its sky's;
+    // with no sky, the fog colour is what lies behind the world.
+    if let Some(fog) = record.get("fog") {
+        let fog: bri_content::environment::Fog =
+            serde_json::from_value(fog.clone()).context("Reading the map's fog")?;
+        fog.validate().context("The map's fog")?;
+        if sky.is_none() {
+            out.clear_color = [fog.color[0], fog.color[1], fog.color[2], 1.0];
+        }
+        out.fog = fog;
     }
     let fields = terrain_fields(&root, &bundle, &scene, lift)?;
     let water_bound = load_waters(&root, &bundle, &scene, lift, &fields, &mut out, &mut cache)?;

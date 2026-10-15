@@ -835,6 +835,8 @@ map starts with none set.
 | `shadow_color` | `[r, g, b]`: the light where the sun does not reach, in place of the ambient light |
 | `sun_flare_color`, `sun_flare_size` | `[r, g, b, a]` (a is how strong) and 0.1 to 4: a glow around the sun |
 | `visible_distance`, `fog_distance` | units: where fog is complete (20 to 1000) and where it starts (0 to 1000) |
+| `fog_height` | units, 1 to 100000: how quickly the fog thins with height (it halves about every 0.7 times this above you, so a small value leaves the haze lying low; the map's own, 60 unless it says) |
+| `fog_max` | above 0 to 1: the most the fog ever covers. Below 1 it is a haze: far cliffs soften into it but stay visible, and nothing fades out before the visible distance (1, complete fog, unless the map says) |
 | `fog_color`, `sky_color` | `[r, g, b]`: the fog, and a tint over the map's sky |
 | `overcast` | 0 to 1, cloud cover: dims the sun, spreads its light and greys the fog and sky |
 | `vignette_color`, `vignette_multiply` | `[r, g, b, a]` darkening the screen's edges; `true` multiplies instead of blending |

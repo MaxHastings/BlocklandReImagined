@@ -146,7 +146,11 @@ and checks them; the renderer adds them to the map's Dynamic lights.
   lights; the type and its settings are kept so maps need no change when
   animation and cones arrive.
 - **Environment** (not built yet) names a sky from the Environment pack or
-  ships its own faces. Weather stays the Environment window's.
+  ships its own faces. Weather stays the Environment window's. Fog is
+  built: an optional `fog` on the map's `maps` entry
+  (`bri_content::environment::Fog`: `start`, `end`, `color`, optional
+  `height` and `max`) replaces a sky's fog and, with no sky, colours the
+  backdrop (docs/modding/maps.md, "Fog and haze").
 
 ## Map lights and brick lights stay separate
 

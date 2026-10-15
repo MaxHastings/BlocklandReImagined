@@ -1,4 +1,4 @@
-struct Camera { view_projection:mat4x4<f32>, right:vec4<f32>, up:vec4<f32>, position:vec4<f32>, atmosphere:vec4<f32>, fog_color:vec4<f32> }
+struct Camera { view_projection:mat4x4<f32>, right:vec4<f32>, up:vec4<f32>, position:vec4<f32>, atmosphere:vec4<f32>, fog_color:vec4<f32>, haze:vec4<f32> }
 @group(0) @binding(0) var<uniform> camera:Camera;
 @group(1) @binding(0) var images:texture_2d_array<f32>;
 @group(1) @binding(1) var image_sampler:sampler;
@@ -31,8 +31,8 @@ struct Out { @builtin(position) position:vec4<f32>, @location(0) uv:vec2<f32>, @
     // The scene's fog: blended sprites take its colour, added light fades;
     // toward the visible distance sprites fade out into what is behind.
     let offset=input.world-camera.position.xyz;
-    let fog=fog_along(offset,camera.atmosphere,camera.fog_color.w);
-    let kept=1.-fog_edge(offset,camera.atmosphere);
+    let fog=fog_along(offset,camera.atmosphere,camera.fog_color.w,camera.haze);
+    let kept=1.-fog_edge(offset,camera.atmosphere,camera.haze);
     let a=texel.a*input.color.a*kept;
     // Premultiplied: alpha blending, additive, additive colour.
     if input.image.w<0.5 {return vec4(output_color(mix(own,camera.fog_color.rgb,fog))*a,a);}
