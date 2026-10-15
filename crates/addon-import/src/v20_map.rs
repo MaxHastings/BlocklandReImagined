@@ -175,9 +175,44 @@ pub fn import(opts: &Options) -> Result<Imported> {
     }
 
     let converted = scratch.0.join("converted");
-    bri_convert::convert_root::run(vec![root.clone().into(), converted.clone().into()])
-        .context("converting the map's files")?;
-    let manifest: Value = serde_json::from_slice(&std::fs::read(converted.join("manifest.json"))?)?;
+    let conversion =
+        bri_convert::convert_root::run(vec![root.clone().into(), converted.clone().into()]);
+    let manifest: Value = serde_json::from_slice(
+        &std::fs::read(converted.join("manifest.json"))
+            .with_context(|| format!("converting the map's files: {conversion:?}"))?,
+    )?;
+    // The reference also contains unrelated legacy bricks and editor shapes.
+    // Failed base assets remain diagnostics; map_bundle requires a converted
+    // output for every asset the chosen mission actually references.
+    if let Err(error) = conversion {
+        let mut fatal = Vec::new();
+        for record in manifest["records"].as_array().into_iter().flatten() {
+            if record["error"].is_null() {
+                continue;
+            }
+            let diagnostic = format!("{}: {}", record["virtual_path"], record["error"]);
+            if record["virtual_path"]
+                .as_str()
+                .is_some_and(|path| path.starts_with("base/"))
+            {
+                eprintln!("warning: reference asset did not convert: {diagnostic}");
+            } else {
+                fatal.push(diagnostic);
+            }
+        }
+        fatal.extend(
+            manifest["scan_errors"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .map(ToString::to_string),
+        );
+        ensure!(
+            fatal.is_empty(),
+            "converting the map's files: {error:#}: {}",
+            fatal.join("; ")
+        );
+    }
     let prefix = format!("add-ons/{}/", stem.to_ascii_lowercase());
     let missions: Vec<String> = manifest["records"]
         .as_array()
@@ -620,6 +655,31 @@ new SimGroup(MissionGroup) {\r\n\
     }
 
     #[test]
+    fn broken_map_assets_remain_fatal_and_name_the_source() {
+        let dir = tempfile::tempdir().unwrap();
+        let input = dir.path().join("Map_Broken");
+        std::fs::create_dir(&input).unwrap();
+        std::fs::write(input.join("broken.dts"), b"invalid map shape").unwrap();
+        let error = import(&Options {
+            input,
+            out: dir.path().join("out"),
+            v20: None,
+            mission: None,
+            id: None,
+            name: None,
+            version: "1.0.0".into(),
+        })
+        .err()
+        .expect("broken source assets must fail");
+        assert!(
+            format!("{error:#}")
+                .to_ascii_lowercase()
+                .contains("add-ons/map_broken/broken.dts"),
+            "{error:#}"
+        );
+    }
+
+    #[test]
     fn an_old_blockland_map_add_on_becomes_a_map_add_on() {
         let dir = tempfile::tempdir().unwrap();
         let zip_path = dir.path().join("Map_Hills.zip");
@@ -663,11 +723,14 @@ datablock ParticleEmitterData(HillsFallEmitter) { ejectionPeriodMS = 10; periodV
         assert!(dir.path().join("hills-plain/import-report.json").is_file());
         assert!(dir.path().join("hills-plain/map/bundle.json").is_file());
 
+        let reference = dir.path().join("reference");
+        std::fs::create_dir_all(reference.join("base")).unwrap();
+        std::fs::write(reference.join("base/unused.dts"), b"invalid editor shape").unwrap();
         let out = dir.path().join("hills");
         let made = import(&Options {
             input: zip_path,
             out: out.clone(),
-            v20: None,
+            v20: Some(reference),
             mission: None,
             id: None,
             name: None,

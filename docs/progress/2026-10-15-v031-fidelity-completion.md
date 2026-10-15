@@ -119,3 +119,25 @@ includes E:\Downloads while retaining its previous search folder; the release
 refresh will verify/reimport them using the candidate importer.
 
 Release refresh stopped on stale nested research-importer lockfiles: bri-convert now depends on the collision conversion stack. Refreshed both standalone importer locks offline, then verified cargo metadata --locked --offline succeeds for each. Runtime sources and the root lockfile are unchanged by this packaging repair.
+
+## Release bundle follow-up: reference-only conversion failures
+
+The first release preparation regenerated public base content and passed its
+headless check, but the community bundle stopped on Arctic Challenge. Diagnostic
+reproduction identified two unused reference assets (`1x1x5spike.blb`, an old BLB
+fragment, and editor `octahedron.dts`, DTS v18), rather than map-owned failures.
+Map import now reports base conversion errors as warnings and lets map_bundle
+validate every referenced converted output. Map/borrowed Add-On errors and scan
+errors remain fatal, with source-path diagnostics retained after scratch cleanup.
+The synthetic map regression now includes a corrupt unused reference shape;
+a separate broken-source regression keeps map-owned corruption fatal.
+
+Initial `cargo fmt --all` exceeded Windows command length; formatting is per
+crate through the tier runner, as documented. Full release preparation stopped
+before cross-platform release builds, integrated gate, main push or tagging.
+There is still no published v0.3.1 at this point.
+
+Verification: `python tools/check.py focused --crates bri-addon-import --depth 0`
+passed (3 steps, 171 seconds) after the source-path regression was made
+case-insensitive. Arctic Challenge's real pinned source imported successfully:
+1 map, 2 direct native assets, 7 original textures, zero unresolved textures.
