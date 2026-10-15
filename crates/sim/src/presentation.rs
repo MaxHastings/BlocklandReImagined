@@ -152,6 +152,8 @@ pub enum CueKind {
     /// the projectile's own decal there, `scale` times its size, until it
     /// fades or the brick goes.
     Decal {
+        /// The brick marked, or 0 for the map (its ground, terrain and
+        /// buildings).
         brick: u64,
         normal: [f32; 3],
         projectile: String,
@@ -292,8 +294,7 @@ impl Cue {
                 projectile,
                 scale,
             } => ensure!(
-                *brick > 0
-                    && normal.iter().all(|v| v.is_finite())
+                normal.iter().all(|v| v.is_finite())
                     && (normal.iter().map(|v| v * v).sum::<f32>() - 1.).abs() < 0.01
                     && !projectile.is_empty()
                     && text(projectile)

@@ -1454,3 +1454,35 @@ fn a_carbine_shot_marks_the_brick_it_hits() {
         "the pack says how it looks"
     );
 }
+
+/// A shot into the ground marks the map (brick 0) where it landed, facing up.
+#[test]
+fn a_carbine_shot_into_the_ground_marks_the_map() {
+    let mut g = Game::new();
+    let p = g.join("Ann");
+    g.steps(40);
+    g.equip(p, CARBINE);
+    g.steps(300);
+    for pitch in [1.2f32, -1.2] {
+        let look = g.looks[&p];
+        g.drive(p, MoveInput { pitch, ..look }, 5);
+        g.s.take_cues();
+        g.fire(p);
+        let marks: Vec<_> =
+            g.s.take_cues()
+                .into_iter()
+                .filter_map(|c| match c.kind {
+                    bri_sim::presentation::CueKind::Decal { brick, normal, .. } => {
+                        Some((brick, Vec3::from(normal)))
+                    }
+                    _ => None,
+                })
+                .collect();
+        if let Some((brick, normal)) = marks.first() {
+            assert_eq!(*brick, 0, "the map, not a brick");
+            assert!(normal.abs_diff_eq(Vec3::Y, 1e-3), "facing up: {normal}");
+            return;
+        }
+    }
+    panic!("a shot at the ground left no mark");
+}

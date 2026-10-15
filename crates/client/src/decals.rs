@@ -1,4 +1,5 @@
-//! Marks projectiles leave on bricks (`ProjectileDef::decal`): a soft disc
+//! Marks projectiles leave on bricks and the map's ground
+//! (`ProjectileDef::decal`): a soft disc
 //! flat on the face that was hit, darkest in the middle, fading over its
 //! last second. Each comes from one host cue; it goes when it fades, when
 //! its brick does, or when newer marks need its place.
@@ -89,7 +90,8 @@ impl Decals {
         let transforms = &mut self.transforms;
         self.live.retain_mut(|mark| {
             mark.age += dt;
-            if mark.age >= mark.seconds || !exists(mark.brick) {
+            // Marks on the map (brick 0) stay until they fade.
+            if mark.age >= mark.seconds || (mark.brick != 0 && !exists(mark.brick)) {
                 return false;
             }
             let fade = ((mark.seconds - mark.age) / FADE_SECONDS).min(1.0);
@@ -257,6 +259,14 @@ mod tests {
             decals.advance(0.25, |_| true);
         }
         assert_eq!(decals.live_count(), 0);
+    }
+
+    #[test]
+    fn a_mark_on_the_map_stays_until_it_fades() {
+        let mut decals = Decals::default();
+        decals.add(0, Vec3::ZERO, Vec3::Y, &hole(), 1.0);
+        decals.advance(0.25, |_| false);
+        assert_eq!(decals.live_count(), 1, "no brick to go with");
     }
 
     #[test]
