@@ -446,6 +446,7 @@ pub fn lower(
             .into(),
             automatic: None,
             recoil: None,
+            look_animation_pitch: None,
             look_muzzle: Vec::new(),
         })
     } else {

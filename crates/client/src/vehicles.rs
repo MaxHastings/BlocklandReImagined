@@ -55,6 +55,8 @@ pub struct VehicleAssets {
     /// Models whose definitions play animation threads (a propeller), keyed
     /// by the model's asset path.
     threads: BTreeMap<String, ThreadRig>,
+    /// Independently posed geometry; immutable textures remain on the model.
+    skinned: BTreeMap<(String, u64), SkinnedModel>,
     /// Model asset paths by lower-case source path (`add-ons/vehicle_jeep/jeeptire.dts`).
     sources: BTreeMap<String, String>,
     /// Each definition's lamps (`Definition::lights`) where its model has
@@ -73,6 +75,58 @@ struct LookRig {
     clip: Animation,
     /// Model key, node, and the inverse of the node's transform in that model.
     parts: Vec<(String, usize, Mat4)>,
+    skinned: bool,
+}
+
+struct SkinnedModel {
+    data: bri_render::scene::SceneData,
+    layout: Option<crate::avatar_mesh::Layout>,
+    gpu: Option<GpuScene>,
+    instances: Option<GpuInstances>,
+    transforms: Vec<SceneTransform>,
+    clips: Vec<ClipPlane>,
+    topology_dirty: bool,
+    faulted: bool,
+}
+
+impl SkinnedModel {
+    fn pose(&mut self, rig: &LookRig, phase: f32) -> Result<()> {
+        let pose =
+            bri_content::animation::sample(&rig.shape, Some(&rig.clip), phase * rig.clip.duration)?;
+        let detail = rig
+            .shape
+            .details
+            .iter()
+            .enumerate()
+            .filter(|(_, d)| !d.collision)
+            .max_by(|(_, a), (_, b)| a.pixel_threshold.total_cmp(&b.pixel_threshold))
+            .map(|(i, _)| i)
+            .context("Animated vehicle has no visible detail")?;
+        let materials: Vec<_> = (0..rig.shape.materials.len()).collect();
+        let colors = vec![Some([1.; 4]); rig.shape.objects.len()];
+        self.topology_dirty |= crate::avatar_mesh::Layout::pose(
+            &mut self.layout,
+            &mut self.data,
+            &crate::avatar_mesh::Binding {
+                shape: &rig.shape,
+                detail,
+                materials: &materials,
+                translucent_materials: &materials,
+                unassigned_material: materials.len(),
+                colors: &colors,
+            },
+            &pose,
+            Mat4::IDENTITY,
+        )?;
+        Ok(())
+    }
+}
+
+/// Borrow the immutable model resources for an upload without copying images.
+fn swap_geometry(a: &mut bri_render::scene::SceneData, b: &mut bri_render::scene::SceneData) {
+    std::mem::swap(&mut a.vertices, &mut b.vertices);
+    std::mem::swap(&mut a.indices, &mut b.indices);
+    std::mem::swap(&mut a.batches, &mut b.batches);
 }
 
 /// A model whose `Definition::threads` animate it: the objects on nodes
@@ -141,12 +195,15 @@ pub fn seat_aim_phase(range: [f32; 2], pitch: f32) -> f32 {
 fn posed<'a>(
     looks: &'a BTreeMap<String, LookRig>,
     model: &'a str,
-    pitch: f32,
+    phase: f32,
     transform: Mat4,
 ) -> Vec<(&'a str, Mat4)> {
     let mut out = vec![(model, transform)];
     if let Some(rig) = looks.get(model) {
-        let time = bri_vehicles::muzzle::look_phase(pitch) * rig.clip.duration;
+        if rig.skinned {
+            return Vec::new();
+        }
+        let time = phase * rig.clip.duration;
         if let Ok(pose) = bri_content::animation::sample(&rig.shape, Some(&rig.clip), time) {
             for (key, node, inverse) in &rig.parts {
                 out.push((key.as_str(), transform * pose.nodes[*node] * *inverse));
@@ -406,6 +463,19 @@ impl VehicleAssets {
             // Objects on nodes the clip moves are drawn apart and posed each
             // frame; everything else is baked once.
             let pose = bri_content::animation::sample(&shape, Some(look), 0.0)?;
+            if shape.meshes.iter().flatten().any(|m| m.skin.is_some()) {
+                insert(asset.path.clone(), &pose)?;
+                looks.insert(
+                    asset.path.clone(),
+                    LookRig {
+                        shape: shape.clone(),
+                        clip: look.clone(),
+                        parts: vec![],
+                        skinned: true,
+                    },
+                );
+                continue;
+            }
             let mut moving = std::collections::BTreeSet::new();
             for t in [0.5, 1.0] {
                 let other = bri_content::animation::sample(&shape, Some(look), t * look.duration)?;
@@ -455,6 +525,7 @@ impl VehicleAssets {
                     shape: shape.clone(),
                     clip: look.clone(),
                     parts,
+                    skinned: false,
                 },
             );
         }
@@ -521,6 +592,7 @@ impl VehicleAssets {
             weapon_nodes,
             looks,
             threads,
+            skinned: BTreeMap::new(),
             sources,
             lamps,
         })
@@ -1028,7 +1100,7 @@ impl ClientVehicles {
             let pose = bri_content::animation::sample(
                 &rig.shape,
                 Some(&rig.clip),
-                bri_vehicles::muzzle::look_phase(frame.turret_aim[1]) * rig.clip.duration,
+                d.look_phase(frame.turret_aim[1]) * rig.clip.duration,
             )
             .ok()?;
             let index = rig
@@ -1163,8 +1235,23 @@ impl ClientVehicles {
             models,
             looks,
             threads,
+            skinned,
             ..
         } = assets;
+        skinned.retain(|(model, id), _| {
+            looks.contains_key(model)
+                && infos
+                    .get(id)
+                    .and_then(|info| index.get(&info.definition))
+                    .map(|i| &pack.definitions[*i])
+                    .is_some_and(|d| {
+                        d.model == *model || d.attachment_model.as_ref() == Some(model)
+                    })
+        });
+        for model in skinned.values_mut() {
+            model.transforms.clear();
+            model.clips.clear();
+        }
         for model in models.values_mut() {
             model.transforms.clear();
             model.clips.clear();
@@ -1177,6 +1264,7 @@ impl ClientVehicles {
                 continue;
             };
             let body = to_transform(frame.position, frame.rotation);
+            let drawn_body = body * Mat4::from_scale(Vec3::splat(info.scale));
             // Openings carry a vehicle by its centre of mass, as the host
             // does; part way through one it draws on both sides, cut there.
             let (low, high) = (Vec3::from(d.bounds_min), Vec3::from(d.bounds_max));
@@ -1202,9 +1290,52 @@ impl ClientVehicles {
                 continue;
             }
             let tint = body_tint(d, info);
-            let pitch = frame.turret_aim[1];
+            let phase = d.look_phase(frame.turret_aim[1]);
             let mut push = |model: &str, transform: Mat4, tint: [f32; 4]| {
-                for (model, transform) in posed(looks, model, pitch, transform) {
+                if let Some(rig) = looks.get(model).filter(|r| r.skinned) {
+                    let Some(base) = models.get(model) else {
+                        return;
+                    };
+                    if !transform.is_finite() {
+                        return;
+                    }
+                    let slot =
+                        skinned
+                            .entry((model.to_string(), *id))
+                            .or_insert_with(|| SkinnedModel {
+                                data: bri_render::scene::SceneData {
+                                    materials: base.data.materials.clone(),
+                                    images: vec![],
+                                    ..Default::default()
+                                },
+                                layout: None,
+                                gpu: None,
+                                instances: None,
+                                transforms: vec![],
+                                clips: vec![],
+                                topology_dirty: true,
+                                faulted: false,
+                            });
+                    if let Err(error) = slot.pose(rig, phase) {
+                        if !slot.faulted {
+                            bri_console::warn(format!("Vehicle animation {model}: {error:#}"));
+                            slot.faulted = true;
+                        }
+                        return;
+                    }
+                    slot.transforms.push(SceneTransform { transform, tint });
+                    if let Some(s) = &straddle {
+                        slot.transforms.push(SceneTransform {
+                            transform: s.carried(transform),
+                            tint,
+                        });
+                        slot.clips.extend([s.near, s.far]);
+                    } else {
+                        slot.clips.push(KEEP_ALL);
+                    }
+                    return;
+                }
+                for (model, transform) in posed(looks, model, phase, transform) {
                     if let Some(m) = models.get_mut(model)
                         && transform.is_finite()
                     {
@@ -1220,11 +1351,11 @@ impl ClientVehicles {
                     }
                 }
             };
-            push(&d.model, body, tint);
+            push(&d.model, drawn_body, tint);
             if let Some(rig) = threads.get(&d.model) {
                 let speed = frame.velocity.length();
                 for (model, transform) in
-                    threaded(rig, &d.threads, speed, self.clock / TICK_RATE, body)
+                    threaded(rig, &d.threads, speed, self.clock / TICK_RATE, drawn_body)
                 {
                     push(model, transform, tint);
                 }
@@ -1235,10 +1366,11 @@ impl ClientVehicles {
                     .wheel_suspension
                     .get(i)
                     .copied()
+                    .map(|world_extension| world_extension / info.scale)
                     .unwrap_or(wheel.rest_length);
                 let spin = frame.wheel_rotation.get(i).copied().unwrap_or(0.0);
                 let local = wheel_transform(wheel, suspension, spin, frame.steering);
-                push(&wheel.model, body * local, [1.0; 4]);
+                push(&wheel.model, drawn_body * local, [1.0; 4]);
             }
             // A broken turret flew off as its explosion's debris.
             if let (Some(model), Some(_mount)) = (&d.attachment_model, &d.attachment_mount)
@@ -1264,7 +1396,7 @@ impl ClientVehicles {
                 };
                 let local = weapon_attachment(d, frame, looks.contains_key(model), sway)
                     .expect("attachment mount present");
-                push(model, body * local, tint);
+                push(model, drawn_body * local, tint);
             }
         }
     }
@@ -1274,6 +1406,44 @@ impl ClientVehicles {
         device: &wgpu::Device,
         queue: &wgpu::Queue,
     ) -> Result<()> {
+        for ((key, _), slot) in &mut assets.skinned {
+            if slot.transforms.is_empty() {
+                continue;
+            }
+            let base = assets
+                .models
+                .get_mut(key)
+                .context("Animated vehicle base model")?;
+            if base.gpu.is_none() {
+                base.gpu = Some(renderer.upload(device, queue, &base.data)?);
+            }
+            if slot.gpu.is_none() || slot.topology_dirty {
+                swap_geometry(&mut base.data, &mut slot.data);
+                let result =
+                    renderer.upload_geometry_shared(device, &base.data, base.gpu.as_ref().unwrap());
+                swap_geometry(&mut base.data, &mut slot.data);
+                slot.gpu = Some(result?);
+                slot.topology_dirty = false;
+            } else if let Some(gpu) = &mut slot.gpu {
+                let centers: Vec<_> = slot.data.batches.iter().map(|b| b.center).collect();
+                gpu.update_vertices(queue, &slot.data.vertices, &centers)?;
+            }
+            if slot
+                .instances
+                .as_ref()
+                .is_none_or(|i| i.capacity() < slot.transforms.len())
+            {
+                slot.instances = Some(GpuInstances::new(
+                    device,
+                    slot.transforms.len().next_power_of_two().max(2),
+                )?);
+            }
+            slot.instances.as_mut().unwrap().update_clipped(
+                queue,
+                &slot.transforms,
+                &slot.clips,
+            )?;
+        }
         for model in assets.models.values_mut() {
             if model.transforms.is_empty() {
                 if let Some(instances) = &mut model.instances {
@@ -1308,9 +1478,20 @@ impl ClientVehicles {
             .values()
             .filter(|m| !m.transforms.is_empty())
             .filter_map(|m| Some((m.gpu.as_ref()?, m.instances.as_ref()?)))
+            .chain(
+                assets
+                    .skinned
+                    .values()
+                    .filter(|m| !m.transforms.is_empty())
+                    .filter_map(|m| Some((m.gpu.as_ref()?, m.instances.as_ref()?))),
+            )
             .collect()
     }
     pub fn gpu_stopped(assets: &mut VehicleAssets) {
+        for model in assets.skinned.values_mut() {
+            model.gpu = None;
+            model.instances = None;
+        }
         for model in assets.models.values_mut() {
             model.gpu = None;
             model.instances = None;
@@ -1645,6 +1826,55 @@ pub(crate) mod tests {
     crate::testing::synthetic_and_content!(Gunners: a_rigged_mount_retains_the_same_portal_split_as_its_motor_and_riders);
     crate::testing::synthetic_and_content!(Gunners: a_broken_turret_leaves_the_hull_and_its_gunner_sits_on_the_hull);
     #[test]
+    fn drawn_vehicle_scale_preserves_world_space_suspension_extension() -> Result<()> {
+        let fixture = Gunners::synthetic()?;
+        let mut assets = VehicleAssets::load(&fixture.root)?;
+        let d = assets
+            .pack
+            .definitions
+            .iter()
+            .find(|d| !d.wheels.is_empty() && !d.is_actor())
+            .context("wheeled vehicle")?
+            .clone();
+        let info = VehicleInfo {
+            id: 1,
+            definition: d.id.clone(),
+            color: None,
+            occupants: vec![],
+            destroyed: false,
+            turret_broken: false,
+            scale: 2.,
+            lights: false,
+        };
+        let mut state = pose(1, 3.);
+        state.rotation = Quat::from_rotation_z(0.2).to_array();
+        state.wheel_suspension = vec![0.3; d.wheels.len()];
+        let infos = BTreeMap::from([(1, info.clone())]);
+        let mut vehicles = ClientVehicles::default();
+        vehicles.update(
+            &infos,
+            &BTreeMap::from([(1, state)]),
+            None,
+            None,
+            &Default::default(),
+        );
+        vehicles.prepare(&mut assets, &infos);
+        let body = &assets.models[&d.model].transforms[0].transform;
+        assert!((body.x_axis.truncate().length() - 2.).abs() < 1e-5);
+        let wheel = &d.wheels[0];
+        let transform = assets.models[&wheel.model].transforms[0].transform;
+        let frame = vehicles.frame(1).unwrap();
+        let expected =
+            frame.position + frame.rotation * (Vec3::from(wheel.position) * 2. - Vec3::Y * 0.3);
+        assert!(
+            transform.w_axis.truncate().abs_diff_eq(expected, 1e-5),
+            "world suspension must not be scaled a second time"
+        );
+        assert!((transform.x_axis.truncate().length() - 2.).abs() < 1e-5);
+        Ok(())
+    }
+
+    #[test]
     fn named_grip_nodes_follow_attachment_animation_aim_sway_and_scale() -> Result<()> {
         let fixture = Gunners::synthetic()?;
         let mut assets = VehicleAssets::load(&fixture.root)?;
@@ -1720,6 +1950,124 @@ pub(crate) mod tests {
             vehicles.hand_holds(&assets, &info, seat)[0].is_none(),
             "a missing explicit node must not silently use a guessed point"
         );
+        Ok(())
+    }
+
+    #[test]
+    fn skinned_guns_keep_independent_poses_and_retire_removed_instances() -> Result<()> {
+        use bri_content::shape::{Influence, Skin};
+        let fixture = Gunners::synthetic()?;
+        let mut assets = VehicleAssets::load(&fixture.root)?;
+        let d = fixture
+            .gunners
+            .iter()
+            .filter_map(|id| assets.definition(id))
+            .find(|d| {
+                d.attachment_model
+                    .as_ref()
+                    .is_some_and(|m| assets.looks.contains_key(m))
+            })
+            .context("animated gun")?
+            .clone();
+        let model = d.attachment_model.as_ref().unwrap().clone();
+        let rig = assets.looks.get_mut(&model).unwrap();
+        let rest = bri_content::animation::sample(&rig.shape, None, 0.)?;
+        let object = rig
+            .shape
+            .objects
+            .iter()
+            .find(|o| o.node.is_some() && !o.meshes.is_empty())
+            .unwrap()
+            .clone();
+        let node = object.node.unwrap();
+        let mesh = rig.shape.meshes[object.meshes[0]].as_mut().unwrap();
+        for p in &mut mesh.positions {
+            *p = rest.nodes[node].transform_point3(Vec3::from(*p)).to_array();
+        }
+        for n in &mut mesh.normals {
+            *n = rest.nodes[node]
+                .inverse()
+                .transpose()
+                .transform_vector3(Vec3::from(*n))
+                .to_array();
+        }
+        mesh.skin = Some(Skin {
+            nodes: vec![node, 0],
+            inverse_bind: vec![
+                rest.nodes[node].inverse().to_cols_array(),
+                rest.nodes[0].inverse().to_cols_array(),
+            ],
+            influences: (0..mesh.frame_vertices)
+                .flat_map(|vertex| {
+                    [
+                        Influence {
+                            vertex,
+                            bone: 0,
+                            weight: 0.7,
+                        },
+                        Influence {
+                            vertex,
+                            bone: 1,
+                            weight: 0.3,
+                        },
+                    ]
+                })
+                .collect(),
+        });
+        rig.shape.validate()?;
+        rig.skinned = true;
+        rig.parts.clear();
+        let info = VehicleInfo {
+            id: 1,
+            definition: d.id.clone(),
+            color: None,
+            occupants: vec![],
+            destroyed: false,
+            turret_broken: false,
+            scale: 1.,
+            lights: false,
+        };
+        let mut second = info.clone();
+        second.id = 2;
+        let mut infos = BTreeMap::from([(1, info), (2, second)]);
+        let mut a = pose(1, 3.);
+        a.turret_aim = [0., -0.4];
+        let mut b = a.clone();
+        b.id = 2;
+        b.turret_aim[1] = 0.4;
+        let mut vehicles = ClientVehicles::default();
+        vehicles.update(
+            &infos,
+            &BTreeMap::from([(1, a), (2, b)]),
+            None,
+            None,
+            &Default::default(),
+        );
+        vehicles.prepare(&mut assets, &infos);
+        let a = &assets.skinned[&(model.clone(), 1)];
+        let b = &assets.skinned[&(model.clone(), 2)];
+        assert!(!a.faulted && !b.faulted);
+        assert!(!a.data.vertices.is_empty());
+        assert_eq!(a.data.indices, b.data.indices);
+        assert!(
+            a.data.images.is_empty() && b.data.images.is_empty(),
+            "texture pixels stay on shared base"
+        );
+        assert!(
+            a.data
+                .vertices
+                .iter()
+                .zip(&b.data.vertices)
+                .any(|(a, b)| Vec3::from(a.position).distance(Vec3::from(b.position)) > 0.01)
+        );
+        assert!(
+            assets.models[&model].transforms.is_empty(),
+            "no duplicate rigid rest gun"
+        );
+        infos.remove(&1);
+        vehicles.prepare(&mut assets, &infos);
+        assert!(!assets.skinned.contains_key(&(model.clone(), 1)));
+        assert!(assets.skinned.contains_key(&(model, 2)));
         Ok(())
     }
 
@@ -1898,7 +2246,7 @@ pub(crate) mod tests {
             for step in 0..=40 {
                 let pitch =
                     d.look_pitch[0] + (d.look_pitch[1] - d.look_pitch[0]) * step as f32 / 40.0;
-                let draws = posed(&assets.looks, &model, pitch, Mat4::IDENTITY);
+                let draws = posed(&assets.looks, &model, d.look_phase(pitch), Mat4::IDENTITY);
                 assert_eq!(draws.len(), 2);
                 let barrel = draws[1].1.transform_point3(rest);
                 let (origin, _) = d.muzzle([0.0, pitch]).unwrap();

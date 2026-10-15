@@ -575,3 +575,17 @@ barrel-animation models retain their pivot-based point fallback. Named nodes are
 preferable for grips that must follow an authored barrel animation exactly.
 These targets position hands; they do not manufacture a new body stance or wrist
 animation. Author the rider's clip separately.
+
+Weapon attachment shapes may embed a `look` animation. Embedded clips take
+precedence over matching external `look.dsq` clips. Rigid objects retain instanced
+joint transforms; a shape with skin weights uses independently posed geometry
+for each vehicle and shares its uploaded materials and textures. Existing native
+shape skin weights, inverse bind matrices and animation channels apply unchanged.
+
+For clips ordered up, neutral, down, `weapon.look_animation_pitch` optionally
+declares the source `[down, up]` endpoints in native up-positive radians. For
+example `[-0.25, 0.6]` maps those endpoints to clip phases 1 and 0, keeping zero
+pitch at phase 0.5. Each side interpolates independently. Endpoints must straddle
+zero within +/-pi/2. Omission retains v20's +/-pi/2 mapping. This is animation
+mapping; `look_pitch` still bounds player aiming. Geometry, named sockets and
+authoritative muzzle tracks share the mapping.

@@ -24,8 +24,8 @@ pub fn look_phase(pitch: f32) -> f32 {
 }
 
 /// The `look` clip made for this shape: every channel names one of its nodes.
-pub fn look_clip<'a>(clips: &'a [Animation], shape: &Shape) -> Option<&'a Animation> {
-    clips.iter().find(|clip| {
+pub fn look_clip<'a>(clips: &'a [Animation], shape: &'a Shape) -> Option<&'a Animation> {
+    shape.animations.iter().chain(clips).find(|clip| {
         clip.name == "look"
             && !clip.nodes.is_empty()
             && clip.nodes.iter().all(|channel| {
@@ -70,6 +70,14 @@ fn read(root: &Path, asset: &Asset, limit: u64) -> Result<Vec<u8>> {
 }
 
 impl Definition {
+    /// Shared look phase for rendered geometry, effect sockets and host shots.
+    pub fn look_phase(&self, pitch: f32) -> f32 {
+        match self.weapon.as_ref().and_then(|w| w.look_animation_pitch) {
+            Some([_, up]) if pitch >= 0. => 0.5 * (1. - pitch / up).clamped(0., 1.),
+            Some([down, _]) => 0.5 + 0.5 * (pitch / down).clamped(0., 1.),
+            None => look_phase(pitch),
+        }
+    }
     /// The barrel node v20 fires from.
     pub fn muzzle_node(&self) -> &'static str {
         if self.family == Family::Cannon {
@@ -95,7 +103,7 @@ impl Definition {
         let direction = turn * Quat::from_rotation_x(pitch) * Vec3::NEG_Z;
         let track = &weapon.look_muzzle;
         let origin = if track.len() >= 2 {
-            let f = look_phase(pitch) * (track.len() - 1) as f32;
+            let f = self.look_phase(pitch) * (track.len() - 1) as f32;
             let i = (f.floor() as usize).min(track.len() - 2);
             let local = Vec3::from(track[i]).lerp(Vec3::from(track[i + 1]), f - i as f32);
             mount + turn * local
@@ -208,6 +216,27 @@ impl Pack {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn authored_look_endpoints_share_the_neutral_sample() {
+        let mut d = crate::testing::tank();
+        let limits = [-0.2, 0.7];
+        d.weapon.as_mut().unwrap().look_animation_pitch = Some(limits);
+        for (pitch, expected) in [
+            (-1., 1.),
+            (-0.2, 1.),
+            (-0.1, 0.75),
+            (0., 0.5),
+            (0.35, 0.25),
+            (0.7, 0.),
+            (1., 0.),
+        ] {
+            assert!((d.look_phase(pitch) - expected).abs() < 1e-6);
+        }
+        d.weapon.as_mut().unwrap().look_animation_pitch = None;
+        for pitch in [-1., 0., 0.7] {
+            assert_eq!(d.look_phase(pitch), look_phase(pitch));
+        }
+    }
     fn pack() -> (Pack, std::path::PathBuf) {
         let root = bri_package::testing::pack_dir(
             &Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content"),

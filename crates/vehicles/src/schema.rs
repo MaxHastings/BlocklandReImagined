@@ -253,6 +253,10 @@ pub struct Weapon {
     /// out, v20's 5 for every gun but the cannon's 0.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub recoil: Option<f32>,
+    /// Authored [down, up] pitch endpoints for a look clip whose neutral
+    /// sample is halfway through. Omitted clips retain v20's +/-90 degrees.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub look_animation_pitch: Option<[f32; 2]>,
     /// Weapon-frame muzzle node positions from full up to full down, sampled
     /// from the model's `look` clip at load (see `muzzle`). Empty without one.
     #[serde(skip)]
@@ -1496,6 +1500,16 @@ impl Pack {
                 "seat hand nodes need a weapon attachment seat and names up to 64 characters"
             );
             if let Some(w) = &d.weapon {
+                ensure!(
+                    w.look_animation_pitch.is_none_or(|[down, up]| {
+                        down.is_finite()
+                            && up.is_finite()
+                            && (-std::f32::consts::FRAC_PI_2..0.).contains(&down)
+                            && up <= std::f32::consts::FRAC_PI_2
+                            && up > 0.
+                    }),
+                    "invalid weapon look animation pitch endpoints"
+                );
                 ensure!(
                     w.cooldown_ticks > 0
                         && w.speed.is_finite()

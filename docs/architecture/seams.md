@@ -138,3 +138,4 @@ labels are retained so earlier progress notes remain traceable.
 | Authored hand poses | Body sockets may preserve authored hand frames/poses instead of generic Blockhead fitting; the same policy applies on host and client | Root rifle source-marker audit | implementation and comparison in progress |
 
 | Weapon attachment grip nodes | Seat-owned named weapon nodes drive rider hand targets through the same animation/aim/sway frame as muzzle/ejection sockets; point holds remain supported | Root Warthog source grip review | implementation and rendered comparison in progress |
+| Skinned vehicle look animation | Embedded native look clips preserve weighted joints with independent geometry per vehicle, shared GPU materials and authored asymmetric pitch endpoints; host muzzle tracks and client sockets use the same phase | Root source vehicle rig audit | quick checks and private diagnostic renders pass; final integrated and human acceptance open |
