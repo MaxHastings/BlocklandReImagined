@@ -96,8 +96,11 @@ fn flag(p: &BTreeMap<String, String>, key: &str, default: bool) -> bool {
 }
 
 /// The highest water surface over Torque (x, y), from the scene's water
-/// blocks (each spans its position plus its scale).
-fn water_top(scene: &Scene, x: f32, y: f32) -> Option<f32> {
+/// blocks (each spans its position plus its scale, wrapped into the terrain
+/// block as `water::terrain_wrapped` describes).
+fn water_top(scene: &Scene, ground: &Ground, x: f32, y: f32) -> Option<f32> {
+    let period = ground.spacing * 256.0;
+    let start = [ground.origin[0], -ground.origin[2]];
     scene
         .nodes
         .iter()
@@ -106,8 +109,9 @@ fn water_top(scene: &Scene, x: f32, y: f32) -> Option<f32> {
             let p = numbers(&n.properties, "position", [0.0; 3]);
             let s = numbers(&n.properties, "scale", [1.0; 3]);
             let repeats = flag(&n.properties, "repeatterrain", true);
-            let inside =
-                repeats || ((p[0]..=p[0] + s[0]).contains(&x) && (p[1]..=p[1] + s[1]).contains(&y));
+            let (x0, x1, _) = crate::water::terrain_wrapped(p[0], p[0] + s[0], start[0], period);
+            let (y0, y1, _) = crate::water::terrain_wrapped(p[1], p[1] + s[1], start[1], period);
+            let inside = repeats || ((x0..=x1).contains(&x) && (y0..=y1).contains(&y));
             inside.then_some(p[2] + s[2])
         })
         .reduce(f32::max)
@@ -175,7 +179,7 @@ pub fn expand(
                 if up < slope.to_radians().cos() - 1e-4 {
                     continue;
                 }
-                if !on_water && water_top(scene, x, y).is_some_and(|top| top > z) {
+                if !on_water && water_top(scene, ground, x, y).is_some_and(|top| top > z) {
                     continue;
                 }
                 let r = [0, 1, 2].map(|k| random.range(rotate.0[k], rotate.1[k]).to_radians());

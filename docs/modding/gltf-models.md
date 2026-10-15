@@ -192,14 +192,24 @@ gun's sound goes in the vehicle pack's `weapons.json` `sounds`, as above.
 - One **Base Color** image texture per material, PNG or JPEG, up to 2048x2048
   (1024 is plenty). The Base Color factor multiplies it; a material with no
   texture becomes its plain colour.
-- Normal, roughness, metallic, emission and occlusion maps are ignored and
-  listed in the report. Vertex colours and shape keys are ignored too.
-- **Metal**: a material whose Metallic value is 0.5 or more draws as bare
-  metal, at its Roughness value, reflecting the world. Its Base Color is the
-  metal's colour (steel about 0.56, gold 1.0 0.71 0.29).
+- **Full materials**: a material's **Normal** map, **Metallic/Roughness**
+  texture (glTF packs metal in blue and roughness in green, as Blender's
+  exporter writes it), **Occlusion** map and **Emission** texture come
+  along with it, each up to 2048x2048. The surface then draws physically
+  based: bumps catch the sun, metal reflects the world at its roughness,
+  creases darken, and the emission glows in the dark. The Normal Map
+  Strength, Metallic, Roughness and Emission Strength values apply as in
+  Blender. Each map is saved as a texture named after the material with
+  `_normal`, `_metal_rough`, `_occlusion` or `_glow`. Vertex colours and
+  shape keys are ignored.
+- **Metal**: a material without those maps whose Metallic value is
+  0.5 or more draws as bare metal, at its Roughness value, reflecting the
+  world. Its Base Color is the metal's colour (steel about 0.56, gold 1.0
+  0.71 0.29).
 - **Glow**: a material whose Emission Strength times its brightest Emission
-  colour channel is 0.5 or more draws at full brightness, like an Unlit one.
-  Fainter glow is ignored and named in the report.
+  colour channel is 0.5 or more and has no Emission texture draws at full
+  brightness, like an Unlit one. Fainter glow, or an Emission texture,
+  glows on top of the lit surface.
 - Alpha: Blend mode "Alpha Blend" and "Alpha Clip" draw see-through
   where the texture is; "Opaque" draws solid and ignores the texture's
   alpha (a specular or colour-change mask left there does no harm).

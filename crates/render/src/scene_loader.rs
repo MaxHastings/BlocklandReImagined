@@ -583,12 +583,42 @@ fn load_static_shape(
         if authored.unlit && !legacy {
             material.kind = MaterialKind::Unlit;
         }
+        // The full physically based look on an Add-On map: its maps are the
+        // textures bound to the materials it names.
+        let physical = authored
+            .surface
+            .as_ref()
+            .filter(|_| !authored.unlit && !legacy);
+        if let Some(surface) = physical {
+            let mut maps = [0; 4];
+            for (k, map) in crate::scene::SurfaceMap::ALL.into_iter().enumerate() {
+                maps[k] = match map.of(surface) {
+                    Some(m) => {
+                        let file = bindings
+                            .iter()
+                            .find(|b| {
+                                b["asset"].as_str() == Some(id)
+                                    && b["shape_material"].as_u64() == Some(m as u64)
+                                    && b["skin"].as_str().unwrap_or("") == skin
+                            })
+                            .and_then(|b| b["texture"].as_str())
+                            .with_context(|| format!("Missing static surface map {id}/{m}"))?;
+                        texture(root, file, map.srgb(), out, cache)?
+                    }
+                    None => {
+                        out.images.push(map.stand_in());
+                        out.images.len() - 1
+                    }
+                };
+            }
+            material = Material::physical(material.name.clone(), diffuse, maps, surface);
+        }
         // Bare metal on an Add-On map: its texture tints the reflectance and
         // a flat detail leaves the authored roughness as it is.
         if let Some(metal) = authored
             .metal
             .as_ref()
-            .filter(|_| !authored.unlit && !legacy)
+            .filter(|_| !authored.unlit && !legacy && physical.is_none())
         {
             material.kind = MaterialKind::Metal;
             material.images[1] = out.images.len();

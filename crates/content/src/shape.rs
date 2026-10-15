@@ -84,6 +84,45 @@ pub struct Material {
     /// sharp highlights instead of a painted, diffusely lit surface.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub metal: Option<Metal>,
+    /// The full physically based look a modern model brings (glTF's
+    /// metallic-roughness material): surface relief, metal and roughness
+    /// per texel, ambient occlusion and glow. Drawn with it instead of
+    /// `metal` when both are set.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub surface: Option<Surface>,
+}
+/// Physically based maps for a [`Material`], each naming another material
+/// (by index) whose texture holds it, as [`Metal::detail`] does. The
+/// material's own texture is the base colour.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Surface {
+    /// Tangent-space normal map (glTF and OpenGL convention: green up).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub normal: Option<usize>,
+    /// How strongly the normal map tilts the surface (0 flat).
+    #[serde(default = "Metal::one")]
+    pub normal_scale: f32,
+    /// Metal in blue and roughness in green (glTF's layout), multiplying
+    /// `metallic` and `roughness`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub metallic_roughness: Option<usize>,
+    /// 0 a painted (dielectric) surface, 1 bare metal.
+    pub metallic: f32,
+    /// 0 a perfect mirror, 1 fully matte.
+    pub roughness: f32,
+    /// Ambient occlusion in red: how much surrounding light reaches a
+    /// crevice.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub occlusion: Option<usize>,
+    #[serde(default = "Metal::one")]
+    pub occlusion_strength: f32,
+    /// Glow colour map (sRGB), multiplying `emissive`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub emissive_map: Option<usize>,
+    /// Light the surface gives off whatever the world's light, linear RGB.
+    #[serde(default)]
+    pub emissive: [f32; 3],
 }
 /// A physically based metal surface (the metallic workflow real-time
 /// engines use): it has no diffuse colour, only reflection.
@@ -250,6 +289,22 @@ impl Shape {
             }
         }
         for material in &self.materials {
+            if let Some(surface) = &material.surface {
+                let index = |m: Option<usize>| m.is_none_or(|m| m < self.materials.len());
+                ensure!(
+                    index(surface.normal)
+                        && index(surface.metallic_roughness)
+                        && index(surface.occlusion)
+                        && index(surface.emissive_map)
+                        && (0.0..=8.0).contains(&surface.normal_scale)
+                        && (0.0..=1.0).contains(&surface.metallic)
+                        && (0.0..=1.0).contains(&surface.roughness)
+                        && (0.0..=1.0).contains(&surface.occlusion_strength)
+                        && surface.emissive.iter().all(|c| (0.0..=1000.0).contains(c)),
+                    "Invalid surface material {}",
+                    material.name
+                );
+            }
             if let Some(metal) = &material.metal {
                 ensure!(
                     metal.color.iter().all(|c| (0.0..=1.0).contains(c))

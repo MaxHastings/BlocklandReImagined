@@ -70,6 +70,44 @@ pub fn resource(root: &Path, source: &str, reference: &str, output: &Path) -> Re
     }
     anyhow::bail!("Missing original water image {reference}")
 }
+/// Where a water block that does not repeat lies along one axis. The
+/// classic engine keeps water in the terrain block's own space, wrapping its
+/// position into the block, so a block authored at `352` on a terrain from
+/// `-1024` to `1024` covers the terrain from its far edge round to its near
+/// one. A block as wide as the terrain covers all of it; a narrower one
+/// moves whole periods to sit inside it, and the second flag says whether
+/// part of it is still past the edge (the classic engine drew that part on
+/// the near side).
+pub fn terrain_wrapped(min: f32, max: f32, start: f32, period: f32) -> (f32, f32, bool) {
+    let width = max - min;
+    if width >= period - 1e-3 {
+        return (start, start + period, false);
+    }
+    let centre = min + width * 0.5;
+    let shift = start + (centre - start).rem_euclid(period) - centre;
+    let (min, max) = (min + shift, max + shift);
+    (min, max, min < start - 1e-3 || max > start + period + 1e-3)
+}
+
+/// The terrain block's native start along x and z and its width, as
+/// `terrain_wrapped` takes them.
+pub fn terrain_block(scene: &Scene) -> Option<([f32; 2], f32)> {
+    let node = scene
+        .nodes
+        .iter()
+        .find(|n| matches!(n.kind, Kind::Terrain))?;
+    let spacing = node
+        .properties
+        .get("squaresize")
+        .and_then(|v| v.trim().parse::<f32>().ok())
+        .filter(|v| *v > 0.0)
+        .unwrap_or(8.0);
+    let period = spacing * 256.0;
+    let origin = glam::Mat4::from_cols_array(&node.transform).w_axis;
+    // Native z runs against Torque y: the block spans z from origin - period.
+    Some(([origin.x, origin.z - period], period))
+}
+
 pub fn convert(
     root: &Path,
     source: &str,
@@ -145,12 +183,25 @@ pub fn convert(
         if p.contains_key("watercolor") {
             warnings.push("Authored waterColor retained in source scene; classic water texture rendering does not infer a new blue tint".into());
         }
+        let mut min = [origin.x, origin.y, origin.z - scale.z];
+        let mut max = [origin.x + scale.x, origin.y + scale.y, origin.z];
+        if let (None, Some((start, period))) = (repeat_period, terrain_block(scene)) {
+            let mut past = false;
+            for (axis, start) in [(0, start[0]), (2, start[1])] {
+                let wrapped = terrain_wrapped(min[axis], max[axis], start, period);
+                (min[axis], max[axis]) = (wrapped.0, wrapped.1);
+                past |= wrapped.2;
+            }
+            if past {
+                warnings.push("Part of this water lies past the terrain's edge, where the classic engine wrapped it to the near side; that part is left out".into());
+            }
+        }
         let w = Water {
             schema_version: 1,
             node,
             id: format!("{}/water/{node}", scene.id),
-            min: [origin.x, origin.y, origin.z - scale.z],
-            max: [origin.x + scale.x, origin.y + scale.y, origin.z],
+            min,
+            max,
             repeat_period,
             liquid_type: p
                 .get("liquidtype")
@@ -193,6 +244,25 @@ pub fn convert(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn water_wraps_into_the_terrain_block() {
+        // Map_Creek: a terrain-wide block authored at 352 covers the terrain.
+        assert_eq!(
+            terrain_wrapped(352.0, 2400.0, -1024.0, 2048.0),
+            (-1024.0, 1024.0, false)
+        );
+        // A pond past the far edge comes back onto the terrain.
+        assert_eq!(
+            terrain_wrapped(1500.0, 1600.0, -1024.0, 2048.0),
+            (-548.0, -448.0, false)
+        );
+        // Inside already: left alone. Across the edge: said so.
+        assert_eq!(
+            terrain_wrapped(-100.0, 100.0, -1024.0, 2048.0),
+            (-100.0, 100.0, false)
+        );
+        assert!(terrain_wrapped(1000.0, 1100.0, -1024.0, 2048.0).2);
+    }
     #[test]
     fn legacy_core_paths_and_disabled_missing_reflection_are_explicit() -> Result<()> {
         let parent = std::env::temp_dir().canonicalize()?;

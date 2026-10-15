@@ -2440,6 +2440,7 @@ fn placeholder() -> bri_content::shape::Shape {
             detail_scale: 1.0,
             reflectance: 0.0,
             metal: None,
+            surface: None,
         }],
         animations: vec![],
     }

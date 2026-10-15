@@ -301,6 +301,8 @@ pub fn import(opts: &Options) -> Result<Imported> {
             std::fs::copy(entry.path(), dir.join(&file))?;
             files += 1;
         }
+        files += foliage(&root, mission, &map_id, &scene, &dir)?;
+        files += emitters(&root, &stem, &ns, &scene, &dir)?;
         std::fs::write(dir.join(&scene_file), serde_json::to_vec_pretty(&scene)?)?;
         std::fs::write(dir.join("bundle.json"), serde_json::to_vec_pretty(&bundle)?)?;
         files += 2;
@@ -341,6 +343,239 @@ pub fn import(opts: &Options) -> Result<Imported> {
     })
 }
 
+/// The map's grass and foliage replicators as a foliage pack beside its
+/// bundle (`foliage.json` and its images), which the game places on the
+/// map as it loads. Returns how many files it wrote.
+fn foliage(root: &Path, mission: &str, map_id: &str, scene: &Value, dir: &Path) -> Result<usize> {
+    use bri_foliage::{Definition, Evidence, FoliagePack, Texture};
+    use sha2::{Digest, Sha256};
+    let text = bri_convert::environment::read_original(root, mission)?.unwrap_or_default();
+    let mut pack = FoliagePack {
+        schema_version: 1,
+        definitions: vec![],
+        textures: vec![],
+        source_bundle: "bundle.json".into(),
+    };
+    let mut seen = std::collections::BTreeMap::<String, usize>::new();
+    for (index, node) in scene["nodes"].as_array().into_iter().flatten().enumerate() {
+        if node["kind"] != "foliage" {
+            continue;
+        }
+        let properties: std::collections::BTreeMap<String, String> =
+            serde_json::from_value(node["properties"].clone())?;
+        let (_, grass) = bri_foliage::replicator_image(&properties)?;
+        let reference = &properties[if grass { "grassfile" } else { "foliagefile" }];
+        let image = bri_convert::water::resource(root, mission, reference, dir)
+            .with_context(|| format!("the image {reference} of a grass or foliage replicator"))?;
+        let texture = match pack.textures.iter().position(|t| t.sha256 == image.sha256) {
+            Some(texture) => texture,
+            None => {
+                pack.textures.push(Texture {
+                    id: format!("{map_id}/foliage/texture/{}", pack.textures.len()),
+                    path: image.file.clone(),
+                    sha256: image.sha256.clone(),
+                    source: image.source.clone(),
+                });
+                pack.textures.len() - 1
+            }
+        };
+        // The replicator's declaration in the mission, for its evidence.
+        let class = if grass {
+            "new fxgrassreplicator("
+        } else {
+            "new fxfoliagereplicator("
+        };
+        let nth = seen.entry(class.into()).or_default();
+        let line = String::from_utf8_lossy(&text)
+            .lines()
+            .enumerate()
+            .filter(|(_, l)| l.to_ascii_lowercase().contains(class))
+            .nth(*nth)
+            .map_or(0, |(k, _)| k + 1);
+        *nth += 1;
+        let transform = node["transform"]
+            .as_array()
+            .context("a node without a transform")?;
+        pack.definitions.push(Definition::from_replicator(
+            map_id,
+            index,
+            [12, 13, 14].map(|k| transform.get(k).and_then(Value::as_f64).unwrap_or(0.0) as f32),
+            &properties,
+            texture,
+            Evidence {
+                source: mission.to_string(),
+                sha256: format!("{:x}", Sha256::digest(&text)),
+                line,
+                fields: properties.clone(),
+                adaptations: vec![],
+            },
+        )?);
+    }
+    if pack.definitions.is_empty() {
+        return Ok(0);
+    }
+    pack.validate()?;
+    pack.images(dir)?;
+    std::fs::write(dir.join("foliage.json"), serde_json::to_vec_pretty(&pack)?)?;
+    Ok(1)
+}
+
+/// The map's particle emitters (`ParticleEmitterNode`s: waterfalls, mist)
+/// as `map_effects.json` beside its bundle, from the particle and emitter
+/// datablocks its own scripts declare. Returns how many files it wrote.
+fn emitters(root: &Path, stem: &str, ns: &str, scene: &Value, dir: &Path) -> Result<usize> {
+    use bri_content::effects::{MapEffects, MapEmitter};
+    use bri_convert::{effect_script::Declarations, effects};
+    let placed: Vec<(usize, &Value)> = scene["nodes"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .enumerate()
+        .filter(|(_, n)| n["properties"]["source_class"] == "particleemitternode")
+        .collect();
+    if placed.is_empty() {
+        return Ok(0);
+    }
+    // The Add-On's own scripts, read for their datablocks only.
+    let mut declarations = Declarations::default();
+    for (origin, text) in scripts(root, stem)? {
+        if let Err(e) = declarations.read(&text, &origin) {
+            eprintln!("warning: {origin}: {e:#}; its effects are left out");
+        }
+    }
+    let find = |class: &str, name: &str| {
+        declarations
+            .entries
+            .iter()
+            .rev()
+            .find(|d| d.class.eq_ignore_ascii_case(class) && d.name.eq_ignore_ascii_case(name))
+    };
+    let rename = |id: &str| {
+        let (kind, name) = id
+            .strip_prefix("v20/")
+            .and_then(|r| r.split_once('/'))
+            .unwrap_or(("effect", id));
+        format!("{ns}:{kind}/{name}")
+    };
+    let mut out = MapEffects {
+        schema_version: 1,
+        particles: vec![],
+        emitters: vec![],
+        sources: vec![],
+    };
+    for (index, node) in placed {
+        let name = node["properties"]["emitter"].as_str().unwrap_or_default();
+        let emitter_id = format!("{ns}:emitter/{}", name.to_ascii_lowercase());
+        if !out.emitters.iter().any(|e| e.id == emitter_id) {
+            let Some(d) = find("ParticleEmitterData", name) else {
+                eprintln!(
+                    "warning: the map places emitter {name}, which its scripts do not declare; it is left out"
+                );
+                continue;
+            };
+            let converted = effects::emitter(d, &Default::default()).and_then(|(mut e, _)| {
+                let mut particles = vec![];
+                for id in &e.particles {
+                    let particle = id.rsplit('/').next().unwrap_or(id);
+                    let pd = find("ParticleData", particle).with_context(|| {
+                        format!("its particle {particle} is not declared by the map")
+                    })?;
+                    let (mut p, _) = effects::particle(pd)?;
+                    p.id = rename(&p.id);
+                    particles.push(p);
+                }
+                e.id = emitter_id.clone();
+                e.particles = e.particles.iter().map(|p| rename(p)).collect();
+                Ok((e, particles))
+            });
+            match converted {
+                Ok((e, particles)) => {
+                    for p in particles {
+                        if !out.particles.iter().any(|q| q.id == p.id) {
+                            out.particles.push(p);
+                        }
+                    }
+                    out.emitters.push(e);
+                }
+                Err(e) => {
+                    eprintln!("warning: emitter {name}: {e:#}; it is left out");
+                    continue;
+                }
+            }
+        }
+        let transform = node["transform"]
+            .as_array()
+            .context("a node without a transform")?
+            .iter()
+            .map(|v| v.as_f64().unwrap_or(0.0) as f32)
+            .collect::<Vec<_>>();
+        let matrix = glam::Mat4::from_cols_slice(&transform);
+        let (_, rotation, position) = matrix.to_scale_rotation_translation();
+        out.sources.push(MapEmitter {
+            node: index,
+            emitter: emitter_id,
+            position: position.to_array(),
+            rotation: rotation.normalize().to_array(),
+            velocity: node["properties"]["velocity"]
+                .as_str()
+                .and_then(|v| v.trim().parse().ok())
+                .unwrap_or(1.0),
+        });
+    }
+    if out.sources.is_empty() {
+        return Ok(0);
+    }
+    out.validate()?;
+    std::fs::write(
+        dir.join("map_effects.json"),
+        serde_json::to_vec_pretty(&out)?,
+    )?;
+    Ok(1)
+}
+
+/// The Add-On's `.cs` scripts (folder or zip, as it was staged), sorted by
+/// path, as (`Add-Ons/<stem>/path`, text).
+fn scripts(root: &Path, stem: &str) -> Result<Vec<(String, String)>> {
+    let mut out = vec![];
+    let is_script = |name: &str| name.to_ascii_lowercase().ends_with(".cs");
+    let folder = root.join("Add-Ons").join(stem);
+    let zip = root.join("Add-Ons").join(format!("{stem}.zip"));
+    if folder.is_dir() {
+        let mut stack = vec![folder.clone()];
+        while let Some(d) = stack.pop() {
+            for entry in std::fs::read_dir(&d)? {
+                let path = entry?.path();
+                if path.is_dir() {
+                    stack.push(path);
+                } else if is_script(&path.to_string_lossy()) {
+                    let relative = path
+                        .strip_prefix(&folder)?
+                        .to_string_lossy()
+                        .replace('\\', "/");
+                    let text = String::from_utf8_lossy(&std::fs::read(&path)?).into_owned();
+                    out.push((format!("Add-Ons/{stem}/{relative}"), text));
+                }
+            }
+        }
+    } else if zip.is_file() {
+        let mut archive = zip::ZipArchive::new(std::fs::File::open(&zip)?)?;
+        for k in 0..archive.len() {
+            let mut entry = archive.by_index(k)?;
+            let name = entry.name().replace('\\', "/");
+            if entry.is_file() && is_script(&name) && entry.size() < 4 << 20 {
+                let mut bytes = vec![];
+                std::io::Read::read_to_end(&mut entry, &mut bytes)?;
+                out.push((
+                    format!("Add-Ons/{stem}/{name}"),
+                    String::from_utf8_lossy(&bytes).into_owned(),
+                ));
+            }
+        }
+    }
+    out.sort();
+    Ok(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -372,8 +607,17 @@ new SimGroup(MissionGroup) {\r\n\
    new Sun() { azimuth = \"238\"; elevation = \"33\"; color = \"0.6 0.6 0.6 1\"; ambient = \"0.4 0.4 0.4 1\"; };\r\n\
    new TerrainBlock(Terrain) { terrainFile = \"Add-Ons/Map_Hills/hills.ter\"; squareSize = \"8\"; };\r\n\
    new SpawnSphere() { position = \"0 0 40\"; };\r\n\
+   new ParticleEmitterNode(Fall) { position = \"0 0 45\"; rotation = \"1 0 0 0\"; scale = \"1 1 1\"; dataBlock = \"GenericEmitterNode\"; emitter = \"HillsFallEmitter\"; velocity = \"1\"; };\r\n\
+   new fxGrassReplicator(Grass) { position = \"0 0 40\"; seed = \"1376312589\"; grassFile = \"./tuft\"; grassCount = \"50\"; grassRetries = \"100\"; outerRadiusX = \"60\"; outerRadiusY = \"60\"; minWidth = \"1\"; maxWidth = \"2\"; minHeight = \"1\"; maxHeight = \"2\"; };\r\n\
 };\r\n\
 //--- OBJECT WRITE END ---\r\n";
+
+    fn read_map_effects(path: &Path) -> bri_content::effects::MapEffects {
+        let effects: bri_content::effects::MapEffects =
+            serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+        effects.validate().unwrap();
+        effects
+    }
 
     #[test]
     fn an_old_blockland_map_add_on_becomes_a_map_add_on() {
@@ -391,7 +635,11 @@ new SimGroup(MissionGroup) {\r\n\
         for (name, bytes) in [
             ("hills.mis", MISSION.as_bytes().to_vec()),
             ("hills.ter", ter()),
-            ("grass.png", grass),
+            ("grass.png", grass.clone()),
+            ("tuft.png", grass),
+            ("hills_resources.cs", br#"datablock ParticleData(HillsFallParticle) { textureName = "base/data/particles/cloud"; lifetimeMS = 1000; };
+datablock ParticleEmitterData(HillsFallEmitter) { ejectionPeriodMS = 10; periodVarianceMS = 2; particles = HillsFallParticle; };
+"#.to_vec()),
             ("description.txt", b"Title: Rolling Hills".to_vec()),
         ] {
             zip.start_file(name, options).unwrap();
@@ -432,6 +680,18 @@ new SimGroup(MissionGroup) {\r\n\
         let native = bri_sim::map::NativeMap::load(&out.join("map"), &made.map_ids[0]).unwrap();
         assert_eq!(native.terrain.len(), 1);
         assert_eq!(native.scene.name, "Rolling Hills");
+        // Its grass comes as a foliage pack beside the bundle.
+        let pack = bri_foliage::FoliagePack::load(out.join("map/foliage.json")).unwrap();
+        assert_eq!(pack.definitions.len(), 1);
+        assert_eq!(pack.definitions[0].scene, made.map_ids[0]);
+        assert_eq!(pack.definitions[0].count, 50);
+        assert_eq!(pack.images(out.join("map")).unwrap().len(), 1);
+        // Its waterfall emitter, from the datablocks its script declares.
+        let effects = read_map_effects(&out.join("map/map_effects.json"));
+        assert_eq!(effects.emitters[0].id, "hills:emitter/hillsfallemitter");
+        assert_eq!(effects.particles[0].texture, "base/data/particles/cloud");
+        assert_eq!(effects.sources.len(), 1);
+        assert_eq!(effects.sources[0].position, [0.0, 45.0, 0.0]);
         for drawn in [
             bri_render::scene_loader::load_map_bundle(&out.join("map"), &made.map_ids[0]).unwrap(),
             bri_render::scene_loader::load_map_bundle_dynamic(&out.join("map"), &made.map_ids[0])

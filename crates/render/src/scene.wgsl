@@ -972,7 +972,7 @@ struct VertexOut {
         out.position=camera.view_projection*vec4<f32>(world,1.0);
     }
     out.point_light=vec3<f32>(0.0);
-    if material[0].x==2.0 || material[0].x==3.0 || material[0].x==9.0 {
+    if material[0].x==2.0 || material[0].x==3.0 || material[0].x==9.0 || material[0].x==11.0 {
         out.point_light=vertex_point_illumination(out.world_position,out.normal);
     }
     if material[0].x==6.0 {
@@ -1154,6 +1154,7 @@ fn shade_surface(v:VertexOut)->vec4<f32> {
         return vec4<f32>(fogged(rgb,v.world_position),alpha);
     }
     if material[0].x==10.0 {return metal_surface(v);}
+    if material[0].x==11.0 {return physical_surface(v);}
     if (material[0].x==4.0 || material[0].x==5.0) {
         // material[1].x: 0 a sky face or cloud (tinted by the sky colour),
         // 1 the fog backdrop (the live fog colour). Faces and clouds take the
@@ -1466,4 +1467,87 @@ fn metal_surface(v:VertexOut)->vec4<f32> {
     }
     radiance*=cavity;
     return vec4<f32>(fogged(display_color(radiance),v.world_position),1.0);
+}
+
+// ---- Physically based surface (MaterialKind::Physical) ----
+// A modern model's full look: base colour, a tangent-space normal map,
+// metal and roughness per texel, ambient occlusion and glow. The diffuse
+// share is lit as other models are in each lighting mode; highlights and
+// reflections come as for metal. material[1]: metallic, roughness, normal
+// strength, occlusion strength; material[2].rgb: glow (linear).
+fn physical_diffuse(v:VertexOut,n:vec3<f32>)->vec3<f32> {
+    let p=v.world_position;
+    let toward_sun=-camera.sun_direction.xyz/max(length(camera.sun_direction.xyz),0.0001);
+    let facing=max(dot(n,toward_sun),0.0);
+    if lighting_mode()==0 {
+        var reach=0.0;
+        if facing>0.0 {reach=sun_visibility(p,n);}
+        return max(ambient_at(reach)+camera.sun_color.rgb*facing*reach,baked_surroundings(p,v.normal))+v.point_light;
+    }
+    if lighting_mode()==3 {
+        return dynamic_illumination(p,n).diffuse+point_illumination(p,n);
+    }
+    let vis=map_visibility(p,n);
+    var share=0.0;
+    if facing>0.0 {share=object_sun(p,n,vis);}
+    let local=map_light_sum(p,n,vis,true,SPECULAR_POWER);
+    return ambient_at(share)+camera.sun_color.rgb*facing*share+local.diffuse
+        +baked_surroundings(p,v.normal)+v.point_light;
+}
+fn physical_surface(v:VertexOut)->vec4<f32> {
+    let albedo=textureSample(layer0,tiled,v.uv);
+    var alpha=albedo.a*v.color.a;
+    if (u32(material[0].w)&2u)!=0u {alpha=v.color.a;}
+    if alpha<=material[0].y {discard;}
+    let tint=clamp(v.color.rgb,vec3<f32>(0.0),vec3<f32>(1.0));
+    let base=albedo.rgb*linear_color(tint);
+    let mr=textureSample(layer3,tiled,v.uv);
+    let metallic=clamp(material[1].x*mr.b,0.0,1.0);
+    let roughness=clamp(material[1].y*mr.g,0.03,1.0);
+    let occlusion=mix(1.0,textureSample(layer4,tiled,v.uv).r,material[1].w);
+    // glTF normal maps: red along +u, green up, the image's up being
+    // decreasing v. The derivative frame's axes run along +u and +v in a
+    // y-up framebuffer; WebGPU's runs y down, which turns both round.
+    let texel=textureSample(layer1,tiled,v.uv).xyz*2.0-vec3<f32>(1.0);
+    let bent=vec3<f32>(texel.xy*material[1].z,max(texel.z,0.05));
+    var n=v.normal/max(length(v.normal),0.0001);
+    n=detailed_normal(n,v.world_position,v.uv,vec2<f32>(-bent.x,bent.y)/bent.z);
+    let e=normalize(camera.eye.xyz-v.world_position);
+    if dot(n,e)<0.0 {n=normalize(n+e*(0.01-dot(n,e)));}
+    // Diffuse: the painted share, lit as other models are (display space).
+    let pigment=display_color(albedo.rgb*(1.0-metallic))*tint*occlusion;
+    var display=pigment*physical_diffuse(v,n);
+    // Highlights and reflections (linear), as for metal.
+    let f0=mix(vec3<f32>(0.04),base,metallic);
+    let nv=max(dot(n,e),0.0001);
+    var radiance=environment_along(v.world_position,reflect(-e,n),roughness)*environment_brdf(f0,roughness,nv)*occlusion;
+    let a=max(roughness*roughness,0.002);
+    let toward_sun=-camera.sun_direction.xyz/max(length(camera.sun_direction.xyz),0.0001);
+    let sun_rgb=linear_color(clamp(camera.sun_color.rgb,vec3<f32>(0.0),vec3<f32>(1.0)));
+    if lighting_mode()==0 {
+        radiance+=sun_rgb*ggx_light(n,toward_sun,e,a,f0)*sun_visibility(v.world_position,n);
+    } else {
+        var vis=MapVisibility(vec4<f32>(1.0,0.0,0.0,0.0),vec4<f32>(0.0),vec3<f32>(0.0),0u);
+        if lighting_mode()!=3 {vis=map_visibility(v.world_position,n);}
+        var share=0.0;
+        if dot(n,toward_sun)>0.0 {share=object_sun(v.world_position,n,vis);}
+        radiance+=sun_rgb*ggx_light(n,toward_sun,e,a,f0)*share;
+        let power=clamp(2.0/(a*a)-2.0,4.0,4096.0);
+        let local=map_light_sum(v.world_position,n,vis,false,power);
+        radiance+=linear_color(min(local.specular,vec3<f32>(1.0)))*f0*(power+8.0)/(8.0*PI);
+    }
+    let list=light_cell(v.world_position);
+    for(var i=0u;i<list.y;i+=1u) {
+        let light=listed_light(list,i);
+        let delta=light.position_radius.xyz-v.world_position;
+        let d2=dot(delta,delta);
+        let radius=light.position_radius.w;
+        if d2>=radius*radius {continue;}
+        let rgb=linear_color(clamp(light.color.rgb,vec3<f32>(0.0),vec3<f32>(1.0)));
+        radiance+=rgb*ggx_light(n,delta*inverseSqrt(max(d2,0.00000001)),e,a,f0)/(1.0+GL_QUADRATIC_ATTENUATION*d2);
+    }
+    // Glow, whatever the world's light.
+    radiance+=material[2].rgb*textureSample(layer5,tiled,v.uv).rgb;
+    display+=display_color(radiance);
+    return vec4<f32>(fogged(display,v.world_position),alpha);
 }

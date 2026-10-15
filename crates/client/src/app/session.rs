@@ -558,8 +558,9 @@ impl App {
                 }
                 let waters = loaded.simulation.waters.clone();
                 let plate = loaded.plate;
-                let foliage = crate::foliage::PreparedFoliage::load(
+                let foliage = crate::foliage::PreparedFoliage::load_for_map(
                     &paths.foliage,
+                    paths.maps.root(&base_map)?,
                     &base_map,
                     &building,
                     &waters,
@@ -568,6 +569,7 @@ impl App {
                     loaded,
                     Prepared {
                         foliage,
+                        map_effects: crate::effects::load_map_effects(paths.maps.root(&base_map)?)?,
                         map_id: base_map.clone(),
                         waters,
                         plate,

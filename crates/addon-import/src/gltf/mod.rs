@@ -24,7 +24,7 @@ use anyhow::{Context, Result, bail, ensure};
 use bri_console::Clamp;
 use bri_content::shape::{
     Animation, Detail, Influence, Material, Mesh, Metal, Node, NodeTrack, Object, Primitive, Shape,
-    Skin,
+    Skin, Surface,
 };
 use glam::{Mat4, Quat, Vec3};
 pub use read::Document;
@@ -717,12 +717,39 @@ pub fn convert(
         if let Some(i) = material_index.get(&index) {
             return Ok(*i);
         }
-        let (m, png) = make_material(doc, folder, index, prefix, &mut material_names, report)?;
+        let (m, png, maps) =
+            make_material(doc, folder, index, prefix, &mut material_names, report)?;
         textures.insert(m.name.clone(), png);
         report.materials.push(m.name.clone());
+        let at = materials.len();
+        let name = m.name.clone();
         materials.push(m);
-        material_index.insert(index, materials.len() - 1);
-        Ok(materials.len() - 1)
+        material_index.insert(index, at);
+        // Each surface map is a material of its own, which the surface names.
+        for (suffix, png) in maps.named() {
+            let mut helper = materials[at].clone();
+            helper.name = format!("{name}_{suffix}");
+            while !material_names.insert(helper.name.clone()) {
+                helper.name.push('_');
+            }
+            helper.blend = "opaque".into();
+            helper.metal = None;
+            helper.surface = None;
+            textures.insert(helper.name.clone(), png);
+            materials.push(helper);
+            let k = Some(materials.len() - 1);
+            let surface = materials[at]
+                .surface
+                .as_mut()
+                .context("surface maps without a surface")?;
+            match suffix {
+                "normal" => surface.normal = k,
+                "metal_rough" => surface.metallic_roughness = k,
+                "occlusion" => surface.occlusion = k,
+                _ => surface.emissive_map = k,
+            }
+        }
+        Ok(at)
     };
 
     // Meshes: one native object per node with a mesh.
@@ -1910,7 +1937,7 @@ fn make_material(
     prefix: &str,
     taken: &mut BTreeSet<String>,
     report: &mut Report,
-) -> Result<(Material, Vec<u8>)> {
+) -> Result<(Material, Vec<u8>, SurfaceMaps)> {
     let null = Value::Null;
     let m = index.map_or(&null, |i| {
         array(&doc.json, "materials").get(i).unwrap_or(&null)
@@ -1953,70 +1980,11 @@ fn make_material(
         srgb(factor[2]),
         factor[3].clamped(0.0, 1.0),
     ];
-    let ignored: Vec<&str> = [
-        ("normalTexture", "normal map"),
-        ("occlusionTexture", "occlusion map"),
-    ]
-    .iter()
-    .filter(|(k, _)| m.get(*k).is_some())
-    .map(|(_, v)| *v)
-    .chain(
-        pbr.get("metallicRoughnessTexture")
-            .map(|_| "metallic/roughness map"),
-    )
-    .collect();
-    if !ignored.is_empty() {
-        report.warnings.push(format!(
-            "material `{source}`: its {} is ignored",
-            ignored.join(", ")
-        ));
-    }
     let mut wrap = (true, true);
-    let pixels = match pbr["baseColorTexture"]["index"].as_u64() {
-        Some(t) => {
-            let info = &pbr["baseColorTexture"];
-            if info["texCoord"].as_u64().unwrap_or(0) != 0 {
-                report.warnings.push(format!(
-                    "material `{source}` uses a second UV map; the first is used"
-                ));
-            }
-            if info["extensions"].get("KHR_texture_transform").is_some() {
-                report.warnings.push(format!("material `{source}` has a texture transform, which is ignored; apply it to the UVs"));
-            }
-            let texture = array(&doc.json, "textures")
-                .get(t as usize)
-                .with_context(|| format!("material `{source}` names missing texture {t}"))?;
-            let image = texture["source"].as_u64().with_context(|| {
-                format!(
-                    "material `{source}`'s texture is not PNG or JPEG (KTX2 and WebP are not read)"
-                )
-            })? as usize;
-            if let Some(s) = texture["sampler"]
-                .as_u64()
-                .and_then(|s| array(&doc.json, "samplers").get(s as usize))
-            {
-                wrap = (
-                    s["wrapS"].as_u64().unwrap_or(10497) != 33071,
-                    s["wrapT"].as_u64().unwrap_or(10497) != 33071,
-                );
-            }
-            let bytes = doc.image(image, folder)?;
-            let mut rgba = image::load_from_memory(&bytes)
-                .with_context(|| format!("material `{source}`'s texture is not a PNG or JPEG"))?
-                .to_rgba8();
-            if rgba.width().max(rgba.height()) > 2048 {
-                let k = 2048.0 / rgba.width().max(rgba.height()) as f32;
-                let (w, h) = (
-                    ((rgba.width() as f32 * k) as u32).max(1),
-                    ((rgba.height() as f32 * k) as u32).max(1),
-                );
-                report.warnings.push(format!(
-                    "material `{source}`'s texture is {}x{}; scaled to {w}x{h}",
-                    rgba.width(),
-                    rgba.height()
-                ));
-                rgba = image::imageops::resize(&rgba, w, h, image::imageops::FilterType::Triangle);
-            }
+    let pixels = match pbr.get("baseColorTexture") {
+        Some(info) => {
+            let (mut rgba, sampler) = texture_image(doc, folder, info, &source, report)?;
+            wrap = sampler;
             if tint != [1.0; 4] {
                 for p in rgba.pixels_mut() {
                     for (channel, t) in p.0.iter_mut().zip(tint) {
@@ -2044,38 +2012,80 @@ fn make_material(
             "opaque"
         }
     };
-    // A material that glows at half strength or more draws self-lit, at its
-    // own colour whatever the world's light; dimmer glow is left out.
-    let glow = m["emissiveFactor"].as_array().map_or(0.0, |a| {
-        a.iter().filter_map(Value::as_f64).fold(0.0, f64::max)
-    }) * m["extensions"]["KHR_materials_emissive_strength"]["emissiveStrength"]
+    // Glow: emissiveFactor times KHR_materials_emissive_strength, linear.
+    let strength = m["extensions"]["KHR_materials_emissive_strength"]["emissiveStrength"]
         .as_f64()
-        .unwrap_or(1.0);
-    let unlit = m["extensions"].get("KHR_materials_unlit").is_some() || glow >= 0.5;
-    if m.get("emissiveTexture").is_some() {
-        report.warnings.push(format!(
-            "material `{source}`: its emission map is ignored{}",
-            if glow >= 0.5 {
-                "; the whole surface glows"
-            } else {
-                ""
-            }
-        ));
-    } else if glow > 0.0 && glow < 0.5 {
-        report.warnings.push(format!(
-            "material `{source}` glows too faintly to draw self-lit; raise its emission strength to 0.5 or more"
-        ));
+        .unwrap_or(1.0) as f32;
+    let emissive: [f32; 3] = match m["emissiveFactor"].as_array() {
+        Some(a) if a.len() == 3 => {
+            [0, 1, 2].map(|c| (a[c].as_f64().unwrap_or(0.0) as f32 * strength).clamped(0.0, 1000.0))
+        }
+        _ => [0.0; 3],
+    };
+    let glow = emissive.iter().copied().fold(0.0, f32::max);
+    let emissive_map = m.get("emissiveTexture").filter(|_| glow > 0.0);
+    // A material that glows at half strength or more over its whole surface
+    // draws self-lit, at its own colour whatever the world's light.
+    let unlit = m["extensions"].get("KHR_materials_unlit").is_some()
+        || (glow >= 0.5 && emissive_map.is_none());
+    let mut maps = SurfaceMaps::default();
+    let png_of = |info: &Value, report: &mut Report| -> Result<Vec<u8>> {
+        let (rgba, _) = texture_image(doc, folder, info, &source, report)?;
+        let mut png = Vec::new();
+        image::DynamicImage::ImageRgba8(rgba)
+            .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)?;
+        Ok(png)
+    };
+    if !unlit {
+        if let Some(info) = m.get("normalTexture") {
+            maps.normal = Some(png_of(info, report)?);
+        }
+        if let Some(info) = pbr.get("metallicRoughnessTexture") {
+            maps.metallic_roughness = Some(png_of(info, report)?);
+        }
+        if let Some(info) = m.get("occlusionTexture") {
+            maps.occlusion = Some(png_of(info, report)?);
+        }
+        if let Some(info) = emissive_map {
+            maps.emissive = Some(png_of(info, report)?);
+        }
     }
-    // Bare metal: glTF's default metallic factor is 1, but exporters write
-    // 0 for every plain surface, so only a stated factor of 0.5 or more makes
-    // metal. The baked texture already carries the base colour, which for
-    // metal is its reflectance.
+    let textured = maps.normal.is_some()
+        || maps.metallic_roughness.is_some()
+        || maps.occlusion.is_some()
+        || maps.emissive.is_some();
+    // glTF's default metallic factor is 1, but exporters write 0 for every
+    // plain surface: without a metal map only a stated factor counts.
+    let metallic = match pbr["metallicFactor"].as_f64() {
+        Some(f) => f as f32,
+        None if maps.metallic_roughness.is_some() => 1.0,
+        None => 0.0,
+    }
+    .clamped(0.0, 1.0);
+    let roughness = (pbr["roughnessFactor"].as_f64().unwrap_or(1.0) as f32).clamped(0.0, 1.0);
+    // The full look when the material has maps or a glow of its own;
+    // otherwise bare metal from a stated metallic factor of 0.5 or more.
+    // The baked texture already carries the base colour, which for metal
+    // is its reflectance.
+    let surface = (!unlit && (textured || glow > 0.0)).then(|| Surface {
+        normal: None,
+        normal_scale: (m["normalTexture"]["scale"].as_f64().unwrap_or(1.0) as f32)
+            .clamped(0.0, 8.0),
+        metallic_roughness: None,
+        metallic,
+        roughness,
+        occlusion: None,
+        occlusion_strength: (m["occlusionTexture"]["strength"].as_f64().unwrap_or(1.0) as f32)
+            .clamped(0.0, 1.0),
+        emissive_map: None,
+        emissive,
+    });
     let metal = pbr["metallicFactor"]
         .as_f64()
-        .filter(|f| *f >= 0.5 && !unlit)
+        .filter(|f| *f >= 0.5 && !unlit && surface.is_none())
         .map(|_| Metal {
             color: [1.0; 3],
-            roughness: (pbr["roughnessFactor"].as_f64().unwrap_or(1.0) as f32).clamped(0.0, 1.0),
+            roughness,
             detail: None,
             detail_scale: 1.0,
             detail_strength: 1.0,
@@ -2098,9 +2108,94 @@ fn make_material(
             detail_scale: 1.0,
             reflectance: 0.0,
             metal,
+            surface,
         },
         png,
+        maps,
     ))
+}
+
+/// A material's texture (`info` a glTF textureInfo) as pixels, at most
+/// 2048 on a side, with whether it repeats along u and v.
+fn texture_image(
+    doc: &Document,
+    folder: Option<&Path>,
+    info: &Value,
+    source: &str,
+    report: &mut Report,
+) -> Result<(image::RgbaImage, (bool, bool))> {
+    let t = info["index"]
+        .as_u64()
+        .with_context(|| format!("material `{source}` has a texture with no index"))?;
+    if info["texCoord"].as_u64().unwrap_or(0) != 0 {
+        report.warnings.push(format!(
+            "material `{source}` uses a second UV map; the first is used"
+        ));
+    }
+    if info["extensions"].get("KHR_texture_transform").is_some() {
+        report.warnings.push(format!(
+            "material `{source}` has a texture transform, which is ignored; apply it to the UVs"
+        ));
+    }
+    let texture = array(&doc.json, "textures")
+        .get(t as usize)
+        .with_context(|| format!("material `{source}` names missing texture {t}"))?;
+    let image = texture["source"].as_u64().with_context(|| {
+        format!("material `{source}`'s texture is not PNG or JPEG (KTX2 and WebP are not read)")
+    })? as usize;
+    let mut wrap = (true, true);
+    if let Some(s) = texture["sampler"]
+        .as_u64()
+        .and_then(|s| array(&doc.json, "samplers").get(s as usize))
+    {
+        wrap = (
+            s["wrapS"].as_u64().unwrap_or(10497) != 33071,
+            s["wrapT"].as_u64().unwrap_or(10497) != 33071,
+        );
+    }
+    let bytes = doc.image(image, folder)?;
+    let mut rgba = image::load_from_memory(&bytes)
+        .with_context(|| format!("material `{source}`'s texture is not a PNG or JPEG"))?
+        .to_rgba8();
+    if rgba.width().max(rgba.height()) > 2048 {
+        let k = 2048.0 / rgba.width().max(rgba.height()) as f32;
+        let (w, h) = (
+            ((rgba.width() as f32 * k) as u32).max(1),
+            ((rgba.height() as f32 * k) as u32).max(1),
+        );
+        report.warnings.push(format!(
+            "material `{source}`'s texture is {}x{}; scaled to {w}x{h}",
+            rgba.width(),
+            rgba.height()
+        ));
+        rgba = image::imageops::resize(&rgba, w, h, image::imageops::FilterType::Triangle);
+    }
+    Ok((rgba, wrap))
+}
+
+/// The textures of a material's [`Surface`], as PNGs: each becomes a
+/// material of its own, named after the material with the suffix, whose
+/// index the surface takes.
+#[derive(Default)]
+pub(crate) struct SurfaceMaps {
+    pub normal: Option<Vec<u8>>,
+    pub metallic_roughness: Option<Vec<u8>>,
+    pub occlusion: Option<Vec<u8>>,
+    pub emissive: Option<Vec<u8>>,
+}
+impl SurfaceMaps {
+    /// Each map with the suffix its material takes.
+    pub fn named(self) -> Vec<(&'static str, Vec<u8>)> {
+        [
+            ("normal", self.normal),
+            ("metal_rough", self.metallic_roughness),
+            ("occlusion", self.occlusion),
+            ("glow", self.emissive),
+        ]
+        .into_iter()
+        .filter_map(|(k, png)| Some((k, png?)))
+        .collect()
+    }
 }
 
 impl Report {

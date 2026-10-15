@@ -118,6 +118,8 @@ const FAR_PLANE: f32 = 4000.0;
 pub(crate) const PLAYER_CAMERA: (f32, f32, f32) = (8.0, 0.75, 0.261);
 struct Prepared {
     foliage: crate::foliage::PreparedFoliage,
+    /// The map's own particle emitters (`map_effects.json`).
+    map_effects: Option<bri_content::effects::MapEffects>,
     map_id: String,
     waters: Vec<bri_content::water::Water>,
     /// The plate a flat map stands on.
@@ -436,10 +438,16 @@ fn prepare_map(
                 .collect(),
         )?;
     }
-    let foliage =
-        crate::foliage::PreparedFoliage::load(&paths.foliage, &map, &building, &native_map.waters)?;
+    let foliage = crate::foliage::PreparedFoliage::load_for_map(
+        &paths.foliage,
+        root,
+        &map,
+        &building,
+        &native_map.waters,
+    )?;
     Ok(Prepared {
         foliage,
+        map_effects: crate::effects::load_map_effects(root)?,
         map_id: map,
         waters: native_map.waters,
         plate: native_map.plate,

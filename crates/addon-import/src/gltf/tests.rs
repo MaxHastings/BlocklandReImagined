@@ -360,12 +360,14 @@ fn materials_become_pngs_with_their_colour_baked_in() {
         .unwrap()
         .to_rgba8();
     assert_eq!(boots.get_pixel(0, 0).0, [124, 89, 63, 255]);
-    assert!(
-        c.report
-            .warnings
-            .iter()
-            .any(|w| w.contains("`Skin Tone`: its normal map is ignored"))
-    );
+    // Its normal map comes along as a helper material the surface names.
+    let surface = skin
+        .surface
+        .as_ref()
+        .expect("the skin keeps its normal map");
+    let normal = surface.normal.expect("a normal map");
+    assert_eq!(c.shape.materials[normal].name, "skin_tone_normal");
+    assert!(c.textures.contains_key("skin_tone_normal"));
 }
 
 #[test]
@@ -1058,8 +1060,8 @@ fn a_map_brings_its_own_sun_sky_and_water() {
 }
 
 /// A stated metallic factor makes bare metal at the material's roughness,
-/// and a strong glow draws self-lit; plain and faint surfaces stay as they
-/// were.
+/// a strong glow draws self-lit, a faint one glows on a lit surface, and a
+/// plain surface stays as it was.
 #[test]
 fn metal_and_glow_come_from_the_material() {
     let doc = super::read::Document::from_bytes(
@@ -1089,13 +1091,11 @@ fn metal_and_glow_come_from_the_material() {
     assert_eq!((metal.color, metal.roughness), ([1.0; 3], 0.3));
     assert!(paint.metal.is_none() && !paint.unlit);
     assert!(lamp.unlit && lamp.metal.is_none());
+    // A faint glow lights the surface from within instead.
     assert!(!ember.unlit);
-    assert!(
-        report
-            .warnings
-            .iter()
-            .any(|w| w.contains("`Ember` glows too faintly"))
-    );
+    let glow = ember.surface.expect("ember keeps its glow");
+    assert_eq!(glow.emissive, [0.2, 0.0, 0.0]);
+    assert!(report.warnings.is_empty(), "{:?}", report.warnings);
 }
 
 /// A `--terrain` folder becomes the native heightmap terrain: shaped as its

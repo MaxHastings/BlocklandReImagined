@@ -186,6 +186,47 @@ pub struct SceneImage {
     /// Diffuse images use sRGB; authored lightmaps and weights are raw UNORM.
     pub srgb: bool,
 }
+/// The maps of a [`MaterialKind::Physical`] material, in its `maps` order.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SurfaceMap {
+    Normal,
+    MetalRough,
+    Occlusion,
+    Glow,
+}
+impl SurfaceMap {
+    pub const ALL: [Self; 4] = [Self::Normal, Self::MetalRough, Self::Occlusion, Self::Glow];
+    /// The material (by index) whose texture holds this map.
+    pub fn of(self, surface: &bri_content::shape::Surface) -> Option<usize> {
+        match self {
+            Self::Normal => surface.normal,
+            Self::MetalRough => surface.metallic_roughness,
+            Self::Occlusion => surface.occlusion,
+            Self::Glow => surface.emissive_map,
+        }
+    }
+    /// Colour (sRGB) rather than data.
+    pub fn srgb(self) -> bool {
+        self == Self::Glow
+    }
+    /// What a model without this map draws with: a flat normal, the
+    /// factors unchanged, no occlusion, the glow colour as it is.
+    pub fn stand_in(self) -> SceneImage {
+        let (label, rgba) = match self {
+            Self::Normal => ("flat normal", [128, 128, 255, 255]),
+            Self::MetalRough => ("plain metal-roughness", [255; 4]),
+            Self::Occlusion => ("no occlusion", [255; 4]),
+            Self::Glow => ("plain glow", [255; 4]),
+        };
+        SceneImage {
+            label: label.into(),
+            width: 1,
+            height: 1,
+            rgba: rgba.to_vec(),
+            srgb: self.srgb(),
+        }
+    }
+}
 impl SceneImage {
     pub fn white() -> Self {
         Self {
@@ -230,6 +271,15 @@ pub enum MaterialKind {
     /// `parameters[0]`: roughness, detail repeats, detail strength;
     /// `parameters[1]`: reflectance at normal incidence (linear RGB).
     Metal,
+    /// A modern model's full look (`bri_content::shape::Surface`, glTF's
+    /// metallic-roughness material): base colour in slot 0 (sRGB), a
+    /// tangent-space normal map in 1, metal (blue) and roughness (green) in
+    /// 3, ambient occlusion (red) in 4 (all linear) and glow colour in 5
+    /// (sRGB); slot 2 is the environment probe's map, as for metal. Lit like
+    /// other models where diffuse, with GGX highlights and reflections.
+    /// `parameters[0]`: metallic, roughness, normal strength, occlusion
+    /// strength; `parameters[1]`: glow (linear RGB).
+    Physical,
 }
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum AlphaMode {
@@ -279,6 +329,41 @@ impl Material {
     pub fn brick_overlay(name: impl Into<String>, diffuse: usize) -> Self {
         let mut material = Self::vertex_lit(name, diffuse);
         material.kind = MaterialKind::BrickOverlay;
+        material
+    }
+    /// A [`MaterialKind::Physical`] material for a model's
+    /// `bri_content::shape::Surface`: `base` its colour image and `maps`
+    /// its normal, metal-roughness, occlusion and glow images, in
+    /// [`SurfaceMap`] order (each the [`SurfaceMap::stand_in`] where the
+    /// model has none).
+    pub fn physical(
+        name: impl Into<String>,
+        base: usize,
+        maps: [usize; 4],
+        surface: &bri_content::shape::Surface,
+    ) -> Self {
+        let mut material = Self::vertex_lit(name, base);
+        material.kind = MaterialKind::Physical;
+        material.images[1] = maps[0];
+        material.images[3] = maps[1];
+        material.images[4] = maps[2];
+        material.images[5] = maps[3];
+        material.parameters = Some([
+            [
+                surface.metallic,
+                surface.roughness,
+                surface.normal_scale,
+                surface.occlusion_strength,
+            ],
+            [
+                surface.emissive[0],
+                surface.emissive[1],
+                surface.emissive[2],
+                0.0,
+            ],
+            [0.0; 4],
+            [0.0; 4],
+        ]);
         material
     }
     pub fn vertex_lit(name: impl Into<String>, diffuse: usize) -> Self {
@@ -724,7 +809,10 @@ impl SceneData {
             // mark its lightmap decomposed; nothing else has any.
             let wants = matches!(
                 material.kind,
-                MaterialKind::Water | MaterialKind::Terrain | MaterialKind::Metal
+                MaterialKind::Water
+                    | MaterialKind::Terrain
+                    | MaterialKind::Metal
+                    | MaterialKind::Physical
             );
             let decomposed =
                 material.kind == MaterialKind::Surface && decomposed_lightmap(material.parameters);
@@ -3317,6 +3405,7 @@ impl SceneRenderer {
                     MaterialKind::Unlit => 8.0,
                     MaterialKind::BrickSurfaces => 9.0,
                     MaterialKind::Metal => 10.0,
+                    MaterialKind::Physical => 11.0,
                 },
                 match material.alpha {
                     AlphaMode::Mask(c) => c,
@@ -3347,7 +3436,9 @@ impl SceneRenderer {
                 .map(|(i, image)| wgpu::BindGroupEntry {
                     binding: i as u32,
                     resource: wgpu::BindingResource::TextureView(
-                        if material.kind == MaterialKind::Metal && i == 2 {
+                        if matches!(material.kind, MaterialKind::Metal | MaterialKind::Physical)
+                            && i == 2
+                        {
                             // Metal reflects the environment probe's map.
                             &self.probe.map
                         } else if (8..=10).contains(&i) {
@@ -4838,6 +4929,7 @@ impl SceneRenderer {
                                     MaterialKind::Terrain
                                         | MaterialKind::VertexLit
                                         | MaterialKind::Metal
+                                        | MaterialKind::Physical
                                         | MaterialKind::Unlit
                                 ))
                         {
