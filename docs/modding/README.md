@@ -82,7 +82,9 @@ HUD row bound to a key players never receive, a broken weapons file. Each
 sound file a weapons pack ships is run through the game's own decoder, so a
 sound that would load and then play silence (an unreadable header, a codec
 the game does not play, such as ADPCM WAV) fails the check by name; the
-game plays PCM WAV and Ogg Vorbis files of up to 30 seconds and 8 MiB.
+game plays PCM WAV and Ogg Vorbis files of up to 30 seconds and 8 MiB (a
+sound marked `music`, which rules play with `play_music`, up to 10
+minutes).
 
 **Try** a rule without opening the game. `bri-addon-run` runs it with the
 Add-Ons it needs in an empty world with two players, `Host` (an admin) and

@@ -65,8 +65,13 @@ impl PreparedSounds {
             });
             let dir = bri_weapons::sound_root(root, def);
             let loaded = stock.unwrap_or_else(|| {
-                bri_package::path::inside(&dir, &def.file)
-                    .and_then(|path| SoundAsset::decoded_file(profile, &path, near, far))
+                bri_package::path::inside(&dir, &def.file).and_then(|path| {
+                    if def.music {
+                        SoundAsset::music_file(profile, &path)
+                    } else {
+                        SoundAsset::decoded_file(profile, &path, near, far)
+                    }
+                })
             });
             match loaded {
                 Ok(mut asset) => {
@@ -250,6 +255,15 @@ pub struct ClientAudio {
     pack_sound_failures: BTreeMap<String, String>,
     /// The portals the listener hears through, as last sent.
     windows: Vec<bri_audio::Window>,
+    /// The track an Add-On rule plays ([`ClientAudio::play_music`]).
+    rule_music: Option<RuleMusic>,
+}
+/// A rule's music track as it plays, fading in over `fade` seconds.
+struct RuleMusic {
+    handle: SoundHandle,
+    volume: f32,
+    fade: f32,
+    elapsed: f32,
 }
 /// How near an Add-On weapon sound plays at full volume, and how far it
 /// carries, in world units: v20's `AudioClose3d`/`AudioDefault3d` range.
@@ -325,6 +339,7 @@ impl ClientAudio {
             prefs: Prefs::default(),
             music: BTreeMap::new(),
             music_bricks: MusicBricks::default(),
+            rule_music: None,
             projectiles: BTreeSet::new(),
             image_loops: BTreeMap::new(),
             engines: BTreeMap::new(),
@@ -578,6 +593,50 @@ impl ClientAudio {
             }
         }
     }
+    /// Play an Add-On rule's music track at the ears on the music bus,
+    /// replacing the one before, or stop it (`track` none); either fades
+    /// over `fade` seconds. The track is a pack sound or the bank's.
+    pub fn play_music(&mut self, play: &bri_sim::session::MusicPlay) {
+        if let Some(old) = self.rule_music.take() {
+            let result = self.runtime.stop_with_fade(old.handle, play.fade);
+            self.record(result);
+        }
+        let Some(track) = &play.track else {
+            return;
+        };
+        let found = match self.pack_sounds.get(&track.to_ascii_lowercase()) {
+            Some((asset, volume)) => Ok((asset.clone(), *volume)),
+            None => self.runtime.bank().resolve(track).map(|a| (a.clone(), 1.0)),
+        };
+        let (asset, volume) = match found {
+            Ok(found) => found,
+            Err(error) => return self.record(Err(error)),
+        };
+        let fade = play.fade.max(0.0);
+        // A one-shot starts above the gain below which it would not start.
+        let start = if fade == 0.0 {
+            1.0
+        } else if play.looping {
+            0.0
+        } else {
+            0.1
+        };
+        let asset = Arc::new(asset.as_music(play.looping));
+        match self
+            .runtime
+            .play_asset(asset, Placement::Listener, volume * start)
+        {
+            Ok(handle) => {
+                self.rule_music = Some(RuleMusic {
+                    handle,
+                    volume,
+                    fade,
+                    elapsed: 0.0,
+                });
+            }
+            Err(error) => self.record(Err(error)),
+        }
+    }
     /// Whether `profile` names a sound this client can play: an Add-On
     /// pack's own that loaded, else the bank's ([`Self::start`]).
     pub fn has_sound(&self, profile: &str) -> bool {
@@ -757,6 +816,7 @@ impl ClientAudio {
         self.hear_through(Vec::new());
         self.music.clear();
         self.music_bricks = MusicBricks::default();
+        self.rule_music = None;
         self.projectiles.clear();
         self.image_loops.clear();
         self.engines.clear();
@@ -772,6 +832,13 @@ impl ClientAudio {
         // Listener precedes starts so distance culling cannot use last session's pose.
         while let Some((id, placement)) = self.pending.pop_front() {
             let result = self.start(&id, placement).map(|_| ());
+            self.record(result);
+        }
+        if let Some(m) = self.rule_music.as_mut().filter(|m| m.elapsed < m.fade) {
+            m.elapsed += seconds;
+            let gain = m.volume * (m.elapsed / m.fade).min(1.0);
+            let handle = m.handle;
+            let result = self.runtime.set_voice_params(handle, gain, 1.0);
             self.record(result);
         }
         self.runtime.update(seconds);
@@ -1167,6 +1234,7 @@ mod tests {
             volume: 0.5,
             looping: false,
             local: false,
+            music: false,
             package: None,
             stock: true,
         };
@@ -1242,6 +1310,7 @@ mod tests {
                 volume: 1.0,
                 looping: false,
                 local: false,
+                music: false,
                 package: None,
                 stock: false,
             },

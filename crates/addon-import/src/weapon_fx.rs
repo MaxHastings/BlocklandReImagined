@@ -505,6 +505,7 @@ fn sounds(cx: &mut Ctx, pack: &mut bri_weapons::Pack) {
                 volume,
                 looping: flag("islooping", false),
                 local: !flag("is3d", true),
+                music: false,
                 package: None,
                 stock,
             },

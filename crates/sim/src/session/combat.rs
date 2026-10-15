@@ -321,6 +321,19 @@ pub struct HeldAmmo {
     pub printed: bool,
 }
 
+/// The music a rule plays for a player ([`Notice::Music`]).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MusicPlay {
+    /// A sound an Add-On marks `music`, or the game's (a music loop);
+    /// `None` stops what plays.
+    pub track: Option<String>,
+    /// Plays again from the start when it ends.
+    pub looping: bool,
+    /// Seconds the new track fades in, or the stopped one out.
+    pub fade: f32,
+}
+
 /// A message for one player only (minigame chat, prints, invitations).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -361,6 +374,9 @@ pub enum Notice {
     Abilities(super::Abilities),
     /// `GameConnection::play2D`: a sound profile only this client hears.
     Sound(String),
+    /// Add-On rule music (`play_music`, `stop_music`): the track this
+    /// player hears at their ears on the music bus, replacing any before.
+    Music(MusicPlay),
     /// `MessageBoxOK` from the server.
     MessageBox {
         title: String,

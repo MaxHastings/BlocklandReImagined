@@ -95,7 +95,7 @@ pub use admin::{
 };
 pub use bri_world::authority::WrenchProperties;
 pub use combat::{
-    DEATH_PROJECTILE, HeldAmmo, MAX_HEALTH, MiniGameRequest, MiniGameView, Notice,
+    DEATH_PROJECTILE, HeldAmmo, MAX_HEALTH, MiniGameRequest, MiniGameView, MusicPlay, Notice,
     SPAWN_PROJECTILE, Vitals,
 };
 pub use inventory::{TOOL_SLOTS, ToolInventory};
@@ -1157,6 +1157,9 @@ pub struct Session {
     breakables: breakables::Breakables,
     /// Add-On map light rules (`set_map_lights`), replicated to clients.
     map_lights: Vec<map_lights::MapLightRule>,
+    /// The music an Add-On rule plays for everyone (`play_music_all`),
+    /// sent to joiners too; cleared by a map change.
+    music: Option<MusicPlay>,
     /// Add-On world shapes (`show_shapes`), replicated to clients.
     world_shapes: world_shapes::WorldShapes,
     /// The live environment over the map's own (Admin Menu Environment,
@@ -1195,6 +1198,7 @@ impl Session {
             grips: Default::default(),
             breakables: Default::default(),
             map_lights: Vec::new(),
+            music: None,
             world_shapes: Default::default(),
             environment: Default::default(),
             movables: Default::default(),

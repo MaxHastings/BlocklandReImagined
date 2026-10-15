@@ -109,3 +109,28 @@ impl Perform for ops::Sound {
         Ok(())
     }
 }
+impl Perform for ops::Music {
+    fn perform(self, session: &mut Session, cx: OpCall<'_>) -> Result<()> {
+        let OpCall { package, .. } = cx;
+        let ops::Music {
+            player,
+            track,
+            looping,
+            fade,
+        } = self;
+        session.take_cue(package)?;
+        let play = crate::session::MusicPlay {
+            track,
+            looping,
+            fade,
+        };
+        match player {
+            Some(player) => {
+                ensure!(session.peers.contains_key(&player), "No such player");
+                session.notify(player, Notice::Music(play));
+            }
+            None => session.play_music_all(play),
+        }
+        Ok(())
+    }
+}

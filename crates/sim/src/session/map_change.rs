@@ -179,6 +179,12 @@ impl Session {
         // Adopting a player bypasses join(), but the new mission has a fresh
         // Add-On store. Initialize its player defaults and hooks just as on join.
         // Otherwise both duplicators receive untyped empty mode/wait values.
+        // A new map starts without the last map's rule music.
+        self.play_music_all(super::MusicPlay {
+            track: None,
+            looping: false,
+            fade: 0.0,
+        });
         let owners: Vec<_> = self.peers.keys().copied().collect();
         for owner in owners {
             self.packages_joined(owner);
