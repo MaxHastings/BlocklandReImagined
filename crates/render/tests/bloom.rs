@@ -17,13 +17,18 @@ fn a_bright_spot_glows_onto_its_surroundings_and_nowhere_else() -> Result<()> {
     let format = wgpu::TextureFormat::Rgba8Unorm;
     let mut bloom = Bloom::new(&device, format);
     bloom.target(&device, &queue, (SIDE, SIDE));
-    // Black, with a white 4x4 spot at (32, 32) and a dim grey one at (96, 96).
+    // Black, with a white 4x4 spot at (32, 32), a dim grey one at (96, 96)
+    // and a full red-orange one, like sunlit sand or fire, at (32, 96).
     let mut pixels = vec![0u8; (SIDE * SIDE * 4) as usize];
-    for (centre, value) in [(32u32, 255u8), (96, 120)] {
-        for y in centre - 2..centre + 2 {
-            for x in centre - 2..centre + 2 {
+    for ((cx, cy), rgb) in [
+        ((32u32, 32u32), [255u8, 255, 255]),
+        ((96, 96), [120, 120, 120]),
+        ((32, 96), [255, 140, 60]),
+    ] {
+        for y in cy - 2..cy + 2 {
+            for x in cx - 2..cx + 2 {
                 let i = ((y * SIDE + x) * 4) as usize;
-                pixels[i..i + 4].copy_from_slice(&[value, value, value, 255]);
+                pixels[i..i + 4].copy_from_slice(&[rgb[0], rgb[1], rgb[2], 255]);
             }
         }
     }
@@ -93,5 +98,6 @@ fn a_bright_spot_glows_onto_its_surroundings_and_nowhere_else() -> Result<()> {
     assert_eq!(red(64, 10), 0, "far away stays black");
     assert_eq!(red(95, 95), 120, "a dim spot does not glow");
     assert_eq!(red(102, 96), 0, "nor around it");
+    assert_eq!(red(38, 96), 0, "a full red-orange spot does not glow");
     Ok(())
 }

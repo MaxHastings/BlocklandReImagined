@@ -3,13 +3,16 @@
 //! draws into a texture; its pixels past a brightness threshold are copied
 //! at a quarter of its size, blurred both ways, and added back over the
 //! world as it is copied out. The frame is display encoded, so the
-//! threshold is on display brightness: only what is drawn near white glows.
+//! threshold is on display luminance: only what is drawn near white glows.
+//! Luminance, not the brightest channel, so sunlit red sand or an orange
+//! fire (one channel near full, the others well below) stays unbloomed.
 
-/// Display brightness (0 to 1) past which a pixel glows.
-pub const THRESHOLD: f32 = 0.8;
-/// How strongly the halo adds back over the world: a small lamp spreads
-/// thin, so its halo is lifted well above its share of light.
-pub const INTENSITY: f32 = 2.5;
+/// Display luminance (0 to 1) past which a pixel glows.
+pub const THRESHOLD: f32 = 0.9;
+/// How strongly the halo adds back over the world: enough that a small lamp
+/// still shows a halo, but at 2.5 a white fire or a sunlit pale patch smears
+/// into a blown-out cloud.
+pub const INTENSITY: f32 = 1.5;
 
 pub struct Bloom {
     format: wgpu::TextureFormat,
@@ -288,10 +291,10 @@ struct Out { @builtin(position) position:vec4<f32>, @location(0) uv:vec2<f32> };
     let uv=vec2<f32>(f32((i<<1u)&2u),f32(i&2u));
     return Out(vec4<f32>(uv.x*2.0-1.0,1.0-uv.y*2.0,0.0,1.0),uv);
 }
-// What of a pixel glows: its brightness past the threshold, with a soft
+// What of a pixel glows: its luminance past the threshold, with a soft
 // knee so the halo does not switch on at an edge.
 fn glow(c:vec3<f32>)->vec3<f32> {
-    let brightness=max(c.r,max(c.g,c.b));
+    let brightness=dot(c,vec3<f32>(0.2126,0.7152,0.0722));
     let t=pass_values.z;
     let over=clamp((brightness-t)/max(1.0-t,0.0001),0.0,1.0);
     return c*over*over;
