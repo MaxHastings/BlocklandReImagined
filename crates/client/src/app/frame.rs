@@ -1528,6 +1528,7 @@ impl App {
                 &mut self.fx.weapon_effects,
                 &mut self.fx.weapon_cues,
                 &self.world_items,
+                Some(building),
                 weapons,
                 game_elapsed.as_secs_f32(),
             );

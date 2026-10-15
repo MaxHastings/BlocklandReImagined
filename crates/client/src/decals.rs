@@ -24,6 +24,7 @@ struct Mark {
     transform: Mat4,
     color: [f32; 4],
     seconds: f32,
+    fade_seconds: f32,
     age: f32,
 }
 
@@ -146,11 +147,16 @@ impl Decals {
             brick,
             transform: Mat4::from_scale_rotation_translation(
                 Vec3::splat(size),
-                Quat::from_rotation_arc(Vec3::Z, normal),
+                Quat::from_rotation_arc(Vec3::Z, normal)
+                    * Quat::from_rotation_z(decal.rotation_degrees.to_radians()),
                 at + normal * LIFT,
             ),
             color: decal.color,
             seconds: decal.seconds,
+            fade_seconds: decal
+                .fade_seconds
+                .unwrap_or(FADE_SECONDS)
+                .min(decal.seconds),
             age: 0.0,
         });
         self.next_order = self.next_order.saturating_add(1);
@@ -190,7 +196,11 @@ impl Decals {
             if mark.age >= mark.seconds || mark.brick.is_some_and(|b| !exists(b)) {
                 return false;
             }
-            let fade = ((mark.seconds - mark.age) / FADE_SECONDS).min(1.0);
+            let fade = if mark.fade_seconds > 0. {
+                ((mark.seconds - mark.age) / mark.fade_seconds).min(1.0)
+            } else {
+                1.0
+            };
             let [r, g, b, a] = mark.color;
             transforms.push(SceneTransform {
                 transform: mark.transform,
@@ -317,12 +327,37 @@ mod tests {
             blend: Default::default(),
             texture: None,
             surfaces: Default::default(),
+            profiles: Default::default(),
+            require_profile: false,
+            fade_seconds: None,
+            rotation_degrees: 0.,
             size: 0.2,
             color: [0.0, 0.0, 0.0, 0.9],
             seconds: 3.0,
         }
     }
 
+    #[test]
+    fn an_authored_mark_keeps_its_surface_rotation_and_fade_duration() {
+        let mut decal = hole();
+        decal.seconds = 4.;
+        decal.fade_seconds = Some(2.);
+        decal.rotation_degrees = 90.;
+        decal.color = [1.; 4];
+        let mut marks = Decals::default();
+        marks.add(None, Vec3::ZERO, Vec3::Z, &decal, 1.);
+        for _ in 0..12 {
+            marks.advance(0.25, |_| true);
+        }
+        let mark = &marks.transforms[0];
+        assert!(
+            mark.transform
+                .transform_vector3(Vec3::X)
+                .normalize()
+                .abs_diff_eq(Vec3::Y, 1e-5)
+        );
+        assert!((mark.tint[3] - 0.5).abs() < 1e-5);
+    }
     #[test]
     fn a_mark_lies_flat_on_the_face_it_hit_at_its_size() {
         let mut decals = Decals::default();

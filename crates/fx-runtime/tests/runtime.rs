@@ -220,6 +220,7 @@ fn authored_groups_keep_seeded_counts_placement_tints_and_sizes() {
     particle.variation = Some(ParticleVariation {
         color: [[0.25, 0.5, 0.75, 1.], [0.5, 0.75, 1., 0.8]],
         size: [0.1, 0.3],
+        initial_spin_degrees: [90., 180.],
     });
     let mut manifest = bri_fx_runtime::testing::manifest();
     manifest.composites.push(pack::Composite {
@@ -258,6 +259,8 @@ fn authored_groups_keep_seeded_counts_placement_tints_and_sizes() {
         assert_eq!(a.position, b.position);
         assert_eq!(a.color, b.color);
         assert_eq!(a.size, b.size);
+        assert_eq!(a.spin, b.spin);
+        assert!((std::f32::consts::FRAC_PI_2..=std::f32::consts::PI).contains(&a.spin));
         assert!((0.1999..=0.4001).contains(&a.position.distance(Vec3::X * 30.)));
         assert!((0.1..=0.3).contains(&a.size));
         assert!((0.25..=0.5).contains(&a.color.x));
@@ -985,4 +988,226 @@ fn lights_moving_sources_and_portal_worlds_never_sleep() {
         w.cull_sources(&[nowhere]);
     }
     assert_eq!(w.dormant_count(), 0);
+}
+
+#[test]
+fn swept_fragments_bounce_without_crossing_the_floor_and_keep_the_remaining_step() {
+    let mut w = world(fixture(|l| {
+        l.particles[0].contact = Some(ParticleContact {
+            restitution: 0.5,
+            friction: 0.0,
+            rest_speed: 0.0,
+            die_on_contact: false,
+            die_at_rest: false,
+            stop_animation_at_rest: false,
+        });
+    }));
+    w.burst(
+        "emitter",
+        SourceTransform {
+            position: Vec3::Y * 0.2,
+            rotation: glam::Quat::from_rotation_z(std::f32::consts::PI),
+            ..Default::default()
+        },
+        SourceOptions::default(),
+        1,
+    )
+    .unwrap();
+    let mut hits = 0;
+    w.advance_with_contacts(0.2, Vec3::ZERO, |a, b| {
+        if a.y > 0.0 && b.y <= 0.0 {
+            hits += 1;
+            Some(ContactHit {
+                fraction: a.y / (a.y - b.y),
+                normal: Vec3::Y,
+            })
+        } else {
+            None
+        }
+    })
+    .unwrap();
+    let f = w.snapshot(&camera());
+    assert_eq!(hits, 1);
+    assert_eq!(f.particles.len(), 1);
+    assert!(
+        (f.particles[0].position.y - 0.101).abs() < 0.002,
+        "{:?}",
+        f.particles[0].position
+    );
+    // It now travels upward, never carrying on through the floor.
+    w.advance_with_contacts(0.1, Vec3::ZERO, |_, _| None)
+        .unwrap();
+    assert!((w.snapshot(&camera()).particles[0].position.y - 0.201).abs() < 0.002);
+}
+
+#[test]
+fn cosmetic_contact_death_and_rest_are_distinct_authored_behaviors() {
+    for die_on_contact in [false, true] {
+        let mut library = bri_fx_runtime::testing::library();
+        {
+            let l = &mut library;
+            for name in ["rest0", "rest1", "rest2", "rest3"] {
+                l.textures.insert(name.into(), format!("{name}.png"));
+            }
+            l.particles[0].animation = Some(ParticleAnimation {
+                frames: ["rest0", "rest1", "rest2", "rest3"]
+                    .map(str::to_owned)
+                    .to_vec(),
+                layouts: Default::default(),
+                rate: [10.; 2],
+                looping: true,
+                random_start: false,
+                reverse: false,
+            });
+            l.particles[0].gravity = 1.0;
+            l.particles[0].contact = Some(ParticleContact {
+                restitution: 0.0,
+                friction: 1.0,
+                rest_speed: 0.1,
+                die_on_contact,
+                die_at_rest: false,
+                stop_animation_at_rest: true,
+            });
+        }
+        let textures = library
+            .textures
+            .keys()
+            .map(|id| pack::TextureImage {
+                id: id.clone(),
+                width: 1,
+                height: 1,
+                rgba: vec![255; 4],
+            })
+            .collect();
+        let mut w = world(
+            EffectsPack::from_parts(library, bri_fx_runtime::testing::manifest(), textures)
+                .unwrap(),
+        );
+        w.burst(
+            "emitter",
+            SourceTransform {
+                position: Vec3::Y * 0.05,
+                rotation: glam::Quat::from_rotation_z(std::f32::consts::PI),
+                ..Default::default()
+            },
+            SourceOptions::default(),
+            1,
+        )
+        .unwrap();
+        let floor = |a: Vec3, b: Vec3| {
+            if a.y > 0.0 && b.y <= 0.0 {
+                Some(ContactHit {
+                    fraction: a.y / (a.y - b.y),
+                    normal: Vec3::Y,
+                })
+            } else {
+                None
+            }
+        };
+        w.advance_with_contacts(0.2, Vec3::ZERO, floor).unwrap();
+        let f = w.snapshot(&camera());
+        assert_eq!(f.particles.len(), usize::from(!die_on_contact));
+        if !die_on_contact {
+            let at = f.particles[0].position;
+            let texture = f.particles[0].texture;
+            w.advance_with_contacts(0.15, Vec3::ZERO, floor).unwrap();
+            assert_eq!(
+                w.snapshot(&camera()).particles[0].texture,
+                texture,
+                "the original frame freezes at contact rest"
+            );
+            assert_eq!(w.snapshot(&camera()).particles[0].position, at);
+            assert!((at.y - 0.001).abs() < 0.0001);
+            w.advance_with_contacts(0.1, Vec3::ZERO, |_, _| None)
+                .unwrap();
+            assert!(
+                w.snapshot(&camera()).particles[0].position.y < at.y - 0.01,
+                "removing support resumes falling instead of leaving a floating casing"
+            );
+        }
+    }
+    let mut l = bri_fx_runtime::testing::library();
+    l.particles[0].contact = Some(ParticleContact {
+        restitution: f32::NAN,
+        friction: 0.0,
+        rest_speed: 0.1,
+        die_on_contact: false,
+        die_at_rest: false,
+        stop_animation_at_rest: false,
+    });
+    assert!(l.validate().is_err());
+}
+
+#[test]
+fn contact_queries_share_a_frame_budget_without_unchecked_motion() {
+    let mut w = world(fixture(|l| {
+        l.particles[0].contact = Some(ParticleContact {
+            restitution: 0.0,
+            friction: 0.0,
+            rest_speed: 0.0,
+            die_on_contact: false,
+            die_at_rest: false,
+            stop_animation_at_rest: false,
+        });
+    }));
+    w.burst(
+        "emitter",
+        SourceTransform::default(),
+        SourceOptions::default(),
+        300,
+    )
+    .unwrap();
+    let mut queries = 0;
+    w.advance_with_contacts(0.1, Vec3::ZERO, |_, _| {
+        queries += 1;
+        Some(ContactHit {
+            fraction: 0.0,
+            normal: Vec3::X,
+        })
+    })
+    .unwrap();
+    assert_eq!(queries, 32768);
+    assert!(
+        w.snapshot(&camera())
+            .particles
+            .iter()
+            .all(|p| p.position.y.abs() < 0.0001),
+        "budget exhaustion must wait, never advance through an unqueried wall"
+    );
+}
+
+#[test]
+fn attached_flashes_do_not_inherit_the_source_translation_twice() {
+    for follow_source in [false, true] {
+        let mut w = world(fixture(|l| {
+            l.emitters[0].speed = 0.0;
+            l.particles[0].inherited_velocity = 1.0;
+        }));
+        let before = SourceTransform {
+            velocity: Vec3::X * 20.0,
+            ..Default::default()
+        };
+        let after = SourceTransform {
+            position: Vec3::X * 0.2,
+            ..before
+        };
+        let handle = w
+            .burst(
+                "emitter",
+                before,
+                SourceOptions {
+                    follow_source,
+                    ..Default::default()
+                },
+                1,
+            )
+            .unwrap();
+        w.carry_attachment(handle, before, after).unwrap();
+        w.advance(0.01, Vec3::ZERO).unwrap();
+        let at = w.snapshot(&camera()).particles[0].position;
+        assert!(
+            at.abs_diff_eq(Vec3::X * 0.2, 1e-5),
+            "follow_source={follow_source}: {at:?}"
+        );
+    }
 }

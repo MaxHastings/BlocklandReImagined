@@ -603,11 +603,39 @@ control the mark; textured marks use the entire image and its alpha. Static
 map and brick marks share one bounded pool. Declared missing artwork is
 reported and omitted. Content without a declared image keeps the stock disc.
 
+Use `profiles` for a surface's complete style, including size and lifetime
+ranges, fade duration and rotation. A null profile leaves no mark. Set
+`require_profile` to omit marks on unknown surfaces. For example:
+
+```json
+"decal": {
+  "size": 0.2, "seconds": 30, "require_profile": true,
+  "profiles": {
+    "wood": null,
+    "stone": {
+      "texture": "kit/holes/stone", "blend": "double_multiply",
+      "size": [0.2, 0.4], "color": [1, 1, 1, 1],
+      "seconds": [60, 90], "fade_seconds": 10,
+      "rotation_degrees": [0, 360]
+    }
+  }
+}
+```
+
+Clients sample the same ranges from the host's shared cue ID. The profile's
+art, blend and timing override the whole default style. Default marks can also
+set `fade_seconds` and a fixed `rotation_degrees`; omitting them preserves
+the stock one-second fade and zero rotation. Fade duration is capped at the
+selected lifetime. Profiles use the same texture, size and lifetime bounds as
+default marks and enter ordinary content-reference validation.
+
 Particles in `effects.particles` may specify an `animation` with `frames`
 (texture keys), a `rate` range in frames/second, and optional `looping`,
 `random_start` and `reverse` flags. Without looping, the last frame holds.
 Optional `variation` has two RGBA `color` endpoints and a `size` range;
 seeded per-particle sampling multiplies the ordinary color/size keys.
+Optional `initial_spin_degrees: [min, max]` samples a starting sprite angle
+independently of angular velocity; omitting it keeps zero starting rotation.
 All frames must be declared presentation textures. The renderer packs original
 pixels into atlas pages rather than spending a texture-array layer per frame.
 
@@ -623,3 +651,20 @@ An image's `shell_effect` names an authored emitter/composite to play for
 reliable cue arrives before its image pose, it waits up to half a second.
 These sprite casings currently have gravity but no structure contact/rest or
 contact audio; use model debris when those are required.
+
+
+Particle `contact` is optional. A definition can supply `restitution` and
+`friction` in [0,1], `rest_speed` in native units/second, and `die_on_contact` /
+`die_at_rest`, plus `stop_animation_at_rest` to hold its last sprite frame. The weapon adapter sweeps points against the actual map/terrain/
+brick collision geometry. These cosmetic contacts never damage or move anything.
+Friction removes the authored fraction of sideways velocity per contact; it is
+not a continuous tire friction coefficient. Rest requires a supporting surface
+opposed to acceleration. Attached flash groups keep their attachment motion and
+do not collide. Unset contact preserves stock particle integration.
+
+Contact paths use at most 1/60-second trajectory segments, 128 segments per
+particle and 32,768 shared queries per advance. Unprocessed motion waits in place
+when this budget is exhausted; particles continue aging. Resting particles expire
+normally. These clouds do not sleep/refill, since reconstructing them would require
+historical world collisions. Contact audio, water transitions
+and attachment to a moving support are not supplied by this seam.

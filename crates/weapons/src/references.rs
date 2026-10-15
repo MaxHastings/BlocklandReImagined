@@ -70,7 +70,7 @@ impl Pack {
             };
             let used_by = || format!("projectile {id}");
             if let Some(decal) = &projectile.decal {
-                for texture in decal.texture.iter().chain(decal.surfaces.values()) {
+                for texture in decal.textures() {
                     out.push(Reference {
                         add_on,
                         kind: Kind::Texture,

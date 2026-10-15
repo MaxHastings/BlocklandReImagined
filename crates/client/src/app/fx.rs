@@ -223,15 +223,14 @@ impl App {
                     .flatten()
                     .map(|(_, kind)| kind.to_owned())
             });
-            let texture = kind
-                .as_deref()
-                .and_then(|kind| decal.surfaces.get(kind))
-                .or(decal.texture.as_ref());
-            let image = texture.and_then(|texture| self.item_assets.texture(texture));
-            if texture.is_none() || image.is_some() {
-                self.fx
-                    .decals
-                    .add_textured(*brick, at, normal, decal, *scale, image);
+            if let Some(decal) = decal.for_surface(kind.as_deref(), cue.id) {
+                let texture = decal.texture.as_ref();
+                let image = texture.and_then(|texture| self.item_assets.texture(texture));
+                if texture.is_none() || image.is_some() {
+                    self.fx
+                        .decals
+                        .add_textured(*brick, at, normal, &decal, *scale, image);
+                }
             }
         }
         if let bri_sim::presentation::CueKind::BodyFlash {
@@ -490,6 +489,7 @@ impl App {
             &mut self.fx.weapon_effects,
             &mut self.fx.weapon_cues,
             &self.world_items,
+            None,
             view,
             elapsed,
         )
@@ -498,6 +498,7 @@ impl App {
         weapon_effects: &mut crate::weapon_effects::WeaponEffects,
         weapon_cues: &mut VecDeque<(bri_sim::presentation::Cue, f32)>,
         world_items: &crate::world_items::WorldItems,
+        building: Option<&crate::building::Building>,
         view: &bri_sim::session::WeaponView,
         elapsed: f32,
     ) -> Result<()> {
@@ -535,7 +536,22 @@ impl App {
         // bounded avatar queue (including its own observable overflow policy).
         // Do not retain a second copy indefinitely in the effects adapter.
         drop(weapon_effects.take_avatar_animation_requests());
-        weapon_effects.advance(elapsed, Vec3::ZERO, |cue| world_items.effect_pose(cue))?;
+        weapon_effects.advance_with_contacts(
+            elapsed,
+            Vec3::ZERO,
+            |cue| world_items.effect_pose(cue),
+            |from, to| {
+                let length = from.distance(to);
+                if !(0.0001..=2000.).contains(&length) {
+                    return None;
+                }
+                let hit = building?.solid_segment(from, to).ok()??;
+                Some(bri_fx_runtime::ContactHit {
+                    fraction: (hit.distance / length).clamped(0., 1.),
+                    normal: hit.normal,
+                })
+            },
+        )?;
         Ok(())
     }
 }

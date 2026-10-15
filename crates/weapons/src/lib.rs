@@ -2385,6 +2385,18 @@ pub struct Decal {
     /// Texture overrides for the map's authored surface kinds.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub surfaces: BTreeMap<String, String>,
+    /// Complete authored marks by surface; null explicitly leaves no mark.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub profiles: BTreeMap<String, Option<DecalProfile>>,
+    /// Unknown surfaces leave no mark instead of using the default style.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub require_profile: bool,
+    /// Final seconds spent fading, at most the mark's lifetime. None keeps
+    /// the stock one-second fade.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fade_seconds: Option<f32>,
+    #[serde(default, skip_serializing_if = "is_zero_f32")]
+    pub rotation_degrees: f32,
     /// Across, in units at scale 1: 0.02 to 4.
     pub size: f32,
     /// Its colour and opacity in the middle, each 0 to 1. A bullet hole's
@@ -2395,7 +2407,91 @@ pub struct Decal {
     #[serde(default = "Decal::stays")]
     pub seconds: f32,
 }
+/// One surface's complete mark. Ranges are sampled from the shared host cue id,
+/// so clients choose the same size, lifetime and rotation without extra packets.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DecalProfile {
+    pub texture: String,
+    #[serde(default)]
+    pub blend: DecalBlend,
+    pub size: [f32; 2],
+    pub color: [f32; 4],
+    pub seconds: [f32; 2],
+    pub fade_seconds: f32,
+    #[serde(default)]
+    pub rotation_degrees: [f32; 2],
+}
+fn decal_texture_valid(s: &str) -> bool {
+    !s.is_empty()
+        && s.len() <= 256
+        && !s.contains([':', '\\'])
+        && !s.starts_with('/')
+        && s.split('/').all(|p| p != ".." && !p.is_empty())
+}
+impl DecalProfile {
+    pub fn valid(&self) -> bool {
+        let range = |v: [f32; 2], min: f32, max: f32| {
+            v[0] <= v[1] && v.iter().all(|v| v.is_finite() && (min..=max).contains(v))
+        };
+        decal_texture_valid(&self.texture)
+            && range(self.size, 0.02, 4.)
+            && range(self.seconds, 0.5, 600.)
+            && range(self.rotation_degrees, -36000., 36000.)
+            && self
+                .color
+                .iter()
+                .all(|c| c.is_finite() && (0.0..=1.0).contains(c))
+            && self.fade_seconds.is_finite()
+            && (0.0..=600.).contains(&self.fade_seconds)
+    }
+}
 impl Decal {
+    pub fn textures(&self) -> impl Iterator<Item = &str> {
+        self.texture
+            .iter()
+            .chain(self.surfaces.values())
+            .map(String::as_str)
+            .chain(self.profiles.values().flatten().map(|p| p.texture.as_str()))
+    }
+    /// Resolve a mark once before drawing, retaining legacy texture overrides
+    /// for packages without complete surface profiles.
+    pub fn for_surface(&self, surface: Option<&str>, seed: u64) -> Option<Self> {
+        if let Some(profile) = surface.and_then(|name| self.profiles.get(name)) {
+            let profile = profile.as_ref()?;
+            let mut state = seed ^ 0x9e3779b97f4a7c15;
+            let mut sample = |range: [f32; 2]| {
+                state = state.wrapping_add(0x9e3779b97f4a7c15);
+                let mut mixed = state;
+                mixed = (mixed ^ (mixed >> 30)).wrapping_mul(0xbf58476d1ce4e5b9);
+                mixed = (mixed ^ (mixed >> 27)).wrapping_mul(0x94d049bb133111eb);
+                let unit = ((mixed ^ (mixed >> 31)) >> 40) as f32 / 16777216.;
+                range[0] + (range[1] - range[0]) * unit
+            };
+            return Some(Self {
+                texture: Some(profile.texture.clone()),
+                blend: profile.blend,
+                size: sample(profile.size),
+                color: profile.color,
+                seconds: sample(profile.seconds),
+                fade_seconds: Some(profile.fade_seconds),
+                rotation_degrees: sample(profile.rotation_degrees),
+                surfaces: BTreeMap::new(),
+                profiles: BTreeMap::new(),
+                require_profile: false,
+            });
+        }
+        if self.require_profile {
+            return None;
+        }
+        let mut selected = self.clone();
+        if let Some(texture) = surface.and_then(|name| self.surfaces.get(name)) {
+            selected.texture = Some(texture.clone());
+        }
+        selected.surfaces.clear();
+        selected.profiles.clear();
+        Some(selected)
+    }
     fn hole() -> [f32; 4] {
         [0.04, 0.035, 0.03, 0.9]
     }
@@ -2403,13 +2499,19 @@ impl Decal {
         30.0
     }
     pub fn valid(&self) -> bool {
-        self.texture.iter().chain(self.surfaces.values()).all(|s| {
-            !s.is_empty()
-                && s.len() <= 256
-                && !s.contains([':', '\\'])
-                && !s.starts_with('/')
-                && s.split('/').all(|p| p != ".." && !p.is_empty())
-        }) && self.surfaces.len() <= 64
+        self.textures().all(decal_texture_valid)
+            && self.surfaces.len() <= 64
+            && self.profiles.len() <= 64
+            && self
+                .profiles
+                .keys()
+                .all(|k| bri_content::surface::valid_name(k))
+            && self.profiles.values().flatten().all(DecalProfile::valid)
+            && self
+                .fade_seconds
+                .is_none_or(|s| s.is_finite() && (0.0..=600.).contains(&s))
+            && self.rotation_degrees.is_finite()
+            && self.rotation_degrees.abs() <= 36000.
             && self
                 .surfaces
                 .keys()

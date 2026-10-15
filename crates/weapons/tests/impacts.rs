@@ -162,3 +162,47 @@ fn authored_material_overrides_target_category_and_unknown_material_falls_back()
         );
     }
 }
+
+#[test]
+fn surface_marks_select_the_complete_style_and_keep_seeded_variation() {
+    let decal: Decal = serde_json::from_value(serde_json::json!({
+        "texture":"default.png", "size":0.2, "seconds":30.,
+        "surfaces":{"legacy":"legacy.png"}, "profiles":{
+            "wood":null,
+            "stone":{"texture":"stone.png","blend":"double_multiply",
+                "size":[0.1,0.3],"color":[1.,0.8,0.6,1.],"seconds":[80.,100.],
+                "fade_seconds":20.,"rotation_degrees":[0.,360.]}
+        }
+    }))
+    .unwrap();
+    assert!(decal.valid());
+    assert!(decal.for_surface(Some("wood"), 10).is_none());
+    let a = decal.for_surface(Some("stone"), 10).unwrap();
+    assert_eq!(a, decal.for_surface(Some("stone"), 10).unwrap());
+    assert_ne!(a, decal.for_surface(Some("stone"), 11).unwrap());
+    assert_eq!(a.texture.as_deref(), Some("stone.png"));
+    assert_eq!(a.blend, DecalBlend::DoubleMultiply);
+    assert_eq!(a.fade_seconds, Some(20.));
+    assert!((0.1..=0.3).contains(&a.size) && (80. ..=100.).contains(&a.seconds));
+    assert!(a.valid());
+    assert_eq!(
+        decal
+            .for_surface(Some("legacy"), 10)
+            .unwrap()
+            .texture
+            .as_deref(),
+        Some("legacy.png")
+    );
+    let mut required = decal;
+    required.require_profile = true;
+    assert!(required.for_surface(Some("sand"), 10).is_none());
+    assert!(required.for_surface(None, 10).is_none());
+    required
+        .profiles
+        .get_mut("stone")
+        .unwrap()
+        .as_mut()
+        .unwrap()
+        .size = [0.5, 0.1];
+    assert!(!required.valid());
+}

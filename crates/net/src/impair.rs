@@ -5,7 +5,8 @@
 //! gap between packets reorders them, as the Internet does.
 use anyhow::Result;
 use std::{
-    collections::HashMap,
+    cmp::{Ordering as CmpOrdering, Reverse},
+    collections::{BinaryHeap, HashMap},
     net::SocketAddr,
     sync::{
         Arc, Mutex,
@@ -13,7 +14,7 @@ use std::{
     },
     time::Duration,
 };
-use tokio::{net::UdpSocket, task::JoinHandle};
+use tokio::{net::UdpSocket, sync::mpsc, task::JoinHandle};
 
 /// What the link does to every datagram, independently in each direction.
 #[derive(Debug, Clone, Copy)]
@@ -105,7 +106,65 @@ impl Dice {
     }
 }
 
+struct Delivery {
+    deadline: tokio::time::Instant,
+    order: u64,
+    bytes: Vec<u8>,
+    socket: Arc<UdpSocket>,
+    to: SocketAddr,
+}
+impl PartialEq for Delivery {
+    fn eq(&self, other: &Self) -> bool {
+        (self.deadline, self.order) == (other.deadline, other.order)
+    }
+}
+impl Eq for Delivery {}
+impl PartialOrd for Delivery {
+    fn partial_cmp(&self, other: &Self) -> Option<CmpOrdering> {
+        Some(self.cmp(other))
+    }
+}
+impl Ord for Delivery {
+    fn cmp(&self, other: &Self) -> CmpOrdering {
+        (self.deadline, self.order).cmp(&(other.deadline, other.order))
+    }
+}
+
+// One scheduler owns each direction's ordered deadlines. Independent sleeping
+// tasks can wake out of order on a coarse timer, inventing jitter and QUIC loss.
+async fn deliver(mut incoming: mpsc::Receiver<Delivery>, stats: Arc<LinkStats>) {
+    let mut pending = BinaryHeap::<Reverse<Delivery>>::new();
+    loop {
+        if let Some(Reverse(next)) = pending.peek() {
+            let deadline = next.deadline;
+            tokio::select! {
+                delivery=incoming.recv()=>match delivery {
+                    Some(delivery) if pending.len()<4096=>pending.push(Reverse(delivery)),
+                    Some(_)=>{stats.dropped.fetch_add(1,Ordering::Relaxed);},
+                    None=>return,
+                },
+                _=tokio::time::sleep_until(deadline)=>{
+                    let mut batch=0;
+                    while pending.peek().is_some_and(|d|d.0.deadline<=tokio::time::Instant::now()) {
+                        let Reverse(delivery)=pending.pop().unwrap();
+                        if delivery.socket.send_to(&delivery.bytes,delivery.to).await.is_err() {stats.dropped.fetch_add(1,Ordering::Relaxed);}
+                        batch+=1;
+                        // Let socket readers drain timer-coalesced bursts too.
+                        if batch%16==0 {tokio::task::yield_now().await;}
+                    }
+                }
+            }
+        } else {
+            match incoming.recv().await {
+                Some(delivery) => pending.push(Reverse(delivery)),
+                None => return,
+            }
+        }
+    }
+}
 struct Direction {
+    deliveries: mpsc::Sender<Delivery>,
+    order: AtomicU64,
     impairment: Impairment,
     dice: Mutex<Dice>,
     stats: Arc<LinkStats>,
@@ -115,6 +174,7 @@ struct Direction {
 impl Direction {
     /// Deliver `bytes` through `send` after the link's delay, or drop it.
     fn carry(self: &Arc<Self>, bytes: Vec<u8>, socket: Arc<UdpSocket>, to: SocketAddr) {
+        let received = tokio::time::Instant::now();
         let (lost, copies, delays) = {
             let mut dice = self.dice.lock().unwrap_or_else(|e| e.into_inner());
             let lost = dice.next() < self.impairment.loss;
@@ -130,7 +190,7 @@ impl Direction {
         };
         // The bandwidth limit: out after everything queued before it, or
         // dropped when that is more than the buffer holds.
-        let mut wait = Duration::ZERO;
+        let mut ready = received;
         if !lost && self.impairment.rate > 0 {
             let now = tokio::time::Instant::now();
             let mut busy = self.busy_until.lock().unwrap_or_else(|e| e.into_inner());
@@ -141,7 +201,7 @@ impl Direction {
             }
             let sending = Duration::from_secs_f64(bytes.len() as f64 / self.impairment.rate as f64);
             *busy = Some(start + sending);
-            wait = start + sending - now;
+            ready = start + sending;
         }
         if lost {
             self.stats.dropped.fetch_add(1, Ordering::Relaxed);
@@ -152,14 +212,16 @@ impl Direction {
             self.stats.duplicated.fetch_add(1, Ordering::Relaxed);
         }
         for delay in delays {
-            let delay = delay + wait;
-            let (bytes, socket) = (bytes.clone(), socket.clone());
-            tokio::spawn(async move {
-                if !delay.is_zero() {
-                    tokio::time::sleep(delay).await;
-                }
-                let _ = socket.send_to(&bytes, to).await;
-            });
+            let delivery = Delivery {
+                deadline: ready + delay,
+                order: self.order.fetch_add(1, Ordering::Relaxed),
+                bytes: bytes.clone(),
+                socket: socket.clone(),
+                to,
+            };
+            if self.deliveries.try_send(delivery).is_err() {
+                self.stats.dropped.fetch_add(1, Ordering::Relaxed);
+            }
         }
     }
 }
@@ -171,15 +233,23 @@ impl ImpairedLink {
         let address = front.local_addr()?;
         let stats = Arc::new(LinkStats::default());
         let direction = |salt: u64| {
-            Arc::new(Direction {
-                impairment,
-                dice: Mutex::new(Dice((seed ^ salt) | 1)),
-                stats: stats.clone(),
-                busy_until: Mutex::new(None),
-            })
+            let (deliveries, incoming) = mpsc::channel(4096);
+            let worker = tokio::spawn(deliver(incoming, stats.clone()));
+            (
+                Arc::new(Direction {
+                    deliveries,
+                    order: AtomicU64::new(0),
+                    impairment,
+                    dice: Mutex::new(Dice((seed ^ salt) | 1)),
+                    stats: stats.clone(),
+                    busy_until: Mutex::new(None),
+                }),
+                worker.abort_handle(),
+            )
         };
-        let (up, down) = (direction(0x9E37_79B9), direction(0x7F4A_7C15));
-        let replies = Arc::new(Mutex::new(Vec::new()));
+        let ((up, up_worker), (down, down_worker)) =
+            (direction(0x9E37_79B9), direction(0x7F4A_7C15));
+        let replies = Arc::new(Mutex::new(vec![up_worker, down_worker]));
         let tasks = replies.clone();
         let task = tokio::spawn(async move {
             // One upstream socket per client, so the host sees distinct peers.
@@ -223,6 +293,48 @@ impl ImpairedLink {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Latency alone cannot introduce packet reordering. Independent timer
+    /// tasks waking together must not turn a zero-jitter link into a lossy one.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn latency_without_jitter_preserves_datagram_order() -> Result<()> {
+        let host = UdpSocket::bind("127.0.0.1:0").await?;
+        let link = ImpairedLink::start(
+            host.local_addr()?,
+            Impairment {
+                latency: Duration::from_millis(20),
+                ..Impairment::NONE
+            }
+            .throttled(12_500_000, Duration::from_millis(100)),
+            73,
+        )
+        .await?;
+        let client = UdpSocket::bind("127.0.0.1:0").await?;
+        let sender = async {
+            for index in 0u32..32 {
+                let mut bytes = vec![0u8; 500];
+                bytes[..4].copy_from_slice(&index.to_le_bytes());
+                client.send_to(&bytes, link.address).await?;
+            }
+            anyhow::Ok(())
+        };
+        let receiver = async {
+            let mut order = Vec::new();
+            let mut bytes = [0u8; 1024];
+            for _ in 0..32 {
+                let (n, _) =
+                    tokio::time::timeout(Duration::from_secs(2), host.recv_from(&mut bytes))
+                        .await??;
+                anyhow::ensure!(n == 500, "relay changed the datagram");
+                order.push(u32::from_le_bytes(bytes[..4].try_into().unwrap()));
+            }
+            anyhow::Ok(order)
+        };
+        let (sent, received) = tokio::join!(sender, receiver);
+        sent?;
+        assert_eq!(received?, (0..32).collect::<Vec<_>>());
+        Ok(())
+    }
 
     /// A throttled link takes as long as its bandwidth says, and its buffer
     /// drops what does not fit.

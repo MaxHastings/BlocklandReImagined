@@ -849,7 +849,17 @@ impl WeaponEffects {
         &mut self,
         dt: f32,
         wind: Vec3,
+        pose: impl FnMut(&Cue) -> Option<SourceTransform>,
+    ) -> Result<()> {
+        self.advance_with_contacts(dt, wind, pose, |_, _| None)
+    }
+    /// As advance, with cosmetic structure sweeps supplied by the actual world.
+    pub fn advance_with_contacts(
+        &mut self,
+        dt: f32,
+        wind: Vec3,
         mut pose: impl FnMut(&Cue) -> Option<SourceTransform>,
+        contact: impl FnMut(Vec3, Vec3) -> Option<bri_fx_runtime::ContactHit>,
     ) -> Result<()> {
         ensure!(
             dt.is_finite() && (0.0..=86400.).contains(&dt) && wind.is_finite(),
@@ -869,7 +879,7 @@ impl WeaponEffects {
                 self.diagnostics.missing_poses = self.diagnostics.missing_poses.saturating_add(1);
             }
         }
-        self.world.advance(dt, wind)?;
+        self.world.advance_with_contacts(dt, wind, contact)?;
         self.timed.retain(|t| self.world.attachment_alive(t.handle));
         debug_assert!(self.timed.len() <= self.limits.sources + self.limits.particles);
         Ok(())

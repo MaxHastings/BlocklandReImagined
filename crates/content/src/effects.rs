@@ -105,6 +105,12 @@ pub struct ParticleVariation {
     pub color: [[f32; 4]; 2],
     /// Multiplies every authored size key.
     pub size: [f32; 2],
+    /// Initial camera-facing sprite rotation, sampled once in degrees.
+    #[serde(default, skip_serializing_if = "zero_pair")]
+    pub initial_spin_degrees: [f32; 2],
+}
+fn zero_pair(value: &[f32; 2]) -> bool {
+    *value == [0.; 2]
 }
 /// One independently authored group at an effect's contact or attachment.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -211,6 +217,31 @@ impl ParticleAnimation {
         &self.frames[index]
     }
 }
+/// Cosmetic point contacts. Collision geometry remains owned by the world adapter.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ParticleContact {
+    pub restitution: f32,
+    /// Fraction of tangential velocity removed on each contact.
+    pub friction: f32,
+    /// Native speed below which a contacting particle rests.
+    pub rest_speed: f32,
+    #[serde(default)]
+    pub die_on_contact: bool,
+    #[serde(default)]
+    pub die_at_rest: bool,
+    #[serde(default)]
+    pub stop_animation_at_rest: bool,
+}
+impl ParticleContact {
+    pub fn valid(self) -> bool {
+        [self.restitution, self.friction]
+            .iter()
+            .all(|v| v.is_finite() && (0.0..=1.0).contains(v))
+            && self.rest_speed.is_finite()
+            && (0.0..=100.0).contains(&self.rest_speed)
+    }
+}
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Particle {
     pub id: String,
@@ -219,6 +250,8 @@ pub struct Particle {
     pub animation: Option<ParticleAnimation>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub variation: Option<ParticleVariation>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub contact: Option<ParticleContact>,
     pub alpha_blend: bool,
     pub lifetime: f32,
     pub lifetime_variance: f32,
@@ -308,6 +341,10 @@ impl Library {
         // authored alpha above one (the stock glow paint uses two).
         let mut ids = BTreeSet::new();
         for p in &self.particles {
+            ensure!(
+                p.contact.is_none_or(ParticleContact::valid),
+                "Invalid particle contacts"
+            );
             if let Some(v) = &p.variation {
                 ensure!(
                     v.color
@@ -317,7 +354,11 @@ impl Library {
                         && v.size
                             .iter()
                             .all(|s| s.is_finite() && (0.0..=10000.0).contains(s))
-                        && v.size[0] <= v.size[1],
+                        && v.size[0] <= v.size[1]
+                        && v.initial_spin_degrees
+                            .iter()
+                            .all(|v| v.is_finite() && v.abs() <= 36000.)
+                        && v.initial_spin_degrees[0] <= v.initial_spin_degrees[1],
                     "Invalid particle variation"
                 );
             }

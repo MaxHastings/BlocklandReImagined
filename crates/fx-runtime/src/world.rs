@@ -7,6 +7,34 @@ use std::{collections::BTreeMap, sync::Arc};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct EffectHandle(pub u64);
+/// Nearest physical hit on a cosmetic sweep, measured from its start.
+#[derive(Clone, Copy, Debug)]
+pub struct ContactHit {
+    pub fraction: f32,
+    pub normal: Vec3,
+}
+impl ContactHit {
+    fn valid(self) -> bool {
+        self.fraction.is_finite()
+            && (0.0..=1.0).contains(&self.fraction)
+            && self.normal.is_finite()
+            && self.normal.length_squared() > 0.5
+    }
+}
+// A frame's shared work budget. Exhausted sweeps wait in place; they never
+// fall back to unchecked motion through a wall.
+struct Contacts<'a> {
+    query: &'a mut dyn FnMut(Vec3, Vec3) -> Option<ContactHit>,
+    remaining: usize,
+}
+impl<'a> Contacts<'a> {
+    fn new(query: &'a mut dyn FnMut(Vec3, Vec3) -> Option<ContactHit>) -> Self {
+        Self {
+            query,
+            remaining: 32768,
+        }
+    }
+}
 #[derive(Clone, Copy, Debug)]
 pub struct SourceTransform {
     pub position: Vec3,
@@ -273,6 +301,8 @@ struct Source {
     seen: f64,
 }
 struct Particle {
+    rested_at: Option<f32>,
+    rest_normal: Vec3,
     follow_source: bool,
     owner: EffectHandle,
     definition: usize,
@@ -283,6 +313,7 @@ struct Particle {
     age: f32,
     lifetime: f32,
     spin: f32,
+    initial_spin: f32,
     wind: Vec3,
     orient: bool,
     orient_velocity: bool,
@@ -708,7 +739,14 @@ impl EffectsWorld {
         let handle = self.start_emitter(id, transform, options)?;
         let mut source = self.sources.remove(&handle).unwrap();
         for _ in 0..count {
-            self.emit(handle, &mut source, transform, 0., Vec3::ZERO);
+            self.emit(
+                handle,
+                &mut source,
+                transform,
+                0.,
+                Vec3::ZERO,
+                &mut Contacts::new(&mut |_, _| None),
+            );
         }
         Ok(handle)
     }
@@ -775,6 +813,12 @@ impl EffectsWorld {
         {
             return None;
         }
+        if self.emitter_particles[s.definition]
+            .iter()
+            .any(|&i| self.pack.library.particles[i].contact.is_some())
+        {
+            return None;
+        }
         let speed = e.speed.abs() + e.speed_variance.abs();
         let wind = (self.wind + s.options.wind).length();
         let travel = self.emitter_particles[s.definition]
@@ -815,7 +859,14 @@ impl EffectsWorld {
         let mut t = (now - f64::from(longest) * scale).max(0.) + f64::from(s.rng.unit() * period);
         while t <= now && t <= s.lifetime && *budget > 0 {
             s.next = t;
-            self.emit(handle, s, at, ((now - t) / scale) as f32, wind);
+            self.emit(
+                handle,
+                s,
+                at,
+                ((now - t) / scale) as f32,
+                wind,
+                &mut Contacts::new(&mut |_, _| None),
+            );
             t += f64::from(s.rng.variance(period, variance));
             *budget -= 1;
         }
@@ -825,6 +876,15 @@ impl EffectsWorld {
     /// Host supplies elapsed cosmetic time and a native Y-up world wind vector.
     /// Dead particles expire at full elapsed time. Work on overdue emissions is bounded.
     pub fn advance(&mut self, dt: f32, wind: Vec3) -> Result<()> {
+        self.advance_with_contacts(dt, wind, |_, _| None)
+    }
+    /// Query the nearest physical hit of each cosmetic point sweep. No world mutation.
+    pub fn advance_with_contacts(
+        &mut self,
+        dt: f32,
+        wind: Vec3,
+        mut contact: impl FnMut(Vec3, Vec3) -> Option<ContactHit>,
+    ) -> Result<()> {
         ensure!(
             dt.is_finite() && (0.0..=86400.0).contains(&dt) && wind.is_finite(),
             "Invalid effects timestep/wind"
@@ -832,6 +892,7 @@ impl EffectsWorld {
         if dt == 0. {
             return Ok(());
         }
+        let mut contact = Contacts::new(&mut contact);
         self.wind = wind;
         self.diagnostics.advances += 1;
         // Particles follow their source's current options; only look the
@@ -874,6 +935,7 @@ impl EffectsWorld {
                 dt,
                 wind,
                 decays[p.definition],
+                &mut contact,
             );
         }
         self.decays = decays;
@@ -904,7 +966,7 @@ impl EffectsWorld {
                     } else {
                         dt * (1. - t)
                     };
-                    self.emit(handle, source, transform, pre_age, wind);
+                    self.emit(handle, source, transform, pre_age, wind, &mut contact);
                     let e = &self.pack.library.emitters[source.definition];
                     source.next += f64::from(source.rng.variance(e.period, e.period_variance));
                     budget -= 1;
@@ -938,6 +1000,7 @@ impl EffectsWorld {
         t: SourceTransform,
         pre_age: f32,
         wind: Vec3,
+        contact: &mut Contacts<'_>,
     ) {
         let e = &self.pack.library.emitters[s.definition];
         let choices = &self.emitter_particles[s.definition];
@@ -972,8 +1035,14 @@ impl EffectsWorld {
         } else {
             direction
         };
-        let velocity = velocity_axis * s.rng.variance(e.speed, e.speed_variance)
-            + t.velocity * p.inherited_velocity;
+        // Attached groups already receive source translation through their
+        // frame. Inheriting its world velocity as well counts that motion twice.
+        let inherited = if s.options.follow_source {
+            Vec3::ZERO
+        } else {
+            t.velocity * p.inherited_velocity
+        };
+        let velocity = velocity_axis * s.rng.variance(e.speed, e.speed_variance) + inherited;
         let tint_factor = if p.variation.is_some() {
             s.rng.unit()
         } else {
@@ -1000,6 +1069,8 @@ impl EffectsWorld {
                 (rate, start, reverse)
             });
         let mut particle = Particle {
+            rested_at: None,
+            rest_normal: Vec3::ZERO,
             follow_source: s.options.follow_source,
             animation_rate,
             animation_start,
@@ -1017,6 +1088,15 @@ impl EffectsWorld {
             age: 0.,
             lifetime: s.rng.variance(p.lifetime, p.lifetime_variance),
             spin: (p.spin_degrees + s.rng.range(p.random_spin[0], p.random_spin[1])).to_radians(),
+            initial_spin: p.variation.as_ref().map_or(0., |v| {
+                if v.initial_spin_degrees == [0.; 2] {
+                    0.
+                } else {
+                    s.rng
+                        .range(v.initial_spin_degrees[0], v.initial_spin_degrees[1])
+                        .to_radians()
+                }
+            }),
             wind: s.options.wind,
             orient: e.orient,
             orient_velocity: e.orient_on_velocity,
@@ -1045,7 +1125,15 @@ impl EffectsWorld {
             visible: s.options.visible,
             hidden_from_own_eye: s.options.hidden_from_own_eye,
         };
-        Self::integrate(&self.pack, &self.passages, &mut particle, pre_age, wind);
+        Self::integrate_with(
+            &self.pack,
+            &self.passages,
+            &mut particle,
+            pre_age,
+            wind,
+            Self::decay(p.drag, pre_age),
+            contact,
+        );
         if particle.age >= particle.lifetime {
             return;
         }
@@ -1065,10 +1153,6 @@ impl EffectsWorld {
             (decay, (1. - decay) / drag)
         })
     }
-    fn integrate(pack: &EffectsPack, passages: &Passages, p: &mut Particle, dt: f32, wind: Vec3) {
-        let decay = Self::decay(pack.library.particles[p.definition].drag, dt);
-        Self::integrate_with(pack, passages, p, dt, wind, decay);
-    }
     fn integrate_with(
         pack: &EffectsPack,
         passages: &Passages,
@@ -1076,6 +1160,7 @@ impl EffectsWorld {
         dt: f32,
         wind: Vec3,
         decay: Option<(f32, f32)>,
+        contact: &mut Contacts<'_>,
     ) {
         p.age += dt;
         if p.age >= p.lifetime {
@@ -1083,6 +1168,104 @@ impl EffectsWorld {
         }
         let before = p.position;
         let def = &pack.library.particles[p.definition];
+        if p.rested_at.is_some() {
+            if contact.remaining == 0 {
+                return;
+            }
+            contact.remaining -= 1;
+            // A resting cosmetic point must not float after a supporting
+            // brick is removed. Recheck support without moving the world.
+            let from = p.position + p.rest_normal * 0.001;
+            let to = p.position - p.rest_normal * 0.004;
+            if (contact.query)(from, to)
+                .is_some_and(|hit| hit.valid() && hit.normal.normalize().dot(p.rest_normal) > 0.5)
+            {
+                return;
+            }
+            p.rested_at = None;
+        }
+        if let Some(style) = def.contact.filter(|_| !p.follow_source) {
+            // Bound each straight sweep along a curved path to 1/60 s, with a
+            // finite catch-up budget. A stalled cosmetic point cannot tunnel.
+            let mut remaining = dt;
+            for _ in 0..128 {
+                if remaining <= 0.0 || p.rested_at.is_some() || p.age >= p.lifetime {
+                    break;
+                }
+                if contact.remaining == 0 {
+                    break;
+                }
+                contact.remaining -= 1;
+                let step = remaining.min(1.0 / 60.0);
+                remaining -= step;
+                let start = p.position;
+                let velocity = p.velocity;
+                Self::free_step(p, def, step, wind, Self::decay(def.drag, step));
+                let end = p.position;
+                if let (end, Some(carry)) = passages.travel(start, end) {
+                    let (_, turn, _) = carry.to_scale_rotation_translation();
+                    p.position = end;
+                    p.velocity = turn * p.velocity;
+                    p.acceleration = turn * p.acceleration;
+                    p.direction = turn * p.direction;
+                    continue;
+                }
+                let Some(hit) = (contact.query)(start, end).filter(|h| h.valid()) else {
+                    continue;
+                };
+                let normal = hit.normal.normalize();
+                if style.die_on_contact {
+                    p.age = p.lifetime;
+                    break;
+                }
+                // Evaluate velocity at the hit time, rather than reflecting the
+                // accelerated velocity from the end of the whole sweep.
+                p.position = start;
+                p.velocity = velocity;
+                let hit_time = step * hit.fraction;
+                Self::free_step(p, def, hit_time, wind, Self::decay(def.drag, hit_time));
+                p.position = start.lerp(end, hit.fraction) + normal * 0.001;
+                let inward = p.velocity.dot(normal);
+                if inward < 0.0 {
+                    p.velocity = (p.velocity - normal * inward) * (1.0 - style.friction)
+                        - normal * inward * style.restitution;
+                }
+                // Only support against acceleration can settle a point: side
+                // walls cannot suspend a slow fragment in midair.
+                let force =
+                    p.acceleration - (wind + p.wind) * def.wind - Vec3::Y * (9.81 * def.gravity);
+                if p.velocity.length() <= style.rest_speed && force.dot(normal) < 0.0 {
+                    p.rested_at = Some(p.age - remaining - step * (1.0 - hit.fraction));
+                    p.rest_normal = normal;
+                    p.velocity = Vec3::ZERO;
+                    if style.die_at_rest {
+                        p.age = p.lifetime;
+                    }
+                }
+                remaining += step * (1.0 - hit.fraction);
+            }
+            // Discard an unresolved stall tail without freezing a particle forever.
+            return;
+        }
+        Self::free_step(p, def, dt, wind, decay);
+        if passages.list.is_empty() {
+            return;
+        }
+        if let (end, Some(carry)) = passages.travel(before, p.position) {
+            let (_, turn, _) = carry.to_scale_rotation_translation();
+            p.position = end;
+            p.velocity = turn * p.velocity;
+            p.acceleration = turn * p.acceleration;
+            p.direction = turn * p.direction;
+        }
+    }
+    fn free_step(
+        p: &mut Particle,
+        def: &bri_content::effects::Particle,
+        dt: f32,
+        wind: Vec3,
+        decay: Option<(f32, f32)>,
+    ) {
         let acceleration =
             p.acceleration - (wind + p.wind) * def.wind - Vec3::Y * (9.81 * def.gravity);
         // Closed-form constant-force linear drag, stable for stalls and arbitrary frame partitioning.
@@ -1093,16 +1276,6 @@ impl EffectsWorld {
         } else {
             p.position += p.velocity * dt + acceleration * (0.5 * dt * dt);
             p.velocity += acceleration * dt;
-        }
-        if passages.list.is_empty() {
-            return;
-        }
-        if let (end, Some(carry)) = passages.travel(before, p.position) {
-            let (_, turn, _) = carry.to_scale_rotation_translation();
-            p.position = end;
-            p.velocity = turn * p.velocity;
-            p.acceleration = turn * p.acceleration;
-            p.direction = turn * p.direction;
         }
     }
     /// This frame's particles, farthest from the camera first, and lights.
@@ -1177,7 +1350,11 @@ impl EffectsWorld {
         }
         let frame = def.animation.as_ref().map(|animation| {
             animation.texture_at(
-                p.age,
+                if def.contact.is_some_and(|c| c.stop_animation_at_rest) {
+                    p.rested_at.unwrap_or(p.age)
+                } else {
+                    p.age
+                },
                 p.animation_rate,
                 p.animation_start,
                 p.animation_reverse,
@@ -1197,18 +1374,13 @@ impl EffectsWorld {
                 position: p.position,
                 size,
                 color: Vec4::from_array(color),
-                spin: p.spin * p.age,
+                spin: p.initial_spin + p.spin * p.rested_at.unwrap_or(p.age),
                 axis,
-                texture: if let Some(animation) = &def.animation {
+                texture: if let Some(frame) = frame {
                     *self
                         .pack
                         .texture_index
-                        .get(animation.texture_at(
-                            p.age,
-                            p.animation_rate,
-                            p.animation_start,
-                            p.animation_reverse,
-                        ))
+                        .get(frame)
                         .expect("validated particle frames") as u32
                 } else {
                     self.particle_texture[p.definition]
@@ -1555,6 +1727,7 @@ mod tests {
                     variation: None,
                     id: "particle".into(),
                     texture: "original".into(),
+                    contact: None,
                     alpha_blend: true,
                     lifetime: 2.,
                     lifetime_variance: 0.,

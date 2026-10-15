@@ -20,6 +20,8 @@ labels are retained so earlier progress notes remain traceable.
 
 | Seam | What it covers | Owner | State |
 |---|---|---|---|
+| Complete surface decal profiles | Per-material artwork, size/lifetime ranges, blend, fade and rotation, with explicit no-mark policy | Codex v0.3.1 remaining capabilities | implementation in progress |
+| Particle initial rotation | Seeded authored starting angle independent of angular velocity, preserving source sprite variation at birth | Codex v0.3.1 remaining capabilities | implementation in progress |
 | Independent haze density and visibility | Authored fog density distance separate from geometry cutoff, shared CPU/GPU atmosphere | Codex v0.3.1 remaining capabilities | implementation in progress |
 | Authored reflection layers | Native surface environment image and mask, face/grazing colours, inverse-mask detail; preserves imported material inputs without inferred metalness | Codex Halo CE fidelity | codex/halo-ce-fidelity |
 | Authored contact and ejection effects | Material-selected impacts and decal textures; sprite frame playback, seeded tint/size/count/radius ranges and independently transformed burst groups; image `shell_effect` at the existing shell socket | Codex v0.3.1 fidelity completion | codex/v031-fidelity-completion; validation in progress |
@@ -128,3 +130,5 @@ labels are retained so earlier progress notes remain traceable.
 | Authored vehicle rider poses | Optional seat-owned clip uses its original model-origin frame; missing clips retain the body sit and anchor its hip to the seat, legacy seats unchanged | Root reference-first passenger review | implementation and rendered comparison pending |
 
 | Authored seat eye origins | Optional seat-local eye drives both client first-person view and authoritative motor interaction eye; no FOV or camera-mode lock | Root passenger view comparison | implementation and comparison pending |
+
+| Cosmetic particle contacts | Optional swept structure contacts with authored restitution, tangential retention, rest and death behavior; world query supplied by adapter, no gameplay authority | Root environment-impact audit | implementation in progress |

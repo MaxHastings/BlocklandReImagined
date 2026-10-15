@@ -72,6 +72,7 @@ pub fn particle(id: &str, keys: Vec<ParticleKey>) -> Particle {
         variation: None,
         id: id.into(),
         texture: TEXTURE.into(),
+        contact: None,
         alpha_blend: true,
         lifetime: 2.,
         lifetime_variance: 0.,

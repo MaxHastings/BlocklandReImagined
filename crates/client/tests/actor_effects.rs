@@ -70,6 +70,7 @@ fn effects() -> Arc<EffectsPack> {
                 variation: None,
                 id: "particle".into(),
                 texture: "texture".into(),
+                contact: None,
                 alpha_blend: true,
                 lifetime: 0.5,
                 lifetime_variance: 0.,
