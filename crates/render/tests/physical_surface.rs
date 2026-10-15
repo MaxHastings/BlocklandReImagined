@@ -31,7 +31,7 @@ fn floor(normal: [u8; 4], surface: &Surface) -> SceneData {
         rgba: normal.to_vec(),
         srgb: false,
     });
-    let mut maps = [1; 5];
+    let mut maps = [1; 7];
     for (k, map) in SurfaceMap::ALL.into_iter().enumerate().skip(1) {
         data.images.push(map.stand_in());
         maps[k] = data.images.len() - 1;
@@ -70,6 +70,7 @@ fn surface() -> Surface {
         detail: None,
         detail_scale: 1.0,
         emissive: [0.0; 3],
+        reflection: None,
     }
 }
 
@@ -144,5 +145,35 @@ fn glow_shows_in_the_dark_and_metal_reflects() -> Result<()> {
     steel.roughness = 0.2;
     let metal = middle(&floor([128, 128, 255, 255], &steel), &camera())?;
     assert_ne!(painted, metal, "metal draws differently");
+    Ok(())
+}
+
+#[test]
+fn an_authored_reflection_keeps_its_mask_and_view_angle_colours() -> Result<()> {
+    let mut authored = surface();
+    authored.reflection = Some(bri_content::shape::SurfaceReflection {
+        environment: 0,
+        mask: 0,
+        perpendicular: [0.8, 0.0, 0.0],
+        parallel: [0.0, 0.0, 0.8],
+        detail_inverse_mask: false,
+    });
+    let mut data = floor([128, 128, 255, 255], &authored);
+    let environment = data.images.len() - 2;
+    let mask = data.images.len() - 1;
+    data.images[environment].rgba = vec![255; 4];
+    let mut dark = camera();
+    dark.sun_color = [0.0; 4];
+    dark.ambient = [0.0; 4];
+    let face = middle(&data, &dark)?;
+    assert!(face[0] > 150 && face[2] < 10, "face: {face:?}");
+    dark = Camera::perspective([0., 2., 22.], [0.; 3], 1., 1., 0.05, 400.);
+    dark.sun_color = [0.0; 4];
+    dark.ambient = [0.0; 4];
+    let grazing = middle(&data, &dark)?;
+    assert!(grazing[2] > 150 && grazing[0] < 35, "grazing: {grazing:?}");
+    data.images[mask].rgba = vec![0, 0, 0, 255];
+    let hidden = middle(&data, &dark)?;
+    assert!(hidden.iter().all(|v| *v < 10), "masked: {hidden:?}");
     Ok(())
 }

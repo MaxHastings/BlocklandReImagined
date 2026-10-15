@@ -778,7 +778,7 @@ fn hitscan_crits_and_melee_kills_play_in_a_hosted_game() {
         let notices = g.s.take_private_notices();
         let found = notices
             .iter()
-            .any(|(_, n)| matches!(n, Notice::Chat(t) if t.contains(text)));
+            .any(|(_, n)| matches!(n, Notice::Kill(k) if k.line.contains(text)));
         assert!(found, "{text}: {notices:?}");
     };
     said(&mut g, "clubbed");
@@ -941,7 +941,7 @@ fn crits_play_with_the_critical_hit_emote() {
     assert!(
         notices
             .iter()
-            .any(|(_, n)| matches!(n, Notice::Chat(t) if t.contains("hit B hard"))),
+            .any(|(_, n)| matches!(n, Notice::Kill(k) if k.line.contains("hit B hard"))),
         "{notices:?}"
     );
 }

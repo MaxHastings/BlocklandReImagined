@@ -14,6 +14,8 @@ fn sample_with_fog(dir: &Path, fog: serde_json::Value) -> Result<String> {
     }
     let file = dir.join("bundle.json");
     let mut bundle: serde_json::Value = serde_json::from_slice(&std::fs::read(&file)?)?;
+    // This fixture deliberately has no sky: the shipped sample now has one.
+    bundle.as_object_mut().unwrap().remove("environments");
     bundle["maps"][0]["fog"] = fog;
     std::fs::write(&file, serde_json::to_vec(&bundle)?)?;
     Ok(bundle["maps"][0]["id"].as_str().unwrap().to_owned())

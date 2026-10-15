@@ -632,6 +632,22 @@ impl App {
             self.ui.core.addon_help = help;
             self.ui.welcome_addons();
         }
+        // The admin orb is the control object, while the parked body's
+        // archetype and held item still replicate. Its HUD is always stock;
+        // retain the catalog so the body's HUD returns on leaving the orb.
+        if view
+            .vitals
+            .get(&view.owner)
+            .is_some_and(|v| v.control == bri_sim::session::ControlObject::Camera)
+        {
+            self.ui.core.package_panels.clear();
+            self.ui.core.package_keys.clear();
+            self.ui.core.hud_regions.clear();
+            self.ui.core.stock_texts.clear();
+            self.addons.hud_regions.forget_drawn();
+            self.addons.client_code.set_hud_owners(Default::default());
+            return;
+        }
         let binds = &self.ui.core.binds;
         let held = view
             .weapons

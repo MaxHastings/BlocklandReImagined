@@ -1750,7 +1750,9 @@ impl VehiclesWorld {
                 let now = v.mouse_steering[0];
                 let yaw_rate = -world.bodies[v.body].angvel().dot(up);
                 let unwind = now.abs() / (rate * 120.).max(0.01);
-                let target = if driven && c.look_yaw.is_finite() {
+                let target = if driven && d.steering.keyboard_override && c.strafe.abs() > 0.01 {
+                    c.strafe.clamped(-1.0, 1.0) * limit
+                } else if driven && c.look_yaw.is_finite() {
                     (c.look_yaw - yaw_rate * unwind).clamped(-limit, limit)
                 } else {
                     0.

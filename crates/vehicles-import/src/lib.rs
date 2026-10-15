@@ -343,6 +343,7 @@ pub fn lower(
             damping: number(spring, "damping", 10.),
             anti_sway: number(spring, "antiSwayForce", 1.),
             rebound_damping: 0.,
+            linear_steering: false,
             tire: Tire {
                 static_friction: number(tire, "staticFriction", 1.),
                 kinetic_friction: number(tire, "kineticFriction", 0.5),
@@ -599,6 +600,7 @@ pub fn lower(
             auto_return_rate: number(b, "steeringAutoReturnRate", 0.9),
             auto_return_max_speed: number(b, "steeringAutoReturnMaxSpeed", 10.),
             toward_look: false,
+            keyboard_override: false,
             speed_lock: 1.,
         },
         wheeled_flight: match family {

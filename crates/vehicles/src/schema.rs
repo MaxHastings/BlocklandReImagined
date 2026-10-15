@@ -124,6 +124,10 @@ pub struct Wheel {
     pub rebound_damping: f32,
     pub tire: Tire,
     pub steering: f32,
+    /// Steering is already a wheel angle in radians. Off preserves the
+    /// v20 squared-input curve. Useful for authored physical steering locks.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub linear_steering: bool,
     pub powered: bool,
     pub model: String,
     /// Turns the tire model, authored with its hub axis along forward, so the
@@ -195,7 +199,11 @@ impl Wheel {
     /// mouse steers gently and full lock sharply, and a wheel steering
     /// against the front (the Tank's rear, -0.8) turns a little less.
     pub fn steer_angle(&self, steering: f32) -> f32 {
-        let squared = steering * steering.abs();
+        let squared = if self.linear_steering {
+            steering
+        } else {
+            steering * steering.abs()
+        };
         (self.steering * squared.sin()).atan2(squared.cos())
     }
 }
@@ -340,6 +348,10 @@ pub struct SteeringSettings {
     /// where you drive where you look.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub toward_look: bool,
+    /// In look steering, a held strafe key requests full left/right lock
+    /// instead. Releasing it resumes steering toward the look.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub keyboard_override: bool,
     /// The share of `max_steering` the driver can still turn to at
     /// `max_speed`, narrowing in a straight line from the full lock
     /// standing: a fast truck that turns sharply in a yard but cannot spin
@@ -370,6 +382,7 @@ impl Default for SteeringSettings {
             auto_return_rate: 0.9,
             auto_return_max_speed: 10.,
             toward_look: false,
+            keyboard_override: false,
             speed_lock: 1.,
         }
     }
@@ -1514,6 +1527,7 @@ mod tests {
             rebound_damping: 0.,
             tire: Tire::default(),
             steering,
+            linear_steering: false,
             powered: false,
             model: String::new(),
             model_rotation: [0.0, 0.0, 0.0, 1.0],
@@ -1527,5 +1541,12 @@ mod tests {
             "{rear}"
         );
         assert_eq!(wheel(0.0).steer_angle(0.9785), 0.0);
+        let mut linear = wheel(1.0);
+        linear.linear_steering = true;
+        let lock = 30.0_f32.to_radians();
+        assert!((linear.steer_angle(lock) - lock).abs() < 1e-6);
+        assert!((linear.steer_angle(-lock) + lock).abs() < 1e-6);
+        // A speed lock is a share of the actual angle, not squared again.
+        assert!((linear.steer_angle(lock * 0.6) - lock * 0.6).abs() < 1e-6);
     }
 }

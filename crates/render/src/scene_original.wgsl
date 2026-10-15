@@ -1424,7 +1424,9 @@ fn physical_surface(v:VertexOut)->vec4<f32> {
     // A repeating detail texture over the colour, mid-grey leaving it as
     // it is (material[3]: repeats, strength).
     let grain=textureSample(layer6,tiled,v.uv*max(material[3].x,0.0001)).rgb;
-    let colour=albedo.rgb*mix(vec3<f32>(1.0),grain*2.0,material[3].y);
+    let reflection_mask=textureSample(weights0,tiled,v.uv).r;
+    let detail_mask=select(1.0,1.0-reflection_mask,material[2].w>1.5);
+    let colour=albedo.rgb*mix(vec3<f32>(1.0),grain*2.0,material[3].y*detail_mask);
     let base=colour*linear_color(tint);
     let mr=textureSample(layer3,tiled,v.uv);
     let metallic=clamp(material[1].x*mr.b,0.0,1.0);
@@ -1439,6 +1441,19 @@ fn physical_surface(v:VertexOut)->vec4<f32> {
     n=detailed_normal(n,v.world_position,v.uv,vec2<f32>(-bent.x,bent.y)/bent.z);
     let e=normalize(camera.eye.xyz-v.world_position);
     if dot(n,e)<0.0 {n=normalize(n+e*(0.01-dot(n,e)));}
+    if material[2].w>0.5 {
+        let r=reflect(-e,n);
+        let uv=vec2<f32>(atan2(r.x,r.z)*0.159154943+0.5,
+            acos(clamp(r.y,-1.0,1.0))*0.318309886);
+        let environment=display_color(textureSample(layer7,clamped,uv).rgb);
+        let perpendicular=vec3<f32>(material[3].zw,material[4].x);
+        let parallel=material[4].yzw;
+        let reflectance=mix(parallel,perpendicular,clamp(dot(n,e),0.0,1.0));
+        let glow=material[2].rgb*textureSample(layer5,tiled,v.uv).rgb;
+        let display=display_color(colour)*tint*physical_diffuse(v,n)
+            +environment*reflectance*reflection_mask+display_color(glow);
+        return vec4<f32>(fogged(display,v.world_position),alpha);
+    }
     // Diffuse: the painted share, lit as other models are (display space).
     let pigment=display_color(colour*(1.0-metallic))*tint*occlusion;
     var display=pigment*physical_diffuse(v,n);

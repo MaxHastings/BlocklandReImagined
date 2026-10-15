@@ -602,7 +602,7 @@ fn load_static_shape(
             .as_ref()
             .filter(|_| !authored.unlit && !legacy);
         if let Some(surface) = physical {
-            let mut maps = [0; 5];
+            let mut maps = [0; 7];
             for (k, map) in crate::scene::SurfaceMap::ALL.into_iter().enumerate() {
                 maps[k] = match map.of(surface) {
                     Some(m) => {

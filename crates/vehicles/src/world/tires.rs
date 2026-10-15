@@ -206,7 +206,6 @@ pub(super) fn update(
     };
     // blocklandv20.exe squares the steering (0x5746ea); each wheel's axle
     // turns by its own share of it (the Tank's rear, -0.8, against the front).
-    let (sin, cos) = (-(drive.steering * drive.steering.abs())).sin_cos();
     let com = b.center_of_mass();
     let inverse_inertia = b.mass_properties().effective_world_inv_inertia;
     for (i, ((w, s), surface)) in d
@@ -216,6 +215,12 @@ pub(super) fn update(
         .zip(&surfaces)
         .enumerate()
     {
+        let steering = if w.linear_steering {
+            drive.steering
+        } else {
+            drive.steering * drive.steering.abs()
+        };
+        let (sin, cos) = (-steering).sin_cos();
         let (length, radius) = (w.rest_length * scale, w.radius * scale);
         let t = &w.tire;
         let tire = &mut s.tire;

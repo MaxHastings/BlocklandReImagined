@@ -206,6 +206,27 @@ pub struct Surface {
     pub detail: Option<usize>,
     #[serde(default = "Metal::one")]
     pub detail_scale: f32,
+    /// Authored environment reflection over diffuse paint, instead of an
+    /// inferred metallic response. Maps and colours belong to the Add-On.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reflection: Option<SurfaceReflection>,
+}
+/// A display-space reflection layer, useful for imported fixed-function
+/// materials. The mask's red channel controls reflection coverage.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SurfaceReflection {
+    /// Equirectangular environment image: +Z at u=.5, +X at u=.75,
+    /// +Y at v=0. Referenced textures are other materials, as for Surface.
+    pub environment: usize,
+    pub mask: usize,
+    /// Reflection colour times brightness, looking straight at the face.
+    pub perpendicular: [f32; 3],
+    /// Reflection colour times brightness, looking along the face.
+    pub parallel: [f32; 3],
+    /// Restrict diffuse detail to the inverse of the reflection mask.
+    #[serde(default)]
+    pub detail_inverse_mask: bool,
 }
 /// A physically based metal surface (the metallic workflow real-time
 /// engines use): it has no diffuse colour, only reflection.
@@ -417,6 +438,14 @@ impl Shape {
                         && index(surface.occlusion)
                         && index(surface.emissive_map)
                         && index(surface.detail)
+                        && surface.reflection.as_ref().is_none_or(|r| {
+                            r.environment < self.materials.len()
+                                && r.mask < self.materials.len()
+                                && r.perpendicular
+                                    .iter()
+                                    .chain(&r.parallel)
+                                    .all(|c| (0.0..=1000.0).contains(c))
+                        })
                         && (0.01..=4096.0).contains(&surface.detail_scale)
                         && (0.0..=8.0).contains(&surface.normal_scale)
                         && (0.0..=1.0).contains(&surface.metallic)

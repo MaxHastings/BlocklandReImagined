@@ -711,7 +711,7 @@ fn ammo_items_bags_and_headshots_play_in_a_hosted_game() {
         g.s.take_private_notices()
             .into_iter()
             .filter_map(|(_, n)| match n {
-                Notice::Chat(text) => Some(text),
+                Notice::Kill(k) => Some(k.line),
                 _ => None,
             })
             .collect();
@@ -1352,7 +1352,7 @@ fn tier2_guns_rest_fire_twice_slow_and_switch_modes() {
         g.s.take_private_notices()
             .into_iter()
             .filter_map(|(_, n)| match n {
-                Notice::Chat(text) => Some(text),
+                Notice::Kill(k) => Some(k.line),
                 _ => None,
             })
             .collect();
@@ -2336,7 +2336,7 @@ fn melee_extended_ii_shield_stops_shots_from_in_front_and_sends_them_back() {
         g.s.take_private_notices()
             .into_iter()
             .filter_map(|(_, n)| match n {
-                Notice::Chat(text) => Some(text),
+                Notice::Kill(k) => Some(k.line),
                 _ => None,
             })
             .collect();
@@ -2578,7 +2578,7 @@ fn the_short_rifle_ricochets_and_crits_only_after_a_turn() {
     let said = |g: &mut Game, what: &str| {
         g.s.take_private_notices()
             .iter()
-            .any(|(_, n)| matches!(n, Notice::Chat(t) if t.contains(what)))
+            .any(|(_, n)| matches!(n, Notice::Kill(k) if k.line.contains(what)))
     };
     // Another kills B under the gun's own crit kill message.
     g.steps(60);

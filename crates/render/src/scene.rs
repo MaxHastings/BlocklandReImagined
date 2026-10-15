@@ -194,14 +194,18 @@ pub enum SurfaceMap {
     Occlusion,
     Glow,
     Detail,
+    ReflectionEnvironment,
+    ReflectionMask,
 }
 impl SurfaceMap {
-    pub const ALL: [Self; 5] = [
+    pub const ALL: [Self; 7] = [
         Self::Normal,
         Self::MetalRough,
         Self::Occlusion,
         Self::Glow,
         Self::Detail,
+        Self::ReflectionEnvironment,
+        Self::ReflectionMask,
     ];
     /// The material (by index) whose texture holds this map.
     pub fn of(self, surface: &bri_content::shape::Surface) -> Option<usize> {
@@ -211,11 +215,13 @@ impl SurfaceMap {
             Self::Occlusion => surface.occlusion,
             Self::Glow => surface.emissive_map,
             Self::Detail => surface.detail,
+            Self::ReflectionEnvironment => surface.reflection.map(|r| r.environment),
+            Self::ReflectionMask => surface.reflection.map(|r| r.mask),
         }
     }
     /// Colour (sRGB) rather than data.
     pub fn srgb(self) -> bool {
-        self == Self::Glow
+        matches!(self, Self::Glow | Self::ReflectionEnvironment)
     }
     /// What a model without this map draws with: a flat normal, the
     /// factors unchanged, no occlusion, the glow colour as it is, no grain.
@@ -226,6 +232,8 @@ impl SurfaceMap {
             Self::Occlusion => ("no occlusion", [255; 4]),
             Self::Glow => ("plain glow", [255; 4]),
             Self::Detail => ("no detail", [128, 128, 128, 255]),
+            Self::ReflectionEnvironment => ("no authored reflection", [0, 0, 0, 255]),
+            Self::ReflectionMask => ("no reflection mask", [255; 4]),
         };
         SceneImage {
             label: label.into(),
@@ -349,7 +357,7 @@ impl Material {
     pub fn physical(
         name: impl Into<String>,
         base: usize,
-        maps: [usize; 5],
+        maps: [usize; 7],
         surface: &bri_content::shape::Surface,
     ) -> Self {
         let mut material = Self::vertex_lit(name, base);
@@ -359,6 +367,8 @@ impl Material {
         material.images[4] = maps[2];
         material.images[5] = maps[3];
         material.images[6] = maps[4];
+        material.images[7] = maps[5];
+        material.images[9] = maps[6];
         material.parameters = Some([
             [
                 surface.metallic,
@@ -380,6 +390,22 @@ impl Material {
             ],
             [0.0; 4],
         ]);
+        if let Some(reflection) = surface.reflection {
+            let parameters = material.parameters.as_mut().expect("physical parameters");
+            parameters[1][3] = if reflection.detail_inverse_mask {
+                2.0
+            } else {
+                1.0
+            };
+            parameters[2][2] = reflection.perpendicular[0];
+            parameters[2][3] = reflection.perpendicular[1];
+            parameters[3] = [
+                reflection.perpendicular[2],
+                reflection.parallel[0],
+                reflection.parallel[1],
+                reflection.parallel[2],
+            ];
+        }
         material
     }
     pub fn vertex_lit(name: impl Into<String>, diffuse: usize) -> Self {

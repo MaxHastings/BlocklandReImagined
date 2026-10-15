@@ -1291,6 +1291,7 @@ pub(crate) mod tests {
     fn tires_mount_axle_out_steer_right_and_roll_forward() {
         let tire = |x: f32| Wheel {
             position: [x, 0.4, -1.9],
+            linear_steering: false,
             radius: 0.75,
             rest_length: 0.4,
             spring: 6000.0,

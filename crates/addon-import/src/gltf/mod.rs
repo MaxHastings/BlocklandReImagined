@@ -2108,6 +2108,7 @@ fn make_material(
             .clamped(0.0, 1.0),
         emissive_map: None,
         emissive,
+        reflection: None,
         detail: None,
         detail_scale: (m["extras"]["bri_detail"]["scale"].as_f64().unwrap_or(1.0) as f32)
             .clamped(0.01, 4096.0),
