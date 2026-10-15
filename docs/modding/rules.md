@@ -125,7 +125,7 @@ run are left out. Your rules remove a game's entry when it ends.
 | | | `cut_copy(p)`, `paint_copy(p, color)`, `paint_copy(p, paint)`, `wrench_copy(p)`, `super_cut(p, min, max)`, `fill_box(p, min, max, color)`, `paint_fill(p, brick, paint, options)`, `paint_vehicle(p, vehicle, paint, options)`: `world.edit` |
 | | | `push`, `tumble`, `hold`, `reach`, `hold_distance`, `let_go`, `tether`, `tether_length`, `untether`, `spawn_vehicle`, `remove_vehicle`, `mount_object(mount, rider, node, can_dismount[, turn])`, `unmount_object(rider)`: `physics` |
 | | | `heal(p, amount)`, `fire(...)`, `spawn_explosion(p, projectile, scale)`: `damage` |
-| | | `play_sound(p, sound)` at a player's ears, `body_flash(p, [r, g, b, a], seconds)` (a see-through colour drawn over the body, just outside it, fading over 0.05 to 60 seconds, for everyone: a shield taking a hit, a glow), `sound_at(sound, x, y, z)`, `beam(from, to[, options])`, `play_thread(p, thread, sequence[, after])`, `play_music(p, track[, options])`, `play_music_all(track[, options])`, `stop_music(p[, fade])`, `stop_music_all([fade])` ([Music](#music)), `show_box(p, min, max, tool)`, `hide_box(p)`, `show_shapes(owner, key, shapes)`, `hide_shapes(owner, key)`: `effects` |
+| | | `play_sound(p, sound)` at a player's ears, `body_flash(p, [r, g, b, a], seconds)` (a see-through colour drawn over the body, just outside it, fading over 0.05 to 60 seconds, for everyone: a shield taking a hit, a glow), `sound_at(sound, x, y, z)`, `beam(from, to[, options])`, `play_thread(p, thread, sequence[, after])`, `play_music(p, track[, options])`, `play_music_all(track[, options])`, `stop_music(p[, fade])`, `stop_music_all([fade])` ([Music](#music)), `play_ambient(p, key, track[, options])`, `play_ambient_all(key, track[, options])`, `stop_ambient(p, key[, fade])`, `stop_ambient_all(key[, fade])` ([Ambient sound](#ambient-sound)), `show_box(p, min, max, tool)`, `hide_box(p)`, `show_shapes(owner, key, shapes)`, `hide_shapes(owner, key)`: `effects` |
 | | | `center_print(p, text, seconds)`, `bottom_print(p, text, seconds[, hide_bar])` (`()` for everyone), `screen_flash(p, [r, g, b, a], seconds)` (the screen tinted that colour, fading over 0.05 to 10 seconds; `()` for everyone: a shield breaking, a hit taken), `tell_minigame(game, text[, except])`, `center_print_minigame(game, text, seconds)`, `bottom_print_minigame(game, text, seconds)` (a mini-game's members, counted once), `ask(p, title, text, command)` (a yes/no box; yes sends the package's own argument-less `command` as if typed, as v20's `MessageBoxYesNo` did), `plant_error(p, error)`, `message_box(p, title, text)` (an OK box, v20's `MessageBoxOK`): `chat` |
 | `bot_kinds()` (each `#{ id, name, first_names }`, `first_names` a count), `bot_kind(id)`, `bot_first_name(kind, i)`, `bot_limit()`, `bot_name_limit()` (a longer name keeps its first characters) | | `add_bot(game, #{ kind, name[, team] })`, `remove_bot(bot)`, `rest_bot(bot, rest)`, `bot_tool(bot, slot or ())`: `bots` |
 | | | `set_map_lights([x, y, z], radius, options)`: `lighting` |
@@ -336,7 +336,9 @@ the lowest free slot, and a team left out is removed. A team map's `body`
 game's `player_type`. `set_minigame(game, #{ bodies, keep_chosen_body })`
 sets which bodies members may pick with `/body` and whether a pick is kept
 through respawns (it is unless the game says `keep_chosen_body: false`;
-a kept pick outranks the team's body). Team ids are slots,
+a kept pick outranks the team's body); it also takes
+`spawn_protection_ms`, `vehicle_return_ms` (`()` for each vehicle's own)
+and `death_view_ms`, as a mode's `minigame` block sets them in seconds. Team ids are slots,
 1 to 64; 0 is never a team (a Team condition reads 0 for none). `set_team(p, team)` puts a
 member on a team (or `()` for none), `set_score` and `add_score` change
 their score, `add_team_points(game, team, n)` and `set_team_points(game,
@@ -844,6 +846,24 @@ last up to 10 minutes (8 MiB, WAV or Ogg Vorbis; Ogg keeps a long track
 small) where other sounds stop at 30 seconds, and is streamed while it
 plays. Each call spends one of the 64 prints and sounds a second. Brick
 music loops play on as before.
+
+#### Ambient sound
+
+**Ambient beds** (`effects`) loop a sound under the game on the effects
+bus, beside any music: wind over a canyon, a river, distant battle. Music
+off leaves them playing. Each has a `key` your rule names it by; a new
+bed under the same key replaces it, and different keys play together (up
+to 16 for everyone). `play_ambient_all(key, track)` plays it for everyone
+on the server, players who join later included, until
+`stop_ambient_all(key)` or a new map; `play_ambient(p, key, track)` for one
+player. Options go in a map, `play_ambient_all("wind", "your-id:wind", #{
+volume: 0.6, fade: 3.0, at: [10.0, 4.0, -20.0], range: 80.0 })`: `volume`
+0 to 1 (1), `fade` seconds in, up to 30 (0), and `at` places it in the
+world, heard out to `range` units (up to 2000; 100 by default); without
+`at` it plays at the ears. `stop_ambient(p, key, fade)` and
+`stop_ambient_all(key, fade)` fade it out. The track is any sound your
+Add-On declares, `"music": true` for long ones, or a game sound by name.
+Each call spends one of the 64 prints and sounds a second.
 
 **Map lights** (`lighting`) switch, dim and recolour the lamps, bulbs and
 tubes baked into the map, for everyone on the server, while they play.

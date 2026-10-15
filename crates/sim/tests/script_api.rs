@@ -159,6 +159,8 @@ fn cmd_box(p) { message_box(p, "Probe", "A box"); }
 fn cmd_music(p, track) { play_music_all(track, #{ looping: false, fade: 2.0 }); }
 fn cmd_music_stop(p) { stop_music_all(1.5); }
 fn cmd_my_music(p) { play_music(p, "probe:sound/theme"); }
+fn cmd_bed(p, key) { play_ambient_all(key, "probe:sound/theme", #{ volume: 0.5, fade: 1.0, at: [1.0, 2.0, 3.0], range: 40.0 }); }
+fn cmd_bed_stop(p, key) { stop_ambient_all(key, 2.0); }
 fn cmd_keep_game(p, v) { let s = get("per_game"); s[`${player(p).minigame}`] = v; set("per_game", s); }
 fn cmd_keep_large_game(p) {
     let values = [];
@@ -245,6 +247,8 @@ fn behaviour() -> Value {
             command("music", &["string"]),
             command("music_stop", &[]),
             command("my_music", &[]),
+            command("bed", &["string"]),
+            command("bed_stop", &["string"]),
             command("keep_game", &["string"]),
             command("keep_large_game", &[]),
         ],
@@ -2211,6 +2215,53 @@ fn a_call_to_no_function_is_told_when_the_add_on_loads() {
         told[0].location.as_deref(),
         Some(format!("probe/main.rhai:{line}").as_str())
     );
+}
+
+/// Ambient beds play under their keys beside music, reach later joiners
+/// until stopped, and are capped in number.
+#[test]
+fn rules_play_ambient_beds_for_everyone_until_stopped() {
+    use bri_sim::session::AmbientPlay;
+    let beds = |g: &mut Game, who: OwnerId| -> Vec<AmbientPlay> {
+        g.s.take_private_notices()
+            .into_iter()
+            .filter_map(|(o, n)| match n {
+                Notice::Ambient(play) if o == who => Some(play),
+                _ => None,
+            })
+            .collect()
+    };
+    let mut g = Game::new();
+    let a = g.join(Vec3::new(0.0, 0.05, 0.0));
+    g.s.take_private_notices();
+    g.run(a, "bed", vec![PackageArg::String("wind".into())]);
+    g.steps(1);
+    let wind = AmbientPlay {
+        key: "wind".into(),
+        track: Some("probe:sound/theme".into()),
+        volume: 0.5,
+        fade: 1.0,
+        at: Some([1.0, 2.0, 3.0]),
+        range: 40.0,
+    };
+    assert_eq!(beds(&mut g, a), vec![wind.clone()]);
+    let b = g.join(Vec3::new(2.0, 0.05, 0.0));
+    assert_eq!(beds(&mut g, b), vec![wind]);
+
+    g.run(a, "bed_stop", vec![PackageArg::String("wind".into())]);
+    g.steps(1);
+    let stopped = beds(&mut g, b);
+    assert_eq!(stopped.len(), 1);
+    assert!(stopped[0].track.is_none() && stopped[0].fade == 2.0);
+    let c = g.join(Vec3::new(4.0, 0.05, 0.0));
+    assert!(beds(&mut g, c).is_empty());
+
+    for i in 0..=bri_package_runtime::ops::MAX_AMBIENT {
+        g.run(a, "bed", vec![PackageArg::String(format!("bed{i}"))]);
+        g.steps(1);
+    }
+    let d = g.join(Vec3::new(6.0, 0.05, 0.0));
+    assert_eq!(beds(&mut g, d).len(), bri_package_runtime::ops::MAX_AMBIENT);
 }
 
 /// A key of an Add-On's own (here a command) uses an item once without

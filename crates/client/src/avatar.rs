@@ -941,6 +941,8 @@ pub struct BodyKind {
     /// The fastest a locomotion clip plays (`Look::max_time_scale`); 0
     /// takes v20's 1.5.
     pub max_time_scale: f32,
+    /// Its own death clips by side and at random (`Look::deaths`).
+    pub deaths: bri_content::body::Deaths,
 }
 impl BodyKind {
     /// The archetype's fit for a mesh: `stand_in` when it draws a box model
@@ -955,6 +957,7 @@ impl BodyKind {
             sit_eye: Vec3::new(0.0, m.sit_eye, -m.sit_eye_forward),
             ground_speeds: archetype.look.ground_speeds.clone(),
             max_time_scale: archetype.look.max_time_scale,
+            deaths: archetype.look.deaths.clone(),
         }
     }
     /// How fast `clip` plays for `role` while the body moves at `velocity`
@@ -1138,6 +1141,9 @@ pub struct AvatarAnimationInput {
     pub gesture: Option<ActionAnimation>,
     /// Dead bodies hold the original `death1` sequence.
     pub dead: bool,
+    /// How a dead body fell (the host's [`bri_sim::session::DeathPose`]):
+    /// picks one of its archetype's `deaths` clips over `death1`.
+    pub death: Option<bri_sim::session::DeathPose>,
     /// The `sit` emote holds the original sit sequence until the player moves.
     pub sitting: bool,
     /// The latest simulated tick state. v20 picks the action from the tick's
@@ -2018,7 +2024,27 @@ impl AvatarMesh {
         self.last_time = Some(time);
         let movement = animation_input.tick_state.as_ref().unwrap_or(player);
         let scripted = if animation_input.dead {
-            Some("death1")
+            // The archetype's death clip for how the body fell, else the
+            // `death` role's.
+            Some(
+                animation_input
+                    .death
+                    .filter(|_| !self.kind.stand_in)
+                    .and_then(|death| {
+                        use bri_content::body::Side;
+                        use bri_sim::session::HitSide;
+                        let side = death.from.map(|s| match s {
+                            HitSide::Front => Side::Front,
+                            HitSide::Back => Side::Back,
+                            HitSide::Left => Side::Left,
+                            HitSide::Right => Side::Right,
+                        });
+                        self.kind
+                            .deaths
+                            .pick(side, death.roll, |clip| assets.rig.sequence(clip).is_some())
+                    })
+                    .map_or("death1", |clip| interned(&clip)),
+            )
         } else if animation_input.sitting {
             Some(SIT)
         } else {
@@ -2064,9 +2090,18 @@ impl AvatarMesh {
         let movement_role =
             |sequence: &str| Role::from_blockhead_clip(sequence).unwrap_or(Role::Idle);
         // The body's clip for the movement; one standing in for walking
-        // back plays reversed. None: the body has no clip even to stand in,
-        // and holds its bind pose under the other layers.
-        let (clip, reversed) = match role(movement_role(next.map_or(self.mode, |a| a.sequence))) {
+        // back plays reversed. A clip the body names itself (an intent's,
+        // a death's) plays as it is. None: the body has no clip even to
+        // stand in, and holds its bind pose under the other layers.
+        let sequence = next.map_or(self.mode, |a| a.sequence);
+        let own = Role::from_blockhead_clip(sequence)
+            .is_none()
+            .then(|| assets.rig.sequence(sequence))
+            .flatten();
+        let (clip, reversed) = match own
+            .map(|c| (c, false))
+            .or_else(|| role(movement_role(sequence)))
+        {
             Some((clip, reversed)) => (Some(clip), reversed),
             None => (None, false),
         };
@@ -3663,6 +3698,9 @@ mod tests {
             respawn_held: false,
             spawn_tick,
             died_tick,
+            death: None,
+            firing: false,
+            fired_tick: None,
             score: 0,
             minigame: None,
             team: None,

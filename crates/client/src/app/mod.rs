@@ -1193,7 +1193,7 @@ fn plant_error(failure: bri_sim::simulation::PlantFailure) -> PlantError {
     }
 }
 
-fn plain_chat(text: &str) -> String {
+pub(crate) fn plain_chat(text: &str) -> String {
     text.chars()
         .filter(|c| !c.is_control() && !(0xE000..0xE010).contains(&(*c as u32)))
         .map(|c| match c {

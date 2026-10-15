@@ -19,8 +19,18 @@ pub(super) struct CombatPresentation {
     pub(super) minigame_state: Option<MiniGameUiState>,
     /// Energy bar fraction last shown, in hundredths.
     pub(super) energy: Option<u8>,
+    /// The latest deaths, for HUD kill feeds.
+    pub(super) kills: std::collections::VecDeque<(std::time::Instant, bri_sim::session::KillLine)>,
 }
+/// Most deaths kept for kill feeds.
+const KEPT_KILLS: usize = 16;
 impl CombatPresentation {
+    pub(super) fn note_kill(&mut self, kill: bri_sim::session::KillLine) {
+        if self.kills.len() == KEPT_KILLS {
+            self.kills.pop_front();
+        }
+        self.kills.push_back((std::time::Instant::now(), kill));
+    }
     pub(super) fn hug_pose(
         &mut self,
         owner: bri_world::OwnerId,
@@ -138,14 +148,33 @@ impl App {
                     c.countdown = Some(remaining);
                 } else if c.countdown != Some(remaining) {
                     c.countdown = Some(remaining);
-                    updates.push(UiUpdate::CenterPrint {
-                        text: match remaining {
-                            0 => "\u{E005}Click to respawn.".into(),
-                            1 => "\u{E005}Respawning in 1 second...".into(),
-                            n => format!("\u{E005}Respawning in {n} seconds..."),
-                        },
-                        seconds: if remaining == 0 { 300.0 } else { 2.0 },
-                    });
+                    // A HUD layout's `texts` restyle or hide these.
+                    let regions = &self.addons.hud_regions;
+                    let stock = |key: &str, default: String| {
+                        regions
+                            .text(key)
+                            .map_or(default, |t| t.replace("{}", &remaining.to_string()))
+                    };
+                    let text = match remaining {
+                        0 => stock("click_to_respawn", "\u{E005}Click to respawn.".into()),
+                        1 => stock(
+                            "respawn_countdown_one",
+                            stock(
+                                "respawn_countdown",
+                                "\u{E005}Respawning in 1 second...".into(),
+                            ),
+                        ),
+                        n => stock(
+                            "respawn_countdown",
+                            format!("\u{E005}Respawning in {n} seconds..."),
+                        ),
+                    };
+                    if !text.is_empty() {
+                        updates.push(UiUpdate::CenterPrint {
+                            text,
+                            seconds: if remaining == 0 { 300.0 } else { 2.0 },
+                        });
+                    }
                 }
             }
             c.alive = Some(local.alive);

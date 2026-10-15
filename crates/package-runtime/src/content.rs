@@ -1401,6 +1401,16 @@ pub struct ModeMiniGame {
     /// A player who picks a body (a brick event, `/body`) respawns as it.
     /// On by default; a mode that forces its bodies turns it off.
     pub keep_chosen_body: bool,
+    /// Seconds a new life cannot be hurt until the player fires (v20's
+    /// 2.5); 0 turns spawn protection off.
+    pub spawn_protection_seconds: f32,
+    /// Seconds a spawned vehicle may stand empty before it goes back to
+    /// its spawn brick; 0 never. Left out, each vehicle's own
+    /// `return_seconds`.
+    pub vehicle_return_seconds: Option<f32>,
+    /// Seconds a dead player's view holds still on their body before they
+    /// may look around it (0: at once, as v20).
+    pub death_view_seconds: f32,
 }
 impl Default for ModeMiniGame {
     fn default() -> Self {
@@ -1426,6 +1436,9 @@ impl Default for ModeMiniGame {
             use_all_players_bricks: false,
             bodies: Vec::new(),
             keep_chosen_body: true,
+            spawn_protection_seconds: 2.5,
+            vehicle_return_seconds: None,
+            death_view_seconds: 0.0,
         }
     }
 }
@@ -1471,6 +1484,19 @@ impl ModeMiniGame {
         ensure!(
             (0.0..=300.0).contains(&self.vehicle_respawn_seconds),
             "vehicle_respawn_seconds must be 0 to 300"
+        );
+        ensure!(
+            (0.0..=60.0).contains(&self.spawn_protection_seconds),
+            "spawn_protection_seconds must be 0 to 60"
+        );
+        ensure!(
+            self.vehicle_return_seconds
+                .is_none_or(|s| (0.0..=3600.0).contains(&s)),
+            "vehicle_return_seconds must be 0 to 3600"
+        );
+        ensure!(
+            (0.0..=30.0).contains(&self.death_view_seconds),
+            "death_view_seconds must be 0 to 30"
         );
         Ok(())
     }
@@ -1736,6 +1762,11 @@ pub struct ArchetypeDef {
     /// out asks for the Blockhead's clip name, then falls back.
     #[serde(default)]
     pub animations: Option<bri_content::body::Animations>,
+    /// The model's own death clips by the side the killing hit came from
+    /// (`front`, `back`, `left`, `right`) and at random (`any`); replacing
+    /// the base's.
+    #[serde(default)]
+    pub deaths: Option<bri_content::body::Deaths>,
     /// The model's clip for each of its movement controller's intents
     /// (`{"11": "triple"}`), replacing the base's.
     #[serde(default)]
@@ -1828,6 +1859,9 @@ impl ArchetypeDef {
         );
         if let Some(speeds) = &self.ground_speeds {
             bri_content::body::validate_ground_speeds(speeds)?;
+        }
+        if let Some(deaths) = &self.deaths {
+            deaths.validate()?;
         }
         ensure!(
             self.max_time_scale

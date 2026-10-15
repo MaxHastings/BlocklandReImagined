@@ -575,7 +575,21 @@ impl App {
                 }
                 point
             });
+        // A mini-game's death view holds the corpse camera still a while.
+        let death_view = view.vitals.get(&view.owner).is_some_and(|v| {
+            let hold = view
+                .minigames
+                .iter()
+                .find(|g| Some(g.id) == v.minigame)
+                .map_or(0, |g| bri_minigames::ticks_for_ms(g.settings.death_view_ms));
+            !v.alive
+                && hold > 0
+                && v.died_tick
+                    .zip(self.motion.server_tick())
+                    .is_some_and(|(died, now)| now - (died as f64) < hold as f64)
+        });
         let owner = view.owner;
+        self.controls.death_view = control == bri_sim::session::ControlObject::Corpse && death_view;
         self.controls.follow(control, owner, eye);
         if let Some(path) = path {
             self.controls.fly_path(path);

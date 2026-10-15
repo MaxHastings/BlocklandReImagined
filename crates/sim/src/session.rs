@@ -96,8 +96,8 @@ pub use admin::{
 };
 pub use bri_world::authority::WrenchProperties;
 pub use combat::{
-    DEATH_PROJECTILE, HeldAmmo, MAX_HEALTH, MiniGameRequest, MiniGameView, MusicPlay, Notice,
-    SPAWN_PROJECTILE, Vitals,
+    AmbientPlay, DEATH_PROJECTILE, DeathPose, HeldAmmo, HitSide, KillLine, MAX_HEALTH,
+    MiniGameRequest, MiniGameView, MusicPlay, Notice, SPAWN_PROJECTILE, Vitals,
 };
 pub use inventory::{TOOL_SLOTS, ToolInventory};
 pub use packages::{
@@ -1163,6 +1163,9 @@ pub struct Session {
     /// The music an Add-On rule plays for everyone (`play_music_all`),
     /// sent to joiners too; cleared by a map change.
     music: Option<MusicPlay>,
+    /// The ambient beds Add-On rules play for everyone (`play_ambient_all`)
+    /// by key, sent to joiners too; cleared by a map change.
+    ambient: BTreeMap<String, AmbientPlay>,
     /// Add-On world shapes (`show_shapes`), replicated to clients.
     world_shapes: world_shapes::WorldShapes,
     /// The live environment over the map's own (Admin Menu Environment,
@@ -1203,6 +1206,7 @@ impl Session {
             map_teleporters: Default::default(),
             map_lights: Vec::new(),
             music: None,
+            ambient: BTreeMap::new(),
             world_shapes: Default::default(),
             environment: Default::default(),
             movables: Default::default(),
@@ -3334,6 +3338,7 @@ impl Session {
         contain("vehicles", self.vehicle_pre_step());
         contain("physics", self.step_physics());
         contain("vehicles", self.vehicle_post_step());
+        contain("vehicle return", self.return_abandoned_vehicles());
         self.player_mount_contacts();
         self.sync_seated();
         contain("weapons", self.step_weapons());

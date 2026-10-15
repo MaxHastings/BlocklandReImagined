@@ -1328,10 +1328,9 @@ fn a_runner_landing_on_a_stomper_flattens_it() {
 /// damage type, not killed by the engine's own run-over damage.
 fn flattened_by_rules(g: &mut Game) -> bool {
     let notices = g.s.take_private_notices();
-    notices
-        .iter()
-        .any(|(_, n)| matches!(n, bri_sim::session::Notice::Chat(t) if t.contains("flattened")))
-        || panic!("{notices:?}")
+    notices.iter().any(
+        |(_, n)| matches!(n, bri_sim::session::Notice::Kill(k) if k.line.contains("flattened")),
+    ) || panic!("{notices:?}")
 }
 
 /// Run over by the buggy at speed, a Stomper is flattened by its own

@@ -2,7 +2,9 @@
 //! region for this viewer this frame, its elements resolved from the
 //! game's values and the rules' replicated state, and the textures they
 //! draw, uploaded for the UI. Data only: nothing here runs Add-On code.
-use bri_content::hud::{Claim, Item, Layout, Region, Source, TextureInfo, Value, Viewer};
+use bri_content::hud::{
+    Claim, Contact, FeedKill, Item, Layout, Live, Region, Source, TextureInfo, Value, Viewer,
+};
 use bri_package_runtime::Catalog;
 use bri_render::scene::SceneImage;
 use bri_sim::session::PackageStateView;
@@ -26,6 +28,13 @@ pub struct GameValues {
     pub bottom_print: String,
     /// The held gun's ammunition (`Notice::Ammo`).
     pub ammo: Option<bri_sim::session::HeldAmmo>,
+    /// Seconds until the dead viewer may respawn (0: click to), while dead
+    /// and not held.
+    pub respawn: Option<f32>,
+    /// The latest deaths, oldest first, for kill feeds.
+    pub kills: Vec<FeedKill>,
+    /// Other players as trackers see them.
+    pub contacts: Vec<Contact>,
 }
 
 /// The layouts of one catalog and their textures.
@@ -41,6 +50,12 @@ pub struct HudRegions {
     uploaded: bool,
     /// Conflicts already reported: (region, winner, loser).
     reported: BTreeSet<(Region, String, String)>,
+    /// The stock texts the drawn layouts replace, by key.
+    texts: BTreeMap<String, String>,
+    /// A drawn layout shows a kill feed.
+    kill_feed: bool,
+    /// Whether a drawn layout shows a motion tracker.
+    tracker: bool,
 }
 
 impl HudRegions {
@@ -126,6 +141,30 @@ impl HudRegions {
         self.layouts = layouts;
         out
     }
+    /// A drawn layout's text for a stock prompt (`Layout::texts`); `""`
+    /// hides it, `None` keeps the game's own.
+    pub fn text(&self, key: &str) -> Option<&str> {
+        self.texts.get(key).map(String::as_str)
+    }
+    /// Every stock prompt the drawn layouts replace.
+    pub fn texts(&self) -> &BTreeMap<String, String> {
+        &self.texts
+    }
+    /// Whether a drawn layout shows a kill feed, so kills stay out of chat.
+    pub fn kill_feed(&self) -> bool {
+        self.kill_feed
+    }
+    /// Whether a drawn layout shows a motion tracker, so contacts are built.
+    pub fn tracker(&self) -> bool {
+        self.tracker
+    }
+    /// Nothing is drawn now (no view or catalog): stock prompts and chat
+    /// come back.
+    pub fn forget_drawn(&mut self) {
+        self.texts.clear();
+        self.kill_feed = false;
+        self.tracker = false;
+    }
     fn resolve(
         &mut self,
         layouts: &[(String, String, Layout)],
@@ -158,6 +197,7 @@ impl HudRegions {
                 Source::Reloading => {
                     Value::Number(f32::from(u8::from(game.ammo.as_ref()?.reloading)))
                 }
+                Source::Respawn => Value::Number(game.respawn?),
                 Source::State(bind) => {
                     let binding = bri_package_runtime::content::Binding::parse(bind)?;
                     match state.get(&binding, owner)? {
@@ -171,6 +211,13 @@ impl HudRegions {
         };
         let keys = &self.keys;
         let texture = |id: &str| keys.get(id).copied();
+        let live = Live {
+            kills: &game.kills,
+            contacts: &game.contacts,
+        };
+        let mut texts = BTreeMap::new();
+        let mut kill_feed = false;
+        let mut tracker = false;
         let mut out = Vec::new();
         for (region, mut list) in claims {
             list.sort_by_key(|(c, _)| c.rank());
@@ -194,7 +241,13 @@ impl HudRegions {
                     ));
                 }
             }
-            let items: Vec<Item> = bri_content::hud::resolve(winner.layout, &value, &texture);
+            for (key, text) in &winner.layout.texts {
+                texts.entry(key.clone()).or_insert_with(|| text.clone());
+            }
+            kill_feed |= winner.layout.has_kill_feed();
+            tracker |= winner.layout.has_tracker();
+            let items: Vec<Item> =
+                bri_content::hud::resolve_live(winner.layout, &value, &texture, &live);
             out.push(HudRegionDraw {
                 region,
                 pixelated: winner.layout.pixelated,
@@ -202,6 +255,9 @@ impl HudRegions {
                 name_tags: winner.layout.name_tags.clone(),
             });
         }
+        self.texts = texts;
+        self.kill_feed = kill_feed;
+        self.tracker = tracker;
         out
     }
 

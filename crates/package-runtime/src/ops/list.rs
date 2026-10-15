@@ -128,6 +128,7 @@ macro_rules! for_each_op {
             Beam = effects,
             BodyFlash = effects,
             Music = effects,
+            Ambient = effects,
             PlayThread = effects,
             SetMapLights = lighting,
             SetEnvironment = environment,

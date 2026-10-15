@@ -590,6 +590,7 @@ pub fn lower(
         strafe_steering,
         throttle_brakes: false,
         reverse_limited: false,
+        return_seconds: None,
         board_on_use: false,
         steering: SteeringSettings {
             strafe_rate: number(b, "steeringStrafeSteeringRate", 0.1),

@@ -185,6 +185,17 @@ impl Session {
             looping: false,
             fade: 0.0,
         });
+        // And without its ambience.
+        for key in std::mem::take(&mut self.ambient).into_keys() {
+            self.play_ambient_all(super::AmbientPlay {
+                key,
+                track: None,
+                volume: 0.0,
+                fade: 0.0,
+                at: None,
+                range: 1.0,
+            });
+        }
         let owners: Vec<_> = self.peers.keys().copied().collect();
         for owner in owners {
             self.packages_joined(owner);
