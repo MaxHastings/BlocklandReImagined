@@ -1474,7 +1474,8 @@ fn metal_surface(v:VertexOut)->vec4<f32> {
 // metal and roughness per texel, ambient occlusion and glow. The diffuse
 // share is lit as other models are in each lighting mode; highlights and
 // reflections come as for metal. material[1]: metallic, roughness, normal
-// strength, occlusion strength; material[2].rgb: glow (linear).
+// strength, occlusion strength; material[2].rgb: glow (linear);
+// material[3]: detail repeats, detail strength.
 fn physical_diffuse(v:VertexOut,n:vec3<f32>)->vec3<f32> {
     let p=v.world_position;
     let toward_sun=-camera.sun_direction.xyz/max(length(camera.sun_direction.xyz),0.0001);
@@ -1500,7 +1501,11 @@ fn physical_surface(v:VertexOut)->vec4<f32> {
     if (u32(material[0].w)&2u)!=0u {alpha=v.color.a;}
     if alpha<=material[0].y {discard;}
     let tint=clamp(v.color.rgb,vec3<f32>(0.0),vec3<f32>(1.0));
-    let base=albedo.rgb*linear_color(tint);
+    // A repeating detail texture over the colour, mid-grey leaving it as
+    // it is (material[3]: repeats, strength).
+    let grain=textureSample(layer6,tiled,v.uv*max(material[3].x,0.0001)).rgb;
+    let colour=albedo.rgb*mix(vec3<f32>(1.0),grain*2.0,material[3].y);
+    let base=colour*linear_color(tint);
     let mr=textureSample(layer3,tiled,v.uv);
     let metallic=clamp(material[1].x*mr.b,0.0,1.0);
     let roughness=clamp(material[1].y*mr.g,0.03,1.0);
@@ -1515,7 +1520,7 @@ fn physical_surface(v:VertexOut)->vec4<f32> {
     let e=normalize(camera.eye.xyz-v.world_position);
     if dot(n,e)<0.0 {n=normalize(n+e*(0.01-dot(n,e)));}
     // Diffuse: the painted share, lit as other models are (display space).
-    let pigment=display_color(albedo.rgb*(1.0-metallic))*tint*occlusion;
+    let pigment=display_color(colour*(1.0-metallic))*tint*occlusion;
     var display=pigment*physical_diffuse(v,n);
     // Highlights and reflections (linear), as for metal.
     let f0=mix(vec3<f32>(0.04),base,metallic);

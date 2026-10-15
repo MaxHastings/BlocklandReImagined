@@ -123,6 +123,14 @@ pub struct Surface {
     /// Light the surface gives off whatever the world's light, linear RGB.
     #[serde(default)]
     pub emissive: [f32; 3],
+    /// A small texture repeated `detail_scale` times across the colour map
+    /// for close-up grain (linear: mid-grey leaves the colour as it is,
+    /// white doubles it), as Torque and Halo lay detail over a stretched
+    /// base map.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detail: Option<usize>,
+    #[serde(default = "Metal::one")]
+    pub detail_scale: f32,
 }
 /// A physically based metal surface (the metallic workflow real-time
 /// engines use): it has no diffuse colour, only reflection.
@@ -296,6 +304,8 @@ impl Shape {
                         && index(surface.metallic_roughness)
                         && index(surface.occlusion)
                         && index(surface.emissive_map)
+                        && index(surface.detail)
+                        && (0.01..=4096.0).contains(&surface.detail_scale)
                         && (0.0..=8.0).contains(&surface.normal_scale)
                         && (0.0..=1.0).contains(&surface.metallic)
                         && (0.0..=1.0).contains(&surface.roughness)

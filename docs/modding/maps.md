@@ -23,6 +23,14 @@ Put the floor near Z = 0 in Blender; the game's up is Blender's up.
 base colour texture with its colour factor baked in, or a plain colour when
 it has no texture. Keep textures in PNG or JPEG.
 
+**Detail textures.** Ground stretched under one big texture blurs up
+close. A material can also carry a small texture repeated many times over
+it for close-up grain, as Torque terrain and Halo do: mid-grey leaves the
+colour as it is, lighter brightens it and darker darkens it. Blender's
+exporter cannot write one, so tools that write the `.glb` themselves add
+it to the material's `extras` as `"bri_detail": {"index": <texture>,
+"scale": <repeats across the colour texture>}`.
+
 **What players stand on.** With no special meshes, everything drawn is
 solid. For anything else, model simple collision meshes and name them
 starting with `col_` (`col_floor`, `col_stairs`): then only those collide

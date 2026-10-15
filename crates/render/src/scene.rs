@@ -193,9 +193,16 @@ pub enum SurfaceMap {
     MetalRough,
     Occlusion,
     Glow,
+    Detail,
 }
 impl SurfaceMap {
-    pub const ALL: [Self; 4] = [Self::Normal, Self::MetalRough, Self::Occlusion, Self::Glow];
+    pub const ALL: [Self; 5] = [
+        Self::Normal,
+        Self::MetalRough,
+        Self::Occlusion,
+        Self::Glow,
+        Self::Detail,
+    ];
     /// The material (by index) whose texture holds this map.
     pub fn of(self, surface: &bri_content::shape::Surface) -> Option<usize> {
         match self {
@@ -203,6 +210,7 @@ impl SurfaceMap {
             Self::MetalRough => surface.metallic_roughness,
             Self::Occlusion => surface.occlusion,
             Self::Glow => surface.emissive_map,
+            Self::Detail => surface.detail,
         }
     }
     /// Colour (sRGB) rather than data.
@@ -210,13 +218,14 @@ impl SurfaceMap {
         self == Self::Glow
     }
     /// What a model without this map draws with: a flat normal, the
-    /// factors unchanged, no occlusion, the glow colour as it is.
+    /// factors unchanged, no occlusion, the glow colour as it is, no grain.
     pub fn stand_in(self) -> SceneImage {
         let (label, rgba) = match self {
             Self::Normal => ("flat normal", [128, 128, 255, 255]),
             Self::MetalRough => ("plain metal-roughness", [255; 4]),
             Self::Occlusion => ("no occlusion", [255; 4]),
             Self::Glow => ("plain glow", [255; 4]),
+            Self::Detail => ("no detail", [128, 128, 128, 255]),
         };
         SceneImage {
             label: label.into(),
@@ -274,11 +283,12 @@ pub enum MaterialKind {
     /// A modern model's full look (`bri_content::shape::Surface`, glTF's
     /// metallic-roughness material): base colour in slot 0 (sRGB), a
     /// tangent-space normal map in 1, metal (blue) and roughness (green) in
-    /// 3, ambient occlusion (red) in 4 (all linear) and glow colour in 5
-    /// (sRGB); slot 2 is the environment probe's map, as for metal. Lit like
+    /// 3, ambient occlusion (red) in 4 (all linear), glow colour in 5
+    /// (sRGB) and a repeating detail texture in 6 (linear); slot 2 is the environment probe's map, as for metal. Lit like
     /// other models where diffuse, with GGX highlights and reflections.
     /// `parameters[0]`: metallic, roughness, normal strength, occlusion
-    /// strength; `parameters[1]`: glow (linear RGB).
+    /// strength; `parameters[1]`: glow (linear RGB); `parameters[2]`:
+    /// detail repeats, detail strength.
     Physical,
 }
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -333,13 +343,13 @@ impl Material {
     }
     /// A [`MaterialKind::Physical`] material for a model's
     /// `bri_content::shape::Surface`: `base` its colour image and `maps`
-    /// its normal, metal-roughness, occlusion and glow images, in
+    /// its normal, metal-roughness, occlusion, glow and detail images, in
     /// [`SurfaceMap`] order (each the [`SurfaceMap::stand_in`] where the
     /// model has none).
     pub fn physical(
         name: impl Into<String>,
         base: usize,
-        maps: [usize; 4],
+        maps: [usize; 5],
         surface: &bri_content::shape::Surface,
     ) -> Self {
         let mut material = Self::vertex_lit(name, base);
@@ -348,6 +358,7 @@ impl Material {
         material.images[3] = maps[1];
         material.images[4] = maps[2];
         material.images[5] = maps[3];
+        material.images[6] = maps[4];
         material.parameters = Some([
             [
                 surface.metallic,
@@ -361,7 +372,12 @@ impl Material {
                 surface.emissive[2],
                 0.0,
             ],
-            [0.0; 4],
+            [
+                surface.detail_scale,
+                if surface.detail.is_some() { 1.0 } else { 0.0 },
+                0.0,
+                0.0,
+            ],
             [0.0; 4],
         ]);
         material

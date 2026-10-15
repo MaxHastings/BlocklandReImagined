@@ -759,6 +759,7 @@ pub fn convert(
                 "normal" => surface.normal = k,
                 "metal_rough" => surface.metallic_roughness = k,
                 "occlusion" => surface.occlusion = k,
+                "detail" => surface.detail = k,
                 _ => surface.emissive_map = k,
             }
         }
@@ -2062,11 +2063,18 @@ fn make_material(
         if let Some(info) = emissive_map {
             maps.emissive = Some(png_of(info, report)?);
         }
+        // `extras.bri_detail`: a texture reference like glTF's own (its
+        // `index`), plus `scale`, how many times it repeats across the
+        // colour map.
+        if m["extras"]["bri_detail"].is_object() {
+            maps.detail = Some(png_of(&m["extras"]["bri_detail"], report)?);
+        }
     }
     let textured = maps.normal.is_some()
         || maps.metallic_roughness.is_some()
         || maps.occlusion.is_some()
-        || maps.emissive.is_some();
+        || maps.emissive.is_some()
+        || maps.detail.is_some();
     // glTF's default metallic factor is 1, but exporters write 0 for every
     // plain surface: without a metal map only a stated factor counts.
     let metallic = match pbr["metallicFactor"].as_f64() {
@@ -2092,6 +2100,9 @@ fn make_material(
             .clamped(0.0, 1.0),
         emissive_map: None,
         emissive,
+        detail: None,
+        detail_scale: (m["extras"]["bri_detail"]["scale"].as_f64().unwrap_or(1.0) as f32)
+            .clamped(0.01, 4096.0),
     });
     let metal = pbr["metallicFactor"]
         .as_f64()
@@ -2195,6 +2206,7 @@ pub(crate) struct SurfaceMaps {
     pub metallic_roughness: Option<Vec<u8>>,
     pub occlusion: Option<Vec<u8>>,
     pub emissive: Option<Vec<u8>>,
+    pub detail: Option<Vec<u8>>,
 }
 impl SurfaceMaps {
     /// Each map with the suffix its material takes.
@@ -2204,6 +2216,7 @@ impl SurfaceMaps {
             ("metal_rough", self.metallic_roughness),
             ("occlusion", self.occlusion),
             ("glow", self.emissive),
+            ("detail", self.detail),
         ]
         .into_iter()
         .filter_map(|(k, png)| Some((k, png?)))

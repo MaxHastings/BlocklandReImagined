@@ -31,7 +31,7 @@ fn floor(normal: [u8; 4], surface: &Surface) -> SceneData {
         rgba: normal.to_vec(),
         srgb: false,
     });
-    let mut maps = [1; 4];
+    let mut maps = [1; 5];
     for (k, map) in SurfaceMap::ALL.into_iter().enumerate().skip(1) {
         data.images.push(map.stand_in());
         maps[k] = data.images.len() - 1;
@@ -67,6 +67,8 @@ fn surface() -> Surface {
         occlusion: None,
         occlusion_strength: 1.0,
         emissive_map: None,
+        detail: None,
+        detail_scale: 1.0,
         emissive: [0.0; 3],
     }
 }
