@@ -7,8 +7,9 @@
 
 /// Display brightness (0 to 1) past which a pixel glows.
 pub const THRESHOLD: f32 = 0.8;
-/// How strongly the halo adds back over the world.
-pub const INTENSITY: f32 = 0.9;
+/// How strongly the halo adds back over the world: a small lamp spreads
+/// thin, so its halo is lifted well above its share of light.
+pub const INTENSITY: f32 = 2.5;
 
 pub struct Bloom {
     format: wgpu::TextureFormat,
@@ -26,7 +27,7 @@ pub struct Bloom {
 /// bind groups reading each, at one world size.
 struct Targets {
     size: (u32, u32),
-    _world: wgpu::Texture,
+    world: wgpu::Texture,
     world_view: wgpu::TextureView,
     _halo: [wgpu::Texture; 2],
     halo_views: [wgpu::TextureView; 2],
@@ -169,7 +170,8 @@ impl Bloom {
                 dimension: wgpu::TextureDimension::D2,
                 format: self.format,
                 usage: wgpu::TextureUsages::RENDER_ATTACHMENT
-                    | wgpu::TextureUsages::TEXTURE_BINDING,
+                    | wgpu::TextureUsages::TEXTURE_BINDING
+                    | wgpu::TextureUsages::COPY_DST,
                 view_formats: &[],
             })
         };
@@ -223,12 +225,16 @@ impl Bloom {
         ];
         Targets {
             size,
-            _world: world,
+            world,
             world_view,
             _halo: halo,
             halo_views,
             binds,
         }
+    }
+    /// The texture the world draws into, once `target` has made it.
+    pub fn world_texture(&self) -> Option<&wgpu::Texture> {
+        self.targets.as_ref().map(|t| &t.world)
     }
     /// The world's texture with its halo over all of `output`.
     pub fn draw(&self, encoder: &mut wgpu::CommandEncoder, output: &wgpu::TextureView) {
