@@ -1713,6 +1713,14 @@ pub struct Shot {
     /// Units per second above which the shooter counts as moving, 0 to 50.
     #[serde(default = "default_moving_speed")]
     pub moving_speed: f32,
+    /// The spread while the shooter crouches and is not moving, when it is
+    /// tighter than the spread they would have standing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub crouched_spread: Option<f32>,
+    /// The spread while the shooter is off the ground (jumping, falling)
+    /// and not riding anything, in place of every other.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub airborne_spread: Option<f32>,
     /// The projectile a shot on the move flies in place of the image's
     /// (Tier+Tactical's Sport Rifle fires a weaker round when not still),
     /// of this pack or one it depends on.
@@ -1863,6 +1871,8 @@ impl Shot {
         recoil_vertical: None,
         moving_spread: None,
         moving_speed: 0.1,
+        crouched_spread: None,
+        airborne_spread: None,
         moving_projectile: None,
         rested: None,
         hitscan: None,
@@ -1893,6 +1903,26 @@ impl Shot {
         match self.rested_at(speed, idle_ticks) {
             Some(r) => r.spread,
             None => self.spread,
+        }
+    }
+    /// [`Self::spread_for`] for a holder crouched or not and on the ground
+    /// (or riding) or not: `airborne_spread` off the ground, else
+    /// `crouched_spread` crouched and not moving, when tighter.
+    pub fn spread_in(
+        &self,
+        speed: f32,
+        idle_ticks: Option<u64>,
+        crouched: bool,
+        grounded: bool,
+    ) -> f32 {
+        if !grounded && let Some(airborne) = self.airborne_spread {
+            return airborne;
+        }
+        let spread = self.spread_for(speed, idle_ticks);
+        let moving = self.moving_spread.is_some() && speed > self.moving_speed;
+        match self.crouched_spread {
+            Some(crouched_spread) if crouched && !moving => crouched_spread.min(spread),
+            _ => spread,
         }
     }
     /// The projectile a shot flies in place of the image's, if any: the
@@ -3059,6 +3089,8 @@ impl Pack {
                     && (0.0..=100.0).contains(&s.recoil)
                     && s.recoil_vertical.is_none_or(|v| (0.0..=100.0).contains(&v))
                     && s.moving_spread.is_none_or(|m| (0.0..=1.0).contains(&m))
+                    && s.crouched_spread.is_none_or(|m| (0.0..=1.0).contains(&m))
+                    && s.airborne_spread.is_none_or(|m| (0.0..=1.0).contains(&m))
                     && (0.0..=50.0).contains(&s.moving_speed)
                     && (0.1..=10.0).contains(&s.scale)
                     && s.kick.is_none_or(|k| {

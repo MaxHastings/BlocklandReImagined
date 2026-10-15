@@ -145,6 +145,9 @@ pub struct Frame {
     pub velocity: Vec3,
     pub scale: f32,
     pub grounded: bool,
+    /// Crouching ([`crate::Shot::crouched_spread`]).
+    #[serde(default)]
+    pub crouched: bool,
     pub mount: Mount,
     pub horse: bool,
     pub first_person: bool,
@@ -166,6 +169,7 @@ impl Default for Frame {
             velocity: Vec3::ZERO,
             scale: 1.0,
             grounded: true,
+            crouched: false,
             mount: Mount::None,
             horse: false,
             first_person: true,
@@ -3603,7 +3607,8 @@ impl WeaponsWorld {
                         / a.frame.scale.max(0.01);
                 }
                 let pace = a.frame.velocity.length();
-                let spread = shot.spread_for(pace, idle_ticks);
+                let footing = a.frame.grounded || a.frame.mount != Mount::None;
+                let spread = shot.spread_in(pace, idle_ticks, a.frame.crouched, footing);
                 let kick = shot.recoil_velocity(direction);
                 if kick != Vec3::ZERO {
                     // Recoil lands before the projectiles, which inherit it.

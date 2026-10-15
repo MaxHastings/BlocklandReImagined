@@ -370,6 +370,7 @@ impl Session {
                     direction,
                     velocity: Vec3::from(state.velocity),
                     grounded: state.grounded,
+                    crouched: state.crouched,
                     mount: match self.vehicles.mounted_family(*owner) {
                         None => bri_weapons::Mount::None,
                         Some(bri_vehicles::Family::Skis) => bri_weapons::Mount::Skis,

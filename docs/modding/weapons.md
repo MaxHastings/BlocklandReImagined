@@ -304,7 +304,11 @@ before the hit.
 `moving_spread` and `moving_projectile` replace the spread and the
 projectile while the shooter moves faster than `moving_speed`; `rested`
 (`after_ticks`, `spread`, and optionally `still` and `projectile`) is
-the truer first shot after a pause. An image's `state_shots` fire on
+the truer first shot after a pause. `crouched_spread` is the spread
+while the shooter crouches and is not moving (used when tighter than their
+standing spread), and `airborne_spread` the spread while they are off the
+ground and not riding, in place of every other: a tactical rifle that is
+steadiest crouched and wild mid-jump. An image's `state_shots` fire on
 entering a state whose script is not `onFire` (`"onfire2": { ... }`),
 each a shot of its own, hitscan or not (a knife's weaker stab beside its
 slash); a shot with `"free": true` takes no rounds. `recoil` pushes the shooter back along
