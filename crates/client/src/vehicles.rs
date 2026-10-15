@@ -233,7 +233,7 @@ impl VehicleAssets {
             .map(|d| d.attachment_model.clone().unwrap_or(d.model.clone()))
             .collect();
         let mut models = BTreeMap::new();
-        let mut weapon_nodes = BTreeMap::new();
+        let mut weapon_nodes: BTreeMap<String, BTreeMap<String, Mat4>> = BTreeMap::new();
         let mut lamps: BTreeMap<String, Vec<BoundLamp>> = BTreeMap::new();
         let mut looks = BTreeMap::new();
         let mut threads = BTreeMap::new();
@@ -477,6 +477,30 @@ impl VehicleAssets {
                     );
                 }
                 None => anyhow::bail!("Vehicle {} model is missing", d.id),
+            }
+        }
+        for definition in &pack.definitions {
+            for seat in &definition.seats {
+                for node in [seat.hands.node(0), seat.hands.node(1)]
+                    .into_iter()
+                    .flatten()
+                {
+                    let found = definition
+                        .attachment_model
+                        .as_ref()
+                        .and_then(|model| weapon_nodes.get(model))
+                        .is_some_and(|nodes| nodes.contains_key(&node.to_ascii_lowercase()));
+                    if !found {
+                        crate::cosmetic::add_on_fault(
+                            definition
+                                .id
+                                .split_once(':')
+                                .map_or(definition.id.as_str(), |(id, _)| id),
+                            "vehicles.json",
+                            format!("{}: weapon hand node {node} is missing", definition.id),
+                        );
+                    }
+                }
             }
         }
         let sources = pack
@@ -1021,8 +1045,11 @@ impl ClientVehicles {
         };
         let sway = self.sways.get(&info.id).map(|spring| spring.rotation());
         Some(
-            to_transform(frame.position, frame.rotation)
-                * weapon_attachment(d, frame, assets.looks.contains_key(model), sway)?
+            Mat4::from_scale_rotation_translation(
+                Vec3::splat(info.scale),
+                frame.rotation,
+                frame.position,
+            ) * weapon_attachment(d, frame, assets.looks.contains_key(model), sway)?
                 * local_node,
         )
     }
@@ -1101,8 +1128,17 @@ impl ClientVehicles {
         if info.turret_broken && d.weapon_seat() == Some(seat) {
             return [None; 2];
         }
-        let body = to_transform(frame.position, frame.rotation);
+        let body = Mat4::from_scale_rotation_translation(
+            Vec3::splat(info.scale),
+            frame.rotation,
+            frame.position,
+        );
         [0, 1].map(|hand| {
+            if let Some(node) = d.seats.get(seat)?.hands.node(hand) {
+                return self
+                    .weapon_node(assets, info, node)
+                    .map(|m| m.w_axis.truncate());
+            }
             d.hand_hold(seat, hand, frame.turret_aim)
                 .map(|at| body.transform_point3(at))
         })
@@ -1608,6 +1644,85 @@ pub(crate) mod tests {
     crate::testing::synthetic_and_content!(Gunners: gunner_barrels_follow_the_pitch_to_the_muzzle);
     crate::testing::synthetic_and_content!(Gunners: a_rigged_mount_retains_the_same_portal_split_as_its_motor_and_riders);
     crate::testing::synthetic_and_content!(Gunners: a_broken_turret_leaves_the_hull_and_its_gunner_sits_on_the_hull);
+    #[test]
+    fn named_grip_nodes_follow_attachment_animation_aim_sway_and_scale() -> Result<()> {
+        let fixture = Gunners::synthetic()?;
+        let mut assets = VehicleAssets::load(&fixture.root)?;
+        let d = fixture
+            .gunners
+            .iter()
+            .filter_map(|id| assets.definition(id))
+            .find(|d| d.attachment_model.is_some())
+            .context("attached weapon")?
+            .clone();
+        let seat = d.weapon_seat().context("gunner")?;
+        let model = d.attachment_model.as_ref().unwrap().clone();
+        let node = d.muzzle_node().to_string();
+        let index = assets.index[&d.id];
+        assets.pack.definitions[index].seats[seat].hands.right = Some([20.; 3]);
+        assets.pack.definitions[index].seats[seat].hands.right_node = Some(node.clone());
+        let mut info = VehicleInfo {
+            id: 1,
+            definition: d.id.clone(),
+            color: None,
+            occupants: vec![],
+            destroyed: false,
+            turret_broken: false,
+            scale: 2.,
+            lights: false,
+        };
+        let mut vehicles = ClientVehicles::default();
+        let mut sample = pose(1, 3.);
+        sample.turret_aim = [0.6, 0.3];
+        sample.rotation = Quat::from_rotation_z(0.2).to_array();
+        vehicles.update(
+            &BTreeMap::from([(1, info.clone())]),
+            &BTreeMap::from([(1, sample)]),
+            None,
+            None,
+            &Default::default(),
+        );
+        vehicles.sways.insert(
+            1,
+            TurretSpring {
+                tip: [0.1, -0.05],
+                ..Default::default()
+            },
+        );
+        let expected = vehicles
+            .weapon_node(&assets, &info, &node)
+            .context("animated attachment node")?
+            .w_axis
+            .truncate();
+        let actual = vehicles.hand_holds(&assets, &info, seat)[0].context("named hold")?;
+        assert!(actual.abs_diff_eq(expected, 1e-5));
+        info.scale = 1.;
+        let unscaled = vehicles.hand_holds(&assets, &info, seat)[0].unwrap();
+        let origin = vehicles.frame(1).unwrap().position;
+        assert!(
+            (actual - origin).abs_diff_eq((unscaled - origin) * 2., 1e-5),
+            "attachment sockets share vehicle scale"
+        );
+        // A model without a look clip pitches its entire attachment instead.
+        assets.looks.remove(&model);
+        let expected = vehicles
+            .weapon_node(&assets, &info, &node)
+            .unwrap()
+            .w_axis
+            .truncate();
+        assert!(
+            vehicles.hand_holds(&assets, &info, seat)[0]
+                .unwrap()
+                .abs_diff_eq(expected, 1e-5)
+        );
+        assets.pack.definitions[index].seats[seat].hands.right_node = Some("missing-grip".into());
+        assert!(
+            vehicles.hand_holds(&assets, &info, seat)[0].is_none(),
+            "a missing explicit node must not silently use a guessed point"
+        );
+        Ok(())
+    }
+
     /// Max, v0.2.5: a blown turret flew off as debris while the hull still
     /// carried it. Once broken it is no longer drawn on the hull, and its
     /// gunner sits on the hull's fallback seat, where the host put them.

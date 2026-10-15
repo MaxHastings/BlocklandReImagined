@@ -555,3 +555,23 @@ sandbox's host API, budgets and checks in
 [client-sandbox.md](../architecture/client-sandbox.md). From a checkout,
 `cargo run -p bri-client-sandbox --bin bri-addon-preview -- <add-on folder>
 <output folder>` renders an Add-On's client code offscreen to PNG frames.
+
+
+### Vehicle weapon grip nodes
+
+A weapon seat may name `hands.right_node` and `hands.left_node` in its weapon
+attachment model. These take precedence over `hands.right`/`hands.left` point
+holds. The client samples the same attachment animation, yaw/pitch, sway and
+vehicle scale used by its muzzle/ejection sockets. A named node that is missing
+is reported when loading; it does not silently substitute a point.
+
+```json
+{"hands":{"right_node":"grip_right","left_node":"grip_left"}}
+```
+
+Point holds remain useful for steering wheels and other fixed grips. On a gun
+whose whole attachment pitches, gunner point holds pitch with that attachment;
+barrel-animation models retain their pivot-based point fallback. Named nodes are
+preferable for grips that must follow an authored barrel animation exactly.
+These targets position hands; they do not manufacture a new body stance or wrist
+animation. Author the rider's clip separately.

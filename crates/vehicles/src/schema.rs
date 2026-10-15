@@ -102,10 +102,26 @@ pub struct SeatHands {
     pub right: Option<[f32; 3]>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub left: Option<[f32; 3]>,
+    /// A node in the weapon attachment, evaluated with its animation and sway.
+    /// When named, it owns that hand instead of the body-local point above.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub right_node: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub left_node: Option<String>,
 }
 impl SeatHands {
     pub fn is_empty(&self) -> bool {
-        self.right.is_none() && self.left.is_none()
+        self.right.is_none()
+            && self.left.is_none()
+            && self.right_node.is_none()
+            && self.left_node.is_none()
+    }
+    pub fn node(&self, hand: usize) -> Option<&str> {
+        match hand {
+            0 => self.right_node.as_deref(),
+            1 => self.left_node.as_deref(),
+            _ => None,
+        }
     }
     /// Right then left.
     pub fn each(&self) -> [Option<[f32; 3]>; 2] {
@@ -1463,6 +1479,21 @@ impl Pack {
                     .flatten()
                     .all(|p| p.iter().all(|v| v.is_finite() && v.abs() <= 64.))),
                 "invalid seat hands"
+            );
+            ensure!(
+                d.seats.iter().enumerate().all(|(index, seat)| {
+                    [seat.hands.node(0), seat.hands.node(1)]
+                        .into_iter()
+                        .flatten()
+                        .all(|node| {
+                            !node.is_empty()
+                                && node.len() <= 64
+                                && !node.chars().any(char::is_control)
+                                && d.weapon_seat() == Some(index)
+                                && d.attachment_model.is_some()
+                        })
+                }),
+                "seat hand nodes need a weapon attachment seat and names up to 64 characters"
             );
             if let Some(w) = &d.weapon {
                 ensure!(

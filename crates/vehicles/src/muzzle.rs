@@ -126,17 +126,35 @@ impl Definition {
         else {
             return Some(at);
         };
+        let pitch = aim[1].clamped(self.look_pitch[0], self.look_pitch[1]);
+        if weapon.look_muzzle.len() < 2
+            && !self.is_actor()
+            && let Some(mount) = &self.attachment_mount
+        {
+            let about = Vec3::from(mount.position);
+            let basis = Quat::from_array(mount.rotation);
+            let local = basis.inverse() * (at - about);
+            return Some(
+                about
+                    + basis * Quat::from_rotation_y(aim[0]) * Quat::from_rotation_x(pitch) * local,
+            );
+        }
         let at = if weapon.look_muzzle.len() >= 2 {
             let pitch = aim[1].clamped(self.look_pitch[0], self.look_pitch[1]);
             let pivot = Vec3::from(weapon.pivot);
-            pivot + Quat::from_rotation_x(pitch) * (at - pivot)
+            let basis = self
+                .attachment_mount
+                .as_ref()
+                .map_or(Quat::IDENTITY, |m| Quat::from_array(m.rotation));
+            pivot + basis * Quat::from_rotation_x(pitch) * basis.inverse() * (at - pivot)
         } else {
             at
         };
         Some(match &self.attachment_mount {
             Some(mount) if !self.is_actor() => {
                 let about = Vec3::from(mount.position);
-                about + Quat::from_rotation_y(aim[0]) * (at - about)
+                let basis = Quat::from_array(mount.rotation);
+                about + basis * Quat::from_rotation_y(aim[0]) * basis.inverse() * (at - about)
             }
             _ => at,
         })
@@ -254,8 +272,8 @@ mod tests {
     }
 
     /// A gunner's hands stay on the drawn gun: turned with the turret
-    /// about its mount, tipped about the pivot only when the gun's model
-    /// pitches with a `look` clip; other seats' holds stay put.
+    /// about its mount, tipped with either the whole attachment or its barrel
+    /// look clip; other seats' holds stay put.
     #[test]
     fn a_gunners_hand_holds_turn_and_tip_with_the_drawn_gun() {
         let mut tank = crate::testing::tank();
@@ -264,11 +282,13 @@ mod tests {
         tank.seats[0].hands.left = Some([0.2, 1.2, -1.5]);
         let quarter = std::f32::consts::FRAC_PI_2;
         let turned = tank.hand_hold(2, 0, [quarter, 0.3]).unwrap();
-        // About the mount at (0, 1.6, 0): (0.3, _, 1.0) turns to (1.0, _, -0.3).
-        assert!(
-            turned.abs_diff_eq(Vec3::new(1.0, 2.4, -0.3), 1e-5),
-            "{turned}"
-        );
+        // A model without a look clip pitches the whole attachment, so its
+        // hand targets pitch too, before yaw, about that attachment's mount.
+        let expected = Vec3::new(0., 1.6, 0.)
+            + Quat::from_rotation_y(quarter)
+                * Quat::from_rotation_x(0.3)
+                * (Vec3::from(grip) - Vec3::new(0., 1.6, 0.));
+        assert!(turned.abs_diff_eq(expected, 1e-5), "{turned}");
         assert_eq!(tank.hand_hold(2, 1, [quarter, 0.3]), None, "left free");
         assert_eq!(
             tank.hand_hold(0, 1, [quarter, 0.3]),

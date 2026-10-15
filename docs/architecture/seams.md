@@ -136,3 +136,5 @@ labels are retained so earlier progress notes remain traceable.
 | Animated texture coordinates | Authored UV scale/offset, scroll and rotation about a declared center, sampled from the cosmetic render clock; no geometry animation | Root source dashboard review | implementation in progress |
 
 | Authored hand poses | Body sockets may preserve authored hand frames/poses instead of generic Blockhead fitting; the same policy applies on host and client | Root rifle source-marker audit | implementation and comparison in progress |
+
+| Weapon attachment grip nodes | Seat-owned named weapon nodes drive rider hand targets through the same animation/aim/sway frame as muzzle/ejection sockets; point holds remain supported | Root Warthog source grip review | implementation and rendered comparison in progress |
