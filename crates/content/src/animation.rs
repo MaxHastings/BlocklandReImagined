@@ -1,5 +1,5 @@
 //! Native animation sampling and posed geometry, independent of source formats.
-use crate::shape::{Animation, Shape};
+use crate::shape::{Animation, LiveValues, Shape};
 use anyhow::{Context, Result, ensure};
 use bri_console::Clamp;
 use glam::{Mat4, Quat, Vec3};
@@ -305,6 +305,22 @@ pub fn sample_layers_with_transition(
 }
 
 /// `visible` selects avatar parts or other named-object customization.
+/// Point each live object (`Object::live`) at the frame of the digit its
+/// value shows, hiding blank leading digits. Objects whose value is absent
+/// keep the frame the animation gave them.
+pub fn show_live(shape: &Shape, pose: &mut Pose, values: &LiveValues) {
+    for (i, object) in shape.objects.iter().enumerate() {
+        let Some(live) = &object.live else { continue };
+        let Some(value) = values.get(&live.value) else {
+            continue;
+        };
+        match live.digit(value) {
+            Some(digit) => pose.material_frames[i] = digit as usize,
+            None => pose.visibility[i] = 0.0,
+        }
+    }
+}
+
 pub fn triangles(
     shape: &Shape,
     pose: &Pose,
@@ -388,6 +404,85 @@ pub fn triangles(
 mod tests {
     use super::*;
     use crate::shape::*;
+    #[test]
+    fn live_digits_pick_material_frames_and_hide_leading_zeros() {
+        let mut shape = fixture();
+        let digit = |place, blank_leading| Object {
+            name: format!("digit{place}"),
+            node: None,
+            meshes: vec![],
+            visibility: 1.0,
+            frame: 0,
+            material_frame: 0,
+            live: Some(Live {
+                value: "rounds".into(),
+                place,
+                base: 10,
+                scale: 1.0,
+                blank_leading,
+                uv_step: None,
+            }),
+        };
+        shape.objects = vec![digit(0, true), digit(1, true), digit(2, false)];
+        let mut pose = sample(&shape, None, 0.0).unwrap();
+        let values = LiveValues {
+            rounds: Some(37),
+            ..LiveValues::default()
+        };
+        show_live(&shape, &mut pose, &values);
+        assert_eq!(pose.material_frames, [7, 3, 0]);
+        assert_eq!(pose.visibility, [1.0, 1.0, 1.0]);
+        let mut pose = sample(&shape, None, 0.0).unwrap();
+        show_live(
+            &shape,
+            &mut pose,
+            &LiveValues {
+                rounds: Some(5),
+                ..LiveValues::default()
+            },
+        );
+        assert_eq!(pose.material_frames[0], 5);
+        assert_eq!(pose.visibility[1], 0.0, "no tens digit below ten");
+        // Without the value (another player's gun) the authored frame stays.
+        let mut pose = sample(&shape, None, 0.0).unwrap();
+        show_live(&shape, &mut pose, &LiveValues::default());
+        assert_eq!(pose.material_frames, [0, 0, 0]);
+    }
+    #[test]
+    fn a_uv_step_strip_expands_into_digit_frames() {
+        let mut shape = fixture();
+        shape.meshes = vec![Some(Mesh {
+            frame_vertices: 3,
+            positions: vec![[0.0; 3]; 3],
+            normals: vec![[0.0, 1.0, 0.0]; 3],
+            uv: vec![[0.0, 0.0], [0.1, 0.0], [0.0, 1.0]],
+            primitives: vec![],
+            skin: None,
+            billboard: false,
+            billboard_y: false,
+        })];
+        shape.objects = vec![Object {
+            name: "ones".into(),
+            node: None,
+            meshes: vec![0],
+            visibility: 1.0,
+            frame: 0,
+            material_frame: 0,
+            live: Some(Live {
+                value: "reserve".into(),
+                place: 0,
+                base: 10,
+                scale: 1.0,
+                blank_leading: false,
+                uv_step: Some([0.1, 0.0]),
+            }),
+        }];
+        shape.expand_live_frames();
+        let mesh = shape.meshes[0].as_ref().unwrap();
+        assert_eq!(mesh.uv.len(), 30);
+        assert!((mesh.uv[3 * 4][0] - 0.4).abs() < 1e-6);
+        shape.validate().unwrap();
+    }
     fn fixture() -> Shape {
         Shape {
             schema_version: 1,
@@ -542,6 +637,7 @@ mod tests {
             visibility: 1.0,
             frame: 0,
             material_frame: 0,
+            live: None,
         });
         let mut absolute = clip("root", None, None, false);
         absolute.objects.push(ObjectTrack {

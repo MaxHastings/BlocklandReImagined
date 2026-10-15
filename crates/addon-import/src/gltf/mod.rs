@@ -992,6 +992,7 @@ pub fn convert(
             visibility: 1.0,
             frame: 0,
             material_frame: 0,
+            live: None,
         };
         if is_collision {
             collision.push((object, mesh));

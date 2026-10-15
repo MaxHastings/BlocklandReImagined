@@ -2327,6 +2327,7 @@ fn placeholder() -> bri_content::shape::Shape {
             visibility: 1.0,
             frame: 0,
             material_frame: 0,
+            live: None,
         }],
         details: vec![Detail {
             name: "detail0".into(),

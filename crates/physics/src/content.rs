@@ -205,6 +205,7 @@ mod tests {
                 visibility: 0.0,
                 frame: 0,
                 material_frame: 0,
+                live: None,
             }],
             details: vec![
                 Detail {

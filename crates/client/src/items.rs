@@ -2,8 +2,8 @@
 //! The offline assembler owns legacy fields; this module reads typed native data.
 use anyhow::{Context, Result, ensure};
 use bri_content::{
-    animation::{Pose, sample},
-    shape::{Animation, Shape},
+    animation::{Pose, sample, show_live},
+    shape::{Animation, LiveValues, Shape},
 };
 use bri_render::{
     scene::{AlphaMode, Material, MaterialKind, SceneData, SceneImage},
@@ -223,9 +223,22 @@ impl ItemMesh {
         sequence: Option<&str>,
         seconds: f32,
     ) -> Result<bool> {
+        self.pose_live(assets, transform, sequence, seconds, &LiveValues::default())
+    }
+    /// `pose`, with its live digits (`bri_content::shape::Live`) showing
+    /// `live`.
+    pub fn pose_live(
+        &mut self,
+        assets: &ItemAssets,
+        transform: Mat4,
+        sequence: Option<&str>,
+        seconds: f32,
+        live: &LiveValues,
+    ) -> Result<bool> {
         validate_transform(transform)?;
         let shape = assets.shape(&self.model)?;
-        let pose = assets.pose(&self.model, sequence, seconds)?;
+        let mut pose = assets.pose(&self.model, sequence, seconds)?;
+        show_live(shape, &mut pose, live);
         let Some(detail) = visible_detail(shape, self.first_person) else {
             let changed = !self.data.vertices.is_empty();
             self.data.vertices.clear();
@@ -854,8 +867,9 @@ impl ItemAssets {
                     input_bytes + bytes.len() <= 256 * 1024 * 1024,
                     "Item aggregate input budget exceeded"
                 );
-                let shape: Shape = serde_json::from_slice(&bytes)?;
+                let mut shape: Shape = serde_json::from_slice(&bytes)?;
                 shape.validate()?;
+                shape.expand_live_frames();
                 let vertices = shape
                     .meshes
                     .iter()

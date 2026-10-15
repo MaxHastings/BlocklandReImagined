@@ -26,6 +26,7 @@ fn frame() -> WorldItemFrame {
         local_owner: None,
         first_person: false,
         reflected_self: false,
+        held_values: Default::default(),
     }
 }
 fn static_item(f: &ItemFixture, brick: u64, position: [f32; 3]) -> StaticItem {

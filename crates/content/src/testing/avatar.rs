@@ -647,6 +647,7 @@ pub fn rig() -> Rig {
             visibility: 1.0,
             frame: 0,
             material_frame: 0,
+            live: None,
         });
         meshes.push(Some(cuboid(Vec3::from(centre), Vec3::from(half), paint)));
     }
@@ -657,6 +658,7 @@ pub fn rig() -> Rig {
         visibility: 1.0,
         frame: 0,
         material_frame: 0,
+        live: None,
     });
     meshes.push(Some(pants(&world)));
     let shape = Shape {

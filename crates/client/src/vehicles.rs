@@ -225,8 +225,9 @@ impl VehicleAssets {
                 32 << 20,
             )
             .and_then(|bytes| {
-                let shape: Shape = serde_json::from_slice(&bytes)?;
+                let mut shape: Shape = serde_json::from_slice(&bytes)?;
                 shape.validate()?;
+                shape.expand_live_frames();
                 Ok(shape)
             });
             let shape = match shape {

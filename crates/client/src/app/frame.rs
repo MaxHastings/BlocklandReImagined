@@ -1362,6 +1362,7 @@ impl App {
                     // Mirrors, metal and shadows show the player's own
                     // items as others see them, not at the eye.
                     reflected_self: true,
+                    held_values: held_values(self.net.held_ammo.as_ref()),
                 },
                 |owner| {
                     let avatar = self.avatar.avatars.get(&owner)?;
@@ -1685,4 +1686,13 @@ impl App {
         }
         Ok(())
     }
+}
+
+/// What the local player's held gun shows on its own model's live digits.
+fn held_values(ammo: Option<&bri_sim::session::HeldAmmo>) -> bri_content::shape::LiveValues {
+    ammo.map_or_else(Default::default, |a| bri_content::shape::LiveValues {
+        rounds: a.rounds,
+        reserve: a.reserve,
+        magazine: Some(a.size),
+    })
 }
