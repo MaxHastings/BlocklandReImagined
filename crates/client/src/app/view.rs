@@ -551,7 +551,18 @@ impl App {
             .and_then(|v| v.camera_path.as_ref())
             .zip(self.motion.server_tick())
             .map(|(path, tick)| path.sample(tick));
-        let point = view.vitals.get(&view.owner).and_then(|v| v.camera_point);
+        let point = view
+            .vitals
+            .get(&view.owner)
+            .and_then(|v| v.camera_point)
+            .map(|mut point| {
+                // A point that follows an object circles it where it is
+                // drawn, smooth between the host's poses.
+                if let Some(at) = point.object.and_then(|o| self.drawn_object_centre(view, o)) {
+                    point.at = at.to_array();
+                }
+                point
+            });
         let owner = view.owner;
         self.controls.follow(control, owner, eye);
         if let Some(path) = path {
@@ -559,6 +570,28 @@ impl App {
         }
         if let Some(point) = point {
             self.controls.orbit_point(point);
+        }
+    }
+    /// The middle of `object` as this frame draws it: a vehicle's box at
+    /// its drawn pose, an entity where it is. None for players (their
+    /// orbit is `orbit_camera`'s) and for objects not drawn.
+    fn drawn_object_centre(
+        &self,
+        view: &network::View,
+        object: bri_package_runtime::ops::ObjectRef,
+    ) -> Option<Vec3> {
+        use bri_package_runtime::ops::ObjectRef;
+        match object {
+            ObjectRef::Vehicle(id) => {
+                let info = view.vehicles.get(&id)?;
+                let d = self.vehicle_assets.definition(&info.definition)?;
+                let frame = self.vehicles.frame(id)?;
+                let middle =
+                    (Vec3::from(d.bounds_min) + Vec3::from(d.bounds_max)) * (0.5 * info.scale);
+                Some(frame.position + frame.rotation * middle)
+            }
+            ObjectRef::Entity(id) => view.entities.get(&id).map(|e| Vec3::from(e.position)),
+            ObjectRef::Player(_) => None,
         }
     }
     /// The camera in control, as the server's `%client.Camera` transform:
