@@ -13,6 +13,9 @@ pub fn read_original(root: &Path, name: &str) -> Result<Option<Vec<u8>>> {
         bri_content::brick_materials::safe_relative(name),
         "Unsafe original environment path"
     );
+    // Compare canonical paths on both sides: Windows canonical paths carry
+    // a `\\?\` prefix that a plain root never starts with.
+    let root = &root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
     let mut path = root.join(name);
     if !path.exists() {
         // Blockland ran on Windows: a mission's `sky_spooky3` is the
