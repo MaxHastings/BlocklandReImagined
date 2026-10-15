@@ -132,6 +132,8 @@ macro_rules! for_each_op {
             SetEnvironment = environment,
             SetFov = player,
             SetSpeedScale = player,
+            SetProne = player,
+            SetLean = player,
             GiveAmmo = player,
             SetReserve = player,
             SetRounds = player,

@@ -42,12 +42,22 @@ mechanism with no game-specific names; the Add-On's own polish waits.
   player or vehicle it hits and it rides along (`Projectile::stuck_to`);
   clients draw it on the body as they draw it, with no position traffic.
 
+- **Stance accuracy.** A shot's `crouched_spread` and `airborne_spread`.
+- **Prone and lean.** An archetype's `movement.prone` (box, eye, crawl
+  speeds) and `movement.lean` (eye slide within half the box's width, view
+  and body tilt, ease time); rules `set_prone` and `set_lean`, bound to
+  keys by an Add-On's `binds.json`. `PlayerState::posture` carries them, so
+  prediction replays them. The lying body is drawn face down along its
+  facing; its box stays the short upright one, so its head and feet are
+  not hit. Hit regions (`head`, `torso`, `legs`) already reached
+  `on_damage`.
+
 Steering toward the look already existed for wheeled vehicles (the
 Playground buggy has the Warthog's tags), so the handling gap named in the
 assessment was content, not engine.
 
 Protocol notes: `footsteps`, `map-decals`, `screen-flash`, `body-flash`,
-`move-seen-tick`, `projectile-stuck-to` in `crates/net/protocol-changes/`.
+`move-seen-tick`, `projectile-stuck-to`, `player-posture` in `crates/net/protocol-changes/`.
 
 ## Decisions
 

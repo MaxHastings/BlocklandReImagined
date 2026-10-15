@@ -381,6 +381,42 @@ impl Perform for ops::SetSpeedScale {
         session.apply_speed(player)
     }
 }
+impl Perform for ops::SetProne {
+    fn check(&self, session: &Session, _cx: OpCall<'_>) -> Result<()> {
+        let peer = session.peers.get(&self.player).context("No such player")?;
+        ensure!(
+            !self.prone || peer.player.tuning().prone.is_some(),
+            "This body cannot lie prone"
+        );
+        Ok(())
+    }
+    fn perform(self, session: &mut Session, _cx: OpCall<'_>) -> Result<()> {
+        let ops::SetProne { player, prone } = self;
+        let peer = session.peers.get_mut(&player).context("No such player")?;
+        // Getting up under something low simply stays down: the rules may
+        // ask again.
+        peer.player
+            .set_prone(&mut session.simulation.physics, prone);
+        Ok(())
+    }
+}
+impl Perform for ops::SetLean {
+    fn check(&self, session: &Session, _cx: OpCall<'_>) -> Result<()> {
+        let peer = session.peers.get(&self.player).context("No such player")?;
+        ensure!(peer.player.tuning().lean.is_some(), "This body cannot lean");
+        ensure!(
+            self.lean.is_finite() && (-1.0..=1.0).contains(&self.lean),
+            "Invalid lean: -1 to 1"
+        );
+        Ok(())
+    }
+    fn perform(self, session: &mut Session, _cx: OpCall<'_>) -> Result<()> {
+        let ops::SetLean { player, lean } = self;
+        let peer = session.peers.get_mut(&player).context("No such player")?;
+        ensure!(peer.player.set_lean(lean), "This body cannot lean");
+        Ok(())
+    }
+}
 impl Perform for ops::GiveAmmo {
     fn check(&self, session: &Session, _cx: OpCall<'_>) -> Result<()> {
         ensure!(session.peers.contains_key(&self.player), "No such player");

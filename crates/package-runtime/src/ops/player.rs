@@ -378,6 +378,36 @@ impl ScriptOp for SetSpeedScale {
     }
 }
 
+/// Lay a player down or get them up, for a body whose archetype can lie
+/// prone (`movement.prone`). Getting up needs room to crouch.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SetProne {
+    pub player: u64,
+    pub prone: bool,
+}
+impl ScriptOp for SetProne {
+    const CAPABILITY: &str = "player";
+    const NAME: &str = "set_prone";
+    fn bounded(&self) -> bool {
+        true
+    }
+}
+
+/// Lean a player, -1 (left) to 1 (right), 0 upright, for a body whose
+/// archetype can lean (`movement.lean`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SetLean {
+    pub player: u64,
+    pub lean: f32,
+}
+impl ScriptOp for SetLean {
+    const CAPABILITY: &str = "player";
+    const NAME: &str = "set_lean";
+    fn bounded(&self) -> bool {
+        self.lean.is_finite() && (-1.0..=1.0).contains(&self.lean)
+    }
+}
+
 /// Add rounds of `ammo` to a player's reserve (an ammo box), up to the
 /// most its magazines carry.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

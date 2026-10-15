@@ -3129,6 +3129,18 @@ fn register_presentation(engine: &mut Engine) {
             },
         }))
     });
+    engine.register_fn("set_prone", |player: Dynamic, prone: bool| {
+        push(Op::SetProne(ops::SetProne {
+            player: id(&player)?,
+            prone,
+        }))
+    });
+    engine.register_fn("set_lean", |player: Dynamic, lean: Dynamic| {
+        push(Op::SetLean(ops::SetLean {
+            player: id(&player)?,
+            lean: float(&lean)?,
+        }))
+    });
     engine.register_fn("set_speed_scale", |player: Dynamic, scale: Dynamic| {
         push(Op::SetSpeedScale(ops::SetSpeedScale {
             player: id(&player)?,

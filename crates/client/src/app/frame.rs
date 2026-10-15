@@ -1273,6 +1273,11 @@ impl App {
                     .map_or(0.0, |(_, c)| c),
                     // A rider's controller does not run, so its last
                     // intent says nothing about the seat.
+                    lean_tilt: if riding || dead {
+                        0.0
+                    } else {
+                        player.lean_tilt(&view.archetypes.tuning(player.archetype, player.scale))
+                    },
                     intent_clip: player.controller.filter(|_| !riding).and_then(|c| {
                         view.archetypes
                             .resolve(player.archetype)

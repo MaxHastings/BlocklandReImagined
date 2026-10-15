@@ -496,6 +496,7 @@ mod tests {
                     heading: Some(i16::MIN),
                 }),
                 pass_group: u8::MAX,
+                posture: Default::default(),
             },
         });
         let vehicle = Datagram::Vehicle(bri_sim::session::VehiclePose {
