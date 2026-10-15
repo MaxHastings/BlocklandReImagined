@@ -26,6 +26,12 @@
     }
   ],
   "schema_version": 1,
+  "surfaces": {
+    "sample-map:map/sample-map": {
+      "sample-map_paint": "metal",
+      "sample-map_wood": "dirt"
+    }
+  },
   "terrains": {
     "sample-map:map/sample-map": []
   },
