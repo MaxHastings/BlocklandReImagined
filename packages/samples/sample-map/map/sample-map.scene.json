@@ -56,7 +56,9 @@
         1.0
       ],
       "asset": "sample-map:map/sample-map/model",
-      "properties": {}
+      "properties": {
+        "surface": "level"
+      }
     },
     {
       "name": "spawn",

@@ -981,6 +981,9 @@ impl App {
             }
             self.scene.scene_map = Some(prepared.map_id.clone());
             self.foliage.set_map(prepared.foliage);
+            self.fx
+                .effects
+                .set_map_effects(prepared.map_effects.as_ref())?;
             self.weather
                 .set_map(&prepared.map_id, prepared.waters.clone())?;
             self.scene.scenery.set_map(prepared.plate, prepared.waters);

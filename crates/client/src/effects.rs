@@ -36,11 +36,72 @@ pub struct WorldEffects {
     pub deferred: usize,
     /// Bricks [`Self::sync`] has looked at.
     visited: u64,
+    /// The game's own effects, which a map's emitters are added to.
+    base: Arc<EffectsPack>,
+    /// The map's own emitters (`map_effects.json`), always running.
+    map_sources: Vec<(String, SourceTransform)>,
+    map_active: Vec<Option<EffectHandle>>,
+}
+
+/// A map's own emitters, from `map_effects.json` beside its bundle.
+pub fn load_map_effects(
+    map_root: &std::path::Path,
+) -> Result<Option<bri_content::effects::MapEffects>> {
+    let path = map_root.join("map_effects.json");
+    if !path.is_file() {
+        return Ok(None);
+    }
+    anyhow::ensure!(
+        std::fs::metadata(&path)?.len() <= 4 << 20,
+        "map_effects.json is over 4 MiB"
+    );
+    let effects: bri_content::effects::MapEffects =
+        serde_json::from_slice(&std::fs::read(&path)?).context("map_effects.json")?;
+    effects.validate()?;
+    Ok(Some(effects))
+}
+
+/// `base` with a map's particles and emitters added. A particle drawing a
+/// texture the game lacks draws the cloud, as v20 did.
+fn with_map_effects(
+    base: &EffectsPack,
+    effects: &bri_content::effects::MapEffects,
+) -> Result<Arc<EffectsPack>> {
+    let mut library = base.library.clone();
+    for p in &effects.particles {
+        if library.particles.iter().any(|q| q.id == p.id) {
+            continue;
+        }
+        let mut p = p.clone();
+        if !library.textures.contains_key(&p.texture) {
+            p.texture = crate::weapon_effects::MISSING_PARTICLE_TEXTURE.into();
+        }
+        library.particles.push(p);
+    }
+    for e in &effects.emitters {
+        if !library.emitters.iter().any(|x| x.id == e.id) {
+            library.emitters.push(bri_content::effects::Emitter {
+                name: String::new(),
+                ..e.clone()
+            });
+        }
+    }
+    let textures = base
+        .textures
+        .iter()
+        .map(|t| bri_fx_runtime::pack::TextureImage {
+            id: t.id.clone(),
+            width: t.width,
+            height: t.height,
+            rgba: t.rgba.clone(),
+        })
+        .collect();
+    EffectsPack::from_parts(library, base.manifest.clone(), textures)
 }
 impl WorldEffects {
     pub fn new(pack: Arc<EffectsPack>, limits: EffectsLimits) -> Result<Self> {
         Ok(Self {
-            world: EffectsWorld::new(pack, limits, 0x425249)?,
+            world: EffectsWorld::new(pack.clone(), limits, 0x425249)?,
             limits,
             source: None,
             attachments: BTreeMap::new(),
@@ -48,10 +109,46 @@ impl WorldEffects {
             warnings: BTreeMap::new(),
             deferred: 0,
             visited: 0,
+            base: pack,
+            map_sources: Vec::new(),
+            map_active: Vec::new(),
         })
+    }
+    /// The next map's own emitters (none for most maps): the effects start
+    /// over with them added to the game's.
+    pub fn set_map_effects(
+        &mut self,
+        effects: Option<&bri_content::effects::MapEffects>,
+    ) -> Result<()> {
+        self.clear();
+        let pack = match effects {
+            Some(effects) => with_map_effects(&self.base, effects)?,
+            None => self.base.clone(),
+        };
+        if !Arc::ptr_eq(self.world.pack(), &pack) {
+            self.world = EffectsWorld::new(pack, self.limits, 0x425249)?;
+        }
+        self.map_sources = effects
+            .into_iter()
+            .flat_map(|e| &e.sources)
+            .map(|s| {
+                let rotation = glam::Quat::from_array(s.rotation).normalize();
+                (
+                    s.emitter.clone(),
+                    SourceTransform {
+                        position: Vec3::from(s.position),
+                        rotation,
+                        velocity: rotation * Vec3::Y * s.velocity,
+                    },
+                )
+            })
+            .collect();
+        self.map_active = vec![None; self.map_sources.len()];
+        Ok(())
     }
     pub fn clear(&mut self) {
         self.world.teardown();
+        self.map_active.iter_mut().for_each(|a| *a = None);
         self.source = None;
         self.attachments.clear();
         self.active.clear();
@@ -248,6 +345,16 @@ impl WorldEffects {
                 );
             }
         }
+        // The map's own emitters run all the time.
+        for ((asset, transform), active) in self.map_sources.iter().zip(&mut self.map_active) {
+            if active.is_none_or(|h| !self.world.is_active(h)) {
+                *active = Some(self.world.start_emitter(
+                    asset,
+                    *transform,
+                    SourceOptions::default(),
+                )?);
+            }
+        }
         self.world.advance(dt, wind)
     }
 }
@@ -388,6 +495,68 @@ mod tests {
     crate::testing::synthetic_and_content!(
         Effects: replicated_effect_lifecycle_late_join_and_capacity
     );
+
+    /// A map's own emitter (an imported map's waterfall) is added to the
+    /// game's effects and runs where the map puts it; the next map without
+    /// one goes back to the game's own pack.
+    #[test]
+    fn a_maps_own_emitters_run_where_it_places_them() -> Result<()> {
+        let base = bri_fx_runtime::testing::pack(|_| {});
+        let mut particle = base.library.particles[0].clone();
+        particle.id = "creek:particle/fall".into();
+        // A texture the game lacks draws the cloud, as v20 did.
+        particle.texture = "add-ons/map_creek/waterfall".into();
+        let mut emitter = base.library.emitters[0].clone();
+        emitter.id = "creek:emitter/fall".into();
+        emitter.particles = vec![particle.id.clone()];
+        let map = bri_content::effects::MapEffects {
+            schema_version: 1,
+            particles: vec![particle],
+            emitters: vec![emitter],
+            sources: vec![bri_content::effects::MapEmitter {
+                node: 3,
+                emitter: "creek:emitter/fall".into(),
+                position: [10.0, 20.0, 30.0],
+                rotation: [0.0, 0.0, 0.0, 1.0],
+                velocity: 1.0,
+            }],
+        };
+        let mut library = base.library.clone();
+        library.textures.insert(
+            crate::weapon_effects::MISSING_PARTICLE_TEXTURE.into(),
+            "cloud.png".into(),
+        );
+        let image = |id: &str| bri_fx_runtime::pack::TextureImage {
+            id: id.into(),
+            width: 1,
+            height: 1,
+            rgba: vec![255; 4],
+        };
+        let base = EffectsPack::from_parts(
+            library,
+            bri_fx_runtime::testing::manifest(),
+            vec![
+                image(bri_fx_runtime::testing::TEXTURE),
+                image(crate::weapon_effects::MISSING_PARTICLE_TEXTURE),
+            ],
+        )?;
+        let mut effects = WorldEffects::new(base.clone(), Default::default())?;
+        effects.set_map_effects(Some(&map))?;
+        for _ in 0..30 {
+            effects.advance(1.0 / 30.0, Vec3::ZERO, Vec3::ZERO, |_, _, _| Ok(true))?;
+        }
+        assert!(effects.world.particle_count() > 0, "the waterfall runs");
+        let drawn = effects.world.pack();
+        let fall = &drawn.library.particles[drawn.library.particles.len() - 1];
+        assert_eq!(
+            fall.texture,
+            crate::weapon_effects::MISSING_PARTICLE_TEXTURE
+        );
+        effects.set_map_effects(None)?;
+        assert!(Arc::ptr_eq(effects.world.pack(), &base));
+        assert_eq!(effects.world.particle_count(), 0);
+        Ok(())
+    }
     fn plate() -> BTreeMap<String, bri_content::brick::Brick> {
         BTreeMap::from([(
             "plate".into(),

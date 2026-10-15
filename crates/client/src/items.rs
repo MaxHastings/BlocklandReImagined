@@ -406,6 +406,35 @@ pub fn native_shape_scene(
     let mut bindings = Vec::new();
     let mut image_bindings = BTreeMap::new();
     for (source, texture) in shape.materials.iter().zip(textures) {
+        if let Some(surface) = source.surface.as_ref().filter(|_| !source.unlit) {
+            // The full physically based look: its maps are other
+            // materials' textures, data except the glow.
+            let mut bind = |image: &SceneImage, srgb: bool| {
+                *image_bindings
+                    .entry((image.label.clone(), !srgb))
+                    .or_insert_with(|| {
+                        let mut image = image.clone();
+                        image.srgb = srgb;
+                        scene.images.push(image);
+                        scene.images.len() - 1
+                    })
+            };
+            let base = bind(texture, true);
+            let maps = bri_render::scene::SurfaceMap::ALL.map(|map| match map.of(surface) {
+                Some(m) => bind(textures[m], map.srgb()),
+                None => bind(&map.stand_in(), map.srgb()),
+            });
+            let mut material =
+                Material::physical(format!("item/{model}/{}", source.name), base, maps, surface);
+            material.ignore_texture_alpha = source.blend == "opaque";
+            material.alpha = match source.blend.as_str() {
+                "opaque" if node_color || tint[3] >= 1. => AlphaMode::Opaque,
+                _ => AlphaMode::Blend,
+            };
+            bindings.push(scene.materials.len());
+            scene.materials.push(material);
+            continue;
+        }
         if let Some(metal) = &source.metal {
             // Bare metal: its texture tints the reflectance (colour),
             // its detail material's texture is data (linear).

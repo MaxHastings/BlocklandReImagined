@@ -112,11 +112,17 @@ impl Parser {
         );
         let class = self.take()?.literal()?.to_lowercase();
         self.expect('(')?;
-        let name = if self.tokens.get(self.at) == Some(&Token::Symbol(')')) {
-            String::new()
-        } else {
-            self.take()?.literal()?
-        };
+        // Torque takes any text up to `)` as the name: community maps name
+        // FileObjects by path (`add-ons/Map/winners1.txt`).
+        let mut name = String::new();
+        while self.tokens.get(self.at) != Some(&Token::Symbol(')')) {
+            match self.take()? {
+                Token::Symbol(c) if c != '(' && c != '{' && c != ';' => name.push(c),
+                Token::Symbol(c) => anyhow::bail!("Unexpected {c} in a mission object name"),
+                t => name.push_str(&t.literal()?),
+            }
+            ensure!(name.len() <= 1024, "Mission object name too long");
+        }
         self.expect(')')?;
         self.expect('{')?;
         let index = self.nodes.len();

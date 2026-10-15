@@ -186,6 +186,56 @@ pub struct SceneImage {
     /// Diffuse images use sRGB; authored lightmaps and weights are raw UNORM.
     pub srgb: bool,
 }
+/// The maps of a [`MaterialKind::Physical`] material, in its `maps` order.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SurfaceMap {
+    Normal,
+    MetalRough,
+    Occlusion,
+    Glow,
+    Detail,
+}
+impl SurfaceMap {
+    pub const ALL: [Self; 5] = [
+        Self::Normal,
+        Self::MetalRough,
+        Self::Occlusion,
+        Self::Glow,
+        Self::Detail,
+    ];
+    /// The material (by index) whose texture holds this map.
+    pub fn of(self, surface: &bri_content::shape::Surface) -> Option<usize> {
+        match self {
+            Self::Normal => surface.normal,
+            Self::MetalRough => surface.metallic_roughness,
+            Self::Occlusion => surface.occlusion,
+            Self::Glow => surface.emissive_map,
+            Self::Detail => surface.detail,
+        }
+    }
+    /// Colour (sRGB) rather than data.
+    pub fn srgb(self) -> bool {
+        self == Self::Glow
+    }
+    /// What a model without this map draws with: a flat normal, the
+    /// factors unchanged, no occlusion, the glow colour as it is, no grain.
+    pub fn stand_in(self) -> SceneImage {
+        let (label, rgba) = match self {
+            Self::Normal => ("flat normal", [128, 128, 255, 255]),
+            Self::MetalRough => ("plain metal-roughness", [255; 4]),
+            Self::Occlusion => ("no occlusion", [255; 4]),
+            Self::Glow => ("plain glow", [255; 4]),
+            Self::Detail => ("no detail", [128, 128, 128, 255]),
+        };
+        SceneImage {
+            label: label.into(),
+            width: 1,
+            height: 1,
+            rgba: rgba.to_vec(),
+            srgb: self.srgb(),
+        }
+    }
+}
 impl SceneImage {
     pub fn white() -> Self {
         Self {
@@ -230,6 +280,16 @@ pub enum MaterialKind {
     /// `parameters[0]`: roughness, detail repeats, detail strength;
     /// `parameters[1]`: reflectance at normal incidence (linear RGB).
     Metal,
+    /// A modern model's full look (`bri_content::shape::Surface`, glTF's
+    /// metallic-roughness material): base colour in slot 0 (sRGB), a
+    /// tangent-space normal map in 1, metal (blue) and roughness (green) in
+    /// 3, ambient occlusion (red) in 4 (all linear), glow colour in 5
+    /// (sRGB) and a repeating detail texture in 6 (linear); slot 2 is the environment probe's map, as for metal. Lit like
+    /// other models where diffuse, with GGX highlights and reflections.
+    /// `parameters[0]`: metallic, roughness, normal strength, occlusion
+    /// strength; `parameters[1]`: glow (linear RGB); `parameters[2]`:
+    /// detail repeats, detail strength.
+    Physical,
 }
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum AlphaMode {
@@ -279,6 +339,47 @@ impl Material {
     pub fn brick_overlay(name: impl Into<String>, diffuse: usize) -> Self {
         let mut material = Self::vertex_lit(name, diffuse);
         material.kind = MaterialKind::BrickOverlay;
+        material
+    }
+    /// A [`MaterialKind::Physical`] material for a model's
+    /// `bri_content::shape::Surface`: `base` its colour image and `maps`
+    /// its normal, metal-roughness, occlusion, glow and detail images, in
+    /// [`SurfaceMap`] order (each the [`SurfaceMap::stand_in`] where the
+    /// model has none).
+    pub fn physical(
+        name: impl Into<String>,
+        base: usize,
+        maps: [usize; 5],
+        surface: &bri_content::shape::Surface,
+    ) -> Self {
+        let mut material = Self::vertex_lit(name, base);
+        material.kind = MaterialKind::Physical;
+        material.images[1] = maps[0];
+        material.images[3] = maps[1];
+        material.images[4] = maps[2];
+        material.images[5] = maps[3];
+        material.images[6] = maps[4];
+        material.parameters = Some([
+            [
+                surface.metallic,
+                surface.roughness,
+                surface.normal_scale,
+                surface.occlusion_strength,
+            ],
+            [
+                surface.emissive[0],
+                surface.emissive[1],
+                surface.emissive[2],
+                0.0,
+            ],
+            [
+                surface.detail_scale,
+                if surface.detail.is_some() { 1.0 } else { 0.0 },
+                0.0,
+                0.0,
+            ],
+            [0.0; 4],
+        ]);
         material
     }
     pub fn vertex_lit(name: impl Into<String>, diffuse: usize) -> Self {
@@ -724,7 +825,10 @@ impl SceneData {
             // mark its lightmap decomposed; nothing else has any.
             let wants = matches!(
                 material.kind,
-                MaterialKind::Water | MaterialKind::Terrain | MaterialKind::Metal
+                MaterialKind::Water
+                    | MaterialKind::Terrain
+                    | MaterialKind::Metal
+                    | MaterialKind::Physical
             );
             let decomposed =
                 material.kind == MaterialKind::Surface && decomposed_lightmap(material.parameters);
@@ -2210,9 +2314,22 @@ const CUBE_FACES_PER_FRAME: usize = 24;
 /// per row and a face's share of a layer; face resolution, world texel per
 /// unit of distance and the soft lights' bits (`shadow::soft_cube_mask`);
 /// and each light's six face matrices.
+/// A map light's cone words for a light that shines all round.
+const ALL_ROUND: [f32; 4] = [0.0, 0.0, 0.0, -1.0];
+/// A spot light's cone words: full light within `inner` degrees of
+/// `direction`, fading to none at `outer`.
+pub fn spot_words(direction: Vec3, inner: f32, outer: f32) -> [f32; 4] {
+    let direction = direction.normalize_or_zero();
+    let (inner, outer) = (inner.to_radians().cos(), outer.to_radians().cos());
+    if direction == Vec3::ZERO || !(inner.is_finite() && outer.is_finite()) {
+        return ALL_ROUND;
+    }
+    let k = 1.0 / (inner - outer).max(0.001);
+    [direction.x * k, direction.y * k, direction.z * k, outer * k]
+}
 const MAP_LIGHTS_BYTES: usize = MAP_LIGHT_CUBES + 32 + crate::map_lighting::MAX_LIGHTS * 6 * 64;
 const MAP_LIGHT_CUBES: usize =
-    48 + crate::map_lighting::MAX_LIGHTS * 48 + crate::map_lighting::MAX_LIGHTS * 4;
+    48 + crate::map_lighting::MAX_LIGHTS * 64 + crate::map_lighting::MAX_LIGHTS * 4;
 fn validate_light_parameters(lights: &[crate::map_lighting::MapLight]) -> Result<()> {
     ensure!(
         lights.len() <= crate::map_lighting::MAX_LIGHTS
@@ -2338,13 +2455,17 @@ impl MapLightBinding {
                 words.extend([l.color[0], l.color[1], l.color[2], l.outer]);
                 let channel = if every_light { None } else { l.channel };
                 words.extend([channel.map_or(-1.0, f32::from), 1.0, 1.0, 1.0]);
+                words.extend(ALL_ROUND);
             }
             // Each `MapLighting::lights` index's place in the uniform.
             let mut slots = [-1.0f32; crate::map_lighting::MAX_LIGHTS];
             for (slot, &(index, _)) in lights.iter().enumerate() {
                 slots[index] = slot as f32;
             }
-            words.resize(12 + crate::map_lighting::MAX_LIGHTS * 12, 0.0);
+            for _ in lights.len()..crate::map_lighting::MAX_LIGHTS {
+                words.extend([0.0; 12]);
+                words.extend(ALL_ROUND);
+            }
             words.extend(slots);
             let bytes: &[u8] = bytemuck::cast_slice(&words);
             uniform[..bytes.len()].copy_from_slice(bytes);
@@ -2363,6 +2484,18 @@ impl MapLightBinding {
             shaded,
         }
     }
+    /// Cones of the shaded lights: `spot(i)` for light `i` of the lights
+    /// set ([`spot_words`]); `None` lights all round.
+    fn set_spots(&self, queue: &wgpu::Queue, spot: impl Fn(usize) -> Option<[f32; 4]>) {
+        for (slot, &(index, _)) in self.shaded.iter().enumerate() {
+            let words = spot(index).unwrap_or(ALL_ROUND);
+            queue.write_buffer(
+                &self.lights,
+                (48 + slot * 64 + 48) as u64,
+                bytemuck::cast_slice(&words),
+            );
+        }
+    }
     /// Tints the shaded lights: `tint(i)` for light `i` of
     /// `MapLighting::lights` (1 as fitted, 0 off). Lamps then pick their
     /// shadow slots by the light they give now.
@@ -2379,9 +2512,9 @@ impl MapLightBinding {
             if let Some(lamp) = self.lamps.get_mut(slot) {
                 lamp.color = color * *t;
             }
-            // Each light is 48 bytes after the 48-byte header; its tint is
-            // the last three words.
-            let offset = 48 + slot * 48 + 36;
+            // Each light is 64 bytes after the 48-byte header; its tint is
+            // words 9 to 11.
+            let offset = 48 + slot * 64 + 36;
             queue.write_buffer(
                 &self.lights,
                 offset as u64,
@@ -3288,6 +3421,7 @@ impl SceneRenderer {
                     MaterialKind::Unlit => 8.0,
                     MaterialKind::BrickSurfaces => 9.0,
                     MaterialKind::Metal => 10.0,
+                    MaterialKind::Physical => 11.0,
                 },
                 match material.alpha {
                     AlphaMode::Mask(c) => c,
@@ -3318,7 +3452,9 @@ impl SceneRenderer {
                 .map(|(i, image)| wgpu::BindGroupEntry {
                     binding: i as u32,
                     resource: wgpu::BindingResource::TextureView(
-                        if material.kind == MaterialKind::Metal && i == 2 {
+                        if matches!(material.kind, MaterialKind::Metal | MaterialKind::Physical)
+                            && i == 2
+                        {
                             // Metal reflects the environment probe's map.
                             &self.probe.map
                         } else if (8..=10).contains(&i) {
@@ -3682,6 +3818,14 @@ impl SceneRenderer {
     /// off). The light leaves objects and its share of the map's baked light
     /// alike; the rest of the baked light stays. Nothing is uploaded when
     /// the tints did not change.
+    /// Spot cones of the Dynamic mode's lights: `(index, cone)` for light
+    /// `index` of the lights last given `set_dynamic_lights`, the cone from
+    /// [`spot_words`]. Every other light shines all round.
+    pub fn set_map_light_spots(&mut self, queue: &wgpu::Queue, spots: &[(usize, [f32; 4])]) {
+        self.map_lights.set_spots(queue, |i| {
+            spots.iter().find(|(index, _)| *index == i).map(|(_, w)| *w)
+        });
+    }
     pub fn set_map_light_tints(&mut self, queue: &wgpu::Queue, tints: &[Vec3]) {
         self.map_lights
             .set_tints(queue, |i| tints.get(i).copied().unwrap_or(Vec3::ONE));
@@ -4801,6 +4945,7 @@ impl SceneRenderer {
                                     MaterialKind::Terrain
                                         | MaterialKind::VertexLit
                                         | MaterialKind::Metal
+                                        | MaterialKind::Physical
                                         | MaterialKind::Unlit
                                 ))
                         {

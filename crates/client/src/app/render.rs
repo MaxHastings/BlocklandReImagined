@@ -146,6 +146,10 @@ impl App {
                 frame.queue,
                 &view.broken_shapes,
                 &view.map_lights,
+                // Wall-clock time, so every player's lights blink together.
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map_or(0.0, |d| d.as_secs_f64()),
             );
         }
         let span = crate::frame_trace::span("chunk uploads");
@@ -1598,6 +1602,8 @@ impl App {
                 &self.state_dir.join("light-volumes"),
                 visual.modern_lights.as_deref(),
             );
+            self.lighting.light_volume.animations = visual.light_animations;
+            self.lighting.light_volume.spots = visual.light_spots;
             self.scene.cpu_scene = Some(visual.scene);
             self.scene.cpu_terrain = visual.terrain.into_iter().map(Arc::new).collect();
             self.scene.scenery.reset();

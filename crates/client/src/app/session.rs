@@ -514,6 +514,8 @@ impl App {
                     &light_cache,
                     visual.modern_lights.as_deref(),
                 );
+                light_volume.animations = visual.light_animations.clone();
+                light_volume.spots = visual.light_spots.clone();
                 light_volume.set_light_shapes(&loaded.breakables);
                 // Every package this host loaded, hashed: what joiners must match.
                 let identity = paths.environment()?;
@@ -557,8 +559,9 @@ impl App {
                 }
                 let waters = loaded.simulation.waters.clone();
                 let plate = loaded.plate;
-                let foliage = crate::foliage::PreparedFoliage::load(
+                let foliage = crate::foliage::PreparedFoliage::load_for_map(
                     &paths.foliage,
+                    paths.maps.root(&base_map)?,
                     &base_map,
                     &building,
                     &waters,
@@ -567,6 +570,7 @@ impl App {
                     loaded,
                     Prepared {
                         foliage,
+                        map_effects: crate::effects::load_map_effects(paths.maps.root(&base_map)?)?,
                         map_id: base_map.clone(),
                         waters,
                         plate,

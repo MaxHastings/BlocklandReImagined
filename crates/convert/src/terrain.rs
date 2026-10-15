@@ -173,7 +173,8 @@ pub fn instance(
                 .properties
                 .get(key)
                 .map(|v| v.trim())
-                .filter(|v| !v.is_empty())
+                // Torque writes "." for an unset texture.
+                .filter(|v| !v.is_empty() && *v != "." && *v != "./")
             else {
                 return Ok(None);
             };

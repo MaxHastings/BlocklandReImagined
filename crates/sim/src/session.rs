@@ -20,6 +20,7 @@ pub use bots::{
 };
 mod breakables;
 mod build_load;
+mod teleporters;
 pub use build_load::LoadPace;
 mod combat;
 mod death_results;
@@ -1155,6 +1156,8 @@ pub struct Session {
     /// Bodies' hands and images' barrels, for shots from the muzzle.
     grips: grips::Grips,
     breakables: breakables::Breakables,
+    /// The map's teleporters (`set_teleporters`).
+    map_teleporters: teleporters::MapTeleporters,
     /// Add-On map light rules (`set_map_lights`), replicated to clients.
     map_lights: Vec<map_lights::MapLightRule>,
     /// The music an Add-On rule plays for everyone (`play_music_all`),
@@ -1197,6 +1200,7 @@ impl Session {
             body_mounts: BTreeMap::new(),
             grips: Default::default(),
             breakables: Default::default(),
+            map_teleporters: Default::default(),
             map_lights: Vec::new(),
             music: None,
             world_shapes: Default::default(),
@@ -3293,6 +3297,7 @@ impl Session {
         self.package_vehicle_crashes();
         impacts.retain(|(owner, _)| !smashers.contains(owner));
         self.fire_touches(touches);
+        contain("map teleporters", self.map_teleports());
         for (owner, carry) in crossed {
             self.crossed(bri_package_runtime::ops::ObjectRef::Player(owner), carry);
         }
