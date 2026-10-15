@@ -181,6 +181,7 @@ impl App {
                 gpu_passes: Vec::new(),
                 time_passes: false,
                 upscale: None,
+                bloom: None,
                 display_size: (1, 1),
             },
             audio,

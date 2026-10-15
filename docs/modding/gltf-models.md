@@ -196,6 +196,18 @@ tracer texture is a PNG under `assets/textures/`, listed in
 `assets/presentation.json` and named by a particle's `texture` in the pack's
 `effects` (see `docs/modding/weapons.md`).
 
+**Live digits.** A counter on the gun itself (rounds left on a rifle's
+display) is an object per digit in the converted `.shape.json`, each with
+a `live` block: `{ "value": "rounds", "place": 0 }` for the ones,
+`"place": 1` for the tens. The object's material frame `d` shows digit
+`d`; with `"uv_step": [0.1, 0]` the mesh needs only one set of texture
+coordinates, on the strip's `0`, and digit `d` moves them `d` steps (a
+strip of `0123456789` across a texture). `"blank_leading": true` hides a
+digit with no value yet (no leading zero); `scale` multiplies the value
+first. Values are `rounds` (in the magazine), `reserve` and `magazine`
+(a full one), from the holder's own gun; other players' copies keep
+their authored frame.
+
 ## 4. Vehicles
 
 The importer converts the model and keeps every node; the vehicle's handling,

@@ -438,6 +438,7 @@ fn write_sky(dir: &Path) -> Result<crate::environment::Environment> {
             start: 500.0,
             end: 1000.0,
             color: [0.45, 0.6, 0.85],
+            ..Default::default()
         },
         warnings: vec![],
     };

@@ -251,6 +251,7 @@ pub fn convert(
             start: vector(p, "fogdistance", [250.0])?[0],
             end: vector(p, "visibledistance", [500.0])?[0],
             color: vector(p, "fogcolor", [0.5; 3])?,
+            ..Default::default()
         },
         warnings,
     };

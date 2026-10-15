@@ -1,41 +1,49 @@
 // The one fog every pass shares; `bri_content::environment::Fog` is its CPU
-// twin and says how it works. atmosphere: fog start, fog end, unused, 1 when
-// fog is on; below: 1 when the sky goes on below the horizon (fog_color.w).
+// twin and says how it works. atmosphere: fog start, fog end, animation
+// seconds (scene passes; unused here), 1 when fog is on; below: 1 when the
+// sky goes on below the horizon (fog_color.w); h: the fog's height (units
+// per e-fold) and most cover (`Fog::haze_uniform`). A zero h is the
+// standard fog (FOG_HEIGHT, complete), so a pass that never sets it keeps
+// today's look.
+fn fog_height(h:vec4<f32>)->f32 {return select(FOG_HEIGHT,h.x,h.x>0.0);}
+fn fog_max(h:vec4<f32>)->f32 {return select(1.0,min(h.y,1.0),h.y>0.0);}
 fn fog_density(a:vec4<f32>)->f32 {return FOG_DEPTH/max(a.y-a.x,0.001);}
 // How fast a ray whose direction rises `up` leaves the fog, per unit.
-fn fog_rising(up:f32,below:f32)->f32 {
-    return select(max(up,0.0),abs(up),below>0.5)/FOG_HEIGHT;
+fn fog_rising(up:f32,below:f32,h:vec4<f32>)->f32 {
+    return select(max(up,0.0),abs(up),below>0.5)/fog_height(h);
 }
 // Fog over the sky along a ray whose direction rises `up`: the air at the
 // world's edge in front of it.
-fn sky_fog_at(up:f32,a:vec4<f32>,below:f32)->f32 {
+fn sky_fog_at(up:f32,a:vec4<f32>,below:f32,h:vec4<f32>)->f32 {
     if a.y<=0.0 {return 0.0;}
-    return (1.0-exp(-FOG_DEPTH*exp(-fog_rising(up,below)*a.y)))*a.w;
+    return (1.0-exp(-FOG_DEPTH*exp(-fog_rising(up,below,h)*a.y)))*fog_max(h)*a.w;
 }
 // Fog over a point at `offset` from the eye.
-fn fog_along(offset:vec3<f32>,a:vec4<f32>,below:f32)->f32 {
+fn fog_along(offset:vec3<f32>,a:vec4<f32>,below:f32,h:vec4<f32>)->f32 {
     if a.y<=0.0 {return 0.0;}
     let distance=length(offset);
     let up=offset.y/max(distance,0.0001);
     let inside=max(distance-a.x,0.0);
-    let rise=fog_rising(up,below);
+    let rise=fog_rising(up,below,h);
     let x=rise*inside;
     let spread=select((1.0-exp(-x))/x,1.0-0.5*x,x<0.0001);
     let depth=fog_density(a)*exp(-rise*a.x)*inside*spread;
-    return (1.0-exp(-depth))*a.w;
+    return (1.0-exp(-depth))*fog_max(h)*a.w;
 }
 // How far a point at `offset` has faded out into what lies behind it: 0
 // before the last quarter of the fog's range, 1 at the visible distance
-// and past it.
-fn fog_edge(offset:vec3<f32>,a:vec4<f32>)->f32 {
+// and past it. A haze (most cover below 1) does not fade: geometry stays
+// until the visible distance.
+fn fog_edge(offset:vec3<f32>,a:vec4<f32>,h:vec4<f32>)->f32 {
     if a.y<=0.0 {return 0.0;}
+    if fog_max(h)<1.0 {return select(0.0,a.w,length(offset)>=a.y);}
     let t=clamp((length(offset)-a.x-0.75*(a.y-a.x))/max(0.25*(a.y-a.x),0.001),0.0,1.0);
     return t*t*(3.0-2.0*t)*a.w;
 }
 // Opaque surfaces fade out by leaving that share of their pixels to what is
 // behind them (the sky), in interleaved gradient noise (Jimenez 2014) over
 // the window pixel `pixel`.
-fn faded_out(pixel:vec2<f32>,offset:vec3<f32>,a:vec4<f32>)->bool {
-    let edge=fog_edge(offset,a);
+fn faded_out(pixel:vec2<f32>,offset:vec3<f32>,a:vec4<f32>,h:vec4<f32>)->bool {
+    let edge=fog_edge(offset,a,h);
     return edge>0.0 && edge>=fract(52.9829189*fract(dot(floor(pixel),vec2<f32>(0.06711056,0.00583715))));
 }

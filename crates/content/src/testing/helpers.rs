@@ -184,6 +184,7 @@ pub fn rigid_shape(
                 visibility: 1.0,
                 frame: 0,
                 material_frame: 0,
+                live: None,
             })
             .collect(),
         details: vec![Detail {

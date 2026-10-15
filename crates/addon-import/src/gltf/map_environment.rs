@@ -174,6 +174,7 @@ pub(super) fn sky(
         start: 0.0,
         end: (2.0 * width).max(1000.0),
         color: solid_color,
+        ..Fog::default()
     };
     fog.start = 0.7 * fog.end;
     if let Some(v) = extras.get("bri_fog") {

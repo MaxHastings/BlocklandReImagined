@@ -487,6 +487,16 @@ name an emitter by id; an explosion's effect is found by its explosion's
 name (`boom`), as the base game's are. Import Add-On writes these from a
 v20 Add-On's datablocks.
 
+**A flash that lights the ground.** An image state's `emitter` may name
+one of your explosions' effects by id (`your-id:explosion/flash`)
+instead of an emitter: the state then plays it whole, its emitters and
+its `light` for the effect's `lifetime`, at the muzzle. A muzzle flash
+with a `lifetime` of 0.05 and a warm light of radius 6 lights the grass
+around the gun for each shot. A gun on a vehicle (the image a vehicle's
+`weapon.effect` names) does the same, and its states with
+`eject_shell` throw the image's `casing` from its muzzle, carried on
+with the vehicle, as a held gun's do.
+
 **Worked example: a rifle with a burst mode.** Two Add-Ons, as the
 Commando sample splits them: `mag` provides the weapons pack (the rifle
 `mag:weapon/rifle`, whose image has a `magazine` of `"ammo": "rifle"` and

@@ -28,6 +28,81 @@ pub struct Object {
     pub visibility: f32,
     pub frame: u32,
     pub material_frame: u32,
+    /// Shows a digit of a value taken from what the model belongs to (the
+    /// rounds left in a held gun) by choosing its material
+    /// frame, so a counter on the model itself follows the game.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub live: Option<Live>,
+}
+/// One digit of a live value, drawn by an object's material frame
+/// (`Object::live`): frame `d` shows digit `d`. With `uv_step` the mesh
+/// needs only one texture-coordinate frame: frame `d` is it moved by
+/// `d * uv_step`, so ten digits side by side in a strip need no more.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Live {
+    /// The value, by name ([`LiveValues::get`]).
+    pub value: String,
+    /// Which digit: 0 the ones, 1 the tens, and so on.
+    #[serde(default)]
+    pub place: u32,
+    /// Digits per place (10 decimal), also the number of frames used.
+    #[serde(default = "Live::ten")]
+    pub base: u32,
+    /// Multiplies the value before its digits are taken.
+    #[serde(default = "Live::one")]
+    pub scale: f32,
+    /// Hide this digit while the value has no digit this high (no leading
+    /// zeros); the ones digit always shows.
+    #[serde(default)]
+    pub blank_leading: bool,
+    /// Texture-coordinate shift from one digit's frame to the next.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub uv_step: Option<[f32; 2]>,
+}
+impl Live {
+    fn ten() -> u32 {
+        10
+    }
+    fn one() -> f32 {
+        1.0
+    }
+    /// The digit `value` shows here, or `None` when it is hidden.
+    pub fn digit(&self, value: u32) -> Option<u32> {
+        let scaled = (value as f32 * self.scale).max(0.0) as u64;
+        let base = u64::from(self.base.max(2));
+        let unit = base.checked_pow(self.place).unwrap_or(u64::MAX);
+        if self.blank_leading && self.place > 0 && scaled < unit {
+            return None;
+        }
+        Some(((scaled / unit) % base) as u32)
+    }
+}
+/// The values a model's live objects (`Object::live`) can show, from what
+/// the model belongs to; `None` where it has no such value (another
+/// player's gun, whose magazine this client does not know).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct LiveValues {
+    /// Rounds ready to fire in a held gun (its magazine).
+    pub rounds: Option<u32>,
+    /// Rounds carried for it beyond the magazine.
+    pub reserve: Option<u32>,
+    /// A full magazine.
+    pub magazine: Option<u32>,
+}
+impl LiveValues {
+    pub const NAMES: [&str; 3] = ["rounds", "reserve", "magazine"];
+    pub fn get(&self, name: &str) -> Option<u32> {
+        match name {
+            "rounds" => self.rounds,
+            "reserve" => self.reserve,
+            "magazine" => self.magazine,
+            _ => None,
+        }
+    }
+    pub fn is_empty(&self) -> bool {
+        *self == Self::default()
+    }
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Detail {
@@ -203,6 +278,30 @@ pub struct ClipSet {
 }
 
 impl Shape {
+    /// Give every mesh a live object draws with `Live::uv_step` its digit
+    /// frames: frame `d` is its first texture-coordinate frame moved by
+    /// `d * uv_step`. Run once after loading, before posing.
+    pub fn expand_live_frames(&mut self) {
+        for object in &self.objects {
+            let Some(live) = &object.live else { continue };
+            let Some(step) = live.uv_step else { continue };
+            for &m in &object.meshes {
+                let Some(Some(mesh)) = self.meshes.get_mut(m) else {
+                    continue;
+                };
+                let n = mesh.frame_vertices;
+                if n == 0 || mesh.uv.len() != n {
+                    continue;
+                }
+                let first = mesh.uv.clone();
+                for d in 1..live.base {
+                    let shift = [step[0] * d as f32, step[1] * d as f32];
+                    mesh.uv
+                        .extend(first.iter().map(|uv| [uv[0] + shift[0], uv[1] + shift[1]]));
+                }
+            }
+        }
+    }
     pub fn validate(&self) -> Result<()> {
         ensure!(
             self.schema_version == 1 && !self.id.is_empty(),
@@ -238,6 +337,19 @@ impl Shape {
                 object.visibility.is_finite(),
                 "Non-finite object visibility"
             );
+            if let Some(live) = &object.live {
+                ensure!(
+                    LiveValues::NAMES.contains(&live.value.as_str())
+                        && (2..=64).contains(&live.base)
+                        && live.place < 10
+                        && live.scale.is_finite()
+                        && live.scale >= 0.0
+                        && live.uv_step.is_none_or(|s| s.iter().all(|v| v.is_finite())),
+                    "Invalid live value on {}: values are {}",
+                    object.name,
+                    LiveValues::NAMES.join(", ")
+                );
+            }
         }
         for mesh in self.meshes.iter().flatten() {
             ensure!(

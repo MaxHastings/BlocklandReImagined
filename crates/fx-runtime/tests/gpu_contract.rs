@@ -241,7 +241,7 @@ fn billboard_blends_and_depth_match_the_host_pass() {
             (0, red, BlendMode::Additive, false, past, [0, 0, 255]),
             (0, red, BlendMode::AdditiveColor, false, past, [0, 0, 255]),
         ] {
-            renderer.set_fog(fogged, [0., 1., 0., 1.]);
+            renderer.set_fog(fogged, [0., 1., 0., 1.], [0.; 4]);
             let frame = FrameEffects {
                 particles: vec![ParticleInstance {
                     position: Vec3::Z * 0.5,

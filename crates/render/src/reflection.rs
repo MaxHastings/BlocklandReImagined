@@ -689,6 +689,8 @@ struct FrameUniform {
     eye: [f32; 4],
     fog_color: [f32; 4],
     atmosphere: [f32; 4],
+    /// The fog's height and most cover (`Camera::haze`).
+    haze: [f32; 4],
     /// Target width and height in pixels.
     screen: [f32; 4],
 }
@@ -703,6 +705,7 @@ fn frame_uniform(
         eye: eye.extend(1.0).to_array(),
         fog_color: camera.fog_color,
         atmosphere: camera.atmosphere,
+        haze: camera.haze,
         screen: [size.0 as f32, size.1 as f32, 0.0, 0.0],
     }
 }

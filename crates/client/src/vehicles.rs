@@ -56,6 +56,9 @@ pub struct VehicleAssets {
     threads: BTreeMap<String, ThreadRig>,
     /// Model asset paths by lower-case source path (`add-ons/vehicle_jeep/jeeptire.dts`).
     sources: BTreeMap<String, String>,
+    /// Each definition's lamps (`Definition::lights`) where its model has
+    /// their nodes: body-local position, colour and radius.
+    lamps: BTreeMap<String, Vec<(Vec3, [f32; 3], f32)>>,
 }
 
 /// A gunner model split into its fixed part and the parts its `look` clip
@@ -215,6 +218,7 @@ impl VehicleAssets {
             .map(|d| d.attachment_model.clone().unwrap_or(d.model.clone()))
             .collect();
         let mut models = BTreeMap::new();
+        let mut lamps: BTreeMap<String, Vec<(Vec3, [f32; 3], f32)>> = BTreeMap::new();
         let mut looks = BTreeMap::new();
         let mut threads = BTreeMap::new();
         for asset in pack.assets.iter().filter(|a| a.kind == "model") {
@@ -225,8 +229,9 @@ impl VehicleAssets {
                 32 << 20,
             )
             .and_then(|bytes| {
-                let shape: Shape = serde_json::from_slice(&bytes)?;
+                let mut shape: Shape = serde_json::from_slice(&bytes)?;
                 shape.validate()?;
+                shape.expand_live_frames();
                 Ok(shape)
             });
             let shape = match shape {
@@ -251,6 +256,28 @@ impl VehicleAssets {
                 })
                 .collect();
             let refs: Vec<&SceneImage> = images.iter().collect();
+            for d in pack
+                .definitions
+                .iter()
+                .filter(|d| d.model == asset.path && !d.lights.is_empty())
+            {
+                let rest = bri_content::animation::sample(&shape, None, 0.0)?;
+                for lamp in &d.lights {
+                    let Some(node) = shape
+                        .nodes
+                        .iter()
+                        .position(|n| n.name.eq_ignore_ascii_case(&lamp.node))
+                    else {
+                        bri_console::warn(format!("{}: no node {} for its light", d.id, lamp.node));
+                        continue;
+                    };
+                    let at = rest.nodes[node].transform_point3(Vec3::from(lamp.offset));
+                    lamps
+                        .entry(d.id.clone())
+                        .or_default()
+                        .push((at, lamp.color, lamp.radius));
+                }
+            }
             let look = gunner_models
                 .contains(&asset.path)
                 .then(|| bri_vehicles::muzzle::look_clip(&look_clips, &shape))
@@ -441,7 +468,29 @@ impl VehicleAssets {
             looks,
             threads,
             sources,
+            lamps,
         })
+    }
+    /// Lights the lamps of the vehicles whose drivers have them on cast,
+    /// from each vehicle's presented body.
+    pub fn lamp_lights(
+        &self,
+        infos: impl IntoIterator<Item = (Mat4, bool, String)>,
+    ) -> Vec<bri_render::scene::PointLight> {
+        let mut out = Vec::new();
+        for (body, on, definition) in infos {
+            if !on {
+                continue;
+            }
+            for (at, color, radius) in self.lamps.get(&definition).into_iter().flatten() {
+                let position = body.transform_point3(*at);
+                out.push(bri_render::scene::PointLight {
+                    position_radius: position.extend(*radius).to_array(),
+                    color: [color[0], color[1], color[2], 0.],
+                });
+            }
+        }
+        out
     }
     /// The loaded vehicle definitions, as the host's vehicle code takes them.
     pub fn pack(&self) -> &Pack {
@@ -1340,6 +1389,7 @@ pub(crate) mod tests {
                     destroyed,
                     turret_broken,
                     scale: 1.0,
+                    lights: false,
                 },
             )]);
             let mut vehicles = ClientVehicles::default();
@@ -1432,6 +1482,7 @@ pub(crate) mod tests {
                     destroyed: false,
                     turret_broken: false,
                     scale,
+                    lights: false,
                 },
             )]);
             let mut vehicles = ClientVehicles::default();
@@ -1535,6 +1586,7 @@ pub(crate) mod tests {
                     destroyed,
                     turret_broken: false,
                     scale: 1.0,
+                    lights: false,
                 },
             )]);
             let mut vehicles = ClientVehicles::default();
@@ -1591,6 +1643,7 @@ pub(crate) mod tests {
                 destroyed: false,
                 turret_broken: false,
                 scale: 1.0,
+                lights: false,
             },
         )]);
         let mut vehicles = ClientVehicles::default();
@@ -1629,6 +1682,7 @@ pub(crate) mod tests {
             destroyed,
             turret_broken: false,
             scale: 1.0,
+            lights: false,
         };
         let (live, dead) = (info(false), info(true));
         use bri_vehicles::Family::*;
@@ -1777,6 +1831,7 @@ pub(crate) mod tests {
                 destroyed: false,
                 turret_broken: false,
                 scale: 1.0,
+                lights: false,
             },
         )]);
         // The host: pulled toward a point that jumps ahead in bursts.
@@ -1875,6 +1930,7 @@ pub(crate) mod tests {
                 destroyed: false,
                 turret_broken: false,
                 scale: 1.0,
+                lights: false,
             },
         )]);
         let mut vehicles = ClientVehicles::default();

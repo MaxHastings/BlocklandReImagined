@@ -909,6 +909,8 @@ pub struct Camera {
     /// Sky-tinted ambient ([`Camera::set_sky_ambient`]): x the strength (0:
     /// off, the flat ambient), yzw the sky's colour at unit brightness.
     pub shading: [f32; 4],
+    /// The fog's height and most cover (`bri_content::environment::Fog::haze_uniform`).
+    pub haze: [f32; 4],
 }
 impl Camera {
     /// Native world uses Y up, right-handed coordinates and reversed 0..1
@@ -992,6 +994,7 @@ impl Camera {
         self.atmosphere[1] = scene.fog.end;
         self.atmosphere[3] = if scene.fog.end > 0.0 { 1.0 } else { 0.0 };
         self.sky_bands = scene.sky_bands;
+        self.haze = scene.fog.haze_uniform();
     }
     /// The live environment (`bri_content::atmosphere::resolve`) over the
     /// map's own values, set by [`Camera::apply_environment`] first.
@@ -1029,6 +1032,12 @@ impl Camera {
         self.atmosphere[0] = live.fog_start;
         self.atmosphere[1] = live.fog_end;
         self.atmosphere[3] = if live.fog_end > 0.0 { 1.0 } else { 0.0 };
+        if let Some(height) = live.fog_height {
+            self.haze[0] = height;
+        }
+        if let Some(max) = live.fog_max {
+            self.haze[1] = max;
+        }
         self.sky = [
             live.sky_tint[0],
             live.sky_tint[1],
@@ -1089,6 +1098,7 @@ impl Default for Camera {
             baked_sun_color: [0.0; 4],
             baked_ambient: [0.0; 4],
             shading: [0.0; 4],
+            haze: bri_content::environment::Fog::default().haze_uniform(),
             sky_bands: Default::default(),
         }
     }

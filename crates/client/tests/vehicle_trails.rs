@@ -233,6 +233,7 @@ impl Viewer {
                 destroyed: false,
                 turret_broken: false,
                 scale: 1.0,
+                lights: false,
             },
         )]);
         let tick = pose.tick as f64;

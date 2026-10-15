@@ -20,9 +20,11 @@ struct GpuCamera {
     right: [f32; 4],
     up: [f32; 4],
     position: [f32; 4],
-    /// The scene's fog (`Camera::atmosphere` and `fog_color` of bri-render).
+    /// The scene's fog (`Camera::atmosphere`, `fog_color` and `haze` of
+    /// bri-render).
     atmosphere: [f32; 4],
     fog_color: [f32; 4],
+    haze: [f32; 4],
 }
 /// Consecutive sprites that share a pipeline draw together. Every texture
 /// is a layer of one array and every blend mode is one premultiplied blend,
@@ -62,8 +64,9 @@ pub struct EffectsRenderer {
     max_instances: usize,
     /// This frame's instance data, kept to reuse its allocation.
     data: Vec<GpuParticle>,
-    /// The scene's fog: atmosphere and colour, as [`Self::set_fog`] gave them.
-    fog: [[f32; 4]; 2],
+    /// The scene's fog: atmosphere, colour and haze, as [`Self::set_fog`]
+    /// gave them.
+    fog: [[f32; 4]; 3],
 }
 impl EffectsRenderer {
     /// Target and depth formats/sample count must match the host render pass.
@@ -254,7 +257,7 @@ impl EffectsRenderer {
             views: vec![view],
             max_instances,
             data: Vec::new(),
-            fog: [[0.0; 4]; 2],
+            fog: [[0.0; 4]; 3],
         })
     }
     fn view(device: &wgpu::Device, layout: &wgpu::BindGroupLayout, capacity: usize) -> View {
@@ -287,10 +290,11 @@ impl EffectsRenderer {
             stats: RenderStats::default(),
         }
     }
-    /// Fog sprites as the scene is fogged: bri-render's `Camera::atmosphere`
-    /// and `fog_color`. Every view prepared afterwards uses it.
-    pub fn set_fog(&mut self, atmosphere: [f32; 4], fog_color: [f32; 4]) {
-        self.fog = [atmosphere, fog_color];
+    /// Fog sprites as the scene is fogged: bri-render's `Camera::atmosphere`,
+    /// `fog_color` and `haze` (zero: the standard fog). Every view prepared
+    /// afterwards uses it.
+    pub fn set_fog(&mut self, atmosphere: [f32; 4], fog_color: [f32; 4], haze: [f32; 4]) {
+        self.fog = [atmosphere, fog_color, haze];
     }
     /// The player's view: `camera` and the sprites it sees.
     pub fn prepare(
@@ -403,6 +407,7 @@ impl EffectsRenderer {
             position: camera.position.extend(0.).to_array(),
             atmosphere: self.fog[0],
             fog_color: self.fog[1],
+            haze: self.fog[2],
         };
         let target = &mut self.views[view];
         queue.write_buffer(&target.camera, 0, bytemuck::bytes_of(&uniform));

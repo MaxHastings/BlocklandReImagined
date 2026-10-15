@@ -2533,6 +2533,9 @@ impl Session {
                 if self.weapons.light_key(bri_weapons::ActorId(owner))? {
                     return Ok(Reply::Accepted);
                 }
+                if self.toggle_vehicle_lights(owner) {
+                    return Ok(Reply::Accepted);
+                }
                 self.package_policy("light", owner)?;
                 self.toggle_light(owner)?;
                 Ok(Reply::Accepted)

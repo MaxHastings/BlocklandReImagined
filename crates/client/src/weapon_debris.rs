@@ -412,10 +412,14 @@ pub struct WeaponDebris {
     bodies: BTreeMap<u64, Body>,
     pending: VecDeque<Pending>,
     cursor: u64,
+    /// Casings thrown without a cue (`eject`), for their ids.
+    ejected: u64,
     seconds: f64,
     accumulator: f64,
     pub diagnostics: WeaponDebrisDiagnostics,
 }
+/// The id bit of casings thrown without a cue (`WeaponDebris::eject`).
+const EJECTED_IDS: u64 = 1 << 63;
 impl WeaponDebris {
     pub fn new(assets: WeaponDebrisAssets, limits: WeaponDebrisLimits) -> Result<Self> {
         ensure!(
@@ -432,6 +436,7 @@ impl WeaponDebris {
             bodies: BTreeMap::new(),
             pending: VecDeque::new(),
             cursor: 0,
+            ejected: 0,
             seconds: 0.,
             accumulator: 0.,
             diagnostics: Default::default(),
@@ -591,6 +596,26 @@ impl WeaponDebris {
         Ok(())
     }
     fn spawn(&mut self, cue: &Cue, eject: Mat4, inherited: Vec3) -> Result<()> {
+        let image = match &cue.kind {
+            CueKind::WeaponShell { image, .. } => Some(image.as_str()),
+            _ => None,
+        };
+        self.throw(cue.id, image, eject, inherited)
+    }
+    /// Throw image `image`'s casing from `eject` now, without a cue: a gun
+    /// on a vehicle (`ActorEffects::take_ejected`), whose firing is not a
+    /// held image's. Casings are cosmetic, so each client throws its own.
+    pub fn eject(&mut self, image: &str, eject: Mat4, inherited: Vec3) -> Result<()> {
+        if !inherited.is_finite() {
+            self.diagnostics.invalid_cues += 1;
+            return Ok(());
+        }
+        // Their own ids, above any cue's.
+        self.ejected = self.ejected.wrapping_add(1);
+        let id = EJECTED_IDS | (self.ejected & !EJECTED_IDS);
+        self.throw(id, Some(image), eject, inherited)
+    }
+    fn throw(&mut self, id: u64, image: Option<&str>, eject: Mat4, inherited: Vec3) -> Result<()> {
         ensure!(
             eject.is_finite() && eject.determinant() > 1e-8 && eject.w_axis.w == 1.,
             "invalid shell-eject transform"
@@ -599,14 +624,11 @@ impl WeaponDebris {
             self.diagnostics.body_capacity_drops += 1;
             return Ok(());
         }
-        let casing = match &cue.kind {
-            CueKind::WeaponShell { image, .. } => self.by_image.get(image).copied(),
-            _ => None,
-        };
+        let casing = image.and_then(|image| self.by_image.get(image).copied());
         let d = casing
             .and_then(|i| self.casings.get(i))
             .unwrap_or(&self.assets.shell);
-        let mut rng = Deterministic(cue.id ^ 0x9e37_79b9_7f4a_7c15);
+        let mut rng = Deterministic(id ^ 0x9e37_79b9_7f4a_7c15);
         let dir = Vec3::from_array(d.exit_direction).normalize();
         // Engine-family assumption: shellExitVariance is a symmetric azimuthal
         // spread around the authored local ejection vector; Torque source only
@@ -623,9 +645,9 @@ impl WeaponDebris {
         let spin_axis = Vec3::new(rng.signed(), rng.signed(), rng.signed()).normalize_or_zero();
         let start = eject.to_scale_rotation_translation().1;
         self.bodies.insert(
-            cue.id,
+            id,
             Body {
-                cue_id: cue.id,
+                cue_id: id,
                 casing,
                 position,
                 velocity: direction * (speed * (1. + variation)) + inherited,

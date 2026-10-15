@@ -1,4 +1,5 @@
 pub mod ambient_occlusion;
+pub mod bloom;
 mod buffer_init;
 pub mod color;
 pub mod environment_choices;

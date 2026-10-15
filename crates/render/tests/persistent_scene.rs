@@ -320,6 +320,7 @@ fn sky_fixture() -> (SceneData, bri_content::environment::Environment) {
             start: 1.0,
             end: 3.0,
             color: [1.0; 3],
+            ..Default::default()
         },
         warnings: vec![],
     };
@@ -417,6 +418,57 @@ fn sky_orientation_translation_depth_and_distance_fog() -> Result<()> {
         bare[center..center + 3],
         "Geometry past the visible distance hid the sky"
     );
+    Ok(())
+}
+
+/// A haze (`Fog::max` below 1) caps the fog on geometry and sky alike, as
+/// its CPU twin says, and geometry in the last quarter of the range stays
+/// drawn instead of fading out, up to the visible distance.
+#[test]
+fn a_haze_caps_the_fog_and_keeps_far_geometry() -> Result<()> {
+    let gpu = Gpu::turn()?;
+    let mut renderer = SceneRenderer::new(&gpu.device, wgpu::TextureFormat::Rgba8UnormSrgb);
+    let (mut data, mut env) = sky_fixture();
+    env.fog.max = 0.6;
+    env.fog.height = 20.0;
+    bri_render::environment_scene::append(&mut data, &env, &[1, 2, 3, 4, 5, 6], &[])?;
+    let sky = renderer.upload(&gpu.device, &gpu.queue, &data)?;
+    let center = (32 * 64 + 32) * 4;
+    let mut camera = Camera::perspective(
+        [0.0; 3],
+        [0.0, 0.0, -1.0],
+        1.0,
+        60_f32.to_radians(),
+        0.05,
+        10.0,
+    );
+    camera.apply_environment(&data);
+    assert_eq!(camera.haze[..2], [20.0, 0.6]);
+    let edge = env.fog.sky_amount(0.0, env.bottom);
+    assert!((edge - 0.6 * (1.0 - (-4.0f32).exp())).abs() < 1e-4);
+    let behind = [0.0, 0.0, 255.0].map(|c: f32| c * (1.0 - edge) + 255.0 * edge);
+    // Black at 2.9 of a 1..3 range: a plain fog would have faded it out.
+    assert_eq!(env.fog.edge(2.9), 0.0);
+    let mut far = triangle([0.0, 0.0, 0.0, 1.0], -2.9, AlphaMode::Opaque);
+    far.materials[0].double_sided = true;
+    let far = renderer.upload(&gpu.device, &gpu.queue, &far)?;
+    let hazed = gpu.frame(&mut renderer, &[&far, &sky], &camera, (64, 64))?;
+    let amount = env.fog.amount(2.9);
+    assert!(amount < 0.6 && amount > 0.5, "{amount}");
+    for (value, behind) in hazed[center..center + 3].iter().zip(behind) {
+        let want = (behind * amount).round() as u8;
+        assert!(
+            value.abs_diff(want) <= 2,
+            "Expected {want} capped haze on far geometry, got {value}"
+        );
+    }
+    // Past the visible distance it is still not drawn.
+    let mut beyond = triangle([0.0, 0.0, 0.0, 1.0], -3.5, AlphaMode::Opaque);
+    beyond.materials[0].double_sided = true;
+    let beyond = renderer.upload(&gpu.device, &gpu.queue, &beyond)?;
+    let past = gpu.frame(&mut renderer, &[&beyond, &sky], &camera, (64, 64))?;
+    let bare = gpu.frame(&mut renderer, &[&sky], &camera, (64, 64))?;
+    assert_eq!(past[center..center + 3], bare[center..center + 3]);
     Ok(())
 }
 

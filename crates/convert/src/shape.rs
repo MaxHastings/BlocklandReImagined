@@ -820,6 +820,7 @@ pub fn read_dts(data: &[u8], id: String) -> Result<(Shape, Provenance)> {
             visibility: state.visibility,
             frame: state.frame,
             material_frame: state.material,
+            live: None,
         });
     }
     let mut shape_details = Vec::new();

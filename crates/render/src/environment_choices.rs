@@ -336,6 +336,7 @@ fn plain_sky() -> Environment {
             start: 500.0,
             end: 600.0,
             color: [1.0; 3],
+            ..Default::default()
         },
         warnings: Vec::new(),
     }

@@ -1061,6 +1061,7 @@ pub fn convert(
             visibility: 1.0,
             frame: 0,
             material_frame: 0,
+            live: None,
         };
         if is_water {
             waters.push(WaterMesh {

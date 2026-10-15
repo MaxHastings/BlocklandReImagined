@@ -1426,6 +1426,7 @@ fn the_client_predicts_the_live_vehicles_and_mounts_it_controls(fx: &Mounts) -> 
         destroyed: false,
         turret_broken: false,
         scale: 1.0,
+        lights: false,
     };
     let target = |info: &bri_sim::session::VehicleInfo, strafe: bool| {
         super::drive_target(info, assets.definition(&info.definition).unwrap(), strafe)
@@ -1453,6 +1454,7 @@ fn the_client_predicts_the_live_vehicles_and_mounts_it_controls(fx: &Mounts) -> 
         },
         bri_sim::session::VehicleInfo {
             scale: 2.0,
+            lights: false,
             ..jeep.clone()
         },
         bri_sim::session::VehicleInfo {

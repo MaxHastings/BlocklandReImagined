@@ -10,7 +10,7 @@ pub const ANTI_ALIASING: &str = "$pref::Video::AntiAliasing";
 /// shape shadows came from players, vehicles and items, never bricks.
 pub const BRICK_SHADOWS: &str = "$pref::Video::BrickShadows";
 pub use bri_ui::screens::options::{
-    AMBIENT_OCCLUSION, LIGHTING, REFLECTIONS, RENDER_SCALE, SOFT_SHADING,
+    AMBIENT_OCCLUSION, BLOOM, LIGHTING, REFLECTIONS, RENDER_SCALE, SOFT_SHADING,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -42,6 +42,9 @@ pub struct Graphics {
     /// Native `$pref::Video::AmbientOcclusion` (on unless turned off): the
     /// contact-shading pass, in Unified and Dynamic lighting only.
     pub ambient_occlusion: bool,
+    /// Native `$pref::Video::Bloom` (on unless turned off): the brightest
+    /// parts of the world glow (`bri_render::bloom`).
+    pub bloom: bool,
 }
 pub fn reflection_settings(level: i64) -> ReflectionSettings {
     match level {
@@ -106,6 +109,7 @@ impl Graphics {
             render_scale: bri_ui::screens::options::render_scale(&prefs),
             soft_shading: prefs.bool_or(SOFT_SHADING, true),
             ambient_occlusion: prefs.bool_or(AMBIENT_OCCLUSION, true),
+            bloom: prefs.bool_or(BLOOM, true),
         }
     }
 }
