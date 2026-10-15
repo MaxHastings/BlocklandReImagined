@@ -68,6 +68,8 @@ pub(super) struct GpuState {
     /// Render Scale below 100%: the smaller texture the world draws into
     /// and the pass that stretches it over the window.
     pub(super) upscale: Option<bri_render::upscale::Upscale>,
+    /// The world's glow (`Graphics::bloom`), drawn through its own copy.
+    pub(super) bloom: Option<bri_render::bloom::Bloom>,
     /// The window's size this frame, which the interface (name tags) is
     /// laid out in, even while the world draws smaller.
     pub(super) display_size: (u32, u32),

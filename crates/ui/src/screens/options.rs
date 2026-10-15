@@ -68,6 +68,9 @@ pub const SOFT_SHADING: &str = "$pref::Video::SoftShading";
 /// Not a v20 setting: ambient occlusion, a contact-shading pass over the
 /// world in Unified and Dynamic lighting, on unless turned off.
 pub const AMBIENT_OCCLUSION: &str = "$pref::Video::AmbientOcclusion";
+/// Not a v20 setting: a soft halo around the brightest parts of the world
+/// (lamps, muzzle flashes), on unless turned off.
+pub const BLOOM: &str = "$pref::Video::Bloom";
 const SHADOW_RADIO: &str = "OPT_ShadowQuality";
 /// v20's Physics Quality radios (0 Best .. 4 Off; the stock default is 1,
 /// High): how many knocked-out bricks tumble as debris at once.
@@ -289,6 +292,7 @@ const DEFAULT_ON: &[&str] = &[
     ANTI_ALIASING,
     SOFT_SHADING,
     AMBIENT_OCCLUSION,
+    BLOOM,
     PRECIPITATION,
     CHECK_FOR_UPDATES,
 ];
@@ -305,6 +309,7 @@ const CHECKBOX_PREFS: &[&str] = &[
     BRICK_SHADOWS,
     SOFT_SHADING,
     AMBIENT_OCCLUSION,
+    BLOOM,
     CHECK_FOR_UPDATES,
     "$Pref::Audio::PlayMusic",
     "$Pref::Audio::MenuSounds",
@@ -1443,6 +1448,11 @@ impl Options {
             c.variable = Some(AMBIENT_OCCLUSION.into());
             c.text = Some("Ambient Occlusion".into());
             c.extent[0] = 160;
+            c.position[1] += c.extent[1] - 3;
+            v.add(parent, c.clone());
+            c.name = Some("OptGraphicsBloomToggle".into());
+            c.variable = Some(BLOOM.into());
+            c.text = Some("Bloom".into());
             c.position[1] += c.extent[1] - 3;
             let below = c.position[1] + c.extent[1] + 8;
             v.add(parent, c);

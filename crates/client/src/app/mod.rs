@@ -1654,6 +1654,7 @@ impl PlatformApp for App {
         ));
         // Made again on the new device by the next scaled frame.
         self.gpu.upscale = None;
+        self.gpu.bloom = None;
         self.gpu.region_lines = Some(bri_render::lines::LineRenderer::new(
             device,
             format,
@@ -1776,29 +1777,56 @@ impl PlatformApp for App {
     fn render_scene(&mut self, frame: &mut RenderContext<'_>) -> Result<bool> {
         self.gpu.display_size = frame.size;
         let size = bri_render::upscale::scaled_size(frame.size, self.graphics.render_scale);
-        if size == frame.size {
+        let bloom = self.graphics.bloom.then(|| {
+            self.gpu
+                .bloom
+                .take()
+                .filter(|b| b.format() == frame.format)
+                .unwrap_or_else(|| bri_render::bloom::Bloom::new(frame.device, frame.format))
+        });
+        if size == frame.size && bloom.is_none() {
             self.gpu.upscale = None;
+            self.gpu.bloom = None;
             return self.render_frame(frame);
         }
-        let mut upscale = self
-            .gpu
-            .upscale
-            .take()
-            .filter(|u| u.format() == frame.format)
-            .unwrap_or_else(|| bri_render::upscale::Upscale::new(frame.device, frame.format));
+        let mut upscale = (size != frame.size).then(|| {
+            self.gpu
+                .upscale
+                .take()
+                .filter(|u| u.format() == frame.format)
+                .unwrap_or_else(|| bri_render::upscale::Upscale::new(frame.device, frame.format))
+        });
+        // The world draws into the bloom's texture when it glows, else the
+        // render scale's; the bloom copies it out into the render scale's
+        // texture or the window, and the render scale stretches that.
+        let mut bloom = bloom;
+        let target = match (&mut bloom, &mut upscale) {
+            (Some(b), _) => b.target(frame.device, frame.queue, size),
+            (None, Some(u)) => u.target(frame.device, size),
+            (None, None) => unreachable!("drawn directly above"),
+        };
         let drawn = self.render_frame(&mut RenderContext {
             device: frame.device,
             queue: frame.queue,
             encoder: &mut *frame.encoder,
-            target: upscale.target(frame.device, size),
+            target,
             format: frame.format,
             size,
             ui_renderer: &mut *frame.ui_renderer,
         });
         if matches!(drawn, Ok(true)) {
-            upscale.draw(frame.encoder, frame.target);
+            if let Some(b) = &bloom {
+                match &mut upscale {
+                    Some(u) => b.draw(frame.encoder, u.target(frame.device, size)),
+                    None => b.draw(frame.encoder, frame.target),
+                }
+            }
+            if let Some(u) = &upscale {
+                u.draw(frame.encoder, frame.target);
+            }
         }
-        self.gpu.upscale = Some(upscale);
+        self.gpu.upscale = upscale;
+        self.gpu.bloom = bloom;
         drawn
     }
 }
