@@ -70,7 +70,10 @@ impl Pack {
                 (Kind::Explosion, projectile.explosion.effect.as_str()),
                 (Kind::DamageType, projectile.damage_type.as_str()),
                 (Kind::DamageType, projectile.radius_damage_type.as_str()),
-            ] {
+            ]
+            .into_iter()
+            .chain(projectile.impacts.all().map(|e| (Kind::Explosion, e)))
+            {
                 // A bounce that only makes a sound (Explosive 1's and the
                 // HE grenade's) has nothing to show; its sound is listed.
                 if kind == Kind::Effect
@@ -93,19 +96,22 @@ impl Pack {
                     });
                 }
             }
-            // The explosion's own sound, as its projectile's Add-On uses it.
-            let explosion = &projectile.explosion.effect;
-            if let Some(info) = self
-                .explosions
-                .get(&crate::effect_symbol(explosion).to_ascii_lowercase())
-                && !info.sound.is_empty()
+            // The explosions' own sounds, as its projectile's Add-On uses them.
+            for explosion in std::iter::once(projectile.explosion.effect.as_str())
+                .chain(projectile.impacts.all())
             {
-                out.push(Reference {
-                    add_on,
-                    kind: Kind::Sound,
-                    name: &info.sound,
-                    used_by: format!("explosion {explosion}"),
-                });
+                if let Some(info) = self
+                    .explosions
+                    .get(&crate::effect_symbol(explosion).to_ascii_lowercase())
+                    && !info.sound.is_empty()
+                {
+                    out.push(Reference {
+                        add_on,
+                        kind: Kind::Sound,
+                        name: &info.sound,
+                        used_by: format!("explosion {explosion}"),
+                    });
+                }
             }
         }
         out

@@ -129,6 +129,16 @@ pub enum TargetId {
     /// push it like a player, and its package decides what that means.
     Entity(u64),
 }
+/// The effect `impacts` names for landing on `target`; empty when it
+/// names none for that kind of surface.
+fn impact_effect(impacts: &crate::Impacts, target: TargetId) -> &str {
+    match target {
+        TargetId::Actor(_) | TargetId::Entity(_) => &impacts.player,
+        TargetId::Vehicle(_) => &impacts.vehicle,
+        TargetId::Brick(_) => &impacts.brick,
+        TargetId::Map(_) | TargetId::Shape(_) => &impacts.map,
+    }
+}
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Mount {
     None,
@@ -2750,7 +2760,7 @@ impl WeaponsWorld {
         let pack = Arc::clone(&self.pack);
         for p in std::mem::take(&mut self.explosions) {
             if let Some(d) = pack.projectiles.get(&p.definition) {
-                self.explode(&p, d, q, None);
+                self.explode(&p, d, q, None, None);
             }
         }
         let ids: Vec<_> = self.actors.keys().copied().collect();
@@ -3768,7 +3778,7 @@ impl WeaponsWorld {
         p.age += 1;
         if let Some(bursts) = expires(d, p.age, self.fuses.get(&p.id).copied()) {
             if bursts {
-                self.explode(p, d, q, None);
+                self.explode(p, d, q, None, None);
             }
             return false;
         }
@@ -3857,7 +3867,7 @@ impl WeaponsWorld {
                 ContactResponse::Continue => {}
                 ContactResponse::Delete => return false,
                 ContactResponse::Explode => {
-                    self.explode(p, d, q, Some(normal));
+                    self.explode(p, d, q, Some(normal), Some(hit.target));
                     return false;
                 }
                 response => match redirect_projectile(p, contact.normal, response) {
@@ -3916,7 +3926,7 @@ impl WeaponsWorld {
                 self.children(p, c, set);
             }
             if hit_bursts(d, p.age, matches!(hit.target, TargetId::Actor(_))) {
-                self.explode(p, d, q, Some(normal));
+                self.explode(p, d, q, Some(normal), Some(hit.target));
                 return false;
             }
             // Kai's shield deleted a projectile it stopped (`%obj.schedule(10,
@@ -3939,7 +3949,7 @@ impl WeaponsWorld {
             p.bounced = true;
             p.bounces += 1;
             if last {
-                self.explode(p, d, q, Some(normal));
+                self.explode(p, d, q, Some(normal), Some(hit.target));
                 return false;
             }
             self.events.push(Event::Bounced {
@@ -4470,9 +4480,9 @@ impl WeaponsWorld {
                     velocity: normal,
                     ..p.clone()
                 };
-                self.explode(&at, &blast, q, Some(normal));
+                self.explode(&at, &blast, q, Some(normal), Some(hit.target));
             }
-            None => self.explode(&p, d, q, Some(normal)),
+            None => self.explode(&p, d, q, Some(normal), Some(hit.target)),
         }
         let sound = hitscan.sound(matches!(hit.target, TargetId::Actor(_)), draw);
         if !sound.is_empty() {
@@ -4638,14 +4648,22 @@ impl WeaponsWorld {
             hurt += 1;
         }
     }
+    /// Its explosion where it is: the effect `impacts` names for `landed`
+    /// on (what it hit), else `explosion`'s, then the blast.
     fn explode(
         &mut self,
         p: &Projectile,
         d: &ProjectileDef,
         q: &mut impl Query,
         direction: Option<Vec3>,
+        landed: Option<TargetId>,
     ) {
-        self.effect(p, &d.explosion.effect, direction);
+        let effect = landed
+            .map(|t| impact_effect(&d.impacts, t))
+            .filter(|e| !e.is_empty())
+            .unwrap_or(&d.explosion.effect)
+            .to_owned();
+        self.effect(p, &effect, direction);
         for (set, c) in d.children.iter().enumerate().filter(|(_, c)| c.on_explode) {
             self.children(p, c, set);
         }

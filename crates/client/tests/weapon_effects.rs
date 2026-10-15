@@ -138,6 +138,7 @@ fn weapons() -> Arc<Pack> {
         sport_hit: None,
         turns_into: None,
         decal: None,
+        impacts: Default::default(),
     };
     Arc::new(Pack {
         effects: Default::default(),

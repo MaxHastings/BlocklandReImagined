@@ -1911,6 +1911,7 @@ fn add_launcher(
         sport_hit: None,
         turns_into: None,
         decal: None,
+        impacts: Default::default(),
     };
     pack.items.insert(item_id, item);
     pack.images.insert(image_id, image);
