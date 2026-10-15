@@ -1405,6 +1405,8 @@ def ci_test(part=(0, 1), tier="full"):
         if code and not ci_tolerated(label, output, known):
             failed.append((label, output))
     if failed:
+        failed = retry_ci_failures(failed, binaries)
+    if failed:
         # The CI log viewer keeps only the end of a long log, so repeat each
         # failing target's libtest failure report here.
         for label, output in failed:
@@ -1419,6 +1421,38 @@ def ci_test(part=(0, 1), tier="full"):
         return False
     say("all content-free test targets passed")
     return True
+
+
+def retry_ci_failures(failed, binaries):
+    """Retry each newly failed named test alone once, as the local gate does.
+
+    Software-rendered tests and throttled-link tests can miss short wall-clock
+    deadlines when a Windows runner is busy. A named test that passes alone is
+    reported as flaky; crashes, hangs, and tests that fail again still block CI.
+    """
+    by_label = {label: (executable, cwd) for label, executable, cwd, _ in binaries}
+    remaining = []
+    for label, output in failed:
+        names = re.findall(r"^test (\S+) \.\.\. FAILED", output, re.M)
+        owner = by_label.get(label)
+        if not names or owner is None:
+            remaining.append((label, output))
+            continue
+        executable, cwd = owner
+        persistent = []
+        for name in names:
+            say(f"retry {label}::{name} alone")
+            retry_output, code = run_binary(label, executable, ["--exact", name], cwd)
+            passed = code == 0 and re.search(
+                rf"^test {re.escape(name)} \.\.\. ok$", retry_output, re.M
+            )
+            if passed:
+                say(f"flaky: {label}::{name} failed in its shard, then passed alone")
+            else:
+                persistent.append(f"test {name} ... FAILED\n{retry_output}")
+        if persistent:
+            remaining.append((label, "\n".join(persistent)))
+    return remaining
 
 
 LIB_KINDS = {"lib", "rlib", "dylib", "cdylib", "staticlib", "proc-macro"}
