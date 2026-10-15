@@ -16,9 +16,35 @@ use std::{
 pub(crate) struct PreparedSounds {
     bank: Arc<SoundBank>,
     sounds: BTreeMap<String, (Arc<SoundAsset>, f32)>,
+    variants: BTreeMap<String, Vec<SoundChoice>>,
     /// Why each pack sound that did not load failed, by lowercase profile.
     failed: BTreeMap<String, String>,
     warnings: BTreeSet<String>,
+}
+
+struct SoundChoice {
+    asset: Arc<SoundAsset>,
+    volume: f32,
+    weight: f32,
+}
+
+fn choose_sound(choices: &[SoundChoice], unit: f32) -> &SoundChoice {
+    let mut at = unit * choices.iter().map(|c| c.weight).sum::<f32>();
+    for choice in choices {
+        if at < choice.weight {
+            return choice;
+        }
+        at -= choice.weight;
+    }
+    choices.last().expect("nonempty prepared sound choices")
+}
+
+/// Local cosmetic randomness; no world-state or network dependency.
+fn sound_choice_unit(counter: u64) -> f32 {
+    let mut z = counter.wrapping_add(0x9e3779b97f4a7c15);
+    z = (z ^ (z >> 30)).wrapping_mul(0xbf58476d1ce4e5b9);
+    z = (z ^ (z >> 27)).wrapping_mul(0x94d049bb133111eb);
+    ((z ^ (z >> 31)) >> 40) as f32 / 16777216.
 }
 
 pub trait SoundLookup {
@@ -53,49 +79,83 @@ impl PreparedSounds {
         let mut prepared = Self {
             bank: bank.clone(),
             sounds: BTreeMap::new(),
+            variants: BTreeMap::new(),
             failed: BTreeMap::new(),
             warnings: BTreeSet::new(),
         };
         for (profile, def) in &pack.sounds {
-            let (near, far) = PACK_SOUND_RANGE;
-            // The game's own file, played from the bank's copy.
-            let stock = def.stock.then(|| {
-                bank.clip_at(&def.file)
-                    .map(|clip| SoundAsset::world(profile, clip.clone(), near, far))
-                    .ok_or_else(|| format!("the game has no sound {}", def.file))
-            });
-            let dir = bri_weapons::sound_root(root, def);
-            let loaded = stock.unwrap_or_else(|| {
-                bri_package::path::inside(&dir, &def.file).and_then(|path| {
-                    if def.music {
-                        SoundAsset::music_file(profile, &path)
-                    } else {
-                        SoundAsset::decoded_file(profile, &path, near, far)
+            if def.variants.is_empty() {
+                prepared.load_clip(profile, def, root);
+            }
+        }
+        for (profile, def) in &pack.sounds {
+            let choices: Vec<_> = def
+                .variants
+                .iter()
+                .filter_map(|variant| {
+                    let leaf = pack.sounds.get(&variant.profile)?;
+                    if !leaf.variants.is_empty()
+                        || !variant.weight.is_finite()
+                        || variant.weight <= 0.
+                    {
+                        return None;
                     }
+                    let (asset, volume) = prepared.sounds.get(&variant.profile)?;
+                    Some(SoundChoice {
+                        asset: asset.clone(),
+                        volume: *volume * def.volume,
+                        weight: variant.weight,
+                    })
                 })
-            });
-            match loaded {
-                Ok(mut asset) => {
-                    asset.playback.looping = def.looping;
-                    prepared
-                        .sounds
-                        .insert(profile.clone(), (Arc::new(asset), def.volume));
-                }
-                Err(error) => {
-                    if prepared.failed.len() < 512 {
-                        prepared
-                            .failed
-                            .insert(profile.to_ascii_lowercase(), error.to_string());
-                    }
-                    if prepared.warnings.len() < 64 {
-                        prepared
-                            .warnings
-                            .insert(format!("Weapon sound {profile}: {error}"));
-                    }
-                }
+                .collect();
+            if let Some(first) = choices.first() {
+                prepared
+                    .sounds
+                    .insert(profile.clone(), (first.asset.clone(), first.volume));
+                prepared.failed.remove(profile);
+                prepared.variants.insert(profile.clone(), choices);
+            } else if !def.variants.is_empty() {
+                prepared.load_clip(profile, def, root);
             }
         }
         prepared
+    }
+    fn load_clip(&mut self, profile: &str, def: &bri_weapons::SoundDef, root: &Path) {
+        let (near, far) = PACK_SOUND_RANGE;
+        // The game's own file, played from the bank's copy.
+        let stock = def.stock.then(|| {
+            self.bank
+                .clip_at(&def.file)
+                .map(|clip| SoundAsset::world(profile, clip.clone(), near, far))
+                .ok_or_else(|| format!("the game has no sound {}", def.file))
+        });
+        let dir = bri_weapons::sound_root(root, def);
+        let loaded = stock.unwrap_or_else(|| {
+            bri_package::path::inside(&dir, &def.file).and_then(|path| {
+                if def.music {
+                    SoundAsset::music_file(profile, &path)
+                } else {
+                    SoundAsset::decoded_file(profile, &path, near, far)
+                }
+            })
+        });
+        match loaded {
+            Ok(mut asset) => {
+                asset.playback.looping = def.looping;
+                self.sounds
+                    .insert(profile.to_string(), (Arc::new(asset), def.volume));
+            }
+            Err(error) => {
+                if self.failed.len() < 512 {
+                    self.failed
+                        .insert(profile.to_ascii_lowercase(), error.to_string());
+                }
+                if self.warnings.len() < 64 {
+                    self.warnings
+                        .insert(format!("Weapon sound {profile}: {error}"));
+                }
+            }
+        }
     }
 }
 
@@ -252,6 +312,8 @@ pub struct ClientAudio {
     /// Sounds Add-On weapons packs ship, by lower-case profile, with their
     /// volume: played in place of a bank sound of the same name.
     pack_sounds: BTreeMap<String, (Arc<SoundAsset>, f32)>,
+    pack_sound_variants: BTreeMap<String, Vec<SoundChoice>>,
+    sound_choice_counter: u64,
     /// [`PreparedSounds`]' reasons for the pack sounds that did not load.
     pack_sound_failures: BTreeMap<String, String>,
     /// The portals the listener hears through, as last sent.
@@ -353,6 +415,8 @@ impl ClientAudio {
             focused: true,
             last_break: None,
             pack_sounds: BTreeMap::new(),
+            pack_sound_variants: BTreeMap::new(),
+            sound_choice_counter: 0,
             pack_sound_failures: BTreeMap::new(),
             windows: Vec::new(),
         };
@@ -609,8 +673,8 @@ impl ClientAudio {
         let Some(track) = &play.track else {
             return;
         };
-        let found = match self.pack_sounds.get(&track.to_ascii_lowercase()) {
-            Some((asset, volume)) => Ok((asset.clone(), *volume)),
+        let found = match self.pack_asset(track) {
+            Some(asset) => Ok(asset),
             None => self.runtime.bank().resolve(track).map(|a| (a.clone(), 1.0)),
         };
         let (asset, volume) = match found {
@@ -654,8 +718,8 @@ impl ClientAudio {
         let Some(track) = &play.track else {
             return;
         };
-        let found = match self.pack_sounds.get(&track.to_ascii_lowercase()) {
-            Some((asset, volume)) => Ok((asset.clone(), *volume)),
+        let found = match self.pack_asset(track) {
+            Some(asset) => Ok(asset),
             None => self.runtime.bank().resolve(track).map(|a| (a.clone(), 1.0)),
         };
         let (asset, volume) = match found {
@@ -713,6 +777,7 @@ impl ClientAudio {
     }
     pub(crate) fn install_pack_sounds(&mut self, prepared: PreparedSounds) {
         self.pack_sounds = prepared.sounds;
+        self.pack_sound_variants = prepared.variants;
         self.pack_sound_failures = prepared.failed;
         self.warnings.extend(
             prepared
@@ -723,9 +788,20 @@ impl ClientAudio {
     }
     /// Start `profile`: an Add-On pack's own sound, else the bank's.
     fn start(&mut self, profile: &str, placement: Placement) -> Result<SoundHandle, AudioError> {
-        match self.pack_sounds.get(&profile.to_ascii_lowercase()) {
-            Some((asset, volume)) => self.runtime.play_asset(asset.clone(), placement, *volume),
+        match self.pack_asset(profile) {
+            Some((asset, volume)) => self.runtime.play_asset(asset, placement, volume),
             None => self.runtime.play(profile, placement),
+        }
+    }
+    fn pack_asset(&mut self, profile: &str) -> Option<(Arc<SoundAsset>, f32)> {
+        let key = profile.to_ascii_lowercase();
+        if let Some(choices) = self.pack_sound_variants.get(&key) {
+            let unit = sound_choice_unit(self.sound_choice_counter);
+            self.sound_choice_counter = self.sound_choice_counter.wrapping_add(1);
+            let choice = choose_sound(choices, unit);
+            Some((choice.asset.clone(), choice.volume))
+        } else {
+            self.pack_sounds.get(&key).cloned()
         }
     }
     /// Keep one loop per mounted image whose current state has a looping
@@ -1288,6 +1364,7 @@ mod tests {
         let mut pack: bri_weapons::Pack =
             serde_json::from_str(r#"{ "schema_version": 1, "id": "addon" }"#)?;
         let def = |file: &str| bri_weapons::SoundDef {
+            variants: Vec::new(),
             file: file.into(),
             volume: 0.5,
             looping: false,
@@ -1339,6 +1416,91 @@ mod tests {
         Ok(())
     }
 
+    #[test]
+    fn one_shot_variants_choose_shared_clips_keep_gains_and_reload_cleanly() -> Result<()> {
+        let fx = Pack::synthetic()?;
+        let dir = tempfile::tempdir()?;
+        for (file, frequency) in [("a.wav", 220.), ("b.wav", 660.)] {
+            let pcm: Vec<_> = (0..2205)
+                .map(|i| (i as f32 / 22050. * frequency * std::f32::consts::TAU).sin() * 0.25)
+                .collect();
+            std::fs::write(
+                dir.path().join(file),
+                bri_audio::wav::encode_pcm16(22050, 1, &pcm),
+            )?;
+        }
+        let mut value: serde_json::Value = serde_json::from_str(
+            r#"{"id":"test","sounds":{
+            "a":{"file":"a.wav","volume":0.8},
+            "b":{"file":"b.wav","volume":0.4},
+            "hit":{"file":"a.wav","volume":0.5,"variants":[
+                {"profile":"a","weight":1.0},{"profile":"b","weight":3.0}]}
+        }}"#,
+        )?;
+        value["schema_version"] = bri_weapons::SCHEMA.into();
+        let mut pack: bri_weapons::Pack = serde_json::from_value(value)?;
+        pack.validate()?;
+        let mut audio = ClientAudio::load(&fx.root, &mut Settings::default(), OutputKind::Offline)?;
+        audio.set_pack_sounds(&pack, dir.path());
+        let a = audio.pack_sounds["a"].0.clone();
+        let b = audio.pack_sounds["b"].0.clone();
+        let choices = &audio.pack_sound_variants["hit"];
+        assert!(Arc::ptr_eq(&choose_sound(choices, 0.).asset, &a));
+        assert!(Arc::ptr_eq(&choose_sound(choices, 0.249).asset, &a));
+        assert!(Arc::ptr_eq(&choose_sound(choices, 0.25).asset, &b));
+        assert!(Arc::ptr_eq(&choose_sound(choices, 0.999).asset, &b));
+        let mut selected = [0; 2];
+        for _ in 0..128 {
+            let (asset, gain) = audio.pack_asset("HIT").unwrap();
+            if Arc::ptr_eq(&asset, &a) {
+                assert!((gain - 0.4).abs() < 1e-6);
+                selected[0] += 1;
+            } else {
+                assert!(Arc::ptr_eq(&asset, &b));
+                assert!((gain - 0.2).abs() < 1e-6);
+                selected[1] += 1;
+            }
+        }
+        assert!(selected[0] > 0 && selected[1] > selected[0]);
+        audio.profile("hit", Placement::World([0.; 3]));
+        audio.tick(0.05, Listener::default());
+        assert_eq!(audio.stats().started, 1);
+        assert!(audio.take_capture().iter().any(|v| v.abs() > 1e-5));
+        let mut invalid = pack.clone();
+        invalid.sounds.get_mut("a").unwrap().variants = invalid.sounds["hit"].variants.clone();
+        assert!(
+            invalid.validate().is_err(),
+            "recursive variant references rejected"
+        );
+        invalid = pack.clone();
+        invalid.sounds.get_mut("hit").unwrap().looping = true;
+        assert!(
+            invalid.validate().is_err(),
+            "loop contents must remain stable"
+        );
+        invalid = pack.clone();
+        invalid.sounds.get_mut("b").unwrap().local = true;
+        assert!(
+            invalid.validate().is_err(),
+            "variant placement cannot change per choice"
+        );
+        let mut missing = pack.clone();
+        missing.sounds.get_mut("b").unwrap().file = "missing.wav".into();
+        audio.set_pack_sounds(&missing, dir.path());
+        assert!(audio.has_sound("hit"));
+        assert_eq!(audio.pack_sound_variants["hit"].len(), 1);
+        assert!(Arc::ptr_eq(
+            &audio.pack_asset("hit").unwrap().0,
+            &audio.pack_sounds["a"].0
+        ));
+        assert!(audio.pack_sound_failures.contains_key("b"));
+        pack.sounds.get_mut("hit").unwrap().variants.clear();
+        audio.set_pack_sounds(&pack, dir.path());
+        assert!(!audio.pack_sound_variants.contains_key("hit"));
+        assert!((audio.pack_asset("hit").unwrap().1 - 0.5).abs() < 1e-6);
+        Ok(())
+    }
+
     /// An Add-On weapon's own stereo sounds (the Mini-Nuke's launch and
     /// blast are 44.1 kHz stereo `.wav`s with 3D descriptions) are heard
     /// where they go off and fade with distance, like every other weapon's,
@@ -1364,6 +1526,7 @@ mod tests {
         pack.sounds.insert(
             blast.into(),
             bri_weapons::SoundDef {
+                variants: Vec::new(),
                 file: "blast.wav".into(),
                 volume: 1.0,
                 looping: false,

@@ -589,3 +589,24 @@ pitch at phase 0.5. Each side interpolates independently. Endpoints must straddl
 zero within +/-pi/2. Omission retains v20's +/-pi/2 mapping. This is animation
 mapping; `look_pitch` still bounds player aiming. Geometry, named sockets and
 authoritative muzzle tracks share the mapping.
+
+### One-shot sound variations
+
+A sound profile can choose among up to 64 single-clip profiles in the same pack:
+
+```json
+{"file":"sounds/hit-a.wav","volume":1.0,"variants":[
+  {"profile":"example:sound/hit-a","weight":1.0},
+  {"profile":"example:sound/hit-b","weight":2.0}
+]}
+```
+
+Each referenced profile keeps its own file and gain. The selected clip's volume
+is multiplied by the containing profile's volume. Selection happens once when
+playback starts and shares the prepared clip data. Weights must be positive and
+at most 1000. Choices must be distinct, nonrecursive, nonlooping, nonmusic and
+have the same `local` placement policy as their containing profile.
+
+Missing clips are diagnosed and omitted from selection. If none loads, `file`
+is tried as the fallback. Reloading a pack replaces its prepared choices.
+This mechanism does not model sequential audio continuations or layered loops.

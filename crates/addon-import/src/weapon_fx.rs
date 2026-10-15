@@ -502,6 +502,7 @@ fn sounds(cx: &mut Ctx, pack: &mut bri_weapons::Pack) {
         pack.sounds.insert(
             id.clone(),
             bri_weapons::SoundDef {
+                variants: Vec::new(),
                 file: rel,
                 volume,
                 looping: flag("islooping", false),

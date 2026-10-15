@@ -471,6 +471,7 @@ mod tests {
     fn a_sound_another_add_on_defines_resolves_to_it() {
         let mut tier1 = part("tier1", "%2 shot %1");
         let sound = SoundDef {
+            variants: Vec::new(),
             file: "fire.wav".into(),
             volume: 1.0,
             looping: false,

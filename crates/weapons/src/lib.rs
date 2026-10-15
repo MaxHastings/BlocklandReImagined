@@ -468,6 +468,10 @@ fn is_one(v: &f32) -> bool {
 pub struct SoundDef {
     /// A `.wav` or `.ogg` file, relative to the folder `weapons.json` is in.
     pub file: String,
+    /// Optional weighted choices of other, single-clip profiles in this pack.
+    /// Chosen once per one-shot playback. `file` remains the authored fallback.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub variants: Vec<SoundVariant>,
     /// 0 to 1.
     #[serde(default = "full_volume")]
     pub volume: f32,
@@ -493,6 +497,12 @@ pub struct SoundDef {
     /// Add-On ships none.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub stock: bool,
+}
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SoundVariant {
+    pub profile: String,
+    pub weight: f32,
 }
 /// How bots use an image (`Image::bot`).
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -3661,6 +3671,26 @@ impl Pack {
         self.effects.validate()?;
         ensure!(self.sounds.len() <= 1024, "Definition budget exceeded");
         for (key, sound) in &self.sounds {
+            ensure!(
+                sound.variants.len() <= 64
+                    && (sound.variants.is_empty() || (!sound.looping && !sound.music)),
+                "Invalid sound {key}: variations are limited to 64 one-shot clips"
+            );
+            let mut seen = BTreeSet::new();
+            for variant in &sound.variants {
+                let target = self.sounds.get(&variant.profile);
+                ensure!(
+                    variant.weight.is_finite()
+                        && (0.0..=1000.0).contains(&variant.weight)
+                        && variant.weight > 0.
+                        && seen.insert(&variant.profile)
+                        && target.is_some_and(|t| t.variants.is_empty()
+                            && !t.looping
+                            && !t.music
+                            && t.local == sound.local),
+                    "Invalid sound {key}: variants need distinct single-clip profiles with matching placement and positive weights"
+                );
+            }
             let lower = sound.file.to_ascii_lowercase();
             ensure!(
                 key == &key.to_ascii_lowercase()

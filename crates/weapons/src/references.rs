@@ -32,6 +32,19 @@ impl Pack {
     /// by `Pack::merge`, which drops what names a missing one.
     pub fn add_on_references(&self) -> Vec<Reference<'_>> {
         let mut out = Vec::new();
+        for (id, sound) in &self.sounds {
+            let Some(add_on) = add_on_of(id) else {
+                continue;
+            };
+            for variant in &sound.variants {
+                out.push(Reference {
+                    add_on,
+                    kind: Kind::Sound,
+                    name: &variant.profile,
+                    used_by: format!("sound {id} variation"),
+                });
+            }
+        }
         for (id, image) in &self.images {
             let Some(add_on) = add_on_of(id) else {
                 continue;
