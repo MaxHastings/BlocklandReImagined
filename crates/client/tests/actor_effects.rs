@@ -857,7 +857,7 @@ fn a_vehicle_gun_throws_casings_and_flashes_its_explosion_light() -> Result<()> 
     };
     let lights = fx.world().snapshot(&camera).lights;
     assert_eq!(lights.len(), 1, "the explosion's light shines");
-    assert!(Vec3::from(lights[0].position).distance(Vec3::new(4., 1., 2.)) < 1e-4);
+    assert!(lights[0].position.distance(Vec3::new(4., 1., 2.)) < 1e-4);
     for _ in 0..5 {
         fx.advance(0.05, at_muzzle, &[], &[], &[])?;
     }

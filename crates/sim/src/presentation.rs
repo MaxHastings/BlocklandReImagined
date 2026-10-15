@@ -289,7 +289,7 @@ impl Cue {
                 ensure!(*actor > 0 && *hand < 2, "Invalid tracer cue")
             }
             CueKind::Decal {
-                brick,
+                brick: _,
                 normal,
                 projectile,
                 scale,
