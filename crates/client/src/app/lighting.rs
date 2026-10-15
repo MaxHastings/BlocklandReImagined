@@ -48,6 +48,10 @@ pub(super) struct LightVolumeState {
     /// The map's breakable light shapes (scene node, centre): a broken bulb
     /// switches its lights off.
     pub(super) light_shapes: Vec<(u32, Vec3)>,
+    /// Animated map lights (index into `recovered`) and their timing.
+    pub(super) animations: Vec<(usize, bri_content::light_animation::LightAnimation)>,
+    /// Spot lights' cones (index into `recovered`).
+    pub(super) spots: Vec<(usize, [f32; 4])>,
 }
 type LightingSource = (bri_render::scene_loader::MapScene, Option<Arc<SceneData>>);
 type LightingSourceReceiver =
@@ -396,6 +400,7 @@ impl LightVolumeState {
         queue: &wgpu::Queue,
         broken: &BTreeSet<u32>,
         rules: &[bri_sim::session::MapLightRule],
+        seconds: f64,
     ) {
         let lights = if self.bound_mode == 3 {
             Some(self.recovered.as_slice())
@@ -403,10 +408,16 @@ impl LightVolumeState {
             self.map.as_ref().map(|m| m.lights.as_slice())
         };
         if let Some(lights) = lights {
-            renderer.set_map_light_tints(
-                queue,
-                &map_light_tints(lights, &self.light_shapes, broken, rules),
-            );
+            let mut tints = map_light_tints(lights, &self.light_shapes, broken, rules);
+            // Animated lights are the authored ones Dynamic lighting draws.
+            if self.bound_mode == 3 {
+                for (index, animation) in &self.animations {
+                    if let Some(tint) = tints.get_mut(*index) {
+                        *tint *= Vec3::from(animation.tint_at(seconds));
+                    }
+                }
+            }
+            renderer.set_map_light_tints(queue, &tints);
         }
     }
     /// The lighting mode frames can draw with now: a Unified mode needs the
@@ -484,6 +495,7 @@ impl LightVolumeState {
         }
         if mode == 3 {
             renderer.set_dynamic_lights(device, queue, &self.recovered)?;
+            renderer.set_map_light_spots(queue, &self.spots);
         } else {
             let unified = mode > 0;
             let map = self.map.as_ref().filter(|_| unified);
@@ -511,6 +523,8 @@ mod tests {
             terrain: Vec::new(),
             shape_indices: Default::default(),
             modern_lights: Some(Vec::new()),
+            light_animations: Vec::new(),
+            light_spots: Vec::new(),
         }
     }
 

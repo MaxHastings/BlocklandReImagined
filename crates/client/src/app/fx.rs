@@ -16,6 +16,8 @@ pub(super) struct Effects {
     pub(super) beams: crate::beams::Beams,
     /// Marks projectiles leave on bricks: bullet holes.
     pub(super) decals: crate::decals::Decals,
+    pub(super) footsteps: crate::footsteps::Footsteps,
+    pub(super) body_flashes: crate::body_flash::BodyFlashes,
     /// The Tutorial's target practice targets.
     pub(super) tutorial_targets: crate::tutorial_targets::TutorialTargets,
     /// Pieces thrown by explosions with `debris` (vehicle wrecks, tank shells).
@@ -220,6 +222,14 @@ impl App {
                 *scale,
             );
         }
+        if let bri_sim::presentation::CueKind::BodyFlash {
+            owner,
+            color,
+            seconds,
+        } = &cue.kind
+        {
+            self.fx.body_flashes.add(*owner, *color, *seconds);
+        }
         self.fx.actor_effects.cue(&cue);
         self.fx.explosion_shapes.cue(&cue);
         self.fx.explosion_debris.cue(&cue);
@@ -378,6 +388,7 @@ impl App {
                 continue;
             };
             sprays.extend(crate::actor_effects::tire_sprays(*id, d, frame));
+            sprays.extend(crate::actor_effects::tire_skids(*id, d, frame).0);
             trails.extend(crate::actor_effects::vehicle_trails(*id, d, frame));
         }
         actor_effects.update_tires(&sprays)?;
@@ -430,6 +441,7 @@ impl App {
         self.fx.explosion_shapes.reset(checkpoint_cursor);
         self.fx.beams.clear();
         self.fx.decals.clear();
+        self.fx.body_flashes.clear();
         self.fx.explosion_debris.reset(checkpoint_cursor);
         self.fx.weapon_shells.reset(checkpoint_cursor);
         self.fx

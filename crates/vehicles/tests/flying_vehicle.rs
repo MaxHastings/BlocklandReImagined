@@ -168,3 +168,34 @@ fn mouse_pitch_tips_the_carpets_nose_about_its_own_wing(f: &Fixture) {
     }
 }
 }
+
+/// A flying vehicle that steers toward its driver's look pitches its nose
+/// to the look as well as turning to it, and holds it there.
+#[test]
+fn a_toward_look_flyer_points_its_nose_where_the_driver_looks() {
+    let f = Fixture {
+        pack: testing::pack_with(|d| {
+            if d.id == testing::CARPET {
+                d.steering.toward_look = true;
+            }
+        }),
+        ..Fixture::synthetic()
+    };
+    for look in [0.35f32, -0.25] {
+        let (mut v, mut w) = carpet(&f, 0., 20.);
+        fly(
+            &mut v,
+            &mut w,
+            360,
+            Controls {
+                throttle: 1.,
+                look_pitch: look,
+                ..Default::default()
+            },
+        );
+        let (_, _, nose) = state(&v, &w);
+        let pitch = nose.y.asin();
+        eprintln!("look {look}: nose {pitch}");
+        assert!((pitch - look).abs() < 0.1, "look {look}: nose {pitch}");
+    }
+}

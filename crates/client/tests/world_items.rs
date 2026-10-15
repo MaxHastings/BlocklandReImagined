@@ -741,6 +741,7 @@ fn a_stuck_arrow_keeps_pointing_the_way_it_flew(f: &ItemFixture) -> Result<()> {
         was_thrown: false,
         paint: None,
         heading: None,
+        stuck_to: None,
         bounces: 0,
         spawned: 0,
     };

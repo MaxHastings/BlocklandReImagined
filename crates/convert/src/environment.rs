@@ -13,7 +13,17 @@ pub fn read_original(root: &Path, name: &str) -> Result<Option<Vec<u8>>> {
         bri_content::brick_materials::safe_relative(name),
         "Unsafe original environment path"
     );
-    let path = root.join(name);
+    // Compare canonical paths on both sides: Windows canonical paths carry
+    // a `\\?\` prefix that a plain root never starts with.
+    let root = &root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
+    let mut path = root.join(name);
+    if !path.exists() {
+        // Blockland ran on Windows: a mission's `sky_spooky3` is the
+        // installation's `Sky_Spooky3`.
+        if let Some(found) = case_insensitive(root, name) {
+            path = found;
+        }
+    }
     if path.is_file() {
         let path = path.canonicalize()?;
         ensure!(
@@ -56,6 +66,23 @@ pub fn read_original(root: &Path, name: &str) -> Result<Option<Vec<u8>>> {
         }
     }
     Ok(None)
+}
+/// `name` under `root` matched one folder at a time ignoring case, when
+/// exactly one entry matches each part.
+fn case_insensitive(root: &Path, name: &str) -> Option<std::path::PathBuf> {
+    let mut path = root.to_path_buf();
+    for part in name.split('/') {
+        let mut matches = std::fs::read_dir(&path)
+            .ok()?
+            .filter_map(|e| e.ok())
+            .filter(|e| e.file_name().to_string_lossy().eq_ignore_ascii_case(part));
+        let entry = matches.next()?;
+        if matches.next().is_some() {
+            return None;
+        }
+        path = entry.path();
+    }
+    Some(path)
 }
 fn vector<const N: usize>(
     p: &BTreeMap<String, String>,
@@ -121,8 +148,8 @@ pub fn convert(
     let p = &sky.properties;
     let dml = p
         .get("materiallist")
-        .context("Sky lacks materials")?
-        .replace('\\', "/");
+        .map(|v| v.replace('\\', "/"))
+        .unwrap_or_default();
     let dml = if let Some(local) = dml.strip_prefix("./") {
         format!(
             "{}/{local}",

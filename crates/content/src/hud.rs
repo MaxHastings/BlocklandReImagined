@@ -51,9 +51,16 @@ pub enum Region {
     /// print only while that print is the ammo display, so rules' other
     /// bottom prints still show.
     Ammo,
+    /// The stock tool bar down the right edge (the five-slot inventory):
+    /// claiming it hides the bar, for a game that shows what is carried
+    /// its own way.
+    Tools,
+    /// The names drawn over other players' heads: claiming it hides the
+    /// stock ones, and a layout's `name_tags` draws them its own way.
+    NameTags,
 }
 impl Region {
-    pub const ALL: [Region; 13] = [
+    pub const ALL: [Region; 15] = [
         Region::TopLeft,
         Region::TopCenter,
         Region::TopRight,
@@ -67,6 +74,8 @@ impl Region {
         Region::CenterPrint,
         Region::BottomPrint,
         Region::Ammo,
+        Region::Tools,
+        Region::NameTags,
     ];
     pub fn name(self) -> &'static str {
         match self {
@@ -83,6 +92,8 @@ impl Region {
             Region::CenterPrint => "center_print",
             Region::BottomPrint => "bottom_print",
             Region::Ammo => "ammo",
+            Region::Tools => "tools",
+            Region::NameTags => "name_tags",
         }
     }
     pub fn parse(name: &str) -> Option<Self> {
@@ -96,6 +107,8 @@ impl Region {
             Region::CenterPrint => Some("center print"),
             Region::BottomPrint => Some("bottom print"),
             Region::Ammo => Some("ammo display"),
+            Region::Tools => Some("tool bar"),
+            Region::NameTags => Some("player names"),
             _ => None,
         }
     }
@@ -122,6 +135,8 @@ impl Region {
             Region::CenterPrint => [center(480.0), 160.0, 480.0, 120.0],
             Region::BottomPrint => [0.0, 400.0, w, 80.0],
             Region::Ammo => [w - 240.0, 400.0, 240.0, 80.0],
+            Region::Tools => [w - 64.0, 0.0, 64.0, HEIGHT],
+            Region::NameTags => [0.0, 0.0, w, HEIGHT],
         }
     }
 }
@@ -148,6 +163,67 @@ pub struct Layout {
     /// into (`hud_region`).
     #[serde(default)]
     pub elements: Vec<Element>,
+    /// How the names over other players' heads look, for a `name_tags`
+    /// claim. Left out, the claim hides them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name_tags: Option<NameTagStyle>,
+}
+
+/// Names over other players' heads, as a game shows them: whose, when,
+/// and in what colour.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct NameTagStyle {
+    /// Players on the viewer's team in the viewer's mini-game.
+    pub teammates: TagShow,
+    /// Everyone else.
+    pub others: TagShow,
+    /// One colour for every name (RGBA 0..1). Left out, the stock colour:
+    /// the team's, then the mini-game's, else white.
+    pub color: Option<[f32; 4]>,
+    /// The stock one-pixel dark outline around each name.
+    pub outline: bool,
+    /// How far above the eye the name sits, in units (the stock 0.85).
+    pub height: f32,
+}
+impl Default for NameTagStyle {
+    fn default() -> Self {
+        Self {
+            teammates: TagShow::Always,
+            others: TagShow::Always,
+            color: None,
+            outline: true,
+            height: 0.85,
+        }
+    }
+}
+
+impl NameTagStyle {
+    /// Whether a name shows: `teammate` on the viewer's team, `aimed` with
+    /// the viewer's aim on them.
+    pub fn shows(&self, teammate: bool, aimed: bool) -> bool {
+        match if teammate {
+            self.teammates
+        } else {
+            self.others
+        } {
+            TagShow::Always => true,
+            TagShow::Aimed => aimed,
+            TagShow::Never => false,
+        }
+    }
+}
+
+/// When a player's name shows.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TagShow {
+    /// Whenever they are in sight, as v20 shows every name.
+    #[default]
+    Always,
+    /// Only while the viewer's aim is on them.
+    Aimed,
+    Never,
 }
 
 /// When a claim applies: every list given must match (an empty list always
@@ -510,6 +586,22 @@ impl Layout {
         ids(&self.when.body, "body")?;
         ids(&self.when.holding, "holding")?;
         ids(&self.when.vehicle, "vehicle")?;
+        if let Some(style) = &self.name_tags {
+            ensure!(
+                self.region == Region::NameTags,
+                "`name_tags` belongs in a `name_tags` region layout"
+            );
+            ensure!(
+                style.height.is_finite() && (-8.0..=8.0).contains(&style.height),
+                "name_tags height must be -8 to 8 units"
+            );
+            ensure!(
+                style
+                    .color
+                    .is_none_or(|c| c.iter().all(|v| v.is_finite() && (0.0..=1.0).contains(v))),
+                "name_tags color must be RGBA from 0 to 1"
+            );
+        }
         ensure!(
             self.elements.len() <= MAX_ELEMENTS,
             "at most {MAX_ELEMENTS} elements"
@@ -928,6 +1020,32 @@ pub fn region(name: &str) -> Result<Region> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_name_tags_claim_styles_whose_names_show_and_a_tools_claim_is_a_region() {
+        let style = layout(
+            serde_json::json!({ "schema_version": 1, "region": "name_tags",
+            "name_tags": { "teammates": "always", "others": "aimed", "outline": false,
+                "color": [0.4, 0.8, 1.0, 1.0] } }),
+        );
+        let s = style.name_tags.as_ref().unwrap();
+        assert!(s.shows(true, false));
+        assert!(!s.shows(false, false) && s.shows(false, true));
+        assert!(!s.outline && s.height == 0.85);
+        // Stock: every name; a bare claim hides them (no style).
+        assert!(NameTagStyle::default().shows(false, false));
+        let bare = layout(serde_json::json!({ "schema_version": 1, "region": "name_tags" }));
+        assert!(bare.name_tags.is_none());
+        // A style anywhere else is refused.
+        let wrong: Layout = serde_json::from_value(serde_json::json!({ "schema_version": 1,
+            "region": "top_left", "name_tags": {} }))
+        .unwrap();
+        assert!(wrong.validate().is_err());
+        let tools = layout(serde_json::json!({ "schema_version": 1, "region": "tools" }));
+        assert_eq!(tools.region.stock(), Some("tool bar"));
+        assert_eq!(Region::parse("name_tags"), Some(Region::NameTags));
+        assert_eq!(Region::Tools.rect(640.0), [576.0, 0.0, 64.0, HEIGHT]);
+    }
 
     fn layout(json: serde_json::Value) -> Layout {
         let l: Layout = serde_json::from_value(json).unwrap();

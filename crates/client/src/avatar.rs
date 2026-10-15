@@ -1152,9 +1152,34 @@ pub struct AvatarAnimationInput {
     /// skid. It takes the place of the run, jump and fall clips while the
     /// model has it; death, sitting and swimming still win.
     pub intent_clip: Option<String>,
+    /// How far the body leans, radians, right positive
+    /// ([`bri_sim::player::PlayerState::lean_tilt`]): it tilts about its
+    /// feet along its facing.
+    pub lean_tilt: f32,
 }
 
 pub use bri_content::hold::reach as reach_hands;
+
+/// What a body's posture does to its drawn frame, after its heading and
+/// before its scale: a lean tilts it about the feet, right side down for
+/// a lean right; lying prone lays it face down along its facing, its
+/// middle over the feet and its back up, `depth` (half its thickness,
+/// scaled) above the ground.
+pub fn posture_frame(player: &PlayerState, lean_tilt: f32, depth: f32) -> Mat4 {
+    let lean = if lean_tilt.is_finite() && lean_tilt != 0.0 {
+        Mat4::from_rotation_z(-lean_tilt)
+    } else {
+        Mat4::IDENTITY
+    };
+    if !player.posture.prone {
+        return lean;
+    }
+    // Head forward (-Z): the body's up turns to its facing.
+    let middle = bri_sim::player::nominal_middle(1.0);
+    Mat4::from_translation(Vec3::new(0.0, depth, middle))
+        * lean
+        * Mat4::from_rotation_x(-std::f32::consts::FRAC_PI_2)
+}
 
 /// A clip name as the action thread holds it. Intent clips come from
 /// archetype data, a bounded table, so each distinct name is kept once.
@@ -1168,6 +1193,49 @@ fn interned(name: &str) -> &'static str {
     let leaked: &'static str = Box::leak(name.to_owned().into_boxed_str());
     names.insert(leaked);
     leaked
+}
+
+#[cfg(test)]
+mod posture_tests {
+    use super::*;
+
+    #[test]
+    fn a_lean_tilts_the_head_aside_and_prone_lays_it_ahead() {
+        let mut player = PlayerState {
+            owner: 1,
+            feet: [0.0; 3],
+            velocity: [0.0; 3],
+            yaw: 0.0,
+            pitch: 0.0,
+            head_yaw: 0.0,
+            grounded: true,
+            crouched: false,
+            jetting: false,
+            jump: Default::default(),
+            archetype: Default::default(),
+            scale: 1.0,
+            energy: 0.0,
+            speed_scale: 1.0,
+            tick: Default::default(),
+            tether: None,
+            controller: None,
+            pass_group: 0,
+            posture: Default::default(),
+        };
+        let head = Vec3::new(0.0, 2.4, 0.0);
+        assert_eq!(posture_frame(&player, 0.0, 0.3), Mat4::IDENTITY);
+        // Facing -Z, right is +X: leaning right puts the head right.
+        let leaned = posture_frame(&player, 0.3, 0.3).transform_point3(head);
+        assert!(leaned.x > 0.5 && leaned.y < head.y, "{leaned}");
+        player.posture.prone = true;
+        let frame = posture_frame(&player, 0.0, 0.3);
+        let (head, feet) = (
+            frame.transform_point3(head),
+            frame.transform_point3(Vec3::ZERO),
+        );
+        assert!(head.z < -0.8 && feet.z > 1.0, "head {head}, feet {feet}");
+        assert!((head.y - 0.3).abs() < 1e-4 && (feet.y - 0.3).abs() < 1e-4);
+    }
 }
 
 /// Which body a drawn player is, and whether it lies dead, at the tick of
@@ -1304,7 +1372,8 @@ pub fn locomotion(player: &PlayerState, coverage: f32) -> LocomotionAction {
     if player.jetting {
         return forward("root");
     }
-    let root = if player.crouched { "crouch" } else { "root" };
+    let crouched = player.crouched && !player.posture.prone;
+    let root = if crouched { "crouch" } else { "root" };
     if coverage > 0.6 || (coverage > 0.01 && (!player.grounded || player.velocity[1] < -0.1)) {
         return forward(root);
     }
@@ -1321,7 +1390,7 @@ pub fn locomotion(player: &PlayerState, coverage: f32) -> LocomotionAction {
     let right = Vec3::new(player.yaw.cos(), 0.0, player.yaw.sin());
     let velocity = Vec3::from(player.velocity);
     let (f, r) = (velocity.dot(facing), velocity.dot(right));
-    let [root, run, back, side] = if player.crouched {
+    let [root, run, back, side] = if crouched {
         ["crouch", "crouchrun", "crouchback", "crouchside"]
     } else {
         ["root", "run", "back", "side"]
@@ -1434,6 +1503,15 @@ impl AvatarMesh {
     pub fn middle(&self) -> Vec3 {
         let scale = self.model_transform.x_axis.truncate().length();
         self.model_transform.w_axis.truncate() + Vec3::Y * bri_sim::player::nominal_middle(scale)
+    }
+    /// What carries the mesh's vertices into the world: the body transform
+    /// for an `instanced` mesh, nothing for one built in world space.
+    pub fn drawn_transform(&self) -> Mat4 {
+        if self.instanced {
+            self.model_transform
+        } else {
+            Mat4::IDENTITY
+        }
     }
     pub fn bounding_sphere(&self) -> (Vec3, f32) {
         let scale = self.model_transform.x_axis.truncate().length();
@@ -2221,6 +2299,7 @@ impl AvatarMesh {
             player,
             pose,
             animation_input.mount_rotation,
+            animation_input.lean_tilt,
             Holds {
                 raised,
                 pitch: player.pitch,
@@ -2236,6 +2315,7 @@ impl AvatarMesh {
         player: &PlayerState,
         mut pose: bri_content::animation::Pose,
         mount_rotation: Option<Quat>,
+        lean_tilt: f32,
         holds: Holds,
     ) -> Result<()> {
         let hand_holds = holds.seat;
@@ -2251,6 +2331,14 @@ impl AvatarMesh {
         let model_transform = match self.fits.as_ref().and_then(|f| f.seat) {
             Some(shift) if mount_rotation.is_some() => {
                 model_transform * Mat4::from_translation(shift)
+            }
+            // On foot a body leans and lies down as its posture says.
+            _ if mount_rotation.is_none() && (player.posture.prone || lean_tilt != 0.0) => {
+                Mat4::from_rotation_translation(
+                    Quat::from_rotation_y(-player.body_yaw()),
+                    Vec3::from(player.feet),
+                ) * posture_frame(player, lean_tilt, 0.3 * player.scale)
+                    * Mat4::from_scale(Vec3::splat(player.scale))
             }
             _ => model_transform,
         };
@@ -2671,6 +2759,7 @@ impl Preview {
                 tether: None,
                 controller: None,
                 pass_group: 0,
+                posture: Default::default(),
             },
             time * 0.85,
             &AvatarAnimationInput {
@@ -3563,6 +3652,7 @@ mod tests {
             tether: None,
             controller: None,
             pass_group: 0,
+            posture: Default::default(),
         }
     }
     fn vitals(alive: bool, spawn_tick: u64, died_tick: Option<u64>) -> bri_sim::session::Vitals {

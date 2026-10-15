@@ -969,6 +969,7 @@ mod tests {
             age: 0,
             bounced: false,
             stuck: false,
+            stuck_to: None,
             origin: input.muzzle,
             was_thrown: false,
             paint: None,

@@ -1,2 +1,1 @@
-`CueKind::Decal::brick` may be 0: the projectile marked the map (its ground,
-terrain or buildings) rather than a brick.
+`CueKind::Decal::brick` is `Option<u64>`: None marks the map itself (its meshes and ground), where the mark stays until it fades.

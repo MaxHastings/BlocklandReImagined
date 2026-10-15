@@ -278,6 +278,7 @@ impl Session {
 
     pub(super) fn step_weapons(&mut self) -> Result<()> {
         self.end_gun_slows()?;
+        self.step_quick_uses()?;
         let tick = self.simulation.state().tick;
         let mut prepared_triggers = Vec::with_capacity(self.peers.len());
         let owners: Vec<OwnerId> = self.peers.keys().copied().collect();
@@ -369,6 +370,7 @@ impl Session {
                     direction,
                     velocity: Vec3::from(state.velocity),
                     grounded: state.grounded,
+                    crouched: state.crouched,
                     mount: match self.vehicles.mounted_family(*owner) {
                         None => bri_weapons::Mount::None,
                         Some(bri_vehicles::Family::Skis) => bri_weapons::Mount::Skis,
@@ -473,6 +475,28 @@ impl Session {
                     == games.get(&target.0).copied().flatten()
         };
         let shapes = self.tutorial_shape_targets();
+        // Lag compensation: each living body's place now, and each
+        // shooter's aimed shots meet the others where they saw them.
+        let now = self.simulation.state().tick;
+        let bodies: Vec<_> = self
+            .peers
+            .iter()
+            .filter(|(_, p)| p.combat.alive)
+            .map(|(owner, p)| {
+                (
+                    *owner,
+                    p.player.collider(),
+                    Vec3::from(p.player.state().feet),
+                )
+            })
+            .collect();
+        self.body_history
+            .record(now, bodies.iter().map(|(owner, _, feet)| (*owner, *feet)));
+        let rewound = self.body_history.rewound(
+            now,
+            self.peers.iter().map(|(owner, p)| (*owner, p.input.seen)),
+            &bodies,
+        );
         let mut query = crate::weapon_query::WeaponQuery {
             simulation: &self.simulation,
             affect: &affect,
@@ -482,6 +506,7 @@ impl Session {
             responses: &self.events.projectile_responses,
             truncated_targets: 0,
             shapes: &shapes,
+            rewound: Some(&rewound),
         };
         let events = self.weapons.step(&mut query);
         let truncated = query.truncated_targets;
@@ -598,14 +623,13 @@ impl Session {
                     self.tutorial_contact(&impact);
                     self.spray_player(&impact);
                     // A projectile that marks what it hits leaves its decal
-                    // on the brick or the map's ground, for every player to
-                    // draw (brick 0: the map).
-                    let marked = match impact.target {
-                        TargetId::Brick(brick) => Some(brick),
-                        TargetId::Map(_) => Some(0),
+                    // on the brick or the map, for every player to draw.
+                    let surface = match impact.target {
+                        TargetId::Brick(brick) => Some(Some(brick)),
+                        TargetId::Map(_) => Some(None),
                         _ => None,
                     };
-                    if let Some(brick) = marked
+                    if let Some(brick) = surface
                         && self
                             .weapons
                             .pack

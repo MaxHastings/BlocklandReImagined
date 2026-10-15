@@ -134,6 +134,28 @@ pub fn engine_loop(
     })
 }
 
+/// The squeal of vehicle `info`'s sliding tyres this frame, if its
+/// definition has a skid sound and a wheel skids
+/// ([`crate::actor_effects::tire_skids`]): louder and a little higher the
+/// harder it slides.
+pub fn skid_loop(
+    d: &bri_vehicles::Definition,
+    info: &bri_sim::session::VehicleInfo,
+    frame: &crate::vehicles::VehicleFrame,
+) -> Option<EngineLoop> {
+    let sound = d.skid.as_ref()?.sound.as_ref()?;
+    if info.destroyed || !frame.position.is_finite() {
+        return None;
+    }
+    let (_, strength) = crate::actor_effects::tire_skids(0, d, frame);
+    (strength > 0.0).then(|| EngineLoop {
+        sound: sound.clone(),
+        position: frame.position.to_array(),
+        volume: strength,
+        pitch: 0.9 + 0.2 * strength,
+    })
+}
+
 /// The world's music bricks (a resolved `sound`), kept in step with each
 /// replica revision from what changed in it (`Bricks::diff` skips the
 /// shared tree), so a world change costs its changed bricks, not a pass
@@ -445,7 +467,8 @@ impl ClientAudio {
             | CueKind::WeaponShell { .. }
             | CueKind::Beam { .. }
             | CueKind::Tracer { .. }
-            | CueKind::Decal { .. } => return,
+            | CueKind::Decal { .. }
+            | CueKind::BodyFlash { .. } => return,
             CueKind::WeaponSound { profile } => {
                 // A looping state sound belongs to the state, not to its
                 // entry; `sync_image_loops` owns it.
@@ -878,6 +901,68 @@ mod tests {
         info.destroyed = false;
         d.engine_sound = None;
         assert_eq!(engine_loop(&d, &info, &frame(15.0)), None);
+    }
+
+    /// A car sliding sideways skids at its grounded wheels, harder and
+    /// louder the faster it slides; rolling straight or airborne it does not.
+    #[test]
+    fn sliding_tyres_skid_and_squeal_with_the_slide() {
+        let mut d = bri_vehicles::testing::car();
+        d.skid = Some(
+            serde_json::from_value(serde_json::json!({
+                "emitter": "car:skid", "sound": "car:squeal"
+            }))
+            .unwrap(),
+        );
+        d.skid.as_ref().unwrap().validate().unwrap();
+        let info = bri_sim::session::VehicleInfo {
+            id: 1,
+            definition: d.id.clone(),
+            color: None,
+            occupants: vec![None; 4],
+            destroyed: false,
+            lights: false,
+            turret_broken: false,
+            scale: 1.0,
+        };
+        let wheels = d.wheels.len();
+        let frame = |velocity: glam::Vec3, grounded: bool| crate::vehicles::VehicleFrame {
+            position: glam::Vec3::ZERO,
+            rotation: glam::Quat::IDENTITY,
+            velocity,
+            steering: 0.0,
+            wheel_suspension: vec![],
+            wheel_rotation: vec![],
+            wheel_contact: vec![grounded; wheels],
+            turret_aim: [0.0; 2],
+        };
+        let straight = frame(glam::Vec3::new(0.0, 0.0, 25.0), true);
+        assert!(
+            crate::actor_effects::tire_skids(1, &d, &straight)
+                .0
+                .is_empty()
+        );
+        assert_eq!(skid_loop(&d, &info, &straight), None);
+        let drift = frame(glam::Vec3::new(7.5, 0.0, 20.0), true);
+        let (sprays, hardest) = crate::actor_effects::tire_skids(1, &d, &drift);
+        assert_eq!(sprays.len(), wheels);
+        assert!(
+            sprays
+                .iter()
+                .all(|s| s.emitter == "car:skid" && s.wheel >= wheels)
+        );
+        assert!((hardest - 0.5).abs() < 1e-4, "{hardest}");
+        let squeal = skid_loop(&d, &info, &drift).unwrap();
+        assert_eq!(squeal.sound, "car:squeal");
+        let hard = skid_loop(&d, &info, &frame(glam::Vec3::new(30.0, 0.0, 0.0), true)).unwrap();
+        assert!(hard.volume > squeal.volume && hard.pitch > squeal.pitch);
+        let airborne = frame(glam::Vec3::new(30.0, 0.0, 0.0), false);
+        assert!(
+            crate::actor_effects::tire_skids(1, &d, &airborne)
+                .0
+                .is_empty()
+        );
+        assert_eq!(skid_loop(&d, &info, &airborne), None);
     }
 
     /// A world change costs the bricks it changed: only the first replica

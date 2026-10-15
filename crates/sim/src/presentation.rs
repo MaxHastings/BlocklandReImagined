@@ -147,14 +147,20 @@ pub enum CueKind {
         actor: u64,
         hand: u8,
     },
+    /// A see-through `color` over `owner`'s body, just outside it, fading
+    /// over `seconds` (rules' `body_flash`).
+    BodyFlash {
+        owner: u64,
+        color: [f32; 4],
+        seconds: f32,
+    },
     /// A projectile that leaves a mark (`ProjectileDef::decal`) hit `brick`
-    /// at the cue position, on the face turned to `normal`. Clients draw
-    /// the projectile's own decal there, `scale` times its size, until it
-    /// fades or the brick goes.
+    /// (None: the map itself, its meshes and ground) at the cue position,
+    /// on the face turned to `normal`. Clients draw the projectile's own
+    /// decal there, `scale` times its size, until it fades or the brick
+    /// goes.
     Decal {
-        /// The brick marked, or 0 for the map (its ground, terrain and
-        /// buildings).
-        brick: u64,
+        brick: Option<u64>,
         normal: [f32; 3],
         projectile: String,
         scale: f32,
@@ -288,13 +294,27 @@ impl Cue {
             CueKind::Tracer { actor, hand } => {
                 ensure!(*actor > 0 && *hand < 2, "Invalid tracer cue")
             }
+            CueKind::BodyFlash {
+                owner,
+                color,
+                seconds,
+            } => ensure!(
+                *owner > 0
+                    && color
+                        .iter()
+                        .all(|c| c.is_finite() && (0.0..=1.0).contains(c))
+                    && seconds.is_finite()
+                    && (0.05..=60.0).contains(seconds),
+                "Invalid body flash cue"
+            ),
             CueKind::Decal {
-                brick: _,
+                brick,
                 normal,
                 projectile,
                 scale,
             } => ensure!(
-                normal.iter().all(|v| v.is_finite())
+                brick.is_none_or(|b| b > 0)
+                    && normal.iter().all(|v| v.is_finite())
                     && (normal.iter().map(|v| v * v).sum::<f32>() - 1.).abs() < 0.01
                     && !projectile.is_empty()
                     && text(projectile)

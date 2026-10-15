@@ -503,6 +503,7 @@ def buggy(root):
         'strafe_steering': False,
         'throttle_brakes': True,
         'reverse_limited': True,
+        'board_on_use': True,
         'steering': {'strafe_rate': 0.25, 'auto_return': True, 'auto_return_rate': 0.9,
                      'auto_return_max_speed': 10.0, 'toward_look': True, 'speed_lock': 0.6},
         'gravity_scale': 0.85,
