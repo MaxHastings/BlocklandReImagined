@@ -262,7 +262,15 @@ impl Orbit {
 #[serde(rename_all = "snake_case")]
 pub enum CameraOp {
     Free,
-    Point { at: [f32; 3], distance: f32 },
+    Point {
+        at: [f32; 3],
+        distance: f32,
+    },
+    /// Circle an object (a ball, a car, a player) wherever it goes.
+    Object {
+        object: ObjectRef,
+        distance: f32,
+    },
 }
 /// Nearest and farthest an orbit camera sits from its point.
 pub const ORBIT_DISTANCES: std::ops::RangeInclusive<f32> = 0.5..=100.0;

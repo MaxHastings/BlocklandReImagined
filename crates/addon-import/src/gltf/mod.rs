@@ -9,6 +9,7 @@
 //! child translations, mesh vertices and inverse bind matrices. Animation
 //! clips are sampled at a fixed rate; clips named after a body's animation
 //! roles take the Blockhead's clip names, so a body needs no mapping.
+mod brick;
 mod lod;
 mod map;
 mod read;
@@ -42,6 +43,9 @@ pub enum Kind {
     /// A whole scene as a map Add-On: its meshes, spawn points and lights
     /// (docs/modding/maps.md).
     Map,
+    /// One brick for the brick menu, drawn in paint colour
+    /// (docs/modding/bricks.md).
+    Brick,
 }
 impl Kind {
     pub fn parse(s: &str) -> Result<Self> {
@@ -50,7 +54,10 @@ impl Kind {
             "item" | "weapon" | "tool" => Kind::Item,
             "prop" | "vehicle" | "model" => Kind::Prop,
             "map" | "level" => Kind::Map,
-            _ => bail!("--kind is body, item, prop (vehicles, wheels and anything else) or map"),
+            "brick" => Kind::Brick,
+            _ => bail!(
+                "--kind is body, item, prop (vehicles, wheels and anything else), map or brick"
+            ),
         })
     }
 }
@@ -391,8 +398,12 @@ pub fn import(opts: &Options) -> Result<Report> {
         .file_name()
         .map(|s| s.to_string_lossy().into_owned())
         .unwrap_or_default();
-    if opts.kind == Kind::Map {
-        let mut report = map::write(opts, &id, converted, &doc)?;
+    if matches!(opts.kind, Kind::Map | Kind::Brick) {
+        let mut report = if opts.kind == Kind::Map {
+            map::write(opts, &id, converted, &doc)?
+        } else {
+            brick::write(opts, &id, converted)?
+        };
         report.files.push("IMPORT-REPORT.md".into());
         std::fs::write(opts.out.join("IMPORT-REPORT.md"), report.markdown())?;
         return Ok(report);
@@ -474,7 +485,7 @@ fn write(opts: &Options, id: &str, converted: Converted) -> Result<Report> {
                 &mut report,
             )?;
         }
-        Kind::Map => unreachable!("maps are written by map::write"),
+        Kind::Map | Kind::Brick => unreachable!("maps and bricks are written by their own modules"),
         Kind::Item | Kind::Prop => {
             report.id = id.into();
             report.model = format!("models/{id}.shape.json");
@@ -1506,7 +1517,7 @@ fn points(shape: &Shape, kind: Kind) -> Vec<Point> {
     let wanted = |name: &str| {
         let n = name.to_ascii_lowercase();
         match kind {
-            Kind::Body | Kind::Map => false,
+            Kind::Body | Kind::Map | Kind::Brick => false,
             Kind::Item => matches!(
                 n.as_str(),
                 "mountpoint" | "muzzlepoint" | "ejectpoint" | "supportpoint"
@@ -2023,6 +2034,7 @@ impl Report {
             Some(Kind::Body) => "body",
             Some(Kind::Item) => "item",
             Some(Kind::Map) => "map",
+            Some(Kind::Brick) => "brick",
             _ => "model",
         };
         let _ = writeln!(s, "# {} ({kind}) from {}\n", self.id, self.source);

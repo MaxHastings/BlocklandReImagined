@@ -2899,6 +2899,60 @@ fn register_presentation(engine: &mut Engine) {
     }
     engine.register_fn("beam", |from: Array, to: Array| beam(from, to, Map::new()));
     engine.register_fn("beam", beam);
+    // play_music(player, track[, options]) / play_music_all(track[, options]),
+    // stop_music(player[, fade]) / stop_music_all([fade]). Options:
+    // `looping` (default true; `loop` is a Rhai keyword) and `fade`,
+    // seconds to fade in.
+    fn music(player: Option<u64>, track: &str, options: Map) -> Fallible<INT> {
+        let (mut looping, mut fade) = (true, 0.0);
+        for (key, value) in options {
+            match key.as_str() {
+                "looping" => {
+                    looping = value.as_bool().map_err(|_| "looping is true or false")?;
+                }
+                "fade" => fade = float(&value)?,
+                other => {
+                    return fail(format!(
+                        "play_music has no option `{other}` (looping, fade)"
+                    ));
+                }
+            }
+        }
+        push(Op::Music(ops::Music {
+            player,
+            track: Some(track.into()),
+            looping,
+            fade,
+        }))
+    }
+    fn stop_music(player: Option<u64>, fade: f32) -> Fallible<INT> {
+        push(Op::Music(ops::Music {
+            player,
+            track: None,
+            looping: false,
+            fade,
+        }))
+    }
+    engine.register_fn("play_music", |p: Dynamic, track: &str| {
+        music(Some(id(&p)?), track, Map::new())
+    });
+    engine.register_fn("play_music", |p: Dynamic, track: &str, options: Map| {
+        music(Some(id(&p)?), track, options)
+    });
+    engine.register_fn("play_music_all", |track: &str| {
+        music(None, track, Map::new())
+    });
+    engine.register_fn("play_music_all", |track: &str, options: Map| {
+        music(None, track, options)
+    });
+    engine.register_fn("stop_music", |p: Dynamic| stop_music(Some(id(&p)?), 0.0));
+    engine.register_fn("stop_music", |p: Dynamic, fade: Dynamic| {
+        stop_music(Some(id(&p)?), float(&fade)?)
+    });
+    engine.register_fn("stop_music_all", || stop_music(None, 0.0));
+    engine.register_fn("stop_music_all", |fade: Dynamic| {
+        stop_music(None, float(&fade)?)
+    });
     // `%player.playThread(thread, sequence)`, or its `schedule(ms, ...)`
     // `after` seconds later.
     fn play_thread(player: Dynamic, thread: i64, sequence: &str, after: f64) -> Fallible<INT> {
@@ -3251,6 +3305,23 @@ fn register_presentation(engine: &mut Engine) {
                 player: id(&player)?,
                 camera: crate::ops::CameraOp::Point {
                     at: vector(&at)?,
+                    distance: float(&distance)?,
+                },
+            }))
+        },
+    );
+    // An orbit `distance` units out around an object (`"vehicle:12"`)
+    // that follows it as it moves; `watch(p, ())` ends it.
+    engine.register_fn(
+        "orbit_object",
+        |player: Dynamic, object: &str, distance: Dynamic| {
+            let Some(object) = crate::ops::ObjectRef::parse(object) else {
+                return fail(format!("\"{object}\" is not an object"));
+            };
+            push(Op::Camera(ops::Camera {
+                player: id(&player)?,
+                camera: crate::ops::CameraOp::Object {
+                    object,
                     distance: float(&distance)?,
                 },
             }))
@@ -3759,6 +3830,9 @@ impl Runtime {
             }
             if !behaviour.zones.is_empty() {
                 need("on_zone".into(), 3, "zones");
+            }
+            if behaviour.zones.iter().any(|z| z.objects) {
+                need("on_zone_object".into(), 3, "zones with objects");
             }
             if !behaviour.brick_outputs.is_empty() {
                 need("on_brick_output".into(), 4, "brick_outputs");

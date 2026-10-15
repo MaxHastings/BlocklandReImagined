@@ -61,6 +61,31 @@ impl ScriptOp for Sound {
     }
 }
 
+/// Play a music track (a sound an Add-On marks `music`, or one of the
+/// game's music loops) at a player's ears on the music bus, or stop it
+/// (`track` none), fading over `fade` seconds. For one player, or for
+/// everyone (`player` none), joiners included until it is stopped.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Music {
+    pub player: Option<u64>,
+    pub track: Option<String>,
+    pub looping: bool,
+    pub fade: f32,
+}
+impl ScriptOp for Music {
+    const CAPABILITY: &str = "effects";
+    const NAME: &str = "play_music";
+    fn bounded(&self) -> bool {
+        let Music { track, fade, .. } = self;
+        track.as_ref().is_none_or(|t| {
+            !t.is_empty() && t.len() <= 128 && !t.chars().any(char::is_control)
+        }) && fade.is_finite()
+            && (0.0..=MAX_MUSIC_FADE).contains(fade)
+    }
+}
+/// The longest fade in or out `play_music` and `stop_music` take, in seconds.
+pub const MAX_MUSIC_FADE: f32 = 30.0;
+
 /// A straight beam from `from` to `to` for `seconds`, fading out: a
 /// tracer, a laser, a bolt. With `muzzle`, clients start it at that
 /// player's held muzzle as they draw it. Presentation only.
