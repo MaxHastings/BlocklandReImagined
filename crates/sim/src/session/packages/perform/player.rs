@@ -555,15 +555,28 @@ impl Perform for ops::FollowPath {
 impl Perform for ops::Camera {
     fn perform(self, session: &mut Session, _cx: OpCall<'_>) -> Result<()> {
         let ops::Camera { player, camera } = self;
-        session.rules_camera(
-            player,
-            match camera {
-                bri_package_runtime::ops::CameraOp::Free => RulesCamera::Free,
-                bri_package_runtime::ops::CameraOp::Point { at, distance } => {
-                    RulesCamera::Point(super::OrbitPoint { at, distance })
-                }
-            },
-        )
+        let camera = match camera {
+            bri_package_runtime::ops::CameraOp::Free => RulesCamera::Free,
+            bri_package_runtime::ops::CameraOp::Point { at, distance } => {
+                RulesCamera::Point(super::OrbitPoint {
+                    at,
+                    distance,
+                    object: None,
+                })
+            }
+            bri_package_runtime::ops::CameraOp::Object { object, distance } => {
+                let at = session
+                    .object_centre(object)
+                    .context("No such object")?
+                    .to_array();
+                RulesCamera::Point(super::OrbitPoint {
+                    at,
+                    distance,
+                    object: Some(object),
+                })
+            }
+        };
+        session.rules_camera(player, camera)
     }
 }
 impl Perform for ops::UnmountImage {
