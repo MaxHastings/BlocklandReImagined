@@ -360,6 +360,15 @@ fn import_map(opts: &Options, src: &source::Source) -> Result<Report> {
         name: None,
         version: opts.version.clone(),
     })?;
+    // The release bundle verifies the same pinned source identity for maps
+    // as for every other imported Add-On, independently of the report.
+    let manifest_path = opts.out.join("package.json");
+    let mut manifest: serde_json::Value = serde_json::from_slice(&std::fs::read(&manifest_path)?)?;
+    manifest["provenance"]["source"] = json!(format!(
+        "Blockland Add-On {} ({}), sha256 {}",
+        src.name, src.format, src.sha256
+    ));
+    std::fs::write(&manifest_path, serde_json::to_vec_pretty(&manifest)?)?;
     let ns = namespace_for(&src.name)?;
     let dir = format!("addons/{ns}");
     let mut report = Report {

@@ -141,3 +141,17 @@ Verification: `python tools/check.py focused --crates bri-addon-import --depth 0
 passed (3 steps, 171 seconds) after the source-path regression was made
 case-insensitive. Arctic Challenge's real pinned source imported successfully:
 1 map, 2 direct native assets, 7 original textures, zero unresolved textures.
+
+## Map provenance and complete bundle verification
+
+The next packaging check correctly rejected the map manifest: `import-report`
+recorded the pinned source hash but `package.json` omitted it. Plain map import
+now writes the same source identity in provenance as every other imported
+Add-On; its real conversion regression checks that identity against the report.
+Focused addon-import validation passed (3 steps, 180 s).
+
+With this candidate importer, `tools/addon_bundle.py build --importer <candidate>
+--out artifacts/v031-public-bundle-verification` succeeded for all 101 originals,
+including all six community maps and all six ModTer packages. No missing-source
+or unpinned override was used. The public main content root contains no Halo or
+Mario Add-On folders. Full gate, Windows CI and publication remain open.

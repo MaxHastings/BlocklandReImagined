@@ -720,6 +720,16 @@ datablock ParticleEmitterData(HillsFallEmitter) { ejectionPeriodMS = 10; periodV
         assert_eq!(report.package.id, "map_hills");
         assert_eq!(report.source.title, "Rolling Hills");
         assert_eq!(report.summary.verdict, "converted");
+        let manifest: Value = serde_json::from_slice(
+            &std::fs::read(dir.path().join("hills-plain/package.json")).unwrap(),
+        )
+        .unwrap();
+        assert!(
+            manifest["provenance"]["source"]
+                .as_str()
+                .unwrap()
+                .contains(&report.source.sha256)
+        );
         assert!(dir.path().join("hills-plain/import-report.json").is_file());
         assert!(dir.path().join("hills-plain/map/bundle.json").is_file());
 
