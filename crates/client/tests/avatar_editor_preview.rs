@@ -69,7 +69,15 @@ fn the_editor_portrait_plays_and_loops_the_authored_run(f: &AvatarFixture) -> Re
             },
         )?;
         gpu.queue.submit([encoder.finish()]);
-        let rgba = gpu.render_rgba(&mut ui, &pack, &draw, size, 1.0, [0.0; 4])?;
+        let rgba = gpu.render_rgba_with_timeout(
+            &mut ui,
+            &pack,
+            &draw,
+            size,
+            1.0,
+            [0.0; 4],
+            std::time::Duration::from_secs(300),
+        )?;
         ensure!(
             rgba.chunks_exact(4).filter(|p| p[3] > 128).count() > 100,
             "the actual preview texture must contain the authored avatar"
