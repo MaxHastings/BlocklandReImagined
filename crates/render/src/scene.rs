@@ -306,6 +306,8 @@ pub enum AlphaMode {
     Blend,
     /// Straight-alpha-weighted source RGB added to destination; no depth writes.
     Additive,
+    /// Unlit modulation of the existing surface, fading toward a neutral multiplier.
+    Multiply,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -756,7 +758,7 @@ impl SceneData {
                 self.indices[batch.indices.start as usize..batch.indices.end as usize].to_vec();
             if matches!(
                 self.materials[batch.material].alpha,
-                AlphaMode::Blend | AlphaMode::Additive
+                AlphaMode::Blend | AlphaMode::Additive | AlphaMode::Multiply
             ) {
                 translucent.push((batch.material, batch.center, indices));
             } else {
@@ -3202,7 +3204,7 @@ impl SceneRenderer {
             for batch in &chunk.batches {
                 let clear = matches!(
                     chunk.materials[batch.material].alpha,
-                    AlphaMode::Blend | AlphaMode::Additive
+                    AlphaMode::Blend | AlphaMode::Additive | AlphaMode::Multiply
                 );
                 let count = u64::from(batch.indices.end - batch.indices.start);
                 // Quads: four vertices for six indices.
@@ -3264,10 +3266,22 @@ impl SceneRenderer {
         }
         let mut pipelines = vec![];
         for background in [false, true] {
-            for blend in 0..3 {
+            for blend in 0..4 {
                 let blend_state = match blend {
                     0 => None,
                     1 => Some(wgpu::BlendState::ALPHA_BLENDING),
+                    3 => Some(wgpu::BlendState {
+                        color: wgpu::BlendComponent {
+                            src_factor: wgpu::BlendFactor::Dst,
+                            dst_factor: wgpu::BlendFactor::Zero,
+                            operation: wgpu::BlendOperation::Add,
+                        },
+                        alpha: wgpu::BlendComponent {
+                            src_factor: wgpu::BlendFactor::Zero,
+                            dst_factor: wgpu::BlendFactor::One,
+                            operation: wgpu::BlendOperation::Add,
+                        },
+                    }),
                     _ => Some(wgpu::BlendState {
                         color: wgpu::BlendComponent {
                             src_factor: wgpu::BlendFactor::SrcAlpha,
@@ -3468,7 +3482,8 @@ impl SceneRenderer {
                 f32::from(
                     u8::from(material.temp_brick_flash)
                         | u8::from(material.ignore_texture_alpha) << 1
-                        | u8::from(material.untinted) << 2,
+                        | u8::from(material.untinted) << 2
+                        | u8::from(material.alpha == AlphaMode::Multiply) << 3,
                 ),
             ]);
             if let Some(groups) = material.parameters {
@@ -3529,6 +3544,7 @@ impl SceneRenderer {
                         match m.alpha {
                             AlphaMode::Blend => 1,
                             AlphaMode::Additive => 2,
+                            AlphaMode::Multiply => 3,
                             _ => 0,
                         },
                         m.double_sided,
@@ -5292,7 +5308,7 @@ impl SceneRenderer {
         }
         fn pipeline_of(d: &Draw<'_>) -> usize {
             let (_, double_sided, background, _, _) = d.scene.material_modes[d.batch.material];
-            usize::from(background) * 6 + d.blend * 2 + usize::from(double_sided)
+            usize::from(background) * 8 + d.blend * 2 + usize::from(double_sided)
         }
         /// What a pooled chunk batch binds; None for everything else.
         #[allow(clippy::type_complexity)]

@@ -66,6 +66,8 @@ pub fn library() -> Library {
 /// A plain alpha-blended particle with a 90 degree spin.
 pub fn particle(id: &str, keys: Vec<ParticleKey>) -> Particle {
     Particle {
+        animation: None,
+        variation: None,
         id: id.into(),
         texture: TEXTURE.into(),
         alpha_blend: true,
@@ -225,6 +227,7 @@ pub fn showcase_pack() -> Arc<EffectsPack> {
     let mut manifest = manifest();
     manifest.composites = vec![
         Composite {
+            bursts: Vec::new(),
             id: "explosion".into(),
             lifetime: 0.5,
             emitters: vec!["sparks".into(), "emitter".into()],
@@ -232,6 +235,7 @@ pub fn showcase_pack() -> Arc<EffectsPack> {
             burst: Some(("sparks".into(), 12, 0.5)),
         },
         Composite {
+            bursts: Vec::new(),
             id: "smoke".into(),
             lifetime: 2.,
             emitters: vec!["painted_puff".into()],

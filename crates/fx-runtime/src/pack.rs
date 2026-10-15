@@ -32,6 +32,8 @@ pub struct Composite {
     pub emitters: Vec<String>,
     pub light: Option<String>,
     pub burst: Option<(String, u32, f32)>,
+    #[serde(default)]
+    pub bursts: Vec<bri_content::effects::Burst>,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Manifest {
@@ -156,6 +158,13 @@ impl EffectsPack {
     ) -> Result<Arc<Self>> {
         library.validate()?;
         ensure!(
+            textures
+                .iter()
+                .fold(0usize, |n, t| n.saturating_add(t.rgba.len()))
+                <= 256 << 20,
+            "Effects decoded image budget exceeded"
+        );
+        ensure!(
             manifest.schema_version == 1 && textures.len() == library.textures.len(),
             "Invalid native effects pack"
         );
@@ -236,6 +245,7 @@ impl EffectsPack {
                 "Invalid composite {}",
                 c.id
             );
+            ensure!(c.bursts.len() <= 32, "Too many composite bursts");
             if let Some((id, count, radius)) = &c.burst {
                 ensure!(
                     emitter_index.contains_key(id)
@@ -245,6 +255,12 @@ impl EffectsPack {
                     "Invalid composite burst"
                 );
             }
+            ensure!(
+                c.bursts
+                    .iter()
+                    .all(|b| b.valid() && emitter_index.contains_key(&b.emitter)),
+                "Invalid composite groups"
+            );
             if let Some(id) = &c.light {
                 ensure!(
                     library.lights.iter().any(|l| &l.id == id),

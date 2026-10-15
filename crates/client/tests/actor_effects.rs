@@ -64,6 +64,8 @@ fn effects() -> Arc<EffectsPack> {
                 }),
             }],
             particles: vec![Particle {
+                animation: None,
+                variation: None,
                 id: "particle".into(),
                 texture: "texture".into(),
                 alpha_blend: true,
@@ -141,6 +143,7 @@ fn image(name: &str, states: Vec<State>) -> (String, Image) {
     (
         id.clone(),
         Image {
+            shell_effect: String::new(),
             id,
             name: name.into(),
             model: String::new(),
@@ -804,11 +807,12 @@ fn a_vehicle_gun_throws_casings_and_flashes_its_explosion_light() -> Result<()> 
     library.emitters.push(emitter("addon:emitter/flash", 0.05));
     let mut manifest = pack.manifest.clone();
     manifest.composites.push(bri_fx_runtime::pack::Composite {
+        bursts: Vec::new(),
         id: flash.into(),
         lifetime: 0.1,
         emitters: vec!["addon:emitter/flash".into()],
         light: Some("addon:light/flash".into()),
-        burst: None,
+        burst: Some(("addon:emitter/flash".into(), 2, 0.)),
     });
     let pack = EffectsPack::from_parts(
         library,
@@ -832,7 +836,8 @@ fn a_vehicle_gun_throws_casings_and_flashes_its_explosion_light() -> Result<()> 
         ],
     );
     gun.id = "addon:image/chaingun".into();
-    gun.casing = "addon:debris/casing".into();
+    gun.casing.clear();
+    gun.shell_effect = flash.into();
     weapons.images.insert(gun.id.clone(), gun);
     let mut fx = ActorEffects::new(pack, Arc::new(weapons), Default::default())?;
     fx.cue(&cue(
@@ -844,6 +849,11 @@ fn a_vehicle_gun_throws_casings_and_flashes_its_explosion_light() -> Result<()> 
         },
     ));
     let muzzle = Mat4::from_translation(Vec3::new(4., 1., 2.));
+    assert_eq!(
+        fx.world().particle_count(),
+        0,
+        "a burst waits for its actual mount pose"
+    );
     let at_muzzle = |a| matches!(a, Anchor::Muzzle { vehicle: 9 }).then_some(muzzle);
     fx.advance(0.02, at_muzzle, &[], &[], &[])?;
     let ejected = fx.take_ejected();
@@ -860,6 +870,18 @@ fn a_vehicle_gun_throws_casings_and_flashes_its_explosion_light() -> Result<()> 
     let lights = fx.world().snapshot(&camera).lights;
     assert_eq!(lights.len(), 1, "the explosion's light shines");
     assert!(lights[0].position.distance(Vec3::new(4., 1., 2.)) < 1e-4);
+    assert!(
+        fx.world()
+            .snapshot(&camera)
+            .particles
+            .iter()
+            .all(|p| p.position.distance(Vec3::new(4., 1., 2.)) < 1e-4),
+        "burst particles start at the muzzle, never the world origin"
+    );
+    assert!(
+        fx.eject_effect("addon:image/chaingun", muzzle, Vec3::ZERO)?,
+        "sprite casings replace the stock shell"
+    );
     for _ in 0..5 {
         fx.advance(0.05, at_muzzle, &[], &[], &[])?;
     }

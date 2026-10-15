@@ -137,6 +137,13 @@ impl WeaponQuery<'_> {
 }
 
 impl Query for WeaponQuery<'_> {
+    fn surface_kind(&mut self, target: TargetId, position: Vec3, normal: Vec3) -> Option<&str> {
+        match target {
+            TargetId::Map(_) => self.simulation.map_surface_at(position, normal),
+            TargetId::Brick(_) => Some(crate::map::BRICK_SURFACE),
+            _ => None,
+        }
+    }
     fn passage(&mut self, start: Vec3, end: Vec3) -> Option<(f32, glam::Affine3A)> {
         self.simulation
             .passages()

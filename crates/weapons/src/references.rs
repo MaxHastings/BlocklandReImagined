@@ -36,6 +36,14 @@ impl Pack {
             let Some(add_on) = add_on_of(id) else {
                 continue;
             };
+            if !image.shell_effect.is_empty() {
+                out.push(Reference {
+                    add_on,
+                    kind: Kind::Effect,
+                    name: &image.shell_effect,
+                    used_by: format!("image {id} ejection"),
+                });
+            }
             for state in &image.states {
                 let used_by = || format!("image {id} state {}", state.name);
                 if !state.sound.is_empty() {
@@ -61,6 +69,16 @@ impl Pack {
                 continue;
             };
             let used_by = || format!("projectile {id}");
+            if let Some(decal) = &projectile.decal {
+                for texture in decal.texture.iter().chain(decal.surfaces.values()) {
+                    out.push(Reference {
+                        add_on,
+                        kind: Kind::Texture,
+                        name: texture,
+                        used_by: format!("projectile {id} decal"),
+                    });
+                }
+            }
             for (kind, name) in [
                 (Kind::Sound, projectile.sound.as_str()),
                 (Kind::Effect, projectile.trail.as_str()),
@@ -72,8 +90,13 @@ impl Pack {
                 (Kind::DamageType, projectile.radius_damage_type.as_str()),
             ]
             .into_iter()
-            .chain(projectile.impacts.all().map(|e| (Kind::Explosion, e)))
-            {
+            .chain(
+                projectile
+                    .impacts
+                    .all()
+                    .into_iter()
+                    .map(|e| (Kind::Explosion, e)),
+            ) {
                 // A bounce that only makes a sound (Explosive 1's and the
                 // HE grenade's) has nothing to show; its sound is listed.
                 if kind == Kind::Effect

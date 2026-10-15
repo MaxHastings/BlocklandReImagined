@@ -288,6 +288,10 @@ pub const ITEM_GRAVITY: f32 = 20.0;
 /// Radius results use closest bounds distance, deterministic target order, and the given cap.
 /// Permissions and visibility are authoritative host decisions; no numeric ID grants access.
 pub trait Query {
+    /// Authoritative authored material at a contact, when known.
+    fn surface_kind(&mut self, _target: TargetId, _position: Vec3, _normal: Vec3) -> Option<&str> {
+        None
+    }
     /// Execute authorized zero-delay projectile brick outputs before default collision.
     fn on_contact(&mut self, _: &ProjectileContact) -> ContactResponse {
         ContactResponse::Continue
@@ -3100,7 +3104,8 @@ impl WeaponsWorld {
                         scale: a.frame.scale,
                     });
                 }
-                if state.eject_shell && !image.casing.is_empty() {
+                if state.eject_shell && (!image.casing.is_empty() || !image.shell_effect.is_empty())
+                {
                     self.events.push(Event::Shell {
                         actor: id,
                         image: image.id.clone(),
@@ -4797,7 +4802,12 @@ impl WeaponsWorld {
         landed: Option<TargetId>,
     ) {
         let effect = landed
-            .map(|t| impact_effect(&d.impacts, t))
+            .map(|t| {
+                q.surface_kind(t, p.position, direction.unwrap_or(Vec3::Y))
+                    .and_then(|kind| d.impacts.surfaces.get(kind))
+                    .map(String::as_str)
+                    .unwrap_or_else(|| impact_effect(&d.impacts, t))
+            })
             .filter(|e| !e.is_empty())
             .unwrap_or(&d.explosion.effect)
             .to_owned();

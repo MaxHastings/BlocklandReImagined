@@ -298,6 +298,7 @@ pub(crate) fn weapon_effects(cx: &mut Ctx, pack: &mut bri_weapons::Pack) {
         };
         let lifetime = (number("lifetimems", 1000.0) / 1000.0).clamped(0.001, 3600.0);
         let mut effect = bri_weapons::ExplosionEffect {
+            bursts: Vec::new(),
             id: content_id(&cx.ns, "explosion", &d.name),
             lifetime,
             emitters: vec![],

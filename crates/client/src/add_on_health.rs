@@ -125,6 +125,10 @@ pub fn check_references(loaded: &Loaded) -> Vec<Problem> {
                 loaded.weapons.has_damage_type(r.name),
                 "kills by it read as the default kill message".to_string(),
             ),
+            Kind::Texture => (
+                loaded.items.texture(r.name).is_some(),
+                "shows nothing".to_string(),
+            ),
             _ => continue,
         };
         if !found {

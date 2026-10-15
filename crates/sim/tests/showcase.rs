@@ -1815,6 +1815,7 @@ fn add_launcher(
         color_shift: false,
         arm_ready: true,
         casing: String::new(),
+        shell_effect: String::new(),
         min_shot_ticks: 0,
         command: Default::default(),
         commands: Default::default(),

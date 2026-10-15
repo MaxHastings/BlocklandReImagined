@@ -377,7 +377,22 @@ impl Package {
                 }
                 Kind::Texture => match content::Texture::read(&asset.bytes) {
                     Ok(t) => {
-                        self.textures.insert(asset.id.clone(), t);
+                        let pixels: u64 = self
+                            .textures
+                            .values()
+                            .map(|t| u64::from(t.width) * u64::from(t.height))
+                            .sum();
+                        if pixels + u64::from(t.width) * u64::from(t.height) > 16 * 1024 * 1024 {
+                            out.push(
+                                Diagnostic::error(
+                                    "content.texture.budget",
+                                    "package textures exceed the 64 MiB decoded RGBA budget",
+                                )
+                                .at(location(&id, &asset.file)),
+                            );
+                        } else {
+                            self.textures.insert(asset.id.clone(), t);
+                        }
                     }
                     Err(e) => out.push(
                         Diagnostic::error("content.texture", format!("{e:#}"))

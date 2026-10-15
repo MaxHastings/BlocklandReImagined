@@ -1626,7 +1626,40 @@ impl App {
                     .or_else(|_| world_items.mounted_node(actor, hand, image, "muzzlePoint"))
                     .ok()
             };
-            let queued = self.fx.weapon_shells.cues(&shells, eject, |actor| {
+            let mut model_shells = Vec::new();
+            for cue in shells {
+                if let bri_sim::presentation::CueKind::WeaponShell { actor, image, hand } =
+                    &cue.kind
+                    && let Some(effect) = self
+                        .content
+                        .weapons
+                        .pack
+                        .images
+                        .get(image)
+                        .map(|i| i.shell_effect.as_str())
+                        .filter(|e| !e.is_empty())
+                {
+                    if let Some(at) = eject(*actor, image, *hand) {
+                        let (_, rotation, position) = at.to_scale_rotation_translation();
+                        let result = self.fx.weapon_effects.burst_at(
+                            effect,
+                            bri_fx_runtime::SourceTransform {
+                                position,
+                                rotation,
+                                velocity: presented
+                                    .get(actor)
+                                    .map_or(Vec3::ZERO, |p| Vec3::from(p.velocity)),
+                            },
+                        );
+                        self.cosmetic_faults.absorb("ejection effects", result);
+                    } else {
+                        self.fx.weapon_effects.defer_shell(cue, view.tick);
+                    }
+                } else {
+                    model_shells.push(cue);
+                }
+            }
+            let queued = self.fx.weapon_shells.cues(&model_shells, eject, |actor| {
                 presented
                     .get(&actor)
                     .map_or(Vec3::ZERO, |p| Vec3::from(p.velocity))

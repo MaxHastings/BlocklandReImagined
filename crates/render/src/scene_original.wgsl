@@ -1027,7 +1027,16 @@ fn slot_size(slot:u32)->vec2<f32> {
         default: {return vec2<f32>(textureDimensions(layer0));}
     }
 }
+fn multiplicative_surface(v:VertexOut)->vec4<f32> {
+    if v.clip<0.0 {discard;}
+    if faded_out(v.position.xy,v.world_position-camera.eye.xyz,camera.atmosphere,camera.haze) {discard;}
+    let texel=textureSample(layer0,tiled,v.uv);
+    let alpha=clamp(texel.a*v.color.a,0.0,1.0)*(1.0-fog_amount(v.world_position));
+    let multiplier=display_color(texel.rgb)*v.color.rgb;
+    return vec4<f32>(output_color(mix(vec3<f32>(1.0),multiplier,alpha)),0.0);
+}
 @fragment fn fs_main(v:VertexOut)->@location(0) vec4<f32> {
+    if (u32(material[0].w)&8u)!=0u {return multiplicative_surface(v);}
     if v.clip<0.0 {discard;}
     // The sky (faces, clouds, fog backdrop) is what lies behind the world:
     // everything else fades out into it toward the visible distance.

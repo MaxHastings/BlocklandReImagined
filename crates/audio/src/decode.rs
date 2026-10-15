@@ -58,6 +58,7 @@ struct Opened {
 }
 
 fn open_reader(bytes: Arc<[u8]>, extension: Option<&str>) -> Result<Opened, String> {
+    let bytes = pcm_wave_header(&bytes).map_or(bytes, Arc::from);
     let mss = MediaSourceStream::new(
         Box::new(Cursor::new(bytes)),
         MediaSourceStreamOptions::default(),
@@ -99,6 +100,55 @@ fn open_reader(bytes: Arc<[u8]>, extension: Option<&str>) -> Result<Opened, Stri
         frames,
         bits,
     })
+}
+
+/// Some PCM exporters write WAVEFORMATEX's zero extension (and optional
+/// zero padding) in `fmt `, which the demuxer accepts only in its 16-byte
+/// form. Normalize that header in memory, preserving every sample and other
+/// chunk. Non-PCM codecs and meaningful extensions belong to the decoder.
+fn pcm_wave_header(bytes: &[u8]) -> Option<Vec<u8>> {
+    if bytes.len() < 12 || &bytes[..4] != b"RIFF" || &bytes[8..12] != b"WAVE" {
+        return None;
+    }
+    let mut at = 12usize;
+    let mut found = None;
+    while at < bytes.len() {
+        let header = bytes.get(at..at.checked_add(8)?)?;
+        let size = u32::from_le_bytes(header[4..8].try_into().ok()?) as usize;
+        let start = at + 8;
+        let end = start.checked_add(size)?;
+        let data = bytes.get(start..end)?;
+        if &header[..4] == b"fmt " {
+            if found.is_some()
+                || !(18..=64).contains(&size)
+                || size & 1 != 0
+                || data[..2] != [1, 0]
+                || data[16..].iter().any(|v| *v != 0)
+            {
+                return None;
+            }
+            found = Some((at, end, size - 16));
+        }
+        at = end.checked_add(size & 1)?;
+    }
+    if at != bytes.len() {
+        return None;
+    }
+    let (start, end, removed) = found?;
+    let declared = (u32::from_le_bytes(bytes[4..8].try_into().ok()?) as usize).checked_add(8)?;
+    // A legacy exporter may have counted the minimal PCM header in RIFF's
+    // length while writing the extended one. Accept only that exact deficit.
+    if declared != bytes.len() && declared.checked_add(removed)? != bytes.len() {
+        return None;
+    }
+    let mut out = Vec::with_capacity(bytes.len() - removed);
+    out.extend_from_slice(&bytes[..start + 4]);
+    out.extend_from_slice(&16u32.to_le_bytes());
+    out.extend_from_slice(&bytes[start + 8..start + 24]);
+    out.extend_from_slice(&bytes[end..]);
+    let size = u32::try_from(out.len() - 8).ok()?;
+    out[4..8].copy_from_slice(&size.to_le_bytes());
+    Some(out)
 }
 
 /// Decode an entire clip to interleaved f32 PCM.

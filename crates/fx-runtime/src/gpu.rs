@@ -12,6 +12,7 @@ struct GpuParticle {
     /// Layer of the effects texture array, the texture's own size, and the
     /// sprite's blend mode (0 alpha, 1 additive, 2 additive colour).
     image: [f32; 4],
+    image_origin: [f32; 2],
 }
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -26,8 +27,8 @@ struct GpuCamera {
     fog_color: [f32; 4],
     haze: [f32; 4],
 }
-/// Consecutive sprites that share a pipeline draw together. Every texture
-/// is a layer of one array and every blend mode is one premultiplied blend,
+/// Consecutive sprites that share a pipeline draw together. Textures occupy
+/// packed pages of one array and every blend mode is one premultiplied blend,
 /// so only flares (drawn over everything) split a run.
 struct Run {
     depth_test: bool,
@@ -59,6 +60,7 @@ pub struct EffectsRenderer {
     images: wgpu::BindGroup,
     /// Per texture: its layer and size, as the instance data carries them.
     layers: Vec<[f32; 4]>,
+    origins: Vec<[f32; 2]>,
     /// The player's view first; others are made when first prepared.
     views: Vec<View>,
     max_instances: usize,
@@ -125,35 +127,68 @@ impl EffectsRenderer {
             min_filter: wgpu::FilterMode::Linear,
             ..Default::default()
         });
-        // Every original texture is one layer of an array as large as the
-        // largest, copied to the layer's corner without resampling; the
-        // shader samples only that corner, clamped as the texture alone was.
-        let width = pack
-            .textures
-            .iter()
-            .map(|i| i.width)
-            .max()
-            .unwrap_or(1)
-            .max(1);
-        let height = pack
-            .textures
-            .iter()
-            .map(|i| i.height)
-            .max()
-            .unwrap_or(1)
-            .max(1);
-        let count = pack.textures.len().max(1) as u32;
         ensure!(
-            width <= device.limits().max_texture_dimension_2d
-                && height <= device.limits().max_texture_dimension_2d
-                && count <= device.limits().max_texture_array_layers,
-            "Effect textures exceed device limits"
+            pack.textures.len() <= 4096
+                && pack.textures.iter().all(|i| (1..=4096).contains(&i.width)
+                    && (1..=4096).contains(&i.height)
+                    && i.rgba.len() as u64 == u64::from(i.width) * u64::from(i.height) * 4),
+            "Invalid effect texture data"
+        );
+        // Pack source images into shelves without resampling. Sampling clamps
+        // to each image's edge texels, so adjacent frames cannot bleed.
+        let max_side = pack
+            .textures
+            .iter()
+            .map(|i| i.width.max(i.height))
+            .max()
+            .unwrap_or(1);
+        let pixels: u64 = pack
+            .textures
+            .iter()
+            .map(|i| u64::from(i.width) * u64::from(i.height))
+            .sum();
+        let side = max_side
+            .max((pixels as f64).sqrt().ceil().min(1024.) as u32)
+            .max(1)
+            .next_power_of_two();
+        ensure!(
+            side <= device.limits().max_texture_dimension_2d,
+            "Effect texture exceeds device dimensions"
+        );
+        let mut order: Vec<_> = (0..pack.textures.len()).collect();
+        order.sort_by_key(|i| {
+            std::cmp::Reverse((pack.textures[*i].height, pack.textures[*i].width))
+        });
+        let mut positions = vec![(0u32, 0u32, 0u32); pack.textures.len()];
+        let (mut layer, mut x, mut y, mut row) = (0u32, 0u32, 0u32, 0u32);
+        for i in order {
+            let image = &pack.textures[i];
+            if x + image.width > side {
+                x = 0;
+                y += row;
+                row = 0;
+            }
+            if y + image.height > side {
+                layer += 1;
+                x = 0;
+                y = 0;
+                row = 0;
+            }
+            positions[i] = (layer, x, y);
+            x += image.width;
+            row = row.max(image.height);
+        }
+        let count = layer + 1;
+        ensure!(
+            count <= device.limits().max_texture_array_layers
+                && u64::from(count) * u64::from(side) * u64::from(side) * 4 <= 256 << 20,
+            "Effect atlas exceeds GPU budget"
         );
         let array = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("original effect textures"),
+            label: Some("authored effect atlas"),
             size: wgpu::Extent3d {
-                width,
-                height,
+                width: side,
+                height: side,
                 depth_or_array_layers: count,
             },
             mip_level_count: 1,
@@ -164,23 +199,14 @@ impl EffectsRenderer {
             view_formats: &[],
         });
         let mut layers = Vec::with_capacity(pack.textures.len());
-        for (layer, image) in pack.textures.iter().enumerate() {
-            ensure!(
-                image.width > 0
-                    && image.height > 0
-                    && image.rgba.len() == (image.width * image.height * 4) as usize,
-                "Invalid effect texture {}",
-                image.id
-            );
+        let mut origins = Vec::with_capacity(pack.textures.len());
+        for (i, image) in pack.textures.iter().enumerate() {
+            let (layer, x, y) = positions[i];
             queue.write_texture(
                 wgpu::TexelCopyTextureInfo {
                     texture: &array,
                     mip_level: 0,
-                    origin: wgpu::Origin3d {
-                        x: 0,
-                        y: 0,
-                        z: layer as u32,
-                    },
+                    origin: wgpu::Origin3d { x, y, z: layer },
                     aspect: wgpu::TextureAspect::All,
                 },
                 &image.rgba,
@@ -196,6 +222,7 @@ impl EffectsRenderer {
                 },
             );
             layers.push([layer as f32, image.width as f32, image.height as f32, 0.]);
+            origins.push([x as f32, y as f32]);
         }
         let view = array.create_view(&wgpu::TextureViewDescriptor {
             dimension: Some(wgpu::TextureViewDimension::D2Array),
@@ -228,7 +255,7 @@ impl EffectsRenderer {
         });
         let pipeline = |blend: wgpu::BlendState, depth_test: bool| {
             device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label:Some("native effects"),layout:Some(&layout),vertex:wgpu::VertexState {module:&shader,entry_point:Some("vs_main"),compilation_options:Default::default(),buffers:&[Some(wgpu::VertexBufferLayout {array_stride:std::mem::size_of::<GpuParticle>() as u64,step_mode:wgpu::VertexStepMode::Instance,attributes:&wgpu::vertex_attr_array![0=>Float32x4,1=>Float32x4,2=>Float32x4,3=>Float32x4]})]},
+            label:Some("native effects"),layout:Some(&layout),vertex:wgpu::VertexState {module:&shader,entry_point:Some("vs_main"),compilation_options:Default::default(),buffers:&[Some(wgpu::VertexBufferLayout {array_stride:std::mem::size_of::<GpuParticle>() as u64,step_mode:wgpu::VertexStepMode::Instance,attributes:&wgpu::vertex_attr_array![0=>Float32x4,1=>Float32x4,2=>Float32x4,3=>Float32x4,4=>Float32x2]})]},
             primitive:wgpu::PrimitiveState {cull_mode:None,..Default::default()},depth_stencil:Some(wgpu::DepthStencilState {format:depth_format,depth_write_enabled:Some(false),depth_compare:Some(if depth_test {bri_render::scene::DEPTH_NEARER}else{wgpu::CompareFunction::Always}),stencil:Default::default(),bias:Default::default()}),multisample:wgpu::MultisampleState {count:sample_count,..Default::default()},
             fragment:Some(wgpu::FragmentState {module:&shader,entry_point:Some("fs_main"),compilation_options:wgpu::PipelineCompilationOptions {constants:&bri_render::color::output_constants(color_format),..Default::default()},targets:&[Some(wgpu::ColorTargetState {format:color_format,blend:Some(blend),write_mask:wgpu::ColorWrites::ALL})]}),multiview_mask:None,cache:None,
         })
@@ -254,6 +281,7 @@ impl EffectsRenderer {
             camera_layout,
             images,
             layers,
+            origins,
             views: vec![view],
             max_instances,
             data: Vec::new(),
@@ -388,6 +416,7 @@ impl EffectsRenderer {
                 color: p.color.to_array(),
                 axis_spin: p.axis.extend(p.spin).to_array(),
                 image,
+                image_origin: self.origins[p.texture as usize],
             });
             if let Some(run) = runs.last_mut()
                 && run.depth_test == p.depth_test

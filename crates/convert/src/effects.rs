@@ -162,6 +162,8 @@ pub fn particle(d: &Declaration) -> Result<(Particle, Vec<String>)> {
             .push("Lifetime variance clamped below lifetime, matching engine onAdd".into());
     }
     let p = Particle {
+        animation: None,
+        variation: None,
         id: id("particle", &d.name),
         texture: texture_path(f.text("texturename", ""), &d.source)?,
         alpha_blend: f.boolean("useinvalpha", false)?,

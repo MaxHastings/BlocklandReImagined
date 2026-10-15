@@ -95,9 +95,88 @@ pub struct ParticleKey {
     pub size: f32,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ParticleVariation {
+    /// One interpolated authored tint per particle, retained for its whole life.
+    pub color: [[f32; 4]; 2],
+    /// Multiplies every authored size key.
+    pub size: [f32; 2],
+}
+/// One independently authored group at an effect's contact or attachment.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Burst {
+    pub emitter: String,
+    pub count: [u32; 2],
+    pub radius: [f32; 2],
+    pub offset: [f32; 3],
+    /// Local ejection axis, relative to the contact normal or socket.
+    pub direction: [f32; 3],
+}
+impl Default for Burst {
+    fn default() -> Self {
+        Self {
+            emitter: String::new(),
+            count: [1; 2],
+            radius: [0.; 2],
+            offset: [0.; 3],
+            direction: [0., 1., 0.],
+        }
+    }
+}
+impl Burst {
+    pub fn valid(&self) -> bool {
+        self.count[0] <= self.count[1]
+            && self.count[1] <= 32768
+            && self
+                .radius
+                .iter()
+                .all(|r| r.is_finite() && (0.0..=10000.0).contains(r))
+            && self.radius[0] <= self.radius[1]
+            && self
+                .offset
+                .iter()
+                .all(|x| x.is_finite() && x.abs() <= 1_000_000.)
+            && self.direction.iter().all(|x| x.is_finite())
+            && (0.0001..=1_000_000.).contains(&self.direction.iter().map(|x| x * x).sum::<f32>())
+    }
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ParticleAnimation {
+    pub frames: Vec<String>,
+    pub rate: [f32; 2],
+    #[serde(default)]
+    pub looping: bool,
+    #[serde(default)]
+    pub random_start: bool,
+    #[serde(default)]
+    pub reverse: bool,
+}
+impl ParticleAnimation {
+    pub fn texture_at(&self, seconds: f32, rate: f32, start: usize, reverse: bool) -> &str {
+        let count = self.frames.len();
+        let frame = (seconds.max(0.) * rate) as usize;
+        let index = if self.looping {
+            if reverse {
+                (start + count - frame % count) % count
+            } else {
+                (start + frame % count) % count
+            }
+        } else if reverse {
+            start.saturating_sub(frame)
+        } else {
+            start.saturating_add(frame).min(count - 1)
+        };
+        &self.frames[index]
+    }
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Particle {
     pub id: String,
     pub texture: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub animation: Option<ParticleAnimation>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub variation: Option<ParticleVariation>,
     pub alpha_blend: bool,
     pub lifetime: f32,
     pub lifetime_variance: f32,
@@ -111,6 +190,13 @@ pub struct Particle {
     pub keys: Vec<ParticleKey>,
 }
 impl Particle {
+    pub fn textures(&self) -> impl Iterator<Item = &str> {
+        std::iter::once(self.texture.as_str()).chain(
+            self.animation
+                .iter()
+                .flat_map(|a| a.frames.iter().map(String::as_str)),
+        )
+    }
     pub fn sample(&self, age: f32) -> ([f32; 4], f32) {
         let age = age.clamped(0.0, 1.0);
         for pair in self.keys.windows(2) {
@@ -172,17 +258,41 @@ impl Library {
             self.schema_version == 1
                 && self.lights.len() <= 4096
                 && self.particles.len() <= 4096
-                && self.emitters.len() <= 4096,
+                && self.emitters.len() <= 4096
+                && self.textures.len() <= 4096,
             "Invalid effect library"
         );
         // Validate before runtime sampling; original additive particles can have
         // authored alpha above one (the stock glow paint uses two).
         let mut ids = BTreeSet::new();
         for p in &self.particles {
+            if let Some(v) = &p.variation {
+                ensure!(
+                    v.color
+                        .iter()
+                        .flatten()
+                        .all(|c| c.is_finite() && (0.0..=64.0).contains(c))
+                        && v.size
+                            .iter()
+                            .all(|s| s.is_finite() && (0.0..=10000.0).contains(s))
+                        && v.size[0] <= v.size[1],
+                    "Invalid particle variation"
+                );
+            }
             ensure!(
-                ids.insert(&p.id) && self.textures.contains_key(&p.texture),
+                ids.insert(&p.id) && p.textures().all(|t| self.textures.contains_key(t)),
                 "Duplicate particle or missing texture"
             );
+            if let Some(a) = &p.animation {
+                ensure!(
+                    (1..=256).contains(&a.frames.len())
+                        && a.rate
+                            .iter()
+                            .all(|r| r.is_finite() && (0.0..=240.0).contains(r))
+                        && a.rate[0] <= a.rate[1],
+                    "Invalid particle animation"
+                );
+            }
             ensure!(
                 p.lifetime.is_finite()
                     && p.lifetime > 0.0
@@ -386,6 +496,23 @@ impl MapEffects {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn sprite_sequences_hold_loop_and_reverse_at_authored_rates() {
+        let mut a = ParticleAnimation {
+            frames: vec!["a".into(), "b".into(), "c".into()],
+            rate: [10.; 2],
+            looping: false,
+            random_start: false,
+            reverse: true,
+        };
+        assert_eq!(a.texture_at(0.15, 10., 0, false), "b");
+        assert_eq!(a.texture_at(5., 10., 0, false), "c");
+        assert_eq!(a.texture_at(0.15, 10., 2, true), "b");
+        assert_eq!(a.texture_at(5., 10., 2, true), "a");
+        a.looping = true;
+        assert_eq!(a.texture_at(0.3, 10., 0, false), "a");
+        assert_eq!(a.texture_at(0.1, 10., 0, true), "c");
+    }
     #[test]
     fn animated_curves_preserve_steps_lerp_and_period() {
         let mut c = Curve {

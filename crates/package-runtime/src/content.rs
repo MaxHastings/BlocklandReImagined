@@ -169,7 +169,7 @@ impl Kind {
         match self {
             Self::Script => 256 * 1024,
             Self::Data | Self::Map => 1024 * 1024,
-            Self::Image => 4 * 1024 * 1024,
+            Self::Image | Self::Texture => 4 * 1024 * 1024,
             Self::Weapons | Self::Vehicles | Self::Bricks | Self::Body => 32 * 1024 * 1024,
             Self::Prints => 8 * 1024 * 1024,
             Self::Controller => 64 * 1024,
@@ -1932,7 +1932,10 @@ pub struct Texture {
     pub height: u32,
 }
 impl Texture {
-    pub const MAX_EDGE: u32 = 1024;
+    pub const MAX_EDGE: u32 = 4096;
+    /// A wide HUD atlas can preserve its frames without allowing an
+    /// arbitrarily large decoded image.
+    pub const MAX_PIXELS: u64 = 4 * 1024 * 1024;
     pub fn read(bytes: &[u8]) -> Result<Self> {
         const SIGNATURE: [u8; 8] = [0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a];
         ensure!(
@@ -1947,6 +1950,10 @@ impl Texture {
             (1..=Self::MAX_EDGE).contains(&width) && (1..=Self::MAX_EDGE).contains(&height),
             "a texture is 1 to {} pixels on each edge, not {width}x{height}",
             Self::MAX_EDGE
+        );
+        ensure!(
+            u64::from(width) * u64::from(height) <= Self::MAX_PIXELS,
+            "a texture exceeds the decoded pixel budget"
         );
         Ok(Self { width, height })
     }
@@ -2614,7 +2621,10 @@ mod tests {
                 height: 32
             }
         );
-        assert!(Texture::read(&png(4096, 16)).is_err());
+        assert!(Texture::read(&png(2580, 550)).is_ok());
+        assert!(Texture::read(&png(4096, 1024)).is_ok());
+        assert!(Texture::read(&png(4096, 1025)).is_err());
+        assert!(Texture::read(&png(4097, 16)).is_err());
         assert!(Texture::read(&png(0, 16)).is_err());
         assert!(Texture::read(b"GIF89a not a png at all....").is_err());
     }

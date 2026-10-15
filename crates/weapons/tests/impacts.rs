@@ -11,8 +11,12 @@ const B: ActorId = ActorId(2);
 /// `target` 20 units ahead down -Z, facing back.
 struct World {
     target: TargetId,
+    surface: Option<&'static str>,
 }
 impl Query for World {
+    fn surface_kind(&mut self, _: TargetId, _: Vec3, _: Vec3) -> Option<&str> {
+        self.surface
+    }
     fn sweep(&mut self, from: Vec3, to: Vec3, _: Filter) -> Option<Hit> {
         let at = Vec3::new(0.0, from.y, -20.0);
         (to.z < -20.0 && from.z >= -20.0).then(|| Hit {
@@ -78,12 +82,24 @@ const GUNS: &str = r#"{
 
 /// Fire `item` once at `target` and return the explosion effects played.
 fn effects(item: &str, target: TargetId) -> Vec<String> {
-    let mut w = WeaponsWorld::new(Pack::from_json(GUNS.as_bytes()).unwrap()).unwrap();
+    surface_effects(item, target, None)
+}
+fn surface_effects(item: &str, target: TargetId, surface: Option<&'static str>) -> Vec<String> {
+    let guns = GUNS
+        .replace(
+            r#""map": "dust""#,
+            r#""map": "dust", "surfaces": {"stone":"stone-chips"}"#,
+        )
+        .replace(
+            r#""brick": "chips""#,
+            r#""brick": "chips", "surfaces": {"stone":"stone-chips"}"#,
+        );
+    let mut w = WeaponsWorld::new(Pack::from_json(guns.as_bytes()).unwrap()).unwrap();
     w.add_actor(A, 5).unwrap();
     w.add_actor(B, 5).unwrap();
     let slot = w.give(A, item).unwrap();
     w.equip(A, Some(slot)).unwrap();
-    let mut world = World { target };
+    let mut world = World { target, surface };
     for _ in 0..8 {
         w.step(&mut world);
     }
@@ -131,4 +147,18 @@ fn a_flying_round_makes_the_effect_named_for_what_it_hits() {
 fn impacts_with_unknown_surfaces_are_refused() {
     let bad = GUNS.replace(r#""map": "dust""#, r#""water": "splash""#);
     assert!(Pack::from_json(bad.as_bytes()).is_err());
+}
+
+#[test]
+fn authored_material_overrides_target_category_and_unknown_material_falls_back() {
+    for gun in ["imp:weapon/rifle", "imp:weapon/cannon"] {
+        assert_eq!(
+            surface_effects(gun, TargetId::Map(0), Some("stone")),
+            ["stone-chips"]
+        );
+        assert_eq!(
+            surface_effects(gun, TargetId::Vehicle(7), Some("unmapped")),
+            ["sparks"]
+        );
+    }
 }

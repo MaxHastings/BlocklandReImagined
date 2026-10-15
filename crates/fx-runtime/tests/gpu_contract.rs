@@ -165,6 +165,30 @@ fn billboard_blends_and_depth_match_the_host_pass() {
             ],
         )
         .unwrap();
+        // More authored frames than a default device's array-layer limit.
+        // Packing must preserve the last frame and prevent adjacent images bleeding.
+        let mut library = pack.library.clone();
+        let mut textures: Vec<_> = pack
+            .textures
+            .iter()
+            .map(|t| TextureImage {
+                id: t.id.clone(),
+                width: t.width,
+                height: t.height,
+                rgba: t.rgba.clone(),
+            })
+            .collect();
+        for frame in 0..300 {
+            let id = format!("frame-{frame}");
+            library.textures.insert(id.clone(), format!("{id}.png"));
+            textures.push(TextureImage {
+                id,
+                width: 2,
+                height: 1,
+                rgba: [50, 180, 80, 255].repeat(2),
+            });
+        }
+        let pack = EffectsPack::from_parts(library, pack.manifest.clone(), textures).unwrap();
         let instance =
             wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
         let adapter = instance.request_adapter(&Default::default()).await.unwrap();
@@ -234,6 +258,7 @@ fn billboard_blends_and_depth_match_the_host_pass() {
                 [255, 0, 255],
             ),
             (1, grey, BlendMode::Alpha, false, clear, [128, 128, 128]),
+            (301, grey, BlendMode::Alpha, false, clear, [50, 180, 80]),
             (0, red, BlendMode::Alpha, false, fog, [16, 111, 128]),
             (0, red, BlendMode::Additive, false, fog, [16, 0, 255]),
             (0, red, BlendMode::AdditiveColor, false, fog, [33, 0, 255]),

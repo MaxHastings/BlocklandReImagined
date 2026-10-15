@@ -150,6 +150,7 @@ fn tool_pack() -> bri_weapons::Pack {
                 color_shift: false,
                 arm_ready: true,
                 casing: String::new(),
+                shell_effect: String::new(),
                 min_shot_ticks: 0,
                 states,
                 command: None,

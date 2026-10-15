@@ -72,6 +72,7 @@ impl Fixture {
             .push(emitter(splash, "", &["paint_splash"]));
         let mut manifest = bri_fx_runtime::testing::manifest();
         manifest.composites.push(pack::Composite {
+            bursts: Vec::new(),
             id: "v20/explosion/bluepaintexplosion".into(),
             lifetime: 0.5,
             emitters: vec![splash.into()],

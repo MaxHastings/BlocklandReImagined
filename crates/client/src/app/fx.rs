@@ -214,13 +214,24 @@ impl App {
                 .get(projectile)
                 .and_then(|p| p.decal.as_ref())
         {
-            self.fx.decals.add(
-                *brick,
-                Vec3::from(cue.position),
-                Vec3::from(*normal),
-                decal,
-                *scale,
-            );
+            let at = Vec3::from(cue.position);
+            let normal = Vec3::from(*normal);
+            let kind = self.building().and_then(|b| {
+                b.surface_at(at + normal * 0.02, at - normal * 0.02)
+                    .ok()
+                    .flatten()
+                    .map(|(_, kind)| kind.to_owned())
+            });
+            let texture = kind
+                .as_deref()
+                .and_then(|kind| decal.surfaces.get(kind))
+                .or(decal.texture.as_ref());
+            let image = texture.and_then(|texture| self.item_assets.texture(texture));
+            if texture.is_none() || image.is_some() {
+                self.fx
+                    .decals
+                    .add_textured(*brick, at, normal, decal, *scale, image);
+            }
         }
         if let bri_sim::presentation::CueKind::BodyFlash {
             owner,
@@ -424,7 +435,9 @@ impl App {
                     .get(&actor)
                     .map_or(Vec3::ZERO, |p| Vec3::from(p.velocity)),
             };
-            shells.eject(&ejected.image, at, carried)?;
+            if !actor_effects.eject_effect(&ejected.image, at, carried)? {
+                shells.eject(&ejected.image, at, carried)?;
+            }
         }
         Ok(())
     }

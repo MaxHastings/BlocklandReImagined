@@ -316,6 +316,14 @@ impl WeaponEffects {
     pub fn resolves(&self, definition: &str) -> bool {
         self.resolve(definition).is_some()
     }
+    /// A sprite casing or other detached effect at the image's actual socket.
+    pub fn burst_at(&mut self, definition: &str, transform: SourceTransform) -> Result<()> {
+        let (binding, options) = self
+            .resolve(definition)
+            .ok_or_else(|| anyhow::anyhow!("Missing ejection effect {definition}"))?;
+        self.world.burst_effect(&binding.id, transform, options)?;
+        Ok(())
+    }
     /// Whether this effect is defined, whatever the palette: a
     /// `color<N>Paint*` copy is known when its `bluePaint*` base is.
     pub fn knows(&self, definition: &str) -> bool {
@@ -325,6 +333,17 @@ impl WeaponEffects {
     }
     pub fn take_host_requests(&mut self) -> impl Iterator<Item = HostRequest> + '_ {
         self.pending.drain(..)
+    }
+    /// A reliable ejection may precede its first posed image. Keep it briefly,
+    /// within the same bounded queue, without accepting the cue a second time.
+    pub fn defer_shell(&mut self, cue: Cue, tick: u64) {
+        if tick.saturating_sub(cue.tick) > u64::from(bri_weapons::TICK_HZ / 2) {
+            self.diagnostics.missing_poses += 1;
+        } else if self.pending.len() < MAX_CUES {
+            self.pending.push_back(HostRequest::Shell(cue));
+        } else {
+            self.diagnostics.host_queue_drops += 1;
+        }
     }
     /// Transfer thread-2 avatar animation requests to App's per-actor pose queue.
     /// Shells and other animation threads remain pending for their own host adapters.
@@ -845,7 +864,7 @@ fn insert_binding(
 /// missing a part, is left out with a note.
 /// Most particle textures Add-Ons bring, and their longest side: every
 /// effect texture is a layer of one array as large as the largest.
-pub const ADD_ON_TEXTURES: usize = 64;
+pub const ADD_ON_TEXTURES: usize = 1024;
 pub const ADD_ON_TEXTURE_SIDE: u32 = 256;
 /// What a particle draws when its texture does not load.
 pub const MISSING_PARTICLE_TEXTURE: &str = "base/data/particles/cloud";
@@ -861,11 +880,16 @@ fn add_add_on_textures<'t>(
     notes: &mut Vec<String>,
 ) {
     let mut added = 0;
-    for p in &effects.particles {
-        if library.textures.contains_key(&p.texture) {
+    let mut decoded_bytes = textures.iter().map(|t| t.rgba.len()).sum::<usize>();
+    for (p, name) in effects
+        .particles
+        .iter()
+        .flat_map(|p| p.textures().map(move |name| (p, name)))
+    {
+        if library.textures.contains_key(name) {
             continue;
         }
-        let Some(image) = texture(&p.texture) else {
+        let Some(image) = texture(name) else {
             continue;
         };
         if added == ADD_ON_TEXTURES {
@@ -886,16 +910,28 @@ fn add_add_on_textures<'t>(
                 Problem::new(
                     owner(&p.id),
                     health::Kind::Texture,
-                    &p.texture,
+                    name,
                     "is not a valid image, so its particle draws nothing",
                 )
                 .used_by(format!("particle {}", p.id)),
             );
             continue;
         };
+        if decoded_bytes.saturating_add(fitted.2.len()) > 256 << 20 {
+            fault(
+                notes,
+                Problem::new(
+                    owner(&p.id),
+                    health::Kind::Texture,
+                    name,
+                    "exceeds the effects image memory budget",
+                ),
+            );
+            continue;
+        }
+        decoded_bytes += fitted.2.len();
         // The library names a texture by a plain file name.
-        let file: String = p
-            .texture
+        let file: String = name
             .chars()
             .map(|c| {
                 if matches!(c, '/' | '\\' | ':') {
@@ -905,9 +941,9 @@ fn add_add_on_textures<'t>(
                 }
             })
             .collect();
-        library.textures.insert(p.texture.clone(), file);
+        library.textures.insert(name.to_owned(), file);
         textures.push(bri_fx_runtime::pack::TextureImage {
-            id: p.texture.clone(),
+            id: name.to_owned(),
             width: fitted.0,
             height: fitted.1,
             rgba: fitted.2,
@@ -925,14 +961,14 @@ pub fn interface_textures(
     ui: &bri_ui::pack::Pack,
 ) -> BTreeMap<String, bri_render::scene::SceneImage> {
     let mut found = BTreeMap::new();
-    for p in &effects.particles {
-        let id = p.texture.replace('\\', "/").to_ascii_lowercase();
-        if !id.starts_with("base/client/ui/") || found.contains_key(&p.texture) {
+    for texture in effects.particles.iter().flat_map(|p| p.textures()) {
+        let id = texture.replace('\\', "/").to_ascii_lowercase();
+        if !id.starts_with("base/client/ui/") || found.contains_key(texture) {
             continue;
         }
         if let Some(pixels) = ui.pixels(&bri_ui::pack::TexKey::Image(id.clone())) {
             found.insert(
-                p.texture.clone(),
+                texture.to_owned(),
                 bri_render::scene::SceneImage {
                     label: id,
                     width: pixels.width,
@@ -971,7 +1007,7 @@ fn add_pack_effects(
         if library.particles.iter().any(|q| q.id == p.id) {
             continue;
         }
-        if library.textures.contains_key(&p.texture) {
+        if p.textures().all(|t| library.textures.contains_key(t)) {
             library.particles.push(p.clone());
         } else if library.textures.contains_key(MISSING_PARTICLE_TEXTURE) {
             // v20's `ParticleData` preload (0x558c60) loads the cloud
@@ -982,6 +1018,7 @@ fn add_pack_effects(
             ));
             library.particles.push(bri_content::effects::Particle {
                 texture: MISSING_PARTICLE_TEXTURE.into(),
+                animation: None,
                 ..p.clone()
             });
         } else {
@@ -1072,7 +1109,12 @@ fn add_pack_effects(
             .as_ref()
             .map(|(e, _, _)| e)
             .filter(|e| !has_emitter(library, e));
-        for missing in unlit.into_iter().chain(unburst) {
+        for missing in unlit.into_iter().chain(unburst).chain(
+            x.bursts
+                .iter()
+                .map(|b| &b.emitter)
+                .filter(|e| !has_emitter(library, e)),
+        ) {
             fault(
                 notes,
                 Problem::new(
@@ -1085,6 +1127,12 @@ fn add_pack_effects(
             );
         }
         manifest.composites.push(bri_fx_runtime::pack::Composite {
+            bursts: x
+                .bursts
+                .iter()
+                .filter(|b| has_emitter(library, &b.emitter))
+                .cloned()
+                .collect(),
             id: x.id.clone(),
             lifetime: x.lifetime,
             emitters,

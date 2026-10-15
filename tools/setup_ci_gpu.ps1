@@ -10,7 +10,7 @@ $packages = @(
 )
 foreach ($package in $packages) {
     $archive = Join-Path $stage ($package.name + '.zip')
-    Invoke-WebRequest $package.url -OutFile $archive -TimeoutSec 120
+    Invoke-WebRequest $package.url -OutFile $archive -TimeoutSec 120 -MaximumRetryCount 3 -RetryIntervalSec 5
     $digest = (Get-FileHash $archive -Algorithm SHA256).Hash.ToLowerInvariant()
     if ($digest -cne $package.sha256) { throw "CI graphics archive checksum mismatch: $($package.name)" }
     $unpacked = Join-Path $stage $package.name

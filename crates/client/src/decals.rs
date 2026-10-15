@@ -18,6 +18,7 @@ const LIFT: f32 = 0.006;
 const FADE_SECONDS: f32 = 1.0;
 
 struct Mark {
+    order: u64,
     /// None: on the map, which stays.
     brick: Option<u64>,
     transform: Mat4,
@@ -28,6 +29,8 @@ struct Mark {
 
 #[derive(Default)]
 pub struct Decals {
+    textured: std::collections::BTreeMap<String, Box<Decals>>,
+    next_order: u64,
     data: Option<SceneData>,
     gpu: Option<GpuScene>,
     instances: Option<GpuInstances>,
@@ -36,6 +39,92 @@ pub struct Decals {
 }
 
 impl Decals {
+    /// A package's original decal art; untextured marks retain the stock disc.
+    pub fn add_textured(
+        &mut self,
+        brick: Option<u64>,
+        at: Vec3,
+        normal: Vec3,
+        decal: &bri_weapons::Decal,
+        scale: f32,
+        image: Option<&bri_render::scene::SceneImage>,
+    ) {
+        let Some(image) = image else {
+            if decal.blend == bri_weapons::DecalBlend::Alpha {
+                self.add(brick, at, normal, decal, scale);
+            }
+            return;
+        };
+        if !usable(at, normal, decal, scale) {
+            return;
+        }
+        // A server cannot retain an unbounded GPU layer for every texture ever hit.
+        let key = format!("{:?}:{}", decal.blend, image.label);
+        if !self.textured.contains_key(&key) && self.textured.len() >= 64 {
+            return;
+        }
+        self.make_room();
+        let order = self.next_order;
+        self.next_order = self.next_order.saturating_add(1);
+        let layer = self.textured.entry(key).or_insert_with(|| {
+            let mut data = unit_mark();
+            data.vertices = [
+                ([-0.5, -0.5, 0.0], [0., 1.]),
+                ([0.5, -0.5, 0.0], [1., 1.]),
+                ([0.5, 0.5, 0.0], [1., 0.]),
+                ([-0.5, 0.5, 0.0], [0., 0.]),
+            ]
+            .into_iter()
+            .map(|(position, uv)| SceneVertex {
+                position,
+                uv,
+                normal: [0., 0., 1.],
+                lightmap_uv: [0.; 2],
+                color: [1.; 4],
+                fx: [0.; 4],
+            })
+            .collect();
+            data.indices = vec![0, 1, 2, 0, 2, 3];
+            data.batches[0].indices = 0..6;
+            data.images = vec![image.clone()];
+            data.materials[0].alpha = match decal.blend {
+                bri_weapons::DecalBlend::Alpha => AlphaMode::Blend,
+                bri_weapons::DecalBlend::Additive => AlphaMode::Additive,
+                _ => AlphaMode::Multiply,
+            };
+            if decal.blend == bri_weapons::DecalBlend::DoubleMultiply {
+                for v in &mut data.vertices {
+                    v.color[..3].fill(2.);
+                }
+            }
+            Box::new(Decals {
+                data: Some(data),
+                ..Default::default()
+            })
+        });
+        layer.add(brick, at, normal, decal, scale);
+        if let Some(mark) = layer.live.last_mut() {
+            mark.order = order;
+        }
+    }
+    fn make_room(&mut self) {
+        if self.live_count() < MAX_LIVE {
+            return;
+        }
+        let stock = self.live.first().map(|m| m.order).unwrap_or(u64::MAX);
+        let oldest = self
+            .textured
+            .iter()
+            .filter_map(|(key, layer)| layer.live.first().map(|mark| (key.clone(), mark.order)))
+            .min_by_key(|(_, order)| *order);
+        if let Some((key, order)) = oldest
+            && order < stock
+        {
+            self.textured.get_mut(&key).unwrap().live.remove(0);
+        } else if !self.live.is_empty() {
+            self.live.remove(0);
+        }
+    }
     /// Mark `brick` (None: the map) at `at` on the face turned to
     /// `normal`, `size` across.
     pub fn add(
@@ -47,20 +136,13 @@ impl Decals {
         scale: f32,
     ) {
         let size = decal.size * scale;
-        let usable = at.is_finite()
-            && normal.is_finite()
-            && normal.length_squared() >= 0.5
-            && size.is_finite()
-            && size > 0.0
-            && decal.valid();
-        if !usable {
+        if !usable(at, normal, decal, scale) {
             return;
         }
         let normal = normal.normalize();
-        if self.live.len() == MAX_LIVE {
-            self.live.remove(0);
-        }
+        self.make_room();
         self.live.push(Mark {
+            order: self.next_order,
             brick,
             transform: Mat4::from_scale_rotation_translation(
                 Vec3::splat(size),
@@ -71,17 +153,31 @@ impl Decals {
             seconds: decal.seconds,
             age: 0.0,
         });
+        self.next_order = self.next_order.saturating_add(1);
     }
     pub fn live_count(&self) -> usize {
         self.live.len()
+            + self
+                .textured
+                .values()
+                .map(|d| d.live_count())
+                .sum::<usize>()
     }
     pub fn clear(&mut self) {
+        self.textured.clear();
         self.live.clear();
         self.transforms.clear();
     }
     /// Age the marks, drop those whose brick is gone (`exists` says which
     /// remain), and rebuild this frame's instances.
     pub fn advance(&mut self, dt: f32, exists: impl Fn(u64) -> bool) {
+        self.advance_inner(dt, &exists);
+    }
+    fn advance_inner(&mut self, dt: f32, exists: &dyn Fn(u64) -> bool) {
+        for layer in self.textured.values_mut() {
+            layer.advance_inner(dt, exists);
+        }
+        self.textured.retain(|_, layer| !layer.live.is_empty());
         let dt = if dt.is_finite() {
             dt.clamped(0.0, 0.25)
         } else {
@@ -109,6 +205,9 @@ impl Decals {
         device: &wgpu::Device,
         queue: &wgpu::Queue,
     ) -> Result<()> {
+        for layer in self.textured.values_mut() {
+            layer.upload(renderer, device, queue)?;
+        }
         if self.transforms.is_empty() {
             if let Some(instances) = &mut self.instances {
                 instances.update(queue, &[])?;
@@ -135,16 +234,32 @@ impl Decals {
             .update(queue, &self.transforms)?;
         Ok(())
     }
-    pub fn draws(&self) -> Option<(&GpuScene, &GpuInstances)> {
-        if self.transforms.is_empty() {
-            return None;
+    pub fn draws(&self) -> Vec<(&GpuScene, &GpuInstances)> {
+        let mut out: Vec<_> = self.textured.values().flat_map(|d| d.draws()).collect();
+        if !self.transforms.is_empty()
+            && let (Some(gpu), Some(instances)) = (&self.gpu, &self.instances)
+        {
+            out.push((gpu, instances));
         }
-        Some((self.gpu.as_ref()?, self.instances.as_ref()?))
+        out
     }
     pub fn gpu_stopped(&mut self) {
+        for layer in self.textured.values_mut() {
+            layer.gpu_stopped();
+        }
         self.gpu = None;
         self.instances = None;
     }
+}
+
+fn usable(at: Vec3, normal: Vec3, decal: &bri_weapons::Decal, scale: f32) -> bool {
+    let size = decal.size * scale;
+    at.is_finite()
+        && normal.is_finite()
+        && normal.length_squared() >= 0.5
+        && size.is_finite()
+        && size > 0.0
+        && decal.valid()
 }
 
 /// A disc 1 across facing +Z: solid to 0.3 from the middle, fading to
@@ -199,6 +314,9 @@ mod tests {
 
     fn hole() -> bri_weapons::Decal {
         bri_weapons::Decal {
+            blend: Default::default(),
+            texture: None,
+            surfaces: Default::default(),
             size: 0.2,
             color: [0.0, 0.0, 0.0, 0.9],
             seconds: 3.0,
@@ -273,5 +391,49 @@ mod tests {
         }
         assert_eq!(decals.live_count(), MAX_LIVE);
         assert_eq!(decals.live[0].brick, Some(11));
+    }
+
+    #[test]
+    fn authored_art_keeps_uv_alpha_and_shares_the_global_mark_budget() {
+        let image = bri_render::scene::SceneImage {
+            label: "original-hole".into(),
+            width: 2,
+            height: 1,
+            rgba: vec![30, 80, 110, 255, 140, 20, 60, 0],
+            srgb: true,
+        };
+        let mut decals = Decals::default();
+        let mut hole = hole();
+        hole.color = [1.; 4];
+        for id in 1..=MAX_LIVE as u64 {
+            decals.add_textured(Some(id), Vec3::ZERO, Vec3::Z, &hole, 1., Some(&image));
+        }
+        decals.add(None, Vec3::ZERO, Vec3::Z, &hole, 1.);
+        assert_eq!(decals.live_count(), MAX_LIVE);
+        let layer = decals.textured.values().next().unwrap();
+        assert_eq!(
+            layer.live[0].brick,
+            Some(2),
+            "oldest art gives way to a stock mark"
+        );
+        let data = layer.data.as_ref().unwrap();
+        assert_eq!(data.images[0].rgba, image.rgba);
+        assert_eq!(
+            data.vertices.iter().map(|v| v.uv).collect::<Vec<_>>(),
+            [[0., 1.], [1., 1.], [1., 0.], [0., 0.]]
+        );
+        assert_eq!(data.indices, [0, 1, 2, 0, 2, 3]);
+        decals.advance(0., |_| false);
+        assert!(
+            decals.textured.is_empty(),
+            "dead marks release their GPU layers"
+        );
+        assert_eq!(
+            decals.live_count(),
+            1,
+            "the map mark survives brick removal"
+        );
+        decals.clear();
+        assert_eq!(decals.live_count(), 0);
     }
 }

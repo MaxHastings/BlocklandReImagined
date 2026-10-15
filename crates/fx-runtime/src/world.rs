@@ -47,6 +47,8 @@ pub struct SourceOptions {
     pub time_scale: f32,
     /// Local rectangular placement volume; zero gives a point source.
     pub half_extents: Vec3,
+    /// Optional spherical placement radius, in place of a rectangular volume.
+    pub radius: Option<[f32; 2]>,
     /// Per-source local wind added to the world wind vector.
     pub wind: Vec3,
     /// Runtime emitter override keys, used only by authored useEmitterColors/Sizes.
@@ -76,6 +78,7 @@ impl Default for SourceOptions {
         Self {
             time_scale: 1.,
             half_extents: Vec3::ZERO,
+            radius: None,
             wind: Vec3::ZERO,
             colors: None,
             sizes: None,
@@ -91,6 +94,13 @@ impl Default for SourceOptions {
 }
 impl SourceOptions {
     fn validate(&self) -> Result<()> {
+        ensure!(
+            self.radius.is_none_or(|r| r
+                .iter()
+                .all(|x| x.is_finite() && (0.0..=10000.).contains(x))
+                && r[0] <= r[1]),
+            "Invalid radial source placement"
+        );
         ensure!(
             self.time_scale.is_finite()
                 && self.time_scale > 0.
@@ -277,6 +287,11 @@ struct Particle {
     rgb: Option<[f32; 3]>,
     visible: bool,
     hidden_from_own_eye: bool,
+    tint: [f32; 4],
+    size_scale: f32,
+    animation_rate: f32,
+    animation_start: usize,
+    animation_reverse: bool,
 }
 pub struct EffectsWorld {
     pack: Arc<EffectsPack>,
@@ -343,7 +358,10 @@ impl EffectsWorld {
             .library
             .particles
             .iter()
-            .map(|p| p.keys.iter().fold(0f32, |m, k| m.max(k.size.abs())))
+            .map(|p| {
+                p.keys.iter().fold(0f32, |m, k| m.max(k.size.abs()))
+                    * p.variation.as_ref().map_or(1., |v| v.size[1])
+            })
             .collect();
         let emitter_particles = pack
             .library
@@ -554,6 +572,19 @@ impl EffectsWorld {
         self.sources.clear();
         self.particles.clear();
     }
+    /// Emit a detached cosmetic group at an already-resolved attachment pose.
+    pub fn burst_effect(
+        &mut self,
+        id: &str,
+        transform: SourceTransform,
+        options: SourceOptions,
+    ) -> Result<Vec<EffectHandle>> {
+        if self.pack.emitter_index.contains_key(id) {
+            self.burst(id, transform, options, 1).map(|h| vec![h])
+        } else {
+            self.play_composite(id, transform, options)
+        }
+    }
     /// Play a source-backed explosion group. Host owns damage, audio, camera shake and debris.
     pub fn play_composite(
         &mut self,
@@ -569,8 +600,10 @@ impl EffectsWorld {
             .find(|c| c.id == id)
             .with_context(|| format!("Unknown native composite {id}"))?
             .clone();
-        let required =
-            c.emitters.len() + usize::from(c.light.is_some()) + usize::from(c.burst.is_some());
+        let required = c.emitters.len()
+            + usize::from(c.light.is_some())
+            + usize::from(c.burst.is_some())
+            + c.bursts.len();
         ensure!(
             self.sources.len() + required <= self.limits.sources,
             "Composite source budget exhausted"
@@ -581,12 +614,12 @@ impl EffectsWorld {
                 "Composite light budget exhausted"
             );
         }
-        if let Some((_, count, _)) = &c.burst {
-            ensure!(
-                *count as usize <= self.limits.emissions_per_advance,
-                "Composite burst exceeds budget"
-            );
-        }
+        let count: usize = c.burst.iter().map(|(_, n, _)| *n as usize).sum::<usize>()
+            + c.bursts.iter().map(|b| b.count[1] as usize).sum::<usize>();
+        ensure!(
+            count <= self.limits.emissions_per_advance,
+            "Composite burst exceeds budget"
+        );
         let mut handles = Vec::new();
         for id in &c.emitters {
             let h = self.start_emitter(id, transform, options.clone())?;
@@ -600,9 +633,24 @@ impl EffectsWorld {
             handles.push(h);
         }
         if let Some((id, count, radius)) = &c.burst {
-            let mut options = options;
+            let mut options = options.clone();
             options.half_extents = Vec3::splat(*radius);
             handles.push(self.burst(id, transform, options, *count as usize)?);
+        }
+        for b in &c.bursts {
+            let mut rng = Rng(self.seed ^ self.next_handle.wrapping_mul(0xa0761d6478bd642f));
+            let count =
+                (rng.range(b.count[0] as f32, b.count[1] as f32 + 1.) as u32).min(b.count[1]);
+            let mut options = options.clone();
+            options.radius = Some(b.radius);
+            let local_rotation =
+                Quat::from_rotation_arc(Vec3::Y, Vec3::from(b.direction).normalize());
+            let group = SourceTransform {
+                position: transform.position + transform.rotation * Vec3::from(b.offset),
+                rotation: (transform.rotation * local_rotation).normalize(),
+                velocity: transform.velocity,
+            };
+            handles.push(self.burst(&b.emitter, group, options, count as usize)?);
         }
         Ok(handles)
     }
@@ -868,11 +916,18 @@ impl EffectsWorld {
                 theta.cos(),
                 theta.sin() * phi.sin(),
             );
-        let placement = Vec3::new(
-            s.rng.range(-1., 1.),
-            s.rng.range(-1., 1.),
-            s.rng.range(-1., 1.),
-        ) * s.options.half_extents;
+        let placement = if let Some(radius) = s.options.radius {
+            let y = s.rng.range(-1., 1.);
+            let angle = s.rng.range(0., std::f32::consts::TAU);
+            let rim = (1. - y * y).sqrt();
+            Vec3::new(rim * angle.cos(), y, rim * angle.sin()) * s.rng.range(radius[0], radius[1])
+        } else {
+            Vec3::new(
+                s.rng.range(-1., 1.),
+                s.rng.range(-1., 1.),
+                s.rng.range(-1., 1.),
+            ) * s.options.half_extents
+        };
         let velocity_axis = if e.use_placement_velocity && placement.length_squared() > 1e-12 {
             t.rotation * placement.normalize()
         } else {
@@ -880,7 +935,37 @@ impl EffectsWorld {
         };
         let velocity = velocity_axis * s.rng.variance(e.speed, e.speed_variance)
             + t.velocity * p.inherited_velocity;
+        let tint_factor = if p.variation.is_some() {
+            s.rng.unit()
+        } else {
+            0.
+        };
+        let tint = p.variation.as_ref().map_or([1.; 4], |v| {
+            std::array::from_fn(|i| v.color[0][i] + (v.color[1][i] - v.color[0][i]) * tint_factor)
+        });
+        let size_scale = p
+            .variation
+            .as_ref()
+            .map_or(1., |v| s.rng.range(v.size[0], v.size[1]));
+        let (animation_rate, animation_start, animation_reverse) =
+            p.animation.as_ref().map_or((0., 0, false), |a| {
+                let rate = s.rng.range(a.rate[0], a.rate[1]);
+                let reverse = a.reverse && s.rng.unit() < 0.5;
+                let start = if a.random_start {
+                    (s.rng.unit() * a.frames.len() as f32) as usize
+                } else if reverse {
+                    a.frames.len() - 1
+                } else {
+                    0
+                };
+                (rate, start, reverse)
+            });
         let mut particle = Particle {
+            animation_rate,
+            animation_start,
+            animation_reverse,
+            tint,
+            size_scale,
             owner: handle,
             definition,
             position: t.position
@@ -1034,6 +1119,10 @@ impl EffectsWorld {
         if let Some(rgb) = p.rgb {
             color[..3].copy_from_slice(&rgb);
         }
+        for (channel, tint) in color.iter_mut().zip(p.tint) {
+            *channel *= tint;
+        }
+        size *= p.size_scale;
         let axis = if p.orient {
             if p.orient_velocity {
                 p.velocity.normalize_or_zero()
@@ -1057,7 +1146,20 @@ impl EffectsWorld {
                 color: Vec4::from_array(color),
                 spin: p.spin * p.age,
                 axis,
-                texture: self.particle_texture[p.definition],
+                texture: if let Some(animation) = &def.animation {
+                    *self
+                        .pack
+                        .texture_index
+                        .get(animation.texture_at(
+                            p.age,
+                            p.animation_rate,
+                            p.animation_start,
+                            p.animation_reverse,
+                        ))
+                        .expect("validated particle frames") as u32
+                } else {
+                    self.particle_texture[p.definition]
+                },
                 blend: p.blend,
                 depth_test: true,
             },
@@ -1383,6 +1485,8 @@ mod tests {
                     }),
                 }],
                 particles: vec![bri_content::effects::Particle {
+                    animation: None,
+                    variation: None,
                     id: "particle".into(),
                     texture: "original".into(),
                     alpha_blend: true,

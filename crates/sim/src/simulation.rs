@@ -250,6 +250,7 @@ pub struct Simulation {
     holding: bool,
     /// Map colliders in `NativeMap::colliders` order.
     map_handles: Vec<ColliderHandle>,
+    map_surfaces: crate::map::MapSurfaces,
     /// The map colliders of static shapes (trees, props), which a plant
     /// never asks about ([`Ground::interior`]).
     map_statics: rustc_hash::FxHashSet<ColliderHandle>,
@@ -554,6 +555,7 @@ impl Simulation {
             parked: Default::default(),
             holding: false,
             map_handles,
+            map_surfaces: Default::default(),
             map_statics,
             terrain: None,
             refreshes: 0,
@@ -701,6 +703,39 @@ impl Simulation {
     /// Position of a map collider in `NativeMap::colliders`.
     pub fn map_collider_index(&self, handle: ColliderHandle) -> Option<usize> {
         self.map_handles.iter().position(|h| *h == handle)
+    }
+    pub fn set_map_surfaces(&mut self, surfaces: crate::map::MapSurfaces) {
+        self.map_surfaces = surfaces;
+    }
+    /// Read the same authored triangle kinds footsteps use, at a shot contact.
+    pub fn map_surface_at(&self, position: Vec3, normal: Vec3) -> Option<&str> {
+        let normal = normal.try_normalize()?;
+        let ray = Ray::new(
+            Vector::from_array((position + normal * 0.02).to_array()),
+            Vector::from_array((-normal).to_array()),
+        );
+        let predicate = |handle, _: &Collider| {
+            self.map_collider_index(handle).is_some()
+                || self
+                    .terrain
+                    .as_ref()
+                    .is_some_and(|t| t.is_terrain_collider(handle))
+        };
+        let (handle, hit) = self
+            .physics
+            .query_pipeline_with_filter(
+                QueryFilter::default()
+                    .exclude_sensors()
+                    .predicate(&predicate),
+            )
+            .cast_ray_and_get_normal(&ray, 0.04, true)?;
+        Some(if let Some(index) = self.map_collider_index(handle) {
+            self.map_surfaces
+                .kind(index, hit.subshape)
+                .unwrap_or(crate::map::DEFAULT_SURFACE)
+        } else {
+            crate::map::TERRAIN_SURFACE
+        })
     }
     /// Make map colliders (a hidden static shape) intangible to every body
     /// and query, or solid again.

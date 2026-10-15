@@ -24,6 +24,185 @@ fn camera() -> Camera {
 fn world(pack: Arc<EffectsPack>) -> EffectsWorld {
     EffectsWorld::new(pack, EffectsLimits::default(), 73).unwrap()
 }
+
+#[test]
+fn authored_particle_frames_advance_without_wrapping_and_survive_split_frames() {
+    let mut library = bri_fx_runtime::testing::library();
+    let frames = ["frame0", "frame1", "frame2"];
+    for id in frames {
+        library.textures.insert(id.into(), format!("{id}.png"));
+    }
+    library.particles[0].animation = Some(ParticleAnimation {
+        frames: frames.map(str::to_owned).to_vec(),
+        rate: [10.; 2],
+        looping: false,
+        random_start: false,
+        reverse: false,
+    });
+    let textures = library
+        .textures
+        .keys()
+        .enumerate()
+        .map(|(i, id)| pack::TextureImage {
+            id: id.clone(),
+            width: 1,
+            height: 1,
+            rgba: vec![i as u8, 0, 0, 255],
+        })
+        .collect();
+    let pack =
+        EffectsPack::from_parts(library, bri_fx_runtime::testing::manifest(), textures).unwrap();
+    let index = |id: &str| pack.textures.iter().position(|t| t.id == id).unwrap() as u32;
+    let mut a = world(pack.clone());
+    let mut b = world(pack.clone());
+    for w in [&mut a, &mut b] {
+        w.burst(
+            "emitter",
+            SourceTransform::default(),
+            SourceOptions::default(),
+            1,
+        )
+        .unwrap();
+    }
+    assert_eq!(a.snapshot(&camera()).particles[0].texture, index("frame0"));
+    a.advance(0.15, Vec3::ZERO).unwrap();
+    for _ in 0..3 {
+        b.advance(0.05, Vec3::ZERO).unwrap();
+    }
+    assert_eq!(a.snapshot(&camera()).particles[0].texture, index("frame1"));
+    assert_eq!(
+        a.snapshot(&camera()).particles[0].texture,
+        b.snapshot(&camera()).particles[0].texture
+    );
+    a.advance(0.85, Vec3::ZERO).unwrap();
+    assert_eq!(
+        a.snapshot(&camera()).particles[0].texture,
+        index("frame2"),
+        "last image holds"
+    );
+    let mut invalid = pack.library.clone();
+    invalid.particles[0]
+        .animation
+        .as_mut()
+        .unwrap()
+        .frames
+        .push("missing".into());
+    assert!(invalid.validate().is_err());
+    invalid.particles[0]
+        .animation
+        .as_mut()
+        .unwrap()
+        .frames
+        .pop();
+    invalid.particles[0].animation.as_mut().unwrap().rate[0] = f32::NAN;
+    assert!(invalid.validate().is_err());
+}
+
+#[test]
+fn composite_particle_groups_share_one_budget_and_reject_atomically() {
+    let library = bri_fx_runtime::testing::library();
+    let mut manifest = bri_fx_runtime::testing::manifest();
+    manifest.composites.push(pack::Composite {
+        id: "contact".into(),
+        lifetime: 0.1,
+        emitters: vec![],
+        light: None,
+        burst: Some(("emitter".into(), 2, 0.)),
+        bursts: [3, 4]
+            .into_iter()
+            .map(|n| Burst {
+                emitter: "emitter".into(),
+                count: [n, n],
+                ..Default::default()
+            })
+            .collect(),
+    });
+    let pack = bri_fx_runtime::testing::pack_from(library, manifest);
+    let mut w = world(pack.clone());
+    w.play_composite(
+        "contact",
+        SourceTransform::default(),
+        SourceOptions::default(),
+    )
+    .unwrap();
+    assert_eq!(w.particle_count(), 9);
+    let limits = EffectsLimits {
+        emissions_per_advance: 8,
+        ..Default::default()
+    };
+    let mut w = EffectsWorld::new(pack, limits, 73).unwrap();
+    assert!(
+        w.play_composite(
+            "contact",
+            SourceTransform::default(),
+            SourceOptions::default()
+        )
+        .is_err()
+    );
+    assert_eq!(
+        w.particle_count(),
+        0,
+        "a rejected effect never starts half its groups"
+    );
+    assert_eq!(w.source_count(), 0);
+}
+
+#[test]
+fn authored_groups_keep_seeded_counts_placement_tints_and_sizes() {
+    let mut library = bri_fx_runtime::testing::library();
+    library.emitters[0].speed = 0.;
+    let particle = &mut library.particles[0];
+    for key in &mut particle.keys {
+        key.color = [1.; 4];
+        key.size = 1.;
+    }
+    particle.variation = Some(ParticleVariation {
+        color: [[0.25, 0.5, 0.75, 1.], [0.5, 0.75, 1., 0.8]],
+        size: [0.1, 0.3],
+    });
+    let mut manifest = bri_fx_runtime::testing::manifest();
+    manifest.composites.push(pack::Composite {
+        id: "contact".into(),
+        lifetime: 0.1,
+        emitters: vec![],
+        light: None,
+        burst: None,
+        bursts: vec![Burst {
+            emitter: "emitter".into(),
+            count: [7, 11],
+            radius: [0.2, 0.4],
+            offset: [10., 0., 0.],
+            ..Default::default()
+        }],
+    });
+    let pack = bri_fx_runtime::testing::pack_from(library, manifest);
+    let mut a = world(pack.clone());
+    let mut b = world(pack);
+    for w in [&mut a, &mut b] {
+        w.play_composite(
+            "contact",
+            SourceTransform {
+                position: Vec3::X * 20.,
+                ..Default::default()
+            },
+            SourceOptions::default(),
+        )
+        .unwrap();
+    }
+    let a = a.snapshot(&camera());
+    let b = b.snapshot(&camera());
+    assert!((7..=11).contains(&a.particles.len()));
+    assert_eq!(a.particles.len(), b.particles.len());
+    for (a, b) in a.particles.iter().zip(&b.particles) {
+        assert_eq!(a.position, b.position);
+        assert_eq!(a.color, b.color);
+        assert_eq!(a.size, b.size);
+        assert!((0.1999..=0.4001).contains(&a.position.distance(Vec3::X * 30.)));
+        assert!((0.1..=0.3).contains(&a.size));
+        assert!((0.25..=0.5).contains(&a.color.x));
+        assert!((0.8..=1.).contains(&a.color.w));
+    }
+}
 #[test]
 fn moving_attachment_emits_along_path_and_detaches_particles() {
     let mut w = world(fixture(|l| l.emitters[0].speed = 0.));

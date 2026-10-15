@@ -1331,7 +1331,16 @@ fn shade_surface(v:VertexOut)->vec4<f32> {
     return vec4<f32>(fogged(display,v.world_position),alpha);
 }
 
+fn multiplicative_surface(v:VertexOut)->vec4<f32> {
+    if v.clip<0.0 {discard;}
+    if faded_out(v.position.xy,v.world_position-camera.eye.xyz,camera.atmosphere,camera.haze) {discard;}
+    let texel=textureSample(layer0,tiled,v.uv);
+    let alpha=clamp(texel.a*v.color.a,0.0,1.0)*(1.0-fog_amount(v.world_position));
+    let multiplier=display_color(texel.rgb)*v.color.rgb;
+    return vec4<f32>(output_color(mix(vec3<f32>(1.0),multiplier,alpha)),0.0);
+}
 @fragment fn fs_main(v:VertexOut)->@location(0) vec4<f32> {
+    if (u32(material[0].w)&8u)!=0u {return multiplicative_surface(v);}
     return shade_surface(v);
 }
 // Reuse the surface's cut-out, clip and far-fade rules. Only visible opaque

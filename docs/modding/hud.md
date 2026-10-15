@@ -68,10 +68,14 @@ complete example.
 ```
 
 List each layout as `{ "kind": "hud", ... }` and each PNG as
-`{ "kind": "texture", ... }` (up to 1024 px a side) in `package.json`
+`{ "kind": "texture", ... }` in `package.json`
 `provides`. A layout may use only its own Add-On's textures. Like a panel,
 it is a client Add-On: put it beside the body or rule it dresses, depending
 on it, as `playground-runner-hud` depends on `playground-runner`.
+
+Texture PNGs may be up to 4 MiB encoded, 4096 pixels per edge and 4,194,304
+pixels total. All textures in one Add-On share a 64 MiB decoded RGBA budget.
+This allows wide sprite atlases without rescaling their frames.
 
 **Units.** The screen is 480 HUD units tall and as wide as its aspect makes
 it (640 at 4:3, about 853 at 16:9), so a layout keeps its proportions at

@@ -107,6 +107,7 @@ struct Playback {
     until: Option<f32>,
     finished: bool,
     sources: Vec<Source>,
+    pending: Vec<(String, f32)>,
 }
 
 /// A player's liquid emitters: froth at the surface, bubbles after a splash.
@@ -946,6 +947,23 @@ impl ActorEffects {
     pub fn take_ejected(&mut self) -> Vec<Ejected> {
         std::mem::take(&mut self.ejected)
     }
+    /// Returns true when the image supplies an authored sprite/composite casing.
+    pub fn eject_effect(&mut self, image: &str, at: Mat4, velocity: Vec3) -> Result<bool> {
+        let Some(effect) = self
+            .weapons
+            .images
+            .get(image)
+            .map(|i| &i.shell_effect)
+            .filter(|e| !e.is_empty())
+        else {
+            return Ok(false);
+        };
+        let mut transform = source(at);
+        transform.velocity = velocity;
+        self.world
+            .burst_effect(effect, transform, SourceOptions::default())?;
+        Ok(true)
+    }
 
     fn vehicle_effect(&mut self, vehicle: u64, effect: &str, active: bool) {
         if effect.eq_ignore_ascii_case("vehicleSplash") {
@@ -989,6 +1007,7 @@ impl ActorEffects {
                 until,
                 finished,
                 sources: Vec::new(),
+                pending: Vec::new(),
             },
         );
         self.enter(&slot, 0);
@@ -1013,7 +1032,10 @@ impl ActorEffects {
         };
         playback.state = state;
         // A gun on a vehicle throws its casings as a held one does.
-        if s.eject_shell && !playback.image.casing.is_empty() && self.ejected.len() < 64 {
+        if s.eject_shell
+            && (!playback.image.casing.is_empty() || !playback.image.shell_effect.is_empty())
+            && self.ejected.len() < 64
+        {
             self.ejected.push(Ejected {
                 anchor: playback.anchor,
                 image: playback.image.id.clone(),
@@ -1050,21 +1072,21 @@ impl ActorEffects {
             .composites
             .iter()
             .any(|c| c.id == emitter);
-        let started = if composite {
-            world.play_composite(
+        if composite {
+            // Bursts emit immediately: wait until advance resolves the real
+            // mount instead of permanently leaving their particles at origin.
+            if playback.pending.len() < 64 {
+                playback.pending.push((emitter, seconds));
+            }
+            return;
+        }
+        let started = world
+            .start_emitter(
                 &emitter,
                 SourceTransform::default(),
                 SourceOptions::default(),
             )
-        } else {
-            world
-                .start_emitter(
-                    &emitter,
-                    SourceTransform::default(),
-                    SourceOptions::default(),
-                )
-                .and_then(|h| world.set_remaining_lifetime(h, seconds).map(|_| vec![h]))
-        };
+            .and_then(|h| world.set_remaining_lifetime(h, seconds).map(|_| vec![h]));
         match started {
             Ok(handles) => playback
                 .sources
@@ -1253,6 +1275,26 @@ impl ActorEffects {
             let transform = pose(p.anchor).map(|m| source(image_emitter(m, &p.image)));
             // Burning ends at `clearBurn`; an emote ends when its emitters do.
             let cleared = p.until.is_some() && p.finished;
+            if let Some(t) = transform
+                && !cleared
+            {
+                for (emitter, seconds) in std::mem::take(&mut p.pending) {
+                    match self
+                        .world
+                        .play_composite(&emitter, t, SourceOptions::default())
+                    {
+                        Ok(handles) => p.sources.extend(handles.into_iter().map(|handle| Source {
+                            emitter: emitter.clone(),
+                            handle,
+                            expires: p.clock + seconds,
+                        })),
+                        Err(_) => {
+                            self.diagnostics.capacity_rejections =
+                                self.diagnostics.capacity_rejections.saturating_add(1)
+                        }
+                    }
+                }
+            }
             p.sources.retain(|s| self.world.is_active(s.handle));
             for s in &p.sources {
                 match transform {
@@ -1438,6 +1480,7 @@ fn sync_liquid_source(
 fn teleport_image() -> bri_weapons::Image {
     let ticks = |seconds: f32| (seconds * bri_weapons::TICK_HZ as f32).round() as u32;
     bri_weapons::Image {
+        shell_effect: String::new(),
         id: bri_weapons::native_id("image", "PlayerTeleportImage"),
         name: "PlayerTeleportImage".into(),
         model: "base/data/shapes/empty.dts".into(),

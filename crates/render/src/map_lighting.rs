@@ -590,7 +590,10 @@ impl Bake {
         for batch in &scene.batches {
             let material = scene.materials.get(batch.material)?;
             if material.kind != MaterialKind::Surface
-                || matches!(material.alpha, AlphaMode::Blend | AlphaMode::Additive)
+                || matches!(
+                    material.alpha,
+                    AlphaMode::Blend | AlphaMode::Additive | AlphaMode::Multiply
+                )
             {
                 continue;
             }

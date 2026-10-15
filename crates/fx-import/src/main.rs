@@ -339,6 +339,7 @@ fn main() -> Result<()> {
             manifest.unresolved.push(format!("{}: absent lifetimeMS uses native 1-second fallback; engine-default verification pending",d.name));
         }
         let mut c = Composite {
+            bursts: Vec::new(),
             id: format!("v20/explosion/{}", d.name),
             lifetime,
             emitters: Vec::new(),

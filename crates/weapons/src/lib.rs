@@ -733,6 +733,9 @@ pub struct Image {
     pub color_shift: bool,
     pub arm_ready: bool,
     pub casing: String,
+    /// Authored sprite/composite ejection instead of a debris model.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub shell_effect: String,
     pub min_shot_ticks: u32,
     pub states: Vec<State>,
     /// An Add-On tool's image: its `onFire` runs this Add-On command
@@ -2320,6 +2323,9 @@ pub struct ProjectileDef {
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Impacts {
+    /// Authored surface kinds take precedence over broad target categories.
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub surfaces: BTreeMap<String, String>,
     /// A player, or a creature or object an Add-On spawned.
     #[serde(skip_serializing_if = "String::is_empty")]
     pub player: String,
@@ -2336,15 +2342,35 @@ impl Impacts {
         self.all().iter().all(|e| e.is_empty())
     }
     /// Every surface's effect: player, vehicle, brick, map.
-    pub fn all(&self) -> [&str; 4] {
+    pub fn all(&self) -> Vec<&str> {
         [&self.player, &self.vehicle, &self.brick, &self.map]
+            .into_iter()
+            .map(String::as_str)
+            .chain(self.surfaces.values().map(String::as_str))
+            .collect()
     }
 }
-/// A projectile's mark on a brick: a soft disc flat on the face it hit,
-/// darkest in the middle, fading out over its last second.
+/// A projectile's mark on a static hit face. Authored images retain their
+/// full UV/alpha coverage; content without an image uses the stock soft disc.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DecalBlend {
+    #[default]
+    Alpha,
+    Additive,
+    Multiply,
+    DoubleMultiply,
+}
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Decal {
+    #[serde(default)]
+    pub blend: DecalBlend,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub texture: Option<String>,
+    /// Texture overrides for the map's authored surface kinds.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub surfaces: BTreeMap<String, String>,
     /// Across, in units at scale 1: 0.02 to 4.
     pub size: f32,
     /// Its colour and opacity in the middle, each 0 to 1. A bullet hole's
@@ -2363,7 +2389,18 @@ impl Decal {
         30.0
     }
     pub fn valid(&self) -> bool {
-        self.size.is_finite()
+        self.texture.iter().chain(self.surfaces.values()).all(|s| {
+            !s.is_empty()
+                && s.len() <= 256
+                && !s.contains([':', '\\'])
+                && !s.starts_with('/')
+                && s.split('/').all(|p| p != ".." && !p.is_empty())
+        }) && self.surfaces.len() <= 64
+            && self
+                .surfaces
+                .keys()
+                .all(|k| bri_content::surface::valid_name(k))
+            && self.size.is_finite()
             && (0.02..=4.0).contains(&self.size)
             && self.color.iter().all(|c| (0.0..=1.0).contains(c))
             && self.seconds.is_finite()
@@ -2779,6 +2816,9 @@ pub struct ExplosionEffect {
     /// Emitter, particle count and radius.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub burst: Option<(String, u32, f32)>,
+    /// Additional independent particle groups emitted at the same contact.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub bursts: Vec<bri_content::effects::Burst>,
 }
 /// The name an effect id is bound by: its last part (`pkg:explosion/boom`
 /// is `boom`).
@@ -2797,15 +2837,19 @@ impl PackEffects {
     /// Add-On's item presentation textures (a relative path key). An
     /// explosion may use the base game's emitters (`v20/emitter/...`).
     pub fn validate(&self) -> Result<()> {
-        for p in &self.particles {
+        for (p, texture) in self
+            .particles
+            .iter()
+            .flat_map(|p| p.textures().map(move |t| (p, t)))
+        {
             ensure!(
-                !p.texture.is_empty()
-                    && p.texture.len() <= 256
-                    && !p.texture.starts_with('/')
-                    && !p.texture.contains(':')
-                    && !p.texture.chars().any(char::is_control)
-                    && p.texture.split('/').all(|s| !s.is_empty() && s != "..")
-                    && !p.texture.contains('\\'),
+                !texture.is_empty()
+                    && texture.len() <= 256
+                    && !texture.starts_with('/')
+                    && !texture.contains(':')
+                    && !texture.chars().any(char::is_control)
+                    && texture.split('/').all(|s| !s.is_empty() && s != "..")
+                    && !texture.contains('\\'),
                 "particle {} names an invalid texture",
                 p.id
             );
@@ -2818,7 +2862,7 @@ impl PackEffects {
                 self.explosions.len()
             ]
             .iter()
-            .all(|n| *n <= 256),
+            .all(|n| *n <= 4096),
             "too many weapon effects"
         );
         let library = bri_content::effects::Library {
@@ -2829,7 +2873,10 @@ impl PackEffects {
             textures: self
                 .particles
                 .iter()
-                .map(|p| (p.texture.clone(), "texture.png".to_owned()))
+                .flat_map(|p| {
+                    p.textures()
+                        .map(|t| (t.to_owned(), "texture.png".to_owned()))
+                })
                 .collect(),
         };
         library.validate()?;
@@ -2853,7 +2900,9 @@ impl PackEffects {
                         .is_none_or(|l| self.lights.iter().any(|x| &x.id == l))
                     && e.burst.as_ref().is_none_or(|(id, count, radius)| {
                         emitter(id) && *count <= 32768 && radius.is_finite() && *radius >= 0.0
-                    }),
+                    })
+                    && e.bursts.len() <= 32
+                    && e.bursts.iter().all(|b| b.valid() && emitter(&b.emitter)),
                 "Invalid explosion effect {}",
                 e.id
             );
@@ -3035,6 +3084,11 @@ impl Pack {
             );
         }
         for (id, image) in &self.images {
+            ensure!(
+                image.shell_effect.len() <= 160
+                    && !image.shell_effect.chars().any(char::is_control),
+                "Invalid shell effect of image {id}"
+            );
             ensure!(
                 id == &image.id && image.states.len() <= 64,
                 "Invalid image {id}"
@@ -3377,6 +3431,14 @@ impl Pack {
                     .iter()
                     .all(|e| e.len() <= 160 && !e.chars().any(char::is_control)),
                 "Invalid impacts of projectile {id}: explosion effect names"
+            );
+            ensure!(
+                p.impacts.surfaces.len() <= 64
+                    && p.impacts
+                        .surfaces
+                        .keys()
+                        .all(|k| bri_content::surface::valid_name(k)),
+                "Invalid impact surface kinds of projectile {id}"
             );
             ensure!(
                 p.decal.as_ref().is_none_or(Decal::valid),

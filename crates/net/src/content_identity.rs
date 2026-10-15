@@ -1159,6 +1159,7 @@ mod tests {
                     color_shift: false,
                     arm_ready: true,
                     casing: String::new(),
+                    shell_effect: String::new(),
                     min_shot_ticks: 0,
                     states: vec![],
                     command: None,
@@ -1283,6 +1284,8 @@ mod tests {
             diagnostics: vec![],
             effects: bri_weapons::PackEffects {
                 particles: vec![bri_content::effects::Particle {
+                    animation: None,
+                    variation: None,
                     id: "crit:particle/critparticle".into(),
                     texture: "base/data/particles/dot".into(),
                     alpha_blend: false,

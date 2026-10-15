@@ -20,6 +20,8 @@ fn fixture(finite: bool) -> Arc<EffectsPack> {
             textures: BTreeMap::from([("texture".into(), "texture.png".into())]),
             lights: vec![],
             particles: vec![Particle {
+                animation: None,
+                variation: None,
                 id: "particle".into(),
                 texture: "texture".into(),
                 alpha_blend: true,
@@ -77,6 +79,7 @@ fn fixture(finite: bool) -> Arc<EffectsPack> {
             emitter_alpha: BTreeMap::new(),
             bindings: vec![],
             composites: vec![Composite {
+                bursts: Vec::new(),
                 id: "v20/explosion/hit".into(),
                 lifetime: 0.05,
                 emitters: vec![],
@@ -367,12 +370,26 @@ fn shell_animation_queue_is_exact_once_and_bounded() -> Result<()> {
         },
     };
     fx.cues(std::slice::from_ref(&shell), pose)?;
-    fx.cues(&[shell], pose)?;
+    fx.cues(std::slice::from_ref(&shell), pose)?;
     assert!(matches!(
         fx.take_host_requests().next(),
         Some(HostRequest::Shell(_))
     ));
     assert_eq!(fx.take_host_requests().count(), 0);
+    fx.defer_shell(
+        shell.clone(),
+        shell.tick + u64::from(bri_weapons::TICK_HZ / 2),
+    );
+    assert!(matches!(
+        fx.take_host_requests().next(),
+        Some(HostRequest::Shell(_))
+    ));
+    fx.defer_shell(
+        shell.clone(),
+        shell.tick + u64::from(bri_weapons::TICK_HZ / 2) + 1,
+    );
+    assert_eq!(fx.take_host_requests().count(), 0);
+    assert_eq!(fx.diagnostics.missing_poses, 1);
     let batch: Vec<_> = (2..=4097)
         .map(|id| Cue {
             id,
@@ -539,6 +556,8 @@ fn actual_native_weapon_bindings_and_effects() -> Result<()> {
 fn an_add_on_explosion_with_a_light_plays_by_its_name() -> Result<()> {
     let base = fixture(false);
     let particle = Particle {
+        animation: None,
+        variation: None,
         id: "kit:particle/spark".into(),
         ..base.library.particles[0].clone()
     };
@@ -566,6 +585,7 @@ fn an_add_on_explosion_with_a_light_plays_by_its_name() -> Result<()> {
         emitters: vec![emitter],
         lights: vec![light.clone()],
         explosions: vec![bri_weapons::ExplosionEffect {
+            bursts: Vec::new(),
             id: "kit:explosion/boom".into(),
             lifetime: 0.25,
             emitters: vec!["kit:emitter/flash".into()],
@@ -594,6 +614,8 @@ fn an_add_on_explosion_with_a_light_plays_by_its_name() -> Result<()> {
 fn an_add_on_pack_brings_its_own_emitters_and_explosions() -> Result<()> {
     let base = fixture(false);
     let particle = Particle {
+        animation: None,
+        variation: None,
         id: "kit:particle/spark".into(),
         ..base.library.particles[0].clone()
     };
@@ -619,6 +641,7 @@ fn an_add_on_pack_brings_its_own_emitters_and_explosions() -> Result<()> {
         ],
         lights: vec![],
         explosions: vec![bri_weapons::ExplosionEffect {
+            bursts: Vec::new(),
             id: "kit:explosion/boom".into(),
             lifetime: 0.2,
             emitters: vec!["kit:emitter/flash".into(), "kit:emitter/lost".into()],
@@ -681,6 +704,8 @@ fn a_particle_whose_texture_is_missing_draws_the_cloud() -> Result<()> {
     });
     let base = EffectsPack::from_parts(library, fixture.manifest.clone(), textures)?;
     let lost = Particle {
+        animation: None,
+        variation: None,
         id: "kit:particle/star".into(),
         texture: "base/data/particles/star".into(),
         ..base.library.particles[0].clone()
@@ -696,6 +721,7 @@ fn a_particle_whose_texture_is_missing_draws_the_cloud() -> Result<()> {
         }],
         lights: vec![],
         explosions: vec![bri_weapons::ExplosionEffect {
+            bursts: Vec::new(),
             id: "kit:explosion/nuke".into(),
             lifetime: 0.2,
             emitters: vec!["kit:emitter/star".into()],
@@ -747,6 +773,8 @@ fn an_add_on_particle_draws_its_own_texture() -> Result<()> {
     let base = fixture(false);
     let key = "add-ons/weapon_kit/spark.png";
     let particle = Particle {
+        animation: None,
+        variation: None,
         id: "kit:particle/spark".into(),
         texture: key.into(),
         ..base.library.particles[0].clone()
@@ -800,6 +828,8 @@ fn an_add_on_particle_draws_an_interface_picture() -> Result<()> {
     let base = fixture(false);
     let named = "base/client/ui/brickIcons/1x1";
     let particle = Particle {
+        animation: None,
+        variation: None,
         id: "kit:particle/icon".into(),
         texture: named.into(),
         ..base.library.particles[0].clone()

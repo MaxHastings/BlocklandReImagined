@@ -529,6 +529,7 @@ pub fn lower(definitions: Vec<Definition>) -> Result<Pack> {
         pack.images.insert(
             id.clone(),
             Image {
+                shell_effect: String::new(),
                 id,
                 name: d.name.clone(),
                 model: resource(d, "shapeFile"),

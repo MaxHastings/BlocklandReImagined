@@ -586,3 +586,40 @@ time is up) and names what would misbehave in play:
 | `state.scope_too_big` / `state.scope_large` | declared player (64 KiB) or global (256 KiB) state over (or near) its limit |
 
 Each message names the image or key and the states involved.
+
+
+## Authored contact and ejection effects
+
+A projectile's `impacts.surfaces` maps authored surface kinds to effect IDs.
+A matching kind wins over `player`, `vehicle`, `brick` and `map`; an unknown
+kind falls back to those target categories and the ordinary explosion effect.
+For example, `"surfaces": {"metal":"kit:explosion/sparks", "dirt":"kit:explosion/dust"}`
+uses the same mechanism on every map and weapon.
+
+A projectile's `decal` may name a `texture` from item presentation, plus
+`surfaces` mapping kinds to texture keys. `blend` is `alpha` (default),
+`additive`, `multiply` or `double_multiply`. `size`, `color` and `seconds`
+control the mark; textured marks use the entire image and its alpha. Static
+map and brick marks share one bounded pool. Declared missing artwork is
+reported and omitted. Content without a declared image keeps the stock disc.
+
+Particles in `effects.particles` may specify an `animation` with `frames`
+(texture keys), a `rate` range in frames/second, and optional `looping`,
+`random_start` and `reverse` flags. Without looping, the last frame holds.
+Optional `variation` has two RGBA `color` endpoints and a `size` range;
+seeded per-particle sampling multiplies the ordinary color/size keys.
+All frames must be declared presentation textures. The renderer packs original
+pixels into atlas pages rather than spending a texture-array layer per frame.
+
+Composite `effects.explosions` can contain up to 32 independently placed
+`bursts`. Each has `emitter`, a `count` range, a `radius` range, local `offset`
+and local `direction`. The source's +Y axis follows the impact normal or
+attachment rotation. Existing `burst` and continuous `emitters` still work;
+all burst groups share the ordinary live-particle/source budgets.
+
+An image's `shell_effect` names an authored emitter/composite to play for
+`eject_shell` states. It replaces mesh `casing` presentation and uses the posed
+`ejectPoint` (or `muzzlePoint` when absent), carrying actor velocity. If the
+reliable cue arrives before its image pose, it waits up to half a second.
+These sprite casings currently have gravity but no structure contact/rest or
+contact audio; use model debris when those are required.
