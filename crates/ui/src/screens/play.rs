@@ -48,6 +48,14 @@ fn chat_text(core: &Core) -> String {
     // line's styles never leak into the next (c:14972-14982). Uncoloured
     // text is BlockChatTextProfile's base colour, `fontColors[0]` = 255 0 64
     // (see `pack::alias_font_colors`).
+    // A HUD layout claiming the chat region hides its passing lines; they
+    // come back while typing or paging up.
+    if core.hud_claimed(bri_content::hud::Region::Chat)
+        && !core.chat_input_open
+        && !core.chat.scrolled_up()
+    {
+        return String::new();
+    }
     core.chat
         .visible(core.time_ms)
         .iter()
@@ -80,12 +88,7 @@ pub fn mouse_tip(core: &Core) -> bool {
             ..
         }
     );
-    let links = !single
-        && core
-            .chat
-            .visible(core.time_ms)
-            .iter()
-            .any(|l| l.text.contains("<a:"));
+    let links = !single && chat_text(core).contains("<a:");
     links || core.cursor_forced
 }
 /// The chat link under a logical point, for a click while the cursor is
@@ -389,6 +392,45 @@ fn hud_regions(pack: &Pack, dl: &mut DrawList, core: &Core) {
                         Align::Right => x - tw,
                     };
                     font.draw(dl, x.round(), y.round(), text, rgba(*color), &[]);
+                }
+                Item::Line { at, align, spans } => {
+                    use bri_content::hud::Span;
+                    let Some(font) = font.as_ref() else {
+                        continue;
+                    };
+                    let gap = 2.0 * unit;
+                    let span_width = |span: &Span| match span {
+                        Span::Text { text, .. } => font.width(text) as f32,
+                        Span::Image { size, .. } => size[0] * unit,
+                    };
+                    let tw = spans.iter().map(span_width).sum::<f32>()
+                        + gap * spans.len().saturating_sub(1) as f32;
+                    let (x, y) = px(at[0], at[1]);
+                    let mut x = match align {
+                        Align::Left => x,
+                        Align::Center => x - tw / 2.0,
+                        Align::Right => x - tw,
+                    };
+                    let bottom = y + font.line_height() as f32;
+                    for span in spans {
+                        match span {
+                            Span::Text { text, color } => {
+                                font.draw(dl, x.round(), y.round(), text, rgba(*color), &[]);
+                            }
+                            Span::Image {
+                                texture,
+                                size,
+                                tint,
+                            } => dl.image(
+                                crate::pack::TexKey::External(*texture),
+                                [0.0, 0.0, 1.0, 1.0],
+                                [x, bottom - size[1] * unit, size[0] * unit, size[1] * unit],
+                                rgba(*tint),
+                                filter,
+                            ),
+                        }
+                        x += span_width(span) + gap;
+                    }
                 }
             }
         }

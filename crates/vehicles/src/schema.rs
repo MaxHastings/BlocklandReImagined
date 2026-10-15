@@ -1119,8 +1119,7 @@ impl Pack {
                 "invalid timing/density"
             );
             ensure!(
-                d.return_seconds
-                    .is_none_or(|s| (0.0..=3600.0).contains(&s)),
+                d.return_seconds.is_none_or(|s| (0.0..=3600.0).contains(&s)),
                 "return_seconds must be 0 to 3600"
             );
             ensure!(

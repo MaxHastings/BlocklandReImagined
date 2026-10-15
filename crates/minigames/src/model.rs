@@ -263,7 +263,9 @@ impl Settings {
             || !(within(self.brick_respawn_ms, l.brick_respawn_ms)
                 || (l.brick_never && self.brick_respawn_ms == NEVER))
             || self.spawn_protection_ms > MAX_MATCH_RULE_MS
-            || self.vehicle_return_ms.is_some_and(|ms| ms > MAX_MATCH_RULE_MS)
+            || self
+                .vehicle_return_ms
+                .is_some_and(|ms| ms > MAX_MATCH_RULE_MS)
             || self.death_view_ms > MAX_MATCH_RULE_MS
         {
             return Err(Error::InvalidSettings);

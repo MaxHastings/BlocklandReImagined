@@ -468,9 +468,18 @@ mod tests {
             ..Default::default()
         };
         let has = |c: &str| matches!(c, "die_back" | "die1" | "die2");
-        assert_eq!(deaths.pick(Some(Side::Front), 7, has).as_deref(), Some("die_back"));
-        assert_eq!(deaths.pick(Some(Side::Left), 0, has).as_deref(), Some("die1"));
-        assert_eq!(deaths.pick(Some(Side::Left), 1, has).as_deref(), Some("die2"));
+        assert_eq!(
+            deaths.pick(Some(Side::Front), 7, has).as_deref(),
+            Some("die_back")
+        );
+        assert_eq!(
+            deaths.pick(Some(Side::Left), 0, has).as_deref(),
+            Some("die1")
+        );
+        assert_eq!(
+            deaths.pick(Some(Side::Left), 1, has).as_deref(),
+            Some("die2")
+        );
         assert_eq!(deaths.pick(None, 3, has).as_deref(), Some("die2"));
         assert_eq!(Deaths::default().pick(None, 3, has), None);
         assert!(

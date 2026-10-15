@@ -446,3 +446,82 @@ fn fall_harm_predicts_the_fall_rule_without_hurting() {
         assert_eq!(s.vitals()[&a].health, 100.0, "asking hurts nobody");
     }
 }
+
+/// A game's spawn protection spares a new body from harm for its time; a
+/// game can turn it off.
+#[test]
+fn spawn_protection_follows_the_game_and_can_be_off() {
+    for (protection_ms, spared) in [(2500, true), (0, false)] {
+        let mut s = session();
+        let a = s
+            .join("Alpha".into(), Vec3::new(0.0, 0.05, 0.0), true)
+            .unwrap();
+        steps(&mut s, 30);
+        let settings = Settings {
+            spawn_protection_ms: protection_ms,
+            ..Settings::default()
+        };
+        s.command(
+            a,
+            1,
+            Command::MiniGame(MiniGameRequest::Create { color: 0, settings }),
+        )
+        .unwrap();
+        steps(&mut s, 2);
+        let (state, _) = s
+            .motion_states()
+            .into_iter()
+            .find(|(p, _)| p.owner == a)
+            .unwrap();
+        let at = Vec3::from(state.feet) + Vec3::Y;
+        s.explode(at, 4.0, 50.0, 0.0, None, "test", None).unwrap();
+        assert_eq!(s.vitals()[&a].health == 100.0, spared, "{protection_ms} ms");
+    }
+}
+
+/// A death in a game reaches its members as a kill-feed line naming the
+/// victim, and leaves a death pose (an undirected blast names no side).
+#[test]
+fn a_game_death_is_a_kill_notice_with_its_side() {
+    let mut s = session();
+    let a = s
+        .join("Alpha".into(), Vec3::new(0.0, 0.05, 0.0), true)
+        .unwrap();
+    steps(&mut s, 30);
+    let settings = Settings {
+        spawn_protection_ms: 0,
+        ..Settings::default()
+    };
+    s.command(
+        a,
+        1,
+        Command::MiniGame(MiniGameRequest::Create { color: 0, settings }),
+    )
+    .unwrap();
+    steps(&mut s, 2);
+    s.take_private_notices();
+    let (state, _) = s
+        .motion_states()
+        .into_iter()
+        .find(|(p, _)| p.owner == a)
+        .unwrap();
+    let at = Vec3::from(state.feet) + Vec3::Y;
+    s.explode(at, 4.0, 500.0, 0.0, None, "test", None).unwrap();
+    steps(&mut s, 1);
+    assert!(!s.vitals()[&a].alive);
+    let kills: Vec<_> = s
+        .take_private_notices()
+        .into_iter()
+        .filter_map(|(o, n)| match n {
+            Notice::Kill(k) if o == a => Some(k),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(kills.len(), 1, "{kills:?}");
+    assert_eq!(
+        (kills[0].victim, kills[0].victim_name.as_str()),
+        (a, "Alpha")
+    );
+    let death = s.vitals()[&a].death.expect("a death pose");
+    assert_eq!(death.from, None);
+}

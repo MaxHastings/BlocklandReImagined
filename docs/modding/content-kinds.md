@@ -81,6 +81,9 @@ world's own bricks, so its brick damage reaches them.
 | `falling_damage`, `weapon_damage`, `self_damage`, `vehicle_damage`, `brick_damage`, `building`, `painting` | all `true` | what the game allows |
 | `use_all_players_bricks` | `false` | let the game break everyone's bricks, not only the world's |
 | `bodies` | none | bodies players may pick for themselves with `/body`, besides `player_type` (archetype ids) |
+| `spawn_protection_seconds` | 2.5 | 0 to 60: how long a new body takes no harm; 0 turns it off |
+| `vehicle_return_seconds` | each vehicle's own | 0 to 3600: how long a brick-spawned vehicle may sit empty away from its brick before it goes back as a fresh one; 0 never |
+| `death_view_seconds` | 0 | 0 to 30: how long the dead keep the camera on their body, looking where it fell, before they can look around |
 | `keep_chosen_body` | `true` | a player who picked a body (a brick's ChangeDatablock, `/body`), before joining or in the game, respawns as it rather than as `player_type` or their team's body; `false` spawns everyone as the game says |
 
 Teams are not a mini-game setting (v20 had none): a rule keeps each
@@ -184,7 +187,14 @@ travel divided by the cycle's length.
 `look`, `head_up`, `head_side`, `swim` and `death`. Unnamed roles use a clip of the
 Blockhead's name if the model has one, then a fallback (`back` runs `run`
 reversed, `fall` plays `jump`, `sit` plays `idle`), and a role with none
-leaves the body in its bind pose for that layer. The client names what a
+leaves the body in its bind pose for that layer. An archetype's `deaths`
+picks among several death clips by where the killing hit came from:
+`"deaths": { "front": ["die_back"], "back": ["die_front"], "left": [...],
+"right": [...], "any": ["die_spin", "die_slump"] }`. Each list holds up to 8
+of the body's own clips; the host rolls one of the side's (or of `any`
+when the side has none or the death had no direction, a fall), so every
+player sees the same one. Without `deaths` the body plays its `death`
+role. The client names what a
 body lacks once, in the Add-On faults log ("no `sit` animation; it plays
 its `idle` instead"). The Playground's
 [Runner](../../packages/playground/playground-runner/runner.json) and the
@@ -287,7 +297,7 @@ damage, `onBotTouch` events and the Gravity Gun treat it as one.
 Add-On's `assets/vehicles.json` holds definitions (the format Import Add-On
 writes; `tools/make_steel_ball_assets.py` writes the Steel Ball's). The
 `Ball` family is a true sphere of the definition's size; a definition with
-no seats cannot be mounted. Three fields exist for Add-Ons:
+no seats cannot be mounted. These fields exist for Add-Ons:
 
 - `"smash": { "speed", "radius", "max_volume", "force" }` breaks bricks it
   strikes at `speed` or faster, under the same rules a rocket's hit follows
@@ -306,6 +316,10 @@ no seats cannot be mounted. Three fields exist for Add-Ons:
 - `"per_player": 3` lets each player have at most that many of this
   vehicle at once, on top of the server's vehicle limits. A spawn brick
   past it tells its builder "You already have 3 Steel Balls".
+- `"return_seconds": 30` sends a vehicle from a spawn brick back to it
+  as a fresh one after it has sat empty that long away from the brick (more
+  than 3 units). A mode's `vehicle_return_seconds` (or the game's setting)
+  overrides it; 0 or none never returns it.
 - `"blast_scale": 3.0` makes rockets, tank shells and other blasts and
   shots push it that many times as hard as v20's rule (the impulse over
   its mass) would. The Steel Ball weighs 900 and sets 3, so a rocket

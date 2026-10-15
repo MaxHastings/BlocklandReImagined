@@ -170,6 +170,8 @@ pub(super) struct Combat {
     pub lava: Option<u64>,
     /// How this body fell, for its death clip; `None` while alive.
     pub death: Option<DeathPose>,
+    /// The tick the player last pulled the trigger, for motion trackers.
+    pub fired_tick: Option<u64>,
 }
 
 /// The side of a body a hit came from.
@@ -192,7 +194,11 @@ impl HitSide {
             return None;
         }
         Some(if from.z.abs() >= from.x.abs() {
-            if from.z < 0.0 { Self::Front } else { Self::Back }
+            if from.z < 0.0 {
+                Self::Front
+            } else {
+                Self::Back
+            }
         } else if from.x > 0.0 {
             Self::Right
         } else {
@@ -255,6 +261,12 @@ pub struct Vitals {
     /// How the body fell, while dead: picks its death clip.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub death: Option<DeathPose>,
+    /// Holding the trigger now, and the tick they last pulled it: a
+    /// motion tracker shows shooters.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub firing: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fired_tick: Option<u64>,
     pub score: i64,
     pub minigame: Option<u64>,
     /// The team of their mini-game they play for (an Add-On's teams):
@@ -377,6 +389,24 @@ pub struct MusicPlay {
     pub fade: f32,
 }
 
+/// A death as a kill feed shows it ([`Notice::Kill`]), with the chat line
+/// a client prints when it has no feed.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct KillLine {
+    /// The chat line (markup), after Add-On rules changed it.
+    pub line: String,
+    pub victim: OwnerId,
+    pub victim_name: String,
+    /// `None` for a death with no killer (a fall, a suicide, a hidden one).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub killer: Option<OwnerId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub killer_name: Option<String>,
+    /// The damage type's name (`Gun`, `Rocket Direct`, `Fall`).
+    pub weapon: String,
+}
+
 /// An ambient bed a rule plays for a player ([`Notice::Ambient`]).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -436,6 +466,8 @@ pub enum Notice {
     /// Add-On rule ambience (`play_ambient`, `stop_ambient`): a looping
     /// bed this player hears on the effects bus, by key.
     Ambient(AmbientPlay),
+    /// A death line: a client with a kill feed shows it there, else in chat.
+    Kill(KillLine),
     /// `MessageBoxOK` from the server.
     MessageBox {
         title: String,
@@ -952,6 +984,7 @@ impl Session {
             pushed: None,
             lava: None,
             death: None,
+            fired_tick: None,
         })
     }
     pub(super) fn combat_disconnect(&mut self, player: mg::PlayerId) {
@@ -1002,6 +1035,12 @@ impl Session {
                         died_tick: (peer.combat.died_tick > 0 || !peer.combat.alive)
                             .then_some(peer.combat.died_tick),
                         death: peer.combat.death.filter(|_| !peer.combat.alive),
+                        firing: peer.combat.alive
+                            && self
+                                .weapons
+                                .actor(ActorId(*owner))
+                                .is_some_and(|a| a.trigger_held()),
+                        fired_tick: peer.combat.fired_tick,
                         score: state.map_or(0, |s| s.score),
                         minigame: state.and_then(|s| s.game).map(|g| g.0),
                         team: state.and_then(|s| s.team).map(|t| t.0),
@@ -1126,6 +1165,22 @@ impl Session {
         }
     }
 
+    /// A death line to a mini-game's members, for their kill feeds or chat;
+    /// outside a game, everyone's chat as [`Self::chat_game`] sends it.
+    pub(super) fn kill_game(&mut self, game: Option<GameId>, kill: KillLine) {
+        // Outside a game the line is everyone's chat, kept for joiners.
+        let Some(game) = game else {
+            return self.system_chat(kill.line);
+        };
+        let to: Vec<OwnerId> = self
+            .minigames
+            .game(game)
+            .map(|g| g.members.iter().filter_map(|m| self.owner_of(*m)).collect())
+            .unwrap_or_default();
+        for owner in to {
+            self.notify(owner, Notice::Kill(kill.clone()));
+        }
+    }
     /// `miniGameCanDamage` for player targets: only members of the same
     /// minigame with weapon damage (and self damage for oneself) can hurt a
     /// player. Players outside minigames are never damaged by weapons.
@@ -1333,7 +1388,9 @@ impl Session {
         });
         let death_pose = DeathPose {
             from: direction.and_then(|d| HitSide::of(Vec3::new(d.x, 0.0, d.z), state.body_yaw())),
-            roll: (victim ^ tick).wrapping_mul(0x9E37_79B9_7F4A_7C15).to_be_bytes()[0],
+            roll: (victim ^ tick)
+                .wrapping_mul(0x9E37_79B9_7F4A_7C15)
+                .to_be_bytes()[0],
         };
         // A killer from another minigame (or none) cannot be credited.
         let killer = killer.filter(|k| *k == victim || self.game_of(*k) == self.game_of(victim));
@@ -1484,6 +1541,15 @@ impl Session {
         let text = line(&victim_name, killer_name.as_deref());
         let game = self.game_of(victim);
         let shown_killer = killer.filter(|k| *k != victim && killer_name.is_some());
+        let weapon = kind.type_name().to_string();
+        let feed = |line: String, victim_name: String, killer_name: Option<String>| KillLine {
+            line,
+            victim,
+            victim_name,
+            killer: shown_killer.filter(|_| killer_name.is_some()),
+            killer_name,
+            weapon: weapon.clone(),
+        };
         match self.package_death_message(
             victim,
             shown_killer,
@@ -1491,7 +1557,10 @@ impl Session {
             kind.type_name(),
             &text,
         ) {
-            super::packages::DeathLine::Engine => self.chat_game(game, None, text),
+            super::packages::DeathLine::Engine => {
+                let kill = feed(text, victim_name.clone(), killer_name.clone());
+                self.kill_game(game, kill);
+            }
             super::packages::DeathLine::Hidden => {}
             super::packages::DeathLine::Changed {
                 victim: v,
@@ -1515,13 +1584,23 @@ impl Session {
                     text.push(' ');
                     text.push_str(&suffix);
                 }
+                let shown_killer_name = if hide_killer {
+                    None
+                } else {
+                    k.or(killer_name.clone())
+                };
+                let kill = feed(
+                    text,
+                    v.unwrap_or_else(|| victim_name.clone()),
+                    shown_killer_name,
+                );
                 match to {
                     Some(to) => {
                         for owner in to {
-                            self.notify(owner, Notice::Chat(text.clone()));
+                            self.notify(owner, Notice::Kill(kill.clone()));
                         }
                     }
-                    None => self.chat_game(game, None, text),
+                    None => self.kill_game(game, kill),
                 }
             }
         }
@@ -2860,8 +2939,10 @@ impl Session {
         }
     }
     pub(super) fn note_shot(&mut self, owner: OwnerId) {
+        let tick = self.simulation.state().tick;
         if let Some(peer) = self.peers.get_mut(&owner) {
             peer.combat.shot_once = true;
+            peer.combat.fired_tick = Some(tick);
         }
     }
     /// `addHealth` / `setHealth` event outputs.
@@ -2968,6 +3049,19 @@ impl Session {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_hit_side_is_where_it_came_from_in_the_bodys_frame() {
+        let yaw = 0.7_f32;
+        let forward = Vec3::new(yaw.sin(), 0.0, -yaw.cos());
+        let right = Vec3::new(yaw.cos(), 0.0, yaw.sin());
+        // A shot travelling toward the body's face came from the front.
+        assert_eq!(HitSide::of(-forward, yaw), Some(HitSide::Front));
+        assert_eq!(HitSide::of(forward, yaw), Some(HitSide::Back));
+        assert_eq!(HitSide::of(-right, yaw), Some(HitSide::Right));
+        assert_eq!(HitSide::of(right, yaw), Some(HitSide::Left));
+        assert_eq!(HitSide::of(Vec3::Y, yaw), None);
+    }
 
     fn session() -> Result<Session> {
         use rapier3d::prelude::*;

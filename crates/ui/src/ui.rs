@@ -417,6 +417,9 @@ pub struct Core {
     /// HUD regions Add-Ons claim this frame, resolved; a claimed stock
     /// region (the crosshair, energy bar, prints) hides the stock element.
     pub hud_regions: Vec<crate::api::HudRegionDraw>,
+    /// Stock prompts a drawn HUD layout replaces (`Layout::texts`), by key:
+    /// `building_disabled` here; `""` hides it.
+    pub stock_texts: BTreeMap<String, String>,
     /// Keys package HUDs bind to package commands. Base game binds win.
     pub package_keys: Vec<crate::api::PackageKey>,
     /// Enabled packages' binds, listed in Controls after the game's own
@@ -884,6 +887,13 @@ impl Core {
         }
     }
     pub fn center_print(&mut self, text: &str, seconds: f32) {
+        let text = match self.stock_texts.get("building_disabled") {
+            Some(own) if text == crate::models::hud::BUILDING_DISABLED => own.as_str(),
+            _ => text,
+        };
+        if text.is_empty() {
+            return;
+        }
         let until = (seconds > 0.0).then(|| self.time_ms + (seconds * 1000.0) as u64);
         self.center_print = Some((text.to_string(), until));
     }
@@ -1275,7 +1285,7 @@ impl Core {
             // `openBSD`: with building disabled it only says so, so the
             // selector (and its "Bricks" cue) never opens.
             "openbsd" if self.hud.building_disabled => {
-                self.center_print("\u{E005}Building is currently disabled.", 2.0)
+                self.center_print(crate::models::hud::BUILDING_DISABLED, 2.0)
             }
             "openbsd" => self.push(ScreenId::BrickSelector),
             "usebricks" => {
@@ -1562,6 +1572,7 @@ impl Ui {
             name_tags: Vec::new(),
             package_panels: Vec::new(),
             hud_regions: Vec::new(),
+            stock_texts: BTreeMap::new(),
             package_keys: Vec::new(),
             package_binds: Vec::new(),
             server_name: String::new(),

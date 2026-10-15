@@ -2,6 +2,7 @@
 //! path selects Device. Sound failures remain diagnostic, never gameplay failures.
 use anyhow::Result;
 use bri_audio::*;
+use bri_console::Clamp;
 use bri_sim::presentation::{Cue, CueKind};
 use bri_ui::screens::options::{MUSIC_VOLUME, MUTE_IN_BACKGROUND, volume};
 use bri_ui::{api::Settings, prefs::Prefs};
@@ -638,7 +639,7 @@ impl ClientAudio {
             Ok(found) => found,
             Err(error) => return self.record(Err(error)),
         };
-        let volume = volume * play.volume.clamp(0.0, 1.0);
+        let volume = volume * play.volume.clamped(0.0, 1.0);
         let fade = play.fade.max(0.0);
         let start = if fade == 0.0 { 1.0 } else { 0.0 };
         let (placement, range) = match play.at {

@@ -950,7 +950,7 @@ impl Session {
         };
         (ms > 0).then(|| mg::ticks_for_ms(ms))
     }
-    /// Halo's abandoned vehicles: a brick-spawned vehicle left empty away
+    /// Abandoned vehicles: a brick-spawned vehicle left empty away
     /// from its spawn for its return time goes back to the brick as a
     /// fresh one, as the brick's `< Respawn >` does.
     pub(super) fn return_abandoned_vehicles(&mut self) -> Result<()> {

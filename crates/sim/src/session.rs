@@ -94,8 +94,8 @@ pub use admin::{
 };
 pub use bri_world::authority::WrenchProperties;
 pub use combat::{
-    DEATH_PROJECTILE, DeathPose, HeldAmmo, HitSide, MAX_HEALTH, MiniGameRequest, MiniGameView,
-    AmbientPlay, MusicPlay, Notice, SPAWN_PROJECTILE, Vitals,
+    AmbientPlay, DEATH_PROJECTILE, DeathPose, HeldAmmo, HitSide, KillLine, MAX_HEALTH,
+    MiniGameRequest, MiniGameView, MusicPlay, Notice, SPAWN_PROJECTILE, Vitals,
 };
 pub use inventory::{TOOL_SLOTS, ToolInventory};
 pub use packages::{

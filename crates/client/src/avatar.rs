@@ -1961,9 +1961,9 @@ impl AvatarMesh {
                             HitSide::Left => Side::Left,
                             HitSide::Right => Side::Right,
                         });
-                        self.kind.deaths.pick(side, death.roll, |clip| {
-                            assets.rig.sequence(clip).is_some()
-                        })
+                        self.kind
+                            .deaths
+                            .pick(side, death.roll, |clip| assets.rig.sequence(clip).is_some())
                     })
                     .map_or("death1", |clip| interned(&clip)),
             )
@@ -2020,7 +2020,10 @@ impl AvatarMesh {
             .is_none()
             .then(|| assets.rig.sequence(sequence))
             .flatten();
-        let (clip, reversed) = match own.map(|c| (c, false)).or_else(|| role(movement_role(sequence))) {
+        let (clip, reversed) = match own
+            .map(|c| (c, false))
+            .or_else(|| role(movement_role(sequence)))
+        {
             Some((clip, reversed)) => (Some(clip), reversed),
             None => (None, false),
         };
@@ -3606,6 +3609,8 @@ mod tests {
             spawn_tick,
             died_tick,
             death: None,
+            firing: false,
+            fired_tick: None,
             score: 0,
             minigame: None,
             team: None,
