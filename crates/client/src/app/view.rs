@@ -408,11 +408,12 @@ impl App {
                 // as a player's chase camera's does.
                 let mut boom = None;
                 let (eye, yaw, pitch) = crate::vehicle_camera::driver_view(
-                    frame.position,
+                    // An orbiting camera trails the vehicle by its lag.
+                    frame.position + controls.orbit_lag(),
                     frame.rotation,
                     center,
                     &d.camera,
-                    controls.driver_head_yaw(),
+                    controls.driver_head(),
                     pos,
                     |from, to| {
                         let (hit, through) =

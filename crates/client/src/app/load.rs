@@ -184,6 +184,7 @@ impl App {
                 display_size: (1, 1),
             },
             audio,
+            footfalls: Default::default(),
             ui,
             files: Saves {
                 saves: crate::saves::Store::new(state_dir, &content, Some(old_saves.clone())),
@@ -361,6 +362,7 @@ impl App {
                 seat_report: None,
                 rider_rotations: BTreeMap::new(),
                 rider_hands: BTreeMap::new(),
+                rider_aims: BTreeMap::new(),
                 posed_eye: None,
                 tumble: None,
             },

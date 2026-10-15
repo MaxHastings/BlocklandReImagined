@@ -168,6 +168,9 @@ pub struct Look {
         skip_serializing_if = "is_default_max_time_scale"
     )]
     pub max_time_scale: f32,
+    /// A sound at each footfall by the surface underfoot; none left out.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub footsteps: Option<bri_content::body::Footsteps>,
 }
 /// v20's `PlayerData::maxTimeScale`.
 pub const MAX_TIME_SCALE: f32 = 1.5;
@@ -231,6 +234,9 @@ impl Archetype {
         bri_content::body::validate_animations(&self.look.animations)?;
         bri_content::body::validate_ground_speeds(&self.look.ground_speeds)?;
         self.look.camera.validate()?;
+        if let Some(f) = &self.look.footsteps {
+            f.validate()?;
+        }
         if let Some(source) = &self.controller {
             source.validate()?;
         }
@@ -261,6 +267,7 @@ impl Archetype {
                 intent_sounds: BTreeMap::new(),
                 ground_speeds: Default::default(),
                 max_time_scale: MAX_TIME_SCALE,
+                footsteps: None,
             },
             uses_items: true,
             sockets: Sockets::default(),

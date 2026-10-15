@@ -483,6 +483,80 @@ pub struct VehicleCamera {
     /// `Vehicle::getCameraTransform` (0x56cc10) never reads them.
     pub lag: f32,
     pub decay: f32,
+    /// The driver's third-person camera orbits the vehicle with the mouse
+    /// instead of sitting level behind it. Not a v20 mode. Left out, v20's
+    /// chase camera.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub orbit: Option<CameraOrbit>,
+}
+/// [`Definition::turret_sway`]: a damped spring that tips the turret
+/// against the vehicle's acceleration in its own frame (back as it speeds
+/// up, forward as it brakes, outward in a turn, down over a bump).
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TurretSway {
+    /// Radians the turret tips per unit/s² of acceleration.
+    pub response: f32,
+    /// How fast it wobbles, cycles a second.
+    #[serde(default = "sway_frequency")]
+    pub frequency: f32,
+    /// 0 rings on, 1 settles without overshooting.
+    #[serde(default = "sway_damping")]
+    pub damping: f32,
+    /// The furthest it tips, degrees.
+    #[serde(default = "sway_max")]
+    pub max_degrees: f32,
+}
+fn sway_frequency() -> f32 {
+    3.0
+}
+fn sway_damping() -> f32 {
+    0.3
+}
+fn sway_max() -> f32 {
+    4.0
+}
+impl TurretSway {
+    pub fn valid(&self) -> bool {
+        self.response.is_finite()
+            && (0. ..=0.1).contains(&self.response)
+            && self.frequency.is_finite()
+            && (0.2..=20.).contains(&self.frequency)
+            && self.damping.is_finite()
+            && (0. ..=2.).contains(&self.damping)
+            && self.max_degrees.is_finite()
+            && (0. ..=30.).contains(&self.max_degrees)
+    }
+}
+/// A free-orbit driver camera ([`VehicleCamera::orbit`]): it sits
+/// `max_dist` from a pivot over the vehicle's box center, swung round by the
+/// driver's look (its yaw and pitch, in the world for a `toward_look`
+/// vehicle), and looks at the pivot. Looking down lifts it overhead, looking
+/// up lowers it toward the ground; the same ground and wall check as the
+/// chase camera keeps it out of both.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CameraOrbit {
+    /// Lowest the camera swings, degrees of elevation over the pivot
+    /// (negative is below it, looking up at the vehicle).
+    pub min_pitch: f32,
+    /// Highest it swings, degrees (90 is straight overhead, looking down).
+    pub max_pitch: f32,
+    /// The pivot's height over the box center, units: the camera looks at
+    /// a point this far above the vehicle's middle.
+    #[serde(default)]
+    pub height: f32,
+    /// How far the camera trails the vehicle's motion, seconds: the pivot
+    /// follows the vehicle like a weight on a spring, a 0.1 lag closing
+    /// about 63% of the gap each tenth of a second. 0 follows exactly.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub lag: f32,
+}
+impl CameraOrbit {
+    /// The elevation range in radians, low then high.
+    pub fn pitch_range(&self) -> (f32, f32) {
+        (self.min_pitch.to_radians(), self.max_pitch.to_radians())
+    }
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Definition {
@@ -500,6 +574,11 @@ pub struct Definition {
     pub attachment_collision_hulls: Vec<Vec<[f32; 3]>>,
     pub attachment_mount: Option<Transform>,
     pub attachment_fallback_seat: Option<Transform>,
+    /// The turret (`attachment_model`) sways on a spring as the vehicle
+    /// speeds up, brakes, turns and bounces. Drawn only; aim and shots
+    /// are unchanged. Left out, the turret sits rigid, as in v20.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub turret_sway: Option<TurretSway>,
     pub collision_hulls: Vec<Vec<[f32; 3]>>,
     pub bounds_min: [f32; 3],
     pub bounds_max: [f32; 3],
@@ -1145,7 +1224,19 @@ impl Pack {
                     && c.lag >= 0.
                     && c.decay >= 0.
                     && d.look_limits.iter().all(|v| (0. ..=1.).contains(v))
-                    && d.look_limits[0] <= d.look_limits[1],
+                    && d.look_limits[0] <= d.look_limits[1]
+                    && c.orbit.is_none_or(|o| {
+                        o.min_pitch.is_finite()
+                            && o.max_pitch.is_finite()
+                            && o.height.is_finite()
+                            && -89. <= o.min_pitch
+                            && o.min_pitch <= o.max_pitch
+                            && o.max_pitch <= 89.
+                            && o.height.abs() <= 20.
+                            && o.lag.is_finite()
+                            && (0. ..=2.).contains(&o.lag)
+                    })
+                    && d.turret_sway.is_none_or(|s| s.valid()),
                 "invalid camera or look limits"
             );
             ensure!(

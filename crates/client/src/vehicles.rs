@@ -118,6 +118,16 @@ fn threaded<'a>(
         .collect()
 }
 
+/// A pitch across `range` (low, high radians, up positive): 0 at the
+/// highest, 1 at the lowest, as v20's `look` clip runs.
+pub fn seat_aim_phase(range: [f32; 2], pitch: f32) -> f32 {
+    let span = range[1] - range[0];
+    if span.is_nan() || span <= 1e-4 || !pitch.is_finite() {
+        return 0.5;
+    }
+    ((range[1] - pitch) / span).clamped(0.0, 1.0)
+}
+
 /// Draws of a model at `transform`: the model itself plus, for a gunner
 /// model, its barrel parts posed by the `look` clip at this pitch.
 fn posed<'a>(
@@ -580,9 +590,66 @@ pub struct ClientVehicles {
     /// Each vehicle's middle in its own frame, the point openings carry it
     /// by (learned in `prepare`, which knows its definition).
     middles: BTreeMap<u64, Vec3>,
+    /// Each swaying turret's spring (`Definition::turret_sway`).
+    sways: BTreeMap<u64, TurretSpring>,
     /// Bodies as they collide ([`bri_vehicles::body_shape`]), by definition
     /// and scale: what shoves this client's debris.
     shapes: std::sync::Mutex<BodyShapes>,
+}
+/// A turret's sway: its tip (pitch about the vehicle's right, roll about
+/// its forward, radians) and how fast each changes, with the vehicle's
+/// velocity and clock when last stepped.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct TurretSpring {
+    pub tip: [f32; 2],
+    rate: [f32; 2],
+    last: Option<(f64, Vec3)>,
+}
+impl TurretSpring {
+    /// Step to `clock` (seconds) with the vehicle at `velocity` (world)
+    /// turned by `rotation`.
+    pub fn step(
+        &mut self,
+        sway: &bri_vehicles::schema::TurretSway,
+        clock: f64,
+        velocity: Vec3,
+        rotation: Quat,
+    ) {
+        let Some((then, before)) = self.last.replace((clock, velocity)) else {
+            return;
+        };
+        let dt = (clock - then) as f32;
+        if dt.is_nan() || dt <= 1e-4 || !velocity.is_finite() {
+            return;
+        }
+        let dt = dt.min(0.1);
+        // The vehicle's acceleration in its own frame (x right, y up, z back).
+        let accel = rotation.inverse() * (velocity - before) / dt;
+        // Speeding up (toward -z) tips the turret back: up about +x; a turn
+        // to the right (+x) leans it left; a bump up presses it down.
+        let push = [
+            (-accel.z - accel.y) * sway.response,
+            accel.x * sway.response,
+        ];
+        let w = std::f32::consts::TAU * sway.frequency;
+        let max = sway.max_degrees.to_radians();
+        // Small sub-steps keep a stiff spring stable at low frame rates.
+        let steps = (dt * w / 0.2).ceil().clamped(1.0, 16.0) as usize;
+        let h = dt / steps as f32;
+        for _ in 0..steps {
+            for ((tip, rate), push) in self.tip.iter_mut().zip(&mut self.rate).zip(push) {
+                *rate += (w * w * (push - *tip) - 2.0 * sway.damping * w * *rate) * h;
+                *tip = (*tip + *rate * h).clamped(-max, max);
+            }
+        }
+        if !self.tip.iter().chain(&self.rate).all(|v| v.is_finite()) {
+            *self = Self::default();
+        }
+    }
+    /// The tip as a rotation in the turret's frame.
+    pub fn rotation(&self) -> Quat {
+        Quat::from_rotation_x(self.tip[0]) * Quat::from_rotation_z(self.tip[1])
+    }
 }
 type BodyShapes = BTreeMap<(String, u32), Option<(rapier3d::prelude::SharedShape, Vec3)>>;
 /// How far the driven vehicle is drawn from its extrapolated newest pose:
@@ -844,6 +911,18 @@ impl ClientVehicles {
                 .map(|at| body.transform_point3(at))
         })
     }
+    /// How far seat `seat`'s gun aims across its pitch range as drawn, 0 at
+    /// its highest to 1 at its lowest (`Definition::look_pitch`), for a
+    /// gunner's body to bend with (`AvatarAnimationInput::seat_aim`). None
+    /// for any other seat, and on a broken turret.
+    pub fn seat_aim(&self, assets: &VehicleAssets, info: &VehicleInfo, seat: usize) -> Option<f32> {
+        let frame = self.frames.get(&info.id)?;
+        let d = assets.definition(&info.definition)?;
+        if d.weapon_seat() != Some(seat) || info.turret_broken || d.is_actor() {
+            return None;
+        }
+        Some(seat_aim_phase(d.look_pitch, frame.turret_aim[1]))
+    }
     /// Refresh per-model instance lists (chassis, wheels, turrets).
     pub fn prepare(&mut self, assets: &mut VehicleAssets, infos: &BTreeMap<u64, VehicleInfo>) {
         let VehicleAssets {
@@ -859,6 +938,7 @@ impl ClientVehicles {
             model.clips.clear();
         }
         self.straddles.clear();
+        self.sways.retain(|id, _| infos.contains_key(id));
         for (id, frame) in &self.frames {
             let Some(info) = infos.get(id) else { continue };
             let Some(d) = index.get(&info.definition).map(|i| &pack.definitions[*i]) else {
@@ -932,9 +1012,14 @@ impl ClientVehicles {
             if let (Some(model), Some(mount)) = (&d.attachment_model, &d.attachment_mount)
                 && !info.turret_broken
             {
-                let local =
+                let mut local =
                     to_transform(Vec3::from(mount.position), Quat::from_array(mount.rotation))
                         * Mat4::from_rotation_y(frame.turret_aim[0]);
+                if let Some(sway) = &d.turret_sway {
+                    let spring = self.sways.entry(*id).or_default();
+                    spring.step(sway, self.clock / TICK_RATE, frame.velocity, frame.rotation);
+                    local *= Mat4::from_quat(spring.rotation());
+                }
                 push(model, body * local, tint);
             }
         }
@@ -1819,6 +1904,40 @@ pub(crate) mod tests {
         assert_eq!(draw(None), 0, "drawn from the host's poses");
         assert!(draw(Some(1)) > 0, "guessed ahead, it is pulled back");
     }
+    #[test]
+    fn a_gunners_aim_runs_from_the_highest_to_the_lowest_pitch() {
+        assert_eq!(seat_aim_phase([-0.5, 1.0], 1.0), 0.0);
+        assert_eq!(seat_aim_phase([-0.5, 1.0], -0.5), 1.0);
+        assert!((seat_aim_phase([-0.5, 1.0], 0.25) - 0.5).abs() < 1e-6);
+        assert_eq!(seat_aim_phase([-0.5, 1.0], 3.0), 0.0);
+        assert_eq!(seat_aim_phase([0.0, 0.0], 0.3), 0.5);
+    }
+
+    #[test]
+    fn a_turret_tips_back_as_the_vehicle_speeds_up_and_settles() {
+        let sway = bri_vehicles::schema::TurretSway {
+            response: 0.01,
+            frequency: 3.0,
+            damping: 0.3,
+            max_degrees: 4.0,
+        };
+        let mut spring = TurretSpring::default();
+        let mut most: f32 = 0.0;
+        // 0.5 s pulling 10 u/s² forward (-Z), then cruising.
+        for i in 0..=180 {
+            let t = i as f64 / 60.0;
+            let speed = (t.min(0.5) * 10.0) as f32;
+            spring.step(&sway, t, Vec3::NEG_Z * speed, Quat::IDENTITY);
+            most = most.max(spring.tip[0]);
+        }
+        assert!(most > 0.05, "tips back: {most}");
+        assert!(most <= 4f32.to_radians() + 1e-6);
+        assert!(
+            spring.tip[0].abs() < 0.01 && spring.tip[1] == 0.0,
+            "settled: {spring:?}"
+        );
+    }
+
     #[test]
     fn a_turret_turning_past_the_hulls_back_never_sweeps_round_the_front() {
         // The gunner turns the barrel through straight behind: the host's

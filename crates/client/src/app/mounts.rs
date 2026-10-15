@@ -20,6 +20,9 @@ pub(super) struct Mounts {
     /// This frame's seat hand holds for every vehicle rider whose seat has
     /// them, right then left.
     pub(super) rider_hands: BTreeMap<bri_world::OwnerId, [Option<Vec3>; 2]>,
+    /// This frame's aim across its range for every gunner, 0 aiming
+    /// highest to 1 lowest (`ClientVehicles::seat_aim`).
+    pub(super) rider_aims: BTreeMap<bri_world::OwnerId, f32>,
     /// This frame's first-person eye while the local player rides a vehicle
     /// or another player, or sits, from their posed `eye` node.
     pub(super) posed_eye: Option<Vec3>,

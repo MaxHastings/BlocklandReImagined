@@ -178,10 +178,21 @@ sequences carry. A clip without any (most glTF exports) keeps its own time
 unless the archetype gives `ground_speeds`, in units per second at 1x:
 `{"run": 9.0, "side": 6.0}`. Measure it as the distance one cycle's feet
 travel divided by the cycle's length.
+
+**Footsteps.** `footsteps` plays a sound each `stride` units (1.2 by
+default, scaled with the body) the body walks on the ground, picked in
+turn from the sounds for the surface kind under its feet (see Making maps,
+`bri_surface`), or `default`'s: `"footsteps": {"stride": 1.5, "sounds":
+{"default": ["mymod:sound/dirt1", "mymod:sound/dirt2"], "metal":
+["mymod:sound/metal1"]}}`. Bricks are `brick`. Each client plays them; nothing is sent.
 `look.animations` maps roles to the body's own clips: `idle`, `run`,
 `back`, `side`, `crouch`, `crouch_run`, `crouch_back`, `crouch_side`,
 `jump`, `fall`, `sit`, `aim_right`, `aim_left`, `aim_both`,
-`look`, `head_up`, `head_side`, `swim` and `death`. Unnamed roles use a clip of the
+`look`, `head_up`, `head_side`, `seat_aim`, `swim` and `death`. `seat_aim`
+is a seated gunner's pose from aiming the gun at its highest (the clip's
+start) to its lowest (its end): it holds at the gun's pitch across the
+vehicle's `look_pitch` range in place of `look`, so the whole seated body,
+knees included, bends with the gun. Unnamed roles use a clip of the
 Blockhead's name if the model has one, then a fallback (`back` runs `run`
 reversed, `fall` plays `jump`, `sit` plays `idle`), and a role with none
 leaves the body in its bind pose for that layer. The client names what a
@@ -218,8 +229,12 @@ and `crates/client/tests/body_attachments_render.rs`.
   on the ground; it eases in and out with speed.
 - `sway` makes the held weapon trail the look by `lag` of each turn (0 to
   1), never more than `max_degrees`, settling at `settle` per second, and
-  bob against the camera by `bob` times the camera's bob. Client code
-  drawing its own first-person model reads the same sway from `view`.
+  bob against the camera by `bob` times the camera's bob. `sway.walk`
+  (`height`, `side`, `stride`, as `bob`) gives the weapon its own bob on
+  screen, so the gun can bob while the view barely moves, as in Halo CE:
+  `"sway": { "lag": 0.5, "walk": { "height": 0.03, "side": 0.025, "stride": 3 } }`
+  with no camera `bob`. Client code drawing its own first-person model
+  reads the same sway from `view`.
 - `third_person` puts the on-foot chase camera's pivot over a shoulder
   (`side`, negative for the left) and higher (`height`); its distance is
   still `camera_distance`.
@@ -377,6 +392,8 @@ engine changes. The fields that decide how it flies and looks:
 | `steering` | `strafe_rate`, and `auto_return`, `auto_return_rate`, `auto_return_max_speed`: whether steering drifts back to straight | `steeringStrafeSteeringRate`, `steeringUseAutoReturn`, `steeringAutoReturnRate`, `steeringAutoReturnMaxSpeed` |
 | `wheels[].steering`, `wheels[].powered` | how far each wheel turns (1 fully, negative the other way) and whether it drives | `setWheelSteering`/`setWheelPowered` in `onAdd`, else v20's table by wheel count |
 | `steering.toward_look` | the driver steers by looking: the wheels turn the hull toward the driver's free look and ease off to arrive (Halo's Warthog); a bot drives it the same way. Off: v20's mouse or strafe steering | none (new) |
+| `camera.orbit` | the driver's third-person camera orbits the vehicle with the mouse: `min_pitch` and `max_pitch` (degrees of elevation, -89 to 89; looking down raises it), `height` (the pivot over the box centre) and `lag` (seconds it trails the vehicle's motion). The ground and wall check keeps it out of both | none (new) |
+| `turret_sway` | the turret (`attachment_model`) tips on a spring against the vehicle's acceleration: `response` (radians per unit/s²), `frequency` (Hz, 3), `damping` (0.3), `max_degrees` (4). Drawn only | none (new) |
 | `steering.speed_lock` | the share (0 to 1) of `max_steering` left at `max_speed`, narrowing in a straight line from full lock at rest (1, the default, never narrows) | none (new) |
 | `engine_curve` | the engine's torque by speed: up to 16 `[speed share, torque share]` points (speed share 0 to 1 of `max_speed` by rising speed, torque share 0 to 4 of `engine_force`), linear between points, flat before the first and past the last, none past `max_speed`. Empty: v20's torque falling straight from full at rest to none at `max_speed` | none (new) |
 | `wheels[].rebound_damping` | damping while the spring extends, apart from `damping` while it compresses: long, soft springs that soak a landing without bouncing. 0, the default: `damping` both ways, as v20 | none (new) |

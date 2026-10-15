@@ -477,6 +477,8 @@ pub struct App {
     /// Everything uploaded to the graphics card, and the renderers that draw it.
     gpu: GpuState,
     audio: crate::audio::ClientAudio,
+    /// Each body's walk toward its next footfall sound.
+    footfalls: crate::footsteps::Footfalls,
     pub ui: Ui,
     pub content: ClientContent,
     pub controls: Controls,

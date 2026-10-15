@@ -662,6 +662,9 @@ pub(super) fn archetype(
     if let Some(v) = def.max_time_scale {
         archetype.look.max_time_scale = v;
     }
+    if let Some(v) = &def.footsteps {
+        archetype.look.footsteps = Some(v.clone());
+    }
     if let Some(v) = def.uses_items {
         archetype.uses_items = v;
     }

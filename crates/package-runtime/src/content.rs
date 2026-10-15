@@ -1745,6 +1745,10 @@ pub struct ArchetypeDef {
     /// `maxTimeScale`, 1.5).
     #[serde(default)]
     pub max_time_scale: Option<f32>,
+    /// A sound at each footfall by the surface underfoot (`stride`, and
+    /// `sounds` by surface kind with a `default`), replacing the base's.
+    #[serde(default)]
+    pub footsteps: Option<bri_content::body::Footsteps>,
     /// Its own movement rules: a `controller` this Add-On or one it
     /// depends on provides (`namespace:controller/name`).
     #[serde(default)]
@@ -1819,6 +1823,9 @@ impl ArchetypeDef {
         );
         if let Some(camera) = &self.camera {
             camera.validate()?;
+        }
+        if let Some(f) = &self.footsteps {
+            f.validate()?;
         }
         ensure!(
             self.controller.as_ref().is_none_or(|c| text(c, 160)),

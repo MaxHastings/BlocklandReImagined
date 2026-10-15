@@ -123,9 +123,10 @@ pub enum Role {
     Look,
     HeadSide,
     HeadUp,
+    SeatAim,
 }
 impl Role {
-    pub const ALL: [Role; 19] = [
+    pub const ALL: [Role; 20] = [
         Role::Idle,
         Role::Run,
         Role::Back,
@@ -145,6 +146,7 @@ impl Role {
         Role::Look,
         Role::HeadSide,
         Role::HeadUp,
+        Role::SeatAim,
     ];
     /// The role's name in an archetype's `animations`.
     pub fn name(self) -> &'static str {
@@ -168,6 +170,7 @@ impl Role {
             Role::Look => "look",
             Role::HeadSide => "head_side",
             Role::HeadUp => "head_up",
+            Role::SeatAim => "seat_aim",
         }
     }
     /// The Blockhead's clip for the role (m.dts sequence names, lower case):
@@ -193,6 +196,7 @@ impl Role {
             Role::Look => "look",
             Role::HeadSide => "headside",
             Role::HeadUp => "headup",
+            Role::SeatAim => "seataim",
         }
     }
     pub fn from_name(name: &str) -> Option<Self> {
@@ -231,6 +235,7 @@ impl Role {
             Role::Look => &[],
             Role::HeadSide => &[],
             Role::HeadUp => &[],
+            Role::SeatAim => &[],
         }
     }
     /// The way a locomotion role's clip carries the body, facing -Z (v20's
@@ -253,6 +258,7 @@ impl Role {
             Role::Look => "it does not look up and down",
             Role::HeadSide => "its head does not turn in free look",
             Role::HeadUp => "its head does not tilt under a pack",
+            Role::SeatAim => "a seated gunner bends only with its `look` clip",
             Role::Swim => "it swims in its locomotion pose",
             _ => "that layer is left out",
         }
@@ -440,5 +446,49 @@ mod tests {
         };
         assert!(bad.validate().is_err());
         assert!(validate_animations(&[("dance".into(), "x".into())].into()).is_err());
+    }
+}
+
+/// An archetype's `footsteps`: a sound at each footfall while the body
+/// walks on the ground, picked by the surface under it
+/// (`crate::surface`). Played on each client; nothing is sent.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Footsteps {
+    /// Ground covered between footfalls, units at scale 1.
+    #[serde(default = "footstep_stride")]
+    pub stride: f32,
+    /// Sound ids (the Add-On's sounds) for each surface kind, one picked
+    /// in turn at each step; `default` plays on any kind not listed.
+    pub sounds: BTreeMap<String, Vec<String>>,
+}
+fn footstep_stride() -> f32 {
+    1.2
+}
+impl Footsteps {
+    pub fn validate(&self) -> Result<()> {
+        ensure!(
+            self.stride.is_finite() && (0.1..=20.0).contains(&self.stride),
+            "footsteps stride must be 0.1 to 20"
+        );
+        ensure!(
+            self.sounds.len() <= 64
+                && self.sounds.iter().all(|(kind, ids)| {
+                    crate::surface::valid_name(kind)
+                        && ids.len() <= 16
+                        && ids.iter().all(|id| {
+                            !id.is_empty() && id.len() <= 160 && !id.chars().any(char::is_control)
+                        })
+                }),
+            "footsteps name up to 64 surface kinds, each with up to 16 sound ids"
+        );
+        Ok(())
+    }
+    /// The sounds for `kind`, else `default`'s.
+    pub fn sounds_for(&self, kind: &str) -> &[String] {
+        self.sounds
+            .get(kind)
+            .or_else(|| self.sounds.get(crate::surface::DEFAULT))
+            .map_or(&[], Vec::as_slice)
     }
 }
