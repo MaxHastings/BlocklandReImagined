@@ -248,6 +248,7 @@ impl App {
     #[allow(clippy::too_many_arguments)]
     pub(super) fn update_actor_effects(
         actor_effects: &mut crate::actor_effects::ActorEffects,
+        shells: &mut crate::weapon_debris::WeaponDebris,
         assets: &crate::avatar::AvatarAssets,
         avatars: &BTreeMap<bri_world::OwnerId, crate::avatar::AvatarMesh>,
         vehicles: &crate::vehicles::ClientVehicles,
@@ -396,7 +397,25 @@ impl App {
                 .map(|(owner, orb)| (*owner, Vec3::from(orb.eye)))
                 .collect(),
         );
-        actor_effects.advance(elapsed, pose, &jets, &burning, &lights)
+        actor_effects.advance(elapsed, pose, &jets, &burning, &lights)?;
+        // Casings a vehicle's gun threw leave from where it fires, carried
+        // on with the vehicle.
+        for ejected in actor_effects.take_ejected() {
+            let Some(at) = pose(ejected.anchor) else {
+                continue;
+            };
+            let carried = match ejected.anchor {
+                crate::actor_effects::Anchor::Muzzle { vehicle }
+                | crate::actor_effects::Anchor::Vehicle { vehicle } => {
+                    vehicles.frame(vehicle).map_or(Vec3::ZERO, |f| f.velocity)
+                }
+                crate::actor_effects::Anchor::Actor { actor, .. } => presented
+                    .get(&actor)
+                    .map_or(Vec3::ZERO, |p| Vec3::from(p.velocity)),
+            };
+            shells.eject(&ejected.image, at, carried)?;
+        }
+        Ok(())
     }
     pub(super) fn reset_weapon_effect_session(
         &mut self,

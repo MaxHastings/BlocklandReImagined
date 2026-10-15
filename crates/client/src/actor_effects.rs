@@ -438,8 +438,19 @@ pub struct ActorEffects {
     /// The first-person player whose jets stay out of their own eye but
     /// show in mirrors and portals (`set_own_eye`).
     own_eye: Option<u64>,
+    /// Casings mounted images threw this frame (`stateEjectShell`), for
+    /// the host to place at their anchor (`take_ejected`).
+    ejected: Vec<Ejected>,
     cursor: u64,
     pub diagnostics: Diagnostics,
+}
+
+/// A casing an image mounted on a vehicle or body threw as it entered a
+/// state with `stateEjectShell`: its casing is the image's.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Ejected {
+    pub anchor: Anchor,
+    pub image: String,
 }
 
 impl ActorEffects {
@@ -471,6 +482,7 @@ impl ActorEffects {
             orbs: BTreeMap::new(),
             orb_eyes: Vec::new(),
             own_eye: None,
+            ejected: Vec::new(),
             cursor: 0,
             diagnostics: Diagnostics::default(),
         })
@@ -511,6 +523,7 @@ impl ActorEffects {
     /// A new session starts after its checkpoint; earlier one-shots never replay.
     pub fn reset(&mut self, checkpoint_cursor: u64) {
         self.world.teardown();
+        self.ejected.clear();
         self.shakes.clear();
         self.images.clear();
         self.one_shots.clear();
@@ -883,6 +896,11 @@ impl ActorEffects {
         }
     }
 
+    /// The casings mounted images threw since the last call.
+    pub fn take_ejected(&mut self) -> Vec<Ejected> {
+        std::mem::take(&mut self.ejected)
+    }
+
     fn vehicle_effect(&mut self, vehicle: u64, effect: &str, active: bool) {
         if effect.eq_ignore_ascii_case("vehicleSplash") {
             for emitter in VEHICLE_SPLASH {
@@ -948,6 +966,13 @@ impl ActorEffects {
             return;
         };
         playback.state = state;
+        // A gun on a vehicle throws its casings as a held one does.
+        if s.eject_shell && !playback.image.casing.is_empty() && self.ejected.len() < 64 {
+            self.ejected.push(Ejected {
+                anchor: playback.anchor,
+                image: playback.image.id.clone(),
+            });
+        }
         if s.emitter.is_empty() || s.emitter_seconds <= 0.0 {
             return;
         }
@@ -971,19 +996,37 @@ impl ActorEffects {
             }
             return;
         }
-        let started = world
-            .start_emitter(
+        // An Add-On's explosion (its emitters and a light for a moment,
+        // a muzzle flash that lights the ground) plays whole.
+        let composite = world
+            .pack()
+            .manifest
+            .composites
+            .iter()
+            .any(|c| c.id == emitter);
+        let started = if composite {
+            world.play_composite(
                 &emitter,
                 SourceTransform::default(),
                 SourceOptions::default(),
             )
-            .and_then(|h| world.set_remaining_lifetime(h, seconds).map(|_| h));
+        } else {
+            world
+                .start_emitter(
+                    &emitter,
+                    SourceTransform::default(),
+                    SourceOptions::default(),
+                )
+                .and_then(|h| world.set_remaining_lifetime(h, seconds).map(|_| vec![h]))
+        };
         match started {
-            Ok(handle) => playback.sources.push(Source {
-                emitter,
-                handle,
-                expires,
-            }),
+            Ok(handles) => playback
+                .sources
+                .extend(handles.into_iter().map(|handle| Source {
+                    emitter: emitter.clone(),
+                    handle,
+                    expires,
+                })),
             Err(_) => {
                 self.diagnostics.capacity_rejections =
                     self.diagnostics.capacity_rejections.saturating_add(1);

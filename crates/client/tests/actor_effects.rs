@@ -777,3 +777,98 @@ fn each_hand_that_shot_kicks_once() {
     );
     assert_eq!(rays[0].from, None, "a ray leaves the muzzle");
 }
+
+/// A gun on a vehicle fires like a held one: a state that ejects a shell
+/// throws the image's casing from where the gun is, and a state emitter
+/// naming an Add-On explosion plays it whole, its light flashing on the
+/// ground for the explosion's lifetime.
+#[test]
+fn a_vehicle_gun_throws_casings_and_flashes_its_explosion_light() -> Result<()> {
+    let flash = "addon:explosion/flash";
+    let pack = effects();
+    let mut library = pack.library.clone();
+    library.lights.push(Light {
+        id: "addon:light/flash".into(),
+        name: String::new(),
+        enabled: true,
+        color: [1., 0.9, 0.5],
+        brightness: 1.,
+        radius: 8.,
+        color_curves: None,
+        brightness_curve: None,
+        radius_curve: None,
+        flare: None,
+    });
+    library.emitters.push(emitter("addon:emitter/flash", 0.05));
+    let mut manifest = pack.manifest.clone();
+    manifest.composites.push(bri_fx_runtime::pack::Composite {
+        id: flash.into(),
+        lifetime: 0.1,
+        emitters: vec!["addon:emitter/flash".into()],
+        light: Some("addon:light/flash".into()),
+        burst: None,
+    });
+    let pack = EffectsPack::from_parts(
+        library,
+        manifest,
+        vec![TextureImage {
+            id: "texture".into(),
+            width: 1,
+            height: 1,
+            rgba: vec![255; 4],
+        }],
+    )?;
+    let mut weapons = (*weapons()).clone();
+    let (_, mut gun) = image(
+        "unused",
+        vec![
+            State {
+                eject_shell: true,
+                ..state("Fire", 12, flash, 0.1, Some(1))
+            },
+            state("Done", 0, "", 0., None),
+        ],
+    );
+    gun.id = "addon:image/chaingun".into();
+    gun.casing = "addon:debris/casing".into();
+    weapons.images.insert(gun.id.clone(), gun);
+    let mut fx = ActorEffects::new(pack, Arc::new(weapons), Default::default())?;
+    fx.cue(&cue(
+        1,
+        CueKind::VehicleEffect {
+            vehicle: 9,
+            effect: "addon:image/chaingun".into(),
+            active: true,
+        },
+    ));
+    let muzzle = Mat4::from_translation(Vec3::new(4., 1., 2.));
+    let at_muzzle = |a| matches!(a, Anchor::Muzzle { vehicle: 9 }).then_some(muzzle);
+    fx.advance(0.02, at_muzzle, &[], &[], &[])?;
+    let ejected = fx.take_ejected();
+    assert_eq!(ejected.len(), 1, "one casing per shell-ejecting state");
+    assert_eq!(ejected[0].anchor, Anchor::Muzzle { vehicle: 9 });
+    assert_eq!(ejected[0].image, "addon:image/chaingun");
+    assert!(fx.take_ejected().is_empty(), "taken once");
+    let camera = bri_fx_runtime::Camera {
+        view_projection: Mat4::IDENTITY,
+        position: Vec3::new(4., 1., 10.),
+        right: Vec3::X,
+        up: Vec3::Y,
+    };
+    let lights = fx.world().snapshot(&camera).lights;
+    assert_eq!(lights.len(), 1, "the explosion's light shines");
+    assert!(Vec3::from(lights[0].position).distance(Vec3::new(4., 1., 2.)) < 1e-4);
+    for _ in 0..5 {
+        fx.advance(0.05, at_muzzle, &[], &[], &[])?;
+    }
+    assert!(
+        fx.world().snapshot(&camera).lights.is_empty(),
+        "and goes out with it"
+    );
+    assert!(
+        fx.diagnostics.messages.is_empty(),
+        "{:?}",
+        fx.diagnostics.messages
+    );
+    Ok(())
+}

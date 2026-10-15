@@ -1482,6 +1482,7 @@ impl App {
                 .set_own_eye(own_jets_hidden.then_some(view.owner));
             let actors = Self::update_actor_effects(
                 &mut self.fx.actor_effects,
+                &mut self.fx.weapon_shells,
                 &self.avatar.avatar_assets,
                 &self.avatar.avatars,
                 &self.vehicles,

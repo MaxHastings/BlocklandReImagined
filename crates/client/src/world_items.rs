@@ -1,9 +1,9 @@
 //! Shared native item geometry projected from authoritative item/weapon state.
 //! No source script fields, physics authority, window or gameplay input.
 use crate::items::{Appearance, ItemAssets, ItemMesh};
-use bri_content::shape::LiveValues;
 use anyhow::{Context, Result, ensure};
 use bri_console::Clamp;
+use bri_content::shape::LiveValues;
 use bri_render::scene::{
     ClipPlane, GpuInstances, GpuScene, KEEP_ALL, MeshBatch, SceneRenderer, SceneTransform,
     SceneVertex,
@@ -604,8 +604,7 @@ impl WorldItems {
                     .is_some_and(|(skin, _)| skin.energy_states.iter().any(|s| s == state_name));
                 (id, energized)
             });
-            let mut pose_key =
-                self.image_pose(owner, hand, image_id, state_name, frame.seconds)?;
+            let mut pose_key = self.image_pose(owner, hand, image_id, state_name, frame.seconds)?;
             if frame.local_owner == Some(owner) && usize::from(hand) < bri_weapons::HAND_SLOTS {
                 pose_key.live = frame.held_values;
             }
