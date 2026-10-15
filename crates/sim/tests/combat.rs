@@ -74,7 +74,7 @@ fn suicide_death_message_score_and_click_respawn() {
     assert!(
         notices
             .iter()
-            .any(|(o, n)| *o == a && matches!(n, Notice::Chat(t) if t == "Bravo"))
+            .any(|(o, n)| *o == a && matches!(n, Notice::Kill(k) if k.line == "Bravo"))
     );
     assert!(s.command(b, 3, Command::Suicide).is_err());
     assert!(s.command(b, 4, Command::Respawn).is_err(), "respawn delay");
@@ -124,7 +124,7 @@ fn players_outside_minigames_cannot_be_hurt_and_falls_follow_rules() {
     let chat = s.take_private_notices();
     assert!(
         chat.iter()
-            .any(|(_, n)| matches!(n, Notice::Chat(t) if t == "Alpha"))
+            .any(|(_, n)| matches!(n, Notice::Kill(k) if k.line == "Alpha"))
     );
 
     // Outside a mini-game the host's Falling Damage decides; with it off,
