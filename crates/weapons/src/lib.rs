@@ -773,6 +773,12 @@ pub struct Image {
     /// Blockhead's (`lhand`, `rhand`, `lhook`, `rhook`). Up to 16 names.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub hide_nodes: Vec<String>,
+    /// Help aiming at bodies the holder could hurt, as console shooters
+    /// give a thumbstick: shots bend onto a body near the aim, and the
+    /// holder's own game slows their look while the aim is on one. None
+    /// for v20's unaided aim.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub aim_assist: Option<AimAssist>,
     /// Held up with both arms (`armReadyBoth`), as `onMount`'s
     /// `%obj.playThread(2, armReadyBoth)` did, not with the mount hand's
     /// arm alone.
@@ -1657,6 +1663,34 @@ pub fn is_image_command(c: &str) -> bool {
         })
 }
 
+/// [`Image::aim_assist`].
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AimAssist {
+    /// A shot turns onto the middle of the nearest such body whose middle
+    /// is within this many radians of the aim (0 to 0.35), in sight,
+    /// before its spread. 0 bends nothing.
+    #[serde(default)]
+    pub angle: f32,
+    /// How far away a body is helped, in units at the holder's scale
+    /// (1 to 1000).
+    pub range: f32,
+    /// Look speed's multiple while the aim is on such a body within
+    /// range (0.1 to 1); 1 does not slow it.
+    #[serde(default = "full_speed")]
+    pub slowdown: f32,
+}
+fn full_speed() -> f32 {
+    1.0
+}
+impl AimAssist {
+    pub fn valid(&self) -> bool {
+        (0.0..=0.35).contains(&self.angle)
+            && (1.0..=1000.0).contains(&self.range)
+            && (0.1..=1.0).contains(&self.slowdown)
+    }
+}
+
 /// What v20 Add-Ons scripted in `onFire` with the common spread code
 /// (`%shellcount`, `%spread`, `%obj.setVelocity(... getEyeVector() * -n)`):
 /// the recoil first, then each projectile's velocity turned by its own
@@ -1684,6 +1718,14 @@ pub struct Shot {
     /// Units per second above which the shooter counts as moving, 0 to 50.
     #[serde(default = "default_moving_speed")]
     pub moving_speed: f32,
+    /// The spread while the shooter crouches and is not moving, when it is
+    /// tighter than the spread they would have standing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub crouched_spread: Option<f32>,
+    /// The spread while the shooter is off the ground (jumping, falling)
+    /// and not riding anything, in place of every other.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub airborne_spread: Option<f32>,
     /// The projectile a shot on the move flies in place of the image's
     /// (Tier+Tactical's Sport Rifle fires a weaker round when not still),
     /// of this pack or one it depends on.
@@ -1834,6 +1876,8 @@ impl Shot {
         recoil_vertical: None,
         moving_spread: None,
         moving_speed: 0.1,
+        crouched_spread: None,
+        airborne_spread: None,
         moving_projectile: None,
         rested: None,
         hitscan: None,
@@ -1864,6 +1908,26 @@ impl Shot {
         match self.rested_at(speed, idle_ticks) {
             Some(r) => r.spread,
             None => self.spread,
+        }
+    }
+    /// [`Self::spread_for`] for a holder crouched or not and on the ground
+    /// (or riding) or not: `airborne_spread` off the ground, else
+    /// `crouched_spread` crouched and not moving, when tighter.
+    pub fn spread_in(
+        &self,
+        speed: f32,
+        idle_ticks: Option<u64>,
+        crouched: bool,
+        grounded: bool,
+    ) -> f32 {
+        if !grounded && let Some(airborne) = self.airborne_spread {
+            return airborne;
+        }
+        let spread = self.spread_for(speed, idle_ticks);
+        let moving = self.moving_spread.is_some() && speed > self.moving_speed;
+        match self.crouched_spread {
+            Some(crouched_spread) if crouched && !moving => crouched_spread.min(spread),
+            _ => spread,
         }
     }
     /// The projectile a shot flies in place of the image's, if any: the
@@ -2239,6 +2303,11 @@ pub struct ProjectileDef {
     /// as v20's own projectiles.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub decal: Option<Decal>,
+    /// It sticks to any player or vehicle it hits, whatever the speed or
+    /// angle, and rides along with it (a sticky grenade). Off: v20's
+    /// sticking, in place, only to what it meets fast and steep enough.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub stick_to_bodies: bool,
     /// The explosion effect it makes by what it lands on, in place of
     /// `explosion.effect`: sparks off a vehicle, dust off the ground.
     /// Effects only: the blast's damage and push stay `explosion`'s.
@@ -2513,6 +2582,7 @@ impl Default for ProjectileDef {
             sport_hit: None,
             turns_into: None,
             decal: None,
+            stick_to_bodies: false,
             impacts: Impacts::default(),
         }
     }
@@ -3056,6 +3126,8 @@ impl Pack {
                     && (0.0..=100.0).contains(&s.recoil)
                     && s.recoil_vertical.is_none_or(|v| (0.0..=100.0).contains(&v))
                     && s.moving_spread.is_none_or(|m| (0.0..=1.0).contains(&m))
+                    && s.crouched_spread.is_none_or(|m| (0.0..=1.0).contains(&m))
+                    && s.airborne_spread.is_none_or(|m| (0.0..=1.0).contains(&m))
                     && (0.0..=50.0).contains(&s.moving_speed)
                     && (0.1..=10.0).contains(&s.scale)
                     && s.kick.is_none_or(|k| {
@@ -3105,6 +3177,10 @@ impl Pack {
                  moving_speed 0 to 50, scale 0.1 to 10, rested after 1 to 1200 ticks, kick amplitude 0 to 1, \
                  frequency 0.1 to 30, seconds 0.05 to 2, radius 0 to 100, a lob within its limits and \
                  without hitscan"
+            );
+            ensure!(
+                image.aim_assist.as_ref().is_none_or(AimAssist::valid),
+                "Invalid image aim_assist {id}: angle 0 to 0.35 radians, range 1 to 1000, slowdown 0.1 to 1"
             );
             ensure!(
                 image.state_shots.len() <= 8

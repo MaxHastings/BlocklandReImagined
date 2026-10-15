@@ -927,3 +927,24 @@ fn a_ricochet_out_of_range_is_refused() {
         .to_string();
     assert!(error.contains("ricochet"), "{error}");
 }
+
+#[test]
+fn crouching_steadies_and_jumping_throws_the_spread() {
+    let shot = Shot {
+        spread: 0.02,
+        moving_spread: Some(0.05),
+        crouched_spread: Some(0.005),
+        airborne_spread: Some(0.1),
+        ..Shot::SINGLE
+    };
+    assert_eq!(shot.spread_in(0.0, Some(1), false, true), 0.02, "standing");
+    assert_eq!(shot.spread_in(0.0, Some(1), true, true), 0.005, "crouched");
+    assert_eq!(
+        shot.spread_in(5.0, Some(1), true, true),
+        0.05,
+        "crouch-walking is moving"
+    );
+    assert_eq!(shot.spread_in(0.0, Some(1), true, false), 0.1, "in the air");
+    // Without them, as before.
+    assert_eq!(Shot::SINGLE.spread_in(0.0, None, true, false), 0.0);
+}

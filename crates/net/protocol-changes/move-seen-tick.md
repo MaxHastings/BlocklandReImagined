@@ -1,0 +1,1 @@
+`MoveInput` gains `seen`: the host tick the client showed other players at when it made the move. The host meets that player's aim rays and hitscan shots with other bodies where they were then (lag compensation, at most 60 ticks back).

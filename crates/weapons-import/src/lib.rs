@@ -389,6 +389,7 @@ pub fn lower(definitions: Vec<Definition>) -> Result<Pack> {
             sport_hit: None,
             turns_into: None,
             decal: None,
+            stick_to_bodies: false,
             impacts: Default::default(),
         };
         pack.projectiles.insert(id, p);
@@ -553,6 +554,7 @@ pub fn lower(definitions: Vec<Definition>) -> Result<Pack> {
                 crosshair: true,
                 follow_arm: false,
                 hide_nodes: Vec::new(),
+                aim_assist: None,
                 both_arms: false,
                 paint_tint: false,
                 left_image: None,

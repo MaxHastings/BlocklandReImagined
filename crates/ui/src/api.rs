@@ -631,6 +631,8 @@ pub struct HudRegionDraw {
     /// Images drawn with sharp pixels.
     pub pixelated: bool,
     pub items: Vec<bri_content::hud::Item>,
+    /// A `name_tags` claim's style for the names over players' heads.
+    pub name_tags: Option<bri_content::hud::NameTagStyle>,
 }
 /// A key players can bind to a package's command in Options → Controls,
 /// from an enabled package's `binds.json`.
@@ -1512,6 +1514,13 @@ pub struct NameTag {
     /// `ShapeBase::setShapeNameColor`: white, or the player's mini-game colour.
     #[serde(default = "white_name")]
     pub color: [u8; 3],
+    /// The stock one-pixel dark outline; a HUD layout's `name_tags` may
+    /// turn it off.
+    #[serde(default = "outlined")]
+    pub outline: bool,
+}
+fn outlined() -> bool {
+    true
 }
 fn white_name() -> [u8; 3] {
     [255; 3]
@@ -1782,6 +1791,12 @@ pub enum UiUpdate {
     Caption(String),
     /// Red damage flash (`Armor::onDamage`: +delta/maxDamage*2, capped 0.75).
     DamageFlash(f32),
+    /// The screen tinted `color` (RGBA 0..1), fading over `seconds`: a
+    /// rule's `screen_flash`.
+    Flash {
+        color: [f32; 4],
+        seconds: f32,
+    },
     /// Jet energy fraction for `HUD_EnergyBar`; `None` hides it
     /// (`clientCmdShowEnergyBar`, from the datablock's `showEnergyBar`).
     Energy(Option<f32>),

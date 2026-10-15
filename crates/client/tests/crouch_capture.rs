@@ -36,6 +36,7 @@ fn player(crouched: bool) -> PlayerState {
         tether: None,
         controller: None,
         pass_group: 0,
+        posture: Default::default(),
     }
 }
 

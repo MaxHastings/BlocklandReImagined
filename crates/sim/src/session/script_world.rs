@@ -44,6 +44,7 @@ impl World for ScriptWorld<'_> {
             responses: &session.events.projectile_responses,
             truncated_targets: 0,
             shapes,
+            rewound: None,
         };
         let from = Vec3::from(from);
         let direction = Vec3::from(direction).normalize_or_zero();

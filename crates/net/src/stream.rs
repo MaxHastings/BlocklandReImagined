@@ -514,7 +514,9 @@ fn projectile_same(a: &Projectile, b: &Projectile) -> bool {
         && a.source == b.source
         && a.origin == b.origin
         && a.heading == b.heading
-        && a.position.distance(b.position) <= PROJECTILE_DRIFT
+        && a.stuck_to == b.stuck_to
+        // One riding a body is placed on it wherever that body is drawn.
+        && (a.stuck_to.is_some() || a.position.distance(b.position) <= PROJECTILE_DRIFT)
         && a.velocity.distance(b.velocity) <= PROJECTILE_DRIFT
 }
 
@@ -575,6 +577,7 @@ mod tests {
                 tether: None,
                 controller: None,
                 pass_group: 0,
+                posture: Default::default(),
             },
         }
     }
@@ -1100,6 +1103,7 @@ mod tests {
             age: 0,
             bounced: false,
             stuck: false,
+            stuck_to: None,
             origin: glam::Vec3::ZERO,
             was_thrown: false,
             paint: None,

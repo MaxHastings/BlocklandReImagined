@@ -78,6 +78,7 @@ fn pose(tick: u64, x: f32, yaw: f32) -> Pose {
             tether: None,
             controller: None,
             pass_group: 0,
+            posture: Default::default(),
         },
     }
 }
@@ -148,6 +149,7 @@ fn malformed_weapon_state_or_presentation_rejects_before_mutation() {
         age: 1,
         bounced: false,
         stuck: false,
+        stuck_to: None,
         origin: glam::Vec3::ZERO,
         was_thrown: false,
         bounces: 0,

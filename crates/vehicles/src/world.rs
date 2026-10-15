@@ -58,6 +58,10 @@ pub struct Controls {
     /// radians): where they look. A `toward_look` vehicle steers to it.
     #[serde(default)]
     pub look_yaw: f32,
+    /// The driver's look pitch in the world (up positive, radians): a
+    /// flying `toward_look` vehicle pitches its nose to it.
+    #[serde(default)]
+    pub look_pitch: f32,
     /// The driver turned `$pref::Input::UseStrafeSteering` off: a vehicle
     /// with `steeringUseStrafeSteering` is then mouse-steered too.
     pub strafe_steering_off: bool,
@@ -110,7 +114,8 @@ impl Controls {
                 self.aim_pitch,
                 self.look_delta[0],
                 self.look_delta[1],
-                self.look_yaw
+                self.look_yaw,
+                self.look_pitch
             ]
             .iter()
             .all(|x| x.is_finite()),
@@ -121,6 +126,10 @@ impl Controls {
                 .iter()
                 .all(|x| x.abs() <= std::f32::consts::PI),
             "look turn outside bounds"
+        );
+        ensure!(
+            self.look_pitch.abs() <= std::f32::consts::FRAC_PI_2,
+            "look pitch outside bounds"
         );
         ensure!(
             [
@@ -1746,7 +1755,21 @@ impl VehiclesWorld {
                 } else {
                     0.
                 };
-                v.mouse_steering = [now + (target - now).clamped(-rate, rate), 0.];
+                // A flying vehicle also pitches its nose to the look, the
+                // same way: a positive pitch steering dips the nose.
+                let pitch = v.mouse_steering[1];
+                let pitch_target = if driven && matches!(d.family, Family::Flying) {
+                    let nose = forward.y.clamped(-1., 1.).asin();
+                    let pitch_rate = world.bodies[v.body].angvel().dot(right);
+                    let unwind = pitch.abs() / (rate * 120.).max(0.01);
+                    (nose + pitch_rate * unwind - c.look_pitch).clamped(-limit, limit)
+                } else {
+                    0.
+                };
+                v.mouse_steering = [
+                    now + (target - now).clamped(-rate, rate),
+                    pitch + (pitch_target - pitch).clamped(-rate, rate),
+                ];
                 v.steering_quiet = 0;
             } else if driver {
                 let limit = lock;
@@ -2586,6 +2609,7 @@ fn actor_step(
         (0., 0.)
     };
     let input = MoveInput {
+        seen: 0,
         forward: throttle,
         right: strafe,
         yaw,

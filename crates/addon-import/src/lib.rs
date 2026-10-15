@@ -20,6 +20,7 @@ pub mod reference;
 pub mod report;
 pub mod rtb;
 pub mod source;
+pub mod v20_map;
 mod vehicle_script;
 mod weapon_fx;
 
@@ -336,6 +337,76 @@ fn check_output(opts: &Options) -> Result<()> {
     Ok(())
 }
 
+/// A Blockland map Add-On: `Map_*` with a mission (`.mis`).
+fn is_map_addon(src: &source::Source) -> bool {
+    src.name.to_ascii_lowercase().starts_with("map_")
+        && src
+            .files
+            .keys()
+            .any(|k| k.to_ascii_lowercase().ends_with(".mis"))
+}
+
+/// A map Add-On goes through the map converter ([`v20_map`]), with
+/// `--reference` as the v20 install its missions borrow from; its report
+/// names the maps it made.
+fn import_map(opts: &Options, src: &source::Source) -> Result<Report> {
+    let made = v20_map::import(&v20_map::Options {
+        input: opts.input.clone(),
+        out: opts.out.clone(),
+        v20: opts.reference.clone(),
+        mission: None,
+        // The package id every import gives an Add-On: its whole name.
+        id: Some(namespace_for(&src.name)?),
+        name: None,
+        version: opts.version.clone(),
+    })?;
+    let ns = namespace_for(&src.name)?;
+    let dir = format!("addons/{ns}");
+    let mut report = Report {
+        schema_version: REPORT_SCHEMA,
+        source: source_info(src),
+        ..Report::default()
+    };
+    report.package = PackageInfo {
+        id: ns.clone(),
+        namespace: ns.clone(),
+        version: opts.version.clone(),
+        dir: dir.clone(),
+        packages_json_entry: json!({ "id": ns, "version": opts.version, "side": "shared", "dir": dir }),
+        files: vec![],
+    };
+    report.diagnostics = made
+        .missions
+        .iter()
+        .zip(&made.map_ids)
+        .map(|(mission, map)| format!("map {map} from {mission}"))
+        .collect();
+    report.summarise();
+    // A map carries no datablocks: it converted whole or failed above.
+    report.summary.verdict = "converted".into();
+    let mut files = vec![];
+    let mut stack = vec![opts.out.clone()];
+    while let Some(d) = stack.pop() {
+        for e in std::fs::read_dir(&d)?.flatten() {
+            if e.path().is_dir() {
+                stack.push(e.path());
+            } else if let Ok(rel) = e.path().strip_prefix(&opts.out) {
+                files.push(rel.to_string_lossy().replace('\\', "/"));
+            }
+        }
+    }
+    files.push("import-report.json".into());
+    files.push("IMPORT-REPORT.md".into());
+    files.sort();
+    report.package.files = files;
+    std::fs::write(
+        opts.out.join("import-report.json"),
+        serde_json::to_vec_pretty(&report)?,
+    )?;
+    std::fs::write(opts.out.join("IMPORT-REPORT.md"), report.markdown())?;
+    Ok(report)
+}
+
 pub fn import(opts: &Options) -> Result<Report> {
     import_with(opts, &ports::Ports::builtin())
 }
@@ -344,6 +415,9 @@ pub fn import(opts: &Options) -> Result<Report> {
 pub fn import_with(opts: &Options, ports: &ports::Ports) -> Result<Report> {
     check_output(opts)?;
     let src = source::read(&opts.input)?;
+    if is_map_addon(&src) {
+        return import_map(opts, &src);
+    }
     let mut reference = match &opts.reference {
         Some(root) => Reference::load(root, &opts.core)?,
         None => Reference::core_only(&opts.core)?,
@@ -563,7 +637,10 @@ fn port_datablocks(
 }
 
 fn metadata(cx: &mut Ctx) {
-    let src = cx.src;
+    cx.report.source = source_info(cx.src);
+}
+/// What the Add-On says about itself: title, authors, listing, licence.
+fn source_info(src: &source::Source) -> SourceInfo {
     let text = |name: &str| {
         src.get(&format!("{}/{name}", src.dir()))
             .map(|f| script_text(&f.bytes))
@@ -636,7 +713,7 @@ fn metadata(cx: &mut Ctx) {
                 .map(|id| (*id).to_owned())
         });
     }
-    cx.report.source = info;
+    info
 }
 
 /// A script or text file as the importer reads it: UTF-8 (lossily) with
@@ -2363,6 +2440,7 @@ fn placeholder() -> bri_content::shape::Shape {
             detail_scale: 1.0,
             reflectance: 0.0,
             metal: None,
+            surface: None,
         }],
         animations: vec![],
     }

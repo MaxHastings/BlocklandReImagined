@@ -184,9 +184,12 @@ impl App {
         let Some(scene) = self.scene.cpu_scene.as_mut() else {
             return;
         };
-        if let Err(error) = offered.set_sky(
+        // A map Add-On's own sky lives in its own bundle.
+        let map_root = self.content.paths.maps.root(&map).ok();
+        if let Err(error) = offered.set_sky_for(
             scene,
             &map,
+            map_root,
             wanted.sky.as_deref(),
             plate.is_some() && planes.ground_shows(),
         ) {

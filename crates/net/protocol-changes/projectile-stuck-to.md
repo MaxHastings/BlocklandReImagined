@@ -1,0 +1,1 @@
+`bri_weapons::Projectile` gains `stuck_to: Option<Attached>` (serde default, skipped when empty): the player or vehicle a `stick_to_bodies` projectile rides on and its offset in that body's frame. Clients draw it on the body where they draw it; the host sends no position corrections while it rides.

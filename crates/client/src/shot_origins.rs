@@ -95,6 +95,27 @@ impl ShotOrigins {
     }
 }
 
+/// Draw each projectile stuck to a player or vehicle on that body where
+/// this client draws it (`frame`: [`bri_weapons::attach_frame`] for a
+/// player, the body's pose for a vehicle); one whose body is not drawn
+/// stays where the host last put it.
+pub fn ride_bodies<'a>(
+    shown: &mut Cow<'a, WeaponView>,
+    frame: impl Fn(bri_weapons::TargetId) -> Option<(glam::Vec3, glam::Quat)>,
+) {
+    for index in 0..shown.projectiles.len() {
+        let Some(attached) = shown.projectiles[index].stuck_to else {
+            continue;
+        };
+        if let Some(at) = frame(attached.target) {
+            let position = attached.place(at);
+            if position.is_finite() {
+                shown.to_mut().projectiles[index].position = position;
+            }
+        }
+    }
+}
+
 /// How much of the muzzle's offset is still drawn: all of it at the start,
 /// none once the shot has flown as far as the drawn line meets its path,
 /// or bounced, stuck or passed through an opening.
@@ -121,6 +142,7 @@ mod tests {
             age,
             bounced: false,
             stuck: false,
+            stuck_to: None,
             origin: Vec3::new(0.0, 2.0, 0.0),
             was_thrown: false,
             paint: None,

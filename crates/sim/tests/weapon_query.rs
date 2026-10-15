@@ -52,6 +52,7 @@ fn swept_queries_share_player_map_collision_and_radius_occlusion() {
         responses: &Default::default(),
         truncated_targets: 0,
         shapes: &[],
+        rewound: None,
     };
     let filter = Filter {
         source: ActorId(1),
@@ -130,6 +131,7 @@ fn shots_stop_at_script_moved_shapes_in_front_of_the_map() {
         responses: &responses,
         truncated_targets: 0,
         shapes,
+        rewound: None,
     };
     let filter = Filter {
         source: ActorId(1),
@@ -164,4 +166,80 @@ fn shots_stop_at_script_moved_shapes_in_front_of_the_map() {
         )
         .unwrap();
     assert_eq!(probe.target, TargetId::Map(0));
+}
+
+/// Lag compensation: an aim ray or hitscan shot meets another body where
+/// the shooter saw it (`bri_sim::rewind`); a flying projectile meets it
+/// where it is.
+#[test]
+fn an_aimed_shot_meets_a_body_where_its_shooter_saw_it() {
+    let mut sim = Simulation::new(
+        World::new("Rewind".into(), "fixture".into(), vec![[1.; 4]]),
+        Definitions::default(),
+        vec![ColliderBuilder::cuboid(20., 0.5, 20.).translation(Vector::new(0., -0.5, 0.))],
+    )
+    .unwrap();
+    let shooter = Player::spawn(
+        &mut sim.physics,
+        1,
+        Vec3::new(0., 0.05, 0.),
+        PlayerTuning::default(),
+    )
+    .unwrap();
+    let runner = Player::spawn(
+        &mut sim.physics,
+        2,
+        Vec3::new(0., 0.05, -8.),
+        PlayerTuning::default(),
+    )
+    .unwrap();
+    // The runner was 3 units to the right ten ticks ago, as the shooter's
+    // screen still shows it.
+    let mut history = bri_sim::rewind::History::default();
+    history.record(90, [(2, Vec3::new(3., 0.05, -8.))]);
+    history.record(100, [(2, Vec3::new(0., 0.05, -8.))]);
+    let bodies = [(2, runner.collider(), Vec3::new(0., 0.05, -8.))];
+    let rewound = history.rewound(100, [(1, 90)], &bodies);
+    let deny = |_: ActorId, _: TargetId| false;
+    let no_catch = |_: ActorId, _: ActorId| false;
+    let responses = Default::default();
+    let mut q = WeaponQuery {
+        simulation: &sim,
+        affect: &deny,
+        affect_radius: &deny,
+        ally: &deny,
+        catch: &no_catch,
+        responses: &responses,
+        truncated_targets: 0,
+        shapes: &[],
+        rewound: Some(&rewound),
+    };
+    let aimed = Filter {
+        source: ActorId(1),
+        projectile_age_ticks: None,
+        players: true,
+        world_only: false,
+    };
+    let eye = shooter.eye();
+    let seen = Vec3::new(3., eye.y, -8.);
+    let at_seen = q.sweep(eye, eye + (seen - eye).normalize() * 20., aimed);
+    assert_eq!(at_seen.map(|h| h.target), Some(TargetId::Actor(ActorId(2))));
+    let at_now = q.sweep(eye, eye + Vec3::NEG_Z * 20., aimed);
+    assert_ne!(at_now.map(|h| h.target), Some(TargetId::Actor(ActorId(2))));
+    // A flying projectile lives in the host's present.
+    let flying = Filter {
+        projectile_age_ticks: Some(3),
+        ..aimed
+    };
+    let now = q.sweep(eye, eye + Vec3::NEG_Z * 20., flying);
+    assert_eq!(now.map(|h| h.target), Some(TargetId::Actor(ActorId(2))));
+    // Another shooter who saw the present meets it where it is.
+    let other = Filter {
+        source: ActorId(3),
+        ..aimed
+    };
+    // (From just past the first shooter's own body.)
+    let ahead = eye + Vec3::NEG_Z * 1.5;
+    let now = q.sweep(ahead, ahead + Vec3::NEG_Z * 20., other);
+    assert_eq!(now.map(|h| h.target), Some(TargetId::Actor(ActorId(2))));
 }

@@ -155,6 +155,9 @@ pub struct Frame {
     pub velocity: Vec3,
     pub scale: f32,
     pub grounded: bool,
+    /// Crouching ([`crate::Shot::crouched_spread`]).
+    #[serde(default)]
+    pub crouched: bool,
     pub mount: Mount,
     pub horse: bool,
     pub first_person: bool,
@@ -176,6 +179,7 @@ impl Default for Frame {
             velocity: Vec3::ZERO,
             scale: 1.0,
             grounded: true,
+            crouched: false,
             mount: Mount::None,
             horse: false,
             first_person: true,
@@ -328,6 +332,10 @@ pub trait Query {
     /// The first opening of a linked brick (a portal) the move from `start`
     /// to `end` goes in through: how far along, and the rigid move that
     /// carries what went in to where it comes out.
+    /// A vehicle's body pose, for a projectile stuck to it.
+    fn vehicle_frame(&mut self, _id: u64) -> Option<(Vec3, Quat)> {
+        None
+    }
     fn passage(&mut self, _start: Vec3, _end: Vec3) -> Option<(f32, glam::Affine3A)> {
         None
     }
@@ -627,6 +635,10 @@ pub struct Projectile {
     /// The direction a stuck projectile flew in: its velocity is zero, but
     /// its model keeps pointing that way (v20 keeps the last transform).
     pub heading: Option<Vec3>,
+    /// The player or vehicle a stuck projectile rides on
+    /// ([`crate::ProjectileDef::stick_to_bodies`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stuck_to: Option<Attached>,
     /// Bounces so far, for `max_bounces`. Host bookkeeping, not replicated.
     #[serde(skip)]
     pub bounces: u32,
@@ -634,6 +646,25 @@ pub struct Projectile {
     /// Host bookkeeping, not replicated.
     #[serde(skip)]
     pub spawned: u64,
+}
+/// Where on a player or vehicle a stuck projectile rides.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct Attached {
+    /// [`TargetId::Actor`] or [`TargetId::Vehicle`].
+    pub target: TargetId,
+    /// Its place in the target's frame ([`attach_frame`]).
+    pub offset: Vec3,
+}
+impl Attached {
+    /// Its place in the world on a target at `frame`.
+    pub fn place(&self, (position, rotation): (Vec3, Quat)) -> Vec3 {
+        position + rotation * self.offset
+    }
+}
+/// The frame a projectile stuck to a player rides in: their feet turned to
+/// their heading (`yaw`, right positive). A vehicle's is its body's pose.
+pub fn attach_frame(feet: Vec3, yaw: f32) -> (Vec3, Quat) {
+    (feet, Quat::from_rotation_y(-yaw))
 }
 /// Vertical speed a projectile loses each tick of flight (`gravityMod`);
 /// none unless it is ballistic.
@@ -1078,6 +1109,22 @@ impl WeaponsWorld {
     pub fn image_id(&self, id: ActorId, hand: u8) -> Option<&str> {
         let equipped = self.actors.get(&id)?.images.get(hand as usize)?.as_ref()?;
         Some(&equipped.image)
+    }
+    /// Send the right hand's image to its state named `name` (any case),
+    /// entered afresh on the next advance as a transition enters it.
+    pub fn set_state(&mut self, id: ActorId, name: &str) -> Result<()> {
+        let a = self.actors.get_mut(&id).context("Unknown actor")?;
+        let e = a.images[0].as_mut().context("Nothing in hand")?;
+        let image = self.pack.images.get(&e.image).context("Unknown image")?;
+        let state = image
+            .states
+            .iter()
+            .position(|s| s.name.eq_ignore_ascii_case(name))
+            .with_context(|| format!("{} has no state {name}", e.image))?;
+        e.state = state;
+        e.entered = false;
+        e.remaining = 0;
+        Ok(())
     }
     pub fn image_state(&self, id: ActorId, hand: u8) -> Option<(&Image, &State)> {
         let equipped = self.actors.get(&id)?.images.get(hand as usize)?.as_ref()?;
@@ -2687,6 +2734,7 @@ impl WeaponsWorld {
                 age: 0,
                 bounced: false,
                 stuck: false,
+                stuck_to: None,
                 origin: position,
                 was_thrown: false,
                 paint: None,
@@ -2742,6 +2790,7 @@ impl WeaponsWorld {
             age: 0,
             bounced: false,
             stuck: false,
+            stuck_to: None,
             origin: position,
             was_thrown: false,
             paint: None,
@@ -3140,6 +3189,56 @@ impl WeaponsWorld {
         Advance::Drop
     }
     /// Play each of the holder's state cues whose time has come.
+    /// [`AimAssist::angle`]: the aim turned onto the middle of the body
+    /// nearest it within the cone and range that the holder could hurt and
+    /// sees, or the aim unchanged.
+    fn assisted_aim(
+        &self,
+        id: ActorId,
+        frame: &Frame,
+        assist: &AimAssist,
+        q: &mut impl Query,
+    ) -> Vec3 {
+        let aim = frame.direction.normalize_or(Vec3::NEG_Z);
+        if assist.angle <= 0.0 {
+            return aim;
+        }
+        let reach = assist.range * frame.scale.max(0.01);
+        let mut best: Option<(f32, Vec3)> = None;
+        for (other, actor) in &self.actors {
+            let target = TargetId::Actor(*other);
+            if *other == id || !q.can_affect(id, target) || q.is_ally(id, target) {
+                continue;
+            }
+            let o = &actor.frame;
+            let middle = o.middle.unwrap_or((o.position + o.eye) * 0.5);
+            let to = middle - frame.eye;
+            let distance = to.length();
+            if !(distance > 0.01 && distance <= reach) {
+                continue;
+            }
+            let angle = aim.angle_between(to / distance);
+            if angle > assist.angle || best.is_some_and(|(b, _)| b <= angle) {
+                continue;
+            }
+            let seen = q
+                .sweep(
+                    frame.eye,
+                    middle,
+                    Filter {
+                        projectile_age_ticks: None,
+                        source: id,
+                        players: true,
+                        world_only: false,
+                    },
+                )
+                .is_none_or(|hit| hit.target == target);
+            if seen {
+                best = Some((angle, to / distance));
+            }
+        }
+        best.map_or(aim, |(_, to)| to)
+    }
     fn play_cues(&mut self, id: ActorId, a: &mut Actor) {
         if a.cues.is_empty() {
             return;
@@ -3360,7 +3459,10 @@ impl WeaponsWorld {
                 } else {
                     a.frame.muzzle[e.hand as usize]
                 };
-                let direction = a.frame.direction.normalize();
+                let direction = image.aim_assist.as_ref().map_or_else(
+                    || a.frame.direction.normalize(),
+                    |assist| self.assisted_aim(id, &a.frame, assist, q),
+                );
                 let mut speed = p.speed;
                 if image.melee {
                     if let Some(hit) = q.sweep(
@@ -3515,7 +3617,8 @@ impl WeaponsWorld {
                         / a.frame.scale.max(0.01);
                 }
                 let pace = a.frame.velocity.length();
-                let spread = shot.spread_for(pace, idle_ticks);
+                let footing = a.frame.grounded || a.frame.mount != Mount::None;
+                let spread = shot.spread_in(pace, idle_ticks, a.frame.crouched, footing);
                 let kick = shot.recoil_velocity(direction);
                 if kick != Vec3::ZERO {
                     // Recoil lands before the projectiles, which inherit it.
@@ -3770,12 +3873,32 @@ impl WeaponsWorld {
             });
         }
     }
+    /// Where a player or vehicle a projectile can ride on is now
+    /// ([`attach_frame`]).
+    fn target_frame(&self, q: &mut impl Query, target: TargetId) -> Option<(Vec3, Quat)> {
+        match target {
+            TargetId::Actor(id) => self
+                .actors
+                .get(&id)
+                .map(|a| attach_frame(a.frame.position, a.frame.body_yaw)),
+            TargetId::Vehicle(id) => q.vehicle_frame(id),
+            _ => None,
+        }
+        .filter(|(at, turn)| at.is_finite() && turn.is_finite())
+    }
     /// One tick of a projectile's flight. [`coast`] is the same motion when
     /// it hits nothing.
     fn projectile_step(&mut self, p: &mut Projectile, q: &mut impl Query) -> bool {
         let pack = Arc::clone(&self.pack);
         let d = &pack.projectiles[&p.definition];
         p.age += 1;
+        if let Some(attached) = p.stuck_to {
+            match self.target_frame(q, attached.target) {
+                Some(frame) => p.position = attached.place(frame),
+                // Its target is gone: it stays where it was last.
+                None => p.stuck_to = None,
+            }
+        }
         if let Some(bursts) = expires(d, p.age, self.fuses.get(&p.id).copied()) {
             if bursts {
                 self.explode(p, d, q, None, None);
@@ -3934,8 +4057,22 @@ impl WeaponsWorld {
             if stopped {
                 return false;
             }
-            let (velocity, last) = match rebound(d, p.velocity, normal, p.bounces) {
+            let body = matches!(hit.target, TargetId::Actor(_) | TargetId::Vehicle(_));
+            let sticks = d.stick_to_bodies && body;
+            let rebounded = if sticks {
+                Rebound::Stuck
+            } else {
+                rebound(d, p.velocity, normal, p.bounces)
+            };
+            let (velocity, last) = match rebounded {
                 Rebound::Stuck => {
+                    if sticks && let Some((at, turn)) = self.target_frame(q, hit.target) {
+                        p.position = hit.position;
+                        p.stuck_to = Some(Attached {
+                            target: hit.target,
+                            offset: turn.inverse() * (hit.position - at),
+                        });
+                    }
                     p.stuck = true;
                     p.heading = p.velocity.try_normalize();
                     p.velocity = Vec3::ZERO;
@@ -4442,6 +4579,7 @@ impl WeaponsWorld {
             age: d.arm_ticks,
             bounced: landing > 0,
             stuck: false,
+            stuck_to: None,
             origin: from,
             was_thrown: false,
             paint: None,
@@ -4814,6 +4952,7 @@ fn redirect_projectile(
     p.position += velocity.normalize_or_zero() * 0.002;
     p.age = 0;
     p.stuck = false;
+    p.stuck_to = None;
     Ok(Event::Bounced {
         projectile: p.id,
         position: p.position,
