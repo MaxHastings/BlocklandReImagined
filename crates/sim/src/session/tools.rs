@@ -423,6 +423,28 @@ impl Session {
         if let Some(play) = self.music.clone() {
             self.notify(owner, super::Notice::Music(play));
         }
+        for play in self.ambient.values().cloned().collect::<Vec<_>>() {
+            self.notify(owner, super::Notice::Ambient(play));
+        }
+    }
+    /// Play (or stop) a rule's ambient bed for everyone, and for later
+    /// joiners. Refused past [`bri_package_runtime::ops::MAX_AMBIENT`] keys.
+    pub(super) fn play_ambient_all(&mut self, play: super::AmbientPlay) -> bool {
+        if play.track.is_some() {
+            if !self.ambient.contains_key(&play.key)
+                && self.ambient.len() >= bri_package_runtime::ops::MAX_AMBIENT
+            {
+                return false;
+            }
+            self.ambient.insert(play.key.clone(), play.clone());
+        } else {
+            self.ambient.remove(&play.key);
+        }
+        let owners: Vec<_> = self.peers.keys().copied().collect();
+        for owner in owners {
+            self.notify(owner, super::Notice::Ambient(play.clone()));
+        }
+        true
     }
     /// Play (or stop) rule music for everyone, and for later joiners.
     pub(super) fn play_music_all(&mut self, play: super::MusicPlay) {

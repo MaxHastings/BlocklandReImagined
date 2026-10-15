@@ -235,6 +235,9 @@ pub struct ClientAudio {
     windows: Vec<bri_audio::Window>,
     /// The track an Add-On rule plays ([`ClientAudio::play_music`]).
     rule_music: Option<RuleMusic>,
+    /// The ambient beds Add-On rules play, by key
+    /// ([`ClientAudio::play_ambient`]).
+    rule_ambient: BTreeMap<String, RuleMusic>,
 }
 /// A rule's music track as it plays, fading in over `fade` seconds.
 struct RuleMusic {
@@ -318,6 +321,7 @@ impl ClientAudio {
             music: BTreeMap::new(),
             music_bricks: MusicBricks::default(),
             rule_music: None,
+            rule_ambient: BTreeMap::new(),
             projectiles: BTreeSet::new(),
             image_loops: BTreeMap::new(),
             engines: BTreeMap::new(),
@@ -614,6 +618,49 @@ impl ClientAudio {
             Err(error) => self.record(Err(error)),
         }
     }
+    /// Play an Add-On rule's ambient bed under its key on the effects bus,
+    /// looping at the ears or at a point in the world, replacing the bed
+    /// under that key, or stop it (`track` none); either fades over
+    /// `fade` seconds.
+    pub fn play_ambient(&mut self, play: &bri_sim::session::AmbientPlay) {
+        if let Some(old) = self.rule_ambient.remove(&play.key) {
+            let result = self.runtime.stop_with_fade(old.handle, play.fade);
+            self.record(result);
+        }
+        let Some(track) = &play.track else {
+            return;
+        };
+        let found = match self.pack_sounds.get(&track.to_ascii_lowercase()) {
+            Some((asset, volume)) => Ok((asset.clone(), *volume)),
+            None => self.runtime.bank().resolve(track).map(|a| (a.clone(), 1.0)),
+        };
+        let (asset, volume) = match found {
+            Ok(found) => found,
+            Err(error) => return self.record(Err(error)),
+        };
+        let volume = volume * play.volume.clamp(0.0, 1.0);
+        let fade = play.fade.max(0.0);
+        let start = if fade == 0.0 { 1.0 } else { 0.0 };
+        let (placement, range) = match play.at {
+            Some(at) => (Placement::World(at), Some(play.range)),
+            None => (Placement::Listener, None),
+        };
+        let asset = Arc::new(asset.as_ambient(range));
+        match self.runtime.play_asset(asset, placement, volume * start) {
+            Ok(handle) => {
+                self.rule_ambient.insert(
+                    play.key.clone(),
+                    RuleMusic {
+                        handle,
+                        volume,
+                        fade,
+                        elapsed: 0.0,
+                    },
+                );
+            }
+            Err(error) => self.record(Err(error)),
+        }
+    }
     /// Whether `profile` names a sound this client can play: an Add-On
     /// pack's own that loaded, else the bank's ([`Self::start`]).
     pub fn has_sound(&self, profile: &str) -> bool {
@@ -794,6 +841,7 @@ impl ClientAudio {
         self.music.clear();
         self.music_bricks = MusicBricks::default();
         self.rule_music = None;
+        self.rule_ambient.clear();
         self.projectiles.clear();
         self.image_loops.clear();
         self.engines.clear();
@@ -811,10 +859,17 @@ impl ClientAudio {
             let result = self.start(&id, placement).map(|_| ());
             self.record(result);
         }
-        if let Some(m) = self.rule_music.as_mut().filter(|m| m.elapsed < m.fade) {
-            m.elapsed += seconds;
-            let gain = m.volume * (m.elapsed / m.fade).min(1.0);
-            let handle = m.handle;
+        let fading: Vec<(SoundHandle, f32)> = self
+            .rule_music
+            .iter_mut()
+            .chain(self.rule_ambient.values_mut())
+            .filter(|m| m.elapsed < m.fade)
+            .map(|m| {
+                m.elapsed += seconds;
+                (m.handle, m.volume * (m.elapsed / m.fade).min(1.0))
+            })
+            .collect();
+        for (handle, gain) in fading {
             let result = self.runtime.set_voice_params(handle, gain, 1.0);
             self.record(result);
         }

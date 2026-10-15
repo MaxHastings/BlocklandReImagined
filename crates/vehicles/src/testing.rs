@@ -247,6 +247,7 @@ fn base(id: &str, name: &str, family: Family) -> Definition {
         strafe_steering: false,
         throttle_brakes: false,
         reverse_limited: false,
+        return_seconds: None,
         steering: SteeringSettings::default(),
         wheeled_flight: None,
         threads: vec![],

@@ -138,6 +138,10 @@ pub struct Look {
     /// a role left out asks for the Blockhead's clip name.
     #[serde(default, skip_serializing_if = "Animations::is_empty")]
     pub animations: Animations,
+    /// Its own death clips by the side the killing hit came from, or at
+    /// random; none plays the `death` role's clip.
+    #[serde(default, skip_serializing_if = "bri_content::body::Deaths::is_empty")]
+    pub deaths: bri_content::body::Deaths,
     /// The body's camera: field of view, first-person offset, bob, weapon
     /// sway and third-person pivot. The default is the stock camera.
     #[serde(default, skip_serializing_if = "CameraProfile::is_default")]
@@ -229,6 +233,7 @@ impl Archetype {
         );
         self.sockets.validate()?;
         bri_content::body::validate_animations(&self.look.animations)?;
+        self.look.deaths.validate()?;
         bri_content::body::validate_ground_speeds(&self.look.ground_speeds)?;
         self.look.camera.validate()?;
         if let Some(source) = &self.controller {
@@ -256,6 +261,7 @@ impl Archetype {
                 first_person_only: false,
                 third_person_only: false,
                 animations: Animations::new(),
+                deaths: Default::default(),
                 camera: CameraProfile::default(),
                 intent_clips: BTreeMap::new(),
                 intent_sounds: BTreeMap::new(),

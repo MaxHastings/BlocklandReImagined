@@ -64,6 +64,9 @@ impl App {
                 bri_net::client::ArrivalEvent::Notice(bri_sim::session::Notice::Music(play)) => {
                     self.audio.play_music(&play);
                 }
+                bri_net::client::ArrivalEvent::Notice(bri_sim::session::Notice::Ambient(play)) => {
+                    self.audio.play_ambient(&play);
+                }
                 bri_net::client::ArrivalEvent::Notice(_) => {}
                 // The game join spawned the player, or the host is gone:
                 // the join itself says which.
@@ -739,6 +742,10 @@ impl App {
                         }
                         bri_sim::session::Notice::Music(play) => {
                             self.audio.play_music(&play);
+                            continue;
+                        }
+                        bri_sim::session::Notice::Ambient(play) => {
+                            self.audio.play_ambient(&play);
                             continue;
                         }
                         bri_sim::session::Notice::Ammo(held) => {

@@ -659,6 +659,9 @@ pub(super) fn archetype(
     if let Some(v) = &def.ground_speeds {
         archetype.look.ground_speeds = v.clone();
     }
+    if let Some(v) = &def.deaths {
+        archetype.look.deaths = v.clone();
+    }
     if let Some(v) = def.max_time_scale {
         archetype.look.max_time_scale = v;
     }

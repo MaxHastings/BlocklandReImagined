@@ -179,6 +179,27 @@ pub struct Settings {
     /// so Mario and Master Chief can fight in one game.
     #[serde(default = "yes", skip_serializing_if = "is_yes")]
     pub keep_chosen_body: bool,
+    /// How long a new life cannot be hurt, until the player fires
+    /// (`$Game::PlayerInvulnerabilityTime`, 2.5 s in v20); 0 turns spawn
+    /// protection off, as Halo has none.
+    #[serde(default = "default_spawn_protection")]
+    pub spawn_protection_ms: u32,
+    /// How long a spawned vehicle may stand empty before it goes back to
+    /// its spawn brick: `None` takes the vehicle's own `return_seconds`,
+    /// 0 never returns it.
+    #[serde(default)]
+    pub vehicle_return_ms: Option<u32>,
+    /// How long a dead member's view holds still on their body before they
+    /// may look around it (0, v20's: at once).
+    #[serde(default)]
+    pub death_view_ms: u32,
+}
+/// v20's `$Game::PlayerInvulnerabilityTime`.
+pub const DEFAULT_SPAWN_PROTECTION_MS: u32 = 2500;
+/// The longest spawn protection, vehicle return wait and death view.
+pub const MAX_MATCH_RULE_MS: u32 = 3_600_000;
+fn default_spawn_protection() -> u32 {
+    DEFAULT_SPAWN_PROTECTION_MS
 }
 fn yes() -> bool {
     true
@@ -222,6 +243,9 @@ impl Default for Settings {
             .map(|s| Some(format!("v20.weapon.{s}"))),
             bodies: BTreeSet::new(),
             keep_chosen_body: true,
+            spawn_protection_ms: DEFAULT_SPAWN_PROTECTION_MS,
+            vehicle_return_ms: None,
+            death_view_ms: 0,
         }
     }
 }
@@ -238,6 +262,9 @@ impl Settings {
             || !within(self.vehicle_respawn_ms, l.vehicle_respawn_ms)
             || !(within(self.brick_respawn_ms, l.brick_respawn_ms)
                 || (l.brick_never && self.brick_respawn_ms == NEVER))
+            || self.spawn_protection_ms > MAX_MATCH_RULE_MS
+            || self.vehicle_return_ms.is_some_and(|ms| ms > MAX_MATCH_RULE_MS)
+            || self.death_view_ms > MAX_MATCH_RULE_MS
         {
             return Err(Error::InvalidSettings);
         }

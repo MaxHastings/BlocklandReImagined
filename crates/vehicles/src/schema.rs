@@ -553,6 +553,11 @@ pub struct Definition {
     /// go forward (`maxBackwardSpeed` is only a hover vehicle's).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub reverse_limited: bool,
+    /// Seconds the vehicle may stand empty before it goes back to its
+    /// spawn brick (Halo's abandoned Warthog). `None`, v20's: it stays
+    /// where it was left. A mini-game's `vehicle_return_ms` overrides it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub return_seconds: Option<f32>,
     #[serde(default)]
     pub steering: SteeringSettings,
     /// Blockland's flying forces for a `Wheeled` or `Skis` vehicle; `None`
@@ -1112,6 +1117,11 @@ impl Pack {
             ensure!(
                 d.density > 0. && d.burn_ticks < 120 * 3600 && d.invulnerable_ticks < 120 * 3600,
                 "invalid timing/density"
+            );
+            ensure!(
+                d.return_seconds
+                    .is_none_or(|s| (0.0..=3600.0).contains(&s)),
+                "return_seconds must be 0 to 3600"
             );
             ensure!(
                 d.bounds_min

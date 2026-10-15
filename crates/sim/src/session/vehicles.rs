@@ -87,6 +87,10 @@ pub(super) struct Vehicles {
     /// merely resting on or walking across a vehicle.
     pub(super) struck: BTreeMap<(OwnerId, VehicleId), u64>,
     pub(super) scanned: bool,
+    /// Each brick-spawned vehicle's home (its centre when first seen) and
+    /// the tick it was last left empty away from home, for returning
+    /// abandoned vehicles ([`Session::return_abandoned_vehicles`]).
+    abandoned: BTreeMap<VehicleId, Abandoned>,
     /// Stand-ins of players on foot part way through openings, beyond the
     /// partners, for this tick's physics step: who, the stand-in's body
     /// and colliders, and the opening's carry.
@@ -97,6 +101,16 @@ pub(super) struct Vehicles {
         glam::Affine3A,
     )>,
 }
+/// Where a brick-spawned vehicle was spawned and since when it has stood
+/// empty somewhere else.
+#[derive(Clone, Copy, Debug)]
+struct Abandoned {
+    home: Vec3,
+    empty_since: Option<u64>,
+}
+/// A vehicle within this many units of its home has not been moved off.
+const HOME_RADIUS: f32 = 3.0;
+
 /// Queue length past which a seated player's backlog drains fast (a stall).
 const SEATED_FLOOD: usize = 30;
 /// Ticks a seated player's queue is watched before a lasting excess drains.
@@ -920,6 +934,74 @@ impl Session {
         }
         self.vehicles.colors.remove(&id);
         self.vehicles.brick_paint.remove(&id);
+        self.vehicles.abandoned.remove(&id);
+    }
+    /// How long a vehicle from `brick_owner`'s spawn brick may stand empty
+    /// before it goes home, in ticks: the owner's mini-game's
+    /// `vehicle_return_ms`, else the vehicle's own `return_seconds`.
+    /// `None` never returns it.
+    fn return_ticks(&self, brick_owner: OwnerId, definition: &veh::Definition) -> Option<u64> {
+        let game = self
+            .owner_game(brick_owner)
+            .and_then(|g| self.minigames.game(g).ok());
+        let ms = match game.and_then(|g| g.settings.vehicle_return_ms) {
+            Some(ms) => ms,
+            None => (definition.return_seconds? * 1000.0).round() as u32,
+        };
+        (ms > 0).then(|| mg::ticks_for_ms(ms))
+    }
+    /// Halo's abandoned vehicles: a brick-spawned vehicle left empty away
+    /// from its spawn for its return time goes back to the brick as a
+    /// fresh one, as the brick's `< Respawn >` does.
+    pub(super) fn return_abandoned_vehicles(&mut self) -> Result<()> {
+        let tick = self.simulation.state().tick;
+        let Some(world) = self.vehicles.world.as_ref() else {
+            return Ok(());
+        };
+        let occupied: BTreeSet<VehicleId> =
+            self.vehicles.mounted.values().map(|m| m.vehicle).collect();
+        let mut watched = Vec::new();
+        for (&brick, &id) in &self.vehicles.by_brick {
+            let (Some(centre), Some(definition), Some((owner, false))) = (
+                world.centre(&self.simulation.physics, id),
+                world.definition_of(id),
+                world.owner_of(id),
+            ) else {
+                continue;
+            };
+            let brick_owner = self
+                .simulation
+                .state()
+                .bricks
+                .get(&brick)
+                .map_or(owner.0, |b| b.owner);
+            watched.push((
+                brick,
+                id,
+                centre,
+                occupied.contains(&id),
+                self.return_ticks(brick_owner, definition),
+            ));
+        }
+        let mut due = Vec::new();
+        for (brick, id, centre, occupied, wait) in watched {
+            let entry = self.vehicles.abandoned.entry(id).or_insert(Abandoned {
+                home: centre,
+                empty_since: None,
+            });
+            if occupied || centre.distance(entry.home) <= HOME_RADIUS {
+                entry.empty_since = None;
+                continue;
+            }
+            let since = *entry.empty_since.get_or_insert(tick);
+            if wait.is_some_and(|wait| tick.saturating_sub(since) >= wait) {
+                due.push(brick);
+            }
+        }
+        for brick in due {
+            self.respawn_vehicle_brick(brick)?;
+        }
+        Ok(())
     }
     /// Wrench Send reapplies the spawn's paint to its existing vehicle.
     /// Unrelated brick edits must leave independently painted vehicles alone.

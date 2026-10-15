@@ -165,6 +165,23 @@ impl SoundAsset {
     }
     /// This sound as rule music plays it: at the ears, on the music bus,
     /// looping or not; the clip is shared, not copied.
+    /// This sound as a looping ambient bed on the effects bus: at the ears,
+    /// or placed in the world heard out to `range` units.
+    pub fn as_ambient(&self, range: Option<f32>) -> Self {
+        let mut playback = self.playback.clone();
+        playback.spatial = range.map(|range| crate::schema::Spatial {
+            reference_distance: (range * 0.25).max(1.0),
+            max_distance: range.max(1.0),
+        });
+        playback.bus = Bus::Effects;
+        playback.looping = true;
+        Self {
+            id: self.id.clone(),
+            name: self.name.clone(),
+            playback,
+            data: self.data.clone(),
+        }
+    }
     pub fn as_music(&self, looping: bool) -> Self {
         let mut playback = self.playback.clone();
         playback.spatial = None;

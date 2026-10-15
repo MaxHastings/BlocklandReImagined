@@ -13,6 +13,9 @@ use std::{
 
 #[derive(Clone, Default)]
 pub struct Controls {
+    /// The corpse camera holds still on the body (a mini-game's
+    /// `death_view_ms` after death): the mouse does not turn it.
+    pub death_view: bool,
     held: BTreeSet<HeldControl>,
     pub yaw: f32,
     pub pitch: f32,
@@ -350,6 +353,9 @@ impl Controls {
     }
     fn look(&mut self, yaw: f32, pitch: f32) {
         if let Some(observer) = &mut self.observer {
+            if self.death_view && observer.from == ControlObject::Corpse {
+                return;
+            }
             observer.yaw = wrap(observer.yaw + yaw);
             observer.pitch = (observer.pitch + pitch).clamped(-OBSERVER_PITCH, OBSERVER_PITCH);
         } else if let Some(look) = self.seat_look()

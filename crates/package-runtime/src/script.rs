@@ -2953,6 +2953,78 @@ fn register_presentation(engine: &mut Engine) {
     engine.register_fn("stop_music_all", |fade: Dynamic| {
         stop_music(None, float(&fade)?)
     });
+    // play_ambient(player, key, track[, options]) /
+    // play_ambient_all(key, track[, options]), stop_ambient(player, key[,
+    // fade]) / stop_ambient_all(key[, fade]). Options: `volume` (0 to 1),
+    // `fade` (seconds to fade in), `at` ([x, y, z] to place it in the
+    // world) and `range` (how far a placed one carries, default 60).
+    fn ambient(player: Option<u64>, key: &str, track: &str, options: Map) -> Fallible<INT> {
+        let mut op = ops::Ambient {
+            player,
+            key: key.into(),
+            track: Some(track.into()),
+            volume: 1.0,
+            fade: 0.0,
+            at: None,
+            range: 60.0,
+        };
+        for (name, value) in options {
+            match name.as_str() {
+                "volume" => op.volume = float(&value)?,
+                "fade" => op.fade = float(&value)?,
+                "range" => op.range = float(&value)?,
+                "at" => {
+                    let at = value
+                        .try_cast::<Array>()
+                        .ok_or("play_ambient's `at` is [x, y, z]")?;
+                    op.at = Some(vector(&at)?);
+                }
+                other => {
+                    return fail(format!(
+                        "play_ambient has no option `{other}` (volume, fade, at, range)"
+                    ));
+                }
+            }
+        }
+        push(Op::Ambient(op))
+    }
+    fn stop_ambient(player: Option<u64>, key: &str, fade: f32) -> Fallible<INT> {
+        push(Op::Ambient(ops::Ambient {
+            player,
+            key: key.into(),
+            track: None,
+            volume: 1.0,
+            fade,
+            at: None,
+            range: 60.0,
+        }))
+    }
+    engine.register_fn("play_ambient", |p: Dynamic, key: &str, track: &str| {
+        ambient(Some(id(&p)?), key, track, Map::new())
+    });
+    engine.register_fn(
+        "play_ambient",
+        |p: Dynamic, key: &str, track: &str, options: Map| {
+            ambient(Some(id(&p)?), key, track, options)
+        },
+    );
+    engine.register_fn("play_ambient_all", |key: &str, track: &str| {
+        ambient(None, key, track, Map::new())
+    });
+    engine.register_fn(
+        "play_ambient_all",
+        |key: &str, track: &str, options: Map| ambient(None, key, track, options),
+    );
+    engine.register_fn("stop_ambient", |p: Dynamic, key: &str| {
+        stop_ambient(Some(id(&p)?), key, 0.0)
+    });
+    engine.register_fn("stop_ambient", |p: Dynamic, key: &str, fade: Dynamic| {
+        stop_ambient(Some(id(&p)?), key, float(&fade)?)
+    });
+    engine.register_fn("stop_ambient_all", |key: &str| stop_ambient(None, key, 0.0));
+    engine.register_fn("stop_ambient_all", |key: &str, fade: Dynamic| {
+        stop_ambient(None, key, float(&fade)?)
+    });
     // `%player.playThread(thread, sequence)`, or its `schedule(ms, ...)`
     // `after` seconds later.
     fn play_thread(player: Dynamic, thread: i64, sequence: &str, after: f64) -> Fallible<INT> {

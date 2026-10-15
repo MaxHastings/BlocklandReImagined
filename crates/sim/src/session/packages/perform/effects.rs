@@ -83,6 +83,41 @@ impl Perform for ops::Sound {
         Ok(())
     }
 }
+impl Perform for ops::Ambient {
+    fn perform(self, session: &mut Session, cx: OpCall<'_>) -> Result<()> {
+        let OpCall { package, .. } = cx;
+        let ops::Ambient {
+            player,
+            key,
+            track,
+            volume,
+            fade,
+            at,
+            range,
+        } = self;
+        session.take_cue(package)?;
+        let play = crate::session::AmbientPlay {
+            key,
+            track,
+            volume,
+            fade,
+            at,
+            range,
+        };
+        match player {
+            Some(player) => {
+                ensure!(session.peers.contains_key(&player), "No such player");
+                session.notify(player, Notice::Ambient(play));
+            }
+            None => ensure!(
+                session.play_ambient_all(play),
+                "at most {} ambient sounds play for everyone at once",
+                ops::MAX_AMBIENT
+            ),
+        }
+        Ok(())
+    }
+}
 impl Perform for ops::Music {
     fn perform(self, session: &mut Session, cx: OpCall<'_>) -> Result<()> {
         let OpCall { package, .. } = cx;
