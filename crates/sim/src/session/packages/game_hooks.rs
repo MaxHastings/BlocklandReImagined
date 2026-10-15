@@ -57,6 +57,8 @@ pub(in crate::session) struct GameHooks {
     /// Who stood in each zone at its last check: by package and zone, the
     /// brick and player pairs.
     inside: BTreeMap<(String, usize), BTreeSet<(BrickId, OwnerId)>>,
+    /// The objects in each zone that notices them at its last check.
+    inside_objects: BTreeMap<(String, usize), BTreeSet<(BrickId, ObjectRef)>>,
     /// Zone periods the rules changed (`set_zone_period`), in ticks.
     periods: BTreeMap<(String, usize), u32>,
     /// The settings change being applied, for its `settings` event.
@@ -433,8 +435,14 @@ impl Session {
                 )
             })
             .collect();
+        let objects = if zones.iter().any(|(_, _, z)| z.objects) {
+            self.object_boxes()
+        } else {
+            Vec::new()
+        };
         for (package, index, zone) in zones {
             let mut now = BTreeSet::new();
+            let mut objects_now = BTreeSet::new();
             let mut skipped = 0usize;
             for kind in &zone.bricks {
                 for (n, brick) in self.simulation.bricks_of(kind).enumerate() {
@@ -449,6 +457,13 @@ impl Session {
                     for (owner, a, b) in &bodies {
                         if a.cmple(hi).all() && b.cmpge(lo).all() {
                             now.insert((brick, *owner));
+                        }
+                    }
+                    if zone.objects {
+                        for (object, a, b) in &objects {
+                            if a.cmple(hi).all() && b.cmpge(lo).all() {
+                                objects_now.insert((brick, *object));
+                            }
                         }
                     }
                 }
@@ -477,6 +492,49 @@ impl Session {
                     "on_zone",
                     vec![
                         Dynamic::from_int(owner as i64),
+                        Dynamic::from_int(brick as i64),
+                        event.into(),
+                    ],
+                    Budget::Command,
+                    None,
+                    None,
+                    None,
+                );
+                self.charge_work(&package);
+            }
+            if !zone.objects {
+                continue;
+            }
+            let host = self.packages.as_mut().expect("checked");
+            let before = host
+                .game_hooks
+                .inside_objects
+                .insert((package.clone(), index), objects_now.clone())
+                .unwrap_or_default();
+            let mut calls: Vec<(BrickId, ObjectRef, &str)> = Vec::new();
+            calls.extend(
+                before
+                    .difference(&objects_now)
+                    .map(|(b, o)| (*b, *o, "leave")),
+            );
+            calls.extend(
+                objects_now
+                    .difference(&before)
+                    .map(|(b, o)| (*b, *o, "enter")),
+            );
+            if zone.ticks {
+                calls.extend(
+                    objects_now
+                        .intersection(&before)
+                        .map(|(b, o)| (*b, *o, "tick")),
+                );
+            }
+            for (brick, object, event) in calls {
+                let _ = self.run_package(
+                    &package,
+                    "on_zone_object",
+                    vec![
+                        object.to_string().into(),
                         Dynamic::from_int(brick as i64),
                         event.into(),
                     ],
