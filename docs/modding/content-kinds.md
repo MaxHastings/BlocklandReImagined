@@ -262,6 +262,21 @@ the standard player its own jump sound in two files; test
 `PlayerData` converts `jumpSound`, and `painSound`/`deathSound` under
 `useCustomPainEffects`, to these.
 
+
+Footfalls and landings are a body's own too:
+
+```json
+"sounds": { "footsteps": ["your-id:step_1", "your-id:step_2"],
+            "stride": 3.2, "land": "your-id:land" }
+```
+
+`footsteps` (up to 8) plays one sound each `stride` units the body covers
+on the ground (0.25 to 32; left out, 1.1 times its standing height), never
+the same one twice running; `land` plays where it lands after falling faster
+than 4 units a second. Each client plays them for every body it draws, so
+they cost nothing on the network; riders and sitters make none. v20's
+Blockhead has neither. Test: `crates/client/src/footsteps.rs`.
+
 An archetype with `"adjusts": "v20.player.<datablock>"` (and no `base` or
 `name`) is no new body: it changes the constants it names on one of v20's
 own player types while the Add-On is on, as a v20 Add-On's
@@ -359,6 +374,17 @@ no seats cannot be mounted. These fields exist for Add-Ons:
   `bri-addon-check` fails an engine sound no weapons pack declares, and
   warns when it does not loop.
 
+- `"skid": { "emitter": "your-id:skid", "sound": "your-id:squeal" }`
+  makes its tyres skid. A grounded wheel whose contact slides sideways
+  (the vehicle's motion across the wheel's steered axle) faster than
+  `min_slip` units a second (3) runs `emitter` at the contact, harder the
+  harder it slides, and the vehicle plays `sound` (a looping sound, as for
+  `engine_sound`) louder and a little higher up to `full_slip` (12). Name
+  either or both; the emitter is one of the vehicle's `effects` or a base
+  game emitter. Every player sees and hears it from the vehicle's motion
+  as they see it; nothing is sent for it, and v20's vehicles have none.
+  `bri-addon-check` checks the sound as it does an engine sound.
+
 Every vehicle can be placed from a vehicle spawn brick and spawned by a
 rule (`spawn_vehicle`).
 
@@ -390,12 +416,13 @@ engine changes. The fields that decide how it flies and looks:
 | `strafe_steering` | the strafe keys steer; otherwise the mouse steers and pitches | `steeringUseStrafeSteering` |
 | `steering` | `strafe_rate`, and `auto_return`, `auto_return_rate`, `auto_return_max_speed`: whether steering drifts back to straight | `steeringStrafeSteeringRate`, `steeringUseAutoReturn`, `steeringAutoReturnRate`, `steeringAutoReturnMaxSpeed` |
 | `wheels[].steering`, `wheels[].powered` | how far each wheel turns (1 fully, negative the other way) and whether it drives | `setWheelSteering`/`setWheelPowered` in `onAdd`, else v20's table by wheel count |
-| `steering.toward_look` | the driver steers by looking: the wheels turn the hull toward the driver's free look and ease off to arrive (Halo's Warthog); a bot drives it the same way. Off: v20's mouse or strafe steering | none (new) |
+| `steering.toward_look` | the driver steers by looking: the wheels turn the hull toward the driver's free look and ease off to arrive (Halo's Warthog); a `Flying` vehicle also pitches its nose to the look, so it flies where the driver looks, and its strafe keys slide it sideways. A bot drives it the same way. Off: v20's mouse or strafe steering | none (new) |
 | `steering.speed_lock` | the share (0 to 1) of `max_steering` left at `max_speed`, narrowing in a straight line from full lock at rest (1, the default, never narrows) | none (new) |
 | `engine_curve` | the engine's torque by speed: up to 16 `[speed share, torque share]` points (speed share 0 to 1 of `max_speed` by rising speed, torque share 0 to 4 of `engine_force`), linear between points, flat before the first and past the last, none past `max_speed`. Empty: v20's torque falling straight from full at rest to none at `max_speed` | none (new) |
 | `wheels[].rebound_damping` | damping while the spring extends, apart from `damping` while it compresses: long, soft springs that soak a landing without bouncing. 0, the default: `damping` both ways, as v20 | none (new) |
 | `gravity_scale` | gravity on this vehicle as a share (0 to 4) of the game's (0.85 floats its jumps). Absent: the game's | none (new) |
 | `wheels[].tire.lateral_grip` | the tyre's grip across as a share (0.05 to 20) of its grip along (`static_friction`, `kinetic_friction`), stretching the friction circle into an ellipse: Halo's Warthog front tyres 0.6, rear 1.44. 1, the default: v20's circle | none (new) |
+| `board_on_use` | the use key (the empty-hand click) on the vehicle within 6 units seats the player in the free seat nearest them; an upturned one still flips. Off: riders board only by landing on it, as in v20 | none (new) |
 | `throttle_brakes` | the throttle against the way the vehicle rolls brakes it with `brake_force` until it stops, then drives the other way (Halo's hard stop when you pull back). Off: v20's reversed engine, which does next to nothing near top speed | none (new) |
 | `reverse_limited` | a wheeled vehicle's engine stops pushing it backward at `reverse_speed`. Off: v20's wheeled vehicles back up as fast as they go forward | none (new) |
 | `weapon.automatic` | the gun fires for as long as the trigger is held: `rate` [first, last] rounds a second rising over `spin_up_ticks`, and `spread` [first, last] radians each round may stray from the aim, rising over `spread_ticks` (120 ticks a second); letting go starts both again from the first. Absent: one shot a pull, at most every `cooldown_ticks` | none (new; Halo's `weap` rate of fire and error angle) |

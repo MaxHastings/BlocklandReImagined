@@ -93,6 +93,7 @@ fn shot_hits(sim: &Simulation, brick: u64) -> bool {
         responses: &responses,
         truncated_targets: 0,
         shapes: &[],
+        rewound: None,
     };
     let filter = Filter {
         projectile_age_ticks: Some(10),

@@ -591,6 +591,7 @@ pub fn lower(
         throttle_brakes: false,
         reverse_limited: false,
         return_seconds: None,
+        board_on_use: false,
         steering: SteeringSettings {
             strafe_rate: number(b, "steeringStrafeSteeringRate", 0.1),
             auto_return: torque_bool(b, "steeringUseAutoReturn", true),
@@ -652,6 +653,7 @@ pub fn lower(
         trails: vec![],
         effects: Default::default(),
         engine_sound: None,
+        skid: None,
         authored: b.fields.clone(),
         adaptations,
     })

@@ -176,6 +176,52 @@ pub fn tire_sprays(
         .collect()
 }
 
+/// A vehicle's sliding tyres this frame (`Definition::skid`): a spray at
+/// each grounded wheel whose contact slides sideways faster than
+/// `min_slip`, run harder the harder it slides, and the hardest slide of
+/// any wheel (0 when none skids) for the squeal. The slide is the vehicle's
+/// presented velocity across the wheel's steered axle, so every client
+/// sees the same skids with nothing on the wire. A skid's `wheel` counts on
+/// from the vehicle's wheels, so it runs beside the wheel's own spray.
+pub fn tire_skids(
+    vehicle: u64,
+    d: &bri_vehicles::Definition,
+    frame: &crate::vehicles::VehicleFrame,
+) -> (Vec<TireSpray>, f32) {
+    let Some(skid) = d.skid.as_ref() else {
+        return (Vec::new(), 0.0);
+    };
+    let mut sprays = Vec::new();
+    let mut hardest = 0.0f32;
+    for (i, w) in d.wheels.iter().enumerate() {
+        if !frame.wheel_contact.get(i).copied().unwrap_or(false) {
+            continue;
+        }
+        let axle = frame.rotation * Quat::from_rotation_y(-w.steer_angle(frame.steering)) * Vec3::X;
+        let strength = skid.strength(frame.velocity.dot(axle).abs());
+        if strength <= 0.0 {
+            continue;
+        }
+        hardest = hardest.max(strength);
+        if let Some(emitter) = &skid.emitter {
+            let suspension = frame
+                .wheel_suspension
+                .get(i)
+                .copied()
+                .unwrap_or(w.rest_length);
+            let hub = Vec3::from(w.position) - Vec3::Y * (suspension + w.radius);
+            sprays.push(TireSpray {
+                vehicle,
+                wheel: d.wheels.len() + i,
+                emitter: emitter.clone(),
+                position: frame.position + frame.rotation * hub,
+                rate: strength,
+            });
+        }
+    }
+    (sprays, hardest)
+}
+
 /// One vehicle trail emitting this frame.
 #[derive(Clone, Debug)]
 pub struct TrailSource {
@@ -1395,6 +1441,7 @@ fn teleport_image() -> bri_weapons::Image {
         crosshair: true,
         follow_arm: false,
         hide_nodes: Vec::new(),
+        aim_assist: None,
         both_arms: false,
         paint_tint: false,
         left_image: None,

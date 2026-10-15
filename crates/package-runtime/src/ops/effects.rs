@@ -61,6 +61,27 @@ impl ScriptOp for Sound {
     }
 }
 
+/// A see-through `color` (RGBA 0..1) drawn over a player's body, just
+/// outside it, fading over `seconds`: a shield taking a hit, a power-up's
+/// glow, a cloak shimmering. Every player sees it. Presentation only.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct BodyFlash {
+    pub player: u64,
+    pub color: [f32; 4],
+    pub seconds: f32,
+}
+impl ScriptOp for BodyFlash {
+    const CAPABILITY: &str = "effects";
+    const NAME: &str = "body_flash";
+    fn bounded(&self) -> bool {
+        self.color
+            .iter()
+            .all(|c| c.is_finite() && (0.0..=1.0).contains(c))
+            && self.seconds.is_finite()
+            && (0.05..=60.0).contains(&self.seconds)
+    }
+}
+
 /// Play a music track (a sound an Add-On marks `music`, or one of the
 /// game's music loops) at a player's ears on the music bus, or stop it
 /// (`track` none), fading over `fade` seconds. For one player, or for

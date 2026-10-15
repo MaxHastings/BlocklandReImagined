@@ -542,7 +542,10 @@ pub fn read(data: &[u8], id: String) -> Result<(Interior, Provenance)> {
             ensure!(r.u32()? == 0, "DIF game entities need native adaptation");
             ensure!(r.u32()? == 0, "Unknown DIF entity extension");
         }
-        _ => anyhow::bail!("Unknown DIF extension"),
+        // Some community exporters write 1 and an all-zero block (no
+        // entities or extra data follow).
+        1 if r.bytes(r.remaining())?.iter().all(|b| *b == 0) => {}
+        other => anyhow::bail!("Unknown DIF extension {other} at byte {}", r.position()),
     };
     r.finish()?;
     p.warnings.push("BSP/zone acceleration and animated-light metadata indexed in separate source archive; native runtime adaptation pending".into());

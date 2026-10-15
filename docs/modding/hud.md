@@ -95,10 +95,33 @@ down. Elements may reach outside the box.
 | `bottom_print` | 0, 400, full width, 80 | the bottom print, whatever it shows |
 | `ammo` | right edge, 400, 240, 80 | the bottom print only while it is the ammo display |
 | `chat` | 0, 0, 320, 120 | chat's passing lines; they show again while typing or paging up |
+| `tools` | right edge, 0, 64, 480 | the tool bar |
+| `name_tags` | 0, 0, full width, 480 | the names over players' heads |
 
 A region nobody claims shows the stock HUD as before. Claiming one of the
-last six hides that stock element while the claim applies; a layout with
+last eight hides that stock element while the claim applies; a layout with
 no elements just hides it, or saves the region for your client code.
+
+**Names over heads.** A `name_tags` claim hides the stock player names;
+give it `name_tags` to draw them your own way (item and shape labels stay):
+
+```json
+{ "schema_version": 1, "region": "name_tags",
+  "when": { "body": ["your-id:archetype/soldier"] },
+  "name_tags": { "teammates": "always", "others": "aimed",
+                 "color": [0.55, 0.8, 1.0, 1.0], "outline": false, "height": 0.6 } }
+```
+
+`teammates` (on the viewer's team in their mini-game) and `others` each
+take `always` (the stock), `aimed` (only while the viewer's aim is on the
+body) or `never`. `color` (RGBA 0..1) paints every name one colour instead
+of the team's; `outline` (default true) is the stock dark edge; `height`
+is units above the eye (default 0.85, -8 to 8).
+
+**Carrying fewer things.** A `tools` claim hides the five-slot tool bar.
+With rules that keep two guns (`on_pickup` returning false to swap with
+`drop_item` and `give_item`, or `set_tools`), and a layout showing the
+held weapon's `ammo`, that is a two-weapon game.
 
 **When.** `when` limits the claim to a body (`body`: archetype ids), a held
 item (`holding`: a weapons Add-On's id or an image id) and a vehicle seat

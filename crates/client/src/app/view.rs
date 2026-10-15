@@ -315,7 +315,19 @@ impl App {
         };
         let (eye, (yaw, pitch, roll)) =
             crate::portal_view::through(eye, look, boom, middle, passages);
-        Ok((eye, yaw, pitch, roll))
+        // A lean tilts the first-person view with the head: right side down
+        // leaning right. The eye already slid with it.
+        let on_foot = view
+            .vitals
+            .get(&view.owner)
+            .and_then(|v| v.mounted)
+            .is_none();
+        let tilt = if on_foot && boom.is_none() && controls.camera_pos() == 0.0 {
+            local.lean_tilt(&view.archetypes.tuning(local.archetype, local.scale))
+        } else {
+            0.0
+        };
+        Ok((eye, yaw, pitch, roll - tilt))
     }
     /// The view camera where the body is, and the carry of any opening the
     /// chase camera's boom went back through.

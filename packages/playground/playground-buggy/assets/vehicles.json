@@ -388,6 +388,7 @@
    "strafe_steering": false,
    "throttle_brakes": true,
    "reverse_limited": true,
+   "board_on_use": true,
    "steering": {
     "strafe_rate": 0.25,
     "auto_return": true,

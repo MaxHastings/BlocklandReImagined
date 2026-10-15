@@ -192,7 +192,7 @@ fn name_tags(pack: &Pack, dl: &mut DrawList, core: &Core) {
         let x = (tag.x - font.width(&tag.text) as f32 / 2.0).round();
         let y = (tag.y - font.line_height() as f32).round();
         let [r, g, b] = crate::api::name_outline(tag.color);
-        for dx in [-1.0, 0.0, 1.0] {
+        for dx in [-1.0, 0.0, 1.0].into_iter().filter(|_| tag.outline) {
             for dy in [-1.0, 0.0, 1.0] {
                 if dx != 0.0 || dy != 0.0 {
                     font.draw(dl, x + dx, y + dy, &tag.text, [r, g, b, alpha], &[]);
@@ -459,6 +459,20 @@ fn hud(core: &Core) -> View {
             [255, 255, 255, (core.whiteout * 255.0) as u8],
         );
     }
+    for (color, left, all) in &core.flashes {
+        let byte = |v: f32| (v.clamped(0.0, 1.0) * 255.0).round() as u8;
+        let fade = (left / all.max(0.001)).clamped(0.0, 1.0);
+        fill(
+            &mut v,
+            Rect::new(0, 0, w, h),
+            [
+                byte(color[0]),
+                byte(color[1]),
+                byte(color[2]),
+                byte(color[3] * fade),
+            ],
+        );
+    }
     for tint in &core.underwater {
         let byte = |v: f32| (v.clamped(0.0, 1.0) * 255.0).round() as u8;
         fill(
@@ -527,28 +541,31 @@ fn hud(core: &Core) -> View {
                 &format!("  Press {} to use bricks", core.key_name("useBricks")),
             );
         }
-        let ty = -m.tool_slide.offset;
-        let tx = w - cell;
-        for (i, t) in m.tools.iter().take(64).enumerate() {
-            let r = Rect::new(tx, ty + i as i32 * cell, cell, cell);
-            art(&mut v, r, "base/client/ui/itemicons/toolbg", WHITE);
-            if m.tool_active && m.cur_tool == Some(i) {
-                art(&mut v, r, "base/client/ui/itemicons/itemactive", WHITE);
+        // A `tools` claim shows what is carried its own way.
+        if !core.hud_claimed(bri_content::hud::Region::Tools) {
+            let ty = -m.tool_slide.offset;
+            let tx = w - cell;
+            for (i, t) in m.tools.iter().take(64).enumerate() {
+                let r = Rect::new(tx, ty + i as i32 * cell, cell, cell);
+                art(&mut v, r, "base/client/ui/itemicons/toolbg", WHITE);
+                if m.tool_active && m.cur_tool == Some(i) {
+                    art(&mut v, r, "base/client/ui/itemicons/itemactive", WHITE);
+                }
+                if let Some(t) = t {
+                    icon(&mut v, r, &t.icon, t.tint.unwrap_or(WHITE));
+                }
             }
-            if let Some(t) = t {
-                icon(&mut v, r, &t.icon, t.tint.unwrap_or(WHITE));
-            }
+            let label = Rect::new(tx, ty + m.tools.len().min(64) as i32 * cell, cell, 18);
+            art(&mut v, label, "base/client/ui/itemicons/toollabelbg", WHITE);
+            let tools_label = if m.mode == ScrollMode::Tools {
+                m.tool_name.clone()
+            } else if m.prefs.show_tooltips {
+                format!("{} = tools", core.key_name("useTools"))
+            } else {
+                String::new()
+            };
+            named_text(&mut v, "HUDCenterTextProfile", label, &tools_label);
         }
-        let label = Rect::new(tx, ty + m.tools.len().min(64) as i32 * cell, cell, 18);
-        art(&mut v, label, "base/client/ui/itemicons/toollabelbg", WHITE);
-        let tools_label = if m.mode == ScrollMode::Tools {
-            m.tool_name.clone()
-        } else if m.prefs.show_tooltips {
-            format!("{} = tools", core.key_name("useTools"))
-        } else {
-            String::new()
-        };
-        named_text(&mut v, "HUDCenterTextProfile", label, &tools_label);
         let px = -m.paint_slide.offset;
         let rows = m.paint_rows.iter().copied().max().unwrap_or(9).max(9) as i32;
         let py = h - (rows * 17 + 1) - 18;

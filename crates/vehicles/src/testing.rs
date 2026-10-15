@@ -248,6 +248,7 @@ fn base(id: &str, name: &str, family: Family) -> Definition {
         throttle_brakes: false,
         reverse_limited: false,
         return_seconds: None,
+        board_on_use: false,
         steering: SteeringSettings::default(),
         wheeled_flight: None,
         threads: vec![],
@@ -278,6 +279,7 @@ fn base(id: &str, name: &str, family: Family) -> Definition {
         trails: vec![],
         effects: VehicleEffects::default(),
         engine_sound: None,
+        skid: None,
         authored: BTreeMap::new(),
         adaptations: vec![],
     }

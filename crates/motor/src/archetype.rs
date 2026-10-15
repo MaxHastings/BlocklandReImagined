@@ -94,7 +94,7 @@ impl MountPoint {
 /// `deathSound` under `useCustomPainEffects`), each an `AudioProfile` name.
 /// None makes the standard player's sound; an empty name makes none, as a
 /// Bot_Hole bot's `jumpSound = ""` did.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Sounds {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -103,18 +103,46 @@ pub struct Sounds {
     pub pain: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub death: Option<String>,
+    /// Footfalls while it walks or runs on the ground, one sound picked
+    /// from these each step (v20's Blockhead has none). Every player hears
+    /// them where the feet are; clients play them from the poses they draw,
+    /// so they cost nothing on the wire.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub footsteps: Vec<String>,
+    /// Ground covered between two footfalls, in units at scale 1. None
+    /// steps once per 1.1 standing heights, a stride most bodies take.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stride: Option<f32>,
+    /// Played where it lands after falling faster than
+    /// [`Sounds::LAND_SPEED`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub land: Option<String>,
 }
 impl Sounds {
     /// Longest sound name, as cues carry it.
     pub const MAX_NAME: usize = 128;
+    /// Most footstep variants.
+    pub const MAX_FOOTSTEPS: usize = 8;
+    /// The falling speed (units/s) a landing must reach to be heard.
+    pub const LAND_SPEED: f32 = 4.0;
     pub fn is_standard(&self) -> bool {
         *self == Self::default()
     }
     fn valid(&self) -> bool {
-        [&self.jump, &self.pain, &self.death]
+        [&self.jump, &self.pain, &self.death, &self.land]
             .into_iter()
             .flatten()
+            .chain(&self.footsteps)
             .all(|s| s.len() <= Self::MAX_NAME && !s.chars().any(char::is_control))
+            && self.footsteps.len() <= Self::MAX_FOOTSTEPS
+            && self.footsteps.iter().all(|s| !s.is_empty())
+            && self
+                .stride
+                .is_none_or(|s| s.is_finite() && (0.25..=32.0).contains(&s))
+    }
+    /// Ground between footfalls for a body `stand_height` tall at `scale`.
+    pub fn stride_for(&self, stand_height: f32, scale: f32) -> f32 {
+        self.stride.unwrap_or(stand_height * 1.1) * scale
     }
 }
 /// How clients draw an archetype and place its camera.

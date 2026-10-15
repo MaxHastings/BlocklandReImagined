@@ -16,7 +16,34 @@
       "texture": "sample-map_paint.png"
     }
   ],
-  "environments": {},
+  "environments": {
+    "sample-map:map/sample-map": {
+      "bottom": false,
+      "clouds": [],
+      "faces": [],
+      "fog": {
+        "color": [
+          0.550000011920929,
+          0.699999988079071,
+          0.8999999761581421
+        ],
+        "end": 1000.0,
+        "start": 700.0
+      },
+      "horizon_band": false,
+      "reflection": null,
+      "schema_version": 2,
+      "solid_color": [
+        0.550000011920929,
+        0.699999988079071,
+        0.8999999761581421
+      ],
+      "source_materials": "plain colour",
+      "source_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+      "textures": false,
+      "warnings": []
+    }
+  },
   "lighting": {},
   "maps": [
     {
@@ -32,5 +59,8 @@
   "textures": {
     "sample-map_paint.png": "sample-map_paint.png",
     "sample-map_wood.png": "sample-map_wood.png"
+  },
+  "waters": {
+    "sample-map:map/sample-map": []
   }
 }
