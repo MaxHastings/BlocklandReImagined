@@ -838,6 +838,13 @@ impl App {
             bodies_drawn.insert(*owner);
         }
         whole.note();
+        self.fx.body_flashes.upload(
+            renderer,
+            frame.device,
+            frame.queue,
+            &self.avatar.avatars,
+            |owner| bodies_drawn.contains(&owner),
+        )?;
         // Horses likewise: posed every frame (riders sit on their nodes),
         // their mesh built and drawn only where it can show.
         let mut mounts_drawn = BTreeSet::new();
@@ -1047,7 +1054,20 @@ impl App {
             controls.observer().is_none(),
             &passages,
             |drop| self.world_items.drop_center(drop),
+            self.ui
+                .core
+                .hud_regions
+                .iter()
+                .find(|r| r.region == bri_content::hud::Region::NameTags),
         );
+        let slowdown = assist_slowdown(
+            view,
+            self.motion.presented(),
+            &self.content.weapons.pack,
+            glam::Mat4::from_cols_array(&camera.view_projection),
+            eye,
+        );
+        self.controls.set_assist_slowdown(slowdown);
         // Plants keep their authored tint, scaled by the live outdoor light
         // relative to the mission's own daylight. All other views share it.
         let live_up = (-glam::Vec3::from_slice(&camera.sun_direction)
@@ -1254,6 +1274,11 @@ impl App {
                 .map(|(_, draw)| *draw),
         );
         item_draws.extend(shared_draws.iter().copied());
+        item_draws.extend(
+            self.fx.body_flashes.draws(|owner| {
+                bodies_drawn.contains(&owner) && (owner != view.owner || third_person)
+            }),
+        );
         use bri_render::scene::ShadowCasters;
         // Every view's shadow casters: mirror and window planes draw their
         // own sun shadows from them.

@@ -313,6 +313,7 @@ mod shots {
             responses: &responses,
             truncated_targets: 0,
             shapes: &[],
+            rewound: None,
         };
         w.step(&mut q)
     }

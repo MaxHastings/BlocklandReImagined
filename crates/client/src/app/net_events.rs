@@ -737,6 +737,9 @@ impl App {
                             self.audio.profile(&profile, bri_audio::Placement::Listener);
                             continue;
                         }
+                        bri_sim::session::Notice::Flash { color, seconds } => {
+                            UiUpdate::Flash { color, seconds }
+                        }
                         bri_sim::session::Notice::Music(play) => {
                             self.audio.play_music(&play);
                             continue;

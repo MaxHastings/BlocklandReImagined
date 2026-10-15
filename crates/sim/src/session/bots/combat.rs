@@ -1248,6 +1248,7 @@ fn burst(
         responses: &session.events.projectile_responses,
         truncated_targets: 0,
         shapes: &shapes,
+        rewound: None,
     };
     let chord = chord_ticks(fall_per_tick);
     let at = |start: Vec3, velocity: Vec3, ticks: u32| -> Option<Vec3> {
@@ -1828,6 +1829,7 @@ fn world_stop(session: &Session, bot: OwnerId, from: Vec3, to: Vec3) -> Option<V
         responses: &session.events.projectile_responses,
         truncated_targets: 0,
         shapes: &shapes,
+        rewound: None,
     };
     q.sweep(
         from,
@@ -1891,6 +1893,7 @@ fn clear_path(
         responses: &session.events.projectile_responses,
         truncated_targets: 0,
         shapes: &shapes,
+        rewound: None,
     };
     let (seconds, ticks) = choice.aim.map_or((0.0, 1), |a| {
         (a.time_seconds, if curved { a.flight_tick } else { 1 })
@@ -2625,6 +2628,7 @@ mod tests {
                     responses: &session.events.projectile_responses,
                     truncated_targets: 0,
                     shapes: &shapes,
+                    rewound: None,
                 };
                 let blast = session
                     .weapons

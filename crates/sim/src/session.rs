@@ -82,6 +82,7 @@ pub use copy_store::{CopyStore, LoadedCopy, MemoryCopies, Saved, StoreDone, name
 mod movables;
 mod packages;
 mod paint_fill;
+mod quick_use;
 mod rules;
 pub use paint_fill::{Fill, FillRules};
 mod script_world;
@@ -1060,6 +1061,10 @@ pub struct Session {
     /// The values of the settings the weapons play with, by binding name.
     weapon_values: BTreeMap<String, String>,
     weapon_triggers: BTreeMap<OwnerId, weapons::Triggers>,
+    /// Items used once without switching to them (`quick_use`).
+    quick_uses: BTreeMap<OwnerId, quick_use::QuickUse>,
+    /// Where bodies stood over the last half second, for lag compensation.
+    body_history: crate::rewind::History,
     weapon_gaps: BTreeMap<String, u64>,
     /// `$Pref::Server::FootballRecord`, in feet, for this server run.
     football_record: u32,
@@ -1229,6 +1234,8 @@ impl Session {
             started_settings: BTreeMap::new(),
             weapon_values: BTreeMap::new(),
             weapon_triggers: BTreeMap::new(),
+            quick_uses: BTreeMap::new(),
+            body_history: Default::default(),
             weapon_gaps: BTreeMap::new(),
             football_record: 0,
             ammo_shown: BTreeSet::new(),
@@ -2932,7 +2939,9 @@ impl Session {
                     .simulation
                     .target_through(eye, direction, 10.0)?
                     .and_then(|(hit, _)| Some((hit.brick?, hit.distance)));
-                if self.flip_vehicle(owner, eye, direction, hit.map(|(_, d)| d)) {
+                if self.board_vehicle_by_use(owner, eye, direction, hit.map(|(_, d)| d), tick)
+                    || self.flip_vehicle(owner, eye, direction, hit.map(|(_, d)| d))
+                {
                     return Ok(Reply::Activated(None));
                 }
                 let hit = hit

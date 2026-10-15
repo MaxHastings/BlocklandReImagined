@@ -352,6 +352,12 @@ pub enum Notice {
         /// `GameConnection::BottomPrint` keep the bar.
         hide_bar: bool,
     },
+    /// The screen tinted `color` (RGBA 0..1), fading over `seconds`
+    /// (rules' `screen_flash`).
+    Flash {
+        color: [f32; 4],
+        seconds: f32,
+    },
     /// Invitation from a minigame owner, answered with Accept/Reject.
     Invite {
         game: u64,

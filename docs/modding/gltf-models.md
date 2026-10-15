@@ -151,6 +151,18 @@ socket. Set it yourself with `--box-width UNITS` and `--box-height UNITS`
 The box, not the mesh, is what bullets, explosions, other players and
 vehicles hit.
 
+**Prone and lean (optional).** `movement.prone` lets the body lie down
+(`set_prone` in rules): `{ "height": 0.5, "eye": 0.35, "forward": 1,
+"backward": 0.5, "sideways": 0.5 }`, its box height (at most the crouch's),
+eye height and crawling speeds. The body is drawn face down along its
+facing, its middle over the box, so its head and feet reach past the box:
+a lying body is hit only around its middle. `movement.lean` lets it lean
+(`set_lean`): `{ "distance": 0.5, "angle": 0.3, "seconds": 0.25 }`, how
+far the eye slides sideways (at most half the box's width, so a lean
+never sees past the body it can be shot at), how far the view and the
+body tilt (radians, up to 0.6) and how long a full lean takes. v20's
+bodies have neither.
+
 **Distant detail (optional, off by default).** Classic-era models are light
 enough to skip this. For a heavy model, `--lod TRIANGLES` adds a lighter
 copy with that many triangles that the body draws when it is small on

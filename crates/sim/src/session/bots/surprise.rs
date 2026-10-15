@@ -1107,6 +1107,7 @@ impl Session {
             responses: &self.events.projectile_responses,
             truncated_targets: 0,
             shapes: &shapes,
+            rewound: None,
         };
         let toward = flat(from - centre).normalize_or_zero();
         let mut best: Option<(f32, Vec3)> = None;

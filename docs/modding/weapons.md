@@ -113,7 +113,8 @@ The fields you are most likely to change:
 | projectile | `speed`, `gravity`, `lifetime_ticks` | how fast, how much it drops, how long it lives (120 ticks = 1 s) |
 | projectile | `damage`, `impulse`, `vertical` | hurt, and how hard it shoves |
 | projectile | `ballistic`, `elasticity` | bounces, and how much |
-| projectile | `decal` | the mark it leaves where it hits a brick, a bullet hole: `{ "size": 0.15, "color": [0.04, 0.035, 0.03, 0.9], "seconds": 30 }`, a soft disc `size` across (0.02 to 4, times the projectile's scale) on the face it hit, darkest in the middle, gone after `seconds` (0.5 to 600, fading over the last one) or when the brick goes; each player keeps the newest 512. `color` and `seconds` may be left out (near black, 30). None leaves no mark, as v20's own projectiles |
+| projectile | `decal` | the mark it leaves where it hits a brick or the map (its meshes and ground), a bullet hole: `{ "size": 0.15, "color": [0.04, 0.035, 0.03, 0.9], "seconds": 30 }`, a soft disc `size` across (0.02 to 4, times the projectile's scale) on the face it hit, darkest in the middle, gone after `seconds` (0.5 to 600, fading over the last one) or when the brick goes (a mark on the map stays until it fades); each player keeps the newest 512. `color` and `seconds` may be left out (near black, 30). None leaves no mark, as v20's own projectiles |
+| projectile | `stick_to_bodies` | `true` sticks it to any player or vehicle it hits, whatever its speed or angle, and it rides along on them until it goes off (a sticky grenade: pair it with `ballistic`, an `arm_ticks` as long as its `lifetime_ticks` and `explode_death`). If the body leaves the game it stays where it was. Off: v20's sticking, in place, only to what it meets fast and steep enough (`min_stick_speed`, `bounce_angle`) |
 | image state | `ticks` | how long a state (`Fire` is the reload time) lasts |
 | image | `shot` | several projectiles per shot, their spread and the recoil ([porting.md](porting.md#the-image-shot-field)); `scale` sizes the projectiles against their holder (0.1 to 10) |
 | image | `volleys` | up to 4 more sets each shot fires after its own: `[{ "projectile": "...", "projectiles": 1, "spread": 0.0005 }]`, a shotgun's slug after its pellets |
@@ -134,6 +135,7 @@ The fields you are most likely to change:
 | image | `both_arms` | `true` holds it up with both arms (`armReadyBoth`), not the mount hand's arm alone |
 | image | `scripts` | what each state `script` does, by lower-case name: `{ "onfire": { "arm": "spearThrow", "fire": true, "use_up": true } }` swings the arm, launches the image's projectile (or the entry's own `projectile`) and uses the item up, as a thrown grenade ([torque-equivalents.md](torque-equivalents.md#image-state-scripts-as-data)) |
 | image | `follow_arm` | `true` also moves a first-person `eye_offset` image with the arm's actions (shift, plant, swing), as the base game's brick, hammer and spray cans do; off by default |
+| image | `aim_assist` | `{ "angle": 0.05, "range": 120, "slowdown": 0.5 }`: help aiming at a body the holder could hurt (not a teammate, inside its mini-game's rules). A shot turns onto the middle of the nearest such body in sight whose middle is within `angle` radians of the aim and `range` units (at the holder's scale), before spread; the holder's own look slows to `slowdown` while their aim is on one. Bots firing the gun get the same help. Test: `crates/weapons/tests/aim_assist.rs` | angle 0 to 0.35, range 1 to 1000, slowdown 0.1 to 1 (default 1); off by default |
 | image | `rope` | `{ "projectile": "your-id:projectile/chain", "speed": 160 }`: while the holder hangs on a rope (`tether`), every player's game draws it with that projectile's trail, swept from the muzzle to the rope's end as densely as the projectile flying it at `speed` would lay it, as v20 rope tools did by firing a stream of them; nothing is sent for it |
 | pack | `sounds` | `{ "your-id:shot": { "file": "sounds/shot.wav", "volume": 0.8 } }`: your own `.wav`/`.ogg` files, named by a state's `sound` and by rules; `local` for sounds only the holder hears, `looping` for a state-long hum or a vehicle's `engine_sound` ([content-kinds.md](content-kinds.md)), `music` for a track rules play with `play_music` (up to 10 minutes, [rules.md](rules.md#music)). `bri-addon-check` decodes each file as the game does and fails one it cannot play |
 
@@ -277,7 +279,10 @@ out, with a note.
 
 An image's `shot` can say more of how it fires. `hitscan` (`range`, and
 `moving_range`) lands each projectile at once along a ray, with its
-damage and push; `explosion` names another projectile exploded there in
+damage and push. The ray meets other players where the shooter's own game
+showed them when they fired (lag compensation, up to half a second back),
+so a shot that was on target on their screen hits; a flying projectile
+meets them where they are; `explosion` names another projectile exploded there in
 place of its own, `player_sound` and `other_sound` play there by what it
 hit, `flown` names a projectile flown from the muzzle to that point, and
 `tracer` (`color`, `width`, `seconds`) draws a streak to it. A ray from
@@ -299,7 +304,11 @@ before the hit.
 `moving_spread` and `moving_projectile` replace the spread and the
 projectile while the shooter moves faster than `moving_speed`; `rested`
 (`after_ticks`, `spread`, and optionally `still` and `projectile`) is
-the truer first shot after a pause. An image's `state_shots` fire on
+the truer first shot after a pause. `crouched_spread` is the spread
+while the shooter crouches and is not moving (used when tighter than their
+standing spread), and `airborne_spread` the spread while they are off the
+ground and not riding, in place of every other: a tactical rifle that is
+steadiest crouched and wild mid-jump. An image's `state_shots` fire on
 entering a state whose script is not `onFire` (`"onfire2": { ... }`),
 each a shot of its own, hitscan or not (a knife's weaker stab beside its
 slash); a shot with `"free": true` takes no rounds. `recoil` pushes the shooter back along

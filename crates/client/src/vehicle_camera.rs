@@ -404,6 +404,7 @@ mod tests {
                     tether: None,
                     controller: None,
                     pass_group: 0,
+                    posture: Default::default(),
                 };
                 rider.yaw = {
                     let forward = turn * Vec3::NEG_Z;
