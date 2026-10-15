@@ -647,6 +647,11 @@ impl VehicleAssets {
         self.models
             .values()
             .filter_map(|m| Some((m.metal?, &m.transforms)))
+            .chain(
+                self.skinned
+                    .values()
+                    .filter_map(|m| Some((metal_centre(&m.data)?, &m.transforms))),
+            )
             .flat_map(|(centre, transforms)| {
                 transforms
                     .iter()
@@ -2017,6 +2022,9 @@ pub(crate) mod tests {
         rig.shape.validate()?;
         rig.skinned = true;
         rig.parts.clear();
+        for material in &mut assets.models.get_mut(&model).unwrap().data.materials {
+            material.kind = bri_render::scene::MaterialKind::Metal;
+        }
         let info = VehicleInfo {
             id: 1,
             definition: d.id.clone(),
@@ -2064,6 +2072,15 @@ pub(crate) mod tests {
             assets.models[&model].transforms.is_empty(),
             "no duplicate rigid rest gun"
         );
+        let centres = assets.metal_centres();
+        for slot in [a, b] {
+            let centre = metal_centre(&slot.data).context("posed metal")?;
+            let world = slot.transforms[0].transform.transform_point3(centre);
+            assert!(
+                centres.iter().any(|p| p.abs_diff_eq(world, 1e-5)),
+                "each posed gun contributes its current reflection-probe centre"
+            );
+        }
         infos.remove(&1);
         vehicles.prepare(&mut assets, &infos);
         assert!(!assets.skinned.contains_key(&(model.clone(), 1)));
