@@ -1124,6 +1124,8 @@ fn metal_and_glow_come_from_the_material() {
                 { "name": "Paint", "pbrMetallicRoughness": { "metallicFactor": 0.0 } },
                 { "name": "Lamp", "emissiveFactor": [1.0, 0.9, 0.5] },
                 { "name": "Ember", "emissiveFactor": [0.2, 0.0, 0.0] },
+                {"name":"Panel","extras":{"bri_uv_motion":{"center":[0.5,0.5],"rotation_rate_degrees":180.0}}},
+                {"name":"Invalid motion","extras":{"bri_uv_motion":{"rotation_rate_degrees":1e9}}},
             ]
         }))
         .unwrap()
@@ -1139,6 +1141,16 @@ fn metal_and_glow_come_from_the_material() {
             .0
     };
     let (steel, paint, lamp, ember) = (get(0), get(1), get(2), get(3));
+    let panel = get(4);
+    let motion = panel
+        .uv_motion
+        .expect("authored texture motion survives import");
+    assert_eq!(motion.center, [0.5; 2]);
+    assert_eq!(motion.rotation_rate_degrees, 180.);
+    assert!(
+        super::make_material(&doc, None, Some(5), "", &mut taken, &mut report).is_err(),
+        "invalid motion must be reported, never silently ignored"
+    );
     let metal = steel.metal.expect("steel is metal");
     assert_eq!((metal.color, metal.roughness), ([1.0; 3], 0.3));
     assert!(paint.metal.is_none() && !paint.unlit);

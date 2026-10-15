@@ -2372,7 +2372,7 @@ fn stowed_ammunition_updates_privately_without_equipping_or_repeating() {
     let image = pack.images.get_mut("probe:image/nade").unwrap();
     image.magazine = Some(
         serde_json::from_value(
-            json!({"size":1,"ammo":"probe","reserve":4,"max_reserve":4,"from_reserve":true}),
+            json!({"size":1,"ammo":"probe","reload_ticks":120,"reserve":4,"max_reserve":4,"from_reserve":true}),
         )
         .unwrap(),
     );

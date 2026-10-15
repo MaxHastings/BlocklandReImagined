@@ -305,3 +305,45 @@ and no collapse crosses between parts on different bones. The client
 picks a body's detail each frame from its height on screen. Code:
 `crates/addon-import/src/gltf/`; tests: `crates/addon-import/src/gltf/tests.rs`
 and `crates/client/tests/gltf_body.rs`.
+
+
+## Texture coordinate motion
+
+A material may supply `extras.bri_uv_motion` (native shape material `uv_motion`):
+
+```json
+{"bri_uv_motion":{"scale":[1,1],"offset":[0,0],"scroll":[0.1,0],"center":[0.5,0.5],"rotation_degrees":0,"rotation_rate_degrees":180}}
+```
+
+The renderer scales the model's UV, rotates about `center`, then adds `offset`
+and `scroll * seconds`. Rotation and rotation rate use degrees and degrees per
+second. Unspecified fields default to identity/zero. The cosmetic render clock
+is shared across world views; mesh positions and lighting UVs stay unchanged.
+The same operation works in Classic and Dynamic presentation. Invalid/nonfinite
+motion is rejected. Static-map glTF export preserves this metadata and keeps two
+materials distinct when they share an image but have different motion.
+
+This is a single UV transformation per material. Independent layer combinations,
+meter thresholds and live per-instance shader inputs are separate capabilities;
+texture motion alone does not implement them.
+
+## Preserving an authored hand pose
+
+Imported bodies receive generic hand fitting by default. If a rig already has
+its own correct hand frames and hold clips, its archetype can supply:
+
+```json
+{"sockets":{"preserve_hand_pose":true,"right_hand":{"node":"socket_right_hand"},"left_hand":{"node":"socket_left_hand"}}}
+```
+
+This uses the named raw marker frames and leaves arm clips/support placement as
+authored. The importer retains the raw nodes alongside its leveled Mount children;
+choose the actual intended attachment frame. It does not repair an incorrect
+marker or invent missing animation. Stock-tool first-person fallback remains
+available. One- and two-handed weapon roles are sampled separately for the host's
+standing muzzle cache, following the image's both_arms setting. Dynamic/seated
+shot pose parity needs separate verification when authoring a custom rig.
+
+Animated alpha-mask shadow casters still use their static UVs. The texture motion
+feature above currently covers visible materials; do not rely on animated cutout
+shadow silhouettes.

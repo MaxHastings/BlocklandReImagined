@@ -65,7 +65,7 @@ pub fn kind_providers(
 pub fn package_body_grips(
     content_root: &Path,
     packages: &bri_package::packages::PackageSet,
-) -> BTreeMap<String, BTreeMap<String, [f32; 16]>> {
+) -> BTreeMap<(String, bool), BTreeMap<String, [f32; 16]>> {
     let mut out = BTreeMap::new();
     for entry in packages.packages.iter().filter(|p| p.role.is_none()) {
         let Ok(dir) = bri_package::packages::package_dir(content_root, entry) else {
@@ -108,17 +108,22 @@ pub fn package_body_grips(
         for (model, looks) in bodies {
             match body_rig(&dir, &model, provided.get(&model).map(String::as_str)) {
                 Ok(rig) => {
-                    let mut grips = BTreeMap::new();
+                    let mut variants = BTreeMap::<bool, BTreeMap<String, [f32; 16]>>::new();
                     // An imported glTF body is fitted; a converted v20
                     // shape keeps its authored mounts.
                     let fitted = provided.contains_key(&model);
                     for (sockets, animations) in &looks {
-                        grips.extend(bri_sim::session::body_grips(
-                            &rig, sockets, animations, fitted,
-                        ));
+                        variants
+                            .entry(sockets.preserve_hand_pose)
+                            .or_default()
+                            .extend(bri_sim::session::body_grips(
+                                &rig, sockets, animations, fitted,
+                            ));
                     }
-                    if !grips.is_empty() {
-                        out.insert(model, grips);
+                    for (policy, grips) in variants {
+                        if !grips.is_empty() {
+                            out.insert((model.clone(), policy), grips);
+                        }
                     }
                 }
                 Err(error) => bri_console::warn(format!(

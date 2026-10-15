@@ -466,6 +466,7 @@ pub fn native_shape_scene(
                 }
             };
             bindings.push(scene.materials.len());
+            material.uv_motion = source.uv_motion;
             scene.materials.push(material);
             continue;
         }
@@ -505,6 +506,7 @@ pub fn native_shape_scene(
                 [0.0; 4],
             ]);
             bindings.push(scene.materials.len());
+            material.uv_motion = source.uv_motion;
             scene.materials.push(material);
             continue;
         }
@@ -560,6 +562,7 @@ pub fn native_shape_scene(
             ));
         }
         bindings.push(scene.materials.len());
+        material.uv_motion = source.uv_motion;
         scene.materials.push(material);
     }
     let fallback = scene.materials.len();

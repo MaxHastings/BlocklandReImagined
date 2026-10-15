@@ -53,6 +53,10 @@ pub const BLOCKHEAD_EYE: &str = "Eye";
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Sockets {
+    /// Authored hand clips/socket frames already hold items correctly. Preserve
+    /// them instead of applying generic arm raising and support fitting.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub preserve_hand_pose: bool,
     /// Where image mount point 0 (a held tool) attaches.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub right_hand: Option<Socket>,

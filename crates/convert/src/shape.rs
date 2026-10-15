@@ -876,6 +876,7 @@ pub fn read_dts(data: &[u8], id: String) -> Result<(Shape, Provenance)> {
             reflectance: reflection[i],
             paint_overlay: None,
             alpha_cutoff: None,
+            uv_motion: None,
             metal: None,
             surface: None,
         });

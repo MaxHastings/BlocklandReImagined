@@ -15,8 +15,8 @@ use glam::{Mat4, Quat};
 pub(super) struct Grips {
     /// By body model, each named node's transform (lower-case name) in the
     /// aim pose, level: the rig's idle, its arm raised for that hand, its
-    /// look level.
-    hands: BTreeMap<String, BTreeMap<String, Mat4>>,
+    /// look level. Two-handed variants use a `#both` suffix.
+    hands: BTreeMap<(String, bool), BTreeMap<String, Mat4>>,
     /// Each image's muzzle in its mount's frame ([`bri_weapons::muzzle::barrel`]).
     barrels: BTreeMap<String, Vec3>,
     /// Archetypes already reported as having no hand the host can find.
@@ -30,17 +30,17 @@ pub(super) struct Grips {
 pub fn shape_grips(rig: &bri_content::avatar::Rig, nodes: &[&str]) -> BTreeMap<String, [f32; 16]> {
     let clip = |role: Role| rig.sequence(role.blockhead_clip());
     let mut out = BTreeMap::new();
-    for hand in [0, 1] {
-        let Some(pose) = aim_pose(rig, &clip, hand) else {
+    for (hand, both) in [(0, false), (1, false), (0, true), (1, true)] {
+        let Some(pose) = aim_pose(rig, &clip, hand, both) else {
             continue;
         };
         let names =
             std::iter::once(bri_content::body::BLOCKHEAD_HANDS[hand]).chain(nodes.iter().copied());
         for name in names {
-            let key = name.to_ascii_lowercase();
+            let key = pose_key(name, both);
             // A node is its own hand's: Mount1 from the left arm's pose.
             if out.contains_key(&key)
-                && !key.eq_ignore_ascii_case(bri_content::body::BLOCKHEAD_HANDS[hand])
+                && key != pose_key(bri_content::body::BLOCKHEAD_HANDS[hand], both)
             {
                 continue;
             }
@@ -79,20 +79,28 @@ pub fn body_grips(
     };
     let parents: Vec<Option<usize>> = rig.shape.nodes.iter().map(|n| n.parent).collect();
     let mut out = BTreeMap::new();
-    for hand in [0, 1] {
+    for (hand, both) in [(0, false), (1, false), (0, true), (1, true)] {
         let Some(name) = sockets.hand(hand as u32).and_then(|s| s.node) else {
             continue;
         };
-        let Some(mut pose) = aim_pose(rig, &clip, hand) else {
+        let Some(mut pose) = aim_pose(rig, &clip, hand, both) else {
             continue;
         };
-        if fitted && let Some(end) = index(&name) {
+        if fitted
+            && !sockets.preserve_hand_pose
+            && let Some(end) = index(&name)
+        {
             let landmark = sockets
                 .hand(1 - hand as u32)
                 .and_then(|s| s.node)
                 .and_then(|n| index(&n))
                 .or_else(|| sockets.eye().node.and_then(|n| index(&n)));
-            let aims = clip([Role::AimRight, Role::AimLeft][hand]).is_some();
+            let aims = clip(if both {
+                Role::AimBoth
+            } else {
+                [Role::AimRight, Role::AimLeft][hand]
+            })
+            .is_some();
             if let Some(fit) =
                 bri_content::hold::fit(&parents, &mut pose.nodes, end, landmark, !aims, hand == 0)
             {
@@ -102,14 +110,14 @@ pub fn body_grips(
                     && let Some(shoulder) = pose.nodes.get(hold.shoulder)
                 {
                     out.insert(
-                        format!("{}{SHOULDER}", name.to_ascii_lowercase()),
+                        format!("{}{SHOULDER}", pose_key(&name, both)),
                         Mat4::from_translation(shoulder.w_axis.truncate()).to_cols_array(),
                     );
                 }
             }
         }
         if let Some(m) = node_in(rig, &pose, &name) {
-            out.insert(name.to_ascii_lowercase(), m);
+            out.insert(pose_key(&name, both), m);
         }
     }
     out
@@ -119,13 +127,23 @@ pub fn body_grips(
 /// about with the aim.
 const SHOULDER: &str = "#shoulder";
 
-/// The rig's idle, its arm raised for `hand` and its look level.
+fn pose_key(node: &str, both: bool) -> String {
+    let key = node.to_ascii_lowercase();
+    if both { format!("{key}#both") } else { key }
+}
+
+/// The rig's idle, its one- or two-handed ready role and its look level.
 fn aim_pose<'a>(
     rig: &'a bri_content::avatar::Rig,
     clip: &dyn Fn(Role) -> Option<&'a bri_content::shape::Animation>,
     hand: usize,
+    both: bool,
 ) -> Option<bri_content::animation::Pose> {
-    let aim = [Role::AimRight, Role::AimLeft][hand];
+    let aim = if both {
+        Role::AimBoth
+    } else {
+        [Role::AimRight, Role::AimLeft][hand]
+    };
     let mut layers = Vec::new();
     for (animation, at) in [
         (clip(Role::Idle), 0.0),
@@ -168,18 +186,29 @@ impl Session {
         model: &str,
         nodes: BTreeMap<String, [f32; 16]>,
     ) -> Result<()> {
+        self.set_body_grips_policy(model, false, nodes)
+    }
+    /// Separate authored/fitted hand frames even when archetypes share a model.
+    pub fn set_body_grips_policy(
+        &mut self,
+        model: &str,
+        preserve_hand_pose: bool,
+        nodes: BTreeMap<String, [f32; 16]>,
+    ) -> Result<()> {
         let nodes = nodes
             .into_iter()
             .map(|(name, m)| (name.to_ascii_lowercase(), Mat4::from_cols_array(&m)))
             .collect::<BTreeMap<_, _>>();
         ensure!(
-            nodes.len() <= 64
+            nodes.len() <= 128
                 && nodes
                     .values()
                     .all(|m| m.is_finite() && m.w_axis.truncate().length() <= 64.0),
             "Invalid body hand nodes for {model}"
         );
-        self.grips.hands.insert(model.to_ascii_lowercase(), nodes);
+        self.grips
+            .hands
+            .insert((model.to_ascii_lowercase(), preserve_hand_pose), nodes);
         Ok(())
     }
     /// Each image's muzzle in the frame of the hand holding it
@@ -201,7 +230,12 @@ impl Session {
     /// offset socket in its own frame, pitching about itself; a socket on a
     /// node, at that node's aim pose, pitching about the eye. `None` when
     /// the host knows no such hand.
-    pub(super) fn grip(&self, archetype: &crate::archetype::Archetype, hand: u8) -> Option<Grip> {
+    pub(super) fn grip(
+        &self,
+        archetype: &crate::archetype::Archetype,
+        hand: u8,
+        both: bool,
+    ) -> Option<Grip> {
         let socket = archetype.sockets.hand(u32::from(hand))?;
         let offset = Mat4::from_translation(Vec3::from(socket.offset));
         let Some(node) = &socket.node else {
@@ -210,12 +244,15 @@ impl Session {
                 pivot: Vec3::from(socket.offset),
             });
         };
-        let hands = self
-            .grips
-            .hands
-            .get(&archetype.look.model.to_ascii_lowercase())?;
-        let node = node.to_ascii_lowercase();
-        let hand_node = hands.get(&node)?;
+        let hands = self.grips.hands.get(&(
+            archetype.look.model.to_ascii_lowercase(),
+            archetype.sockets.preserve_hand_pose,
+        ))?;
+        let node = pose_key(node, both);
+        let hand_node = hands.get(&node).or_else(|| {
+            both.then(|| hands.get(&node[..node.len() - "#both".len()]))
+                .flatten()
+        })?;
         let m = &archetype.movement;
         let pivot = hands
             .get(&format!("{node}{SHOULDER}"))
@@ -236,7 +273,12 @@ impl Session {
         };
         let state = peer.player.state();
         let archetype = self.archetypes.resolve(state.archetype);
-        let Some(grip) = self.grip(archetype, hand) else {
+        let both = self
+            .weapons
+            .image_id(ActorId(owner), hand)
+            .and_then(|id| self.weapons.pack.images.get(id))
+            .is_some_and(|image| image.both_arms);
+        let Some(grip) = self.grip(archetype, hand, both) else {
             let key = (archetype.id.clone(), hand);
             if hand < 2 && !self.grips.reported.contains(&key) {
                 bri_console::warn(format!(
@@ -272,5 +314,40 @@ impl Session {
             eye_local - standing,
         );
         if muzzle.is_finite() { muzzle } else { eye }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn authored_two_handed_grips_use_the_two_handed_role() {
+        let mut rig = bri_content::testing::avatar::rig();
+        // A real imported rig may give its one- and two-handed holds different
+        // right-arm poses; do not assume they share the same muzzle origin.
+        let both = rig.sequences.get_mut("armreadyboth").unwrap();
+        let arm = both
+            .nodes
+            .iter_mut()
+            .find(|t| t.node == "RightArm")
+            .unwrap();
+        *arm.rotations.last_mut().unwrap() = Quat::from_rotation_x(0.7).to_array();
+        let sockets = bri_content::body::Sockets {
+            preserve_hand_pose: true,
+            ..Default::default()
+        };
+        let clips = Default::default();
+        let grips = body_grips(&rig, &sockets, &clips, true);
+        let single = Mat4::from_cols_array(&grips["mount0"]);
+        let both = Mat4::from_cols_array(&grips["mount0#both"]);
+        assert!(!single.abs_diff_eq(both, 1e-3));
+        let lookup = |role: Role| rig.sequence(role.blockhead_clip());
+        let expected = aim_pose(&rig, &lookup, 0, true).unwrap();
+        assert!(both.abs_diff_eq(
+            Mat4::from_cols_array(&node_in(&rig, &expected, "Mount0").unwrap()),
+            1e-5
+        ));
+        assert!(shape_grips(&rig, &[]).contains_key("mount0#both"));
     }
 }

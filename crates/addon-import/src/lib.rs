@@ -2451,6 +2451,7 @@ fn placeholder() -> bri_content::shape::Shape {
             reflectance: 0.0,
             paint_overlay: None,
             alpha_cutoff: None,
+            uv_motion: None,
             metal: None,
             surface: None,
         }],

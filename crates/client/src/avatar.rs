@@ -916,6 +916,7 @@ pub struct AvatarMesh {
 /// its shoulder ([`bri_content::hold::fit`]).
 #[derive(Debug, Default, PartialEq)]
 struct Fits {
+    first_person: [bool; 2],
     hands: [Option<bri_content::hold::Fit>; 2],
     /// How far a rider is moved (model frame, unscaled) so its hip sits
     /// where the Blockhead's does in its `sit` pose: every seat is
@@ -1709,6 +1710,9 @@ impl AvatarMesh {
                 assets.rig.shape.nodes.iter().map(|n| n.parent).collect();
             let ends = [0, 1].map(|n| self.mount_index(assets, n));
             for (hand, aim) in [Role::AimRight, Role::AimLeft].into_iter().enumerate() {
+                if self.kind.sockets.preserve_hand_pose {
+                    continue;
+                }
                 let Some(end) = ends[hand] else {
                     continue;
                 };
@@ -1745,6 +1749,13 @@ impl AvatarMesh {
                     fits.hands[hand] = Some(fit);
                 }
             }
+            fits.first_person = std::array::from_fn(|n| {
+                if self.kind.sockets.preserve_hand_pose {
+                    ends[n].is_some()
+                } else {
+                    fits.hands[n].is_some()
+                }
+            });
             let hip = bri_content::hold::sit_hip(&assets.rig.shape, clip(Role::Sit));
             fits.seat = assets
                 .seat_hip
@@ -1856,7 +1867,9 @@ impl AvatarMesh {
     /// view, whatever the body's size or arm animation.
     /// `None` for the Blockhead and v20 bodies, which hold in the hand.
     pub fn first_person_hand(&self, n: usize) -> Option<Mat4> {
-        self.fits.as_ref()?.hands.get(n)?.as_ref()?;
+        if !*self.fits.as_ref()?.first_person.get(n)? {
+            return None;
+        }
         let offset = self
             .kind
             .sockets
@@ -3425,6 +3438,65 @@ mod tests {
         assets.load_bodies(root.path(), &packages);
         ensure!(assets.has_body(&model), "{model} did not load");
         Ok((assets, model, root))
+    }
+
+    #[test]
+    fn authored_hand_frames_preserve_clips_and_keep_the_first_person_fallback() -> Result<()> {
+        let (mut assets, model, _root) = own_body("authored-hands", &[], &[("root", "root")])?;
+        assets
+            .bodies
+            .get_mut(&model)
+            .context("imported body fixture")?
+            .fitted = true;
+        let mut archetype = bri_sim::archetype::Archetypes::default()
+            .resolve(Default::default())
+            .clone();
+        archetype.look.model = model.clone();
+        archetype.sockets.preserve_hand_pose = true;
+        let mut body = assets.body_mesh(&model, assets.package.defaults.clone())?;
+        body.set_body_kind(BodyKind::of(&archetype, false));
+        body.pose_with_animation(&assets, &player(), 0., &AvatarAnimationInput::default())?;
+        let original = body.posed_nodes.clone();
+        body.pose_with_animation(
+            &assets,
+            &player(),
+            0.,
+            &AvatarAnimationInput {
+                held_tool_pose: HeldToolPose::Both,
+                support: Some(Vec3::splat(4.)),
+                ..Default::default()
+            },
+        )?;
+        assert!(
+            body.posed_nodes
+                .iter()
+                .zip(&original)
+                .all(|(a, b)| a.abs_diff_eq(*b, 1e-5)),
+            "generic raising/support IK must not alter authored hands"
+        );
+        let raw = body
+            .world_node(&assets, "Mount0")
+            .context("raw hand node")?;
+        assert!(
+            body.mount_socket(&assets, 0, 0.)
+                .context("hand")?
+                .abs_diff_eq(raw, 1e-5)
+        );
+        assert!(
+            body.first_person_hand(0).is_some(),
+            "foreign stock tools retain their independent first-person fallback"
+        );
+        let rig = &assets.for_mesh(&body).rig;
+        let host =
+            bri_sim::session::body_grips(rig, &archetype.sockets, &archetype.look.animations, true);
+        assert!(
+            Mat4::from_cols_array(host.get("mount0").context("host hand")?).abs_diff_eq(
+                body.model_node(&assets, "Mount0").context("client hand")?,
+                1e-5
+            ),
+            "host and client preserve the same authored frame"
+        );
+        Ok(())
     }
 
     /// v20 plays the run, back and side clips at the speed the body covers

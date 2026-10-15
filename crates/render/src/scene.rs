@@ -324,6 +324,7 @@ pub struct Material {
     pub kind: MaterialKind,
     pub alpha: AlphaMode,
     pub double_sided: bool,
+    pub uv_motion: Option<bri_content::shape::UvMotion>,
     /// v20 `fxBrickBatcher` loads brickSIDE with `GL_CLAMP` and nearest
     /// magnification; every other brick surface repeats with linear filtering.
     pub clamp_nearest: bool,
@@ -425,6 +426,7 @@ impl Material {
             kind: MaterialKind::Surface,
             alpha: AlphaMode::Opaque,
             double_sided: false,
+            uv_motion: None,
             clamp_nearest: false,
             temp_brick_flash: false,
             ignore_texture_alpha: false,
@@ -3457,7 +3459,7 @@ impl SceneRenderer {
         });
         let mut materials = vec![];
         for material in &data.materials {
-            let mut parameters: [f32; 20] = [0.0; 20];
+            let mut parameters: [f32; 32] = [0.0; 32];
             parameters[..4].copy_from_slice(&[
                 match material.kind {
                     MaterialKind::Surface => 0.0,
@@ -3490,6 +3492,27 @@ impl SceneRenderer {
                 for (i, group) in groups.iter().enumerate() {
                     parameters[(i + 1) * 4..(i + 2) * 4].copy_from_slice(group);
                 }
+            }
+            if let Some(uv) = material.uv_motion {
+                ensure!(uv.valid(), "Invalid UV motion on {}", material.name);
+                parameters[20..24].copy_from_slice(&[
+                    1.,
+                    uv.scale[0],
+                    uv.scale[1],
+                    uv.rotation_degrees.to_radians(),
+                ]);
+                parameters[24..28].copy_from_slice(&[
+                    uv.offset[0],
+                    uv.offset[1],
+                    uv.scroll[0],
+                    uv.scroll[1],
+                ]);
+                parameters[28..32].copy_from_slice(&[
+                    uv.center[0],
+                    uv.center[1],
+                    uv.rotation_rate_degrees.to_radians(),
+                    0.,
+                ]);
             }
             let buffer = device.buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: Some(&material.name),

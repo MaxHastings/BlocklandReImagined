@@ -122,7 +122,7 @@ impl MeshBuilder {
     }
 }
 
-/// Texture files to glTF materials, one per file.
+/// Texture files to glTF materials, preserving distinct authored UV motion.
 struct Materials {
     by_file: BTreeMap<String, usize>,
 }
@@ -132,9 +132,14 @@ impl Materials {
         g: &mut Gltf,
         root: &Path,
         file: &str,
+        motion: Option<bri_content::shape::UvMotion>,
         report: &mut ExportReport,
     ) -> Result<usize> {
-        if let Some(&m) = self.by_file.get(file) {
+        let key = match motion {
+            Some(uv) => format!("{file}:uv={}", serde_json::to_string(&uv)?),
+            None => file.to_owned(),
+        };
+        if let Some(&m) = self.by_file.get(&key) {
             return Ok(m);
         }
         let bytes = read(root, file)?;
@@ -159,7 +164,10 @@ impl Materials {
         // Torque surfaces are matte.
         g.json["materials"][m]["pbrMetallicRoughness"]["metallicFactor"] = json!(0.0);
         g.json["materials"][m]["pbrMetallicRoughness"]["roughnessFactor"] = json!(1.0);
-        self.by_file.insert(file.to_owned(), m);
+        if let Some(motion) = motion {
+            g.json["materials"][m]["extras"] = json!({"bri_uv_motion":motion});
+        }
+        self.by_file.insert(key, m);
         report.textures += 1;
         Ok(m)
     }
@@ -271,7 +279,7 @@ pub fn export_map(root: &Path, wanted: &str) -> Result<(Vec<u8>, ExportReport)> 
                 let mut by_material = BTreeMap::new();
                 for b in bindings.iter().filter(|b| b["asset"].as_str() == Some(id) && b["detail"].as_u64() == Some(0)) {
                     if let (Some(m), Some(t)) = (b["material"].as_u64(), b["texture"].as_str()) {
-                        by_material.insert(m as usize, materials.get(&mut g, root, t, &mut report)?);
+                        by_material.insert(m as usize, materials.get(&mut g, root, t, None, &mut report)?);
                     }
                 }
                 let mut mesh = MeshBuilder::default();
@@ -316,7 +324,7 @@ pub fn export_map(root: &Path, wanted: &str) -> Result<(Vec<u8>, ExportReport)> 
                 let mut by_material = BTreeMap::new();
                 for b in bindings.iter().filter(|b| b["asset"].as_str() == Some(id) && b["skin"].as_str().unwrap_or_default().is_empty()) {
                     if let (Some(m), Some(t)) = (b["shape_material"].as_u64(), b["texture"].as_str()) {
-                        by_material.insert(m as usize, materials.get(&mut g, root, t, &mut report)?);
+                        by_material.insert(m as usize, materials.get(&mut g, root, t, shape.materials.get(m as usize).and_then(|source|source.uv_motion), &mut report)?);
                     }
                 }
                 let pose = bri_content::animation::sample(&shape, None, 0.0)?;

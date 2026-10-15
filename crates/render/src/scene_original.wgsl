@@ -816,7 +816,7 @@ fn map_light_sum(position:vec3<f32>,normal:vec3<f32>,visibility:MapVisibility,la
     }
     return out;
 }
-@group(1) @binding(15) var<uniform> material:array<vec4<f32>,5>;
+@group(1) @binding(15) var<uniform> material:array<vec4<f32>,8>;
 // v20 brick FX (blocklandv20.exe quad emitter 0x52ed70, docs/audits/bricks.md).
 // fx.w packs 1 + color + 8*shape + 32*corner + 128*depthStuds; fx.xyz is the
 // brick centre. Only brick materials read it.
@@ -856,7 +856,14 @@ struct VertexOut {
     let normal=(cofactor*local_normal)/dot(m0.xyz,cross(m1.xyz,m2.xyz));
     let color=local_color*tint;
     var out:VertexOut;out.position=camera.view_projection*vec4<f32>(position,1.0);
-    out.uv=uv;out.lightmap_uv=lightmap_uv;out.color=color;out.normal=normal;out.world_position=position;
+    out.uv=uv;
+    if material[5].x>0.5 {
+        let angle=material[5].w+camera.atmosphere.z*material[7].z;
+        let c=cos(angle);let s=sin(angle);
+        let local=uv*material[5].yz-material[7].xy;
+        out.uv=vec2(local.x*c-local.y*s,local.x*s+local.y*c)+material[7].xy+material[6].xy+camera.atmosphere.z*material[6].zw;
+    }
+    out.lightmap_uv=lightmap_uv;out.color=color;out.normal=normal;out.world_position=position;
     out.clip=dot(clip.xyz,position)+clip.w;
     let fx=brick_fx(fx_data);out.fx=vec2<u32>(fx.color,fx.shape);
     // The FX centre moves with the model, like the vertices (debris is built

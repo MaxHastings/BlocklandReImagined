@@ -2124,6 +2124,15 @@ fn make_material(
             detail_scale: 1.0,
             detail_strength: 1.0,
         });
+    let uv_motion = if m["extras"]["bri_uv_motion"].is_null() {
+        None
+    } else {
+        let motion: bri_content::shape::UvMotion =
+            serde_json::from_value(m["extras"]["bri_uv_motion"].clone())
+                .context("Material bri_uv_motion")?;
+        ensure!(motion.valid(), "Invalid material UV motion");
+        Some(motion)
+    };
     let mut png = Vec::new();
     image::DynamicImage::ImageRgba8(pixels)
         .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)?;
@@ -2144,6 +2153,7 @@ fn make_material(
             paint_overlay: Some(false),
             alpha_cutoff: (m["alphaMode"].as_str() == Some("MASK"))
                 .then(|| m["alphaCutoff"].as_f64().unwrap_or(0.5) as f32),
+            uv_motion,
             metal,
             surface,
         },

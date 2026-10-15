@@ -126,7 +126,7 @@ fn an_imported_gltf_body_draws_untinted_holds_and_animates() -> Result<()> {
     // the muzzle in its hand and not its eye.
     let grips = bri_net::content_identity::package_body_grips(root.path(), &packages);
     let hands = grips
-        .get(MODEL)
+        .get(&(MODEL.to_owned(), false))
         .context("the host found the body's hands")?;
     let (node, grip) = hands
         .iter()

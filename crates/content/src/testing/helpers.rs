@@ -145,6 +145,7 @@ pub fn material(name: &str, blend: &str) -> Material {
         reflectance: 0.0,
         paint_overlay: None,
         alpha_cutoff: None,
+        uv_motion: None,
         metal: None,
         surface: None,
     }

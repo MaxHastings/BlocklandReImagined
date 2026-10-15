@@ -132,3 +132,7 @@ labels are retained so earlier progress notes remain traceable.
 | Authored seat eye origins | Optional seat-local eye drives both client first-person view and authoritative motor interaction eye; no FOV or camera-mode lock | Root passenger view comparison | implementation and comparison pending |
 
 | Cosmetic particle contacts | Optional swept structure contacts with authored restitution, tangential retention, rest and death behavior; world query supplied by adapter, no gameplay authority | Root environment-impact audit | implementation in progress |
+
+| Animated texture coordinates | Authored UV scale/offset, scroll and rotation about a declared center, sampled from the cosmetic render clock; no geometry animation | Root source dashboard review | implementation in progress |
+
+| Authored hand poses | Body sockets may preserve authored hand frames/poses instead of generic Blockhead fitting; the same policy applies on host and client | Root rifle source-marker audit | implementation and comparison in progress |

@@ -668,6 +668,7 @@ fn load_static_shape(
             material.alpha = AlphaMode::Mask(0.5);
             soft_edges.insert(out.materials.len(), out.materials.len() + 1);
             materials.push(out.materials.len());
+            material.uv_motion = authored.uv_motion;
             out.materials.push(material);
             out.materials.push(edges);
             continue;
@@ -679,6 +680,7 @@ fn load_static_shape(
             ));
         }
         materials.push(out.materials.len());
+        material.uv_motion = authored.uv_motion;
         out.materials.push(material);
     }
     let fallback = out.materials.len();
@@ -1044,6 +1046,7 @@ fn load_terrain(
         kind: MaterialKind::Terrain,
         alpha: AlphaMode::Opaque,
         double_sided: false,
+        uv_motion: None,
         clamp_nearest: false,
         temp_brick_flash: false,
         ignore_texture_alpha: false,

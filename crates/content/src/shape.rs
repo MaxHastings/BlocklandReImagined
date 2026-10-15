@@ -150,6 +150,8 @@ pub struct Material {
     /// Solid cutout geometry: discard texels below this alpha, then write depth.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub alpha_cutoff: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub uv_motion: Option<UvMotion>,
     pub unlit: bool,
     pub environment: bool,
     pub mipmaps: bool,
@@ -171,6 +173,44 @@ pub struct Material {
     /// `metal` when both are set.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub surface: Option<Surface>,
+}
+/// Texture coordinates in UV space: scale, rotate about center, then offset
+/// and scroll. Angles are degrees, rates per second. Geometry and lighting UVs stay put.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct UvMotion {
+    pub scale: [f32; 2],
+    pub offset: [f32; 2],
+    pub scroll: [f32; 2],
+    pub center: [f32; 2],
+    pub rotation_degrees: f32,
+    pub rotation_rate_degrees: f32,
+}
+impl Default for UvMotion {
+    fn default() -> Self {
+        Self {
+            scale: [1.; 2],
+            offset: [0.; 2],
+            scroll: [0.; 2],
+            center: [0.; 2],
+            rotation_degrees: 0.,
+            rotation_rate_degrees: 0.,
+        }
+    }
+}
+impl UvMotion {
+    pub fn valid(self) -> bool {
+        self.scale
+            .iter()
+            .chain(&self.offset)
+            .chain(&self.scroll)
+            .chain(&self.center)
+            .all(|v| v.is_finite() && v.abs() <= 10000.)
+            && self.rotation_degrees.is_finite()
+            && self.rotation_degrees.abs() <= 36000.
+            && self.rotation_rate_degrees.is_finite()
+            && self.rotation_rate_degrees.abs() <= 36000.
+    }
 }
 /// Physically based maps for a [`Material`], each naming another material
 /// (by index) whose texture holds it, as [`Metal::detail`] does. The
@@ -436,6 +476,10 @@ impl Shape {
             }
         }
         for material in &self.materials {
+            ensure!(
+                material.uv_motion.is_none_or(UvMotion::valid),
+                "Invalid material UV motion"
+            );
             ensure!(
                 material
                     .alpha_cutoff
