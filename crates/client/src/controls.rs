@@ -1752,6 +1752,7 @@ mod tests {
         c.orbit_point(bri_sim::session::OrbitPoint {
             at: [3.0, 1.0, 4.0],
             distance: 4.5,
+            object: None,
         });
         assert_eq!(
             c.orbit_focus(

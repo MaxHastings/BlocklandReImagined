@@ -3367,6 +3367,23 @@ fn register_presentation(engine: &mut Engine) {
             }))
         },
     );
+    // An orbit `distance` units out around an object (`"vehicle:12"`)
+    // that follows it as it moves; `watch(p, ())` ends it.
+    engine.register_fn(
+        "orbit_object",
+        |player: Dynamic, object: &str, distance: Dynamic| {
+            let Some(object) = crate::ops::ObjectRef::parse(object) else {
+                return fail(format!("\"{object}\" is not an object"));
+            };
+            push(Op::Camera(ops::Camera {
+                player: id(&player)?,
+                camera: crate::ops::CameraOp::Object {
+                    object,
+                    distance: float(&distance)?,
+                },
+            }))
+        },
+    );
     engine.register_fn("set_look_limits", |player: Dynamic, _: ()| {
         push(Op::SetLookLimits(ops::SetLookLimits {
             player: id(&player)?,
@@ -3870,6 +3887,9 @@ impl Runtime {
             }
             if !behaviour.zones.is_empty() {
                 need("on_zone".into(), 3, "zones");
+            }
+            if behaviour.zones.iter().any(|z| z.objects) {
+                need("on_zone_object".into(), 3, "zones with objects");
             }
             if !behaviour.brick_outputs.is_empty() {
                 need("on_brick_output".into(), 4, "brick_outputs");

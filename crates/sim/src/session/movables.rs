@@ -252,6 +252,34 @@ impl Session {
             })
             .collect()
     }
+    /// Every vehicle's box as it sits in the world (its definition's box,
+    /// scaled and turned, then boxed again along the axes), for zones that
+    /// notice objects.
+    pub(super) fn object_boxes(&self) -> Vec<(ObjectRef, Vec3, Vec3)> {
+        let Some(world) = &self.vehicles.world else {
+            return Vec::new();
+        };
+        world
+            .snapshot(&self.simulation.physics)
+            .vehicles
+            .into_iter()
+            .filter(|v| !v.destroyed)
+            .filter_map(|v| {
+                let d = world.definition(&v.definition)?;
+                let lo = Vec3::from(d.bounds_min) * v.scale;
+                let hi = Vec3::from(d.bounds_max) * v.scale;
+                let turn = glam::Mat3::from_quat(glam::Quat::from_array(v.transform.rotation));
+                let centre = Vec3::from(v.transform.position) + turn * ((lo + hi) * 0.5);
+                let half = (hi - lo) * 0.5;
+                let reach = Vec3::new(
+                    turn.row(0).abs().dot(half),
+                    turn.row(1).abs().dot(half),
+                    turn.row(2).abs().dot(half),
+                );
+                Some((ObjectRef::Vehicle(v.id.0), centre - reach, centre + reach))
+            })
+            .collect()
+    }
     pub(super) fn hold_views(&self) -> Vec<HoldView> {
         self.movables
             .holds

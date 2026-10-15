@@ -54,6 +54,7 @@ refused. The engine calls:
 | `on_brick_input(input, brick, player)` | a player set off an engine input that some of your `brick_inputs` follow, on a brick with rows on one of them: return the name of one to run it too, or `()` (see **Brick events**) |
 | `on_event_row(player, brick, row)` | a player sends a row of wrench events for a brick, before it is saved, when `"on_event_row": true`: return `false` or a reason to leave it out (see **Brick events**) |
 | `on_zone(player, brick, event)` | a living player enters (`"enter"`), stays in (`"tick"`, with `"ticks": true`) or leaves (`"leave"`) the space over a brick of a kind listed in `zones` (a Torque trigger made with `createTrigger`) |
+| `on_zone_object(object, brick, event)` | the same for an object (`"vehicle:12"`), in a zone with `"objects": true` |
 | `on_trigger(player, trigger, down)` | a living player with nothing in their hand presses (`down` true) or lets go of a trigger (v20's `Armor::onTrigger`), when `"on_trigger": true`. Trigger `0` is fire: the empty-hand click, whose press comes before `on_activate`. Return `true` to take it, anything else to pass it on: Add-Ons are asked in load order, presses and releases alike, and a press nobody takes goes on to `on_activate` and the usual click. A charged throw starts on the press and lets fly on the release |
 | `on_drop_key(player)` | a living player with nothing in their hand presses the Drop Tool key (v20's `serverCmdDropTool` while `currTool` is -1), when `"on_drop_key": true`. Return `true` to take it; Add-Ons are asked in load order. Capture the Flag drops a carried flag this way |
 | `on_contact(info)` | two bodies begin to touch, when `"on_contact": true`: `info` is `#{ kind, by, target, vehicle, target_vehicle, from, speed, velocity }`, `kind` being `"body"` (one player's body meeting another's), `"vehicle"` (a vehicle running into a player) or `"vehicles"` (two vehicles crashing: `vehicle` ran into `target_vehicle`; `by` and `target` are their drivers or `()`). `from` is `"above"`, `"below"` or `"side"`; `velocity` is `by`'s less `target`'s as they met and `speed` its length. A stomp, a run-over or a crash means what the rules make it mean |
@@ -117,7 +118,7 @@ run are left out. Your rules remove a game's entry when it ends.
 | `object(ref)`, `objects()`, `objects_near(x, y, z, r)`, `held(p)`, `tethered(p)` | | `teleport`, `respawn`, `remove_body(p)` (takes the body away without a death: no score, no death line, no `on_death`; they wait to respawn like the dead), `scroll_mode(p, mode)` (what the mouse wheel and number keys pick: `"none"`, `"bricks"`, `"paint"` or `"tools"`, leaving what is in hand), `set_archetype`, `push_archetype`, `pop_archetype`, `control(p, entity)`, `release(p)`, `give_item(p, item, equip)`, `take_item(p, item)`, `drop_item(item, x, y, z[, vx, vy, vz[, data]])`, `drop_item(item, #{ ... })`, `remove_drop(id)`, `name_drop(id, text, c)`: `player` |
 | `raycast(from, dir, range[, ignore])`, `can_damage(by, target)`, `enabled(add_on)`, `lan()` | | `set_fov(p, fov)`, `set_speed_scale(p, scale)`, `set_prone(p, prone)`, `set_lean(p, lean)`, `set_image_ammo(p, ammo)`, `set_image_loaded(p, loaded)`, `mount_image(p, image)`, `mount_image(p, image, slot[, paint or #{ paint, keep }])`, `unmount_image(p)`, `emote(p, image[, skip_spam])`, `set_scale(p, scale)`, `set_look_limits(p, up, down)`, `orbit_camera(p, target[, nearest, farthest], distance[, body])`: `player` |
 | | | `give_ammo(p, ammo, rounds)`, `set_reserve(p, ammo, rounds)`, `set_rounds(p, item, rounds)`, `reload(p)`, `set_image_state(p, state)`, `quick_use(p, item)`: `player` |
-| `minigames()`, `minigame(id)`, `setting(game, key)`, `team_setting(game, team, key)`, `server_setting(key)`, `pref(global)`, `bricks(kind)`, `brick(id)`, `palette()`, `drops()` | | `set_teams(game, teams, options)`, `set_team(p, team)`, `set_score(p, n)`, `add_score(p, n)`, `reset_minigame(game)`, `set_setting(game, key, v)`, `set_team_setting(game, team, key, v)`, `hold_respawn(p, held)`, `end_round(game, winners)`, `report_column(game, key, title, cells)`: `minigame`; `show_report(p, report)`, `hide_report(p)`: `chat`; `watch(p, target)`, `follow_path(p, knots)`, `free_camera(p)`, `orbit_point(p, at, distance)`: `player`; `set_brick_item(brick, item)`, `set_brick_color(brick, c)`, `set_brick_shown(brick, rendering, colliding, raycasting)`: `world.edit`; `fire_brick_input(brick, input, p)`, `fire_game_input(game, input, p, killer)`, `set_brick_field(brick, key, v)`: `brick_events`; `brick_field(brick, key)` reads |
+| `minigames()`, `minigame(id)`, `setting(game, key)`, `team_setting(game, team, key)`, `server_setting(key)`, `pref(global)`, `bricks(kind)`, `brick(id)`, `palette()`, `drops()` | | `set_teams(game, teams, options)`, `set_team(p, team)`, `set_score(p, n)`, `add_score(p, n)`, `reset_minigame(game)`, `set_setting(game, key, v)`, `set_team_setting(game, team, key, v)`, `hold_respawn(p, held)`, `end_round(game, winners)`, `report_column(game, key, title, cells)`: `minigame`; `show_report(p, report)`, `hide_report(p)`: `chat`; `watch(p, target)`, `follow_path(p, knots)`, `free_camera(p)`, `orbit_point(p, at, distance)`, `orbit_object(p, object, distance)`: `player`; `set_brick_item(brick, item)`, `set_brick_color(brick, c)`, `set_brick_shown(brick, rendering, colliding, raycasting)`: `world.edit`; `fire_brick_input(brick, input, p)`, `fire_game_input(game, input, p, killer)`, `set_brick_field(brick, key, v)`: `brick_events`; `brick_field(brick, key)` reads |
 | `brick_box(brick)`, `voxel(brick)`, `can_place_voxel(x, y, z)` | | `place_voxel(x, y, z, material)`: `world.edit`; `set_avatar_colors(p, colors)`, `temp_look(p, look, seconds)`: `player` |
 | `brick(id)`, `bricks_in(min, max)`, `can_plant(kind, [x, y, z], turns)`, `can_edit(brick)` | | `plant_brick(kind, [x, y, z], turns, color, owner)`: `world.edit` |
 | | | `copy_build(p, brick, limit, way, tool[, options])`, `copy_box(p, min, max, limit, tool[, options])`, `mirror_copy(p, axis)`, `mirror_ghost(p, axis, asymmetric)`, `highlight_copy(p, rgba, seconds)`, `save_copy(p, name[, options])`, `load_copy(p, name, limit, tool[, options])`, `list_copies(p, filter)`, `plant_wait(p, seconds)`, `pivot_copy(p, pivot)`, `plant_as(p, target, admin)`: `build` |
@@ -471,7 +472,10 @@ as it reaches each one, from 0 (`PathCameraData::onNode`).
 `follow_path(p, ())` hands control back. `free_camera(p)` lets a spectator
 fly freely from where their camera is (`Camera::setMode("Observer")`, no
 orb, no drop), and `orbit_point(p, [x, y, z], distance)` circles a point
-0.5 to 100 units out (`setOrbitPointMode`); `watch(p, ())` ends either. All
+0.5 to 100 units out (`setOrbitPointMode`). `orbit_object(p, object,
+distance)` circles an object (`"vehicle:12"`: a ball, a car, a crate) and
+follows it wherever it goes, as clients draw it; if the object leaves the
+world the camera stays where it last was. `watch(p, ())` ends any of them. All
 are `player` capability and take only the body or another rules camera.
 With `"on_observer": true`, `on_observer(p, button)` hears the keys of a
 spectator, a dead player whose respawn a rule holds or one under a rules
@@ -703,7 +707,16 @@ of the brick's colour).
 Every `period_ms` (10 to 10000, default 100) the engine checks each living
 player against the box of every brick of those kinds, raised by `above`,
 and calls `on_zone(player, brick, "enter")` or `"leave"` as they come and
-go (and `"tick"` while they stay, with `"ticks": true`).
+go (and `"tick"` while they stay, with `"ticks": true`). A zone with
+`"objects": true` also notices every vehicle (any loose physics body: a
+golf ball reaching its cup, a crate pushed onto a plate, a car crossing a
+line) whose box meets it, calling `on_zone_object(object, brick, event)`
+with the object's reference and the same events. Builders get the same
+without code from the wrench: a brick with an `onObjectEnter`,
+`onObjectLeave` or `onObjectStay` row is a detection region that notices
+vehicles from their own spawn bricks (see the Rule Workshop's
+`PLAYTEST.md`). Zones are for an Add-On's own objects and zones it
+declares itself.
 `set_zone_period(zone, ms)` (`minigame`) changes how often zone `zone` (its
 index in `zones`) is checked, as a script setting the trigger datablock's
 `tickPeriodMS` did.
