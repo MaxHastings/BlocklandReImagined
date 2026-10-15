@@ -172,6 +172,8 @@ pub struct Report {
     /// A body's collision box and eye heights, as its archetype's
     /// `movement` gets them.
     pub movement: Option<Movement>,
+    /// A map's teleporters, one line each: name, role, channel, radius.
+    pub teleporters: Vec<String>,
     pub warnings: Vec<String>,
 }
 #[derive(Debug, Clone, Copy, Serialize)]
@@ -2293,6 +2295,13 @@ impl Report {
             let _ = writeln!(s, "{heading}\n");
             for p in &self.points {
                 let _ = writeln!(s, "- `{}` at {:?}", p.node, p.position);
+            }
+            let _ = writeln!(s);
+        }
+        if !self.teleporters.is_empty() {
+            let _ = writeln!(s, "## Teleporters\n");
+            for t in &self.teleporters {
+                let _ = writeln!(s, "- {t}");
             }
             let _ = writeln!(s);
         }

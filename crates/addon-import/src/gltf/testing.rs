@@ -517,6 +517,19 @@ pub fn room(col_floor: bool) -> Vec<u8> {
         json!({ "name": "spawn", "translation": [2.0, 0.0, 3.0] }),
         None,
     );
+    // A teleporter: in at one corner, out at the other facing glTF +X.
+    g.node(
+        json!({ "name": "teleport_in", "translation": [-5.0, 0.0, -5.0],
+                "extras": { "bri_channel": "a", "bri_radius": 1.5 } }),
+        None,
+    );
+    let quarter = std::f32::consts::FRAC_1_SQRT_2;
+    g.node(
+        json!({ "name": "teleport_out.001", "translation": [5.0, 0.0, 5.0],
+                "rotation": [0.0, -quarter, 0.0, quarter],
+                "extras": { "bri_channel": "a" } }),
+        None,
+    );
     g.json["extensionsUsed"] = json!(["KHR_lights_punctual"]);
     g.json["extensions"] = json!({ "KHR_lights_punctual": { "lights": [
         { "name": "Lamp", "type": "point", "color": [1.0, 0.8, 0.6], "intensity": 100.0 },

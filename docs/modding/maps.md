@@ -33,6 +33,17 @@ is better as a `col_` ramp.
 `spawn.001`, `spawn.002`, and every one is a spawn point). Without one,
 players start above the middle of the map and the import says so.
 
+**Teleporters.** Add an Empty named `teleport_in` where players step in
+and one named `teleport_out` where they come out (copies such as
+`teleport_in.001` work the same). Pair them with a `bri_channel` custom
+property on both: an entrance sends players to the exit with the same
+channel, taking turns when a channel has more than one exit. `bri_radius`
+on an entrance is how near its middle a player steps to go through, 1 unit
+by default. Players leave an exit facing along the Empty's Blender +Y
+(Blender shows that as the green arrow of a Plain Axes or Arrows Empty),
+keeping their speed. An entrance with no exit on its channel does nothing,
+and the import says so.
+
 **Lights.** Add Point and Spot lights where you want them. The light's
 colour is used. Its strength in watts is not, because Torque lights were
 not physical: set these as custom properties on the light object

@@ -803,6 +803,28 @@ fn a_map_imports_as_an_add_on_the_game_loads() {
         ),
         Vec3::new(-2.0, 0.0, -3.0)
     ));
+    // The teleporter pair, turned with the model.
+    let teleporters = scene.teleporters().unwrap();
+    assert_eq!(teleporters.len(), 2, "{teleporters:?}");
+    let (entrance, exit) = (&teleporters[0], &teleporters[1]);
+    assert!(entrance.entrance && !exit.entrance);
+    assert_eq!(
+        (entrance.channel.as_str(), exit.channel.as_str()),
+        ("a", "a")
+    );
+    assert!((entrance.radius - 1.5).abs() < 1e-5 && (exit.radius - 1.0).abs() < 1e-5);
+    assert!(near(
+        Vec3::from(entrance.position),
+        Vec3::new(5.0, 0.0, 5.0)
+    ));
+    assert!(near(Vec3::from(exit.position), Vec3::new(-5.0, 0.0, -5.0)));
+    // glTF +X is native -X after the half turn: a yaw of minus a quarter.
+    assert!(
+        (exit.yaw + std::f32::consts::FRAC_PI_2).abs() < 1e-4,
+        "{}",
+        exit.yaw
+    );
+    assert_eq!(native.teleporters.len(), 2);
     let lights = scene.lights().unwrap();
     assert_eq!(lights.len(), 2, "{lights:?}");
     let lamp = lights

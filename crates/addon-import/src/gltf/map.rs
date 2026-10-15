@@ -4,6 +4,7 @@
 //! Every visible mesh becomes one native model the map places; `col_`
 //! meshes are what players collide with, or, when there are none, the
 //! visible meshes themselves. Empties named `spawn...` are spawn points,
+//! `teleport_in...` and `teleport_out...` teleporter entrances and exits,
 //! and Blender lights (`KHR_lights_punctual`) are map lights in map2dif's
 //! types. The result is an Add-On folder holding `package.json` and a
 //! native map bundle in `map/`, the same files the converted v20 maps use.
@@ -49,6 +50,89 @@ fn extra_number(node: &Value, light: &Value, key: &str) -> Option<f32> {
         .and_then(Value::as_f64)
         .map(|v| v as f32)
         .filter(|v| v.is_finite())
+}
+
+/// Empties named `teleport_in...` (entrances) and `teleport_out...` (exits)
+/// as teleporter nodes: `bri_channel` pairs them (entrances lead to the
+/// exits of their channel), and `bri_radius` is how near an entrance's
+/// middle a player steps to go through, 1 by default, in the model's units.
+/// An exit faces along its Empty's Blender +Y.
+fn teleporters(
+    doc: &Document,
+    shape: &Shape,
+    globals: &[Mat4],
+    report: &mut Report,
+) -> Result<Vec<SceneNode>> {
+    let mut out = Vec::new();
+    for (k, node) in shape.nodes.iter().enumerate() {
+        let lower = node.name.to_ascii_lowercase();
+        let role = if lower.starts_with("teleport_in") {
+            "entrance"
+        } else if lower.starts_with("teleport_out") {
+            "exit"
+        } else {
+            continue;
+        };
+        let json = doc.json["nodes"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .find(|n| n["name"].as_str().map(str::trim) == Some(node.name.as_str()))
+            .cloned()
+            .unwrap_or(Value::Null);
+        let channel = match &json["extras"]["bri_channel"] {
+            Value::String(s) => s.trim().to_string(),
+            Value::Number(n) => n.to_string(),
+            Value::Null => String::new(),
+            other => anyhow::bail!(
+                "teleporter `{}`: bri_channel {other} is not a name",
+                node.name
+            ),
+        };
+        let radius = json["extras"]["bri_radius"]
+            .as_f64()
+            .map_or(1.0, |r| r as f32)
+            * report.scale;
+        ensure!(
+            radius.is_finite()
+                && radius > 0.0
+                && radius <= bri_content::scene::MAX_TELEPORTER_RADIUS,
+            "teleporter `{}`: bri_radius must be above 0 and at most {} units once scaled",
+            node.name,
+            bri_content::scene::MAX_TELEPORTER_RADIUS
+        );
+        let (_, rotation, position) = globals[k].to_scale_rotation_translation();
+        report.teleporters.push(format!(
+            "`{}`: {role} on channel `{channel}`, radius {radius:.2}, at {:?}",
+            node.name,
+            position.to_array()
+        ));
+        out.push(SceneNode {
+            name: node.name.clone(),
+            parent: None,
+            kind: NodeKind::Teleporter,
+            transform: Mat4::from_rotation_translation(rotation, position).to_cols_array(),
+            asset: None,
+            properties: BTreeMap::from([
+                ("role".to_string(), role.to_string()),
+                ("channel".to_string(), channel),
+                ("radius".to_string(), radius.to_string()),
+            ]),
+        });
+    }
+    for entrance in out.iter().filter(|n| n.properties["role"] == "entrance") {
+        let channel = &entrance.properties["channel"];
+        if !out
+            .iter()
+            .any(|n| n.properties["role"] == "exit" && &n.properties["channel"] == channel)
+        {
+            report.warnings.push(format!(
+                "teleporter `{}` has no teleport_out with bri_channel `{channel}`; it does nothing",
+                entrance.name
+            ));
+        }
+    }
+    Ok(out)
 }
 
 /// The map's light nodes from the glTF scene's `KHR_lights_punctual`
@@ -266,6 +350,7 @@ pub(super) fn write(
             properties: BTreeMap::new(),
         });
     }
+    nodes.extend(teleporters(doc, &shape, &globals, &mut report)?);
     nodes.extend(lights(doc, &shape, &globals, &mut report)?);
     // Sky and water pictures, written into `map/` under their hashes.
     let mut pictures: Vec<(String, Vec<u8>)> = Vec::new();

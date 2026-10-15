@@ -61,6 +61,8 @@ pub struct NativeMap {
     pub pending_objects: Vec<String>,
     /// Static shapes a fast player smashes (v20 `Glass` class).
     pub breakables: Vec<Breakable>,
+    /// Teleporter entrances and exits (`Scene::teleporters`).
+    pub teleporters: Vec<bri_content::scene::Teleporter>,
     /// The plate a flat map stands on, where the Environment window's
     /// ground and water go; None on every other map.
     pub plate: Option<bri_content::scene::Plate>,
@@ -327,6 +329,7 @@ impl NativeMap {
             !colliders.is_empty() || !terrain.is_empty(),
             "Native map has no physical geometry"
         );
+        let teleporters = scene.teleporters()?;
         Ok(Self {
             scene,
             colliders,
@@ -334,6 +337,7 @@ impl NativeMap {
             waters,
             pending_objects,
             breakables,
+            teleporters,
             plate,
         })
     }
