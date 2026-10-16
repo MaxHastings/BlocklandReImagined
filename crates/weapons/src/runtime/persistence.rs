@@ -1,6 +1,6 @@
 use super::*;
 /// Weapon save schema. Alpha saves of any other version do not load.
-pub const SAVE_SCHEMA: u32 = 3;
+pub const SAVE_SCHEMA: u32 = 4;
 /// Complete fixed-tick state, independent of render/physics handles and legacy files.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WeaponsSave {
@@ -8,6 +8,9 @@ pub struct WeaponsSave {
     pub pack_id: String,
     pub tick: u64,
     pub next_id: u64,
+    /// Last allocated item, mount or animation producer identity, including
+    /// instances no longer retained by an actor. Never reconstruct from live state.
+    pub animation_serial: u64,
     pub actors: Vec<(ActorId, Actor)>,
     pub projectiles: Vec<Projectile>,
     pub drops: Vec<Drop>,
@@ -22,6 +25,7 @@ impl WeaponsWorld {
             pack_id: self.pack.id.clone(),
             tick: self.tick,
             next_id: self.next_id,
+            animation_serial: self.animation_serial,
             actors: self.actors.iter().map(|(id, a)| (*id, a.clone())).collect(),
             projectiles: self.projectiles.values().cloned().collect(),
             drops: self.drops.values().cloned().collect(),
@@ -50,9 +54,62 @@ impl WeaponsWorld {
         let mut w = Self::new(pack)?;
         w.tick = save.tick;
         w.next_id = save.next_id;
+        w.animation_serial = save.animation_serial;
+        let valid_generation = |generation: u64| generation > 0 && generation <= w.animation_serial;
+        // None is only produced for an occupied instance after exhaustion.
+        let valid_stamp =
+            |stamp: Option<u64>| stamp.map_or(w.animation_serial == u64::MAX, valid_generation);
+        let mut live_generations = BTreeSet::new();
         for (id, a) in save.actors {
             a.frame.validate()?;
             ensure!((1..=16).contains(&a.inventory.len()), "Save inventory size");
+            ensure!(
+                a.animation_items.len() == a.inventory.len()
+                    && a.animation_items
+                        .iter()
+                        .zip(&a.inventory)
+                        .all(|(stamp, item)| {
+                            if item.is_some() {
+                                valid_stamp(*stamp)
+                            } else {
+                                stamp.is_none()
+                            }
+                        })
+                    && a.images
+                        .iter()
+                        .flatten()
+                        .chain(a.emote.iter())
+                        .all(|image| valid_stamp(image.animation_generation)),
+                "Save animation instance identity"
+            );
+            for generation in a.animation_items.iter().copied().flatten().chain(
+                a.images
+                    .iter()
+                    .flatten()
+                    .chain(a.emote.iter())
+                    .filter_map(|image| image.animation_generation),
+            ) {
+                ensure!(
+                    valid_generation(generation) && live_generations.insert(generation),
+                    "Save animation allocator/duplicate instance"
+                );
+            }
+            ensure!(
+                a.cues
+                    .iter()
+                    .filter_map(|cue| cue.animation_binding.as_ref())
+                    .all(|binding| {
+                        binding
+                            .item
+                            .as_ref()
+                            .is_none_or(|item| valid_generation(item.generation))
+                            && binding
+                                .image
+                                .as_ref()
+                                .is_none_or(|image| valid_generation(image.generation))
+                    }),
+                "Save deferred animation identity"
+            );
             for item in a.inventory.iter().flatten() {
                 ensure!(w.contains_item(item), "Save unknown item");
             }
