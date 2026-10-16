@@ -26,6 +26,8 @@ use bri_package::packages::{PackageSet, Side};
 use std::path::Path;
 use std::sync::Arc;
 
+mod claims;
+
 /// The download cache under the content root, where a server's Add-Ons go.
 pub(crate) const DOWNLOADS: &str = ".downloads/";
 
@@ -116,6 +118,8 @@ pub struct ClientCode {
     /// The game controls Add-Ons hold (`input.capture`), and what the
     /// player did with them since the last frame.
     captured: bri_client_sandbox::Captured,
+    claims: claims::Input,
+    claim_diagnostics: claims::Diagnostics,
 }
 
 /// Every held control, in `input.capture` bit order.
@@ -367,7 +371,7 @@ impl ClientCode {
     }
 
     /// Run every Add-On's `camera_frame` (`camera.control`) with the
-    /// camera the game would show; the first that places it decides.
+    /// camera the game would show. Conflicting placements keep that camera.
     pub fn camera_shot(
         &mut self,
         eye: glam::Vec3,
@@ -376,8 +380,9 @@ impl ClientCode {
         let time = self.time;
         let dt = self.dt;
         let mut shot = None;
+        let mut claimants = Vec::new();
         self.running.retain_mut(|r| {
-            if shot.is_some() || !r.addon.places_camera() {
+            if !r.addon.places_camera() {
                 return true;
             }
             match r
@@ -385,7 +390,10 @@ impl ClientCode {
                 .camera_frame(time, dt, eye.to_array(), forward.to_array())
             {
                 Ok(placed) => {
-                    shot = placed;
+                    if let Some(placed) = placed {
+                        claimants.push(r.addon.id.clone());
+                        shot = Some(placed);
+                    }
                     true
                 }
                 Err(reason) => {
@@ -394,7 +402,13 @@ impl ClientCode {
                 }
             }
         });
-        shot
+        let exclusive = claimants.len() == 1;
+        if let Some(message) = self.claim_diagnostics.camera(claimants) {
+            bri_console::warn(message);
+        }
+        // Camera callbacks can stop an Add-On or update its input claims.
+        self.resolve_input_claims();
+        if exclusive { shot } else { None }
     }
 
     /// Sounds Add-Ons asked for since the last call.
@@ -407,6 +421,8 @@ impl ClientCode {
         self.running.clear();
         self.sounds.clear();
         self.captured = Default::default();
+        self.claims = Default::default();
+        self.claim_diagnostics = Default::default();
         self.poses.clear();
         self.started = false;
         self.trusted = false;
@@ -552,24 +568,8 @@ impl ClientCode {
         self.last = Some(now);
         self.time += dt;
         self.dt = dt;
-        // Each control goes to the first Add-On asking for it, in load
-        // order; what the player holds of a control no one holds now is
-        // forgotten.
-        let mut taken = 0u32;
-        let granted: Vec<u32> = self
-            .running
-            .iter()
-            .map(|r| {
-                let mine = r.addon.claims() & !taken;
-                taken |= mine;
-                mine
-            })
-            .collect();
-        let captured = bri_client_sandbox::Captured {
-            granted: taken,
-            held: self.captured.held & taken,
-            look: self.captured.look,
-        };
+        let granted = self.resolve_input_claims();
+        let captured = self.captured;
         self.captured = bri_client_sandbox::Captured {
             look: [0.0; 2],
             ..captured
@@ -672,9 +672,22 @@ impl ClientCode {
             }
         }
         // What the frames just asked for holds from now, not a frame on.
-        let taken = self.running.iter().fold(0, |t, r| t | r.addon.claims());
-        self.captured.granted = taken;
-        self.captured.held &= taken;
+        self.resolve_input_claims();
+    }
+
+    /// Resolve both delivery and event interception from the same claims.
+    /// A newly assigned owner never inherits another owner's held input.
+    fn resolve_input_claims(&mut self) -> Vec<u32> {
+        let requests: Vec<_> = self
+            .running
+            .iter()
+            .map(|r| (r.addon.id.as_str(), r.addon.claims()))
+            .collect();
+        let resolved = self.claims.resolve(&requests, &mut self.captured);
+        if let Some(message) = self.claim_diagnostics.input(resolved.conflicts) {
+            bri_console::warn(message);
+        }
+        resolved.granted
     }
 
     /// Upload what is new and this frame's uniforms. Renderers are built
@@ -809,6 +822,7 @@ impl ClientCode {
                 r.addon.name
             ));
         }
+        self.resolve_input_claims();
     }
 
     /// Lines for the player since the last call.

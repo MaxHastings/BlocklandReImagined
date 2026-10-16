@@ -554,7 +554,7 @@ pub const LOOK_CONTROL: u32 = 1 << 11;
 #[derive(Debug, Default, Clone, Copy, PartialEq)]
 pub struct Captured {
     /// The controls the game gave this Add-On (it asked with
-    /// `input_claim`; one Add-On holds each control, the first to ask).
+    /// `input_claim`; only an uncontested Add-On holds a control).
     pub granted: u32,
     /// Which of them are held down.
     pub held: u32,
