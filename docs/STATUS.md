@@ -14,10 +14,13 @@ private game assets are excluded from public archives. Interactive acceptance
 was not performed; the physical Linux reporter's backend remains unconfirmed.
 The release and its tag remain immutable.
 
-Maxwell approved the [v0.3.2 definition of done](releases/v0.3.2-readiness.md):
-a faithful playable Chief / assault rifle / Warthog showcase, actual host/remote
-agreement, a source-backed AA M16 reload portability consumer, reported map and
-wheel bug closure, and the usual integrated/package checks. A meaningful shared
+Maxwell's latest [v0.3.2 direction](releases/v0.3.2-readiness.md) is a bug-fix
+release: finish reported fixes, select completed engine seams that pass the
+combined gate, verify required CI/platform packages, then publish automatically.
+Halo Chief/AR/Warthog and AA reload fidelity continue separately and no longer
+hold this release open. Another approval or final playtest is not required.
+Failed checks or known deterministic release blockers still hold publication.
+A meaningful shared
 capability must be exercised by an affected ordinary gameplay consumer before
 further dependent mechanism expansion. No acceptance row is closed by an
 isolated API test, imported mesh or rendering diagnostic alone.
@@ -26,7 +29,7 @@ Shotgun fidelity work continues independently and is not required for v0.3.2.
 The wider Halo and AA execution plans remain active; GMod remains parked.
 Engine mechanisms remain generic and source policy belongs to packages. Root
 reviews exact ownership/path grants and immutable consumer evidence. The
-v0.3.1-only automatic publication grant does not authorize publishing v0.3.2.
+latest v0.3.2 instruction explicitly authorizes publication after validation.
 
 The released-v0.3.1 Halo private playtest uses exact public5956 plus private
 `13425df5` (Warthog fingerprint correction), with all thirteen registered Halo
