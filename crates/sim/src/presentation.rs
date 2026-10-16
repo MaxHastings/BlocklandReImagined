@@ -54,6 +54,8 @@ pub enum CueKind {
         image: Option<String>,
         hand: Option<u8>,
         direction: Option<[f32; 3]>,
+        #[serde(default)]
+        contact: Option<bri_content::effects::ContactGeometry>,
         scale: f32,
     },
     WeaponAnimation {
@@ -185,6 +187,7 @@ impl Cue {
                 image,
                 hand,
                 direction,
+                contact,
                 scale,
             } => ensure!(
                 !definition.is_empty()
@@ -203,6 +206,7 @@ impl Cue {
                     && image.as_ref().is_none_or(|s| !s.is_empty() && text(s))
                     && image.is_some() == hand.is_some()
                     && hand.is_none_or(|h| h < 2)
+                    && contact.is_none_or(|c| c.valid())
                     && direction.is_none_or(|v| {
                         v.iter().all(|x| x.is_finite())
                             && (v.iter().map(|x| x * x).sum::<f32>() - 1.).abs() < 0.001
@@ -463,6 +467,7 @@ mod tests {
                 image: Some("v20.image.gunimage".into()),
                 hand: Some(1),
                 direction: Some([0., 0., -1.]),
+                contact: None,
                 scale: 1.,
             },
         };

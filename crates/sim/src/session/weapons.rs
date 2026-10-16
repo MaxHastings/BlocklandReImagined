@@ -676,6 +676,7 @@ impl Session {
                     image,
                     hand,
                     direction,
+                    contact,
                     scale,
                 } => self.cues.emit(
                     tick,
@@ -687,6 +688,7 @@ impl Session {
                         image,
                         hand,
                         direction: direction.map(|v| v.to_array()),
+                        contact,
                         scale,
                     },
                     position.to_array(),
@@ -1087,6 +1089,7 @@ impl Session {
                 image: None,
                 hand: None,
                 direction: None,
+                contact: None,
                 scale,
             },
             eye,

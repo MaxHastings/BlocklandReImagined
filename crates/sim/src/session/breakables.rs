@@ -108,6 +108,7 @@ impl Session {
                     image: None,
                     hand: None,
                     direction: None,
+                    contact: None,
                     scale: 1.,
                 },
                 center,

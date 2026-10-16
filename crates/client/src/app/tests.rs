@@ -733,6 +733,7 @@ fn app_weapon_effect_path_consumes_cues_once_and_syncs_projectile_trails(
             image: None,
             hand: None,
             direction: None,
+            contact: None,
             scale: 1.,
         },
     };
@@ -771,6 +772,7 @@ fn app_weapon_effect_path_consumes_cues_once_and_syncs_projectile_trails(
             image: Some("v20.image.missing-pose-test".into()),
             hand: Some(0),
             direction: None,
+            contact: None,
             scale: 1.,
         },
     };

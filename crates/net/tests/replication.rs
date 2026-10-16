@@ -500,6 +500,7 @@ fn invalid_weapon_pose_cue_cannot_partially_commit_world() {
             image: Some("v20.image.gunimage".into()),
             hand: Some(0),
             direction: Some([0., 0., -1.]),
+            contact: None,
             scale: 1.,
         },
     };
@@ -1111,5 +1112,123 @@ fn malformed_passage_frames_are_rejected_after_codec_decode_in_both_pose_streams
             Replica::new(decoded).is_err(),
             "vehicle checkpoint marker must be validated"
         );
+    }
+}
+
+fn contact_geometry_delta(cues: Vec<bri_sim::presentation::Cue>) -> Delta {
+    Delta {
+        vitals: Default::default(),
+        minigames: None,
+        vehicles: None,
+        time_scale: None,
+        broken_shapes: None,
+        targets: None,
+        map_lights: None,
+        environment: None,
+        weapon_settings: None,
+        archetypes: None,
+        entities: None,
+        world_shapes: Default::default(),
+        weapons: None,
+        tools: Default::default(),
+        cues,
+        dropped_cues: 0,
+        base: 0,
+        cursor: 1,
+        tick: 11,
+        bricks: [(
+            1,
+            Some(Brick::new(ContentRef::Resolved("brick".into()), [0.; 3], 1)),
+        )]
+        .into(),
+        names: None,
+        loading: None,
+        avatars: Default::default(),
+        palette: None,
+        chat: vec![],
+    }
+}
+
+#[test]
+fn contact_geometry_survives_reliable_codec_and_invalid_batches_reject_atomically() {
+    use bri_content::effects::ContactGeometry;
+    use bri_sim::presentation::{Cue, CueKind};
+    let geometry = ContactGeometry {
+        travel: [0.6, 0., -0.8],
+        normal: [0., 0., 1.],
+    };
+    let cue = |id, contact| Cue {
+        id,
+        tick: 11,
+        position: [1., 2., 3.],
+        kind: CueKind::WeaponEffect {
+            source: bri_weapons::TargetId::Actor(bri_weapons::ActorId(17)),
+            definition: "fixture:effect/contact".into(),
+            node: String::new(),
+            seconds: 0.,
+            image: None,
+            hand: None,
+            direction: Some([0., 0., 1.]),
+            contact,
+            scale: 1.,
+        },
+    };
+    let delta = contact_geometry_delta(vec![cue(1, Some(geometry)), cue(2, None)]);
+    let bytes = codec::encode(&Message::Update(delta.clone())).unwrap();
+    let Message::Update(decoded) = codec::decode(&bytes).unwrap() else {
+        panic!("message kind")
+    };
+    assert_eq!(decoded.cues, delta.cues);
+    let mut replica = Replica::new(checkpoint()).unwrap();
+    replica.update(decoded).unwrap();
+    assert_eq!(replica.cue_cursor, 2);
+    assert_eq!(replica.take_cues(), delta.cues);
+    assert!(codec::decode::<Message>(&bytes[..bytes.len() - 1]).is_err());
+    // Invalid wire shape fails actual MessagePack/zstd decode, before Replica.
+    let mut shape_delta = delta;
+    shape_delta.bricks.clear();
+    let mut malformed = serde_json::to_value(Message::Update(shape_delta)).unwrap();
+    let named = codec::encode(&malformed).unwrap();
+    assert!(
+        codec::decode::<Message>(&named).is_ok(),
+        "valid named shape control"
+    );
+    let mut unknown = malformed.clone();
+    unknown["Update"]["cues"][0]["kind"]["WeaponEffect"]["contact"]["unverified_basis"] =
+        serde_json::json!([0, 0, 0, 1]);
+    assert!(codec::decode::<Message>(&codec::encode(&unknown).unwrap()).is_err());
+    malformed["Update"]["cues"][0]["kind"]["WeaponEffect"]["contact"]["travel"] =
+        serde_json::json!(["bad", 0, 0]);
+    let malformed = codec::encode(&malformed).unwrap();
+    assert!(codec::decode::<Message>(&malformed).is_err());
+    for invalid in [
+        ContactGeometry {
+            travel: [0.; 3],
+            ..geometry
+        },
+        ContactGeometry {
+            normal: [0.; 3],
+            ..geometry
+        },
+        ContactGeometry {
+            travel: [f32::NAN, 0., 1.],
+            ..geometry
+        },
+        ContactGeometry {
+            normal: [0., 2., 0.],
+            ..geometry
+        },
+    ] {
+        let delta = contact_geometry_delta(vec![cue(1, Some(geometry)), cue(2, Some(invalid))]);
+        let bytes = codec::encode(&Message::Update(delta)).unwrap();
+        let Message::Update(decoded) = codec::decode(&bytes).unwrap() else {
+            panic!("message kind")
+        };
+        let mut replica = Replica::new(checkpoint()).unwrap();
+        assert!(replica.update(decoded).is_err());
+        assert_eq!(replica.cursor, 0);
+        assert_eq!(replica.cue_cursor, 0);
+        assert!(replica.world.bricks.is_empty());
+        assert!(replica.take_cues().is_empty());
     }
 }

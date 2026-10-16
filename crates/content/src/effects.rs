@@ -187,11 +187,89 @@ impl ParticleVariation {
 fn zero_pair(value: &[f32; 2]) -> bool {
     *value == [0.; 2]
 }
+/// Independent directions from the same accepted contact, without claiming roll.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ContactGeometry {
+    /// Actual incoming travel, before collision response; never nominal aim.
+    pub travel: [f32; 3],
+    pub normal: [f32; 3],
+}
+impl ContactGeometry {
+    pub fn valid(&self) -> bool {
+        [self.travel, self.normal].iter().all(|v| {
+            v.iter().all(|x| x.is_finite())
+                && (v.iter().map(|x| x * x).sum::<f32>() - 1.).abs() < 0.001
+        })
+    }
+    /// Capture producer velocity and normal at the accepted hit, before mutation.
+    pub fn from_velocity(velocity: glam::Vec3, normal: glam::Vec3) -> Option<Self> {
+        if !velocity.is_finite()
+            || !normal.is_finite()
+            || velocity.length_squared() < 1e-12
+            || normal.length_squared() < 1e-12
+        {
+            return None;
+        }
+        let value = Self {
+            travel: velocity.normalize().to_array(),
+            normal: normal.normalize().to_array(),
+        };
+        value.valid().then_some(value)
+    }
+}
+
+/// Reference axis for a group's existing local offset/direction. Minimal-arc
+/// rotation is a native convention, not an original game's complete marker basis.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BurstFrame {
+    #[default]
+    Source,
+    ContactNormal,
+    ContactTravel,
+    OppositeTravel,
+    ReflectedTravel,
+    WorldDown,
+}
+impl BurstFrame {
+    fn is_source(&self) -> bool {
+        *self == Self::Source
+    }
+    pub fn needs_contact(self) -> bool {
+        !matches!(self, Self::Source | Self::WorldDown)
+    }
+    pub fn axis(self, contact: Option<ContactGeometry>) -> Option<glam::Vec3> {
+        use glam::Vec3;
+        match self {
+            Self::Source => Some(Vec3::Y),
+            Self::WorldDown => Some(Vec3::NEG_Y),
+            _ => {
+                let c = contact.filter(|c| c.valid())?;
+                let d = Vec3::from(c.travel);
+                let n = Vec3::from(c.normal);
+                Some(
+                    match self {
+                        Self::ContactNormal => n,
+                        Self::ContactTravel => d,
+                        Self::OppositeTravel => -d,
+                        Self::ReflectedTravel => d - 2. * d.dot(n) * n,
+                        _ => unreachable!(),
+                    }
+                    .normalize(),
+                )
+            }
+        }
+    }
+}
+
 /// One independently authored group at an effect's contact or attachment.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Burst {
     pub emitter: String,
+    #[serde(skip_serializing_if = "BurstFrame::is_source")]
+    pub frame: BurstFrame,
     /// Keep this group's particles in the moving attachment frame.
     pub follow_source: bool,
     pub count: [u32; 2],
@@ -204,6 +282,7 @@ impl Default for Burst {
     fn default() -> Self {
         Self {
             emitter: String::new(),
+            frame: BurstFrame::Source,
             follow_source: false,
             count: [1; 2],
             radius: [0.; 2],

@@ -2398,6 +2398,7 @@ impl Session {
                         image: None,
                         hand: None,
                         direction: None,
+                        contact: None,
                         scale: 1.0,
                     },
                     center.to_array(),

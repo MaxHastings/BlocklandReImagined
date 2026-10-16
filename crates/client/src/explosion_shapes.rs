@@ -453,6 +453,7 @@ mod tests {
                 image: None,
                 hand: None,
                 direction: None,
+                contact: None,
                 scale: 1.0,
             },
             position: [1.0, 2.0, 3.0],

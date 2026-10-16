@@ -2,7 +2,7 @@
 //! Call reset on session replacement (with the checkpoint cue cursor), then sync,
 //! cues and advance. The host provides animated attachment poses and consumes
 //! shell/animation requests; this module never guesses a mount or gameplay hit.
-use anyhow::{Result, ensure};
+use anyhow::{Context, Result, ensure};
 use bri_console::Clamp;
 use bri_content::passage::Passages;
 use bri_fx_runtime::{
@@ -738,6 +738,79 @@ impl WeaponEffects {
             cues.windows(2).all(|p| p[0].id <= p[1].id),
             "Unordered reliable presentation batch"
         );
+        // Resolve/validate the whole batch before any cursor, host request or
+        // particle changes. Pose callbacks run once and their results are retained.
+        struct ReadyEffect {
+            binding: Binding,
+            options: SourceOptions,
+            transform: SourceTransform,
+            plan: Option<bri_fx_runtime::CompositePlan>,
+        }
+        enum Prepared {
+            MissingBinding,
+            MissingPose,
+            Ready(Box<ReadyEffect>),
+        }
+        let mut prepared = BTreeMap::new();
+        for cue in cues {
+            if cue.id <= self.cursor || prepared.contains_key(&cue.id) {
+                continue;
+            }
+            if let CueKind::WeaponEffect {
+                definition,
+                node,
+                seconds,
+                image,
+                direction,
+                contact,
+                ..
+            } = &cue.kind
+            {
+                let Some((binding, options)) = self.resolve(definition) else {
+                    prepared.insert(cue.id, Prepared::MissingBinding);
+                    continue;
+                };
+                let attached = image.is_some() || !node.is_empty() || *seconds > 0.;
+                let transform = if attached {
+                    pose(cue)
+                } else {
+                    Some(SourceTransform {
+                        position: cue.position.into(),
+                        rotation: direction.map_or(Quat::IDENTITY, |v| {
+                            Quat::from_rotation_arc(Vec3::Y, Vec3::from(v))
+                        }),
+                        ..Default::default()
+                    })
+                };
+                let Some(transform) = transform else {
+                    prepared.insert(cue.id, Prepared::MissingPose);
+                    continue;
+                };
+                ensure!(
+                    valid_transform(transform),
+                    "Invalid provided effect transform"
+                );
+                let plan = if matches!(binding.kind, Kind::Composite) {
+                    Some(self.world.prepare_composite(
+                        &binding.id,
+                        transform,
+                        options.clone(),
+                        *contact,
+                    )?)
+                } else {
+                    None
+                };
+                prepared.insert(
+                    cue.id,
+                    Prepared::Ready(Box::new(ReadyEffect {
+                        binding,
+                        options,
+                        transform,
+                        plan,
+                    })),
+                );
+            }
+        }
         for cue in cues {
             if cue.id <= self.cursor {
                 self.diagnostics.duplicate_cues = self.diagnostics.duplicate_cues.saturating_add(1);
@@ -764,39 +837,33 @@ impl WeaponEffects {
                     node,
                     seconds,
                     image,
-                    direction,
                     ..
                 } => {
-                    let Some((binding, options)) = self.resolve(definition) else {
-                        self.missing(format!("Missing cue effect {definition}"));
-                        continue;
-                    };
-                    let attached = image.is_some() || !node.is_empty() || *seconds > 0.;
-                    let transform = if attached {
-                        let Some(transform) = pose(cue) else {
+                    let (binding, options, transform, plan) = match prepared.remove(&cue.id) {
+                        Some(Prepared::Ready(ready)) => {
+                            let ReadyEffect {
+                                binding,
+                                options,
+                                transform,
+                                plan,
+                            } = *ready;
+                            (binding, options, transform, plan)
+                        }
+                        Some(Prepared::MissingBinding) => {
+                            self.missing(format!("Missing cue effect {definition}"));
+                            continue;
+                        }
+                        _ => {
                             self.diagnostics.missing_poses =
                                 self.diagnostics.missing_poses.saturating_add(1);
                             continue;
-                        };
-                        transform
-                    } else {
-                        SourceTransform {
-                            position: cue.position.into(),
-                            rotation: direction.map_or(Quat::IDENTITY, |v| {
-                                Quat::from_rotation_arc(Vec3::Y, Vec3::from(v))
-                            }),
-                            ..Default::default()
                         }
                     };
-                    if !valid_transform(transform) {
-                        self.diagnostics.missing_poses =
-                            self.diagnostics.missing_poses.saturating_add(1);
-                        continue;
-                    }
+                    let attached = image.is_some() || !node.is_empty() || *seconds > 0.;
                     let result = match binding.kind {
-                        Kind::Composite => {
-                            self.world.play_composite(&binding.id, transform, options)
-                        }
+                        Kind::Composite => self
+                            .world
+                            .play_prepared_composite(plan.context("Missing preflight composite")?),
                         Kind::Emitter | Kind::Light => {
                             let authored_finite = matches!(binding.kind, Kind::Emitter)
                                 && self

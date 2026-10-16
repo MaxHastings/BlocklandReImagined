@@ -808,6 +808,7 @@ fn an_effect_streams_from_a_held_image_without_a_muzzle_point(f: &ItemFixture) -
             image: Some(f.no_muzzle_image.clone()),
             hand: Some(0),
             direction: Some([0.0, 0.0, -1.0]),
+            contact: None,
             scale: 1.0,
         },
         position: [0.0; 3],

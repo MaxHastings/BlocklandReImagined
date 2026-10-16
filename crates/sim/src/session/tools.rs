@@ -1002,6 +1002,7 @@ impl Session {
                 image: None,
                 hand: None,
                 direction: direction.map(|d| d.to_array()),
+                contact: None,
                 scale,
             },
             position.to_array(),
