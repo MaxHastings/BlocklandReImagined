@@ -7,6 +7,11 @@ use bri_content::{
     animation::{Channels, Layer, sample_layers_with_transition},
     avatar::{Appearance, Outfit, Package, Rig},
     body::{Animations, CrouchComposition, Role, RoleClips, Sockets},
+    body_pose::{
+        BodyFitInput, BodyFits as Fits, BodyFittingInput, BodyHolds, BodySocketInput,
+        apply_body_fitting, body_mount_action, body_mount_node, body_offset_socket,
+        build_body_fits, first_person_hand_frame, sample_reference_tool_action,
+    },
 };
 use bri_render::scene::{
     AlphaMode, GpuInstances, GpuScene, Material, SceneData, SceneImage, SceneRenderer,
@@ -910,20 +915,6 @@ pub struct AvatarMesh {
     skipped: Vec<String>,
 }
 
-/// How a fitted body ([`AvatarAssets::fitted`]) holds with each hand: the
-/// turn that lines its hand socket up with the Blockhead's `Mount0`, the
-/// raise for an arm it has no aim clip for and where the hand holds from
-/// its shoulder ([`bri_content::hold::fit`]).
-#[derive(Debug, Default, PartialEq)]
-struct Fits {
-    first_person: [bool; 2],
-    hands: [Option<bri_content::hold::Fit>; 2],
-    /// How far a rider is moved (model frame, unscaled) so its hip sits
-    /// where the Blockhead's does in its `sit` pose: every seat is
-    /// authored for the Blockhead.
-    seat: Option<Vec3>,
-}
-
 /// How a player's archetype fits the mesh drawn for it: where its sockets
 /// are, which clips play each animation role, and whether the mesh is the
 /// body at all.
@@ -1052,7 +1043,7 @@ pub fn report_body(archetype: &str, model: &str, mesh: &mut AvatarMesh, assets: 
     }
 }
 
-/// How a pose's arms hold on after its clips ([`AvatarMesh::fit_hands`]).
+/// How a pose's arms hold on after its clips (the shared body fitter).
 #[derive(Clone, Copy, Debug, Default)]
 struct Holds {
     /// Hands raised to hold an item.
@@ -1716,67 +1707,16 @@ impl AvatarMesh {
         }
         let roles = self.roles(assets);
         let assets = assets.for_mesh(self);
-        let mut fits = Fits::default();
-        if assets.fitted && !self.kind.stand_in {
-            let clip = |role: Role| assets.rig.sequence(roles.clip(role)?.0);
-            let parents: Vec<Option<usize>> =
-                assets.rig.shape.nodes.iter().map(|n| n.parent).collect();
-            let ends = [0, 1].map(|n| self.mount_index(assets, n));
-            for (hand, aim) in [Role::AimRight, Role::AimLeft].into_iter().enumerate() {
-                if self.kind.sockets.preserve_hand_pose {
-                    continue;
-                }
-                let Some(end) = ends[hand] else {
-                    continue;
-                };
-                let mut layers: Vec<Layer<'_>> = [
-                    (clip(Role::Idle), 0.0),
-                    (clip(aim), 1.0),
-                    (clip(Role::Look), 0.5),
-                ]
-                .into_iter()
-                .filter_map(|(animation, at)| {
-                    let animation = animation?;
-                    Some(Layer {
-                        animation,
-                        time: animation.duration * at,
-                        weight: 1.0,
-                    })
-                })
-                .collect();
-                layers.sort_by_key(|l| (l.animation.additive, l.animation.priority));
-                let Ok(mut pose) =
-                    bri_content::animation::sample_layers(&assets.rig.shape, &layers)
-                else {
-                    continue;
-                };
-                let landmark = ends[1 - hand].or_else(|| assets.node("eye"));
-                if let Some(fit) = bri_content::hold::fit(
-                    &parents,
-                    &mut pose.nodes,
-                    end,
-                    landmark,
-                    clip(aim).is_none(),
-                    hand == 0,
-                ) {
-                    fits.hands[hand] = Some(fit);
-                }
-            }
-            fits.first_person = std::array::from_fn(|n| {
-                if self.kind.sockets.preserve_hand_pose {
-                    ends[n].is_some()
-                } else {
-                    fits.hands[n].is_some()
-                }
-            });
-            let hip = bri_content::hold::sit_hip(&assets.rig.shape, clip(Role::Sit));
-            fits.seat = assets
-                .seat_hip
-                .zip(hip)
-                .map(|(blockhead, own)| blockhead - own)
-                .filter(|shift| shift.is_finite() && shift.length() < 8.0);
-        }
-        let fits = Arc::new(fits);
+        let fits = Arc::new(build_body_fits(BodyFitInput {
+            rig: &assets.rig,
+            roles: &roles,
+            fitted: assets.fitted,
+            stand_in: self.kind.stand_in,
+            preserve_hand_pose: self.kind.sockets.preserve_hand_pose,
+            hands: [0, 1].map(|n| self.mount_index(assets, n)),
+            eye: assets.node("eye"),
+            reference_seat_hip: assets.seat_hip,
+        }));
         self.fits = Some(fits.clone());
         fits
     }
@@ -1840,37 +1780,15 @@ impl AvatarMesh {
             None => Vec3::ZERO,
         };
         let node = *self.posed_nodes.get(index)?;
-        let hand = match self.held_hand(n) {
-            // Where the arm put it, pointing along the aim.
-            Some(aim) => Mat4::from_rotation_translation(aim, node.w_axis.truncate()),
-            None => node * self.hand_turn(n),
-        };
-        Some(
-            self.model_transform
-                * hand
-                * Mat4::from_translation(offset)
-                * self
-                    .tool_only_actions
-                    .get(n)
-                    .copied()
-                    .flatten()
-                    .unwrap_or(Mat4::IDENTITY),
-        )
-    }
-    /// A fitted body's hand `n` while it holds something up: how it turns
-    /// in the body's frame, along the aim ([`bri_content::hold::Raise::aim`]).
-    fn held_hand(&self, n: usize) -> Option<Quat> {
-        let (held, pitch) = self.held;
-        let fit = self.fits.as_ref()?.hands.get(n)?.as_ref()?;
-        (*held.get(n)? && fit.hold.is_some()).then(|| bri_content::hold::Raise::aim(pitch))
-    }
-    /// The turn after a fitted body's hand socket node that lines it up
-    /// with the Blockhead's `Mount0` ([`bri_content::hold::Fit`]).
-    fn hand_turn(&self, n: usize) -> Mat4 {
-        self.fits
-            .as_ref()
-            .and_then(|f| f.hands.get(n)?.as_ref())
-            .map_or(Mat4::IDENTITY, |fit| Mat4::from_quat(fit.correction))
+        Some(body_mount_node(BodySocketInput {
+            model_transform: self.model_transform,
+            node,
+            fit: self.fits.as_ref().and_then(|f| f.hands.get(n)?.as_ref()),
+            raised: self.held.0.get(n).copied().unwrap_or(false),
+            pitch: self.held.1,
+            offset,
+            tool_action: self.tool_only_actions.get(n).copied().flatten(),
+        }))
     }
     /// Where a fitted body's hand `n` holds in first person, in the eye's
     /// frame (the camera, scaled with the body): where the Blockhead's
@@ -1880,23 +1798,12 @@ impl AvatarMesh {
     /// view, whatever the body's size or arm animation.
     /// `None` for the Blockhead and v20 bodies, which hold in the hand.
     pub fn first_person_hand(&self, n: usize) -> Option<Mat4> {
-        if !*self.fits.as_ref()?.first_person.get(n)? {
-            return None;
-        }
         let offset = self
             .kind
             .sockets
             .hand(n as u32)
             .map_or(Vec3::ZERO, |s| Vec3::from(s.offset));
-        let mut at = bri_content::hold::FIRST_PERSON_HAND;
-        if n == 1 {
-            at.x = -at.x;
-        }
-        let scale = self.model_transform.x_axis.truncate().length();
-        let local = Mat4::from_scale(Vec3::splat(scale))
-            * Mat4::from_rotation_translation(bri_content::hold::AIM_HAND, at)
-            * Mat4::from_translation(offset);
-        local.is_finite().then_some(local)
+        first_person_hand_frame(self.fits.as_ref()?, n, self.model_transform, offset)
     }
     /// Where image mount point `n` attaches in the world. A hand socket
     /// that is an offset (a box body's hand) holds what it carries pitched
@@ -1904,17 +1811,14 @@ impl AvatarMesh {
     /// as the arm animates. `None` when the body has nowhere for it.
     pub fn mount_socket(&self, assets: &AvatarAssets, n: usize, aim_pitch: f32) -> Option<Mat4> {
         match self.kind.sockets.hand(n as u32) {
-            Some(socket) if socket.node.is_none() && aim_pitch.is_finite() => Some(
-                self.seated_frame()
-                    * Mat4::from_translation(Vec3::from(socket.offset))
-                    * Mat4::from_rotation_x(aim_pitch)
-                    * self
-                        .tool_only_actions
-                        .get(n)
-                        .copied()
-                        .flatten()
-                        .unwrap_or(Mat4::IDENTITY),
-            ),
+            Some(socket) if socket.node.is_none() && aim_pitch.is_finite() => {
+                Some(body_offset_socket(
+                    self.seated_frame(),
+                    Vec3::from(socket.offset),
+                    aim_pitch,
+                    self.tool_only_actions.get(n).copied().flatten(),
+                ))
+            }
             _ => self.mount_node(assets, n),
         }
     }
@@ -1927,9 +1831,11 @@ impl AvatarMesh {
             return Some(action);
         }
         let index = self.mount_index(assets, n)?;
-        let rest = *self.unacted_nodes.get(index)? * self.hand_turn(n);
-        let moved = rest.inverse() * *self.posed_nodes.get(index)? * self.hand_turn(n);
-        (moved.is_finite() && !moved.abs_diff_eq(Mat4::IDENTITY, 1e-6)).then_some(moved)
+        body_mount_action(
+            *self.unacted_nodes.get(index)?,
+            *self.posed_nodes.get(index)?,
+            self.fits.as_ref().and_then(|f| f.hands.get(n)?.as_ref()),
+        )
     }
     /// How far into the `sit` pose the body is: 1 seated, easing from 0
     /// over one action transition as it sits down and back as it gets up.
@@ -2281,30 +2187,12 @@ impl AvatarMesh {
             && named(&action.sequence).is_none()
             && let Some(clip) = reference_assets.rig.sequence(&action.sequence)
         {
-            let mut base = Vec::new();
-            if let Some(ready) = reference_assets.rig.sequence("armreadyright") {
-                base.push(Layer {
-                    animation: ready,
-                    time: ready.duration,
-                    weight: 1.0,
-                });
-            }
-            let rest = bri_content::animation::sample_layers(&reference_assets.rig.shape, &base)?;
-            base.push(Layer {
-                animation: clip,
-                time: (time - action.started_at).max(0.0) as f32,
-                weight: 1.0,
-            });
-            base.sort_by_key(|layer| (layer.animation.additive, layer.animation.priority));
-            let moved = bri_content::animation::sample_layers(&reference_assets.rig.shape, &base)?;
-            for (hand, index) in reference_assets.mount_nodes.iter().take(2).enumerate() {
-                if let Some(index) = index {
-                    let delta = rest.nodes[*index].inverse() * moved.nodes[*index];
-                    if delta.is_finite() && !delta.abs_diff_eq(Mat4::IDENTITY, 1e-6) {
-                        self.tool_only_actions[hand] = Some(delta);
-                    }
-                }
-            }
+            self.tool_only_actions = sample_reference_tool_action(
+                &reference_assets.rig,
+                [0, 1].map(|n| reference_assets.mount_nodes.get(n).copied().flatten()),
+                clip,
+                (time - action.started_at).max(0.0) as f32,
+            )?;
         }
         let transition_time = if mode == "jump" {
             JUMP_TRANSITION_TIME
@@ -2389,7 +2277,6 @@ impl AvatarMesh {
         lean_tilt: f32,
         holds: Holds,
     ) -> Result<()> {
-        let hand_holds = holds.seat;
         // `setScale` scales the whole shape about the feet.
         let model_transform = Mat4::from_scale_rotation_translation(
             Vec3::splat(player.scale),
@@ -2418,11 +2305,14 @@ impl AvatarMesh {
         };
         self.model_transform = model_transform;
         self.held = (holds.raised, holds.pitch);
-        self.fit_hands(assets, &mut pose.nodes, &holds);
-        if hand_holds.iter().any(Option::is_some) {
-            let inverse = model_transform.inverse();
-            let ends = [0, 1].map(|n| self.mount_index(assets, n));
-            let parents: Vec<Option<usize>> = assets
+        // Stock and authored-hand poses without seat holds need no IK inputs.
+        if self
+            .fits
+            .as_ref()
+            .is_some_and(|f| f.hands.iter().any(Option::is_some))
+            || holds.seat.iter().any(Option::is_some)
+        {
+            let parents: Vec<_> = assets
                 .for_mesh(self)
                 .rig
                 .shape
@@ -2430,22 +2320,27 @@ impl AvatarMesh {
                 .iter()
                 .map(|n| n.parent)
                 .collect();
-            if inverse.is_finite() && parents.len() == pose.nodes.len() {
-                for n in 0..2 {
-                    if let (Some(end), Some(hold)) = (ends[n], hand_holds[n])
-                        && hold.is_finite()
-                    {
-                        let other = ends[1 - n].or_else(|| assets.for_mesh(self).node("eye"));
-                        reach_hands(
-                            &parents,
-                            &mut pose.nodes,
-                            end,
-                            other,
-                            inverse.transform_point3(hold),
-                        );
-                    }
-                }
-            }
+            apply_body_fitting(
+                &mut pose.nodes,
+                BodyFittingInput {
+                    parents: &parents,
+                    hands: [0, 1].map(|n| self.mount_index(assets, n)),
+                    eye: assets.for_mesh(self).node("eye"),
+                    fits: self.fits.as_deref(),
+                    right_socket_offset: self
+                        .kind
+                        .sockets
+                        .hand(0)
+                        .map_or(Vec3::ZERO, |s| Vec3::from(s.offset)),
+                    model_transform,
+                    holds: BodyHolds {
+                        raised: holds.raised,
+                        pitch: holds.pitch,
+                        support: holds.support,
+                        seat: holds.seat,
+                    },
+                },
+            );
         }
         self.posed_nodes.clone_from(&pose.nodes);
         self.animated_nodes.clear();
@@ -2454,78 +2349,6 @@ impl AvatarMesh {
             Ok(())
         } else {
             self.build_mesh(assets, &pose)
-        }
-    }
-    /// A fitted body's arms after its clips: each held hand it has no aim
-    /// clip for raised in front of the chest and pitched with the aim
-    /// ([`bri_content::hold::Raise`]), then the left hand on the support
-    /// point of what the right holds in both. Seat holds come after.
-    fn fit_hands(&self, assets: &AvatarAssets, nodes: &mut [Mat4], holds: &Holds) {
-        let Some(fits) = self.fits.clone() else {
-            return;
-        };
-        if fits.hands.iter().all(Option::is_none) {
-            return;
-        }
-        let assets = assets.for_mesh(self);
-        let parents: Vec<Option<usize>> = assets.rig.shape.nodes.iter().map(|n| n.parent).collect();
-        if parents.len() != nodes.len() {
-            return;
-        }
-        let ends = [0, 1].map(|n| self.mount_index(assets, n));
-        let landmark = |n: usize| ends[1 - n].or_else(|| assets.node("eye"));
-        let pitch = if holds.pitch.is_finite() {
-            holds.pitch
-        } else {
-            0.0
-        };
-        for (n, end) in ends.into_iter().enumerate() {
-            if !holds.raised[n] || holds.seat[n].is_some() {
-                continue;
-            }
-            let (Some(end), Some(fit)) = (end, &fits.hands[n]) else {
-                continue;
-            };
-            if let Some(raise) = fit.hold
-                && raise.shoulder < nodes.len()
-            {
-                let shoulder = nodes[raise.shoulder].w_axis.truncate();
-                bri_content::hold::reach(
-                    &parents,
-                    nodes,
-                    end,
-                    landmark(n),
-                    raise.target(shoulder, pitch),
-                );
-            }
-        }
-        if let (Some(point), Some(right), Some(left), Some(fit)) =
-            (holds.support, ends[0], ends[1], &fits.hands[0])
-            && holds.seat[1].is_none()
-            && point.is_finite()
-        {
-            let offset = self
-                .kind
-                .sockets
-                .hand(0)
-                .map_or(Vec3::ZERO, |s| Vec3::from(s.offset));
-            // The right hand as `mount_node` draws it.
-            let hand = if holds.raised[0] && fit.hold.is_some() {
-                Mat4::from_rotation_translation(
-                    bri_content::hold::Raise::aim(pitch),
-                    nodes[right].w_axis.truncate(),
-                )
-            } else {
-                nodes[right] * Mat4::from_quat(fit.correction)
-            };
-            let grip = hand * Mat4::from_translation(offset);
-            bri_content::hold::reach(
-                &parents,
-                nodes,
-                left,
-                Some(right),
-                grip.transform_point3(point),
-            );
         }
     }
     /// Write the posed vertices into `data`, reusing the last frame's
@@ -3456,6 +3279,432 @@ mod tests {
                 }
             }
         }
+        Ok(())
+    }
+
+    // Stage C characterizations first run against the original socket methods.
+    #[test]
+    fn socket_foreign_tool_delta_preserves_body_and_noncommuting_mount_order() -> Result<()> {
+        let (mut assets, model, _root) = own_body("socket-foreign", &[], &[("root", "root")])?;
+        assets.bodies.get_mut(&model).unwrap().fitted = true;
+        let ready = assets
+            .rig
+            .sequence("armreadyright")
+            .context("reference ready")?;
+        let action = assets
+            .rig
+            .sequence("activate2")
+            .context("reference action")?;
+        let rest_layers = [Layer {
+            animation: ready,
+            time: ready.duration,
+            weight: 1.,
+        }];
+        let rest = bri_content::animation::sample_layers(&assets.rig.shape, &rest_layers)?;
+        let mut layers = vec![
+            rest_layers[0],
+            Layer {
+                animation: action,
+                time: 0.1,
+                weight: 1.,
+            },
+        ];
+        layers.sort_by_key(|l| (l.animation.additive, l.animation.priority));
+        let moved = bri_content::animation::sample_layers(&assets.rig.shape, &layers)?;
+        let index = assets.mount_nodes[0].context("reference mount")?;
+        let delta = rest.nodes[index].inverse() * moved.nodes[index];
+        assert!(!delta.abs_diff_eq(Mat4::IDENTITY, 1e-4));
+        for preserve in [false, true] {
+            let mut body = assets.body_mesh(&model, assets.package.defaults.clone())?;
+            let mut kind = BodyKind::default();
+            kind.sockets.preserve_hand_pose = preserve;
+            kind.sockets.right_hand = Some(bri_content::body::Socket {
+                node: Some("Mount0".into()),
+                offset: [0.13, 0.09, -0.17],
+            });
+            body.set_body_kind(kind);
+            let p = PlayerState {
+                feet: [2., 3., -4.],
+                scale: 1.4,
+                yaw: 0.6,
+                pitch: 0.3,
+                ..player()
+            };
+            let mut input = AvatarAnimationInput {
+                held_tool_pose: HeldToolPose::Right,
+                ..Default::default()
+            };
+            body.pose_with_animation(&assets, &p, 0.1, &input)?;
+            let nodes = body.posed_nodes.clone();
+            let base = body
+                .mount_socket(&assets, 0, p.pitch)
+                .context("base socket")?;
+            body.wants_unacted = false;
+            input.action = Some(ActionAnimation {
+                sequence: "activate2".into(),
+                started_at: 0.,
+            });
+            body.pose_with_animation(&assets, &p, 0.1, &input)?;
+            assert_eq!(
+                body.posed_nodes, nodes,
+                "reference motion must not deform the foreign body"
+            );
+            assert!(body.unacted_nodes.is_empty());
+            assert!(
+                body.mount_action(&assets, 0)
+                    .unwrap()
+                    .abs_diff_eq(delta, 1e-5)
+            );
+            assert!(
+                body.mount_socket(&assets, 0, p.pitch)
+                    .unwrap()
+                    .abs_diff_eq(base * delta, 1e-5)
+            );
+            let offset = Mat4::from_translation(Vec3::new(0.13, 0.09, -0.17));
+            assert!(
+                !(base * delta).abs_diff_eq(base * offset.inverse() * delta * offset, 1e-4),
+                "fixture must distinguish offset/action order"
+            );
+            let fp = body.first_person_hand(0).context("fitted FP hand")?;
+            let expected = Mat4::from_scale(Vec3::splat(p.scale))
+                * Mat4::from_rotation_translation(
+                    bri_content::hold::AIM_HAND,
+                    bri_content::hold::FIRST_PERSON_HAND,
+                )
+                * offset;
+            assert!(fp.abs_diff_eq(expected, 1e-5));
+            assert!(body.first_person_hand(2).is_none());
+            input.action = None;
+            body.pose_with_animation(&assets, &p, 0.1, &input)?;
+            assert!(
+                body.mount_action(&assets, 0).is_none(),
+                "clearing action clears reference delta"
+            );
+            assert!(
+                body.mount_socket(&assets, 0, p.pitch)
+                    .unwrap()
+                    .abs_diff_eq(base, 1e-5)
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn socket_owned_action_uses_corrected_unacted_inverse_during_transition() -> Result<()> {
+        let (mut assets, model, _root) = own_body(
+            "socket-owned",
+            &[],
+            &[("root", "root"), ("run", "run"), ("activate2", "activate2")],
+        )?;
+        assets.bodies.get_mut(&model).unwrap().fitted = true;
+        let mut body = assets.body_mesh(&model, assets.package.defaults.clone())?;
+        let mut p = player();
+        body.pose_with_animation(&assets, &p, 0., &Default::default())?;
+        p.velocity = [0., 0., -2.];
+        let input = AvatarAnimationInput {
+            held_tool_pose: HeldToolPose::Right,
+            action: Some(ActionAnimation {
+                sequence: "activate2".into(),
+                started_at: 0.,
+            }),
+            ..Default::default()
+        };
+        body.pose_with_animation(&assets, &p, 0.1, &input)?;
+        assert!(body.action().1, "native locomotion transition must be live");
+        assert!(
+            body.tool_only_actions.iter().all(Option::is_none),
+            "owned action never borrows reference delta"
+        );
+        let i = body.mount_index(&assets, 0).context("hand")?;
+        let correction = Mat4::from_quat(
+            body.fits.as_ref().unwrap().hands[0]
+                .as_ref()
+                .unwrap()
+                .correction,
+        );
+        let rest = body.unacted_nodes[i] * correction;
+        let expected = rest.inverse() * body.posed_nodes[i] * correction;
+        let actual = body.mount_action(&assets, 0).context("owned action")?;
+        assert!(actual.abs_diff_eq(expected, 1e-5));
+        let wrong = body.unacted_nodes[i].inverse() * body.posed_nodes[i];
+        assert!(
+            !actual.abs_diff_eq(wrong, 1e-4),
+            "fixture must distinguish missing correction conjugation"
+        );
+        body.wants_unacted = false;
+        body.pose_with_animation(&assets, &p, 0.1, &input)?;
+        assert!(body.mount_action(&assets, 0).is_none());
+        assert!(body.mount_node(&assets, usize::MAX).is_none());
+        Ok(())
+    }
+
+    #[test]
+    fn socket_offset_only_uses_seated_frame_then_pitch_then_tool_delta() -> Result<()> {
+        let (assets, model, _root) = own_body("socket-offset", &[], &[("root", "root")])?;
+        let mut body = assets.body_mesh(&model, assets.package.defaults.clone())?;
+        let mut kind = BodyKind {
+            stand_in: true,
+            eye: Vec3::Y,
+            sit_eye: Vec3::new(0., 0.5, 0.2),
+            ..Default::default()
+        };
+        kind.sockets.right_hand = Some(bri_content::body::Socket::at([0.3, 0.4, -0.2]));
+        body.set_body_kind(kind);
+        let p = PlayerState {
+            scale: 1.3,
+            pitch: 0.4,
+            yaw: 0.3,
+            ..player()
+        };
+        let mut input = AvatarAnimationInput {
+            sitting: true,
+            held_tool_pose: HeldToolPose::Right,
+            ..Default::default()
+        };
+        body.pose_with_animation(&assets, &p, 0., &input)?;
+        input.action = Some(ActionAnimation {
+            sequence: "activate2".into(),
+            started_at: 0.,
+        });
+        body.pose_with_animation(&assets, &p, 0.1, &input)?;
+        let delta = body
+            .mount_action(&assets, 0)
+            .context("reference action on offset socket")?;
+        let offset = Mat4::from_translation(Vec3::new(0.3, 0.4, -0.2));
+        let pitch = Mat4::from_rotation_x(p.pitch);
+        let actual = body
+            .mount_socket(&assets, 0, p.pitch)
+            .context("offset socket")?;
+        assert!(actual.abs_diff_eq(body.seated_frame() * offset * pitch * delta, 1e-5));
+        assert!(!actual.abs_diff_eq(body.seated_frame() * pitch * offset * delta, 1e-4));
+        assert!(
+            !actual.abs_diff_eq(body.body_transform() * offset * pitch * delta, 1e-4),
+            "seat transition changes the presentation frame"
+        );
+        assert!(body.mount_node(&assets, 0).is_none());
+        assert!(body.mount_socket(&assets, 0, f32::NAN).is_none());
+        assert!(body.first_person_hand(0).is_none());
+        Ok(())
+    }
+
+    // Stage B characterizations: run before and after moving fitting orchestration.
+    #[test]
+    fn fitting_seat_reaches_use_completed_frame_even_with_authored_hands() -> Result<()> {
+        let (mut assets, model, _root) = own_body("fitting-seat", &[], &[("root", "root")])?;
+        assets.bodies.get_mut(&model).unwrap().fitted = true;
+        for preserve in [false, true] {
+            for scale in [0.5, 1.7] {
+                let mut body = assets.body_mesh(&model, assets.package.defaults.clone())?;
+                let mut kind = BodyKind::default();
+                kind.sockets.preserve_hand_pose = preserve;
+                body.set_body_kind(kind);
+                let p = PlayerState {
+                    feet: [2., 3., -4.],
+                    scale,
+                    ..player()
+                };
+                let mut input = AvatarAnimationInput {
+                    sitting: true,
+                    mount_rotation: Some(Quat::from_rotation_y(0.6) * Quat::from_rotation_z(0.3)),
+                    seat_pose: Some("missing-seat".into()),
+                    seat_fallback_hip: Some(Vec3::new(2.2, 3.6, -4.1)),
+                    ..Default::default()
+                };
+                body.pose_with_animation(&assets, &p, 0., &input)?;
+                let before = body.posed_nodes.clone();
+                let frame = body.model_transform;
+                let ends = [0, 1].map(|n| body.mount_index(&assets, n).unwrap());
+                let parents: Vec<_> = assets
+                    .for_mesh(&body)
+                    .rig
+                    .shape
+                    .nodes
+                    .iter()
+                    .map(|n| n.parent)
+                    .collect();
+                let targets =
+                    ends.map(|end| before[end].w_axis.truncate() + Vec3::new(0.01, 0.04, -0.09));
+                input.hand_holds = targets.map(|v| Some(frame.transform_point3(v)));
+                let mut expected = before.clone();
+                for n in 0..2 {
+                    reach_hands(
+                        &parents,
+                        &mut expected,
+                        ends[n],
+                        Some(ends[1 - n]),
+                        targets[n],
+                    );
+                }
+                body.pose_with_animation(&assets, &p, 0., &input)?;
+                assert!(
+                    body.posed_nodes
+                        .iter()
+                        .zip(&expected)
+                        .all(|(a, b)| a.abs_diff_eq(*b, 2e-5))
+                );
+                assert!(
+                    body.posed_nodes
+                        .iter()
+                        .zip(&before)
+                        .any(|(a, b)| !a.abs_diff_eq(*b, 1e-4)),
+                    "seat holds must work when generic fitting is bypassed"
+                );
+                assert!(frame.abs_diff_eq(body.model_transform, 1e-6));
+                input.hand_holds = [Some(Vec3::NAN), None];
+                body.pose_with_animation(&assets, &p, 0., &input)?;
+                assert!(
+                    body.posed_nodes
+                        .iter()
+                        .zip(&before)
+                        .all(|(a, b)| a.abs_diff_eq(*b, 1e-5))
+                );
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn fitting_support_returns_at_thread2_end_while_final_action_channels_hold() -> Result<()> {
+        let (mut assets, model, _root) = own_body(
+            "fitting-action",
+            &[],
+            &[("root", "root"), ("root", "reload")],
+        )?;
+        let own = assets.bodies.get_mut(&model).unwrap();
+        own.fitted = true;
+        let clip = own.rig.sequences.get_mut("reload").unwrap();
+        clip.duration = 1.;
+        clip.frames = 2;
+        clip.looping = false;
+        clip.additive = false;
+        clip.priority = 20;
+        clip.nodes = vec![bri_content::shape::NodeTrack {
+            node: "LeftArm".into(),
+            rotations: vec![Quat::from_rotation_x(0.5).to_array(); 2],
+            translations: vec![],
+            scales: vec![],
+            scale_rotations: vec![],
+        }];
+        let mut body = assets.body_mesh(&model, assets.package.defaults.clone())?;
+        let mut kind = BodyKind::default();
+        kind.sockets.right_hand = Some(bri_content::body::Socket {
+            node: Some("Mount0".into()),
+            offset: [0.08, -0.03, 0.05],
+        });
+        body.set_body_kind(kind);
+        let mut input = AvatarAnimationInput {
+            held_tool_pose: HeldToolPose::Both,
+            support: Some(Vec3::new(-0.4, 0.1, 0.)),
+            action: Some(ActionAnimation {
+                sequence: "reload".into(),
+                started_at: 0.,
+            }),
+            ..Default::default()
+        };
+        for (time, should_support) in [(0.5, false), (1., true), (1.2, true)] {
+            body.pose_with_animation(&assets, &player(), time, &input)?;
+            let supported = body.posed_nodes.clone();
+            let acted = body.unacted_nodes.clone();
+            input.support = None;
+            body.pose_with_animation(&assets, &player(), time, &input)?;
+            let differs = supported
+                .iter()
+                .zip(&body.posed_nodes)
+                .any(|(a, b)| !a.abs_diff_eq(*b, 1e-4));
+            assert_eq!(differs, should_support, "time {time}");
+            if should_support {
+                let mut expected = body.posed_nodes.clone();
+                let parents: Vec<_> = assets
+                    .for_mesh(&body)
+                    .rig
+                    .shape
+                    .nodes
+                    .iter()
+                    .map(|n| n.parent)
+                    .collect();
+                let ends = [0, 1].map(|n| body.mount_index(&assets, n).unwrap());
+                let world_grip = body.mount_node(&assets, 0).unwrap();
+                let target = body
+                    .model_transform
+                    .inverse()
+                    .transform_point3(world_grip.transform_point3(Vec3::new(-0.4, 0.1, 0.)));
+                reach_hands(&parents, &mut expected, ends[1], Some(ends[0]), target);
+                assert!(
+                    supported
+                        .iter()
+                        .zip(&expected)
+                        .all(|(a, b)| a.abs_diff_eq(*b, 2e-5)),
+                    "support must use the displayed corrected right socket"
+                );
+            }
+
+            assert!(
+                !acted.is_empty(),
+                "final action still has an unacted comparison"
+            );
+            assert!(
+                body.posed_nodes
+                    .iter()
+                    .zip(&acted)
+                    .any(|(a, b)| !a.abs_diff_eq(*b, 1e-4))
+            );
+            input.support = Some(Vec3::new(-0.4, 0.1, 0.));
+        }
+        assets
+            .bodies
+            .get_mut(&model)
+            .unwrap()
+            .rig
+            .sequences
+            .get_mut("reload")
+            .unwrap()
+            .looping = true;
+        body.pose_with_animation(&assets, &player(), 2., &input)?;
+        let looping = body.posed_nodes.clone();
+        input.support = None;
+        body.pose_with_animation(&assets, &player(), 2., &input)?;
+        assert!(
+            looping
+                .iter()
+                .zip(&body.posed_nodes)
+                .all(|(a, b)| a.abs_diff_eq(*b, 1e-5))
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn fitting_cache_follows_same_model_roles_sockets_and_stand_in_switches() -> Result<()> {
+        let (mut assets, model, _root) = own_body(
+            "fitting-identity",
+            &[],
+            &[("root", "root"), ("armreadyright", "own-ready")],
+        )?;
+        assets.bodies.get_mut(&model).unwrap().fitted = true;
+        let mut body = assets.body_mesh(&model, assets.package.defaults.clone())?;
+        let mut kind = BodyKind::default();
+        body.set_body_kind(kind.clone());
+        body.pose_with_animation(&assets, &player(), 0., &Default::default())?;
+        let initial = body.fits.as_ref().unwrap().clone();
+        assert!(initial.hands[0].as_ref().unwrap().hold.is_some());
+        kind.animations
+            .insert("aim_right".into(), "own-ready".into());
+        body.set_body_kind(kind.clone());
+        assert!(body.fits.is_none() && body.roles.is_none());
+        body.pose_with_animation(&assets, &player(), 0.1, &Default::default())?;
+        let ready = body.fits.as_ref().unwrap().clone();
+        assert!(!Arc::ptr_eq(&initial, &ready));
+        assert_ne!(
+            ready.hands[0], initial.hands[0],
+            "resolved aim alias changes the fitted frame"
+        );
+        kind.sockets.right_hand = Some(bri_content::body::Socket::node("missing"));
+        body.set_body_kind(kind.clone());
+        body.pose_with_animation(&assets, &player(), 0.2, &Default::default())?;
+        assert!(body.fits.as_ref().unwrap().hands[0].is_none());
+        kind.stand_in = true;
+        body.set_body_kind(kind);
+        body.pose_with_animation(&assets, &player(), 0.3, &Default::default())?;
+        assert_eq!(**body.fits.as_ref().unwrap(), Fits::default());
         Ok(())
     }
 

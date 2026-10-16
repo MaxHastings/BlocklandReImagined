@@ -44,9 +44,40 @@ pub fn animation_assets(
     presentation_root: &Path,
     extras: &[(String, PathBuf)],
 ) -> Result<bri_sim::session::AnimationAssets> {
+    body_pose_assets(
+        content_root,
+        packages,
+        avatar_root,
+        avatar,
+        weapons,
+        presentation_root,
+        extras,
+    )
+    .map(|(assets, _)| assets)
+}
+
+/// One bounded native snapshot for clocks and retained body inputs. Provider
+/// selection matches Avatar's sorted model/optional-file precedence.
+pub fn body_pose_assets(
+    content_root: &Path,
+    packages: &bri_package::packages::PackageSet,
+    avatar_root: &Path,
+    avatar: &bri_content::avatar::Package,
+    weapons: &bri_weapons::Pack,
+    presentation_root: &Path,
+    extras: &[(String, PathBuf)],
+) -> Result<(
+    bri_sim::session::AnimationAssets,
+    bri_sim::session::BodyPoseBindings,
+)> {
     use bri_sim::session::{AnimationAsset, AnimationAssets, AnimationImageAsset};
     let mut assets = BTreeMap::<String, AnimationAsset>::new();
     let mut images = BTreeMap::new();
+    let mut body_bindings = vec![bri_sim::session::BodyPoseBinding {
+        model: crate::host_setup::BLOCKHEAD_MODEL.into(),
+        resource: crate::host_setup::BLOCKHEAD_MODEL.into(),
+        fitted: false,
+    }];
     let mut ambiguous_images = std::collections::BTreeSet::new();
     let mut seen_images = BTreeMap::<String, String>::new();
     let bytes = bounded_bytes(&contained(avatar_root, &avatar.rig)?, 64 << 20)?;
@@ -65,11 +96,15 @@ pub fn animation_assets(
             bytes,
         },
     );
-    let read_shape = |root: &Path, file: &str, resource: &str| -> Result<Option<AnimationAsset>> {
+    let read_shape = |root: &Path,
+                      file: &str,
+                      resource: &str,
+                      bind_only: bool|
+     -> Result<Option<AnimationAsset>> {
         let bytes = bounded_bytes(&contained(root, file)?, 32 << 20)?;
         let shape: bri_content::shape::Shape = serde_json::from_slice(&bytes)?;
         shape.validate()?;
-        if shape.animations.is_empty() {
+        if shape.animations.is_empty() && !bind_only {
             return Ok(None);
         }
         let asset = AnimationAsset {
@@ -87,19 +122,32 @@ pub fn animation_assets(
     };
     for entry in &packages.packages {
         let dir = bri_package::packages::package_dir(content_root, entry)?;
-        for (id, file) in package_bodies(&dir) {
-            match read_shape(&dir, &file, &id) {
+        let candidates = body_pose_candidates(&dir, &entry.id, entry.role.is_none());
+        let selected: std::collections::BTreeSet<_> =
+            candidates.iter().map(|(id, _)| id.clone()).collect();
+        for (id, file) in candidates {
+            let fitted = file.is_some();
+            let read = file
+                .map_or_else(|| body_pose_file(&dir, &id), Ok)
+                .and_then(|file| read_shape(&dir, &file, &id, entry.role.is_none()));
+            match read {
                 Ok(Some(asset)) => {
                     ensure!(
                         !assets.contains_key(&id),
                         "Ambiguous animation body resource"
                     );
-                    admit_animation_asset(&mut assets, asset);
+                    if admit_animation_asset(&mut assets, asset) && entry.role.is_none() {
+                        body_bindings.push(bri_sim::session::BodyPoseBinding {
+                            model: id.clone(),
+                            resource: id,
+                            fitted,
+                        });
+                    }
                 }
                 Ok(None) => (),
-                Err(error) => {
-                    bri_console::warn(format!("{id}: animation metadata unsupported: {error:#}"))
-                }
+                Err(error) => bri_console::warn(format!(
+                    "{id}: animation/body metadata unsupported: {error:#}"
+                )),
             }
         }
         let native = dir.join("assets");
@@ -112,10 +160,13 @@ pub fn animation_assets(
                 else {
                     continue;
                 };
-                if !file.ends_with(".shape.json") || assets.contains_key(id) {
+                if !file.ends_with(".shape.json")
+                    || assets.contains_key(id)
+                    || selected.contains(id)
+                {
                     continue;
                 }
-                match read_shape(&native, file, id) {
+                match read_shape(&native, file, id, false) {
                     Ok(Some(asset)) => {
                         admit_animation_asset(&mut assets, asset);
                     }
@@ -162,7 +213,7 @@ pub fn animation_assets(
             let Some(file) = manifest["models"][model]["file"].as_str() else {
                 continue;
             };
-            match read_shape(root, file, id) {
+            match read_shape(root, file, id, false) {
                 Ok(Some(asset)) => {
                     if let Some(old) = seen_images.get(id)
                         && old != &asset.digest
@@ -218,7 +269,7 @@ pub fn animation_assets(
             if images.contains_key(id) || ambiguous_images.contains(id) {
                 continue;
             }
-            match read_shape(root, file, id) {
+            match read_shape(root, file, id, false) {
                 Ok(Some(asset)) => {
                     if !admit_animation_asset(&mut assets, asset) {
                         continue;
@@ -257,7 +308,74 @@ pub fn animation_assets(
         images,
     };
     catalog.validate()?;
-    Ok(catalog)
+    Ok((
+        catalog,
+        bri_sim::session::BodyPoseBindings {
+            reference_resource: Some(crate::host_setup::BLOCKHEAD_MODEL.into()),
+            bodies: body_bindings,
+        },
+    ))
+}
+
+// Same candidate ordering as Avatar::body_models, with contained/bounded reads.
+fn body_pose_candidates(
+    dir: &Path,
+    package: &str,
+    include_assets: bool,
+) -> Vec<(String, Option<String>)> {
+    let mut models: Vec<_> = contained(dir, bri_package::library::MANIFEST_FILE)
+        .and_then(|p| bounded_bytes(&p, 256 << 10))
+        .ok()
+        .and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok())
+        .and_then(|m| m["provides"].as_array().cloned())
+        .into_iter()
+        .flatten()
+        .filter(|p| p["kind"] == "body")
+        .filter_map(|p| {
+            Some((
+                p["id"].as_str()?.to_owned(),
+                Some(p["file"].as_str()?.to_owned()),
+            ))
+        })
+        .collect();
+    if include_assets && let Ok(files) = std::fs::read_dir(dir.join("assets/archetypes")) {
+        for file in files.flatten() {
+            let name = format!("assets/archetypes/{}", file.file_name().to_string_lossy());
+            let parsed = contained(dir, &name)
+                .and_then(|p| bounded_bytes(&p, 256 << 10))
+                .ok()
+                .and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok());
+            if let Some(model) = parsed
+                .as_ref()
+                .and_then(|v| v["model"].as_str())
+                .filter(|m| m.starts_with(&format!("{package}:asset/")))
+            {
+                models.push((model.to_owned(), None));
+            }
+        }
+    }
+    models.sort();
+    models.dedup_by(|a, b| a.0 == b.0);
+    models
+}
+
+fn body_pose_file(dir: &Path, model: &str) -> Result<String> {
+    let index: serde_json::Value = serde_json::from_slice(&bounded_bytes(
+        &contained(dir, "assets/content.json")?,
+        4 << 20,
+    )?)?;
+    index["content"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .find(|c| {
+            c["id"]
+                .as_str()
+                .is_some_and(|id| id.eq_ignore_ascii_case(model))
+        })
+        .and_then(|c| c["file"].as_str())
+        .map(str::to_owned)
+        .with_context(|| format!("{model} is not in its package"))
 }
 
 /// Validated startup snapshot shared by host/join/dedicated catalog setup.

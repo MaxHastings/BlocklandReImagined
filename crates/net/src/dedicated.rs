@@ -207,18 +207,20 @@ fn load_packages_in(
     let package_body_grips = content_identity::package_body_grips(content_root, packages);
     let image_barrels =
         content_identity::image_barrels(&item_presentation_dir, &weapons, &weapon_extras);
+    let (animation_assets, body_pose_bindings) = content_identity::body_pose_assets(
+        content_root,
+        packages,
+        &avatar_dir,
+        &avatar,
+        &weapons.pack,
+        &item_presentation_dir,
+        &weapon_extras,
+    )?;
     let setup = HostSetup {
         lan: false,
         content: SessionContent {
-            animation_assets: content_identity::animation_assets(
-                content_root,
-                packages,
-                &avatar_dir,
-                &avatar,
-                &weapons.pack,
-                &item_presentation_dir,
-                &weapon_extras,
-            )?,
+            animation_assets,
+            body_pose_bindings,
             tool_catalog: tools,
             weapon_pack: weapons.pack,
             item_bounds: item_physics.bounds,

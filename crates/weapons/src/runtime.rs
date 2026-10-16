@@ -1111,7 +1111,146 @@ pub struct WeaponsWorld {
     /// share of push left. Their blasts spare that holder.
     stopped: Vec<(u64, ActorId, f32)>,
 }
+
+/// An exact-instance patch, validated without changing gameplay state or events.
+///
+/// Holds the world's exclusive borrow until consumed or dropped, so identities,
+/// rounds, pack definitions and event capacity cannot change between preparation
+/// and commit. Dropping it aborts; committing it performs no lookup or callback.
+/// A caller may commit an independently borrowed clock before consuming this
+/// guard. This does not make arbitrary operations on the enclosing host atomic.
+///
+/// A guard cannot be committed twice:
+/// ```compile_fail
+/// use bri_weapons::PreparedWeaponPatch;
+/// fn twice(patch: PreparedWeaponPatch<'_>) {
+///     patch.commit();
+///     patch.commit();
+/// }
+/// ```
+/// Nor can the world change while its guard remains usable:
+/// ```compile_fail
+/// use bri_weapons::{ActorId, AnimationBinding, WeaponsWorld};
+/// fn intervene(world: &mut WeaponsWorld, binding: &AnimationBinding) {
+///     let patch = world.prepare_weapon_patch(ActorId(1), binding, None, None, None).unwrap();
+///     world.remove_actor(ActorId(1));
+///     patch.commit();
+/// }
+/// ```
+#[must_use = "commit the prepared patch or drop it to abort"]
+pub struct PreparedWeaponPatch<'a> {
+    actor: &'a mut Actor,
+    prepared: Actor,
+    events: &'a mut Vec<Event>,
+    ammo_notice: Option<ActorId>,
+}
+
+impl PreparedWeaponPatch<'_> {
+    /// Publish the validated patch once. Capacity was reserved at preparation;
+    /// no fallible operation, identity lookup or image-entry callback runs here.
+    pub fn commit(self) {
+        *self.actor = self.prepared;
+        if let Some(actor) = self.ammo_notice {
+            self.events.push(Event::Ammo { actor });
+        }
+    }
+}
+
 impl WeaponsWorld {
+    /// Prepare optional loaded-round and image-state writes for the exact
+    /// selected item and its ordinary right-hand mount. All binding components
+    /// are required and compared with current authoritative identities.
+    ///
+    /// Expected rounds can be checked without writing. Rounds refer to a real
+    /// stored magazine, never a reserve-counted or unlimited supply. Desired
+    /// rounds outside its authored size are refused rather than clamped. State
+    /// entry is deferred to the next ordinary advance, exactly as `set_state`.
+    /// Preparation/dropping changes no actor state, events or identity serial.
+    /// Life/body stamps are host-owned: the host must also enforce living-player
+    /// eligibility before constructing its enclosing action.
+    pub fn prepare_weapon_patch(
+        &mut self,
+        id: ActorId,
+        binding: &AnimationBinding,
+        expected_rounds: Option<u32>,
+        rounds: Option<u32>,
+        image_state: Option<&str>,
+    ) -> Result<PreparedWeaponPatch<'_>> {
+        let actor = self.actors.get(&id).context("Unknown actor")?;
+        let current = self.animation_binding(actor, None);
+        ensure!(
+            current
+                .owner
+                .is_some_and(|owner| owner.life > 0 && owner.body > 0)
+                && current.item.is_some()
+                && current.image.is_some()
+                && &current == binding,
+            "Missing or stale weapon patch binding"
+        );
+        let item = current.item.as_ref().expect("validated");
+        let equipped = actor.images[0].as_ref().context("Nothing in right hand")?;
+        let image = self
+            .pack
+            .images
+            .get(&equipped.image)
+            .context("Unknown image")?;
+        let mut prepared = actor.clone();
+        if expected_rounds.is_some() || rounds.is_some() {
+            let magazine = image
+                .magazine
+                .as_ref()
+                .context("That image has no magazine")?;
+            ensure!(
+                !magazine.counts_reserve() && magazine.supply != crate::Supply::Unlimited,
+                "That image has no stored loaded rounds"
+            );
+            let key = slot_key(&item.item, item.slot);
+            ensure!(
+                equipped.magazine.as_ref() == Some(&key),
+                "Magazine does not belong to selected instance"
+            );
+            let loaded = actor
+                .rounds
+                .get(&key)
+                .context("Missing instance magazine")?;
+            ensure!(
+                expected_rounds.is_none_or(|expected| expected == *loaded),
+                "Changed loaded rounds"
+            );
+            if let Some(rounds) = rounds {
+                ensure!(
+                    rounds <= magazine.size,
+                    "Loaded rounds exceed magazine size"
+                );
+                *prepared.rounds.get_mut(&key).expect("validated") = rounds;
+                self.magazine_flags(&mut prepared, &equipped.image, &key, magazine);
+            }
+        }
+        if let Some(name) = image_state {
+            let state = image
+                .states
+                .iter()
+                .position(|state| state.name.eq_ignore_ascii_case(name))
+                .context("Unknown weapon patch image state")?;
+            let equipped = prepared.images[0].as_mut().expect("validated");
+            equipped.state = state;
+            equipped.entered = false;
+            equipped.remaining = 0;
+        }
+        if rounds.is_some() {
+            ensure!(self.events.len() < 8192, "Command event budget");
+            self.events
+                .try_reserve(1)
+                .context("Weapon patch ammo notice capacity")?;
+        }
+        Ok(PreparedWeaponPatch {
+            actor: self.actors.get_mut(&id).expect("validated"),
+            prepared,
+            events: &mut self.events,
+            ammo_notice: rounds.map(|_| id),
+        })
+    }
+
     fn animation_serial(&mut self) -> Option<u64> {
         self.animation_serial = self.animation_serial.checked_add(1)?;
         Some(self.animation_serial)

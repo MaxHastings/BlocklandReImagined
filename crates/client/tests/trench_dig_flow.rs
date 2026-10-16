@@ -145,6 +145,7 @@ fn the_trench_shovel_digs_dirt_in_a_mini_game_once_the_add_on_is_on() -> Result<
         lan: true,
         content: SessionContent {
             animation_assets: Default::default(),
+            body_pose_bindings: Default::default(),
             tool_catalog: Default::default(),
             weapon_pack: content.weapons.pack.clone(),
             item_bounds: content.item_physics.bounds.clone(),

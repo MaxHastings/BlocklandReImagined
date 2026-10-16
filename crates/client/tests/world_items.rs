@@ -903,3 +903,82 @@ fn a_lying_item_loops_its_idle_sequence_on_the_world_clock(f: &ItemFixture) -> R
     assert_eq!(adapter.instances().count(), 2);
     Ok(())
 }
+
+/// Real native Avatar outputs feed WorldItems in both views. Eye-offset actions
+/// are applied once in first person; the third-person socket already carries them.
+#[test]
+fn native_avatar_socket_actions_reach_world_items_once_in_each_view() -> Result<()> {
+    use bri_client::avatar::{ActionAnimation, AvatarAnimationInput, HeldToolPose};
+    let f = ItemFixture::synthetic()?;
+    let (items, weapons) = packs(&f)?;
+    let mut adapter = WorldItems::new(items.clone(), weapons, WorldItemLimits::default())?;
+    let avatars = bri_client::testing::avatar::assets()?;
+    let mut body = avatars.mesh(avatars.package.defaults.clone())?;
+    let p: bri_sim::player::PlayerState = serde_json::from_value(serde_json::json!({
+        "owner":7,"feet":[2.,3.,-4.],"velocity":[0.,0.,0.],"yaw":0.4,"pitch":0.3,
+        "grounded":true,"crouched":false,"jetting":false,"scale":1.4
+    }))?;
+    body.pose_with_animation(
+        &avatars,
+        &p,
+        0.1,
+        &AvatarAnimationInput {
+            held_tool_pose: HeldToolPose::Right,
+            action: Some(ActionAnimation {
+                sequence: "activate2".into(),
+                started_at: 0.,
+            }),
+            ..Default::default()
+        },
+    )?;
+    let eye = body
+        .eye_transform(&avatars, p.yaw, p.pitch)
+        .context("eye")?;
+    let mount = body
+        .mount_socket(&avatars, 0, p.pitch)
+        .context("native mount")?;
+    let action = body.mount_action(&avatars, 0).context("native action")?;
+    assert!(!action.abs_diff_eq(Mat4::IDENTITY, 1e-4));
+    let view = WeaponView {
+        images: BTreeMap::from([(7, vec![mounted(&f.eye_offset_image, "Ready")])]),
+        ..Default::default()
+    };
+    for first_person in [false, true] {
+        let input = WorldItemFrame {
+            local_owner: Some(7),
+            first_person,
+            ..frame()
+        };
+        adapter.sync(&view, input, |_| {
+            Some(MountPose {
+                eye,
+                mounts: BTreeMap::from([(0, mount)]),
+                actions: BTreeMap::from([(0, action)]),
+                velocity: Vec3::ZERO,
+                straddle: None,
+            })
+        })?;
+        let actual = adapter
+            .instances()
+            .find(|(id, _)| *id == ItemIdentity::Mounted(7, 0))
+            .context("mounted item")?
+            .1
+            .transform;
+        let expected = items.moved_mount_transform(
+            &f.eye_offset_image,
+            first_person,
+            eye,
+            |_| Some(mount),
+            |_| Some(action),
+        )?;
+        let without_action =
+            items.mount_transform(&f.eye_offset_image, first_person, eye, |_| Some(mount))?;
+        assert!(actual.abs_diff_eq(expected, 1e-5));
+        assert_eq!(
+            actual.abs_diff_eq(without_action, 1e-4),
+            !first_person,
+            "eye-offset action is applied once, view={first_person}"
+        );
+    }
+    Ok(())
+}

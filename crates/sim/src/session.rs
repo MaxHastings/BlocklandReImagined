@@ -14,11 +14,15 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::sync::Arc;
 mod admin;
 mod animation;
+mod body_pose;
 pub use animation::{
     ActiveAnimation, AnimationAsset, AnimationAssets, AnimationClip, AnimationImageAsset,
-    AnimationOutcome, AnimationRecord, AnimationStart, AnimationTarget, AnimationView, PlaybackId,
+    AnimationOutcome, AnimationPose, AnimationPoseApplicability, AnimationPoseRetention,
+    AnimationPoseState, AnimationPoseView, AnimationRecord, AnimationStart, AnimationTarget,
+    AnimationView, EvaluatedActiveAnimation, EvaluatedAnimationView, PlaybackId,
     PreparedAnimationStart,
 };
+pub use body_pose::{BodyPoseAssetInfo, BodyPoseBinding, BodyPoseBindings};
 mod bots;
 pub use bots::{
     BotCandidate, BotDecision, BotDrive, BotEvidence, BotNotice, BotObjectiveDetail,
@@ -1029,6 +1033,7 @@ impl DeferredSave {
 
 pub struct Session {
     animations: animation::AnimationClocks,
+    body_poses: body_pose::BodyPoseInputs,
     events: events::Events,
     specials: special::Specials,
     highlights: highlight::Highlights,
@@ -1207,6 +1212,7 @@ impl Session {
         Self {
             events: Default::default(),
             animations: Default::default(),
+            body_poses: Default::default(),
             archetypes: Default::default(),
             absent_bodies: Vec::new(),
             tuned: Default::default(),

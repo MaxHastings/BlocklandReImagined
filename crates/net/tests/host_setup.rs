@@ -41,6 +41,7 @@ fn add_ons(saves: &Path) -> HostedAddOns {
 fn content() -> SessionContent {
     SessionContent {
         animation_assets: Default::default(),
+        body_pose_bindings: Default::default(),
         tool_catalog: Default::default(),
         weapon_pack: bri_weapons::Pack {
             schema_version: bri_weapons::SCHEMA,

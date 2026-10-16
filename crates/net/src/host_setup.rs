@@ -20,6 +20,7 @@ use std::{collections::BTreeMap, path::PathBuf, sync::Arc};
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub struct SessionContent {
     pub animation_assets: bri_sim::session::AnimationAssets,
+    pub body_pose_bindings: bri_sim::session::BodyPoseBindings,
     pub tool_catalog: ToolCatalog,
     pub weapon_pack: bri_weapons::Pack,
     pub item_bounds: BTreeMap<String, bri_weapons::ItemBounds>,
@@ -322,7 +323,10 @@ impl HostSetup {
                 &hosted.map,
             ));
         }
-        session.set_animation_assets(content.animation_assets.clone())?;
+        session.set_body_pose_assets(
+            content.animation_assets.clone(),
+            content.body_pose_bindings.clone(),
+        )?;
         Ok((session, spawn_points))
     }
 
