@@ -133,7 +133,16 @@ pub fn animation_assets(
         let Ok(bytes) = manifest else {
             return Ok(());
         };
-        let manifest: serde_json::Value = serde_json::from_slice(&bytes)?;
+        let manifest: serde_json::Value = match serde_json::from_slice(&bytes) {
+            Ok(manifest) => manifest,
+            Err(error) => {
+                bri_console::warn(format!(
+                    "{}: animation metadata unsupported: {error}",
+                    root.display()
+                ));
+                return Ok(());
+            }
+        };
         for (id, binding) in manifest["images"].as_object().into_iter().flatten() {
             if ambiguous_images.contains(id) {
                 continue;
@@ -144,6 +153,12 @@ pub fn animation_assets(
             let Some(model) = binding["model"].as_str() else {
                 continue;
             };
+            if !model.eq_ignore_ascii_case(&image.model) {
+                bri_console::warn(format!(
+                    "{id}: animation metadata unsupported: image model mismatch"
+                ));
+                continue;
+            }
             let Some(file) = manifest["models"][model]["file"].as_str() else {
                 continue;
             };

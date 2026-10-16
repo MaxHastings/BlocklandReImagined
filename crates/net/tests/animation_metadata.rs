@@ -168,7 +168,7 @@ fn ambiguous_optional_image_clock_does_not_discard_stock_metadata_or_break_hosti
         let shape = json!({"schema_version":1,"id":"invented","nodes":[],"objects":[],"details":[],"meshes":[],"materials":[],
             "animations":[{"name":"cycle","frames":1,"duration":duration,"looping":false,"additive":false,"priority":0,"nodes":[],"objects":[],"ground_translations":[],"ground_rotations":[],"triggers":[]}]});
         std::fs::write(dir.join("model.json"), shape.to_string())?;
-        std::fs::write(dir.join("presentation.json"),json!({"models":{"body":{"file":"model.json"}},"images":{"metadata:image/shared":{"model":"body"}}}).to_string())?;
+        std::fs::write(dir.join("presentation.json"),json!({"models":{"actual_model":{"file":"model.json"}},"images":{"metadata:image/shared":{"model":"actual_model"}}}).to_string())?;
     }
     let first = first.canonicalize()?;
     let second = second.canonicalize()?;
@@ -210,11 +210,12 @@ fn ambiguous_optional_image_clock_does_not_discard_stock_metadata_or_break_hosti
             id.clone(),
             json!({"model":"actual_model","states":[{"name":"Ready"}]}),
         );
-        presentation_images.insert(id, json!({"model":"body"}));
+        presentation_images.insert(id, json!({"model":"actual_model"}));
     }
     std::fs::write(
         first.join("presentation.json"),
-        json!({"models":{"body":{"file":"model.json"}},"images":presentation_images}).to_string(),
+        json!({"models":{"actual_model":{"file":"model.json"}},"images":presentation_images})
+            .to_string(),
     )?;
     let extra_pack = bri_weapons::Pack::from_json(&serde_json::to_vec(
         &json!({"schema_version":5,"id":"many-images","items":{},"images":pack_images,"projectiles":{}}),
@@ -240,5 +241,168 @@ fn ambiguous_optional_image_clock_does_not_discard_stock_metadata_or_break_hosti
     limited_host.set_weapon_pack(extra_pack)?;
     limited_host.set_animation_assets(limited)?;
     admit(&mut limited_host, sequence)?;
+    Ok(())
+}
+
+fn optional_setup(
+    root: &std::path::Path,
+    extras: &[(String, std::path::PathBuf)],
+) -> Result<host_setup::HostSetup> {
+    let host = dedicated::load(
+        root,
+        World::new(
+            "Optional metadata".into(),
+            bri_net::testing::MAP.into(),
+            vec![[1.; 4]],
+        ),
+    )?;
+    let mut setup = (*host.setup).clone();
+    let image_pack = bri_weapons::Pack::from_json(br#"{"schema_version":5,"id":"optional","items":{},"images":{"metadata:image/optional":{"model":"Actual_Model","states":[{"name":"Ready"}]}},"projectiles":{}}"#)?;
+    setup.content.weapon_pack.images.extend(image_pack.images);
+    let packages = PackageSet::load_root(root)?;
+    setup.content.animation_assets = content_identity::animation_assets(
+        root,
+        &packages,
+        &packages.role_dir(root, "avatar")?,
+        &setup.content.avatar_catalog,
+        &setup.content.weapon_pack,
+        &packages.role_dir(root, "item_presentation")?,
+        extras,
+    )?;
+    Ok(setup)
+}
+
+fn assert_stock_host(setup: &host_setup::HostSetup, root: &std::path::Path) -> Result<()> {
+    let hosted = host_setup::hosted(None, bri_net::testing::MAP, None)?;
+    let map = MapSession {
+        simulation: common::simulation_with(World::new(
+            "Optional metadata".into(),
+            bri_net::testing::MAP.into(),
+            vec![[1.; 4]],
+        )),
+        spawn_points: vec![glam::Vec3::new(0., 0.05, 0.)],
+        breakables: vec![],
+        teleporters: vec![],
+        tutorial: None,
+    };
+    let (mut session, _) = setup.session_with(&hosted, map, None)?;
+    let packages = PackageSet::load_root(root)?;
+    let bytes = std::fs::read(
+        packages
+            .role_dir(root, "avatar")?
+            .join(&setup.content.avatar_catalog.rig),
+    )?;
+    let rig: Rig = serde_json::from_slice(&bytes)?;
+    let sequence = rig
+        .sequences
+        .iter()
+        .find(|(_, c)| !c.looping && c.duration > 0.)
+        .unwrap()
+        .0;
+    let active = admit(&mut session, sequence)?;
+    assert_eq!(
+        active.clip.digest,
+        bri_package::environment::hash_bytes(&bytes)
+    );
+    Ok(())
+}
+
+#[test]
+fn malformed_optional_extra_presentation_keeps_verified_stock_hosting() -> Result<()> {
+    let root = tempfile::tempdir()?;
+    bri_net::testing::write_root(root.path(), &[bri_net::testing::MAP])?;
+    let extra = root.path().join("optional");
+    std::fs::create_dir_all(&extra)?;
+    std::fs::write(
+        extra.join("presentation.json"),
+        b"{ malformed optional JSON",
+    )?;
+    let setup = optional_setup(root.path(), &[("optional".into(), extra.canonicalize()?)])?;
+    assert!(
+        !setup
+            .content
+            .animation_assets
+            .images
+            .contains_key("metadata:image/optional")
+    );
+    assert_stock_host(&setup, root.path())
+}
+
+#[test]
+fn optional_extra_clock_requires_actual_image_model_identity() -> Result<()> {
+    let root = tempfile::tempdir()?;
+    bri_net::testing::write_root(root.path(), &[bri_net::testing::MAP])?;
+    let extra = root.path().join("optional");
+    std::fs::create_dir_all(&extra)?;
+    let extra = extra.canonicalize()?;
+    let shape = json!({"schema_version":1,"id":"invented","nodes":[],"objects":[],"details":[],"meshes":[],"materials":[],
+        "animations":[{"name":"cycle","frames":1,"duration":1.,"looping":false,"additive":false,"priority":0,"nodes":[],"objects":[],"ground_translations":[],"ground_rotations":[],"triggers":[]}]});
+    std::fs::write(extra.join("model.json"), shape.to_string())?;
+    for (model, supported) in [("another_model", false), ("actual_model", true)] {
+        let mut models = serde_json::Map::new();
+        models.insert(model.into(), json!({"file":"model.json"}));
+        std::fs::write(
+            extra.join("presentation.json"),
+            json!({"models":models,"images":{"metadata:image/optional":{"model":model}}})
+                .to_string(),
+        )?;
+        let setup = optional_setup(root.path(), &[("optional".into(), extra.clone())])?;
+        assert_eq!(
+            setup
+                .content
+                .animation_assets
+                .images
+                .contains_key("metadata:image/optional"),
+            supported,
+            "model {model}"
+        );
+        assert_eq!(
+            setup
+                .content
+                .animation_assets
+                .assets
+                .iter()
+                .any(|a| a.resource == "metadata:image/optional"),
+            supported
+        );
+        assert_stock_host(&setup, root.path())?;
+    }
+    Ok(())
+}
+
+#[test]
+fn malformed_base_presentation_still_fails_existing_mandatory_validation() -> Result<()> {
+    let root = tempfile::tempdir()?;
+    bri_net::testing::write_root(root.path(), &[bri_net::testing::MAP])?;
+    let packages = PackageSet::load_root(root.path())?;
+    let weapons = content_identity::WeaponContent::load_with(
+        &packages.role_dir(root.path(), "weapons")?,
+        &[],
+    )?;
+    std::fs::write(
+        packages
+            .role_dir(root.path(), "item_presentation")?
+            .join("presentation.json"),
+        b"{ malformed mandatory JSON",
+    )?;
+    assert!(
+        content_identity::ItemPhysicsContent::load_with(
+            &packages.role_dir(root.path(), "item_presentation")?,
+            &weapons,
+            &[],
+        )
+        .is_err()
+    );
+    assert!(
+        dedicated::load(
+            root.path(),
+            World::new(
+                "Mandatory metadata".into(),
+                bri_net::testing::MAP.into(),
+                vec![[1.; 4]]
+            )
+        )
+        .is_err()
+    );
     Ok(())
 }
