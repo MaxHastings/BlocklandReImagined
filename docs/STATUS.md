@@ -14,8 +14,9 @@ for owners, completion evidence and the integration/publication boundary.
 
 Current public release: [v0.3.0 Alpha](https://github.com/MaxHastings/BlocklandReImagined/releases/tag/v0.3.0),
 source `ee244a8449382516d24a7460c0e7b78e00128573`, with Windows x86-64,
-Apple silicon macOS and Linux x86-64 archives. The v0.3.1 engine candidate is
-being integrated on `v0.3.1-experimental`; release notes are in
+Apple silicon macOS and Linux x86-64 archives. The first intermediate v0.3.1
+engine checkpoint is on main at `1be98fd7`. The next candidate is on
+`codex/v031-integration-followup`; release notes are in
 [docs/releases/v0.3.1.md](releases/v0.3.1.md). This is an alpha release, and
 interactive acceptance and the broader alpha definition of done remain open.
 
