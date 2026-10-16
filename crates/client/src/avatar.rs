@@ -2452,32 +2452,15 @@ impl AvatarMesh {
             .support
             .filter(|_| animation_input.held_tool_pose == HeldToolPose::Both && !hand_action);
         let seat_shift = seat_pose.and_then(|_| {
-            if authored_seat.is_some() {
-                Some(Vec3::ZERO)
-            } else {
-                let parents: Vec<_> = assets.rig.shape.nodes.iter().map(|n| n.parent).collect();
-                let bind = bri_content::animation::sample(&assets.rig.shape, None, 0.0).ok()?;
-                let hip = bri_content::hold::hip(&parents, &bind.nodes)?;
-                let target = animation_input
-                    .seat_fallback_hip
-                    .filter(|p| p.is_finite())
-                    .zip(
-                        animation_input
-                            .mount_rotation
-                            .filter(|q| q.is_finite() && q.is_normalized()),
-                    )
-                    .filter(|_| {
-                        player.scale.is_finite()
-                            && player.scale > 0.
-                            && Vec3::from(player.feet).is_finite()
-                    })
-                    .map(|(world, rotation)| {
-                        rotation.inverse() * (world - Vec3::from(player.feet)) / player.scale
-                    })
-                    .filter(|p| p.is_finite());
-                let shift = target.unwrap_or(Vec3::ZERO) - pose.nodes.get(hip)?.w_axis.truncate();
-                (shift.is_finite() && (target.is_some() || shift.length() < 8.)).then_some(shift)
-            }
+            bri_content::body_pose::seat_root_shift(
+                &assets.rig.shape,
+                &pose,
+                authored_seat.is_some(),
+                animation_input.seat_fallback_hip,
+                Vec3::from(player.feet),
+                animation_input.mount_rotation,
+                player.scale,
+            )
         });
         self.fits(assets);
         self.finish_pose(
