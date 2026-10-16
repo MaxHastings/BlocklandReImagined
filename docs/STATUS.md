@@ -15,10 +15,14 @@ for owners, completion evidence and the integration/publication boundary.
 Current public release: [v0.3.0 Alpha](https://github.com/MaxHastings/BlocklandReImagined/releases/tag/v0.3.0),
 source `ee244a8449382516d24a7460c0e7b78e00128573`, with Windows x86-64,
 Apple silicon macOS and Linux x86-64 archives. Intermediate v0.3.1 engine
-checkpoints are on main through `3436de89`, with exact full-gate and Windows
-evidence in [the follow-up integration record](progress/2026-10-16-followup-main-and-next-halo-preview.md).
-The next camera/portal/contact candidate is on `codex/v031-camera-portal-integration`;
-its validation and main integration remain pending. Release notes are in
+checkpoints are on main through `3117e8c3`: fresh camera snapshots, the corrected
+portal contact fixture and authoritative contact-effect frames passed the full
+local gate and all five Windows checks before the guarded main push. Exact
+evidence and private consumer limits are in
+[the integration checkpoint](progress/2026-10-16-3117-gate-and-consumer-checkpoints.md).
+The next sampler candidate is on `codex/v031-animation-sampler-integration`;
+authoritative animation admission/completion is active in the shared engine chat.
+Neither work closes the remaining game fidelity or final playtest. Release notes are in
 [docs/releases/v0.3.1.md](releases/v0.3.1.md). This is an alpha release, and
 interactive acceptance and the broader alpha definition of done remain open.
 
