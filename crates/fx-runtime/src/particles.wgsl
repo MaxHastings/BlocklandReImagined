@@ -1,9 +1,11 @@
-struct Camera { view_projection:mat4x4<f32>, right:vec4<f32>, up:vec4<f32>, position:vec4<f32>, atmosphere:vec4<f32>, fog_color:vec4<f32>, haze:vec4<f32> }
+struct PointLight { position_radius:vec4<f32>, color:vec4<f32> }
+struct Camera { view_projection:mat4x4<f32>, right:vec4<f32>, up:vec4<f32>, position:vec4<f32>, atmosphere:vec4<f32>, fog_color:vec4<f32>, haze:vec4<f32>, ambient:vec4<f32>, sun_direction:vec4<f32>, sun_color:vec4<f32>, light_count:vec4<u32>, lights:array<PointLight,256> }
 @group(0) @binding(0) var<uniform> camera:Camera;
 @group(1) @binding(0) var images:texture_2d_array<f32>;
 @group(1) @binding(1) var image_sampler:sampler;
 struct Out { @builtin(position) position:vec4<f32>, @location(0) uv:vec2<f32>, @location(1) color:vec4<f32>, @location(2) @interpolate(flat) image:vec4<f32>, @location(3) world:vec3<f32>, @location(4) @interpolate(flat) origin:vec2<f32> }
-@vertex fn vs_main(@builtin(vertex_index) vertex:u32,@location(0) position_size:vec4<f32>,@location(1) color:vec4<f32>,@location(2) axis_spin:vec4<f32>,@location(3) image:vec4<f32>,@location(4) origin:vec2<f32>,@location(5) sprite_frame:vec4<f32>,@location(6) plane_right:vec3<f32>)->Out {
+@vertex fn vs_main(@builtin(vertex_index) vertex:u32,@location(0) position_size:vec4<f32>,@location(1) color:vec4<f32>,@location(2) axis_spin:vec4<f32>,@location(3) image:vec4<f32>,@location(4) origin:vec2<f32>,@location(5) sprite_frame:vec4<f32>,@location(6) plane_lighting:vec4<f32>)->Out {
+    let plane_right=plane_lighting.xyz;
     let corners=array<vec2<f32>,6>(vec2(-1.,-1.),vec2(1.,-1.),vec2(1.,1.),vec2(-1.,-1.),vec2(1.,1.),vec2(-1.,1.));
     let corner=corners[vertex];
     var right=camera.right.xyz;var up=camera.up.xyz;
@@ -31,8 +33,26 @@ struct Out { @builtin(position) position:vec4<f32>, @location(0) uv:vec2<f32>, @
     var out:Out;
     let local=(corner*0.5+0.5-vec2(sprite_frame.z,1.-sprite_frame.w))*sprite_frame.xy;
     let world=position_size.xyz+(right*local.x+up*local.y)*position_size.w;
+    var tint=color;
+    if plane_lighting.w>0.5 {
+        let crossed=cross(right,up);
+        var normal=crossed/max(length(crossed),0.00001);
+        // Thin sprite faces receive illumination on the side being viewed.
+        if dot(normal,camera.position.xyz-position_size.xyz)<0. { normal=-normal; }
+        var light=camera.ambient.rgb+camera.sun_color.rgb*max(dot(normal,-camera.sun_direction.xyz),0.);
+        for(var i=0u;i<min(camera.light_count.x,256u);i+=1u) {
+            let lamp=camera.lights[i];
+            let delta=lamp.position_radius.xyz-world;
+            let distance=length(delta);
+            if distance<lamp.position_radius.w {
+                // Same quadratic point attenuation as native vertex-lit models.
+                light+=lamp.color.rgb*max(dot(normal,delta/max(distance,0.00001)),0.)/(1.+0.1*distance*distance);
+            }
+        }
+        tint=vec4(color.rgb*light,color.a);
+    }
     out.position=camera.view_projection*vec4(world,1.);out.world=world;
-    out.uv=vec2(corner.x*0.5+0.5,0.5-corner.y*0.5);out.color=color;out.image=image;out.origin=origin;return out;
+    out.uv=vec2(corner.x*0.5+0.5,0.5-corner.y*0.5);out.color=tint;out.image=image;out.origin=origin;return out;
 }
 @fragment fn fs_main(input:Out)->@location(0) vec4<f32> {
     // The texture fills the layer's corner: sample it there, clamped to its

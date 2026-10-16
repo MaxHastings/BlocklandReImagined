@@ -14,7 +14,7 @@ struct GpuParticle {
     image: [f32; 4],
     image_origin: [f32; 2],
     sprite_layout: [f32; 4],
-    plane_right: [f32; 3],
+    plane_lighting: [f32; 4],
 }
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -28,6 +28,11 @@ struct GpuCamera {
     atmosphere: [f32; 4],
     fog_color: [f32; 4],
     haze: [f32; 4],
+    ambient: [f32; 4],
+    sun_direction: [f32; 4],
+    sun_color: [f32; 4],
+    light_count: [u32; 4],
+    lights: [crate::GpuLight; 256],
 }
 /// Consecutive sprites that share a pipeline draw together. Textures occupy
 /// packed pages of one array and every blend mode is one premultiplied blend,
@@ -71,6 +76,10 @@ pub struct EffectsRenderer {
     /// The scene's fog: atmosphere, colour and haze, as [`Self::set_fog`]
     /// gave them.
     fog: [[f32; 4]; 3],
+    ambient: glam::Vec3,
+    sun_direction: glam::Vec3,
+    sun_color: glam::Vec3,
+    lights: Vec<crate::GpuLight>,
 }
 impl EffectsRenderer {
     /// Target and depth formats/sample count must match the host render pass.
@@ -257,7 +266,7 @@ impl EffectsRenderer {
         });
         let pipeline = |blend: wgpu::BlendState, depth_test: bool| {
             device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label:Some("native effects"),layout:Some(&layout),vertex:wgpu::VertexState {module:&shader,entry_point:Some("vs_main"),compilation_options:Default::default(),buffers:&[Some(wgpu::VertexBufferLayout {array_stride:std::mem::size_of::<GpuParticle>() as u64,step_mode:wgpu::VertexStepMode::Instance,attributes:&wgpu::vertex_attr_array![0=>Float32x4,1=>Float32x4,2=>Float32x4,3=>Float32x4,4=>Float32x2,5=>Float32x4,6=>Float32x3]})]},
+            label:Some("native effects"),layout:Some(&layout),vertex:wgpu::VertexState {module:&shader,entry_point:Some("vs_main"),compilation_options:Default::default(),buffers:&[Some(wgpu::VertexBufferLayout {array_stride:std::mem::size_of::<GpuParticle>() as u64,step_mode:wgpu::VertexStepMode::Instance,attributes:&wgpu::vertex_attr_array![0=>Float32x4,1=>Float32x4,2=>Float32x4,3=>Float32x4,4=>Float32x2,5=>Float32x4,6=>Float32x4]})]},
             primitive:wgpu::PrimitiveState {cull_mode:None,..Default::default()},depth_stencil:Some(wgpu::DepthStencilState {format:depth_format,depth_write_enabled:Some(false),depth_compare:Some(if depth_test {bri_render::scene::DEPTH_NEARER}else{wgpu::CompareFunction::Always}),stencil:Default::default(),bias:Default::default()}),multisample:wgpu::MultisampleState {count:sample_count,..Default::default()},
             fragment:Some(wgpu::FragmentState {module:&shader,entry_point:Some("fs_main"),compilation_options:wgpu::PipelineCompilationOptions {constants:&bri_render::color::output_constants(color_format),..Default::default()},targets:&[Some(wgpu::ColorTargetState {format:color_format,blend:Some(blend),write_mask:wgpu::ColorWrites::ALL})]}),multiview_mask:None,cache:None,
         })
@@ -288,6 +297,10 @@ impl EffectsRenderer {
             max_instances,
             data: Vec::new(),
             fog: [[0.0; 4]; 3],
+            ambient: glam::Vec3::ONE,
+            sun_direction: glam::Vec3::NEG_Y,
+            sun_color: glam::Vec3::ZERO,
+            lights: Vec::new(),
         })
     }
     fn view(device: &wgpu::Device, layout: &wgpu::BindGroupLayout, capacity: usize) -> View {
@@ -325,6 +338,43 @@ impl EffectsRenderer {
     /// afterwards uses it.
     pub fn set_fog(&mut self, atmosphere: [f32; 4], fog_color: [f32; 4], haze: [f32; 4]) {
         self.fog = [atmosphere, fog_color, haze];
+    }
+    /// The host's native diffuse lighting for authored lit sprites. Direction
+    /// follows the travelling sunlight (as bri-render's scene camera does).
+    /// Neutral defaults keep standalone adapters usable before the host sets it.
+    /// This path receives no geometry shadows or baked irradiance volumes.
+    pub fn set_lighting(
+        &mut self,
+        ambient: glam::Vec3,
+        sun_direction: glam::Vec3,
+        sun_color: glam::Vec3,
+        lights: &[crate::GpuLight],
+    ) -> Result<()> {
+        let color_valid = |v: glam::Vec3| v.is_finite() && v.min_element() >= 0.;
+        ensure!(
+            color_valid(ambient)
+                && color_valid(sun_color)
+                && sun_direction.is_finite()
+                && sun_direction.length_squared().is_finite()
+                && sun_direction.length_squared() > 1e-8
+                && lights.len() <= 256,
+            "Invalid particle scene lighting"
+        );
+        ensure!(
+            lights.iter().all(|l| {
+                l.position_radius.iter().all(|v| v.is_finite())
+                    && l.position_radius[3] >= 0.
+                    && l.color.iter().all(|v| v.is_finite())
+                    && l.color[..3].iter().all(|v| *v >= 0.)
+            }),
+            "Invalid particle point light"
+        );
+        self.ambient = ambient;
+        self.sun_direction = sun_direction.normalize();
+        self.sun_color = sun_color;
+        self.lights.clear();
+        self.lights.extend_from_slice(lights);
+        Ok(())
     }
     /// The player's view: `camera` and the sprites it sees.
     pub fn prepare(
@@ -419,7 +469,7 @@ impl EffectsRenderer {
                 BlendMode::AdditiveColor => 2.,
             };
             data.push(GpuParticle {
-                plane_right: p.plane_right.to_array(),
+                plane_lighting: p.plane_right.extend(f32::from(u8::from(p.lit))).to_array(),
                 position_size: p.position.extend(p.size).to_array(),
                 color: p.color.to_array(),
                 axis_spin: p.axis.extend(p.spin).to_array(),
@@ -443,7 +493,7 @@ impl EffectsRenderer {
                 });
             }
         }
-        let uniform = GpuCamera {
+        let mut uniform = GpuCamera {
             view_projection: camera.view_projection.to_cols_array_2d(),
             right: camera.right.extend(0.).to_array(),
             up: camera.up.extend(0.).to_array(),
@@ -451,7 +501,13 @@ impl EffectsRenderer {
             atmosphere: self.fog[0],
             fog_color: self.fog[1],
             haze: self.fog[2],
+            ambient: self.ambient.extend(0.).to_array(),
+            sun_direction: self.sun_direction.extend(0.).to_array(),
+            sun_color: self.sun_color.extend(0.).to_array(),
+            light_count: [self.lights.len() as u32, 0, 0, 0],
+            lights: [bytemuck::Zeroable::zeroed(); 256],
         };
+        uniform.lights[..self.lights.len()].copy_from_slice(&self.lights);
         let target = &mut self.views[view];
         queue.write_buffer(&target.camera, 0, bytemuck::bytes_of(&uniform));
         if !data.is_empty() {

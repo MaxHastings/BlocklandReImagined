@@ -224,6 +224,7 @@ pub struct Camera {
 }
 #[derive(Clone, Copy, Debug)]
 pub struct ParticleInstance {
+    pub lit: bool,
     pub layout: bri_content::effects::SpriteLayout,
     pub position: Vec3,
     pub size: f32,
@@ -1385,6 +1386,7 @@ impl EffectsWorld {
         Some((
             camera.position.distance_squared(p.position),
             ParticleInstance {
+                lit: def.lit,
                 plane_right: p.plane_right,
                 layout,
                 position: p.position,
@@ -1503,6 +1505,7 @@ impl EffectsWorld {
                 drawn.push((
                     camera.position.distance_squared(s.transform.position),
                     ParticleInstance {
+                        lit: false,
                         plane_right: Vec3::ZERO,
                         layout: Default::default(),
                         position: s.transform.position,
@@ -1745,6 +1748,7 @@ mod tests {
                     id: "particle".into(),
                     texture: "original".into(),
                     contact: None,
+                    lit: false,
                     orientation: None,
                     alpha_blend: true,
                     lifetime: 2.,

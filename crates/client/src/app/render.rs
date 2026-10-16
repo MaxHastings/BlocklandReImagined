@@ -1140,6 +1140,18 @@ impl App {
             .as_mut()
             .context("Effects GPU not initialized")?;
         effects_renderer.set_fog(camera.atmosphere, camera.fog_color, camera.haze);
+        effects_renderer.set_lighting(
+            glam::Vec3::from_slice(&camera.ambient),
+            glam::Vec3::from_slice(&camera.sun_direction),
+            glam::Vec3::from_slice(&camera.sun_color),
+            &lights
+                .iter()
+                .map(|l| bri_fx_runtime::GpuLight {
+                    position_radius: l.position_radius,
+                    color: l.color,
+                })
+                .collect::<Vec<_>>(),
+        )?;
         effects_renderer.prepare(frame.queue, &effects_camera, &effects_frame)?;
         // A sky's rain or snow changed the weather pack: its pictures go up.
         if self.gpu.weather_revision != self.weather.revision {

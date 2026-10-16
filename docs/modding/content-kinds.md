@@ -611,6 +611,20 @@ Missing clips are diagnosed and omitted from selection. If none loads, `file`
 is tried as the fallback. Reloading a pack replaces its prepared choices.
 This mechanism does not model sequential audio continuations or layered loops.
 
+### Particle illumination
+
+Particles default to `lit: false`, preserving their authored texture/tint brightness.
+`lit: true` opts into native diffuse sprite illumination. The host adapter supplies
+ambient, travelling sun direction/color and up to 256 point lights through
+`EffectsRenderer::set_lighting`. The game client uses the scene camera and the same
+current point lights as world geometry. Thin sprite normals face the viewer;
+lighting uses the native vertex-lit model's quadratic point attenuation and color
+convention, with alpha, fog and blend selection unchanged.
+
+Standalone adapters default to neutral lighting until explicitly supplied. This
+path does not receive geometry shadows, sky-band ambient or baked irradiance;
+opting into it does not establish fidelity to another game's lighting.
+
 ### Particle tint interpolation
 
 `ParticleVariation.color_interpolation` accepts `rgb` (default), `hsv_short` or

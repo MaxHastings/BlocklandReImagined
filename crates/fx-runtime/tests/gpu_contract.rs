@@ -93,6 +93,7 @@ fn planar_sprites_keep_source_roll_spin_and_edge_on_geometry() {
                             spin,
                             axis,
                             plane_right,
+                            lit: false,
                             texture: 0,
                             blend: BlendMode::Alpha,
                             depth_test: true,
@@ -261,6 +262,7 @@ fn a_reloaded_pack_needs_its_own_atlas_and_invalid_values_remain_errors() {
         };
         let mut frame = FrameEffects {
             particles: vec![ParticleInstance {
+                lit: false,
                 plane_right: Vec3::ZERO,
                 layout: Default::default(),
                 position: Vec3::ZERO,
@@ -443,7 +445,7 @@ fn billboard_blends_and_depth_match_the_host_pass() {
         let clear = [0.; 4];
         let fog = [0., 3., 0., 1.];
         let past = [0., 1., 0., 1.];
-        for (texture, tint, blend, depth_test, fogged, expected) in [
+        for ((texture, tint, blend, depth_test, fogged, expected), lit, light_case) in [
             (0, red, BlendMode::Alpha, true, clear, [0, 0, 255]),
             (0, red, BlendMode::Alpha, false, clear, [128, 0, 128]),
             (0, red, BlendMode::Additive, false, clear, [128, 0, 255]),
@@ -463,10 +465,85 @@ fn billboard_blends_and_depth_match_the_host_pass() {
             (0, red, BlendMode::Alpha, false, past, [0, 0, 255]),
             (0, red, BlendMode::Additive, false, past, [0, 0, 255]),
             (0, red, BlendMode::AdditiveColor, false, past, [0, 0, 255]),
-        ] {
+        ]
+        .into_iter()
+        .map(|case| (case, false, 0))
+        .chain([
+            (
+                (0, grey, BlendMode::Alpha, false, clear, [64, 0, 0]),
+                true,
+                1,
+            ),
+            (
+                (0, grey, BlendMode::Alpha, false, clear, [0, 0, 0]),
+                true,
+                2,
+            ),
+            (
+                (0, grey, BlendMode::Alpha, false, clear, [255, 255, 255]),
+                true,
+                3,
+            ),
+            (
+                (0, grey, BlendMode::Alpha, false, clear, [0, 0, 0]),
+                true,
+                4,
+            ),
+            (
+                (0, grey, BlendMode::Alpha, false, clear, [0, 0, 130]),
+                true,
+                5,
+            ),
+            (
+                (0, grey, BlendMode::Alpha, false, clear, [0, 0, 0]),
+                true,
+                6,
+            ),
+            (
+                (0, grey, BlendMode::Alpha, false, clear, [255, 255, 255]),
+                false,
+                1,
+            ),
+            (
+                (0, red, BlendMode::Alpha, false, clear, [0, 0, 128]),
+                true,
+                2,
+            ),
+        ]) {
+            let ambient = match light_case {
+                0 => Vec3::ONE,
+                1 => Vec3::X * 0.25,
+                _ => Vec3::ZERO,
+            };
+            let sun = if matches!(light_case, 3 | 4) {
+                Vec3::ONE
+            } else {
+                Vec3::ZERO
+            };
+            let lamps = if matches!(light_case, 5 | 6) {
+                vec![GpuLight {
+                    position_radius: [0., 0., 2.5, if light_case == 5 { 10. } else { 1. }],
+                    color: [0., 0., 1., 0.],
+                }]
+            } else {
+                vec![]
+            };
+            renderer
+                .set_lighting(
+                    ambient,
+                    if light_case == 4 {
+                        Vec3::Z
+                    } else {
+                        Vec3::NEG_Z
+                    },
+                    sun,
+                    &lamps,
+                )
+                .unwrap();
             renderer.set_fog(fogged, [0., 1., 0., 1.], [0.; 4]);
             let frame = FrameEffects {
                 particles: vec![ParticleInstance {
+                    lit,
                     plane_right: Vec3::ZERO,
                     layout: Default::default(),
                     position: Vec3::Z * 0.5,
@@ -552,6 +629,29 @@ fn billboard_blends_and_depth_match_the_host_pass() {
                 );
             }
         }
+        assert!(
+            renderer
+                .set_lighting(Vec3::ONE, Vec3::ZERO, Vec3::ZERO, &[])
+                .is_err()
+        );
+        assert!(
+            renderer
+                .set_lighting(Vec3::splat(f32::NAN), Vec3::Y, Vec3::ZERO, &[])
+                .is_err()
+        );
+        assert!(
+            renderer
+                .set_lighting(
+                    Vec3::ONE,
+                    Vec3::Y,
+                    Vec3::ZERO,
+                    &[GpuLight {
+                        position_radius: [0., 0., 0., -1.],
+                        color: [1.; 4]
+                    }]
+                )
+                .is_err()
+        );
         // Compile the host integration shader's storage-buffer layout as well.
         let _ = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("scene effects light integration contract"),

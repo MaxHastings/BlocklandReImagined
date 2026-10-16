@@ -319,6 +319,9 @@ impl ParticleContact {
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Particle {
+    /// Receive the host scene's diffuse illumination instead of self-lighting.
+    #[serde(default)]
+    pub lit: bool,
     pub id: String,
     pub texture: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]

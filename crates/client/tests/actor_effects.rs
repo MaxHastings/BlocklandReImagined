@@ -71,6 +71,7 @@ fn effects() -> Arc<EffectsPack> {
                 id: "particle".into(),
                 texture: "texture".into(),
                 contact: None,
+                lit: false,
                 orientation: None,
                 alpha_blend: true,
                 lifetime: 0.5,
