@@ -1052,9 +1052,10 @@ impl EffectsWorld {
         } else {
             0.
         };
-        let tint = p.variation.as_ref().map_or([1.; 4], |v| {
-            std::array::from_fn(|i| v.color[0][i] + (v.color[1][i] - v.color[0][i]) * tint_factor)
-        });
+        let tint = p
+            .variation
+            .as_ref()
+            .map_or([1.; 4], |v| v.sample_tint(tint_factor));
         let size_scale = p
             .variation
             .as_ref()

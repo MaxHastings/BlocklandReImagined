@@ -103,11 +103,86 @@ pub struct ParticleKey {
 pub struct ParticleVariation {
     /// One interpolated authored tint per particle, retained for its whole life.
     pub color: [[f32; 4]; 2],
+    /// How the per-particle tint is sampled between its authored endpoints.
+    #[serde(default)]
+    pub color_interpolation: TintInterpolation,
     /// Multiplies every authored size key.
     pub size: [f32; 2],
     /// Initial camera-facing sprite rotation, sampled once in degrees.
     #[serde(default, skip_serializing_if = "zero_pair")]
     pub initial_spin_degrees: [f32; 2],
+}
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TintInterpolation {
+    #[default]
+    Rgb,
+    HsvShort,
+    HsvLong,
+}
+impl ParticleVariation {
+    /// Alpha always interpolates linearly. Achromatic endpoints borrow the
+    /// other endpoint's hue, avoiding an arbitrary detour through red.
+    pub fn sample_tint(&self, t: f32) -> [f32; 4] {
+        let t = t.clamped(0., 1.);
+        let [a, b] = self.color;
+        if t == 0. {
+            return a;
+        }
+        if t == 1. {
+            return b;
+        }
+        let lerp = |a: f32, b: f32| a + (b - a) * t;
+        if self.color_interpolation == TintInterpolation::Rgb {
+            return std::array::from_fn(|i| lerp(a[i], b[i]));
+        }
+        let hsv = |c: [f32; 4]| {
+            let hi = c[0].max(c[1]).max(c[2]);
+            let lo = c[0].min(c[1]).min(c[2]);
+            let span = hi - lo;
+            let hue = if span == 0. {
+                0.
+            } else if hi == c[0] {
+                ((c[1] - c[2]) / span).rem_euclid(6.) / 6.
+            } else if hi == c[1] {
+                ((c[2] - c[0]) / span + 2.) / 6.
+            } else {
+                ((c[0] - c[1]) / span + 4.) / 6.
+            };
+            [hue, if hi > 0. { span / hi } else { 0. }, hi]
+        };
+        let mut x = hsv(a);
+        let mut y = hsv(b);
+        if x[1] == 0. {
+            x[0] = y[0];
+        }
+        if y[1] == 0. {
+            y[0] = x[0];
+        }
+        let mut delta = (y[0] - x[0] + 0.5).rem_euclid(1.) - 0.5;
+        if self.color_interpolation == TintInterpolation::HsvLong && x[1] > 0. && y[1] > 0. {
+            delta += if delta >= 0. { -1. } else { 1. };
+        }
+        let h = (x[0] + delta * t).rem_euclid(1.) * 6.;
+        let s = lerp(x[1], y[1]);
+        let v = lerp(x[2], y[2]);
+        let c = v * s;
+        let secondary = c * (1. - (h.rem_euclid(2.) - 1.).abs());
+        let rgb = match h as u32 {
+            0 => [c, secondary, 0.],
+            1 => [secondary, c, 0.],
+            2 => [0., c, secondary],
+            3 => [0., secondary, c],
+            4 => [secondary, 0., c],
+            _ => [c, 0., secondary],
+        };
+        [
+            rgb[0] + v - c,
+            rgb[1] + v - c,
+            rgb[2] + v - c,
+            lerp(a[3], b[3]),
+        ]
+    }
 }
 fn zero_pair(value: &[f32; 2]) -> bool {
     *value == [0.; 2]
@@ -597,6 +672,42 @@ impl MapEffects {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn tint_interpolation_preserves_hue_paths_alpha_hdr_and_achromatic_endpoints() {
+        use super::{ParticleVariation, TintInterpolation};
+        let mut v = ParticleVariation {
+            color: [[2., 0., 0., 0.2], [0., 0., 2., 0.8]],
+            color_interpolation: TintInterpolation::Rgb,
+            size: [1.; 2],
+            initial_spin_degrees: [0.; 2],
+        };
+        let close = |a: [f32; 4], b: [f32; 4]| {
+            assert!(
+                a.iter().zip(b).all(|(x, y)| (x - y).abs() < 1e-5),
+                "{a:?} != {b:?}"
+            );
+        };
+        close(v.sample_tint(0.5), [1., 0., 1., 0.5]);
+        v.color_interpolation = TintInterpolation::HsvShort;
+        close(v.sample_tint(0.5), [2., 0., 2., 0.5]);
+        close(v.sample_tint(0.), v.color[0]);
+        close(v.sample_tint(1.), v.color[1]);
+        v.color_interpolation = TintInterpolation::HsvLong;
+        close(v.sample_tint(0.5), [0., 2., 0., 0.5]);
+        // Neither black nor grey has an authored hue: retain blue while
+        // interpolating saturation/value, including when long hue is requested.
+        v.color[0] = [0.; 4];
+        close(v.sample_tint(0.5), [0.5, 0.5, 1., 0.4]);
+        v.color[0] = [1., 1., 1., 0.2];
+        close(v.sample_tint(0.5), [0.75, 0.75, 1.5, 0.5]);
+        v.color = [[0.5, 0.5, 0.5, 1.], [1., 1., 1., 1.]];
+        close(v.sample_tint(0.5), [0.75, 0.75, 0.75, 1.]);
+        let legacy: ParticleVariation = serde_json::from_value(serde_json::json!({
+            "color": [[1,0,0,1],[0,0,1,1]], "size": [1,1]
+        }))
+        .unwrap();
+        assert_eq!(legacy.color_interpolation, TintInterpolation::Rgb);
+    }
     use super::*;
     #[test]
     fn sprite_sequences_hold_loop_and_reverse_at_authored_rates() {

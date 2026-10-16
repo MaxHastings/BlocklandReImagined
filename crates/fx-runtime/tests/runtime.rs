@@ -259,6 +259,61 @@ fn composite_particle_groups_share_one_budget_and_reject_atomically() {
 }
 
 #[test]
+fn hsv_tints_are_sampled_once_without_changing_emission_or_alpha() {
+    let make = |mode| {
+        world(fixture(|l| {
+            for key in &mut l.particles[0].keys {
+                key.color = [1.; 4];
+            }
+            l.particles[0].variation = Some(ParticleVariation {
+                color: [[1., 0., 0., 0.2], [0., 0., 1., 0.8]],
+                color_interpolation: mode,
+                size: [1.; 2],
+                initial_spin_degrees: [0.; 2],
+            });
+        }))
+    };
+    let mut rgb = make(TintInterpolation::Rgb);
+    let mut hsv = make(TintInterpolation::HsvShort);
+    for w in [&mut rgb, &mut hsv] {
+        w.burst(
+            "emitter",
+            SourceTransform::default(),
+            SourceOptions::default(),
+            32,
+        )
+        .unwrap();
+    }
+    let before = hsv.snapshot(&camera());
+    for (a, b) in rgb
+        .snapshot(&camera())
+        .particles
+        .iter()
+        .zip(&before.particles)
+    {
+        assert_eq!(a.position, b.position);
+        assert_eq!(a.color.w, b.color.w);
+        assert_eq!(a.spin, b.spin);
+        assert!(b.color.x.max(b.color.z) > 0.99999);
+        assert_eq!(b.color.y, 0.);
+        assert!(a.color.x.max(a.color.z) < b.color.x.max(b.color.z));
+    }
+    hsv.advance(0.01, Vec3::ZERO).unwrap();
+    let after = hsv.snapshot(&camera());
+    // Particle velocities can change depth order; compare tint multisets.
+    let tints = |f: FrameEffects| {
+        let mut colors: Vec<_> = f
+            .particles
+            .iter()
+            .map(|p| p.color.to_array().map(f32::to_bits))
+            .collect();
+        colors.sort();
+        colors
+    };
+    assert_eq!(tints(before), tints(after));
+}
+
+#[test]
 fn authored_groups_keep_seeded_counts_placement_tints_and_sizes() {
     let mut library = bri_fx_runtime::testing::library();
     library.emitters[0].speed = 0.;
@@ -268,6 +323,7 @@ fn authored_groups_keep_seeded_counts_placement_tints_and_sizes() {
         key.size = 1.;
     }
     particle.variation = Some(ParticleVariation {
+        color_interpolation: Default::default(),
         color: [[0.25, 0.5, 0.75, 1.], [0.5, 0.75, 1., 0.8]],
         size: [0.1, 0.3],
         initial_spin_degrees: [90., 180.],

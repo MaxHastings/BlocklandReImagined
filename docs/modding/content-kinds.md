@@ -611,6 +611,15 @@ Missing clips are diagnosed and omitted from selection. If none loads, `file`
 is tried as the fallback. Reloading a pack replaces its prepared choices.
 This mechanism does not model sequential audio continuations or layered loops.
 
+### Particle tint interpolation
+
+`ParticleVariation.color_interpolation` accepts `rgb` (default), `hsv_short` or
+`hsv_long`. It controls the single tint sampled between `color` endpoints when
+each particle is born. HSV interpolates saturation/value while choosing the short
+or long hue path. Alpha always interpolates linearly. Grey/black endpoints borrow
+the other hue instead of introducing an arbitrary red hue. This changes neither
+texture pixels nor lifetime color keys.
+
 ### Authored particle orientation
 
 Particles optionally declare `orientation` as `screen`, `axis` or `plane`.
