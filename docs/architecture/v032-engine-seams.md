@@ -2,9 +2,12 @@
 
 Owner: v0.3.2 engine-seam chat, branch `codex/v032-engine-seams`.
 Immutable starting point: `3117e8c36c460f20bfc571700108890a9d4b7ad4`.
-This is a read-only production audit and proposed reservation. Root must grant
-the exact production paths before implementation. Only this note, the lane's
-progress entry and its seam rows are assigned at this checkpoint.
+Initial read-only production audit committed as `d644c0e9`. Root subsequently
+granted Stage B only: `crates/content/src/body_pose.rs`,
+`crates/client/src/avatar.rs`, tests inside their existing unit modules and own
+docs/seam rows. Stage B is implemented with passing native characterization, quick and scoped
+focused checks;
+all subsequent reservations below remain proposals.
 
 ## Boundary and dependency order
 
@@ -36,7 +39,7 @@ this lane. A fixture correction awaiting root validation is not an engine fix.
 
 ## First production atom proposed: existing fitting only
 
-Exact production paths requested:
+Exact Stage B production paths granted:
 
 - `crates/content/src/body_pose.rs`: plain fitting inputs/results and pure
   orchestration using existing `hold::{fit,reach,sit_hip}` and native sampling.
@@ -48,7 +51,7 @@ and the existing source-free `own_body` loader fixture. No lib export is needed:
 `body_pose` is already public. No host, weapons, package-runtime, vehicle,
 wire, clock, renderer or manifest path is required for this atom.
 
-Proposed API (subject to root review):
+Approved Stage B API (implemented with the following borrow shape):
 
 ```rust,ignore
 pub struct BodyFits {
@@ -118,7 +121,10 @@ unchanged implementation. Then run the same expectations after delegation:
   still reach. Missing limbs/eye and malformed parent counts remain bounded.
 - Both world seat holds under tilted/turned, translated, nonunit model frames;
   distinguish inverse completed root/seat frame from inverse raw player frame.
-  Include a fixture sensitive to right-before-left order and finite-input exits.
+  Keep the original right-before-left loop and exercise finite-input exits.
+  On validated tree rigs, the other-hand landmark isolates disjoint arms; the
+  two reaches need not numerically distinguish reversed iteration. No claim of
+  order-sensitive source evidence follows from those fixtures.
 - Native Avatar thread2 before/end/after and looping cases: final-key hold and
   support liveness remain distinct. Existing acted/unacted transition behavior,
   same-model role invalidation, outfit continuation and spawn resets survive.
@@ -166,5 +172,5 @@ Private evidence was read with pinned `git show`, without changing its checkout:
   PR34 remains incomplete. Neither is an engine acceptance shortcut.
 
 Root routes consumer assignments and immutable engine SHAs to Halo/AA chats.
-No consumer-ready capability, original-game fidelity, release closure or full
-gate pass is claimed by this design checkpoint.
+No host authority, original-game fidelity, release closure or full gate pass is
+claimed by Stage B. Its consumer-ready scope is only the tested pure fitting API.
