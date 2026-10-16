@@ -611,6 +611,9 @@ pub(super) fn archetype(
     if let Some(animations) = &def.animations {
         archetype.look.animations = animations.clone();
     }
+    if let Some(policy) = def.crouch_composition {
+        archetype.look.crouch_composition = policy;
+    }
     archetype.id = id.into();
     archetype.name = def.name.clone();
     if let Some(v) = def.max_health {
@@ -4405,6 +4408,7 @@ mod archetype_tests {
                 "intent_clips": { "11": "triple" },
                 "intent_sounds": { "11": "plumber:sound/yahoo" },
                 "ground_speeds": { "run": 9.0 },
+                "crouch_composition": "locomotion",
                 "max_time_scale": 2.0
             }))?;
         def.validate()?;
@@ -4418,6 +4422,20 @@ mod archetype_tests {
         assert_eq!(a.look.intent_sounds[&11], "plumber:sound/yahoo");
         assert_eq!(a.look.ground_speeds["run"], 9.0);
         assert_eq!(a.look.max_time_scale, 2.0);
+        assert_eq!(
+            a.look.crouch_composition,
+            bri_content::body::CrouchComposition::Locomotion
+        );
+        let roundtrip: crate::archetype::Archetype =
+            serde_json::from_value(serde_json::to_value(&a)?)?;
+        assert_eq!(roundtrip.look.crouch_composition, a.look.crouch_composition);
+        assert_eq!(
+            crate::archetype::Archetypes::default()
+                .resolve(Default::default())
+                .look
+                .crouch_composition,
+            bri_content::body::CrouchComposition::Overlay
+        );
         let bad: bri_package_runtime::content::ArchetypeDef =
             serde_json::from_value(serde_json::json!({
                 "schema_version": 1, "ground_speeds": { "jump": 9.0 }

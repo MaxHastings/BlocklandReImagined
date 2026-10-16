@@ -347,3 +347,21 @@ shot pose parity needs separate verification when authoring a custom rig.
 Animated alpha-mask shadow casters still use their static UVs. The texture motion
 feature above currently covers visible materials; do not rely on animated cutout
 shadow silhouettes.
+
+## Authored crouch locomotion
+
+The default body composition layers the dedicated `crouch` thread over movement,
+holding its final pose while crouched. Imported bodies whose crouched idle and
+movement clips already contain the complete crouch pose can opt out of that layer
+at the archetype root:
+
+```json
+{"crouch_composition":"locomotion"}
+```
+
+This preserves the selected crouch idle/run/back clip and its playback phase.
+The default `"overlay"` retains the stock Blockhead behavior. Ready, aim and action
+layers still compose normally; this setting does not suppress those channels or
+repair an incompatible hold clip. Collision, eye height and stance controls are
+unchanged. Hidden or box-body Blockhead stand-ins retain the legacy overlay.
+The resolved archetype carries this policy in `look.crouch_composition` for clients.

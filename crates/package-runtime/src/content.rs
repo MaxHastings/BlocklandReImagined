@@ -1762,6 +1762,9 @@ pub struct ArchetypeDef {
     /// out asks for the Blockhead's clip name, then falls back.
     #[serde(default)]
     pub animations: Option<bri_content::body::Animations>,
+    /// How the body composes crouched locomotion with the legacy crouch thread.
+    #[serde(default)]
+    pub crouch_composition: Option<bri_content::body::CrouchComposition>,
     /// The model's own death clips by the side the killing hit came from
     /// (`front`, `back`, `left`, `right`) and at random (`any`); replacing
     /// the base's.
