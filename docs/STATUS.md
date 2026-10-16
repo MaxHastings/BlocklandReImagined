@@ -6,6 +6,12 @@ Revised 2026-10-15. It summarises; the linked docs are the evidence, and
 
 ## Release state
 
+Maxwell authorized continuing v0.3.1 integration into main on 2026-10-15.
+The agreed game Add-On fidelity work must be finished, not parked as a gap list.
+Release publication remains blocked until the combined final cross-game
+playtest and his explicit approval. See [v0.3.1 readiness](releases/v0.3.1-readiness.md)
+for owners, completion evidence and the integration/publication boundary.
+
 Current public release: [v0.3.0 Alpha](https://github.com/MaxHastings/BlocklandReImagined/releases/tag/v0.3.0),
 source `ee244a8449382516d24a7460c0e7b78e00128573`, with Windows x86-64,
 Apple silicon macOS and Linux x86-64 archives. The v0.3.1 engine candidate is
@@ -124,7 +130,7 @@ Agreed with Max on 2026-09-28.
 |---|---|---|
 | 1 | A new player can download, host or join, and play; all 20 first-impressions items closed | Nearly. See the table below. |
 | 2 | A modder gets from zero to an Add-On with the guide; v20 imports work | **Done.** The guide is on main, and v20 weapon and brick packs import and play. |
-| 3 | Reported bugs fixed; the gate has zero known failures | Ongoing. `tools/gate-known-failures.toml` lists no failures. |
+| 3 | Reported bugs fixed; the gate has zero known failures | Ongoing. Existing vehicle/portal baseline entries and integrated validation failures require closure for v0.3.1; see `tools/gate-known-failures.toml` and the dated integration evidence. |
 | 4 | A 1 h multi-player soak with save and reload | **Done** on a13 code: four players for 3608 s on Slate over LAN, no disconnects, every reload exact ([audits/night-qa.md](audits/night-qa.md)). |
 | 5 | A home test, then a small group playtest | Max has played test builds in multiplayer. The group session is for later (see "For testers later"). |
 
