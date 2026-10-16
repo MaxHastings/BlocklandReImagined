@@ -401,6 +401,7 @@ pub mod explosions {
                 frames: Vec::new(),
                 material_frames: Vec::new(),
             }],
+            rotation_interpolation: Default::default(),
             ground_translations: Vec::new(),
             ground_rotations: Vec::new(),
             triggers: Vec::new(),

@@ -704,6 +704,7 @@ pub fn rig() -> Rig {
                 priority: clip.priority,
                 nodes: clip.nodes,
                 objects: Vec::new(),
+                rotation_interpolation: Default::default(),
                 ground_translations: Vec::new(),
                 ground_rotations: Vec::new(),
                 triggers: Vec::new(),

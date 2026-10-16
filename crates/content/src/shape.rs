@@ -303,6 +303,21 @@ impl Metal {
         1.0
     }
 }
+/// Interpolation between authored node rotation keys, independent of layer
+/// influence, transitions, scale-axis rotation and ground motion.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RotationInterpolation {
+    #[default]
+    Spherical,
+    NormalizedLinear,
+}
+impl RotationInterpolation {
+    fn is_spherical(&self) -> bool {
+        *self == Self::Spherical
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Animation {
     pub name: String,
@@ -311,6 +326,8 @@ pub struct Animation {
     pub looping: bool,
     pub additive: bool,
     pub priority: i32,
+    #[serde(default, skip_serializing_if = "RotationInterpolation::is_spherical")]
+    pub rotation_interpolation: RotationInterpolation,
     pub nodes: Vec<NodeTrack>,
     pub objects: Vec<ObjectTrack>,
     pub ground_translations: Vec<[f32; 3]>,
