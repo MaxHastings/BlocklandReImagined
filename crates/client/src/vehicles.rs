@@ -1174,6 +1174,42 @@ impl ClientVehicles {
         let (_, rotation, position) = world.to_scale_rotation_translation();
         Some((position, rotation))
     }
+    /// Explicit fallback hip through the actual native seat frame before any
+    /// passenger turn. Animated mount nodes already include vehicle/node scale;
+    /// static seat offsets use vehicle scale exactly once, like seat_eye.
+    pub fn seat_fallback_hip(
+        &self,
+        assets: &VehicleAssets,
+        info: &VehicleInfo,
+        seat: usize,
+        animated_mount: Option<Mat4>,
+    ) -> Option<Vec3> {
+        if info.destroyed || info.turret_broken {
+            return None;
+        }
+        let s = assets.definition(&info.definition)?.seats.get(seat)?;
+        s.rider_pose.as_ref()?;
+        let point = Vec3::from(s.rider_fallback_hip?);
+        if !point.is_finite() || point.abs().max_element() > 64. {
+            return None;
+        }
+        let frame = match animated_mount {
+            Some(frame) => frame,
+            None => {
+                if !info.scale.is_finite() || info.scale <= 0. {
+                    return None;
+                }
+                let (position, rotation) = self.seat_transform(assets, info, seat)?;
+                Mat4::from_scale_rotation_translation(Vec3::splat(info.scale), rotation, position)
+            }
+        };
+        let target = frame.transform_point3(point);
+        (frame.is_finite()
+            && frame.determinant().is_finite()
+            && frame.determinant().abs() > f32::EPSILON
+            && target.is_finite())
+        .then_some(target)
+    }
     /// An authored seat eye, shared with the host's interaction origin.
     pub fn seat_eye(
         &self,

@@ -1161,6 +1161,9 @@ pub struct AvatarAnimationInput {
     /// Authored seat clip in the seat's own model-origin frame. A body without
     /// this clip keeps its own sit animation and aligns its hip to the seat.
     pub seat_pose: Option<String>,
+    /// Current world hip target from the actual seat frame, independent of
+    /// passenger rotation/body scale. Ignored when the body owns seat_pose.
+    pub seat_fallback_hip: Option<Vec3>,
     /// Exact image-set eligibility; applied only to an owned active seat clip
     /// and the actual resolved ready role (including body fallback).
     pub seat_ready: bri_vehicles::schema::SeatReadyMatches,
@@ -2455,8 +2458,25 @@ impl AvatarMesh {
                 let parents: Vec<_> = assets.rig.shape.nodes.iter().map(|n| n.parent).collect();
                 let bind = bri_content::animation::sample(&assets.rig.shape, None, 0.0).ok()?;
                 let hip = bri_content::hold::hip(&parents, &bind.nodes)?;
-                let shift = -pose.nodes.get(hip)?.w_axis.truncate();
-                (shift.is_finite() && shift.length() < 8.).then_some(shift)
+                let target = animation_input
+                    .seat_fallback_hip
+                    .filter(|p| p.is_finite())
+                    .zip(
+                        animation_input
+                            .mount_rotation
+                            .filter(|q| q.is_finite() && q.is_normalized()),
+                    )
+                    .filter(|_| {
+                        player.scale.is_finite()
+                            && player.scale > 0.
+                            && Vec3::from(player.feet).is_finite()
+                    })
+                    .map(|(world, rotation)| {
+                        rotation.inverse() * (world - Vec3::from(player.feet)) / player.scale
+                    })
+                    .filter(|p| p.is_finite());
+                let shift = target.unwrap_or(Vec3::ZERO) - pose.nodes.get(hip)?.w_axis.truncate();
+                (shift.is_finite() && (target.is_some() || shift.length() < 8.)).then_some(shift)
             }
         });
         self.fits(assets);

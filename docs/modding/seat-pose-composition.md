@@ -67,3 +67,31 @@ comparison at the exact engine SHA. Required closure includes source poses acros
 covered held states, actions and aim, unchanged unrelated tools/default seats,
 then corrected authoritative mounted Session and obstruction coverage in the
 following slice. Maxwell owns all interactive passenger aim/camera playtests.
+
+## Explicit fallback hip point
+
+A seat with rider_pose may additionally author rider_fallback_hip: [x, y, z].
+The point is in the unscaled native seat-node frame: +Y up, forward -Z. It is
+relative to the same actual seat origin used for the rider's model root, before
+passenger turn. Each component must be finite and within [-64, 64], as for seat
+eye bounds; an anchor without a selected rider_pose is invalid. No source-game
+point is inferred from bounds, model names or screenshots.
+
+The static seat path transforms this point by the existing rendered seat position
+and rotation and the vehicle's scale once. The animated mount path transforms it
+by the full posed world mount-node matrix, retaining its vehicle and node scale
+without multiplying vehicle scale a second time. Existing seat origins/transforms
+are unchanged. The world hip target is independent of rider body scale and turn.
+
+Only when the selected mounted sit/root clip is missing on the current body does
+the client convert that world target through the inverse rider rotation and body
+scale, then subtract the sampled fallback hip in rider model space. The body that
+owns the selected clip keeps its authored model root and ignores the anchor.
+Absent anchors retain the existing missing-clip hip-to-seat-origin behavior;
+absent rider_pose retains legacy fitting. The target cache is rebuilt each frame,
+dead/dismounted inputs exclude it, and a changed body resolves its own current
+clip/hip. This does not change hand, eye or aim policy or authoritative origins.
+
+Halo owns recovering and binding original seat/hip evidence and comparing the
+original/native consumer at the exact committed engine SHA. Root owns the later
+authoritative mounted-pose/Session work. Synthetic points do not close either.

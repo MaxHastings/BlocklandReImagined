@@ -82,6 +82,10 @@ pub struct Seat {
     /// Exact mounted-image contracts whose resolved ready role the seat owns.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rider_ready_policy: Option<SeatReadyPolicy>,
+    /// Fallback hip point in the unscaled native seat-node frame (+Y up,
+    /// forward -Z). Only used when the selected rider_pose is absent on a body.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rider_fallback_hip: Option<[f32; 3]>,
     /// Authored first-person eye offset in the seat frame. No FOV or camera
     /// mode restriction. Host interaction rays use this same point.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1576,6 +1580,12 @@ impl Pack {
                 "ambiguous vehicle control roles"
             );
             for seat in &d.seats {
+                ensure!(
+                    seat.rider_fallback_hip
+                        .is_none_or(|p| seat.rider_pose.is_some()
+                            && p.iter().all(|v| v.is_finite() && v.abs() <= 64.)),
+                    "invalid authored rider fallback hip"
+                );
                 ensure!(
                     seat.rider_ready_policy
                         .as_ref()

@@ -123,6 +123,7 @@ fn seat(node: &str, position: [f32; 3], controls: bool, weapon: bool) -> Seat {
     Seat {
         rider_pose: None,
         rider_ready_policy: None,
+        rider_fallback_hip: None,
         eye: None,
         node: node.into(),
         transform: at(position),

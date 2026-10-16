@@ -565,6 +565,7 @@ impl App {
                 // Riders sit exactly on their rendered vehicle's seat, tilted
                 // with it (`Player::processTick` takes the mount transform).
                 self.mounts.rider_rotations.clear();
+                self.mounts.rider_fallback_hips.clear();
                 self.mounts.rider_hands.clear();
                 self.mounts.rider_aims.clear();
                 self.mounts.posed_eye = None;
@@ -581,7 +582,7 @@ impl App {
                     {
                         // A horse's rider rides its animated mount node, rising
                         // and falling with the gait like v20's `mountObject`.
-                        if let Some(node) = self
+                        let animated_mount = self
                             .avatar
                             .mount_meshes
                             .get(&vehicle)
@@ -592,11 +593,21 @@ impl App {
                             )
                             .and_then(|(mesh, s)| {
                                 mesh.world_node(&self.avatar.avatar_assets, &s.node)
-                            })
-                        {
+                            });
+                        if let Some(node) = animated_mount {
                             let (_, node_rotation, position) = node.to_scale_rotation_translation();
                             feet = position;
                             rotation = node_rotation;
+                        }
+                        if vitals.alive
+                            && let Some(target) = self.vehicles.seat_fallback_hip(
+                                &self.vehicle_assets,
+                                info,
+                                usize::from(seat),
+                                animated_mount,
+                            )
+                        {
+                            self.mounts.rider_fallback_hips.insert(*owner, target);
                         }
                         let forward = rotation * Vec3::NEG_Z;
                         let mut yaw = forward.x.atan2(-forward.z);
@@ -1260,6 +1271,8 @@ impl App {
                 );
                 let input = crate::avatar::AvatarAnimationInput {
                     seat_ready,
+                    seat_fallback_hip: mounted_seat
+                        .and_then(|_| self.mounts.rider_fallback_hips.get(owner).copied()),
                     look_limits,
                     mount_rotation: self.mounts.rider_rotations.get(owner).copied(),
                     seat_aim: self.mounts.rider_aims.get(owner).copied().filter(|_| !dead),
@@ -1867,6 +1880,19 @@ mod seat_ready_wiring_tests {
     use super::seat_ready_matches;
     use bri_sim::session::MountedImage;
     use bri_vehicles::schema::{SeatHeldImage, SeatReadyContract, SeatReadyPolicy, SeatReadyPose};
+
+    #[test]
+    fn disconnect_forgets_fallback_hip_before_another_session() -> anyhow::Result<()> {
+        let content = crate::testing::content_root::ContentRoot::synthetic()?;
+        let state = content.state()?;
+        let mut app = super::App::load(&content.root, state.path(), (320, 240))?;
+        app.mounts
+            .rider_fallback_hips
+            .insert(3, glam::Vec3::new(4., 5., 6.));
+        app.disconnect();
+        assert!(app.mounts.rider_fallback_hips.is_empty());
+        Ok(())
+    }
 
     #[test]
     fn seat_frame_uses_whole_current_mounted_view_and_fails_closed() {
