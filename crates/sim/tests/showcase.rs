@@ -259,6 +259,7 @@ fn vehicles() -> bri_vehicles::Pack {
     tumble.harms_only_in_minigames = false;
     tumble.seats = vec![Seat {
         rider_pose: None,
+        rider_ready_policy: None,
         eye: None,
         node: "mount0".into(),
         transform: Transform::default(),

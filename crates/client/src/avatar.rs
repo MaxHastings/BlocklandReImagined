@@ -1161,6 +1161,9 @@ pub struct AvatarAnimationInput {
     /// Authored seat clip in the seat's own model-origin frame. A body without
     /// this clip keeps its own sit animation and aligns its hip to the seat.
     pub seat_pose: Option<String>,
+    /// Exact image-set eligibility; applied only to an owned active seat clip
+    /// and the actual resolved ready role (including body fallback).
+    pub seat_ready: bri_vehicles::schema::SeatReadyMatches,
     /// The latest simulated tick state. v20 picks the action from the tick's
     /// own rotation and velocity, not from the render-interpolated body or the
     /// live mouse yaw; mixing those breaks the exact tie at 45 degrees.
@@ -2219,7 +2222,10 @@ impl AvatarMesh {
             HeldToolPose::Both => Some(Role::AimBoth),
         };
         let ready_clip = ready_role.and_then(role).map(|(clip, _)| clip);
-        if let Some(clip) = &ready_clip {
+        let seat_owns_ready = authored_seat.is_some()
+            && ready_role
+                .is_some_and(|role| animation_input.seat_ready.covers_resolved(role, &roles));
+        if let Some(clip) = &ready_clip.filter(|_| !seat_owns_ready) {
             layers.push(Layer {
                 animation: clip,
                 time: clip.duration,
