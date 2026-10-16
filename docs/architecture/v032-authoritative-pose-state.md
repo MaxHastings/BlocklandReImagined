@@ -81,6 +81,9 @@ or transport behavior. See the separate D2a progress receipt for validation.
 
 ## Separate decision: visual final-key retention at the clock owner (D2b)
 
+The later docs-only [applicability/capacity proposal](v032-final-pose-retention.md)
+refines the following outline from accepted D2a 84dee79a; it grants no code.
+
 This requires a separate grant and applicability/budget review. A retained pose
 is not an active playback and is not a terminal callback. Proposed read-only
 pose entries distinguish `Playing` from `HeldFinal`, retaining the same actual
