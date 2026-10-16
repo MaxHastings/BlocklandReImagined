@@ -13,6 +13,253 @@ const WEAPON_INDEX_LIMIT: u64 = 32 * 1024 * 1024;
 const WEAPON_RESOURCE_LIMIT: u64 = 64 * 1024 * 1024;
 const WEAPON_TOTAL_LIMIT: u64 = 512 * 1024 * 1024;
 
+fn admit_animation_asset(
+    assets: &mut BTreeMap<String, bri_sim::session::AnimationAsset>,
+    asset: bri_sim::session::AnimationAsset,
+) -> bool {
+    let count = assets.len() + usize::from(!assets.contains_key(&asset.resource));
+    let old = assets.get(&asset.resource).map_or(0, |a| a.bytes.len());
+    let bytes = assets.values().map(|a| a.bytes.len()).sum::<usize>() - old;
+    if !bytes.checked_add(asset.bytes.len()).is_some_and(|bytes| {
+        bri_sim::session::AnimationAssets::within_resource_budget(count, bytes)
+    }) {
+        bri_console::warn(format!(
+            "{}: animation metadata unsupported: catalog budget",
+            asset.resource
+        ));
+        return false;
+    }
+    assets.insert(asset.resource.clone(), asset);
+    true
+}
+
+/// The same bounded native playback metadata for local and dedicated hosts.
+/// Only native files selected by existing body/image bindings are inspected.
+pub fn animation_assets(
+    content_root: &Path,
+    packages: &bri_package::packages::PackageSet,
+    avatar_root: &Path,
+    avatar: &bri_content::avatar::Package,
+    weapons: &bri_weapons::Pack,
+    presentation_root: &Path,
+    extras: &[(String, PathBuf)],
+) -> Result<bri_sim::session::AnimationAssets> {
+    use bri_sim::session::{AnimationAsset, AnimationAssets, AnimationImageAsset};
+    let mut assets = BTreeMap::<String, AnimationAsset>::new();
+    let mut images = BTreeMap::new();
+    let mut ambiguous_images = std::collections::BTreeSet::new();
+    let mut seen_images = BTreeMap::<String, String>::new();
+    let bytes = bounded_bytes(&contained(avatar_root, &avatar.rig)?, 64 << 20)?;
+    ensure!(
+        bri_package::environment::hash_bytes(&bytes) == avatar.rig_sha256,
+        "Animation avatar digest mismatch"
+    );
+    let rig: bri_content::avatar::Rig = serde_json::from_slice(&bytes)?;
+    rig.validate()?;
+    assets.insert(
+        crate::host_setup::BLOCKHEAD_MODEL.into(),
+        AnimationAsset {
+            resource: crate::host_setup::BLOCKHEAD_MODEL.into(),
+            digest: avatar.rig_sha256.clone(),
+            rig: true,
+            bytes,
+        },
+    );
+    let read_shape = |root: &Path, file: &str, resource: &str| -> Result<Option<AnimationAsset>> {
+        let bytes = bounded_bytes(&contained(root, file)?, 32 << 20)?;
+        let shape: bri_content::shape::Shape = serde_json::from_slice(&bytes)?;
+        shape.validate()?;
+        if shape.animations.is_empty() {
+            return Ok(None);
+        }
+        let asset = AnimationAsset {
+            resource: resource.into(),
+            digest: bri_package::environment::hash_bytes(&bytes),
+            rig: false,
+            bytes,
+        };
+        let mut checked = AnimationAssets {
+            assets: vec![asset],
+            images: BTreeMap::new(),
+        };
+        checked.validate()?;
+        Ok(checked.assets.pop())
+    };
+    for entry in &packages.packages {
+        let dir = bri_package::packages::package_dir(content_root, entry)?;
+        for (id, file) in package_bodies(&dir) {
+            match read_shape(&dir, &file, &id) {
+                Ok(Some(asset)) => {
+                    ensure!(
+                        !assets.contains_key(&id),
+                        "Ambiguous animation body resource"
+                    );
+                    admit_animation_asset(&mut assets, asset);
+                }
+                Ok(None) => (),
+                Err(error) => {
+                    bri_console::warn(format!("{id}: animation metadata unsupported: {error:#}"))
+                }
+            }
+        }
+        let native = dir.join("assets");
+        let index = contained(&native, "content.json")
+            .and_then(|p| bounded_bytes(&p, 4 << 20))
+            .and_then(|b| Ok(serde_json::from_slice::<serde_json::Value>(&b)?));
+        if let Ok(index) = index {
+            for resource in index["content"].as_array().into_iter().flatten() {
+                let (Some(id), Some(file)) = (resource["id"].as_str(), resource["file"].as_str())
+                else {
+                    continue;
+                };
+                if !file.ends_with(".shape.json") || assets.contains_key(id) {
+                    continue;
+                }
+                match read_shape(&native, file, id) {
+                    Ok(Some(asset)) => {
+                        admit_animation_asset(&mut assets, asset);
+                    }
+                    Ok(None) => (),
+                    Err(error) => bri_console::warn(format!(
+                        "{id}: animation metadata unsupported: {error:#}"
+                    )),
+                }
+            }
+        }
+    }
+    let mut presented = |root: &Path| -> Result<()> {
+        let manifest =
+            contained(root, "presentation.json").and_then(|p| bounded_bytes(&p, 4 << 20));
+        let Ok(bytes) = manifest else {
+            return Ok(());
+        };
+        let manifest: serde_json::Value = match serde_json::from_slice(&bytes) {
+            Ok(manifest) => manifest,
+            Err(error) => {
+                bri_console::warn(format!(
+                    "{}: animation metadata unsupported: {error}",
+                    root.display()
+                ));
+                return Ok(());
+            }
+        };
+        for (id, binding) in manifest["images"].as_object().into_iter().flatten() {
+            if ambiguous_images.contains(id) {
+                continue;
+            }
+            let Some(image) = weapons.images.get(id) else {
+                continue;
+            };
+            let Some(model) = binding["model"].as_str() else {
+                continue;
+            };
+            if !model.eq_ignore_ascii_case(&image.model) {
+                bri_console::warn(format!(
+                    "{id}: animation metadata unsupported: image model mismatch"
+                ));
+                continue;
+            }
+            let Some(file) = manifest["models"][model]["file"].as_str() else {
+                continue;
+            };
+            match read_shape(root, file, id) {
+                Ok(Some(asset)) => {
+                    if let Some(old) = seen_images.get(id)
+                        && old != &asset.digest
+                    {
+                        assets.remove(id);
+                        images.remove(id);
+                        ambiguous_images.insert(id.clone());
+                        bri_console::warn(format!(
+                            "{id}: animation metadata unsupported: ambiguous image providers"
+                        ));
+                        continue;
+                    }
+                    seen_images.insert(id.clone(), asset.digest.clone());
+                    if !admit_animation_asset(&mut assets, asset) {
+                        continue;
+                    }
+                    images.insert(
+                        id.clone(),
+                        AnimationImageAsset {
+                            model: image.model.clone(),
+                            resource: id.clone(),
+                        },
+                    );
+                }
+                Ok(None) => (),
+                Err(error) => {
+                    bri_console::warn(format!("{id}: animation metadata unsupported: {error:#}"))
+                }
+            }
+        }
+        Ok(())
+    };
+    presented(presentation_root)?;
+    for (_, root) in extras {
+        presented(root)?;
+    }
+    for (_, root) in extras {
+        let bytes = contained(root, "weapons.json").and_then(|p| bounded_bytes(&p, 32 << 20));
+        let Ok(bytes) = bytes else {
+            continue;
+        };
+        let value: serde_json::Value = serde_json::from_slice(&bytes)?;
+        for (id, value) in value["images"].as_object().into_iter().flatten() {
+            let Some(image) = weapons.images.get(id) else {
+                continue;
+            };
+            let Some(file) = value["model"]
+                .as_str()
+                .filter(|f| f.ends_with(".shape.json") && *f == image.model)
+            else {
+                continue;
+            };
+            if images.contains_key(id) || ambiguous_images.contains(id) {
+                continue;
+            }
+            match read_shape(root, file, id) {
+                Ok(Some(asset)) => {
+                    if !admit_animation_asset(&mut assets, asset) {
+                        continue;
+                    }
+                    images.insert(
+                        id.clone(),
+                        AnimationImageAsset {
+                            model: image.model.clone(),
+                            resource: id.clone(),
+                        },
+                    );
+                }
+                Ok(None) => (),
+                Err(error) => {
+                    bri_console::warn(format!("{id}: animation metadata unsupported: {error:#}"))
+                }
+            }
+        }
+    }
+    for (id, image) in &weapons.images {
+        if !images.contains_key(id)
+            && !ambiguous_images.contains(id)
+            && assets.contains_key(&image.model)
+        {
+            images.insert(
+                id.clone(),
+                AnimationImageAsset {
+                    model: image.model.clone(),
+                    resource: image.model.clone(),
+                },
+            );
+        }
+    }
+    let catalog = AnimationAssets {
+        assets: assets.into_values().collect(),
+        images,
+    };
+    catalog.validate()?;
+    Ok(catalog)
+}
+
 /// Validated startup snapshot shared by host/join/dedicated catalog setup.
 /// Source resource hashes describe originals, not converted native bytes.
 #[derive(Clone)]

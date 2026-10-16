@@ -82,10 +82,14 @@ fn absent_and_explicit_spherical_preserve_native_sampling() {
     let explicit: Animation = serde_json::from_value(clip(Some("spherical"))).unwrap();
     for time in [-1.0_f32, 0.0, 0.25, 0.5, 1.0, 2.0] {
         let t = time.clamped(0.0, 1.0);
+        let key_rotation = Quat::from_array(absent.nodes[0].rotations[0])
+            .slerp(Quat::from_array(absent.nodes[0].rotations[1]), t)
+            .normalize();
+        // The legacy sampler also composes this absolute layer over the rest
+        // rotation, even at full weight. Preserve that normalization step in
+        // the exact oracle rather than comparing two different calculations.
         let expected = Mat4::from_rotation_translation(
-            Quat::from_array(absent.nodes[0].rotations[0])
-                .slerp(Quat::from_array(absent.nodes[0].rotations[1]), t)
-                .normalize(),
+            Quat::IDENTITY.slerp(key_rotation, 1.0).normalize(),
             Vec3::new(1.0, 2.0, 3.0),
         );
         assert_eq!(rotation(&absent, time), rotation(&explicit, time));

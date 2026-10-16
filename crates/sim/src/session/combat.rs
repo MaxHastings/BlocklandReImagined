@@ -2579,6 +2579,7 @@ impl Session {
         }
         // Skiing belongs to the old Player object: a new body starts off skis.
         let _ = self.weapons.cancel_skis(ActorId(owner));
+        self.new_animation_life(owner)?;
         self.give_loadout(owner, equipment.as_ref())?;
         self.package_spawn(owner);
         // `GameConnection::spawnPlayer`: a spawnProjectile at the hack position.
@@ -3012,6 +3013,12 @@ impl Session {
         owner: OwnerId,
         archetype: crate::archetype::ArchetypeId,
     ) -> Result<()> {
+        let previous_body = self.peers.get(&owner).map(|p| {
+            self.archetypes
+                .resolve(p.player.state().archetype)
+                .look
+                .clone()
+        });
         let old = self.max_health(owner);
         let kind = self.archetypes.resolve(archetype);
         let (movement, max, can_ride, uses_items) = (
@@ -3051,6 +3058,14 @@ impl Session {
         // `Armor::onNewDataBlock` swaps a held brick for the new datablock's.
         if self.holds_brick(owner) {
             self.hold_brick(owner)?;
+        }
+        if previous_body.as_ref()
+            != self
+                .peers
+                .get(&owner)
+                .map(|p| &self.archetypes.resolve(p.player.state().archetype).look)
+        {
+            self.new_animation_body(owner)?;
         }
         Ok(())
     }
