@@ -2,6 +2,7 @@
 use crate::*;
 use anyhow::{Result, ensure};
 use bri_console::Clamp;
+use bri_content::effects::ContactGeometry;
 use bri_content::passage::{MAX_CARRIES, PAST};
 use glam::{Quat, Vec3};
 use std::{
@@ -438,6 +439,8 @@ pub enum Event {
         seconds: f32,
         image: Option<String>,
         hand: Option<u8>,
+        #[serde(default)]
+        contact: Option<ContactGeometry>,
         /// Actual image aim or collision normal; absent for lifetime expiry.
         direction: Option<Vec3>,
         scale: f32,
@@ -2828,7 +2831,7 @@ impl WeaponsWorld {
         let pack = Arc::clone(&self.pack);
         for p in std::mem::take(&mut self.explosions) {
             if let Some(d) = pack.projectiles.get(&p.definition) {
-                self.explode(&p, d, q, None, None);
+                self.explode(&p, d, q, None, None, None);
             }
         }
         let ids: Vec<_> = self.actors.keys().copied().collect();
@@ -3116,6 +3119,7 @@ impl WeaponsWorld {
                         image: Some(image.id.clone()),
                         hand: Some(e.hand),
                         direction: Some(a.frame.direction.normalize()),
+                        contact: None,
                         scale: a.frame.scale,
                     });
                 }
@@ -3921,7 +3925,7 @@ impl WeaponsWorld {
         }
         if let Some(bursts) = expires(d, p.age, self.fuses.get(&p.id).copied()) {
             if bursts {
-                self.explode(p, d, q, None, None);
+                self.explode(p, d, q, None, None, None);
             }
             return false;
         }
@@ -4000,6 +4004,7 @@ impl WeaponsWorld {
                 scale: p.scale,
                 paint: p.paint,
             };
+            let contact_geometry = ContactGeometry::from_velocity(contact.velocity, contact.normal);
             self.events.push(Event::Contact {
                 impact: contact.clone(),
             });
@@ -4010,7 +4015,7 @@ impl WeaponsWorld {
                 ContactResponse::Continue => {}
                 ContactResponse::Delete => return false,
                 ContactResponse::Explode => {
-                    self.explode(p, d, q, Some(normal), Some(hit.target));
+                    self.explode(p, d, q, Some(normal), Some(hit.target), contact_geometry);
                     return false;
                 }
                 response => match redirect_projectile(p, contact.normal, response) {
@@ -4069,7 +4074,7 @@ impl WeaponsWorld {
                 self.children(p, c, set);
             }
             if hit_bursts(d, p.age, matches!(hit.target, TargetId::Actor(_))) {
-                self.explode(p, d, q, Some(normal), Some(hit.target));
+                self.explode(p, d, q, Some(normal), Some(hit.target), contact_geometry);
                 return false;
             }
             // Kai's shield deleted a projectile it stopped (`%obj.schedule(10,
@@ -4096,7 +4101,7 @@ impl WeaponsWorld {
                     p.stuck = true;
                     p.heading = p.velocity.try_normalize();
                     p.velocity = Vec3::ZERO;
-                    self.effect(p, &d.stick_effect, Some(normal));
+                    self.effect(p, &d.stick_effect, Some(normal), contact_geometry);
                     return true;
                 }
                 Rebound::Bounced { velocity, bursts } => (velocity, bursts),
@@ -4106,7 +4111,7 @@ impl WeaponsWorld {
             p.bounced = true;
             p.bounces += 1;
             if last {
-                self.explode(p, d, q, Some(normal), Some(hit.target));
+                self.explode(p, d, q, Some(normal), Some(hit.target), contact_geometry);
                 return false;
             }
             self.events.push(Event::Bounced {
@@ -4114,7 +4119,7 @@ impl WeaponsWorld {
                 position: p.position,
                 velocity: p.velocity,
             });
-            self.effect(p, &d.bounce_effect, Some(normal));
+            self.effect(p, &d.bounce_effect, Some(normal), contact_geometry);
             for (set, c) in d.children.iter().enumerate().filter(|(_, c)| c.on_bounce) {
                 self.children(p, c, set);
             }
@@ -4182,7 +4187,13 @@ impl WeaponsWorld {
         true
     }
     /// An explosion's composite plus its `soundProfile`, both at the projectile.
-    fn effect(&mut self, p: &Projectile, definition: &str, direction: Option<Vec3>) {
+    fn effect(
+        &mut self,
+        p: &Projectile,
+        definition: &str,
+        direction: Option<Vec3>,
+        contact: Option<ContactGeometry>,
+    ) {
         if let Some(sound) = self
             .pack
             .explosions
@@ -4206,6 +4217,7 @@ impl WeaponsWorld {
                 image: None,
                 hand: None,
                 direction,
+                contact,
                 scale: p.scale,
             });
         }
@@ -4618,6 +4630,7 @@ impl WeaponsWorld {
             scale: p.scale,
             paint: None,
         };
+        let contact_geometry = ContactGeometry::from_velocity(contact.velocity, hit.normal);
         self.events.push(Event::Contact {
             impact: contact.clone(),
         });
@@ -4638,9 +4651,16 @@ impl WeaponsWorld {
                     velocity: normal,
                     ..p.clone()
                 };
-                self.explode(&at, &blast, q, Some(normal), Some(hit.target));
+                self.explode(
+                    &at,
+                    &blast,
+                    q,
+                    Some(normal),
+                    Some(hit.target),
+                    contact_geometry,
+                );
             }
-            None => self.explode(&p, d, q, Some(normal), Some(hit.target)),
+            None => self.explode(&p, d, q, Some(normal), Some(hit.target), contact_geometry),
         }
         let sound = hitscan.sound(matches!(hit.target, TargetId::Actor(_)), draw);
         if !sound.is_empty() {
@@ -4771,6 +4791,7 @@ impl WeaponsWorld {
                     image: None,
                     hand: None,
                     direction: None,
+                    contact: None,
                     scale,
                 });
             }
@@ -4808,6 +4829,7 @@ impl WeaponsWorld {
     }
     /// Its explosion where it is: the effect `impacts` names for `landed`
     /// on (what it hit), else `explosion`'s, then the blast.
+    #[allow(clippy::too_many_arguments)]
     fn explode(
         &mut self,
         p: &Projectile,
@@ -4815,6 +4837,7 @@ impl WeaponsWorld {
         q: &mut impl Query,
         direction: Option<Vec3>,
         landed: Option<TargetId>,
+        contact: Option<ContactGeometry>,
     ) {
         let effect = landed
             .map(|t| {
@@ -4826,7 +4849,7 @@ impl WeaponsWorld {
             .filter(|e| !e.is_empty())
             .unwrap_or(&d.explosion.effect)
             .to_owned();
-        self.effect(p, &effect, direction);
+        self.effect(p, &effect, direction, contact);
         for (set, c) in d.children.iter().enumerate().filter(|(_, c)| c.on_explode) {
             self.children(p, c, set);
         }

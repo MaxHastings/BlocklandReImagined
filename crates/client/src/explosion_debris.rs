@@ -368,6 +368,7 @@ mod tests {
                 image: None,
                 hand: None,
                 direction,
+                contact: None,
                 scale: 1.0,
             },
         }

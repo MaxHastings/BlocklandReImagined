@@ -1373,6 +1373,7 @@ pub(crate) mod tests {
                 image: None,
                 hand: None,
                 direction: normal.map(|n| n.to_array()),
+                contact: None,
                 scale: 1.0,
             },
         }

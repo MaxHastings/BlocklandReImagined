@@ -149,6 +149,7 @@ impl App {
                         image: None,
                         hand: None,
                         direction: None,
+                        contact: None,
                         scale: (radius / 4.).clamped(0.5, 3.),
                     },
                     ..cue

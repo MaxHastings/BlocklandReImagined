@@ -218,6 +218,10 @@ impl EffectsLimits {
 }
 #[derive(Clone, Copy, Debug, Default, serde::Serialize)]
 pub struct Diagnostics {
+    /// Explicit contact groups omitted once because no accepted contact was supplied.
+    pub missing_contact_groups: u64,
+    /// A contact reference requested following a contacted frame not supplied here.
+    pub unsupported_contact_attachments: u64,
     pub emitted: u64,
     pub particle_capacity_drops: u64,
     pub emission_budget_skips: u64,
@@ -363,6 +367,16 @@ struct Particle {
     animation_start: usize,
     animation_reverse: bool,
 }
+pub struct CompositePlan {
+    pack: Arc<EffectsPack>,
+    composite: crate::pack::Composite,
+    transform: SourceTransform,
+    options: SourceOptions,
+    groups: Vec<(bri_content::effects::Burst, SourceTransform, SourceOptions)>,
+    missing_contacts: usize,
+    unsupported_attachments: usize,
+}
+
 pub struct EffectsWorld {
     pack: Arc<EffectsPack>,
     limits: EffectsLimits,
@@ -693,14 +707,21 @@ impl EffectsWorld {
             self.play_composite(id, transform, options)
         }
     }
-    /// Play a source-backed explosion group. Host owns damage, audio, camera shake and debris.
-    pub fn play_composite(
-        &mut self,
+    /// Preflight every authored group without changing a cursor, RNG, source or particle.
+    pub fn prepare_composite(
+        &self,
         id: &str,
         transform: SourceTransform,
         options: SourceOptions,
-    ) -> Result<Vec<EffectHandle>> {
-        let c = self
+        contact: Option<bri_content::effects::ContactGeometry>,
+    ) -> Result<CompositePlan> {
+        transform.validate()?;
+        options.validate()?;
+        ensure!(
+            contact.is_none_or(|c| c.valid()),
+            "Invalid contact geometry"
+        );
+        let composite = self
             .pack
             .manifest
             .composites
@@ -708,13 +729,99 @@ impl EffectsWorld {
             .find(|c| c.id == id)
             .with_context(|| format!("Unknown native composite {id}"))?
             .clone();
+        let mut groups = Vec::new();
+        let mut missing_contacts = 0;
+        let mut unsupported_attachments = 0;
+        for b in &composite.bursts {
+            ensure!(b.valid(), "Invalid authored composite group");
+            if b.frame.needs_contact() && contact.is_none() {
+                missing_contacts += 1;
+                continue;
+            }
+            if b.follow_source
+                && b.frame != bri_content::effects::BurstFrame::Source
+                && (b.frame.needs_contact() || contact.is_some())
+            {
+                unsupported_attachments += 1;
+                continue;
+            }
+            let reference = if b.frame == bri_content::effects::BurstFrame::Source {
+                transform.rotation
+            } else {
+                Quat::from_rotation_arc(
+                    Vec3::Y,
+                    b.frame.axis(contact).context("Missing contact reference")?,
+                )
+            };
+            let local_rotation =
+                Quat::from_rotation_arc(Vec3::Y, Vec3::from(b.direction).normalize());
+            let group = SourceTransform {
+                position: transform.position + reference * Vec3::from(b.offset),
+                rotation: (reference * local_rotation).normalize(),
+                velocity: transform.velocity,
+            };
+            group.validate()?;
+            let mut group_options = options.clone();
+            group_options.radius = Some(b.radius);
+            group_options.follow_source = b.follow_source;
+            group_options.validate()?;
+            groups.push((b.clone(), group, group_options));
+        }
+        Ok(CompositePlan {
+            pack: self.pack.clone(),
+            composite,
+            transform,
+            options,
+            groups,
+            missing_contacts,
+            unsupported_attachments,
+        })
+    }
+    /// Play a source-backed explosion group. Existing callers retain Source semantics.
+    pub fn play_composite(
+        &mut self,
+        id: &str,
+        transform: SourceTransform,
+        options: SourceOptions,
+    ) -> Result<Vec<EffectHandle>> {
+        let plan = self.prepare_composite(id, transform, options, None)?;
+        self.play_prepared_composite(plan)
+    }
+    /// Emit a previously validated plan, reserving only eligible groups' existing
+    /// conservative source/light/count-max budgets before any emission.
+    pub fn play_prepared_composite(&mut self, plan: CompositePlan) -> Result<Vec<EffectHandle>> {
+        ensure!(
+            Arc::ptr_eq(&self.pack, &plan.pack),
+            "Composite plan belongs to another pack"
+        );
+        let CompositePlan {
+            composite: c,
+            transform,
+            options,
+            groups,
+            missing_contacts,
+            unsupported_attachments,
+            ..
+        } = plan;
+        self.diagnostics.missing_contact_groups = self
+            .diagnostics
+            .missing_contact_groups
+            .saturating_add(missing_contacts as u64);
+        self.diagnostics.unsupported_contact_attachments = self
+            .diagnostics
+            .unsupported_contact_attachments
+            .saturating_add(unsupported_attachments as u64);
         let required = c.emitters.len()
             + usize::from(c.light.is_some())
             + usize::from(c.burst.is_some())
-            + c.bursts.len();
+            + groups.len();
         ensure!(
             self.sources.len() + required <= self.limits.sources,
             "Composite source budget exhausted"
+        );
+        ensure!(
+            self.next_handle.checked_add(required as u64).is_some(),
+            "Effect handle space exhausted"
         );
         if c.light.is_some() {
             ensure!(
@@ -722,8 +829,11 @@ impl EffectsWorld {
                 "Composite light budget exhausted"
             );
         }
-        let count: usize = c.burst.iter().map(|(_, n, _)| *n as usize).sum::<usize>()
-            + c.bursts.iter().map(|b| b.count[1] as usize).sum::<usize>();
+        let count = c.burst.iter().map(|(_, n, _)| *n as usize).sum::<usize>()
+            + groups
+                .iter()
+                .map(|(b, _, _)| b.count[1] as usize)
+                .sum::<usize>();
         ensure!(
             count <= self.limits.emissions_per_advance,
             "Composite burst exceeds budget"
@@ -745,20 +855,10 @@ impl EffectsWorld {
             options.half_extents = Vec3::splat(*radius);
             handles.push(self.burst(id, transform, options, *count as usize)?);
         }
-        for b in &c.bursts {
+        for (b, group, options) in groups {
             let mut rng = Rng(self.seed ^ self.next_handle.wrapping_mul(0xa0761d6478bd642f));
             let count =
                 (rng.range(b.count[0] as f32, b.count[1] as f32 + 1.) as u32).min(b.count[1]);
-            let mut options = options.clone();
-            options.radius = Some(b.radius);
-            options.follow_source = b.follow_source;
-            let local_rotation =
-                Quat::from_rotation_arc(Vec3::Y, Vec3::from(b.direction).normalize());
-            let group = SourceTransform {
-                position: transform.position + transform.rotation * Vec3::from(b.offset),
-                rotation: (transform.rotation * local_rotation).normalize(),
-                velocity: transform.velocity,
-            };
             handles.push(self.burst(&b.emitter, group, options, count as usize)?);
         }
         Ok(handles)

@@ -1,9 +1,23 @@
 # Independent contact vectors and authored effect groups
 
 Design/strict-regression checkpoint on `codex/contact-effect-frames`, based on
-camera correction `3cf62a6b0229b9df9f3c5b299f8c1fb4a2988a30`. Root granted
-only the new test, this note, own progress and one seam row. All production is
-read-only until root reviews a concrete implementation reservation.
+camera correction `3cf62a6b0229b9df9f3c5b299f8c1fb4a2988a30`. The original
+reservation covered only the new test, this note, own progress and one seam row;
+root subsequently granted the implementation described below.
+
+Root subsequently granted the bounded implementation on
+`codex/contact-effect-frames-impl`. The proposal below records its source evidence;
+current implementation and commands are recorded in
+`../progress/2026-10-16-contact-effect-frames-impl.md`. All strict tests are enabled
+in the corrected branch. A separate immutable diagnostic branch retains the
+original failing requirements.
+
+The implementation uses ContactGeometry, Source-default BurstFrame and opaque
+native CompositePlan preflight. Malformed provided geometry/pose/group data fails
+before any batch cursor or emission mutation. Missing contact skips/counts only
+that group; capacity admission reserves eligible groups' existing conservative
+source/light/count-max budgets and emits nothing on rejection. Unsupported
+contact attachment is a separate diagnostic/omission, not shooter attachment.
 
 Private Halo handoff: PR 34, immutable
 `fa09e005e2e7e3ea315f09c5c0c6f2697910c179`,
@@ -60,9 +74,9 @@ must not be used as a substitute for the authoritative shot's accepted contact.
 Original audio repeat/promotion, cut-plane appearance and wood collision/render
 separation remain separate unclosed requirements.
 
-## Minimal transport proposal for root review
+## Reviewed transport contract
 
-Add a bounded plain geometry record, tentatively
+The implementation adds a bounded plain geometry record,
 `content::effects::ContactGeometry { travel: [f32; 3], normal: [f32; 3] }`, and
 optional `contact` on native `Event::Effect` and `CueKind::WeaponEffect`.
 Existing effect position remains the contact point; do not duplicate it in the
@@ -83,17 +97,17 @@ ordinary hitscan, nonzero randomized spread, the explosion-projectile override,
 flying impact, bounce/stick pre-response direction and non-contact expiry.
 Do not infer attachment from this geometry-only record.
 
-This changes reliable cue payloads and requires exactly one new file,
+The reliable cue change is recorded by exactly one new file,
 `crates/net/protocol-changes/contact-effect-frames.md`, describing the optional
 contact record on checkpoint/delta presentation cues. Never edit VERSION
-directly. The marker is proposed here, not created by this diagnostic task.
-All content remains under explicit alpha schemas. Root must review the exact
-optional-field/schema treatment before implementation; no migration is needed
-or proposed. Default omission preserves the existing authored behavior.
+directly. The diagnostic did not create it; the granted implementation does.
+Content remains under the existing explicit alpha Library/weapon schemas as
+a defaulted extension; no migration is introduced. Default omission preserves
+the existing authored behavior.
 
-## Per-group reference proposal
+## Reviewed per-group reference contract
 
-Extend existing Burst with a defaulted typed reference selector, tentatively
+Existing Burst gains a defaulted typed reference selector,
 `frame: Source | ContactNormal | ContactTravel | OppositeTravel |
 ReflectedTravel | WorldDown`. These are explicit engine geometry operations,
 not Halo tag-name branches or source-policy bindings:
@@ -113,16 +127,21 @@ bit-for-bit. WorldDown uses the native world axis without needing contact data.
 Explicit contact references without actual contact data are
 unsupported: count/report the missing context and omit that group, rather than
 inventing an incoming vector. Sibling legacy groups can still emit within the
-existing budgets. Exact diagnostic/whole-composite failure policy needs root's
-review, including all-or-nothing validation before emission and cursor advance.
-Do not introduce an unbounded retry or replay on a later frame.
+existing budgets. Root chose whole-batch validation of malformed provided
+geometry/pose and preflight of every group before cursor/emission mutation.
+Missing optional context omits/counts only that group. Capacity admission uses
+only eligible groups and the existing conservative count-max semantics; rejection
+emits nothing and consumes the reliable cue once. No retry or later replay.
+Capacity rejection is per composite: earlier successful cues in the batch remain
+accepted. In contrast, malformed provided geometry/pose/group data rejects the
+whole batch before any of its cursor, host-request or emission changes.
 
 One forward vector does not specify roll. Reusing current minimal-arc machinery
 is a documented native convention for a bounded initial reference selector;
 it is not proof of an original marker matrix. A verified full original basis
 must later be authorable without loss (a validated local quaternion/basis
 override is a possible extension to Burst, not a new particle framework).
-Root must decide this before claiming the seam expresses the original planes.
+The bounded mechanism does not claim to express the original full plane basis.
 The source owner still needs PC evidence for sign, perpendicular/roll and local
 coordinate conversion. No binding is authorized merely because a reference's
 name resembles an original marker. Offset/local direction and plane orientation
@@ -136,7 +155,7 @@ attach it to the shooter or overload the cue's source/node/scale. A later typed
 attachment record needs stable target identity, actual node/frame semantics,
 death/removal and late-client behavior under its own reservation.
 
-## Proposed production footprint, not a grant
+## Approved production footprint
 
 | Paths | Bounded responsibility |
 |---|---|
@@ -149,29 +168,33 @@ death/removal and late-client behavior under its own reservation.
 | `net/protocol-changes/contact-effect-frames.md`, affected net codec tests | One wire-change marker plus actual reliable roundtrip/rejection checks |
 
 No runtime Torque reader, VM, new effect framework, game-name branch or camera
-aim reconstruction. No manifests/dependencies are required. Root owns final
-path reservations, shared integration, gate and release.
+aim reconstruction. No manifests/dependencies are required. Root owns additional
+path reservations, shared integration, gate and release. Constructor-only and
+corresponding test additions are listed in the implementation progress entry.
 
 ## Public evidence boundary and next acceptance
 
 The new public test uses invented WeaponsWorld/Query geometry with real native
 spread and accepted contact callbacks. It compares contact velocity against
 the actual queried cast, proves that nominal aim differs, and keeps shooter
-and map target distinct. Strict ignored requirements expose missing Event
+and map target distinct. At diagnostic checkpoint `27678b2f`, strict ignored
+requirements exposed missing Event
 context, loss of proposed context through actual native Cue serde and unsupported
 authored Burst reference selection. The third case has an actual WeaponEffects
 consumer and independent normal/travel particle-output assertions ready after
-schema support; currently it fails at Burst's unknown-field rejection. They are
+schema support; that checkpoint fails at Burst's unknown-field rejection. They are
 not a fabricated Session adapter or proof of reliable binary serialization.
 The private PR 34 independently records an actual ordinary Session failure.
 
 The green native FX control exercises existing local Burst direction and Plane
 orientation under a rotated source. It does not bind any original tag or assert
-an unverified reflected/incident sign, roll or attachment law. Proposed JSON
-field names in the strict fixture are reviewable placeholders, while the
-behavioral requirement is retaining the actual independent quantities.
+an unverified reflected/incident sign, roll or attachment law. The reviewed
+field names now implement retention of the actual independent quantities. The
+corrected target enables all of these cases and adds actual Session, projectile
+response and budget/cursor coverage; net replication exercises the real reliable
+codec and atomic Replica rejection. Exact results are in the implementation entry.
 
-After root grants implementation, require the enabled strict cases plus actual
+Implementation acceptance requires the enabled strict cases plus actual
 Session/reliable transport and per-group non-collinear native output checks,
 default-preserving legacy and absent/invalid context controls, contact expiry/
 bounce/override paths, attribution/target separation and budget/cursor behavior.
