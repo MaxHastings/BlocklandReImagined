@@ -6,36 +6,33 @@ Revised 2026-10-16. It summarises; the linked docs are the evidence, and
 
 ## Release state
 
-Maxwell's latest October16 direction makes v0.3.1 a focused engine and bug-fix
-release. Finish the already-approved current animation seam; new engine seams
-target v0.3.2. Halo and AA continue private fidelity, while GMod remains parked;
-full cross-game fidelity no longer blocks this release. Maxwell explicitly
-authorizes automatic v0.3.1 publication after the required checks and package
-verification, without waiting for his final playtest or another approval. Failed
-checks and unresolved release blockers still hold publication. See
-[v0.3.1 readiness](releases/v0.3.1-readiness.md) for the current boundary.
+Current public release: [v0.3.1 Alpha](https://github.com/MaxHastings/BlocklandReImagined/releases/tag/v0.3.1),
+published on October 16, 2026 from
+`5956e3a383a1c241bd5192a3aa8cc4f358f2e503`. The full local gate, required CI,
+three-platform builds and published archive/hash verification passed. Original
+private game assets are excluded from public archives. Interactive acceptance
+was not performed; the physical Linux reporter's backend remains unconfirmed.
+The release and its tag remain immutable.
 
-Current public release: [v0.3.0 Alpha](https://github.com/MaxHastings/BlocklandReImagined/releases/tag/v0.3.0),
-source `ee244a8449382516d24a7460c0e7b78e00128573`, with Windows x86-64,
-Apple silicon macOS and Linux x86-64 archives. Intermediate v0.3.1 engine
-checkpoints are on main through `3117e8c3`: fresh camera snapshots, the corrected
-portal contact fixture and authoritative contact-effect frames passed the full
-local gate and all five Windows checks before the guarded main push. Exact
-evidence and private consumer limits are in
-[the integration checkpoint](progress/2026-10-16-3117-gate-and-consumer-checkpoints.md).
-The local candidate on `codex/v031-release-regressions` now includes
-the sampler, bounded Stage1 authoritative animation admission/lifetime clocks,
-and scoped corrections for tutorial print clipping and X11 legacy wheel releases.
-The earlier integrated gate identified an animation allocator checkpoint bug and
-stale content-test expectations after default Add-Ons were installed. The bounded
-checkpoint correction and source-qualified test corrections pass their scoped
-tiers; the combined successor still requires its full integrated/platform checks.
-Stage1
-does not provide package completion callbacks or active client replication.
-The separate v0.3.2 engine chat owns further fitting/socket/pose mechanisms;
-Halo and AA private fidelity continue independently. Release notes are in
-[docs/releases/v0.3.1.md](releases/v0.3.1.md). This is an alpha release, and
-interactive acceptance and the broader alpha definition of done remain open.
+Maxwell approved the [v0.3.2 definition of done](releases/v0.3.2-readiness.md):
+a faithful playable Chief / assault rifle / Warthog showcase, actual host/remote
+agreement, a source-backed AA M16 reload portability consumer, reported map and
+wheel bug closure, and the usual integrated/package checks. A meaningful shared
+capability must be exercised by an affected ordinary gameplay consumer before
+further dependent mechanism expansion. No acceptance row is closed by an
+isolated API test, imported mesh or rendering diagnostic alone.
+
+Shotgun fidelity work continues independently and is not required for v0.3.2.
+The wider Halo and AA execution plans remain active; GMod remains parked.
+Engine mechanisms remain generic and source policy belongs to packages. Root
+reviews exact ownership/path grants and immutable consumer evidence. The
+v0.3.1-only automatic publication grant does not authorize publishing v0.3.2.
+
+The released-v0.3.1 Halo private playtest uses exact public5956 plus private
+`13425df5` (Warthog fingerprint correction), with all thirteen registered Halo
+packages and no loader health problems. The shotgun is unregistered and not
+playable. The reported Add-On map-switch and remaining Linux paint-wheel
+problems are still open; a local playtest is not proof they are fixed.
 
 See the dated progress entries for each release's exact build and test
 evidence.
