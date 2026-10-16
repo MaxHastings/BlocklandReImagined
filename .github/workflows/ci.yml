@@ -36,6 +36,21 @@ env:
   TEST_TIER: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && 'full' || 'pr' }}
 
 jobs:
+  linux-wheel:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install native build dependencies
+        run: sudo apt-get update && sudo apt-get install -y build-essential pkg-config libasound2-dev libudev-dev
+      - uses: dtolnay/rust-toolchain@1.93
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: linux-wheel
+      - uses: mozilla-actions/sccache-action@v0.0.9
+      - name: Compile Linux backends and check legacy X11 wheel routing headlessly
+        run: cargo test --locked -p bri-client --test x11_wheel
+
   check:
     runs-on: windows-latest
     timeout-minutes: 60

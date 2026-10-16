@@ -365,6 +365,8 @@ if ($StressLab) {
 }
 
 $docInputs = @(
+    @{ source = (Join-Path $RepoRoot 'vendor/winit/LICENSE'); destination = 'WINIT-LICENSE.txt' },
+    @{ source = (Join-Path $RepoRoot 'vendor/winit/BRI-PATCH.md'); destination = 'WINIT-PATCH.md' },
     @{ source = (Join-Path $RepoRoot 'docs/PLAYTEST.md'); destination = 'PLAYTEST.md' },
     @{ source = (Join-Path $RepoRoot 'docs/KNOWN-ISSUES.md'); destination = 'KNOWN-ISSUES.md' },
     @{ source = (Join-Path $RepoRoot 'docs/TESTER-GUIDE.md'); destination = 'TESTER-GUIDE.md' },

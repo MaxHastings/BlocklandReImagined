@@ -10,6 +10,8 @@ try {
     $fixture = Join-Path $temp 'fixture'
     [IO.Directory]::CreateDirectory($fixture) | Out-Null
     foreach ($path in @('content','docs','bin')) { [IO.Directory]::CreateDirectory((Join-Path $fixture $path)) | Out-Null }
+    [IO.Directory]::CreateDirectory((Join-Path $fixture 'vendor/winit')) | Out-Null
+    foreach ($name in @('LICENSE','BRI-PATCH.md')) { Copy-Item (Join-Path $repo "vendor/winit/$name") (Join-Path $fixture "vendor/winit/$name") }
     Copy-Item (Join-Path $repo 'docs/PLAYTEST.md') (Join-Path $fixture 'docs/PLAYTEST.md')
     Copy-Item (Join-Path $repo 'docs/KNOWN-ISSUES.md') (Join-Path $fixture 'docs/KNOWN-ISSUES.md')
     Copy-Item (Join-Path $repo 'docs/TESTER-GUIDE.md') (Join-Path $fixture 'docs/TESTER-GUIDE.md')
