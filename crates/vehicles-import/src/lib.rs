@@ -290,6 +290,8 @@ pub fn lower(
         let node = format!("mount{node_index}");
         seats.push(Seat {
             rider_pose: None,
+            rider_ready_policy: None,
+            rider_fallback_hip: None,
             eye: None,
             transform: find_node(s, &n, &node)?,
             node,

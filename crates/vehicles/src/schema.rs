@@ -79,6 +79,13 @@ pub struct Seat {
     /// to this seat. None keeps legacy Blockhead-relative seat fitting.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rider_pose: Option<String>,
+    /// Exact mounted-image contracts whose resolved ready role the seat owns.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rider_ready_policy: Option<SeatReadyPolicy>,
+    /// Fallback hip point in the unscaled native seat-node frame (+Y up,
+    /// forward -Z). Only used when the selected rider_pose is absent on a body.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rider_fallback_hip: Option<[f32; 3]>,
     /// Authored first-person eye offset in the seat frame. No FOV or camera
     /// mode restriction. Host interaction rays use this same point.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -93,6 +100,131 @@ pub struct Seat {
     /// and tip with the gun's aim. Every body reaches its arms there.
     #[serde(default, skip_serializing_if = "SeatHands::is_empty")]
     pub hands: SeatHands,
+}
+/// Mirrors weapons::IMAGE_SLOTS; cross-crate regression guards this domain.
+pub const SEAT_READY_IMAGE_SLOTS: usize = 4;
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SeatReadyPose {
+    Right,
+    Left,
+    Both,
+}
+impl SeatReadyPose {
+    fn index(self) -> usize {
+        match self {
+            Self::Right => 0,
+            Self::Left => 1,
+            Self::Both => 2,
+        }
+    }
+}
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SeatHeldImage {
+    pub slot: u8,
+    pub image: String,
+}
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SeatReadyContract {
+    pub images: Vec<SeatHeldImage>,
+    pub pose: SeatReadyPose,
+}
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SeatReadyPolicy {
+    pub contracts: Vec<SeatReadyContract>,
+}
+/// Eligible roles for one exact image set. The body must still resolve its role
+/// and verify the active owned seat clip. No client or rendering dependency.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct SeatReadyMatches {
+    roles: [bool; 3],
+}
+impl SeatReadyMatches {
+    pub fn covers(self, pose: SeatReadyPose) -> bool {
+        self.roles[pose.index()]
+    }
+    /// Resolve the body's existing fallback provenance without changing it.
+    /// Both clients and authoritative pose consumers can apply this decision.
+    pub fn covers_resolved(
+        self,
+        requested: bri_content::body::Role,
+        roles: &bri_content::body::RoleClips,
+    ) -> bool {
+        use bri_content::body::Role;
+        if roles.clip(requested).is_none() {
+            return false;
+        }
+        let resolved = roles
+            .missing
+            .iter()
+            .find(|(missing, _)| *missing == requested)
+            .map_or(Some(requested), |(_, fallback)| *fallback);
+        match resolved {
+            Some(Role::AimRight) => self.covers(SeatReadyPose::Right),
+            Some(Role::AimLeft) => self.covers(SeatReadyPose::Left),
+            Some(Role::AimBoth) => self.covers(SeatReadyPose::Both),
+            _ => false,
+        }
+    }
+}
+fn ready_image_valid(slot: u8, image: &str) -> bool {
+    usize::from(slot) < SEAT_READY_IMAGE_SLOTS
+        && !image.is_empty()
+        && image.len() <= 256
+        && image.trim() == image
+        && !image.chars().any(char::is_control)
+}
+impl SeatReadyPolicy {
+    pub fn valid(&self) -> bool {
+        !self.contracts.is_empty()
+            && self.contracts.len() <= 16
+            && self.contracts.iter().enumerate().all(|(i, c)| {
+                !c.images.is_empty()
+                    && c.images.len() <= SEAT_READY_IMAGE_SLOTS
+                    && c.images.iter().enumerate().all(|(n, b)| {
+                        ready_image_valid(b.slot, &b.image)
+                            && c.images[..n].iter().all(|a| a.slot != b.slot)
+                    })
+                    && self.contracts[..i].iter().all(|other| {
+                        other.pose != c.pose
+                            || other.images.len() != c.images.len()
+                            || !other.images.iter().all(|b| c.images.contains(b))
+                    })
+            })
+    }
+    pub fn matches(&self, images: &[(u8, &str)]) -> SeatReadyMatches {
+        let mut found = SeatReadyMatches::default();
+        if !self.valid()
+            || images.is_empty()
+            || images.len() > SEAT_READY_IMAGE_SLOTS
+            || !images.iter().enumerate().all(|(i, (slot, id))| {
+                ready_image_valid(*slot, id) && images[..i].iter().all(|(s, _)| s != slot)
+            })
+        {
+            return found;
+        }
+        for c in &self.contracts {
+            if c.images.len() == images.len()
+                && c.images
+                    .iter()
+                    .all(|b| images.contains(&(b.slot, b.image.as_str())))
+            {
+                found.roles[c.pose.index()] = true;
+            }
+        }
+        found
+    }
+}
+impl Seat {
+    pub fn ready_matches(&self, images: &[(u8, &str)]) -> SeatReadyMatches {
+        self.rider_ready_policy
+            .as_ref()
+            .filter(|_| self.rider_pose.is_some())
+            .map_or_else(SeatReadyMatches::default, |p| p.matches(images))
+    }
 }
 /// A seat's hand holds: the rider's right and left hand.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -1448,6 +1580,18 @@ impl Pack {
                 "ambiguous vehicle control roles"
             );
             for seat in &d.seats {
+                ensure!(
+                    seat.rider_fallback_hip
+                        .is_none_or(|p| seat.rider_pose.is_some()
+                            && p.iter().all(|v| v.is_finite() && v.abs() <= 64.)),
+                    "invalid authored rider fallback hip"
+                );
+                ensure!(
+                    seat.rider_ready_policy
+                        .as_ref()
+                        .is_none_or(|p| seat.rider_pose.is_some() && p.valid()),
+                    "invalid authored rider ready policy"
+                );
                 ensure!(
                     seat.eye
                         .is_none_or(|p| p.iter().all(|v| v.is_finite() && v.abs() <= 64.)),

@@ -565,6 +565,7 @@ impl App {
                 // Riders sit exactly on their rendered vehicle's seat, tilted
                 // with it (`Player::processTick` takes the mount transform).
                 self.mounts.rider_rotations.clear();
+                self.mounts.rider_fallback_hips.clear();
                 self.mounts.rider_hands.clear();
                 self.mounts.rider_aims.clear();
                 self.mounts.posed_eye = None;
@@ -581,7 +582,7 @@ impl App {
                     {
                         // A horse's rider rides its animated mount node, rising
                         // and falling with the gait like v20's `mountObject`.
-                        if let Some(node) = self
+                        let animated_mount = self
                             .avatar
                             .mount_meshes
                             .get(&vehicle)
@@ -592,11 +593,21 @@ impl App {
                             )
                             .and_then(|(mesh, s)| {
                                 mesh.world_node(&self.avatar.avatar_assets, &s.node)
-                            })
-                        {
+                            });
+                        if let Some(node) = animated_mount {
                             let (_, node_rotation, position) = node.to_scale_rotation_translation();
                             feet = position;
                             rotation = node_rotation;
+                        }
+                        if vitals.alive
+                            && let Some(target) = self.vehicles.seat_fallback_hip(
+                                &self.vehicle_assets,
+                                info,
+                                usize::from(seat),
+                                animated_mount,
+                            )
+                        {
+                            self.mounts.rider_fallback_hips.insert(*owner, target);
                         }
                         let forward = rotation * Vec3::NEG_Z;
                         let mut yaw = forward.x.atan2(-forward.z);
@@ -1239,7 +1250,29 @@ impl App {
                     .vitals
                     .get(owner)
                     .is_some_and(|v| v.mounted.is_some() || v.ride.is_some());
+                let mounted_seat = view
+                    .vitals
+                    .get(owner)
+                    .filter(|_| !dead)
+                    .and_then(|v| v.mounted)
+                    .and_then(|(vehicle, seat)| {
+                        let info = view.vehicles.get(&vehicle)?;
+                        if info.destroyed || info.turret_broken {
+                            return None;
+                        }
+                        self.vehicle_assets
+                            .definition(&info.definition)?
+                            .seats
+                            .get(usize::from(seat))
+                    });
+                let seat_ready = seat_ready_matches(
+                    mounted_seat,
+                    view.weapons.images.get(owner).map(Vec::as_slice),
+                );
                 let input = crate::avatar::AvatarAnimationInput {
+                    seat_ready,
+                    seat_fallback_hip: mounted_seat
+                        .and_then(|_| self.mounts.rider_fallback_hips.get(owner).copied()),
                     look_limits,
                     mount_rotation: self.mounts.rider_rotations.get(owner).copied(),
                     seat_aim: self.mounts.rider_aims.get(owner).copied().filter(|_| !dead),
@@ -1272,23 +1305,7 @@ impl App {
                         .and_then(|v| v.death)
                         .filter(|_| dead),
                     sitting: !dead && sit_posed(view, &self.vehicle_assets, presented, *owner),
-                    seat_pose: view
-                        .vitals
-                        .get(owner)
-                        .filter(|_| !dead)
-                        .and_then(|v| v.mounted)
-                        .and_then(|(vehicle, seat)| {
-                            let info = view.vehicles.get(&vehicle)?;
-                            if info.destroyed || info.turret_broken {
-                                return None;
-                            }
-                            self.vehicle_assets
-                                .definition(&info.definition)?
-                                .seats
-                                .get(usize::from(seat))?
-                                .rider_pose
-                                .clone()
-                        }),
+                    seat_pose: mounted_seat.and_then(|s| s.rider_pose.clone()),
                     // Riders hold `root` (`Armor::onMount` sets the action
                     // thread to root and mountThread on thread 0); they do
                     // not run, jump or fall with their mount's motion.
@@ -1838,4 +1855,90 @@ fn held_values(ammo: Option<&bri_sim::session::HeldAmmo>) -> bri_content::shape:
         reserve: a.reserve,
         magazine: Some(a.size),
     })
+}
+
+/// The frame adapter uses actual mounted slots/IDs, with one overflow sentinel.
+/// The seat/owned-clip and body-role guards remain separate from this mapping.
+fn seat_ready_matches(
+    seat: Option<&bri_vehicles::schema::Seat>,
+    images: Option<&[bri_sim::session::MountedImage]>,
+) -> bri_vehicles::schema::SeatReadyMatches {
+    let Some(seat) = seat.filter(|s| s.rider_ready_policy.is_some()) else {
+        return Default::default();
+    };
+    let images: Vec<_> = images
+        .into_iter()
+        .flatten()
+        .take(bri_vehicles::schema::SEAT_READY_IMAGE_SLOTS + 1)
+        .map(|m| (m.hand, m.image.as_str()))
+        .collect();
+    seat.ready_matches(&images)
+}
+
+#[cfg(test)]
+mod seat_ready_wiring_tests {
+    use super::seat_ready_matches;
+    use bri_sim::session::MountedImage;
+    use bri_vehicles::schema::{SeatHeldImage, SeatReadyContract, SeatReadyPolicy, SeatReadyPose};
+
+    #[test]
+    fn disconnect_forgets_fallback_hip_before_another_session() -> anyhow::Result<()> {
+        let content = crate::testing::content_root::ContentRoot::synthetic()?;
+        let state = content.state()?;
+        let mut app = super::App::load(&content.root, state.path(), (320, 240))?;
+        app.mounts
+            .rider_fallback_hips
+            .insert(3, glam::Vec3::new(4., 5., 6.));
+        app.disconnect();
+        assert!(app.mounts.rider_fallback_hips.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn seat_frame_uses_whole_current_mounted_view_and_fails_closed() {
+        let mut seat = bri_vehicles::testing::car().seats.remove(0);
+        seat.rider_pose = Some("invented_seat".into());
+        let binding = |slot, image: &str| SeatHeldImage {
+            slot,
+            image: image.into(),
+        };
+        seat.rider_ready_policy = Some(SeatReadyPolicy {
+            contracts: vec![SeatReadyContract {
+                pose: SeatReadyPose::Both,
+                images: vec![binding(0, "test:rifle"), binding(2, "test:attachment")],
+            }],
+        });
+        let mounted = |hand, image: &str| MountedImage {
+            hand,
+            image: image.into(),
+            state: "held".into(),
+            paint: None,
+        };
+        let mut images = vec![mounted(2, "test:attachment"), mounted(0, "test:rifle")];
+        assert!(seat_ready_matches(Some(&seat), Some(&images)).covers(SeatReadyPose::Both));
+        assert_eq!(seat_ready_matches(None, Some(&images)), Default::default());
+        assert_eq!(seat_ready_matches(Some(&seat), None), Default::default());
+        images.push(mounted(1, "test:unmatched"));
+        assert_eq!(
+            seat_ready_matches(Some(&seat), Some(&images)),
+            Default::default()
+        );
+        images.pop();
+        images[0].hand = 3;
+        assert_eq!(
+            seat_ready_matches(Some(&seat), Some(&images)),
+            Default::default()
+        );
+        images[0].hand = 2;
+        images.extend([mounted(1, "a"), mounted(3, "b"), mounted(0, "overflow")]);
+        assert_eq!(
+            seat_ready_matches(Some(&seat), Some(&images)),
+            Default::default()
+        );
+        seat.rider_ready_policy = None;
+        assert_eq!(
+            seat_ready_matches(Some(&seat), Some(&images)),
+            Default::default()
+        );
+    }
 }

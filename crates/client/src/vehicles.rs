@@ -1170,9 +1170,48 @@ impl ClientVehicles {
                 * Mat4::from_translation(-pivot)
                 * local;
         }
+        // Match authoritative effective_seat_pose: scale the entire local
+        // translation after turret-pivot rotation, leaving orientation unit.
+        local.w_axis = (local.w_axis.truncate() * info.scale).extend(1.);
         let world = to_transform(frame.position, frame.rotation) * local;
         let (_, rotation, position) = world.to_scale_rotation_translation();
         Some((position, rotation))
+    }
+    /// Explicit fallback hip through the actual native seat frame before any
+    /// passenger turn. Animated mount nodes already include vehicle/node scale;
+    /// static seat offsets use vehicle scale exactly once, like seat_eye.
+    pub fn seat_fallback_hip(
+        &self,
+        assets: &VehicleAssets,
+        info: &VehicleInfo,
+        seat: usize,
+        animated_mount: Option<Mat4>,
+    ) -> Option<Vec3> {
+        if info.destroyed || info.turret_broken {
+            return None;
+        }
+        let s = assets.definition(&info.definition)?.seats.get(seat)?;
+        s.rider_pose.as_ref()?;
+        let point = Vec3::from(s.rider_fallback_hip?);
+        if !point.is_finite() || point.abs().max_element() > 64. {
+            return None;
+        }
+        let frame = match animated_mount {
+            Some(frame) => frame,
+            None => {
+                if !info.scale.is_finite() || info.scale <= 0. {
+                    return None;
+                }
+                let (position, rotation) = self.seat_transform(assets, info, seat)?;
+                Mat4::from_scale_rotation_translation(Vec3::splat(info.scale), rotation, position)
+            }
+        };
+        let target = frame.transform_point3(point);
+        (frame.is_finite()
+            && frame.determinant().is_finite()
+            && frame.determinant().abs() > f32::EPSILON
+            && target.is_finite())
+        .then_some(target)
     }
     /// An authored seat eye, shared with the host's interaction origin.
     pub fn seat_eye(
@@ -1666,6 +1705,223 @@ pub(crate) mod tests {
             actor: None,
         }
     }
+    #[test]
+    fn seat_scale_matches_authority_with_unequal_riders_and_owned_or_fallback_hips() -> Result<()> {
+        use bri_vehicles::{OwnerId, Spawn, Transform, VehicleId, VehiclesWorld};
+        let dir = crate::testing::ScratchDir::new("seat-scale")?;
+        crate::testing::vehicles::write_pack(dir.path())?;
+        let mut assets = VehicleAssets::load(dir.path())?;
+        let index = assets.index[bri_vehicles::testing::CAR];
+        let seat = &mut assets.pack.definitions[index].seats[1];
+        seat.transform.position = [0.5, 1.2, 0.8];
+        seat.transform.rotation =
+            (Quat::from_rotation_y(0.4) * Quat::from_rotation_z(0.3)).to_array();
+        seat.rider_pose = Some("sit".into());
+        seat.rider_fallback_hip = Some([0.1, 0.7, -0.2]);
+        let body = crate::testing::avatar::assets()?;
+        let bind = bri_content::animation::sample(&body.rig.shape, None, 0.)?;
+        let parents: Vec<_> = body.rig.shape.nodes.iter().map(|n| n.parent).collect();
+        let hip = bri_content::hold::hip(&parents, &bind.nodes).context("fixture hip")?;
+        let hip_name = &body.rig.shape.nodes[hip].name;
+        let sit = body.rig.sequence("sit").context("sit")?;
+        let authored = bri_content::animation::sample(&body.rig.shape, Some(sit), sit.duration)?;
+        for vehicle_scale in [0.5, 1., 2.] {
+            let mut physics = bri_physics::new_world();
+            let mut host = VehiclesWorld::new(assets.pack.clone())?;
+            host.spawn(
+                &mut physics,
+                Spawn {
+                    id: VehicleId(1),
+                    owner: OwnerId(0),
+                    definition: bri_vehicles::testing::CAR.into(),
+                    scale: vehicle_scale,
+                    transform: Transform {
+                        position: [3., 4., 5.],
+                        rotation: (Quat::from_rotation_y(0.7) * Quat::from_rotation_x(0.2))
+                            .to_array(),
+                    },
+                    spawn_id: None,
+                    respawn_ticks: None,
+                },
+            )?;
+            let snapshot = host
+                .vehicle_snapshot(&physics, VehicleId(1))
+                .context("host snapshot")?;
+            let expected = &snapshot.seats[1].transform;
+            let info = VehicleInfo {
+                id: 1,
+                definition: snapshot.definition.clone(),
+                scale: vehicle_scale,
+                color: None,
+                occupants: vec![],
+                destroyed: false,
+                turret_broken: false,
+                lights: false,
+            };
+            let mut sample = pose(1, 0.);
+            sample.position = snapshot.transform.position;
+            sample.rotation = snapshot.transform.rotation;
+            let mut client = ClientVehicles::default();
+            client.update(
+                &BTreeMap::from([(1, info.clone())]),
+                &BTreeMap::from([(1, sample)]),
+                Some(1.),
+                None,
+                &Default::default(),
+            );
+            let (origin, rotation) = client
+                .seat_transform(&assets, &info, 1)
+                .context("client seat")?;
+            assert!(
+                origin.abs_diff_eq(Vec3::from(expected.position), 1e-5),
+                "vehicle scale {vehicle_scale}: client {origin}, authoritative {:?}",
+                expected.position
+            );
+            assert!(rotation.abs_diff_eq(Quat::from_array(expected.rotation), 1e-5));
+            let target = client
+                .seat_fallback_hip(&assets, &info, 1, None)
+                .context("fallback")?;
+            let independent = Vec3::from(expected.position)
+                + Quat::from_array(expected.rotation) * Vec3::new(0.1, 0.7, -0.2) * vehicle_scale;
+            assert!(target.abs_diff_eq(independent, 1e-5));
+            for rider_scale in [0.7, 1.6] {
+                for turn in [-0.7, 0.4] {
+                    for owns in [false, true] {
+                        let rider_rotation = rotation * Quat::from_rotation_y(-turn);
+                        let p: bri_sim::player::PlayerState = serde_json::from_value(
+                            serde_json::json!({"owner":1,"feet":origin.to_array(),"velocity":[0.,0.,0.],"yaw":0.,"pitch":0.,"grounded":true,"crouched":false,"jetting":false,"scale":rider_scale}),
+                        )?;
+                        let input = crate::avatar::AvatarAnimationInput {
+                            sitting: true,
+                            mount_rotation: Some(rider_rotation),
+                            seat_pose: Some(if owns { "sit" } else { "test_missing" }.into()),
+                            seat_fallback_hip: Some(target),
+                            ..Default::default()
+                        };
+                        let mut mesh = body.mesh(body.package.defaults.clone())?;
+                        for time in [0., 1.] {
+                            mesh.pose_with_animation(&body, &p, time, &input)?;
+                        }
+                        let observed = mesh
+                            .world_node(&body, hip_name)
+                            .context("world hip")?
+                            .w_axis
+                            .truncate();
+                        let expected_hip = if owns {
+                            Vec3::from(expected.position)
+                                + Quat::from_array(expected.rotation)
+                                    * Quat::from_rotation_y(-turn)
+                                    * (authored.nodes[hip].w_axis.truncate() * rider_scale)
+                        } else {
+                            independent
+                        };
+                        assert!(
+                            observed.abs_diff_eq(expected_hip, 1e-5),
+                            "scale {vehicle_scale}/{rider_scale} owns {owns}: {observed} vs {expected_hip}"
+                        );
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn seat_scale_matches_authoritative_turret_pivot_and_broken_fallback() -> Result<()> {
+        use bri_vehicles::{
+            Controls, Occupant, OccupantId, OwnerId, Spawn, Transform, VehicleId, VehiclesWorld,
+        };
+        let dir = crate::testing::ScratchDir::new("turret-seat-scale")?;
+        crate::testing::vehicles::write_pack(dir.path())?;
+        let assets = VehicleAssets::load(dir.path())?;
+        let d = assets
+            .definition(bri_vehicles::testing::TANK)
+            .context("tank")?;
+        let seat = d.weapon_seat().context("gunner")?;
+        for scale in [0.5, 1., 2.] {
+            let mut physics = bri_physics::new_world();
+            let mut host = VehiclesWorld::new(assets.pack.clone())?;
+            host.spawn(
+                &mut physics,
+                Spawn {
+                    id: VehicleId(1),
+                    owner: OwnerId(0),
+                    definition: d.id.clone(),
+                    scale,
+                    transform: Transform {
+                        position: [3., 4., 5.],
+                        rotation: (Quat::from_rotation_z(0.2) * Quat::from_rotation_y(0.7))
+                            .to_array(),
+                    },
+                    spawn_id: None,
+                    respawn_ticks: None,
+                },
+            )?;
+            let at = host
+                .seat_position(&physics, VehicleId(1), seat)
+                .context("gunner position")?;
+            host.mount(
+                &physics,
+                VehicleId(1),
+                seat,
+                Occupant {
+                    id: OccupantId(7),
+                    owner: OwnerId(7),
+                    body: [0.8, 2.6],
+                },
+                at,
+            )?;
+            host.set_controls(
+                OwnerId(7),
+                OccupantId(7),
+                Controls {
+                    aim_yaw: 0.6,
+                    ..Default::default()
+                },
+            )?;
+            for broken in [false, true] {
+                if broken {
+                    host.damage_turret(&mut physics, VehicleId(1), 300., OwnerId(0))?;
+                }
+                let snapshot = host
+                    .vehicle_snapshot(&physics, VehicleId(1))
+                    .context("host snapshot")?;
+                let info = VehicleInfo {
+                    id: 1,
+                    definition: d.id.clone(),
+                    scale,
+                    color: None,
+                    occupants: vec![],
+                    destroyed: false,
+                    turret_broken: broken,
+                    lights: false,
+                };
+                let mut sample = pose(1, 0.);
+                sample.position = snapshot.transform.position;
+                sample.rotation = snapshot.transform.rotation;
+                sample.turret_aim = snapshot.turret_aim;
+                let mut client = ClientVehicles::default();
+                client.update(
+                    &BTreeMap::from([(1, info.clone())]),
+                    &BTreeMap::from([(1, sample)]),
+                    Some(1.),
+                    None,
+                    &Default::default(),
+                );
+                let (position, rotation) = client
+                    .seat_transform(&assets, &info, seat)
+                    .context("client seat")?;
+                let expected = &snapshot.seats[seat].transform;
+                assert!(
+                    position.abs_diff_eq(Vec3::from(expected.position), 1e-5),
+                    "scale {scale}, broken {broken}"
+                );
+                assert!(rotation.abs_diff_eq(Quat::from_array(expected.rotation), 1e-5));
+            }
+        }
+        Ok(())
+    }
+
     /// v20 tires are authored with the hub axis along Torque +Y (native -Z),
     /// outer face first; mounted, they must roll along the chassis.
     #[test]

@@ -6,6 +6,7 @@ pub mod animation;
 pub mod atmosphere;
 pub mod avatar;
 pub mod body;
+pub mod body_pose;
 pub mod brick;
 pub mod camera;
 pub mod collision;
