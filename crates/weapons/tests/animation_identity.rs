@@ -168,3 +168,96 @@ fn worn_image_does_not_borrow_the_selected_hand_item() -> Result<()> {
     assert_eq!(event.binding.image.as_ref().unwrap().hand, 2);
     Ok(())
 }
+
+#[test]
+fn checkpoint_preserves_deferred_provenance_and_allocator_after_removed_instances() -> Result<()> {
+    let mut original = world()?;
+    let first = start(original.step(&mut Empty), "native_clip")?;
+    original.equip(A, Some(1))?;
+    original.set_animation_owner(A, AnimationOwner { life: 21, body: 22 })?;
+    let bytes = serde_json::to_vec(&original.save())?;
+    let mut restored = WeaponsWorld::restore((*original.pack).clone(), &bytes)?;
+    for _ in 0..14 {
+        assert_eq!(
+            serde_json::to_value(original.step(&mut Empty))?,
+            serde_json::to_value(restored.step(&mut Empty))?
+        );
+    }
+    // The high-water mark must survive even when no live item/mount can be
+    // scanned to reconstruct the last emitted producer serial.
+    original.remove_actor(A);
+    // Checkpoints resume fixed-tick state after its transient events are read.
+    original.step(&mut Empty);
+    let save = original.save();
+    let watermark = serde_json::to_value(&save)?["animation_serial"]
+        .as_u64()
+        .context("Checkpoint omitted animation allocator")?;
+    assert!(watermark > first.serial);
+    let mut restored =
+        WeaponsWorld::restore((*original.pack).clone(), &serde_json::to_vec(&save)?)?;
+    for world in [&mut original, &mut restored] {
+        world.add_actor(A, 3)?;
+        world.set_animation_owner(A, AnimationOwner { life: 31, body: 32 })?;
+        world.give(A, ITEM)?;
+        assert!(world.animation_item(A, 0).unwrap().generation > watermark);
+        world.equip(A, Some(0))?;
+    }
+    assert_eq!(
+        serde_json::to_value(original.step(&mut Empty))?,
+        serde_json::to_value(restored.step(&mut Empty))?
+    );
+    assert_eq!(
+        serde_json::to_value(original.save())?,
+        serde_json::to_value(restored.save())?
+    );
+    Ok(())
+}
+
+#[test]
+fn checkpoint_rejects_missing_or_rewound_animation_allocator_and_old_schema() -> Result<()> {
+    let world = world()?;
+    let original = serde_json::to_value(world.save())?;
+    let mut missing = original.clone();
+    missing.as_object_mut().unwrap().remove("animation_serial");
+    assert!(WeaponsWorld::restore((*world.pack).clone(), &serde_json::to_vec(&missing)?).is_err());
+    let mut rewound = original.clone();
+    rewound["animation_serial"] = 1.into();
+    assert!(WeaponsWorld::restore((*world.pack).clone(), &serde_json::to_vec(&rewound)?).is_err());
+    let mut duplicated = original.clone();
+    duplicated["actors"][0][1]["animation_items"][1] =
+        duplicated["actors"][0][1]["animation_items"][0].clone();
+    assert!(
+        WeaponsWorld::restore((*world.pack).clone(), &serde_json::to_vec(&duplicated)?).is_err()
+    );
+    let mut old = original;
+    old["schema_version"] = 3.into();
+    assert!(WeaponsWorld::restore((*world.pack).clone(), &serde_json::to_vec(&old)?).is_err());
+    Ok(())
+}
+
+#[test]
+fn checkpoint_preserves_exhausted_allocator_without_reusing_identity() -> Result<()> {
+    let world = world()?;
+    let mut save = serde_json::to_value(world.save())?;
+    save["animation_serial"] = u64::MAX.into();
+    let mut restored = WeaponsWorld::restore((*world.pack).clone(), &serde_json::to_vec(&save)?)?;
+    restored.give_at(A, 2, ITEM)?;
+    assert!(restored.animation_item(A, 2).is_none());
+    restored.equip(A, Some(0))?;
+    assert!(restored.step(&mut Empty).into_iter().all(|e| !matches!(
+        e,
+        Event::Animation {
+            provenance: Some(_),
+            ..
+        }
+    )));
+    assert_eq!(
+        serde_json::to_value(restored.save())?["animation_serial"],
+        u64::MAX
+    );
+    WeaponsWorld::restore(
+        (*restored.pack).clone(),
+        &serde_json::to_vec(&restored.save())?,
+    )?;
+    Ok(())
+}
