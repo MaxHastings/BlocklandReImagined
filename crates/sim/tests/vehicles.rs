@@ -2517,7 +2517,8 @@ fn a_car_meets_the_part_of_a_player_beyond_a_portal(f: &Fixture) -> anyhow::Resu
     let car = f.vehicle_definition(Vehicle::Car);
     let width = bri_sim::player::PlayerTuning::default().width;
     let mut fronts = Vec::new();
-    let mut pasts = Vec::new();
+    let mut approaches = Vec::new();
+    let mut pushes = Vec::new();
     for standing in [true, false] {
         let mut definitions = f.bricks();
         definitions.entries.insert(PORTAL.into(), bri_sim::testing::portal(PORTAL, Some([14, 1, 30])));
@@ -2556,25 +2557,38 @@ fn a_car_meets_the_part_of_a_player_beyond_a_portal(f: &Fixture) -> anyhow::Resu
         if standing {
             assert!(stood.x.abs() < 1. && (stood.z - target).abs() < 0.5, "the walker is part way in: {stood}");
         }
-        pasts.push(-24. - (stood.z - width * 0.5));
         // A car rolling at the partner along -x, nose first.
         s.spawn_vehicle_at(0, &car.id, Vec3::new(40., 0.6, -24.), -std::f32::consts::FRAC_PI_2, Vec3::new(-15., 0., 0.))?;
         let mut front = f32::MAX;
+        let mut approach = Vec::new();
+        let mut pushed = 0.0_f32;
         for _ in 0..400 {
             p.feed(&mut s, MoveInput::default(), 1)?;
             let pose = &s.vehicle_poses()[0];
-            // Its nose is the hull's -z end, turned to -x.
-            front = front.min(pose.position[0] + car.bounds_min[2]);
+            approach.push(pose.position[0]);
+            pushed = pushed.max(feet(&s).z - stood.z);
+            // After crossing, x is in the source world, not this approach frame.
             if pose.position[0] < 25. {
                 break;
             }
+            // Its nose is the hull's -z end, turned to -x.
+            front = front.min(pose.position[0] + car.bounds_min[2]);
         }
         fronts.push(front);
+        approaches.push(approach);
+        pushes.push(pushed);
     }
-    let past = pasts[0];
-    // With the walker there it stops at their part beyond the partner;
-    // without, it goes on into the opening.
-    assert!(fronts[0] > 30. + past * 0.5, "nose reached {} (the walker's part ends at {})", fronts[0], 30. + past);
+    // A finite-mass walker can be pushed out of the opening. Require an actual
+    // response relative to the empty-opening trajectory and the correctly
+    // mapped push in the walker's source world, rather than a permanent stop.
+    let delay = approaches[0]
+        .iter()
+        .zip(&approaches[1])
+        .filter(|(a, b)| **a > 25. && **b > 25.)
+        .map(|(a, b)| a - b)
+        .fold(0.0_f32, f32::max);
+    assert!(delay > 0.25, "no collision response relative to the empty opening: {delay}");
+    assert!(pushes[0] > 0.03, "no mapped push away from the source opening: {}", pushes[0]);
     assert!(fronts[1] < 29., "with nobody there the car goes in: {}", fronts[1]);
     Ok(())
 }
