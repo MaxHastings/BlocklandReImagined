@@ -6,11 +6,14 @@ Revised 2026-10-16. It summarises; the linked docs are the evidence, and
 
 ## Release state
 
-Maxwell authorized continuing v0.3.1 integration into main on 2026-10-15.
-The agreed game Add-On fidelity work must be finished, not parked as a gap list.
-Release publication remains blocked until the combined final cross-game
-playtest and his explicit approval. See [v0.3.1 readiness](releases/v0.3.1-readiness.md)
-for owners, completion evidence and the integration/publication boundary.
+Maxwell's latest October16 direction makes v0.3.1 a focused engine and bug-fix
+release. Finish the already-approved current animation seam; new engine seams
+target v0.3.2. Halo continues private showcase fidelity, while AA and GMod remain
+parked; full cross-game fidelity no longer blocks this release. Maxwell explicitly
+authorizes automatic v0.3.1 publication after the required checks and package
+verification, without waiting for his final playtest or another approval. Failed
+checks and unresolved release blockers still hold publication. See
+[v0.3.1 readiness](releases/v0.3.1-readiness.md) for the current boundary.
 
 Current public release: [v0.3.0 Alpha](https://github.com/MaxHastings/BlocklandReImagined/releases/tag/v0.3.0),
 source `ee244a8449382516d24a7460c0e7b78e00128573`, with Windows x86-64,
