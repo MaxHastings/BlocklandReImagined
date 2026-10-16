@@ -23,9 +23,13 @@ portal contact fixture and authoritative contact-effect frames passed the full
 local gate and all five Windows checks before the guarded main push. Exact
 evidence and private consumer limits are in
 [the integration checkpoint](progress/2026-10-16-3117-gate-and-consumer-checkpoints.md).
-The next sampler candidate is on `codex/v031-animation-sampler-integration`;
-authoritative animation admission/completion is active in the shared engine chat.
-Neither work closes the remaining game fidelity or final playtest. Release notes are in
+The local candidate on `codex/v031-animation-sampler-integration` now includes
+the sampler, bounded Stage1 authoritative animation admission/lifetime clocks,
+and scoped corrections for tutorial print clipping and X11 legacy wheel releases.
+Scoped checks pass; the next full integrated/platform checks are pending. Stage1
+does not provide package completion callbacks or active client replication.
+The separate v0.3.2 engine chat owns further fitting/socket/pose mechanisms;
+Halo and AA private fidelity continue independently. Release notes are in
 [docs/releases/v0.3.1.md](releases/v0.3.1.md). This is an alpha release, and
 interactive acceptance and the broader alpha definition of done remain open.
 
