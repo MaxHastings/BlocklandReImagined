@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Ship the creator guides with working links in every platform package."""
+"""Ship creator guides, working links and vendored notices on every platform."""
 from pathlib import Path
 import sys
 
@@ -15,6 +15,9 @@ GUIDES = {
 
 
 def copy_guides(repo: Path, destination: Path) -> None:
+    # macOS has its own packager; all three invoke this shared document step.
+    for source, filename in [('LICENSE', 'WINIT-LICENSE.txt'), ('BRI-PATCH.md', 'WINIT-PATCH.md')]:
+        (destination / filename).write_bytes((repo / 'vendor' / 'winit' / source).read_bytes())
     for source, filename in GUIDES.items():
         text = (repo / 'docs' / 'rule-workshop' / source).read_text(encoding='utf-8')
         for target, packaged in GUIDES.items():
