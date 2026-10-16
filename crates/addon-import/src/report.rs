@@ -378,7 +378,14 @@ impl Report {
         }
         let _ = writeln!(m, "\n## Needs behaviour\n");
         if self.needs_behaviour.is_empty() {
-            let _ = writeln!(m, "Nothing: every script function is covered by data.");
+            if self.unsupported.is_empty() && self.ambiguous.is_empty() {
+                let _ = writeln!(m, "Nothing: every script function is covered by data.");
+            } else {
+                let _ = writeln!(
+                    m,
+                    "No per-function behaviour entries. Retained import gaps are listed in this report; complete script coverage is not established."
+                );
+            }
         }
         for b in &self.needs_behaviour {
             let port = match &b.port {

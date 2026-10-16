@@ -390,9 +390,105 @@ fn import_map(opts: &Options, src: &source::Source) -> Result<Report> {
         .zip(&made.map_ids)
         .map(|(mission, map)| format!("map {map} from {mission}"))
         .collect();
+    for (mission, map) in made.missions.iter().zip(&made.map_ids) {
+        let provide = manifest["provides"]
+            .as_array()
+            .context("Missing map providers")?
+            .iter()
+            .find(|p| p["id"].as_str() == Some(map))
+            .context("Missing converted map provider")?;
+        let bundle_path = opts.out.join(
+            provide["file"]
+                .as_str()
+                .context("Missing map bundle path")?,
+        );
+        let directory = bundle_path
+            .parent()
+            .context("Missing map bundle directory")?;
+        let bundle: serde_json::Value = serde_json::from_slice(&std::fs::read(&bundle_path)?)?;
+        let entry = bundle["maps"]
+            .as_array()
+            .context("Missing map index")?
+            .iter()
+            .find(|m| m["id"].as_str() == Some(map))
+            .context("Missing converted map")?;
+        let scene: bri_content::scene::Scene = serde_json::from_slice(&std::fs::read(
+            directory.join(entry["file"].as_str().context("Missing map scene")?),
+        )?)?;
+        // Emitter nodes remain Unadapted in the literal scene, but a successful
+        // map_effects export already implements those exact source instances.
+        let effects = directory.join("map_effects.json");
+        let emitted: BTreeSet<_> = if effects.is_file() {
+            let effects: bri_content::effects::MapEffects =
+                serde_json::from_slice(&std::fs::read(effects)?)?;
+            effects.sources.into_iter().map(|s| s.node).collect()
+        } else {
+            BTreeSet::new()
+        };
+        for (index, node) in scene.nodes.iter().enumerate() {
+            if !matches!(node.kind, bri_content::scene::Kind::Unadapted) {
+                continue;
+            }
+            let class = node
+                .properties
+                .get("source_class")
+                .map_or("unknown", String::as_str);
+            if class == "particleemitternode" && emitted.contains(&index) {
+                continue;
+            }
+            report.unsupported.push(Finding {
+                what: "retained_map_object".into(),
+                source: None,
+                detail: format!(
+                    "Map {map} from {mission}, node {index}, class {class}, name '{}', datablock '{}': retained as Unadapted; native admission is not supplied by this import",
+                    node.name, node.properties.get("datablock").map_or("", String::as_str)
+                ),
+                resolution: None,
+            });
+        }
+        for section in &scene.pending_scripts {
+            report.ambiguous.push(Finding {
+                what: "retained_mission_source".into(),
+                source: Some(Location { file: mission.clone(), line: section.first_line }),
+                detail: format!(
+                    "Map {map}: retained {} section, lines {}..{}, sha256 {}; native coverage is not established here. This range can include comments and declarations; it is not a count of functions or unsupported statements",
+                    section.section, section.first_line, section.last_line, section.sha256
+                ),
+                resolution: None,
+            });
+        }
+        for (field, what, detail) in [
+            (
+                "stand_in_textures",
+                "terrain_texture_stand_in",
+                "uses a packaged stand-in; original appearance is unresolved",
+            ),
+            (
+                "unresolved_textures",
+                "unresolved_map_texture",
+                "has no resolved source texture",
+            ),
+        ] {
+            if let Some(textures) = bundle[field].as_array() {
+                for texture in textures.iter().filter_map(serde_json::Value::as_str) {
+                    report.unsupported.push(Finding {
+                        what: what.into(),
+                        source: None,
+                        detail: format!("Map {map}: {texture} {detail}"),
+                        resolution: None,
+                    });
+                }
+            }
+        }
+    }
     report.summarise();
-    // A map carries no datablocks: it converted whole or failed above.
-    report.summary.verdict = "converted".into();
+    // Successful geometry conversion alone does not establish whole-map coverage.
+    report.summary.verdict = if report.unsupported.is_empty() && report.ambiguous.is_empty() {
+        "converted"
+    } else {
+        "converted_with_gaps"
+    }
+    .into();
     let mut files = vec![];
     let mut stack = vec![opts.out.clone()];
     while let Some(d) = stack.pop() {
