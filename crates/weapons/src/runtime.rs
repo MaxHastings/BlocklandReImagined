@@ -3061,9 +3061,6 @@ impl WeaponsWorld {
         // v20 `Item::updatePos`: the item's box falls under gravity 20 and
         // rests on its lowest face, bouncing with elasticity 0.2, friction 0.6.
         for d in self.drops.values_mut() {
-            if d.velocity.length_squared() < 0.000001 {
-                continue;
-            }
             let shape = self.item_bounds.get(&d.item).map(|b| {
                 let min = Vec3::from(b.min) * d.scale;
                 let max = Vec3::from(b.max) * d.scale;
@@ -3081,15 +3078,36 @@ impl WeaponsWorld {
                 })
                 .filter(|l| l.coverage >= 0.1 && l.density.is_finite())
                 .map_or(0.0, |l| l.density / ITEM_DENSITY * l.coverage.min(1.0));
-            d.velocity.y -= ITEM_GRAVITY * (1.0 - rise) / 120.0;
+            let gravity = ITEM_GRAVITY * (1.0 - rise);
             let start = d.position + offset;
-            let end = start + d.velocity / 120.0;
             let filter = Filter {
                 projectile_age_ticks: None,
                 source: d.source,
                 players: false,
                 world_only: true,
             };
+            if d.velocity.length_squared() < 0.000001 && gravity != 0.0 {
+                // An airborne apex can have zero speed. Sleep only against an
+                // actual supporting face, across twice the existing .002 skin;
+                // recheck each tick so removed support or buoyancy wakes it.
+                let probe = start - Vec3::Y * gravity.signum() * 0.004;
+                let support = if shape.is_some() {
+                    q.sweep_box(start, probe, half, d.rotation, filter)
+                } else {
+                    q.sweep(start, probe, filter)
+                };
+                if support.is_some_and(|hit| {
+                    hit.position.is_finite()
+                        && hit.normal.is_finite()
+                        && hit.normal.length_squared() > 0.1
+                        && hit.normal.y * gravity > 0.0
+                }) {
+                    d.velocity = Vec3::ZERO;
+                    continue;
+                }
+            }
+            d.velocity.y -= gravity / 120.0;
+            let end = start + d.velocity / 120.0;
             // Through a portal: out of its partner, turned, with the rest of
             // the move, unless something stops it first.
             if let Some((t, carry)) = q.passage(start, end) {
