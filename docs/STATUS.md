@@ -8,8 +8,8 @@ Revised 2026-10-16. It summarises; the linked docs are the evidence, and
 
 Maxwell's latest October16 direction makes v0.3.1 a focused engine and bug-fix
 release. Finish the already-approved current animation seam; new engine seams
-target v0.3.2. Halo continues private showcase fidelity, while AA and GMod remain
-parked; full cross-game fidelity no longer blocks this release. Maxwell explicitly
+target v0.3.2. Halo and AA continue private fidelity, while GMod remains parked;
+full cross-game fidelity no longer blocks this release. Maxwell explicitly
 authorizes automatic v0.3.1 publication after the required checks and package
 verification, without waiting for his final playtest or another approval. Failed
 checks and unresolved release blockers still hold publication. See
