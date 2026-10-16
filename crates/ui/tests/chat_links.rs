@@ -29,6 +29,16 @@ fn click(ui: &mut Ui, x: f32, y: f32) {
     });
 }
 
+/// A point to click in the current chat layout, including the inset used by
+/// the input event. Font-size changes can move the link since an earlier hit.
+fn link_point(ui: &Ui) -> (i32, i32) {
+    (0..1024)
+        .step_by(2)
+        .flat_map(|x| (0..80).step_by(2).map(move |y| (x + 1, y + 1)))
+        .find(|&(x, y)| chat_link_at(&ui.core, x, y).is_some())
+        .expect("the link is drawn in the current chat layout")
+}
+
 #[test]
 fn clicking_a_chat_link_asks_before_opening_it_synthetic() {
     clicking_a_chat_link_asks_before_opening_it_on(bri_ui::testing::screens_pack());
@@ -72,11 +82,7 @@ fn clicking_a_chat_link_asks_before_opening_it_on(pack: Rc<Pack>) {
             .into(),
     });
     ui.update(16);
-    let hit = (0..1024)
-        .step_by(2)
-        .flat_map(|x| (0..80).step_by(2).map(move |y| (x, y)))
-        .find(|&(x, y)| chat_link_at(&ui.core, x, y).is_some())
-        .expect("the link is drawn in the chat");
+    let hit = link_point(&ui);
     assert_eq!(
         chat_link_at(&ui.core, hit.0, hit.1).as_deref(),
         Some("blockland.us/forum")
@@ -101,14 +107,25 @@ fn clicking_a_chat_link_asks_before_opening_it_on(pack: Rc<Pack>) {
         assert!(!ui.core.chat_input_open);
     }
 
+    // The final ChatSize can use another font: click its current link, not
+    // the position measured before the input-box layout checks.
+    let hit = link_point(&ui);
+    assert_eq!(
+        chat_link_at(&ui.core, hit.0, hit.1).as_deref(),
+        Some("blockland.us/forum")
+    );
     // Without the cursor a click is gameplay input and asks nothing.
-    click(&mut ui, hit.0 as f32 + 1.0, hit.1 as f32 + 1.0);
+    click(&mut ui, hit.0 as f32, hit.1 as f32);
     ui.update(16);
     assert!(!ui.is_open(ScreenId::MessageBox));
 
     ui.core.run_command("toggleCursor", true);
     ui.update(16);
-    click(&mut ui, hit.0 as f32 + 1.0, hit.1 as f32 + 1.0);
+    assert_eq!(
+        chat_link_at(&ui.core, hit.0, hit.1).as_deref(),
+        Some("blockland.us/forum")
+    );
+    click(&mut ui, hit.0 as f32, hit.1 as f32);
     ui.update(16);
     assert_eq!(ui.top_id(), ScreenId::MessageBox);
     assert!(
