@@ -2207,90 +2207,71 @@ impl AvatarMesh {
         } else {
             self.phase = self.phase.clamped(0.0, duration);
         }
-        let mut layers = Vec::new();
-        if let Some(clip) = clip {
-            layers.push(Layer {
-                animation: clip,
-                time: self.phase,
-                weight: 1.0,
-            });
-        }
-        // Native sequence priorities put armReady (14) over locomotion (12).
-        // Custom rigs may author it as an additive overlay; the completed
-        // stack below orders each rig's own sequence type appropriately.
         let ready_role = match animation_input.held_tool_pose {
             HeldToolPose::None => None,
             HeldToolPose::Right => Some(Role::AimRight),
             HeldToolPose::Left => Some(Role::AimLeft),
             HeldToolPose::Both => Some(Role::AimBoth),
         };
-        let ready_clip = ready_role.and_then(role).map(|(clip, _)| clip);
         let seat_owns_ready = authored_seat.is_some()
             && ready_role
                 .is_some_and(|role| animation_input.seat_ready.covers_resolved(role, &roles));
-        if let Some(clip) = &ready_clip.filter(|_| !seat_owns_ready) {
-            layers.push(Layer {
-                animation: clip,
-                time: clip.duration,
-                weight: 1.0,
-            });
-        }
-        if (self.kind.stand_in || self.kind.crouch_composition == CrouchComposition::Overlay)
+        let crouch = if (self.kind.stand_in
+            || self.kind.crouch_composition == CrouchComposition::Overlay)
             && let Some((crouch, _)) = role(Role::Crouch)
         {
             self.crouch
                 .update(player.crouched, elapsed, crouch.duration);
-            if let Some(time) = self.crouch.time() {
-                layers.push(Layer {
-                    animation: crouch,
-                    time,
-                    weight: 1.0,
-                });
-            }
-        }
-        // Thread-2/3 actions. An absolute one (a rule's `playThread(2,
-        // armReadyBoth)` or `death1`) takes over the nodes it animates by
-        // its priority, as Torque's threads do: armReadyBoth (14) over
-        // locomotion's arms, death1 (128) over the whole body. It holds its
-        // last frame once played. Additive ones add on top of everything.
-        let mut absolute_actions = Vec::new();
-        let mut additive_actions = Vec::new();
-        // Script threads in order: 0 and 1 the body, 2 the arms, 3 gestures.
-        for action in animation_input
-            .body
-            .iter()
-            .chain([&animation_input.action, &animation_input.gesture])
-            .flatten()
-        {
-            let name = action.sequence.to_ascii_lowercase();
-            if name == "root" {
-                continue;
-            }
-            // A clip the body lacks is left out, not the whole pose.
-            let Some(clip) = named(&name) else {
-                self.skipped.push(name);
-                continue;
-            };
-            let played = (time - action.started_at).max(0.0) as f32;
-            if clip.additive {
-                additive_actions.push(Layer {
+            self.crouch.time().map(|time| Layer {
+                animation: crouch,
+                time,
+                weight: 1.,
+            })
+        } else {
+            None
+        };
+        let actions = [
+            &animation_input.body[0],
+            &animation_input.body[1],
+            &animation_input.action,
+            &animation_input.gesture,
+        ]
+        .map(|action| {
+            action
+                .as_ref()
+                .map(|action| bri_content::body_pose::ActionRef {
+                    sequence: action.sequence.as_str(),
+                    started_at: action.started_at,
+                })
+        });
+        let bri_content::body_pose::BodyLayerPlan {
+            layers,
+            unacted,
+            transition_at: at,
+            unacted_transition_at,
+            acted,
+            skipped,
+        } = bri_content::body_pose::plan_body_layers(
+            &assets.rig,
+            &roles,
+            bri_content::body_pose::LayerPlanInput {
+                base: clip.map(|clip| Layer {
                     animation: clip,
-                    time: played,
-                    weight: 1.0,
-                });
-            } else {
-                let at = if clip.looping && clip.duration > 0.0 {
-                    played.rem_euclid(clip.duration)
-                } else {
-                    played.min(clip.duration)
-                };
-                absolute_actions.push(Layer {
-                    animation: clip,
-                    time: at,
-                    weight: 1.0,
-                });
-            }
-        }
+                    time: self.phase,
+                    weight: 1.,
+                }),
+                ready_role,
+                omit_ready: seat_owns_ready,
+                crouch,
+                actions: &actions,
+                time,
+                head_up: self.outfit.head_up,
+                seat_aim: animation_input.seat_aim,
+                look_phase: look_position(player.pitch, animation_input.look_limits),
+                head_yaw: player.head_yaw,
+            },
+        )?;
+        self.skipped.extend(skipped);
         // A foreign body need not borrow a punch/throw to use a stock tool.
         // Sample only the reference tool action's socket displacement, keeping
         // every vertex and bone of the foreign body on its own animation.
@@ -2325,86 +2306,6 @@ impl AvatarMesh {
                 }
             }
         }
-        // Absolute clips establish the base pose before additive deltas. The
-        // original jump clip is additive even though other locomotion clips
-        // are absolute; priority alone would put it before armReady/crouch and
-        // make the sampler reject an ordinary jump while holding a tool.
-        let order = |layers: &mut Vec<Layer<'_>>| {
-            layers.sort_by_key(|layer| (layer.animation.additive, layer.animation.priority));
-        };
-        // The pose without actions, for images that follow the arm
-        // (`mount_action`).
-        let mut unacted = layers.clone();
-        order(&mut unacted);
-        layers.extend(absolute_actions.iter().copied());
-        order(&mut layers);
-        let mut overlays = Vec::new();
-        if self.outfit.head_up
-            && let Some((clip, _)) = role(Role::HeadUp)
-        {
-            overlays.push(Layer {
-                animation: clip,
-                time: clip.duration,
-                weight: 1.0,
-            });
-        }
-        let seat_aim = animation_input
-            .seat_aim
-            .filter(|a| a.is_finite())
-            .zip(role(Role::SeatAim));
-        if let Some((aim, (clip, _))) = seat_aim {
-            overlays.push(Layer {
-                animation: clip,
-                time: aim.clamped(0.0, 1.0) * clip.duration,
-                weight: 1.0,
-            });
-        } else if let Some((look, _)) = role(Role::Look) {
-            overlays.push(Layer {
-                animation: look,
-                time: look_position(player.pitch, animation_input.look_limits) * look.duration,
-                weight: 1.0,
-            });
-        }
-        // `Player::updateLookAnimation`: free look turns only the head,
-        // mapped over the datablock's +/-maxLookAngle.
-        if let Some((headside, _)) = role(Role::HeadSide) {
-            overlays.push(Layer {
-                animation: headside,
-                time: (0.5 + player.head_yaw / std::f32::consts::PI).clamped(0.0, 1.0)
-                    * headside.duration,
-                weight: 1.0,
-            });
-        }
-        layers.extend(overlays.iter().copied());
-        unacted.extend(overlays);
-        let acted = !absolute_actions.is_empty() || !additive_actions.is_empty();
-        layers.extend(additive_actions);
-        // Custom rigs can supply absolute look/head overlays (or empty
-        // fallback clips) over an additive locomotion sequence such as swim.
-        // Order the complete stack, not only the layers before those overlays.
-        // Stable partition retains the existing overlay/thread order within
-        // each type; only misplaced absolute custom clips move before deltas.
-        layers.sort_by_key(|layer| layer.animation.additive);
-        unacted.sort_by_key(|layer| layer.animation.additive);
-        // `transitionToSequence` blends the locomotion thread from the pose it
-        // had when the action changed. Its channels end right after the
-        // locomotion clip, or where the absolute layers end for additive jumps.
-        let transition_at = |layers: &[Layer<'_>]| -> Result<usize> {
-            Ok(match clip {
-                Some(clip) if !clip.additive => {
-                    layers
-                        .iter()
-                        .position(|layer| std::ptr::eq(layer.animation, clip))
-                        .context("Missing avatar movement layer")?
-                        + 1
-                }
-                _ => layers
-                    .iter()
-                    .position(|layer| layer.animation.additive)
-                    .unwrap_or(layers.len()),
-            })
-        };
-        let at = transition_at(&layers)?;
         let transition_time = if mode == "jump" {
             JUMP_TRANSITION_TIME
         } else {
@@ -2427,7 +2328,7 @@ impl AvatarMesh {
             let (rest, _) = sample_layers_with_transition(
                 &assets.rig.shape,
                 &unacted,
-                transition_at(&unacted)?,
+                unacted_transition_at,
                 from,
             )?;
             self.unacted_nodes = rest.nodes;

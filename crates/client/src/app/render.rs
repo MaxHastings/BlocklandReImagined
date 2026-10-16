@@ -21,10 +21,11 @@ impl App {
         };
         // Draw what this frame's tick posed, not input that arrived since.
         let controls = self.view.drawn_controls.as_ref().unwrap_or(&self.controls);
-        let third_person = draws_third_person(
+        let stock_third_person = draws_third_person(
             controls,
             view.vitals.get(&view.owner).is_none_or(|v| v.alive),
-        ) || self.view.addon_camera;
+        );
+        let third_person = stock_third_person || self.view.addon_camera;
         let mut hidden = self.combat.hidden_bodies(&view.vitals);
         // Players whose archetype looks like a package model draw as it, in
         // place of the Blockhead; the local player's in first person only
@@ -619,6 +620,96 @@ impl App {
             &self.motion.passages(),
             orbit_drawn_offset(controls, &self.avatar.avatars),
         )?;
+        // Resolve environment once for both presentation phases. Camera reads a
+        // coherent current stock world; ordinary frame reads the resolved world.
+        let live = (!view.environment.is_empty()).then(|| {
+            bri_content::atmosphere::resolve(
+                &authored_environment(scene),
+                &view.environment,
+                self.motion.server_tick().unwrap_or(view.tick as f64),
+            )
+        });
+        let apply_environment = |camera: &mut Camera| {
+            camera.apply_environment(scene);
+            if let Some(live) = &live {
+                camera.apply_atmosphere(live);
+            }
+        };
+        let player_view = bri_client_sandbox::View {
+            fov: controls.fov(),
+            normal_fov: controls.normal_fov(),
+            size: [frame.size.0, frame.size.1],
+            first_person: !stock_third_person,
+            aiming: controls.aiming(),
+            alive: view.vitals.get(&view.owner).is_none_or(|v| v.alive),
+            view_model: if stock_third_person {
+                [0.0; 5]
+            } else {
+                controls.view_model_record()
+            },
+            hud_owned: 0,
+        };
+        let mut addon_world = if self.addons.client_code.is_started() {
+            let (stock_forward, _, stock_up) = rolled_view_basis(yaw, pitch, roll);
+            let aspect = frame.size.0 as f32 / frame.size.1 as f32;
+            let mut stock_camera = Camera::oriented(
+                eye.to_array(),
+                stock_forward.to_array(),
+                stock_up.to_array(),
+                aspect,
+                vertical_fov(controls.fov().to_radians(), aspect),
+                0.05,
+                FAR_PLANE,
+            );
+            apply_environment(&mut stock_camera);
+            let world = if self.addons.client_code.reads_world() {
+                let image_meshes = self.world_items.held_image_meshes();
+                // A corpse past its timeout has no body left to pose: a
+                // ragdoll goes with it instead of lingering unseen.
+                let gone = self.combat.hidden_bodies(&view.vitals);
+                let skeletons = if self.addons.client_code.poses_bodies() {
+                    self.avatar
+                        .avatars
+                        .iter_mut()
+                        .filter(|(owner, _)| !gone.contains(owner))
+                        .map(|(owner, avatar)| {
+                            (*owner, avatar.skeleton(&self.avatar.avatar_assets))
+                        })
+                        .collect()
+                } else {
+                    Default::default()
+                };
+                // Death and respawn as drawn, not the newest vitals.
+                let lives = self
+                    .avatar
+                    .avatars
+                    .iter()
+                    .filter_map(|(owner, avatar)| Some((*owner, avatar.life()?)))
+                    .collect();
+                std::sync::Arc::new(crate::client_code::world_view(
+                    view,
+                    self.ghosts.entities_at(view.tick, &view.entities),
+                    self.motion.presented(),
+                    &self.vehicles,
+                    &self.vehicle_assets,
+                    &stock_camera,
+                    &self.world_items,
+                    image_meshes,
+                    crate::client_code::DrawnBodies { skeletons, lives },
+                    std::sync::Arc::new(self.motion.passages()),
+                ))
+            } else {
+                Default::default()
+            };
+            self.addons.client_code.begin_camera_frame(
+                self.avatar.animation_time,
+                world.clone(),
+                player_view,
+            );
+            world
+        } else {
+            Default::default()
+        };
         // An Add-On may place the camera (`camera.control`): what the
         // player sees, never where they aim or move.
         let shot = if self.addons.client_code.is_started() {
@@ -661,19 +752,7 @@ impl App {
             0.05,
             FAR_PLANE,
         );
-        camera.apply_environment(scene);
-        // The host's environment (Admin Menu, Add-Ons) over the map's own;
-        // an untouched map skips it and draws exactly as authored.
-        let live = (!view.environment.is_empty()).then(|| {
-            bri_content::atmosphere::resolve(
-                &authored_environment(scene),
-                &view.environment,
-                self.motion.server_tick().unwrap_or(view.tick as f64),
-            )
-        });
-        if let Some(live) = &live {
-            camera.apply_atmosphere(live);
-        }
+        apply_environment(&mut camera);
         if let Some(vignette) = &mut self.gpu.vignette {
             vignette.update(
                 frame.queue,
@@ -874,65 +953,22 @@ impl App {
             up,
         };
         if self.addons.client_code.is_started() {
-            let world = if self.addons.client_code.reads_world() {
-                let image_meshes = self.world_items.held_image_meshes();
-                // A corpse past its timeout has no body left to pose: a
-                // ragdoll goes with it instead of lingering unseen.
-                let gone = self.combat.hidden_bodies(&view.vitals);
-                let skeletons = if self.addons.client_code.poses_bodies() {
-                    self.avatar
-                        .avatars
-                        .iter_mut()
-                        .filter(|(owner, _)| !gone.contains(owner))
-                        .map(|(owner, avatar)| {
-                            (*owner, avatar.skeleton(&self.avatar.avatar_assets))
-                        })
-                        .collect()
-                } else {
-                    Default::default()
-                };
-                // Death and respawn as drawn, not the newest vitals.
-                let lives = self
-                    .avatar
-                    .avatars
-                    .iter()
-                    .filter_map(|(owner, avatar)| Some((*owner, avatar.life()?)))
-                    .collect();
-                std::sync::Arc::new(crate::client_code::world_view(
-                    view,
-                    self.ghosts.entities_at(view.tick, &view.entities),
-                    self.motion.presented(),
-                    &self.vehicles,
-                    &self.vehicle_assets,
-                    &camera,
-                    &self.world_items,
-                    image_meshes,
-                    crate::client_code::DrawnBodies { skeletons, lives },
-                    std::sync::Arc::new(passages.clone()),
-                ))
-            } else {
-                Default::default()
-            };
-            let player_view = bri_client_sandbox::View {
-                fov: self.controls.fov(),
-                normal_fov: self.controls.normal_fov(),
-                size: [frame.size.0, frame.size.1],
-                first_person: !third_person,
-                aiming: self.controls.aiming(),
-                alive: view.vitals.get(&view.owner).is_none_or(|v| v.alive),
-                view_model: if third_person {
-                    [0.0; 5]
-                } else {
-                    self.controls.view_model_record()
-                },
-                hud_owned: 0,
-            };
+            if self.addons.client_code.reads_world() {
+                let rgb = |v: [f32; 4]| [v[0], v[1], v[2]];
+                std::sync::Arc::make_mut(&mut addon_world).environment =
+                    bri_client_sandbox::world::Environment {
+                        sun_direction: rgb(camera.sun_direction),
+                        sun_color: rgb(camera.sun_color),
+                        ambient: rgb(camera.ambient),
+                        sky: rgb(camera.fog_color),
+                    };
+            }
             let span = crate::frame_trace::span("Add-On code");
             self.addons.client_code.run_frame(
                 self.avatar.animation_time,
                 eye,
                 forward,
-                world,
+                addon_world,
                 player_view,
             );
             drop(span);

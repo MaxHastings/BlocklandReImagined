@@ -799,9 +799,19 @@ impl AddOn {
         self.stopped.is_none() && self.camera_frame.is_some()
     }
 
+    /// Install a complete current stock presentation before camera selection.
+    /// This executes no code and preserves frame outputs, inbox and local bodies.
+    pub fn camera_context(&mut self, input: &FrameInput) {
+        let state = self.store.data_mut();
+        state.world = input.world.clone();
+        state.view = input.view;
+        state.controls = input.controls;
+    }
+
     /// Run `camera_frame` before the game draws, with the camera the game
     /// would show (`camera`), and return where the Add-On put it, if it
-    /// did. It reads the world as the last frame drew it.
+    /// did. The adapter supplies this draw's stock world/view/input through
+    /// `camera_context`; the later frame callback receives the resolved view.
     pub fn camera_frame(
         &mut self,
         time: f32,
