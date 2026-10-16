@@ -266,6 +266,15 @@ impl Action {
             }
             Self::ChangeMap { map } => {
                 validate_text(map, 128)?;
+                if map.contains(':') {
+                    return if bri_package::id::ContentId::parse(map)
+                        .is_ok_and(|id| id.kind == "map")
+                    {
+                        Ok(())
+                    } else {
+                        Err(Error::InvalidValue)
+                    };
+                }
                 if map.is_empty()
                     || !map
                         .bytes()

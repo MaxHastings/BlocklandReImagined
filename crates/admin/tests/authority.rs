@@ -552,6 +552,70 @@ fn typed_command_validation_clamps_authored_time_scale_and_keeps_minigame_owner_
     settings.port = 28000;
     assert!(run(&mut s, 1, Action::HostConfigure { settings }).is_ok());
 }
+
+#[test]
+fn change_map_accepts_authored_map_ids_without_relaxing_paths_or_authority() {
+    let mut administration = setup();
+    for map in [
+        "v20/add-ons/map_slate/slate.mis",
+        "v20.map.bedroom",
+        "other",
+        "first-map:map/main",
+        "second-map:map/nested/room",
+    ] {
+        let request = Request::new(Action::ChangeMap { map: map.into() });
+        assert!(request.validate().is_ok(), "{map}");
+        assert!(
+            Request::decode(&serde_json::to_vec(&request).unwrap()).is_ok(),
+            "{map}"
+        );
+        assert_eq!(
+            run(&mut administration, 1, request.action).unwrap(),
+            vec![Effect::Gameplay {
+                actor: Some(id(1)),
+                command: GameplayCommand::ChangeMap(map.into())
+            }]
+        );
+    }
+    for map in [
+        "",
+        "../map",
+        "/map",
+        "map/..",
+        "map//room",
+        "first-map:weapon/main",
+        "first-map:map/../main",
+        "first-map:map/./main",
+        "first-map:map//main",
+        "first-map:map/",
+        "first-map:map/.../room",
+        "first-map:map/main:other",
+        "First-map:map/main",
+        "C:/maps/main",
+        "C:\\maps\\main",
+        "first-map:map/room\n",
+    ] {
+        let request = Request::new(Action::ChangeMap { map: map.into() });
+        assert!(request.validate().is_err(), "{map:?}");
+        assert!(
+            Request::decode(&serde_json::to_vec(&request).unwrap()).is_err(),
+            "{map:?}"
+        );
+    }
+    for map in ["a".repeat(129), format!("first-map:map/{}", "a".repeat(65))] {
+        assert!(Request::new(Action::ChangeMap { map }).validate().is_err());
+    }
+    assert!(
+        run(
+            &mut administration,
+            4,
+            Action::ChangeMap {
+                map: "first-map:map/main".into()
+            }
+        )
+        .is_err()
+    );
+}
 #[test]
 fn failed_logins_follow_the_identity_across_reconnects_and_expire() {
     let mut s = setup();
