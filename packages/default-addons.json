@@ -1448,6 +1448,7 @@
       "id": "map_avp",
       "original": {
         "addon": "Map_AvP",
+        "withdrawn": "Maxwell: local test map only; exclude from public releases starting with v0.3.2.",
         "title": "Aliens vs Predator",
         "authors": [
           "Maxwell"

@@ -25,6 +25,9 @@ capability must be exercised by an affected ordinary gameplay consumer before
 further dependent mechanism expansion. No acceptance row is closed by an
 isolated API test, imported mesh or rendering diagnostic alone.
 
+AvP is retained as a local test map and excluded from public packages starting
+with v0.3.2, per Maxwell. See the release readiness map-selection check.
+
 Shotgun fidelity work continues independently and is not required for v0.3.2.
 The wider Halo and AA execution plans remain active; GMod remains parked.
 Engine mechanisms remain generic and source policy belongs to packages. Root
