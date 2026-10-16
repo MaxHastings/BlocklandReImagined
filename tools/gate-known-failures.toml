@@ -164,11 +164,6 @@ reason = "1.7 min on WARP"
 [[port_bound]]
 target = "bri-client/night_qa"
 
-[[failure]]
-test = "steady_play_builds_and_uploads_nothing_whole::content"
-owner = "v0.2.7 stabilization sweep"
-reason = "The soak's rocket knocks none of its floating test wall out after the v0.2.4 merge; check the wall against the new brick-damage rules."
-
 # The v0.3.0 release gate on the owner's PC (1bdfd4d7, 2026-10-14); the
 # owner chose to ship with it as a known issue (2026-10-14 06:42).
 
