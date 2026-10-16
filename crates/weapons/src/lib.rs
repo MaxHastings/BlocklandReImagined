@@ -725,6 +725,13 @@ pub enum BotFire {
 fn full_volume() -> f32 {
     1.0
 }
+/// Explicit first-person placement; omission preserves legacy numeric inference.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FirstPersonOrigin {
+    Eye,
+    Mount,
+}
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Image {
@@ -735,6 +742,8 @@ pub struct Image {
     pub mount_point: u32,
     pub offset: [f32; 3],
     pub eye_offset: [f32; 3],
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub first_person_origin: Option<FirstPersonOrigin>,
     /// Logical attachment name to authored node for the local first-person model.
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub first_person_nodes: BTreeMap<String, String>,

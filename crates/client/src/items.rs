@@ -60,6 +60,8 @@ pub struct ImagePresentation {
     pub mount_point: u32,
     pub offset: [f32; 3],
     pub eye_offset: [f32; 3],
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub first_person_origin: Option<bri_weapons::FirstPersonOrigin>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub first_person_nodes: BTreeMap<String, String>,
     pub source_rotation_degrees: [f32; 3],
@@ -721,6 +723,7 @@ impl ItemAssets {
                     && native.mount_point == image.mount_point
                     && native.offset == image.offset
                     && native.eye_offset == image.eye_offset
+                    && native.first_person_origin == image.first_person_origin
                     && native.source_rotation_degrees == image.source_rotation_degrees,
                 "Image presentation identity/transform mismatch: {id}"
             );
@@ -765,9 +768,12 @@ impl ItemAssets {
         euler_to_matrix_images(&mut manifest.images, &pack);
         // v20's own tools (the brick, hammer, wrench, spray cans) move with
         // the arm in first person; the base game says so for all of its
-        // images, which changes only those with an eye offset.
+        // legacy images, which changes only those with an eye offset. An
+        // explicit origin keeps its separately authored arm-action policy.
         for image in manifest.images.values_mut() {
-            image.follow_arm = true;
+            if image.first_person_origin.is_none() {
+                image.follow_arm = true;
+            }
         }
         ensure!(
             item_physics.items.len() == manifest.items.len()
@@ -1328,8 +1334,9 @@ impl ItemAssets {
         }
     }
     /// Engine-family mount rule. Native axes are X-right/Y-up/-Z-forward.
-    /// First-person uses a nonidentity eye offset; otherwise uses the actual
-    /// requested host mount node. Akimbo mount1 is not a reflected mount0.
+    /// First-person honors an explicit origin, else infers eye placement from
+    /// nonidentity eye fields; otherwise uses the actual requested host mount
+    /// node. Akimbo mount1 is not a reflected mount0.
     pub fn mount_transform(
         &self,
         id: &str,
@@ -1477,6 +1484,14 @@ fn read_part(
         part.weapons_sha256 == hash(weapons),
         "presentation.json does not match weapons.json; rerun the importer"
     );
+    for (id, image) in &part.images {
+        ensure!(
+            pack.images
+                .get(id)
+                .is_none_or(|native| native.first_person_origin == image.first_person_origin),
+            "Image presentation origin mismatch: {id}"
+        );
+    }
     euler_to_matrix_images(&mut part.images, pack);
     for (id, image) in &mut part.images {
         image.follow_arm |= pack.images.get(id).is_some_and(|i| i.follow_arm);
@@ -1631,6 +1646,7 @@ fn present_gaps(
                 mount_point: image.mount_point,
                 offset: image.offset,
                 eye_offset: image.eye_offset,
+                first_person_origin: image.first_person_origin,
                 first_person_nodes: image.first_person_nodes.clone(),
                 source_rotation_degrees: image.source_rotation_degrees,
                 eye_rotation_degrees: image.eye_rotation,
@@ -1714,10 +1730,11 @@ fn present_gaps(
         );
     }
 }
-/// Where a held image is drawn (Torque's `getRenderImageTransform`). In
-/// first person an image with an eye offset sits at `eye x eyeOffset`, and
-/// rides the arm's action at its mount too when it has `follow_arm`;
-/// otherwise it sits in the hand: `mount x offset x rotation x correction`.
+/// Where a held image is drawn (Torque's `getRenderImageTransform`). Explicit
+/// first-person origin selects eye or mount; omission infers eye from nonzero
+/// eye fields. Eye placement is `eye x eyeOffset`, optionally carrying the arm
+/// action with `follow_arm`. Mount and third-person placement use
+/// `mount x offset x rotation x correction`.
 pub(crate) fn place_image(
     image: &ImagePresentation,
     first_person: bool,
@@ -1733,24 +1750,32 @@ pub(crate) fn place_image(
             Vec3::from(image.offset),
         ) * correction()?)
     };
-    let transform =
-        if first_person && (image.eye_offset != [0.; 3] || image.eye_rotation_degrees != [0.; 3]) {
-            let eye_local = Mat4::from_rotation_translation(
-                source_euler(image.eye_rotation_degrees),
-                Vec3::from(image.eye_offset),
-            );
-            match mount_action(image.mount_point).filter(|_| image.follow_arm) {
-                Some(action) => {
-                    let hand = in_hand()?;
-                    eye * eye_local * hand.inverse() * action * hand
-                }
-                None => eye * eye_local,
+    let at_eye = match image.first_person_origin {
+        Some(bri_weapons::FirstPersonOrigin::Eye) => true,
+        Some(bri_weapons::FirstPersonOrigin::Mount) => false,
+        None => image.eye_offset != [0.; 3] || image.eye_rotation_degrees != [0.; 3],
+    };
+    let transform = if first_person && at_eye {
+        let eye_local = Mat4::from_rotation_translation(
+            source_euler(image.eye_rotation_degrees),
+            Vec3::from(image.eye_offset),
+        );
+        match image
+            .follow_arm
+            .then(|| mount_action(image.mount_point))
+            .flatten()
+        {
+            Some(action) => {
+                let hand = in_hand()?;
+                eye * eye_local * hand.inverse() * action * hand
             }
-        } else {
-            let mount = host_mount(image.mount_point)
-                .with_context(|| format!("Missing authored host mount{}", image.mount_point))?;
-            mount * in_hand()?
-        };
+            None => eye * eye_local,
+        }
+    } else {
+        let mount = host_mount(image.mount_point)
+            .with_context(|| format!("Missing authored host mount{}", image.mount_point))?;
+        mount * in_hand()?
+    };
     ensure!(
         transform.is_finite() && transform.determinant() > 1e-8,
         "Invalid image mount transform"
@@ -2503,6 +2528,7 @@ mod add_on_icon_tests {
                 mount_point: 0,
                 offset: [0.; 3],
                 eye_offset: [0.; 3],
+                first_person_origin: None,
                 first_person_nodes: BTreeMap::new(),
                 source_rotation_degrees: [0.; 3],
                 eye_rotation_degrees: [0.; 3],
@@ -3384,6 +3410,7 @@ mod placement_tests {
             mount_point: 0,
             offset: [0.1, -0.2, 0.05],
             eye_offset,
+            first_person_origin: None,
             first_person_nodes: BTreeMap::new(),
             source_rotation_degrees: [0., 90., 0.],
             eye_rotation_degrees: eye_rotation,
@@ -3476,6 +3503,100 @@ mod placement_tests {
             }
         }
     }
+    #[test]
+    fn explicit_image_origin_separates_eye_mount_and_arm_action() {
+        use bri_weapons::FirstPersonOrigin::{Eye, Mount};
+        let eye =
+            Mat4::from_rotation_translation(Quat::from_rotation_y(0.7), Vec3::new(10., 5., -3.));
+        let hand =
+            Mat4::from_rotation_translation(Quat::from_rotation_z(-0.4), Vec3::new(2., 3., 4.));
+        let correction =
+            Mat4::from_rotation_translation(Quat::from_rotation_x(0.3), Vec3::new(-0.2, 0.4, 0.6));
+        let action =
+            Mat4::from_rotation_translation(Quat::from_rotation_z(0.2), Vec3::new(0.3, -0.2, 0.1));
+        let mut identity = image([0.; 3], [0.; 3], false);
+        identity.first_person_origin = Some(Eye);
+        let placed = place_image(
+            &identity,
+            true,
+            eye,
+            || panic!("identity eye must not inspect model correction"),
+            |_| panic!("identity eye must not query host hand"),
+            |_| panic!("arm action is independently disabled"),
+        )
+        .unwrap();
+        assert_eq!(placed, eye);
+        let in_hand = Mat4::from_rotation_translation(
+            source_euler(identity.source_rotation_degrees),
+            Vec3::from(identity.offset),
+        ) * correction;
+        for origin in [None, Some(Eye), Some(Mount)] {
+            let mut i = image([0.2, -0.3, -0.8], [10., 20., -5.], false);
+            i.first_person_origin = origin;
+            let third = place_image(
+                &i,
+                false,
+                eye,
+                || Ok(correction),
+                |_| Some(hand),
+                |_| panic!("third person ignores arm action"),
+            )
+            .unwrap();
+            assert!(close(third, hand * in_hand));
+            if origin == Some(Mount) {
+                let mounted = place_image(
+                    &i,
+                    true,
+                    eye,
+                    || Ok(correction),
+                    |_| Some(hand),
+                    |_| panic!("mount ignores eye arm action"),
+                )
+                .unwrap();
+                assert!(
+                    close(mounted, third),
+                    "explicit mount ignores nonzero eye fields"
+                );
+            }
+        }
+        identity.first_person_origin = None;
+        let legacy = place_image(
+            &identity,
+            true,
+            eye,
+            || Ok(correction),
+            |_| Some(hand),
+            |_| None,
+        )
+        .unwrap();
+        assert!(
+            close(legacy, hand * in_hand),
+            "legacy zero fields remain hand-mounted"
+        );
+        identity.first_person_origin = Some(Eye);
+        identity.follow_arm = true;
+        let acted = place_image(
+            &identity,
+            true,
+            eye,
+            || Ok(correction),
+            |_| panic!("eye never queries host hand"),
+            |_| Some(action),
+        )
+        .unwrap();
+        assert!(close(acted, eye * in_hand.inverse() * action * in_hand));
+        let still = place_image(
+            &identity,
+            true,
+            eye,
+            || panic!("no action needs no correction"),
+            |_| None,
+            |_| None,
+        )
+        .unwrap();
+        assert_eq!(still, eye);
+    }
+
     #[test]
     fn follow_arm_is_off_unless_an_image_asks() {
         let json = r#"{ "model": "", "mount_point": 0, "offset": [0,0,0], "eye_offset": [0,0,-1],

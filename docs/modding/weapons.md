@@ -712,3 +712,17 @@ visual RNG, unrelated audio, vector compaction, report drops and render views.
 The optional field retains the existing version-1 effects schema policy; omission
 preserves legacy motion and silence. Original repeat/promotion fidelity remains a
 separate package-evidence requirement.
+
+
+An image may set `first_person_origin: "eye"` or `"mount"`. Omission keeps the
+existing inference: a nonzero eye offset or rotation selects the eye, and zero
+eye fields select the host mount. Explicit `eye` selects eye-local placement even
+when its local transform is identity. With `follow_arm: false`, identity eye
+placement is exactly the supplied eye transform and does not query the host hand
+or apply the model's automatic mount correction. `follow_arm` remains a separate
+choice for carrying arm actions. Explicit `mount` uses the ordinary host mount,
+image offset/rotation and model correction even with nonzero eye fields. Third
+person always retains that ordinary mount path. Base images without an explicit
+origin retain stock forced arm following; explicit origins keep their authored
+`follow_arm` choice. Native image and authored
+presentation selectors must agree; unknown selector values are rejected.
