@@ -56,7 +56,8 @@ fn on_damage(victim, attacker, amount, info) {
 
 fn on_death(victim, killer) {
     if killer == () || killer == victim { return; }
-    let streak = get_player(killer, "streak") + 1;
+    let previous = get_player(killer, "streak");
+    let streak = if previous == () { 1 } else { previous + 1 };
     set_player(killer, "streak", streak);
     add_player(killer, "score", 1);
     play_sound(killer, "sample-commando-rifle:equip");
