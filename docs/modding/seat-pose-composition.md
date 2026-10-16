@@ -77,11 +77,12 @@ passenger turn. Each component must be finite and within [-64, 64], as for seat
 eye bounds; an anchor without a selected rider_pose is invalid. No source-game
 point is inferred from bounds, model names or screenshots.
 
-The static seat path transforms this point by the existing rendered seat position
-and rotation and the vehicle's scale once. The animated mount path transforms it
-by the full posed world mount-node matrix, retaining its vehicle and node scale
-without multiplying vehicle scale a second time. Existing seat origins/transforms
-are unchanged. The world hip target is independent of rider body scale and turn.
+The static seat path scales its complete local seat translation (after turret
+pivot rotation) before the vehicle world transform, matching authoritative
+effective_seat_pose. It then transforms the fallback point through that seat
+position/rotation with vehicle scale once. The animated mount path uses the full
+posed world mount-node matrix, retaining vehicle and node scale without a second
+scale multiplication. The world hip target is independent of rider scale/turn.
 
 Only when the selected mounted sit/root clip is missing on the current body does
 the client convert that world target through the inverse rider rotation and body
