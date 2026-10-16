@@ -1,7 +1,185 @@
-//! Pure body-basis calculations shared by pose consumers. Clip selection,
-//! playback state and gameplay origin policy belong to their existing owners.
-use crate::{animation::Pose, shape::Shape};
+//! Pure layer plans and body-basis calculations. Playback state, clocks and
+//! gameplay origin policy remain with their existing owners.
+use crate::{
+    animation::{Layer, Pose},
+    avatar::Rig,
+    body::{Role, RoleClips},
+    shape::{Animation, Shape},
+};
+use anyhow::{Context, Result};
+use bri_console::Clamp;
 use glam::{Quat, Vec3};
+
+/// An existing action request in the caller's monotonic animation time domain.
+#[derive(Clone, Copy)]
+pub struct ActionRef<'input> {
+    pub sequence: &'input str,
+    pub started_at: f64,
+}
+
+/// Already selected/clocked inputs to the existing body layer composition.
+/// The base and crouch clips must belong to the supplied immutable rig.
+pub struct LayerPlanInput<'rig, 'input> {
+    pub base: Option<Layer<'rig>>,
+    pub ready_role: Option<Role>,
+    /// The caller has verified the active owned seat clip and actual image set.
+    pub omit_ready: bool,
+    pub crouch: Option<Layer<'rig>>,
+    /// Existing adapter order, without imposing a new action-count limit.
+    pub actions: &'input [Option<ActionRef<'input>>],
+    pub time: f64,
+    pub head_up: bool,
+    pub seat_aim: Option<f32>,
+    /// Normalized phase from the caller's existing pitch/limit mapping.
+    pub look_phase: f32,
+    pub head_yaw: f32,
+}
+
+/// Layers borrow only the rig; temporary input names do not escape the call.
+pub struct BodyLayerPlan<'rig> {
+    pub layers: Vec<Layer<'rig>>,
+    pub unacted: Vec<Layer<'rig>>,
+    pub transition_at: usize,
+    pub unacted_transition_at: usize,
+    pub acted: bool,
+    pub skipped: Vec<String>,
+}
+
+fn role_clip<'rig>(rig: &'rig Rig, roles: &RoleClips, role: Role) -> Option<&'rig Animation> {
+    rig.sequence(roles.clip(role)?.0)
+}
+
+/// Plan the existing ordered body layers without advancing or retaining state.
+/// Sparse node channels, sampling and transition blending remain in animation's
+/// native sampler. Callers retain their existing input validation and clocks.
+pub fn plan_body_layers<'rig>(
+    rig: &'rig Rig,
+    roles: &RoleClips,
+    input: LayerPlanInput<'rig, '_>,
+) -> Result<BodyLayerPlan<'rig>> {
+    let role = |r| role_clip(rig, roles, r);
+    let named = |name: &str| match Role::from_blockhead_clip(name) {
+        Some(r) => role(r),
+        None => rig.sequence(name),
+    };
+    let base = input.base.map(|l| l.animation);
+    let mut layers: Vec<_> = input.base.into_iter().collect();
+    if !input.omit_ready
+        && let Some(clip) = input.ready_role.and_then(role)
+    {
+        layers.push(Layer {
+            animation: clip,
+            time: clip.duration,
+            weight: 1.,
+        });
+    }
+    layers.extend(input.crouch);
+    let mut absolute_actions = Vec::new();
+    let mut additive_actions = Vec::new();
+    let mut skipped = Vec::new();
+    for action in input.actions.iter().flatten() {
+        let name = action.sequence.to_ascii_lowercase();
+        if name == "root" {
+            continue;
+        }
+        let Some(clip) = named(&name) else {
+            skipped.push(name);
+            continue;
+        };
+        let played = (input.time - action.started_at).max(0.) as f32;
+        if clip.additive {
+            additive_actions.push(Layer {
+                animation: clip,
+                time: played,
+                weight: 1.,
+            });
+        } else {
+            let at = if clip.looping && clip.duration > 0. {
+                played.rem_euclid(clip.duration)
+            } else {
+                played.min(clip.duration)
+            };
+            absolute_actions.push(Layer {
+                animation: clip,
+                time: at,
+                weight: 1.,
+            });
+        }
+    }
+    let order = |layers: &mut Vec<Layer<'_>>| {
+        layers.sort_by_key(|l| (l.animation.additive, l.animation.priority));
+    };
+    let mut unacted = layers.clone();
+    order(&mut unacted);
+    layers.extend(absolute_actions.iter().copied());
+    order(&mut layers);
+    let mut overlays = Vec::new();
+    if input.head_up
+        && let Some(clip) = role(Role::HeadUp)
+    {
+        overlays.push(Layer {
+            animation: clip,
+            time: clip.duration,
+            weight: 1.,
+        });
+    }
+    let seat_aim = input
+        .seat_aim
+        .filter(|a| a.is_finite())
+        .zip(role(Role::SeatAim));
+    if let Some((aim, clip)) = seat_aim {
+        overlays.push(Layer {
+            animation: clip,
+            time: aim.clamped(0., 1.) * clip.duration,
+            weight: 1.,
+        });
+    } else if let Some(look) = role(Role::Look) {
+        overlays.push(Layer {
+            animation: look,
+            time: input.look_phase * look.duration,
+            weight: 1.,
+        });
+    }
+    if let Some(clip) = role(Role::HeadSide) {
+        overlays.push(Layer {
+            animation: clip,
+            time: (0.5 + input.head_yaw / std::f32::consts::PI).clamped(0., 1.) * clip.duration,
+            weight: 1.,
+        });
+    }
+    layers.extend(overlays.iter().copied());
+    unacted.extend(overlays);
+    let acted = !absolute_actions.is_empty() || !additive_actions.is_empty();
+    layers.extend(additive_actions);
+    // This final partition deliberately does not re-sort priorities.
+    layers.sort_by_key(|l| l.animation.additive);
+    unacted.sort_by_key(|l| l.animation.additive);
+    let boundary = |stack: &[Layer<'_>]| -> Result<usize> {
+        Ok(match base {
+            Some(clip) if !clip.additive => {
+                stack
+                    .iter()
+                    .position(|l| std::ptr::eq(l.animation, clip))
+                    .context("Missing avatar movement layer")?
+                    + 1
+            }
+            _ => stack
+                .iter()
+                .position(|l| l.animation.additive)
+                .unwrap_or(stack.len()),
+        })
+    };
+    let transition_at = boundary(&layers)?;
+    let unacted_transition_at = boundary(&unacted)?;
+    Ok(BodyLayerPlan {
+        layers,
+        unacted,
+        transition_at,
+        unacted_transition_at,
+        acted,
+        skipped,
+    })
+}
 
 /// Model-space root shift for an already selected active authored seat context.
 /// The caller retains its mounted sit/root/dead eligibility checks. An owned
@@ -38,6 +216,248 @@ mod tests {
     use super::*;
     use anyhow::{Context, Result};
     use glam::Mat4;
+
+    fn planning_clip(name: &str, priority: i32, additive: bool, duration: f32) -> Animation {
+        Animation {
+            name: name.into(),
+            frames: 2,
+            duration,
+            looping: false,
+            additive,
+            priority,
+            nodes: vec![crate::shape::NodeTrack {
+                node: "Mount0".into(),
+                translations: vec![[0.; 3]; 2],
+                rotations: vec![],
+                scales: vec![],
+                scale_rotations: vec![],
+            }],
+            objects: vec![],
+            ground_translations: vec![],
+            ground_rotations: vec![],
+            triggers: vec![],
+        }
+    }
+    fn planning_rig() -> Rig {
+        let mut rig = crate::testing::avatar::rig();
+        rig.sequences.clear();
+        for c in [
+            planning_clip("base", 12, false, 1.),
+            planning_clip("body_action", 1, false, 1.),
+            planning_clip("arm_action", 20, false, 1.),
+            planning_clip("gesture_action", 0, true, 1.),
+            planning_clip("look", 16, true, 2.),
+            planning_clip("seataim", 17, false, 4.),
+            planning_clip("armreadyright", 14, false, 3.),
+        ] {
+            rig.sequences.insert(c.name.clone(), c);
+        }
+        rig
+    }
+    fn planning_input<'rig, 'input>(
+        base: Option<&'rig Animation>,
+        actions: &'input [Option<ActionRef<'input>>],
+    ) -> LayerPlanInput<'rig, 'input> {
+        LayerPlanInput {
+            base: base.map(|animation| Layer {
+                animation,
+                time: 0.1,
+                weight: 1.,
+            }),
+            ready_role: None,
+            omit_ready: false,
+            crouch: None,
+            actions,
+            time: 0.1,
+            head_up: false,
+            seat_aim: None,
+            look_phase: 0.25,
+            head_yaw: 0.,
+        }
+    }
+    fn names<'rig>(layers: &[Layer<'rig>]) -> Vec<&'rig str> {
+        layers.iter().map(|l| l.animation.name.as_str()).collect()
+    }
+
+    #[test]
+    fn plan_preserves_exact_stable_order_and_distinct_transition_boundaries() -> Result<()> {
+        for base_additive in [false, true] {
+            for look_additive in [false, true] {
+                let mut rig = planning_rig();
+                rig.sequences.get_mut("base").unwrap().additive = base_additive;
+                rig.sequences.get_mut("look").unwrap().additive = look_additive;
+                let roles = RoleClips::resolve(&Default::default(), |n| rig.sequence(n).is_some());
+                let actions = ["body_action", "arm_action", "gesture_action"].map(|sequence| {
+                    Some(ActionRef {
+                        sequence,
+                        started_at: 0.,
+                    })
+                });
+                let plan =
+                    plan_body_layers(&rig, &roles, planning_input(rig.sequence("base"), &actions))?;
+                let (acted, unacted, at, unacted_at) = if !base_additive {
+                    (
+                        vec![
+                            "body_action",
+                            "base",
+                            "arm_action",
+                            "look",
+                            "gesture_action",
+                        ],
+                        vec!["base", "look"],
+                        2,
+                        1,
+                    )
+                } else if look_additive {
+                    (
+                        vec![
+                            "body_action",
+                            "arm_action",
+                            "base",
+                            "look",
+                            "gesture_action",
+                        ],
+                        vec!["base", "look"],
+                        2,
+                        0,
+                    )
+                } else {
+                    (
+                        vec![
+                            "body_action",
+                            "arm_action",
+                            "look",
+                            "base",
+                            "gesture_action",
+                        ],
+                        vec!["look", "base"],
+                        3,
+                        1,
+                    )
+                };
+                assert_eq!(names(&plan.layers), acted);
+                assert_eq!(names(&plan.unacted), unacted);
+                assert_eq!(plan.transition_at, at);
+                assert_eq!(plan.unacted_transition_at, unacted_at);
+                assert!(plan.acted && plan.skipped.is_empty());
+                crate::animation::sample_layers_with_transition(
+                    &rig.shape,
+                    &plan.layers,
+                    plan.transition_at,
+                    None,
+                )?;
+                crate::animation::sample_layers_with_transition(
+                    &rig.shape,
+                    &plan.unacted,
+                    plan.unacted_transition_at,
+                    None,
+                )?;
+            }
+        }
+        Ok(())
+    }
+    #[test]
+    fn plan_uses_actual_roles_ready_eligibility_and_selected_overlay_duration() -> Result<()> {
+        let rig = planning_rig();
+        let roles = RoleClips::resolve(&Default::default(), |n| rig.sequence(n).is_some());
+        for (aim, overlay, time) in [
+            (None, "look", 0.5),
+            (Some(0.75), "seataim", 3.),
+            (Some(2.), "seataim", 4.),
+            (Some(f32::NAN), "look", 0.5),
+        ] {
+            let mut input = planning_input(rig.sequence("base"), &[]);
+            input.ready_role = Some(Role::AimBoth);
+            input.seat_aim = aim;
+            let plan = plan_body_layers(&rig, &roles, input)?;
+            let ready = plan
+                .layers
+                .iter()
+                .find(|l| l.animation.name == "armreadyright")
+                .context("resolved ready")?;
+            assert_eq!(ready.time, 3.);
+            assert_eq!(
+                plan.layers
+                    .iter()
+                    .find(|l| l.animation.name == overlay)
+                    .unwrap()
+                    .time,
+                time
+            );
+            assert!(!plan.acted);
+        }
+        let mut input = planning_input(rig.sequence("base"), &[]);
+        input.ready_role = Some(Role::AimBoth);
+        input.omit_ready = true;
+        assert!(!names(&plan_body_layers(&rig, &roles, input)?.layers).contains(&"armreadyright"));
+        Ok(())
+    }
+    #[test]
+    fn plan_does_not_borrow_input_names_or_add_a_four_action_limit() -> Result<()> {
+        let mut rig = planning_rig();
+        let mut looping = planning_clip("loop_action", 20, false, 2.);
+        looping.looping = true;
+        rig.sequences.insert(looping.name.clone(), looping);
+        let roles = RoleClips::resolve(&Default::default(), |n| rig.sequence(n).is_some());
+        let plan = {
+            let name = String::from("loop_action");
+            let actions = [
+                Some(ActionRef {
+                    sequence: &name,
+                    started_at: 0.,
+                }),
+                Some(ActionRef {
+                    sequence: "gesture_action",
+                    started_at: 0.,
+                }),
+                Some(ActionRef {
+                    sequence: "ROOT",
+                    started_at: 0.,
+                }),
+                Some(ActionRef {
+                    sequence: "Missing_Name",
+                    started_at: 0.,
+                }),
+            ];
+            let mut input = planning_input(rig.sequence("base"), &actions);
+            input.time = 3.5;
+            plan_body_layers(&rig, &roles, input)?
+        };
+        assert_eq!(plan.skipped, ["missing_name"]);
+        assert_eq!(
+            plan.layers
+                .iter()
+                .find(|l| l.animation.name == "loop_action")
+                .unwrap()
+                .time,
+            1.5
+        );
+        assert_eq!(
+            plan.layers
+                .iter()
+                .find(|l| l.animation.name == "gesture_action")
+                .unwrap()
+                .time,
+            3.5
+        );
+        let actions = vec![
+            Some(ActionRef {
+                sequence: "loop_action",
+                started_at: 0.
+            });
+            7
+        ];
+        let plan = plan_body_layers(&rig, &roles, planning_input(rig.sequence("base"), &actions))?;
+        assert_eq!(
+            plan.layers
+                .iter()
+                .filter(|l| l.animation.name == "loop_action")
+                .count(),
+            7
+        );
+        assert_eq!(names(&plan.unacted), ["base", "look"]);
+        Ok(())
+    }
 
     fn fixture() -> Result<(Shape, Pose, usize)> {
         let rig = crate::testing::avatar::rig();
