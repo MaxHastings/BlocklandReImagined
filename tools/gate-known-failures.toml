@@ -171,8 +171,3 @@ target = "bri-client/night_qa"
 test = "a_car_meets_the_part_of_a_player_beyond_a_portal::content"
 owner = "v0.3.1 portal follow-up"
 reason = "With the v20 jeep the car drives through a walker's part beyond the partner opening (nose reached -3.06); passes with the synthetic car. Not diagnosed yet."
-
-[[failure]]
-test = "standing_on_a_vehicle_does_not_seat_a_rider_but_landing_on_it_does::content"
-owner = "v0.3.1 vehicle follow-up"
-reason = "Test timing, not the engine: with the v20 jeep the jet dismount throws the rider about 13 u/s up, so 60 ticks later he is still airborne (feet y 8.0, roof about 3.6), lands on the roof about 100 ticks into the 360-tick stand and is seated by the landing rule, as v20 does. Fix: wait until grounded on the roof before the stand. Owner chose to ship with it (2026-10-14 13:37)."

@@ -555,11 +555,17 @@ fn standing_on_a_vehicle_does_not_seat_a_rider_but_landing_on_it_does(f: &Fixtur
             break;
         }
     }
+    assert!(
+        rider(&s).grounded || s.mounted(owner).is_some(),
+        "the jetting rider did not settle within the bounded landing wait"
+    );
+    // Grounding is observed before the resulting mount collision is handled.
+    // Let the existing settling interval finish before deciding which case ran.
+    feed(&mut s, MoveInput::default(), 30)?;
     if s.mounted(owner).is_some() {
         assert!(f.is_native(), "the made-up car's rider lands inside MinMountTime");
         return Ok(());
     }
-    feed(&mut s, MoveInput::default(), 30)?;
     assert!(
         feet(&s).y > car.y + 0.5,
         "the rider stands on the roof: feet {} over the car at {car}",
