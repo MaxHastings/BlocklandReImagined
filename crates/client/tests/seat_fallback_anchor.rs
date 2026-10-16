@@ -34,6 +34,7 @@ fn clip(name: &str, node: &str, at: Vec3) -> Animation {
             scale_rotations: vec![],
         }],
         objects: vec![],
+        rotation_interpolation: Default::default(),
         ground_translations: vec![],
         ground_rotations: vec![],
         triggers: vec![],

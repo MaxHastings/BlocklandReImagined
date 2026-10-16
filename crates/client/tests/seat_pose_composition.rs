@@ -52,6 +52,7 @@ fn clip(name: &str, priority: i32, nodes: &[(&str, [f32; 3])]) -> Animation {
             })
             .collect(),
         objects: vec![],
+        rotation_interpolation: Default::default(),
         ground_translations: vec![],
         ground_rotations: vec![],
         triggers: vec![],

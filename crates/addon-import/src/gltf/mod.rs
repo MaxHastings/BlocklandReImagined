@@ -1877,6 +1877,7 @@ fn sample_clip(
         priority,
         nodes: tracks,
         objects: Vec::new(),
+        rotation_interpolation: Default::default(),
         ground_translations: Vec::new(),
         ground_rotations: Vec::new(),
         triggers: Vec::new(),
