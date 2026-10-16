@@ -167,6 +167,13 @@ impl Sounds {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Look {
+    /// Imported bodies can own their crouched idle/movement pose instead of
+    /// receiving the dedicated Blockhead crouch thread over it.
+    #[serde(
+        default,
+        skip_serializing_if = "bri_content::body::CrouchComposition::is_overlay"
+    )]
+    pub crouch_composition: bri_content::body::CrouchComposition,
     /// Model id: `v20.shape.<name>` for v20's shapes (the Blockhead is
     /// `v20.shape.m`, the horse [`HORSE_SHAPE`]), a package model, or
     /// [`NO_BODY`] to draw none.
@@ -298,6 +305,7 @@ impl Archetype {
             can_ride: kind.can_ride(),
             mount_points: kind.mount_points(),
             look: Look {
+                crouch_composition: Default::default(),
                 model: if kind == PlayerType::Horse {
                     HORSE_SHAPE.into()
                 } else {

@@ -6,7 +6,7 @@ use bri_console::Clamp;
 use bri_content::{
     animation::{Channels, Layer, sample_layers_with_transition},
     avatar::{Appearance, Outfit, Package, Rig},
-    body::{Animations, Role, RoleClips, Sockets},
+    body::{Animations, CrouchComposition, Role, RoleClips, Sockets},
 };
 use bri_render::scene::{
     AlphaMode, GpuInstances, GpuScene, Material, SceneData, SceneImage, SceneRenderer,
@@ -929,6 +929,7 @@ struct Fits {
 /// body at all.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct BodyKind {
+    pub crouch_composition: CrouchComposition,
     pub sockets: Sockets,
     pub animations: Animations,
     /// The archetype draws a box model or no body: this mesh is a hidden
@@ -954,6 +955,7 @@ impl BodyKind {
     pub fn of(archetype: &bri_sim::archetype::Archetype, stand_in: bool) -> Self {
         let m = &archetype.movement;
         Self {
+            crouch_composition: archetype.look.crouch_composition,
             sockets: archetype.sockets.clone(),
             animations: archetype.look.animations.clone(),
             stand_in,
@@ -1667,6 +1669,11 @@ impl AvatarMesh {
     /// animation roles at the next pose.
     pub fn set_body_kind(&mut self, kind: BodyKind) {
         if self.kind != kind {
+            if self.kind.crouch_composition != kind.crouch_composition
+                || self.kind.stand_in != kind.stand_in
+            {
+                self.crouch = CrouchThread::default();
+            }
             self.kind = kind;
             self.roles = None;
             self.fits = None;
@@ -2219,7 +2226,9 @@ impl AvatarMesh {
                 weight: 1.0,
             });
         }
-        if let Some((crouch, _)) = role(Role::Crouch) {
+        if (self.kind.stand_in || self.kind.crouch_composition == CrouchComposition::Overlay)
+            && let Some((crouch, _)) = role(Role::Crouch)
+        {
             self.crouch
                 .update(player.crouched, elapsed, crouch.duration);
             if let Some(time) = self.crouch.time() {
@@ -3438,6 +3447,106 @@ mod tests {
         assets.load_bodies(root.path(), &packages);
         ensure!(assets.has_body(&model), "{model} did not load");
         Ok((assets, model, root))
+    }
+
+    #[test]
+    fn authored_crouch_locomotion_keeps_its_phase_and_motion_channels() -> Result<()> {
+        let (mut assets, model, _root) = own_body(
+            "crouch-composition",
+            &[],
+            &[
+                ("root", "root"),
+                ("crouch", "crouch"),
+                ("crouchrun", "crouchrun"),
+                ("crouchback", "crouchback"),
+            ],
+        )?;
+        // Entirely synthetic absolute channels, deliberately distinct between
+        // the held crouch pose and each moving crouch clip.
+        let rig = &mut assets.bodies.get_mut(&model).context("synthetic rig")?.rig;
+        for (name, x) in [("crouch", 0.), ("crouchrun", 1.), ("crouchback", -1.)] {
+            let clip = rig.sequences.get_mut(name).context("synthetic clip")?;
+            clip.frames = 2;
+            clip.duration = 0.8;
+            clip.looping = true;
+            clip.additive = false;
+            clip.ground_translations.clear();
+            clip.ground_rotations.clear();
+            clip.nodes = vec![bri_content::shape::NodeTrack {
+                node: "Hip".into(),
+                rotations: vec![Quat::IDENTITY.to_array(); 2],
+                translations: vec![[x, 0.6, 0.], [x + 0.4, 0.9, 0.]],
+                scales: vec![],
+                scale_rotations: vec![],
+            }];
+        }
+        let mut archetype = bri_sim::archetype::Archetypes::default()
+            .resolve(Default::default())
+            .clone();
+        archetype.look.model = model.clone();
+        for (velocity, expected_clip) in [
+            ([0., 0., 0.], "crouch"),
+            ([0., 0., -3.], "crouchrun"),
+            ([0., 0., 3.], "crouchback"),
+        ] {
+            let p = PlayerState {
+                crouched: true,
+                velocity,
+                ..player()
+            };
+            let sample = |name, time| {
+                let rig = &assets.bodies[&model].rig;
+                bri_content::animation::sample(&rig.shape, rig.sequence(name), time)
+            };
+            let expected = sample(expected_clip, 0.2)?;
+            let legacy = sample("crouch", 0.8)?;
+            for (composition, stand_in) in [
+                (CrouchComposition::Overlay, false),
+                (CrouchComposition::Locomotion, false),
+                (CrouchComposition::Locomotion, true),
+            ] {
+                archetype.look.crouch_composition = composition;
+                let mut body = assets.body_mesh(&model, assets.package.defaults.clone())?;
+                body.set_body_kind(BodyKind::of(&archetype, stand_in));
+                for t in [0., 0.2] {
+                    body.pose_with_animation(&assets, &p, t, &AvatarAnimationInput::default())?;
+                }
+                let want = if composition == CrouchComposition::Locomotion && !stand_in {
+                    &expected
+                } else {
+                    &legacy
+                };
+                assert!(
+                    body.posed_nodes
+                        .iter()
+                        .zip(&want.nodes)
+                        .all(|(a, b)| a.abs_diff_eq(*b, 1e-5)),
+                    "{expected_clip} {composition:?} stand_in={stand_in}"
+                );
+                assert!(
+                    expected
+                        .nodes
+                        .iter()
+                        .zip(&legacy.nodes)
+                        .any(|(a, b)| !a.abs_diff_eq(*b, 1e-3)),
+                    "fixture must distinguish source motion from held overlay"
+                );
+                // Switching a live body back to the default must start its
+                // crouch thread afresh, rather than inheriting a stale phase.
+                if composition == CrouchComposition::Locomotion {
+                    archetype.look.crouch_composition = CrouchComposition::Overlay;
+                    body.set_body_kind(BodyKind::of(&archetype, false));
+                    body.pose_with_animation(&assets, &p, 0.4, &AvatarAnimationInput::default())?;
+                    assert!(
+                        body.posed_nodes
+                            .iter()
+                            .zip(&legacy.nodes)
+                            .all(|(a, b)| a.abs_diff_eq(*b, 1e-5))
+                    );
+                }
+            }
+        }
+        Ok(())
     }
 
     #[test]

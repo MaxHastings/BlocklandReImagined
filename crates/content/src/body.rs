@@ -7,6 +7,21 @@ use anyhow::{Result, ensure};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
+/// Whether crouching is an independent legacy pose thread or already authored
+/// into each of the body's crouched locomotion clips.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CrouchComposition {
+    #[default]
+    Overlay,
+    Locomotion,
+}
+impl CrouchComposition {
+    pub fn is_overlay(&self) -> bool {
+        *self == Self::Overlay
+    }
+}
+
 /// Where on a body something attaches: a node of its model, an offset, or
 /// both. With a node the offset is in that node's frame; without one it is
 /// from the feet, facing -Z, at scale 1 (a box body has no nodes).
