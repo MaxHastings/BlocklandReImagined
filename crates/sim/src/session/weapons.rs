@@ -591,16 +591,18 @@ impl Session {
                 WeaponEvent::ToolFire {
                     actor,
                     command: Some(command),
+                    animation_binding,
                     hand: bri_weapons::EMOTE_SLOT,
                     ..
-                } => self.addon_tool_fire(actor.0, &command),
+                } => self.addon_tool_fire_bound(actor.0, &command, animation_binding),
                 WeaponEvent::ToolFire {
                     actor,
                     command: Some(command),
+                    animation_binding,
                     ..
                 } => {
                     self.take_click_aim(actor.0);
-                    self.addon_tool_fire(actor.0, &command);
+                    self.addon_tool_fire_bound(actor.0, &command, animation_binding);
                 }
                 WeaponEvent::ToolFire {
                     actor,

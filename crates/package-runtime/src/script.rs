@@ -1791,6 +1791,48 @@ fn register_api(engine: &mut Engine) {
             player: id(&player)?,
         }))
     });
+    engine.register_fn(
+        "start_weapon_animation",
+        |player: Dynamic,
+         resource: &str,
+         sequence: &str,
+         nonce: Dynamic,
+         expected: Dynamic,
+         rounds: Dynamic,
+         state: Dynamic|
+         -> Fallible<INT> {
+            let loaded = |value: &Dynamic| -> Fallible<Option<u32>> {
+                if value.is_unit() {
+                    Ok(None)
+                } else {
+                    Ok(Some(
+                        u32::try_from(id(value)?).map_err(|_| "loaded rounds out of range")?,
+                    ))
+                }
+            };
+            let op = push(Op::StartWeaponAnimation(ops::StartWeaponAnimation {
+                player: id(&player)?,
+                resource: resource.into(),
+                sequence: sequence.into(),
+                nonce: id(&nonce)?,
+                expected_rounds: loaded(&expected)?,
+                rounds: loaded(&rounds)?,
+                image_state: if state.is_unit() {
+                    None
+                } else {
+                    Some(
+                        state
+                            .clone()
+                            .try_cast::<rhai::ImmutableString>()
+                            .ok_or("expected image state string or ()")?
+                            .to_string(),
+                    )
+                },
+            }))?;
+            require(op)?;
+            Ok(op)
+        },
+    );
     engine.register_fn("remove_body", |player: Dynamic| {
         push(Op::RemoveBody(ops::RemoveBody {
             player: id(&player)?,
@@ -3910,6 +3952,9 @@ impl Runtime {
             }
             if behaviour.on_join {
                 need("on_join".into(), 1, "on_join");
+            }
+            if behaviour.on_weapon_animation {
+                need("on_weapon_animation".into(), 2, "on_weapon_animation");
             }
             if behaviour.on_loadout {
                 need("on_loadout".into(), 1, "on_loadout");

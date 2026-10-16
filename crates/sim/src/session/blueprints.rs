@@ -949,12 +949,51 @@ impl Session {
         self.addon_tool_command(owner, command, Vec::new());
     }
 
+    pub(super) fn current_weapon_command_binding(
+        &self,
+        owner: OwnerId,
+    ) -> Option<bri_weapons::AnimationBinding> {
+        let id = bri_weapons::ActorId(owner);
+        let actor = self.weapons.actor(id)?;
+        let item = self.weapons.animation_item(id, actor.selected?)?;
+        let image = self.weapons.animation_image(id, 0, false)?;
+        if self.weapons.pack.items.get(&item.item)?.image != image.image {
+            return None;
+        }
+        Some(bri_weapons::AnimationBinding {
+            owner: self.weapons.animation_owner(id),
+            item: Some(item),
+            image: Some(image),
+        })
+    }
+
+    pub(super) fn addon_tool_fire_bound(
+        &mut self,
+        owner: OwnerId,
+        command: &str,
+        binding: Option<bri_weapons::AnimationBinding>,
+    ) {
+        let context =
+            binding.map(|binding| super::packages::WeaponCommandContext { owner, binding });
+        self.addon_tool_command_context(owner, command, Vec::new(), context.as_ref());
+    }
+
     /// [`Self::addon_tool_fire`] with arguments (a key's).
     pub(super) fn addon_tool_command(
         &mut self,
         owner: OwnerId,
         command: &str,
         args: Vec<super::packages::PackageArg>,
+    ) {
+        self.addon_tool_command_context(owner, command, args, None);
+    }
+
+    fn addon_tool_command_context(
+        &mut self,
+        owner: OwnerId,
+        command: &str,
+        args: Vec<super::packages::PackageArg>,
+        context: Option<&super::packages::WeaponCommandContext>,
     ) {
         let Some(direction) = self
             .weapons
@@ -972,7 +1011,8 @@ impl Session {
             command: command.into(),
             args,
         };
-        if let Err(error) = self.run_command(owner, request, direction, true) {
+        if let Err(error) = self.run_command_with_context(owner, request, direction, true, context)
+        {
             if self.notices.len() == 64 {
                 self.notices.pop_front();
             }

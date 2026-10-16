@@ -42,6 +42,7 @@ macro_rules! for_each_op {
             PlantBrick = world_edit,
             PlaceVoxel = world_edit,
             SetAvatarColors = player,
+            StartWeaponAnimation = player,
             SetAvatarParts = player,
             Explode = damage,
             Damage = damage,

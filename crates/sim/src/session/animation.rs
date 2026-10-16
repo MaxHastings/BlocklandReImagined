@@ -294,6 +294,11 @@ struct Receipt {
     clip: AnimationClip,
     retention: AnimationPoseRetention,
 }
+struct RoutedAnimationRecord {
+    record: AnimationRecord,
+    host_pending: bool,
+    package_pending: Option<String>,
+}
 pub(super) struct AnimationClocks {
     session: Option<u64>,
     serial: u64,
@@ -306,7 +311,8 @@ pub(super) struct AnimationClocks {
     active: BTreeMap<(OwnerId, AnimationTarget), ActiveAnimation>,
     pose_contexts: BTreeMap<(OwnerId, AnimationTarget), AnimationPoseApplicability>,
     held: BTreeMap<(OwnerId, AnimationTarget), AnimationPose>,
-    records: VecDeque<AnimationRecord>,
+    records: VecDeque<RoutedAnimationRecord>,
+    package_routes: BTreeMap<(OwnerId, AnimationTarget), (PlaybackId, String)>,
     receipts: VecDeque<Receipt>,
     watermarks: BTreeMap<(OwnerId, u64, String), u64>,
 }
@@ -327,12 +333,32 @@ impl Default for AnimationClocks {
             pose_contexts: Default::default(),
             held: Default::default(),
             records: Default::default(),
+            package_routes: Default::default(),
             receipts: Default::default(),
             watermarks: Default::default(),
         }
     }
 }
 impl AnimationClocks {
+    fn push_record(&mut self, record: AnimationRecord) {
+        let key = (
+            record.playback.id.owner,
+            record.playback.request.target.clone(),
+        );
+        let package_pending = if record.outcome == AnimationOutcome::Started {
+            None
+        } else {
+            self.package_routes
+                .remove(&key)
+                .filter(|(id, _)| *id == record.playback.id)
+                .map(|(_, package)| package)
+        };
+        self.records.push_back(RoutedAnimationRecord {
+            record,
+            host_pending: true,
+            package_pending,
+        });
+    }
     fn occupancy(&self) -> usize {
         self.active.len() + self.held.len()
     }
@@ -400,7 +426,7 @@ impl AnimationClocks {
                     },
                 );
             }
-            self.records.push_back(AnimationRecord {
+            self.push_record(AnimationRecord {
                 playback,
                 outcome,
                 tick,
@@ -571,7 +597,7 @@ impl AnimationClocks {
             phase: 0.0,
             rate: prepared.request.rate,
         };
-        self.records.push_back(AnimationRecord {
+        self.push_record(AnimationRecord {
             playback: playback.clone(),
             outcome: AnimationOutcome::Started,
             tick,
@@ -608,7 +634,7 @@ impl AnimationClocks {
                     },
                 );
             }
-            self.records.push_back(AnimationRecord {
+            self.push_record(AnimationRecord {
                 playback,
                 outcome: AnimationOutcome::Natural,
                 tick,
@@ -1106,7 +1132,108 @@ impl Session {
         }
     }
     pub fn take_animation_records(&mut self) -> Vec<AnimationRecord> {
-        self.animations.records.drain(..).collect()
+        let mut records = Vec::new();
+        for envelope in &mut self.animations.records {
+            if envelope.host_pending {
+                envelope.host_pending = false;
+                records.push(envelope.record.clone());
+            }
+        }
+        self.animations
+            .records
+            .retain(|e| e.host_pending || e.package_pending.is_some());
+        records
+    }
+
+    pub(in crate::session) fn check_package_animation_resource(
+        &self,
+        owner: OwnerId,
+        request: &AnimationStart,
+        resource: &str,
+        digest: &str,
+    ) -> Result<()> {
+        let clip = self.animation_clip(owner, request)?;
+        ensure!(
+            clip.resource == resource && clip.digest == digest,
+            "Package animation resource does not match actual weapon"
+        );
+        Ok(())
+    }
+
+    pub(in crate::session) fn route_package_animation(&mut self, id: PlaybackId, package: String) {
+        for envelope in &mut self.animations.records {
+            if envelope.record.playback.id == id {
+                envelope.package_pending = Some(package.clone());
+            }
+        }
+        if let Some(active) = self.animations.active.values().find(|a| a.id == id) {
+            self.animations
+                .package_routes
+                .insert((id.owner, active.request.target.clone()), (id, package));
+        }
+    }
+
+    pub(super) fn abandon_package_animation_routes(&mut self, packages: &[String]) {
+        self.animations
+            .package_routes
+            .retain(|_, (_, package)| !packages.contains(package));
+        for envelope in &mut self.animations.records {
+            if envelope
+                .package_pending
+                .as_ref()
+                .is_some_and(|package| packages.contains(package))
+            {
+                envelope.package_pending = None;
+            }
+        }
+        self.animations
+            .records
+            .retain(|e| e.host_pending || e.package_pending.is_some());
+    }
+
+    /// Mark the pass-entry set attempted before any hook; payload remains in the
+    /// same bounded outbox until its host consumer has also read it.
+    pub(super) fn take_package_animation_observations(
+        &mut self,
+    ) -> Vec<(String, AnimationRecord, bool, bool, bool)> {
+        let mut deliveries = Vec::new();
+        for envelope in &mut self.animations.records {
+            if let Some(package) = envelope.package_pending.take() {
+                deliveries.push((package, envelope.record.clone()));
+            }
+        }
+        self.animations
+            .records
+            .retain(|e| e.host_pending || e.package_pending.is_some());
+        deliveries
+            .into_iter()
+            .map(|(package, record)| {
+                let playback = &record.playback;
+                let custody = self.animation_binding_valid(
+                    playback.id.owner,
+                    &playback.request.binding,
+                    &playback.request.target,
+                    false,
+                );
+                let selection = self.animation_binding_valid(
+                    playback.id.owner,
+                    &playback.request.binding,
+                    &playback.request.target,
+                    true,
+                );
+                let current = self
+                    .peers
+                    .get(&playback.id.owner)
+                    .is_some_and(|peer| peer.combat.alive)
+                    && self.animation_owner(playback.id.owner) == Some(playback.id.epochs)
+                    && self.animations.watermarks.get(&(
+                        playback.id.owner,
+                        playback.id.epochs.life,
+                        playback.request.namespace.clone(),
+                    )) == Some(&playback.request.nonce);
+                (package, record, custody, selection, current)
+            })
+            .collect()
     }
     pub fn cancel_animation(&mut self, id: &PlaybackId) -> Result<()> {
         let key = self

@@ -2556,7 +2556,8 @@ impl Session {
                     .image_state(bri_weapons::ActorId(owner), 0)
                     .and_then(|(image, _)| image.commands.light.clone())
                 {
-                    self.addon_tool_fire(owner, &command);
+                    let binding = self.current_weapon_command_binding(owner);
+                    self.addon_tool_fire_bound(owner, &command, binding);
                     return Ok(Reply::Accepted);
                 }
                 // A gun with a magazine reloads on the light key, as tactical
@@ -3393,6 +3394,7 @@ impl Session {
         contain("items", self.reconcile_items());
         self.load_clock.end_step();
         self.reconcile_animation_bindings();
+        self.observe_package_weapon_animations();
         ensure!(failures.is_empty(), "{}", failures.join("; "));
         Ok(())
     }

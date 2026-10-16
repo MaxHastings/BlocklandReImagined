@@ -431,6 +431,10 @@ pub enum Event {
         image: String,
         hand: u8,
         command: Option<String>,
+        /// Original command-producing instance, captured while Actor/Equipped
+        /// may be detached. Unsupported emote commands carry no weapon authority.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        animation_binding: Option<AnimationBinding>,
         /// The host's building mechanism to perform, for a [`HostTool`]
         /// image's `onFire`.
         tool: Option<HostTool>,
@@ -2478,6 +2482,7 @@ impl WeaponsWorld {
                 image: image.into(),
                 hand: EMOTE_SLOT,
                 command: Some(command),
+                animation_binding: None,
                 tool: None,
             });
         }
@@ -2516,6 +2521,7 @@ impl WeaponsWorld {
                         image: image.id.clone(),
                         hand: EMOTE_SLOT,
                         command: Some(command.clone()),
+                        animation_binding: None,
                         tool: None,
                     });
                 }
@@ -2611,6 +2617,7 @@ impl WeaponsWorld {
                 image: old.image.clone(),
                 hand: old.hand,
                 command: Some(command),
+                animation_binding: None,
                 tool: None,
             });
         }
@@ -3630,6 +3637,7 @@ impl WeaponsWorld {
                 image: image.id.clone(),
                 hand: e.hand,
                 command: Some(command.clone()),
+                animation_binding: Some(self.animation_binding(a, Some(e))),
                 tool: None,
             });
             if script.eq_ignore_ascii_case("onfire") && image.projectile.is_none() {
@@ -3682,6 +3690,7 @@ impl WeaponsWorld {
                             image: image.id.clone(),
                             hand: e.hand,
                             command: image.command.clone(),
+                            animation_binding: Some(self.animation_binding(a, Some(e))),
                             tool: None,
                         });
                         return true;
@@ -3694,6 +3703,7 @@ impl WeaponsWorld {
                                 image: image.id.clone(),
                                 hand: e.hand,
                                 command: None,
+                                animation_binding: Some(self.animation_binding(a, Some(e))),
                                 tool: Some(*tool),
                             });
                             return true;

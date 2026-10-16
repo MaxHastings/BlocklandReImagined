@@ -2,6 +2,103 @@
 //! (`bri_package_runtime::ops::player`).
 use super::*;
 
+fn native_weapon_request(
+    op: &ops::StartWeaponAnimation,
+    session: &Session,
+    cx: OpCall<'_>,
+) -> Result<AnimationStart> {
+    asked_by(
+        cx,
+        op.player,
+        "Weapon animation belongs to the command caller",
+    )?;
+    let origin = cx
+        .weapon
+        .context("Weapon animation requires original image command provenance")?;
+    ensure!(origin.owner == op.player, "Foreign weapon command origin");
+    let slot = origin
+        .binding
+        .item
+        .as_ref()
+        .context("Image command has no inventory weapon")?
+        .slot;
+    let host = session.packages.as_ref().context("No packages")?;
+    let package = host
+        .catalog
+        .packages
+        .get(cx.package)
+        .context("Missing package")?;
+    ensure!(
+        package
+            .behaviour
+            .as_ref()
+            .is_some_and(|b| b.on_weapon_animation)
+            && host.runtime.has_script(cx.package),
+        "Weapon animation observer is not enabled"
+    );
+    let mut visited = BTreeSet::new();
+    let mut pending = vec![cx.package];
+    while let Some(id) = pending.pop() {
+        if !visited.insert(id) {
+            continue;
+        }
+        for provider in host.catalog.packages.keys() {
+            if provider != id && host.catalog.uses(id, provider) {
+                pending.push(provider);
+            }
+        }
+    }
+    let asset = visited
+        .into_iter()
+        .find_map(|provider| {
+            host.catalog
+                .packages
+                .get(provider)?
+                .assets
+                .iter()
+                .find(|asset| {
+                    asset.kind == bri_package_runtime::content::Kind::Body
+                        && asset.id == op.resource
+                })
+        })
+        .context("Native weapon resource is not provided by the package or its dependencies")?;
+    let request = AnimationStart {
+        namespace: format!("package:{}:weapon", cx.package),
+        nonce: op.nonce,
+        target: AnimationTarget::Weapon(slot),
+        sequence: op.sequence.clone(),
+        binding: origin.binding.clone(),
+        rate: 1.0,
+        tween: 0.0,
+    };
+    session.check_package_animation_resource(
+        op.player,
+        &request,
+        &op.resource,
+        &bri_package::environment::hash_bytes(&asset.bytes),
+    )?;
+    Ok(request)
+}
+
+impl Perform for ops::StartWeaponAnimation {
+    fn check(&self, session: &Session, cx: OpCall<'_>) -> Result<()> {
+        native_weapon_request(self, session, cx).map(|_| ())
+    }
+    fn perform(self, session: &mut Session, cx: OpCall<'_>) -> Result<()> {
+        let request = native_weapon_request(&self, session, cx)?;
+        let package = cx.package.to_owned();
+        let id = session.start_weapon_animation_with_patch(
+            self.player,
+            request,
+            self.expected_rounds,
+            self.rounds,
+            self.image_state.as_deref(),
+        )?;
+        session.route_package_animation(id, package);
+        Ok(())
+    }
+}
+
 impl Perform for ops::SetAvatarColors {
     fn perform(self, session: &mut Session, _cx: OpCall<'_>) -> Result<()> {
         let ops::SetAvatarColors { player, colors } = self;

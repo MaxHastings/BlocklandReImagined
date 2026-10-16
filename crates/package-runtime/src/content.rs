@@ -211,6 +211,10 @@ pub struct Behaviour {
     /// `on_join(player)` when a player joins.
     #[serde(default)]
     pub on_join: bool,
+    /// State-only, at-most-once observation of this package's admitted native
+    /// weapon playback: `on_weapon_animation(player, info)`. Never source Finish.
+    #[serde(default)]
+    pub on_weapon_animation: bool,
     /// `on_death(victim, killer)` after any player dies, however it
     /// happened; `killer` is the player credited, or `()`. Delivered at the
     /// start of the next tick.

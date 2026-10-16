@@ -65,6 +65,13 @@ const MAX_BLAST_BRICKS: usize = 256;
 /// Entities below this height fell out of the world.
 const KILL_Y: f32 = -64.0;
 
+/// Server-captured image command origin, never supplied by script arguments.
+#[derive(Debug, Clone)]
+pub(in crate::session) struct WeaponCommandContext {
+    pub owner: OwnerId,
+    pub binding: bri_weapons::AnimationBinding,
+}
+
 /// A client's request to run a package command.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -742,6 +749,72 @@ fn body_eyes(
 }
 
 impl Session {
+    /// End-of-step, owning-package-only and at most once. This is observation,
+    /// not a source-specific completion callback or gameplay mutation path.
+    pub(super) fn observe_package_weapon_animations(&mut self) {
+        let tick = self.simulation.state().tick;
+        for (package, record, custody, selection, current) in
+            self.take_package_animation_observations()
+        {
+            let enabled = self.packages.as_ref().is_some_and(|host| {
+                host.catalog
+                    .packages
+                    .get(&package)
+                    .and_then(|p| p.behaviour.as_ref())
+                    .is_some_and(|b| b.on_weapon_animation)
+            });
+            if !enabled {
+                continue;
+            }
+            if let Some(host) = self.packages.as_mut()
+                && host.shares.work.available(&package, tick) <= 0
+            {
+                note(
+                    host,
+                    Diagnostic::error(
+                        "animation.observer_budget",
+                        "Native observation attempted without remaining package work share",
+                    )
+                    .at(&package),
+                );
+                continue;
+            }
+            let outcome = match record.outcome {
+                AnimationOutcome::Started => "started",
+                AnimationOutcome::Natural => "native_natural",
+                AnimationOutcome::Interrupted => "interrupted",
+                AnimationOutcome::Cancelled => "cancelled",
+            };
+            let slot = match record.playback.request.target {
+                AnimationTarget::Weapon(slot) => slot,
+                _ => continue,
+            };
+            let info = serde_json::json!({
+                "token":serde_json::to_string(&record.playback.id).expect("native ID serializes"),
+                "binding":serde_json::to_string(&record.playback.request.binding).expect("native binding serializes"),
+                "nonce":record.playback.request.nonce,"target":"weapon","slot":slot,
+                "resource":record.playback.clip.resource,"sequence":record.playback.clip.sequence,
+                "outcome":outcome,"authority_tick":record.tick.to_string(),"delivery_tick":tick.to_string(),
+                "phase":record.phase,"custody_valid":custody,"current_selection_applicable":selection,
+                "current_action_applicable":current,"reason":record.reason,
+            });
+            let info = bri_package_runtime::rhai::serde::to_dynamic(info)
+                .expect("bounded native observation serializes");
+            let _ = self.run_package_with_context(
+                &package,
+                "on_weapon_animation",
+                vec![Dynamic::from_int(record.playback.id.owner as i64), info],
+                Budget::Tick,
+                None,
+                None,
+                None,
+                None,
+                true,
+            );
+            self.charge_work(&package);
+        }
+    }
+
     /// Enable a set of mod packages before any player joins: compile their
     /// scripts, set up defaults, restore a save, and generate the world
     /// around the origin. Returns spawn points on the generated ground when
@@ -1489,6 +1562,23 @@ impl Session {
         aim: Option<script::Aim>,
         entity: Option<u64>,
     ) -> std::result::Result<Dynamic, Diagnostic> {
+        self.run_package_with_context(
+            package, function, args, budget, caller, aim, entity, None, false,
+        )
+    }
+    #[allow(clippy::too_many_arguments)]
+    fn run_package_with_context(
+        &mut self,
+        package: &str,
+        function: &str,
+        args: Vec<Dynamic>,
+        budget: Budget,
+        caller: Option<OwnerId>,
+        aim: Option<script::Aim>,
+        entity: Option<u64>,
+        weapon: Option<&WeaponCommandContext>,
+        observer: bool,
+    ) -> std::result::Result<Dynamic, Diagnostic> {
         let (result, took, input) =
             self.call_package(package, function, args, budget, caller, aim, entity)?;
         let host = self.packages.as_mut().expect("checked above");
@@ -1573,6 +1663,60 @@ impl Session {
             note(host, d.clone());
             return Err(d);
         }
+        let weapon_action = parts.iter().any(|p| {
+            p.ops
+                .iter()
+                .any(|op| matches!(op, Op::StartWeaponAnimation(_)))
+        });
+        if observer || weapon_action {
+            let restricted = parts.len() == 1
+                && parts[0].entity_vars.is_empty()
+                && parts[0].events.is_empty()
+                && if observer {
+                    parts[0].ops.is_empty()
+                } else {
+                    parts[0].ops.len() == 1
+                        && matches!(parts[0].ops[0], Op::StartWeaponAnimation(_))
+                };
+            if !restricted {
+                let d = Diagnostic::error("animation.call_shape", "Weapon admission requires one operation; observation permits state only; nested parts, entity writes and events are refused").at(package);
+                note(self.packages.as_mut().expect("installed"), d.clone());
+                return Err(d);
+            }
+            let part = parts.pop().expect("one root part");
+            let changed = part.input != part.state;
+            let next_revision = self
+                .package_revision
+                .checked_add(u64::from(changed))
+                .ok_or_else(|| {
+                    Diagnostic::error(
+                        "animation.state_revision",
+                        "Package state revision exhausted",
+                    )
+                    .at(package)
+                })?;
+            // Everything fallible about publication is checked before native
+            // success. Restricted calls have no events/entity/nested publication.
+            if let Some(op) = part.ops.into_iter().next() {
+                let cx = perform::OpCall {
+                    package,
+                    caller,
+                    tick: self.simulation.state().tick,
+                    weapon,
+                };
+                if let Err(error) = perform::perform(self, op, cx) {
+                    let d =
+                        Diagnostic::error("animation.refused", format!("{error:#}")).at(package);
+                    note(self.packages.as_mut().expect("installed"), d.clone());
+                    return Err(d);
+                }
+            }
+            let host = self.packages.as_mut().expect("installed");
+            *host.store.namespace_mut(package) = part.state;
+            host.state_bytes = total;
+            self.package_revision = next_revision;
+            return Ok(returned);
+        }
         // Operations the script marked `require` are checked before the
         // call takes effect: a shop that charges for an item it cannot hand
         // out charges nobody. What a check cannot see is caught below.
@@ -1582,6 +1726,7 @@ impl Session {
                 package: &part.package,
                 caller,
                 tick,
+                weapon,
             };
             for (index, op) in part.ops.iter().enumerate() {
                 if part.required.contains(&index)
@@ -1633,6 +1778,7 @@ impl Session {
                 package: &part.package,
                 caller,
                 tick,
+                weapon,
             };
             for (index, op) in std::mem::take(&mut part.ops).into_iter().enumerate() {
                 let name = bri_package_runtime::ops::op_name(&op);
@@ -2697,6 +2843,16 @@ impl Session {
         direction: Vec3,
         from_image: bool,
     ) -> Result<Reply> {
+        self.run_command_with_context(owner, request, direction, from_image, None)
+    }
+    pub(super) fn run_command_with_context(
+        &mut self,
+        owner: OwnerId,
+        request: PackageCommand,
+        direction: Vec3,
+        from_image: bool,
+        weapon: Option<&WeaponCommandContext>,
+    ) -> Result<Reply> {
         if request.package.is_empty() && !from_image {
             if self.bot_tuning_command(owner, &request.command, &request.args) {
                 return Ok(Reply::Accepted);
@@ -2984,7 +3140,7 @@ impl Session {
                 host.cooldowns.insert(shared_key, tick + shared);
             }
         }
-        let result = self.run_package(
+        let result = self.run_package_with_context(
             &request.package,
             &function,
             args,
@@ -2992,6 +3148,8 @@ impl Session {
             Some(owner),
             aim,
             None,
+            weapon,
+            false,
         );
         if let Some(host) = self.packages.as_mut() {
             let used = host.runtime.last_operations() as i64;
@@ -4080,6 +4238,9 @@ impl Session {
         }
         host.runtime = runtime;
         host.catalog = Arc::new(catalog);
+        // A changed script must not adopt an old callback route. Keep the clock
+        // and host evidence, without an incarnation counter or automatic Finish.
+        self.abandon_package_animation_routes(&changed);
         Ok(changed)
     }
 

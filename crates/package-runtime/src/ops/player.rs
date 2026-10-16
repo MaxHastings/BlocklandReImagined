@@ -1,6 +1,43 @@
 //! Operations behind the `player` capability.
 use super::*;
 
+/// One required native weapon admission and optional exact-instance writes.
+/// Target, rate, tween and authoritative binding are resolved by the host.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct StartWeaponAnimation {
+    pub player: u64,
+    pub resource: String,
+    pub sequence: String,
+    pub nonce: u64,
+    pub expected_rounds: Option<u32>,
+    pub rounds: Option<u32>,
+    pub image_state: Option<String>,
+}
+impl ScriptOp for StartWeaponAnimation {
+    const CAPABILITY: &str = "player";
+    const NAME: &str = "start_weapon_animation";
+    fn bounded(&self) -> bool {
+        self.player > 0
+            && self.nonce > 0
+            && self.nonce <= i64::MAX as u64
+            && !self.resource.is_empty()
+            && self.resource.len() <= 128
+            && bri_package::id::ContentId::parse(&self.resource).is_ok_and(|id| id.kind == "body")
+            && !self.sequence.is_empty()
+            && self.sequence.len() <= 128
+            && self.sequence.is_ascii()
+            && !self.sequence.bytes().any(|b| b.is_ascii_control())
+            && self.expected_rounds.is_none_or(|n| n <= 100_000)
+            && self.rounds.is_none_or(|n| n <= 100_000)
+            && self.image_state.as_ref().is_none_or(|s| {
+                !s.is_empty()
+                    && s.len() <= 128
+                    && s.is_ascii()
+                    && !s.bytes().any(|b| b.is_ascii_control())
+            })
+    }
+}
+
 /// Colour a player's avatar over their own colours, per avatar slot
 /// (`torso`, `larm`, `rleg`, ...): a team's uniform. An empty map
 /// gives them their own colours back. Kept across respawns.

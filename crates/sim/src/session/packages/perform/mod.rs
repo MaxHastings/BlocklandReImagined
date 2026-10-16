@@ -39,6 +39,7 @@ pub(in crate::session) struct OpCall<'a> {
     pub caller: Option<OwnerId>,
     /// The simulation tick the operation lands on.
     pub tick: u64,
+    pub weapon: Option<&'a super::WeaponCommandContext>,
 }
 
 /// What the engine does for one authorized operation. Its impl lives in
