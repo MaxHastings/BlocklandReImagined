@@ -18,8 +18,8 @@ pub struct Hosted {
     /// Bricks placed in the world.
     pub placed: usize,
     /// Bricks set aside, kept and saved with the world, because no installed
-    /// package defines them. Installing the package that does moves them to
-    /// `placed`, so `placed + set_aside` does not depend on the Add-Ons.
+    /// package defines them. After installing a definition, the ordinary
+    /// planting rules can reject an overlapping brick instead of placing it.
     pub set_aside: usize,
 }
 

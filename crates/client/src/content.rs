@@ -1721,7 +1721,11 @@ mod tests {
         let content = ClientContent::load(&root).unwrap();
         assert_eq!(
             (
-                content.maps.len(),
+                content
+                    .maps
+                    .iter()
+                    .filter(|m| LOADABLE_MAPS.contains(&m.id.as_str()))
+                    .count(),
                 content
                     .bricks
                     .iter()
@@ -1737,6 +1741,7 @@ mod tests {
             content
                 .maps
                 .iter()
+                .filter(|m| LOADABLE_MAPS.contains(&m.id.as_str()))
                 .all(|m| matches!(m.preview, IconRef::Pack(_)))
         );
         // v20's 21 items, plus any a loaded Add-On adds (the default

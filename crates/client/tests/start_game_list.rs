@@ -29,10 +29,13 @@ fn start_game_lists_and_draws_every_loadable_map(f: &ContentRoot) -> Result<()> 
     let list = view.id("SM_missionList").context("mission list")?;
     let items = &view.node(list).state.items;
     let names: Vec<_> = items.iter().map(|(name, _)| name.clone()).collect();
+    let mut expected: Vec<_> = app.content.maps.iter().map(|m| m.name.clone()).collect();
+    expected.sort();
+    let mut actual = names.clone();
+    actual.sort();
     ensure!(
-        names.len() == bri_client::content::LOADABLE_MAPS.len(),
-        "Mission list has {} maps: {names:?}",
-        names.len()
+        actual == expected,
+        "Mission list differs from installed maps: {names:?}"
     );
     // Every row must lie inside the list control, or it is clipped away.
     let rect = view.node(list).rect;

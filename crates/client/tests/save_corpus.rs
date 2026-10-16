@@ -29,10 +29,12 @@ struct Save {
     path: String,
     #[allow(dead_code)]
     reason: String,
-    /// Bricks the host keeps: placed, or set aside because no installed
-    /// package defines them. Which Add-Ons are installed only moves bricks
-    /// between the two, so the count holds for any content folder.
+    /// Bricks kept with the release's default content: placed or set aside.
+    /// Installing a definition can expose an overlap that was not testable
+    /// while the brick was unresolved, so other Add-On selections can differ.
     bricks: Option<usize>,
+    /// Converted rows before planting, independently of host overlap rejection.
+    converted_bricks: Option<usize>,
     /// Hosting must fail with an error containing this text.
     error: Option<String>,
 }
@@ -130,6 +132,19 @@ fn run(corpus: &Corpus, root: &Path, saves: &Path, state: &Path) -> Result<()> {
                 save.path
             ));
         };
+        if let Some(want) = save.converted_bricks {
+            let converted =
+                Store::read(entry).map(|b| b.world.bricks.len() + b.world.unloaded.len());
+            match converted {
+                Ok(got) if got == want => {}
+                other => {
+                    return Some(format!(
+                        "{}: converted rows {other:?}, expected {want}",
+                        save.path
+                    ));
+                }
+            }
+        }
         let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| host.host(entry)))
             .unwrap_or_else(|_| Err(anyhow::anyhow!("panicked")));
         match (&outcome, &save.error, save.bricks) {
