@@ -210,6 +210,15 @@ fn load_packages_in(
     let setup = HostSetup {
         lan: false,
         content: SessionContent {
+            animation_assets: content_identity::animation_assets(
+                content_root,
+                packages,
+                &avatar_dir,
+                &avatar,
+                &weapons.pack,
+                &item_presentation_dir,
+                &weapon_extras,
+            )?,
             tool_catalog: tools,
             weapon_pack: weapons.pack,
             item_bounds: item_physics.bounds,

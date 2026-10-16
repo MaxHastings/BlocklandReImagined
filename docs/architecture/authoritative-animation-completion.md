@@ -1,12 +1,48 @@
 # Authoritative animation admission and completion
 
-Design only, from sampler `b37b280f99ed4420650391bb535e1d705ac828ab` on
+Original design baseline, from sampler `b37b280f99ed4420650391bb535e1d705ac828ab` on
 `codex/authoritative-animation-completion-design`. Root reserves this note,
 sim/tests/authoritative_animation_completion.rs, own progress and one seam row.
-Production is read-only pending review/grant. Do not integrate the deliberately
-red diagnostic alone. This is a bounded first clock stage within
+The design checkpoint `b59145b7ad8044a2f0ec090ab9585b7828e93144` retained its
+deliberately red diagnostic; do not integrate that checkpoint alone. Stage1
+production was subsequently granted and implemented as described below. This is
+a bounded first clock stage within
 [the existing layer/fitting/host plan](mounted-pose-authority.md), not another
 animation graph or a replacement for its shared sampler and body-layer planner.
+
+## Implemented Stage1 and release boundary
+
+Session now owns native full-clip playback admission, durable active views and
+bounded Started/Natural/Interrupted/Cancelled records. `prepare_animation_start`
+is pure; `commit_animation_start` rejects stale catalog/clock tickets before
+mutation. Producer serials, session/life/body epochs, inventory custody stamps
+and actual image mount generations identify independent playbacks. Duplicate
+requests retain their original resolved clip; bounded receipt eviction retains
+nonce watermarks. Every admitted active playback reserves terminal capacity.
+Zero-duration clips complete atomically; loops do not synthesize Natural, and
+pause/rate changes preserve accumulated phase at the fixed Session tick.
+
+Actual body and image producers preserve legacy cosmetic cue fields and order.
+Deferred producers retain queue-time bindings; stale deferred roots cannot stop
+a replacement action. Pawn/image lifetimes follow selected item and mount;
+inventory weapon lifetimes retain custody through holstering. Disconnect,
+respawn, body replacement, inventory replacement and mount replacement reject
+old full playback identities. Invalid catalog replacement is atomic.
+
+Local and dedicated HostSetup share bounded native byte loading and SHA-256
+identity checks. Optional ambiguous or over-budget image metadata remains
+unsupported while verified stock metadata and ordinary hosting remain usable.
+There are no new packet fields, package completion callbacks, client phase
+adapters or inferred original endpoint/tween rules in Stage1. The native
+`Animation.duration` endpoint is not AA's original GetAnimDuration contract.
+
+The release freeze permits only Stage1 correctness, lifecycle tests and scoped
+validation, followed by immutable handoff. Stage2, fitting/socket work and new
+Source/Halo mechanisms below are queued for v0.3.2 and require a new assignment.
+Stage1 does not close original AA/Halo/Source fidelity. Root owns the integrated
+release checks and Maxwell has authorized automatic publication once ready.
+Validation details and commands are in
+[the Stage1 progress entry](../progress/2026-10-16-authoritative-animation-clock-stage1.md).
 
 ## Observed blocker and existing boundaries
 
@@ -390,7 +426,7 @@ and net Checkpoint/delta/Replica. Their production paths remain ungranted and
 must be pinned separately. Session's native animation_view accessor does not
 silently add a network field or replay callbacks to late joiners.
 
-## Fitting/socket work remains next
+## Fitting/socket work queued for v0.3.2
 
 Read current Avatar::fits, fit_hands, finish_pose, mount_node, mount_socket and
 mount_action against mounted plan Stages B/C. Boundaries remain suitable: extract

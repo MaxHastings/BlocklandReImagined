@@ -19,6 +19,7 @@ use std::{collections::BTreeMap, path::PathBuf, sync::Arc};
 /// the compiler then asks every host for it.
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub struct SessionContent {
+    pub animation_assets: bri_sim::session::AnimationAssets,
     pub tool_catalog: ToolCatalog,
     pub weapon_pack: bri_weapons::Pack,
     pub item_bounds: BTreeMap<String, bri_weapons::ItemBounds>,
@@ -321,6 +322,7 @@ impl HostSetup {
                 &hosted.map,
             ));
         }
+        session.set_animation_assets(content.animation_assets.clone())?;
         Ok((session, spawn_points))
     }
 

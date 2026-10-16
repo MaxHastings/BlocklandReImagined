@@ -286,6 +286,11 @@ pub fn describe(mismatches: &[Mismatch]) -> String {
         .join("; ")
 }
 
+/// SHA-256 identity of immutable native resource bytes.
+pub fn hash_bytes(bytes: &[u8]) -> String {
+    hex(&Sha256::digest(bytes))
+}
+
 pub fn is_hash(text: &str) -> bool {
     text.len() == 64 && text.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
 }
@@ -532,6 +537,18 @@ pub fn remember_file_hashes_in(file: std::path::PathBuf) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn immutable_bytes_have_standard_sha256_identity() {
+        assert_eq!(
+            hash_bytes(b""),
+            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        );
+        assert_eq!(
+            hash_bytes(b"abc"),
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        );
+    }
 
     fn aged(path: &Path, bytes: &[u8], seconds_ago: u64) {
         fs::write(path, bytes).unwrap();
