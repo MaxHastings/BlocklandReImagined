@@ -157,6 +157,9 @@ pub struct HudModel {
     instant_use: bool,
     pub tools: Vec<Option<ToolInfo>>,
     pub cur_tool: Option<usize>,
+    /// Last valid UI choice, separate from authoritative held-tool state.
+    /// Keep its authored ID so replacement inventory cannot reuse a stale choice.
+    last_tool: Option<(usize, String)>,
     pub tool_active: bool,
     pub tool_name: String,
     pub paint: Vec<PaintDivision>,
@@ -200,6 +203,7 @@ impl HudModel {
             tool_takes_paint: false,
             tools: vec![None; 5],
             cur_tool: None,
+            last_tool: None,
             tool_active: false,
             tool_name: String::new(),
             paint: Vec::new(),
@@ -305,6 +309,12 @@ impl HudModel {
         let hidden = self.mode != ScrollMode::Tools && self.prefs.hide_tool_box;
         let old_hide_dist = self.tool_hide_dist();
         self.tools = tools;
+        self.last_tool = self.last_tool.take().filter(|(i, id)| {
+            self.tools
+                .get(*i)
+                .and_then(Option::as_ref)
+                .is_some_and(|tool| &tool.id == id)
+        });
         if hidden {
             self.tool_slide.offset += self.tool_hide_dist() - old_hide_dist;
         }
@@ -619,7 +629,10 @@ impl HudModel {
     pub fn use_tools(&mut self, out: &mut Outbox) {
         if self.mode != ScrollMode::Tools {
             let n = self.tools.len();
-            let start = self.cur_tool.unwrap_or(0);
+            let start = self
+                .cur_tool
+                .or_else(|| self.last_tool.as_ref().map(|(i, _)| *i))
+                .unwrap_or(0);
             let Some(idx) = (0..n).map(|i| (i + start) % n).find(|&i| self.has_tool(i)) else {
                 return;
             };
@@ -639,6 +652,7 @@ impl HudModel {
                 self.tool_name.clear();
             }
             Some(i) => {
+                self.last_tool = Some((i, self.tools[i].as_ref().expect("valid tool").id.clone()));
                 self.tool_active = true;
                 self.tool_name = self.tools[i]
                     .as_ref()
@@ -1125,6 +1139,39 @@ mod tests {
         assert!(h.brick_active);
         h.scroll_inventory(1, "B", &mut o);
         assert_eq!(h.cur_brick, Some(3));
+    }
+
+    #[test]
+    fn remembered_tool_survives_deselection_but_not_removed_or_replaced_inventory() {
+        for replacement in [
+            None,
+            Some(ToolInfo {
+                id: "other".into(),
+                name: "Other".into(),
+                icon: IconRef::None,
+                tint: None,
+            }),
+        ] {
+            let mut h = model();
+            h.apply_active_tool(Some(2));
+            h.apply_active_tool(None);
+            let mut tools = h.tools.clone();
+            tools[2] = replacement;
+            h.set_tools(tools);
+            let mut out = Outbox::default();
+            h.use_tools(&mut out);
+            assert_eq!(out.actions, vec![UiAction::UseTool { slot: 0 }]);
+        }
+        let mut h = model();
+        h.apply_active_tool(Some(2));
+        h.apply_active_tool(None);
+        h.set_tools(vec![]);
+        let mut out = Outbox::default();
+        h.use_tools(&mut out);
+        assert!(out.actions.is_empty());
+        h.set_tools(model().tools);
+        h.use_tools(&mut out);
+        assert_eq!(out.actions, vec![UiAction::UseTool { slot: 0 }]);
     }
 
     #[test]

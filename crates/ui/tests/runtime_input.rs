@@ -558,6 +558,52 @@ fn canceled_attempt_cannot_reopen_and_new_session_clears_host_data() {
     assert!(u.core.selector.favorites.contains_key(&3));
 }
 #[test]
+fn q_reopens_the_last_tool_after_authoritative_deselection() {
+    let mut u = ui();
+    play(&mut u);
+    u.core
+        .binds
+        .bind(BindInput::Key(Chord::plain(Key::Letter('q'))), "useTools");
+    u.apply(UiUpdate::Tools(vec![
+        Some(ToolInfo {
+            id: "hammer".into(),
+            name: "Hammer".into(),
+            icon: IconRef::None,
+            tint: None,
+        }),
+        Some(ToolInfo {
+            id: "wrench".into(),
+            name: "Wrench".into(),
+            icon: IconRef::None,
+            tint: None,
+        }),
+    ]));
+    u.apply(UiUpdate::SetActiveTool(Some(1)));
+    down(&mut u, Key::Letter('q'));
+    up(&mut u, Key::Letter('q'));
+    assert_eq!(actions(&mut u), vec![UiAction::UnUseTool]);
+    u.apply(UiUpdate::SetActiveTool(None));
+    assert_eq!(u.core.hud.cur_tool, None);
+    assert!(!u.core.hud.tool_active);
+    assert!(actions(&mut u).is_empty());
+    down(&mut u, Key::Letter('q'));
+    up(&mut u, Key::Letter('q'));
+    assert_eq!(actions(&mut u), vec![UiAction::UseTool { slot: 1 }]);
+    // Reconnecting resets the preference even when the next server offers
+    // the same inventory. Remembering a choice never keeps a tool equipped.
+    let tools = u.core.hud.tools.clone();
+    u.apply(UiUpdate::Connection(ConnectionState::Failed {
+        reason: "Disconnected".into(),
+    }));
+    play(&mut u);
+    u.apply(UiUpdate::Tools(tools));
+    assert!(!u.core.hud.tool_active);
+    down(&mut u, Key::Letter('q'));
+    up(&mut u, Key::Letter('q'));
+    assert_eq!(actions(&mut u), vec![UiAction::UseTool { slot: 0 }]);
+}
+
+#[test]
 fn authoritative_hud_updates_cannot_echo_or_panic_on_stale_slots() {
     let mut u = ui();
     play(&mut u);
