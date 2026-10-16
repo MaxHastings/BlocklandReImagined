@@ -227,6 +227,7 @@ if stress_lab:
     mods += [mod_package(d, 'stresslab') for d in found]
 
 docs = [('docs/PLAYTEST.md', 'PLAYTEST.md'), ('docs/KNOWN-ISSUES.md', 'KNOWN-ISSUES.md'),
+        ('vendor/winit/LICENSE', 'WINIT-LICENSE.txt'), ('vendor/winit/BRI-PATCH.md', 'WINIT-PATCH.md'),
         ('docs/TESTER-GUIDE.md', 'TESTER-GUIDE.md'), ('docs/FEATURES.md', 'FEATURES.md'),
         ('docs/DEDICATED-SERVER.md', 'DEDICATED-SERVER.md'),
         ('tools/launch_playtest.sh', 'launch.sh')]
