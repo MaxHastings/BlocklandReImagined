@@ -21,3 +21,12 @@ plus explicit new targets, Cargo2jobs/testthreads8/target unset. Root reviews th
 immutable result before integration/reimport of public bundles. AvP remains
 excluded from public selection and preserved locally. B4 source remains frozen
 in its independent checkout with focused41480 running; these paths do not overlap.
+
+Source qualification corrected the initial preview-field hypothesis before edits:
+recovered client getMissionPreviewImage (7507..7522) and server equivalent
+(4384..4400), corroborated by ui-import, choose companion missionstem.png then
+missionstem.jpg; neither reads MissionInfo.previewImage. Root instructed the
+owner to implement that proven precedence, not an unqualified field-first native
+behavior. The original grant wording was not authorization to invent policy.
+If the actual community maps disagree, report the discrepancy before changing
+precedence. Case/confinement/bytes/budget/absent-image controls remain required.
