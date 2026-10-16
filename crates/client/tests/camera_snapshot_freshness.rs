@@ -1,6 +1,6 @@
 //! Invented Wasm callbacks through real ClientCode, in App render order.
-//! Strict same-draw requirements are deliberately ignored/red until the engine
-//! supplies current context before camera selection. No original package code.
+//! Current stock context precedes camera, then one resolved frame callback.
+//! No original package code.
 use anyhow::{Result, ensure};
 use bri_client::client_code::{ClientCode, Host};
 use bri_client_sandbox::{
@@ -72,7 +72,7 @@ impl Code {
         self.0
     }
 }
-fn module() -> Vec<u8> {
+fn module_for(image: &str, telemetry: bool) -> Vec<u8> {
     let mut wasm = b"\0asm\x01\0\0\0".to_vec();
     let mut section = |id: u8, data: Vec<u8>| {
         wasm.push(id);
@@ -122,7 +122,7 @@ fn module() -> Vec<u8> {
     let mut init = Code(vec![0]);
     init.i(300);
     init.i(512);
-    init.i(IMAGE.len() as i32);
+    init.i(image.len() as i32);
     init.call(6);
     init.op(&[0x36, 2, 0]);
     init.store_i(304, -1);
@@ -192,6 +192,11 @@ fn module() -> Vec<u8> {
     let mut camera = Code(vec![0]);
     camera.call(12);
     camera.op(&[0x45, 0x04, 0x40, 0x0f, 0x0b]);
+    // Aiming is an invented fault-injection selector for the trap control.
+    camera.load(20, true);
+    camera.op(&[0xa8]);
+    camera.i(2);
+    camera.op(&[0x71, 0x04, 0x40, 0x00, 0x0b]);
     camera.load(316, false);
     camera.load(320, false);
     camera.op(&[0x47, 0x04, 0x40]);
@@ -215,6 +220,16 @@ fn module() -> Vec<u8> {
         camera.load(offset, true);
         camera.op(&[0x92, 0x38, 2, 0]);
     }
+    if telemetry {
+        // Observable camera roll = .01 * (time + dt + completed frame count).
+        // This proves actual callback timing/count without a production hook.
+        camera.i(248);
+        camera.op(&[0x20, 0, 0x20, 1, 0x92]);
+        camera.load(316, false);
+        camera.op(&[0xb2, 0x92, 0x43]);
+        camera.0.extend(0.01f32.to_le_bytes());
+        camera.op(&[0x94, 0x38, 2, 0]);
+    }
     camera.i(224);
     camera.call(10);
     camera.op(&[0x1a]);
@@ -228,7 +243,7 @@ fn module() -> Vec<u8> {
     data.push(0x41);
     int(512, &mut data);
     data.push(0x0b);
-    text(IMAGE, &mut data);
+    text(image, &mut data);
     section(11, data);
     wasm
 }
@@ -241,20 +256,23 @@ struct Fixture {
 }
 impl Fixture {
     fn new(ids: &[&str]) -> Result<Self> {
+        Self::images(&ids.iter().map(|id| (*id, IMAGE)).collect::<Vec<_>>())
+    }
+    fn images(specs: &[(&str, &str)]) -> Result<Self> {
         let root = tempfile::tempdir()?;
         let mut packages = Vec::new();
-        for id in ids {
+        for &(id, image) in specs {
             let dir = root.path().join(id);
             std::fs::create_dir_all(&dir)?;
-            std::fs::write(dir.join("main.wasm"), module())?;
+            std::fs::write(dir.join("main.wasm"), module_for(image, false))?;
             let manifest = serde_json::json!({"id":id,"version":"1.0.0","name":id,
                 "client":{"module":"main.wasm","capabilities":["render.layer","world.read","input.capture","camera.control"]}});
             std::fs::write(dir.join("package.json"), serde_json::to_vec(&manifest)?)?;
             packages.push(PackageEntry {
-                id: (*id).into(),
+                id: id.into(),
                 version: "1.0.0".into(),
                 side: Side::Shared,
-                dir: (*id).into(),
+                dir: id.into(),
                 role: None,
             });
         }
@@ -268,7 +286,7 @@ impl Fixture {
         let state = tempfile::tempdir()?;
         code.start(Host::Local, state.path());
         ensure!(
-            code.running().len() == ids.len(),
+            code.running().len() == specs.len(),
             "load/start failed: {:?}",
             code.take_messages()
         );
@@ -279,10 +297,11 @@ impl Fixture {
             now: 0.,
         })
     }
-    /// Same production API order as App::render_frame: camera then frame.
+    /// Same production API order as App::render_frame: prepare, camera, frame.
     /// No shim refreshes host snapshots, and no callback is simulated in Rust.
     fn draw(&mut self, world: Arc<World>, view: View) -> Option<Shot> {
         self.now += 0.016;
+        self.code.begin_camera_frame(self.now, world.clone(), view);
         let shot = self.code.camera_shot(EYE, Vec3::NEG_Z);
         self.code.run_frame(self.now, EYE, Vec3::NEG_Z, world, view);
         shot
@@ -394,7 +413,6 @@ fn delivered_look_is_not_replayed_and_disconnect_device_loss_clear_immediately()
     let mut f = Fixture::new(&["fixture-a"])?;
     f.acquire()?;
     ensure!(f.code.capture_look(0.12, -0.06));
-    f.draw(world(true, true, true, 7), View::default()); // current known delay
     let expected = Vec3::new(0.12, -0.06, -1.);
     for _ in 0..3 {
         direction(
@@ -418,7 +436,6 @@ fn delivered_look_is_not_replayed_and_disconnect_device_loss_clear_immediately()
 }
 
 #[test]
-#[ignore = "strict red requirement: current draw camera still reads previous frame input"]
 fn current_look_reaches_this_draw_without_replay() -> Result<()> {
     let mut f = Fixture::new(&["fixture-a"])?;
     f.acquire()?;
@@ -434,7 +451,6 @@ fn current_look_reaches_this_draw_without_replay() -> Result<()> {
 }
 
 #[test]
-#[ignore = "strict red requirement: current death/unequip/first-person exit retains old camera"]
 fn current_lifecycle_selectors_suppress_camera_in_the_same_draw() -> Result<()> {
     let mut stale = Vec::new();
     for transition in ["death", "unequip", "first-person exit"] {
@@ -468,5 +484,317 @@ fn current_lifecycle_selectors_suppress_camera_in_the_same_draw() -> Result<()> 
         stale.is_empty(),
         "same draw retained stale camera for {stale:?}"
     );
+    Ok(())
+}
+
+#[test]
+fn abandoned_draw_release_and_trap_do_not_replay_pending_look() -> Result<()> {
+    let mut f = Fixture::new(&["fixture-a"])?;
+    f.acquire()?;
+    ensure!(f.code.capture_look(0.4, 0.2));
+    f.code
+        .begin_camera_frame(f.now + 0.016, world(true, true, true, 7), View::default());
+    // Abandon before either callback. A replacement preparation owns new input.
+    f.now += 0.016;
+    direction(
+        f.draw(world(true, true, true, 7), View::default()),
+        Vec3::NEG_Z,
+    )?;
+    ensure!(f.code.capture_look(0.4, 0.2));
+    ensure!(
+        f.draw(world(true, false, true, 7), View::default())
+            .is_none()
+    );
+    for _ in 0..3 {
+        direction(
+            f.draw(world(true, true, true, 7), View::default()),
+            Vec3::NEG_Z,
+        )?;
+    }
+    ensure!(f.code.capture_look(0.4, 0.2));
+    ensure!(
+        f.draw(
+            world(true, true, true, 7),
+            View {
+                aiming: true,
+                ..Default::default()
+            }
+        )
+        .is_none()
+    );
+    ensure!(f.code.running().is_empty() && f.code.captured_controls() == 0);
+    ensure!(
+        f.draw(world(true, true, true, 7), View::default())
+            .is_none()
+    );
+    f.code.start(Host::Local, f.state.path());
+    f.acquire()?;
+    direction(
+        f.draw(world(true, true, true, 7), View::default()),
+        Vec3::NEG_Z,
+    )?;
+    Ok(())
+}
+
+mod support;
+
+#[test]
+fn replacement_control_owner_never_inherits_a_prepared_batch() -> Result<()> {
+    const OTHER: &str = "fixture:image/other";
+    for specs in [
+        [("fixture-a", IMAGE), ("fixture-b", OTHER)],
+        [("fixture-b", OTHER), ("fixture-a", IMAGE)],
+    ] {
+        let mut f = Fixture::images(&specs)?;
+        f.acquire()?;
+        ensure!(f.code.capture_look(0.4, 0.2));
+        let mut changed = (*world(true, true, true, 7)).clone();
+        changed.players[0].image = OTHER.into();
+        let mesh = changed.image_meshes.remove(IMAGE).unwrap();
+        changed.image_meshes.insert(OTHER.into(), mesh);
+        let changed = Arc::new(changed);
+        for _ in 0..3 {
+            direction(f.draw(changed.clone(), View::default()), Vec3::NEG_Z)?;
+        }
+        ensure!(f.code.captured_controls() == LOOK_CONTROL);
+    }
+    Ok(())
+}
+
+#[test]
+fn actual_app_keeps_consecutive_stock_mode_eye_projection_and_single_frame_time() -> Result<()> {
+    use anyhow::Context;
+    use bri_client::{
+        app::App,
+        platform::{PlatformApp, RenderContext},
+        testing::content_root::ContentRoot,
+    };
+    use bri_ui::{api::*, gpu::UiRenderer, screens::ScreenId};
+    use std::time::Duration;
+    const SIZE: (u32, u32) = (320, 240);
+    fn action(app: &mut App, action: UiAction) -> Result<()> {
+        app.ui.core.request(action);
+        ensure!(app.pump()?.is_empty());
+        app.ui.update(0);
+        Ok(())
+    }
+    fn step(app: &mut App, dt: Duration) -> Result<()> {
+        app.tick(dt)?;
+        app.ui.update(dt.as_millis() as u64);
+        ensure!(app.pump()?.is_empty());
+        Ok(())
+    }
+    fn draw(app: &mut App, gpu: &bri_ui::gpu::Headless, ui: &mut UiRenderer) -> Result<()> {
+        let texture = gpu.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("camera snapshot offscreen"),
+            size: wgpu::Extent3d {
+                width: SIZE.0,
+                height: SIZE.1,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8Unorm,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+            view_formats: &[],
+        });
+        let target = texture.create_view(&Default::default());
+        let mut encoder = gpu.device.create_command_encoder(&Default::default());
+        ensure!(app.render_scene(&mut RenderContext {
+            device: &gpu.device,
+            queue: &gpu.queue,
+            encoder: &mut encoder,
+            target: &target,
+            format: wgpu::TextureFormat::Rgba8Unorm,
+            size: SIZE,
+            ui_renderer: ui
+        })?);
+        gpu.queue.submit([encoder.finish()]);
+        Ok(())
+    }
+    let content = ContentRoot::synthetic()?;
+    let state = content.state()?;
+    let code_dir = content.root.join("camera");
+    std::fs::create_dir(&code_dir)?;
+    std::fs::write(
+        code_dir.join("main.wasm"),
+        module_for(bri_weapons::testing::HAMMER_IMAGE, true),
+    )?;
+    std::fs::write(
+        code_dir.join("package.json"),
+        serde_json::to_vec(&serde_json::json!({
+            "schema_version":1,"api":1,"id":"fixture-camera","version":"1.0.0","name":"fixture-camera",
+            "license":"CC0-1.0","provides":[],"provenance":{"source":"original"},
+            "client":{"module":"main.wasm","capabilities":["render.layer","world.read","input.capture","camera.control"]}
+        }))?,
+    )?;
+    let mut set = PackageSet::load_root(&content.root)?;
+    set.packages.push(PackageEntry {
+        id: "fixture-camera".into(),
+        version: "1.0.0".into(),
+        side: Side::Shared,
+        dir: "camera".into(),
+        role: None,
+    });
+    std::fs::write(
+        content.root.join("packages.json"),
+        serde_json::to_vec(&set)?,
+    )?;
+    let mut app = App::load(&content.root, state.path(), SIZE)?;
+    app.ui
+        .core
+        .prefs
+        .set(bri_ui::screens::options::DEFAULT_FOV, "73");
+    app.ui.core.pop(ScreenId::DefaultControls);
+    let gpu = support::gpu::turn().context("offscreen camera test")?;
+    let mut ui = UiRenderer::new(&gpu.device, &gpu.queue);
+    app.gpu_ready(&gpu.device, &gpu.queue, wgpu::TextureFormat::Rgba8Unorm)?;
+    app.host_on_any_port();
+    action(
+        &mut app,
+        UiAction::HostGame {
+            map: content.map.0.clone(),
+            mode: ServerMode::SinglePlayer,
+            game_mode: None,
+            max_players: 1,
+            server_name: "snapshot fixture".into(),
+            password: String::new(),
+            admin_password: String::new(),
+            super_admin_password: String::new(),
+        },
+    )?;
+    support::wait::until(
+        &mut [&mut app],
+        "host with grounded local actor",
+        Duration::from_secs(90),
+        |apps, dt| step(apps[0], dt),
+        |apps| {
+            Ok(apps[0].network_view().is_some()
+                && apps[0].local_motion().is_some_and(|(p, _)| p.grounded))
+        },
+    )?;
+    action(&mut app, UiAction::UseTool { slot: 0 })?;
+    support::wait::until(
+        &mut [&mut app],
+        "actual hammer image",
+        Duration::from_secs(20),
+        |apps, dt| step(apps[0], dt),
+        |apps| {
+            Ok(apps[0].network_view().is_some_and(|v| {
+                v.weapons.images.get(&v.owner).is_some_and(|images| {
+                    images
+                        .iter()
+                        .any(|m| m.image == bri_weapons::testing::HAMMER_IMAGE)
+                })
+            }))
+        },
+    )?;
+    step(&mut app, Duration::from_millis(16))?;
+    draw(&mut app, &gpu, &mut ui)?;
+    draw(&mut app, &gpu, &mut ui)?;
+    // No tick between these draws. Native pose/item sync remains unchanged;
+    // each real render must execute exactly one frame callback with dt=0.
+    let eye = app.rendered_camera().context("camera")?.0;
+    let held = app.held_image_transform(0).context("held hammer")?;
+    let mut previous = app.rendered_roll();
+    ensure!(previous > 0., "invented Wasm camera did not activate");
+    for _ in 0..3 {
+        draw(&mut app, &gpu, &mut ui)?;
+        let roll = app.rendered_roll();
+        ensure!(
+            (roll - previous - 0.01).abs() < 1e-5,
+            "callback count/time changed: {previous} -> {roll}"
+        );
+        ensure!(app.rendered_camera().unwrap().0.distance(eye) < 1e-6);
+        ensure!(app.held_image_transform(0) == Some(held));
+        ensure!(!app.controls.third_person_view());
+        ensure!(app.controls.fov() == 73. && app.controls.normal_fov() == 73.);
+        previous = roll;
+    }
+    // A controlled .016 tick must advance the draw clock once, not once per phase.
+    step(&mut app, Duration::from_millis(16))?;
+    draw(&mut app, &gpu, &mut ui)?;
+    ensure!((app.rendered_roll() - previous - 0.01032).abs() < 1e-5);
+    let (stock_yaw, stock_pitch) = app.controls.view_angles();
+    action(
+        &mut app,
+        UiAction::Game(GameAction::Look {
+            yaw: 0.12,
+            pitch: -0.06,
+        }),
+    )?;
+    draw(&mut app, &gpu, &mut ui)?;
+    let (_, yaw, pitch) = app.rendered_camera().unwrap();
+    ensure!(
+        (yaw - stock_yaw).abs() > 0.05 && (pitch - stock_pitch).abs() > 0.02,
+        "same draw did not use captured look"
+    );
+    // The captured camera-only input must not change authoritative/body aim.
+    ensure!(app.controls.view_angles() == (stock_yaw, stock_pitch));
+    action(
+        &mut app,
+        UiAction::Game(GameAction::ToggleFirstPerson { fast: true }),
+    )?;
+    step(&mut app, Duration::from_millis(16))?;
+    draw(&mut app, &gpu, &mut ui)?;
+    ensure!(app.controls.third_person_view() && app.rendered_roll() == 0.);
+    action(
+        &mut app,
+        UiAction::Game(GameAction::ToggleFirstPerson { fast: true }),
+    )?;
+    step(&mut app, Duration::from_millis(16))?;
+    draw(&mut app, &gpu, &mut ui)?;
+    ensure!(!app.controls.third_person_view() && app.rendered_roll() > 0.);
+    action(&mut app, UiAction::UnUseTool)?;
+    support::wait::until(
+        &mut [&mut app],
+        "unequipped actual hammer",
+        Duration::from_secs(20),
+        |apps, dt| step(apps[0], dt),
+        |apps| {
+            Ok(apps[0].network_view().is_some_and(|v| {
+                v.weapons
+                    .images
+                    .get(&v.owner)
+                    .is_none_or(|images| images.is_empty())
+            }))
+        },
+    )?;
+    draw(&mut app, &gpu, &mut ui)?;
+    ensure!(app.rendered_roll() == 0.);
+    action(&mut app, UiAction::UseTool { slot: 0 })?;
+    support::wait::until(
+        &mut [&mut app],
+        "re-equipped hammer",
+        Duration::from_secs(20),
+        |apps, dt| step(apps[0], dt),
+        |apps| {
+            Ok(apps[0].network_view().is_some_and(|v| {
+                v.weapons.images.get(&v.owner).is_some_and(|images| {
+                    images
+                        .iter()
+                        .any(|m| m.image == bri_weapons::testing::HAMMER_IMAGE)
+                })
+            }))
+        },
+    )?;
+    draw(&mut app, &gpu, &mut ui)?;
+    ensure!(app.rendered_roll() > 0.);
+    action(&mut app, UiAction::Game(GameAction::Suicide))?;
+    support::wait::until(
+        &mut [&mut app],
+        "current local death",
+        Duration::from_secs(20),
+        |apps, dt| step(apps[0], dt),
+        |apps| {
+            Ok(apps[0]
+                .network_view()
+                .is_some_and(|v| v.vitals.get(&v.owner).is_some_and(|life| !life.alive)))
+        },
+    )?;
+    draw(&mut app, &gpu, &mut ui)?;
+    ensure!(app.rendered_roll() == 0.);
+    ensure!(app.cosmetic_faults.total() == 0);
     Ok(())
 }

@@ -1,8 +1,46 @@
 # Current context before Add-On camera callbacks
 
-Design checkpoint on `codex/camera-snapshot-design`, based on
-`c8998ac1652b60129ba25c07de22c64404197122`. Production remains read-only.
-Root owns review and any subsequent implementation reservation.
+Design checkpoint `936f84a4d8d3a87046705624041963eee5af6767` on
+`codex/camera-snapshot-design`, based on
+`c8998ac1652b60129ba25c07de22c64404197122`. Root subsequently approved the
+bounded implementation on `codex/camera-snapshot-fix`; the investigation and
+proposal below preserve the reasoning and original failing requirements.
+
+## Implemented phase contract
+
+`ClientCode::begin_camera_frame(now, stock_world, view)` advances one draw clock,
+transfers pending captured look once and binds the batch to existing owners.
+`AddOn::camera_context` installs current World/View/controls without executing
+Wasm or clearing outputs/inbox/body state. `camera_shot` invokes camera callbacks
+once; `run_frame` later uses the same timing/input batch and one ordinary frame
+callback. Frame-only callers perform preparation internally. Replacing an
+abandoned preparation, stop and device loss discard its batch. Claim resolution
+can remove prepared grants but cannot add input for a newly acquired owner.
+
+An additive consumer rerun follows the new App order using the same `now`:
+
+```rust
+code.begin_camera_frame(now, stock_world, underlying_view);
+let shot = code.camera_shot(stock_eye, stock_forward);
+// Derive resolved eye/forward/world from that shot or stock fallback.
+code.run_frame(now, resolved_eye, resolved_forward, resolved_world, underlying_view);
+// Advance the consumer's monotonic time once, after the draw.
+```
+
+`stock_world` is a complete current snapshot with actual synced held frames;
+`underlying_view` describes stock mode, not whether the Add-On returned a shot.
+The original old-order stale receipt remains historical evidence.
+
+App builds the full stock World before camera selection from actual current
+presented actors, vehicles, drawn life/skeletons, entities, state, passages,
+synced held transforms and immutable image geometry. Authored/live environment
+is resolved once and applied through the same closure to stock and resolved
+cameras. The later World retains that current presentation and receives the
+resolved camera environment in a separate snapshot; no native pose, item sync,
+physics, culling or upload runs twice. View is shared by both phases, using
+drawn controls and current local life with underlying stock mode independent
+of previous Add-On camera selection. Existing renderer visibility and stock
+held placement remain unchanged. App frame.rs/view.rs production is untouched.
 
 The private Source evidence is PR 30, immutable
 `0c970aba271039718a89e927aa70b19dac0cf1a0`,
@@ -95,8 +133,8 @@ Proposed mutable paths and ownership:
 | `client/src/app/render.rs`, App adapter | Assemble stock snapshot/View before camera, prepare ClientCode once, select shot once, then retain resolved render work and one later frame dispatch. Reserve any shared snapshot-builder extraction explicitly. |
 | `client/src/app/view.rs` and `app/frame.rs`, App presentation | Read-only investigation shows the underlying stock-mode and held-pose inputs here. A grant is required if the chosen implementation needs to change these paths; existing body/item stepping must not run again. |
 
-This table is a proposal, not a path grant. Root must choose the smallest
-implementation after reviewing the phase contract and `addon_camera` feedback.
+This table records the reviewed proposal. Root's implementation grant covered
+render.rs, client_code.rs and host.rs; frame.rs/view.rs remained read-only.
 
 The prepared batch owns draw time, dt and captured input. `now` remains the
 existing monotonic avatar animation time, with the same 0..0.25 elapsed clamp.
@@ -121,24 +159,32 @@ and rendered avatar overrides still happen once through their current paths.
 
 `crates/client/tests/camera_snapshot_freshness.rs` builds invented Wasm bytes in
 memory, loads real package manifests through `ClientCode::load/start`, and
-executes actual sandbox imports/callbacks in the production camera-then-frame
-API order. It does not substitute a Rust callback or manually refresh HostState.
-It is a focused boundary reproduction, not a complete App/GPU render test.
+executes actual sandbox imports/callbacks in the production preparation,
+camera, then single-frame API order. It does not substitute a Rust callback or
+manually refresh HostState. The original checkpoint was a boundary reproduction;
+the fix also includes a real hosted App/offscreen render case.
 
-Green controls cover both unique identities, empty stock, two claimants in both
-orders, absent actual mesh, delayed delivery without replay, stop/reconnect,
-device loss, eye position and no FOV override. Strict ignored requirements
-expect current look in the same draw, and suppress current death, unequip and
-first-person-exit shots in that same draw. The lifecycle test records every
-stale case before failing and verifies that the later fresh frame releases
-LOOK and the subsequent camera disappears. These ignored tests must be run
-explicitly to retain their failure evidence. They stay outside an integrated
-include-ignored candidate until corrected.
+At the design checkpoint, green controls covered both unique identities, empty
+stock, two claimants in both orders, absent actual mesh, delayed delivery without
+replay, stop/reconnect, device loss, eye position and no FOV override. Explicitly
+running the two ignored strict requirements reproduced delayed look and stale
+death/unequip/first-person-exit shots. That checkpoint remains separate evidence;
+its deliberately red state must not be integrated without the correction.
 
-Implementation acceptance additionally needs a real App/offscreen integration
-check for underlying mode stability across consecutive Add-On camera draws,
-current stock view selection, draw time/dt, one frame callback/physics command
-and no input replay, plus unchanged Eye/third-person placement and projection.
-Root then supplies an exact fix SHA for the private Source consumer to rerun.
+The fix enables both strict requirements without ignores and adds abandoned
+preparation, release, trap and replacement-owner controls in both package
+orders. An invented telemetry variant reports actual Wasm time/dt and completed
+frame count through its controlled camera roll, without a production hook.
+The real hosted App/offscreen case uses actual loaded/posed hammer geometry,
+consecutive underlying first-person draws, current look, mode exit/reentry,
+unequip, death, Eye/held placement, user FOV and single clock/frame advancement.
+Scoped evidence and any fixture corrections are recorded in
+`../progress/2026-10-16-camera-snapshot-fix.md`.
+
+Existing native vehicle-camera and held-item render targets provide additional
+independent regression coverage. The actual Wasm frame counter checks one
+callback side effect per draw; physics retains its existing App update owner,
+and the sandbox physics/showcase tests remain part of focused validation.
+Root supplies an exact fix SHA for the private Source consumer to rerun.
 Original GMod camera profile, movement and original repeat/promotion rules
 remain separate source-owned work.

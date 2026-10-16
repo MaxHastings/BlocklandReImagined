@@ -90,7 +90,7 @@ pub struct ClientCode {
     /// game, or a server whose code they trusted.
     trusted: bool,
     time: f32,
-    /// The last frame's step, for `camera_frame`.
+    /// The prepared draw's step, shared by camera and ordinary frame callbacks.
     dt: f32,
     last: Option<f64>,
     messages: Vec<String>,
@@ -118,6 +118,8 @@ pub struct ClientCode {
     /// The game controls Add-Ons hold (`input.capture`), and what the
     /// player did with them since the last frame.
     captured: bri_client_sandbox::Captured,
+    /// Input transferred once for a prepared draw, bound to its existing owners.
+    prepared: Option<std::collections::BTreeMap<String, bri_client_sandbox::Captured>>,
     claims: claims::Input,
     claim_diagnostics: claims::Diagnostics,
 }
@@ -421,6 +423,8 @@ impl ClientCode {
         self.running.clear();
         self.sounds.clear();
         self.captured = Default::default();
+        self.prepared = None;
+        self.dt = 0.;
         self.claims = Default::default();
         self.claim_diagnostics = Default::default();
         self.poses.clear();
@@ -553,6 +557,59 @@ impl ClientCode {
     ) {
         self.hud_owners = owners;
     }
+    /// Prepare one draw's clock and input, and refresh camera callbacks with a
+    /// complete stock presentation. Replacing an abandoned draw drops its input.
+    /// No frame callback, output collection or physics stepping happens here.
+    pub fn begin_camera_frame(
+        &mut self,
+        now: f64,
+        world: Arc<bri_client_sandbox::World>,
+        view: bri_client_sandbox::View,
+    ) {
+        self.prepared = None;
+        let dt = self
+            .last
+            .map_or(0., |last| (now - last).clamped(0., 0.25) as f32);
+        self.last = Some(now);
+        self.time += dt;
+        self.dt = dt;
+        self.view = view;
+        let granted = self.resolve_input_claims();
+        let captured = self.captured;
+        self.captured.look = [0.; 2];
+        let mut prepared = std::collections::BTreeMap::new();
+        for (r, mine) in self.running.iter_mut().zip(granted) {
+            let hud_owned = self.hud_owners.get(&r.addon.id).map_or(0, |regions| {
+                regions.iter().fold(0u16, |bits, region| {
+                    let at = bri_content::hud::Region::ALL
+                        .iter()
+                        .position(|r| r == region)
+                        .unwrap_or(0);
+                    bits | (1 << at)
+                })
+            });
+            let controls = bri_client_sandbox::Captured {
+                granted: mine,
+                held: captured.held & mine,
+                look: if mine & bri_client_sandbox::host::LOOK_CONTROL != 0 {
+                    captured.look
+                } else {
+                    [0.; 2]
+                },
+            };
+            r.addon.camera_context(&FrameInput {
+                world: world.clone(),
+                view: bri_client_sandbox::View { hud_owned, ..view },
+                controls,
+                ..Default::default()
+            });
+            prepared.insert(r.addon.id.clone(), controls);
+        }
+        self.prepared = Some(prepared);
+    }
+
+    /// Dispatch the ordinary frame with the resolved presentation. A prepared
+    /// camera draw reuses its clock/input; frame-only callers prepare here.
     pub fn run_frame(
         &mut self,
         now: f64,
@@ -561,19 +618,13 @@ impl ClientCode {
         world: Arc<bri_client_sandbox::World>,
         view: bri_client_sandbox::View,
     ) {
+        if self.prepared.is_none() {
+            self.begin_camera_frame(now, world.clone(), view);
+        }
         self.view = view;
-        let dt = self
-            .last
-            .map_or(0.0, |last| (now - last).clamped(0.0, 0.25) as f32);
-        self.last = Some(now);
-        self.time += dt;
-        self.dt = dt;
+        let dt = self.dt;
         let granted = self.resolve_input_claims();
-        let captured = self.captured;
-        self.captured = bri_client_sandbox::Captured {
-            look: [0.0; 2],
-            ..captured
-        };
+        let prepared = self.prepared.take().unwrap_or_default();
         let mut granted = granted.into_iter();
         let sounds = &mut self.sounds;
         let poses = &mut self.poses;
@@ -606,13 +657,14 @@ impl ClientCode {
                 })
             });
             let mine = granted.next().unwrap_or(0);
+            let captured = prepared.get(&r.addon.id).copied().unwrap_or_default();
             let input = FrameInput {
                 time: self.time,
                 dt,
                 controls: bri_client_sandbox::Captured {
                     granted: mine,
                     held: captured.held & mine,
-                    look: if mine & bri_client_sandbox::host::LOOK_CONTROL != 0 {
+                    look: if mine & captured.granted & bri_client_sandbox::host::LOOK_CONTROL != 0 {
                         captured.look
                     } else {
                         [0.0; 2]
@@ -684,6 +736,17 @@ impl ClientCode {
             .map(|r| (r.addon.id.as_str(), r.addon.claims()))
             .collect();
         let resolved = self.claims.resolve(&requests, &mut self.captured);
+        if let Some(prepared) = &mut self.prepared {
+            for (r, granted) in self.running.iter().zip(&resolved.granted) {
+                if let Some(input) = prepared.get_mut(&r.addon.id) {
+                    input.granted &= granted;
+                    input.held &= granted;
+                    if input.granted & bri_client_sandbox::host::LOOK_CONTROL == 0 {
+                        input.look = [0.; 2];
+                    }
+                }
+            }
+        }
         if let Some(message) = self.claim_diagnostics.input(resolved.conflicts) {
             bri_console::warn(message);
         }
@@ -814,6 +877,7 @@ impl ClientCode {
     /// Add-On's code stops until the next join; the game rebuilds its
     /// renderer as usual.
     pub fn device_lost(&mut self) {
+        self.prepared = None;
         // A driver reset may come back slower (or as another adapter).
         self.speed = None;
         for r in self.running.drain(..) {
@@ -1060,6 +1124,46 @@ mod tests {
         assert!(code.take_messages().is_empty());
         code.stop();
         assert!(code.running().is_empty());
+    }
+
+    #[test]
+    fn prepared_frame_only_and_empty_paths_advance_the_draw_clock_once() {
+        for active in [false, true] {
+            let (root, set) = sample_set();
+            let mut code = if active {
+                ClientCode::load(&root, &set)
+            } else {
+                ClientCode::default()
+            };
+            let state = tempfile::tempdir().unwrap();
+            code.start(Host::Local, state.path());
+            let run = |code: &mut ClientCode, now| {
+                code.run_frame(
+                    now,
+                    glam::Vec3::ZERO,
+                    glam::Vec3::NEG_Z,
+                    Default::default(),
+                    Default::default(),
+                )
+            };
+            run(&mut code, 0.);
+            run(&mut code, 0.1);
+            assert!((code.time - 0.1).abs() < 1e-6);
+            assert!((code.dt - 0.1).abs() < 1e-6);
+            code.begin_camera_frame(0.2, Default::default(), Default::default());
+            assert!(
+                code.camera_shot(glam::Vec3::ZERO, glam::Vec3::NEG_Z)
+                    .is_none()
+            );
+            run(&mut code, 0.2);
+            assert!((code.time - 0.2).abs() < 1e-6);
+            assert!((code.dt - 0.1).abs() < 1e-6);
+            assert!(code.prepared.is_none());
+            // Existing elapsed clamp remains at the one preparation boundary.
+            run(&mut code, 1.);
+            assert!((code.time - 0.45).abs() < 1e-6);
+            assert_eq!(code.dt, 0.25);
+        }
     }
 
     #[test]
