@@ -212,6 +212,21 @@ pub struct AnimationView {
     pub revision: u64,
     pub active: Vec<ActiveAnimation>,
 }
+/// An unchanged playback anchor together with clock phase at the snapshot tick.
+#[derive(Debug, Clone, PartialEq)]
+pub struct EvaluatedActiveAnimation {
+    pub playback: ActiveAnimation,
+    /// Elapsed native seconds, before the sampler's loop or final-key clamp.
+    pub evaluated_phase: f64,
+}
+/// Read-only active playback state evaluated at the current Session tick.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct EvaluatedAnimationView {
+    pub tick: u64,
+    /// Mutation revision, not a cache key for phases: time can advance alone.
+    pub revision: u64,
+    pub active: Vec<EvaluatedActiveAnimation>,
+}
 pub struct PreparedAnimationStart {
     revision: u64,
     catalog: u64,
@@ -736,6 +751,24 @@ impl Session {
             tick: self.simulation.state().tick,
             revision: self.animations.revision,
             active: self.animations.active.values().cloned().collect(),
+        }
+    }
+    /// Evaluates existing clocks without changing anchors or consuming records.
+    /// Completed playbacks are absent; this query does not retain final poses.
+    pub fn evaluated_animation_view(&self) -> EvaluatedAnimationView {
+        let tick = self.simulation.state().tick;
+        EvaluatedAnimationView {
+            tick,
+            revision: self.animations.revision,
+            active: self
+                .animations
+                .active
+                .values()
+                .map(|playback| EvaluatedActiveAnimation {
+                    playback: playback.clone(),
+                    evaluated_phase: playback.phase_at(tick),
+                })
+                .collect(),
         }
     }
     pub fn take_animation_records(&mut self) -> Vec<AnimationRecord> {

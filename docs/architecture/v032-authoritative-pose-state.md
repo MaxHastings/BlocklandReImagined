@@ -1,7 +1,9 @@
 # v0.3.2 authoritative pose state proposal
 
-Status: documentation for root review; no additional production grant. Immutable
-implementation baseline: `63edd2300eaec1a9f8a63ad9073ab6263d45eb96` (D1).
+Status: root granted D2a only from immutable docs checkpoint
+`efc21d370ea6f47c168a1a551869fd59bb6fa3f1`. Retention, mutable-state extraction
+and host composition below remain proposals without a production grant. Immutable
+input implementation baseline: `63edd2300eaec1a9f8a63ad9073ab6263d45eb96` (D1).
 Root accepted D1 as bounded retained native inputs/read-only diagnostics on
 2026-10-16. It remains outside v0.3.1. This proposal does not widen its supported
 providers or change ordinary hosting, gameplay grips, camera or shot origins.
@@ -69,7 +71,13 @@ retain current behavior. Assert the outbox is unchanged by queries and existing
 clock behavior before edits. Run changed-crate quick and scoped focused with
 process-local `CARGO_BUILD_JOBS=2`, leaving `CARGO_TARGET_DIR` unset.
 
-Root can grant this step independently of all following design choices.
+Root granted this step independently of all following design choices. Implemented
+API: `Session::evaluated_animation_view() -> EvaluatedAnimationView`, whose active
+entries are `EvaluatedActiveAnimation { playback, evaluated_phase }`. `playback`
+is the unchanged cloned ActiveAnimation, preserving every anchor, request,
+binding and clip identity. `evaluated_phase` calls its existing private `phase_at`
+at the snapshot tick, in unwrapped native seconds. Neither new type adds serde
+or transport behavior. See the separate D2a progress receipt for validation.
 
 ## Separate decision: visual final-key retention at the clock owner (D2b)
 

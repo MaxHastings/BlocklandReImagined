@@ -17,8 +17,8 @@ mod animation;
 mod body_pose;
 pub use animation::{
     ActiveAnimation, AnimationAsset, AnimationAssets, AnimationClip, AnimationImageAsset,
-    AnimationOutcome, AnimationRecord, AnimationStart, AnimationTarget, AnimationView, PlaybackId,
-    PreparedAnimationStart,
+    AnimationOutcome, AnimationRecord, AnimationStart, AnimationTarget, AnimationView,
+    EvaluatedActiveAnimation, EvaluatedAnimationView, PlaybackId, PreparedAnimationStart,
 };
 pub use body_pose::{BodyPoseAssetInfo, BodyPoseBinding, BodyPoseBindings};
 mod bots;
