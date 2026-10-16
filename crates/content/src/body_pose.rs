@@ -410,11 +410,166 @@ fn apply_generic_fitting(nodes: &mut [Mat4], input: &BodyFittingInput<'_>) {
     }
 }
 
+/// One already resolved native socket. The caller owns mount lookup, body
+/// identity and eligibility; this payload carries no clocks or gameplay policy.
+pub struct BodySocketInput<'a> {
+    pub model_transform: Mat4,
+    pub node: Mat4,
+    pub fit: Option<&'a crate::hold::Fit>,
+    pub raised: bool,
+    pub pitch: f32,
+    pub offset: Vec3,
+    pub tool_action: Option<Mat4>,
+}
+
+fn hand_correction(fit: Option<&crate::hold::Fit>) -> Mat4 {
+    fit.map_or(Mat4::IDENTITY, |fit| Mat4::from_quat(fit.correction))
+}
+
+/// Existing node/correction/offset/tool-action multiplication order. Raised
+/// fitted hands keep their sampled position while pointing along the aim.
+/// As in the native caller, this does not impose a new matrix validity filter.
+pub fn body_mount_node(input: BodySocketInput<'_>) -> Mat4 {
+    let hand = if input.raised && input.fit.is_some_and(|fit| fit.hold.is_some()) {
+        Mat4::from_rotation_translation(
+            crate::hold::Raise::aim(input.pitch),
+            input.node.w_axis.truncate(),
+        )
+    } else {
+        input.node * hand_correction(input.fit)
+    };
+    input.model_transform
+        * hand
+        * Mat4::from_translation(input.offset)
+        * input.tool_action.unwrap_or(Mat4::IDENTITY)
+}
+
+/// Existing offset-only socket in the caller's completed seated presentation
+/// frame. Caller retains the offset-socket and finite aim-pitch eligibility.
+pub fn body_offset_socket(
+    seated_frame: Mat4,
+    offset: Vec3,
+    pitch: f32,
+    tool_action: Option<Mat4>,
+) -> Mat4 {
+    seated_frame
+        * Mat4::from_translation(offset)
+        * Mat4::from_rotation_x(pitch)
+        * tool_action.unwrap_or(Mat4::IDENTITY)
+}
+
+/// Existing acted/unacted delta in the corrected mount frame. A foreign-tool
+/// override is selected before this call, even when no unacted sample exists.
+pub fn body_mount_action(
+    unacted_node: Mat4,
+    posed_node: Mat4,
+    fit: Option<&crate::hold::Fit>,
+) -> Option<Mat4> {
+    let correction = hand_correction(fit);
+    let rest = unacted_node * correction;
+    let moved = rest.inverse() * posed_node * correction;
+    nonidentity_action(moved)
+}
+
+fn nonidentity_action(delta: Mat4) -> Option<Mat4> {
+    (delta.is_finite() && !delta.abs_diff_eq(Mat4::IDENTITY, 1e-6)).then_some(delta)
+}
+
+/// Presentation-only fitted-hand fallback in the eye's scaled frame; never a
+/// gameplay eye or shot-origin rule. The caller resolves the actual socket offset.
+pub fn first_person_hand_frame(
+    fits: &BodyFits,
+    hand: usize,
+    model_transform: Mat4,
+    offset: Vec3,
+) -> Option<Mat4> {
+    if !*fits.first_person.get(hand)? {
+        return None;
+    }
+    let mut at = crate::hold::FIRST_PERSON_HAND;
+    if hand == 1 {
+        at.x = -at.x;
+    }
+    let scale = model_transform.x_axis.truncate().length();
+    let local = Mat4::from_scale(Vec3::splat(scale))
+        * Mat4::from_rotation_translation(crate::hold::AIM_HAND, at)
+        * Mat4::from_translation(offset);
+    local.is_finite().then_some(local)
+}
+
+/// Sample only the reference tool's right-ready/action socket displacements,
+/// never reference skeleton deformation for another body. `action` belongs to
+/// this immutable reference rig; played time and fallback eligibility stay with
+/// the caller. The two indices explicitly describe its existing hand mounts.
+pub fn sample_reference_tool_action(
+    rig: &Rig,
+    mounts: [Option<usize>; 2],
+    action: &Animation,
+    played: f32,
+) -> Result<[Option<Mat4>; 2]> {
+    let mut base = Vec::new();
+    if let Some(ready) = rig.sequence("armreadyright") {
+        base.push(Layer {
+            animation: ready,
+            time: ready.duration,
+            weight: 1.,
+        });
+    }
+    let rest = crate::animation::sample_layers(&rig.shape, &base)?;
+    base.push(Layer {
+        animation: action,
+        time: played,
+        weight: 1.,
+    });
+    base.sort_by_key(|layer| (layer.animation.additive, layer.animation.priority));
+    let moved = crate::animation::sample_layers(&rig.shape, &base)?;
+    Ok(mounts.map(|index| {
+        let index = index?;
+        let delta = rest.nodes.get(index)?.inverse() * *moved.nodes.get(index)?;
+        nonidentity_action(delta)
+    }))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use anyhow::{Context, Result};
     use glam::Mat4;
+
+    #[test]
+    fn socket_helpers_keep_absence_nonidentity_and_finite_contracts() -> Result<()> {
+        let rig = crate::testing::avatar::rig();
+        let action = rig.sequence("activate2").context("reference action")?;
+        assert_eq!(
+            sample_reference_tool_action(&rig, [Some(usize::MAX), None], action, 0.1)?,
+            [None; 2]
+        );
+        assert_eq!(
+            body_mount_action(Mat4::IDENTITY, Mat4::IDENTITY, None),
+            None
+        );
+        assert_eq!(body_mount_action(Mat4::ZERO, Mat4::IDENTITY, None), None);
+        assert_eq!(body_mount_action(Mat4::IDENTITY, Mat4::NAN, None), None);
+        let fits = BodyFits {
+            first_person: [true; 2],
+            ..Default::default()
+        };
+        assert!(first_person_hand_frame(&fits, usize::MAX, Mat4::IDENTITY, Vec3::ZERO).is_none());
+        assert!(first_person_hand_frame(&fits, 0, Mat4::NAN, Vec3::ZERO).is_none());
+        assert!(
+            first_person_hand_frame(&fits, 0, Mat4::ZERO, Vec3::ZERO).is_some(),
+            "legacy presentation checks finite values, not invertibility"
+        );
+        let right = first_person_hand_frame(&fits, 0, Mat4::IDENTITY, Vec3::ZERO).unwrap();
+        let left = first_person_hand_frame(&fits, 1, Mat4::IDENTITY, Vec3::ZERO).unwrap();
+        assert_eq!(right.w_axis.x, -left.w_axis.x);
+        assert_eq!(right.w_axis.y, left.w_axis.y);
+        assert_eq!(right.w_axis.z, left.w_axis.z);
+        assert!(
+            first_person_hand_frame(&BodyFits::default(), 0, Mat4::IDENTITY, Vec3::ZERO).is_none()
+        );
+        Ok(())
+    }
 
     #[test]
     fn fitting_invalid_indices_and_parent_counts_are_bounded() -> Result<()> {

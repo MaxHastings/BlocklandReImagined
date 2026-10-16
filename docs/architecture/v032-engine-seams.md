@@ -7,7 +7,7 @@ granted Stage B only: `crates/content/src/body_pose.rs`,
 `crates/client/src/avatar.rs`, tests inside their existing unit modules and own
 docs/seam rows. Stage B is implemented with passing native characterization, quick and scoped
 focused checks;
-all subsequent reservations below remain proposals.
+Stage C's subsequent grant is recorded below; host reservations remain proposals.
 
 ## Boundary and dependency order
 
@@ -20,7 +20,8 @@ Do not change manifests/lockfile, add dependencies, publish or create agents.
 Original installations and both delivered Halo previews remain unchanged.
 
 1. Extract existing fitting (Stage B below), independently of pending Stage1.
-2. Extract socket/tool calculations (Stage C, separate reservation and atom).
+2. Extract socket/tool calculations (Stage C, separately granted; local native
+   characterizations, quick and scoped focused pass).
 3. Register full immutable body inputs and compose host pose using real clocks
    and pre-fire state. Coordinate exact sim/net/client setup paths with root.
 4. Deliver truthful package completion and active client playback in separate
@@ -174,3 +175,142 @@ Private evidence was read with pinned `git show`, without changing its checkout:
 Root routes consumer assignments and immutable engine SHAs to Halo/AA chats.
 No host authority, original-game fidelity, release closure or full gate pass is
 claimed by Stage B. Its consumer-ready scope is only the tested pure fitting API.
+
+
+## Stage C granted extraction
+
+Root granted the same two production paths plus existing client/tests/world_items.rs
+for native controls, unit tests and own docs/seams. Stage C adds BodySocketInput,
+body_mount_node, body_offset_socket, body_mount_action, first_person_hand_frame
+and sample_reference_tool_action in content/body_pose.rs. Avatar retains actual
+mount_index/for_mesh lookup, offset-only/finite-pitch eligibility, held eligibility,
+foreign named-action fallback selection, timestamps and tool-only override precedence.
+Reference sampling takes an explicit immutable Rig, its two hand indices, selected
+native Animation and played time. It returns only socket deltas, never foreign
+body deformation. Out-of-range reference indices stay absent operations.
+
+Node composition remains model * corrected-or-raised-hand * socket-offset *
+tool-action; offset-only composition remains seated-frame * offset * aim-pitch *
+tool-action. The owned action delta remains inverse(unacted * correction) * posed
+* correction, with the same finite/nonidentity threshold. Foreign tool overrides
+still work with no unacted sample. First-person hand fallback remains independent
+presentation metadata, using the model X-axis scale and mirrored left offset.
+No new finite/invertibility rejection is imposed on ordinary socket composition.
+
+Before moving production, three native Avatar tests passed on1127ffdb production,
+plus a real native Avatar -> WorldItems control in both views. Their strict
+expectations include noncommuting offset/action and correction-conjugation negative
+controls, live locomotion transition, authored hand preservation, missing-action
+reference sampling without body deformation, seated offset-only sockets and
+first-person action application exactly once. The same three Avatar cases pass
+after extraction. Quick and scoped focused pass with client590/content101 and32 passing selected
+integration controls; the full receipt is in the Stage C progress note. Existing control assertions are unchanged.
+
+
+## Next host-pose atom proposed: D1 retained native inputs
+
+**Proposal only; no paths below are granted or edited.** Root controls dependency
+merges. Before D1, root must arrange this branch to contain immutable Stage1
+`94bae5632d1a19d16d9c663e146bcc5034522d55` and the required metadata correction
+`853d02f3c3b076cf28e9c59dac7ec6d7758555e9`, plus its reviewed sampler dependency.
+Those commits were inspected by git show; they have not been cherry-picked here.
+No statement that they passed the integrated candidate or are main/released follows.
+
+Request the following exact next production reservation, initially for asset
+registration and read-only native diagnostics, with no gameplay-origin switch:
+
+| Path | D1 change |
+|---|---|
+| `crates/sim/src/session/animation.rs` | Retain parsed native rigs from the existing validated asset transaction; share its resource/digest/catalog identity and byte budgets rather than introduce another admission/generation owner |
+| `crates/sim/src/session/body_pose.rs` (new) | Resolve each actual archetype's roles/sockets/fitted policy against retained immutable rigs; build shared BodyFits; expose bounded read-only registration diagnostics |
+| `crates/sim/src/session.rs` | Module/state/export and constructor wiring only; no step/weapons change |
+| `crates/net/src/content_identity.rs` | Return body-resource/fitted bindings from the existing bounded native providers, with client-equivalent body/asset precedence; retain valid bind-only bodies too |
+| `crates/net/src/host_setup.rs` | Carry bindings in common SessionContent and install the complete native input set after package/archetype setup |
+| `crates/net/src/dedicated.rs` | Construct that common binding input beside existing animation assets |
+| `crates/client/src/app/session.rs` | Same constructor propagation from the existing background native loader for local hosts |
+
+Test reservation requested: new `crates/sim/tests/body_pose_assets.rs`, new
+`crates/net/tests/body_pose_metadata.rs`, and constructor propagation in existing
+`crates/net/tests/host_setup.rs` and `crates/client/tests/trench_dig_flow.rs`.
+The latter two are the only test SessionContent literals found by git grep at
+853d02f3; discovered additional paths still require root coordination.
+
+Proposed native-only API, final names/layout subject to review:
+
+```text
+BodyPoseBinding { model, resource, fitted }
+Session::set_body_pose_assets(assets: AnimationAssets, bindings) -> Result<()>
+Session::body_pose_asset_info(archetype: ArchetypeId) -> BodyPoseAssetInfo
+```
+
+Bindings describe provider facts, not duplicate role/socket policy. Resolve the
+actual Session archetype by its existing authored `Archetype.id`; retain its full
+relevant native policy (roles, sockets, preservation, stand-in/fitted state),
+resource digest and node layout. Cache identity cannot be model/preserve alone.
+Shared immutable Rig allocation may be keyed by existing resource/digest; fitted
+policy/RoleClips/hand indices are per actual definition. On definition changes,
+compare full native policy and rebuild that entry. Asset catalog replacement
+invalidates resource-dependent entries through Stage1's existing catalog owner.
+No new actor/item/asset counters, script-supplied rig, texture loading or render
+objects enter sim. Registration remains transactional: malformed input cannot
+replace a working native set or cancel playbacks as a side effect of failure.
+The combined setter must reuse/refactor the existing catalog transaction, staging
+bindings against its incoming validated native set before the existing atomic
+swap. It must not install a second catalog or perform two fallible mutations in
+sequence. Existing set_animation_assets callers retain their established clock
+semantics through that same validation owner.
+
+The current Stage1 catalog retains verified raw native bytes but indexes only
+clip metadata. Its read_shape loader explicitly drops animation-empty shapes.
+D1 must deliberately retain validated bind-only body resources through the same
+bounded asset owner; simply decoding current clock entries cannot close that
+case. Optional absent/ambiguous/over-budget bodies remain named unsupported
+inputs and preserve ordinary hosting, as Stage1 already does for optional metadata.
+Original readers remain offline. No second catalog silently weakens the hash or
+provider-conflict checks fixed by853d02f3.
+
+D1 acceptance: actual local/common/dedicated setup produces equivalent native
+resource digests and resolved body inputs; two archetypes sharing a model with
+different role/socket policy remain distinct; bind-only, authored-hand and stock
+bodies are represented; modified bytes, invalid indices/hierarchy, ambiguous
+providers and budgets are bounded; failed replacement retains prior catalog,
+playback identities and resolved entries. Compare registered fitting to the shared
+native functions/actual Avatar control, using invented content only. Existing
+Stage1 animation_metadata, animation_identity and authoritative Session clock
+controls must remain green. Run scoped quick/focused and report exact SHA.
+This checkpoint exposes assets only; it cannot turn the mounted Session red test
+green, change a shot origin or satisfy original pose/camera fidelity.
+
+### Required subsequent pose-state design, not implicit D1 scope
+
+Stage1 `animation_view()` returns active records with phase anchors. Its Natural
+path removes a playback. Avatar can continue holding a final key after that
+endpoint, so active views alone cannot drive equivalent held body channels.
+Do not recreate phase from local cue timestamps, use a hard-coded tick divider,
+drain the terminal outbox as a second state source, or create a fourth clock.
+Propose evaluated phases and any explicit final-key pose retention at the existing
+clock owner, sharing actual producer/binding/life/body identities. Source completion
+outcomes remain separate from pose hold policy. Pawn15 needs authored channel
+semantics, not automatic mapping onto current native slots.
+
+Client locomotion phase, CrouchThread, frozen channel transitions, selected seat
+clip/ready and support applicability are still mutable client adapter state.
+Their exact shared-state extraction and authoritative input mapping must be
+specified before a host composer replaces static grips; the pure B/C helpers
+cannot manufacture them. Effective seat frame/scale, pre-passenger-turn fallback
+point and actor mount sampling also require exact existing vehicle-owner APIs.
+Then reserve sim/session/grips.rs + weapons pre-fire adapter and the exact vehicle
+basis accessor, with a native Session test exercising real boarding/switching,
+scaled/tilted frames, action lifecycle, actual wall fallback and the explicit
+sync_seated -> pre-fire sample -> step_weapons order. AA authored-prone and dynamic
+eye/fire policy remain separately demonstrated requirements, not stock fitting.
+
+AA PR54 `def522999e9e9413a9a2c947f5504a8eeb08995b` supplies a static old-pin
+package-view audit (activation-v032-handoff.json), not an executed Stage1
+replacement counterexample. At853d02f3, runtime already has AnimationOwner,
+AnimationItem(slot,generation,item), AnimationImage and AnimationBinding, with
+animation_item/image queries. Future authorized package views/completion must
+reuse these actual custody/mount/life identities where appropriate and prove
+same-id replacement, transfer, duplicate weapons, redraw and respawn behavior.
+Do not substitute package counters, equate item/slot with an incarnation, or
+activate a private kit for all players. Root routes any separate package API work.
