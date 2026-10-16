@@ -355,6 +355,7 @@ fn lower_sequence(
         priority: s.priority,
         nodes: tracks.into_values().collect(),
         objects,
+        rotation_interpolation: Default::default(),
         ground_translations: subset(
             &p.ground_translations,
             at(s.ground, 0, s.ground_count)?,

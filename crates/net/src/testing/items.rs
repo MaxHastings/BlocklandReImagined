@@ -158,6 +158,7 @@ fn held_tool(id: &str, handle: f32, head: [f32; 3]) -> Shape {
             scale_rotations: Vec::new(),
         }],
         objects: Vec::new(),
+        rotation_interpolation: Default::default(),
         ground_translations: Vec::new(),
         ground_rotations: Vec::new(),
         triggers: Vec::new(),

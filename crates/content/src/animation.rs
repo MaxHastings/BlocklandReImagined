@@ -1,5 +1,5 @@
 //! Native animation sampling and posed geometry, independent of source formats.
-use crate::shape::{Animation, LiveValues, Shape};
+use crate::shape::{Animation, LiveValues, RotationInterpolation, Shape};
 use anyhow::{Context, Result, ensure};
 use bri_console::Clamp;
 use glam::{Mat4, Quat, Vec3};
@@ -60,6 +60,20 @@ fn quaternion(data: &[[f32; 4]], a: usize, b: usize, t: f32, default: Quat) -> Q
             .slerp(Quat::from_array(data[b]), t)
             .normalize()
     }
+}
+fn node_rotation(animation: &Animation, data: &[[f32; 4]], a: usize, b: usize, t: f32) -> Quat {
+    if animation.rotation_interpolation == RotationInterpolation::Spherical || data.is_empty() {
+        return quaternion(data, a, b, t, Quat::IDENTITY);
+    }
+    let first = data[a];
+    let mut second = data[b];
+    if Quat::from_array(first).dot(Quat::from_array(second)) < 0.0 {
+        second = second.map(|v| -v);
+    }
+    Quat::from_array(std::array::from_fn(|i| {
+        first[i] * (1.0 - t) + second[i] * t
+    }))
+    .normalize()
 }
 /// Ordered pose layers: absolute channels first, then additive local transforms.
 /// Absolute clips only affect authored channels; missing channels preserve the
@@ -206,7 +220,7 @@ pub fn sample_layers_with_transition(
             if animation.additive {
                 let translation = vector(&track.translations, a, b, t, Vec3::ZERO) * w;
                 let rotation = Quat::IDENTITY
-                    .slerp(quaternion(&track.rotations, a, b, t, Quat::IDENTITY), w)
+                    .slerp(node_rotation(animation, &track.rotations, a, b, t), w)
                     .normalize();
                 let scale = Vec3::ONE.lerp(vector(&track.scales, a, b, t, Vec3::ONE), w);
                 let axis = quaternion(&track.scale_rotations, a, b, t, Quat::IDENTITY);
@@ -221,7 +235,7 @@ pub fn sample_layers_with_transition(
                 }
                 if !track.rotations.is_empty() {
                     rotations[node] = rotations[node]
-                        .slerp(quaternion(&track.rotations, a, b, t, Quat::IDENTITY), w)
+                        .slerp(node_rotation(animation, &track.rotations, a, b, t), w)
                         .normalize();
                 }
                 if !track.scales.is_empty() {
@@ -541,6 +555,7 @@ mod tests {
                 scale_rotations: vec![],
             }],
             objects: vec![],
+            rotation_interpolation: Default::default(),
             ground_translations: vec![],
             ground_rotations: vec![],
             triggers: vec![],
@@ -577,6 +592,7 @@ mod tests {
                 scale_rotations: vec![],
             }],
             objects: vec![],
+            rotation_interpolation: Default::default(),
             ground_translations: vec![],
             ground_rotations: vec![],
             triggers: vec![],

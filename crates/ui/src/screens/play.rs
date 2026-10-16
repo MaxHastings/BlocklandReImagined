@@ -10,6 +10,7 @@ pub const SMALL_PLANT_ERRORS: &str = "$pref::Video::useSmallPlantErrors";
 
 pub struct Play {
     view: View,
+    center_print_min_height: i32,
 }
 impl Play {
     pub fn new(core: &Core) -> Self {
@@ -32,7 +33,13 @@ impl Play {
                 view.nodes[t].ctrl.extent[1] = h;
             }
         }
-        Self { view }
+        let center_print_min_height = view
+            .id("centerPrintDlg")
+            .map_or(0, |n| view.node(n).ctrl.extent[1]);
+        Self {
+            view,
+            center_print_min_height,
+        }
     }
 }
 /// `newChatText`'s authored position in NewChatHud.
@@ -691,6 +698,37 @@ pub fn loading_chat(pack: &Pack, dl: &mut DrawList, core: &Core) {
     v.draw(pack, dl);
 }
 impl Play {
+    fn fit_center_print(&mut self, core: &Core) {
+        let (Some(dialog), Some(text)) = (
+            self.view.id("centerPrintDlg"),
+            self.view.id("CenterPrintText"),
+        ) else {
+            return;
+        };
+        let node = self.view.node(text);
+        let need = View::ml_height(
+            &core.pack,
+            &node.ctrl.style,
+            &self.view.text_of(text),
+            node.rect.w,
+        );
+        let top = node.ctrl.position[1];
+        let height = self.center_print_min_height.max(top + need);
+        let old = self.view.node(dialog).rect;
+        let parent_y = self
+            .view
+            .node(dialog)
+            .parent
+            .map_or(0, |p| self.view.node(p).rect.y);
+        // Grow the clipping parent as well as its ML child. Keep the existing
+        // center when possible and move long prints inside the logical canvas.
+        let y = (old.y + (old.h - height) / 2).clamp(0, (core.logical.1 - height).max(0));
+        self.view.nodes[dialog].ctrl.position[1] = y - parent_y;
+        self.view.nodes[dialog].ctrl.extent[1] = height;
+        self.view.nodes[text].ctrl.extent[1] = height - top;
+        self.view.relayout();
+    }
+
     fn print(&mut self, dialog: &str, text: &str, message: Option<String>) {
         if let Some(n) = self.view.id(dialog) {
             self.view.set_visible(n, message.is_some());
@@ -759,6 +797,9 @@ impl Screen for Play {
             "CenterPrintText",
             center.map(|t| format!("<just:center>{t}\n")),
         );
+        if center.is_some() {
+            self.fit_center_print(core);
+        }
         // An `ammo` claim hides only the ammo display.
         let ammo = core.bottom_print_ammo && core.hud_claimed(Region::Ammo);
         let bottom = core

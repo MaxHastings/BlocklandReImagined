@@ -238,6 +238,7 @@ fn a_states_arm_plays_on_the_holders_arm_thread() {
                 thread: 2,
                 sequence,
                 image_hand: None,
+                ..
             } => Some(sequence),
             _ => None,
         })

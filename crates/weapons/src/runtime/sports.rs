@@ -197,11 +197,13 @@ impl WeaponsWorld {
         self.ball_released(id, a.frame.eye);
         if let Some(slot) = a.selected {
             a.inventory[slot] = None;
+            a.animation_items[slot] = None;
         }
         self.unmount(id, &mut a);
         a.ball_ready = self.tick + cooldown;
+        let binding = self.animation_binding(&a, None);
         self.actors.insert(id, a);
-        self.animation(id, "root");
+        self.emit_animation(id, 2, "root".into(), None, Some(binding));
         Ok(result)
     }
     /// Native 1-in-6 steal, constrained to a visible target five units ahead.
@@ -266,6 +268,7 @@ impl WeaponsWorld {
         self.ball_released(target, a.frame.eye);
         if let Some(slot) = a.selected {
             a.inventory[slot] = None;
+            a.animation_items[slot] = None;
         }
         self.unmount(target, &mut a);
         a.ball_ready = self.tick + 120;
@@ -331,6 +334,7 @@ impl WeaponsWorld {
             self.ball_released(victim, a.frame.eye);
             if let Some(slot) = a.selected {
                 a.inventory[slot] = None;
+                a.animation_items[slot] = None;
             }
             self.unmount(victim, &mut a);
             a.ball_ready = self.tick + 120;
@@ -400,6 +404,7 @@ impl WeaponsWorld {
         let mut a = self.actors.remove(&id).unwrap();
         if let Some(slot) = a.selected {
             a.inventory[slot] = None;
+            a.animation_items[slot] = None;
         }
         self.unmount(id, &mut a);
         a.ball_ready = self.tick + 60;

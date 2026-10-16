@@ -690,6 +690,7 @@ mod tests {
                 scale_rotations: vec![],
             }],
             objects: vec![],
+            rotation_interpolation: Default::default(),
             ground_translations: vec![],
             ground_rotations: vec![],
             triggers: vec![],
