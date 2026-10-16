@@ -649,8 +649,8 @@ An image's `shell_effect` names an authored emitter/composite to play for
 `eject_shell` states. It replaces mesh `casing` presentation and uses the posed
 `ejectPoint` (or `muzzlePoint` when absent), carrying actor velocity. If the
 reliable cue arrives before its image pose, it waits up to half a second.
-These sprite casings currently have gravity but no structure contact/rest or
-contact audio; use model debris when those are required.
+These sprite casings can opt into the cosmetic point contact/rest and local
+contact audio policies described below.
 
 
 Particle `contact` is optional. A definition can supply `restitution` and
@@ -666,5 +666,49 @@ Contact paths use at most 1/60-second trajectory segments, 128 segments per
 particle and 32,768 shared queries per advance. Unprocessed motion waits in place
 when this budget is exhausted; particles continue aging. Resting particles expire
 normally. These clouds do not sleep/refill, since reconstructing them would require
-historical world collisions. Contact audio, water transitions
-and attachment to a moving support are not supplied by this seam.
+historical world collisions. Water transitions and attachment to a moving
+support are not supplied by this seam.
+
+
+Optional particle `contact_audio` requires `contact` and explicit package policy:
+
+```json
+"contact_audio": {
+  "surfaces": {"example_surface": "example:contact_sound"},
+  "fallback": null,
+  "min_inward_speed": 0.5,
+  "cooldown_seconds": 0.1,
+  "max_impacts": 8,
+  "max_lateness_seconds": 0.05
+}
+```
+
+These example numbers are invented, not recovered original-game rules. All four
+eligibility fields are required. Speed is the inward normal velocity in native
+units/second; cooldown uses particle simulation age, and `max_impacts` counts
+all real inward contacts, including contacts that fail eligibility or reporting
+budgets. Eligibility history advances even when reporting drops an event. Cooldown
+is measured between eligible inward contacts before surface lookup or mixer
+audibility;
+this is an explicit native policy, not a recovered original audibility order.
+Lateness is simulated time from the impact to the end of this advance (including
+emission pre-age). Expired particles do not generate historical contact bursts.
+No repeat/promotion law is inferred from profile names or promotion counts.
+Packages must recover that policy or label an explicit native adaptation.
+
+The client resolves the exact original sweep against the same world snapshot.
+`surfaces` keys are authored map surface kinds, `brick`, `terrain`, or `default`;
+an unmapped/unknown kind is silent unless `fallback` explicitly names a profile.
+Profiles use existing prepared sounds and weighted leaf variants, including
+per-profile gains and spatial placement at the impact. Unknown or looping sounds
+are silent and counted as drops. There are no gameplay or network events.
+
+Only inward physical hits report: support probes, separation, resting frames and
+render views never request sounds. Reports cap at 64 per effects advance and
+local sound starts at 16 per audio tick, sharing the existing mixer voice budget.
+Overflow is counted and discarded; no deferred backlog is replayed. Variant seeds
+come from world seed, source/emission identity and impact ordinal, independent of
+visual RNG, unrelated audio, vector compaction, report drops and render views.
+The optional field retains the existing version-1 effects schema policy; omission
+preserves legacy motion and silence. Original repeat/promotion fidelity remains a
+separate package-evidence requirement.

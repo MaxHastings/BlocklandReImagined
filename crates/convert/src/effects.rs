@@ -167,6 +167,7 @@ pub fn particle(d: &Declaration) -> Result<(Particle, Vec<String>)> {
         id: id("particle", &d.name),
         texture: texture_path(f.text("texturename", ""), &d.source)?,
         contact: None,
+        contact_audio: None,
         lit: false,
         orientation: None,
         alpha_blend: f.boolean("useinvalpha", false)?,

@@ -317,6 +317,36 @@ impl ParticleContact {
             && (0.0..=100.0).contains(&self.rest_speed)
     }
 }
+/// Explicit package policy for cosmetic contacts. No inferred repeat or promotion rules.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ContactAudio {
+    pub surfaces: BTreeMap<String, String>,
+    /// Missing mappings remain silent unless a package explicitly supplies this.
+    pub fallback: Option<String>,
+    pub min_inward_speed: f32,
+    pub cooldown_seconds: f32,
+    pub max_impacts: u32,
+    pub max_lateness_seconds: f32,
+}
+impl ContactAudio {
+    pub fn valid(&self) -> bool {
+        let id = |s: &str| !s.is_empty() && s.len() <= 256 && !s.chars().any(char::is_control);
+        self.surfaces.len() <= 128
+            && self
+                .surfaces
+                .iter()
+                .all(|(k, v)| crate::surface::valid_name(k) && id(v))
+            && self.fallback.as_deref().is_none_or(id)
+            && self.min_inward_speed.is_finite()
+            && (0.0..=10000.0).contains(&self.min_inward_speed)
+            && self.cooldown_seconds.is_finite()
+            && (0.0..=3600.0).contains(&self.cooldown_seconds)
+            && (1..=65536).contains(&self.max_impacts)
+            && self.max_lateness_seconds.is_finite()
+            && (0.0..=1.0).contains(&self.max_lateness_seconds)
+    }
+}
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Particle {
     /// Receive the host scene's diffuse illumination instead of self-lighting.
@@ -330,6 +360,8 @@ pub struct Particle {
     pub variation: Option<ParticleVariation>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub contact: Option<ParticleContact>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub contact_audio: Option<ContactAudio>,
     /// Overrides the emitter's legacy camera/axis-facing choice.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub orientation: Option<ParticleOrientation>,
@@ -433,6 +465,12 @@ impl Library {
             ensure!(
                 p.contact.is_none_or(ParticleContact::valid),
                 "Invalid particle contacts"
+            );
+            ensure!(
+                p.contact_audio
+                    .as_ref()
+                    .is_none_or(|a| p.contact.is_some() && a.valid()),
+                "Invalid particle contact audio"
             );
             if let Some(v) = &p.variation {
                 ensure!(

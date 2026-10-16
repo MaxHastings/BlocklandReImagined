@@ -1317,3 +1317,347 @@ fn attached_flashes_do_not_inherit_the_source_translation_twice() {
         );
     }
 }
+
+// Invented policies and material IDs exercise mechanisms, not original-game rules.
+fn contact_audio_policy() -> ContactAudio {
+    ContactAudio {
+        surfaces: std::collections::BTreeMap::from([("test_surface".into(), "test_hit".into())]),
+        fallback: None,
+        min_inward_speed: 0.,
+        cooldown_seconds: 0.,
+        max_impacts: 100,
+        max_lateness_seconds: 1.,
+    }
+}
+fn audio_world(audio: Option<ContactAudio>, die: bool) -> EffectsWorld {
+    world(fixture(|l| {
+        l.emitters[0].speed = 2.;
+        l.particles[0].gravity = 1.;
+        l.particles[0].contact = Some(ParticleContact {
+            restitution: 0.,
+            friction: 1.,
+            rest_speed: 0.1,
+            die_on_contact: die,
+            die_at_rest: false,
+            stop_animation_at_rest: false,
+        });
+        l.particles[0].contact_audio = audio.clone();
+    }))
+}
+fn audio_burst(w: &mut EffectsWorld, count: usize) {
+    w.burst(
+        "emitter",
+        SourceTransform {
+            position: Vec3::Y * 0.05,
+            rotation: glam::Quat::from_rotation_z(std::f32::consts::PI),
+            ..Default::default()
+        },
+        SourceOptions::default(),
+        count,
+    )
+    .unwrap();
+}
+fn audio_floor(a: Vec3, b: Vec3) -> Option<ContactHit> {
+    (a.y > 0. && b.y <= 0.).then(|| ContactHit {
+        fraction: a.y / (a.y - b.y),
+        normal: Vec3::Y,
+    })
+}
+#[test]
+fn contact_audio_is_opt_in_preserves_visual_rng_and_reports_death_before_removal() {
+    let mut silent = audio_world(None, false);
+    let mut audible = audio_world(Some(contact_audio_policy()), false);
+    for w in [&mut silent, &mut audible] {
+        audio_burst(w, 8);
+        w.advance_with_contacts(0.1, Vec3::ZERO, audio_floor)
+            .unwrap();
+    }
+    assert!(silent.take_contact_impacts().is_empty());
+    let impacts = audible.take_contact_impacts();
+    assert_eq!(impacts.len(), 8);
+    for (a, b) in silent
+        .snapshot(&camera())
+        .particles
+        .iter()
+        .zip(audible.snapshot(&camera()).particles)
+    {
+        assert_eq!(a.position, b.position);
+        assert_eq!(a.color, b.color);
+        assert_eq!(a.size, b.size);
+    }
+    for hit in &impacts {
+        assert!(hit.incoming_velocity.dot(hit.normal) < 0.);
+        assert!(
+            hit.point
+                .abs_diff_eq(hit.from.lerp(hit.to, hit.fraction), 1e-6)
+        );
+        assert!(hit.point.y.abs() < 1e-6);
+        assert_eq!(
+            audible.contact_profile(hit, "test_surface"),
+            Some("test_hit")
+        );
+        assert_eq!(audible.contact_profile(hit, "unknown"), None);
+        let fallback = world(fixture(|l| {
+            l.particles[0].contact = Some(ParticleContact {
+                restitution: 0.,
+                friction: 0.,
+                rest_speed: 0.,
+                die_on_contact: false,
+                die_at_rest: false,
+                stop_animation_at_rest: false,
+            });
+            let mut policy = contact_audio_policy();
+            policy.fallback = Some("explicit_fallback".into());
+            l.particles[0].contact_audio = Some(policy);
+        }));
+        assert_eq!(
+            fallback.contact_profile(hit, "unknown"),
+            Some("explicit_fallback")
+        );
+    }
+    assert_ne!(impacts[0].sound_seed(), impacts[1].sound_seed());
+    assert!(audible.take_contact_impacts().is_empty());
+    let mut dying = audio_world(Some(contact_audio_policy()), true);
+    audio_burst(&mut dying, 1);
+    dying
+        .advance_with_contacts(0.1, Vec3::ZERO, audio_floor)
+        .unwrap();
+    assert!(dying.snapshot(&camera()).particles.is_empty());
+    assert_eq!(dying.take_contact_impacts().len(), 1);
+}
+#[test]
+fn contact_audio_support_separation_expiry_and_authored_eligibility_are_silent() {
+    let mut w = audio_world(Some(contact_audio_policy()), false);
+    audio_burst(&mut w, 1);
+    w.advance_with_contacts(0.1, Vec3::ZERO, audio_floor)
+        .unwrap();
+    assert_eq!(w.take_contact_impacts().len(), 1);
+    w.advance_with_contacts(0.1, Vec3::ZERO, audio_floor)
+        .unwrap();
+    assert!(
+        w.take_contact_impacts().is_empty(),
+        "support probe is silent"
+    );
+    w.advance_with_contacts(0.1, Vec3::ZERO, |_, _| None)
+        .unwrap();
+    assert!(w.take_contact_impacts().is_empty());
+    w.advance_with_contacts(2., Vec3::ZERO, audio_floor)
+        .unwrap();
+    assert!(
+        w.take_contact_impacts().is_empty(),
+        "expired particles do not replay contacts"
+    );
+    for change in [0, 1] {
+        let mut policy = contact_audio_policy();
+        if change == 0 {
+            policy.min_inward_speed = 100.;
+        } else {
+            policy.max_lateness_seconds = 0.;
+        }
+        let mut w = audio_world(Some(policy), false);
+        audio_burst(&mut w, 1);
+        w.advance_with_contacts(0.2, Vec3::ZERO, audio_floor)
+            .unwrap();
+        assert!(w.take_contact_impacts().is_empty());
+    }
+    let mut w = audio_world(Some(contact_audio_policy()), false);
+    audio_burst(&mut w, 1);
+    w.advance_with_contacts(0.1, Vec3::ZERO, |_, _| {
+        Some(ContactHit {
+            fraction: 0.5,
+            normal: Vec3::NEG_Y,
+        })
+    })
+    .unwrap();
+    assert!(
+        w.take_contact_impacts().is_empty(),
+        "outward hits never request sound"
+    );
+}
+#[test]
+fn contact_audio_reports_are_bounded_discarded_and_stable_across_view_sampling() {
+    let mut w = audio_world(Some(contact_audio_policy()), true);
+    audio_burst(&mut w, 1000);
+    w.advance_with_contacts(0.1, Vec3::ZERO, audio_floor)
+        .unwrap();
+    w.snapshot(&camera());
+    w.snapshot(&camera());
+    let hits = w.take_contact_impacts();
+    assert_eq!(hits.len(), 64);
+    assert_eq!(w.diagnostics().contact_report_drops, 936);
+    w.advance(0.1, Vec3::ZERO).unwrap();
+    assert!(w.take_contact_impacts().is_empty());
+    let mut other = audio_world(Some(contact_audio_policy()), true);
+    audio_burst(&mut other, 1000);
+    other
+        .advance_with_contacts(0.1, Vec3::ZERO, audio_floor)
+        .unwrap();
+    assert_eq!(
+        hits.iter()
+            .map(ContactImpact::sound_seed)
+            .collect::<Vec<_>>(),
+        other
+            .take_contact_impacts()
+            .iter()
+            .map(ContactImpact::sound_seed)
+            .collect::<Vec<_>>()
+    );
+}
+#[test]
+fn contact_audio_policy_rejects_invalid_or_implicit_rules() {
+    let mut l = bri_fx_runtime::testing::library();
+    l.particles[0].contact_audio = Some(contact_audio_policy());
+    assert!(l.validate().is_err(), "audio requires contact geometry");
+    for bad in [f32::NAN, -1., 2.] {
+        let mut p = contact_audio_policy();
+        p.max_lateness_seconds = bad;
+        assert!(!p.valid());
+    }
+    assert!(
+        serde_json::from_str::<ContactAudio>(r#"{"surfaces":{}}"#).is_err(),
+        "eligibility is required"
+    );
+}
+
+#[test]
+fn contact_audio_repeat_limits_are_authored_and_do_not_change_motion() {
+    let make = |cooldown, cap| {
+        world(fixture(|l| {
+            l.emitters[0].speed = 2.;
+            l.particles[0].gravity = 0.;
+            l.particles[0].contact = Some(ParticleContact {
+                restitution: 1.,
+                friction: 0.,
+                rest_speed: 0.,
+                die_on_contact: false,
+                die_at_rest: false,
+                stop_animation_at_rest: false,
+            });
+            let mut policy = contact_audio_policy();
+            policy.cooldown_seconds = cooldown;
+            policy.max_impacts = cap;
+            l.particles[0].contact_audio = Some(policy);
+        }))
+    };
+    let walls = |a: Vec3, b: Vec3| {
+        if b.y <= 0. && a.y > 0. {
+            audio_floor(a, b)
+        } else if b.y >= 0.1 && a.y < 0.1 {
+            Some(ContactHit {
+                fraction: (0.1 - a.y) / (b.y - a.y),
+                normal: Vec3::NEG_Y,
+            })
+        } else {
+            None
+        }
+    };
+    let mut all = make(0., 100);
+    let mut cooldown = make(0.12, 100);
+    let mut capped = make(0., 2);
+    for w in [&mut all, &mut cooldown, &mut capped] {
+        audio_burst(w, 1);
+        w.advance_with_contacts(0.4, Vec3::ZERO, walls).unwrap();
+    }
+    let every = all.take_contact_impacts();
+    let spaced = cooldown.take_contact_impacts();
+    let limited = capped.take_contact_impacts();
+    assert!(every.len() >= 6);
+    assert!(spaced.len() < every.len());
+    assert!(
+        spaced
+            .windows(2)
+            .all(|h| h[0].lateness - h[1].lateness >= 0.12)
+    );
+    assert_eq!(
+        limited.iter().map(|h| h.ordinal).collect::<Vec<_>>(),
+        vec![1, 2]
+    );
+    for w in [&cooldown, &capped] {
+        assert_eq!(
+            all.snapshot(&camera()).particles[0].position,
+            w.snapshot(&camera()).particles[0].position
+        );
+    }
+}
+#[test]
+fn contact_audio_overdue_emissions_reject_stale_preaged_impacts() {
+    let mut w = world(fixture(|l| {
+        l.emitters[0].speed = 2.;
+        l.emitters[0].period = 0.05;
+        l.particles[0].contact = Some(ParticleContact {
+            restitution: 0.,
+            friction: 1.,
+            rest_speed: 0.,
+            die_on_contact: true,
+            die_at_rest: false,
+            stop_animation_at_rest: false,
+        });
+        let mut p = contact_audio_policy();
+        p.max_lateness_seconds = 0.04;
+        l.particles[0].contact_audio = Some(p);
+    }));
+    w.start_emitter(
+        "emitter",
+        SourceTransform {
+            position: Vec3::Y * 0.05,
+            rotation: glam::Quat::from_rotation_z(std::f32::consts::PI),
+            ..Default::default()
+        },
+        SourceOptions::default(),
+    )
+    .unwrap();
+    w.advance_with_contacts(0.4, Vec3::ZERO, audio_floor)
+        .unwrap();
+    let hits = w.take_contact_impacts();
+    assert_eq!(
+        hits.len(),
+        1,
+        "historical emissions must not burst into sound"
+    );
+    assert!(hits[0].lateness <= 0.04);
+}
+
+#[test]
+fn contact_audio_seed_survives_particle_vector_compaction_and_undrained_replacement() {
+    let mut compacted = audio_world(Some(contact_audio_policy()), true);
+    let mut retained = audio_world(Some(contact_audio_policy()), true);
+    for w in [&mut compacted, &mut retained] {
+        w.burst(
+            "emitter",
+            SourceTransform {
+                position: Vec3::Y * 100.,
+                ..Default::default()
+            },
+            SourceOptions::default(),
+            1,
+        )
+        .unwrap();
+        audio_burst(w, 1);
+    }
+    compacted.stop(EffectHandle(1), StopMode::Immediate);
+    for w in [&mut compacted, &mut retained] {
+        w.advance_with_contacts(0.1, Vec3::ZERO, audio_floor)
+            .unwrap();
+    }
+    let hits = compacted.take_contact_impacts();
+    assert_eq!(hits.len(), 1);
+    assert_eq!(
+        hits[0].sound_seed(),
+        retained.take_contact_impacts()[0].sound_seed()
+    );
+    audio_burst(&mut compacted, 1);
+    compacted
+        .advance_with_contacts(0.1, Vec3::ZERO, audio_floor)
+        .unwrap();
+    compacted.advance(0., Vec3::ZERO).unwrap();
+    assert!(
+        compacted.take_contact_impacts().is_empty(),
+        "the next advance discards unconsumed reports"
+    );
+    audio_burst(&mut compacted, 1);
+    compacted
+        .advance_with_contacts(0.1, Vec3::ZERO, audio_floor)
+        .unwrap();
+    compacted.teardown();
+    assert!(compacted.take_contact_impacts().is_empty());
+}

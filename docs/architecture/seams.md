@@ -132,6 +132,7 @@ labels are retained so earlier progress notes remain traceable.
 | Authored seat eye origins | Optional seat-local eye drives both client first-person view and authoritative motor interaction eye; no FOV or camera-mode lock | Root passenger view comparison | implementation and comparison pending |
 
 | Cosmetic particle contacts | Optional swept structure contacts with authored restitution, tangential retention, rest and death behavior; world query supplied by adapter, no gameplay authority | Root environment-impact audit | implementation in progress |
+| Cosmetic contact audio | Bounded client-local accepted particle impacts, actual surface selection and identity-seeded one-shot playback; authored eligibility, repeat and fallback policy; no gameplay or wire events | Coordinate shared engine seams; root integration | assigned from `5158ade8` on `codex/cosmetic-contact-audio`; synthetic acceptance and private source policy validation pending; independent of Halo preview |
 
 | Animated texture coordinates | Authored UV scale/offset, scroll and rotation about a declared center, sampled from the cosmetic render clock; no geometry animation | Root source dashboard review | implementation in progress |
 

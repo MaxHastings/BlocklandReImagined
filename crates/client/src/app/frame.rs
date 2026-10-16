@@ -1533,6 +1533,12 @@ impl App {
                 game_elapsed.as_secs_f32(),
             );
             self.cosmetic_faults.absorb("weapon effects", parts);
+            for (profile, point, seed) in self.fx.weapon_effects.take_contact_audio(|impact| {
+                crate::weapon_effects::contact_surface(building, impact)
+            }) {
+                self.audio.contact_profile(&profile, point, seed);
+            }
+
             let lamp_effects = self
                 .vehicles
                 .lamp_effects(&self.vehicle_assets, &view.vehicles);

@@ -287,6 +287,7 @@ impl MusicBricks {
 pub struct ClientAudio {
     runtime: AudioRuntime,
     pending: VecDeque<(String, Placement)>,
+    contact_pending: VecDeque<(String, [f32; 3], u64)>,
     pub warnings: BTreeSet<String>,
     pub dropped: u64,
     pub server_dropped: u64,
@@ -398,6 +399,7 @@ impl ClientAudio {
         let mut audio = Self {
             runtime,
             pending: VecDeque::new(),
+            contact_pending: VecDeque::new(),
             warnings,
             dropped: 0,
             server_dropped: 0,
@@ -517,6 +519,20 @@ impl ClientAudio {
     }
     pub fn profile(&mut self, profile: &str, placement: Placement) {
         self.enqueue(profile.into(), placement, profile);
+    }
+    /// Bounded local cosmetic starts. No backlog survives a tick or session reset.
+    /// Unknown profiles are silent; this path never guesses a bank fallback.
+    pub fn contact_profile(&mut self, profile: &str, point: [f32; 3], seed: u64) {
+        if self.contact_pending.len() >= 16
+            || profile.is_empty()
+            || profile.len() > 256
+            || !point.iter().all(|v| v.is_finite())
+        {
+            self.dropped = self.dropped.saturating_add(1);
+            return;
+        }
+        self.contact_pending
+            .push_back((profile.to_owned(), point, seed));
     }
     fn enqueue(&mut self, id: String, placement: Placement, label: &str) {
         if self.pending.len() == bri_sim::presentation::MAX_CUES {
@@ -794,10 +810,19 @@ impl ClientAudio {
         }
     }
     fn pack_asset(&mut self, profile: &str) -> Option<(Arc<SoundAsset>, f32)> {
+        let seed = self.sound_choice_counter;
+        if self
+            .pack_sound_variants
+            .contains_key(&profile.to_ascii_lowercase())
+        {
+            self.sound_choice_counter = self.sound_choice_counter.wrapping_add(1);
+        }
+        self.seeded_pack_asset(profile, seed)
+    }
+    fn seeded_pack_asset(&self, profile: &str, seed: u64) -> Option<(Arc<SoundAsset>, f32)> {
         let key = profile.to_ascii_lowercase();
         if let Some(choices) = self.pack_sound_variants.get(&key) {
-            let unit = sound_choice_unit(self.sound_choice_counter);
-            self.sound_choice_counter = self.sound_choice_counter.wrapping_add(1);
+            let unit = sound_choice_unit(seed);
             let choice = choose_sound(choices, unit);
             Some((choice.asset.clone(), choice.volume))
         } else {
@@ -946,6 +971,7 @@ impl ClientAudio {
         self.image_loops.clear();
         self.engines.clear();
         self.pending.clear();
+        self.contact_pending.clear();
         let result = self.runtime.stop_all();
         self.record(result);
         // Flush stop even if another session is started before the next normal frame.
@@ -958,6 +984,27 @@ impl ClientAudio {
         while let Some((id, placement)) = self.pending.pop_front() {
             let result = self.start(&id, placement).map(|_| ());
             self.record(result);
+        }
+        while let Some((id, point, seed)) = self.contact_pending.pop_front() {
+            let asset = self
+                .seeded_pack_asset(&id, seed)
+                .or_else(|| {
+                    self.runtime
+                        .bank()
+                        .resolve(&id)
+                        .ok()
+                        .map(|asset| (asset.clone(), 1.0))
+                })
+                .filter(|(asset, _)| !asset.playback.looping);
+            if let Some((asset, volume)) = asset {
+                let result = self
+                    .runtime
+                    .play_asset(asset, Placement::World(point), volume)
+                    .map(|_| ());
+                self.record(result);
+            } else {
+                self.dropped = self.dropped.saturating_add(1);
+            }
         }
         let fading: Vec<(SoundHandle, f32)> = self
             .rule_music
@@ -1413,6 +1460,89 @@ mod tests {
         );
         assert_eq!(audio.stats().started, 1);
         assert!(audio.take_capture().iter().any(|v| v.abs() > 0.00001));
+        Ok(())
+    }
+
+    #[test]
+    fn contact_audio_has_seeded_choices_bounded_starts_and_no_session_backlog() -> Result<()> {
+        let fx = Pack::synthetic()?;
+        let mut audio = ClientAudio::load(&fx.root, &mut Settings::default(), OutputKind::Offline)?;
+        let data = audio
+            .runtime
+            .bank()
+            .resolve(crate::testing::audio::NOTE)?
+            .data
+            .clone();
+        let asset = Arc::new(SoundAsset::world("contact_a", data.clone(), 1., 10.));
+        let other = Arc::new(SoundAsset::world("contact_b", data.clone(), 1., 10.));
+        audio.pack_sound_variants.insert(
+            "impact".into(),
+            vec![
+                SoundChoice {
+                    asset: asset.clone(),
+                    volume: 0.4,
+                    weight: 1.,
+                },
+                SoundChoice {
+                    asset: other,
+                    volume: 0.2,
+                    weight: 3.,
+                },
+            ],
+        );
+        for seed in 0..100 {
+            let (before, gain) = audio.seeded_pack_asset("impact", seed).unwrap();
+            audio.pack_asset("impact");
+            let (after, later_gain) = audio.seeded_pack_asset("impact", seed).unwrap();
+            assert!(Arc::ptr_eq(&before, &after));
+            assert_eq!(gain, later_gain);
+            assert_eq!(
+                gain,
+                if Arc::ptr_eq(&before, &asset) {
+                    0.4
+                } else {
+                    0.2
+                }
+            );
+        }
+        let counter = audio.sound_choice_counter;
+        for _ in 0..1000 {
+            audio.contact_profile("impact", [1000., 1., 0.], 12);
+        }
+        assert_eq!(audio.contact_pending.len(), 16);
+        assert_eq!(audio.dropped, 984);
+        audio.tick(
+            0.05,
+            Listener {
+                position: [1000., 1., 0.],
+                ..Default::default()
+            },
+        );
+        assert_eq!(audio.sound_choice_counter, counter);
+        assert!(audio.contact_pending.is_empty());
+        assert_eq!(
+            audio.stats().started,
+            16,
+            "listener must precede local starts"
+        );
+        assert!(audio.take_capture().iter().any(|v| v.abs() > 1e-5));
+        let started = audio.stats().started;
+        audio.tick(0.05, Listener::default());
+        assert_eq!(audio.stats().started, started);
+        audio.contact_profile("missing", [0.; 3], 0);
+        let mut looping = SoundAsset::world("contact_loop", data, 1., 10.);
+        looping.playback.looping = true;
+        audio
+            .pack_sounds
+            .insert("loop".into(), (Arc::new(looping), 1.));
+        audio.contact_profile("loop", [0.; 3], 0);
+        audio.tick(0.01, Listener::default());
+        assert_eq!(audio.stats().started, started);
+        audio.contact_profile("impact", [0.; 3], 1);
+        audio.clear();
+        assert!(audio.contact_pending.is_empty());
+        audio.tick(0.01, Listener::default());
+        assert_eq!(audio.stats().started, started);
         Ok(())
     }
 

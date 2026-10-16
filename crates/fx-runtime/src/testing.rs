@@ -73,6 +73,7 @@ pub fn particle(id: &str, keys: Vec<ParticleKey>) -> Particle {
         id: id.into(),
         texture: TEXTURE.into(),
         contact: None,
+        contact_audio: None,
         lit: false,
         orientation: None,
         alpha_blend: true,

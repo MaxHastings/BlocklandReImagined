@@ -21,17 +21,42 @@ impl ContactHit {
             && self.normal.length_squared() > 0.5
     }
 }
+/// A real inward impact, before bounce/death. Sweep evidence is retained for
+/// the host to resolve material against the same immutable world snapshot.
+#[derive(Clone, Debug)]
+pub struct ContactImpact {
+    pub source: EffectHandle,
+    pub particle_id: u64,
+    pub ordinal: u32,
+    pub definition: usize,
+    pub from: Vec3,
+    pub to: Vec3,
+    pub fraction: f32,
+    pub point: Vec3,
+    pub normal: Vec3,
+    pub incoming_velocity: Vec3,
+    pub lateness: f32,
+}
+impl ContactImpact {
+    pub fn sound_seed(&self) -> u64 {
+        self.particle_id ^ u64::from(self.ordinal).wrapping_mul(0xe7037ed1a0b428db)
+    }
+}
 // A frame's shared work budget. Exhausted sweeps wait in place; they never
 // fall back to unchecked motion through a wall.
 struct Contacts<'a> {
     query: &'a mut dyn FnMut(Vec3, Vec3) -> Option<ContactHit>,
     remaining: usize,
+    impacts: Vec<ContactImpact>,
+    dropped: u64,
 }
 impl<'a> Contacts<'a> {
     fn new(query: &'a mut dyn FnMut(Vec3, Vec3) -> Option<ContactHit>) -> Self {
         Self {
             query,
             remaining: 32768,
+            impacts: Vec::new(),
+            dropped: 0,
         }
     }
 }
@@ -203,6 +228,7 @@ pub struct Diagnostics {
     /// refilled into their clouds.
     pub wakes: u64,
     pub refilled: u64,
+    pub contact_report_drops: u64,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum StopMode {
@@ -302,8 +328,12 @@ struct Source {
     dormant: bool,
     /// Its age when a view last could see it.
     seen: f64,
+    emission: u64,
 }
 struct Particle {
+    serial: u64,
+    impacts: u32,
+    last_sound_age: Option<f32>,
     plane_right: Vec3,
     rested_at: Option<f32>,
     rest_normal: Vec3,
@@ -341,6 +371,7 @@ pub struct EffectsWorld {
     next_handle: u64,
     seed: u64,
     diagnostics: Diagnostics,
+    contact_impacts: Vec<ContactImpact>,
     /// A source's options changed since the last advance, so its particles
     /// must pick up the new wind, visibility and override keys.
     options_changed: bool,
@@ -442,6 +473,7 @@ impl EffectsWorld {
             next_handle: 1,
             seed,
             diagnostics: Diagnostics::default(),
+            contact_impacts: Vec::new(),
             options_changed: false,
             particle_texture,
             particle_reach,
@@ -549,6 +581,7 @@ impl EffectsWorld {
                 lifetime,
                 dormant: false,
                 seen: 0.,
+                emission: 0,
             },
         );
         Ok(handle)
@@ -645,6 +678,7 @@ impl EffectsWorld {
     pub fn teardown(&mut self) {
         self.sources.clear();
         self.particles.clear();
+        self.contact_impacts.clear();
     }
     /// Emit a detached cosmetic group at an already-resolved attachment pose.
     pub fn burst_effect(
@@ -878,6 +912,24 @@ impl EffectsWorld {
         s.next = if t <= now { now + f64::from(period) } else { t };
         self.diagnostics.refilled += self.diagnostics.emitted - emitted;
     }
+    /// Consume once per simulation advance; rendering never replays contacts.
+    pub fn take_contact_impacts(&mut self) -> Vec<ContactImpact> {
+        std::mem::take(&mut self.contact_impacts)
+    }
+    pub fn contact_profile(&self, impact: &ContactImpact, surface: &str) -> Option<&str> {
+        let audio = self
+            .pack
+            .library
+            .particles
+            .get(impact.definition)?
+            .contact_audio
+            .as_ref()?;
+        audio
+            .surfaces
+            .get(surface)
+            .or(audio.fallback.as_ref())
+            .map(String::as_str)
+    }
     /// Host supplies elapsed cosmetic time and a native Y-up world wind vector.
     /// Dead particles expire at full elapsed time. Work on overdue emissions is bounded.
     pub fn advance(&mut self, dt: f32, wind: Vec3) -> Result<()> {
@@ -894,6 +946,7 @@ impl EffectsWorld {
             dt.is_finite() && (0.0..=86400.0).contains(&dt) && wind.is_finite(),
             "Invalid effects timestep/wind"
         );
+        self.contact_impacts.clear();
         if dt == 0. {
             return Ok(());
         }
@@ -996,6 +1049,11 @@ impl EffectsWorld {
         }
         sources.retain(|_, source| source.age < source.lifetime);
         self.sources = sources;
+        self.diagnostics.contact_report_drops = self
+            .diagnostics
+            .contact_report_drops
+            .saturating_add(contact.dropped);
+        self.contact_impacts = contact.impacts;
         Ok(())
     }
     fn emit(
@@ -1007,6 +1065,10 @@ impl EffectsWorld {
         wind: Vec3,
         contact: &mut Contacts<'_>,
     ) {
+        let serial = self.seed
+            ^ handle.0.wrapping_mul(0xa0761d6478bd642f)
+            ^ s.emission.wrapping_mul(0x8ebc6af09c88c6e3);
+        s.emission = s.emission.wrapping_add(1);
         let e = &self.pack.library.emitters[s.definition];
         let choices = &self.emitter_particles[s.definition];
         let definition = choices[(s.rng.unit() * choices.len() as f32) as usize];
@@ -1075,6 +1137,9 @@ impl EffectsWorld {
                 (rate, start, reverse)
             });
         let mut particle = Particle {
+            serial,
+            impacts: 0,
+            last_sound_age: None,
             plane_right: if p.orientation == Some(bri_content::effects::ParticleOrientation::Plane)
             {
                 t.rotation * Vec3::X
@@ -1229,10 +1294,6 @@ impl EffectsWorld {
                     continue;
                 };
                 let normal = hit.normal.normalize();
-                if style.die_on_contact {
-                    p.age = p.lifetime;
-                    break;
-                }
                 // Evaluate velocity at the hit time, rather than reflecting the
                 // accelerated velocity from the end of the whole sweep.
                 p.position = start;
@@ -1242,8 +1303,42 @@ impl EffectsWorld {
                 p.position = start.lerp(end, hit.fraction) + normal * 0.001;
                 let inward = p.velocity.dot(normal);
                 if inward < 0.0 {
+                    p.impacts = p.impacts.saturating_add(1);
+                    let lateness = remaining + step * (1.0 - hit.fraction);
+                    let age = p.age - lateness;
+                    if let Some(audio) = &def.contact_audio
+                        && -inward >= audio.min_inward_speed
+                        && p.impacts <= audio.max_impacts
+                        && lateness <= audio.max_lateness_seconds
+                        && p.last_sound_age
+                            .is_none_or(|last| age - last >= audio.cooldown_seconds)
+                    {
+                        // Eligibility history advances even when the bounded report is dropped.
+                        p.last_sound_age = Some(age);
+                        if contact.impacts.len() < 64 {
+                            contact.impacts.push(ContactImpact {
+                                source: p.owner,
+                                particle_id: p.serial,
+                                ordinal: p.impacts,
+                                definition: p.definition,
+                                from: start,
+                                to: end,
+                                fraction: hit.fraction,
+                                point: start.lerp(end, hit.fraction),
+                                normal,
+                                incoming_velocity: p.velocity,
+                                lateness,
+                            });
+                        } else {
+                            contact.dropped = contact.dropped.saturating_add(1);
+                        }
+                    }
                     p.velocity = (p.velocity - normal * inward) * (1.0 - style.friction)
                         - normal * inward * style.restitution;
+                }
+                if style.die_on_contact {
+                    p.age = p.lifetime;
+                    break;
                 }
                 // Only support against acceleration can settle a point: side
                 // walls cannot suspend a slow fragment in midair.
@@ -1748,6 +1843,7 @@ mod tests {
                     id: "particle".into(),
                     texture: "original".into(),
                     contact: None,
+                    contact_audio: None,
                     lit: false,
                     orientation: None,
                     alpha_blend: true,

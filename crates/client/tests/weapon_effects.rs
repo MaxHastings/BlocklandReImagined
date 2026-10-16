@@ -25,6 +25,7 @@ fn fixture(finite: bool) -> Arc<EffectsPack> {
                 id: "particle".into(),
                 texture: "texture".into(),
                 contact: None,
+                contact_audio: None,
                 lit: false,
                 orientation: None,
                 alpha_blend: true,

@@ -22,6 +22,19 @@ use std::{
 
 const MAX_MESSAGES: usize = 128;
 
+/// Resolve only the same nearest hit on the original sweep, under one world snapshot.
+/// A nearer occluder, missing geometry or a different face must not borrow its sound.
+pub fn contact_surface(
+    building: &crate::building::Building,
+    impact: &bri_fx_runtime::ContactImpact,
+) -> Option<String> {
+    let (hit, surface) = building.surface_at(impact.from, impact.to).ok()??;
+    let length = impact.from.distance(impact.to);
+    ((hit.distance - length * impact.fraction).abs() <= 0.0001
+        && hit.normal.normalize().dot(impact.normal) > 0.999)
+        .then(|| surface.to_owned())
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct Diagnostics {
     pub accepted_cues: u64,
@@ -30,6 +43,7 @@ pub struct Diagnostics {
     pub missing_poses: u64,
     pub capacity_rejections: u64,
     pub host_queue_drops: u64,
+    pub contact_mapping_misses: u64,
     pub deferred_attachments: usize,
     pub messages: BTreeSet<String>,
 }
@@ -852,6 +866,25 @@ impl WeaponEffects {
         pose: impl FnMut(&Cue) -> Option<SourceTransform>,
     ) -> Result<()> {
         self.advance_with_contacts(dt, wind, pose, |_, _| None)
+    }
+    /// Resolve the exact sweep against the host's unchanged world snapshot.
+    /// Unknown surfaces/mappings remain silent. Called once after advance.
+    pub fn take_contact_audio(
+        &mut self,
+        mut surface: impl FnMut(&bri_fx_runtime::ContactImpact) -> Option<String>,
+    ) -> Vec<(String, [f32; 3], u64)> {
+        let mut sounds = Vec::new();
+        for hit in self.world.take_contact_impacts() {
+            let profile =
+                surface(&hit).and_then(|surface| self.world.contact_profile(&hit, &surface));
+            if let Some(profile) = profile {
+                sounds.push((profile.to_owned(), hit.point.to_array(), hit.sound_seed()));
+            } else {
+                self.diagnostics.contact_mapping_misses =
+                    self.diagnostics.contact_mapping_misses.saturating_add(1);
+            }
+        }
+        sounds
     }
     /// As advance, with cosmetic structure sweeps supplied by the actual world.
     pub fn advance_with_contacts(
