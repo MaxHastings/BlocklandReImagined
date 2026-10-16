@@ -46,13 +46,17 @@ pub struct AnimationClip {
     pub looping: bool,
 }
 type ClipIndex = BTreeMap<(String, String), AnimationClip>;
+struct ValidatedAnimationAssets {
+    clips: ClipIndex,
+    rigs: BTreeMap<String, super::body_pose::NativePoseRig>,
+}
 impl AnimationAssets {
     /// Lets bounded loaders retain supported resources without making optional
     /// missing clock metadata a failure of legacy hosting.
     pub fn within_resource_budget(count: usize, bytes: usize) -> bool {
         count <= MAX_ASSETS && bytes <= MAX_TOTAL_BYTES
     }
-    fn index(&self) -> Result<ClipIndex> {
+    fn index(&self) -> Result<ValidatedAnimationAssets> {
         ensure!(
             self.assets.len() <= MAX_ASSETS && self.images.len() <= 4096,
             "Animation catalog bounds"
@@ -60,6 +64,7 @@ impl AnimationAssets {
         let mut total = 0usize;
         let mut resources = BTreeSet::new();
         let mut clips = BTreeMap::new();
+        let mut rigs = BTreeMap::new();
         for asset in &self.assets {
             total = total
                 .checked_add(asset.bytes.len())
@@ -76,23 +81,33 @@ impl AnimationAssets {
                 bri_package::environment::hash_bytes(&asset.bytes) == asset.digest,
                 "Animation resource digest mismatch"
             );
-            let sequences = if asset.rig {
+            let rig = if asset.rig {
                 let rig: Rig = serde_json::from_slice(&asset.bytes)?;
                 rig.validate()?;
-                rig.sequences
+                rig
             } else {
                 let shape: Shape = serde_json::from_slice(&asset.bytes)?;
                 shape.validate()?;
                 let mut sequences = BTreeMap::new();
-                for animation in shape.animations {
+                for animation in &shape.animations {
                     let name = animation.name.to_ascii_lowercase();
                     ensure!(
-                        !name.is_empty() && sequences.insert(name, animation).is_none(),
+                        !name.is_empty() && sequences.insert(name, animation.clone()).is_none(),
                         "Ambiguous animation alias"
                     );
                 }
-                sequences
+                // Shape validation admits bind-only bodies. Full-avatar Rig
+                // validation separately requires nonempty sequence metadata.
+                Rig {
+                    schema_version: 1,
+                    id: asset.resource.clone(),
+                    shape,
+                    sequences,
+                    sources: vec![],
+                    omissions: vec![],
+                }
             };
+            let sequences = &rig.sequences;
             ensure!(sequences.len() <= 256, "Animation sequence count");
             for (name, animation) in sequences {
                 animation.validate()?;
@@ -105,12 +120,19 @@ impl AnimationAssets {
                     AnimationClip {
                         resource: asset.resource.clone(),
                         digest: asset.digest.clone(),
-                        sequence: name,
+                        sequence: name.clone(),
                         duration: f64::from(animation.duration),
                         looping: animation.looping,
                     },
                 );
             }
+            rigs.insert(
+                asset.resource.clone(),
+                super::body_pose::NativePoseRig {
+                    digest: asset.digest.clone(),
+                    rig: Arc::new(rig),
+                },
+            );
         }
         for (image, binding) in &self.images {
             ensure!(
@@ -121,7 +143,7 @@ impl AnimationAssets {
                 "Invalid animation image binding"
             );
         }
-        Ok(clips)
+        Ok(ValidatedAnimationAssets { clips, rigs })
     }
     pub fn validate(&self) -> Result<()> {
         self.index().map(|_| ())
@@ -472,7 +494,20 @@ impl Session {
         self.animations.receipts.retain(|r| r.owner != owner);
     }
     pub fn set_animation_assets(&mut self, assets: AnimationAssets) -> Result<()> {
-        let clips = assets.index()?;
+        let bindings = self.body_poses.retained_bindings(&assets);
+        self.set_body_pose_assets(assets, bindings)
+    }
+    /// One verified catalog transaction for clocks and retained native body inputs.
+    /// Failed preparation leaves every existing generation and entry intact.
+    pub fn set_body_pose_assets(
+        &mut self,
+        assets: AnimationAssets,
+        bindings: BodyPoseBindings,
+    ) -> Result<()> {
+        let validated = assets.index()?;
+        let body_poses =
+            super::body_pose::BodyPoseInputs::prepare(validated.rigs, bindings, &self.archetypes)?;
+        let clips = validated.clips;
         ensure!(
             self.animations
                 .revision
@@ -544,6 +579,7 @@ impl Session {
             .checked_add(1)
             .context("Animation catalog exhausted")?;
         self.animations.assets = assets;
+        self.body_poses = body_poses;
         self.animations.clips = clips;
         self.animations.revision += 1;
         for owner in changed_bodies {

@@ -492,6 +492,7 @@ impl App {
                 catalog,
                 weapon_pack,
                 animation_assets,
+                body_pose_bindings,
                 item_bounds,
                 (vehicle_pack, bot_kinds),
                 recipe_start,
@@ -499,15 +500,16 @@ impl App {
                 let _permit = permit;
                 let weapons = paths.weapon_content()?;
                 weapon_snapshot.ensure_same(&weapons)?;
-                let animation_assets = bri_net::content_identity::animation_assets(
-                    &paths.root,
-                    &paths.packages,
-                    &paths.avatar,
-                    &animation_avatar,
-                    &weapons.pack,
-                    &paths.item_presentation,
-                    &paths.weapon_extras,
-                )?;
+                let (animation_assets, body_pose_bindings) =
+                    bri_net::content_identity::body_pose_assets(
+                        &paths.root,
+                        &paths.packages,
+                        &paths.avatar,
+                        &animation_avatar,
+                        &weapons.pack,
+                        &paths.item_presentation,
+                        &paths.weapon_extras,
+                    )?;
                 let item_physics = paths.item_physics(&weapons)?;
                 physics_snapshot.ensure_same(&item_physics)?;
                 // Package worlds grow their ground when the session is
@@ -604,6 +606,7 @@ impl App {
                     catalog,
                     weapons.pack,
                     animation_assets,
+                    body_pose_bindings,
                     item_physics.bounds,
                     (vehicle_pack, bot_kinds),
                     recipe_start,
@@ -633,6 +636,7 @@ impl App {
                 lan: !internet,
                 content: bri_net::host_setup::SessionContent {
                     animation_assets,
+                    body_pose_bindings,
                     tool_catalog: catalog,
                     weapon_pack,
                     item_bounds,

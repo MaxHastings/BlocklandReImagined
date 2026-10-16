@@ -207,17 +207,18 @@ after extraction. Quick and scoped focused pass with client590/content101 and32 
 integration controls; the full receipt is in the Stage C progress note. Existing control assertions are unchanged.
 
 
-## Next host-pose atom proposed: D1 retained native inputs
+## D1 retained native inputs (granted)
 
-**Proposal only; no paths below are granted or edited.** Root controls dependency
-merges. Before D1, root must arrange this branch to contain immutable Stage1
-`94bae5632d1a19d16d9c663e146bcc5034522d55` and the required metadata correction
-`853d02f3c3b076cf28e9c59dac7ec6d7758555e9`, plus its reviewed sampler dependency.
-Those commits were inspected by git show; they have not been cherry-picked here.
-No statement that they passed the integrated candidate or are main/released follows.
+Root granted the exact D1 paths below and authorized merging immutable input
+3775cc0149d825c8c545462e32c165561e223018 into this isolated v0.3.2 branch.
+Merge07ae6344639a3cec902d621de7b929f24c9af0d9 contains Stage1 and its required
+metadata correction, sampler/root oracle correction and release UI fix. The only
+conflict was the seam table; both sets of ownership rows were retained. This is
+not a reverse merge into the release or main. All seven key immutable-input
+control groups passed; exact separate receipts are in the D1 progress note.
 
-Request the following exact next production reservation, initially for asset
-registration and read-only native diagnostics, with no gameplay-origin switch:
+D1 implements registration and read-only native diagnostics only. No gameplay
+origin switch, live pose sampling or additional lifecycle state is granted.
 
 | Path | D1 change |
 |---|---|
@@ -229,18 +230,19 @@ registration and read-only native diagnostics, with no gameplay-origin switch:
 | `crates/net/src/dedicated.rs` | Construct that common binding input beside existing animation assets |
 | `crates/client/src/app/session.rs` | Same constructor propagation from the existing background native loader for local hosts |
 
-Test reservation requested: new `crates/sim/tests/body_pose_assets.rs`, new
+Granted test reservation: new `crates/sim/tests/body_pose_assets.rs`, new
 `crates/net/tests/body_pose_metadata.rs`, and constructor propagation in existing
 `crates/net/tests/host_setup.rs` and `crates/client/tests/trench_dig_flow.rs`.
 The latter two are the only test SessionContent literals found by git grep at
 853d02f3; discovered additional paths still require root coordination.
 
-Proposed native-only API, final names/layout subject to review:
+Implemented native-only API:
 
 ```text
 BodyPoseBinding { model, resource, fitted }
+BodyPoseBindings { reference_resource: Option<String>, bodies: Vec<BodyPoseBinding> }
 Session::set_body_pose_assets(assets: AnimationAssets, bindings) -> Result<()>
-Session::body_pose_asset_info(archetype: ArchetypeId) -> BodyPoseAssetInfo
+Session::body_pose_asset_info(archetype: ArchetypeId) -> Result<Arc<BodyPoseAssetInfo>>
 ```
 
 Bindings describe provider facts, not duplicate role/socket policy. Resolve the
@@ -249,7 +251,8 @@ relevant native policy (roles, sockets, preservation, stand-in/fitted state),
 resource digest and node layout. Cache identity cannot be model/preserve alone.
 Shared immutable Rig allocation may be keyed by existing resource/digest; fitted
 policy/RoleClips/hand indices are per actual definition. On definition changes,
-compare full native policy and rebuild that entry. Asset catalog replacement
+compare the full actual Archetype snapshot; changed policy resolves read-only
+against retained immutable rigs, without reusing a stale model-only entry. Asset catalog replacement
 invalidates resource-dependent entries through Stage1's existing catalog owner.
 No new actor/item/asset counters, script-supplied rig, texture loading or render
 objects enter sim. Registration remains transactional: malformed input cannot
@@ -260,14 +263,27 @@ swap. It must not install a second catalog or perform two fallible mutations in
 sequence. Existing set_animation_assets callers retain their established clock
 semantics through that same validation owner.
 
-The current Stage1 catalog retains verified raw native bytes but indexes only
-clip metadata. Its read_shape loader explicitly drops animation-empty shapes.
-D1 must deliberately retain validated bind-only body resources through the same
-bounded asset owner; simply decoding current clock entries cannot close that
-case. Optional absent/ambiguous/over-budget bodies remain named unsupported
-inputs and preserve ordinary hosting, as Stage1 already does for optional metadata.
-Original readers remain offline. No second catalog silently weakens the hash or
-provider-conflict checks fixed by853d02f3.
+Stage1's baseline retained verified raw native bytes but indexed only clip metadata
+and dropped animation-empty shapes. D1 returns parsed native rigs and clip metadata
+from that same validator and retains valid bind-only body resources. Image-only
+empty animation metadata keeps its existing unsupported behavior. Optional selected
+source read/budget failures stay named unsupported, and the actual selected source
+is not silently replaced by an alternate. Existing image ambiguity containment,
+definite body-resource conflict rejection and mandatory stock hash failures remain.
+No original reader or weaker second catalog is introduced.
+
+Root reviewed reference ownership: the registration carries ONE explicit optional
+reference_resource. Unknown references and duplicate JSON identity fields reject;
+absence leaves reference seat-hip fitting absent, while independent hand fitting
+remains permissive. Neither native encoding nor an overridden default actor
+chooses the reference. The common loader declares its known avatar resource.
+
+D1 covers explicit avatar/package-body bindings. Missing bindings, stand-in models
+and separately vehicle-owned rigs remain named unsupported; no stock rig is
+substituted. Vehicle/load_horse provider work is not granted in D1. Existing
+ordinary hosting/gameplay and static grip policy remain in place. Data receipts
+contain full definitions, actual resource/reference digests, resolved roles/socket
+indices and shared static BodyFits, not live eye/fire or attachment transforms.
 
 D1 acceptance: actual local/common/dedicated setup produces equivalent native
 resource digests and resolved body inputs; two archetypes sharing a model with
@@ -277,7 +293,8 @@ providers and budgets are bounded; failed replacement retains prior catalog,
 playback identities and resolved entries. Compare registered fitting to the shared
 native functions/actual Avatar control, using invented content only. Existing
 Stage1 animation_metadata, animation_identity and authoritative Session clock
-controls must remain green. Run scoped quick/focused and report exact SHA.
+controls must remain green. Targeted native2/net3 controls, changed-crate quick1074 and scoped focused1898
+pass. Exact commands and immutable-input receipts are in the D1 progress note.
 This checkpoint exposes assets only; it cannot turn the mounted Session red test
 green, change a shot origin or satisfy original pose/camera fidelity.
 
