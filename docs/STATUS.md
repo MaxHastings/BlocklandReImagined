@@ -17,7 +17,7 @@ source `ee244a8449382516d24a7460c0e7b78e00128573`, with Windows x86-64,
 Apple silicon macOS and Linux x86-64 archives. Intermediate v0.3.1 engine
 checkpoints are on main through `3436de89`, with exact full-gate and Windows
 evidence in [the follow-up integration record](progress/2026-10-16-followup-main-and-next-halo-preview.md).
-The next camera/portal candidate is on `codex/v031-camera-portal-integration`;
+The next camera/portal/contact candidate is on `codex/v031-camera-portal-integration`;
 its validation and main integration remain pending. Release notes are in
 [docs/releases/v0.3.1.md](releases/v0.3.1.md). This is an alpha release, and
 interactive acceptance and the broader alpha definition of done remain open.
