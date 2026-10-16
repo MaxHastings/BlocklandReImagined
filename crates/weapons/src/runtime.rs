@@ -112,6 +112,37 @@ pub fn host_tool(image: &Image) -> Option<HostTool> {
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct ActorId(pub u64);
+
+/// Host-owned body identity; unlike a tick it distinguishes repeated births.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AnimationOwner {
+    pub life: u64,
+    pub body: u64,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AnimationItem {
+    pub slot: usize,
+    pub generation: u64,
+    pub item: String,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AnimationImage {
+    pub hand: u8,
+    pub generation: u64,
+    pub image: String,
+    pub emote: bool,
+}
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AnimationBinding {
+    pub owner: Option<AnimationOwner>,
+    pub item: Option<AnimationItem>,
+    pub image: Option<AnimationImage>,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AnimationProvenance {
+    pub serial: u64,
+    pub binding: AnimationBinding,
+}
 impl ActorId {
     /// No actor: the thrower of an item the world itself put down (the
     /// `spawnItem` event, an Add-On rule's `drop_item`). Owners start at 1.
@@ -425,6 +456,7 @@ pub enum Event {
         thread: u8,
         sequence: String,
         image_hand: Option<u8>,
+        provenance: Option<AnimationProvenance>,
     },
     Sound {
         source: TargetId,
@@ -752,6 +784,8 @@ fn loaded() -> bool {
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct Equipped {
+    #[serde(default)]
+    animation_generation: Option<u64>,
     image: String,
     state: usize,
     remaining: u32,
@@ -776,6 +810,10 @@ struct NextImage {
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Actor {
+    #[serde(default)]
+    animation_owner: Option<AnimationOwner>,
+    #[serde(default)]
+    animation_items: Vec<Option<u64>>,
     pub inventory: Vec<Option<String>>,
     pub selected: Option<usize>,
     pub frame: Frame,
@@ -843,6 +881,8 @@ pub const EMOTE_SLOT: u8 = 3;
 /// state began (v20 scheduled `serverPlay3D` with the position then).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 struct PendingCue {
+    #[serde(default)]
+    animation_binding: Option<AnimationBinding>,
     due: u64,
     cue: crate::Cue,
     position: Vec3,
@@ -1046,6 +1086,7 @@ pub const HAND_SLOTS: usize = 2;
 /// Slots worn on the body, which tool changes leave alone.
 pub const WORN_SLOTS: std::ops::Range<usize> = HAND_SLOTS..IMAGE_SLOTS;
 pub struct WeaponsWorld {
+    animation_serial: u64,
     pub pack: Arc<Pack>,
     pub tick: u64,
     actors: BTreeMap<ActorId, Actor>,
@@ -1071,6 +1112,103 @@ pub struct WeaponsWorld {
     stopped: Vec<(u64, ActorId, f32)>,
 }
 impl WeaponsWorld {
+    fn animation_serial(&mut self) -> Option<u64> {
+        self.animation_serial = self.animation_serial.checked_add(1)?;
+        Some(self.animation_serial)
+    }
+    pub fn set_animation_owner(&mut self, id: ActorId, owner: AnimationOwner) -> Result<()> {
+        ensure!(owner.life > 0 && owner.body > 0, "Invalid animation owner");
+        self.actors
+            .get_mut(&id)
+            .context("Unknown actor")?
+            .animation_owner = Some(owner);
+        Ok(())
+    }
+    pub fn animation_owner(&self, id: ActorId) -> Option<AnimationOwner> {
+        self.actors.get(&id)?.animation_owner
+    }
+    pub fn animation_item(&self, id: ActorId, slot: usize) -> Option<AnimationItem> {
+        Self::animation_item_of(self.actors.get(&id)?, slot)
+    }
+    fn animation_item_of(a: &Actor, slot: usize) -> Option<AnimationItem> {
+        Some(AnimationItem {
+            slot,
+            generation: a.animation_items.get(slot).copied().flatten()?,
+            item: a.inventory.get(slot)?.clone()?,
+        })
+    }
+    pub fn animation_image(&self, id: ActorId, hand: u8, emote: bool) -> Option<AnimationImage> {
+        let a = self.actors.get(&id)?;
+        let e = if emote {
+            a.emote.as_ref()?
+        } else {
+            a.images.get(usize::from(hand))?.as_ref()?
+        };
+        Self::animation_image_of(e, emote)
+    }
+    fn animation_image_of(e: &Equipped, emote: bool) -> Option<AnimationImage> {
+        Some(AnimationImage {
+            hand: e.hand,
+            generation: e.animation_generation?,
+            image: e.image.clone(),
+            emote,
+        })
+    }
+    fn animation_binding(&self, a: &Actor, e: Option<&Equipped>) -> AnimationBinding {
+        let e = e.or(a.images[0].as_ref());
+        let image = e.and_then(|e| Self::animation_image_of(e, false));
+        let item = a
+            .selected
+            .and_then(|slot| Self::animation_item_of(a, slot))
+            .filter(|item| {
+                let Some(e) = e else {
+                    return false;
+                };
+                let Some(held) = self.pack.items.get(&item.item) else {
+                    return false;
+                };
+                match e.hand {
+                    0 => held.image == e.image,
+                    1 => {
+                        self.pack
+                            .images
+                            .get(&held.image)
+                            .and_then(|i| i.left_image.as_ref())
+                            == Some(&e.image)
+                    }
+                    _ => false,
+                }
+            });
+        AnimationBinding {
+            owner: if e.is_some() && image.is_none() {
+                None
+            } else {
+                a.animation_owner
+            },
+            item,
+            image,
+        }
+    }
+    fn emit_animation(
+        &mut self,
+        actor: ActorId,
+        thread: u8,
+        sequence: String,
+        image_hand: Option<u8>,
+        binding: Option<AnimationBinding>,
+    ) {
+        let provenance = binding.and_then(|binding| {
+            self.animation_serial()
+                .map(|serial| AnimationProvenance { serial, binding })
+        });
+        self.events.push(Event::Animation {
+            actor,
+            thread,
+            sequence,
+            image_hand,
+            provenance,
+        });
+    }
     pub fn new(pack: Pack) -> Result<Self> {
         pack.validate()?;
         anyhow::ensure!(
@@ -1083,6 +1221,7 @@ impl WeaponsWorld {
                 .join(", ")
         );
         Ok(Self {
+            animation_serial: 0,
             pack: Arc::new(pack),
             tick: 0,
             actors: BTreeMap::new(),
@@ -1227,6 +1366,8 @@ impl WeaponsWorld {
         self.actors.insert(
             id,
             Actor {
+                animation_owner: None,
+                animation_items: vec![None; slots],
                 inventory: vec![None; slots],
                 selected: None,
                 frame: Frame::default(),
@@ -1339,9 +1480,14 @@ impl WeaponsWorld {
         ensure!(self.contains_item(item), "Unknown item");
         // `ItemData::onPickup` takes the first free slot; v20 has no
         // duplicate check, so a player may carry two of one item.
-        let a = self.actors.get_mut(&id).context("Unknown actor")?;
-        let place = a.inventory.get_mut(slot).context("Invalid item slot")?;
+        let a = self.actors.get(&id).context("Unknown actor")?;
+        let place = a.inventory.get(slot).context("Invalid item slot")?;
         ensure!(place.is_none(), "Occupied item slot");
+        let generation = self.animation_serial();
+        let a = self.actors.get_mut(&id).expect("checked");
+        a.animation_items.resize(a.inventory.len(), None);
+        a.animation_items[slot] = generation;
+        let place = &mut a.inventory[slot];
         *place = Some(item.into());
         // A gun new to the slot comes with a full magazine.
         a.rounds.remove(&slot_key(item, slot));
@@ -1361,10 +1507,15 @@ impl WeaponsWorld {
             .inventory
             .len();
         ensure!(items.len() == slots, "Loadout slot count mismatch");
+        let generations: Vec<_> = items
+            .iter()
+            .map(|item| item.as_ref().and_then(|_| self.animation_serial()))
+            .collect();
         let mut a = self.actors.remove(&id).context("Unknown actor")?;
         self.unmount(id, &mut a);
         a.selected = None;
         a.inventory = items.to_vec();
+        a.animation_items = generations;
         // Each slot's magazine stays with the gun still in it.
         let kept: BTreeSet<String> = a
             .inventory
@@ -1723,15 +1874,16 @@ impl WeaponsWorld {
             Self::apply_check(a, &key, magazine, check);
         }
         if !magazine.reload_sequence.is_empty() {
-            self.animation(id, &magazine.reload_sequence);
+            self.animation(id, a, None, &magazine.reload_sequence);
         }
         if !magazine.reload_image_sequence.is_empty() {
-            self.events.push(Event::Animation {
-                actor: id,
-                thread: 0,
-                sequence: magazine.reload_image_sequence.clone(),
-                image_hand: Some(0),
-            });
+            self.emit_animation(
+                id,
+                0,
+                magazine.reload_image_sequence.clone(),
+                Some(0),
+                Some(self.animation_binding(a, None)),
+            );
         }
         if !magazine.reload_sound.is_empty() {
             self.events.push(Event::Sound {
@@ -2168,8 +2320,10 @@ impl WeaponsWorld {
         let Some(image) = image.filter(|i| self.pack.images.contains_key(*i)) else {
             return Ok(());
         };
+        let animation_generation = self.animation_serial();
         let a = self.actors.get_mut(&id).expect("checked");
         a.emote = Some(Equipped {
+            animation_generation,
             image: image.into(),
             state: 0,
             remaining: 0,
@@ -2339,6 +2493,7 @@ impl WeaponsWorld {
             };
             let shown = magazine.is_some();
             a.images[hand as usize] = Some(Equipped {
+                animation_generation: self.animation_serial(),
                 image: image.into(),
                 state: 0,
                 remaining: 0,
@@ -2559,6 +2714,7 @@ impl WeaponsWorld {
         }
         let a = self.actors.get_mut(&id).unwrap();
         a.inventory[slot] = None;
+        a.animation_items[slot] = None;
         // The magazine goes with the gun (`servercmdDropTool` handing
         // `TT_toolAmmo[%slot]` to the item); another of it keeps its own.
         let rounds = a.rounds.remove(&slot_key(&item, slot));
@@ -2694,6 +2850,7 @@ impl WeaponsWorld {
         }
         let a = self.actors.get_mut(&id).expect("checked");
         a.inventory[slot] = None;
+        a.animation_items[slot] = None;
         a.rounds.remove(&slot_key(item, slot));
         Ok(Some(slot))
     }
@@ -3072,23 +3229,25 @@ impl WeaponsWorld {
                     }
                 }
                 if !state.sequence.is_empty() {
-                    self.events.push(Event::Animation {
-                        actor: id,
-                        thread: 0,
-                        sequence: state.sequence.clone(),
-                        image_hand: Some(e.hand),
-                    });
+                    self.emit_animation(
+                        id,
+                        0,
+                        state.sequence.clone(),
+                        Some(e.hand),
+                        Some(self.animation_binding(a, Some(e))),
+                    );
                 }
                 if !state.arm.is_empty() && (!state.arm_once || left != Some(e.state)) {
-                    self.animation(id, &state.arm);
+                    self.animation(id, a, Some(e), &state.arm);
                 }
                 if !state.gesture.is_empty() {
-                    self.events.push(Event::Animation {
-                        actor: id,
-                        thread: 3,
-                        sequence: state.gesture.clone(),
-                        image_hand: None,
-                    });
+                    self.emit_animation(
+                        id,
+                        3,
+                        state.gesture.clone(),
+                        None,
+                        Some(self.animation_binding(a, Some(e))),
+                    );
                 }
                 if !state.sound.is_empty() {
                     self.events.push(Event::Sound {
@@ -3099,6 +3258,7 @@ impl WeaponsWorld {
                 }
                 for cue in &state.cues {
                     let pending = PendingCue {
+                        animation_binding: Some(self.animation_binding(a, Some(e))),
                         due: self.tick + cue.ticks(),
                         cue: cue.clone(),
                         position: a.frame.position,
@@ -3279,12 +3439,7 @@ impl WeaponsWorld {
         if let Some(thread) = c.cue.thread
             && !c.cue.sequence.is_empty()
         {
-            self.events.push(Event::Animation {
-                actor: id,
-                thread,
-                sequence: c.cue.sequence,
-                image_hand: None,
-            });
+            self.emit_animation(id, thread, c.cue.sequence, None, c.animation_binding);
         }
         if !c.cue.sound.is_empty() {
             self.events.push(Event::Sound {
@@ -3294,13 +3449,14 @@ impl WeaponsWorld {
             });
         }
     }
-    fn animation(&mut self, id: ActorId, sequence: &str) {
-        self.events.push(Event::Animation {
-            actor: id,
-            thread: 2,
-            sequence: sequence.into(),
-            image_hand: None,
-        });
+    fn animation(&mut self, id: ActorId, a: &Actor, e: Option<&Equipped>, sequence: &str) {
+        self.emit_animation(
+            id,
+            2,
+            sequence.into(),
+            None,
+            Some(self.animation_binding(a, e)),
+        );
     }
     /// The image state scripts [`Self::callback`] runs itself, as v20's
     /// stock `WeaponImage` functions did, for an image whose Add-On does not
@@ -3356,7 +3512,7 @@ impl WeaponsWorld {
         let ported = image.scripts.get(&script);
         if let Some(s) = ported {
             if !s.arm.is_empty() {
-                self.animation(id, &s.arm);
+                self.animation(id, a, Some(e), &s.arm);
             }
             if !s.fire {
                 return true;
@@ -3373,7 +3529,7 @@ impl WeaponsWorld {
         // state's own `arm`, played as it was entered.
         let state_arm = image.states.get(e.state).is_some_and(|s| !s.arm.is_empty());
         match script {
-            "onabortcharge" | "onstopfire" if !state_arm => self.animation(id, "root"),
+            "onabortcharge" | "onstopfire" if !state_arm => self.animation(id, a, Some(e), "root"),
             "onfireakimbo" => {
                 if let Some(left) = &mut a.images[1] {
                     left.trigger = true;
@@ -3804,7 +3960,7 @@ impl WeaponsWorld {
                 if ported.is_some() || state_arm {
                     // The port or the state played the arm's own animation.
                 } else if e.hand == 1 {
-                    self.animation(id, "leftrecoil");
+                    self.animation(id, a, Some(e), "leftrecoil");
                 }
                 if sport {
                     self.ball_released(id, a.frame.eye);
@@ -3812,10 +3968,11 @@ impl WeaponsWorld {
                     if let Some(slot) = a.selected
                         && let Some(item) = a.inventory[slot].take()
                     {
+                        a.animation_items[slot] = None;
                         a.rounds.remove(&slot_key(&item, slot));
                     }
                     self.unmount(id, a);
-                    self.animation(id, "root");
+                    self.animation(id, a, Some(e), "root");
                     return false;
                 }
             }

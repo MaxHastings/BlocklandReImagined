@@ -82,6 +82,7 @@ impl Session {
         let spray = self.peers[&owner].current_color;
         self.weapons.set_spray_color(ActorId(owner), spray)?;
         self.weapons.equip(ActorId(owner), slot)?;
+        self.reconcile_animation_bindings();
         if previous != slot {
             self.peers.get_mut(&owner).unwrap().inspection = None;
         }
@@ -135,6 +136,7 @@ impl Session {
                 self.weapons.give_at(actor, slot, item)?;
             }
         }
+        self.new_animation_life(owner)?;
         Ok(())
     }
 

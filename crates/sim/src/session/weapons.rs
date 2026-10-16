@@ -698,7 +698,17 @@ impl Session {
                     thread,
                     sequence,
                     image_hand,
+                    provenance,
                 } => {
+                    if let Some(provenance) = provenance {
+                        self.native_animation(
+                            actor.0,
+                            thread,
+                            &sequence,
+                            image_hand,
+                            Some(provenance),
+                        );
+                    }
                     let position = self
                         .peers
                         .get(&actor.0)

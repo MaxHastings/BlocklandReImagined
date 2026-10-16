@@ -13,6 +13,12 @@ use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::sync::Arc;
 mod admin;
+mod animation;
+pub use animation::{
+    ActiveAnimation, AnimationAsset, AnimationAssets, AnimationClip, AnimationImageAsset,
+    AnimationOutcome, AnimationRecord, AnimationStart, AnimationTarget, AnimationView, PlaybackId,
+    PreparedAnimationStart,
+};
 mod bots;
 pub use bots::{
     BotCandidate, BotDecision, BotDrive, BotEvidence, BotNotice, BotObjectiveDetail,
@@ -1022,6 +1028,7 @@ impl DeferredSave {
 }
 
 pub struct Session {
+    animations: animation::AnimationClocks,
     events: events::Events,
     specials: special::Specials,
     highlights: highlight::Highlights,
@@ -1199,6 +1206,7 @@ impl Session {
         weapons.tick = simulation.state().tick;
         Self {
             events: Default::default(),
+            animations: Default::default(),
             archetypes: Default::default(),
             absent_bodies: Vec::new(),
             tuned: Default::default(),
@@ -1985,6 +1993,7 @@ impl Session {
         self.eject(owner);
         self.release_riders(owner);
         let peer = self.peers.remove(&owner).context("Unknown connection")?;
+        self.forget_animation_owner(owner);
         self.crossings
             .forget(bri_package_runtime::ops::ObjectRef::Player(owner));
         self.admin_disconnect(owner);
@@ -2211,6 +2220,7 @@ impl Session {
             return;
         };
         let position = peer.player.state().feet;
+        self.native_animation(owner, thread, sequence, None, None);
         self.cues.emit(
             tick,
             crate::presentation::CueKind::WeaponAnimation {
@@ -2292,6 +2302,18 @@ impl Session {
     /// Network host adapter supplies an atomic durable-state commit callback.
     /// Ban/unban changes are published only after this callback succeeds.
     pub fn command_with_aim_and_admin_persistence(
+        &mut self,
+        owner: OwnerId,
+        sequence: u64,
+        command: Command,
+        aim: Option<ActionAim>,
+        persist: impl FnMut(&bri_admin::DurableState) -> Result<()>,
+    ) -> Result<Reply> {
+        let result = self.command_with_animation_boundary(owner, sequence, command, aim, persist);
+        self.reconcile_animation_bindings();
+        result
+    }
+    fn command_with_animation_boundary(
         &mut self,
         owner: OwnerId,
         sequence: u64,
@@ -3349,6 +3371,7 @@ impl Session {
         contain("vehicle return", self.return_abandoned_vehicles());
         self.player_mount_contacts();
         self.sync_seated();
+        self.advance_animations();
         contain("weapons", self.step_weapons());
         self.step_temp_colors();
         contain("items", self.step_items());
@@ -3363,6 +3386,7 @@ impl Session {
         contain("events", self.step_events(&changed));
         contain("items", self.reconcile_items());
         self.load_clock.end_step();
+        self.reconcile_animation_bindings();
         ensure!(failures.is_empty(), "{}", failures.join("; "));
         Ok(())
     }
