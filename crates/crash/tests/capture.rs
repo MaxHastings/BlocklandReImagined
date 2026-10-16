@@ -258,24 +258,28 @@ fn a_dump_that_never_finishes_leaves_no_snapshot_behind() {
         assert!(std::time::Instant::now() < deadline, "no report written");
         std::thread::yield_now();
     };
-    // The clone ends with the crashed process (the stalled dump keeps its
-    // snapshot); Windows tears it down after, later on a loaded machine.
-    // Wait for it to go, and it must not outlive the crashed process.
+    // Require both the crashed process and its clone to disappear within
+    // the cleanup bound. Toolhelp returns a snapshot: the parent and clone
+    // can exit between that snapshot and try_wait, so their separately
+    // observed states cannot establish which one exited first.
     let released = std::time::Instant::now() + bri_crash::NATIVE_CAPTURE_WAIT;
-    while !processes::children(child.id()).is_empty() {
-        assert!(
-            child.try_wait().unwrap().is_none(),
-            "the snapshot's clone outlived the crashed process"
-        );
+    let status = loop {
+        let status = child.try_wait().unwrap();
+        let clones = processes::children(child.id());
+        if let Some(status) = status
+            && clones.is_empty()
+        {
+            break status;
+        }
         assert!(
             std::time::Instant::now() < released,
-            "the snapshot's clone was never released"
+            "crash cleanup did not finish: parent={status:?}, snapshot clones={clones:?}"
         );
         std::thread::sleep(std::time::Duration::from_millis(10));
-    }
+    };
     let report = fs::read_to_string(&reports[0]).unwrap();
     assert!(report.contains("did not finish in time"), "{report}");
-    assert!(!child.wait().unwrap().success());
+    assert!(!status.success());
     let _ = reader.join();
 }
 
