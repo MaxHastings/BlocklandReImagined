@@ -875,6 +875,68 @@ impl Session {
             .cloned()
             .context("Unsupported native animation clip")
     }
+    /// Atomically admit a finite native weapon clock and optional current-weapon
+    /// writes. Trusted host only: package authorization/state publication and
+    /// source completion policy are separate responsibilities.
+    ///
+    /// Admission requires the selected ordinary right-hand instance. Afterward
+    /// the existing Weapon clock retains its inventory-custody lifetime. No
+    /// callback runs here; image-state entry remains deferred to weapon advance.
+    pub fn start_weapon_animation_with_patch(
+        &mut self,
+        owner: OwnerId,
+        request: AnimationStart,
+        expected_rounds: Option<u32>,
+        rounds: Option<u32>,
+        image_state: Option<&str>,
+    ) -> Result<PlaybackId> {
+        let slot = match &request.target {
+            AnimationTarget::Weapon(slot) => *slot,
+            _ => anyhow::bail!("Weapon patch requires a weapon target"),
+        };
+        ensure!(
+            request
+                .binding
+                .item
+                .as_ref()
+                .is_some_and(|item| item.slot == slot)
+                && request
+                    .binding
+                    .image
+                    .as_ref()
+                    .is_some_and(|image| image.hand == 0 && !image.emote)
+                && request.rate == 1.0
+                && request.tween == 0.0,
+            "Unsupported weapon patch animation options"
+        );
+        ensure!(
+            !self
+                .animations
+                .active
+                .contains_key(&(owner, request.target.clone())),
+            "Weapon animation target is occupied"
+        );
+        let clip = self.animation_clip(owner, &request)?;
+        ensure!(!clip.looping, "Weapon patch requires a finite native clip");
+        let tick = self.simulation.state().tick;
+        let (animations, weapons) = (&mut self.animations, &mut self.weapons);
+        let patch = weapons.prepare_weapon_patch(
+            ActorId(owner),
+            &request.binding,
+            expected_rounds,
+            rounds,
+            image_state,
+        )?;
+        let prepared = animations.prepare(owner, request, clip, AnimationPoseRetention::NoHold)?;
+        ensure!(
+            prepared.duplicate.is_none(),
+            "Duplicate weapon patch animation action"
+        );
+        let id = animations.commit(prepared, tick)?;
+        patch.commit();
+        Ok(id)
+    }
+
     pub fn prepare_animation_start(
         &self,
         owner: OwnerId,
