@@ -1357,6 +1357,31 @@ fn detailed_normal(n:vec3<f32>,p:vec3<f32>,uv:vec2<f32>,tilt:vec2<f32>)->vec3<f3
     let scale=inverseSqrt(max(max(dot(t,t),dot(b,b)),1e-20));
     return normalize(n+(t*tilt.x+b*tilt.y)*scale);
 }
+// A sampled normal encodes a direction in a unit tangent frame, independent
+// of texture repeats. Procedural detail above deliberately retains its metric.
+fn sampled_normal(n:vec3<f32>,p:vec3<f32>,uv:vec2<f32>,bent:vec3<f32>)->vec3<f32> {
+    let dp1=dpdx(p);let dp2=dpdy(p);let duv1=dpdx(uv);let duv2=dpdy(uv);
+    // Remove common magnitudes before testing the Jacobian so small or large
+    // but well-conditioned UVs do not change the frame or overflow its products.
+    let uv_scale=max(max(abs(duv1.x),abs(duv1.y)),max(abs(duv2.x),abs(duv2.y)));
+    let p_scale=max(length(dp1),length(dp2));
+    if uv_scale<=1e-20 || p_scale<=1e-20 {return n;}
+    let q1=duv1/uv_scale;let q2=duv2/uv_scale;
+    let determinant=q1.x*q2.y-q1.y*q2.x;
+    if abs(determinant)<=1e-6*length(q1)*length(q2) {return n;}
+    let p1=dp1/p_scale;let p2=dp2/p_scale;
+    let handed=select(-1.0,1.0,determinant>0.0);
+    let along_u=(p1*q2.y-p2*q1.y)*handed;
+    let along_v=(p2*q1.x-p1*q2.x)*handed;
+    let projected=along_u-n*dot(n,along_u);
+    let length2=dot(projected,projected);
+    if length2<=1e-20 {return n;}
+    let t=projected*inverseSqrt(length2);
+    let across=cross(n,t);
+    let b=across*select(-1.0,1.0,dot(across,along_v)>0.0);
+    // Existing image convention: red along +u, green toward decreasing v.
+    return normalize(n*bent.z+t*bent.x-b*bent.y);
+}
 fn metal_surface(v:VertexOut)->vec4<f32> {
     let base=textureSample(layer0,tiled,v.uv).rgb*linear_color(clamp(v.color.rgb,vec3<f32>(0.0),vec3<f32>(1.0)));
     let detail=textureSample(layer1,tiled,v.uv*material[1].y);
@@ -1448,13 +1473,11 @@ fn physical_surface(v:VertexOut)->vec4<f32> {
     let metallic=clamp(material[1].x*mr.b,0.0,1.0);
     let roughness=clamp(material[1].y*mr.g,0.03,1.0);
     let occlusion=mix(1.0,textureSample(layer4,tiled,v.uv).r,material[1].w);
-    // glTF normal maps: red along +u, green up, the image's up being
-    // decreasing v. The derivative frame's axes run along +u and +v in a
-    // y-up framebuffer; WebGPU's runs y down, which turns both round.
+    // glTF normal maps: red along +u, green up (decreasing v).
     let texel=textureSample(layer1,tiled,v.uv).xyz*2.0-vec3<f32>(1.0);
     let bent=vec3<f32>(texel.xy*material[1].z,max(texel.z,0.05));
     var n=v.normal/max(length(v.normal),0.0001);
-    n=detailed_normal(n,v.world_position,v.uv,vec2<f32>(-bent.x,bent.y)/bent.z);
+    n=sampled_normal(n,v.world_position,v.uv,bent);
     let e=normalize(camera.eye.xyz-v.world_position);
     if dot(n,e)<0.0 {n=normalize(n+e*(0.01-dot(n,e)));}
     if material[2].w>0.5 {
