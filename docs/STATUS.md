@@ -1,7 +1,7 @@
 # Status
 
 One page so everyone starts from the same place: Max, or any new thread.
-Revised 2026-10-15. It summarises; the linked docs are the evidence, and
+Revised 2026-10-16. It summarises; the linked docs are the evidence, and
 [progress.md](progress.md) has the dated history of each build.
 
 ## Release state
@@ -14,9 +14,11 @@ for owners, completion evidence and the integration/publication boundary.
 
 Current public release: [v0.3.0 Alpha](https://github.com/MaxHastings/BlocklandReImagined/releases/tag/v0.3.0),
 source `ee244a8449382516d24a7460c0e7b78e00128573`, with Windows x86-64,
-Apple silicon macOS and Linux x86-64 archives. The first intermediate v0.3.1
-engine checkpoint is on main at `1be98fd7`. The next candidate is on
-`codex/v031-integration-followup`; release notes are in
+Apple silicon macOS and Linux x86-64 archives. Intermediate v0.3.1 engine
+checkpoints are on main through `3436de89`, with exact full-gate and Windows
+evidence in [the follow-up integration record](progress/2026-10-16-followup-main-and-next-halo-preview.md).
+The next camera/portal candidate is on `codex/v031-camera-portal-integration`;
+its validation and main integration remain pending. Release notes are in
 [docs/releases/v0.3.1.md](releases/v0.3.1.md). This is an alpha release, and
 interactive acceptance and the broader alpha definition of done remain open.
 
