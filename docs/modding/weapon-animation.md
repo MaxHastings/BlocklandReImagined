@@ -23,10 +23,14 @@ unsupported magazine/state or stale instance checks refuse the action. Rounds
 must be between 0 and 100000 and still satisfy that weapon's native magazine
 rules. Resource, sequence and image-state strings are bounded to 128 bytes.
 
-The call must originate from the server's original ordinary image command.
-Typing the same command or invoking it from a HUD does not supply that authority.
-Queued commands retain their original owner, inventory instance and image mount;
+Admission authority is limited to the server-captured ordinary ToolFire callback
+sites and the trusted ToggleLight image-command path in this slice. Supported
+queued callbacks retain their original owner, inventory instance and image mount;
 a replacement of the same content ID does not make an old command current.
+Old-image unmount commands explicitly carry no animation binding and cannot admit
+an action. Emote commands and other unqualified command paths, including typed,
+HUD, cancel and jet commands, also supply no admission authority. Refusing those
+routes is intentional; ordinary command execution alone does not qualify one.
 
 The returned integer is a queued operation handle, implicitly required. The
 script may update its own declared state, for example reserving a spare magazine,
@@ -78,3 +82,24 @@ while the original inventory clock continues. Natural clip exhaustion is an
 observation only: it does not invoke a source game's Finish routine, unlock fire,
 exchange magazines again or refund ammunition. Source-specific completion policy
 needs its own verified implementation.
+
+## Remaining source completion boundary
+
+The following distinctions apply even when an ordinary consumer successfully
+admits and observes a native playback:
+
+| Evidence or applicability | What it establishes | Remaining boundary |
+|---|---|---|
+| `started` with actual token/binding | One native clock and its optional immediate patch were admitted atomically | Source gameplay completion has not happened |
+| `native_natural` | The native clip reached its own end | No source Finish, fire unlock, extra magazine exchange, refund or source callback is inferred |
+| Custody true, current selection false | The original live inventory instance still owns the clock after holstering or a mount change | Selection loss alone does not cancel that Weapon clock or replace its identity |
+| Current action false | Owner epochs are no longer live or a newer nonce owns the package namespace | The record remains evidence of its original action; it grants no current action authority |
+| Package hook succeeds | Bounded declared package state was published for that attempted observation | Delivery is not a durable gameplay completion or replication guarantee |
+| Hook fails, lacks work share, or script reload abandons a route | That package observation is not retried | The host record and native lifetime are independent; no recovery/unlock/refund policy is supplied |
+
+Source-specific listen-server completion, dedicated-server wait/poll semantics,
+fire/burst/refire and switch/pickup/correction arbitration still require their own
+verified consumer and acceptance evidence. An independent pawn animation layer
+also cannot finish the weapon action. This bridge adds no callback or policy for
+those open boundaries. It does not establish full source fidelity or release
+acceptance by itself.
