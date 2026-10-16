@@ -173,7 +173,7 @@ impl BodyPoseInputs {
             fits,
         }))
     }
-    fn info(&self, definition: &Archetype) -> Result<Arc<BodyPoseAssetInfo>> {
+    pub(super) fn info(&self, definition: &Archetype) -> Result<Arc<BodyPoseAssetInfo>> {
         if let Some(cached) = self.resolved.get(&definition.id)
             && cached.definition == *definition
         {

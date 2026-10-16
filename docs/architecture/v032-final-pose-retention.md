@@ -1,7 +1,8 @@
 # v0.3.2 final-pose applicability and capacity proposal (D2b)
 
-Status: docs-only proposal from accepted immutable D2a
-`84dee79add6fba5ba311dab17f7fbf0a0567a624`. No D2b production grant.
+Status: root granted D2b-1 only from immutable proposal
+`3d44bfb7264178b17069d695cb4f059996d3b919`, based on accepted D2a
+`84dee79add6fba5ba311dab17f7fbf0a0567a624`. D2b-2 remains ungranted.
 Keep this lane outside main/v0.3.1. The retained native assets of D1 and the
 evaluated active phases of D2a do not supply final holds, pose layering or shot
 origins. This document refines, rather than replaces, the remaining work in
@@ -20,14 +21,14 @@ submit a mount-set assertion. Existing `prepare_animation_start` and every
 existing producer remain `NoHold`. No global setting or automatic promotion of
 legacy requests. This establishes a host state mechanism, not consumer parity.
 
-Proposed API surface for review: `AnimationPoseRetention::{NoHold,
+Implemented D2b-1 API surface: `AnimationPoseRetention::{NoHold,
 HoldNativeFinal}`, `prepare_animation_start_with_pose(owner, request, policy)`
 returning the existing prepared ticket type, `animation_pose_view()` exposing
 only opted-in Playing/HeldFinal entries, and `clear_animation_pose(&PlaybackId)`
 for an actual opted-in active or held ID. The clear rejects stale/unrelated IDs;
 active clear uses the existing cancellation path, held clear emits no terminal.
-Keep these host result types outside serde/transport, like D2a. Names are proposed
-for root review; this document implements none of them.
+These host result types remain outside serde/transport, like D2a. Exact validation
+and limitations are recorded in the separate D2b-1 progress entry.
 
 Keep AnimationStart's current serialized shape unchanged. Carry the option and
 captured applicability privately in the existing prepared ticket and receipt;
@@ -94,8 +95,10 @@ source law; require the independent consumer checks below.
 
 Emote and ordinary worn slot3 are distinct stores, even though both can report
 hand3. Do not collapse them into a map keyed only by hand. Emote-only changes do
-not invalidate this initial Pawn2 ordinary-image-set policy. Future emote policy
-must identify `emote=true` separately and demonstrate its own producer semantics.
+not invalidate an unbound hold through this ordinary-image-set policy. Explicit
+existing qualified bindings still obey their own actual item/image validation;
+the set does not override that binding law. Future emote producer policy must
+identify `emote=true` separately and demonstrate its own producer semantics.
 
 ### Audited producer, hand, emote and custody paths
 
@@ -210,9 +213,16 @@ in owner/catalog/rate revision headroom audits; do not introduce a pose revision
 counter or an unchecked overflow path. Keep receipt256 and nonce-owner4096
 bounds; receipt eviction must not evict or resurrect a held pose.
 
+D2b-1 implementation preserves `revision + K + P <= u64::MAX`, where P is
+opted-in active count. K reserves eventual cleanup; P additionally reserves
+Natural-to-held before that cleanup. New admission preflights three extra
+increments; rate/catalog operations one. Natural/clear/owner cleanup consume
+their reserved headroom, with checked increments. This is a derived bound at
+the existing revision owner, not a new counter or terminal reservation.
+
 ## Production reservations root would need to grant
 
-Nothing below is granted by this document.
+Root granted the D2b-1 row from 3d44bfb7. The remaining rows are ungranted.
 
 | Independent reservation | Proposed exact paths | Boundary |
 | --- | --- | --- |

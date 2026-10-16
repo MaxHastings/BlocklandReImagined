@@ -1,8 +1,9 @@
 # v0.3.2 authoritative pose state proposal
 
-Status: root granted D2a only from immutable docs checkpoint
-`efc21d370ea6f47c168a1a551869fd59bb6fa3f1`. Retention, mutable-state extraction
-and host composition below remain proposals without a production grant. Immutable
+Status: root accepted D2a at `84dee79add6fba5ba311dab17f7fbf0a0567a624`
+and granted D2b-1 only from proposal `3d44bfb7264178b17069d695cb4f059996d3b919`.
+Native producer activation, mutable-state extraction and host composition below
+remain proposals without a production grant. Immutable
 input implementation baseline: `63edd2300eaec1a9f8a63ad9073ab6263d45eb96` (D1).
 Root accepted D1 as bounded retained native inputs/read-only diagnostics on
 2026-10-16. It remains outside v0.3.1. This proposal does not widen its supported
