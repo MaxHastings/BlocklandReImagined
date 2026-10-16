@@ -1708,12 +1708,8 @@ impl Runner {
                 }
             }
             WindowEvent::MouseWheel { delta, .. } if self.focused => {
-                let steps = match delta {
-                    MouseScrollDelta::LineDelta(_, y) => y,
-                    MouseScrollDelta::PixelDelta(p) => {
-                        pixel_wheel_steps(&mut self.wheel_pixels, p.y)
-                    }
-                };
+                let scale = self.window.as_ref().map_or(1.0, |w| w.scale_factor());
+                let steps = wheel_delta_steps(&mut self.wheel_pixels, delta, scale);
                 if steps.is_finite() && steps != 0.0 {
                     self.input(InputEvent::Wheel { delta: steps });
                 }
@@ -2278,6 +2274,20 @@ fn committed_chars(text: &str, mods: Modifiers) -> Vec<char> {
         text.chars().filter(|c| !c.is_control()).collect()
     }
 }
+fn wheel_delta_steps(acc: &mut f64, delta: MouseScrollDelta, scale_factor: f64) -> f32 {
+    match delta {
+        MouseScrollDelta::LineDelta(_, y) => y,
+        MouseScrollDelta::PixelDelta(p) => {
+            if !scale_factor.is_finite() || scale_factor <= 0.0 {
+                return 0.0;
+            }
+            // winit reports physical pixels on Wayland and precise macOS
+            // scrolling. Accumulate logical pixels so display density cannot
+            // turn the same gesture into extra inventory/paint steps.
+            pixel_wheel_steps(acc, p.y / scale_factor)
+        }
+    }
+}
 fn pixel_wheel_steps(acc: &mut f64, delta: f64) -> f32 {
     if !delta.is_finite() {
         return 0.0;
@@ -2598,6 +2608,103 @@ mod tests {
                 ..Modifiers::NONE
             }
         );
+    }
+    #[test]
+    fn pixel_scroll_gestures_are_independent_of_display_density() {
+        for scale in [1.0, 1.25, 1.5, 2.0, 3.0] {
+            let mut acc = 0.0;
+            // Both the pinned Wayland and macOS adapters scale logical pixels
+            // to physical pixels before emitting this exact winit event type.
+            for _ in 0..4 {
+                let pixel = winit::dpi::LogicalPosition::new(0.0, 40.0).to_physical(scale);
+                assert_eq!(
+                    wheel_delta_steps(&mut acc, MouseScrollDelta::PixelDelta(pixel), scale),
+                    1.0,
+                    "one logical gesture at display scale {scale}"
+                );
+            }
+        }
+    }
+    #[test]
+    fn pixel_scroll_keeps_fractional_units_across_density_changes_and_line_units() {
+        let pixel = |logical, scale| {
+            MouseScrollDelta::PixelDelta(
+                winit::dpi::LogicalPosition::new(0.0, logical).to_physical(scale),
+            )
+        };
+        let mut acc = 0.0;
+        assert_eq!(wheel_delta_steps(&mut acc, pixel(12.0, 1.0), 1.0), 0.0);
+        assert_eq!(wheel_delta_steps(&mut acc, pixel(28.0, 2.0), 2.0), 1.0);
+        assert_eq!(acc, 0.0);
+        assert_eq!(wheel_delta_steps(&mut acc, pixel(-20.0, 1.5), 1.5), 0.0);
+        assert_eq!(wheel_delta_steps(&mut acc, pixel(-20.0, 2.0), 2.0), -1.0);
+        assert_eq!(acc, 0.0);
+        for scale in [1.0, 1.5, 2.0] {
+            for line in [-2.0, -0.25, 0.25, 1.0] {
+                assert_eq!(
+                    wheel_delta_steps(&mut acc, MouseScrollDelta::LineDelta(0.0, line), scale),
+                    line
+                );
+            }
+        }
+        for scale in [0.0, -1.0, f64::NAN, f64::INFINITY] {
+            assert_eq!(wheel_delta_steps(&mut acc, pixel(40.0, 1.0), scale), 0.0);
+            assert_eq!(acc, 0.0);
+        }
+    }
+    #[test]
+    fn pixel_scroll_reaches_adjacent_paint_swatch_at_display_and_ui_scales() {
+        use bri_ui::{
+            api::{BindInput, ConnectionState, PaintDivision, Settings, UiUpdate},
+            binds::Platform,
+            models::hud::Outbox,
+            ui::{Ui, UiConfig},
+        };
+        for display_scale in [1.0, 1.5, 2.0] {
+            for ui_scale in [1.0, 1.5, 2.0] {
+                let mut ui = Ui::new(
+                    bri_ui::testing::screens_pack(),
+                    UiConfig {
+                        size: (1280, 960),
+                        scale: Some(ui_scale),
+                        platform: Platform::Linux,
+                    },
+                    Settings::default(),
+                );
+                ui.apply(UiUpdate::Connection(ConnectionState::InGame {
+                    server_name: "Pixel paint wheel".into(),
+                    max_players: 1,
+                    local: true,
+                    single_player: true,
+                    admin: true,
+                }));
+                ui.core.binds.bind(BindInput::Wheel, "scrollInventory");
+                ui.apply(UiUpdate::Colorset(vec![
+                    PaintDivision {
+                        name: "Warm".into(),
+                        colors: vec![[1.0; 4]; 8],
+                    },
+                    PaintDivision {
+                        name: "Cool".into(),
+                        colors: vec![[0.5; 4]; 8],
+                    },
+                ]));
+                ui.core.hud.use_spray_can(&mut Outbox::default());
+                let row = ui.core.hud.paint_row;
+                let before = ui.core.hud.paint_swatch;
+                let count = ui.core.hud.paint_rows[row];
+                let pixel = winit::dpi::LogicalPosition::new(0.0, 40.0).to_physical(display_scale);
+                let steps =
+                    wheel_delta_steps(&mut 0.0, MouseScrollDelta::PixelDelta(pixel), display_scale);
+                ui.handle_input(InputEvent::Wheel { delta: steps });
+                assert_eq!(ui.core.hud.paint_row, row);
+                assert_eq!(
+                    ui.core.hud.paint_swatch,
+                    (before + count - 1) % count,
+                    "display scale {display_scale}, UI scale {ui_scale}"
+                );
+            }
+        }
     }
     #[test]
     fn high_resolution_wheel_accumulates_and_invalid_deltas_do_not_poison() {
