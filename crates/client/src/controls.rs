@@ -86,6 +86,8 @@ pub struct Controls {
     vehicle_mouse_plain: bool,
     /// The held weapon's aim (`Image::zoom`), while one is held.
     aim: Option<bri_weapons::Zoom>,
+    /// Eligibility is separate from the retained profile's input ownership.
+    aim_state_allowed: bool,
     /// Look speed's multiple from the held image's aim assist this frame;
     /// None for full speed. Set by the frame drawn, which holds the
     /// controls only to read them.
@@ -1078,8 +1080,14 @@ impl Controls {
                 .filter(|s| *s < 1.0),
         );
     }
+    /// A profile without current-state information. Restricted profiles fail
+    /// closed; use `set_aim_in_state` when the accepted mounted state is known.
     pub fn set_aim(&mut self, aim: Option<bri_weapons::Zoom>) {
+        self.set_aim_in_state(aim, None);
+    }
+    pub fn set_aim_in_state(&mut self, aim: Option<bri_weapons::Zoom>, state: Option<&str>) {
         let aim = aim.filter(|a| a.validate().is_ok());
+        self.aim_state_allowed = aim.as_ref().is_none_or(|a| a.allows_state(state));
         if aim != self.aim {
             // Another weapon (or none) starts from its widest step.
             self.aim_level = 0;
@@ -1089,7 +1097,8 @@ impl Controls {
     /// Aiming down the held weapon's sights.
     pub fn aiming(&self) -> bool {
         self.aim.as_ref().is_some_and(|a| {
-            self.observer.is_none()
+            self.aim_state_allowed
+                && self.observer.is_none()
                 && (self.held(HeldControl::Zoom) || (a.on_jet && self.held(HeldControl::Jet)))
         })
     }
@@ -1315,7 +1324,7 @@ impl Controls {
         if let Some(aim) = self.aim_while_aiming() {
             aim.level_fov(self.aim_level)
                 .clamped(ZOOM_FOV_RANGE.0, ZOOM_FOV_RANGE.1)
-        } else if self.held(HeldControl::Zoom) {
+        } else if self.held(HeldControl::Zoom) && (self.aim.is_none() || self.aim_state_allowed) {
             self.zoom_fov.unwrap_or(10.0)
         } else {
             // The body's FOV, at the ratio the player's own setting keeps.
@@ -2250,6 +2259,96 @@ mod tests {
             c.advance_zoom(1.0 / 60.0);
             c.advance_view(1.0 / 60.0);
         }
+    }
+    fn restricted_scope() -> bri_weapons::Zoom {
+        let mut profile = scope();
+        profile.allowed_states = Some(vec!["Ready".into(), "Fire".into(), "WaitRelease".into()]);
+        profile
+    }
+    #[test]
+    fn restricted_scope_gates_visuals_but_retains_right_button_ownership() {
+        let mut c = Controls {
+            third_person: true,
+            ..Default::default()
+        };
+        held(&mut c, HeldControl::Jet, true);
+        c.set_aim_in_state(Some(restricted_scope()), Some("Ready"));
+        settle(&mut c);
+        assert!(c.aiming() && !c.third_person_view());
+        assert!(c.aim_wheel(1));
+        for state in ["Lower", "Hold", "Raise", "Reload", "Draw", "unknown"] {
+            c.set_aim_in_state(Some(restricted_scope()), Some(state));
+            settle(&mut c);
+            assert!(!c.aiming() && c.scope_overlay().is_none());
+            assert!(!c.aim_hides_crosshair() && !c.aim_takes_wheel() && !c.aim_wheel(1));
+            assert_eq!(c.aim_sensitivity(), 1.0);
+            assert_eq!(c.fov(), 90.0);
+            assert!(c.third_person_view());
+            assert!(!c.movement().jet, "barred scope still owns RMB: {state}");
+            assert_eq!(c.aim_level, 1, "temporary gating keeps wheel magnification");
+        }
+        for state in ["READY", "Fire", "WaitRelease"] {
+            c.set_aim_in_state(Some(restricted_scope()), Some(state));
+            settle(&mut c);
+            assert!(c.aiming() && c.scope_overlay().is_some());
+            assert_eq!(c.fov(), 10.0, "held intent resumes the retained wheel step");
+            assert!(!c.movement().jet);
+        }
+        let mut jetting = restricted_scope();
+        jetting.jets = true;
+        c.set_aim_in_state(Some(jetting), Some("Hold"));
+        assert!(c.movement().jet && !c.aiming());
+    }
+    #[test]
+    fn restricted_scope_without_current_state_fails_closed_for_old_setter() {
+        let mut c = Controls::default();
+        held(&mut c, HeldControl::Jet, true);
+        c.set_aim(Some(restricted_scope()));
+        settle(&mut c);
+        assert!(!c.aiming() && !c.movement().jet && c.scope_overlay().is_none());
+        assert_eq!(c.fov(), 90.0);
+        c.set_aim_in_state(Some(restricted_scope()), None);
+        assert!(!c.aiming());
+        let mut barred = scope();
+        barred.allowed_states = Some(vec![]);
+        c.set_aim_in_state(Some(barred), Some("Ready"));
+        assert!(!c.aiming());
+    }
+    #[test]
+    fn barred_keyboard_zoom_cannot_fall_back_to_generic_zoom() {
+        let mut c = Controls::default();
+        held(&mut c, HeldControl::Zoom, true);
+        c.set_aim_in_state(Some(restricted_scope()), Some("Hold"));
+        settle(&mut c);
+        assert_eq!(c.fov(), 90.0);
+        c.set_aim_in_state(Some(restricted_scope()), Some("Ready"));
+        settle(&mut c);
+        assert_eq!(c.fov(), 22.0);
+        c.set_aim(None);
+        settle(&mut c);
+        assert_eq!(c.fov(), 10.0, "no-profile generic zoom is unchanged");
+        c.set_aim(Some(scope()));
+        settle(&mut c);
+        assert_eq!(
+            c.fov(),
+            22.0,
+            "omitted eligibility is legacy even without state"
+        );
+    }
+    #[test]
+    fn barred_scope_eases_existing_sway_out_and_back_in() {
+        let mut c = Controls::default();
+        held(&mut c, HeldControl::Jet, true);
+        c.set_aim_in_state(Some(restricted_scope()), Some("Ready"));
+        swayed(&mut c, 120);
+        assert!(c.sway.gain > 0.0);
+        c.set_aim_in_state(Some(restricted_scope()), Some("Hold"));
+        swayed(&mut c, 120);
+        assert_eq!(c.sway.gain, 0.0);
+        assert!(c.sway.applied.0.abs() < 1e-6 && c.sway.applied.1.abs() < 1e-6);
+        c.set_aim_in_state(Some(restricted_scope()), Some("Ready"));
+        swayed(&mut c, 120);
+        assert!(c.sway.gain > 0.0);
     }
     /// The mouse wheel steps a scope's magnification while it is aimed,
     /// and the tools otherwise; the step is kept while the weapon is held

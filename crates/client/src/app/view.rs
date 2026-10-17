@@ -660,15 +660,19 @@ impl App {
             .filter(|a| a.entered)
             .and_then(|a| a.view.as_ref());
         let pack = &self.content.weapons.pack;
-        let image = view.and_then(|view| {
+        let held_image = view.and_then(|view| {
             if !view.vitals.get(&view.owner).is_some_and(|v| v.alive) {
                 return None;
             }
             let mounted = view.weapons.images.get(&view.owner)?;
             let mounted = mounted.iter().find(|m| m.hand == 0)?;
-            pack.images.get(&mounted.image)
+            Some((pack.images.get(&mounted.image)?, mounted.state.as_str()))
         });
-        self.controls.set_aim(image.and_then(|i| i.zoom.clone()));
+        let image = held_image.map(|(image, _)| image);
+        self.controls.set_aim_in_state(
+            image.and_then(|i| i.zoom.clone()),
+            held_image.map(|(_, state)| state),
+        );
         let hidden = image.is_some_and(|i| !i.crosshair) || self.controls.aim_hides_crosshair();
         if hidden != self.view.crosshair_hidden {
             self.view.crosshair_hidden = hidden;

@@ -321,6 +321,11 @@ fn zero3(v: &[f32; 3]) -> bool {
 pub struct Zoom {
     /// Horizontal field of view while aiming, 5 to 85 degrees.
     pub fov: f32,
+    /// Image states that permit visual aiming. Omitted allows every state;
+    /// an explicit empty list allows none. Names match ASCII case-insensitively.
+    /// This never changes trigger eligibility or the right button's jet ownership.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub allowed_states: Option<Vec<String>>,
     /// The right mouse button aims too (aim down sights). The holder jets
     /// as well unless `jets` is false or their body cannot jet.
     #[serde(default)]
@@ -371,6 +376,13 @@ impl Zoom {
             n => self.levels[n - 1],
         }
     }
+    /// Whether a known current image state allows visual aiming. Restricted
+    /// profiles with no current state fail closed; an omitted list is legacy.
+    pub fn allows_state(&self, state: Option<&str>) -> bool {
+        self.allowed_states.as_ref().is_none_or(|allowed| {
+            state.is_some_and(|state| allowed.iter().any(|name| name.eq_ignore_ascii_case(state)))
+        })
+    }
     pub fn validate(&self) -> std::result::Result<(), String> {
         let fov = |f: f32| f.is_finite() && (5.0..=85.0).contains(&f);
         if !fov(self.fov) {
@@ -400,6 +412,26 @@ impl Zoom {
                 || o.split('/').any(|part| part == ".." || part.is_empty()))
         {
             return Err("overlay: a PNG path inside the Add-On, without .png".into());
+        }
+        if let Some(states) = &self.allowed_states {
+            if states.len() > 64 {
+                return Err("allowed_states: at most 64 image states".into());
+            }
+            for (index, name) in states.iter().enumerate() {
+                if name.trim().is_empty()
+                    || name.len() > 128
+                    || !name.is_ascii()
+                    || name.bytes().any(|byte| byte.is_ascii_control())
+                    || states[..index]
+                        .iter()
+                        .any(|prior| prior.eq_ignore_ascii_case(name))
+                {
+                    return Err(
+                        "allowed_states: unique nonempty ASCII state names, at most 128 bytes each"
+                            .into(),
+                    );
+                }
+            }
         }
         if let Some(s) = &self.sway {
             s.validate()?;
@@ -3454,6 +3486,19 @@ impl Pack {
             if let Some(zoom) = &image.zoom {
                 zoom.validate()
                     .map_err(|e| anyhow::anyhow!("Invalid image zoom {id}: {e}"))?;
+                if let Some(allowed) = &zoom.allowed_states {
+                    for name in allowed {
+                        ensure!(
+                            image
+                                .states
+                                .iter()
+                                .filter(|state| state.name.eq_ignore_ascii_case(name))
+                                .count()
+                                == 1,
+                            "Invalid image zoom {id}: allowed state `{name}` must match exactly one image state"
+                        );
+                    }
+                }
             }
             for state in &image.states {
                 ensure!(
