@@ -192,9 +192,10 @@ python tools/release.py <new-version> --branch codex/<release-branch>
    perf or benchmark runs on the PC wait until it finishes.
 4. **Push and tag.** The exact gated commit is pushed to main through the
    pre-push hook and tagged with the version. The hook can reuse an exact gate
-   pass; it still enforces history and required CI checks. PR integrations must
-   pass required Windows CI before merging. A successful platform build alone
-   does not satisfy the integration checks. Never bypass the hook.
+   pass and enforces history and the local gate. It does not query GitHub CI.
+   The coordinator must separately verify the matching required Windows CI
+   before merging or tagging. A successful platform build alone does not satisfy
+   the integration checks. Never bypass the hook.
 5. **Publish.** The tag starts `publish-release.yml`, which waits for the
    build-only run if it is still going, takes its three zips and publishes
    them with `docs/releases/<version>.md` (when the commit has it) above the
@@ -206,6 +207,10 @@ the gate and the builds pass. `--check-only` does steps 1 to 3 and publishes
 nothing to main, tags or public releases (content refresh can still update the
 private draft content bundles). Each step prints its minutes. The binaries carry the tagged commit's
 hash, because the tag names the commit they were built from.
+
+`release.py` waits for its platform build run and local gate; it does not wait
+for a branch's PR CI jobs. The coordinator must establish that those required
+checks passed on the exact candidate before invoking the publishing path.
 
 Other ways in, for a release built without the PC:
 

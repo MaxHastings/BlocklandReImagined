@@ -102,3 +102,11 @@ the link check; code-backed editorial review remains necessary.
 
 Next: coordinator reviews the immutable branch/PR, reconciles any unpublished
 candidate STATUS overlap, and integrates through required CI and gate discipline.
+
+Independent coordinator review caught two additional textual defects before
+integration: the local pre-push hook does not query required GitHub CI, and
+the macOS Cargo recipe's global binary filters omitted the client/importer.
+Corrected the guide to require separate exact-candidate CI verification and
+to name all four macOS binaries. `release.py` waits on its platform build and
+local gate, not PR jobs. Documentation checks and the full tool suite were
+rerun after these corrections; no build was needed for the recipe correction.
