@@ -191,3 +191,76 @@ qualified, not full original per-hole/underwater fidelity. The 256 MiB cap is an
 active logical resource estimate, excluding driver overhead/deferred reclamation.
 Explicit unsupported coverage/precision/device-limit errors remain; no silent
 truncation. Maxwell owns interactive acceptance and the wider alpha is incomplete.
+
+
+## Native catalog consumer follow-up after integrated gate
+
+Root's exact integrated candidate `0b27fe669d22ea3b2f3b58a72d0a690c95f2a470`
+failed its full gate after 480 binaries on the existing explicitly enabled native
+catalog test: it still assumed every native water lived in MapScene.scene, and
+its draw path submitted only that static scene plus terrain. Root granted only
+`crates/render/tests/persistent_scene.rs` and this existing note for correction,
+from clean `bfcba5dc` on `codex/v033-native-water-regression`. The original water
+branch, source, compiled cache and durable evidence remain preserved.
+
+Before edits, the exact native test command reproduced the same failure (actual
+exit 101, missing static material 0 versus expected 1):
+`cargo test -p bri-render --test persistent_scene real_native_maps_upload_once_camera_motion -- --include-ignored --nocapture`.
+The fixture's content junction points at the existing read-only playtest-v031
+content. No original/content writes are performed; output stays in this worker's
+artifacts/persistent-scene folder. Baseline: target/native-water-regression-baseline.log.
+
+The corrected consumer validates finite static material IDs and repeated source
+IDs against the entire authored inventory, including repeated node/period
+identity. It admits and draws GpuWater alongside the existing static scene and
+terrain for the actual player/secondary-view union. Stationary and vertical
+camera moves with the same horizontal union must preserve upload counts, mask
+builds, texture counts and draw ownership. The original architectural material,
+opaque tree, fog, omission, camera-motion, occupied-image, empty Destruct and
+far-terrain assertions remain. The far-terrain bare control retains identical
+water on both sides, so its pixel difference still measures terrain alone.
+
+Legacy 7000-unit cameras/terrain capacity remain unchanged. Repeated-water maps'
+authored fog radii are 600 or 1000, used without shrinking; the helper asserts
+that the full visible radius fits the actual App's 4000 water maximum rather
+than silently truncating unsupported coverage. Total streamed uploads are
+reported separately from the observed single static-map scene upload.
+
+The exact enabled native command passes across all 14 maps (actual exit 0,
+1 passed/0 failed, 15.33 seconds). The actual catalog contains nine repeated
+water sources and no finite ones; finite remains checked by the parent public
+source-free regression. Five mask-qualified real map views beyond the old patch
+also compare full GPU output with the same static/terrain image omitting only
+repeated water: Desert 223664, Sea 216610, Storm 216605, Slopes 159337 and Tutorial
+3077 changed pixels. Both Slopes images and the Sea restored image were inspected.
+The direct pixel control prevents a count-only correction from hiding lost draws.
+The existing requires-content ignore is unchanged, and the native acceptance run
+explicitly enables it. Normal quick/focused closure and final receipt archival
+are the remaining steps; root alone reruns the integrated gate and release checks.
+
+
+Final native-consumer follow-up validation at the frozen test hash:
+
+- Render quick: actual exit 0, two steps/5 seconds, 70 passed/0 failed.
+- Full normal focused render/dependent closure with explicit persistent_scene
+  target: actual exit 0, all 13 steps/638 seconds, 93 summaries, 1,259 passed,
+  zero failed, 123 existing ignored. All-target warnings-denied render Clippy
+  passes. This includes all 16 enabled persistent GPU cases; its three existing
+  content-required cases keep their original ignore annotations.
+- Separately enabled exact native case on final source: actual exit 0,
+  1 passed/0 failed in 13.03 seconds, all 14 maps, nine repeated sources,
+  unchanged legacy controls, five positive beyond-patch water pixel controls.
+  This explicit --include-ignored run supplies the real native acceptance that
+  normal focused deliberately does not auto-enable. No waiver or new ignore.
+- Final test hash and read-only native bundle hash match frozen receipts;
+  renderer/client production source diff against bfcba5dc is empty. Only this
+  note and persistent_scene.rs change. The report labels static-map uploads
+  and static/terrain load timing separately from total streamed upload counts.
+
+Logs, frozen hash, input/final JSON receipts, full 14-map report and selected
+paired original-content renders are retained in a separate non-Git archive:
+`C:/Users/Maxwell/.codex/visualizations/2026/10/16/01a1424d-cf6a-78d3-8d02-df8017d87507/native-water-regression-v033-evidence/`.
+Its MANIFEST.json pins the final test-only head and all copied evidence hashes.
+Root owns integration and the replacement full gate; this worker has not gated,
+pushed main, published, or cleaned any protected cache/worktree. The broader
+alpha and Maxwell's interactive acceptance remain incomplete.

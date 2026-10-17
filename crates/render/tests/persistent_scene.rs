@@ -1,6 +1,11 @@
 use anyhow::Result;
-use bri_render::{scene::*, terrain_scene::GpuTerrain};
+use bri_render::{
+    scene::*,
+    terrain_scene::GpuTerrain,
+    water_scene::{GpuWater, WaterScene},
+};
 use glam::{Mat4, Vec3};
+use std::sync::Arc;
 
 fn triangle(color: [f32; 4], z: f32, alpha: AlphaMode) -> SceneData {
     let vertices = [[-0.9, -0.8, z], [0.9, -0.8, z], [0.0, 0.9, z]]
@@ -1309,6 +1314,84 @@ fn persistent_gpu_camera_depth_alpha_and_resize() -> Result<()> {
     Ok(())
 }
 
+/// Update every view's native-water coverage, then observe a stationary update
+/// and a vertical camera move with the same horizontal visible union.
+fn native_water_views(
+    gpu: &Gpu,
+    renderer: &SceneRenderer,
+    waters: &mut [GpuWater],
+    sources: &[Arc<WaterScene>],
+    eyes: &[Vec3],
+    radius: f32,
+) -> Result<usize> {
+    // The App's FAR_PLANE is 4000. The legacy terrain camera below retains
+    // 7000; native water must still cover its entire visible fog radius.
+    assert!(
+        waters.is_empty() || radius <= 4000.,
+        "native test view exceeds the App water draw distance: {radius}"
+    );
+    let expected = sources
+        .iter()
+        .map(|s| s.visible_from(eyes, radius))
+        .collect::<Result<Vec<_>>>()?;
+    GpuWater::update_all(waters, renderer, &gpu.device, &gpu.queue, eyes, radius)?;
+    for (water, copies) in waters.iter().zip(&expected) {
+        assert_eq!(
+            water.copy_count(),
+            copies.len(),
+            "native water copy coverage"
+        );
+        assert_eq!(
+            water.draws().count(),
+            copies.len(),
+            "admitted native water has no draw ownership"
+        );
+        assert!(
+            water
+                .draws()
+                .all(|draw| draw.vertex_count > 0 && draw.index_count > 0 && draw.image_count > 0)
+        );
+    }
+    let counts = renderer.upload_counts();
+    let state: Vec<_> = waters
+        .iter()
+        .map(|w| (w.mask_builds(), w.copy_count(), w.texture_count()))
+        .collect();
+    GpuWater::update_all(waters, renderer, &gpu.device, &gpu.queue, eyes, radius)?;
+    assert_eq!(
+        renderer.upload_counts(),
+        counts,
+        "stationary native water uploaded resources"
+    );
+    let moved: Vec<_> = eyes.iter().map(|eye| *eye + Vec3::Y * 0.25).collect();
+    for (source, copies) in sources.iter().zip(&expected) {
+        assert_eq!(source.visible_from(&moved, radius)?, *copies);
+    }
+    GpuWater::update_all(waters, renderer, &gpu.device, &gpu.queue, &moved, radius)?;
+    assert_eq!(
+        renderer.upload_counts(),
+        counts,
+        "same-union camera motion uploaded native water"
+    );
+    assert_eq!(
+        waters
+            .iter()
+            .map(|w| (w.mask_builds(), w.copy_count(), w.texture_count()))
+            .collect::<Vec<_>>(),
+        state,
+        "stationary/same-union update rebuilt native masks or changed resources"
+    );
+    Ok(waters.iter().map(GpuWater::copy_count).sum())
+}
+
+fn native_view_radius(camera: &Camera) -> f32 {
+    if camera.atmosphere[3] > 0. {
+        camera.atmosphere[1].max(1.)
+    } else {
+        7000.
+    }
+}
+
 #[test]
 #[ignore = "requires generated v20 content"]
 fn real_native_maps_upload_once_camera_motion() -> Result<()> {
@@ -1318,6 +1401,8 @@ fn real_native_maps_upload_once_camera_motion() -> Result<()> {
     let gpu = Gpu::turn()?;
     let mut renderer = SceneRenderer::new(&gpu.device, wgpu::TextureFormat::Rgba8UnormSrgb);
     let mut reports = vec![];
+    let mut repeated_water_pixels = 0usize;
+    let mut beyond_patch_water_views = 0usize;
     let bundle_path = bri_package::testing::pack_dir(&root.join("content"), "map_bundle");
     let bundle: serde_json::Value =
         serde_json::from_slice(&std::fs::read(bundle_path.join("bundle.json"))?)?;
@@ -1329,14 +1414,51 @@ fn real_native_maps_upload_once_camera_motion() -> Result<()> {
         let started = std::time::Instant::now();
         let map = bri_render::scene_loader::load_map_bundle(&bundle_path, id)?;
         let data = map.scene;
+        let authored: Vec<bri_content::water::Water> =
+            serde_json::from_value(bundle["waters"][id].clone())?;
+        let mut finite: Vec<_> = authored
+            .iter()
+            .filter(|w| w.repeat_period.is_none())
+            .map(|w| w.id.clone())
+            .collect();
+        let mut expected_repeated: Vec<_> = authored
+            .iter()
+            .filter(|w| w.repeat_period.is_some())
+            .map(|w| w.id.clone())
+            .collect();
+        let mut static_materials: Vec<_> = data
+            .materials
+            .iter()
+            .filter(|m| m.kind == MaterialKind::Water)
+            .map(|m| m.name.clone())
+            .collect();
+        let mut repeated_ids: Vec<_> = map
+            .repeated_water
+            .iter()
+            .map(|w| w.water.id.clone())
+            .collect();
+        finite.sort();
+        expected_repeated.sort();
+        static_materials.sort();
+        repeated_ids.sort();
         assert_eq!(
-            data.materials
-                .iter()
-                .filter(|m| m.kind == MaterialKind::Water)
-                .count(),
-            bundle["waters"][id].as_array().unwrap().len(),
-            "Missing native water material"
+            static_materials, finite,
+            "Missing finite native water material"
         );
+        assert_eq!(
+            repeated_ids, expected_repeated,
+            "Missing repeated native water descriptor"
+        );
+        assert_eq!(
+            static_materials.len() + repeated_ids.len(),
+            authored.len(),
+            "Incomplete native water inventory"
+        );
+        for water in &map.repeated_water {
+            let original = authored.iter().find(|w| w.id == water.water.id).unwrap();
+            assert_eq!(water.water.node, original.node);
+            assert_eq!(water.water.repeat_period, original.repeat_period);
+        }
         let architectural = matches!(
             name,
             "bedroom" | "bedroomdark" | "kitchen" | "kitchendark" | "tutorial"
@@ -1401,7 +1523,18 @@ fn real_native_maps_upload_once_camera_motion() -> Result<()> {
             let (x, z) = (data.spawn[0] + 6100.0, data.spawn[2] - 6100.0);
             Vec3::new(x, t.field.height(x, z).unwrap_or(0.0) + 4.0, z)
         });
+        let before_uploads = renderer.upload_counts();
         let scene = renderer.upload(&gpu.device, &gpu.queue, &data)?;
+        let static_map_uploads = renderer.upload_counts().scenes - before_uploads.scenes;
+        assert_eq!(
+            static_map_uploads, 1,
+            "static native map uploaded more than once"
+        );
+        let water_sources: Vec<_> = map.repeated_water.into_iter().map(Arc::new).collect();
+        let mut waters = water_sources
+            .iter()
+            .map(|w| GpuWater::new(w.clone(), 4000.))
+            .collect::<Result<Vec<_>>>()?;
         let mut terrain = map
             .terrain
             .into_iter()
@@ -1411,6 +1544,17 @@ fn real_native_maps_upload_once_camera_motion() -> Result<()> {
         let eye = Vec3::from(data.spawn) + Vec3::from(offset);
         let mut frames = vec![];
         let mut terrain_instances = 0;
+        let mut water_copies = 0;
+        let mut water_pixel_changes = 0;
+        let secondary_eye = far_eye.or_else(|| {
+            water_sources.first().map(|w| {
+                eye + Vec3::new(
+                    6. * w.water.repeat_period.unwrap(),
+                    0.,
+                    -5. * w.water.repeat_period.unwrap(),
+                )
+            })
+        });
         for (i, shift) in [0.0, 12.0].into_iter().enumerate() {
             let mut camera = Camera::perspective(
                 (eye + Vec3::X * shift).to_array(),
@@ -1421,24 +1565,43 @@ fn real_native_maps_upload_once_camera_motion() -> Result<()> {
                 7000.0,
             );
             camera.apply_environment(&data);
-            let radius = if camera.atmosphere[3] > 0. {
-                camera.atmosphere[1]
-            } else {
-                7000.
-            };
+            let radius = native_view_radius(&camera);
+            let eyes: Vec<_> = std::iter::once(eye + Vec3::X * shift)
+                .chain(secondary_eye)
+                .collect();
+            water_copies =
+                native_water_views(&gpu, &renderer, &mut waters, &water_sources, &eyes, radius)?;
             for t in &mut terrain {
-                t.update(&gpu.device, &gpu.queue, &[eye + Vec3::X * shift], radius)?;
+                t.update(&gpu.device, &gpu.queue, &eyes, radius)?;
             }
             let draws: Vec<_> = terrain.iter().flat_map(GpuTerrain::draws).collect();
             terrain_instances = draws.iter().map(|(_, i)| i.len()).sum::<usize>();
+            let scenes: Vec<_> = std::iter::once(&scene)
+                .chain(waters.iter().flat_map(GpuWater::draws))
+                .collect();
             let frame = gpu.frame_instances(
                 &mut renderer,
-                &[&scene],
+                &scenes,
                 &draws,
                 &camera,
                 (640, 480),
                 wgpu::TextureFormat::Rgba8UnormSrgb,
             )?;
+            if !waters.is_empty() {
+                let without_water = gpu.frame_instances(
+                    &mut renderer,
+                    &[&scene],
+                    &draws,
+                    &camera,
+                    (640, 480),
+                    wgpu::TextureFormat::Rgba8UnormSrgb,
+                )?;
+                water_pixel_changes += frame
+                    .chunks_exact(4)
+                    .zip(without_water.chunks_exact(4))
+                    .filter(|(a, b)| a != b)
+                    .count();
+            }
             let occupied = frame
                 .chunks_exact(4)
                 .filter(|p| p[0] != 0 || p[1] != 0 || p[2] != 0)
@@ -1466,19 +1629,19 @@ fn real_native_maps_upload_once_camera_motion() -> Result<()> {
                 7000.0,
             );
             camera.apply_environment(&data);
+            let radius = native_view_radius(&camera);
+            native_water_views(&gpu, &renderer, &mut waters, &water_sources, &[far], radius)?;
             for t in &mut terrain {
-                t.update(
-                    &gpu.device,
-                    &gpu.queue,
-                    &[far],
-                    camera.atmosphere[1].max(1.),
-                )?;
+                t.update(&gpu.device, &gpu.queue, &[far], radius)?;
             }
             let draws: Vec<_> = terrain.iter().flat_map(GpuTerrain::draws).collect();
             assert!(draws.iter().any(|(_, i)| !i.is_empty()));
+            let scenes: Vec<_> = std::iter::once(&scene)
+                .chain(waters.iter().flat_map(GpuWater::draws))
+                .collect();
             let frame = gpu.frame_instances(
                 &mut renderer,
-                &[&scene],
+                &scenes,
                 &draws,
                 &camera,
                 (640, 480),
@@ -1491,7 +1654,7 @@ fn real_native_maps_upload_once_camera_motion() -> Result<()> {
                 480,
                 image::ColorType::Rgba8,
             )?;
-            let bare = gpu.frame(&mut renderer, &[&scene], &camera, (640, 480))?;
+            let bare = gpu.frame(&mut renderer, &scenes, &camera, (640, 480))?;
             let covered = frame
                 .chunks_exact(4)
                 .zip(bare.chunks_exact(4))
@@ -1502,6 +1665,106 @@ fn real_native_maps_upload_once_camera_motion() -> Result<()> {
                 "Far repeated terrain did not render: {covered} pixels"
             );
         }
+
+        let mut beyond_patch_pixels = None;
+        for source in &water_sources {
+            let copy = [5, -4];
+            let copy_data = source.copy_scene(copy)?;
+            let mask = copy_data.images.last().unwrap();
+            let Some((pixel, opacity)) =
+                mask.rgba.chunks_exact(4).enumerate().max_by_key(|(i, p)| {
+                    (
+                        p[0].max(p[1]),
+                        -((*i % 256) as i32 - 128).abs() - ((*i / 256) as i32 - 128).abs(),
+                    )
+                })
+            else {
+                continue;
+            };
+            if opacity[0].max(opacity[1]) == 0 {
+                continue;
+            }
+            let water = &source.water;
+            let period = water.repeat_period.unwrap();
+            let x = (pixel % 256) as f32 + 0.5;
+            let z = (pixel / 256) as f32 + 0.5;
+            let at = Vec3::new(
+                water.min[0] + x / 256. * (water.max[0] - water.min[0]) + copy[0] as f32 * period,
+                water.max[1],
+                water.max[2] - z / 256. * (water.max[2] - water.min[2]) + copy[1] as f32 * period,
+            );
+            assert!(water.footprint(at.x, at.z).is_some());
+            let proof_eye = at + Vec3::new(0., 130., 180.);
+            let mut camera = Camera::perspective(
+                proof_eye.to_array(),
+                at.to_array(),
+                4. / 3.,
+                80_f32.to_radians(),
+                0.05,
+                7000.,
+            );
+            camera.apply_environment(&data);
+            let radius = native_view_radius(&camera);
+            native_water_views(
+                &gpu,
+                &renderer,
+                &mut waters,
+                &water_sources,
+                &[proof_eye, eye],
+                radius,
+            )?;
+            for terrain in &mut terrain {
+                terrain.update(&gpu.device, &gpu.queue, &[proof_eye, eye], radius)?;
+            }
+            let draws: Vec<_> = terrain.iter().flat_map(GpuTerrain::draws).collect();
+            let scenes: Vec<_> = std::iter::once(&scene)
+                .chain(waters.iter().flat_map(GpuWater::draws))
+                .collect();
+            let full = gpu.frame_instances(
+                &mut renderer,
+                &scenes,
+                &draws,
+                &camera,
+                (640, 480),
+                wgpu::TextureFormat::Rgba8UnormSrgb,
+            )?;
+            let without = gpu.frame_instances(
+                &mut renderer,
+                &[&scene],
+                &draws,
+                &camera,
+                (640, 480),
+                wgpu::TextureFormat::Rgba8UnormSrgb,
+            )?;
+            let changed = full
+                .chunks_exact(4)
+                .zip(without.chunks_exact(4))
+                .filter(|(a, b)| a != b)
+                .count();
+            assert!(
+                changed > 100,
+                "qualified native repeated water failed to reach GPU pixels: {id}, {changed}"
+            );
+            image::save_buffer(
+                output.join(format!("{name}-repeated-water.png")),
+                &full,
+                640,
+                480,
+                image::ColorType::Rgba8,
+            )?;
+            image::save_buffer(
+                output.join(format!("{name}-without-repeated-water.png")),
+                &without,
+                640,
+                480,
+                image::ColorType::Rgba8,
+            )?;
+            beyond_patch_pixels = Some(changed);
+            beyond_patch_water_views += 1;
+            water_pixel_changes += changed;
+            break;
+        }
+        repeated_water_pixels += water_pixel_changes;
         if name == "destruct" {
             assert!(
                 frames[0].chunks_exact(4).all(|p| p[..3] == [0, 0, 0]),
@@ -1510,8 +1773,18 @@ fn real_native_maps_upload_once_camera_motion() -> Result<()> {
         } else if name != "construct" {
             assert_ne!(frames[0], frames[1], "Camera uniform did not move {name}");
         }
-        reports.push(serde_json::json!({"map":data.id,"name":data.name,"vertices":scene.vertex_count,"triangles":scene.index_count/3,"images":scene.image_count,"batches":data.batches.len(),"terrain_tile_instances":terrain_instances,"load_upload_ms":upload_ms,"camera_frames":2,"gpu_scene_uploads":1,"omissions":data.omissions,"terrain_omissions":terrain.iter().flat_map(|t| t.omissions().to_vec()).collect::<Vec<_>>()}));
+        let uploads = renderer.upload_counts();
+        reports.push(serde_json::json!({"map":data.id,"name":data.name,"vertices":scene.vertex_count,"triangles":scene.index_count/3,"images":scene.image_count,"batches":data.batches.len(),"terrain_tile_instances":terrain_instances,"static_and_terrain_load_upload_ms":upload_ms,"camera_frames":2,"static_map_gpu_scene_uploads":static_map_uploads,
+            "legacy_camera_far":7000.,"app_water_max_radius":4000.,"water_fog_radius":data.fog.end,
+            "finite_water_materials":finite.len(),"repeated_water_sources":water_sources.len(),"main_view_union_water_copies":water_copies,
+            "repeated_water_pixel_changes":water_pixel_changes,"beyond_old_patch_water_pixels":beyond_patch_pixels,
+            "gpu_upload_counts_delta":{"scenes":uploads.scenes-before_uploads.scenes,"textures":uploads.textures-before_uploads.textures,"palette_geometry":uploads.palette_geometry-before_uploads.palette_geometry,"shared_geometry":uploads.shared_geometry-before_uploads.shared_geometry},
+            "stationary_and_same_union_water_uploads":0,"omissions":data.omissions,"terrain_omissions":terrain.iter().flat_map(|t| t.omissions().to_vec()).collect::<Vec<_>>()}));
     }
+    assert!(
+        repeated_water_pixels > 0 && beyond_patch_water_views > 0,
+        "native catalog never rendered repeated water"
+    );
     std::fs::write(
         output.join("report.json"),
         serde_json::to_vec_pretty(
