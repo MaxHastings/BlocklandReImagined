@@ -27,7 +27,9 @@ Root reviewed the production diff and preserved tier log. AA private953bac
 contains state-aware configuration and the same coupled consumer. Its actual
 App/QUIC/GPU run now passes on exact651, including all five barred sight states
 and allowed firing continuity. Root has merged the source locally for review;
-main integration and final separate preview health remain pending.
+main integration remains pending. The separate private preview now passes full
+file/candidate comparison and actual startup health. See the
+[playtest handoff](progress/2026-10-17-aa-sprint-aim-private-playtest.md).
 The existing installed e4 showcase and userdata must remain untouched. See
 [the handoff](progress/2026-10-17-v033-aa-priority-handoff.md).
 
