@@ -158,6 +158,8 @@ pub struct Hello {
 pub enum LobbyRequest {
     /// `commandToServer('messageSent', ...)`: a chat line.
     Chat(String),
+    /// The accepted loading connection started or stopped typing.
+    Talking(bool),
 }
 /// What a resuming client still holds of the world: the map and the
 /// replication cursor its bricks are current to.
@@ -1508,6 +1510,8 @@ pub enum Message {
     },
     /// New chat lines, for a client still loading.
     LobbyChat(Vec<bri_sim::session::ChatLine>),
+    /// Authoritative typing names visible to a client still loading.
+    LobbyTalking(Vec<String>),
     /// The join was refused because these shared packages differ. A client
     /// can fetch what it lacks from the server and join again
     /// ([`crate::client::Client::connect_fetching`]).

@@ -39,6 +39,12 @@ impl App {
         }
         for event in events {
             match event {
+                bri_net::client::ArrivalEvent::Talking(names) => {
+                    self.ui.apply_session(
+                        id,
+                        UiUpdate::Talking(names.iter().map(|name| plain_chat(name)).collect()),
+                    );
+                }
                 bri_net::client::ArrivalEvent::Chat(lines) => {
                     for line in lines {
                         let shown = self.net.arrival.as_ref().map_or(u64::MAX, |h| h.last_chat);

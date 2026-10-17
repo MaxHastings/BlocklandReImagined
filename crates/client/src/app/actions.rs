@@ -905,10 +905,15 @@ impl App {
                 result
             }
             UiAction::StartTyping | UiAction::StopTyping => {
+                let talking = matches!(action, UiAction::StartTyping);
+                if let Some(held) = &self.net.arrival
+                    && !self.net.attempt.as_ref().is_some_and(|a| a.entered)
+                {
+                    return held.arrival.talking(talking);
+                }
                 if self.network_view().is_none() {
                     return Ok(());
                 }
-                let talking = matches!(action, UiAction::StartTyping);
                 let result = self.command(id, Command::Talking(talking), action.clone());
                 if result.is_ok() {
                     return Ok(());

@@ -806,6 +806,7 @@ struct Arrival {
     window_tick: u64,
     chats: u32,
     last_chat: Option<(String, u64)>,
+    talking: bool,
 }
 struct Peer {
     player: Player,
@@ -1756,6 +1757,7 @@ impl Session {
                 window_tick: self.simulation.state().tick,
                 chats: 0,
                 last_chat: None,
+                talking: false,
             },
         );
         self.greet(
@@ -1791,6 +1793,20 @@ impl Session {
         self.arrivals
             .iter()
             .map(|(owner, a)| (*owner, a.name.clone()))
+            .collect()
+    }
+    /// Authoritative typing names, including accepted connections still loading.
+    pub fn talking_names(&self) -> BTreeMap<OwnerId, String> {
+        self.peers
+            .iter()
+            .filter(|(_, peer)| peer.talking)
+            .map(|(owner, peer)| (*owner, peer.name.clone()))
+            .chain(
+                self.arrivals
+                    .iter()
+                    .filter(|(_, arrival)| arrival.talking)
+                    .map(|(owner, arrival)| (*owner, arrival.name.clone())),
+            )
             .collect()
     }
     /// A loading player has the map and the server's Add-Ons and spawns at
@@ -1829,13 +1845,21 @@ impl Session {
             peer.window_tick = arrival.window_tick;
             peer.chats = arrival.chats;
             peer.last_chat = arrival.last_chat;
+            peer.talking = arrival.talking;
         }
         Ok(())
     }
     /// `serverCmdMessageSent` from a player still loading: the same checks
     /// and the same line as [`Command::Chat`], without a body to talk with.
-    /// Anything else a loading player asks for is refused.
+    /// Typing status is also accepted; gameplay still requires a body.
     fn arrival_command(&mut self, owner: OwnerId, command: Command) -> Result<Reply> {
+        if let Command::Talking(talking) = command {
+            self.arrivals
+                .get_mut(&owner)
+                .context("Unknown connection")?
+                .talking = talking;
+            return Ok(Reply::Accepted);
+        }
         let Command::Chat(text) = command else {
             anyhow::bail!("You are still loading");
         };

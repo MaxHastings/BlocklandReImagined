@@ -118,6 +118,87 @@ async fn arrival_line(arrival: &mut Arrival, name: &str, text: &str) -> Result<(
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn accepted_loading_peers_receive_authoritative_typing_and_disconnect_cleanup() -> Result<()>
+{
+    let server = server::start(fixture::session(), fixture::options())?;
+    let ids = tempfile::tempdir()?;
+    let mut ann = Client::connect_with_identity(
+        server.address,
+        &server.certificate,
+        "Ann".into(),
+        Vec::new(),
+        None,
+        None,
+        &identity(ids.path(), "ann")?,
+    )
+    .await?;
+    let pin = HostPin::from(&server.certificate[..]);
+    let mut bob = Arrival::open(
+        server.address,
+        &pin,
+        "Bob".into(),
+        None,
+        &identity(ids.path(), "bob")?,
+    )
+    .await?;
+    let mut cara = Arrival::open(
+        server.address,
+        &pin,
+        "Cara".into(),
+        None,
+        &identity(ids.path(), "cara")?,
+    )
+    .await?;
+    async fn names(arrival: &mut Arrival, expected: &[&str]) -> Result<()> {
+        tokio::time::timeout(Duration::from_secs(10), async {
+            loop {
+                match arrival.next().await {
+                    Some(ArrivalEvent::Talking(actual))
+                        if actual
+                            .iter()
+                            .map(String::as_str)
+                            .eq(expected.iter().copied()) =>
+                    {
+                        return Ok(());
+                    }
+                    Some(ArrivalEvent::Closed(reason)) => {
+                        anyhow::bail!("Loading connection closed: {reason}")
+                    }
+                    None => anyhow::bail!("Loading connection ended"),
+                    _ => {}
+                }
+            }
+        })
+        .await?
+    }
+    names(&mut bob, &[]).await?;
+    names(&mut cara, &[]).await?;
+    bob.talking(true)?;
+    names(&mut bob, &["Bob"]).await?;
+    names(&mut cara, &["Bob"]).await?;
+    assert!(
+        !ann.replica.names.contains_key(&bob.owner),
+        "typing must not spawn a body"
+    );
+    bob.talking(false)?;
+    names(&mut bob, &[]).await?;
+    names(&mut cara, &[]).await?;
+    ann.command(Command::Talking(true)).await?;
+    names(&mut bob, &["Ann"]).await?;
+    names(&mut cara, &["Ann"]).await?;
+    bob.talking(true)?;
+    names(&mut cara, &["Ann", "Bob"]).await?;
+    bob.close();
+    names(&mut cara, &["Ann"]).await?;
+    ann.command(Command::Talking(false)).await?;
+    names(&mut cara, &[]).await?;
+    cara.close();
+    ann.close();
+    server.stop().await?;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_joiner_is_connected_and_chats_while_downloading_then_spawns() -> Result<()> {
     let root = tempfile::tempdir()?;
     let (server, environment) = modded_server(root.path())?;
@@ -155,6 +236,17 @@ async fn a_joiner_is_connected_and_chats_while_downloading_then_spawns() -> Resu
     chat_line(&mut ann, "Bob", "hi, still loading").await?;
     ann.command(Command::Chat("welcome Bob".into())).await?;
     arrival_line(&mut bob, "Ann", "welcome Bob").await?;
+    bob.talking(true)?;
+    tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            if let Some(ArrivalEvent::Talking(names)) = bob.next().await
+                && names == ["Bob"]
+            {
+                break;
+            }
+        }
+    })
+    .await?;
 
     // Bob downloads the server's Add-On and loads; he and Ann keep
     // chatting meanwhile, and he does not join until they have.
@@ -199,6 +291,14 @@ async fn a_joiner_is_connected_and_chats_while_downloading_then_spawns() -> Resu
     let (joined, chat) = tokio::join!(connect, chat);
     chat?;
     let (joined, _, _) = joined?;
+    assert!(
+        joined
+            .replica
+            .vitals
+            .get(&bob.owner)
+            .is_some_and(|v| v.talking),
+        "typing survives the loading-to-spawn handoff"
+    );
     assert_eq!(
         downloaded, 1,
         "the Add-On downloaded while Bob was connected"
