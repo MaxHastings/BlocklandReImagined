@@ -521,6 +521,7 @@ mod tests {
         bri_render::scene_loader::MapScene {
             scene: SceneData::default(),
             terrain: Vec::new(),
+            repeated_water: Vec::new(),
             shape_indices: Default::default(),
             modern_lights: Some(Vec::new()),
             light_animations: Vec::new(),

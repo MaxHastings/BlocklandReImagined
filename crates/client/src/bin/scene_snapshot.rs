@@ -56,6 +56,15 @@ fn main() -> Result<()> {
             let plate = bri_sim::map::NativeMap::load(&PathBuf::from(&args[0]), &args[1])?
                 .plate
                 .context("Not a flat map")?;
+            // Match the App's flat-map override: a known selection (including
+            // explicit no-water) replaces both static and camera-following water.
+            if planes.water.is_some() {
+                let materials = &map.scene.materials;
+                map.scene.batches.retain(|b| {
+                    materials[b.material].kind != bri_render::scene::MaterialKind::Water
+                });
+                map.repeated_water.clear();
+            }
             let ground = planes
                 .ground
                 .map(|(g, _)| choices.picture(&g.texture))
@@ -122,6 +131,35 @@ fn main() -> Result<()> {
         t.update(&device, &queue, &[eye], 4000.0)?;
     }
     let terrain_draws: Vec<_> = terrain.iter().flat_map(GpuTerrain::draws).collect();
+    let mut waters = map
+        .repeated_water
+        .into_iter()
+        .map(|water| bri_render::water_scene::GpuWater::new(water.into(), 4000.))
+        .collect::<Result<Vec<_>>>()?;
+    bri_render::water_scene::GpuWater::update_all(
+        &mut waters,
+        &renderer,
+        &device,
+        &queue,
+        &[eye],
+        4000.,
+    )?;
+    eprintln!(
+        "Repeated water: copies={}, masks built={}, cached textures={}, conservative resource bound={} bytes",
+        waters.iter().map(|w| w.copy_count()).sum::<usize>(),
+        waters.iter().map(|w| w.mask_builds()).sum::<usize>(),
+        waters.iter().map(|w| w.texture_count()).sum::<usize>(),
+        waters
+            .iter()
+            .map(|w| w.resource_bound_bytes())
+            .collect::<Result<Vec<_>>>()?
+            .iter()
+            .sum::<usize>()
+    );
+    let scenes: Vec<_> = std::iter::once(&gpu)
+        .chain(waters.iter().flat_map(|w| w.draws()))
+        .collect();
+
     let mut camera = Camera::perspective(
         eye.to_array(),
         (eye + forward).to_array(),
@@ -155,7 +193,7 @@ fn main() -> Result<()> {
         &mut encoder,
         &view,
         &depth,
-        &[&gpu],
+        &scenes,
         &terrain_draws,
         Some(wgpu::Color::BLACK),
     );

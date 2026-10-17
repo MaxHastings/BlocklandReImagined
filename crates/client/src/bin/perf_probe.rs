@@ -428,12 +428,19 @@ fn main() -> Result<()> {
         .unwrap_or(0);
 
     // ---- GPU: offscreen frames ---------------------------------------------
-    let map_scene = load_map_bundle(&paths.map_bundle, &entry.map_id)?.scene;
+    let loaded = load_map_bundle(&paths.map_bundle, &entry.map_id)?;
+    let waters: Vec<_> = loaded
+        .repeated_water
+        .into_iter()
+        .map(std::sync::Arc::new)
+        .collect();
+    let map_scene = loaded.scene;
     let snapshots = report_path.with_extension("snapshots");
     let gpu = gpu_frames(
         &snapshots,
         &full_world,
         &map_scene,
+        &waters,
         &palette,
         &world_chunks,
         &one_brick_chunk,
@@ -541,6 +548,7 @@ fn gpu_frames(
     snapshots: &std::path::Path,
     reference_world: &bri_render::scene::SceneData,
     map: &bri_render::scene::SceneData,
+    waters: &[std::sync::Arc<bri_render::water_scene::WaterScene>],
     palette: &bri_client::world_chunks::BrickPalette,
     chunks: &[(
         bri_client::world_chunks::ChunkKey,
@@ -601,8 +609,6 @@ fn gpu_frames(
         timeout: None,
     })?;
     let one_chunk_upload_ms = ms(t.elapsed());
-    let mut scenes = vec![&gpu_map];
-    scenes.extend(gpu_world.iter());
     let gpu_reference = renderer.upload(&device, &queue, reference_world)?;
     std::fs::create_dir_all(snapshots)?;
 
@@ -627,6 +633,24 @@ fn gpu_frames(
         // Inside the shadow distance, looking down across the build.
         ("near", center + Vec3::new(40.0, 25.0, 40.0), center),
     ];
+    let mut water_gpu = waters
+        .iter()
+        .map(|w| bri_render::water_scene::GpuWater::new(w.clone(), 4000.))
+        .collect::<Result<Vec<_>>>()?;
+    let eyes: Vec<_> = views.iter().map(|(_, eye, _)| *eye).collect();
+    bri_render::water_scene::GpuWater::update_all(
+        &mut water_gpu,
+        &renderer,
+        &device,
+        &queue,
+        &eyes,
+        4000.,
+    )?;
+    let mut scenes = vec![&gpu_map];
+    scenes.extend(gpu_world.iter());
+    scenes.extend(water_gpu.iter().flat_map(|w| w.draws()));
+    let mut reference_scenes = vec![&gpu_map, &gpu_reference];
+    reference_scenes.extend(water_gpu.iter().flat_map(|w| w.draws()));
     let mut out = serde_json::Map::new();
     for &(name, eye, look) in &views {
         let mut camera = Camera::perspective(
@@ -667,7 +691,7 @@ fn gpu_frames(
             &mut encoder,
             &view,
             &depth,
-            &[&gpu_map, &gpu_reference],
+            &reference_scenes,
             Some(wgpu::Color::BLACK),
         );
         queue.submit([encoder.finish()]);
@@ -696,6 +720,7 @@ fn gpu_frames(
         &queue,
         snapshots,
         map,
+        waters,
         palette,
         chunks,
         &views,
@@ -719,6 +744,7 @@ fn quality_variants(
     queue: &wgpu::Queue,
     snapshots: &std::path::Path,
     map: &bri_render::scene::SceneData,
+    waters: &[std::sync::Arc<bri_render::water_scene::WaterScene>],
     palette: &bri_client::world_chunks::BrickPalette,
     chunks: &[(
         bri_client::world_chunks::ChunkKey,
@@ -764,8 +790,22 @@ fn quality_variants(
             .iter()
             .map(|(_, chunk)| renderer.upload_chunk(device, queue, chunk, &gpu_palette))
             .collect::<Result<Vec<_>>>()?;
+        let mut water_gpu = waters
+            .iter()
+            .map(|w| bri_render::water_scene::GpuWater::new(w.clone(), 4000.))
+            .collect::<Result<Vec<_>>>()?;
+        let eyes: Vec<_> = views.iter().map(|(_, eye, _)| *eye).collect();
+        bri_render::water_scene::GpuWater::update_all(
+            &mut water_gpu,
+            &renderer,
+            device,
+            queue,
+            &eyes,
+            4000.,
+        )?;
         let mut scenes = vec![&gpu_map];
         scenes.extend(gpu_world.iter());
+        scenes.extend(water_gpu.iter().flat_map(|w| w.draws()));
         let multisampled = (samples > 1).then(|| {
             texture(samples, wgpu::TextureUsages::RENDER_ATTACHMENT)
                 .create_view(&Default::default())
