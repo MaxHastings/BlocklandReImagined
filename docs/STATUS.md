@@ -16,10 +16,13 @@ private game assets and AvP are excluded; local test copies remain. No interacti
 acceptance is claimed. GSF import limitations and unreproduced movement reports
 remain explicit in the [release notes](releases/v0.3.2.md).
 
-Maxwell has now explicitly resumed one bounded AA2 validation and private playtest:
-run the saved aiming/sprint/reload consumer against the tested image-state Zoom
-fix, review/integrate if green, and package a separate preview. Everything else
-remains parked. v0.3.2 stays immutable; no new release publication is authorized.
+The bounded AA2 aiming/sprint/reload validation and separate private preview have
+been delivered. Maxwell has subsequently authorized the AA thread to pursue a
+cohesive Pipeline TDM playtest destination and asked root to coordinate any shared
+engine needs for v0.3.3. AA owns private policy/content and actual consumer checks;
+root reviews reproduced engine gaps and assigns nonoverlapping public paths.
+This does not authorize unrelated Halo/GMod research or every proposed engine
+mechanism. v0.3.2 stays immutable; no new release publication is authorized.
 
 Engine branch651efb2f preserves the three-path optional Zoom state gate, with
 metadata/control/App targets, quick and full normal focused checks passing.
@@ -35,7 +38,8 @@ The existing installed e4 showcase and userdata must remain untouched. See
 
 Maxwell additionally requested a v0.3.3 repeating-water fix: terrain follows the
 camera but water is limited to a static3x3 patch. The existing maps/core owner and
-root are qualifying the minimal camera-following renderer correction. Finite
+root have reproduced the extent mismatch and assigned the bounded camera-following
+renderer correction after design review. Finite
 water and authoritative physics stay unchanged; no fix or publication is claimed
 yet. See [the bounded correction](progress/2026-10-17-v033-repeating-water-fix.md).
 

@@ -27,3 +27,33 @@ root reviews the immutable source and ordinary consumer evidence. One integrated
 candidate gate and Windows checks remain required before any future main push.
 Original installations and delivered playtest folders stay unchanged. All other
 AA/Halo/GMod research remains parked absent new direct user instructions.
+
+## Reproduction and implementation assignment
+
+The core/maps owner reproduced the actual native-loader mismatch on exact651:
+synthetic repeating water physically covers point[336,-272], repeat[5,-4], but
+the static mesh has no triangle there (cargo exit101). Both compatibility and
+Dynamic loaders ran before the failing assertion. Scratch source/log are retained
+in that owner's target/repeating-water-baseline.rs and .log; production was
+unchanged at this checkpoint.
+
+Root approved implementation on codex/v033-repeating-water: render water_scene,
+scene_loader and minimal scene texture-cache retention; necessary client scene,
+GPU, load/session/map, rendering and lighting lifecycle plumbing; scene_snapshot,
+lighting_probe and perf_probe; focused render/client regressions and the owner's
+progress note. No shader/instance ABI, content/physics/network/import schema or
+additional mechanism is granted. Further paths require review.
+
+The bounded design follows all active eyes, preserves copy UVs and finite authored
+footprints, computes depth masks at each newly visible copy's coordinates, shares
+surface textures and equal masks, and evicts resources outside the view union.
+Any texture-cache pruning is confined to its own water cache. Checked resource
+and coordinate bounds must fail explicitly rather than silently omit coverage;
+the proposed active geometry/mask cap is256MiB, to be measured against real maps
+and device limits. Stable visible-copy sets must cause no repeated uploads.
+
+Read-only native Slopes measurement: footprint1024x1024, period2048, so intentional
+gaps remain. Each copy has4225 vertices/24576indices and a256x256RGBA mask, roughly
+0.63MiB before mip/descriptor costs. A typical4000-unit eye needs about20copies.
+Actual source/GPU validation, lifecycle tests and full focused checks are pending;
+no fix, integrated pass or release is claimed.
