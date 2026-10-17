@@ -126,6 +126,7 @@ struct Prepared {
     plate: Option<bri_content::scene::Plate>,
     scene: SceneData,
     terrain: Vec<Arc<bri_render::terrain_scene::TerrainScene>>,
+    repeated_water: Vec<Arc<bri_render::water_scene::WaterScene>>,
     meshes: Arc<Meshes>,
     mirror_shapes: Arc<crate::mirrors::MirrorShapes>,
     materials: Arc<crate::materials::BrickMaterials>,
@@ -454,6 +455,7 @@ fn prepare_map(
         plate: native_map.plate,
         scene: visual.scene,
         terrain: visual.terrain.into_iter().map(Arc::new).collect(),
+        repeated_water: visual.repeated_water.into_iter().map(Arc::new).collect(),
         meshes,
         mirror_shapes,
         materials,
@@ -1796,6 +1798,7 @@ impl PlatformApp for App {
         self.gpu.retired_renderer = None;
         self.gpu.gpu_scene = None;
         self.gpu.gpu_terrain.clear();
+        self.gpu.gpu_water.clear();
         self.gpu.gpu_palette = None;
         self.gpu.gpu_chunks.clear();
         self.gpu.ghost_gpu = None;
@@ -1864,6 +1867,7 @@ impl PlatformApp for App {
         self.world_shapes = None;
         self.gpu.gpu_scene = None;
         self.gpu.gpu_terrain.clear();
+        self.gpu.gpu_water.clear();
         self.gpu.gpu_palette = None;
         self.gpu.gpu_chunks.clear();
         self.gpu.ghost_gpu = None;

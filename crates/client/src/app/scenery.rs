@@ -43,6 +43,15 @@ pub(super) struct Scenery {
     shown: Option<String>,
 }
 impl Scenery {
+    /// The same flat-map override that hides the map's static water also
+    /// hides camera-following native water. Missing choices retain the native map.
+    pub(super) fn native_water_visible(&self) -> bool {
+        self.plate.is_none()
+            || self
+                .offered
+                .as_ref()
+                .is_none_or(|offered| Planes::of(&offered.pack, &self.drawn).water.is_none())
+    }
     /// A map scene was loaded (a new map, or its lighting): it draws its
     /// own scenery.
     pub(super) fn reset(&mut self) {

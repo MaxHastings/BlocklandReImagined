@@ -448,6 +448,7 @@ struct Pass {
     gpu_map: GpuScene,
     gpu_world: Vec<GpuScene>,
     terrain: Vec<GpuTerrain>,
+    water: Vec<bri_render::water_scene::GpuWater>,
     tower: Option<GpuScene>,
     player: Option<(GpuScene, GpuInstances)>,
 }
@@ -463,6 +464,7 @@ impl Pass {
         lights: Option<&[bri_render::map_lighting::MapLight]>,
         scene: &SceneData,
         terrain: Vec<TerrainScene>,
+        water: Vec<bri_render::water_scene::WaterScene>,
         chunks: &[SceneData],
         palette: &SceneData,
     ) -> Result<Pass> {
@@ -480,6 +482,10 @@ impl Pass {
         let terrain = terrain
             .into_iter()
             .map(|t| GpuTerrain::upload(&renderer, device, queue, t.into(), 4000.0))
+            .collect::<Result<Vec<_>>>()?;
+        let water = water
+            .into_iter()
+            .map(|water| bri_render::water_scene::GpuWater::new(water.into(), 4000.))
             .collect::<Result<Vec<_>>>()?;
         // Stand-ins, as the client draws them: BRI_TOWER=x,y,z,width,height a
         // brick tower (a kept, static chunk) standing on x,y,z; BRI_PLAYER=x,y,z
@@ -518,6 +524,7 @@ impl Pass {
             gpu_map,
             gpu_world,
             terrain,
+            water,
             tower,
             player,
         })
@@ -1332,6 +1339,7 @@ fn main() -> Result<()> {
             None,
             &scene,
             map.terrain,
+            map.repeated_water,
             &chunks,
             &palette.scene,
         )?);
@@ -1354,6 +1362,7 @@ fn main() -> Result<()> {
             Some(&lights),
             &modern.scene,
             modern.terrain,
+            modern.repeated_water,
             &chunks,
             &palette.scene,
         )?);
@@ -1383,6 +1392,7 @@ fn main() -> Result<()> {
             gpu_map,
             gpu_world,
             terrain,
+            water,
             tower,
             player,
         } = pass;
@@ -1452,9 +1462,14 @@ fn main() -> Result<()> {
             }
         }
         let models: Vec<(&GpuScene, &GpuInstances)> = player.iter().map(|(b, i)| (b, i)).collect();
+        let eyes: Vec<_> = views.iter().map(|(_, eye, _)| *eye).collect();
+        bri_render::water_scene::GpuWater::update_all(
+            water, renderer, &device, &queue, &eyes, 4000.,
+        )?;
         let mut scenes = vec![&*gpu_map];
         scenes.extend(gpu_world.iter());
         scenes.extend(tower.iter());
+        scenes.extend(water.iter().flat_map(|w| w.draws()));
         let bricks_cast = brick_shadows || mode == 3;
         let mut views_out = serde_json::Map::new();
         for (name, eye, look) in &views {
