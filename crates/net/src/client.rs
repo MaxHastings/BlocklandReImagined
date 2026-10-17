@@ -1207,6 +1207,8 @@ impl From<&[u8]> for HostPin {
 pub enum ArrivalEvent {
     /// New chat lines, oldest first; each id above every one before.
     Chat(Vec<bri_sim::session::ChatLine>),
+    /// Current typing names, including accepted players without a body yet.
+    Talking(Vec<String>),
     /// A server line or sound addressed to this player.
     Notice(bri_sim::session::Notice),
     /// The connection ended, with why.
@@ -1230,7 +1232,7 @@ pub struct Arrival {
     /// The certificate the host presented, to pin for the game join.
     pub certificate: Vec<u8>,
     pub listing: Listing,
-    say: mpsc::Sender<String>,
+    say: mpsc::Sender<LobbyRequest>,
     events: mpsc::Receiver<ArrivalEvent>,
     tasks: Vec<tokio::task::JoinHandle<()>>,
 }
@@ -1310,6 +1312,7 @@ impl Arrival {
                     Ok(Message::LobbyChat(lines)) if lines.len() <= 100 => {
                         ArrivalEvent::Chat(lines)
                     }
+                    Ok(Message::LobbyTalking(names)) => ArrivalEvent::Talking(names),
                     Ok(Message::Notice(notice)) => ArrivalEvent::Notice(notice),
                     Ok(_) => continue,
                     Err(error) => {
@@ -1329,10 +1332,10 @@ impl Arrival {
                 let _ = events_tx.try_send(event);
             }
         });
-        let (say, mut said) = mpsc::channel::<String>(16);
+        let (say, mut said) = mpsc::channel::<LobbyRequest>(16);
         let writer = tokio::spawn(async move {
-            while let Some(text) = said.recv().await {
-                if codec::write_small_request(&mut send, &LobbyRequest::Chat(text))
+            while let Some(request) = said.recv().await {
+                if codec::write_small_request(&mut send, &request)
                     .await
                     .is_err()
                 {
@@ -1357,7 +1360,13 @@ impl Arrival {
     /// Send a chat line. A full queue (more than a player types) drops it.
     pub fn say(&self, text: String) -> Result<()> {
         self.say
-            .try_send(text)
+            .try_send(LobbyRequest::Chat(text))
+            .context("The chat queue is full or the connection ended")
+    }
+    /// Announce typing through this accepted connection, before it has a body.
+    pub fn talking(&self, talking: bool) -> Result<()> {
+        self.say
+            .try_send(LobbyRequest::Talking(talking))
             .context("The chat queue is full or the connection ended")
     }
     /// What the host sent that has not been taken yet.

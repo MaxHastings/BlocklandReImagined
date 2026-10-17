@@ -648,15 +648,7 @@ fn hud(core: &Core) -> View {
     // rules from ChatModel, and the "VVV" indicator on its last line while
     // paged up (newChatHud_UpdateIndicatorPosition).
     // chatWhosTalkingText above it: " name name" (WhoTalkSO::Display).
-    if !core.talking.is_empty() {
-        let names: String = core.talking.iter().map(|n| format!(" {n}")).collect();
-        named_text(
-            &mut v,
-            "MM_LeftProfile",
-            Rect::new(-1, 0, w - 10, 18),
-            &names,
-        );
-    }
+    add_typing_names(&mut v, core);
     add_chat(&mut v, core);
     if let Some(r) = mouse_tip_rect(core) {
         let tip = format!(
@@ -667,6 +659,13 @@ fn hud(core: &Core) -> View {
     }
     v.layout(w, h);
     v
+}
+fn add_typing_names(v: &mut View, core: &Core) {
+    let w = core.logical.0;
+    if !core.talking.is_empty() {
+        let names: String = core.talking.iter().map(|n| format!(" {n}")).collect();
+        named_text(v, "MM_LeftProfile", Rect::new(-1, 0, w - 10, 18), &names);
+    }
 }
 /// NewChatHud's text, and the "VVV" indicator on its last line while
 /// paged up (newChatHud_UpdateIndicatorPosition).
@@ -693,6 +692,7 @@ pub fn loading_chat(pack: &Pack, dl: &mut DrawList, core: &Core) {
         "GuiDefaultProfile",
         Rect::new(0, 0, w, h),
     ));
+    add_typing_names(&mut v, core);
     add_chat(&mut v, core);
     v.layout(w, h);
     v.draw(pack, dl);

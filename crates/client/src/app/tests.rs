@@ -1,4 +1,125 @@
 #[test]
+fn accepted_loading_chat_routes_real_ui_typing_to_authority_and_back() -> anyhow::Result<()> {
+    use super::*;
+    use bri_ui::input::{InputEvent, Key, Modifiers};
+    let f = ContentRoot::synthetic()?;
+    let state = f.state()?;
+    let mut app = App::load(&f.root, state.path(), (800, 600))?;
+    let simulation = bri_sim::simulation::Simulation::new(
+        bri_world::World::new("Loading".into(), "fixture".into(), vec![[1.; 4]]),
+        bri_sim::testing::definitions(),
+        Vec::new(),
+    )?;
+    let server = {
+        let _entered = app.runtime.enter();
+        bri_net::server::start(
+            bri_sim::session::Session::new(simulation),
+            bri_net::server::ServerOptions {
+                bind: "127.0.0.1:0".parse()?,
+                environment: bri_package::environment::Environment::empty(),
+                spawn_points: vec![glam::Vec3::ZERO],
+                certificate: None,
+                map_loader: None,
+                packages: None,
+            },
+        )?
+    };
+    let identity =
+        bri_identity::ClientIdentity::load_or_create(state.path().join("loading.identity"))?;
+    let arrival = app.runtime.block_on(bri_net::client::Arrival::open(
+        server.address,
+        &bri_net::client::HostPin::from(&server.certificate[..]),
+        "Bob".into(),
+        None,
+        &identity,
+    ))?;
+    // Establish the UI session token, but use the real accepted Arrival above.
+    // This driver holds the loading phase; it does not claim the complete join.
+    let id = app.ui.core.request(UiAction::HostGame {
+        map: f.map.0.clone(),
+        mode: ServerMode::Lan,
+        game_mode: None,
+        max_players: 8,
+        server_name: "Loading test".into(),
+        password: String::new(),
+        admin_password: String::new(),
+        super_admin_password: String::new(),
+    });
+    app.ui.drain_actions();
+    app.ui.apply_session(
+        id,
+        UiUpdate::Connection(ConnectionState::Loading {
+            map: "Loading".into(),
+            preview: IconRef::None,
+            status: "DOWNLOADING ADD-ONS".into(),
+            progress: 0.25,
+        }),
+    );
+    app.ui.apply_session(id, UiUpdate::LoadingChat(true));
+    app.net.arrival = Some(HeldArrival {
+        id,
+        address: server.address.to_string(),
+        last_chat: arrival.chat_cursor,
+        arrival,
+    });
+    app.ui.core.binds.bind(
+        bri_ui::api::BindInput::Key(bri_ui::input::Chord::plain(Key::Letter('t'))),
+        "globalChat",
+    );
+    app.ui.handle_input(InputEvent::KeyDown {
+        key: Key::Letter('t'),
+        mods: Modifiers::NONE,
+        repeat: false,
+    });
+    app.ui.handle_input(InputEvent::KeyUp {
+        key: Key::Letter('t'),
+        mods: Modifiers::NONE,
+    });
+    app.ui.handle_input(InputEvent::Char('t'));
+    app.ui.handle_input(InputEvent::Char('h'));
+    app.dispatch()?;
+    let wait = |app: &mut App, expected: &[&str]| -> anyhow::Result<()> {
+        let start = std::time::Instant::now();
+        loop {
+            app.poll_arrival();
+            if app
+                .ui
+                .core
+                .talking
+                .iter()
+                .map(String::as_str)
+                .eq(expected.iter().copied())
+            {
+                return Ok(());
+            }
+            anyhow::ensure!(
+                start.elapsed() < Duration::from_secs(5),
+                "Missing authoritative typing: {:?}",
+                app.ui.core.talking
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    };
+    wait(&mut app, &["Bob"])?;
+    assert!(
+        app.network_view().is_none(),
+        "loading typing needs no spawned body"
+    );
+    let named = app.ui.draw().cmds;
+    app.ui.handle_input(InputEvent::KeyDown {
+        key: Key::Escape,
+        mods: Modifiers::NONE,
+        repeat: false,
+    });
+    app.dispatch()?;
+    wait(&mut app, &[])?;
+    assert_ne!(app.ui.draw().cmds, named);
+    app.net.arrival.take();
+    app.runtime.block_on(server.stop())?;
+    Ok(())
+}
+
+#[test]
 fn body_threads_hold_until_replaced_or_root() {
     let mut threads = std::collections::BTreeMap::new();
     // An image's own thread 0 and the image-bound thread 2 are not body

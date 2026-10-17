@@ -1156,6 +1156,7 @@ struct Lobby {
     /// [`token_key`] of the ticket its game join presents.
     ticket: [u8; 32],
     principal: Option<Principal>,
+    shown_talking: Option<Vec<String>>,
 }
 /// Unauthenticated connections (QUIC handshake through Welcome) may take at
 /// most this long in total.
@@ -1736,7 +1737,7 @@ async fn run(
                     let name=session.arrivals().remove(&owner).unwrap_or_default();
                     let bytes=match codec::encode(&Message::Arrived{owner,name,arrival:arrival.clone(),chat_cursor:session.chat_cursor()}) {Ok(bytes)=>bytes,Err(error)=>{let _=recorder.disconnect(&mut session,owner);return Err(error)}};
                     if out.try_send(Frame::Ready(Arc::new(bytes))).is_err(){let _=recorder.disconnect(&mut session,owner);anyhow::bail!("Connection writer unavailable");}
-                    lobbies.insert(owner,Lobby{peer:Peer{generation:connection.stable_id(),connection,out,traffic:traffic.clone(),bulk:Arc::new(AtomicBool::new(false))},ticket:token_key(&arrival),principal});
+                    lobbies.insert(owner,Lobby{peer:Peer{generation:connection.stable_id(),connection,out,traffic:traffic.clone(),bulk:Arc::new(AtomicBool::new(false))},ticket:token_key(&arrival),principal,shown_talking:None});
                     Ok(owner)
                 })())? {Ok(arrived)=>arrived,Err(fault)=>Err(anyhow::anyhow!("{fault}"))};
                 if arrived.is_err(){rejected+=1;}else{broadcast_admin_snapshots(&session,&peers);}
@@ -1744,11 +1745,11 @@ async fn run(
             },
             Event::LobbyRequest{owner,generation,request}=>{
                 if lobbies.get(&owner).is_some_and(|l|l.peer.generation==generation){
-                    let LobbyRequest::Chat(text)=request;
+                    let command=match request{LobbyRequest::Chat(text)=>bri_sim::session::Command::Chat(text),LobbyRequest::Talking(talking)=>bri_sim::session::Command::Talking(talking)};
                     commands+=1;
-                    // Refusals (pace, filter) are the session's to tell; a
-                    // loading client is answered by what its line causes.
-                    let result=match fuse.guard("a loading player's chat",||recorder.command(&mut session,owner,0,bri_sim::session::Command::Chat(text),None,|_|anyhow::bail!("Loading players cannot administer")))? {Ok(result)=>result,Err(fault)=>Err(anyhow::anyhow!("{fault}"))};
+                    // Loading controls use their accepted connection and remain
+                    // recorded Session commands; gameplay is still refused.
+                    let result=match fuse.guard("a loading player's chat control",||recorder.command(&mut session,owner,0,command,None,|_|anyhow::bail!("Loading players cannot administer")))? {Ok(result)=>result,Err(fault)=>Err(anyhow::anyhow!("{fault}"))};
                     if result.is_err(){rejected+=1;}
                 }
             },
@@ -1832,6 +1833,12 @@ async fn run(
                 let current_environment=session.environment();let changed_environment=if environment!=current_environment{environment=current_environment;Some(environment.clone())}else{None};let changed_archetypes=(session.tuned_revision()!=tuned_revision).then(||{tuned_revision=session.tuned_revision();session.tuned_archetypes()});
                 let changed_weapon_settings=if weapon_settings!=*session.weapon_settings(){weapon_settings=session.weapon_settings().clone();Some(weapon_settings.clone())}else{None};
                 let chat=session.chat_after(last_chat);if let Some(line)=chat.last(){last_chat=line.id;}
+                // Accepted loading connections have no body/vitals entry.
+                // Their typing names still come from authoritative identities.
+                if !lobbies.is_empty(){
+                    let talking_names:Vec<_>=session.talking_names().into_values().collect();
+                    for lobby in lobbies.values_mut(){if lobby.shown_talking.as_ref()!=Some(&talking_names){lobby.peer.send_message(Kind::Notice,&Message::LobbyTalking(talking_names.clone()));lobby.shown_talking=Some(talking_names.clone());}}
+                }
                 // Players still loading read and send chat (v20's loading screen).
                 if !chat.is_empty()&&!lobbies.is_empty(){broadcast(lobbies.values().map(|l|&l.peer),Kind::Notice,&Message::LobbyChat(chat.clone()));}
                 let next=cursor.checked_add(1).context("Replication sequence exhausted")?;
