@@ -18,12 +18,13 @@ remain explicit in the [release notes](releases/v0.3.2.md).
 
 Maxwell has now resumed bounded AA2-driven engine work toward v0.3.3. The current
 private consumer is the Pipeline two-team playtest, with source art and documented
-native adaptations. First priority is proper aimed first-person weapon placement
-through ordinary aim input; sprint input/state and weapon lower/raise transitions
-follow. Pipeline lighting needs separate source-light admission and live-budget
+native adaptations. The original M16 sight artwork now passes an ordinary App
+overlay preview using existing APIs; exact original 3D/interpolation behavior
+remains unqualified. Configurable sprint input/state and weapon lower/raise
+integration are now the first engine priority. Pipeline lighting needs separate source-light admission and live-budget
 review. Original prop collision is private import work unless a native failure is
-demonstrated. The AA owner is correcting vertical aim through the existing look
-layer. See [the current handoff](progress/2026-10-17-v033-aa-priority-handoff.md).
+demonstrated. The AA owner delivered vertical aim through the existing look layer
+at private f9d514c. See [the current handoff](progress/2026-10-17-v033-aa-priority-handoff.md).
 
 This does not resume the old full-ammo completion roadmap, broad Halo/shotgun
 research, GMod, or all saved engine proposals. Those branches and evidence remain

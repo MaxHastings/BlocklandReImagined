@@ -56,3 +56,37 @@ Evidence read: AA TDM/PIPELINE handoffs, aim-pitch-source-contract.json,
 view-transitions-source-audit.json; public Zoom/Controls/ImagePresentation,
 MoveInput, scene_loader, lighting_parameters and MAX_LIGHTS/shader call sites.
 No gameplay/production change or new acceptance pass is claimed by this note.
+
+## Actual first-consumer checkpoint
+
+The engine's source-free actual-App diagnostic reached its intended missing-pose
+assertion after RMB FOV90->40, admitted shot12->11, release/focus/swap/death
+controls. This proves a generic optional placement feature is absent; it does
+not prove the AA sight path needs that feature. Driver/log/evidence are retained
+outside target in the engine owner's artifacts. Root granted no production API.
+
+AA then saved selected source endpoint facts at49aeb418, explicitly retaining
+unqualified original selector/3D/interpolation composition. Root challenged the
+new API assumption and requested an actual existing-Zoom.overlay trial. Private
+b1ecaf7ee6cfd6b3122e75c25671f0553b7affbd passes that consumer: ordinary App host,
+real seven AA packages, QUIC, UI/GPU rendering, original512-square M16 artwork
+and full pixel hash plus317 opaque GPU texels, FOV70, admitted shot and original
+sound request, release/focus/AK swap/death/respawn. The same M16 with its zoom
+profile removed supplies the no-overlay/FOV90 baseline. Two tests and scoped
+Clippy pass. Root read the actual test/receipts and inspected the aimed capture.
+
+This is an original-artwork preview adaptation: native hold-RMB/no-jets/input,
+FOV easing, screen-height fit/black bars and hidden rig. It is not exact original
+runtime selector, 3D sights, positional interpolation or source gameplay parity.
+The earlier generic pose red is preserved but does not justify implementing an
+unneeded API for this preview. The AA owner may finish a reproducible private
+delivery only after checking the exact game is not running, retaining affected
+file backups and proving actual startup health plus unrelated-file identity.
+No active user playtest may be interrupted or hot-edited.
+
+Sprint is the next selected engine need. Root requested one armed/standing-forward
+source/preview trace from AA and a minimal existing-route/input/cancel proposal
+from the engine owner. Package policy owns speed, eligibility and clips. General
+messaging, new motor physics, full-ammo completion and lighting expansion remain
+outside that bounded step. No sprint production paths or acceptance are granted
+by this checkpoint. Vertical aim was separately tested/installed at f9d514c.
