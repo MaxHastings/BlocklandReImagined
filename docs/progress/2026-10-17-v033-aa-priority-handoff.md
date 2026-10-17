@@ -176,3 +176,22 @@ and non-AA package selections. Root checks final hashes/loader health and gives
 concrete manual test instructions. No new production scope, full-ammo/source
 completion, main push, public release or existing-install replacement is granted
 by this validation checkpoint. Integration follows actual consumer evidence.
+
+
+## Actual state-aware AA consumer green; local integration only
+
+Root independently reviewed private run20261017-133217 against EXACT engine651:
+exit0/Clippy0, actual App/QUIC/GPU with AA packages, same original image, all five
+barred states FOV90/no scope/visible mounted FP geometry. Ready/Fire/WaitRelease,
+ordinary shot/audio and held-RMB reaim pass. Green mode performs no variant mount
+or set_fov workaround. Read fixture/JSON/log and inspected SprintHold/Reload PNGs.
+Orders run133637 also completed with Clippy0. Remaining planned controls and
+separate preview executable/staging remain in the AA owner's bounded task.
+
+Root merged651 conflict-free into its integration branch at db8faa44. Runtime
+content remains exactly651; no main push, combined gate or v0.3.3 release is
+claimed. The separate preview uses exact651, not a relabeled published engine.
+New direct ultrawide feedback concerns current square height-fit side masks;
+that layout issue remains visible and documented, separate from state gating.
+Shift stays crouch; this candidate uses heldO+forward for sprint. Further direct
+AA feedback is queued/scoped without replacing this preview delivery.

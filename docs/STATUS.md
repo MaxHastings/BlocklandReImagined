@@ -24,8 +24,10 @@ remains parked. v0.3.2 stays immutable; no new release publication is authorized
 Engine branch651efb2f preserves the three-path optional Zoom state gate, with
 metadata/control/App targets, quick and full normal focused checks passing.
 Root reviewed the production diff and preserved tier log. AA private953bac
-contains inactive state-aware configuration and the same coupled consumer's green
-expectations. That consumer must pass on exact651 before preview acceptance.
+contains state-aware configuration and the same coupled consumer. Its actual
+App/QUIC/GPU run now passes on exact651, including all five barred sight states
+and allowed firing continuity. Root has merged the source locally for review;
+main integration and final separate preview health remain pending.
 The existing installed e4 showcase and userdata must remain untouched. See
 [the handoff](progress/2026-10-17-v033-aa-priority-handoff.md).
 
