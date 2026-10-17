@@ -195,3 +195,28 @@ New direct ultrawide feedback concerns current square height-fit side masks;
 that layout issue remains visible and documented, separate from state gating.
 Shift stays crouch; this candidate uses heldO+forward for sprint. Further direct
 AA feedback is queued/scoped without replacing this preview delivery.
+
+## Subsequent AA destination and shared-engine coordination
+
+Maxwell directly authorized the AA owner to pursue a cohesive Pipeline TDM
+playtest destination, and asked root to orchestrate any engine work for v0.3.3.
+The delivered651 preview stays frozen. AA owns private content/policy and its
+ordinary consumer; root assigns public engine paths and integrates tested pins.
+
+AA's first new native Session reproduction on651 selects US/OPFOR through the
+normal typed body command and remains at instance scale1 after65ticks, while the
+showcase commands explicitly request2. The actual App/network case is pending.
+This is a demonstrated entry-point inconsistency, not yet proof of an engine
+defect: choose_body validates clearance at the existing instance scale, and body
+changes deliberately preserve that scale. Pipeline's current derivative builder
+also explicitly scales map and body2x together from diagnostic units.
+
+Root therefore requested a bounded generator-level native-unit normalization
+proposal before considering a new default-scale or body-entry API. It must trace
+geometry, animation/bind translations, collision/eye/hit/socket dimensions,
+weapon sizing and motion without double scaling; preserve arbitrary player
+resizing and true source counterparts; and validate normal selection, spawn and
+remote agreement. No perpetual scale setter, reused spawn callback or public
+engine path/schema is granted. If intrinsic normalization is unsafe, the owner
+must identify the concrete existing-mechanism gap before root grants an engine
+correction. This is independent of the exclusively assigned water render lane.
