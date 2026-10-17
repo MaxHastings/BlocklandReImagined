@@ -7,7 +7,11 @@ start with the [tester guide](TESTER-GUIDE.md), [features](FEATURES.md) and
 
 ## Release state
 
-Current public release: [v0.3.2 Alpha](https://github.com/MaxHastings/BlocklandReImagined/releases/tag/v0.3.2),
+Use the [latest published release](https://github.com/MaxHastings/BlocklandReImagined/releases/latest)
+for downloads, its exact source tag and release notes. Repository source
+can be ahead of that build; source checks alone are not a new publication.
+
+Verified v0.3.2 release: [v0.3.2 Alpha](https://github.com/MaxHastings/BlocklandReImagined/releases/tag/v0.3.2),
 published October 16, 2026 at 10:17 PM America/Chicago (October 17, 03:17 UTC),
 from `e4d9bb05df3c26c95a410cb9872990d99b37b54d`. Windows x86-64,
 Apple silicon macOS and Linux x86-64 archives are available. The combined gate,
@@ -15,7 +19,7 @@ required CI, platform packages, manifests and archive hashes were verified.
 Published tags and assets remain immutable. Interactive acceptance and the
 full [alpha contract](alpha-contract.md) remain open.
 
-Start with the [v0.3.2 release notes](releases/v0.3.2.md). This release corrects
+The [v0.3.2 release notes](releases/v0.3.2.md). That release corrects
 Add-On map selection and previews, pixel-wheel scaling, Q tool selection memory,
 dropped-item support at the throw apex, and loading-screen typing names. It also
 includes completed generic engine foundations; these do not establish finished
@@ -30,7 +34,7 @@ API test, imported mesh or diagnostic render does not close gameplay or fidelity
 acceptance. A meaningful shared capability needs an ordinary gameplay consumer
 before further dependent expansion.
 
-Current development for v0.3.3 includes optional weapon-image-state gating of
+The [v0.3.3 source changes](releases/v0.3.3.md) include optional weapon-image-state gating of
 aim presentation and camera-following repeated water. AA's private consumer
 checks exercise the aim gate; native-map and offscreen checks exercise water
 beyond its former fixed patch. These source changes do not update the published
