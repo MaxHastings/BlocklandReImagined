@@ -38,10 +38,12 @@ The existing installed e4 showcase and userdata must remain untouched. See
 
 Maxwell additionally requested a v0.3.3 repeating-water fix: terrain follows the
 camera but water is limited to a static3x3 patch. The existing maps/core owner and
-root have reproduced the extent mismatch and assigned the bounded camera-following
-renderer correction after design review. Finite
-water and authoritative physics stay unchanged; no fix or publication is claimed
-yet. See [the bounded correction](progress/2026-10-17-v033-repeating-water-fix.md).
+root reproduced the extent mismatch. The camera-following correction now passes
+targeted actual App/GPU controls, quick671/0 and full focused1250/0, with read-only
+Slopes/Slate Sea/Storm render evidence. Root reviewed and merged exactbfcba5dc
+locally into the v0.3.3 candidate. Finite water and authoritative physics stay
+unchanged. Combined gate/CI and human playtest remain pending; no release is
+claimed. See [the bounded correction](progress/2026-10-17-v033-repeating-water-fix.md).
 
 See the dated progress entries for each release's exact build and test
 evidence.

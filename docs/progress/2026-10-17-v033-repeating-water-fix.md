@@ -57,3 +57,34 @@ gaps remain. Each copy has4225 vertices/24576indices and a256x256RGBA mask, roug
 0.63MiB before mip/descriptor costs. A typical4000-unit eye needs about20copies.
 Actual source/GPU validation, lifecycle tests and full focused checks are pending;
 no fix, integrated pass or release is claimed.
+
+## Final worker acceptance and local integration
+
+Worker headbfcba5dc993688f15d64d3203aaf9e4ffff405ee, direct parent651,
+is clean, pushed and independently remote-verified. Root reviewed the final17-path
+diff, including the additionally granted tiny app/scenery.rs accessor. Source-free
+renderer7 and actual App lifecycle/scenery2 cases pass; quick671/0/76existingignored
+and full normal focused15steps/951s/1250/0/120existingignored pass, with both changed
+all-target Clippy checks green. The first forbidden scalar-clamp lint was corrected
+with the existing repository helper and full tiers rerun; no waiver/new ignore.
+
+Root independently checked all50 durable acceptance archive hashes and inspected
+the actual Slopes old/corrected render pair. Final Slopes34copies have a36,444,712
+byte logical bound; Slate Sea/Storm84copies across two eyes retain both layers
+within179,468,496 bytes summed conservative individual bounds. No stationary
+mask/image/geometry reuploads. The bound includes retained logical resources and
+one serial construction peak; it excludes driver overhead/deferred reclamation
+and is not measured VRAM/RSS. Validate-all/evict-all/admit prevents cross-group
+temporary ownership excess. Accepted custom/NO_WATER hides native water; missing
+choice restores it. CLI controls are native42/custom0/none0/unknown42, with unknown
+output byte-identical to native. Source installations and delivered previews are
+unchanged. Full original hole/underwater fidelity and the reporter's exact location
+remain unqualified; authored repeat gaps remain intentional.
+
+Root merged the immutable worker head conflict-free into its integration branch
+at1f0d0ce81074df7306fbe077a33c57a48843f810. Source/runtime is the exact tested
+worker content (which already includes651); this is local integration only.
+The existing PR187 previously passed all six required checks on9bad4cad before
+water integration. That earlier CI does not cover this new candidate. Updated
+candidate CI and one full integrated gate remain required before main. No public
+v0.3.3 publication is authorized or claimed, and no installed playtest is replaced.
