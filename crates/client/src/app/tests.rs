@@ -2302,3 +2302,329 @@ fn aim_on_a_body_finds_it_and_aim_beside_or_behind_does_not() {
     let over = (Vec3::new(0.0, 2.0, -10.0)).normalize();
     assert!(!super::aimed_at(camera, over, feet, eye, 0.5));
 }
+
+/// Source-free ordinary App/host state eligibility, not source-game policy.
+#[test]
+fn scope_state_eligibility_follows_ordinary_authority_without_releasing_rmb() -> anyhow::Result<()>
+{
+    use super::*;
+    use bri_ui::input::{InputEvent, MouseButton};
+    use serde_json::json;
+    let f = ContentRoot::synthetic()?;
+    let mut packages = bri_package::packages::PackageSet::load_root(&f.root)?;
+    let weapon_dir = packages.role_dir(&f.root, "weapons")?;
+    let item_dir = packages.role_dir(&f.root, "item_presentation")?;
+    let gun = bri_weapons::testing::GUN_IMAGE;
+    let item = bri_weapons::testing::GUN_ITEM;
+    let weapon_file = weapon_dir.join("weapons.json");
+    let mut pack: serde_json::Value = serde_json::from_slice(&std::fs::read(&weapon_file)?)?;
+    pack["images"][gun]["zoom"] = json!({"fov":40.0,"on_jet":true,"jets":false,"first_person":true,"overlay":"scope","allowed_states":["Ready","Fire","WaitRelease"]});
+    pack["images"][gun]["states"] = json!([
+        {"name":"Draw","ticks":64,"timeout":1},
+        {"name":"Ready","down":2},
+        {"name":"Fire","ticks":2,"script":"onFire","timeout":3},
+        {"name":"WaitRelease","up":1},
+        {"name":"Lower","ticks":64,"timeout":5},
+        {"name":"Hold"},
+        {"name":"Raise","ticks":64,"timeout":1},
+        {"name":"Reload","ticks":64,"timeout":1}
+    ]);
+    pack["images"][gun]["magazine"] =
+        json!({"size":12,"ammo":"probe","reload_ticks":120,"reserve":0});
+    pack["images"][gun]["follow_arm"] = json!(false);
+    pack["images"][gun]["eye_offset"] = json!([0.35, -0.25, -0.9]);
+    pack["images"][gun]["eye_rotation"] = json!([0., 0., 0.]);
+    pack["images"][gun]["first_person_origin"] =
+        serde_json::to_value(bri_weapons::FirstPersonOrigin::Eye)?;
+    let weapon_bytes = serde_json::to_vec(&pack)?;
+    std::fs::write(&weapon_file, &weapon_bytes)?;
+    bri_weapons::Pack::from_json(&weapon_bytes)?;
+    let presentation_file = item_dir.join("presentation.json");
+    let mut presentation: crate::items::Presentation =
+        serde_json::from_slice(&std::fs::read(&presentation_file)?)?;
+    presentation.weapons_sha256 = crate::testing::sha256(&weapon_bytes);
+    let image = presentation
+        .images
+        .get_mut(gun)
+        .context("Fixture gun presentation")?;
+    image.eye_offset = [0.35, -0.25, -0.9];
+    image.eye_rotation_degrees = [0.; 3];
+    image.first_person_origin = Some(bri_weapons::FirstPersonOrigin::Eye);
+    image.follow_arm = false;
+    image.overlay = Some("probe:scope".into());
+    let overlay = crate::testing::png(16, 16, |x, y| {
+        if (5..11).contains(&x) && (5..11).contains(&y) {
+            [0, 0, 0, 0]
+        } else {
+            [40, 60, 80, 255]
+        }
+    })?;
+    std::fs::write(item_dir.join("probe-scope.png"), &overlay)?;
+    presentation.textures.insert(
+        "probe:scope".into(),
+        crate::items::TextureResource {
+            file: "probe-scope.png".into(),
+            sha256: crate::testing::sha256(&overlay),
+            width: 16,
+            height: 16,
+            source: "invented scope".into(),
+        },
+    );
+    std::fs::write(presentation_file, serde_json::to_vec(&presentation)?)?;
+    let rules = f.root.join("ads-probe-rules");
+    std::fs::create_dir(&rules)?;
+    std::fs::write(rules.join("package.json"),json!({"schema_version":1,"id":"adsprobe","version":"1.0.0","api":1,"name":"Source free ADS diagnostic","license":"CC0-1.0","capabilities":["player"],"provides":[{"kind":"behaviour","id":"adsprobe:behaviour/main","file":"behaviour.json"},{"kind":"script","id":"adsprobe:script/main","file":"main.rhai"}]}).to_string())?;
+    std::fs::write(
+        rules.join("behaviour.json"),
+        json!({"schema_version":1,"script":"main.rhai","on_loadout":true,"commands":[{"name":"draw"},{"name":"lower"},{"name":"hold"},{"name":"raise"},{"name":"reload"},{"name":"ready"}]}).to_string(),
+    )?;
+    std::fs::write(
+        rules.join("main.rhai"),
+        format!(
+            "fn on_loadout(p) {{ require(give_item(p, \"{item}\", false)); }} fn cmd_draw(p) {{ require(set_image_state(p, \"Draw\")); }} fn cmd_lower(p) {{ require(set_image_state(p, \"Lower\")); }} fn cmd_hold(p) {{ require(set_image_state(p, \"Hold\")); }} fn cmd_raise(p) {{ require(set_image_state(p, \"Raise\")); }} fn cmd_reload(p) {{ require(set_image_state(p, \"Reload\")); }} fn cmd_ready(p) {{ require(set_image_state(p, \"Ready\")); }}"
+        ),
+    )?;
+    packages.packages.push(bri_package::packages::PackageEntry {
+        id: "adsprobe".into(),
+        version: "1.0.0".into(),
+        side: bri_package::packages::Side::Server,
+        dir: "ads-probe-rules".into(),
+        role: None,
+    });
+    std::fs::write(f.root.join("packages.json"), serde_json::to_vec(&packages)?)?;
+    let state = f.state()?;
+    let mut app = App::load(&f.root, state.path(), (800, 600))?;
+    app.host_on_any_port();
+    app.ui.core.pop(ScreenId::DefaultControls);
+    app.apply_packages(&packages)?;
+    app.ui.core.request(UiAction::HostGame {
+        map: f.map.0.clone(),
+        mode: ServerMode::SinglePlayer,
+        game_mode: None,
+        max_players: 1,
+        server_name: "ADS diagnostic".into(),
+        password: String::new(),
+        admin_password: String::new(),
+        super_admin_password: String::new(),
+    });
+    until(&mut app, "ordinary fixture host", |a| {
+        matches!(a.ui.core.conn, ConnectionState::InGame { .. })
+            && a.network_view().is_some_and(|v| {
+                v.tools
+                    .get(&v.owner)
+                    .is_some_and(|t| t.slots.iter().any(|s| s.as_deref() == Some(item)))
+            })
+    })?;
+    let slot = {
+        let v = app.network_view().unwrap();
+        v.tools[&v.owner]
+            .slots
+            .iter()
+            .position(|s| s.as_deref() == Some(item))
+            .unwrap()
+    };
+    app.ui.core.request(UiAction::UseTool { slot });
+    until(&mut app, "ordinary equip/sample", |a| {
+        a.network_view().is_some_and(|v| {
+            v.tools[&v.owner].selected == Some(slot)
+                && v.poses[&v.owner].player.grounded
+                && a.world_items.held_image(v.owner, 0) == Some(gun)
+        }) && a
+            .net
+            .held_ammo
+            .as_ref()
+            .is_some_and(|a| a.rounds == Some(12))
+    })?;
+    if app.controls.third_person_view() {
+        app.ui
+            .core
+            .request(UiAction::Game(GameAction::ToggleFirstPerson { fast: true }));
+    }
+    until(&mut app, "first person", |a| {
+        !a.controls.third_person_view() && a.controls.at_eye()
+    })?;
+
+    let owner = app.network_view().unwrap().owner;
+    fn accepted(a: &App, state: &str) -> bool {
+        a.network_view().is_some_and(|v| {
+            v.weapons
+                .images
+                .get(&v.owner)
+                .is_some_and(|images| images.iter().any(|m| m.hand == 0 && m.state == state))
+        })
+    }
+    fn command(a: &mut App, name: &str) {
+        a.ui.core.request(UiAction::Game(GameAction::Package {
+            package: "adsprobe".into(),
+            command: name.into(),
+            pressed: None,
+        }));
+    }
+    let rmb = |a: &mut App, down| {
+        a.ui.handle_input(if down {
+            InputEvent::MouseDown {
+                button: MouseButton::Right,
+                x: 400.,
+                y: 300.,
+            }
+        } else {
+            InputEvent::MouseUp {
+                button: MouseButton::Right,
+                x: 400.,
+                y: 300.,
+            }
+        })
+    };
+    let lmb = |a: &mut App, down| {
+        a.ui.handle_input(if down {
+            InputEvent::MouseDown {
+                button: MouseButton::Left,
+                x: 400.,
+                y: 300.,
+            }
+        } else {
+            InputEvent::MouseUp {
+                button: MouseButton::Left,
+                x: 400.,
+                y: 300.,
+            }
+        })
+    };
+    until(&mut app, "initial native Ready", |a| accepted(a, "Ready"))?;
+    rmb(&mut app, true);
+    until(&mut app, "Ready scope", |a| {
+        a.controls.aiming()
+            && (a.controls.fov() - 40.).abs() < 0.01
+            && a.view.scope_overlay.is_some()
+    })?;
+    assert!(app.controls.at_eye());
+    assert!(
+        !app.world_items
+            .instances()
+            .any(|(id, _)| id == crate::world_items::ItemIdentity::Mounted(owner, 0)),
+        "scope hides the first-person rig"
+    );
+    lmb(&mut app, true);
+    until(&mut app, "ordinary held shot WaitRelease", |a| {
+        accepted(a, "WaitRelease")
+            && a.net
+                .held_ammo
+                .as_ref()
+                .is_some_and(|a| a.rounds == Some(11))
+    })?;
+    assert!(
+        app.controls.aiming() && app.view.scope_overlay.is_some(),
+        "accepted Fire/WaitRelease must retain scope with LMB still held"
+    );
+    lmb(&mut app, false);
+    until(&mut app, "ordinary shot release", |a| accepted(a, "Ready"))?;
+    let mut checked = Vec::new();
+    for (name, state) in [
+        ("draw", "Draw"),
+        ("lower", "Lower"),
+        ("hold", "Hold"),
+        ("raise", "Raise"),
+        ("reload", "Reload"),
+    ] {
+        command(&mut app, name);
+        until(&mut app, "accepted barred image state", |a| {
+            accepted(a, state)
+                && !a.controls.aiming()
+                && a.view.scope_overlay.is_none()
+                && (a.controls.fov() - 90.).abs() < 0.01
+        })?;
+        assert!(
+            !app.controls.third_person_view() && app.controls.at_eye(),
+            "explicit first-person rig check"
+        );
+        assert!(
+            app.world_items
+                .instances()
+                .any(|(id, _)| id == crate::world_items::ItemIdentity::Mounted(owner, 0)),
+            "barred {state} must expose the same first-person rig"
+        );
+        assert!(
+            !app.controls.movement().jet,
+            "RMB still belongs to jets:false profile in {state}"
+        );
+        lmb(&mut app, true);
+        lmb(&mut app, false);
+        let tick = app.network_view().unwrap().tick;
+        until(&mut app, "barred trigger processed", |a| {
+            a.network_view().unwrap().tick >= tick + 6 && a.pending_requests() == 0
+        })?;
+        assert_eq!(
+            app.net.held_ammo.as_ref().unwrap().rounds,
+            Some(11),
+            "host's {state} fire policy is unchanged"
+        );
+        checked.push(state);
+        command(&mut app, "ready");
+        until(&mut app, "held intent reaim after accepted Ready", |a| {
+            accepted(a, "Ready")
+                && a.controls.aiming()
+                && a.view.scope_overlay.is_some()
+                && (a.controls.fov() - 40.).abs() < 0.01
+        })?;
+    }
+    rmb(&mut app, false);
+    until(&mut app, "ordinary RMB release", |a| {
+        !a.controls.aiming()
+            && a.view.scope_overlay.is_none()
+            && (a.controls.fov() - 90.).abs() < 0.01
+    })?;
+    rmb(&mut app, true);
+    until(&mut app, "reaim before focus loss", |a| a.controls.aiming())?;
+    app.ui.handle_input(InputEvent::FocusLost);
+    until(&mut app, "focus releases RMB", |a| {
+        !a.controls.held(HeldControl::Jet) && !a.controls.aiming() && a.view.scope_overlay.is_none()
+    })?;
+    assert_ne!(slot, 0, "positive different-item swap");
+    app.ui.core.request(UiAction::UseTool { slot: 0 });
+    until(&mut app, "ordinary different-item swap", |a| {
+        a.world_items.held_image(owner, 0) != Some(gun)
+            && a.network_view().unwrap().tools[&owner].selected == Some(0)
+    })?;
+    assert!(app.view.scope_overlay.is_none());
+    app.ui.core.request(UiAction::UseTool { slot });
+    until(&mut app, "ordinary rifle redraw", |a| {
+        a.world_items.held_image(owner, 0) == Some(gun) && accepted(a, "Ready")
+    })?;
+    rmb(&mut app, true);
+    until(&mut app, "scope before death", |a| {
+        a.view.scope_overlay.is_some()
+    })?;
+    app.ui.core.request(UiAction::Game(GameAction::Suicide));
+    until(&mut app, "ordinary death clears scope", |a| {
+        !a.network_view().unwrap().vitals[&owner].alive
+            && !a.controls.aiming()
+            && a.view.scope_overlay.is_none()
+    })?;
+    rmb(&mut app, false);
+    until(&mut app, "ordinary respawn eligibility", |a| {
+        let v = a.network_view().unwrap();
+        v.tick >= v.vitals[&owner].respawn_tick
+    })?;
+    lmb(&mut app, true);
+    lmb(&mut app, false);
+    until(&mut app, "ordinary respawn", |a| {
+        a.network_view().unwrap().vitals[&owner].alive
+    })?;
+    app.ui.core.request(UiAction::UseTool { slot });
+    until(&mut app, "respawn rifle Ready", |a| {
+        accepted(a, "Ready") && a.world_items.held_image(owner, 0) == Some(gun)
+    })?;
+    assert!(!app.controls.aiming() && app.view.scope_overlay.is_none());
+    rmb(&mut app, true);
+    until(&mut app, "fresh held input after respawn", |a| {
+        a.controls.aiming() && a.view.scope_overlay.is_some()
+    })?;
+    rmb(&mut app, false);
+    until(&mut app, "final release", |a| {
+        !a.controls.aiming() && a.view.scope_overlay.is_none()
+    })?;
+    eprintln!(
+        "ZOOM_STATE_APP_GREEN allowed Ready/Fire/WaitRelease; barred={checked:?}; ordinary shot12->11; each barred fire preserved11; RMB ownership/release/focus/different-item swap/death/respawn pass; same-ID remount not asserted"
+    );
+    Ok(())
+}

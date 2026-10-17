@@ -152,10 +152,27 @@ The fields you are most likely to change:
 | Field | Meaning | Limits |
 |---|---|---|
 | `jets` | `false`: with `on_jet`, the right mouse button only aims and the player does not jet while holding it | default `true` |
+| `allowed_states` | Optional image-state names that permit visual aiming. Omitted allows all states; `[]` allows none. A restricted profile without a known current state does not aim. | Up to 64 unique ASCII names, 1 to 128 bytes each; each must name exactly one state of this image, matched without ASCII case |
 | `levels` | further fields of view the mouse wheel steps through while aiming (back on rolling the other way); each narrower than the last. The step resets when the aim ends | up to 8, 5 to 85 degrees |
 | `sensitivity` | look speed while aimed, on top of the usual slowing with the field of view | 0.1 to 4, default 1 |
 | `overlay` | your own PNG (named without `.png`, relative to `assets/`) drawn over the whole view while aimed in first person, fitted to the screen's height with black either side, under the HUD. Its transparent middle is the lens; the held model is hidden meanwhile | up to 2048 px a side and 4 MB |
 | `sway` | the aim drifts on a figure of eight, `degrees` to each side, once every `seconds`; `crouched` and `moving` scale it. Only on foot, only on the holder's screen, and the mouse turns freely under it; it eases in and out | 0 to 5 degrees, 0.5 to 30 seconds, crouched 0 to 1, moving 1 to 4 |
+
+For a scope permitted only in ready/firing states, add for example
+`"allowed_states": ["Ready", "Fire", "WaitRelease"]` using the actual names in
+that image's `states`. The client's accepted mounted state gates its scope,
+FOV, aim sensitivity, wheel levels, sway and forced first-person view. A barred
+state removes the scope overlay so the held model can be seen, and the existing
+FOV ramp returns toward normal. Holding aim when an allowed state returns aims
+again; the wheel step is kept across this temporary gate. A keyboard Zoom key
+cannot bypass the gate by falling back to generic camera zoom.
+
+The profile stays installed while barred: `"on_jet": true, "jets": false`
+continues to suppress jet input from RMB. State eligibility is presentation only;
+it does not decide whether the host accepts firing, reload or movement. Rules
+and native weapon states still own those decisions. Omitting `allowed_states`
+preserves the existing scope behavior. This adds no mount identity or same-ID
+remount/reset guarantee.
 
 Sway changes only where the holder looks, so other players see nothing
 new and it costs no bandwidth.
