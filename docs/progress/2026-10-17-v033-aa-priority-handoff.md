@@ -220,3 +220,19 @@ remote agreement. No perpetual scale setter, reused spawn callback or public
 engine path/schema is granted. If intrinsic normalization is unsafe, the owner
 must identify the concrete existing-mechanism gap before root grants an engine
 correction. This is independent of the exclusively assigned water render lane.
+
+The App/UI/QUIC reproduction subsequently confirmed both selected AA identities
+at instance1 rather than the intended current sandbox size. Root approved a
+private deterministic unit-normalization experiment on651, preserving the old
+candidate and installed preview. Initial body/FP/TP/camera/motor/GPU equivalence,
+native selection/room and App size checks pass; this is not a final handoff.
+
+An expanded native TDM control caught an additional dependency: ordinary
+projectile damage scales with instance size unless fixed_damage is selected.
+Old authored35 at instance2 produces70, while the normalized body at instance1
+produces35. The two-hit baseline correctly remains red. Root approved only
+private, measured compensation of actual instance-scaled projectile/effect
+parameters, keeping source values separate from sandbox-equivalence values.
+The earlier claim that observed70 established a head multiplier is unsupported
+and must be corrected in current AA evidence; actual hit-region attribution is
+required. No engine rule, default-scale API or assertion waiver is approved.
