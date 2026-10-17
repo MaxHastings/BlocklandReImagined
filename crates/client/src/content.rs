@@ -205,6 +205,8 @@ struct MapEntry {
     id: String,
     name: String,
     file: String,
+    #[serde(default)]
+    preview: Option<serde_json::Value>,
 }
 #[derive(Deserialize)]
 struct TextureBinding {
@@ -673,12 +675,19 @@ impl ClientContent {
                 .context("Add-On map is missing from its bundle")?;
             validate_scene(&source.root, entry, &bundle)
                 .with_context(|| format!("Add-On map {}", source.id))?;
+            let preview = install_map_preview(
+                &mut schema,
+                &source.root,
+                &source.id,
+                entry.preview.as_ref(),
+                &mut warnings,
+            );
             maps.push(MapInfo {
                 id: source.id.clone(),
                 name: source.name.clone(),
                 // Player-facing: "Add-On", never "package".
                 description: format!("Add-On {}", source.package.as_deref().unwrap_or_default()),
-                preview: IconRef::None,
+                preview,
             });
         }
         let mut catalog = validate_catalog(&paths)?;
@@ -811,6 +820,82 @@ impl ClientContent {
 
     pub fn load_map(&self, map_id: &str, world_id: Option<&str>) -> Result<LoadedMap> {
         self.paths.load_map(map_id, world_id)
+    }
+}
+
+/// Optional native map art uses the existing UI image path, never a renderer
+/// handle or a basename shared with another package. Bad art leaves the map usable.
+fn install_map_preview(
+    schema: &mut UiPack,
+    root: &Path,
+    map: &str,
+    metadata: Option<&serde_json::Value>,
+    warnings: &mut Vec<String>,
+) -> IconRef {
+    let Some(metadata) = metadata else {
+        return IconRef::None;
+    };
+    let result = (|| -> Result<(String, bri_ui::schema::ImageEntry)> {
+        let image: bri_content::environment::Image = serde_json::from_value(metadata.clone())?;
+        ensure!(
+            image.width > 0
+                && image.height > 0
+                && image.width <= 8192
+                && image.height <= 8192
+                && u64::from(image.width) * u64::from(image.height) <= 16_777_216,
+            "Invalid map preview dimensions"
+        );
+        let path = file(root, &image.file, 4 * 1024 * 1024)?;
+        let bytes = fs::read(&path)?;
+        ensure!(
+            format!("{:x}", sha2::Sha256::digest(&bytes)) == image.sha256,
+            "Map preview checksum mismatch"
+        );
+        let mut reader =
+            image::ImageReader::new(std::io::Cursor::new(&bytes)).with_guessed_format()?;
+        let expected = image::ImageFormat::from_path(&path)?;
+        ensure!(
+            matches!(expected, image::ImageFormat::Png | image::ImageFormat::Jpeg)
+                && reader.format() == Some(expected),
+            "Map preview format disagrees with native image extension"
+        );
+        let mut limits = image::Limits::default();
+        limits.max_image_width = Some(8192);
+        limits.max_image_height = Some(8192);
+        limits.max_alloc = Some(64 * 1024 * 1024);
+        reader.limits(limits);
+        let decoded = reader.decode()?;
+        ensure!(
+            (decoded.width(), decoded.height()) == (image.width, image.height),
+            "Map preview dimensions disagree with image"
+        );
+        let id = format!("native-map-preview/{map}");
+        ensure!(
+            !schema.images.contains_key(&id),
+            "Duplicate map preview image identity"
+        );
+        Ok((
+            id,
+            bri_ui::schema::ImageEntry {
+                file: path.to_string_lossy().into_owned(),
+                source: image.source,
+                sha256: image.sha256,
+                width: image.width,
+                height: image.height,
+            },
+        ))
+    })();
+    match result {
+        Ok((id, image)) => {
+            schema.images.insert(id.clone(), image);
+            IconRef::Pack(id)
+        }
+        Err(error) => {
+            warnings.push(format!(
+                "Map {map} preview unavailable: {error:#}; using menu placeholder"
+            ));
+            IconRef::None
+        }
     }
 }
 
