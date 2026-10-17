@@ -33,6 +33,12 @@ file/candidate comparison and actual startup health. See the
 The existing installed e4 showcase and userdata must remain untouched. See
 [the handoff](progress/2026-10-17-v033-aa-priority-handoff.md).
 
+Maxwell additionally requested a v0.3.3 repeating-water fix: terrain follows the
+camera but water is limited to a static3x3 patch. The existing maps/core owner and
+root are qualifying the minimal camera-following renderer correction. Finite
+water and authoritative physics stay unchanged; no fix or publication is claimed
+yet. See [the bounded correction](progress/2026-10-17-v033-repeating-water-fix.md).
+
 See the dated progress entries for each release's exact build and test
 evidence.
 
