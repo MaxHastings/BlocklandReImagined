@@ -1,5 +1,12 @@
 # Native client integration
 
+Implementation reference containing early integration checkpoints. Dated probe
+results and provisional gaps below are historical evidence; use the
+[tester guide](TESTER-GUIDE.md), [known issues](KNOWN-ISSUES.md) and
+[release state](STATUS.md#release-state) for current supported platforms and
+player instructions. For complete build/package commands use
+[package layout](playtest-package-layout.md), rather than the old probe recipes.
+
 The native UI is connected to native content, an authoritative
 loopback/LAN host, QUIC client state and a persistent world renderer.
 
@@ -205,10 +212,10 @@ cargo build -p bri-client --release --locked
 ```
 
 The ignored tests require the generated local assets and/or an offscreen GPU.
-They never create a visible window or send OS input. Windows is verified.
-Linux x86_64 builds and passes `--check` (see "Linux" below); its window, input
-and audio are not yet verified, nor is macOS. Maxwell performs interactive
-playtests when the complete alpha is ready.
+They never create a visible window or send OS input. Windows x86-64, Linux
+x86-64 and Apple silicon macOS now have published archives and platform
+startup/package checks; see STATUS for the verified release. These checks do
+not replace Maxwell's interactive gameplay acceptance.
 
 Evidence:
 
@@ -277,8 +284,9 @@ executable bits). It checks that `bri-client --version` reports the version.
 The zip is the download, as on Windows and Mac. `--validate-only` and `--verify <dir>` work
 as on Windows.
 
-Verified on 2026-09-27 from Windows: the client compiles for
+Historical verification on 2026-09-27 from Windows: the client compiled for
 `x86_64-unknown-linux-gnu` without warnings, links against an Ubuntu 24.04
 sysroot, and the linked binary passes `--check` under WSL Ubuntu against the
-full content folder. Not yet verified: opening a window, input, audio output,
-and GPU rendering on a real Linux desktop.
+full content folder. That checkpoint did not verify opening a window, input,
+audio output or GPU rendering on a real Linux desktop; later release/platform
+evidence is recorded in STATUS and progress entries.

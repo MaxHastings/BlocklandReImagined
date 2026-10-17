@@ -1,88 +1,56 @@
 # Status
 
-One page so everyone starts from the same place: Max, or any new thread.
-Revised 2026-10-17. It summarises; the linked docs are the evidence, and
-[progress.md](progress.md) has the dated history of each build.
+Current release and engineering decisions. Reviewed 2026-10-17. Players should
+start with the [tester guide](TESTER-GUIDE.md), [features](FEATURES.md) and
+[known issues](KNOWN-ISSUES.md). Dated development receipts are in
+[progress/](progress/README.md); older history is in [progress.md](progress.md).
 
 ## Release state
 
 Current public release: [v0.3.2 Alpha](https://github.com/MaxHastings/BlocklandReImagined/releases/tag/v0.3.2),
-published on October 16, 2026 from
-`e4d9bb05df3c26c95a410cb9872990d99b37b54d`. Full gate, required CI,
-three-platform packages and public archive/hash verification passed. The release
-and tag are immutable. It includes map-change/preview, wheel-density, Q-selection,
-dropped-item and loading-chat fixes plus completed engine foundations. Original
-private game assets and AvP are excluded; local test copies remain. No interactive
-acceptance is claimed. GSF import limitations and unreproduced movement reports
-remain explicit in the [release notes](releases/v0.3.2.md).
+published October 16, 2026 at 10:17 PM America/Chicago (October 17, 03:17 UTC),
+from `e4d9bb05df3c26c95a410cb9872990d99b37b54d`. Windows x86-64,
+Apple silicon macOS and Linux x86-64 archives are available. The combined gate,
+required CI, platform packages, manifests and archive hashes were verified.
+Published tags and assets remain immutable. Interactive acceptance and the
+full [alpha contract](alpha-contract.md) remain open.
 
-The bounded AA2 aiming/sprint/reload validation and separate private preview have
-been delivered. Maxwell has subsequently authorized the AA thread to pursue a
-cohesive Pipeline TDM playtest destination and asked root to coordinate any shared
-engine needs for v0.3.3. AA owns private policy/content and actual consumer checks;
-root reviews reproduced engine gaps and assigns nonoverlapping public paths.
-This does not authorize unrelated Halo/GMod research or every proposed engine
-mechanism. v0.3.2 stays immutable; no new release publication is authorized.
+Start with the [v0.3.2 release notes](releases/v0.3.2.md). This release corrects
+Add-On map selection and previews, pixel-wheel scaling, Q tool selection memory,
+dropped-item support at the throw apex, and loading-screen typing names. It also
+includes completed generic engine foundations; these do not establish finished
+Halo or America's Army gameplay. AvP and private Halo/AA/GMod source assets are
+excluded from public packages. Earlier release-readiness checklists are historical
+plans, not instructions to republish or replace an existing release.
 
-Engine branch651efb2f preserves the three-path optional Zoom state gate, with
-metadata/control/App targets, quick and full normal focused checks passing.
-Root reviewed the production diff and preserved tier log. AA private953bac
-contains state-aware configuration and the same coupled consumer. Its actual
-App/QUIC/GPU run now passes on exact651, including all five barred sight states
-and allowed firing continuity. Root has merged the source locally for review;
-main integration remains pending. The separate private preview now passes full
-file/candidate comparison and actual startup health. See the
-[playtest handoff](progress/2026-10-17-aa-sprint-aim-private-playtest.md).
-The existing installed e4 showcase and userdata must remain untouched. See
-[the handoff](progress/2026-10-17-v033-aa-priority-handoff.md).
+Unpublished branches and local previews are development work. Describe their
+exact source and limits in progress receipts; do not count them as public
+features until integration and release verification finish. A passing isolated
+API test, imported mesh or diagnostic render does not close gameplay or fidelity
+acceptance. A meaningful shared capability needs an ordinary gameplay consumer
+before further dependent expansion.
 
-Maxwell additionally requested a v0.3.3 repeating-water fix: terrain follows the
-camera but water is limited to a static3x3 patch. The existing maps/core owner and
-root reproduced the extent mismatch. The camera-following correction now passes
-targeted actual App/GPU controls, quick671/0 and full focused1250/0, with read-only
-Slopes/Slate Sea/Storm render evidence. Root reviewed and merged exactbfcba5dc
-locally into the v0.3.3 candidate. Finite water and authoritative physics stay
-unchanged. The first combined candidate passed all six CI jobs but failed the
-native-map render test, which still submitted only static water. The reviewed
-test-only correction now covers both finite and repeated water, draws the new
-groups and passes all 14 native maps plus its full focused closure. A replacement
-combined gate and matching CI remain required; human playtest and release are
-not claimed. See [the bounded correction](progress/2026-10-17-v033-repeating-water-fix.md)
-and [replacement validation](progress/2026-10-17-v033-native-water-integration.md).
+Current development for v0.3.3 includes optional weapon-image-state gating of
+aim presentation and camera-following repeated water. AA's private consumer
+checks exercise the aim gate; native-map and offscreen checks exercise water
+beyond its former fixed patch. These source changes do not update the published
+v0.3.2 downloads or complete the private AA/Halo playtests. Their evidence and
+remaining limits are in the [aim handoff](progress/2026-10-17-v033-aa-priority-handoff.md),
+[water correction](progress/2026-10-17-v033-repeating-water-fix.md) and
+[native-map follow-up](progress/2026-10-17-v033-native-water-integration.md).
 
-See the dated progress entries for each release's exact build and test
-evidence.
+The Rule Workshop, bot objective planning and alpha formats remain experimental.
+Bots compose supported declared mechanics, not arbitrary scripts. Shark/Zombie
+ports remain partial. Lighting and recovered map metadata have the limits in
+[known issues](KNOWN-ISSUES.md). The Windows firefight crash, original
+death/disconnect and hitch reports, intermittent hosted position pullback and
+reported slope feel are not closed by scoped diagnostic checks. GSF Paradise's
+missing source texture and unsupported map Items remain explicit import gaps.
 
-Start with the [v0.3.0 release notes](releases/v0.3.0.md) and the current
-v0.3.1 notes above. The
-[current bot architecture](architecture/bots.md) and
-[objective integration audit](audits/objective-driven-integration.md)
-record the supported mechanisms and limits. The
-dated progress entries preserve the investigation history.
-
-This increment hardens creator draft/acknowledgment flows, persistent Add-On
-choices, live vehicle recoloring, join preparation, copy authority/support,
-conservative face coverage, committed bot holds/charged attacks, native avatar
-preview, authored-unlit Dynamic materials and authoritative portal travel frames.
-Borrowed Add-On geometry loads under independent identities, and Shark capture
-completes through ordinary typed damage. The final corrections after gameplay
-wind-down changed only offscreen test layout; no runtime logic, assertions or
-watchdogs changed.
-
-The Rule Workshop, objective planning and alpha formats remain experimental.
-Bots execute supported event objectives through ordinary controls; unfamiliar
-Add-On mechanisms need declarations. Arbitrary scripts, jet-assisted carrying,
-high-hoop throws and coordinated stacking remain unsupported. Shark/Zombie
-fidelity is partial. Dynamic uses live geometry/source lamps, with approximate
-recovered metadata and no general indirect lighting; Classic and Unified retain
-their existing appearance. Bulb model and broader lighting polish remain deferred.
-
-The reported Windows firefight NaN crash, death disconnect, destruction/respawn
-hitch and tank retreat behavior remain unreproduced. Scoped diagnostic/control
-checks do not close those reports or establish Windows performance gains.
-Interactive acceptance belongs to Maxwell, and the full alpha contract is open.
-Release menus display their version and source commit; publication remains
-Maxwell's decision.
+Maxwell performs all interactive playtests. A separately authorized alpha
+publication can proceed after its required checks without closing the broader
+roadmap. Current published behavior, known limits and historical evidence must
+remain distinct.
 
 ## What this is
 
@@ -161,11 +129,15 @@ Agreed with Max on 2026-09-28.
 |---|---|---|
 | 1 | A new player can download, host or join, and play; all 20 first-impressions items closed | Nearly. See the table below. |
 | 2 | A modder gets from zero to an Add-On with the guide; v20 imports work | **Done.** The guide is on main, and v20 weapon and brick packs import and play. |
-| 3 | Reported bugs fixed; the gate has zero known failures | Ongoing. Existing vehicle/portal baseline entries and integrated validation failures require closure for v0.3.1; see `tools/gate-known-failures.toml` and the dated integration evidence. |
+| 3 | Reported bugs fixed; the gate has zero known failures | Ongoing across the alpha roadmap. The published v0.3.2 candidate passed its gate; this does not close unconfirmed player reports. See `tools/gate-known-failures.toml` and dated integration evidence for subsequent candidates. |
 | 4 | A 1 h multi-player soak with save and reload | **Done** on a13 code: four players for 3608 s on Slate over LAN, no disconnects, every reload exact ([audits/night-qa.md](audits/night-qa.md)). |
 | 5 | A home test, then a small group playtest | Max has played test builds in multiplayer. The group session is for later (see "For testers later"). |
 
 ### First-impressions items
+
+This table preserves the original release checklist and its acceptance evidence.
+It is not a fresh test run of every item on today's main. Use Known issues
+below and the linked player guides for current reports and limitations.
 
 From [audits/first-impressions.md](audits/first-impressions.md). Items that
 need a real window are for Max to confirm.
@@ -187,7 +159,7 @@ need a real window are for Max to confirm.
 | 13 | Text size, colourblind, subtitles | Fixed: UI Size, colour-vision modes (`b7566e9`), sound captions (`a3cdc7b`). |
 | 14 | Join passwords and brick limits | Password fields hidden; Server Settings apply. |
 | 15 | Name prompt; duplicate names | First run asks your name (`78df917`); duplicates are numbered. |
-| 16 | Dedicated server persistence | `bri-server` saves on shutdown and `resume` starts from its newest save; no autosave (removed 2026-09-29). |
+| 16 | Dedicated server persistence | `bri-server` saves on shutdown, keeps one rolling crash-recovery checkpoint, and supports `resume`. Local play uses manual Save Bricks; it has no autosave. |
 | 17 | Version, updates, debug symbols | Fixed; release builds keep the .pdb as a CI artifact, not shipped to players. |
 | 18 | Brick search, duplicator | Fixed: brick search (`cc96712`) and the Duplicator Add-On (`d8484f0`). |
 | 19 | Input options | Toggle Crouch, Mouse 4 and 5, and a gamepad while playing (`c2e7941`). |
@@ -243,12 +215,14 @@ IP.
 
 ## Parked, and why
 
-- **Startup splash.** Content loads before the window opens; left for later
-  in [audits/engine-foundations.md](audits/engine-foundations.md).
+- **Startup splash.** A dedicated splash remains deferred. The earlier
+  [engine-foundations audit](audits/engine-foundations.md) predates background
+  content preparation and should not be read as a current startup trace.
 - **Stress campaign next steps.** Block faces in the renderer, a saturation
   round, predicted driven entities, animated box models (see
   [stress-lab/HANDOFF.md](stress-lab/HANDOFF.md)). Not started.
-- **Visual comparison with v20.** It drives the original game itself, so only with Max's OK.
+- **Visual comparison with v20.** Cancelled by Maxwell; retained evidence is
+  historical, not a pending agent task.
 - **Terrain.** Opus's data, conversion and collision pieces are kept; the
   playtest ships the finite map-bundle path.
 

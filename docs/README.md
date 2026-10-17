@@ -1,6 +1,20 @@
 # Docs
 
-Starting points grouped by what you're after. Start at the top of your group.
+Choose a path below. The guides describe the public alpha; a source checkout
+can contain changes newer than your download. For a particular build, use its
+included guides and [release notes](https://github.com/MaxHastings/BlocklandReImagined/releases).
+
+| I want to… | Start here |
+|---|---|
+| Install, update, bring old saves or play with friends | [Tester guide](TESTER-GUIDE.md) |
+| Find controls or improve performance | [Playtest notes](PLAYTEST.md) |
+| Check capabilities and unfinished behavior | [Features](FEATURES.md) and [known issues](KNOWN-ISSUES.md) |
+| Run a server without the client | [Dedicated server](DEDICATED-SERVER.md) |
+| Build games with brick events | [Rule Workshop](rule-workshop/PLAYTEST.md) |
+| Make or import an Add-On | [Making Add-Ons](modding/README.md) |
+| Build the engine or contribute | [Contributing](../CONTRIBUTING.md) |
+
+The sections below are reference routes; you do not need to read them all to play.
 
 ## Playing and testing
 
@@ -15,6 +29,8 @@ Release-folder guides and platform notes:
 - [FEATURES.md](FEATURES.md): what is done, partly done and missing.
 - [PLAYTEST.md](PLAYTEST.md): things to try, default keys, slow-PC tips.
 - [KNOWN-ISSUES.md](KNOWN-ISSUES.md): known problems.
+- [DEDICATED-SERVER.md](DEDICATED-SERVER.md): headless hosting, persistence,
+  admin settings and Add-Ons on Windows or Linux.
 - [stress-lab/PLAYTEST-STRESS-LAB.md](stress-lab/PLAYTEST-STRESS-LAB.md):
   the Stress Lab game mode, in builds packaged with it.
 
@@ -47,6 +63,9 @@ filenames.
   in-game Add-Ons screen, downloads on join and importing.
 - [modding/porting.md](modding/porting.md): porting the behaviour of a v20
   Add-On's scripts natively.
+- [modding/maps.md](modding/maps.md): Blender maps and legacy map imports.
+- [modding/gltf-models.md](modding/gltf-models.md): bodies, held models,
+  vehicles and bricks from Blender/glTF.
 
 ## Working on the game
 
@@ -66,6 +85,7 @@ Read [AGENTS.md](../AGENTS.md) first, then:
   2026-10-01; newer entries are one file each in [progress/](progress/README.md).
 - [content-regeneration.md](content-regeneration.md): what
   `tools/bootstrap.py` does, step by step.
+- [testing-tiers.md](testing-tiers.md): quick, focused and integrated checks.
 - [playtest-package-layout.md](playtest-package-layout.md): building and
   checking a release folder.
 - [release-builds.md](release-builds.md): the GitHub Actions release build,
@@ -74,6 +94,11 @@ Read [AGENTS.md](../AGENTS.md) first, then:
   the reference, and coverage of its content.
 
 ### Systems
+
+These implementation notes include dated checkpoints, commands and test evidence.
+Old schema/protocol numbers describe those checkpoints; current constants and
+tests in source define the running formats. Use the modding guides above for
+supported authoring workflows, and STATUS for current release state.
 
 - [world-state.md](world-state.md): authoritative state, events, saves.
 - [networking.md](networking.md) and
@@ -111,7 +136,11 @@ Read [AGENTS.md](../AGENTS.md) first, then:
 behaviour, first impressions, red team, bandwidth and net graph,
 orthogonality and more. Read [audits/bug-patterns.md](audits/bug-patterns.md)
 before fixing a bug.
-Each says what it found and what is still open. [research/](research)
+Each records what it found at its checkpoint; open findings may have later
+follow-ups. Release-readiness pages, `v022-delivery-contract.md`,
+`v023-work-plan.md`, dated Rule Workshop checks and the first-playtest contract
+are historical release plans. They do not reopen published releases or prove
+current acceptance. [research/](research)
 holds the evidence gathered from v20's files while each system was built.
 [stress-lab/](stress-lab) holds the Stress Lab's handoff and weakness
 ledger. They are history: when one disagrees with the code, the code wins.

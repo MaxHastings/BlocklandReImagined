@@ -1,10 +1,41 @@
 # Blockland ReImagined
 
-Blockland v20 rebuilt from scratch in Rust. It keeps v20's maps, bricks,
-tools, weapons, vehicles, mini-games, events, art, music and sounds, and
-adds modern safety nets, easy direct-IP hosting and Add-Ons that can go
-much further than v20's. Available for Windows x86-64, Apple Silicon Macs
-and Linux x86-64.
+Blockland v20 rebuilt in Rust: build with bricks, make mini-games, and play
+with friends using the original maps, art, music and sounds. Add-Ons extend
+the game with tools, weapons, vehicles, rules and new worlds.
+
+**This is an alpha.** Familiar v20 gameplay is the reference; fidelity,
+performance and compatibility still have limits. See [features](docs/FEATURES.md)
+and [known issues](docs/KNOWN-ISSUES.md) before planning a larger project.
+
+## Play
+
+Download from the [latest release](https://github.com/MaxHastings/BlocklandReImagined/releases/latest),
+extract the whole ZIP, then launch:
+
+| System | Download | Start |
+|---|---|---|
+| Windows 10/11 x86-64 | [Windows ZIP](https://github.com/MaxHastings/BlocklandReImagined/releases/latest/download/BlocklandReImagined-windows.zip) | `Launch.cmd` |
+| macOS Apple silicon (M1 or newer) | [Mac ZIP](https://github.com/MaxHastings/BlocklandReImagined/releases/latest/download/BlocklandReImagined-macos.zip) | `BlocklandReImagined.app` |
+| Linux x86-64, glibc 2.35+ and a Vulkan driver | [Linux ZIP](https://github.com/MaxHastings/BlocklandReImagined/releases/latest/download/BlocklandReImagined-linux.zip) | `./launch.sh` |
+
+You need no original Blockland install, account, compiler or Python to play.
+The [tester guide](docs/TESTER-GUIDE.md) covers first launch, security prompts,
+updates, old saves and file locations. Start with the Tutorial, or host a
+Custom game on Slate. [Playtest notes](docs/PLAYTEST.md) cover controls and
+things to try.
+
+**Playing together:** use the same release. Pick LAN or Internet in Start
+Game; friends join by IP or paste the `bri://` invite into Connect to IP.
+Internet hosts need **UDP 28000** reachable; the game asks the router to open
+it automatically. UDP 28050 is only for LAN discovery. There is no public
+server list or relay. See [playing together](docs/TESTER-GUIDE.md#playing-together)
+or [dedicated servers](docs/DEDICATED-SERVER.md).
+
+Settings and saves live outside the release folder. Extract updates into a
+fresh folder, back up your state, and carry over custom Add-Ons as described
+in [updating and backups](docs/TESTER-GUIDE.md#updating-and-backups).
+Alpha save and Add-On formats may change between releases.
 
 ## Video
 
@@ -13,62 +44,34 @@ and Linux x86-64.
 
 ## Community
 
-Join the Discord: https://discord.com/invite/J8e4kvndyu
+Join the [Discord](https://discord.com/invite/J8e4kvndyu).
+For bugs, include your version, reproduction steps and logs from
+[the reporting guide](docs/TESTER-GUIDE.md#when-something-breaks).
 
 ## What's in it
 
-- **v20 as you remember it.** All 14 maps, the brick selector, paint and
+- **Familiar v20 content.** The 14 reference maps, the brick selector, paint and
   prints, the wrench and events, all 21 stock items, the stock vehicles,
-  mini-games, bots, the avatar editor, admin tools and v20's own screens,
-  keys and numbers.
+  mini-games, bots, the avatar editor and admin tools. Fidelity gaps are tracked
+  in the feature guide and known issues.
 - **Built for huge builds.** Bricks are drawn in batched chunks, joining
   a big build is quick, and saves are compact binary files. The aim is a
   million bricks at 60 fps.
 - **Modern quality of life.** An unsaved-work prompt, crash
   reports, brick search, a red ghost before a plant that would fail,
   graphics presets, frame cap, field of view, UI size, colour-vision
-  modes, sound captions, a gamepad while playing, and old v20 `.bls`
-  saves that load as they are.
+  modes, sound captions, a gamepad while playing, and import for old v20 `.bls`
+  saves, with conversion gaps reported.
 - **Add-Ons.** The Stunt Plane and the Duplicator come with the game.
   Add-Ons add rules, HUDs, weapons, vehicles, game modes, creatures and
   bodies through generic engine hooks, with no game-specific code in the
   engine. Players joining a server download the Add-Ons it runs, and
   Add-On code on players' PCs runs in a sandbox they choose to trust.
   Old v20 Add-Ons import their bricks, weapons, vehicles and sounds.
-- **Direct hosting.** No accounts, relays or server list (see Hosting
-  below).
+- **Direct hosting.** No accounts, relays or server list; see Play above.
 
 The full list, with what is still missing, is in
 [FEATURES.md](docs/FEATURES.md).
-
-## Play
-
-Download the zip for your system from the Releases page
-([Windows](https://github.com/MaxHastings/BlocklandReImagined/releases/latest/download/BlocklandReImagined-windows.zip),
-[Mac](https://github.com/MaxHastings/BlocklandReImagined/releases/latest/download/BlocklandReImagined-macos.zip),
-[Linux](https://github.com/MaxHastings/BlocklandReImagined/releases/latest/download/BlocklandReImagined-linux.zip)),
-extract it somewhere you can write to (not Program Files) and run `Launch.cmd`
-(the app on Mac, `launch.sh` on Linux). Nothing else needs installing (Linux
-needs glibc 2.35 or newer and a Vulkan driver, which most desktop installs
-have), and you don't need the original Blockland. Settings and saves live in your user folder
-(`%LOCALAPPDATA%\BlocklandReImagined` on Windows), so a newer release's folder
-picks them up.
-
-- [Tester guide](docs/TESTER-GUIDE.md): install, playing together, what to
-  send when something breaks.
-- [Mac startup](docs/PLAYTEST-MAC.md): opening the app and finding your files.
-- [Features](docs/FEATURES.md): what is done, partly done and missing.
-- [Playtest notes](docs/PLAYTEST.md): things to try, default keys, what
-  to do if it runs slowly.
-- [Known issues](docs/KNOWN-ISSUES.md).
-
-The tester guide, features, playtest notes and known issues ship in every
-release folder; Mac releases also include the Mac startup guide.
-
-**Hosting** is a direct connection: pick LAN or Internet in Start Game.
-Friends join by IP address or with the invite the game copies for you.
-Over the internet only **UDP port 28000** needs forwarding, and the game
-asks your router to open it for you. UDP 28050 only finds LAN games.
 
 ## Build games
 
@@ -84,8 +87,11 @@ things to try. Both ship in the release folder; no code or checkout is needed.
 Start with [Making Add-Ons](docs/modding/README.md). It walks through
 making an Add-On from a sample, checking and trying it without the game,
 importing old v20 Add-Ons, porting what their scripts did, and what players
-are asked to trust. You need a checkout of this repository and Rust, but
-not the v20 game or its content. The Commando sample shows a small total
+are asked to trust. The release includes `bri-import-addon`, `bri-addon-check`
+and `bri-addon-run`; editing and checking native Add-Ons needs no Rust.
+Get samples from this repository (GitHub's **Code → Download ZIP** works).
+Building the engine or the tools from source needs Rust; importing some old
+maps also needs a v20 install for borrowed resources. The Commando sample shows a small total
 conversion built only from those hooks, and
 [total-conversion.md](docs/audits/total-conversion.md) records the implemented
 hooks and remaining seams.
@@ -126,19 +132,20 @@ engineering rules. Then:
   date; entries from 2026-10-01 are one file each in
   [docs/progress/](docs/progress/README.md).
 
-Useful commands:
+Use the [contributor guide](CONTRIBUTING.md) for scoped checks and changes.
+After bootstrap, these commands validate content or start a development game
+using the normal user profile:
 
 ```powershell
-cargo test --workspace --locked
-cargo run -p bri-client --release -- --check content user-state
-cargo run -p bri-client --release -- --run content user-state
+cargo run -p bri-client --release --locked -- --check content
+cargo run -p bri-client --release --locked -- --run content
 ```
 
-A dedicated server is `cargo run -p bri-net --release --bin bri-server`;
-run it without arguments for its usage.
+For isolated settings and saves, append a state directory after `content`.
+A dedicated server is documented in [DEDICATED-SERVER.md](docs/DEDICATED-SERVER.md).
 
-Release folders are built with `tools/package_playtest.ps1`; see
-[package layout](docs/playtest-package-layout.md).
+Platform packagers and verification are in [package layout](docs/playtest-package-layout.md);
+publication is in [release builds](docs/release-builds.md).
 
 Generated content, diagnostics and packages live under the ignored
 `content/`, `artifacts/` and `dist/` folders. Research copies of original

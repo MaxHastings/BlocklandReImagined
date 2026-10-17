@@ -1,7 +1,7 @@
 # Native world state and authority
 
 `bri-world` contains portable state and rules, independent of rendering, physics
-handles, networking and all Torque readers. Schema 2 saves contain stable brick
+handles, networking and all Torque readers. Versioned saves contain stable brick
 IDs, native content references, map identity, original palette, placements,
 ownership (with each owner's durable principal), names, flags, prints,
 light/emitter properties and event rows. Queued event actions are not saved.
@@ -47,7 +47,9 @@ There is no autosave, as in v20 (removed 2026-09-29 at Max's request; it was the
 Autosaver Add-On in v20). Players save with Save Bricks, and leaving with unsaved
 changes asks first. The dedicated `bri-server` writes `world-<unix millis>.json`
 into its state directory when it stops; `resume` in place of `<world.json>`
-starts from the newest one. A crash loses what was built since the last save.
+starts from the newest one. The server also keeps a rolling recovery checkpoint;
+see [dedicated server recovery](DEDICATED-SERVER.md#on-a-linux-vps). Recovery is
+not a replacement for backups, and alpha save schemas can change.
 
 Every world a server accepts can be saved and streamed (stress campaign W7).
 `Brick::stored_bound` is an allocation-free upper bound on a brick's JSON save

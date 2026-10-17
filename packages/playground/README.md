@@ -32,7 +32,7 @@ a late joiner over the network).
 
 ## Playtest (about five minutes)
 
-1. In Add-Ons, turn on the eleven Playground Add-Ons and Blockhead Bot. Host a
+1. In Add-Ons, enable the Playground mode and its dependencies, including Blockhead Bot. Host a
    server with the **Mixed Add-On Playground** game mode, then place a
    vehicle spawn with the Dune Buggy and another with a Blockhead Bot.
 2. You spawn as the Runner (red cap, blue overalls). Check that it walks,
@@ -55,7 +55,7 @@ a late joiner over the network).
    flattened.
 8. Let a bot shoot you. You should respawn as the Runner holding the
    Carbine.
-7. As the Runner, the top of the screen shows a gold power meter that
+9. As the Runner, the top of the screen shows a gold power meter that
    loses wedges as you are hurt, a cap with a health counter, and a gold
    reticle instead of the crosshair. Draw the Carbine: a big gold-edged
    round count, a magazine bar and the reserve sit bottom right instead of
