@@ -42,8 +42,13 @@ root reproduced the extent mismatch. The camera-following correction now passes
 targeted actual App/GPU controls, quick671/0 and full focused1250/0, with read-only
 Slopes/Slate Sea/Storm render evidence. Root reviewed and merged exactbfcba5dc
 locally into the v0.3.3 candidate. Finite water and authoritative physics stay
-unchanged. Combined gate/CI and human playtest remain pending; no release is
-claimed. See [the bounded correction](progress/2026-10-17-v033-repeating-water-fix.md).
+unchanged. The first combined candidate passed all six CI jobs but failed the
+native-map render test, which still submitted only static water. The reviewed
+test-only correction now covers both finite and repeated water, draws the new
+groups and passes all 14 native maps plus its full focused closure. A replacement
+combined gate and matching CI remain required; human playtest and release are
+not claimed. See [the bounded correction](progress/2026-10-17-v033-repeating-water-fix.md)
+and [replacement validation](progress/2026-10-17-v033-native-water-integration.md).
 
 See the dated progress entries for each release's exact build and test
 evidence.
