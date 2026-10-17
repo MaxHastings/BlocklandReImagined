@@ -1,8 +1,8 @@
 # Old v20 Add-Ons and new bricks
 
 Put an old Blockland Add-On (a `.zip` or a folder with `server.cs`) in the
-game's `content/Add-Ons/` folder (inside `content`, found as in section
-2), open **Start Game > Add-Ons**, pick it
+game's `content/Add-Ons/` folder (see [checking and trying Add-Ons](README.md#2-check-it-and-try-it)
+for the content location), open **Start Game > Add-Ons**, pick it
 and press **Import**. Its scripts are never run: datablocks for bricks,
 weapons and vehicles become data, and `IMPORT-REPORT.md` in the new Add-On
 lists what came across and what did not. An Add-On without a licence file
@@ -40,11 +40,12 @@ so it is left out and its image kept for rules to mount; a
 list, as v20 listed it, and so is a named light; one with a
 `uiName` and no image becomes a pickup nobody holds. A kill icon the
 Add-On forgot to ship is left out of its messages. Its particles may draw
-its own textures; players load at most 64 of them from all Add-Ons, and
-fit each within 256 pixels a side.
+its own textures. Each weapons-pack merge admits at most 1024 new effect
+textures, fitted within 256 pixels a side, subject to the shared decoded-image
+and GPU atlas budgets. Read Add-On health messages for omitted effects.
 
-That is also how you make **new bricks** today: write a small v20-style
-brick Add-On and import it. A folder `Brick_Tall` holding:
+For **new bricks**, you can [import a Blender/glTF model](gltf-models.md#bricks),
+or write and import a small v20-style brick Add-On. A folder `Brick_Tall` holding:
 
 ```text
 server.cs         datablock fxDTSBrickData(brick3x3x2Data)

@@ -11,7 +11,7 @@ unfinished. Slate and Bedroom are good first maps.
 ## Version and updates
 
 The main menu's bottom corner shows the version (for example
-`2026-09-28-a13 (1a2b3c4d5)`); include it when reporting a problem. Once per
+`v0.3.2 (e4d9bb05d)`); include it when reporting a problem. Once per
 start the game asks the project's GitHub Releases page whether a newer version
 exists and, if so, offers to open that page. It never downloads or installs
 anything and says nothing when offline. Turn it off with Options > Advanced >
@@ -40,7 +40,8 @@ anything and says nothing when offline. Turn it off with Options > Advanced >
   walking into its side does not board. W/S throttle, A/D steer, Space gets out (Shift on the horse), period and
   comma change seats, left mouse fires vehicle weapons. Tick "Recolor Vehicle" to paint
   it with the brick color, and use `< Respawn >` to reset it.
-- **Bots:** pick "Blockhead Bot" in a Vehicle Spawn brick. Bots wander near their
+- **Bots:** first enable **Blockhead Bot** in Start Game → Add-Ons, then pick
+  "Blockhead Bot" in a Vehicle Spawn brick. Bots wander near their
   brick; inside your minigame they fight you. Try allied bots near a ground vehicle
   with control and weapon seats, a human driver with bot passengers, a blocked
   route, a teammate crossing the driving path, and a team change during a charge.
@@ -53,8 +54,10 @@ anything and says nothing when offline. Turn it off with Options > Advanced >
   `/confusion` or `/sit`. `/suicide` and `/light` work in chat too.
 - **Rule Workshop:** Escape → Rule Workshop offers editable examples. Start
   with a blank brick and ordinary Events, then add IF checks. Read
-  `RULE-WORKSHOP-PLAYTEST.md` and `RULE-WORKSHOP-CREATOR-TEST-CARD.md` in the
-  download for recipes, semantic limits and useful mutation tests.
+  the [Rule Workshop guide](rule-workshop/PLAYTEST.md) and
+  [creator test card](rule-workshop/CREATOR-TEST-CARD.md)
+  for recipes, semantic limits and useful mutation tests. They ship in the
+  download under `RULE-WORKSHOP-*` names.
 - **Save/load:** save a build (with events and ownership), leave, load it back.
 
 ## Playing with a friend
@@ -90,6 +93,11 @@ log with any "it's slow" report; the console's `stats` command shows the
 current numbers.
 
 ## Default controls reminder
+
+These are the standard scheme. If you have no numpad, choose the laptop
+scheme on first run, or open **Options → Controls** to view and rebind actions.
+F1 opens help. Gamepads cover movement and combat; building and menus still
+need a keyboard and mouse.
 
 | Action | Standard keyboard / wheel mouse |
 |---|---|

@@ -28,7 +28,7 @@ minutes). Send applies the edits. The classic rows
 stay simple until you add a condition. Chat commands below are an alternative
 to the picker, not a required setup step.
 
-For team games, open **MiniGames → Teams & Add-Ons**. Team door and Soccer
+For team games, open **MiniGames → Teams**. Team door and Soccer
 create missing teams and put the builder on the first team; assign other players
 there, or switch yourself between teams to test the gate. Conditions and `setTeam`
 show your named teams; boolean checks use Yes/No. State actions label where the
@@ -53,7 +53,7 @@ are saved, while live variable progress is not.
 | Command | Starting behavior | Mutate and stress it |
 |---|---|---|
 | `/rulelab switch` | Classic switch opens a named panel for two seconds; reactivation extends it. No conditions. | Add sounds/lights, relays, more named targets or replace the panel. Compare authoring with ordinary v20 Events. |
-| `/rulelab teamdoor` | Open and Close buttons control a solid gate, only for Blue. Fresh games create Blue/Red and put you on Blue; existing games use their first team. | Change your team in Teams & Add-Ons and verify refusal. Change the allowed team, add a delay, or require a shared `keyFound` variable. Add walls around the gate. |
+| `/rulelab teamdoor` | Open and Close buttons control a solid gate, only for Blue. Fresh games create Blue/Red and put you on Blue; existing games use their first team. | Change your team in Teams and verify refusal. Change the allowed team, add a delay, or require a shared `keyFound` variable. Add walls around the gate. |
 | `/rulelab puzzle` | Three distinct switches in order open a gate. Any player in the MiniGame can contribute. Wrong order/repeated completed switches do not advance it; resetting the MiniGame clears progress and closes it. | Make wrong input reset progress, require simultaneous switches, add a timeout or let a ball operate one switch. Rename shared `puzzleStep` for an independent puzzle. |
 | `/rulelab race` | Three ordered player/object checkpoints; three laps wins. | Reverse order, alter lap count, drive a Jeep, jump over sensors, try two racers or use a portal. Rename `checkpoint` to make a second course independent. |
 | `/rulelab hill` | An uncontested occupant gains a real point each second; ten wins. | Remove the opponents check for a crowded hill, configure teams, require consecutive hold time, or make control unlock a door instead of awarding points. |

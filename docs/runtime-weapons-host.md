@@ -1,5 +1,10 @@
 # Weapon host integration
 
+Implementation reference with early integration evidence. The numbered content,
+snapshot and wire versions below identify the original checkpoint. For current
+authoring use [Weapons](modding/weapons.md); current protocol/save constants
+live in source and can change during alpha.
+
 Native weapon catalogs now load on ordinary local host/join and dedicated
 startup. Content identity8 includes declared native resource bytes with bounded
 reads and canonical containment. Original resource hashes are provenance, not
@@ -57,8 +62,9 @@ grant command.
 - Malformed duplicate projectiles and oversized sound profiles reject an entire
   delta before mutation. Existing building/network suites remain exercised.
 
-Still incomplete: original animated server muzzle positions (both hands
-currently use the authoritative eye). Health, death and minigame damage rules
+Host firing now resolves each hand through `Session::muzzle`, with the eye as
+a fallback, rather than always firing both hands from the eye. Exact animated
+pose parity still requires consumer evidence. Health, death and minigame damage rules
 are in `crates/sim/src/session/combat.rs`; vehicles in
 `crates/sim/src/session/vehicles.rs`. Free-build player damage remains denied.
 Unsupported gameplay intentions produce

@@ -1,5 +1,10 @@
 # Authoritative world items
 
+Implementation reference with early integration evidence. Pack/protocol numbers
+and test counts below identify those checkpoints, not current format versions.
+Current behavior is implemented in the linked source; alpha schemas have no
+backward-compatibility promise.
+
 Implemented in `crates/sim/src/item_spawners.rs` and `session/items.rs`, with
 offline authored bounds from item-presentation-pack-003.
 
@@ -48,7 +53,8 @@ Source evidence and startup measurements are in
 - The thrower exclusion is58 native ticks: round-up of the engine-family
   15×32ms=480ms timeout. This duration is not proven from the closed v20 binary.
   Other players can collect immediately. Saved legacy state retains its existing
-  lifetime; new weapon saves use schema3, with read compatibility for1/2.
+  lifetime. Weapon saves accept only the current schema in
+  `crates/weapons/src/runtime/persistence.rs`; earlier alpha schemas are rejected.
 - Static and dynamic contact queries use eight-unit spatial buckets; shapes
   spanning more than128 buckets use an occupied-shape fallback. Negative axes
   and contacts exactly on bucket boundaries are included. Connection order
@@ -73,10 +79,13 @@ migration from earlier ones). Real QUIC verifies dropped inventory
 and item state reach another peer and a late join.
 
 The client draws static, dropped, mounted and projectile items
-(`crates/client/src/world_items.rs`). Not yet complete: original muzzle poses,
-full inventory persistence across host restart, item fake-kill coupling, source-derived drop collision
-shape/gravity/friction/elasticity, and item spin presentation. Current drop
-motion still uses the earlier provisional point sweep and damping.
+(`crates/client/src/world_items.rs`). Drop motion in
+`crates/weapons/src/runtime.rs` uses authored item bounds, box sweeps, gravity,
+bounce/friction, buoyancy and portal transport, with a point fallback when bounds
+are unavailable. v0.3.2 requires actual support before a stationary item sleeps,
+so the apex of a vertical throw no longer strands it in air. Full inventory
+persistence across host restart and overall item/muzzle fidelity still need
+their own acceptance evidence.
 
 A picked-up brick item waits for its respawn as a ghost (2026-09-28).
 `Item::fadeOut` sets node colour `<ItemData colorShiftColor rgb or white> 0.25`

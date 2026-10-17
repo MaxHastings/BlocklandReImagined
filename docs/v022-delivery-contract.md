@@ -1,5 +1,9 @@
 # v0.2.2 delivery contract — 2026-10-03
 
+Historical scope for the published v0.2.2 increment. Use [STATUS](STATUS.md)
+for current release decisions, [features](FEATURES.md) for available gameplay
+and [the alpha contract](alpha-contract.md) for the broader roadmap.
+
 Maxwell authorized an ambitious, thorough release and all-day work, with
 integration, cleanup, main consolidation and Windows/macOS/Linux publication.
 This contract makes that outcome reviewable. It is not a permanent architecture

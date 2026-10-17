@@ -1,4 +1,8 @@
-# Windows core-building playtest package
+# Release package layout
+
+Maintainer reference for Windows, Linux and macOS packaging. Players should
+start with [the tester guide](TESTER-GUIDE.md). Packaging creates a local
+artifact; publication and required checks follow [release builds](release-builds.md).
 
 The packaging script creates a versioned folder under ignored `dist/` only
 after root supplies the final release executable and SHA-256. It never builds,
@@ -9,10 +13,12 @@ The packager reads the package list the client loads: `content/packages.json`
 when present, otherwise `crates/package/base-packages.json`
 (`docs/architecture/packages.md`). The package receives that list as
 `content/packages.json`. It copies only the listed package directories with
-all nested files, plus the Add-Ons every release ships turned on (the
-Duplicator and those in `tools/shipped-addons.json`, under `content/addons/`,
-and with `-StressLab` the Stress Lab under `content/stresslab/`); it excludes research,
-community and unintegrated debris content. Inputs with symbolic links or
+all nested files, plus the bundled Add-Ons declared by
+`packages/default-addons.json`, including ones shipped turned off, under
+`content/addons/`. Original community resources come from the separately
+prepared Add-On bundle. With `-StressLab`, the Stress Lab is added under
+`content/stresslab/`. Arbitrary local/community/private Add-Ons are not copied.
+Inputs with symbolic links or
 junctions are rejected.
 
 Package layout:
@@ -27,12 +33,18 @@ BlocklandReImagined-<version>-windows/
   content/
     packages.json
     <the listed native packages, recursively copied>
-    addons/               Add-Ons shipped turned on
+    addons/               bundled Add-Ons, enabled or disabled by their defaults
     stresslab/            with -StressLab only
   PLAYTEST.md
   KNOWN-ISSUES.md
   TESTER-GUIDE.md         install, playing together, what to send, known limits
   FEATURES.md             what is done, partly done and missing
+  DEDICATED-SERVER.md     headless server setup
+  RULE-WORKSHOP-*.md     creator recipes, semantics and test card
+  CREDITS.md              bundled original Add-On credits
+  WINIT-PATCH.md, WINIT-LICENSE.txt
+  dxcompiler.dll          pinned Windows shader compiler
+  licenses/              shader compiler notices
   PLAYTEST-STRESS-LAB.md  with -StressLab only
   Launch.cmd
   Launch-Playtest.ps1
@@ -96,11 +108,12 @@ name it (without it a build calls itself `dev-<commit date>` and never checks
 for updates):
 
 ```powershell
-$env:BRI_VERSION = '2026-09-28-a14'
+$env:BRI_VERSION = 'v0.3.3'
 cargo build --release --locked -p bri-client --bin bri-client -p bri-addon-import --bin bri-import-addon -p bri-net --bin bri-server -p bri-package-runtime --bin bri-addon-check -p bri-sim --bin bri-addon-run
-.\tools\package_playtest.ps1 -Version 2026-09-28-a14 -ExpectedExecutableSha256 <hash>
+.\tools\package_playtest.ps1 -Version $env:BRI_VERSION -ExpectedExecutableSha256 <hash>
 ```
 
+The version above is an example; choose the authorized, unpublished version.
 The packager runs `bri-client.exe --version` and refuses a build whose version
 differs from `-Version`. Publish the zipped folder as a GitHub Release whose tag
 is that version; players' games compare against the latest release. Pushing a
@@ -123,7 +136,7 @@ the packs the package list gives a role, every default Add-On from
 `packages/default-addons.json` and, with `--stress-lab`, `packages/stresslab`.
 
 ```sh
-export BRI_VERSION=2026-09-29-a21
+export BRI_VERSION=v0.3.3
 cargo build --release --locked -p bri-client -p bri-addon-import -p bri-package-runtime --bin bri-addon-check -p bri-sim --bin bri-addon-run
 tools/package_mac.sh --version "$BRI_VERSION" \
     --sha256 "$(shasum -a 256 target/release/bri-client | cut -d' ' -f1)"
@@ -150,3 +163,20 @@ on macOS the first launch of each build copies `Contents/Resources/content`
 to `~/Library/Application Support/BlocklandReImagined/content/<build>` and
 plays from there (`mac_bundle` in `crates/client/src/main.rs`). State and
 logs live in `~/Library/Application Support/BlocklandReImagined`.
+
+## Linux folder
+
+`tools/package_playtest.sh` packages the client, importer, dedicated server and
+both modder tools beside `content/`, `launch.sh`, player/creator guides, credits
+and `MANIFEST.json`. Build all five binaries with the selected `BRI_VERSION`
+first, as shown in the script's header. Use `--validate-only` to inspect inputs
+and `--verify dist/BlocklandReImagined-<version>-linux` to verify the folder.
+The archive is `dist/BlocklandReImagined-linux.zip`.
+
+## Guide links
+
+The common guide copier, `tools/package_guides.py`, converts repository-relative
+links to the flat release layout. Platform-specific guides absent from an
+archive link to their online source. Run `python tools/check_docs.py` to check
+repository links and generated Windows/Linux/macOS guide layouts without
+building a game or copying original content.

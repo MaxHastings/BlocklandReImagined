@@ -1,5 +1,11 @@
 # Native tool inventory integration
 
+Implementation reference with early integration evidence. Historical protocol,
+snapshot and pack numbers below describe those checkpoints; current constants
+and tests define the running formats. See [features](FEATURES.md) for player
+capabilities and [inventory implementation](../crates/weapons/src/runtime.rs)
+for the current authority.
+
 The host owns one five-slot inventory for core tools and native weapon items.
 Stock spawn order is Hammer, Wrench, Printer, empty, empty, from recovered
 `allGameScripts-Vanilla.cs:9697–9699`. No Gun is granted implicitly. Core tool
@@ -10,9 +16,10 @@ The original four core definitions all declare `canDrop = 1` at source lines
 
 `bri-weapons` accepts the four explicit core IDs alongside validated pack items.
 Duplicate grants and full inventories reject before mutation. Core/weapon drops
-and pickups use the same slots and persistence. Weapon saves now write schema2
-and read schema1/2; restore also rejects duplicate inventory items. This does not
-add a legacy reader to runtime. All native 17 weapon entries retain pack validation.
+and pickups use the same slots and persistence. Weapon saves accept only the
+current `SAVE_SCHEMA` in `crates/weapons/src/runtime/persistence.rs`; alpha has
+no older-schema migration. Restore rejects duplicate inventory items. All native
+17 weapon entries retain pack validation.
 
 `Session` creates stock inventories on join/re-spawn via authenticated resume;
 disconnect removes the actor. `set_weapon_pack` is setup-only. `give_item` is an

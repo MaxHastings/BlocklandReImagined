@@ -3,12 +3,13 @@
 Blockland ReImagined is Blockland v20 rebuilt from scratch. The goal is
 v20 as you remember it, with its own art, music and sounds, plus Add-Ons
 that can go much further than v20's ever could. This page says what is
-done, what is partly done, and what is still missing. It was checked
-against the game's own code and focused test reports on 2026-10-04. Each
-release's notes on [GitHub](https://github.com/MaxHastings/BlocklandReImagined/releases) say what changed since;
+available, what is partly done, and what is still missing. This documentation
+was reviewed against public v0.3.2 on 2026-10-17. Available content and passing
+headless tests do not establish complete v20 fidelity or human acceptance.
+Each release's notes on [GitHub](https://github.com/MaxHastings/BlocklandReImagined/releases) say what changed;
 [known issues](KNOWN-ISSUES.md) records the remaining limits.
 
-## v20: what's done
+## v20: available gameplay
 
 **Menus.** Start Game, Join Game, Player (avatar), Options, About, Credits,
 the Tutorial and F1 help with v20's eight help pages. The screens are v20's
@@ -137,6 +138,23 @@ events and brick ownership. Loading a build remains a host/admin action.
 rows on the original live projectile. An impact or lifetime can retire it before
 the row becomes due; that row then skips rather than affecting a newer shot.
 
+## Newer public capabilities
+
+The v0.3 releases add Blender/glTF import for bodies, held models, vehicles,
+bricks and maps; community map Add-Ons; additional bundled ModTer bricks;
+live body tuning; and more map, camera, HUD, audio and weapon hooks. v0.3.2
+fixes Add-On map selection/previews, scaled pixel-wheel steps, remembered Q
+inventory selection, falling dropped items and loading-screen typing names.
+See the release notes on GitHub for the exact per-version changes.
+
+Native rule authors can edit Rhai and use the included `bri-addon-check` and
+`bri-addon-run` tools without installing Rust. Maps and models also import
+with the included `bri-import-addon`. See the modding guide linked below.
+
+Private Halo, America's Army and Source/GMod work is development evidence,
+not a bundled or finished public game. Support for a model, material or
+animation hook does not imply a faithful port of its original game.
+
 ## v20: partly done
 
 - **Graphics quality.** v20's separate lighting, particle, texture,
@@ -231,9 +249,11 @@ Before any server's code runs, the game asks "Trust and join" or "Leave",
 and asks again if that code changes. Forget Trust on the Add-Ons screen
 takes it back.
 
-**Not yet:** writing new bricks directly (for now, you make a small
-v20-style brick Add-On and import it), and drawing block faces. Blocks
-load, save and play, but aren't drawn yet.
+**New bricks** can come from Blender/glTF models or imported v20-style BLB
+Add-Ons. A hand-authored native brick workflow is not documented yet. Generic
+`block` content loads, saves and replicates, but its faces are not drawn yet.
+See the online [modding guide](https://github.com/MaxHastings/BlocklandReImagined/tree/main/docs/modding)
+for supported authoring paths.
 
 ## Old v20 Add-Ons
 
@@ -253,5 +273,8 @@ Add-On, which starts off until you turn it on:
 
 In a test over 255 old Add-Ons, 253 imported. 31 came across completely
 and 81 came across with gaps. The other 141 had nothing to convert
-because they were only scripts, maps or GUIs. Old maps (`.mis`) and
-saves (`.bls`) inside Add-Ons aren't imported.
+because they were only scripts, maps or GUIs. This is a historical importer
+sample, not a compatibility guarantee for other archives. The regular Add-On
+import path does not import their `.mis` maps or `.bls` saves. Map Add-Ons use
+`bri-import-addon map` instead; `.bls` saves use Load Bricks as described in
+the tester guide. Read `IMPORT-REPORT.md` for each import's actual gaps.

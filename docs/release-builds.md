@@ -171,11 +171,12 @@ game on the PC.
 
 ## Making a release
 
-From a gate-ready branch on origin (it contains origin/main), one command on
-the PC does everything, and the next release needs one go-ahead from Max:
+Publish only within Maxwell's release authorization. Previous releases and their
+scope decisions do not authorize an unrelated new release. From a gate-ready
+branch on origin (it contains origin/main), the coordinator can use:
 
 ```powershell
-python tools/release.py v0.2.11 --branch claude/v0211-integration-ab12cd
+python tools/release.py <new-version> --branch codex/<release-branch>
 ```
 
 1. **Content refresh first.** The main checkout checks out the branch head
@@ -189,11 +190,11 @@ python tools/release.py v0.2.11 --branch claude/v0211-integration-ab12cd
    Windows, macOS and Linux in parallel, while the gate runs.
 3. **The gate** (`tools/gate.py`) on that commit. It goes first: any queued
    perf or benchmark runs on the PC wait until it finishes.
-4. **Push and tag.** The exact gated commit is pushed to main (the push hook
-   reuses the gate's pass, so it takes seconds) and tagged with the version.
-   There is no merge pull request, so nothing waits on the GitHub Windows
-   check, which still runs on main afterwards as the record. An open pull
-   request for the branch shows as merged.
+4. **Push and tag.** The exact gated commit is pushed to main through the
+   pre-push hook and tagged with the version. The hook can reuse an exact gate
+   pass; it still enforces history and required CI checks. PR integrations must
+   pass required Windows CI before merging. A successful platform build alone
+   does not satisfy the integration checks. Never bypass the hook.
 5. **Publish.** The tag starts `publish-release.yml`, which waits for the
    build-only run if it is still going, takes its three zips and publishes
    them with `docs/releases/<version>.md` (when the commit has it) above the
@@ -202,7 +203,8 @@ python tools/release.py v0.2.11 --branch claude/v0211-integration-ab12cd
 
 It stops at the first failure and says what failed; nothing is pushed until
 the gate and the builds pass. `--check-only` does steps 1 to 3 and publishes
-nothing. Each step prints its minutes. The binaries carry the tagged commit's
+nothing to main, tags or public releases (content refresh can still update the
+private draft content bundles). Each step prints its minutes. The binaries carry the tagged commit's
 hash, because the tag names the commit they were built from.
 
 Other ways in, for a release built without the PC:
@@ -217,6 +219,11 @@ Other ways in, for a release built without the PC:
 
 The workflows refuse a version that already has a published release. A draft
 left by a failed publish is reused.
+
+After publication, independently check the public tag/source commit, all three
+assets and `SHA256SUMS`, then update [STATUS.md](STATUS.md) with the verified
+release. Record the exact gate/CI/build and archive-verification evidence in a
+new progress entry. Preserve unresolved player reports and validation limits.
 
 Re-attaching one platform to an existing release: run `mac-release-asset.yml`
 or `linux-release-asset.yml` with the release tag, the release commit and

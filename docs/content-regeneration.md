@@ -1,8 +1,9 @@
 # Regenerating native content from a v20 install
 
-Everything under `content/` is generated from an unmodified Blockland v20
-folder and is never committed. From a fresh clone on Windows (Linux works for
-cloud and CI tooling only; the game ships for Windows):
+The native v20 packs under `content/` are generated from an unmodified Blockland
+v20 folder and are never committed. Repository-authored Add-Ons are copied in
+separately. The game ships for Windows x86-64, Apple silicon
+macOS and Linux x86-64. From a fresh clone:
 
 ```sh
 python tools/bootstrap.py --v20 "/path/to/Blockland v20"
@@ -20,17 +21,20 @@ The pack names come from the base package list,
 client loads. When the client's `--check` reports missing packs, rerunning bootstrap
 builds exactly those.
 
-Platform status: the Windows path is verified from a fresh clone. The Linux
-path (prerequisite hints, building dso-sharp with a .NET SDK) is for cloud and
-CI tooling and is best effort.
+The Windows regeneration path has fresh-clone evidence. Non-Windows script
+recovery builds dso-sharp using a .NET SDK. Published platform startup/package
+checks do not establish a fresh source-content bootstrap on every platform.
+Use `python3` where that names your Python installation.
 
 ## Requirements
 
 `bootstrap.py --prerequisites` checks these without building anything.
 
 - Rust (stable, 1.93 or newer, from rustup) and git.
-- Python 3.9+ with Pillow (`python -m pip install pillow`) for item presentation.
-- Linux (tooling only): a C compiler, pkg-config and the ALSA and udev headers
+- Python 3.11+ for the full development workflow, with Pillow
+  (`python -m pip install pillow`) for item presentation. Bootstrap itself
+  supports 3.9+, but gate/tool tests use `tomllib` from 3.11.
+- Linux: a C compiler, pkg-config and the ALSA and udev headers
   (`apt install build-essential pkg-config libasound2-dev libudev-dev`, `pacman
   -S base-devel alsa-lib`).
 - The v20 install: the folder with `base/`, `Add-Ons/` and `saves/`. It is only
@@ -38,7 +42,7 @@ CI tooling and is best effort.
 - To decompile the v20 scripts (once per checkout):
   - Windows: nothing extra. The script downloads the pinned `dso-sharp.exe`
     2.1.0 release and checks its SHA-256.
-  - Linux: any .NET 8 or newer SDK (`apt install dotnet-sdk-8.0`, `pacman -S
+  - Linux/macOS: any .NET 8 or newer SDK (Linux examples: `apt install dotnet-sdk-8.0`, `pacman -S
     dotnet-sdk`). The script fetches
     dso-sharp at the 2.1.0 commit and builds it framework-dependent with
     `dotnet build -p:PublishAot=false -p:RollForward=Major`, so no native AOT
@@ -99,16 +103,14 @@ it before `python tools/ci_content.py upload`, so release builds carry it.
 
 ## Default Add-Ons
 
-The default Add-Ons are on in every copy of the game until a player turns
-them off: the Duplicator (two packages), the Stunt Plane (Kaje and
-Ephialtes, a community Add-On that is not in the v20 install; Max approved
-shipping it on 2026-09-28) and the Mirror (a 1x4x5 mirror built on the base
-game's window brick; it holds only its catalog entry, and borrows the
-window's shape and icon when the game loads). `packages/default-addons.json` lists them in load
-order, and each is committed under `packages/<path>`. They are not generated
-and need no v20 install.
+`packages/default-addons.json` declares the bundled Add-Ons, their order and
+which start enabled. The Duplicator, Stunt Plane, Mirror and Workshop Toys are
+among the enabled defaults; many optional Add-Ons ship disabled. Entries with
+`path` use repository-authored content under `packages/<path>`. Entries with
+`original` require a pinned original archive and native import/port; original
+and converted game assets are never committed.
 
-A checkout's `content/` gets them when the game starts: each
+A checkout's `content/` gets repository-authored defaults when the game starts: each
 is copied to `content/addons/<id>` when missing or different from the
 checkout's copy. `bri-client --check` (bootstrap's last step) and `bri-server` change
 nothing unless `BRI_INSTALL_DEFAULT_ADD_ONS=1` is set
