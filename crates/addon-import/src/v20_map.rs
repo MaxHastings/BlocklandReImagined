@@ -9,6 +9,7 @@
 //! textures, skies and models a map borrows from the base game.
 use anyhow::{Context, Result, ensure};
 use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
 
 pub struct Options {
@@ -338,6 +339,10 @@ pub fn import(opts: &Options) -> Result<Imported> {
         }
         files += foliage(&root, mission, &map_id, &scene, &dir)?;
         files += emitters(&root, &stem, &ns, &scene, &dir)?;
+        if let Some(image) = preview(&root, mission, &dir) {
+            bundle["maps"][0]["preview"] = serde_json::to_value(image)?;
+            files += 1;
+        }
         std::fs::write(dir.join(&scene_file), serde_json::to_vec_pretty(&scene)?)?;
         std::fs::write(dir.join("bundle.json"), serde_json::to_vec_pretty(&bundle)?)?;
         files += 2;
@@ -376,6 +381,68 @@ pub fn import(opts: &Options) -> Result<Imported> {
         missions: chosen,
         files: files + 1,
     })
+}
+
+/// v20 getMissionPreviewImage: first existing companion PNG, then JPG.
+/// Preview failure is cosmetic; never synthesize art or fail the map for it.
+fn preview(root: &Path, mission: &str, output: &Path) -> Option<bri_content::environment::Image> {
+    let stem = mission.rsplit_once('.')?.0;
+    for extension in ["png", "jpg"] {
+        let source = format!("{stem}.{extension}");
+        let result = (|| -> Result<Option<bri_content::environment::Image>> {
+            let Some(bytes) = bri_convert::environment::read_original(root, &source)? else {
+                return Ok(None);
+            };
+            ensure!(bytes.len() <= 4 * 1024 * 1024, "Map preview exceeds 4 MiB");
+            let reader =
+                image::ImageReader::new(std::io::Cursor::new(&bytes)).with_guessed_format()?;
+            let expected = if extension == "png" {
+                image::ImageFormat::Png
+            } else {
+                image::ImageFormat::Jpeg
+            };
+            ensure!(
+                reader.format() == Some(expected),
+                "Map preview format disagrees with companion extension"
+            );
+            let (width, height) = reader.into_dimensions()?;
+            ensure!(
+                width > 0
+                    && height > 0
+                    && width <= 8192
+                    && height <= 8192
+                    && u64::from(width) * u64::from(height) <= 16_777_216,
+                "Invalid map preview dimensions"
+            );
+            let mut reader =
+                image::ImageReader::new(std::io::Cursor::new(&bytes)).with_guessed_format()?;
+            let mut limits = image::Limits::default();
+            limits.max_image_width = Some(8192);
+            limits.max_image_height = Some(8192);
+            limits.max_alloc = Some(64 * 1024 * 1024);
+            reader.limits(limits);
+            reader.decode()?;
+            let sha256 = format!("{:x}", Sha256::digest(&bytes));
+            let file = format!("{sha256}.preview.{extension}");
+            std::fs::write(output.join(&file), bytes)?;
+            Ok(Some(bri_content::environment::Image {
+                file,
+                source: source.clone(),
+                sha256,
+                width,
+                height,
+            }))
+        })();
+        match result {
+            Ok(None) => continue,
+            Ok(image) => return image,
+            Err(error) => {
+                eprintln!("warning: map preview {source}: {error:#}; using the menu placeholder");
+                return None;
+            }
+        }
+    }
+    None
 }
 
 /// The map's grass and foliage replicators as a foliage pack beside its
