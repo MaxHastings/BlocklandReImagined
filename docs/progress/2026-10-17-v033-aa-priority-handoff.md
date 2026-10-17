@@ -129,3 +129,28 @@ source-free metadata/control/App regressions, quick and full normal focused tier
 must pass before an immutable engine pin. AA then consumes that pin in the SAME
 state-policy test with opt-in metadata. New metadata must not be installed into
 the old e4 executable's folder. No v0.3.3 publication grant is inferred.
+
+
+## New direct wind-down instruction supersedes active follow-ups
+
+On October 17 the engine owner received new live human messages: "Lets stop any
+other remaining work on the halo and americas army stuff to conserve tokens.
+Have them finish up and push whatever they got. Clean up or whatever wind down
+basically" and "The only thing to fully complete is publish v0.3.2 everything
+else winds down". Root checked the apparent conflict with the earlier resume
+request; the owner explicitly confirmed these were new messages in its current
+turn, not a stale summary. v0.3.2 is already published/verified, so no duplicate
+release action is needed.
+
+Stop further consumer rounds, production changes and investigations. The engine
+owner finishes only its already-running focused validation, saves/pushes the
+bounded branch and stops. Targeted metadata4, controls40, actual App1 and quick
+612/0/76 passed; final focused result and immutable pin remain pending at this
+root checkpoint. The source stays frozen. No combined AA acceptance is claimed.
+
+AA private d9d523b41cd527c1e8a4607db2d1c801e40b3c29 preserves the original red,
+corrected ordering/apex/ambient positives and same-candidate sight regressions.
+Private953bac0049f7a461e4fdc4e41b9c0a3ea647aea9 saves an inactive builder flag
+and matching green expectations; these were not executed against a new engine
+or installed. The owner is told to stop at this clean pushed checkpoint. Existing
+showcase, userdata, source research and unmerged branches remain preserved.

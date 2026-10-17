@@ -16,27 +16,20 @@ private game assets and AvP are excluded; local test copies remain. No interacti
 acceptance is claimed. GSF import limitations and unreproduced movement reports
 remain explicit in the [release notes](releases/v0.3.2.md).
 
-Maxwell has now resumed bounded AA2-driven engine work toward v0.3.3. The current
-private consumer is the Pipeline two-team playtest, with source art and documented
-native adaptations. The original M16 sight artwork now passes an ordinary App
-overlay preview using existing APIs; exact original 3D/interpolation behavior
-remains unqualified. Existing held bindings, speed and image states also pass a
-bounded ordinary-client sprint trial. The first demonstrated engine change is
-optional image-state eligibility for local aiming: the actual AA consumer keeps
-its sight overlay active during lowering, raising and reload. That narrow patch
-is granted; input-order/grounding/ambient policy checks remain in the Add-On.
-Pipeline lighting needs separate source-light admission and live-budget
-review. Original prop collision is private import work unless a native failure is
-demonstrated. The AA owner delivered vertical aim through the existing look layer
-at private f9d514c. See [the current handoff](progress/2026-10-17-v033-aa-priority-handoff.md).
+Maxwell briefly resumed bounded AA2 work, then gave a newer direct instruction
+in the engine chat on October 17 to wind down Halo, AA and later engine work.
+The owner confirmed these were new live messages. Finish only already-running
+checks needed to preserve the current branch, commit/push coherent work, then
+stop. v0.3.2 is already published and independently verified; do not republish it.
+No new consumer rounds, research, installations or mechanism expansion are active.
 
-This does not resume the old full-ammo completion roadmap, broad Halo/shotgun
-research, GMod, or all saved engine proposals. Those branches and evidence remain
-preserved. New production paths are assigned by root after the concrete consumer
-gap is reviewed. A meaningful shared capability must reach its ordinary Add-On
-gameplay path before further dependent expansion. Source-specific assets and
-behavior stay private/in packages. New release publication is not authorized by
-the earlier v0.3.2-only publication grant.
+The AA showcase's delivered original M16 overlay and vertical aim remain usable
+with the published engine. Sprint interaction evidence and inactive state-aware
+configuration are preserved privately. The optional image-state Zoom gate is
+being saved on its own engine branch after its running focused checks; targeted
+metadata/control/App tests passed, but no immutable final pin or affected AA
+consumer green is claimed yet. Root integration and v0.3.3 publication remain
+unapproved. See [the handoff](progress/2026-10-17-v033-aa-priority-handoff.md).
 
 See the dated progress entries for each release's exact build and test
 evidence.
