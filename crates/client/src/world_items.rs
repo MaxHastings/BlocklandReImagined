@@ -191,6 +191,21 @@ struct SpinClock {
     state_started: f64,
     last: f64,
 }
+/// Exact inputs retained by the current mounted-image projection. Sampling
+/// these inputs elsewhere does not establish the original game's pose law.
+#[derive(Clone, Debug)]
+pub struct MountedImageObservation {
+    pub owner: u64,
+    pub hand: u8,
+    pub image: String,
+    pub model: String,
+    pub first_person: bool,
+    pub transform: Mat4,
+    pub sequence: Option<String>,
+    pub seconds: f32,
+    pub live: LiveValues,
+}
+
 #[derive(Clone)]
 struct MountedPose {
     first_person: bool,
@@ -1302,6 +1317,36 @@ impl WorldItems {
     /// Where `owner`'s image in `hand` was placed by the last sync.
     pub fn mounted_transform(&self, owner: u64, hand: u8) -> Option<Mat4> {
         self.mounted.get(&(owner, hand)).map(|m| m.transform)
+    }
+    /// Current exact image only, matching the guard used by `mounted_node`.
+    /// Does not evaluate, advance or cache a pose.
+    pub fn mounted_image_observation(
+        &self,
+        owner: u64,
+        hand: u8,
+        image: &str,
+    ) -> Option<MountedImageObservation> {
+        let m = self
+            .mounted
+            .get(&(owner, hand))
+            .filter(|m| m.image == image)?;
+        Some(MountedImageObservation {
+            owner,
+            hand,
+            image: m.image.clone(),
+            model: m.model.clone(),
+            first_person: m.first_person,
+            transform: m.transform,
+            sequence: m.pose.sequence.clone(),
+            seconds: f32::from_bits(m.pose.seconds),
+            live: m.pose.live,
+        })
+    }
+    /// The same bounded current mount map; allocates only when iterated.
+    pub fn mounted_image_observations(&self) -> impl Iterator<Item = MountedImageObservation> + '_ {
+        self.mounted
+            .iter()
+            .filter_map(|(&(owner, hand), m)| self.mounted_image_observation(owner, hand, &m.image))
     }
     pub fn mounted_node(&self, owner: u64, hand: u8, image: &str, node: &str) -> Result<Mat4> {
         let mounted = self

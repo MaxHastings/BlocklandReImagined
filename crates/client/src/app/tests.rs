@@ -2628,3 +2628,51 @@ fn scope_state_eligibility_follows_ordinary_authority_without_releasing_rmb() ->
     );
     Ok(())
 }
+
+#[test]
+fn weapon_frame_probe_drops_owned_buffers_on_toggle_session_reset_and_disconnect()
+-> anyhow::Result<()> {
+    use super::*;
+    use crate::weapon_effects::WeaponFrameObservation;
+    let f = ContentRoot::synthetic()?;
+    let state = f.state()?;
+    let mut app = App::load(&f.root, state.path(), (320, 240))?;
+    assert!(!app.fx.weapon_frame_probe && app.weapon_frame_observation().is_none());
+    app.set_weapon_frame_probe(true);
+    let sample = WeaponFrameObservation {
+        session: Some(99),
+        replica_tick: 100,
+        owner: 1,
+        cue_cursor: 9,
+        camera: bri_fx_runtime::Camera {
+            view_projection: glam::Mat4::IDENTITY,
+            position: Vec3::ZERO,
+            right: Vec3::X,
+            up: Vec3::Y,
+        },
+        attachments: Vec::new(),
+        mounted_images: Vec::new(),
+        weapon_frame: Default::default(),
+        combined_particles: 0,
+        combined_lights: 0,
+        cut_sprites: 0,
+        cut_lights: 0,
+    };
+    app.fx.weapon_effect_session = Some(99);
+    app.fx.weapon_frame_observation = Some(sample.clone());
+    assert!(
+        app.weapon_frame_observation().is_none(),
+        "no current entered session: reject stale capture"
+    );
+    app.reset_weapon_effect_session(100, 9);
+    assert!(app.fx.weapon_frame_observation.is_none());
+    app.fx.weapon_frame_observation = Some(sample.clone());
+    app.set_weapon_frame_probe(false);
+    assert!(app.fx.weapon_frame_observation.is_none());
+    app.set_weapon_frame_probe(true);
+    app.fx.weapon_frame_observation = Some(sample);
+    app.disconnect();
+    assert!(app.fx.weapon_frame_observation.is_none());
+    assert!(app.weapon_frame_observation().is_none());
+    Ok(())
+}

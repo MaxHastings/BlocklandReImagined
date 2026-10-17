@@ -302,6 +302,8 @@ impl App {
                 weapon_light_deferred: 0,
                 effect_sprites_cut: 0,
                 weapon_effect_session: None,
+                weapon_frame_probe: false,
+                weapon_frame_observation: None,
                 weapon_animation_cues: VecDeque::new(),
                 weapon_animation_drops: 0,
                 weapon_animation_cursor: 0,

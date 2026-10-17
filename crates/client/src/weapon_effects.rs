@@ -94,6 +94,35 @@ struct Timed {
     previous: SourceTransform,
 }
 
+/// A current timed attachment, copied only when explicitly observed. `cue` is
+/// the actual accepted adapter cue (including source/image/hand/node), and
+/// `previous` is its last resolved transform, not a reconstructed pose.
+#[derive(Clone, Debug)]
+pub struct TimedAttachmentObservation {
+    pub cue: Cue,
+    pub handle: EffectHandle,
+    pub previous: SourceTransform,
+}
+
+/// One successful render preparation's weapon inputs, before the shared budget.
+/// This is not proof of queue submission, pixels, or source-game fidelity. A
+/// consumer must qualify the combined cuts and capture the same GPU frame.
+#[derive(Clone)]
+pub struct WeaponFrameObservation {
+    pub session: Option<u64>,
+    pub replica_tick: u64,
+    pub owner: u64,
+    pub cue_cursor: u64,
+    pub camera: bri_fx_runtime::Camera,
+    pub attachments: Vec<TimedAttachmentObservation>,
+    pub mounted_images: Vec<crate::world_items::MountedImageObservation>,
+    pub weapon_frame: bri_fx_runtime::FrameEffects,
+    pub combined_particles: usize,
+    pub combined_lights: usize,
+    pub cut_sprites: usize,
+    pub cut_lights: usize,
+}
+
 /// Shell and avatar/image animation need the host's original posed models.
 /// Ownership and sequence/hand are preserved in the original reliable cue.
 #[derive(Clone, Debug)]
@@ -309,6 +338,15 @@ impl WeaponEffects {
     }
     pub fn timed_count(&self) -> usize {
         self.timed.len()
+    }
+    /// Iterate only currently retained timed attachments. No history, cursor
+    /// consumption, or pose evaluation; cloning happens only on iteration.
+    pub fn timed_attachments(&self) -> impl Iterator<Item = TimedAttachmentObservation> + '_ {
+        self.timed.iter().map(|t| TimedAttachmentObservation {
+            cue: t.cue.clone(),
+            handle: t.handle,
+            previous: t.previous,
+        })
     }
     pub fn set_passages(&mut self, passages: &Passages) {
         if &self.passages != passages {
@@ -1348,4 +1386,70 @@ fn owner(id: &str) -> &str {
 fn fault(notes: &mut Vec<String>, problem: Problem) {
     notes.push(problem.to_string());
     crate::add_on_health::report(problem);
+}
+
+#[cfg(test)]
+mod observation_tests {
+    use super::*;
+    #[test]
+    fn timed_observation_keeps_actual_cue_transform_and_cursor_without_history() -> Result<()> {
+        let mut fx = WeaponEffects::new(
+            bri_fx_runtime::testing::pack(|_| {}),
+            Arc::new(bri_weapons::testing::pack()),
+            EffectsLimits::default(),
+        )?;
+        let cue = Cue {
+            id: 9,
+            tick: 37,
+            position: [9., 8., 7.],
+            kind: CueKind::WeaponEffect {
+                source: bri_weapons::TargetId::Actor(bri_weapons::ActorId(42)),
+                definition: "emitter".into(),
+                node: "inventedSocket".into(),
+                seconds: 0.2,
+                image: Some("synthetic:image/gun".into()),
+                hand: Some(1),
+                direction: None,
+                contact: None,
+                scale: 1.,
+            },
+        };
+        let original = SourceTransform {
+            position: Vec3::new(2., 3., 4.),
+            rotation: Quat::from_rotation_z(0.25),
+            velocity: Vec3::X,
+        };
+        fx.cues(std::slice::from_ref(&cue), |_| Some(original))?;
+        let mut first = fx.timed_attachments().collect::<Vec<_>>();
+        assert_eq!(first.len(), 1);
+        assert_eq!(first[0].cue, cue);
+        assert_eq!(first[0].previous.position, original.position);
+        assert_eq!(first[0].previous.rotation, original.rotation);
+        assert_eq!(first[0].previous.velocity, original.velocity);
+        let handle = first[0].handle;
+        assert!(fx.world().attachment_alive(handle));
+        first[0].cue.position = [0.; 3];
+        let moved = SourceTransform {
+            position: Vec3::new(-3., 5., 1.),
+            ..original
+        };
+        fx.advance(0.01, Vec3::ZERO, |_| Some(moved))?;
+        let current = fx.timed_attachments().collect::<Vec<_>>();
+        assert_eq!(current.len(), 1);
+        assert_eq!(
+            current[0].cue, cue,
+            "returned copies cannot alter retained cue"
+        );
+        assert_eq!(current[0].handle, handle);
+        assert_eq!(current[0].previous.position, moved.position);
+        assert_eq!(
+            fx.cue_cursor(),
+            9,
+            "observation must not consume reliable cues"
+        );
+        fx.reset(40);
+        assert_eq!(fx.timed_attachments().count(), 0);
+        assert_eq!(fx.cue_cursor(), 40);
+        Ok(())
+    }
 }

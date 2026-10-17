@@ -38,6 +38,8 @@ pub(super) struct Effects {
     /// The farthest sprites the last frame left out past the renderer's budget.
     pub(super) effect_sprites_cut: usize,
     pub(super) weapon_effect_session: Option<RequestId>,
+    pub(super) weapon_frame_probe: bool,
+    pub(super) weapon_frame_observation: Option<crate::weapon_effects::WeaponFrameObservation>,
     pub(super) weapon_animation_cues: VecDeque<(bri_sim::presentation::Cue, f32, f64)>,
     pub(super) weapon_animation_drops: u64,
     pub(super) weapon_animation_cursor: u64,
@@ -463,6 +465,7 @@ impl App {
         if self.fx.weapon_effect_session == Some(session) {
             return;
         }
+        self.fx.weapon_frame_observation = None;
         self.fx.weapon_effects.reset(checkpoint_cursor);
         self.fx.actor_effects.reset(checkpoint_cursor);
         self.fx.explosion_shapes.reset(checkpoint_cursor);

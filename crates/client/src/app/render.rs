@@ -4,6 +4,7 @@ use bri_console::Clamp;
 
 impl App {
     pub(super) fn render_frame(&mut self, frame: &mut RenderContext<'_>) -> Result<bool> {
+        self.fx.weapon_frame_observation = None;
         let span = crate::frame_trace::span("prepare");
         self.prepare_render(frame)?;
         drop(span);
@@ -1051,6 +1052,26 @@ impl App {
             .weapon_effects
             .world()
             .snapshot_in_view(&effects_camera);
+        // Probe the already computed inputs only when explicitly requested.
+        // Keep local until the entire render attempt succeeds, so failures do
+        // not expose a partial preparation or a previous frame.
+        let mut weapon_observation =
+            self.fx
+                .weapon_frame_probe
+                .then(|| crate::weapon_effects::WeaponFrameObservation {
+                    session: self.fx.weapon_effect_session,
+                    replica_tick: view.tick,
+                    owner: view.owner,
+                    cue_cursor: self.fx.weapon_effects.cue_cursor(),
+                    camera: effects_camera,
+                    attachments: self.fx.weapon_effects.timed_attachments().collect(),
+                    mounted_images: self.world_items.mounted_image_observations().collect(),
+                    weapon_frame: weapon_frame.clone(),
+                    combined_particles: 0,
+                    combined_lights: 0,
+                    cut_sprites: 0,
+                    cut_lights: 0,
+                });
         let actor_frame = self
             .fx
             .actor_effects
@@ -1189,6 +1210,12 @@ impl App {
                 .collect::<Vec<_>>(),
         )?;
         effects_renderer.prepare(frame.queue, &effects_camera, &effects_frame)?;
+        if let Some(o) = &mut weapon_observation {
+            o.combined_particles = effects_frame.particles.len();
+            o.combined_lights = effects_frame.lights.len();
+            o.cut_sprites = cuts.sprites;
+            o.cut_lights = cuts.lights;
+        }
         // A sky's rain or snow changed the weather pack: its pictures go up.
         if self.gpu.weather_revision != self.weather.revision {
             let limits = bri_weather::WeatherLimits::default();
@@ -1654,6 +1681,7 @@ impl App {
         self.addons.item_skins.resolve(frame.encoder);
         self.addons.client_code.resolve(frame.encoder);
         renderer.end_timing(frame.encoder, "effects");
+        self.fx.weapon_frame_observation = weapon_observation;
         Ok(true)
     }
 

@@ -109,6 +109,7 @@ impl App {
         self.weather.clear();
         self.audio.clear();
         self.fx.effects.clear();
+        self.fx.weapon_frame_observation = None;
         self.fx.weapon_effects.reset(0);
         self.fx.actor_effects.reset(0);
         self.fx.explosion_shapes.reset(0);
