@@ -36,7 +36,8 @@ labels are retained so earlier progress notes remain traceable.
 | Movement controllers | `controller` kind, `Archetype::controller`, `bri_motor::controller` (tick record, sweeps, 16-byte memory, animation intent), `bri-controller` Wasmtime host on host and client | v0.3.0 movement controllers (W3) | branch `claude/v030-movement-controllers-w3puoe` |
 | Hit regions | `info.region` on damage: head, torso, legs | Bushido's Adventure Pack | on main |
 | HUD "holding" line | per-gun HUD text while an item is held | Bushido's Adventure Pack | on main |
-| Scope zoom | zoom, `hide_nodes`, `both_arms` | Kaje's Sniper Rifle | on main |
+| Scope zoom and aimed first-person placement | Existing FOV/scope/input behavior; optional package-authored sight pose and shared posed muzzle frame | Scope zoom on main; root coordination and existing engine-seam chat for AA v0.3.3 | Existing zoom on main; aimed viewmodel pose gap under review, ordinary AA press/hold/release/lifecycle red required before implementation; [handoff](../progress/2026-10-17-v033-aa-priority-handoff.md) |
+| Sprint input and weapon-state integration | Configurable ordinary input, accepted movement state, package-owned speed/eligibility and weapon lower/hold/raise policy | Root coordination and existing engine-seam chat for AA v0.3.3 | Proposed next after aimed-placement consumer; no production paths granted, no source-specific bindings or timers accepted |
 | Image scripts | `Image.scripts` state-machine hooks | Butterfly Knife and Grenade | on main |
 | Voxel bricks and own models | `place_voxel`, `*.shape.json` loading, textured item icons, `mode.json` | Trench Warfare game mode | on main |
 | Gun behaviour | hitscan, spread, shake, `left_image`, `set_speed_scale`, projectile bounces, children and aura, damage direction, Add-On settings, HUD format, magazines, explosions | Tier Tactical weapons | on main |

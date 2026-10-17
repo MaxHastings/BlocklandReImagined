@@ -1,44 +1,37 @@
 # Status
 
 One page so everyone starts from the same place: Max, or any new thread.
-Revised 2026-10-16. It summarises; the linked docs are the evidence, and
+Revised 2026-10-17. It summarises; the linked docs are the evidence, and
 [progress.md](progress.md) has the dated history of each build.
 
 ## Release state
 
-Current public release: [v0.3.1 Alpha](https://github.com/MaxHastings/BlocklandReImagined/releases/tag/v0.3.1),
+Current public release: [v0.3.2 Alpha](https://github.com/MaxHastings/BlocklandReImagined/releases/tag/v0.3.2),
 published on October 16, 2026 from
-`5956e3a383a1c241bd5192a3aa8cc4f358f2e503`. The full local gate, required CI,
-three-platform builds and published archive/hash verification passed. Original
-private game assets are excluded from public archives. Interactive acceptance
-was not performed; the physical Linux reporter's backend remains unconfirmed.
-The release and its tag remain immutable.
+`e4d9bb05df3c26c95a410cb9872990d99b37b54d`. Full gate, required CI,
+three-platform packages and public archive/hash verification passed. The release
+and tag are immutable. It includes map-change/preview, wheel-density, Q-selection,
+dropped-item and loading-chat fixes plus completed engine foundations. Original
+private game assets and AvP are excluded; local test copies remain. No interactive
+acceptance is claimed. GSF import limitations and unreproduced movement reports
+remain explicit in the [release notes](releases/v0.3.2.md).
 
-Maxwell's latest [v0.3.2 direction](releases/v0.3.2-readiness.md) is a bug-fix
-release: finish reported fixes, select completed engine seams that pass the
-combined gate, verify required CI/platform packages, then publish automatically.
-Halo Chief/AR/Warthog and AA reload fidelity continue separately and no longer
-hold this release open. Another approval or final playtest is not required.
-Failed checks or known deterministic release blockers still hold publication.
-A meaningful shared
-capability must be exercised by an affected ordinary gameplay consumer before
-further dependent mechanism expansion. No acceptance row is closed by an
-isolated API test, imported mesh or rendering diagnostic alone.
+Maxwell has now resumed bounded AA2-driven engine work toward v0.3.3. The current
+private consumer is the Pipeline two-team playtest, with source art and documented
+native adaptations. First priority is proper aimed first-person weapon placement
+through ordinary aim input; sprint input/state and weapon lower/raise transitions
+follow. Pipeline lighting needs separate source-light admission and live-budget
+review. Original prop collision is private import work unless a native failure is
+demonstrated. The AA owner is correcting vertical aim through the existing look
+layer. See [the current handoff](progress/2026-10-17-v033-aa-priority-handoff.md).
 
-AvP is retained as a local test map and excluded from public packages starting
-with v0.3.2, per Maxwell. See the release readiness map-selection check.
-
-Shotgun fidelity work continues independently and is not required for v0.3.2.
-The wider Halo and AA execution plans remain active; GMod remains parked.
-Engine mechanisms remain generic and source policy belongs to packages. Root
-reviews exact ownership/path grants and immutable consumer evidence. The
-latest v0.3.2 instruction explicitly authorizes publication after validation.
-
-The released-v0.3.1 Halo private playtest uses exact public5956 plus private
-`13425df5` (Warthog fingerprint correction), with all thirteen registered Halo
-packages and no loader health problems. The shotgun is unregistered and not
-playable. The reported Add-On map-switch and remaining Linux paint-wheel
-problems are still open; a local playtest is not proof they are fixed.
+This does not resume the old full-ammo completion roadmap, broad Halo/shotgun
+research, GMod, or all saved engine proposals. Those branches and evidence remain
+preserved. New production paths are assigned by root after the concrete consumer
+gap is reviewed. A meaningful shared capability must reach its ordinary Add-On
+gameplay path before further dependent expansion. Source-specific assets and
+behavior stay private/in packages. New release publication is not authorized by
+the earlier v0.3.2-only publication grant.
 
 See the dated progress entries for each release's exact build and test
 evidence.
