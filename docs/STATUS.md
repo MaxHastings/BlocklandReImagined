@@ -16,20 +16,18 @@ private game assets and AvP are excluded; local test copies remain. No interacti
 acceptance is claimed. GSF import limitations and unreproduced movement reports
 remain explicit in the [release notes](releases/v0.3.2.md).
 
-Maxwell briefly resumed bounded AA2 work, then gave a newer direct instruction
-in the engine chat on October 17 to wind down Halo, AA and later engine work.
-The owner confirmed these were new live messages. Finish only already-running
-checks needed to preserve the current branch, commit/push coherent work, then
-stop. v0.3.2 is already published and independently verified; do not republish it.
-No new consumer rounds, research, installations or mechanism expansion are active.
+Maxwell has now explicitly resumed one bounded AA2 validation and private playtest:
+run the saved aiming/sprint/reload consumer against the tested image-state Zoom
+fix, review/integrate if green, and package a separate preview. Everything else
+remains parked. v0.3.2 stays immutable; no new release publication is authorized.
 
-The AA showcase's delivered original M16 overlay and vertical aim remain usable
-with the published engine. Sprint interaction evidence and inactive state-aware
-configuration are preserved privately. The optional image-state Zoom gate is
-being saved on its own engine branch after its running focused checks; targeted
-metadata/control/App tests passed, but no immutable final pin or affected AA
-consumer green is claimed yet. Root integration and v0.3.3 publication remain
-unapproved. See [the handoff](progress/2026-10-17-v033-aa-priority-handoff.md).
+Engine branch651efb2f preserves the three-path optional Zoom state gate, with
+metadata/control/App targets, quick and full normal focused checks passing.
+Root reviewed the production diff and preserved tier log. AA private953bac
+contains inactive state-aware configuration and the same coupled consumer's green
+expectations. That consumer must pass on exact651 before preview acceptance.
+The existing installed e4 showcase and userdata must remain untouched. See
+[the handoff](progress/2026-10-17-v033-aa-priority-handoff.md).
 
 See the dated progress entries for each release's exact build and test
 evidence.

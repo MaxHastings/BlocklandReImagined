@@ -154,3 +154,25 @@ Private953bac0049f7a461e4fdc4e41b9c0a3ea647aea9 saves an inactive builder flag
 and matching green expectations; these were not executed against a new engine
 or installed. The owner is told to stop at this clean pushed checkpoint. Existing
 showcase, userdata, source research and unmerged branches remain preserved.
+
+
+## Bounded validation and separate private preview resumed
+
+Maxwell now explicitly accepts the proposed next step and asks to playtest it:
+"Okay lets do that i can playtest it to see it in action?" This resumes only
+this saved interaction, not broad Halo/AA research or new mechanisms. Root reviewed
+engine651efb2ff361579dde657b54d4023b2ee313bab7: exactly weapons/lib.rs,
+client/controls.rs and client/app/view.rs production paths. The preserved focused
+log finishes14steps/2038s, all targets green; quick612/0/76 and targetedmetadata4,
+controls40, actualApp1 are recorded. No private/source assets are in that diff.
+
+AA is authorized to retarget its clean verifier to that exact immutable commit
+with an explicit checked pin, activate private953bac state-aware configuration,
+and run the SAME ordinary App zoom-green plus ordering/apex/ambient/lifecycle
+and sight/no-profile controls. No dirty engine copy or broad guard bypass.
+If green, preserve a private immutable handoff and stage a separate Windows
+preview with exact matching binary and packages. Keep existing showcase/userdata
+and non-AA package selections. Root checks final hashes/loader health and gives
+concrete manual test instructions. No new production scope, full-ammo/source
+completion, main push, public release or existing-install replacement is granted
+by this validation checkpoint. Integration follows actual consumer evidence.
