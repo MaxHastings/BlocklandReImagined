@@ -20,8 +20,12 @@ Maxwell has now resumed bounded AA2-driven engine work toward v0.3.3. The curren
 private consumer is the Pipeline two-team playtest, with source art and documented
 native adaptations. The original M16 sight artwork now passes an ordinary App
 overlay preview using existing APIs; exact original 3D/interpolation behavior
-remains unqualified. Configurable sprint input/state and weapon lower/raise
-integration are now the first engine priority. Pipeline lighting needs separate source-light admission and live-budget
+remains unqualified. Existing held bindings, speed and image states also pass a
+bounded ordinary-client sprint trial. The first demonstrated engine change is
+optional image-state eligibility for local aiming: the actual AA consumer keeps
+its sight overlay active during lowering, raising and reload. That narrow patch
+is granted; input-order/grounding/ambient policy checks remain in the Add-On.
+Pipeline lighting needs separate source-light admission and live-budget
 review. Original prop collision is private import work unless a native failure is
 demonstrated. The AA owner delivered vertical aim through the existing look layer
 at private f9d514c. See [the current handoff](progress/2026-10-17-v033-aa-priority-handoff.md).

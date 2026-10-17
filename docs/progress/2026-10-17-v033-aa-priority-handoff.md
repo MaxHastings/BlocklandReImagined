@@ -90,3 +90,42 @@ from the engine owner. Package policy owns speed, eligibility and clips. General
 messaging, new motor physics, full-ammo completion and lighting expansion remain
 outside that bounded step. No sprint production paths or acceptance are granted
 by this checkpoint. Vertical aim was separately tested/installed at f9d514c.
+
+## Coupled consumer justifies the first production change
+
+Private06973e4c saves the existing held-bind sprint trial and same-candidate sight
+regressions. Ordinary App/QUIC bool down/up reaches server package policy; source
+clips play in native Lower/Hold/Raise and authoritative speed_scale1.5 gives
+4.4856 versus2.9904 horizontal velocity. It is not installed. Root review required
+normal input ordering, aim/sprint interaction and ambient/grounding checks beyond
+the first already-host-moving case. Those remain private policy work; a support
+ray is explicitly a preview proxy rather than a canonical grounded observation.
+
+AA's actual App scope-policy run20261017-071002 reaches a strict failure after
+valid Ready/Fire/WaitRelease sight, admitted shot and release/re-aim controls.
+All five accepted Draw/SprintLower/SprintHold/SprintRaise/Reload states retain
+aiming, overlay and FOV70 while hiding the rifle. The error is
+AA_SCOPE_STATE_POLICY_MISSING:5barredstates retain sights; actual exit101,
+scoped Clippy0. The fixture SHA is
+ba516b07310d083fa1d61ae8a526c93ee2f5f3f546079c19982fb2700b37d2ad.
+Existing set_fov90 does not override the active scope; a no-Zoom image variant
+changes image identity and restarts Draw, rather than preserving the same state.
+Root read the actual log, JSON and ordinary-input fixture. This is the required
+affected consumer evidence; the earlier invented pose diagnostic is not its basis.
+
+Production grant on the existing engine branch from e4 is exactly
+weapons/src/lib.rs, client/src/controls.rs and client/src/app/view.rs. Add optional
+Zoom.allowed_states: omitted preserves legacy, explicit empty denies all, bounded
+case-insensitive unique names resolve within the owning image. Use the already
+accepted local mounted state; unknown/missing state denies a restricted profile.
+Retain the profile for on_jet/jets input ownership while local aiming is barred,
+including suppressing the generic keyboard-Zoom fallback. No new host permission,
+counter, clock, mount identity, Sprint enum, wire message, renderer or motor field.
+
+Preview policy permits Ready/Fire/WaitRelease, bars the other five states and
+re-aims when Ready returns while RMB remains held. Existing no-profile behavior
+is preserved; this is not exact AA runtime selector/interpolation parity. Public
+source-free metadata/control/App regressions, quick and full normal focused tiers
+must pass before an immutable engine pin. AA then consumes that pin in the SAME
+state-policy test with opt-in metadata. New metadata must not be installed into
+the old e4 executable's folder. No v0.3.3 publication grant is inferred.
