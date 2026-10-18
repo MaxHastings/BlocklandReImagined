@@ -262,6 +262,10 @@ pub struct When {
     /// The viewer sits in one of these vehicles (`namespace:vehicle/name`,
     /// or a v20 `v20.vehicle.<datablock>`).
     pub vehicle: Vec<String>,
+    /// The viewer sits in one of these seats of their vehicle (from 0, the
+    /// driver's first): a driver's reticle, a gunner's hull meter.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub seat: Vec<u8>,
     /// `true` only while the viewer plays in a mini-game, `false` only
     /// while they do not.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -272,6 +276,7 @@ impl When {
         self.body.is_empty()
             && self.holding.is_empty()
             && self.vehicle.is_empty()
+            && self.seat.is_empty()
             && self.minigame.is_none()
     }
 }
@@ -285,6 +290,8 @@ pub struct Viewer<'a> {
     pub holding: &'a str,
     /// The vehicle definition sat in, `""` on foot.
     pub vehicle: &'a str,
+    /// The seat sat in, from 0, while `vehicle` is not empty.
+    pub seat: Option<u8>,
     /// Playing in a mini-game.
     pub minigame: bool,
 }
@@ -305,14 +312,15 @@ impl When {
                 }));
         let vehicle = self.vehicle.is_empty()
             || (!viewer.vehicle.is_empty() && self.vehicle.iter().any(|v| same(v, viewer.vehicle)));
+        let seat = self.seat.is_empty() || viewer.seat.is_some_and(|s| self.seat.contains(&s));
         let minigame = self.minigame.is_none_or(|m| m == viewer.minigame);
-        body && holding && vehicle && minigame
+        body && holding && vehicle && seat && minigame
     }
     /// How specific the claim is: a vehicle seat (8), then a held item (4),
     /// then a body (2), then being in a mini-game or not (1), added
     /// together.
     pub fn specificity(&self) -> u8 {
-        u8::from(!self.vehicle.is_empty()) * 8
+        u8::from(!self.vehicle.is_empty() || !self.seat.is_empty()) * 8
             + u8::from(!self.holding.is_empty()) * 4
             + u8::from(!self.body.is_empty()) * 2
             + u8::from(self.minigame.is_some())
@@ -725,6 +733,9 @@ pub enum Source {
     /// The viewer's health, and their body's full health.
     Health,
     HealthMax,
+    /// What is left of the hull of the vehicle the viewer rides, 0 to 1
+    /// (missing on foot).
+    VehicleHealth,
     /// Jet energy, 0 to 1 (0 for a body with no jet).
     Energy,
     /// 1 while alive, 0 while dead.
@@ -783,6 +794,7 @@ impl Source {
         Some(match text {
             "health" => Source::Health,
             "health_max" => Source::HealthMax,
+            "vehicle_health" => Source::VehicleHealth,
             "energy" => Source::Energy,
             "alive" => Source::Alive,
             "center_print" => Source::CenterPrint,
@@ -847,7 +859,7 @@ fn rect_ok(r: &[f32; 4]) -> bool {
 fn source_ok(s: &str) -> Result<()> {
     ensure!(
         Source::parse(s).is_some(),
-        "`{s}` is not a HUD value: health, health_max, energy, alive, center_print, bottom_print, ammo, ammo_max, ammo_reserve, reloading, respawn, or a rule's package:player/key or package:global/key"
+        "`{s}` is not a HUD value: health, health_max, vehicle_health, energy, alive, center_print, bottom_print, ammo, ammo_max, ammo_reserve, reloading, respawn, or a rule's package:player/key or package:global/key"
     );
     Ok(())
 }
@@ -1588,7 +1600,11 @@ pub fn resolve_live(
                 let to_ahead = dx * ahead[0] + dz * ahead[1];
                 let to_right = -dx * ahead[1] + dz * ahead[0];
                 let nearest = if to_ahead.abs() >= to_right.abs() {
-                    if to_ahead > 0.0 { Edge::Top } else { Edge::Bottom }
+                    if to_ahead > 0.0 {
+                        Edge::Top
+                    } else {
+                        Edge::Bottom
+                    }
                 } else if to_right > 0.0 {
                     Edge::Right
                 } else {
@@ -1947,12 +1963,14 @@ mod tests {
             body: vec!["a:archetype/runner".into()],
             holding: vec!["guns".into()],
             vehicle: vec![],
+            seat: vec![],
             minigame: None,
         };
         let viewer = |body, holding| Viewer {
             body,
             holding,
             vehicle: "",
+            seat: None,
             minigame: false,
         };
         assert!(when.matches(&viewer("a:archetype/runner", "guns:image/rifle")));
@@ -1970,6 +1988,7 @@ mod tests {
             body: "",
             holding: "",
             vehicle: "",
+            seat: None,
             minigame,
         };
         let playing = When {
@@ -2129,8 +2148,16 @@ mod tests {
         assert_eq!(drawn("top", 5.0, 1.0, 1.0), Some(0.5), "ahead is the top");
         assert_eq!(drawn("bottom", 5.0, 1.0, 1.0), None);
         assert_eq!(drawn("bottom", -5.0, 1.0, 1.0), Some(0.5));
-        assert_eq!(drawn("left", 1.0, -5.0, 1.0), Some(0.5), "to -z is the left");
-        assert_eq!(drawn("right", 1.0, 5.0, 0.5), Some(0.25), "to +z is the right, faded");
+        assert_eq!(
+            drawn("left", 1.0, -5.0, 1.0),
+            Some(0.5),
+            "to -z is the left"
+        );
+        assert_eq!(
+            drawn("right", 1.0, 5.0, 0.5),
+            Some(0.25),
+            "to +z is the right, faded"
+        );
         assert_eq!(drawn("top", 5.0, 0.0, 0.0), None, "no strength, no arrow");
         assert_eq!(drawn("top", 0.0, 0.0, 1.0), None, "no direction, no arrow");
     }

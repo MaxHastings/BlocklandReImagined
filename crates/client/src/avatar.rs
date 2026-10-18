@@ -4209,6 +4209,7 @@ mod tests {
             invite: None,
             light: false,
             mounted: None,
+            vehicle_health: None,
             ride: None,
             look_limits: None,
             control: Default::default(),

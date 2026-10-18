@@ -277,6 +277,9 @@ pub struct Vitals {
     pub light: bool,
     /// Vehicle id and seat while riding.
     pub mounted: Option<(u64, u8)>,
+    /// What is left of the hull of the vehicle they ride, 1 to 0.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vehicle_health: Option<f32>,
     /// The player this one rides, and the seat.
     pub ride: Option<super::Ride>,
     /// A rule's look limits for this body (`setLookLimits`), `[down, up]`.
@@ -1068,6 +1071,7 @@ impl Session {
                         invite: state.and_then(|s| s.invite).map(|g| g.0),
                         light: peer.combat.light,
                         mounted: self.mounted(*owner),
+                        vehicle_health: self.mounted_health(*owner),
                         ride: self.ride(*owner),
                         look_limits: peer.look_limits,
                         control: peer.control,

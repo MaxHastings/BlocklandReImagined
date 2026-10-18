@@ -678,6 +678,7 @@ impl App {
             body,
             holding: held,
             vehicle,
+            seat: vitals.and_then(|v| v.mounted).map(|(_, seat)| seat),
             minigame: vitals.is_some_and(|v| v.minigame.is_some()),
         };
         let energy = presented
@@ -687,6 +688,7 @@ impl App {
             });
         let game = crate::hud_regions::GameValues {
             health: vitals.map_or(0.0, |v| v.health),
+            vehicle_health: vitals.and_then(|v| v.vehicle_health),
             health_max: presented.map_or(bri_sim::session::MAX_HEALTH, |p| {
                 view.archetypes.resolve(p.archetype).max_health
             }),
