@@ -2663,10 +2663,14 @@ impl MapLightBinding {
 }
 /// Native unshadowed point illumination. Radius and RGB come from the effect clock.
 #[repr(C)]
-#[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+#[derive(Clone, Copy, Debug, Default, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct PointLight {
     pub position_radius: [f32; 4],
     pub color: [f32; 4],
+    /// A cone: the unit direction scaled by `1 / (cos inner - cos outer)`
+    /// and `cos outer` times that scale ([`spot_words`] without its all-round
+    /// sentinel); all zero shines all round.
+    pub cone: [f32; 4],
 }
 
 /// Scenes a renderer has uploaded since it was made: what a frame's work

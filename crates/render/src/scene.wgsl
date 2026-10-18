@@ -19,7 +19,7 @@ struct Camera {
 };
 @group(0) @binding(0) var<uniform> camera:Camera;
 // color.w 1 marks a map light drawn with the shaded lights' linear falloff.
-struct PointLight { position_radius:vec4<f32>, color:vec4<f32> };
+struct PointLight { position_radius:vec4<f32>, color:vec4<f32>, cone:vec4<f32> };
 // count.x lights; the grid (crate::light_grid) has its origin and inverse
 // cell size in grid_origin, its dimensions and 1 when built in grid_dims.
 struct PointLights { count:vec4<u32>, grid_origin:vec4<f32>, grid_dims:vec4<u32>, values:array<PointLight,256> };
@@ -40,6 +40,11 @@ fn light_cell(position:vec3<f32>)->vec2<u32> {
 fn listed_light(list:vec2<u32>,i:u32)->PointLight {
     return lights.values[min(light_grid[list.x+i],255u)];
 }
+// A point light's cone (PointLight::cone): 1 inside, fading to 0 at its edge, all round when unset.
+fn point_cone(light:PointLight,toward:vec3<f32>)->f32 {
+    if dot(light.cone.xyz,light.cone.xyz)==0.0 {return 1.0;}
+    return clamp(dot(toward,light.cone.xyz)-light.cone.w,0.0,1.0);
+}
 // Map surfaces and terrain: smooth finite-radius native falloff per pixel.
 // Vertex-lit objects use vertex_point_illumination below.
 fn point_illumination(position:vec3<f32>,normal:vec3<f32>)->vec3<f32> {
@@ -54,7 +59,7 @@ fn point_illumination(position:vec3<f32>,normal:vec3<f32>)->vec3<f32> {
         // color.w 1: a map light past the shaded budget, linear like the
         // shaded ones (light_given); effect and vehicle lights stay smooth.
         let shaped=select(falloff*falloff,falloff,light.color.w>0.5);
-        result+=light.color.rgb*shaped*max(dot(n,delta/max(distance,0.0001)),0.0);
+        result+=light.color.rgb*shaped*max(dot(n,delta/max(distance,0.0001)),0.0)*point_cone(light,-delta/max(distance,0.0001));
     }
     return result;
 }
@@ -76,7 +81,7 @@ fn vertex_point_illumination(position:vec3<f32>,normal:vec3<f32>)->vec3<f32> {
         let radius=light.position_radius.w;
         if d2>=radius*radius {continue;}
         let facing=max(dot(n,delta*inverseSqrt(max(d2,0.00000001))),0.0);
-        result+=light.color.rgb*facing/(1.0+GL_QUADRATIC_ATTENUATION*d2);
+        result+=light.color.rgb*facing*point_cone(light,-delta*inverseSqrt(max(d2,0.00000001)))/(1.0+GL_QUADRATIC_ATTENUATION*d2);
     }
     return result;
 }
@@ -1525,7 +1530,7 @@ fn metal_surface(v:VertexOut)->vec4<f32> {
         let radius=light.position_radius.w;
         if d2>=radius*radius {continue;}
         let rgb=linear_color(clamp(light.color.rgb,vec3<f32>(0.0),vec3<f32>(1.0)));
-        radiance+=rgb*ggx_light(n,delta*inverseSqrt(max(d2,0.00000001)),e,alpha,f0)/(1.0+GL_QUADRATIC_ATTENUATION*d2);
+        radiance+=rgb*ggx_light(n,delta*inverseSqrt(max(d2,0.00000001)),e,alpha,f0)*point_cone(light,-delta*inverseSqrt(max(d2,0.00000001)))/(1.0+GL_QUADRATIC_ATTENUATION*d2);
     }
     radiance*=cavity;
     return vec4<f32>(fogged(display_color(radiance),v.world_position),1.0);
@@ -1642,7 +1647,7 @@ fn physical_surface(v:VertexOut)->vec4<f32> {
         let radius=light.position_radius.w;
         if d2>=radius*radius {continue;}
         let rgb=linear_color(clamp(light.color.rgb,vec3<f32>(0.0),vec3<f32>(1.0)));
-        radiance+=rgb*ggx_light(n,delta*inverseSqrt(max(d2,0.00000001)),e,a,f0)/(1.0+GL_QUADRATIC_ATTENUATION*d2);
+        radiance+=rgb*ggx_light(n,delta*inverseSqrt(max(d2,0.00000001)),e,a,f0)*point_cone(light,-delta*inverseSqrt(max(d2,0.00000001)))/(1.0+GL_QUADRATIC_ATTENUATION*d2);
     }
     // Glow, whatever the world's light.
     radiance+=material[2].rgb*textureSample(layer5,tiled,v.uv).rgb;
