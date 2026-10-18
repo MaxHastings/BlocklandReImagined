@@ -131,6 +131,8 @@ fn seat(node: &str, position: [f32; 3], controls: bool, weapon: bool) -> Seat {
         controls,
         weapon,
         hands: Default::default(),
+        enter_sound: String::new(),
+        exit_sound: String::new(),
     }
 }
 

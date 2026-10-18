@@ -375,6 +375,50 @@ fn spawn_brick_vehicle_mounts_drives_dismounts_and_respawns(f: &Fixture) -> anyh
 }
 
 on_both! {
+/// A seat's own sounds replace the base game's mount sound when a rider
+/// boards it, and play where they leave it (Halo's seat animation sounds).
+fn a_seats_own_sounds_play_on_boarding_and_leaving(f: &Fixture) -> anyhow::Result<()> {
+    use bri_sim::presentation::CueKind;
+    let mut s = session_changing(f, None, |d| {
+        d.seats[0].enter_sound = "t:seat_in".into();
+        d.seats[0].exit_sound = "t:seat_out".into();
+    })?;
+    let owner = s.join("Driver".into(), Vec3::new(0.0, 0.05, 0.0), true)?;
+    let mut p = Feeder { owner, sequence: 0 };
+    p.feed(&mut s, MoveInput::default(), 120)?;
+    s.take_cues();
+    p.board(&mut s, 0.0)?;
+    let cues = s.take_cues();
+    let sounds: Vec<&str> = cues
+        .iter()
+        .filter_map(|c| match &c.kind {
+            CueKind::VehicleSound { sound, .. } => Some(sound.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(sounds, ["t:seat_in"], "the seat's own sound, not player.mount");
+    for cue in &cues {
+        cue.validate()?;
+    }
+    p.feed(&mut s, MoveInput::default(), 20)?;
+    s.take_cues();
+    p.feed(&mut s, MoveInput { jet: true, ..Default::default() }, 2)?;
+    p.feed(&mut s, MoveInput::default(), 10)?;
+    assert_eq!(s.mounted(owner), None);
+    let left: Vec<String> = s
+        .take_cues()
+        .into_iter()
+        .filter_map(|c| match c.kind {
+            CueKind::VehicleSound { sound, .. } => Some(sound),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(left, ["t:seat_out"]);
+    Ok(())
+}
+}
+
+on_both! {
 /// A vehicle left empty away from its spawn brick for its return time goes
 /// back to the brick as a fresh one; while ridden it stays.
 fn an_abandoned_vehicle_returns_to_its_spawn(f: &Fixture) -> anyhow::Result<()> {
