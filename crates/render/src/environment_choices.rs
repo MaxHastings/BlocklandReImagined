@@ -338,6 +338,7 @@ fn plain_sky() -> Environment {
             color: [1.0; 3],
             ..Default::default()
         },
+        lens_flare: None,
         warnings: Vec::new(),
     }
 }
@@ -385,6 +386,21 @@ pub(crate) fn append_sky(
         });
     }
     let faces = environment.faces.len();
+    out.lens_flare = environment
+        .lens_flare
+        .as_ref()
+        .map(|flare| {
+            let elements = flare
+                .elements
+                .iter()
+                .map(|e| Ok((image(root, &e.image)?, e.clone())))
+                .collect::<Result<Vec<_>>>()?;
+            Ok::<_, anyhow::Error>(std::sync::Arc::new(crate::scene::LensFlareScene {
+                cutoff_angle: flare.cutoff_angle,
+                elements,
+            }))
+        })
+        .transpose()?;
     crate::environment_scene::append(out, environment, &images[..faces], &images[faces..])
 }
 

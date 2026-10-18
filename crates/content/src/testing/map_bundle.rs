@@ -440,6 +440,7 @@ fn write_sky(dir: &Path) -> Result<crate::environment::Environment> {
             color: [0.45, 0.6, 0.85],
             ..Default::default()
         },
+        lens_flare: None,
         warnings: vec![],
     };
     sky.validate()?;

@@ -244,6 +244,7 @@ pub(super) fn sky(
         horizon_band: false,
         solid_color,
         fog,
+        lens_flare: None,
         warnings: Vec::new(),
     };
     environment.validate()?;

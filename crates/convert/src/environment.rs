@@ -253,6 +253,7 @@ pub fn convert(
             color: vector(p, "fogcolor", [0.5; 3])?,
             ..Default::default()
         },
+        lens_flare: None,
         warnings,
     };
     env.validate()?;

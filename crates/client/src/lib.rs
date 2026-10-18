@@ -29,6 +29,7 @@ pub mod decals;
 pub mod footsteps;
 pub mod wheel_contacts;
 pub mod rule_regions;
+pub mod sun_flare;
 pub use bri_sim::crouch;
 pub mod effects;
 pub mod explosion_debris;

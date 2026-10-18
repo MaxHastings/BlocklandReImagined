@@ -7,6 +7,7 @@ pub mod environment_planes;
 pub mod environment_probe;
 pub mod environment_scene;
 mod kept_shadows;
+pub mod lens_flare;
 pub mod light_grid;
 pub mod light_volume;
 pub mod lighting_parameters;

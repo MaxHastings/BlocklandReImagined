@@ -19,6 +19,9 @@ pub(super) struct GpuState {
     pub(super) region_outlines: crate::rule_regions::Outlines,
     /// The Environment window's vignette over the world.
     pub(super) vignette: Option<bri_render::vignette::VignetteRenderer>,
+    /// The sun's lens flare over the world, and what decides how much shows.
+    pub(super) lens_flare: Option<bri_render::lens_flare::LensFlareRenderer>,
+    pub(super) sun_flare: crate::sun_flare::SunFlare,
     /// Screen-space ambient occlusion, drawn after the world while Soft
     /// Shading is on in Unified or Dynamic lighting.
     pub(super) ambient_occlusion: Option<bri_render::ambient_occlusion::AmbientOcclusion>,
