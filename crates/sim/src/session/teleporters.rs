@@ -15,6 +15,13 @@ pub(super) struct MapTeleporters {
     inside: BTreeMap<OwnerId, usize>,
     /// How many trips each channel has sent, to take its exits in turn.
     trips: BTreeMap<String, usize>,
+    /// The sound each traveller hears (`set_teleport_sound`).
+    sound: Option<String>,
+}
+impl MapTeleporters {
+    pub(super) fn set_sound(&mut self, sound: Option<String>) {
+        self.sound = sound;
+    }
 }
 
 /// The entrance `feet` stands in: within its radius across, and from its
@@ -107,6 +114,10 @@ impl Session {
             )?;
             peer.player.push(new_velocity);
             peer.discard_inputs();
+            if let Some(sound) = self.map_teleporters.sound.clone() {
+                self.notify(owner, super::Notice::Sound(sound));
+            }
+            let peer = self.peers.get_mut(&owner).unwrap();
             // Landing in another entrance takes them through only once
             // they step out of it.
             match entrance_at(

@@ -260,6 +260,11 @@ impl Session {
         self.game_version = version.into();
     }
 
+    /// The map this session plays, as `map_id()` shows it to rules.
+    pub fn set_map_id(&mut self, id: impl Into<String>) {
+        self.map_id = id.into();
+    }
+
     /// Where this host keeps saved copies. Without one, saving and loading
     /// copies tells the player it is not available here.
     pub fn set_copy_store(&mut self, store: Arc<dyn CopyStore>) {

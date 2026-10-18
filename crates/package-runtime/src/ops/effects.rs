@@ -115,6 +115,23 @@ impl ScriptOp for EffectAt {
     }
 }
 
+/// The sound a map teleporter plays at the ears of each player it sends
+/// through (`None` for silence, the default). Applies to the map being
+/// played; a new map starts with none.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SetTeleportSound {
+    pub profile: Option<String>,
+}
+impl ScriptOp for SetTeleportSound {
+    const CAPABILITY: &str = "effects";
+    const NAME: &str = "set_teleport_sound";
+    fn bounded(&self) -> bool {
+        self.profile.as_ref().is_none_or(|p| {
+            !p.is_empty() && p.len() <= 128 && !p.chars().any(char::is_control)
+        })
+    }
+}
+
 /// Play a music track (a sound an Add-On marks `music`, or one of the
 /// game's music loops) at a player's ears on the music bus, or stop it
 /// (`track` none), fading over `fade` seconds. For one player, or for

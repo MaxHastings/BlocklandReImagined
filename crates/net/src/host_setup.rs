@@ -291,6 +291,7 @@ impl HostSetup {
         if let Some(data) = &self.addon_data {
             session.set_addon_data(data.clone());
         }
+        session.set_map_id(hosted.map.clone());
         if let Some(version) = &self.game_version {
             session.set_game_version(version.clone());
         }
