@@ -800,6 +800,8 @@ impl AvatarAssets {
             forward: true,
             phase: 0.0,
             last_time: None,
+            death_announced: false,
+            started_clips: Vec::new(),
             channels: None,
             transition: None,
             stood_at: None,
@@ -897,6 +899,10 @@ pub struct AvatarMesh {
     forward: bool,
     phase: f32,
     last_time: Option<f64>,
+    /// A death clip has been announced for the body's current death.
+    death_announced: bool,
+    /// Clips (lower case) the body started since the last take.
+    started_clips: Vec<String>,
     /// Locomotion channels of the last pose, frozen when a transition starts.
     channels: Option<Channels>,
     /// Frozen source pose and start time of the current action transition.
@@ -2028,6 +2034,16 @@ impl AvatarMesh {
         } else {
             None
         };
+        // A death starts its clip once; sounds tied to the clip are queued
+        // from it ([`Self::take_started_clips`]).
+        match scripted {
+            Some(clip) if animation_input.dead => {
+                if !std::mem::replace(&mut self.death_announced, true) {
+                    self.started_clips.push(clip.to_ascii_lowercase());
+                }
+            }
+            _ => self.death_announced = false,
+        }
         // v20 picks every client frame: it kept `delayTicks` but dropped the
         // test that would hold an action for `sNewAnimationTickTime`.
         let next = Some(scripted.map_or_else(
@@ -2437,6 +2453,10 @@ impl AvatarMesh {
             });
         }
         Ok(())
+    }
+    /// The clips the body started since the last call, lower case.
+    pub fn take_started_clips(&mut self) -> Vec<String> {
+        std::mem::take(&mut self.started_clips)
     }
     /// Takes over another mesh's action thread (sequence, direction, time
     /// and transition), for a rebuilt outfit of the same player.

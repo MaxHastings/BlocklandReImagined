@@ -293,6 +293,13 @@ under the feet (a map material's `bri_surface`, see Making maps; bricks are
 that kind: `"surfaces": {"metal": ["your-id:clang_1"]}` (up to 16 kinds,
 1 to 8 sounds each). Test: `crates/client/src/footsteps.rs`.
 
+`clips` ties a sound to a moment of one of the body's clips, by the clip's
+name: `"clips": {"h_kill_back_gut": {"sound": "your-id:body_fall",
+"seconds": 0.57}}` plays the sound where the body is once the clip has run
+`seconds` (0 to 60; up to 32 clips), when the body dies and starts it (the archetype's
+`deaths`, or the `death` role); other clips do not play one yet. A body-fall
+is one. Test: `crates/client/src/clip_sounds.rs`.
+
 An archetype with `"adjusts": "v20.player.<datablock>"` (and no `base` or
 `name`) is no new body: it changes the constants it names on one of v20's
 own player types while the Add-On is on, as a v20 Add-On's

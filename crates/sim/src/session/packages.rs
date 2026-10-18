@@ -700,6 +700,22 @@ pub(super) fn archetype(
     if def.sounds.stride.is_some() {
         sounds.stride = def.sounds.stride;
     }
+    if !def.sounds.clips.is_empty() {
+        sounds.clips = def
+            .sounds
+            .clips
+            .iter()
+            .map(|(clip, c)| {
+                (
+                    clip.to_ascii_lowercase(),
+                    crate::archetype::ClipSound {
+                        sound: c.sound.clone(),
+                        seconds: c.seconds,
+                    },
+                )
+            })
+            .collect();
+    }
     archetype.validate()?;
     Ok(archetype)
 }

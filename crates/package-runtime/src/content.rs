@@ -1819,6 +1819,17 @@ pub struct ArchetypeSounds {
     /// The sound of landing from a fall.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub land: Option<String>,
+    /// Sounds tied to a clip by its name: the sound plays at the body once
+    /// the clip has run `seconds` (at most 32 clips; 0 to 60 s).
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub clips: BTreeMap<String, ClipSoundDef>,
+}
+/// [`ArchetypeSounds::clips`]: a sound at a moment of a clip.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ClipSoundDef {
+    pub sound: String,
+    pub seconds: f32,
 }
 /// One rider seat: the model node riders follow, its rest position from
 /// the feet (facing -Z, at scale 1) and the rider's action (`root`, `sit`).
@@ -1912,6 +1923,16 @@ impl ArchetypeDef {
                 .stride
                 .is_none_or(|s| s.is_finite() && (0.25..=32.0).contains(&s)),
             "sounds.stride must be 0.25 to 32 units"
+        );
+        ensure!(
+            self.sounds.clips.len() <= 32
+                && self.sounds.clips.iter().all(|(clip, c)| {
+                    text(clip, 64)
+                        && text(&c.sound, 128)
+                        && c.seconds.is_finite()
+                        && (0.0..=60.0).contains(&c.seconds)
+                }),
+            "sounds.clips names up to 32 clips, each with a sound profile and 0 to 60 seconds"
         );
         if let Some(stock) = &self.adjusts {
             ensure!(

@@ -121,8 +121,24 @@ pub struct Sounds {
     /// [`Sounds::LAND_SPEED`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub land: Option<String>,
+    /// Sounds tied to a clip (lower-case name): when a body starts the clip
+    /// the sound plays at the body once the clip has run `seconds`. A death
+    /// clip's body-fall is one.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub clips: std::collections::BTreeMap<String, ClipSound>,
+}
+/// A sound tied to the moment of a clip ([`Sounds::clips`]).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ClipSound {
+    /// The sound profile.
+    pub sound: String,
+    /// Seconds into the clip.
+    pub seconds: f32,
 }
 impl Sounds {
+    /// Most clips with a sound of their own.
+    pub const MAX_CLIPS: usize = 32;
     /// Longest sound name, as cues carry it.
     pub const MAX_NAME: usize = 128;
     /// Most footstep variants.
@@ -153,6 +169,17 @@ impl Sounds {
             && self
                 .stride
                 .is_none_or(|s| s.is_finite() && (0.25..=32.0).contains(&s))
+            && self.clips.len() <= Self::MAX_CLIPS
+            && self.clips.iter().all(|(clip, c)| {
+                !clip.is_empty()
+                    && clip.len() <= 64
+                    && !clip.chars().any(char::is_control)
+                    && !c.sound.is_empty()
+                    && c.sound.len() <= Self::MAX_NAME
+                    && !c.sound.chars().any(char::is_control)
+                    && c.seconds.is_finite()
+                    && (0.0..=60.0).contains(&c.seconds)
+            })
     }
     /// Ground between footfalls for a body `stand_height` tall at `scale`.
     /// The footfalls on surface `kind`.
@@ -570,5 +597,20 @@ mod tests {
         let mut loud = horse.clone();
         loud.sounds.pain = Some("x".repeat(Sounds::MAX_NAME + 1));
         assert!(loud.validate().is_err());
+    }
+    #[test]
+    fn a_clip_sound_names_a_sound_and_a_moment_in_the_clip() {
+        let table = Archetypes::default();
+        let mut body = table.resolve(PlayerType::Horse.archetype()).clone();
+        let clip = |sound: &str, seconds: f32| ClipSound {
+            sound: sound.into(),
+            seconds,
+        };
+        body.sounds.clips.insert("fall".into(), clip("thud", 0.6));
+        assert!(body.validate().is_ok());
+        for bad in [clip("", 0.6), clip("thud", -1.0), clip("thud", f32::NAN)] {
+            body.sounds.clips.insert("fall".into(), bad);
+            assert!(body.validate().is_err());
+        }
     }
 }

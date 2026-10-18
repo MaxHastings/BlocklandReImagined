@@ -1370,6 +1370,13 @@ impl App {
                 {
                     avatar.override_nodes(&self.avatar.avatar_assets, nodes);
                 }
+                for clip in avatar.take_started_clips() {
+                    self.fx.clip_sounds.started(
+                        &view.archetypes.resolve(player.archetype).sounds,
+                        &clip,
+                        player.feet,
+                    );
+                }
                 avatar.remember_drawn_offset(gone.contains(owner));
                 self.cosmetic_faults.absorb("avatar pose", posed);
             }
@@ -1636,6 +1643,9 @@ impl App {
                         .to_string()
                 },
             ) {
+                self.audio.profile(&sound, bri_audio::Placement::World(at));
+            }
+            for (sound, at) in self.fx.clip_sounds.advance(game_elapsed.as_secs_f32()) {
                 self.audio.profile(&sound, bri_audio::Placement::World(at));
             }
             self.fx
