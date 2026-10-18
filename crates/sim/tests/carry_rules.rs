@@ -498,10 +498,13 @@ fn hook_probe() -> Arc<Catalog> {
         "carry-hook-probe",
         "",
         r#"{ "schema_version": 1, "script": "probe.rhai",
-  "state": { "global": { "seen": { "default": "", "visible": "everyone", "persist": false } } },
+  "state": {
+    "global": { "seen": { "default": "", "visible": "everyone", "persist": false } },
+    "player": { "marker": { "default": 7, "visible": "everyone", "persist": false } }
+  },
   "on_join": true, "on_loadout": true, "on_spawn": true }"#,
         r#"fn note(hook, who) { set("seen", get("seen") + hook + ":" + who + " "); }
-fn on_join(who) { note("join", who); }
+fn on_join(who) { set_player(who, "marker", 9); note("join", who); }
 fn on_loadout(who) { note("loadout", who); }
 fn on_spawn(who) { note("spawn", who); }"#,
     )
@@ -517,6 +520,8 @@ fn a_new_bot_gets_no_player_hooks() {
     g.steps(30);
     let bot = *g.s.names().keys().find(|o| g.s.is_bot(**o)).expect("a bot");
     let state = g.s.package_state();
+    assert_eq!(state.packages["probe"].players[&builder]["marker"], 9);
+    assert_eq!(state.packages["probe"].players[&bot]["marker"], 7);
     let seen = state.packages["probe"].global["seen"]
         .as_str()
         .unwrap()

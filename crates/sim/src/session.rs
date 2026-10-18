@@ -1721,6 +1721,10 @@ impl Session {
         // player for Add-Ons.
         if !is_bot {
             self.packages_joined(owner);
+        } else {
+            // Bots still own declared player state, even outside mini-games.
+            // Initialize it without sending human connection hooks.
+            self.ensure_package_player_defaults(owner);
         }
         self.join_server_game(owner)?;
         if !is_bot {

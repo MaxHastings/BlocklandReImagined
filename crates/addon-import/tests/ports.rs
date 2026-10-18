@@ -1079,6 +1079,86 @@ fn player_throwing_port_becomes_host_rules_with_this_copys_numbers() {
     std::fs::remove_dir_all(dir).unwrap();
 }
 
+/// Free-build spawn-brick bots execute ordinary equip commands too, without
+/// joining a mini-game or receiving player connection hooks.
+#[test]
+fn ported_player_throwing_allows_a_free_build_bot_to_equip_without_script_errors() {
+    use bri_sim::session::{Command, Session};
+    use rapier3d::prelude::*;
+    let dir = fresh("throwing-free-build-bot");
+    let root = dir.join("content");
+    let set = throwing_import(&root);
+    let catalog =
+        std::sync::Arc::new(bri_package_runtime::Catalog::load(&root, &set, true).unwrap());
+    let mut world = bri_world::World::new("Bots".into(), "bots".into(), vec![[1.0; 4]]);
+    world
+        .owners
+        .insert(1, bri_world::OwnerRecord::new([1; 32], "Builder".into()));
+    let mut brick = bri_world::Brick::new(
+        bri_world::ContentRef::Resolved("plate".into()),
+        [0.0, 0.1, -6.25],
+        1,
+    );
+    brick.vehicle = Some(Box::new(bri_world::VehicleSpawn {
+        vehicle: bri_world::ContentRef::Resolved("bot.blockhead".into()),
+        recolor: false,
+        team: None,
+    }));
+    world.bricks.insert(1, brick);
+    world.next_brick_id = 2;
+    let mut session = Session::new(
+        bri_sim::simulation::Simulation::new(
+            world,
+            plate(),
+            vec![
+                ColliderBuilder::cuboid(200.0, 0.5, 200.0).translation(Vector::new(0.0, -0.5, 0.0)),
+            ],
+        )
+        .unwrap(),
+    );
+    session.install_packages(catalog, None).unwrap();
+    session
+        .set_vehicle_pack(
+            bri_vehicles::Pack::load(
+                Path::new(env!("CARGO_MANIFEST_DIR"))
+                    .join("../../packages/showcase/steel-ball-kit/assets/vehicles.json"),
+            )
+            .unwrap(),
+            Vec::new(),
+        )
+        .unwrap();
+    session
+        .set_bot_kinds(
+            bri_sim::bot_kind::BotPack::from_json(include_bytes!(
+                "../../../packages/blockhead_bot/assets/bots.json"
+            ))
+            .unwrap()
+            .bots,
+        )
+        .unwrap();
+    let builder = session
+        .join("Builder".into(), Vec3::new(0.0, 0.05, 0.0), false)
+        .unwrap();
+    session
+        .command(builder, 1, Command::EquipTool { slot: None })
+        .unwrap();
+    session.step().unwrap();
+    let bot = *session
+        .names()
+        .keys()
+        .find(|owner| session.is_bot(**owner))
+        .expect("spawned bot");
+    session
+        .command(bot, 1, Command::EquipTool { slot: None })
+        .unwrap();
+    assert!(
+        session.package_diagnostics().is_empty(),
+        "{:#?}",
+        session.package_diagnostics()
+    );
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
 /// Hosted, on flat ground: in a minigame, an empty-hand click lifts the
 /// player in front onto the hand (shrunk, limp, looking within the copy's
 /// limits, bricks put away, their camera circling the holder); neither may

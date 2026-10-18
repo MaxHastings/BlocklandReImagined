@@ -1356,7 +1356,7 @@ impl Session {
             tethers: self.tether_views(),
         }
     }
-    /// Initialize declared per-player state for an actual participant without
+    /// Initialize declared per-player state for a connected player or bot without
     /// running connection hooks or replacing authored/persisted values.
     pub(in crate::session) fn ensure_package_player_defaults(&mut self, owner: OwnerId) {
         if self.packages.is_none() || !self.peers.contains_key(&owner) {
