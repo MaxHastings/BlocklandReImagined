@@ -1701,6 +1701,7 @@ impl PlatformApp for App {
         crate::vehicles::ClientVehicles::gpu_stopped(&mut self.vehicle_assets);
         self.fx.explosion_shapes.gpu_stopped();
         self.fx.beams.gpu_stopped();
+        self.fx.weapon_effects.contrails_gpu_stopped();
         self.fx.decals.gpu_stopped();
         self.fx.body_flashes.gpu_stopped();
         self.fx.tutorial_targets.gpu_stopped();
@@ -1862,6 +1863,7 @@ impl PlatformApp for App {
         crate::vehicles::ClientVehicles::gpu_stopped(&mut self.vehicle_assets);
         self.fx.explosion_shapes.gpu_stopped();
         self.fx.beams.gpu_stopped();
+        self.fx.weapon_effects.contrails_gpu_stopped();
         self.fx.decals.gpu_stopped();
         self.fx.body_flashes.gpu_stopped();
         self.fx.tutorial_targets.gpu_stopped();

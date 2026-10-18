@@ -2653,6 +2653,10 @@ pub struct ProjectileDef {
     /// guided shot.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub homing: Option<Homing>,
+    /// A ribbon it leaves behind it as it flies, drawn by each player's own
+    /// game from where the projectile has been.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub contrail: Option<Contrail>,
     /// Its direct damage stays as authored at any scale, where v20's own
     /// `ProjectileData::damage` scaled it with the projectile: projectiles
     /// whose `damage` method dealt `directDamage` as it was.
@@ -2753,6 +2757,74 @@ pub struct Homing {
     pub range: f32,
     /// Radians either side of its heading, 0 to 3.2.
     pub angle: f32,
+}
+/// [`ProjectileDef::contrail`]: a ribbon of textured quads through the points
+/// the projectile has passed, a camera-facing strip (`rate` points a second,
+/// each a quad to the next) whose width and colour change with a point's age
+/// along `keys` (linear between them) and which is gone when the last key's
+/// age is reached. Presentation only: nothing is sent while it shows.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Contrail {
+    /// An Add-On presentation texture key, as a particle's.
+    pub texture: String,
+    /// Points a second, 1 to 240.
+    pub rate: f32,
+    /// 2 to 8 keys, ages ascending from 0 and ending by 10 seconds.
+    pub keys: Vec<ContrailKey>,
+    /// Added to the picture behind (light) rather than blended over it.
+    #[serde(default)]
+    pub additive: bool,
+}
+/// One key of a [`Contrail`]: at `age` seconds a point is `width` units wide
+/// and `color` (RGB, and alpha as opacity).
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ContrailKey {
+    pub age: f32,
+    /// 0 to 100 units.
+    pub width: f32,
+    pub color: [f32; 4],
+}
+impl Contrail {
+    pub fn validate(&self) -> Result<()> {
+        ensure!(
+            !self.texture.is_empty()
+                && self.texture.len() <= 256
+                && !self.texture.contains(':')
+                && !self.texture.contains('\\')
+                && !self.texture.chars().any(char::is_control)
+                && self.texture.split('/').all(|s| !s.is_empty() && s != "..")
+                && self.rate.is_finite()
+                && (1.0..=240.0).contains(&self.rate)
+                && (2..=8).contains(&self.keys.len())
+                && self.keys[0].age == 0.0
+                && self.keys.windows(2).all(|k| k[0].age < k[1].age)
+                && self.keys.last().is_some_and(|k| k.age <= 10.0)
+                && self.keys.iter().all(|k| {
+                    k.age.is_finite()
+                        && (0.0..=100.0).contains(&k.width)
+                        && k.color.iter().all(|c| c.is_finite() && (0.0..=4.0).contains(c))
+                }),
+            "Invalid contrail: a texture key, 1 to 240 points a second, 2 to 8 keys by \
+             rising age from 0 to at most 10 s, widths to 100, colours 0 to 4"
+        );
+        Ok(())
+    }
+    /// The width and colour of a point `age` seconds old (None once it has
+    /// gone).
+    pub fn at(&self, age: f32) -> Option<(f32, [f32; 4])> {
+        let end = self.keys.last()?.age;
+        if !(0.0..end).contains(&age) {
+            return None;
+        }
+        let pair = self.keys.windows(2).find(|k| age < k[1].age)?;
+        let t = (age - pair[0].age) / (pair[1].age - pair[0].age);
+        Some((
+            pair[0].width + (pair[1].width - pair[0].width) * t,
+            std::array::from_fn(|i| pair[0].color[i] + (pair[1].color[i] - pair[0].color[i]) * t),
+        ))
+    }
 }
 /// A projectile's explosion effect by what it lands on, each an explosion
 /// effect as `Explosion::effect` names one. One left empty, and a burst in
@@ -3157,6 +3229,7 @@ impl Default for ProjectileDef {
             slow: None,
             falloff: None,
             homing: None,
+            contrail: None,
             fixed_damage: false,
             collision_sound: None,
             sport_hit: None,
@@ -4126,6 +4199,10 @@ impl Pack {
                     (1.0..=10.0).contains(&slow.divisor),
                     "Invalid slow of projectile {id}: divisor 1 to 10"
                 );
+            }
+            if let Some(c) = &p.contrail {
+                c.validate()
+                    .map_err(|e| anyhow::anyhow!("projectile {id}: {e}"))?;
             }
             if let Some(h) = p.homing {
                 ensure!(

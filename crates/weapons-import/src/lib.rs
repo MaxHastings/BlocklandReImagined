@@ -389,6 +389,7 @@ pub fn lower(definitions: Vec<Definition>) -> Result<Pack> {
             slow: None,
             falloff: None,
             homing: None,
+            contrail: None,
             fixed_damage: false,
             collision_sound: None,
             sport_hit: None,

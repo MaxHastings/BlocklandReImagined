@@ -573,6 +573,9 @@ impl App {
             .explosion_shapes
             .upload(renderer, frame.device, frame.queue)?;
         self.fx.beams.upload(renderer, frame.device, frame.queue)?;
+        self.fx
+            .weapon_effects
+            .upload_contrails(renderer, frame.device, frame.queue)?;
         self.fx.decals.upload(renderer, frame.device, frame.queue)?;
         self.fx
             .tutorial_targets
@@ -1540,6 +1543,7 @@ impl App {
         shared_draws.extend(self.gpu.gpu_terrain.iter().flat_map(|t| t.draws()));
         shared_draws.extend(self.fx.explosion_shapes.draws());
         shared_draws.extend(self.fx.beams.draws());
+        shared_draws.extend(self.fx.weapon_effects.contrail_draws());
         shared_draws.extend(self.fx.decals.draws());
         shared_draws.extend(self.fx.tutorial_targets.draws());
         shared_draws.extend(self.fx.map_movers.draws());

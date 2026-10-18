@@ -1927,6 +1927,7 @@ fn add_launcher(
         slow: None,
         falloff: None,
         homing: None,
+        contrail: None,
         collision_sound: None,
         sport_hit: None,
         turns_into: None,
