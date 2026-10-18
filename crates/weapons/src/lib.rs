@@ -2300,7 +2300,7 @@ impl ShotError {
     }
     /// The spread at `error`.
     pub fn spread(&self, error: f32) -> f32 {
-        self.min + (self.max - self.min) * error.clamp(0.0, 1.0)
+        self.min + (self.max - self.min) * error.clamped(0.0, 1.0)
     }
 }
 /// [`Shot::rested`].
