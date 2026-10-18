@@ -920,7 +920,6 @@ mod tests {
             let clip = planning_clip(name, 3, additive, 4.);
             rig.sequences.insert(clip.name.clone(), clip);
         }
-        let roles = RoleClips::resolve(&Default::default(), |n| rig.sequence(n).is_some());
         let overlays = [
             SeatOverlay {
                 clip: "ACCEL_A",

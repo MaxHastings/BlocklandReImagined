@@ -18,6 +18,7 @@
 //! as the Euler pair itself, and the combined speed is held to the limit
 //! afterwards by scaling both. They agree wherever the barrel is far from
 //! straight up or down, which its pitch range guarantees.
+use bri_console::Clamp;
 use serde::{Deserialize, Serialize};
 
 /// Physics ticks in one 30 Hz Halo tick.
@@ -261,7 +262,7 @@ impl AimFollow {
     }
     /// One Halo tick of `unit_euler_aiming_update`.
     fn law(&mut self, desired: [f32; 2], limits: &AimLimits, [down, up]: [f32; 2]) -> [f32; 2] {
-        let target = [wrap(desired[0]), desired[1].clamp(down, up)];
+        let target = [wrap(desired[0]), desired[1].clamped(down, up)];
         if limits.max_velocity == 0. && limits.max_acceleration == 0. {
             self.velocity = [0.; 2];
             return target;
@@ -281,13 +282,13 @@ impl AimFollow {
         }
         let end = [
             wrap(yaw_error + target[0]),
-            (tilt_error + target[1]).clamp(down, up),
+            (tilt_error + target[1]).clamped(down, up),
         ];
         let mut velocity = [yaw_velocity, tilt_velocity];
         // The source scales the 3D speed to the limit: the angle this aim
         // would move through one more step.
         let further = [end[0] + velocity[0], end[1] + velocity[1]];
-        let angle = direction(end).dot(direction(further)).clamp(-1., 1.).acos();
+        let angle = direction(end).dot(direction(further)).clamped(-1., 1.).acos();
         if angle > max_velocity && angle > 0. {
             let scale = max_velocity / angle;
             velocity = velocity.map(|v| v * scale);
