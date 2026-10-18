@@ -165,6 +165,8 @@ fn player_same(a: &PlayerState, b: &PlayerState) -> bool {
         && (a.energy - b.energy).abs() <= ENERGY
         && a.grounded == b.grounded
         && a.crouched == b.crouched
+        && a.posture.prone == b.posture.prone
+        && (a.posture.lean - b.posture.lean).abs() <= 0.01
         && a.jetting == b.jetting
         && a.jump.jet_flight == b.jump.jet_flight
         && a.archetype == b.archetype
@@ -876,6 +878,37 @@ mod tests {
             (back.scale, back.crouched, back.grounded),
             (2.0, true, true)
         );
+    }
+
+    /// Others are told a player lies prone or leans, and an upright body
+    /// costs no byte for it.
+    #[test]
+    fn others_see_a_prone_or_leaning_body() {
+        let mut state = pose(4, 1_000_000, 123.456).player;
+        let upright = RemotePose::of(0, &state);
+        assert_eq!(upright.controller, None);
+        state.posture.prone = true;
+        state.posture.lean = -0.5;
+        state.posture.lean_to = -0.5;
+        let lying = RemotePose::of(0, &state);
+        let back = lying.clone().into_pose().player;
+        assert!(back.posture.prone);
+        assert_eq!((back.posture.lean * 100.0).round(), -50.0);
+        let size = |p: RemotePose| {
+            crate::codec::encode_datagram_item(&Datagram::Remote(p))
+                .unwrap()
+                .len()
+        };
+        // Through the real datagram: a prone body with no controller must not
+        // shift a skipped trailing field into the wrong slot.
+        let bytes = crate::codec::encode_datagram_item(&Datagram::Remote(lying.clone())).unwrap();
+        let Datagram::Remote(wire) = crate::codec::decode_datagram::<Datagram>(&bytes).unwrap()
+        else {
+            panic!("a remote pose")
+        };
+        assert!(wire.into_pose().player.posture.prone);
+        let larger = size(lying) - size(upright);
+        assert!(larger > 0 && larger <= 8, "{larger} extra bytes");
     }
 
     /// Others see a body its movement controller turned itself (Mario

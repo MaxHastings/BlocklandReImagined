@@ -110,6 +110,7 @@ action. Name them by role (the names are not case-sensitive):
 | `crouch` | crouching down | once; its last frame is the crouched pose |
 | `crouch_run`, `crouch_back`, `crouch_side` | moving while crouched | loops |
 | `crouch_side_right` | strafing right while crouched | a loop. If missing, `crouch_side` plays reversed |
+| `prone`, `prone_run`, `prone_back`, `prone_side`, `prone_side_right` | lying prone (`movement.prone`, `set_prone`) and crawling | loops that pose the lying body themselves. With a `prone` clip the body is not laid face down by its posture frame; without one it is, as before |
 | `aim_right`, `aim_left`, `aim_both` | holding an item in that hand, or both | a held pose: the body holds the last frame. Key only the arm bones |
 | `sit` | seated in a vehicle or on a rideable | a held pose; one frame is enough. If missing it sits in `idle` |
 | `death` | on death | once; it holds the last frame |

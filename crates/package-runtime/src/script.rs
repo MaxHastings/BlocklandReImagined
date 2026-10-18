@@ -113,6 +113,9 @@ pub struct PlayerView {
     pub archetype: String,
     #[serde(default)]
     pub crouched: bool,
+    /// Lying prone (`set_prone`); a prone body is also `crouched`.
+    #[serde(default)]
+    pub prone: bool,
     /// Seated on a vehicle or riding another player.
     #[serde(default)]
     pub mounted: bool,
@@ -859,6 +862,7 @@ fn player_map(p: &PlayerView) -> Dynamic {
         float_entry("max_health", p.max_health),
         ("archetype", p.archetype.clone().into()),
         ("crouched", p.crouched.into()),
+        ("prone", p.prone.into()),
         ("mounted", p.mounted.into()),
         (
             "mount",

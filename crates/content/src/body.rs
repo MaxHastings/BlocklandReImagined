@@ -138,6 +138,14 @@ pub enum Role {
     CrouchSide,
     /// `crouch_side` for strafing right, as `side_right` is for `side`.
     CrouchSideRight,
+    /// Lying prone, on a body whose clips author the lying pose (a body without
+    /// them is laid face down by its posture frame). Idle, then crawling forward,
+    /// back and sideways, as the crouch roles are for crouching.
+    Prone,
+    ProneRun,
+    ProneBack,
+    ProneSide,
+    ProneSideRight,
     AimRight,
     AimLeft,
     AimBoth,
@@ -152,7 +160,7 @@ pub enum Role {
     SeatAim,
 }
 impl Role {
-    pub const ALL: [Role; 23] = [
+    pub const ALL: [Role; 28] = [
         Role::Idle,
         Role::Run,
         Role::Back,
@@ -165,6 +173,11 @@ impl Role {
         Role::CrouchBack,
         Role::CrouchSide,
         Role::CrouchSideRight,
+        Role::Prone,
+        Role::ProneRun,
+        Role::ProneBack,
+        Role::ProneSide,
+        Role::ProneSideRight,
         Role::AimRight,
         Role::AimLeft,
         Role::AimBoth,
@@ -192,6 +205,11 @@ impl Role {
             Role::CrouchBack => "crouch_back",
             Role::CrouchSide => "crouch_side",
             Role::CrouchSideRight => "crouch_side_right",
+            Role::Prone => "prone",
+            Role::ProneRun => "prone_run",
+            Role::ProneBack => "prone_back",
+            Role::ProneSide => "prone_side",
+            Role::ProneSideRight => "prone_side_right",
             Role::AimRight => "aim_right",
             Role::AimLeft => "aim_left",
             Role::AimBoth => "aim_both",
@@ -221,6 +239,11 @@ impl Role {
             Role::CrouchBack => "crouchback",
             Role::CrouchSide => "crouchside",
             Role::CrouchSideRight => "crouchsideright",
+            Role::Prone => "prone",
+            Role::ProneRun => "pronerun",
+            Role::ProneBack => "proneback",
+            Role::ProneSide => "proneside",
+            Role::ProneSideRight => "pronesideright",
             Role::AimRight => "armreadyright",
             Role::AimLeft => "armreadyleft",
             Role::AimBoth => "armreadyboth",
@@ -263,6 +286,11 @@ impl Role {
             Role::CrouchBack => &[(Role::Crouch, false), (Role::Back, false)],
             Role::CrouchSide => &[(Role::Crouch, false), (Role::Side, false)],
             Role::CrouchSideRight => &[(Role::CrouchSide, true), (Role::SideRight, false)],
+            Role::Prone => &[],
+            Role::ProneRun => &[(Role::Prone, false)],
+            Role::ProneBack => &[(Role::ProneRun, true), (Role::Prone, false)],
+            Role::ProneSide => &[(Role::ProneRun, false), (Role::Prone, false)],
+            Role::ProneSideRight => &[(Role::ProneSide, true)],
             Role::AimRight => &[],
             Role::AimLeft => &[],
             Role::AimBoth => &[(Role::AimRight, false)],
@@ -286,6 +314,10 @@ impl Role {
             Role::Back | Role::CrouchBack => Some([0.0, 0.0, 1.0]),
             Role::Side | Role::CrouchSide => Some([-1.0, 0.0, 0.0]),
             Role::SideRight | Role::CrouchSideRight => Some([1.0, 0.0, 0.0]),
+            Role::ProneRun => Some([0.0, 0.0, -1.0]),
+            Role::ProneBack => Some([0.0, 0.0, 1.0]),
+            Role::ProneSide => Some([-1.0, 0.0, 0.0]),
+            Role::ProneSideRight => Some([1.0, 0.0, 0.0]),
             _ => None,
         }
     }
@@ -294,7 +326,14 @@ impl Role {
     pub fn optional(self) -> bool {
         matches!(
             self,
-            Role::LookCrouch | Role::SideRight | Role::CrouchSideRight
+            Role::LookCrouch
+                | Role::SideRight
+                | Role::CrouchSideRight
+                | Role::Prone
+                | Role::ProneRun
+                | Role::ProneBack
+                | Role::ProneSide
+                | Role::ProneSideRight
         )
     }
     /// The role whose ground speed stands in for this one's when the
@@ -303,6 +342,7 @@ impl Role {
         match self {
             Role::SideRight => Some(Role::Side),
             Role::CrouchSideRight => Some(Role::CrouchSide),
+            Role::ProneSideRight => Some(Role::ProneSide),
             _ => None,
         }
     }
@@ -430,7 +470,7 @@ pub fn validate_ground_speeds(speeds: &GroundSpeeds) -> Result<()> {
     for (role, speed) in speeds {
         ensure!(
             Role::from_name(role).is_some_and(|r| r.ground_axis().is_some()),
-            "ground speed role `{role}` must be one of run, back, side, side_right, crouch_run, crouch_back, crouch_side or crouch_side_right"
+            "ground speed role `{role}` must be a locomotion role (run, back, side, side_right, crouch_run, crouch_back, crouch_side, crouch_side_right, prone_run, prone_back, prone_side or prone_side_right)"
         );
         ensure!(
             speed.is_finite() && (0.01..=1000.0).contains(speed),
@@ -493,8 +533,8 @@ impl RoleClips {
                         .map(|(r, rev)| (*r, *rev != reversed)),
                 );
             }
-            // An optional role is polish over another, not a gap to report.
-            if !role.optional() || stand_in.is_none() {
+            // An optional role is polish over another, never a gap to report.
+            if !role.optional() {
                 missing.push((role, stand_in.as_ref().map(|(r, _, _)| *r)));
             }
             if let Some((_, clip, reversed)) = stand_in {
@@ -601,9 +641,9 @@ mod tests {
                 &"no `aim_right` animation; its arm does not raise a held item".to_string()
             )
         );
-        // Not reported: the two roles it names, and the optional right strafes
-        // that stand in on its left ones.
-        assert_eq!(report.len(), Role::ALL.len() - 4);
+        // Not reported: the two roles it names and every optional role.
+        let optional = Role::ALL.into_iter().filter(|r| r.optional()).count();
+        assert_eq!(report.len(), Role::ALL.len() - 2 - optional);
         assert_eq!(
             roles.clip(Role::SideRight),
             Some(("walk", true)),
@@ -617,7 +657,8 @@ mod tests {
     fn a_body_with_no_clips_resolves_nothing_and_says_so() {
         let roles = RoleClips::resolve(&Animations::new(), |_| false);
         assert!(Role::ALL.into_iter().all(|r| roles.clip(r).is_none()));
-        assert_eq!(roles.report().len(), Role::ALL.len());
+        let optional = Role::ALL.into_iter().filter(|r| r.optional()).count();
+        assert_eq!(roles.report().len(), Role::ALL.len() - optional);
     }
 
     #[test]
