@@ -1137,7 +1137,7 @@ impl Controls {
         }
         match shake.advance(seconds.min(0.1)) {
             Some((pitch, yaw)) => {
-                self.pitch = (self.pitch + pitch).clamp(-FRAC_PI_2, FRAC_PI_2);
+                self.pitch = (self.pitch + pitch).clamped(-FRAC_PI_2, FRAC_PI_2);
                 self.yaw += yaw;
             }
             None => self.view_shake = None,
@@ -1160,7 +1160,7 @@ impl Controls {
         let out = (self.breath_clock * std::f32::consts::TAU / breath.period).sin() < 0.0;
         let turned = self.breath_out.is_some_and(|before| before != out);
         self.breath_out = Some(out);
-        turned.then(|| if out { breath.exhale } else { breath.inhale })
+        turned.then_some(if out { breath.exhale } else { breath.inhale })
     }
     pub fn set_server_fov(&mut self, fov: Option<f32>) {
         self.server_fov = fov.filter(|f| f.is_finite()).map(|f| {
@@ -1375,6 +1375,16 @@ impl Controls {
             grounded,
             turned,
         );
+    }
+    /// The body struck the ground going `speed` units a second downward:
+    /// the profile's landing dip, when it has one.
+    pub fn land_body_camera(&mut self, speed: f32) {
+        if !self.body_owns_view() {
+            return;
+        }
+        let scale = self.body_camera.scale.max(0.01);
+        let profile = self.body_camera.profile.clone();
+        self.body_camera.motion.land(&profile, speed / scale);
     }
     /// Where the body moves the first-person camera from its eye, in the
     /// world, for a look heading `yaw`: the profile's `eye_offset` plus

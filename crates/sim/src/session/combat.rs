@@ -2890,8 +2890,11 @@ impl Session {
     /// The one fall formula ([`Self::fall_harm`]): None when the blow does
     /// not hurt at all.
     fn fall_damage(&self, owner: OwnerId, impact: Vec3) -> Option<f32> {
-        let speed = impact.length();
         let peer = self.peers.get(&owner)?;
+        // A body with its own falling law (`movement.fall`): only the speed
+        // downward counts, and nothing below the threshold hurts.
+        let law = peer.player.tuning().fall;
+        let speed = law.map_or_else(|| impact.length(), |_| -impact.y);
         // The engine raises `onImpact` past the datablock's
         // `minImpactSpeed` (the Horse's is 250), and `Armor::onImpact`
         // also wants `minImpactSpeed` times the player's height scale.
@@ -2899,7 +2902,10 @@ impl Session {
         let min = PlayerType::from_archetype(state.archetype)
             .unwrap_or_default()
             .min_impact_speed();
-        if speed <= min || speed < min * state.scale {
+        if law.is_none() && (speed <= min || speed < min * state.scale) {
+            return None;
+        }
+        if law.is_some_and(|l| speed <= l.threshold * state.scale) {
             return None;
         }
         // `Armor::onImpact` never hurts a player holding the admin wand.
@@ -2928,7 +2934,9 @@ impl Session {
             return None;
         }
         // A guard faced the way they fell takes some of it.
-        let amount = speed * SPEED_DAMAGE_SCALE;
+        let amount = law.map_or(speed * SPEED_DAMAGE_SCALE, |l| {
+            (speed - l.threshold * state.scale) * l.per_speed
+        });
         Some(
             self.weapons
                 .guard_fall_share(ActorId(owner), impact.normalize_or_zero())

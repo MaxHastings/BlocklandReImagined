@@ -191,6 +191,7 @@ macro_rules! for_each_op {
             Camera = player,
             OrbitCamera = player,
             ViewShake = player,
+            ScaleVelocity = player,
         }
     };
 }

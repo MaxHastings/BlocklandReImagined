@@ -751,6 +751,9 @@ pub struct PlayerTuning {
     /// Water coverage from which the underwater speeds apply. A floating
     /// rowboat is always in the water.
     pub swim_coverage: f32,
+    /// Falling damage by a source law, when the body has one: none for v20's
+    /// bodies, which take `speed * SPEED_DAMAGE_SCALE` past `minImpactSpeed`.
+    pub fall: Option<Fall>,
     /// Lying prone, when the body can: none for v20's bodies.
     pub prone: Option<Prone>,
     /// Leaning left and right, when the body can: none for v20's bodies.
@@ -826,12 +829,22 @@ impl Default for PlayerTuning {
             min_jet_energy: 0.0,
             jet_drain: 0.0,
             swim_coverage: 0.9,
+            fall: None,
             prone: None,
             lean: None,
             climb: None,
             controller: None,
         }
     }
+}
+/// [`PlayerTuning::fall`]: striking the ground downward faster than
+/// `threshold` units a second costs `(speed - threshold) * per_speed` health
+/// (a body that falls less far takes none). Only the downward speed counts.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Fall {
+    pub threshold: f32,
+    pub per_speed: f32,
 }
 /// [`PlayerTuning::prone`]: the body lying down, in place of its crouch.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
@@ -1661,6 +1674,14 @@ impl Player {
         if input.validate().is_ok() {
             self.state.pitch = input.pitch;
             self.state.head_yaw = input.head_yaw;
+        }
+    }
+    /// Scale the velocity: the level part by `horizontal`, the vertical part
+    /// by `vertical`.
+    pub fn scale_velocity(&mut self, horizontal: f32, vertical: f32) {
+        if horizontal.is_finite() && vertical.is_finite() {
+            let v = self.state.velocity;
+            self.state.velocity = [v[0] * horizontal, v[1] * vertical, v[2] * horizontal];
         }
     }
     /// Add an impulse-derived velocity change (weapon knockback).
