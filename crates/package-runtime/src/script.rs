@@ -2954,9 +2954,7 @@ fn register_presentation(engine: &mut Engine) {
             scale,
         }))
     }
-    engine.register_fn("effect_at", |e: &str, p: Array, d: Array| {
-        effect_at(e, p, d, 1.0)
-    });
+    engine.register_fn("effect_at", |e: &str, p: Array, d: Array| effect_at(e, p, d, 1.0));
     engine.register_fn("effect_at", |e: &str, p: Array, d: Array, s: Dynamic| {
         effect_at(e, p, d, float(&s)?)
     });
@@ -2968,9 +2966,7 @@ fn register_presentation(engine: &mut Engine) {
         }))
     });
     engine.register_fn("set_teleport_sound", |_none: ()| {
-        push(Op::SetTeleportSound(ops::SetTeleportSound {
-            profile: None,
-        }))
+        push(Op::SetTeleportSound(ops::SetTeleportSound { profile: None }))
     });
     engine.register_fn("beam", |from: Array, to: Array| beam(from, to, Map::new()));
     engine.register_fn("beam", beam);
