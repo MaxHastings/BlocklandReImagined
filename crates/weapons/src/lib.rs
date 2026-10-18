@@ -3747,7 +3747,7 @@ impl Pack {
                 "Invalid image aim_assist {id}: angle 0 to 0.35 radians, range 1 to 1000, slowdown 0.1 to 1"
             );
             ensure!(
-                image.state_shots.len() <= 8
+                image.state_shots.len() <= 16
                     && image.state_shots.iter().all(|(script, s)| {
                         !script.is_empty()
                             && script.len() <= 64
@@ -3755,7 +3755,7 @@ impl Pack {
                             && script != "onfire"
                             && shot_ok(s)
                     }),
-                "Invalid state shots of image {id}: at most 8, by lowercase state script other \
+                "Invalid state shots of image {id}: at most 16, by lowercase state script other \
                  than onfire, each a shot as its own"
             );
             if let Some(guard) = &image.guard {
