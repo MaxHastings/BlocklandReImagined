@@ -423,6 +423,21 @@ pub enum Element {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         show: Option<Show>,
     },
+    /// A picture strip scrolled by a heading, as AA's compass: `textures`
+    /// (one to eight, equal width) are laid end to end to make one whole turn,
+    /// and `rect` shows the `span` degrees (a number or a source such as
+    /// `fov`) centred on `heading`'s source, wrapping round.
+    Strip {
+        textures: Vec<String>,
+        /// x, y, width, height in units from the region's corner.
+        rect: [f32; 4],
+        heading: String,
+        span: Amount,
+        #[serde(default = "white")]
+        tint: [f32; 4],
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        show: Option<Show>,
+    },
     /// The latest kills, one line each, oldest at the top: the killer, the
     /// weapon (an icon or its name) and the victim, in their teams'
     /// colours. While a layout with one is drawn, kills stay out of chat.
@@ -743,6 +758,13 @@ pub enum Source {
     /// Seconds until the dead viewer may respawn, 0 once they may click;
     /// missing while alive or while a rule holds their respawn.
     Respawn,
+    /// The way the viewer's body faces, degrees 0 to 360 turning clockwise
+    /// from straight ahead along the world's -z (`Element::Strip`'s compass).
+    Heading,
+    /// The camera's field of view now, degrees.
+    Fov,
+    /// 1 while the viewer aims down a gun's sights, else 0.
+    Aiming,
     /// Owner-private ammunition for an inventory item, including stowed items.
     ItemAmmo {
         item: String,
@@ -792,6 +814,9 @@ impl Source {
             "ammo_reserve" => Source::AmmoReserve,
             "reloading" => Source::Reloading,
             "respawn" => Source::Respawn,
+            "heading" => Source::Heading,
+            "fov" => Source::Fov,
+            "aiming" => Source::Aiming,
             state => {
                 let (package, rest) = state.split_once(':')?;
                 let (scope, key) = rest.split_once('/')?;
@@ -1070,6 +1095,30 @@ impl Layout {
                     );
                     show_ok(show)?;
                 }
+                Element::Strip {
+                    textures,
+                    rect,
+                    heading,
+                    span,
+                    tint,
+                    show,
+                } => {
+                    ensure!(
+                        (1..=8).contains(&textures.len()),
+                        "a strip lays one to eight textures end to end"
+                    );
+                    for t in textures {
+                        texture_ok(t)?;
+                    }
+                    ensure!(
+                        rect_ok(rect),
+                        "strip rect must be finite with no negative size"
+                    );
+                    source_ok(heading)?;
+                    amount_ok(span)?;
+                    ensure!(color_ok(tint), "tint must be 0..1 RGBA");
+                    show_ok(show)?;
+                }
                 Element::EdgeArrow {
                     texture,
                     rect,
@@ -1180,6 +1229,7 @@ impl Layout {
                 Element::Image { texture, .. } | Element::EdgeArrow { texture, .. } => {
                     out.push(texture.as_str());
                 }
+                Element::Strip { textures, .. } => out.extend(textures.iter().map(String::as_str)),
                 Element::Bar { fill, back, .. } => out.extend(
                     std::iter::once(fill)
                         .chain(back)
@@ -1246,6 +1296,18 @@ impl Layout {
                     ..
                 } => {
                     names.extend([x.as_str(), z.as_str(), strength.as_str()]);
+                    names.extend(show.as_ref().map(|s| s.value.as_str()));
+                }
+                Element::Strip {
+                    heading,
+                    span,
+                    show,
+                    ..
+                } => {
+                    names.push(heading);
+                    if let Amount::Source(s) = span {
+                        names.push(s.as_str());
+                    }
                     names.extend(show.as_ref().map(|s| s.value.as_str()));
                 }
                 Element::KillFeed { show, .. } | Element::Tracker { show, .. } => {
@@ -1559,6 +1621,53 @@ pub fn resolve_live(
                         align: *align,
                         spans,
                     });
+                }
+            }
+            Element::Strip {
+                textures,
+                rect,
+                heading,
+                span,
+                tint,
+                show,
+            } => {
+                if !shown(show) {
+                    continue;
+                }
+                let keys: Vec<u64> = textures
+                    .iter()
+                    .filter_map(|t| texture(t).map(|(key, _)| key))
+                    .collect();
+                if keys.len() != textures.len() {
+                    continue;
+                }
+                let (Some(heading), Some(span)) = (number(heading), amount(span)) else {
+                    continue;
+                };
+                let n = keys.len() as f32;
+                let span = span.clamped(1.0, 360.0) / 360.0;
+                let start = (heading / 360.0 - span / 2.0).rem_euclid(1.0);
+                let end = start + span;
+                let mut at = start;
+                while at < end - 1e-6 {
+                    let wrapped = at.rem_euclid(1.0);
+                    let cell = ((wrapped * n).floor() as usize).min(keys.len() - 1);
+                    let cell_end = (at - wrapped) + (cell as f32 + 1.0) / n;
+                    let stop = cell_end.min(end);
+                    let u0 = wrapped * n - cell as f32;
+                    let u1 = (wrapped + (stop - at)) * n - cell as f32;
+                    out.push(Item::Image {
+                        texture: keys[cell],
+                        uv: [u0, 0.0, u1, 1.0],
+                        rect: [
+                            rect[0] + rect[2] * (at - start) / span,
+                            rect[1],
+                            rect[2] * (stop - at) / span,
+                            rect[3],
+                        ],
+                        tint: *tint,
+                    });
+                    at = stop;
                 }
             }
             Element::EdgeArrow {
@@ -2181,5 +2290,89 @@ mod tests {
         assert!(Source::parse("item_ammo:").is_none());
         assert!(Source::parse("item_ammo:bad id").is_none());
         assert!(Source::parse(&format!("item_ammo:{}", "x".repeat(161))).is_none());
+    }
+}
+
+#[cfg(test)]
+mod strip_tests {
+    use super::*;
+
+    fn compass() -> Layout {
+        serde_json::from_value(serde_json::json!({
+            "schema_version": 1, "region": "top_center",
+            "elements": [{
+                "type": "strip",
+                "textures": ["t:texture/left", "t:texture/right"],
+                "rect": [0.0, 0.0, 100.0, 10.0],
+                "heading": "heading", "span": 90.0
+            }]
+        }))
+        .expect("layout")
+    }
+
+    fn items(heading: f32) -> Vec<Item> {
+        let layout = compass();
+        layout.validate().expect("valid");
+        let value = move |s: &Source| match s {
+            Source::Heading => Some(Value::Number(heading)),
+            _ => None,
+        };
+        let texture = |t: &str| match t {
+            "t:texture/left" => Some((1, [1024, 32])),
+            "t:texture/right" => Some((2, [1024, 32])),
+            _ => None,
+        };
+        resolve(&layout, &value, &texture)
+    }
+
+    fn pieces(items: &[Item]) -> Vec<(u64, [f32; 4], [f32; 4])> {
+        items
+            .iter()
+            .filter_map(|i| match i {
+                Item::Image {
+                    texture, uv, rect, ..
+                } => Some((*texture, *uv, *rect)),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_strip_scrolls_by_heading_and_wraps_round_the_turn() {
+        // Facing 180 degrees, a quarter turn wide: it straddles the seam of
+        // the two textures (the left's last quarter, the right's first).
+        let mid = pieces(&items(180.0));
+        assert_eq!(mid.len(), 2, "{mid:?}");
+        assert_eq!((mid[0].0, mid[1].0), (1, 2));
+        assert!((mid[0].1[0] - 0.75).abs() < 1e-4 && (mid[0].1[2] - 1.0).abs() < 1e-4, "{mid:?}");
+        assert!(mid[1].1[0].abs() < 1e-4 && (mid[1].1[2] - 0.25).abs() < 1e-4, "{mid:?}");
+        // Facing 0 the window straddles the end and start of the strip.
+        let wrap = pieces(&items(0.0));
+        assert_eq!(wrap.len(), 2, "{wrap:?}");
+        assert_eq!(wrap[0].0, 2);
+        assert_eq!(wrap[1].0, 1);
+        assert!((wrap[0].2[2] + wrap[1].2[2] - 100.0).abs() < 1e-3, "the pieces fill the rect");
+        assert!((wrap[1].2[0] - wrap[0].2[2]).abs() < 1e-3, "side by side");
+    }
+
+    #[test]
+    fn a_strip_reads_a_field_of_view_source_for_its_span() {
+        let layout: Layout = serde_json::from_value(serde_json::json!({
+            "schema_version": 1, "region": "top_center",
+            "elements": [{
+                "type": "strip", "textures": ["t:texture/left"],
+                "rect": [0.0, 0.0, 100.0, 10.0], "heading": "heading", "span": "fov"
+            }]
+        }))
+        .expect("layout");
+        layout.validate().expect("valid");
+        let value = |s: &Source| match s {
+            Source::Heading => Some(Value::Number(180.0)),
+            Source::Fov => Some(Value::Number(36.0)),
+            _ => None,
+        };
+        let drawn = pieces(&resolve(&layout, &value, &|_| Some((1, [1024, 32]))));
+        assert_eq!(drawn.len(), 1);
+        assert!((drawn[0].1[2] - drawn[0].1[0] - 0.1).abs() < 1e-4, "36 of 360 degrees: {drawn:?}");
     }
 }
