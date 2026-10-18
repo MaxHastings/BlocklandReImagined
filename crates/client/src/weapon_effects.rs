@@ -154,6 +154,8 @@ pub struct WeaponEffects {
     /// was started for.
     image_lights: BTreeMap<(u64, u8), (String, Option<u8>, EffectHandle)>,
     attached_lights: BTreeMap<(u64, u16), (String, EffectHandle)>,
+    /// The ribbons projectiles leave ([`bri_weapons::ProjectileDef::contrail`]).
+    contrails: crate::contrails::Contrails,
     ropes: BTreeMap<u64, RopeSweep>,
     timed: Vec<Timed>,
     pending: VecDeque<HostRequest>,
@@ -235,9 +237,10 @@ impl WeaponEffects {
             &weapons.effects,
             &mut library,
             &mut textures,
-            texture,
+            &texture,
             &mut notes,
         );
+        let contrails = crate::contrails::Contrails::new(&weapons.projectiles, &texture);
         add_pack_effects(&weapons.effects, &mut library, &mut manifest, &mut notes);
         let pack = EffectsPack::from_parts(library, manifest, textures)?;
         let mut bindings = BTreeMap::new();
@@ -324,6 +327,7 @@ impl WeaponEffects {
             trails: BTreeMap::new(),
             image_lights: BTreeMap::new(),
             attached_lights: BTreeMap::new(),
+            contrails,
             ropes: BTreeMap::new(),
             timed: Vec::new(),
             pending: VecDeque::new(),
@@ -338,6 +342,31 @@ impl WeaponEffects {
         })
     }
 
+    /// Age the projectiles' contrails and turn their quads to face `eye`.
+    pub fn advance_contrails(&mut self, dt: f32, eye: glam::Vec3) {
+        self.contrails.advance(dt, eye);
+    }
+    pub fn upload_contrails(
+        &mut self,
+        renderer: &bri_render::scene::SceneRenderer,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+    ) -> Result<()> {
+        self.contrails.upload(renderer, device, queue)
+    }
+    pub fn contrail_draws(
+        &self,
+    ) -> impl Iterator<
+        Item = (
+            &bri_render::scene::GpuScene,
+            &bri_render::scene::GpuInstances,
+        ),
+    > {
+        self.contrails.draws()
+    }
+    pub fn contrails_gpu_stopped(&mut self) {
+        self.contrails.gpu_stopped();
+    }
     pub fn weapons(&self) -> &bri_weapons::Pack {
         &self.weapons
     }
@@ -457,6 +486,7 @@ impl WeaponEffects {
         self.trails.clear();
         self.image_lights.clear();
         self.attached_lights.clear();
+        self.contrails.clear();
         self.ropes.clear();
         self.timed.clear();
         self.pending.clear();
@@ -478,6 +508,7 @@ impl WeaponEffects {
             view.projectiles.len() <= bri_weapons::MAX_PROJECTILES,
             "Weapon effects view exceeds projectile limit"
         );
+        self.contrails.observe(&view.projectiles);
         let mut ids = BTreeSet::new();
         let mut desired = BTreeMap::new();
         for p in &view.projectiles {
