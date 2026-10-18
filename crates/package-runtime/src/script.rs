@@ -3437,6 +3437,20 @@ fn register_presentation(engine: &mut Engine) {
             knots: Some(knots.iter().map(path_knot).collect::<Fallible<_>>()?),
         }))
     });
+    // `view_shake(p, direction, min, max, rate)`, radians: the aim kicked
+    // out along `direction` to `max`, back to `min` ([`ops::ViewShake`]).
+    engine.register_fn(
+        "view_shake",
+        |player: Dynamic, direction: Dynamic, min: Dynamic, max: Dynamic, rate: Dynamic| {
+            push(Op::ViewShake(ops::ViewShake {
+                player: id(&player)?,
+                direction: float(&direction)?,
+                min: float(&min)?,
+                max: float(&max)?,
+                rate: float(&rate)?,
+            }))
+        },
+    );
     engine.register_fn("follow_path", |player: Dynamic, _: ()| {
         push(Op::FollowPath(ops::FollowPath {
             player: id(&player)?,

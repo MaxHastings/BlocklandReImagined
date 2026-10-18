@@ -727,3 +727,29 @@ impl ScriptOp for OrbitCamera {
         orbit.is_none_or(|o| o.valid() && (o.target != *player || *body == OrbitBody::Frozen))
     }
 }
+
+/// Kick a player's real view (`HumanController.ClientStartViewShake`): the
+/// look turns out along `direction` (radians in the view plane, 0 up and
+/// pi/2 across) up to `max`, bounces back at half the speed and settles
+/// where it has come back to `min`, so a hit leaves the aim a little off.
+/// `rate` is radians a second. Radians throughout; the client runs it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ViewShake {
+    pub player: u64,
+    pub direction: f32,
+    pub min: f32,
+    pub max: f32,
+    pub rate: f32,
+}
+impl ScriptOp for ViewShake {
+    const CAPABILITY: &str = "player";
+    const NAME: &str = "view_shake";
+    fn bounded(&self) -> bool {
+        let ViewShake { direction, min, max, rate, .. } = self;
+        [direction, min, max, rate].iter().all(|v| v.is_finite())
+            && direction.abs() <= 100.0
+            && (-1.0..=1.0).contains(min)
+            && (0.0..=1.0).contains(max)
+            && (0.01..=100.0).contains(&rate.abs())
+    }
+}

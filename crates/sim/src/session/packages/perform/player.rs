@@ -603,6 +603,16 @@ impl Perform for ops::FollowPath {
         )
     }
 }
+impl Perform for ops::ViewShake {
+    fn perform(self, session: &mut Session, cx: OpCall<'_>) -> Result<()> {
+        let OpCall { package, .. } = cx;
+        let ops::ViewShake { player, direction, min, max, rate } = self;
+        session.take_cue(package)?;
+        ensure!(session.peers.contains_key(&player), "No such player");
+        session.notify(player, Notice::ViewShake { direction, min, max, rate });
+        Ok(())
+    }
+}
 impl Perform for ops::Camera {
     fn perform(self, session: &mut Session, _cx: OpCall<'_>) -> Result<()> {
         let ops::Camera { player, camera } = self;
