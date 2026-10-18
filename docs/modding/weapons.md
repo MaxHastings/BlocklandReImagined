@@ -743,3 +743,50 @@ person always retains that ordinary mount path. Base images without an explicit
 origin retain stock forced arm following; explicit origins keep their authored
 `follow_arm` choice. Native image and authored
 presentation selectors must agree; unknown selector values are rejected.
+
+
+## An independent local held-image view
+
+An image can opt into `first_person_view`:
+
+```json
+"first_person_view": {
+  "horizontal_fov": 62,
+  "near": 0.03,
+  "far": 400,
+  "scale": 0.7,
+  "eye_offset_reference_fov": 100
+}
+```
+
+These are invented example values. Author the projection and camera-relative
+native-unit conversion from your own reference. Horizontal FOV is in degrees;
+`near` and `far` must be positive and ordered. `scale` defaults to 1. Values
+must also produce a finite, invertible projection and a nondegenerate native
+transform. Omission of the entire block keeps the existing view and serialization.
+
+The local held image uses the current stock eye/rotation and this independent
+projection, after the world, with fresh depth. Its model and posed attachment
+nodes receive the uniform visual scale; its eye translation does not. Optional
+`eye_offset_reference_fov` multiplies eye translation by that reference divided
+by the same frame's resolved stock horizontal FOV. Leaving it out keeps the
+existing eye translation. It does not change third-person scale or placement.
+
+Current custom Add-On camera shots suppress these opted local layers. Composing
+an independent held-image view with arbitrary custom camera callbacks requires
+separate qualification. World-space effects, diagnostic geometry and other
+world-depth consumers finish first; the screen vignette remains above local
+images and the HUD follows. MSAA resolves after the final local layer.
+
+The image's skin and explicitly attached local weapon sprites use its local
+view. Their immutable owner/slot/image/policy affinity survives particle/source
+expiry and holstering. A particle without an eligible exact current image stays
+hidden while its original lifetime drains; it is never redirected into another
+weapon's projection or into the world. At most the existing image-slot count
+allocates current views. A same-image policy mismatch is diagnosed. Shared
+sprite and skin budgets still apply across world and local layers. Point lights
+remain in the world once; particle size/light radius do not inherit mesh scale.
+
+This rendering policy does not recover source pose, ADS state selection,
+lighting or interpolation laws. Those still need an ordinary integrated consumer
+and original-reference comparison.

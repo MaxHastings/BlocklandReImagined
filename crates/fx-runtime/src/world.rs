@@ -94,8 +94,20 @@ impl SourceTransform {
         }
     }
 }
+/// Immutable local-image rendering affinity. This is not an authority identity
+/// or a lifetime: current-view eligibility is supplied by the host at render.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub struct LocalViewAffinity {
+    pub owner: u64,
+    pub slot: u8,
+    pub image: String,
+    pub policy: [u32; 5],
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct SourceOptions {
+    /// Copied into emitted particles; never inferred from currently alive emitters.
+    pub local_view: Option<Arc<LocalViewAffinity>>,
     /// Carry emitted particles with subsequent attachment-frame motion.
     pub follow_source: bool,
     /// Cosmetic emission clock multiplier. Attached projectile/player sources use 1.
@@ -131,6 +143,7 @@ pub struct SourceOptions {
 impl Default for SourceOptions {
     fn default() -> Self {
         Self {
+            local_view: None,
             follow_source: false,
             time_scale: 1.,
             half_extents: Vec3::ZERO,
@@ -335,6 +348,7 @@ struct Source {
     emission: u64,
 }
 struct Particle {
+    local_view: Option<Arc<LocalViewAffinity>>,
     serial: u64,
     impacts: u32,
     last_sound_age: Option<f32>,
@@ -661,6 +675,10 @@ impl EffectsWorld {
             .sources
             .get_mut(&handle)
             .context("Stale effect handle")?;
+        ensure!(
+            source.options.local_view == options.local_view,
+            "A source's local view affinity is immutable"
+        );
         if source.options != options {
             source.options = options;
             self.options_changed = true;
@@ -1303,6 +1321,7 @@ impl EffectsWorld {
                 .or(s.options.paint.filter(|_| e.use_emitter_colors)),
             visible: s.options.visible,
             hidden_from_own_eye: s.options.hidden_from_own_eye,
+            local_view: s.options.local_view.clone(),
         };
         Self::integrate_with(
             &self.pack,
@@ -1491,7 +1510,7 @@ impl EffectsWorld {
     }
     /// This frame's particles, farthest from the camera first, and lights.
     pub fn snapshot(&self, camera: &Camera) -> FrameEffects {
-        self.snapshot_culled(camera, None, true)
+        self.snapshot_culled(camera, None, true, None)
     }
     /// [`EffectsWorld::snapshot`] without the sprites wholly outside the
     /// camera's view, which would draw nothing: what a renderer needs.
@@ -1606,19 +1625,62 @@ impl EffectsWorld {
     /// What the player's own eye sees: without what its first-person owner
     /// hides (`SourceOptions::hidden_from_own_eye`, third-person flares).
     pub fn snapshot_in_view(&self, camera: &Camera) -> FrameEffects {
-        self.snapshot_culled(camera, Some(Frustum::new(camera.view_projection)), true)
+        self.snapshot_culled(
+            camera,
+            Some(Frustum::new(camera.view_projection)),
+            true,
+            None,
+        )
     }
     /// [`Self::snapshot_in_view`] for another view of the world (a mirror,
     /// a portal, the environment probe), which sees the player from
     /// outside: their own jets and third-person flares included.
     pub fn snapshot_in_other_view(&self, camera: &Camera) -> FrameEffects {
-        self.snapshot_culled(camera, Some(Frustum::new(camera.view_projection)), false)
+        self.snapshot_culled(
+            camera,
+            Some(Frustum::new(camera.view_projection)),
+            false,
+            None,
+        )
+    }
+    /// Sprites belonging to this exact retained policy/owner/image only. The
+    /// host admits current bindings; absent ones remain hidden, never world.
+    /// Point lights stay in the ordinary world snapshot; only flares project.
+    pub fn has_mismatched_local_policy(&self, eligible: &[Arc<LocalViewAffinity>]) -> bool {
+        let mismatch = |view: &LocalViewAffinity| {
+            eligible.iter().any(|e| {
+                e.owner == view.owner
+                    && e.slot == view.slot
+                    && e.image == view.image
+                    && e.policy != view.policy
+            })
+        };
+        self.particles
+            .iter()
+            .any(|p| p.local_view.as_deref().is_some_and(mismatch))
+            || self
+                .sources
+                .values()
+                .any(|s| s.options.local_view.as_deref().is_some_and(mismatch))
+    }
+    pub fn snapshot_in_local_view(
+        &self,
+        camera: &Camera,
+        view: &LocalViewAffinity,
+    ) -> FrameEffects {
+        self.snapshot_culled(
+            camera,
+            Some(Frustum::new(camera.view_projection)),
+            true,
+            Some(view),
+        )
     }
     fn snapshot_culled(
         &self,
         camera: &Camera,
         frustum: Option<Frustum>,
         own_eye: bool,
+        local_view: Option<&LocalViewAffinity>,
     ) -> FrameEffects {
         let sees = |center, size| frustum.as_ref().is_none_or(|f| f.sees(center, size));
         // Each sprite's squared distance, computed once for the sort. A
@@ -1628,6 +1690,7 @@ impl EffectsWorld {
         let sample = |particles: &[Particle]| -> Vec<(f32, ParticleInstance)> {
             particles
                 .iter()
+                .filter(|p| p.local_view.as_deref() == local_view)
                 .filter_map(|p| self.particle_instance(p, camera, own_eye, &sees))
                 .collect()
         };
@@ -1656,13 +1719,16 @@ impl EffectsWorld {
             if color.max_element() <= 0. {
                 continue;
             }
-            if radius > 0. {
+            if radius > 0. && local_view.is_none() {
                 lights.push(LightSnapshot {
                     handle: *handle,
                     position: s.transform.position,
                     color,
                     radius,
                 });
+            }
+            if s.options.local_view.as_deref() != local_view {
+                continue;
             }
             if let (Some(f), Some(texture)) = (&def.flare, self.flare_texture[s.definition]) {
                 let own = (f.third_person && s.options.first_person_owner)

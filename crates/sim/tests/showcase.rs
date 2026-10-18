@@ -1832,6 +1832,7 @@ fn add_launcher(
         crosshair: true,
         follow_arm: false,
         first_person_origin: None,
+        first_person_view: None,
         paint_tint: false,
         left_image: None,
         magazine: None,

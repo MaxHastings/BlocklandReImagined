@@ -80,6 +80,7 @@ fn rocket_pack() -> bri_weapons::Pack {
         crosshair: true,
         follow_arm: false,
         first_person_origin: None,
+        first_person_view: None,
         hide_nodes: Vec::new(),
         aim_assist: None,
         both_arms: false,

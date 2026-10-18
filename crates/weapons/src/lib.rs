@@ -764,6 +764,68 @@ pub enum FirstPersonOrigin {
     Eye,
     Mount,
 }
+/// Opt-in local held-image camera. FOV is horizontal in degrees; near/far
+/// use the authored camera-relative native units. A fresh depth layer is drawn
+/// after the world. Scale changes local model/nodes, never eye translation.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FirstPersonView {
+    pub horizontal_fov: f32,
+    pub near: f32,
+    pub far: f32,
+    #[serde(default = "one")]
+    pub scale: f32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub eye_offset_reference_fov: Option<f32>,
+}
+impl FirstPersonView {
+    pub fn validate(&self) -> Result<()> {
+        let fov = |f: f32| {
+            let tangent = (f.to_radians() * 0.5).tan();
+            f.is_finite()
+                && f > 0.
+                && f < 180.
+                && tangent.is_normal()
+                && tangent.recip().is_normal()
+        };
+        ensure!(
+            fov(self.horizontal_fov)
+                && self.near.is_finite()
+                && self.near > 0.
+                && self.far.is_finite()
+                && self.far > self.near
+                && self.scale.is_finite()
+                && self.scale > 0.
+                && self.eye_offset_reference_fov.is_none_or(fov),
+            "Invalid first-person view: finite FOV in (0,180), 0 < near < far, positive scale"
+        );
+        let determinant = self.scale * self.scale * self.scale;
+        let projection = glam::camera::rh::proj::directx::perspective(
+            self.horizontal_fov.to_radians(),
+            1.,
+            self.far,
+            self.near,
+        );
+        ensure!(
+            determinant.is_finite()
+                && determinant > 1e-8
+                && projection.is_finite()
+                && projection.inverse().is_finite(),
+            "First-person view exceeds native transform/projection precision"
+        );
+        Ok(())
+    }
+    /// Exact immutable policy identity; zero means no eye-offset compensation.
+    pub fn key(self) -> [u32; 5] {
+        [
+            self.horizontal_fov.to_bits(),
+            self.near.to_bits(),
+            self.far.to_bits(),
+            self.scale.to_bits(),
+            self.eye_offset_reference_fov.unwrap_or(0.).to_bits(),
+        ]
+    }
+}
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Image {
@@ -776,6 +838,8 @@ pub struct Image {
     pub eye_offset: [f32; 3],
     #[serde(skip_serializing_if = "Option::is_none")]
     pub first_person_origin: Option<FirstPersonOrigin>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub first_person_view: Option<FirstPersonView>,
     /// Logical attachment name to authored node for the local first-person model.
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub first_person_nodes: BTreeMap<String, String>,
@@ -3483,6 +3547,9 @@ impl Pack {
                     }),
                 "Invalid image hide_nodes {id}: up to 16 body node names"
             );
+            if let Some(view) = image.first_person_view {
+                view.validate().with_context(|| format!("Image {id}"))?;
+            }
             if let Some(zoom) = &image.zoom {
                 zoom.validate()
                     .map_err(|e| anyhow::anyhow!("Invalid image zoom {id}: {e}"))?;

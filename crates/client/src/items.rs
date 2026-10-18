@@ -1735,6 +1735,33 @@ fn present_gaps(
 /// eye fields. Eye placement is `eye x eyeOffset`, optionally carrying the arm
 /// action with `follow_arm`. Mount and third-person placement use
 /// `mount x offset x rotation x correction`.
+pub(crate) fn local_image_view_transform(
+    base: Mat4,
+    eye: Mat4,
+    eye_offset: Vec3,
+    policy: bri_weapons::FirstPersonView,
+    resolved_horizontal_fov: Option<f32>,
+) -> Result<Mat4> {
+    policy.validate()?;
+    let factor = match policy.eye_offset_reference_fov {
+        Some(reference) => {
+            let current = resolved_horizontal_fov
+                .filter(|f| f.is_finite() && *f > 0. && *f < 180.)
+                .context("First-person eye offset needs the current resolved horizontal FOV")?;
+            reference / current
+        }
+        None => 1.,
+    };
+    let delta = eye.transform_vector3(eye_offset * (factor - 1.));
+    let transformed =
+        Mat4::from_translation(delta) * base * Mat4::from_scale(Vec3::splat(policy.scale));
+    ensure!(
+        transformed.is_finite(),
+        "Invalid first-person view transform"
+    );
+    Ok(transformed)
+}
+
 pub(crate) fn place_image(
     image: &ImagePresentation,
     first_person: bool,
@@ -3821,6 +3848,48 @@ mod texture_rule_tests {
         // One it does not sample leaves it a plain texture.
         let unsampled = scene(&image(|x, y| if (x, y) == (3, 5) { 0 } else { 255 }))?;
         assert_eq!(unsampled.kind, MaterialKind::VertexLit);
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod local_view_tests {
+    use super::*;
+    #[test]
+    fn local_scale_changes_nodes_without_scaling_eye_offset_and_uses_current_fov() -> Result<()> {
+        let eye = Mat4::from_rotation_translation(
+            glam::Quat::from_rotation_y(0.4),
+            Vec3::new(3., 2., 1.),
+        );
+        let offset = Vec3::new(0.2, -0.4, -0.8);
+        let base = eye * Mat4::from_translation(offset);
+        let policy = bri_weapons::FirstPersonView {
+            horizontal_fov: 62.,
+            near: 0.03,
+            far: 400.,
+            scale: 0.5,
+            eye_offset_reference_fov: Some(100.),
+        };
+        assert!(local_image_view_transform(base, eye, offset, policy, None).is_err());
+        let transformed = local_image_view_transform(base, eye, offset, policy, Some(50.))?;
+        assert!(
+            transformed
+                .transform_point3(Vec3::ZERO)
+                .distance(eye.transform_point3(offset * 2.))
+                < 1e-5
+        );
+        let node = Vec3::new(1., 0.1, -0.3);
+        assert!(
+            transformed
+                .transform_point3(node)
+                .distance(eye.transform_point3(offset * 2. + node * 0.5))
+                < 1e-5
+        );
+        assert_eq!(
+            base,
+            eye * Mat4::from_translation(offset),
+            "shared TP base remains unchanged"
+        );
         Ok(())
     }
 }

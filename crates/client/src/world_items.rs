@@ -112,6 +112,7 @@ struct ModelKey {
     first_person: bool,
     /// Drawn only in mirrors (`ItemIdentity::Reflected`).
     reflected: bool,
+    local_view: Option<(u64, u8)>,
 }
 impl ModelKey {
     fn new(model: &str, tint: [f32; 4]) -> Self {
@@ -120,6 +121,7 @@ impl ModelKey {
             tint: tint.map(f32::to_bits),
             first_person: false,
             reflected: false,
+            local_view: None,
         }
     }
     fn tint(&self) -> [f32; 4] {
@@ -261,6 +263,7 @@ pub struct WorldItems {
     /// poses stay for muzzle effects.
     hide_own_first_person: bool,
     scoped: bool,
+    first_person_fov: Option<f32>,
     /// Each projectile's last flight direction. A stuck arrow's velocity is
     /// zero, but it keeps pointing the way it flew into the wall, as v20's
     /// projectile keeps its last render transform.
@@ -322,6 +325,7 @@ impl WorldItems {
             palette: Vec::new(),
             hide_own_first_person: false,
             scoped: false,
+            first_person_fov: None,
             headings: BTreeMap::new(),
             prepares: 0,
             diagnostics: Default::default(),
@@ -334,6 +338,7 @@ impl WorldItems {
         self.headings.clear();
         self.skinned.clear();
         self.last_seconds = None;
+        self.first_person_fov = None;
         self.diagnostics = Default::default();
     }
     /// CPU models/animation clocks survive device recreation.
@@ -369,6 +374,11 @@ impl WorldItems {
     }
     /// Looking through a scope (`Zoom::overlay`): the player's own
     /// first-person weapon is not drawn behind its picture.
+    /// The same drawn stock-eye FOV used by this frame's camera. A custom
+    /// camera suppresses opted local layers at render instead of reposing them.
+    pub fn set_first_person_fov(&mut self, fov: f32) {
+        self.first_person_fov = (fov.is_finite() && fov > 0. && fov < 180.).then_some(fov);
+    }
     pub fn set_scoped(&mut self, on: bool) {
         self.scoped = on;
     }
@@ -661,6 +671,34 @@ impl WorldItems {
                     continue;
                 }
             };
+            let policy = local_first
+                .then(|| {
+                    self.weapons
+                        .images
+                        .get(image_id)
+                        .and_then(|i| i.first_person_view)
+                })
+                .flatten();
+            let transform = if let Some(policy) = policy {
+                let at_eye = match image.first_person_origin {
+                    Some(bri_weapons::FirstPersonOrigin::Eye) => true,
+                    Some(bri_weapons::FirstPersonOrigin::Mount) => false,
+                    None => image.eye_offset != [0.; 3] || image.eye_rotation_degrees != [0.; 3],
+                };
+                crate::items::local_image_view_transform(
+                    transform,
+                    pose.eye,
+                    if at_eye {
+                        Vec3::from(image.eye_offset)
+                    } else {
+                        Vec3::ZERO
+                    },
+                    policy,
+                    self.first_person_fov,
+                )?
+            } else {
+                transform
+            };
             self.mounted.insert(
                 (owner, hand),
                 MountedPose {
@@ -727,6 +765,7 @@ impl WorldItems {
                 identity: ItemIdentity::Mounted(owner, hand),
                 model: ModelKey {
                     first_person: local_first,
+                    local_view: policy.map(|_| (owner, hand)),
                     ..ModelKey::new(&image.model, image.tint)
                 },
                 pose: drawn_pose,
@@ -1281,10 +1320,80 @@ impl WorldItems {
     }
     /// What the player's view draws.
     pub fn draws(&self) -> Vec<(&GpuScene, &GpuInstances)> {
-        self.draws_where(|key| !key.reflected)
+        self.draws_where(|key| !key.reflected && key.local_view.is_none())
     }
     /// What mirrors show and what casts shadows: the local player's
     /// images as others see them, not as first person holds them.
+    pub fn is_local_view_copy(&self, copy: &SkinnedCopy) -> bool {
+        copy.first_person
+            && !copy.reflected
+            && self
+                .weapons
+                .images
+                .get(&copy.image)
+                .is_some_and(|image| image.first_person_view.is_some())
+    }
+    pub fn local_view_draws(&self, owner: u64, hand: u8) -> Vec<(&GpuScene, &GpuInstances)> {
+        self.draws_where(|key| key.local_view == Some((owner, hand)))
+    }
+    /// Only currently eligible exact mounted images allocate local render views.
+    pub fn local_views(
+        &self,
+        owner: u64,
+    ) -> Vec<(
+        std::sync::Arc<bri_fx_runtime::LocalViewAffinity>,
+        bri_weapons::FirstPersonView,
+    )> {
+        if self.scoped || self.hide_own_first_person {
+            return Vec::new();
+        }
+        self.mounted
+            .iter()
+            .filter_map(|(&(actor, hand), m)| {
+                if actor != owner || !m.first_person {
+                    return None;
+                }
+                let policy = self.weapons.images.get(&m.image)?.first_person_view?;
+                Some((
+                    std::sync::Arc::new(bri_fx_runtime::LocalViewAffinity {
+                        owner: actor,
+                        slot: hand,
+                        image: m.image.clone(),
+                        policy: policy.key(),
+                    }),
+                    policy,
+                ))
+            })
+            .take(bri_weapons::IMAGE_SLOTS)
+            .collect()
+    }
+    /// Admission-time classification persists through particle lifetime, even
+    /// while its current view is suppressed or no longer mounted.
+    pub fn local_effect_affinity(
+        &self,
+        cue: &Cue,
+    ) -> Option<std::sync::Arc<bri_fx_runtime::LocalViewAffinity>> {
+        let CueKind::WeaponEffect {
+            source: bri_weapons::TargetId::Actor(actor),
+            image: Some(image),
+            hand: Some(hand),
+            ..
+        } = &cue.kind
+        else {
+            return None;
+        };
+        let mounted = self
+            .mounted
+            .get(&(actor.0, *hand))
+            .filter(|m| m.first_person && &m.image == image)?;
+        let policy = self.weapons.images.get(&mounted.image)?.first_person_view?;
+        Some(std::sync::Arc::new(bri_fx_runtime::LocalViewAffinity {
+            owner: actor.0,
+            slot: *hand,
+            image: image.clone(),
+            policy: policy.key(),
+        }))
+    }
     pub fn reflection_draws(&self) -> Vec<(&GpuScene, &GpuInstances)> {
         self.draws_where(|key| !key.first_person)
     }

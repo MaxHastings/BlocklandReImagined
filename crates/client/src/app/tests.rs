@@ -2652,6 +2652,7 @@ fn weapon_frame_probe_drops_owned_buffers_on_toggle_session_reset_and_disconnect
         },
         attachments: Vec::new(),
         mounted_images: Vec::new(),
+        local_views: Vec::new(),
         weapon_frame: Default::default(),
         combined_particles: 0,
         combined_lights: 0,

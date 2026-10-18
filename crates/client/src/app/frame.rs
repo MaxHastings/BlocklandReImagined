@@ -1437,6 +1437,8 @@ impl App {
             self.fx.effects.world.set_passages(&passages);
             self.fx.actor_effects.set_passages(&passages);
             self.fx.brick_debris.set_passages(&passages);
+            // drawn_controls is cloned from these controls after presentation.
+            self.world_items.set_first_person_fov(self.controls.fov());
             let items = self.world_items.sync(
                 weapons,
                 crate::world_items::WorldItemFrame {

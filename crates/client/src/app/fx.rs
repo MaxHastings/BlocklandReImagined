@@ -535,7 +535,11 @@ impl App {
                     .effect_cue(weapon_cues.pop_front().unwrap().0, weapon_effects.weapons()),
             );
         }
-        weapon_effects.cues(&ready, |cue| world_items.effect_pose(cue))?;
+        weapon_effects.cues_with_local_view(
+            &ready,
+            |cue| world_items.effect_pose(cue),
+            |cue| world_items.local_effect_affinity(cue),
+        )?;
         // queue_weapon_cue already transfers these same reliable IDs into App's
         // bounded avatar queue (including its own observable overflow policy).
         // Do not retain a second copy indefinitely in the effects adapter.

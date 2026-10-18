@@ -104,6 +104,19 @@ pub struct TimedAttachmentObservation {
     pub previous: SourceTransform,
 }
 
+/// One current eligible local image projection and its prepared sprite partition.
+#[derive(Clone)]
+pub struct LocalViewObservation {
+    pub affinity: Arc<bri_fx_runtime::LocalViewAffinity>,
+    pub policy: bri_weapons::FirstPersonView,
+    pub viewport: [u32; 2],
+    pub world_horizontal_fov: f32,
+    pub camera: bri_fx_runtime::Camera,
+    /// Actual affinity-partitioned, budgeted sprites prepared for this view.
+    pub weapon_frame: bri_fx_runtime::FrameEffects,
+    pub prebudget_particles: usize,
+    pub cut_sprites: usize,
+}
 /// One successful render preparation's weapon inputs, before the shared budget.
 /// This is not proof of queue submission, pixels, or source-game fidelity. A
 /// consumer must qualify the combined cuts and capture the same GPU frame.
@@ -116,6 +129,7 @@ pub struct WeaponFrameObservation {
     pub camera: bri_fx_runtime::Camera,
     pub attachments: Vec<TimedAttachmentObservation>,
     pub mounted_images: Vec<crate::world_items::MountedImageObservation>,
+    pub local_views: Vec<LocalViewObservation>,
     pub weapon_frame: bri_fx_runtime::FrameEffects,
     pub combined_particles: usize,
     pub combined_lights: usize,
@@ -341,6 +355,16 @@ impl WeaponEffects {
     }
     /// Iterate only currently retained timed attachments. No history, cursor
     /// consumption, or pose evaluation; cloning happens only on iteration.
+    pub fn check_local_views(&mut self, eligible: &[Arc<bri_fx_runtime::LocalViewAffinity>]) {
+        if self.world.has_mismatched_local_policy(eligible)
+            && self.diagnostics.messages.len() < MAX_MESSAGES
+        {
+            self.diagnostics.messages.insert(
+                "Local effect policy no longer matches current mounted image; hidden until expiry"
+                    .into(),
+            );
+        }
+    }
     pub fn timed_attachments(&self) -> impl Iterator<Item = TimedAttachmentObservation> + '_ {
         self.timed.iter().map(|t| TimedAttachmentObservation {
             cue: t.cue.clone(),
@@ -766,7 +790,15 @@ impl WeaponEffects {
     pub fn cues(
         &mut self,
         cues: &[Cue],
+        pose: impl FnMut(&Cue) -> Option<SourceTransform>,
+    ) -> Result<()> {
+        self.cues_with_local_view(cues, pose, |_| None)
+    }
+    pub fn cues_with_local_view(
+        &mut self,
+        cues: &[Cue],
         mut pose: impl FnMut(&Cue) -> Option<SourceTransform>,
+        mut local_view: impl FnMut(&Cue) -> Option<Arc<bri_fx_runtime::LocalViewAffinity>>,
     ) -> Result<()> {
         ensure!(cues.len() <= MAX_CUES, "Weapon effects cue batch too large");
         for cue in cues {
@@ -804,10 +836,11 @@ impl WeaponEffects {
                 ..
             } = &cue.kind
             {
-                let Some((binding, options)) = self.resolve(definition) else {
+                let Some((binding, mut options)) = self.resolve(definition) else {
                     prepared.insert(cue.id, Prepared::MissingBinding);
                     continue;
                 };
+                options.local_view = local_view(cue);
                 let attached = image.is_some() || !node.is_empty() || *seconds > 0.;
                 let transform = if attached {
                     pose(cue)

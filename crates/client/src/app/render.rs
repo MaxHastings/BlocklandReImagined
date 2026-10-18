@@ -1019,6 +1019,65 @@ impl App {
             },
         );
         let eyes = crate::views::eyes(eye, &other_views);
+        // Slots are disjoint from every mirror and the six probe faces.
+        let local_bindings = if !stock_third_person && shot.is_none() {
+            self.world_items.local_views(view.owner)
+        } else {
+            Vec::new()
+        };
+        let mut local_views = Vec::with_capacity(local_bindings.len());
+        for (affinity, policy) in local_bindings {
+            let vertical = 2. * ((policy.horizontal_fov.to_radians() * 0.5).tan() / aspect).atan();
+            let mut local_camera = camera;
+            local_camera.view_projection = Camera::oriented(
+                eye.to_array(),
+                forward.to_array(),
+                up.to_array(),
+                aspect,
+                vertical,
+                policy.near,
+                policy.far,
+            )
+            .view_projection;
+            let effects_camera = bri_fx_runtime::Camera {
+                view_projection: glam::Mat4::from_cols_array(&local_camera.view_projection),
+                position: eye,
+                right,
+                up,
+            };
+            ensure!(
+                effects_camera.view_projection.is_finite(),
+                "Invalid local image projection"
+            );
+            let effects = self
+                .fx
+                .weapon_effects
+                .world()
+                .snapshot_in_local_view(&effects_camera, &affinity);
+            let prebudget_particles = effects.particles.len();
+            local_views.push(LocalImagePass {
+                affinity,
+                policy,
+                camera: local_camera,
+                effects_camera,
+                effects,
+                prebudget_particles,
+                cut_sprites: 0,
+            });
+        }
+        self.fx.weapon_effects.check_local_views(
+            &local_views
+                .iter()
+                .map(|v| v.affinity.clone())
+                .collect::<Vec<_>>(),
+        );
+        if !local_views.is_empty() {
+            renderer.set_view_count(frame.device, LOCAL_IMAGE_FIRST_VIEW + local_views.len());
+            for (index, local) in local_views.iter().enumerate() {
+                renderer.update_view(frame.queue, LOCAL_IMAGE_FIRST_VIEW + index, &local.camera);
+            }
+        }
+
         let rgb = |v: [f32; 4]| [v[0], v[1], v[2]];
         self.addons.item_skins.prepare(
             frame.device,
@@ -1066,6 +1125,7 @@ impl App {
                     camera: effects_camera,
                     attachments: self.fx.weapon_effects.timed_attachments().collect(),
                     mounted_images: self.world_items.mounted_image_observations().collect(),
+                    local_views: Vec::new(),
                     weapon_frame: weapon_frame.clone(),
                     combined_particles: 0,
                     combined_lights: 0,
@@ -1083,12 +1143,26 @@ impl App {
             .as_ref()
             .context("Effects GPU not initialized")?
             .max_instances();
-        let (effects_frame, cuts) = combine_effect_frames(
+        let (mut effects_frame, mut cuts) = combine_effect_frames(
             world_frame,
             [weapon_frame, actor_frame],
             &eyes,
-            sprite_budget,
+            if local_views.is_empty() {
+                sprite_budget
+            } else {
+                usize::MAX
+            },
         );
+        if !local_views.is_empty() {
+            let mut partitions: Vec<_> = std::iter::once(&mut effects_frame)
+                .chain(local_views.iter_mut().map(|v| &mut v.effects))
+                .collect();
+            let removed = trim_effect_partitions(&mut partitions, eye, sprite_budget);
+            cuts.sprites += removed.iter().sum::<usize>();
+            for (local, cut) in local_views.iter_mut().zip(removed.into_iter().skip(1)) {
+                local.cut_sprites = cut;
+            }
+        }
         let (fog_start, fog_end) = if camera.atmosphere[3] > 0. {
             (camera.atmosphere[0], camera.atmosphere[1])
         } else {
@@ -1210,8 +1284,55 @@ impl App {
                 .collect::<Vec<_>>(),
         )?;
         effects_renderer.prepare(frame.queue, &effects_camera, &effects_frame)?;
+        for (index, local) in local_views.iter().enumerate() {
+            effects_renderer.prepare_view(
+                frame.device,
+                frame.queue,
+                LOCAL_IMAGE_FIRST_VIEW + index,
+                &local.effects_camera,
+                &local.effects,
+            )?;
+            self.addons.item_skins.prepare_local_view(
+                frame.device,
+                frame.queue,
+                frame.format,
+                bri_render::scene::DEPTH_FORMAT,
+                renderer.samples(),
+                &mut self.world_items,
+                self.addons.client_code.trusts_server(),
+                crate::item_skins::Light {
+                    sun_direction: rgb(camera.sun_direction),
+                    sun_color: rgb(camera.sun_color),
+                    ambient: rgb(camera.ambient),
+                },
+                index,
+                &local.affinity,
+                local.effects_camera.view_projection,
+                eye,
+                [frame.size.0, frame.size.1],
+                self.avatar.animation_time as f32,
+                local.policy.horizontal_fov,
+            );
+        }
         if let Some(o) = &mut weapon_observation {
-            o.combined_particles = effects_frame.particles.len();
+            o.combined_particles = effects_frame.particles.len()
+                + local_views
+                    .iter()
+                    .map(|v| v.effects.particles.len())
+                    .sum::<usize>();
+            o.local_views = local_views
+                .iter()
+                .map(|v| crate::weapon_effects::LocalViewObservation {
+                    affinity: v.affinity.clone(),
+                    policy: v.policy,
+                    viewport: [frame.size.0, frame.size.1],
+                    world_horizontal_fov: shown_fov,
+                    camera: v.effects_camera,
+                    weapon_frame: v.effects.clone(),
+                    prebudget_particles: v.prebudget_particles,
+                    cut_sprites: v.cut_sprites,
+                })
+                .collect();
             o.combined_lights = effects_frame.lights.len();
             o.cut_sprites = cuts.sprites;
             o.cut_lights = cuts.lights;
@@ -1444,7 +1565,7 @@ impl App {
             };
             (bodies, models, blockers, blocking, map, terrain_map)
         };
-        let shadows = |encoder: &mut wgpu::CommandEncoder, view: usize| {
+        let sky_exposure = |encoder: &mut wgpu::CommandEncoder, view: usize| {
             let sky_scenes: Vec<_> = self
                 .gpu
                 .gpu_scene
@@ -1466,6 +1587,9 @@ impl App {
                     instances: &sky_moving,
                 },
             );
+        };
+        let shadows = |encoder: &mut wgpu::CommandEncoder, view: usize| {
+            sky_exposure(encoder, view);
             renderer.render_view_shadows(
                 encoder,
                 view,
@@ -1484,6 +1608,11 @@ impl App {
             );
         };
         let _recording = crate::frame_trace::span("record passes");
+        // Prepare environmental occlusion from the world, never from only the
+        // rifle supplied to the later model-only pass. Sun shadow inputs stay main.
+        for index in 0..local_views.len() {
+            sky_exposure(frame.encoder, LOCAL_IMAGE_FIRST_VIEW + index);
+        }
         renderer.begin_timing(frame.encoder);
         // Live mirror and window planes record the player's shadows
         // themselves, after those with their own.
@@ -1635,10 +1764,12 @@ impl App {
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: world_target,
                     depth_slice: None,
-                    resolve_target: multisampled.as_ref().map(|_| frame.target),
+                    resolve_target: (local_views.is_empty())
+                        .then(|| multisampled.as_ref().map(|_| frame.target))
+                        .flatten(),
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Load,
-                        store: if multisampled.is_some() {
+                        store: if multisampled.is_some() && local_views.is_empty() {
                             wgpu::StoreOp::Discard
                         } else {
                             wgpu::StoreOp::Store
@@ -1674,10 +1805,65 @@ impl App {
         if let Some(shapes) = &self.world_shapes {
             shapes.render(&mut pass);
         }
-        if let Some(vignette) = &self.gpu.vignette {
+        if local_views.is_empty()
+            && let Some(vignette) = &self.gpu.vignette
+        {
             vignette.render(&mut pass);
         }
         drop(pass);
+        for (index, local) in local_views.iter().enumerate() {
+            // Every world-depth consumer has finished. Load the existing color,
+            // clear only depth; no world/observer camera or geometry is replayed.
+            drop(
+                frame
+                    .encoder
+                    .begin_render_pass(&wgpu::RenderPassDescriptor {
+                        label: Some("local held image fresh depth"),
+                        color_attachments: &[],
+                        depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                            view: &depth,
+                            depth_ops: Some(wgpu::Operations {
+                                load: wgpu::LoadOp::Clear(bri_render::scene::DEPTH_CLEAR),
+                                store: wgpu::StoreOp::Store,
+                            }),
+                            stencil_ops: None,
+                        }),
+                        timestamp_writes: None,
+                        occlusion_query_set: None,
+                        multiview_mask: None,
+                    }),
+            );
+            let draws = self
+                .world_items
+                .local_view_draws(local.affinity.owner, local.affinity.slot);
+            let late = |pass: &mut wgpu::RenderPass<'_>| {
+                effects_renderer.render_view(pass, LOCAL_IMAGE_FIRST_VIEW + index);
+                self.addons.item_skins.render_local_view(pass, index);
+                // Screen tint remains above every image; HUD still follows render_scene.
+                if index + 1 == local_views.len()
+                    && let Some(vignette) = &self.gpu.vignette
+                {
+                    vignette.render(pass);
+                }
+            };
+            renderer.render_world(
+                frame.encoder,
+                bri_render::scene::WorldPass {
+                    view: LOCAL_IMAGE_FIRST_VIEW + index,
+                    color: world_target,
+                    resolve: (index + 1 == local_views.len())
+                        .then(|| multisampled.as_ref().map(|_| frame.target))
+                        .flatten(),
+                    depth: &depth,
+                    viewport: None,
+                    clear: None,
+                    after_opaque: None,
+                    after_all: Some(&late),
+                },
+                &[],
+                &draws,
+            );
+        }
         self.addons.item_skins.resolve(frame.encoder);
         self.addons.client_code.resolve(frame.encoder);
         renderer.end_timing(frame.encoder, "effects");
@@ -1951,5 +2137,89 @@ impl WholeUploads {
                 self.deferred
             ));
         }
+    }
+}
+
+const LOCAL_IMAGE_FIRST_VIEW: usize = bri_render::environment_probe::FIRST_VIEW + 6;
+struct LocalImagePass {
+    affinity: std::sync::Arc<bri_fx_runtime::LocalViewAffinity>,
+    policy: bri_weapons::FirstPersonView,
+    camera: Camera,
+    effects_camera: bri_fx_runtime::Camera,
+    effects: bri_fx_runtime::FrameEffects,
+    prebudget_particles: usize,
+    cut_sprites: usize,
+}
+/// Snapshots are far-first from the same eye. Remove globally farthest prefixes
+/// before preparing any view, retaining the existing single renderer budget.
+fn trim_effect_partitions(
+    frames: &mut [&mut bri_fx_runtime::FrameEffects],
+    eye: Vec3,
+    budget: usize,
+) -> Vec<usize> {
+    let mut heads = vec![0; frames.len()];
+    let excess = frames
+        .iter()
+        .map(|f| f.particles.len())
+        .sum::<usize>()
+        .saturating_sub(budget);
+    for _ in 0..excess {
+        let mut best: Option<(usize, f32)> = None;
+        for (index, frame) in frames.iter().enumerate() {
+            if let Some(p) = frame.particles.get(heads[index]) {
+                let distance = eye.distance_squared(p.position);
+                if best.is_none_or(|(_, previous)| distance.total_cmp(&previous).is_gt()) {
+                    best = Some((index, distance));
+                }
+            }
+        }
+        if let Some((index, _)) = best {
+            heads[index] += 1;
+        }
+    }
+    for (frame, &count) in frames.iter_mut().zip(&heads) {
+        frame.particles.drain(..count);
+    }
+    heads
+}
+
+#[cfg(test)]
+mod local_budget_tests {
+    use super::*;
+    #[test]
+    fn local_and_world_particles_share_one_budget_and_ties_are_stable() {
+        let particle = |z| bri_fx_runtime::ParticleInstance {
+            lit: false,
+            layout: Default::default(),
+            position: Vec3::new(0., 0., z),
+            size: 1.,
+            color: glam::Vec4::ONE,
+            spin: 0.,
+            axis: Vec3::ZERO,
+            plane_right: Vec3::ZERO,
+            texture: 0,
+            blend: bri_fx_runtime::BlendMode::Alpha,
+            depth_test: true,
+        };
+        let mut world = bri_fx_runtime::FrameEffects {
+            particles: vec![particle(9.), particle(3.)],
+            lights: vec![],
+        };
+        let mut first = bri_fx_runtime::FrameEffects {
+            particles: vec![particle(9.), particle(2.)],
+            lights: vec![],
+        };
+        let mut second = bri_fx_runtime::FrameEffects {
+            particles: vec![particle(8.), particle(1.)],
+            lights: vec![],
+        };
+        let cuts =
+            trim_effect_partitions(&mut [&mut world, &mut first, &mut second], Vec3::ZERO, 3);
+        assert_eq!(cuts, vec![1, 1, 1]);
+        assert_eq!(world.particles[0].position.z, 3.);
+        let cuts =
+            trim_effect_partitions(&mut [&mut world, &mut first, &mut second], Vec3::ZERO, 2);
+        assert_eq!(cuts, vec![1, 0, 0]);
+        assert_eq!(first.particles.len() + second.particles.len(), 2);
     }
 }
