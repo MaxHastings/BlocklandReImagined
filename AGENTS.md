@@ -90,6 +90,11 @@ Use explicit versioned content/save schemas, stable authored IDs, and independen
 physics/render identities. World state owns the game; adapters derive views.
 Do not implement structural fracture/collapse or a general TorqueScript VM.
 
+### Recreating source-game experiences
+Follow [Source-Faithful, Consumer-Driven Vertical Slice Development](docs/source-faithful-development.md)
+for AA, Halo and other source-game recreations. It names the working approach;
+it does not expand an assignment or restart a paused workstream.
+
 Bots know affordances, not content. Games expose objectives, not bot scripts.
 Discover success through authoritative rules/provider semantics, compose only
 grounded capabilities, execute ordinary controls, and replan from observed
