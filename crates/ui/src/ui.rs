@@ -468,6 +468,8 @@ pub struct Core {
     pub aim_wheel: bool,
     /// The scope picture drawn over the screen while aiming, if any.
     pub scope_overlay: Option<(u64, f32)>,
+    /// How that picture is laid out.
+    pub scope_fit: crate::api::ScopeFit,
     pub cursor_forced: bool,
     /// The chat input (newMessageHud) is open under the chat.
     pub chat_input_open: bool,
@@ -607,6 +609,7 @@ impl Core {
         self.wheel_camera = false;
         self.aim_wheel = false;
         self.scope_overlay = None;
+        self.scope_fit = Default::default();
         self.cursor_forced = false;
         self.print_aspect = None;
         self.last_print.clear();
@@ -1603,6 +1606,7 @@ impl Ui {
             wheel_camera: false,
             aim_wheel: false,
             scope_overlay: None,
+            scope_fit: Default::default(),
             cursor_forced: false,
             chat_input_open: false,
             print_aspect: None,
@@ -2091,6 +2095,7 @@ impl Ui {
             UiUpdate::ScopeOverlay(overlay) => {
                 c.scope_overlay = overlay.filter(|(_, aspect)| aspect.is_finite() && *aspect > 0.0)
             }
+            UiUpdate::ScopeFit(fit) => c.scope_fit = fit,
             UiUpdate::Whiteout(amount) => {
                 if amount.is_finite() {
                     c.whiteout = c.whiteout.max(amount.clamped(0.0, 1.0));

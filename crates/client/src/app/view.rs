@@ -15,6 +15,8 @@ pub(super) struct ViewState {
     pub(super) aim_wheel: bool,
     /// The scope overlay shown (`ItemUi::scope_overlay`).
     pub(super) scope_overlay: Option<(u64, f32)>,
+    /// How that picture is laid out (`Zoom::overlay_fit`).
+    pub(super) scope_fit: bri_ui::api::ScopeFit,
     /// Where the admin, spy or death camera was last drawn from, reported
     /// to the server as the camera's transform.
     pub(super) observer_eye: Option<Vec3>,
@@ -716,6 +718,18 @@ impl App {
         let overlay = image
             .filter(|_| self.controls.scope_overlay().is_some())
             .and_then(|i| self.item_ui.scope_overlay(&i.id));
+        let fit = match image
+            .and_then(|i| i.zoom.as_ref())
+            .map_or(Default::default(), |z| z.overlay_fit)
+        {
+            bri_weapons::OverlayFit::HeightBlack => bri_ui::api::ScopeFit::HeightBlack,
+            bri_weapons::OverlayFit::Height => bri_ui::api::ScopeFit::Height,
+            bri_weapons::OverlayFit::Stretch => bri_ui::api::ScopeFit::Stretch,
+        };
+        if fit != self.view.scope_fit {
+            self.view.scope_fit = fit;
+            self.ui.apply(UiUpdate::ScopeFit(fit));
+        }
         if overlay != self.view.scope_overlay {
             self.view.scope_overlay = overlay;
             self.world_items.set_scoped(overlay.is_some());
