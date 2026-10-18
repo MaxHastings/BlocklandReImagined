@@ -930,6 +930,48 @@ pub struct Lamp {
     pub color: [f32; 3],
     /// How far it reaches, units.
     pub radius: f32,
+    /// A beam instead of an all-round light.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cone: Option<LampCone>,
+    /// How fast it comes up to full light and goes out.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ramp: Option<LampRamp>,
+}
+/// A lamp's beam ([`Lamp::cone`]): full light within `inner` degrees of
+/// `axis` (in the node's own frame), fading to none at `outer`.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LampCone {
+    pub inner: f32,
+    pub outer: f32,
+    #[serde(default = "LampCone::forward")]
+    pub axis: [f32; 3],
+}
+impl LampCone {
+    fn forward() -> [f32; 3] {
+        [0.0, 0.0, -1.0]
+    }
+    fn valid(&self) -> bool {
+        (0.0..=180.0).contains(&self.inner)
+            && self.outer.is_finite()
+            && self.outer > self.inner
+            && self.outer <= 180.0
+            && self.axis.iter().all(|v| v.is_finite())
+            && self.axis.iter().any(|v| *v != 0.0)
+    }
+}
+/// Seconds a lamp takes to reach full light from dark and to go dark again
+/// ([`Lamp::ramp`]): a client's own cosmetic fade.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LampRamp {
+    pub up: f32,
+    pub down: f32,
+}
+impl LampRamp {
+    fn valid(&self) -> bool {
+        (0.0..=60.0).contains(&self.up) && (0.0..=60.0).contains(&self.down)
+    }
 }
 #[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -1305,6 +1347,8 @@ impl Pack {
                             && (l.radius > 0. || l.effect.is_some())
                             && l.radius >= 0.
                             && l.radius <= 100.
+                            && l.cone.is_none_or(|c| c.valid())
+                            && l.ramp.is_none_or(|r| r.valid())
                             && l.effect.as_ref().is_none_or(|id| {
                                 !id.is_empty()
                                     && id.len() <= 160

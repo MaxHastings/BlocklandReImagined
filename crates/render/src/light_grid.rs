@@ -171,6 +171,7 @@ mod tests {
         PointLight {
             position_radius: [x, y, z, radius],
             color: [1.; 4],
+            ..Default::default()
         }
     }
 

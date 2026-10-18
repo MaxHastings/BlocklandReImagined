@@ -185,6 +185,7 @@ pub(super) fn overflow_point_lights(
         .map(|(_, l)| bri_render::scene::PointLight {
             position_radius: [l.position[0], l.position[1], l.position[2], l.outer],
             color: [l.color[0], l.color[1], l.color[2], 1.0],
+            ..Default::default()
         })
         .collect()
 }

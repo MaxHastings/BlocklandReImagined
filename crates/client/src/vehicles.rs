@@ -62,6 +62,10 @@ pub struct VehicleAssets {
     /// Each definition's lamps (`Definition::lights`) where its model has
     /// their nodes: body-local position, colour and radius.
     lamps: BTreeMap<String, Vec<BoundLamp>>,
+    /// Each ramped lamp's current light, 0 to 1, by vehicle and lamp, and
+    /// when they were last stepped.
+    lamp_levels: BTreeMap<(u64, usize), f32>,
+    lamp_clock: Option<std::time::Instant>,
 }
 struct BoundLamp {
     transform: Mat4,
@@ -595,28 +599,78 @@ impl VehicleAssets {
             skinned: BTreeMap::new(),
             sources,
             lamps,
+            lamp_levels: BTreeMap::new(),
+            lamp_clock: None,
         })
     }
     /// Lights the lamps of the vehicles whose drivers have them on cast,
     /// from each vehicle's presented body.
     pub fn lamp_lights(
-        &self,
-        infos: impl IntoIterator<Item = (Mat4, bool, bool, String)>,
+        &mut self,
+        infos: impl IntoIterator<Item = (u64, Mat4, bool, bool, String)>,
     ) -> Vec<bri_render::scene::PointLight> {
+        let now = std::time::Instant::now();
+        let dt = self
+            .lamp_clock
+            .replace(now)
+            .map_or(0., |before| (now - before).as_secs_f32().min(0.25));
         let mut out = Vec::new();
-        for (body, on, driver, definition) in infos {
-            for bound in self.lamps.get(&definition).into_iter().flatten() {
+        let mut seen = std::collections::BTreeSet::new();
+        for (id, body, on, driver, definition) in infos {
+            for (slot, bound) in self
+                .lamps
+                .get(&definition)
+                .into_iter()
+                .flatten()
+                .enumerate()
+            {
                 let lamp = &bound.lamp;
-                if !lamp.activation.enabled(on, driver) || lamp.radius <= 0. {
+                if lamp.radius <= 0. {
                     continue;
                 }
-                let position = (body * bound.transform).w_axis.truncate();
+                let wanted = lamp.activation.enabled(on, driver);
+                // A lamp with a ramp fades toward its state; without one it
+                // switches at once.
+                let level = match lamp.ramp {
+                    None => f32::from(u8::from(wanted)),
+                    Some(ramp) => {
+                        let level = self.lamp_levels.entry((id, slot)).or_insert(0.);
+                        let seconds = if wanted { ramp.up } else { ramp.down };
+                        let step = if seconds > 0. { dt / seconds } else { 1. };
+                        *level = if wanted {
+                            (*level + step).min(1.)
+                        } else {
+                            (*level - step).max(0.)
+                        };
+                        seen.insert((id, slot));
+                        *level
+                    }
+                };
+                if level <= 0. {
+                    continue;
+                }
+                let at = body * bound.transform;
+                let cone = lamp.cone.map_or([0.; 4], |c| {
+                    let axis = at.transform_vector3(Vec3::from(c.axis)).normalize_or_zero();
+                    if axis == Vec3::ZERO {
+                        [0.; 4]
+                    } else {
+                        bri_render::scene::spot_words(axis, c.inner, c.outer)
+                    }
+                });
                 out.push(bri_render::scene::PointLight {
-                    position_radius: position.extend(lamp.radius).to_array(),
-                    color: [lamp.color[0], lamp.color[1], lamp.color[2], 0.],
+                    position_radius: at.w_axis.truncate().extend(lamp.radius).to_array(),
+                    color: [
+                        lamp.color[0] * level,
+                        lamp.color[1] * level,
+                        lamp.color[2] * level,
+                        0.,
+                    ],
+                    cone,
                 });
             }
         }
+        self.lamp_levels.retain(|key, _| seen.contains(key));
         out
     }
     pub fn driver_present(&self, info: &VehicleInfo) -> bool {

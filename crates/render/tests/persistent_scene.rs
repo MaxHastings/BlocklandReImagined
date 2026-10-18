@@ -76,6 +76,7 @@ fn point_lights_update_and_clear_without_reuploading_geometry() -> Result<()> {
     let mut light = PointLight {
         position_radius: [0., 0., 1.5, 4.],
         color: [1., 0., 0., 0.],
+        ..Default::default()
     };
     renderer.update_lights(&gpu.queue, &[light])?;
     let red = gpu.frame(&mut renderer, &[&mesh], &camera, (64, 64))?;
@@ -133,6 +134,7 @@ fn point_lights_light_objects_per_vertex_with_v20_attenuation() -> Result<()> {
         &[PointLight {
             position_radius: [0., 0., 1.5, 10.],
             color: [1., 1., 1., 0.],
+            ..Default::default()
         }],
     )?;
     let lit = gpu.frame(&mut renderer, &[&small], &camera, (64, 64))?;
@@ -150,6 +152,7 @@ fn point_lights_light_objects_per_vertex_with_v20_attenuation() -> Result<()> {
         &[PointLight {
             position_radius: [0., 0., 0.8, 0.8],
             color: [5., 5., 5., 0.],
+            ..Default::default()
         }],
     )?;
     let far = gpu.frame(&mut renderer, &[&large], &camera, (64, 64))?;
@@ -173,10 +176,12 @@ fn a_full_light_budget_lights_each_pixel_with_the_lights_that_reach_it() -> Resu
         PointLight {
             position_radius: [0.3, 0., 1.5, 4.],
             color: [0.6, 0., 0., 0.],
+            ..Default::default()
         },
         PointLight {
             position_radius: [-0.3, 0.2, 1.2, 3.],
             color: [0., 0.5, 0.3, 0.],
+            ..Default::default()
         },
     ];
     renderer.update_lights(&gpu.queue, &near)?;
@@ -187,6 +192,7 @@ fn a_full_light_budget_lights_each_pixel_with_the_lights_that_reach_it() -> Resu
         .map(|i| PointLight {
             position_radius: [20. + (i % 16) as f32 * 9., (i / 16) as f32 * 7., -30., 6.],
             color: [1., 1., 1., 0.],
+            ..Default::default()
         })
         .collect();
     all.insert(100, near[0]);

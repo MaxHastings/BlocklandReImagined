@@ -2802,6 +2802,8 @@ mod tests {
             offset: [0.0, 0.0, -1.0],
             color: [1.0; 3],
             radius: 20.0,
+            cone: None,
+            ramp: None,
         };
         let (mut s, tank) = tank_session_with(bri_vehicles::testing::pack_with(|d| {
             d.lights = vec![lamp.clone()]
