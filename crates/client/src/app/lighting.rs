@@ -555,6 +555,27 @@ mod tests {
     }
 
     #[test]
+    fn overflow_lights_fill_what_the_effects_leave_nearest_first() {
+        let lamp = |x: f32, outer: f32| bri_render::map_lighting::MapLight {
+            position: [x, 0.0, 0.0],
+            color: [0.5, 0.4, 0.3],
+            inner: 0.0,
+            outer,
+            channel: None,
+        };
+        // Reach counts from a lamp's edge: the big lamp 100 away (5 to its
+        // edge) comes before the small one 10 away (9).
+        let lamps = [lamp(10.0, 1.0), lamp(100.0, 95.0), lamp(-4.0, 1.0)];
+        let max = bri_render::scene::MAX_POINT_LIGHTS;
+        let all = overflow_point_lights(&lamps, Vec3::ZERO, 0);
+        let order: Vec<f32> = all.iter().map(|l| l.position_radius[0]).collect();
+        assert_eq!(order, [-4.0, 100.0, 10.0]);
+        assert!(all.iter().all(|l| l.color[3] == 1.0));
+        assert_eq!(overflow_point_lights(&lamps, Vec3::ZERO, max - 2).len(), 2);
+        assert!(overflow_point_lights(&lamps, Vec3::ZERO, max).is_empty());
+    }
+
+    #[test]
     fn modern_state_has_no_compatibility_preparation() {
         let descriptor = bri_render::map_lighting::MapLight {
             position: [1.0, 2.0, 3.0],
