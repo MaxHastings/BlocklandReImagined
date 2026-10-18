@@ -1574,7 +1574,7 @@ pub fn resolve_live(
                 let Some((key, _)) = texture(id).filter(|_| shown(show)) else {
                     continue;
                 };
-                let strength = number(strength).unwrap_or(0.0).clamp(0.0, 1.0);
+                let strength = number(strength).unwrap_or(0.0).clamped(0.0, 1.0);
                 let (dx, dz) = (number(x).unwrap_or(0.0), number(z).unwrap_or(0.0));
                 if strength <= 0.0 || dx.hypot(dz) < 1e-4 {
                     continue;
