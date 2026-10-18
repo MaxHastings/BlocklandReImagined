@@ -118,6 +118,12 @@ pub struct Fog {
         skip_serializing_if = "Fog::is_default_max"
     )]
     pub max: f32,
+    /// Fog grows in a straight line with distance, from nothing at `start`
+    /// to `max` at the density distance (`density_end`, else `end`), with no
+    /// thinning above the eye: a Halo sky's fog, whose density texture is a
+    /// linear ramp. Off: the exponential fog described above.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub linear: bool,
 }
 impl Default for Fog {
     fn default() -> Self {
@@ -128,6 +134,7 @@ impl Default for Fog {
             color: [0.0; 3],
             height: FOG_HEIGHT,
             max: 1.0,
+            linear: false,
         }
     }
 }
@@ -183,7 +190,12 @@ impl Fog {
     }
     /// The shaders' `haze` uniform: height, max, optional density end.
     pub fn haze_uniform(&self) -> [f32; 4] {
-        [self.height, self.max, self.density_end.unwrap_or(0.0), 0.0]
+        [
+            self.height,
+            self.max,
+            self.density_end.unwrap_or(0.0),
+            f32::from(self.linear),
+        ]
     }
     /// Fog over a point `distance` away, level with the eye.
     pub fn amount(&self, distance: f32) -> f32 {
@@ -196,6 +208,10 @@ impl Fog {
             return 0.0;
         }
         let distance = offset.iter().map(|v| v * v).sum::<f32>().sqrt();
+        if self.linear {
+            let reach = (self.density_end.unwrap_or(self.end) - self.start).max(0.001);
+            return ((distance - self.start) / reach).clamped(0.0, 1.0) * self.max;
+        }
         let up = offset[1] / distance.max(0.0001);
         let inside = (distance - self.start).max(0.0);
         let rise = rising(up, sky_below, self.height);
@@ -340,6 +356,7 @@ mod tests {
             height,
             max,
             density_end: None,
+            linear: false,
         }
     }
 
@@ -392,6 +409,26 @@ mod tests {
         bad(&|f| f.elements[0].brightness = 9.0);
         bad(&|f| f.elements[0].image.file = "../flare.png".into());
         bad(&|f| f.elements[0].image.sha256 = "zz".into());
+    }
+    #[test]
+    fn a_linear_fog_runs_straight_from_the_start_to_the_density_distance() {
+        let mut fog = fog(FOG_HEIGHT, 0.4);
+        fog.start = 12.0;
+        fog.end = 1200.0;
+        fog.density_end = Some(412.0);
+        fog.linear = true;
+        fog.validate().unwrap();
+        assert_eq!(fog.amount(12.0), 0.0);
+        assert!((fog.amount(212.0) - 0.2).abs() < 1e-6);
+        assert!((fog.amount(412.0) - 0.4).abs() < 1e-6);
+        assert!((fog.amount(900.0) - 0.4).abs() < 1e-6);
+        // Level fog: the same up, down and level.
+        for offset in [[0.0, 212.0, 0.0], [0.0, -212.0, 0.0], [212.0, 0.0, 0.0]] {
+            assert!((fog.amount_along(offset, false) - 0.2).abs() < 1e-6);
+        }
+        assert_eq!(fog.haze_uniform()[3], 1.0);
+        fog.linear = false;
+        assert_eq!(fog.haze_uniform()[3], 0.0);
     }
     #[test]
     fn unset_haze_reads_as_the_fog_before_it() {

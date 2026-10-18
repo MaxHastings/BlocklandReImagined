@@ -2,7 +2,8 @@
 // twin and says how it works. atmosphere: fog start, fog end, animation
 // seconds (scene passes; unused here), 1 when fog is on; below: 1 when the
 // sky goes on below the horizon (fog_color.w); h: the fog's height (units
-// per e-fold), most cover and optional density end (`Fog::haze_uniform`). A zero h is the
+// per e-fold), most cover, optional density end and w, 1 for the linear
+// fog (`Fog::haze_uniform`). A zero h is the
 // standard fog (FOG_HEIGHT, complete), so a pass that never sets it keeps
 // today's look.
 fn fog_height(h:vec4<f32>)->f32 {return select(FOG_HEIGHT,h.x,h.x>0.0);}
@@ -25,6 +26,9 @@ fn sky_fog_at(up:f32,a:vec4<f32>,below:f32,h:vec4<f32>)->f32 {
 fn fog_along(offset:vec3<f32>,a:vec4<f32>,below:f32,h:vec4<f32>)->f32 {
     if a.y<=0.0 {return 0.0;}
     let distance=length(offset);
+    if h.w>0.5 {
+        return clamp((distance-a.x)/max(select(a.y,h.z,h.z>0.0)-a.x,0.001),0.0,1.0)*fog_max(h)*a.w;
+    }
     let up=offset.y/max(distance,0.0001);
     let inside=max(distance-a.x,0.0);
     let rise=fog_rising(up,below,h);
