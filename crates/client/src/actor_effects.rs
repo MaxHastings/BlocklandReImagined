@@ -1540,6 +1540,7 @@ fn teleport_image() -> bri_weapons::Image {
         first_person_view: None,
         hide_nodes: Vec::new(),
         aim_assist: None,
+        movement: None,
         both_arms: false,
         paint_tint: false,
         left_image: None,

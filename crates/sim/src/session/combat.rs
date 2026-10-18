@@ -159,6 +159,9 @@ pub(super) struct Combat {
     /// A gun's slowdown on top ([`bri_weapons::Slow`]): the share kept and
     /// the tick it ends.
     pub gun_slow: Option<(f32, u64)>,
+    /// The share of their speeds the held image leaves
+    /// ([`bri_weapons::MovementScale`]), 1 with none.
+    pub image_speed: f32,
     /// `Player::emote`'s spam check (`lastVoiceTime`, `voiceCount`): the
     /// tick of the last emote let through and the quick ones counted.
     pub voice: Option<u64>,
@@ -1000,6 +1003,7 @@ impl Session {
             pain_tick: 0,
             speed_rule: 1.0,
             gun_slow: None,
+            image_speed: 1.0,
             voice: None,
             voice_count: 0,
             pushed: None,
@@ -2919,7 +2923,8 @@ impl Session {
     pub(super) fn apply_speed(&mut self, target: OwnerId) -> Result<()> {
         if let Some(peer) = self.peers.get_mut(&target) {
             let slow = peer.combat.gun_slow.map_or(1.0, |(m, _)| m);
-            peer.player.set_speed_scale(peer.combat.speed_rule * slow)?;
+            peer.player
+                .set_speed_scale(peer.combat.speed_rule * slow * peer.combat.image_speed)?;
         }
         Ok(())
     }

@@ -180,6 +180,7 @@ fn image(name: &str, states: Vec<State>) -> (String, Image) {
             first_person_view: None,
             hide_nodes: Vec::new(),
             aim_assist: None,
+            movement: None,
             both_arms: false,
             paint_tint: false,
             left_image: None,

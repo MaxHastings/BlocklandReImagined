@@ -3406,6 +3406,7 @@ impl Session {
         self.sync_seated();
         self.advance_animations();
         contain("weapons", self.step_weapons());
+        contain("image speeds", self.step_image_speeds());
         self.step_temp_colors();
         contain("items", self.step_items());
         contain("combat", self.step_combat(impacts));

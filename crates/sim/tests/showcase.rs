@@ -1850,6 +1850,7 @@ fn add_launcher(
         scripts: Default::default(),
         hide_nodes: Vec::new(),
         aim_assist: None,
+        movement: None,
         both_arms: false,
         states,
     };

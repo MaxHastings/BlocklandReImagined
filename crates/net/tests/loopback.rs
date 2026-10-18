@@ -167,6 +167,7 @@ fn tool_pack() -> bri_weapons::Pack {
                 first_person_view: None,
                 hide_nodes: Vec::new(),
                 aim_assist: None,
+                movement: None,
                 both_arms: false,
                 paint_tint: false,
                 left_image: None,

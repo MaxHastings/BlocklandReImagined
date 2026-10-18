@@ -560,6 +560,7 @@ pub fn lower(definitions: Vec<Definition>) -> Result<Pack> {
                 first_person_view: None,
                 hide_nodes: Vec::new(),
                 aim_assist: None,
+                movement: None,
                 both_arms: false,
                 paint_tint: false,
                 left_image: None,

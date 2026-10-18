@@ -926,6 +926,10 @@ pub struct Image {
     /// for v20's unaided aim.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub aim_assist: Option<AimAssist>,
+    /// How much of its holder's speed this image leaves while it reloads
+    /// and while its holder aims it ([`MovementScale`]). None slows nothing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub movement: Option<MovementScale>,
     /// Held up with both arms (`armReadyBoth`), as `onMount`'s
     /// `%obj.playThread(2, armReadyBoth)` did, not with the mount hand's
     /// arm alone.
@@ -1816,6 +1820,40 @@ pub fn is_image_command(c: &str) -> bool {
                 && c.bytes()
                     .all(|b| b.is_ascii_alphanumeric() || b"_-:".contains(&b))
         })
+}
+
+/// [`Image::movement`]: the share of the holder's speeds the image leaves,
+/// each 0.05 to 1 (1 slows nothing): Halo's rocket launcher slows its holder
+/// to 0.75 while zoomed or reloading.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MovementScale {
+    /// While the magazine reloads.
+    #[serde(default = "full_speed")]
+    pub reloading: f32,
+    /// While the holder aims it with the right mouse button ([`Zoom::on_jet`]),
+    /// which the host sees as the jet button held. A zoom on the zoom key
+    /// alone is the holder's own view and does not slow them.
+    #[serde(default = "full_speed")]
+    pub aiming: f32,
+}
+impl MovementScale {
+    pub fn valid(&self) -> bool {
+        [self.reloading, self.aiming]
+            .iter()
+            .all(|s| s.is_finite() && (0.05..=1.0).contains(s))
+    }
+    /// The share of speed left in this moment. Reloading and aiming multiply.
+    pub fn scale(&self, reloading: bool, aiming: bool) -> f32 {
+        let mut scale = 1.0;
+        if reloading {
+            scale *= self.reloading;
+        }
+        if aiming {
+            scale *= self.aiming;
+        }
+        scale
+    }
 }
 
 /// [`Image::aim_assist`].
@@ -3511,6 +3549,10 @@ impl Pack {
                  moving_speed 0 to 50, scale 0.1 to 10, rested after 1 to 1200 ticks, kick amplitude 0 to 1, \
                  frequency 0.1 to 30, seconds 0.05 to 2, radius 0 to 100, a lob within its limits and \
                  without hitscan"
+            );
+            ensure!(
+                image.movement.as_ref().is_none_or(MovementScale::valid),
+                "Invalid image movement {id}: reloading and aiming 0.05 to 1"
             );
             ensure!(
                 image.aim_assist.as_ref().is_none_or(AimAssist::valid),
