@@ -140,12 +140,14 @@ pub enum Role {
     Death,
     Swim,
     Look,
+    /// `look` while the body is crouched; a body without it keeps its `look`.
+    LookCrouch,
     HeadSide,
     HeadUp,
     SeatAim,
 }
 impl Role {
-    pub const ALL: [Role; 20] = [
+    pub const ALL: [Role; 21] = [
         Role::Idle,
         Role::Run,
         Role::Back,
@@ -163,6 +165,7 @@ impl Role {
         Role::Death,
         Role::Swim,
         Role::Look,
+        Role::LookCrouch,
         Role::HeadSide,
         Role::HeadUp,
         Role::SeatAim,
@@ -187,6 +190,7 @@ impl Role {
             Role::Death => "death",
             Role::Swim => "swim",
             Role::Look => "look",
+            Role::LookCrouch => "look_crouch",
             Role::HeadSide => "head_side",
             Role::HeadUp => "head_up",
             Role::SeatAim => "seat_aim",
@@ -213,6 +217,7 @@ impl Role {
             Role::Death => "death1",
             Role::Swim => "swim",
             Role::Look => "look",
+            Role::LookCrouch => "lookcrouch",
             Role::HeadSide => "headside",
             Role::HeadUp => "headup",
             Role::SeatAim => "seataim",
@@ -252,6 +257,7 @@ impl Role {
             Role::Death => &[(Role::Idle, false)],
             Role::Swim => &[],
             Role::Look => &[],
+            Role::LookCrouch => &[(Role::Look, false)],
             Role::HeadSide => &[],
             Role::HeadUp => &[],
             Role::SeatAim => &[],
@@ -274,7 +280,7 @@ impl Role {
         match self {
             Role::Idle => "it stands in its bind pose",
             Role::AimRight | Role::AimLeft => "its arm does not raise a held item",
-            Role::Look => "it does not look up and down",
+            Role::Look | Role::LookCrouch => "it does not look up and down",
             Role::HeadSide => "its head does not turn in free look",
             Role::HeadUp => "its head does not tilt under a pack",
             Role::SeatAim => "a seated gunner bends only with its `look` clip",
@@ -454,7 +460,10 @@ impl RoleClips {
                         .map(|(r, rev)| (*r, *rev != reversed)),
                 );
             }
-            missing.push((role, stand_in.as_ref().map(|(r, _, _)| *r)));
+            // `look_crouch` is optional polish over `look`, not a gap to report.
+            if role != Role::LookCrouch || stand_in.is_none() {
+                missing.push((role, stand_in.as_ref().map(|(r, _, _)| *r)));
+            }
             if let Some((_, clip, reversed)) = stand_in {
                 clips.insert(role, (clip, reversed));
             }

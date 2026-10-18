@@ -119,6 +119,7 @@ action. Name them by role (the names are not case-sensitive):
 | `death` | on death | once; it holds the last frame |
 | `swim` | in water | a loop |
 | `look` | looking up and down | first frame looking straight up, middle frame level, last frame straight down. Key only head, neck, spine and arms |
+| `look_crouch` | looking up and down while crouched | the same frames as `look`. If missing a crouched body uses `look` |
 | `head_side` | free look | first frame head turned fully left, middle forward, last fully right |
 | `head_up` | head tilted up under a pack | first frame neutral, last tilted |
 

@@ -269,7 +269,7 @@ const DEATH: Play = Play::Absolute {
 const LEVEL: Play = Play::Overlay { reference: 0.5 };
 const FIRST: Play = Play::Overlay { reference: 0.0 };
 #[rustfmt::skip]
-const ROLES: [(&str, &str, Play, &str); 19] = [
+const ROLES: [(&str, &str, Play, &str); 20] = [
     ("idle", "root", LOOP, "it stands in its bind pose"),
     ("run", "run", LOOP, "it plays its `idle`"),
     ("back", "back", LOOP, "it plays its `run` reversed"),
@@ -287,6 +287,7 @@ const ROLES: [(&str, &str, Play, &str); 19] = [
     ("death", "death1", DEATH, "it falls in its `idle`"),
     ("swim", "swim", LOOP, "it swims in its locomotion pose"),
     ("look", "look", LEVEL, "it does not look up and down"),
+    ("look_crouch", "lookcrouch", LEVEL, "it plays its `look`"),
     ("head_side", "headside", LEVEL, "its head does not turn in free look"),
     ("head_up", "headup", FIRST, "its head does not tilt under a pack"),
 ];

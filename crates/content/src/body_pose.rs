@@ -33,6 +33,8 @@ pub struct LayerPlanInput<'rig, 'input> {
     /// Normalized phase from the caller's existing pitch/limit mapping.
     pub look_phase: f32,
     pub head_yaw: f32,
+    /// The body is crouched: its `look_crouch` clip, if it has one, replaces `look`.
+    pub crouched: bool,
 }
 
 /// Layers borrow only the rig; temporary input names do not escape the call.
@@ -133,7 +135,11 @@ pub fn plan_body_layers<'rig>(
             time: aim.clamped(0., 1.) * clip.duration,
             weight: 1.,
         });
-    } else if let Some(look) = role(Role::Look) {
+    } else if let Some(look) = role(if input.crouched {
+        Role::LookCrouch
+    } else {
+        Role::Look
+    }) {
         overlays.push(Layer {
             animation: look,
             time: input.look_phase * look.duration,
@@ -731,6 +737,7 @@ mod tests {
             seat_aim: None,
             look_phase: 0.25,
             head_yaw: 0.,
+            crouched: false,
         }
     }
     fn names<'rig>(layers: &[Layer<'rig>]) -> Vec<&'rig str> {
@@ -812,6 +819,37 @@ mod tests {
                 )?;
             }
         }
+        Ok(())
+    }
+    #[test]
+    fn a_crouched_body_uses_its_crouch_look_and_falls_back_to_look() -> Result<()> {
+        let mut rig = planning_rig();
+        let roles = RoleClips::resolve(&Default::default(), |n| rig.sequence(n).is_some());
+        let mut input = planning_input(rig.sequence("base"), &[]);
+        input.crouched = true;
+        let plain = plan_body_layers(&rig, &roles, input)?;
+        assert_eq!(
+            names(&plain.unacted),
+            ["base", "look"],
+            "no crouch look: look"
+        );
+        let crouch_look = planning_clip("lookcrouch", 16, true, 2.);
+        rig.sequences.insert(crouch_look.name.clone(), crouch_look);
+        let roles = RoleClips::resolve(&Default::default(), |n| rig.sequence(n).is_some());
+        let mut input = planning_input(rig.sequence("base"), &[]);
+        input.crouched = true;
+        let crouched = plan_body_layers(&rig, &roles, input)?;
+        assert_eq!(names(&crouched.unacted), ["base", "lookcrouch"]);
+        let standing = plan_body_layers(&rig, &roles, planning_input(rig.sequence("base"), &[]))?;
+        assert_eq!(
+            names(&standing.unacted),
+            ["base", "look"],
+            "standing keeps look"
+        );
+        assert!(
+            !roles.report().iter().any(|l| l.contains("look_crouch")),
+            "the optional crouch look is not reported missing"
+        );
         Ok(())
     }
     #[test]
