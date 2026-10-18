@@ -37,6 +37,7 @@ labels are retained so earlier progress notes remain traceable.
 | Hit regions | `info.region` on damage: head, torso, legs | Bushido's Adventure Pack | on main |
 | HUD "holding" line | per-gun HUD text while an item is held | Bushido's Adventure Pack | on main |
 | Scope zoom | zoom, `hide_nodes`, `both_arms` | Kaje's Sniper Rifle | on main |
+| Scope picture layout | optional `zoom.overlay_fit` (`height_black` default, `height`, `stretch`) | AA2.5 sights lane | branch `codex/aa-sights`; local view only, no wire change |
 | Image scripts | `Image.scripts` state-machine hooks | Butterfly Knife and Grenade | on main |
 | Voxel bricks and own models | `place_voxel`, `*.shape.json` loading, textured item icons, `mode.json` | Trench Warfare game mode | on main |
 | Gun behaviour | hitscan, spread, shake, `left_image`, `set_speed_scale`, projectile bounces, children and aura, damage direction, Add-On settings, HUD format, magazines, explosions | Tier Tactical weapons | on main |

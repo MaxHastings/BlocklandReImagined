@@ -892,15 +892,18 @@ fn scope_overlay(dl: &mut DrawList, core: &Core) -> Option<Rect> {
     if w <= 0 || h <= 0 {
         return None;
     }
-    let side = h as f32 * aspect;
-    let x = (w as f32 - side) / 2.0;
+    let stretch = core.scope_fit == crate::api::ScopeFit::Stretch;
+    let side = if stretch { w as f32 } else { h as f32 * aspect };
+    let x = if stretch { 0.0 } else { (w as f32 - side) / 2.0 };
     let lens = Rect::new(x.floor() as i32, 0, side.ceil() as i32, h);
-    let black = [0, 0, 0, 255];
-    dl.fill(Rect::new(0, 0, lens.x.max(0), h), black);
-    dl.fill(
-        Rect::new(lens.right(), 0, (w - lens.right()).max(0), h),
-        black,
-    );
+    if core.scope_fit == crate::api::ScopeFit::HeightBlack {
+        let black = [0, 0, 0, 255];
+        dl.fill(Rect::new(0, 0, lens.x.max(0), h), black);
+        dl.fill(
+            Rect::new(lens.right(), 0, (w - lens.right()).max(0), h),
+            black,
+        );
+    }
     dl.image(
         crate::pack::TexKey::External(key),
         [0.0, 0.0, 1.0, 1.0],

@@ -312,6 +312,23 @@ fn is_true(b: &bool) -> bool {
 fn zero3(v: &[f32; 3]) -> bool {
     *v == [0.0; 3]
 }
+/// Where a scope picture sits on screen ([`Zoom::overlay_fit`]).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OverlayFit {
+    /// Fitted to the screen's height and centred, the rest of the screen black.
+    #[default]
+    HeightBlack,
+    /// Fitted to the screen's height and centred, the world showing either side.
+    Height,
+    /// Stretched over the whole screen, whatever its shape.
+    Stretch,
+}
+impl OverlayFit {
+    fn is_default(&self) -> bool {
+        *self == Self::HeightBlack
+    }
+}
 /// Aiming with an image: the view zooms to `fov` while the zoom key is
 /// held (and, with `on_jet`, while jet, the right mouse button, is held).
 /// Presentation only: each player's own game zooms its own view, draws
@@ -361,6 +378,9 @@ pub struct Zoom {
     /// not drawn while it shows.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub overlay: Option<String>,
+    /// How `overlay` is laid out on screens wider than its picture.
+    #[serde(default, skip_serializing_if = "OverlayFit::is_default")]
+    pub overlay_fit: OverlayFit,
     /// The aim drifting while aiming: a steady figure of eight, as a
     /// marksman's breathing moves a scope.
     #[serde(default, skip_serializing_if = "Option::is_none")]
