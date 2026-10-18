@@ -127,12 +127,17 @@ pub enum Role {
     Run,
     Back,
     Side,
+    /// `side` for strafing right, when the body has its own right clip rather
+    /// than playing its left one reversed.
+    SideRight,
     Jump,
     Fall,
     Crouch,
     CrouchRun,
     CrouchBack,
     CrouchSide,
+    /// `crouch_side` for strafing right, as `side_right` is for `side`.
+    CrouchSideRight,
     AimRight,
     AimLeft,
     AimBoth,
@@ -147,17 +152,19 @@ pub enum Role {
     SeatAim,
 }
 impl Role {
-    pub const ALL: [Role; 21] = [
+    pub const ALL: [Role; 23] = [
         Role::Idle,
         Role::Run,
         Role::Back,
         Role::Side,
+        Role::SideRight,
         Role::Jump,
         Role::Fall,
         Role::Crouch,
         Role::CrouchRun,
         Role::CrouchBack,
         Role::CrouchSide,
+        Role::CrouchSideRight,
         Role::AimRight,
         Role::AimLeft,
         Role::AimBoth,
@@ -177,12 +184,14 @@ impl Role {
             Role::Run => "run",
             Role::Back => "back",
             Role::Side => "side",
+            Role::SideRight => "side_right",
             Role::Jump => "jump",
             Role::Fall => "fall",
             Role::Crouch => "crouch",
             Role::CrouchRun => "crouch_run",
             Role::CrouchBack => "crouch_back",
             Role::CrouchSide => "crouch_side",
+            Role::CrouchSideRight => "crouch_side_right",
             Role::AimRight => "aim_right",
             Role::AimLeft => "aim_left",
             Role::AimBoth => "aim_both",
@@ -204,12 +213,14 @@ impl Role {
             Role::Run => "run",
             Role::Back => "back",
             Role::Side => "side",
+            Role::SideRight => "sideright",
             Role::Jump => "jump",
             Role::Fall => "fall",
             Role::Crouch => "crouch",
             Role::CrouchRun => "crouchrun",
             Role::CrouchBack => "crouchback",
             Role::CrouchSide => "crouchside",
+            Role::CrouchSideRight => "crouchsideright",
             Role::AimRight => "armreadyright",
             Role::AimLeft => "armreadyleft",
             Role::AimBoth => "armreadyboth",
@@ -244,12 +255,14 @@ impl Role {
             Role::Run => &[(Role::Idle, false)],
             Role::Back => &[(Role::Run, true), (Role::Idle, false)],
             Role::Side => &[(Role::Run, false), (Role::Idle, false)],
+            Role::SideRight => &[(Role::Side, true)],
             Role::Jump => &[(Role::Idle, false)],
             Role::Fall => &[(Role::Jump, false), (Role::Idle, false)],
             Role::Crouch => &[(Role::Idle, false)],
             Role::CrouchRun => &[(Role::Crouch, false), (Role::Run, false)],
             Role::CrouchBack => &[(Role::Crouch, false), (Role::Back, false)],
             Role::CrouchSide => &[(Role::Crouch, false), (Role::Side, false)],
+            Role::CrouchSideRight => &[(Role::CrouchSide, true), (Role::SideRight, false)],
             Role::AimRight => &[],
             Role::AimLeft => &[],
             Role::AimBoth => &[(Role::AimRight, false)],
@@ -272,6 +285,24 @@ impl Role {
             Role::Run | Role::CrouchRun => Some([0.0, 0.0, -1.0]),
             Role::Back | Role::CrouchBack => Some([0.0, 0.0, 1.0]),
             Role::Side | Role::CrouchSide => Some([-1.0, 0.0, 0.0]),
+            Role::SideRight | Role::CrouchSideRight => Some([1.0, 0.0, 0.0]),
+            _ => None,
+        }
+    }
+    /// Roles a body supplies only to improve on another's: a body without
+    /// one is not reported as missing it.
+    pub fn optional(self) -> bool {
+        matches!(
+            self,
+            Role::LookCrouch | Role::SideRight | Role::CrouchSideRight
+        )
+    }
+    /// The role whose ground speed stands in for this one's when the
+    /// archetype names none for it.
+    pub fn speed_alias(self) -> Option<Role> {
+        match self {
+            Role::SideRight => Some(Role::Side),
+            Role::CrouchSideRight => Some(Role::CrouchSide),
             _ => None,
         }
     }
@@ -399,7 +430,7 @@ pub fn validate_ground_speeds(speeds: &GroundSpeeds) -> Result<()> {
     for (role, speed) in speeds {
         ensure!(
             Role::from_name(role).is_some_and(|r| r.ground_axis().is_some()),
-            "ground speed role `{role}` must be one of run, back, side, crouch_run, crouch_back or crouch_side"
+            "ground speed role `{role}` must be one of run, back, side, side_right, crouch_run, crouch_back, crouch_side or crouch_side_right"
         );
         ensure!(
             speed.is_finite() && (0.01..=1000.0).contains(speed),
@@ -417,6 +448,8 @@ pub struct RoleClips {
     /// Roles with no clip of their own: what stands in (`None`: nothing,
     /// the layer is skipped).
     pub missing: Vec<(Role, Option<Role>)>,
+    /// Roles the body has a clip of its own for (not a stand-in).
+    own: std::collections::BTreeSet<Role>,
 }
 impl RoleClips {
     /// Resolve `animations` against the clips the body has (`has` takes a
@@ -460,15 +493,24 @@ impl RoleClips {
                         .map(|(r, rev)| (*r, *rev != reversed)),
                 );
             }
-            // `look_crouch` is optional polish over `look`, not a gap to report.
-            if role != Role::LookCrouch || stand_in.is_none() {
+            // An optional role is polish over another, not a gap to report.
+            if !role.optional() || stand_in.is_none() {
                 missing.push((role, stand_in.as_ref().map(|(r, _, _)| *r)));
             }
             if let Some((_, clip, reversed)) = stand_in {
                 clips.insert(role, (clip, reversed));
             }
         }
-        Self { clips, missing }
+        let own = own.keys().copied().collect();
+        Self {
+            clips,
+            missing,
+            own,
+        }
+    }
+    /// Whether the body names a clip of its own for `role`.
+    pub fn has_own(&self, role: Role) -> bool {
+        self.own.contains(&role)
     }
     /// The clip (lower case) playing `role`, and whether it plays reversed.
     pub fn clip(&self, role: Role) -> Option<(&str, bool)> {
@@ -559,7 +601,16 @@ mod tests {
                 &"no `aim_right` animation; its arm does not raise a held item".to_string()
             )
         );
-        assert_eq!(report.len(), Role::ALL.len() - 2);
+        // Not reported: the two roles it names, and the optional right strafes
+        // that stand in on its left ones.
+        assert_eq!(report.len(), Role::ALL.len() - 4);
+        assert_eq!(
+            roles.clip(Role::SideRight),
+            Some(("walk", true)),
+            "reversed"
+        );
+        assert_eq!(roles.clip(Role::CrouchSideRight), Some(("stand", true)));
+        assert!(!roles.has_own(Role::SideRight) && roles.has_own(Role::Run));
     }
 
     #[test]

@@ -977,7 +977,11 @@ impl BodyKind {
             .last()
             .map(|&t| Vec3::from(t))
             .filter(|t| t.is_finite() && clip.duration > 0.0 && t.length() > 1e-4);
-        let (speed, dir) = match self.ground_speeds.get(role.name()) {
+        let named = self.ground_speeds.get(role.name()).or_else(|| {
+            role.speed_alias()
+                .and_then(|alias| self.ground_speeds.get(alias.name()))
+        });
+        let (speed, dir) = match named {
             Some(&speed) => (speed, Vec3::from(axis)),
             None => match ground {
                 Some(t) => (t.length() / clip.duration, t.normalize()),
@@ -1431,6 +1435,22 @@ pub fn locomotion(player: &PlayerState, coverage: f32) -> LocomotionAction {
         }
     }
     action
+}
+/// A body with its own right-strafe clip plays it, rather than its left clip
+/// reversed (v20's only way to strafe right, which `locomotion` returns).
+fn own_right_strafe(action: LocomotionAction, roles: &RoleClips) -> LocomotionAction {
+    let (sequence, role) = match action.sequence {
+        "side" => ("sideright", Role::SideRight),
+        "crouchside" => ("crouchsideright", Role::CrouchSideRight),
+        _ => return action,
+    };
+    if action.forward || !roles.has_own(role) {
+        return action;
+    }
+    LocomotionAction {
+        sequence,
+        forward: true,
+    }
 }
 impl AvatarMesh {
     /// The same sampled node matrices used by this frame's visible character.
@@ -2041,7 +2061,7 @@ impl AvatarMesh {
                     if movement.jump.jet_flight && action.sequence == "jump" {
                         action.sequence = if movement.crouched { "crouch" } else { "root" };
                     }
-                    action
+                    own_right_strafe(action, &roles)
                 }
             },
             |sequence| LocomotionAction {
@@ -4312,6 +4332,35 @@ mod tests {
         p.crouched = true;
         p.velocity = [2.0, 0.0, 0.0];
         assert_eq!(action(&p), ("crouchside", false));
+    }
+
+    #[test]
+    fn a_body_with_its_own_right_clip_strafes_right_on_it() {
+        let mut p = player();
+        p.velocity = [6.0, 0.0, 0.0];
+        let picked = locomotion(&p, 0.0);
+        let own: bri_content::body::Animations = [
+            ("side_right".into(), "StrafeR".into()),
+            ("crouch_side_right".into(), "CrouchR".into()),
+        ]
+        .into();
+        let has = |c: &str| matches!(c, "run" | "side" | "strafer" | "crouchr" | "crouchside");
+        let with = RoleClips::resolve(&own, has);
+        let without = RoleClips::resolve(&Default::default(), has);
+        let right = own_right_strafe(picked, &with);
+        assert_eq!((right.sequence, right.forward), ("sideright", true));
+        let reversed = own_right_strafe(picked, &without);
+        assert_eq!((reversed.sequence, reversed.forward), ("side", false));
+        p.velocity = [-6.0, 0.0, 0.0];
+        let left = own_right_strafe(locomotion(&p, 0.0), &with);
+        assert_eq!((left.sequence, left.forward), ("side", true));
+        p.crouched = true;
+        p.velocity = [2.0, 0.0, 0.0];
+        let crouch = own_right_strafe(locomotion(&p, 0.0), &with);
+        assert_eq!((crouch.sequence, crouch.forward), ("crouchsideright", true));
+        assert_eq!(with.clip(Role::SideRight), Some(("strafer", false)));
+        assert_eq!(without.clip(Role::SideRight), Some(("side", true)));
+        assert!(!without.report().iter().any(|l| l.contains("side_right")));
     }
 
     #[test]

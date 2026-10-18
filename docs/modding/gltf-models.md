@@ -104,10 +104,12 @@ action. Name them by role (the names are not case-sensitive):
 | `idle` | standing still | a loop (first frame = last frame) |
 | `run` | moving forward | a loop, running in place (no forward drift of the root) |
 | `back`, `side` | moving backward, strafing sideways | loops; if missing, `back` plays `run` reversed, `side` plays `run` |
+| `side_right` | strafing right | a loop. If missing, the body plays its `side` clip reversed |
 | `jump` | on takeoff | once |
 | `fall` | in the air | a loop; if missing it plays `jump` |
 | `crouch` | crouching down | once; its last frame is the crouched pose |
 | `crouch_run`, `crouch_back`, `crouch_side` | moving while crouched | loops |
+| `crouch_side_right` | strafing right while crouched | a loop. If missing, `crouch_side` plays reversed |
 | `aim_right`, `aim_left`, `aim_both` | holding an item in that hand, or both | a held pose: the body holds the last frame. Key only the arm bones |
 | `sit` | seated in a vehicle or on a rideable | a held pose; one frame is enough. If missing it sits in `idle` |
 | `death` | on death | once; it holds the last frame |
