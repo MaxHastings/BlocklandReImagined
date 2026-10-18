@@ -34,6 +34,7 @@ pub(super) struct GpuState {
     pub(super) gpu_scene: Option<GpuScene>,
     pub(super) gpu_broken: BTreeSet<u32>,
     pub(super) gpu_terrain: Vec<bri_render::terrain_scene::GpuTerrain>,
+    pub(super) gpu_water: Vec<bri_render::water_scene::GpuWater>,
     /// World-pass depth and, with MSAA, the multisampled color attachment
     /// that the last world pass resolves into the frame target.
     pub(super) depth: Option<(wgpu::Texture, Option<wgpu::Texture>, (u32, u32))>,

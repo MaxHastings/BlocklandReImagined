@@ -177,8 +177,11 @@ scene.
 
 ## 3. Import, check and play
 
-From a checkout of this repository (see the main [README](../../README.md)).
-Add `--sky FOLDER` for a picture sky and `--terrain FOLDER` for terrain:
+The release includes `bri-import-addon` and `bri-addon-check`; use `./` before
+their names on Linux/macOS or `.\` in PowerShell. On macOS they are inside
+`BlocklandReImagined.app/Contents/MacOS/`. A checkout can build the same tools
+as shown below (see the main [README](../../README.md)). Add `--sky FOLDER`
+for a picture sky and `--terrain FOLDER` for terrain:
 
 ```sh
 cargo run -p bri-addon-import --bin bri-import-addon -- gltf my-map.glb addons/my-map --kind map --name "My Map"

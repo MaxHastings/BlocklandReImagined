@@ -12,6 +12,21 @@ checks do not replace your playtest.
 - **Unsigned builds:** Windows SmartScreen warns on the first start. The Apple
   silicon Mac app uses an ad-hoc signature; see `PLAYTEST-MAC.md` for opening it.
   Linux builds target x86-64 systems with glibc 2.35 or newer.
+- **Alpha compatibility:** hosts and joining players should use the same release.
+  Saves and native Add-On formats may change before beta; keep backups before
+  updating. Downloaded Add-Ons do not update the engine.
+- **Community maps:** GSF Paradise has a missing source `sand7` texture and
+  unsupported rotating/pickable gas-station Items. The original beach color
+  and sign are not restored. Other imports can have their own gaps: read
+  `IMPORT-REPORT.md`. AvP is excluded from public bundles; private Halo/AA/GMod
+  assets and unfinished showcases are not included.
+- **Position pullback and slope feel:** intermittent hosted position corrections
+  and reported Blood Gulch slope behavior remain unconfirmed after bounded
+  traces. v0.3.2 does not claim fixes for these reports.
+- **Linux wheel input:** v0.3.1 corrects duplicate legacy X11 wheel releases;
+  v0.3.2 corrects pixel-wheel density scaling. The original reporter's physical
+  backend/device remains unconfirmed. If skipping persists, report X11/Wayland,
+  mouse/trackpad, display scaling, version and logs.
 - **Delayed projectile events:** commands apply to the original live projectile.
   If it has already impacted or expired, the row skips it rather than creating
   a replacement. Explain reports the missing projectile.
@@ -43,7 +58,7 @@ checks do not replace your playtest.
   retains matching build symbols; it does not claim a causal fix. Please retain
   the complete crash/session files if it happens again.
 - **Reported death/disconnect, destruction/respawn hitches and tank retreat:**
-  v0.2.3 has not established their causes or a causal fix. More precise death
+  Their original causes and causal fixes have not been established. More precise death
   correction errors and scoped headless/offscreen controls do not establish
   Windows performance or close the original reports. Please retain complete
   logs and the smallest reproducing save.

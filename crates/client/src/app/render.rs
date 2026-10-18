@@ -79,6 +79,7 @@ impl App {
             crate::frame_trace::note(format!("kept no world: {error:#}"));
             self.gpu.gpu_scene = None;
             self.gpu.gpu_terrain.clear();
+            self.gpu.gpu_water.clear();
             self.gpu.gpu_palette = None;
             self.gpu.gpu_chunks.clear();
         }
@@ -122,6 +123,12 @@ impl App {
                         FAR_PLANE,
                     )
                 })
+                .collect::<Result<_>>()?;
+            self.gpu.gpu_water = self
+                .scene
+                .cpu_water
+                .iter()
+                .map(|water| bri_render::water_scene::GpuWater::new(water.clone(), FAR_PLANE))
                 .collect::<Result<_>>()?;
         }
         let previous_lighting = self.lighting.light_volume.bound_mode;
@@ -1171,6 +1178,19 @@ impl App {
         for terrain in &mut self.gpu.gpu_terrain {
             terrain.update(frame.device, frame.queue, &eyes, fog_end.max(1.))?;
         }
+        let water_eyes = if self.scene.scenery.native_water_visible() {
+            &eyes[..]
+        } else {
+            &[]
+        };
+        bri_render::water_scene::GpuWater::update_all(
+            &mut self.gpu.gpu_water,
+            renderer,
+            frame.device,
+            frame.queue,
+            water_eyes,
+            fog_end.clamped(1., FAR_PLANE),
+        )?;
         self.ui.core.name_tags = name_tags(
             view,
             self.motion.presented(),
@@ -1444,6 +1464,7 @@ impl App {
         }
         let mut scenes = vec![self.gpu.gpu_scene.as_ref().unwrap()];
         scenes.extend(self.gpu.gpu_chunks.values());
+        scenes.extend(self.gpu.gpu_water.iter().flat_map(|water| water.draws()));
 
         scenes.extend(
             self.build
@@ -1891,6 +1912,7 @@ impl App {
             self.lighting.light_volume.spots = visual.light_spots;
             self.scene.cpu_scene = Some(visual.scene);
             self.scene.cpu_terrain = visual.terrain.into_iter().map(Arc::new).collect();
+            self.scene.cpu_water = visual.repeated_water.into_iter().map(Arc::new).collect();
             self.scene.scenery.reset();
             self.scene.shape_indices = visual.shape_indices;
             crate::frame_trace::note("the map's lighting source changed");
@@ -1965,16 +1987,18 @@ impl App {
                         owner,
                         self.gpu.gpu_scene.take(),
                         std::mem::take(&mut self.gpu.gpu_terrain),
+                        std::mem::take(&mut self.gpu.gpu_water),
                         self.gpu.gpu_palette.take(),
                         std::mem::take(&mut self.gpu.gpu_chunks),
                     )
                 })
             };
             self.gpu_ready(frame.device, frame.queue, frame.format)?;
-            if let Some((owner, scene, terrain, palette, chunks)) = kept {
+            if let Some((owner, scene, terrain, water, palette, chunks)) = kept {
                 self.gpu.retired_renderer = Some(owner);
                 self.gpu.gpu_scene = scene;
                 self.gpu.gpu_terrain = terrain;
+                self.gpu.gpu_water = water;
                 self.gpu.gpu_palette = palette;
                 self.gpu.gpu_chunks = chunks;
                 // The new renderer binds no light volume or map lights yet,
@@ -2221,5 +2245,431 @@ mod local_budget_tests {
             trim_effect_partitions(&mut [&mut world, &mut first, &mut second], Vec3::ZERO, 2);
         assert_eq!(cuts, vec![1, 0, 0]);
         assert_eq!(first.particles.len() + second.particles.len(), 2);
+    }
+}
+
+#[cfg(test)]
+mod repeated_water_tests {
+    use super::*;
+    use crate::testing::content_root::ContentRoot;
+    use bri_content::{
+        scene::{Kind, Node, Scene},
+        water::Water,
+    };
+    use bri_ui::models::admin::AdminAction;
+
+    struct Frames {
+        gpu: bri_ui::gpu::Headless,
+        ui: bri_ui::gpu::UiRenderer,
+        target: wgpu::Texture,
+    }
+    impl Frames {
+        fn new() -> Result<Self> {
+            let gpu = bri_ui::gpu::Headless::new()?;
+            let ui = bri_ui::gpu::UiRenderer::new(&gpu.device, &gpu.queue);
+            let target = gpu.device.create_texture(&wgpu::TextureDescriptor {
+                label: Some("repeated water App fixture"),
+                size: wgpu::Extent3d {
+                    width: 160,
+                    height: 120,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba8Unorm,
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+                view_formats: &[],
+            });
+            Ok(Self { gpu, ui, target })
+        }
+        fn open(&self, app: &mut App) -> Result<()> {
+            app.gpu_ready(
+                &self.gpu.device,
+                &self.gpu.queue,
+                wgpu::TextureFormat::Rgba8Unorm,
+            )
+        }
+        fn draw(&mut self, app: &mut App) -> Result<bool> {
+            let mut encoder = self.gpu.device.create_command_encoder(&Default::default());
+            let target = self.target.create_view(&Default::default());
+            let drew = app.render_scene(&mut RenderContext {
+                device: &self.gpu.device,
+                queue: &self.gpu.queue,
+                encoder: &mut encoder,
+                target: &target,
+                format: wgpu::TextureFormat::Rgba8Unorm,
+                size: (160, 120),
+                ui_renderer: &mut self.ui,
+            })?;
+            self.gpu.queue.submit([encoder.finish()]);
+            Ok(drew)
+        }
+        fn until(
+            &mut self,
+            app: &mut App,
+            label: &str,
+            predicate: impl Fn(&App) -> bool,
+        ) -> Result<()> {
+            eprintln!("water lifecycle: {label}");
+            let start = std::time::Instant::now();
+            loop {
+                app.tick(Duration::from_millis(16))?;
+                app.ui.update(16);
+                ensure!(app.pump()?.is_empty(), "unexpected native window command");
+                let drew = self.draw(app)?;
+                if drew && predicate(app) {
+                    return Ok(());
+                }
+                ensure!(
+                    start.elapsed() < Duration::from_secs(300),
+                    "{label}: {:?}; admin {}; stack {:?}",
+                    app.ui.core.conn,
+                    app.ui.core.admin.status,
+                    app.ui.stack()
+                );
+                if let ConnectionState::Failed { reason } = &app.ui.core.conn {
+                    anyhow::bail!("{label}: {reason}");
+                }
+                std::thread::sleep(Duration::from_millis(10));
+            }
+        }
+    }
+    fn install_water(app: &App, map: &str, flat: bool) -> Result<()> {
+        let root = app.content.paths.maps.root(map)?.to_owned();
+        let bundle_path = root.join("bundle.json");
+        let mut bundle: serde_json::Value = serde_json::from_slice(&std::fs::read(&bundle_path)?)?;
+        let record = bundle["maps"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|m| m["id"] == map)
+            .unwrap();
+        let scene_path = root.join(record["file"].as_str().unwrap());
+        let mut scene: Scene = serde_json::from_slice(&std::fs::read(&scene_path)?)?;
+        if flat {
+            for node in &mut scene.nodes {
+                if matches!(node.kind, Kind::StaticModel | Kind::DatablockModel) {
+                    node.kind = Kind::Metadata;
+                    node.asset = None;
+                }
+                if matches!(node.kind, Kind::Interior) {
+                    let file = root.join(
+                        bundle["assets"][node.asset.as_ref().unwrap()]
+                            .as_str()
+                            .unwrap(),
+                    );
+                    let mut interior: serde_json::Value =
+                        serde_json::from_slice(&std::fs::read(&file)?)?;
+                    for detail in interior["details"].as_array_mut().unwrap() {
+                        detail["surfaces"] = serde_json::json!([]);
+                    }
+                    std::fs::write(file, serde_json::to_vec(&interior)?)?;
+                }
+            }
+        }
+        let mut water = Water::volume([-1024., -10., -1024.], [1024., -2., 1024.]);
+        water.node = scene.nodes.len();
+        water.repeat_period = Some(2048.);
+        scene.nodes.push(Node {
+            name: "invented repeating water".into(),
+            parent: None,
+            kind: Kind::Water,
+            transform: glam::Mat4::IDENTITY.to_cols_array(),
+            asset: None,
+            properties: BTreeMap::new(),
+        });
+        let bytes = crate::testing::png(1, 1, |_, _| [10, 80, 180, 255])?;
+        water.surface.sha256 = crate::testing::sha256(&bytes);
+        water.shore = water.surface.clone();
+        std::fs::write(root.join(&water.surface.file), bytes)?;
+        if !bundle["waters"].is_object() {
+            bundle["waters"] = serde_json::json!({});
+        }
+        bundle["waters"][&scene.id] = serde_json::json!([water]);
+        std::fs::write(scene_path, serde_json::to_vec(&scene)?)?;
+        std::fs::write(bundle_path, serde_json::to_vec(&bundle)?)?;
+        Ok(())
+    }
+    /// Real loader/async map adoption and ordinary frame preparation, all offscreen.
+    #[test]
+    fn repeated_water_survives_app_graphics_lighting_and_device_then_leaves_with_map() -> Result<()>
+    {
+        let fixture = ContentRoot::synthetic()?;
+        let state = fixture.state()?;
+        let mut app = App::load(&fixture.root, state.path(), (160, 120))?;
+        install_water(&app, &fixture.map.0, false)?;
+        app.graphics.samples = 1;
+        app.graphics.bloom = false;
+        app.graphics.lighting = 0;
+        let mut frames = Frames::new()?;
+        frames.open(&mut app)?;
+        app.ui.core.request(UiAction::HostGame {
+            map: fixture.map.0.clone(),
+            mode: ServerMode::SinglePlayer,
+            game_mode: None,
+            max_players: 1,
+            server_name: "Water lifecycle".into(),
+            password: String::new(),
+            admin_password: String::new(),
+            super_admin_password: String::new(),
+        });
+        frames.until(&mut app, "initial water", |a| {
+            matches!(a.ui.core.conn, ConnectionState::InGame { .. }) && !a.gpu.gpu_water.is_empty()
+        })?;
+        assert_eq!(app.scene.cpu_water.len(), 1);
+        let builds = app.gpu.gpu_water[0].mask_builds();
+        assert!(builds > 0 && app.gpu.gpu_water[0].copy_count() > 0);
+        for _ in 0..3 {
+            frames.draw(&mut app)?;
+        }
+        assert_eq!(app.gpu.gpu_water[0].mask_builds(), builds);
+        let cpu = app.scene.cpu_water[0].clone();
+        // Same device, new pipelines: existing geometry/masks must be adopted.
+        app.graphics.samples = 4;
+        frames.until(&mut app, "same-device graphics", |_| true)?;
+        assert_eq!(
+            app.gpu
+                .renderer
+                .as_mut()
+                .unwrap()
+                .ready()
+                .unwrap()
+                .samples(),
+            4
+        );
+        assert_eq!(app.gpu.gpu_water[0].mask_builds(), builds);
+        assert!(Arc::ptr_eq(&cpu, &app.scene.cpu_water[0]));
+        // Actual async loader source replacement, not a manually injected scene.
+        app.graphics.lighting = 3;
+        frames.until(&mut app, "Dynamic source", |a| {
+            a.lighting.light_volume.source_modern && !a.gpu.gpu_water.is_empty()
+        })?;
+        assert!(!Arc::ptr_eq(&cpu, &app.scene.cpu_water[0]));
+        let dynamic = app.scene.cpu_water[0].clone();
+        app.graphics.lighting = 0;
+        frames.until(&mut app, "compatibility source", |a| {
+            !a.lighting.light_volume.source_modern && !a.gpu.gpu_water.is_empty()
+        })?;
+        assert!(!Arc::ptr_eq(&dynamic, &app.scene.cpu_water[0]));
+        // A genuinely different headless device must drop and rebuild GPU ownership.
+        app.gpu_stopped();
+        assert!(app.gpu.gpu_water.is_empty());
+        assert_eq!(app.scene.cpu_water.len(), 1);
+        let mut other = Frames::new()?;
+        other.open(&mut app)?;
+        other.until(&mut app, "new device", |a| !a.gpu.gpu_water.is_empty())?;
+        assert!(app.gpu.gpu_water[0].copy_count() > 0);
+        app.ui.core.request(UiAction::OpenAdmin);
+        other.until(&mut app, "admin", |a| {
+            !a.ui.core.admin.busy() && a.ui.stack().contains(&ScreenId::Admin)
+        })?;
+        app.ui
+            .core
+            .admin_request(AdminAction::RequestMaps)
+            .context("map list request unavailable")?;
+        other.until(&mut app, "map list", |a| {
+            !a.ui.core.admin.busy()
+                && a.ui
+                    .core
+                    .admin
+                    .maps
+                    .iter()
+                    .any(|m| m.id == fixture.open_map.0)
+        })?;
+        app.ui
+            .core
+            .admin_request(AdminAction::ChangeMap {
+                map: fixture.open_map.0.clone(),
+            })
+            .context("map change unavailable")?;
+        other.until(&mut app, "map without repeated water", |a| {
+            a.scene.scene_map.as_deref() == Some(fixture.open_map.0.as_str())
+                && a.scene.cpu_water.is_empty()
+                && a.gpu.gpu_water.is_empty()
+        })?;
+        app.disconnect();
+        assert!(app.scene.cpu_water.is_empty() && app.gpu.gpu_water.is_empty());
+        Ok(())
+    }
+    #[test]
+    fn repeated_native_water_obeys_flat_scenery_overrides_and_nonflat_maps_keep_it() -> Result<()> {
+        use bri_content::{
+            atmosphere::{NO_WATER, Settings},
+            environment::Image,
+            environment_pack::{FILE, Pack, SCHEMA, Water as PlaneWater},
+        };
+        let fixture = ContentRoot::synthetic()?;
+        let env_dir = bri_net::testing::role_dir(&fixture.root, "environments")?;
+        let bytes = crate::testing::png(2, 2, |_, _| [20, 140, 210, 255])?;
+        let picture = Image {
+            file: "fixture.png".into(),
+            source: "invented".into(),
+            sha256: crate::testing::sha256(&bytes),
+            width: 2,
+            height: 2,
+        };
+        let pack = Pack {
+            schema_version: SCHEMA,
+            source: Some("invented".into()),
+            waters: vec![PlaneWater {
+                id: "fixture-water".into(),
+                label: "Fixture water".into(),
+                thumbnail: picture.clone(),
+                top: picture.clone(),
+                bottom: picture,
+                loops_per_unit: 0.2,
+                color: [1.; 4],
+                overlay_color: [0.1, 0.3, 0.5, 0.2],
+                color_multiply: true,
+                height: 1.,
+                kill: false,
+                scroll: [0.; 2],
+            }],
+            ..Default::default()
+        };
+        pack.validate()?;
+        std::fs::write(env_dir.join("fixture.png"), bytes)?;
+        std::fs::write(env_dir.join(FILE), serde_json::to_vec(&pack)?)?;
+        let mut packages = bri_package::packages::PackageSet::load_root(&fixture.root)?;
+        packages
+            .packages
+            .push(bri_net::testing::package("environments")?);
+        std::fs::write(
+            fixture.root.join("packages.json"),
+            serde_json::to_vec(&packages)?,
+        )?;
+        let state = fixture.state()?;
+        let mut app = App::load(&fixture.root, state.path(), (160, 120))?;
+        install_water(&app, &fixture.map.0, true)?;
+        install_water(&app, &fixture.open_map.0, false)?;
+        app.graphics.samples = 1;
+        app.graphics.bloom = false;
+        app.graphics.lighting = 0;
+        let mut frames = Frames::new()?;
+        frames.open(&mut app)?;
+        app.ui.core.request(UiAction::HostGame {
+            map: fixture.map.0.clone(),
+            mode: ServerMode::SinglePlayer,
+            game_mode: None,
+            max_players: 1,
+            server_name: "Native water scenery".into(),
+            password: String::new(),
+            admin_password: String::new(),
+            super_admin_password: String::new(),
+        });
+        frames.until(&mut app, "native flat water", |a| {
+            matches!(a.ui.core.conn, ConnectionState::InGame { .. })
+                && a.gpu.gpu_water.iter().any(|w| w.copy_count() > 0)
+        })?;
+        assert!(
+            bri_sim::map::NativeMap::load(
+                app.content.paths.maps.root(&fixture.map.0)?,
+                &fixture.map.0
+            )?
+            .plate
+            .is_some()
+        );
+        app.ui.core.request(UiAction::OpenAdmin);
+        frames.until(&mut app, "scenery admin", |a| {
+            !a.ui.core.admin.busy() && a.ui.stack().contains(&ScreenId::Admin)
+        })?;
+        let set_water = |frames: &mut Frames,
+                         app: &mut App,
+                         choice: Option<&str>,
+                         native: bool|
+         -> Result<()> {
+            let settings = Settings {
+                water: choice.map(str::to_string),
+                ..Default::default()
+            };
+            app.ui
+                .core
+                .admin_request(AdminAction::SetEnvironment {
+                    settings: Box::new(settings),
+                })
+                .context("environment request unavailable")?;
+            frames.until(app, "accepted water scenery", |a| {
+                !a.ui.core.admin.busy()
+                    && a.network_view()
+                        .is_some_and(|v| v.environment.water.as_deref() == choice)
+            })?;
+            assert_eq!(
+                app.gpu.gpu_water.iter().any(|w| w.copy_count() > 0),
+                native,
+                "native repeated draw ownership must follow accepted scenery {choice:?}"
+            );
+            assert_eq!(app.scene.scenery.native_water_visible(), native);
+            Ok(())
+        };
+        for choice in [
+            Some("fixture-water"),
+            Some(NO_WATER),
+            Some("missing-water"),
+            None,
+        ] {
+            let native = choice.is_none() || choice == Some("missing-water");
+            set_water(&mut frames, &mut app, choice, native)?;
+            let custom = app
+                .scene
+                .cpu_scene
+                .as_ref()
+                .unwrap()
+                .batches
+                .iter()
+                .any(|b| {
+                    app.scene.cpu_scene.as_ref().unwrap().materials[b.material].name
+                        == "environment/water-top"
+                });
+            assert_eq!(custom, choice == Some("fixture-water"));
+            if !native {
+                assert!(app.gpu.gpu_water.iter().all(|w| w.copy_count() == 0));
+            }
+        }
+        // Restore from an explicit hide, so source geometry must be readmitted.
+        set_water(&mut frames, &mut app, Some(NO_WATER), false)?;
+        set_water(&mut frames, &mut app, None, true)?;
+        app.ui
+            .core
+            .admin_request(AdminAction::RequestMaps)
+            .context("map list unavailable")?;
+        frames.until(&mut app, "scenery map list", |a| {
+            !a.ui.core.admin.busy()
+                && a.ui
+                    .core
+                    .admin
+                    .maps
+                    .iter()
+                    .any(|m| m.id == fixture.open_map.0)
+        })?;
+        app.ui
+            .core
+            .admin_request(AdminAction::ChangeMap {
+                map: fixture.open_map.0.clone(),
+            })
+            .context("nonflat map unavailable")?;
+        frames.until(&mut app, "nonflat native water", |a| {
+            a.scene.scene_map.as_deref() == Some(fixture.open_map.0.as_str())
+                && a.gpu.gpu_water.iter().any(|w| w.copy_count() > 0)
+        })?;
+        assert!(
+            bri_sim::map::NativeMap::load(
+                app.content.paths.maps.root(&fixture.open_map.0)?,
+                &fixture.open_map.0
+            )?
+            .plate
+            .is_none()
+        );
+        for choice in [
+            Some("fixture-water"),
+            Some(NO_WATER),
+            Some("missing-water"),
+            None,
+        ] {
+            set_water(&mut frames, &mut app, choice, true)?;
+        }
+        app.disconnect();
+        assert!(app.gpu.gpu_water.is_empty() && app.scene.cpu_water.is_empty());
+        Ok(())
     }
 }

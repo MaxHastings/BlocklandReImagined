@@ -36,7 +36,9 @@ then what players are asked to trust when your Add-On runs code on their PC
 | Worlds, creatures, bodies, blocks | [`packages/stresslab`](../../packages/stresslab) | see [Other content kinds](content-kinds.md) |
 | A whole new game on top: bodies, scoped guns, creatures that shoot back, scoring | [`sample-commando`](../../packages/samples/sample-commando) and its four siblings | five Add-Ons: a weapon, a look with client code, rules, a HUD and a mode ([total-conversion.md](../audits/total-conversion.md)) |
 
-Old Blockland v20 Add-Ons (`.zip` files) also work: see [Old v20 Add-Ons and new bricks](old-addons.md).
+Old Blockland v20 Add-Ons (`.zip` files) can be imported. Data conversion and
+supported native ports have different coverage; arbitrary TorqueScript does
+not run. See [Old v20 Add-Ons and new bricks](old-addons.md).
 
 ## 1. Make one
 
@@ -100,7 +102,9 @@ at least that long (10 by default), `"Guest: ..."` sends as the Guest and
 `other-add-on:command` sends another Add-On's command.
 
 **Play** it: put the folder in the game's `content/addons/` folder
-(`content` beside `Launch.cmd` in a release folder), open **Start Game > Add-Ons**, and turn it on. The screen turns on what it
+(`content` beside `Launch.cmd` or `launch.sh` in a release folder; on macOS,
+use the [writable per-build copy](../PLAYTEST-MAC.md#where-things-are)),
+open **Start Game > Add-Ons**, and turn it on. The screen turns on what it
 depends on and shows players what it may do. See
 [mod-manager.md](../architecture/mod-manager.md).
 
@@ -159,6 +163,8 @@ Each topic has its own page:
 11. [Bodies that move their own way](../architecture/movement-controllers.md): movement controllers
 12. [Client code: cameras, controls and effects](../architecture/client-sandbox.md)
 13. [Experimental bot objectives](bot-objectives.md)
+14. [Making maps](maps.md)
+15. [Authored seat pose composition](seat-pose-composition.md)
 
 Porting an old Add-On's scripts is [porting.md](porting.md), and the
 TorqueScript functions they used map to [torque-equivalents.md](torque-equivalents.md).
@@ -169,8 +175,9 @@ This guide changes in the same change as these land. Everything a total
 conversion can and cannot change yet, area by area, is in
 [total-conversion.md](../audits/total-conversion.md).
 
-- **Brick authoring without v20 files**: a native brick format you write
-  directly.
+- **Hand-authored native brick files**: there is no step-by-step guide for
+  writing the converted format directly. Blender/glTF brick import already
+  works without v20 files; see [Bricks](gltf-models.md#bricks).
 - **Drawing blocks**: `block` and `texture` content (per-face textures,
   flipbooks and states a script switches with `set_block_state`) load,
   save and replicate, but the renderer does not draw block faces yet.

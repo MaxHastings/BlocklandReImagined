@@ -2,19 +2,35 @@
 
 `bri-server` hosts a game with no window, like a Blockland v20 dedicated
 server. It ships in the Windows (`bri-server.exe`) and Linux (`bri-server`)
-downloads, next to the game, and uses the game's own `content` folder, so
-everyone who plays with the same download joins without extra steps.
+downloads, next to the game, and uses the game's own `content` folder.
+Players should use the same release. macOS releases do not include a dedicated
+server executable.
+
+## On Windows
+
+Extract the whole Windows release. Open PowerShell in that folder and run:
+
+```powershell
+.\bri-server.exe content slate server-state 0.0.0.0:28000
+```
+
+Allow the firewall prompt for the network you intend to host on. Internet
+players need reachable UDP 28000; LAN discovery uses UDP 28050. The settings,
+shutdown, resume and Add-On instructions below also apply on Windows.
 
 ## On a Linux VPS
 
-Any 64-bit Linux from Ubuntu 22.04 or Debian 12 on works. No graphics card,
-sound or desktop is needed.
+Use Linux **x86-64** with glibc 2.35 or newer, such as Ubuntu 22.04 or Debian
+12. No graphics card, sound or desktop is needed.
 
 1. Download and unzip the newest Linux release on the VPS:
    ```sh
    wget https://github.com/MaxHastings/BlocklandReImagined/releases/latest/download/BlocklandReImagined-linux.zip
-   unzip BlocklandReImagined-linux.zip && cd BlocklandReImagined-*-linux
+   unzip BlocklandReImagined-linux.zip
+   cd BlocklandReImagined-<version>-linux
    ```
+   Replace `<version>` with the folder name in the ZIP. If the extractor
+   dropped executable permissions, run `chmod +x bri-server`.
 2. Open the game port for UDP: `sudo ufw allow 28000/udp` (and the same
    port in your VPS provider's firewall, if it has one).
 3. Start the server on a map:
@@ -45,8 +61,10 @@ To keep it running after you log out, start it inside `tmux` or `screen`
 While it runs it keeps one recovery file, `server-state/recovery.json`,
 rewritten about once a minute while the world changes and removed when the
 server stops normally. If the server crashes or is killed outright, the next
-start turns that file into the world `resume` carries on from, so at most a
-minute of building is lost. It never adds save files of its own.
+start uses that file to prepare the world `resume` carries on from. Recovery
+usually trails changes by about a minute; it is not a backup guarantee.
+Back up `server-state` while the server is stopped before updating. Starting
+with a map name creates a new world; use `resume` to continue the saved one.
 
 ## Settings and admin passwords
 
@@ -66,9 +84,13 @@ kept in `server-state/administration.json`.
 
 ## Add-Ons
 
-The server runs the Add-Ons turned on in `content/packages.json`, the same
-ones the game ships with. Players who are missing one download it from the
-server when they join.
+The server runs the Add-Ons turned on in `content/packages.json`. Keep the
+release's base package selection. To configure custom Add-Ons, use the matching
+client release's **Start Game → Add-Ons** screen on a content copy and transfer
+that selection together with the required Add-On folders. Stop the server
+before replacing content; back up its state and custom Add-Ons first.
+Players download missing shared Add-Ons on join. This does not update their
+game binary or make incompatible alpha Add-On formats load.
 
 ## Not there yet
 

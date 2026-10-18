@@ -21,6 +21,7 @@ use std::{
 pub struct MapScene {
     pub scene: SceneData,
     pub terrain: Vec<TerrainScene>,
+    pub repeated_water: Vec<crate::water_scene::WaterScene>,
     /// Index range of each static shape by scene node, so a smashed shape
     /// can stop drawing (`GpuScene::hide_indices`).
     pub shape_indices: BTreeMap<u32, std::ops::Range<u32>>,
@@ -311,7 +312,8 @@ fn load_bundle(root: &Path, map_id: &str, legacy: bool) -> Result<MapScene> {
         out.fog = fog;
     }
     let fields = terrain_fields(&root, &bundle, &scene, lift)?;
-    let water_bound = load_waters(&root, &bundle, &scene, lift, &fields, &mut out, &mut cache)?;
+    let (water_bound, repeated_water) =
+        load_waters(&root, &bundle, &scene, lift, &fields, &mut out, &mut cache)?;
     let terrain = fields
         .iter()
         .map(|field| {
@@ -407,6 +409,7 @@ fn load_bundle(root: &Path, map_id: &str, legacy: bool) -> Result<MapScene> {
     Ok(MapScene {
         scene: out,
         terrain,
+        repeated_water,
         shape_indices,
         modern_lights,
         light_animations,
@@ -452,9 +455,9 @@ fn load_waters(
     fields: &[Arc<TerrainField>],
     out: &mut SceneData,
     cache: &mut BTreeMap<(String, bool), usize>,
-) -> Result<bool> {
+) -> Result<(bool, Vec<crate::water_scene::WaterScene>)> {
     let Some(records) = bundle.get("waters").and_then(|w| w.get(&scene.id)) else {
-        return Ok(false);
+        return Ok((false, Vec::new()));
     };
     let mut waters: Vec<bri_content::water::Water> = serde_json::from_value(records.clone())?;
     for water in &mut waters {
@@ -472,7 +475,15 @@ fn load_waters(
         waters.iter().map(|w| w.node).collect::<Vec<_>>() == expected,
         "Native water placements disagree with scene"
     );
+    let mut repeated = Vec::new();
     for water in &waters {
+        let mut local = SceneData::default();
+        let mut local_cache = BTreeMap::new();
+        let (dest, images) = if water.repeat_period.is_some() {
+            (&mut local, &mut local_cache)
+        } else {
+            (&mut *out, &mut *cache)
+        };
         water.validate()?;
         let mut textures = [0; 3];
         for (slot, image) in [
@@ -494,24 +505,42 @@ fn load_waters(
                         && format!("{:x}", Sha256::digest(&bytes)) == image.sha256,
                     "Water image checksum mismatch"
                 );
-                textures[slot] = texture(root, &image.file, true, out, cache)?;
+                textures[slot] = texture(root, &image.file, true, dest, images)?;
                 ensure!(
-                    out.images[textures[slot]].width == image.width
-                        && out.images[textures[slot]].height == image.height,
+                    dest.images[textures[slot]].width == image.width
+                        && dest.images[textures[slot]].height == image.height,
                     "Water image dimensions changed"
                 );
             }
         }
         let specular = water_specular(&scene.nodes[water.node].properties);
-        let terrain = !fields.is_empty();
-        crate::water_scene::append(out, water, textures, specular, terrain, |x, z| {
-            fields
-                .iter()
-                .filter_map(|field| field.height(x, z))
-                .max_by(f32::total_cmp)
-        })?;
+        if water.repeat_period.is_some() {
+            out.omissions
+                .extend(water.warnings.iter().map(|w| format!("{}: {w}", water.id)));
+            repeated.push(crate::water_scene::WaterScene::new(
+                water.clone(),
+                local,
+                textures,
+                specular,
+                fields.to_vec(),
+            )?);
+        } else {
+            crate::water_scene::append(
+                out,
+                water,
+                textures,
+                specular,
+                !fields.is_empty(),
+                |x, z| {
+                    fields
+                        .iter()
+                        .filter_map(|field| field.height(x, z))
+                        .max_by(f32::total_cmp)
+                },
+            )?;
+        }
     }
-    Ok(true)
+    Ok((true, repeated))
 }
 
 /// A WaterBlock's authored `specularColor` and `specularPower`, or the

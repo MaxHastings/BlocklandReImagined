@@ -1,5 +1,11 @@
 # Native multiplayer foundation
 
+Implementation reference with dated transport/protocol milestones. Numbered
+protocol/content identities and benchmark counts below belong to those
+milestones. The current wire version is computed in
+`crates/net/src/protocol.rs`; players should follow
+[hosting and joining](TESTER-GUIDE.md#playing-together).
+
 `bri-net` runs the same `bri-sim::Session` used by local headless tests. Quinn
 provides QUIC with a reliable ordered control stream and unreliable movement/
 pose datagrams.

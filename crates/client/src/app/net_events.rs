@@ -1026,6 +1026,7 @@ impl App {
             self.scene.cpu_scene = Some(prepared.scene);
             self.scene.shape_indices = prepared.shape_indices;
             self.scene.cpu_terrain = prepared.terrain;
+            self.scene.cpu_water = prepared.repeated_water;
             self.scene.meshes = Some(prepared.meshes);
             self.scene.mirror_shapes = prepared.mirror_shapes;
             self.scene.mirror_index.clear();
@@ -1048,6 +1049,7 @@ impl App {
             }
             self.gpu.gpu_scene = None;
             self.gpu.gpu_terrain.clear();
+            self.gpu.gpu_water.clear();
             if let Some((device, queue, format)) = rebuild {
                 self.gpu_ready(&device, &queue, format)?;
             }

@@ -1216,6 +1216,11 @@ pub struct TextureCache {
 }
 
 impl TextureCache {
+    /// Prune only a caller-owned cache; used by the water copy lifetime.
+    pub(crate) fn retain_labels(&mut self, labels: &std::collections::BTreeSet<String>) {
+        self.textures.retain(|key, _| labels.contains(&key.label));
+    }
+
     /// Images held.
     pub fn len(&self) -> usize {
         self.textures.len()

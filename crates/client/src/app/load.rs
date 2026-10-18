@@ -166,6 +166,7 @@ impl App {
                 gpu_scene: None,
                 gpu_broken: BTreeSet::new(),
                 gpu_terrain: Vec::new(),
+                gpu_water: Vec::new(),
                 depth: None,
                 gpu_palette: None,
                 gpu_chunks: HashMap::new(),
@@ -244,6 +245,7 @@ impl App {
             scene: SceneState {
                 cpu_scene: None,
                 cpu_terrain: Vec::new(),
+                cpu_water: Vec::new(),
                 scenery: Default::default(),
                 chunks_left_out: BTreeSet::new(),
                 shape_indices: BTreeMap::new(),

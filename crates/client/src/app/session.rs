@@ -166,9 +166,11 @@ impl App {
         self.scene.cpu_scene = None;
         self.lighting.light_volume = LightVolumeState::default();
         self.scene.cpu_terrain.clear();
+        self.scene.cpu_water.clear();
         self.scene.scenery.reset();
         self.gpu.gpu_scene = None;
         self.gpu.gpu_terrain.clear();
+        self.gpu.gpu_water.clear();
         self.scene.meshes = None;
         self.scene.mirror_shapes = Default::default();
         self.scene.mirror_index.clear();
@@ -594,6 +596,7 @@ impl App {
                         plate,
                         scene: visual.scene,
                         terrain: visual.terrain.into_iter().map(Arc::new).collect(),
+                        repeated_water: visual.repeated_water.into_iter().map(Arc::new).collect(),
                         meshes,
                         mirror_shapes,
                         materials,

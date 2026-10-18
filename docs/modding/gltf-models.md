@@ -6,6 +6,12 @@ skeleton, clips and textures, a held weapon, or a vehicle or prop. Blender
 exports glTF from File > Export > glTF 2.0; so do Blockbench, Maya and most
 other tools.
 
+The release includes `bri-import-addon`: run it directly with the arguments
+after `--` in these source-build examples. Use `.\bri-import-addon.exe` in
+PowerShell, `./bri-import-addon` on Linux, or the tool inside
+`BlocklandReImagined.app/Contents/MacOS/` on macOS. Rust is only needed to
+build the tools from this checkout.
+
 ```sh
 cargo run -p bri-addon-import --bin bri-import-addon -- gltf mario.glb addons/mario --kind body --name "Mario" --height 1.6
 cargo run -p bri-addon-import --bin bri-import-addon -- gltf rifle.glb rifle-model --kind item
@@ -232,7 +238,7 @@ needs nothing more. A gun that visibly turns (the Warthog's chain gun) is
 its own `.glb`, imported with `--kind vehicle`, with its own `mount0` (the
 gunner), `muzzlePoint` and `pivot`; the hull gets a `turret` Empty where it
 sits. It turns left and right with the gunner's aim; tilting the barrel up
-and down needs a `look` clip, which glTF turrets do not support yet. The
+and down uses an authored `look` clip driven by the gunner's pitch. The
 gun's sound goes in the vehicle pack's `weapons.json` `sounds`, as above.
 
 ## 5. Textures and materials
