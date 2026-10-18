@@ -1211,12 +1211,18 @@ pub use bri_content::hold::reach as reach_hands;
 /// middle over the feet and its back up, `depth` (half its thickness,
 /// scaled) above the ground.
 pub fn posture_frame(player: &PlayerState, lean_tilt: f32, depth: f32) -> Mat4 {
+    posture_frame_for(lean_tilt, depth, player.posture.prone)
+}
+
+/// [`posture_frame`], laying the body face down only when `lie_down`: a body
+/// whose own clips pose it lying prone is not laid down a second time.
+pub fn posture_frame_for(lean_tilt: f32, depth: f32, lie_down: bool) -> Mat4 {
     let lean = if lean_tilt.is_finite() && lean_tilt != 0.0 {
         Mat4::from_rotation_z(-lean_tilt)
     } else {
         Mat4::IDENTITY
     };
-    if !player.posture.prone {
+    if !lie_down {
         return lean;
     }
     // Head forward (-Z): the body's up turns to its facing.
@@ -1459,6 +1465,27 @@ pub fn locomotion(player: &PlayerState, coverage: f32) -> LocomotionAction {
     }
     action
 }
+/// A body lying prone whose clips pose the lying body plays its prone locomotion
+/// roles for the stance names `locomotion` picks from the velocity. A right
+/// strafe takes its own clip when it has one, else the left clip reversed.
+fn own_prone_action(action: LocomotionAction, roles: &RoleClips) -> LocomotionAction {
+    let stay = |sequence| LocomotionAction {
+        sequence,
+        forward: true,
+    };
+    match (action.sequence, action.forward) {
+        ("run", _) => stay("pronerun"),
+        ("back", _) => stay("proneback"),
+        ("side", true) => stay("proneside"),
+        ("side", false) if roles.has_own(Role::ProneSideRight) => stay("pronesideright"),
+        ("side", false) => LocomotionAction {
+            sequence: "proneside",
+            forward: false,
+        },
+        _ => stay("prone"),
+    }
+}
+
 /// A body with its own right-strafe clip plays it, rather than its left clip
 /// reversed (v20's only way to strafe right, which `locomotion` returns).
 fn own_right_strafe(action: LocomotionAction, roles: &RoleClips) -> LocomotionAction {
@@ -2070,6 +2097,7 @@ impl AvatarMesh {
         }
         // v20 picks every client frame: it kept `delayTicks` but dropped the
         // test that would hold an action for `sNewAnimationTickTime`.
+        let player_prone_authored = movement.posture.prone && roles.has_own(Role::Prone);
         let next = Some(scripted.map_or_else(
             || {
                 if self.model.is_some()
@@ -2094,7 +2122,11 @@ impl AvatarMesh {
                     if movement.jump.jet_flight && action.sequence == "jump" {
                         action.sequence = if movement.crouched { "crouch" } else { "root" };
                     }
-                    own_right_strafe(action, &roles)
+                    if player_prone_authored {
+                        own_prone_action(action, &roles)
+                    } else {
+                        own_right_strafe(action, &roles)
+                    }
                 }
             },
             |sequence| LocomotionAction {
@@ -2340,6 +2372,8 @@ impl AvatarMesh {
         lean_tilt: f32,
         holds: Holds,
     ) -> Result<()> {
+        // A body whose own clips pose it lying is not laid face down as well.
+        let lie_down = player.posture.prone && !self.roles(assets).has_own(Role::Prone);
         // `setScale` scales the whole shape about the feet.
         let model_transform = Mat4::from_scale_rotation_translation(
             Vec3::splat(player.scale),
@@ -2357,11 +2391,11 @@ impl AvatarMesh {
                 model_transform * Mat4::from_translation(shift)
             }
             // On foot a body leans and lies down as its posture says.
-            _ if mount_rotation.is_none() && (player.posture.prone || lean_tilt != 0.0) => {
+            _ if mount_rotation.is_none() && (lie_down || lean_tilt != 0.0) => {
                 Mat4::from_rotation_translation(
                     Quat::from_rotation_y(-player.body_yaw()),
                     Vec3::from(player.feet),
-                ) * posture_frame(player, lean_tilt, 0.3 * player.scale)
+                ) * posture_frame_for(lean_tilt, 0.3 * player.scale, lie_down)
                     * Mat4::from_scale(Vec3::splat(player.scale))
             }
             _ => model_transform,
@@ -4422,6 +4456,64 @@ mod tests {
         assert_eq!(with.clip(Role::SideRight), Some(("strafer", false)));
         assert_eq!(without.clip(Role::SideRight), Some(("side", true)));
         assert!(!without.report().iter().any(|l| l.contains("side_right")));
+    }
+
+    #[test]
+    fn a_prone_body_with_its_own_clips_crawls_on_them_and_is_not_laid_down_again() {
+        let own: bri_content::body::Animations = [
+            ("prone".into(), "Prn".into()),
+            ("prone_run".into(), "Crawl".into()),
+            ("prone_back".into(), "CrawlBack".into()),
+            ("prone_side".into(), "CrawlLeft".into()),
+            ("prone_side_right".into(), "CrawlRight".into()),
+        ]
+        .into();
+        let has = |c: &str| {
+            matches!(
+                c,
+                "prn" | "crawl" | "crawlback" | "crawlleft" | "crawlright"
+            )
+        };
+        let with = RoleClips::resolve(&own, has);
+        assert!(with.has_own(Role::Prone));
+        let pick = |sequence: &'static str, forward| {
+            let a = own_prone_action(LocomotionAction { sequence, forward }, &with);
+            (a.sequence, a.forward)
+        };
+        assert_eq!(pick("root", true), ("prone", true));
+        assert_eq!(pick("run", true), ("pronerun", true));
+        assert_eq!(pick("back", true), ("proneback", true));
+        assert_eq!(pick("side", true), ("proneside", true));
+        assert_eq!(pick("side", false), ("pronesideright", true));
+        assert_eq!(with.clip(Role::ProneSideRight), Some(("crawlright", false)));
+        // Without a right clip the left one plays reversed; and no report line.
+        let left_only = RoleClips::resolve(
+            &[
+                ("prone".into(), "Prn".into()),
+                ("prone_side".into(), "CrawlLeft".into()),
+            ]
+            .into(),
+            has,
+        );
+        let a = own_prone_action(
+            LocomotionAction {
+                sequence: "side",
+                forward: false,
+            },
+            &left_only,
+        );
+        assert_eq!((a.sequence, a.forward), ("proneside", false));
+        assert_eq!(
+            left_only.clip(Role::ProneSideRight),
+            Some(("crawlleft", true))
+        );
+        assert!(!left_only.report().iter().any(|l| l.contains("prone")));
+        // The face-down frame is only for bodies without lying clips.
+        let mut p = player();
+        p.posture.prone = true;
+        let down = posture_frame(&p, 0.0, 0.3);
+        assert_ne!(down, Mat4::IDENTITY);
+        assert_eq!(posture_frame_for(0.0, 0.3, false), Mat4::IDENTITY);
     }
 
     #[test]

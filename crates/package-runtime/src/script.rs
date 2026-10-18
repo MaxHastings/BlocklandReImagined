@@ -119,6 +119,9 @@ pub struct PlayerView {
     /// makes of it (an aim-down-sights gun takes it as its aim).
     #[serde(default)]
     pub jet_held: bool,
+    /// Lying prone (`set_prone`); a prone body is also `crouched`.
+    #[serde(default)]
+    pub prone: bool,
     /// Seated on a vehicle or riding another player.
     #[serde(default)]
     pub mounted: bool,
@@ -878,6 +881,7 @@ fn player_map(p: &PlayerView) -> Dynamic {
         ("archetype", p.archetype.clone().into()),
         ("crouched", p.crouched.into()),
         ("jet_held", p.jet_held.into()),
+        ("prone", p.prone.into()),
         ("mounted", p.mounted.into()),
         (
             "mount",

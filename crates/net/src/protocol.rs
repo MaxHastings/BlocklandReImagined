@@ -578,11 +578,24 @@ pub struct RemotePose {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub controller: Option<RemoteController>,
 }
-/// The part of [`bri_sim::archetype::ControllerState`] others draw.
+/// The part of [`bri_sim::archetype::ControllerState`] others draw, and the part
+/// of [`bri_sim::player::Posture`] they draw too: whether the body lies prone
+/// and how far it leans in hundredths (-100 fully left to 100 fully right).
+/// The one trailing pose field, so a pose of an upright body with a blank
+/// controller still costs no byte (two skipped trailing fields would shift).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RemoteController {
     pub intent: u8,
     pub heading: Option<i16>,
+    /// Last and left out when upright, so a controller costs what it did.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub posture: Option<RemotePosture>,
+}
+/// Lying prone, and how far leaning in hundredths (-100 fully left, 100 fully right).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RemotePosture {
+    pub prone: bool,
+    pub lean: i8,
 }
 const CENTIMETRES: f32 = 100.0;
 const LOOK_UNITS: f32 = 10_000.0;
@@ -615,13 +628,20 @@ impl RemotePose {
                 | (p.pass_group.min(bri_sim::player::MAX_PASS_GROUP) << Self::PASS_GROUP_SHIFT),
             archetype: p.archetype,
             scale: (p.scale != 1.0).then_some(p.scale),
-            controller: p
-                .controller
-                .filter(|c| c.intent != 0 || c.heading.is_some())
-                .map(|c| RemoteController {
-                    intent: c.intent,
-                    heading: c.heading,
-                }),
+            controller: {
+                let controller = p
+                    .controller
+                    .filter(|c| c.intent != 0 || c.heading.is_some());
+                let posed = p.posture.prone || p.posture.lean != 0.0;
+                (controller.is_some() || posed).then(|| RemoteController {
+                    intent: controller.map_or(0, |c| c.intent),
+                    heading: controller.and_then(|c| c.heading),
+                    posture: posed.then(|| RemotePosture {
+                        prone: p.posture.prone,
+                        lean: (p.posture.lean * 100.0).round().clamped(-100.0, 100.0) as i8,
+                    }),
+                })
+            },
         }
     }
     /// As a pose, with owner-only state at its defaults and flight history
@@ -656,13 +676,24 @@ impl RemotePose {
                 tether: None,
                 controller: self
                     .controller
+                    .filter(|c| c.intent != 0 || c.heading.is_some())
                     .map(|c| bri_sim::archetype::ControllerState {
                         intent: c.intent,
                         heading: c.heading,
                         ..Default::default()
                     }),
                 pass_group: self.flags >> Self::PASS_GROUP_SHIFT,
-                posture: Default::default(),
+                posture: self.controller.and_then(|c| c.posture).map_or_else(
+                    Default::default,
+                    |p| {
+                        let lean = f32::from(p.lean) / 100.0;
+                        bri_sim::player::Posture {
+                            prone: p.prone,
+                            lean,
+                            lean_to: lean,
+                        }
+                    },
+                ),
             },
         }
     }

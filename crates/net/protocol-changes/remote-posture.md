@@ -1,0 +1,1 @@
+`RemoteController` (the trailing `RemotePose::controller`) gains a trailing `posture: Option<RemotePosture { prone, lean }>`: whether a player lies prone and how far it leans (hundredths), in the pose others receive. The controller is sent when active or when the body is prone or leaning, and left out otherwise. Before this, observers never saw `PlayerState::posture`.

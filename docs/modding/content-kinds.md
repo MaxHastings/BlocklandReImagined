@@ -240,7 +240,7 @@ travel divided by the cycle's length.
 
 `look.animations` maps roles to the body's own clips: `idle`, `run`,
 `back`, `side`, `side_right`, `crouch`, `crouch_run`, `crouch_back`, `crouch_side`,
-`crouch_side_right`,
+`crouch_side_right`, `prone`, `prone_run`, `prone_back`, `prone_side`, `prone_side_right`,
 `jump`, `fall`, `sit`, `aim_right`, `aim_left`, `aim_both`,
 `look`, `look_crouch`, `head_up`, `head_side`, `seat_aim`, `swim` and `death`. `seat_aim`
 is a seated gunner's pose from aiming the gun at its highest (the clip's
