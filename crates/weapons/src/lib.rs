@@ -2025,6 +2025,11 @@ pub struct Shot {
     /// with `still`, stands still): the first shot of a burst.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rested: Option<Rested>,
+    /// A spread that builds as the holder keeps firing and settles when
+    /// they stop (Halo's trigger error): it replaces `spread` and the
+    /// `moving`, `crouched`, `airborne` and `rested` variants.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<ShotError>,
     /// Each projectile arrives instantly along a ray instead of flying.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hitscan: Option<Hitscan>,
@@ -2170,6 +2175,7 @@ impl Shot {
         airborne_spread: None,
         moving_projectile: None,
         rested: None,
+        error: None,
         hitscan: None,
         kick: None,
         scale: 1.0,
@@ -2237,6 +2243,44 @@ impl Shot {
             (!r.still || speed <= self.moving_speed)
                 && idle_ticks.is_none_or(|t| t >= u64::from(r.after_ticks))
         })
+    }
+}
+/// [`Shot::error`]: each tick (120 a second) a holder's error rises by
+/// `1 / rise_ticks` while the trigger is held or a shot was fired within
+/// `recover_ticks`, and falls by `1 / fall_ticks` otherwise, between 0 and
+/// 1; a shot's spread is `min` at error 0 and `max` at 1, as Halo's
+/// `weapon_trigger` error runs (`weapons.c`).
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ShotError {
+    pub min: f32,
+    pub max: f32,
+    pub rise_ticks: u32,
+    pub fall_ticks: u32,
+    /// How long after a shot the error keeps rising with the trigger up:
+    /// the trigger's recovering state, a round's own period.
+    pub recover_ticks: u32,
+}
+impl ShotError {
+    pub fn valid(&self) -> bool {
+        (0.0..=1.0).contains(&self.min)
+            && (0.0..=1.0).contains(&self.max)
+            && self.min <= self.max
+            && (1..=7200).contains(&self.rise_ticks)
+            && (1..=7200).contains(&self.fall_ticks)
+            && self.recover_ticks <= 7200
+    }
+    /// The error a tick on, from `error`.
+    pub fn step(&self, error: f32, rising: bool) -> f32 {
+        if rising {
+            (error + 1.0 / self.rise_ticks as f32).min(1.0)
+        } else {
+            (error - 1.0 / self.fall_ticks as f32).max(0.0)
+        }
+    }
+    /// The spread at `error`.
+    pub fn spread(&self, error: f32) -> f32 {
+        self.min + (self.max - self.min) * error.clamp(0.0, 1.0)
     }
 }
 /// [`Shot::rested`].
@@ -3681,7 +3725,8 @@ impl Pack {
                 "Invalid image command {id}"
             );
             let shot_ok = |s: &Shot| {
-                (1..=64).contains(&s.projectiles)
+                s.error.is_none_or(|e| e.valid())
+                    && (1..=64).contains(&s.projectiles)
                     && (0.0..=1.0).contains(&s.spread)
                     && (0.0..=100.0).contains(&s.recoil)
                     && s.recoil_vertical.is_none_or(|v| (0.0..=100.0).contains(&v))

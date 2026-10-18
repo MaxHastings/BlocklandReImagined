@@ -850,6 +850,9 @@ pub struct Actor {
     #[serde(default)]
     next: Option<NextImage>,
     last_shot: Option<u64>,
+    /// The holder's firing error, 0 to 1 ([`crate::ShotError`]).
+    #[serde(default)]
+    error: f32,
     /// The palette colour the holder last picked for their spray can,
     /// which `paint_tint` images take.
     #[serde(default)]
@@ -1541,6 +1544,7 @@ impl WeaponsWorld {
                 next: None,
                 aim_scale: 1.0,
                 last_shot: None,
+                error: 0.0,
                 spray: 0,
                 ball_ready: 0,
                 spawn_tick: self.tick,
@@ -3227,6 +3231,22 @@ impl WeaponsWorld {
                     break;
                 }
             }
+            // The firing error of the gun in hand rises while its trigger is
+            // held or it is recovering from a shot, and settles otherwise.
+            let error = a.images[0]
+                .as_ref()
+                .and_then(|e| self.pack.images.get(&e.image))
+                .and_then(|image| image.shot.as_ref())
+                .and_then(|shot| shot.error);
+            a.error = match error {
+                Some(error) => {
+                    let recovering = a
+                        .last_shot
+                        .is_some_and(|t| self.tick < t + u64::from(error.recover_ticks));
+                    error.step(a.error, a.trigger || recovering)
+                }
+                None => 0.0,
+            };
             if let Some(mut e) = a.emote.take()
                 && self.advance_emote(id, &mut e)
             {
@@ -4037,8 +4057,10 @@ impl WeaponsWorld {
                 }
                 let pace = a.frame.velocity.length();
                 let footing = a.frame.grounded || a.frame.mount != Mount::None;
-                let spread =
-                    shot.spread_in(pace, idle_ticks, a.frame.crouched, footing) * a.aim_scale;
+                let spread = match shot.error {
+                    Some(error) => error.spread(a.error),
+                    None => shot.spread_in(pace, idle_ticks, a.frame.crouched, footing),
+                } * a.aim_scale;
                 let kick = shot.recoil_velocity(direction);
                 if kick != Vec3::ZERO {
                     // Recoil lands before the projectiles, which inherit it.
