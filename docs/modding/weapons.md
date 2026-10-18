@@ -210,7 +210,7 @@ Each shot takes `per_shot` rounds (1 when left out); a shot without them
 clicks with `empty_sound` and reloads. The last round, the light key and
 `reload(p)` start a reload that lasts `reload_ticks` (120 a second, up to
 1200) and fills the magazine from the holder's reserve of its `ammo`.
-Every gun loading the same `ammo` shares that reserve; each gun keeps its
+A reload that starts with nothing loaded may take its own `empty_reload_ticks`, `empty_reload_image_sequence` and `empty_reload_sound` in place of the ordinary ones (a gun whose empty reload also works its slide or bolt). Every gun loading the same `ammo` shares that reserve; each gun keeps its
 own rounds, by the tool slot it sits in (two of one gun each keep theirs),
 also when thrown and picked up by someone else. `one_by_one`
 loads a round per `reload_ticks` (`per_load` rounds with a two-barrel

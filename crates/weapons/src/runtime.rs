@@ -2018,6 +2018,23 @@ impl WeaponsWorld {
             return false;
         }
         let scripted = magazine.scripted();
+        // Started with nothing loaded, a gun may reload another way.
+        let empty = rounds == 0;
+        let ticks = if empty && magazine.empty_reload_ticks > 0 {
+            magazine.empty_reload_ticks
+        } else {
+            magazine.reload_ticks
+        };
+        let image_sequence = if empty && !magazine.empty_reload_image_sequence.is_empty() {
+            &magazine.empty_reload_image_sequence
+        } else {
+            &magazine.reload_image_sequence
+        };
+        let sound = if empty && !magazine.empty_reload_sound.is_empty() {
+            &magazine.empty_reload_sound
+        } else {
+            &magazine.reload_sound
+        };
         if scripted
             && !magazine.light_states.is_empty()
             && !a.images[0]
@@ -2038,7 +2055,7 @@ impl WeaponsWorld {
             done: if scripted {
                 u64::MAX
             } else {
-                self.tick + u64::from(magazine.reload_ticks)
+                self.tick + u64::from(ticks)
             },
         });
         if let Some(image) = a.images[0].as_ref().map(|e| e.image.clone()) {
@@ -2050,19 +2067,19 @@ impl WeaponsWorld {
         if !magazine.reload_sequence.is_empty() {
             self.animation(id, a, None, &magazine.reload_sequence);
         }
-        if !magazine.reload_image_sequence.is_empty() {
+        if !image_sequence.is_empty() {
             self.emit_animation(
                 id,
                 0,
-                magazine.reload_image_sequence.clone(),
+                image_sequence.clone(),
                 Some(0),
                 Some(self.animation_binding(a, None)),
             );
         }
-        if !magazine.reload_sound.is_empty() {
+        if !sound.is_empty() {
             self.events.push(Event::Sound {
                 source: TargetId::Actor(id),
-                profile: magazine.reload_sound.clone(),
+                profile: sound.clone(),
                 position: a.frame.position,
             });
         }

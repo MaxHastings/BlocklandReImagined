@@ -1450,6 +1450,16 @@ pub struct Magazine {
     pub reload_sound: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub empty_sound: String,
+    /// A reload that starts with nothing loaded takes these in place of
+    /// `reload_ticks`, `reload_image_sequence` and `reload_sound` (a gun
+    /// whose empty reload also works the slide or the bolt): 0 or empty
+    /// keeps the usual one.
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub empty_reload_ticks: u32,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub empty_reload_image_sequence: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub empty_reload_sound: String,
     /// What the ammo display calls it; the `ammo` name when empty.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub display: String,
@@ -1661,6 +1671,7 @@ impl Magazine {
                 && (1..=self.size).contains(&self.per_load)
                 && self.last_rounds <= self.size
                 && (1..=1200).contains(&self.reload_ticks)
+                && self.empty_reload_ticks <= 1200
                 && self.reserve <= 100_000
                 && (1..=100_000).contains(&self.max_reserve),
             "Invalid magazine numbers"
@@ -1684,11 +1695,20 @@ impl Magazine {
                     .reload_sequence
                     .bytes()
                     .all(|b| b.is_ascii_alphanumeric() || b == b'_')
+                && self.empty_reload_image_sequence.len() <= 64
+                && self
+                    .empty_reload_image_sequence
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b == b'_')
                 && self.display.len() <= 64
                 && self.reload_state.len() <= 64,
             "Invalid magazine reload sequence, display or reload state"
         );
-        for sound in [&self.reload_sound, &self.empty_sound] {
+        for sound in [
+            &self.reload_sound,
+            &self.empty_sound,
+            &self.empty_reload_sound,
+        ] {
             ensure!(sound.len() <= 128, "Invalid magazine sound");
         }
         ensure!(
