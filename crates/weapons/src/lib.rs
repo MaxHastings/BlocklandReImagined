@@ -385,6 +385,36 @@ pub struct Zoom {
     /// marksman's breathing moves a scope.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sway: Option<Sway>,
+    /// The sound of breath while aiming: the owner hears `exhale` and
+    /// `inhale` alternate every half `period` (AA's `BreatheCycle`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub breath: Option<Breath>,
+}
+/// Breathing sounds while aiming ([`Zoom::breath`]): sound profile names,
+/// heard only by the player aiming.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Breath {
+    pub exhale: String,
+    pub inhale: String,
+    /// Seconds for one breath out and in, 1 to 30.
+    #[serde(default = "Breath::default_period")]
+    pub period: f32,
+}
+impl Breath {
+    fn default_period() -> f32 {
+        std::f32::consts::TAU
+    }
+    fn validate(&self) -> std::result::Result<(), String> {
+        let name = |s: &String| !s.is_empty() && s.len() <= 128 && !s.chars().any(char::is_control);
+        if !(name(&self.exhale) && name(&self.inhale)) {
+            return Err("breath: exhale and inhale name sound profiles".into());
+        }
+        if !(self.period.is_finite() && (1.0..=30.0).contains(&self.period)) {
+            return Err("breath: period 1 to 30 seconds".into());
+        }
+        Ok(())
+    }
 }
 impl Zoom {
     pub const MAX_LEVELS: usize = 8;
@@ -455,6 +485,9 @@ impl Zoom {
         }
         if let Some(s) = &self.sway {
             s.validate()?;
+        }
+        if let Some(b) = &self.breath {
+            b.validate()?;
         }
         Ok(())
     }

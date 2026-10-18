@@ -1819,6 +1819,10 @@ pub struct ArchetypeSounds {
     /// The sound of landing from a fall.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub land: Option<String>,
+    /// With no `land` sound, landing sounds like a footfall on the surface
+    /// underfoot.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub land_on_surface: bool,
 }
 /// One rider seat: the model node riders follow, its rest position from
 /// the feet (facing -Z, at scale 1) and the rider's action (`root`, `sit`).

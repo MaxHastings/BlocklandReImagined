@@ -121,6 +121,11 @@ pub struct Sounds {
     /// [`Sounds::LAND_SPEED`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub land: Option<String>,
+    /// With no `land` sound, a landing sounds like a footfall on the surface
+    /// underfoot (AA's `PlayLanded` plays the floor material's foot-contact
+    /// sound).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub land_on_surface: bool,
 }
 impl Sounds {
     /// Longest sound name, as cues carry it.
