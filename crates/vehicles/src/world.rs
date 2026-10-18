@@ -650,7 +650,9 @@ impl VehiclesWorld {
         pack.validate()?;
         let catalog_fingerprint = format!("{:x}", Sha256::digest(serde_json::to_vec(&pack)?));
         let mut pack = pack;
-        pack.definitions.iter_mut().for_each(Definition::resolve_drive);
+        pack.definitions
+            .iter_mut()
+            .for_each(Definition::resolve_drive);
         Ok(Self {
             catalog_fingerprint,
             step_pending: false,

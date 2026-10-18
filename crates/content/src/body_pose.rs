@@ -958,7 +958,10 @@ mod tests {
         // A rigid clip is no overlay and a missing one is none: both are
         // reported by name.
         assert!(layer("rigid").is_none());
-        assert_eq!(plan.skipped, vec!["rigid".to_string(), "absent".to_string()]);
+        assert_eq!(
+            plan.skipped,
+            vec!["rigid".to_string(), "absent".to_string()]
+        );
         // Still a sampleable stack.
         crate::animation::sample_layers_with_transition(
             &rig.shape,

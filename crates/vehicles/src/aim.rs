@@ -288,7 +288,10 @@ impl AimFollow {
         // The source scales the 3D speed to the limit: the angle this aim
         // would move through one more step.
         let further = [end[0] + velocity[0], end[1] + velocity[1]];
-        let angle = direction(end).dot(direction(further)).clamped(-1., 1.).acos();
+        let angle = direction(end)
+            .dot(direction(further))
+            .clamped(-1., 1.)
+            .acos();
         if angle > max_velocity && angle > 0. {
             let scale = max_velocity / angle;
             velocity = velocity.map(|v| v * scale);

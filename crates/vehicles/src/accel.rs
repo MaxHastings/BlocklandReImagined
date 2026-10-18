@@ -8,8 +8,8 @@
 //! (`overlay_animation_apply_continuous` at `(frames - 1) * value`). This
 //! module is that filter; the clips and scales are a package's policy
 //! ([`AccelerationOverlays`]).
-use bri_console::Clamp;
 use crate::schema::AccelerationOverlays;
+use bri_console::Clamp;
 use glam::Vec3;
 
 /// Halo ticks a second: the rate the filter runs at.
