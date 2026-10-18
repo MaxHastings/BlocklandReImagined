@@ -782,6 +782,9 @@ impl Default for DropLook {
 fn loaded() -> bool {
     true
 }
+fn one_scale() -> f32 {
+    1.0
+}
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct Equipped {
     #[serde(default)]
@@ -818,6 +821,9 @@ pub struct Actor {
     pub selected: Option<usize>,
     pub frame: Frame,
     pub ammo: bool,
+    /// How much of its spread a shot keeps (`set_aim_scale`): 1 all of it.
+    #[serde(default = "one_scale")]
+    pub aim_scale: f32,
     /// Whether the image in hand is loaded (`setImageLoaded`), which its
     /// states' `loaded` and `not_loaded` transitions read.
     #[serde(default = "loaded")]
@@ -1516,6 +1522,7 @@ impl WeaponsWorld {
                 images: Default::default(),
                 trigger: false,
                 next: None,
+                aim_scale: 1.0,
                 last_shot: None,
                 spray: 0,
                 ball_ready: 0,
@@ -1597,6 +1604,12 @@ impl WeaponsWorld {
     }
     pub fn set_ammo(&mut self, id: ActorId, ammo: bool) -> Result<()> {
         self.actors.get_mut(&id).context("Unknown actor")?.ammo = ammo;
+        Ok(())
+    }
+    /// Scale the random spread of this actor's shots (`set_aim_scale`).
+    pub fn set_aim_scale(&mut self, id: ActorId, scale: f32) -> Result<()> {
+        ensure!(scale.is_finite() && scale >= 0.0, "Invalid aim scale");
+        self.actors.get_mut(&id).context("Unknown actor")?.aim_scale = scale;
         Ok(())
     }
     pub fn set_loaded(&mut self, id: ActorId, loaded: bool) -> Result<()> {
@@ -3955,7 +3968,8 @@ impl WeaponsWorld {
                 }
                 let pace = a.frame.velocity.length();
                 let footing = a.frame.grounded || a.frame.mount != Mount::None;
-                let spread = shot.spread_in(pace, idle_ticks, a.frame.crouched, footing);
+                let spread =
+                    shot.spread_in(pace, idle_ticks, a.frame.crouched, footing) * a.aim_scale;
                 let kick = shot.recoil_velocity(direction);
                 if kick != Vec3::ZERO {
                     // Recoil lands before the projectiles, which inherit it.

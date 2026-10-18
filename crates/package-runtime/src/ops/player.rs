@@ -537,6 +537,39 @@ impl ScriptOp for SetImageLoaded {
     }
 }
 
+/// Scale the random spread of a player's next shots (`shot.spread` and its
+/// stance variants): 1 leaves it, 0 makes shots true, 2 doubles the cone. A
+/// rule that models how steady a shooter is sets it as that changes.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SetAimScale {
+    pub player: u64,
+    pub scale: f32,
+}
+impl ScriptOp for SetAimScale {
+    const CAPABILITY: &str = "player";
+    const NAME: &str = "set_aim_scale";
+    fn bounded(&self) -> bool {
+        self.scale.is_finite() && (0.0..=8.0).contains(&self.scale)
+    }
+}
+
+/// Turn a player's own view by `pitch` degrees up and `yaw` degrees to the
+/// right and leave it there: a rifle's recoil climb. The player's game adds
+/// it to where they look; nothing pulls it back.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct KickView {
+    pub player: u64,
+    pub pitch: f32,
+    pub yaw: f32,
+}
+impl ScriptOp for KickView {
+    const CAPABILITY: &str = "player";
+    const NAME: &str = "kick_view";
+    fn bounded(&self) -> bool {
+        [self.pitch, self.yaw].iter().all(|a| a.is_finite() && a.abs() <= 30.0)
+    }
+}
+
 /// Put another image in a player's hand, keeping their tool slot
 /// (`mountImage`): a scope, a second fire mode. `None` puts back the
 /// selected tool's own image.

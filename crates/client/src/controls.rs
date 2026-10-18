@@ -644,6 +644,21 @@ impl Controls {
             }
         })
     }
+    /// Turn the look by a rule's `kick_view`: `yaw` to the right and `pitch`
+    /// up, in radians, and leave it turned. A corpse camera that holds still,
+    /// a spectator's orbit and a rider's seat look are not the holder's aim
+    /// and stay as they are.
+    pub fn kick_view(&mut self, yaw: f32, pitch: f32) {
+        if !(yaw.is_finite() && pitch.is_finite())
+            || self.death_view
+            || self.observer.is_some()
+            || self.seat_look().is_some()
+        {
+            return;
+        }
+        self.yaw = wrap(self.yaw + yaw);
+        self.pitch = (self.pitch + pitch).clamped(-FRAC_PI_2, FRAC_PI_2);
+    }
     /// Take control of a turret looking along it: the look becomes the
     /// barrel's (`yaw`, `pitch`), as v20's control object hands the camera
     /// the turret's own rotation.

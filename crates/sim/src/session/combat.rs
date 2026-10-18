@@ -597,6 +597,12 @@ pub enum Notice {
     /// A panel an Add-On shows this player (`show_panel`), in place of any
     /// open one, or `None` to close it.
     Panel(Option<Box<crate::session::PanelShown>>),
+    /// A rule turned this player's view (`kick_view`): degrees up and to
+    /// the right, added to where they look.
+    ViewKick {
+        pitch: f32,
+        yaw: f32,
+    },
 }
 
 /// Minigame requests. The actor is always the authenticated connection.

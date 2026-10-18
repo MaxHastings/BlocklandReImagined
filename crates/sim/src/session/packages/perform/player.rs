@@ -518,6 +518,23 @@ impl Perform for ops::SetImageLoaded {
             .set_loaded(bri_weapons::ActorId(player), loaded)
     }
 }
+impl Perform for ops::SetAimScale {
+    fn perform(self, session: &mut Session, _cx: OpCall<'_>) -> Result<()> {
+        let ops::SetAimScale { player, scale } = self;
+        ensure!(session.peers.contains_key(&player), "No such player");
+        session
+            .weapons
+            .set_aim_scale(bri_weapons::ActorId(player), scale)
+    }
+}
+impl Perform for ops::KickView {
+    fn perform(self, session: &mut Session, _cx: OpCall<'_>) -> Result<()> {
+        let ops::KickView { player, pitch, yaw } = self;
+        ensure!(session.peers.contains_key(&player), "No such player");
+        session.notify(player, Notice::ViewKick { pitch, yaw });
+        Ok(())
+    }
+}
 impl Perform for ops::MountImage {
     fn perform(self, session: &mut Session, cx: OpCall<'_>) -> Result<()> {
         let OpCall { package, .. } = cx;

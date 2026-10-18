@@ -1232,6 +1232,7 @@ impl Session {
                 .id
                 .clone(),
             crouched: state.crouched,
+            jet_held: p.input.jet,
             mounted: self.seated(owner),
             mount: self.riding_seat(owner).map(|(mount, _)| mount),
             model: self.archetypes.resolve(state.archetype).look.model.clone(),
