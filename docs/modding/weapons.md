@@ -130,6 +130,7 @@ The fields you are most likely to change:
 | image | `guard` | a shield raised in some states (below) |
 | projectile | `fixed_damage` | its direct damage stays as authored at any scale |
 | projectile | `falloff` | `{ "near": 10, "far": 50, "far_damage": 5 }`: its direct damage is `damage` up to `near` units from where it was fired, `far_damage` from `far` on, and moves in a line between (a Halo projectile's air damage range) |
+| projectile | `homing` | `{ "turn_rate": 0.576, "range": 165, "angle": 0.21 }`: as it is made it picks the nearest player or vehicle (not its shooter) within `range` units and `angle` radians of its heading, then turns toward it by at most `turn_rate` radians a second at the same speed; straight on without one or once it is gone |
 | item | `ui_name` | the name players see |
 | image | `zoom` | `{ "fov": 20, "on_jet": true, "crosshair": false, "first_person": true }`: aim with the zoom key (and the right mouse button with `on_jet`), hide the crosshair, force first person while aiming. More under "Scopes" below |
 | image | `eye_offset`, `eye_rotation` | where the weapon sits in first person: exactly there, relative to the camera, as Torque places it, so a scope whose sight is on the eye line stays centred at any zoom |

@@ -2364,6 +2364,10 @@ pub struct ProjectileDef {
     /// projectile's air damage range does.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub falloff: Option<Falloff>,
+    /// It turns toward a player or vehicle it picks as it is made, as a
+    /// guided shot.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub homing: Option<Homing>,
     /// Its direct damage stays as authored at any scale, where v20's own
     /// `ProjectileData::damage` scaled it with the projectile: projectiles
     /// whose `damage` method dealt `directDamage` as it was.
@@ -2417,6 +2421,21 @@ impl Falloff {
         let along = ((distance - self.near) / span).clamped(0.0, 1.0);
         damage + (self.far_damage - damage) * along
     }
+}
+/// [`ProjectileDef::homing`]: as it is made it picks the nearest player or
+/// vehicle (not its shooter, nothing `can_affect` refuses) within `range`
+/// units and `angle` radians of the way it is flying, then turns toward
+/// that target by at most `turn_rate` radians a second, keeping its speed.
+/// It flies straight on without one, and when its target is gone.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Homing {
+    /// Radians a second, above 0 to 20.
+    pub turn_rate: f32,
+    /// Units, 1 to 1000.
+    pub range: f32,
+    /// Radians either side of its heading, 0 to 3.2.
+    pub angle: f32,
 }
 /// A projectile's explosion effect by what it lands on, each an explosion
 /// effect as `Explosion::effect` names one. One left empty, and a burst in
@@ -2818,6 +2837,7 @@ impl Default for ProjectileDef {
             aura: None,
             slow: None,
             falloff: None,
+            homing: None,
             fixed_damage: false,
             collision_sound: None,
             sport_hit: None,
@@ -3756,6 +3776,16 @@ impl Pack {
                 ensure!(
                     (1.0..=10.0).contains(&slow.divisor),
                     "Invalid slow of projectile {id}: divisor 1 to 10"
+                );
+            }
+            if let Some(h) = p.homing {
+                ensure!(
+                    h.turn_rate > 0.0
+                        && h.turn_rate <= 20.0
+                        && (1.0..=1000.0).contains(&h.range)
+                        && (0.0..=3.2).contains(&h.angle),
+                    "Invalid homing of projectile {id}: turn_rate above 0 to 20, range 1 to \
+                     1000, angle 0 to 3.2"
                 );
             }
             if let Some(f) = p.falloff {

@@ -141,6 +141,7 @@ fn weapons() -> Arc<Pack> {
         aura: None,
         slow: None,
         falloff: None,
+        homing: None,
         fixed_damage: false,
         collision_sound: None,
         sport_hit: None,

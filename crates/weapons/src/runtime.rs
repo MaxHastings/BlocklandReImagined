@@ -1105,6 +1105,9 @@ pub struct WeaponsWorld {
     /// Projectiles that go off at this age, before their lifetime: a cooked
     /// grenade's fuse, a cluster's bomblets ([`crate::Children::fuse_ticks`]).
     fuses: BTreeMap<u64, u32>,
+    /// What each homing projectile ([`crate::ProjectileDef::homing`]) turns
+    /// toward: picked on its first tick, None when nothing was in reach.
+    homed: BTreeMap<u64, Option<TargetId>>,
     /// The tick each projectile last played its collision sound
     /// ([`crate::CollisionSound::gap_ticks`]).
     sounded: BTreeMap<u64, u64>,
@@ -1375,6 +1378,7 @@ impl WeaponsWorld {
             events: vec![],
             explosions: vec![],
             fuses: BTreeMap::new(),
+            homed: BTreeMap::new(),
             sounded: BTreeMap::new(),
             reflected: BTreeMap::new(),
             stopped: vec![],
@@ -3217,6 +3221,10 @@ impl WeaponsWorld {
             let live = &self.projectiles;
             self.fuses.retain(|id, _| live.contains_key(id));
         }
+        if !self.homed.is_empty() {
+            let live = &self.projectiles;
+            self.homed.retain(|id, _| live.contains_key(id));
+        }
         if !self.reflected.is_empty() {
             let live = &self.projectiles;
             self.reflected.retain(|id, _| live.contains_key(id));
@@ -4254,6 +4262,54 @@ impl WeaponsWorld {
         }
         .filter(|(at, turn)| at.is_finite() && turn.is_finite())
     }
+    /// Turn a homing projectile toward its target by this tick's share of
+    /// its turn rate, picking the target on its first tick.
+    fn steer(&mut self, p: &mut Projectile, homing: crate::Homing, q: &mut impl Query) {
+        let heading = p.velocity.normalize_or_zero();
+        if heading == Vec3::ZERO {
+            return;
+        }
+        let target = match self.homed.get(&p.id) {
+            Some(target) => *target,
+            None => {
+                let picked = q
+                    .radius(p.position, homing.range, 32)
+                    .into_iter()
+                    .filter(|n| {
+                        matches!(n.target, TargetId::Actor(_) | TargetId::Vehicle(_))
+                            && n.target != TargetId::Actor(p.source)
+                            && q.can_affect(p.source, n.target)
+                            && n.center.is_finite()
+                            && heading.angle_between((n.center - p.position).normalize_or_zero())
+                                <= homing.angle
+                    })
+                    .min_by(|a, b| a.distance.total_cmp(&b.distance))
+                    .map(|n| n.target);
+                self.homed.insert(p.id, picked);
+                picked
+            }
+        };
+        let aim = match target {
+            Some(TargetId::Actor(id)) => self.actors.get(&id).map(|a| {
+                a.frame
+                    .middle
+                    .unwrap_or(a.frame.position + Vec3::Y * a.frame.scale)
+            }),
+            Some(TargetId::Vehicle(id)) => q.vehicle_frame(id).map(|(at, _)| at),
+            _ => None,
+        };
+        let Some(aim) = aim.filter(|a| a.is_finite()) else {
+            return;
+        };
+        let want = (aim - p.position).normalize_or_zero();
+        let angle = heading.angle_between(want);
+        let axis = heading.cross(want);
+        if want == Vec3::ZERO || angle < 1e-5 || axis.length_squared() < 1e-12 {
+            return;
+        }
+        let turn = angle.min(homing.turn_rate / 120.0);
+        p.velocity = Quat::from_axis_angle(axis.normalize(), turn) * p.velocity;
+    }
     /// One tick of a projectile's flight. [`coast`] is the same motion when
     /// it hits nothing.
     fn projectile_step(&mut self, p: &mut Projectile, q: &mut impl Query) -> bool {
@@ -4296,6 +4352,9 @@ impl WeaponsWorld {
             return true;
         }
         p.velocity.y -= fall_per_tick(d);
+        if let Some(homing) = d.homing {
+            self.steer(p, homing, q);
+        }
         let mut remaining = 1.0 / 120.0;
         for _ in 0..4 {
             let end = p.position + p.velocity * remaining;
