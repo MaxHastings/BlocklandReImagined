@@ -100,6 +100,27 @@ pub struct Sway {
     /// `bob` this moves the gun while the view barely does.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub walk: Option<Bob>,
+    /// The weapon shifting against a fast turn of the look, in view space:
+    /// `side` units to the left at a turn to the right of `rate` radians a
+    /// second (and the reverse), `up` units down at a pitch up at that rate.
+    /// Smaller turns shift it in proportion, and it settles at `settle`.
+    /// This moves the gun on screen rather than turning it behind the look
+    /// like `lag`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub look: Option<LookShift>,
+}
+/// [`Sway::look`].
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LookShift {
+    /// Units across at the full turn rate, within 0.5.
+    #[serde(default)]
+    pub side: f32,
+    /// Units up and down at the full pitch rate, within 0.5.
+    #[serde(default)]
+    pub up: f32,
+    /// The turn rate that gives the full shift, radians a second, 0.1 to 20.
+    pub rate: f32,
 }
 fn max_degrees() -> f32 {
     5.0
@@ -153,6 +174,15 @@ impl CameraProfile {
                     && finite(s.bob, 4.0),
                 "camera sway needs lag 0 to 1, max_degrees 0 to 30, settle 0.1 to 60 and bob within 4"
             );
+            if let Some(l) = &s.look {
+                ensure!(
+                    finite(l.side, 0.5)
+                        && finite(l.up, 0.5)
+                        && l.rate.is_finite()
+                        && (0.1..=20.0).contains(&l.rate),
+                    "camera sway look needs side and up within 0.5 units and a rate of 0.1 to 20 radians a second"
+                );
+            }
             if let Some(w) = &s.walk {
                 ensure!(
                     finite(w.height, 0.5)
@@ -194,6 +224,9 @@ pub struct CameraMotion {
     pub trail: (f32, f32),
     /// Through the weapon's own bob cycle (`Sway::walk`), 0 to 1.
     pub weapon_phase: f32,
+    /// How far the look's turn rate has shifted the weapon (`Sway::look`),
+    /// yaw and pitch, each -1 to 1.
+    pub look: (f32, f32),
 }
 /// How fast the bob eases in and out, per second.
 const BOB_EASE: f32 = 4.0;
@@ -234,6 +267,7 @@ impl CameraMotion {
         } else {
             *self = Self {
                 trail: self.trail,
+                look: self.look,
                 ..Self::default()
             }
         }
@@ -246,8 +280,23 @@ impl CameraMotion {
                     ((now - finite(turn) * sway.lag) * decay).clamped(-max, max)
                 };
                 self.trail = (trail(self.trail.0, turned.0), trail(self.trail.1, turned.1));
+                self.look = match &sway.look {
+                    Some(l) => {
+                        let ease = 1.0 - decay;
+                        let toward = |now: f32, turn: f32| {
+                            let target = (finite(turn) / seconds / l.rate).clamped(-1.0, 1.0);
+                            let shift = now + (target - now) * ease;
+                            if shift.abs() < 1e-4 { 0.0 } else { shift }
+                        };
+                        (toward(self.look.0, turned.0), toward(self.look.1, turned.1))
+                    }
+                    None => (0.0, 0.0),
+                };
             }
-            None => self.trail = (0.0, 0.0),
+            None => {
+                self.trail = (0.0, 0.0);
+                self.look = (0.0, 0.0);
+            }
         }
     }
     /// The bob's offset this moment: (right, up) in units at scale 1. The
@@ -269,11 +318,17 @@ impl CameraMotion {
         let (own_side, own_dip) = sway
             .walk
             .map_or((0.0, 0.0), |w| w.offset(self.weapon_phase, self.gain));
-        (side * sway.bob + own_side, dip * sway.bob + own_dip)
+        let (look_side, look_up) = sway
+            .look
+            .map_or((0.0, 0.0), |l| (-self.look.0 * l.side, -self.look.1 * l.up));
+        (
+            side * sway.bob + own_side + look_side,
+            dip * sway.bob + own_dip + look_up,
+        )
     }
     /// At rest: no bob and no trail, as the stock camera.
     pub fn at_rest(&self) -> bool {
-        self.gain == 0.0 && self.trail == (0.0, 0.0)
+        self.gain == 0.0 && self.trail == (0.0, 0.0) && self.look == (0.0, 0.0)
     }
 }
 
@@ -293,6 +348,65 @@ mod tests {
         assert!(m.at_rest());
         assert_eq!(m.bob(&p), (0.0, 0.0));
         assert_eq!(serde_json::to_string(&p).unwrap(), "{}");
+    }
+
+    #[test]
+    fn a_turn_shifts_the_weapon_against_it_and_it_settles() {
+        let p = CameraProfile {
+            sway: Some(Sway {
+                lag: 0.0,
+                max_degrees: 5.0,
+                settle: 8.0,
+                bob: 0.0,
+                walk: None,
+                look: Some(LookShift {
+                    side: 0.04,
+                    up: 0.03,
+                    rate: 4.0,
+                }),
+            }),
+            ..Default::default()
+        };
+        p.validate().unwrap();
+        let mut m = CameraMotion::default();
+        // A turn right at the full rate (4 rad/s) for a second, then none.
+        for _ in 0..60 {
+            m.advance(&p, 1.0 / 60.0, 0.0, true, (4.0 / 60.0, 0.0));
+        }
+        let (side, up) = m.weapon_bob(&p);
+        assert!((side + 0.04).abs() < 1e-3, "left of centre at the full rate: {side}");
+        assert!(up.abs() < 1e-6);
+        // Half the rate gives half the shift; turning the other way reverses it.
+        let mut half = CameraMotion::default();
+        for _ in 0..60 {
+            half.advance(&p, 1.0 / 60.0, 0.0, true, (-2.0 / 60.0, 1.0 / 60.0));
+        }
+        let (side, up) = half.weapon_bob(&p);
+        assert!((side - 0.02).abs() < 1e-3, "{side}");
+        assert!((up + 0.0075).abs() < 1e-3, "pitch at a quarter of the rate: {up}");
+        // Settled: no turn brings it back to the middle.
+        for _ in 0..120 {
+            m.advance(&p, 1.0 / 60.0, 0.0, true, (0.0, 0.0));
+        }
+        assert!(m.at_rest(), "{m:?}");
+        // A rate past the full one is clamped to it.
+        let mut fast = CameraMotion::default();
+        for _ in 0..120 {
+            fast.advance(&p, 1.0 / 60.0, 0.0, true, (40.0 / 60.0, 0.0));
+        }
+        assert!((fast.weapon_bob(&p).0 + 0.04).abs() < 1e-3);
+        let bad = CameraProfile {
+            sway: Some(Sway {
+                look: Some(LookShift {
+                    side: 0.04,
+                    up: 0.0,
+                    rate: 0.0,
+                }),
+                ..p.sway.unwrap()
+            }),
+            ..Default::default()
+        };
+        assert!(bad.validate().is_err());
     }
 
     #[test]
@@ -347,6 +461,7 @@ mod tests {
                 settle: 8.0,
                 bob: 0.0,
                 walk: None,
+                look: None,
             }),
             ..Default::default()
         };

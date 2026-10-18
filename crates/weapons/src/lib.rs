@@ -208,6 +208,10 @@ pub struct State {
     pub emitter_node: String,
     pub emitter_seconds: f32,
     pub eject_shell: bool,
+    /// After the image rests in this state for a random while, it goes to
+    /// another ([`Fidget`]): a weapon's idle fidget.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fidget: Option<Fidget>,
     /// What happens a while after the state is entered, as v20 scripts
     /// scheduled it by hand (`%obj.schedule(450, "playThread", 2, plant)`,
     /// `schedule(650, 0, serverPlay3D, ...)`): up to 16, each played even
@@ -289,6 +293,33 @@ impl Spin {
             Self::SpinDown => 1. - through,
             Self::FullSpeed => 1.,
         }
+    }
+}
+/// [`State::fidget`]: once the image has been in the state for a random time
+/// in `seconds`, it enters state `to`, unless the draw falls under `skip`,
+/// which draws a new time instead. Any other transition out of the state
+/// (the trigger, a timeout) comes first and ends the wait. Halo's rifle waits
+/// 10 to 15 seconds, skips a quarter of the draws, and plays its posing clip.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Fidget {
+    /// The shortest and longest wait, seconds (0.1 to 3600).
+    pub seconds: [f32; 2],
+    /// The state it goes to, by index.
+    pub to: usize,
+    /// The share of draws that skip the fidget (0 to 0.95).
+    #[serde(default)]
+    pub skip: f32,
+}
+impl Fidget {
+    pub fn valid(&self) -> bool {
+        let [low, high] = self.seconds;
+        low.is_finite()
+            && high.is_finite()
+            && (0.1..=3600.0).contains(&low)
+            && (low..=3600.0).contains(&high)
+            && self.skip.is_finite()
+            && (0.0..=0.95).contains(&self.skip)
     }
 }
 impl State {
@@ -979,6 +1010,10 @@ pub struct Image {
     /// for v20's unaided aim.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub aim_assist: Option<AimAssist>,
+    /// How much of its holder's speed this image leaves while it reloads
+    /// and while its holder aims it ([`MovementScale`]). None slows nothing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub movement: Option<MovementScale>,
     /// Held up with both arms (`armReadyBoth`), as `onMount`'s
     /// `%obj.playThread(2, armReadyBoth)` did, not with the mount hand's
     /// arm alone.
@@ -1869,6 +1904,40 @@ pub fn is_image_command(c: &str) -> bool {
                 && c.bytes()
                     .all(|b| b.is_ascii_alphanumeric() || b"_-:".contains(&b))
         })
+}
+
+/// [`Image::movement`]: the share of the holder's speeds the image leaves,
+/// each 0.05 to 1 (1 slows nothing): Halo's rocket launcher slows its holder
+/// to 0.75 while zoomed or reloading.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MovementScale {
+    /// While the magazine reloads.
+    #[serde(default = "full_speed")]
+    pub reloading: f32,
+    /// While the holder aims it with the right mouse button ([`Zoom::on_jet`]),
+    /// which the host sees as the jet button held. A zoom on the zoom key
+    /// alone is the holder's own view and does not slow them.
+    #[serde(default = "full_speed")]
+    pub aiming: f32,
+}
+impl MovementScale {
+    pub fn valid(&self) -> bool {
+        [self.reloading, self.aiming]
+            .iter()
+            .all(|s| s.is_finite() && (0.05..=1.0).contains(s))
+    }
+    /// The share of speed left in this moment. Reloading and aiming multiply.
+    pub fn scale(&self, reloading: bool, aiming: bool) -> f32 {
+        let mut scale = 1.0;
+        if reloading {
+            scale *= self.reloading;
+        }
+        if aiming {
+            scale *= self.aiming;
+        }
+        scale
+    }
 }
 
 /// [`Image::aim_assist`].
@@ -3566,6 +3635,10 @@ impl Pack {
                  without hitscan"
             );
             ensure!(
+                image.movement.as_ref().is_none_or(MovementScale::valid),
+                "Invalid image movement {id}: reloading and aiming 0.05 to 1"
+            );
+            ensure!(
                 image.aim_assist.as_ref().is_none_or(AimAssist::valid),
                 "Invalid image aim_assist {id}: angle 0 to 0.35 radians, range 1 to 1000, slowdown 0.1 to 1"
             );
@@ -3667,6 +3740,12 @@ impl Pack {
                 .flatten()
                 {
                     ensure!(index < image.states.len(), "Invalid state target");
+                }
+                if let Some(fidget) = &state.fidget {
+                    ensure!(
+                        fidget.valid() && fidget.to < image.states.len(),
+                        "Invalid state fidget: seconds 0.1 to 3600 (shortest first), a state of the image, skip 0 to 0.95"
+                    );
                 }
             }
             for p in image.projectile_refs() {

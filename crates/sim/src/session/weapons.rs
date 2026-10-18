@@ -276,6 +276,30 @@ impl Session {
         }
     }
 
+    /// Each holder's speeds follow what their image leaves while it reloads
+    /// and is aimed ([`bri_weapons::Image::movement`]).
+    pub(super) fn step_image_speeds(&mut self) -> Result<()> {
+        let owners: Vec<OwnerId> = self.peers.keys().copied().collect();
+        for owner in owners {
+            let actor = ActorId(owner);
+            let scale = match self.weapons.image_state(actor, 0) {
+                Some((image, _)) => image.movement.as_ref().map_or(1.0, |m| {
+                    let reloading = self.weapons.ammo(actor).is_some_and(|a| a.reloading);
+                    let aiming = self.peers[&owner].input.jet
+                        && image.zoom.as_ref().is_some_and(|z| z.on_jet);
+                    m.scale(reloading, aiming)
+                }),
+                None => 1.0,
+            };
+            if self.peers[&owner].combat.image_speed != scale {
+                if let Some(peer) = self.peers.get_mut(&owner) {
+                    peer.combat.image_speed = scale;
+                }
+                self.apply_speed(owner)?;
+            }
+        }
+        Ok(())
+    }
     pub(super) fn step_weapons(&mut self) -> Result<()> {
         self.end_gun_slows()?;
         self.step_quick_uses()?;
