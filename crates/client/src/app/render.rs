@@ -768,6 +768,29 @@ impl App {
                 aspect,
             );
         }
+        if let (Some(flare), Some(scene)) = (&mut self.gpu.lens_flare, &self.scene.cpu_scene) {
+            // The sun's lens flare, where the map has one: shown while the
+            // sun is in view and nothing drawn stands in front of it.
+            flare.set_scene(frame.device, frame.queue, scene.lens_flare.as_ref());
+            let toward = -Vec3::from_slice(&camera.sun_direction[..3]).normalize_or_zero();
+            if toward != Vec3::ZERO {
+                let bricks = self.build.building.as_ref().is_some_and(|b| {
+                    b.solid_segment(eye, eye + toward * 1500.0)
+                        .is_ok_and(|h| h.is_some())
+                });
+                let (at, strength) = self.gpu.sun_flare.update(
+                    scene,
+                    eye,
+                    forward,
+                    toward,
+                    &glam::Mat4::from_cols_array(&camera.view_projection),
+                    bricks,
+                );
+                flare.update(frame.queue, at, strength, aspect);
+            } else {
+                flare.update(frame.queue, glam::Vec2::ZERO, 0.0, aspect);
+            }
+        }
         camera.ambient[3] = f32::from(self.lighting.light_volume.mode(self.graphics.lighting));
         // Classic stays exactly v20's flat shade.
         let modern = camera.ambient[3] >= 0.5;
@@ -1833,10 +1856,13 @@ impl App {
         if let Some(shapes) = &self.world_shapes {
             shapes.render(&mut pass);
         }
-        if local_views.is_empty()
-            && let Some(vignette) = &self.gpu.vignette
-        {
-            vignette.render(&mut pass);
+        if local_views.is_empty() {
+            if let Some(flare) = &self.gpu.lens_flare {
+                flare.render(&mut pass);
+            }
+            if let Some(vignette) = &self.gpu.vignette {
+                vignette.render(&mut pass);
+            }
         }
         drop(pass);
         for (index, local) in local_views.iter().enumerate() {
@@ -1868,10 +1894,13 @@ impl App {
                 effects_renderer.render_view(pass, LOCAL_IMAGE_FIRST_VIEW + index);
                 self.addons.item_skins.render_local_view(pass, index);
                 // Screen tint remains above every image; HUD still follows render_scene.
-                if index + 1 == local_views.len()
-                    && let Some(vignette) = &self.gpu.vignette
-                {
-                    vignette.render(pass);
+                if index + 1 == local_views.len() {
+                    if let Some(flare) = &self.gpu.lens_flare {
+                        flare.render(pass);
+                    }
+                    if let Some(vignette) = &self.gpu.vignette {
+                        vignette.render(pass);
+                    }
                 }
             };
             renderer.render_world(

@@ -214,6 +214,7 @@ fn sky_with(fog_start: f32, bottom: bool) -> SceneData {
             color: [0.5, 0.6, 0.5],
             ..Default::default()
         },
+        lens_flare: None,
         warnings: vec![],
     };
     let faces: Vec<usize> = (1..=6).collect();

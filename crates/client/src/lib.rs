@@ -27,6 +27,7 @@ pub mod culling;
 pub mod decals;
 pub mod footsteps;
 pub mod rule_regions;
+pub mod sun_flare;
 pub use bri_sim::crouch;
 pub mod effects;
 pub mod explosion_debris;

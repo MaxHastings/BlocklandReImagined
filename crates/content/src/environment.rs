@@ -11,6 +11,59 @@ pub struct Image {
     pub width: u32,
     pub height: u32,
 }
+/// The sun's lens flare: pictures strung along the line from the sun's place
+/// on the screen through the screen's centre, drawn over the world while the
+/// sun is in view and not blocked (a Halo lens flare's reflections).
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LensFlare {
+    /// It shows only while the sun is within this many degrees of where the
+    /// player looks, fading in toward the view's centre.
+    pub cutoff_angle: f32,
+    pub elements: Vec<FlareElement>,
+}
+/// One picture of a [`LensFlare`].
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FlareElement {
+    pub image: Image,
+    /// Where along the axis it sits: 0 on the sun, 0.5 at the screen's
+    /// centre, 1 as far past the centre as the sun is before it.
+    pub position: f32,
+    /// Its radius in half screen heights.
+    pub radius: f32,
+    /// Times `tint`, added to the frame.
+    pub brightness: f32,
+    pub tint: [f32; 3],
+}
+impl LensFlare {
+    pub fn validate(&self) -> Result<()> {
+        ensure!(
+            (0.0..=180.0).contains(&self.cutoff_angle)
+                && self.cutoff_angle > 0.0
+                && (1..=32).contains(&self.elements.len())
+                && self.elements.iter().all(|e| {
+                    e.position.is_finite()
+                        && (-2.0..=3.0).contains(&e.position)
+                        && e.radius.is_finite()
+                        && (0.0..=4.0).contains(&e.radius)
+                        && e.brightness.is_finite()
+                        && (0.0..=8.0).contains(&e.brightness)
+                        && e.tint
+                            .iter()
+                            .all(|t| t.is_finite() && (0.0..=8.0).contains(t))
+                        && crate::brick_materials::safe_relative(&e.image.file)
+                        && !e.image.file.contains('/')
+                        && e.image.sha256.len() == 64
+                        && e.image.sha256.bytes().all(|b| b.is_ascii_hexdigit())
+                        && (1..=512).contains(&e.image.width)
+                        && (1..=512).contains(&e.image.height)
+                }),
+            "Invalid lens flare"
+        );
+        Ok(())
+    }
+}
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Cloud {
@@ -207,6 +260,9 @@ pub struct Environment {
     pub horizon_band: bool,
     pub solid_color: [f32; 3],
     pub fog: Fog,
+    /// The sun's lens flare, if the map has one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lens_flare: Option<LensFlare>,
     pub warnings: Vec<String>,
 }
 impl Environment {
@@ -219,6 +275,9 @@ impl Environment {
             "Invalid sky schema/layers"
         );
         self.fog.validate()?;
+        if let Some(flare) = &self.lens_flare {
+            flare.validate()?;
+        }
         ensure!(
             self.source_sha256.len() == 64
                 && self.source_sha256.bytes().all(|b| b.is_ascii_hexdigit()),
@@ -300,6 +359,39 @@ mod tests {
             haze.density_end = Some(end);
             assert!(haze.validate().is_err());
         }
+    }
+    #[test]
+    fn a_lens_flare_must_name_safe_pictures_within_range() {
+        let element = || FlareElement {
+            image: Image {
+                file: "flare.png".into(),
+                source: "flares/0".into(),
+                sha256: "0".repeat(64),
+                width: 64,
+                height: 64,
+            },
+            position: 0.3,
+            radius: 0.1,
+            brightness: 0.8,
+            tint: [1.0; 3],
+        };
+        let good = LensFlare {
+            cutoff_angle: 20.0,
+            elements: vec![element()],
+        };
+        good.validate().unwrap();
+        let bad = |edit: &dyn Fn(&mut LensFlare)| {
+            let mut flare = good.clone();
+            edit(&mut flare);
+            assert!(flare.validate().is_err());
+        };
+        bad(&|f| f.cutoff_angle = 0.0);
+        bad(&|f| f.cutoff_angle = 181.0);
+        bad(&|f| f.elements.clear());
+        bad(&|f| f.elements[0].radius = f32::NAN);
+        bad(&|f| f.elements[0].brightness = 9.0);
+        bad(&|f| f.elements[0].image.file = "../flare.png".into());
+        bad(&|f| f.elements[0].image.sha256 = "zz".into());
     }
     #[test]
     fn unset_haze_reads_as_the_fog_before_it() {

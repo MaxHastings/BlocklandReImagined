@@ -1770,6 +1770,12 @@ impl PlatformApp for App {
             bri_render::scene::DEPTH_FORMAT,
             samples,
         ));
+        self.gpu.lens_flare = Some(bri_render::lens_flare::LensFlareRenderer::new(
+            device,
+            format,
+            bri_render::scene::DEPTH_FORMAT,
+            samples,
+        ));
         // Made again on the new device by the next scaled frame.
         self.gpu.upscale = None;
         self.gpu.bloom = None;

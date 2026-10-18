@@ -384,6 +384,7 @@ mod tests {
                 color: [1.0; 3],
                 ..Default::default()
             },
+            lens_flare: None,
             warnings: vec![],
         };
         append(&mut out, &env, &[1, 2, 3, 4, 5, 6], &[]).unwrap();

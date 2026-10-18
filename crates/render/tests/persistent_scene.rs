@@ -327,6 +327,7 @@ fn sky_fixture() -> (SceneData, bri_content::environment::Environment) {
             color: [1.0; 3],
             ..Default::default()
         },
+        lens_flare: None,
         warnings: vec![],
     };
     (data, env)

@@ -497,6 +497,17 @@ pub struct SceneData {
     /// The authored sky's colour by direction, which far geometry fogs
     /// toward ([`SkyBands`]); all zero where only the fog backdrop shows.
     pub sky_bands: SkyBands,
+    /// The sun's lens flare (`Environment::lens_flare`), drawn over the world
+    /// by [`crate::lens_flare::LensFlareRenderer`].
+    pub lens_flare: Option<std::sync::Arc<LensFlareScene>>,
+}
+
+/// A map's lens flare as loaded: the cut-off angle and each element's
+/// picture, place, size and colour.
+#[derive(Debug)]
+pub struct LensFlareScene {
+    pub cutoff_angle: f32,
+    pub elements: Vec<(SceneImage, bri_content::environment::FlareElement)>,
 }
 
 /// Directions around the eye the sky's colour is kept for: 8 around
@@ -529,6 +540,7 @@ impl Default for SceneData {
             sky_below: false,
             lightmap_bases: vec![],
             sky_bands: Default::default(),
+            lens_flare: None,
         }
     }
 }

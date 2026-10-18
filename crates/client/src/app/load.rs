@@ -156,6 +156,8 @@ impl App {
                 region_lines: None,
                 region_outlines: Default::default(),
                 vignette: None,
+                lens_flare: None,
+                sun_flare: Default::default(),
                 ambient_occlusion: None,
                 selection_lines: None,
                 selection_uploaded: None,
