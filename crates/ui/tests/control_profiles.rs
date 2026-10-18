@@ -199,7 +199,7 @@ fn a_vehicle_layer_changes_the_mouse_and_leaves_with_the_rider() {
         (flying.0 / on_foot.0 - 0.5).abs() < 1e-3,
         "layer sensitivity"
     );
-    assert_eq!(u.core.mouse_settings().vehicle_invert, true);
+    assert!(u.core.mouse_settings().vehicle_invert);
     u.set_control_context("aa-soldier", None);
     assert_eq!(look(&mut u), on_foot, "the layer is gone on exit");
 }

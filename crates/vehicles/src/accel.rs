@@ -9,6 +9,7 @@
 //! module is that filter; the clips and scales are a package's policy
 //! ([`AccelerationOverlays`]).
 use crate::schema::AccelerationOverlays;
+use bri_console::Clamp;
 use glam::Vec3;
 
 /// Halo ticks a second: the rate the filter runs at.
@@ -81,7 +82,7 @@ impl SeatAcceleration {
             let left = up.cross(forward);
             let span = clock - then.clock;
             for tick in from + 1..=to {
-                let along = (((tick as f64) / TICK_RATE - then.clock) / span).clamp(0., 1.);
+                let along = (((tick as f64) / TICK_RATE - then.clock) / span).clamped(0., 1.);
                 let reached = then.position.lerp(position, along as f32);
                 let step = reached - self.tick_position;
                 let change = (step - self.step) / overlays.native_per_unit;
@@ -91,7 +92,7 @@ impl SeatAcceleration {
                     change.dot(up) * overlays.scale[2],
                 ];
                 for (value, reading) in self.value.iter_mut().zip(reading) {
-                    let reading = (reading + 0.5).clamp(0., 1.);
+                    let reading = (reading + 0.5).clamped(0., 1.);
                     *value = reading * SMOOTHING + *value * (1. - SMOOTHING);
                 }
                 (self.tick_position, self.step) = (reached, step);

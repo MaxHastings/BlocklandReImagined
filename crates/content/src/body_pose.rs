@@ -920,7 +920,6 @@ mod tests {
             let clip = planning_clip(name, 3, additive, 4.);
             rig.sequences.insert(clip.name.clone(), clip);
         }
-        let roles = RoleClips::resolve(&Default::default(), |n| rig.sequence(n).is_some());
         let overlays = [
             SeatOverlay {
                 clip: "ACCEL_A",
@@ -959,7 +958,10 @@ mod tests {
         // A rigid clip is no overlay and a missing one is none: both are
         // reported by name.
         assert!(layer("rigid").is_none());
-        assert_eq!(plan.skipped, vec!["rigid".to_string(), "absent".to_string()]);
+        assert_eq!(
+            plan.skipped,
+            vec!["rigid".to_string(), "absent".to_string()]
+        );
         // Still a sampleable stack.
         crate::animation::sample_layers_with_transition(
             &rig.shape,

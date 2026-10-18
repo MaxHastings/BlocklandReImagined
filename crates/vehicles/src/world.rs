@@ -650,7 +650,9 @@ impl VehiclesWorld {
         pack.validate()?;
         let catalog_fingerprint = format!("{:x}", Sha256::digest(serde_json::to_vec(&pack)?));
         let mut pack = pack;
-        pack.definitions.iter_mut().for_each(Definition::resolve_drive);
+        pack.definitions
+            .iter_mut()
+            .for_each(Definition::resolve_drive);
         Ok(Self {
             catalog_fingerprint,
             step_pending: false,
@@ -1660,7 +1662,7 @@ impl VehiclesWorld {
     pub fn health_fraction(&self, id: VehicleId) -> Option<f32> {
         let v = self.instances.get(&id).filter(|v| v.dead_at.is_none())?;
         let max = self.catalog[&v.spawn.definition].max_damage;
-        Some((1.0 - v.damage / max).clamp(0.0, 1.0))
+        Some((1.0 - v.damage / max).clamped(0.0, 1.0))
     }
     /// The damage a part of a live vehicle takes to be destroyed: its
     /// definition's `max_damage`, or an attached turret's own pool.

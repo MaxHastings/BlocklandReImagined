@@ -7,7 +7,7 @@
 //! slower than the ground passes) at least `min_slip` makes the effect its
 //! surface names every `interval`, and its sound every `sound_interval`.
 use crate::vehicles::VehicleFrame;
-use bri_vehicles::{Definition, schema::WheelContacts};
+use bri_vehicles::Definition;
 use glam::{Quat, Vec3};
 use std::collections::BTreeMap;
 
@@ -139,7 +139,7 @@ impl WheelContactEffects {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use bri_vehicles::schema::ContactEffect;
+    use bri_vehicles::schema::{ContactEffect, WheelContacts};
 
     fn car() -> Definition {
         let mut d = bri_vehicles::testing::car();
