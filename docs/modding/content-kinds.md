@@ -239,6 +239,9 @@ and `crates/client/tests/body_attachments_render.rs`.
   `"sway": { "lag": 0.5, "walk": { "height": 0.03, "side": 0.025, "stride": 3 } }`
   with no camera `bob`. Client code drawing its own first-person model
   reads the same sway from `view`.
+- `sway.look` (`side`, `up`, `rate`) shifts the held weapon on screen against a turn of the look: `side` units
+  left at a turn right of `rate` radians a second (and the reverse), `up` units down at a pitch up at that rate,
+  in proportion below it, settling at `settle`.
 - `third_person` puts the on-foot chase camera's pivot over a shoulder
   (`side`, negative for the left) and higher (`height`); its distance is
   still `camera_distance`.
