@@ -170,6 +170,7 @@ fn rocket_pack() -> bri_weapons::Pack {
         children: Vec::new(),
         aura: None,
         slow: None,
+        falloff: None,
         fixed_damage: false,
         collision_sound: None,
         sport_hit: None,

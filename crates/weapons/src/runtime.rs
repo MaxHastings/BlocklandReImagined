@@ -868,6 +868,10 @@ pub struct Actor {
     reserve: BTreeMap<String, Reserve>,
     #[serde(default)]
     reload: Option<Reload>,
+    /// The tick each cooling magazine ([`crate::Magazine::cool_ticks`]) next
+    /// gets a round back, by [`slot_key`]. Host bookkeeping, not replicated.
+    #[serde(skip)]
+    cool_at: BTreeMap<String, u64>,
     /// The grenade whose fuse is burning in the hand ([`crate::Cook`]).
     #[serde(default)]
     cook: Option<Cooking>,
@@ -1540,6 +1544,7 @@ impl WeaponsWorld {
                 rounds: BTreeMap::new(),
                 reserve: BTreeMap::new(),
                 reload: None,
+                cool_at: BTreeMap::new(),
                 cook: None,
                 cues: Vec::new(),
                 emote: None,
@@ -2055,6 +2060,30 @@ impl WeaponsWorld {
         }
         self.events.push(Event::Ammo { actor: id });
         true
+    }
+    /// A held gun whose rounds are heat ([`crate::Magazine::cool_ticks`])
+    /// gets one back each time its cooling comes due, while it is neither
+    /// full nor empty (an empty one vents by reloading).
+    fn cool_magazine(&mut self, id: ActorId, a: &mut Actor) {
+        let Some((key, magazine)) = self.magazine_of(a).filter(|(_, m)| m.cool_ticks > 0) else {
+            a.cool_at.clear();
+            return;
+        };
+        let rounds = a.rounds.get(&key).copied().unwrap_or(0);
+        if a.reload.is_some() || rounds == 0 || rounds >= magazine.size {
+            a.cool_at.remove(&key);
+            return;
+        }
+        let due = *a
+            .cool_at
+            .entry(key.clone())
+            .or_insert(self.tick + u64::from(magazine.cool_ticks));
+        if self.tick >= due {
+            a.rounds.insert(key.clone(), rounds + 1);
+            a.cool_at
+                .insert(key, self.tick + u64::from(magazine.cool_ticks));
+            self.events.push(Event::Ammo { actor: id });
+        }
     }
     /// A reload whose time is up moves its rounds: all it can, or one and
     /// the next one's wait.
@@ -3160,6 +3189,7 @@ impl WeaponsWorld {
         for id in ids {
             let mut a = self.actors.remove(&id).unwrap();
             self.finish_reload(id, &mut a);
+            self.cool_magazine(id, &mut a);
             self.burn_fuse(id, &mut a);
             self.play_cues(id, &mut a);
             // v20 `Player::updateMove` sets image slot 1's trigger from move
@@ -4680,7 +4710,12 @@ impl WeaponsWorld {
             self.events.push(Event::Damage {
                 source: p.source,
                 target,
-                amount: d.damage.clamped(0.0, 100.0)
+                amount: d
+                    .falloff
+                    .map_or(d.damage, |f| {
+                        f.damage_at(d.damage, p.origin.distance(position))
+                    })
+                    .clamped(0.0, 100.0)
                     * if d.fixed_damage { 1.0 } else { p.scale }
                     * hurt,
                 kind: d.damage_type.clone(),
