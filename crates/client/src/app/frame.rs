@@ -794,8 +794,12 @@ impl App {
                     ) else {
                         continue;
                     };
-                    if let Some(e) = crate::audio::engine_loop(d, info, frame) {
-                        engines.insert(*id, e);
+                    // Layer n plays under the key of its vehicle and n.
+                    for (layer, e) in crate::audio::engine_loops(d, info, frame)
+                        .into_iter()
+                        .enumerate()
+                    {
+                        engines.insert(*id | (layer as u64) << 56, e);
                     }
                     // The squeal plays beside the engine, keyed apart from it.
                     if let Some(e) = crate::audio::skid_loop(d, info, frame) {
@@ -1672,6 +1676,48 @@ impl App {
             }
             for (sound, at) in self.fx.clip_sounds.advance(game_elapsed.as_secs_f32()) {
                 self.audio.profile(&sound, bri_audio::Placement::World(at));
+            }
+            // Slipping tyres throw up what the surface under them says.
+            let drawn: Vec<_> = view
+                .vehicles
+                .iter()
+                .filter(|(_, info)| !info.destroyed)
+                .filter_map(|(id, info)| {
+                    Some((
+                        *id,
+                        self.vehicle_assets.definition(&info.definition)?,
+                        self.vehicles.frame(*id)?,
+                    ))
+                })
+                .collect();
+            for burst in self
+                .fx
+                .wheel_contacts
+                .update(game_elapsed.as_secs_f32(), drawn, |at| {
+                    building
+                        .surface_at(at + Vec3::Y * 0.5, at - Vec3::Y)
+                        .ok()
+                        .flatten()
+                        .map_or(bri_content::surface::DEFAULT, |(_, kind)| kind)
+                        .to_string()
+                })
+            {
+                let transform = bri_fx_runtime::SourceTransform {
+                    position: burst.position,
+                    ..Default::default()
+                };
+                if let Some(effect) = &burst.effect
+                    && self.fx.weapon_effects.resolves(effect)
+                    && let Err(error) = self.fx.weapon_effects.burst_at(effect, transform)
+                {
+                    bri_console::warn(format!("Wheel contact effect {effect}: {error:#}"));
+                }
+                if let Some(sound) = &burst.sound {
+                    self.audio.profile(
+                        sound,
+                        bri_audio::Placement::World(burst.position.to_array()),
+                    );
+                }
             }
             self.fx
                 .explosion_debris
