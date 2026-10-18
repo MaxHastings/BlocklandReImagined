@@ -474,6 +474,10 @@ pub struct SceneData {
     pub sun_direction: [f32; 3],
     pub sun_color: [f32; 3],
     pub ambient: [f32; 3],
+    /// The map's ambient light where the sky cannot see (an interior's
+    /// lamp-lit rooms), in place of `ambient`; Dynamic lighting blends to it
+    /// by how closed off from the sky a surface is (`sky_exposure`).
+    pub enclosed_ambient: Option<[f32; 3]>,
     pub fog: bri_content::environment::Fog,
     /// The sky goes on below the horizon (a bottom face, Skylands' floor),
     /// so fog below the eye thins as it does above (`Fog::sky_amount`).
@@ -513,6 +517,7 @@ impl Default for SceneData {
             sun_direction: [0.3, -1.0, 0.4],
             sun_color: [0.7; 3],
             ambient: [0.35; 3],
+            enclosed_ambient: None,
             clear_color: [0.05, 0.08, 0.12, 1.0],
             fog: Default::default(),
             sky_below: false,
@@ -941,6 +946,9 @@ pub struct Camera {
     pub shading: [f32; 4],
     /// The fog's height and most cover (`bri_content::environment::Fog::haze_uniform`).
     pub haze: [f32; 4],
+    /// The ambient light in spaces the sky cannot see
+    /// ([`SceneData::enclosed_ambient`]); w 1 when the map sets one.
+    pub enclosed: [f32; 4],
 }
 impl Camera {
     /// Native world uses Y up, right-handed coordinates and reversed 0..1
@@ -1025,6 +1033,9 @@ impl Camera {
         self.atmosphere[3] = if scene.fog.end > 0.0 { 1.0 } else { 0.0 };
         self.sky_bands = scene.sky_bands;
         self.haze = scene.fog.haze_uniform();
+        self.enclosed = scene
+            .enclosed_ambient
+            .map_or([0.0; 4], |c| [c[0], c[1], c[2], 1.0]);
     }
     /// The live environment (`bri_content::atmosphere::resolve`) over the
     /// map's own values, set by [`Camera::apply_environment`] first.
@@ -1129,6 +1140,7 @@ impl Default for Camera {
             baked_ambient: [0.0; 4],
             shading: [0.0; 4],
             haze: bri_content::environment::Fog::default().haze_uniform(),
+            enclosed: [0.0; 4],
             sky_bands: Default::default(),
         }
     }

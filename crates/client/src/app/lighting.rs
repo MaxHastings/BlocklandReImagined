@@ -52,6 +52,9 @@ pub(super) struct LightVolumeState {
     pub(super) animations: Vec<(usize, bri_content::light_animation::LightAnimation)>,
     /// Spot lights' cones (index into `recovered`).
     pub(super) spots: Vec<(usize, [f32; 4])>,
+    /// Plain map lights past the shaded budget, drawn unshadowed (nearest
+    /// first, see `overflow_point_lights`).
+    pub(super) overflow: Vec<bri_render::map_lighting::MapLight>,
 }
 type LightingSource = (bri_render::scene_loader::MapScene, Option<Arc<SceneData>>);
 type LightingSourceReceiver =
@@ -160,6 +163,28 @@ pub(super) fn map_light_tints(
             } else {
                 tint * (whole as f32 / owners.len() as f32)
             }
+        })
+        .collect()
+}
+/// The overflow lights that fit beside `taken` point lights, nearest to `eye`
+/// first (by distance to their reach, so a big lamp counts from its edge).
+/// Colour w 1 marks the linear falloff the shaded map lights use.
+pub(super) fn overflow_point_lights(
+    overflow: &[bri_render::map_lighting::MapLight],
+    eye: Vec3,
+    taken: usize,
+) -> Vec<bri_render::scene::PointLight> {
+    let room = bri_render::scene::MAX_POINT_LIGHTS.saturating_sub(taken);
+    let mut near: Vec<_> = overflow
+        .iter()
+        .map(|l| (Vec3::from(l.position).distance(eye) - l.outer, l))
+        .collect();
+    near.sort_by(|a, b| a.0.total_cmp(&b.0));
+    near.truncate(room);
+    near.into_iter()
+        .map(|(_, l)| bri_render::scene::PointLight {
+            position_radius: [l.position[0], l.position[1], l.position[2], l.outer],
+            color: [l.color[0], l.color[1], l.color[2], 1.0],
         })
         .collect()
 }
@@ -526,7 +551,29 @@ mod tests {
             modern_lights: Some(Vec::new()),
             light_animations: Vec::new(),
             light_spots: Vec::new(),
+            overflow_lights: Vec::new(),
         }
+    }
+
+    #[test]
+    fn overflow_lights_fill_what_the_effects_leave_nearest_first() {
+        let lamp = |x: f32, outer: f32| bri_render::map_lighting::MapLight {
+            position: [x, 0.0, 0.0],
+            color: [0.5, 0.4, 0.3],
+            inner: 0.0,
+            outer,
+            channel: None,
+        };
+        // Reach counts from a lamp's edge: the big lamp 100 away (5 to its
+        // edge) comes before the small one 10 away (9).
+        let lamps = [lamp(10.0, 1.0), lamp(100.0, 95.0), lamp(-4.0, 1.0)];
+        let max = bri_render::scene::MAX_POINT_LIGHTS;
+        let all = overflow_point_lights(&lamps, Vec3::ZERO, 0);
+        let order: Vec<f32> = all.iter().map(|l| l.position_radius[0]).collect();
+        assert_eq!(order, [-4.0, 100.0, 10.0]);
+        assert!(all.iter().all(|l| l.color[3] == 1.0));
+        assert_eq!(overflow_point_lights(&lamps, Vec3::ZERO, max - 2).len(), 2);
+        assert!(overflow_point_lights(&lamps, Vec3::ZERO, max).is_empty());
     }
 
     #[test]

@@ -33,6 +33,10 @@ pub struct MapScene {
     /// Spot lights: an index into `modern_lights` and its cone words
     /// (`scene::spot_words`), for `SceneRenderer::set_map_light_spots`.
     pub light_spots: Vec<(usize, [f32; 4])>,
+    /// Plain lights past the shadowed budget (`map_lighting::MAX_LIGHTS`):
+    /// they draw as unshadowed point lights with the same linear falloff, the
+    /// nearest ones each frame (`SceneRenderer::update_lights`, colour w 1).
+    pub overflow_lights: Vec<crate::map_lighting::MapLight>,
 }
 
 pub(crate) fn file(root: &Path, name: &str) -> Result<PathBuf> {
@@ -285,6 +289,11 @@ fn load_bundle(root: &Path, map_id: &str, legacy: bool) -> Result<MapScene> {
         out.sun_direction = [d.x, d.z, -d.y]; // original Z-up to native Y-up
         out.sun_color = rgb(sun.properties.get("color"), out.sun_color);
         out.ambient = rgb(sun.properties.get("ambient"), out.ambient);
+        // Light in spaces the sky cannot see; absent, they keep the ambient.
+        out.enclosed_ambient = sun
+            .properties
+            .get("enclosed")
+            .map(|v| rgb(Some(v), out.ambient));
     }
     if let Some(sky) = scene.nodes.iter().find(|n| matches!(n.kind, Kind::Sky)) {
         let c = rgb(sky.properties.get("skysolidcolor"), [0.05, 0.08, 0.12]);
@@ -355,6 +364,7 @@ fn load_bundle(root: &Path, map_id: &str, legacy: bool) -> Result<MapScene> {
     let authored = scene.lights()?;
     let mut light_animations = Vec::new();
     let mut light_spots = Vec::new();
+    let mut overflow_lights = Vec::new();
     let modern_lights = if legacy {
         None
     } else {
@@ -370,20 +380,32 @@ fn load_bundle(root: &Path, map_id: &str, legacy: bool) -> Result<MapScene> {
             Vec::new()
         };
         for light in &authored {
-            if lights.len() >= crate::map_lighting::MAX_LIGHTS {
-                out.omissions.push(format!(
-                    "Map light at node {} left out: a map draws at most {} lights",
-                    light.node,
-                    crate::map_lighting::MAX_LIGHTS
-                ));
-                continue;
-            }
             if !crate::lighting_parameters::valid_geometry(light.position, light.inner, light.outer)
             {
                 out.omissions.push(format!(
                     "Map light at node {} left out: its falloff is too small to draw",
                     light.node
                 ));
+                continue;
+            }
+            if lights.len() >= crate::map_lighting::MAX_LIGHTS {
+                // Past the shadowed budget only plain lights can draw: a cone
+                // or an animation needs a shaded slot.
+                if light.spot.is_some() || light.animation.is_some() {
+                    out.omissions.push(format!(
+                        "Map light at node {} left out: a map shades at most {} lights, and only plain lights draw past them",
+                        light.node,
+                        crate::map_lighting::MAX_LIGHTS
+                    ));
+                } else {
+                    overflow_lights.push(crate::map_lighting::MapLight {
+                        position: light.position,
+                        color: light.color,
+                        inner: light.inner,
+                        outer: light.outer,
+                        channel: None,
+                    });
+                }
                 continue;
             }
             if let Some(spot) = light.spot {
@@ -414,6 +436,7 @@ fn load_bundle(root: &Path, map_id: &str, legacy: bool) -> Result<MapScene> {
         modern_lights,
         light_animations,
         light_spots,
+        overflow_lights,
     })
 }
 
