@@ -26,11 +26,13 @@ mod games;
 pub mod interop;
 mod lint;
 mod math;
+mod movers;
 mod physics;
 pub mod view;
 pub use bots::BotKindView;
 pub use games::{BrickView, DropView, MAX_BRICKS_LISTED, MinigameView, TeamView, brick_map};
 pub use interop::{Emitted, Nested};
+pub use movers::MoverInfo;
 use view::{Of, view_in};
 
 /// Operation budgets per kind of call.
@@ -231,6 +233,15 @@ pub trait World {
         range: f32,
         ignore: Option<u64>,
     ) -> Option<RayHit>;
+    /// The map's keyed movers (doors), in map order.
+    fn movers(&self) -> Vec<MoverInfo> {
+        Vec::new()
+    }
+    /// The movers whose collision lies within `reach` of player `player`'s
+    /// body (touching it, for a reach of a hair), nearest first.
+    fn movers_near(&self, _player: u64, _reach: f32) -> Vec<String> {
+        Vec::new()
+    }
     /// Whether the minigame and trust rules let player `by` hurt `target`
     /// (`minigameCanDamage`).
     fn can_damage(&self, by: u64, target: ObjectRef) -> bool;
@@ -3154,6 +3165,66 @@ fn register_presentation(engine: &mut Engine) {
         }))
     }
     engine.register_fn("set_map_lights", set_map_lights);
+    // The map's keyed movers (doors): #[id, key (-1 between keys), from, to,
+    // moving, blocked, progress, keys, position, rest, params].
+    engine.register_fn("movers", || {
+        with_world(|world, _| {
+            Ok(Dynamic::from_array(
+                world
+                    .movers()
+                    .iter()
+                    .map(|m| {
+                        // Without the params, which one `mover(id)` gives:
+                        // a script's values hold 4096 bytes together.
+                        let mut m = m.clone();
+                        m.params.clear();
+                        movers::mover_map(&m)
+                    })
+                    .collect(),
+            ))
+        })
+    });
+    // One mover, with its params, or ().
+    engine.register_fn("mover", |name: &str| {
+        with_world(|world, _| {
+            Ok(world
+                .movers()
+                .iter()
+                .find(|m| m.id == name)
+                .map_or(Dynamic::UNIT, movers::mover_map))
+        })
+    });
+    // The ids of the movers touching a player's body (within `reach`).
+    engine.register_fn("movers_near", |player: Dynamic, reach: Dynamic| {
+        let player = id(&player)?;
+        let reach = float(&reach)?;
+        if !(0.0..=64.0).contains(&reach) {
+            return fail("movers_near reaches 0 to 64 units");
+        }
+        with_world(|world, _| {
+            Ok(Dynamic::from_array(
+                world
+                    .movers_near(player, reach)
+                    .into_iter()
+                    .map(Dynamic::from)
+                    .collect(),
+            ))
+        })
+    });
+    // Send a mover to a key over a number of seconds, or hold it.
+    engine.register_fn("mover_goto", |name: &str, key: i64, seconds: Dynamic| {
+        let key = u8::try_from(key).map_err(|_| "a mover key is 0 to 15")?;
+        push(Op::MoverGoto(ops::MoverGoto {
+            id: name.to_owned(),
+            key,
+            seconds: float(&seconds)?,
+        }))
+    });
+    engine.register_fn("mover_stop", |name: &str| {
+        push(Op::MoverStop(ops::MoverStop {
+            id: name.to_owned(),
+        }))
+    });
     // A uniform over the avatar's own colours: #{ torso: [r, g, b], ... }
     // per colour slot, or () for the player's own colours again.
     engine.register_fn("set_avatar_colors", |player: Dynamic, colors: Dynamic| {

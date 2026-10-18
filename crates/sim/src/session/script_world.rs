@@ -171,6 +171,28 @@ impl World for ScriptWorld<'_> {
     fn palette(&self) -> Vec<[f32; 4]> {
         self.session.simulation.state().palette.clone()
     }
+    fn movers(&self) -> Vec<bri_package_runtime::script::MoverInfo> {
+        self.session
+            .mover_views()
+            .into_iter()
+            .map(|m| bri_package_runtime::script::MoverInfo {
+                id: m.id,
+                key: m.key,
+                from: m.from,
+                to: m.to,
+                moving: m.moving,
+                blocked: m.blocked,
+                progress: m.progress,
+                keys: m.keys,
+                position: m.position,
+                rest: m.rest,
+                params: m.params,
+            })
+            .collect()
+    }
+    fn movers_near(&self, player: u64, reach: f32) -> Vec<String> {
+        self.session.movers_near_player(player, reach)
+    }
     fn drops(&self) -> Vec<bri_package_runtime::script::DropView> {
         self.session.package_drop_views(self.package)
     }

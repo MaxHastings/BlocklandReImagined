@@ -293,6 +293,7 @@ impl App {
                 footsteps: Default::default(),
                 body_flashes: Default::default(),
                 tutorial_targets,
+                map_movers: Default::default(),
                 explosion_debris,
                 weapon_shells,
                 weapon_cues: VecDeque::new(),

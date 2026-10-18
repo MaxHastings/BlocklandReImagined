@@ -577,6 +577,9 @@ impl App {
         self.fx
             .tutorial_targets
             .upload(renderer, frame.device, frame.queue)?;
+        self.fx
+            .map_movers
+            .upload(renderer, frame.device, frame.queue)?;
         let shells: Vec<_> = self
             .fx
             .weapon_shells
@@ -1516,6 +1519,7 @@ impl App {
         shared_draws.extend(self.fx.beams.draws());
         shared_draws.extend(self.fx.decals.draws());
         shared_draws.extend(self.fx.tutorial_targets.draws());
+        shared_draws.extend(self.fx.map_movers.draws());
         if let Some((scene, instances)) = &self.gpu.shell_gpu
             && self.fx.weapon_shells.active_count() > 0
         {
@@ -1929,6 +1933,7 @@ impl App {
             self.scene.cpu_water = visual.repeated_water.into_iter().map(Arc::new).collect();
             self.scene.scenery.reset();
             self.scene.shape_indices = visual.shape_indices;
+            self.fx.map_movers.replace_scenes(visual.movers);
             crate::frame_trace::note("the map's lighting source changed");
             self.gpu.gpu_scene = None;
             self.lighting.reflections = None;

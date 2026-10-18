@@ -16,6 +16,7 @@ pub mod hold;
 pub mod hud;
 pub mod interior;
 pub mod light_animation;
+pub mod mover;
 pub mod passage;
 pub mod scene;
 pub mod shape;

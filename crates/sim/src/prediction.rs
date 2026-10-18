@@ -69,6 +69,68 @@ impl BrokenShapes {
     }
 }
 
+/// Client copies of map movers (doors) follow the host's replicated
+/// states, so the predicted player meets a door where the host does.
+#[derive(Default)]
+pub struct MoverMirror {
+    handles: Vec<ColliderHandle>,
+    movers: Vec<crate::map::MapMover>,
+    placed: Vec<Option<glam::Mat4>>,
+}
+impl MoverMirror {
+    /// `handles` are the map colliders in `NativeMap::colliders` order.
+    fn new(handles: Vec<ColliderHandle>) -> Self {
+        Self {
+            handles,
+            ..Default::default()
+        }
+    }
+    fn set(&mut self, movers: &[crate::map::MapMover]) {
+        self.movers = movers.to_vec();
+        self.placed = movers
+            .iter()
+            .map(|m| Some(m.transform(&bri_content::mover::MoverState::default(), 0)))
+            .collect();
+    }
+    /// Put every mover's colliders where `states` have them at `tick`.
+    /// Returns whether any moved.
+    fn apply(
+        &mut self,
+        physics: &mut PhysicsWorld,
+        states: &[bri_content::mover::MoverState],
+        tick: u64,
+    ) -> bool {
+        let mut moved = false;
+        for (index, mover) in self.movers.iter().enumerate() {
+            let state = states.get(index).copied().unwrap_or_default();
+            let target = mover.transform(&state, tick);
+            if self.placed.get(index).copied().flatten() == Some(target) {
+                continue;
+            }
+            let (_, rotation, translation) = target.to_scale_rotation_translation();
+            let pose = Pose::from_parts(
+                Vector::from_array(translation.to_array()),
+                Rotation::from_array(rotation.to_array()),
+            );
+            for handle in self
+                .handles
+                .get(mover.colliders.clone())
+                .unwrap_or_default()
+            {
+                if let Some(collider) = physics.colliders.get_mut(*handle) {
+                    collider.set_position(pose);
+                    moved = true;
+                }
+            }
+            self.placed[index] = Some(target);
+        }
+        if moved {
+            bri_physics::detect_collisions(physics);
+        }
+        moved
+    }
+}
+
 #[derive(PartialEq)]
 struct Geometry {
     definition: ContentRef,
@@ -104,6 +166,7 @@ pub struct CollisionMirror {
     chunks: crate::chunks::Chunks,
     terrain: Option<crate::map::TerrainStream>,
     broken: BrokenShapes,
+    movers: MoverMirror,
     /// Removed bricks' colliders (see `parking`).
     parked: crate::parking::Parking,
     /// Linked bricks, as the host sees them.
@@ -116,9 +179,17 @@ fn next_water_generation() -> u64 {
 impl CollisionMirror {
     pub fn new(definitions: Definitions, map: Vec<ColliderBuilder>, waters: Vec<Water>) -> Self {
         let mut physics = bri_physics::new_world();
-        let handles = map
+        let handles: Vec<ColliderHandle> = map
             .into_iter()
-            .map(|collider| physics.insert_collider(collider.user_data(MAP_TAG), None))
+            .map(|collider| {
+                // A ladder's sensor keeps its own tag (`bri_motor::climb`).
+                let tag = if bri_motor::climb::is_climb(collider.user_data) {
+                    collider.user_data
+                } else {
+                    MAP_TAG
+                };
+                physics.insert_collider(collider.user_data(tag), None)
+            })
             .collect();
         bri_physics::detect_collisions(&mut physics);
         Self {
@@ -130,6 +201,7 @@ impl CollisionMirror {
             water_generation: next_water_generation(),
             bricks: BTreeMap::new(),
             terrain: None,
+            movers: MoverMirror::new(handles.clone()),
             broken: BrokenShapes::new(handles, &[]),
             chunks: Default::default(),
             parked: Default::default(),
@@ -143,6 +215,15 @@ impl CollisionMirror {
     /// Drop the collision of smashed shapes (`Session::broken_shapes`).
     pub fn set_broken_shapes(&mut self, broken: &BTreeSet<u32>) -> Result<bool> {
         self.broken.apply(&mut self.physics, broken)
+    }
+    /// The map's movers (`NativeMap::movers`), all at rest.
+    pub fn set_movers(&mut self, movers: &[crate::map::MapMover]) {
+        self.movers.set(movers);
+    }
+    /// Move the map's doors to where the host's states put them at `tick`
+    /// (`Session::map_mover_states`). Returns whether any moved.
+    pub fn set_map_movers(&mut self, states: &[bri_content::mover::MoverState], tick: u64) -> bool {
+        self.movers.apply(&mut self.physics, states, tick)
     }
     /// Incrementally mirror replicated brick collision. Returns whether any
     /// collider changed. Unknown definitions reject the update atomically.
@@ -687,6 +768,10 @@ impl Predictor {
     }
     pub fn set_broken_shapes(&mut self, broken: &BTreeSet<u32>) -> Result<bool> {
         self.world.set_broken_shapes(broken)
+    }
+    /// See [`CollisionMirror::set_map_movers`].
+    pub fn set_map_movers(&mut self, states: &[bri_content::mover::MoverState], tick: u64) -> bool {
+        self.world.set_map_movers(states, tick)
     }
     /// `sync_world` restricted to the bricks a replica change log names.
     pub fn sync_world_changes(

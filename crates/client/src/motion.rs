@@ -509,9 +509,11 @@ impl Motion {
         match (&mut self.predictor, &mut self.mirror) {
             (Some(predictor), _) => {
                 predictor.set_broken_shapes(&view.broken_shapes)?;
+                predictor.set_map_movers(&view.map_movers, view.tick);
             }
             (None, Some(mirror)) => {
                 mirror.set_broken_shapes(&view.broken_shapes)?;
+                mirror.set_map_movers(&view.map_movers, view.tick);
             }
             (None, None) => {}
         }

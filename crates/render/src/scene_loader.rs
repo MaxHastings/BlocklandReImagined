@@ -25,6 +25,10 @@ pub struct MapScene {
     /// Index range of each static shape by scene node, so a smashed shape
     /// can stop drawing (`GpuScene::hide_indices`).
     pub shape_indices: BTreeMap<u32, std::ops::Range<u32>>,
+    /// The models a package moves (doors), each its own scene about its
+    /// own origin, by scene node: drawn instanced where the session's
+    /// mover states put them rather than baked into the map.
+    pub movers: Vec<(u32, SceneData)>,
     /// Set only by the modern loader, which never decodes illumination images.
     pub modern_lights: Option<Vec<crate::map_lighting::MapLight>>,
     /// Animated map lights: an index into `modern_lights` and how it
@@ -338,8 +342,36 @@ fn load_bundle(root: &Path, map_id: &str, legacy: bool) -> Result<MapScene> {
         })
         .collect::<Result<Vec<_>>>()?;
     let mut shape_indices = BTreeMap::new();
+    let mut movers = Vec::new();
     for (node_index, node) in scene.nodes.iter().enumerate() {
         let first = out.indices.len() as u32;
+        if node.properties.contains_key("mover") && node.asset.is_some() {
+            // Its own scene, at the origin: the client places it each frame.
+            let mut alone = SceneData {
+                id: format!("{}#mover{node_index}", scene.id),
+                name: node.name.clone(),
+                ..Default::default()
+            };
+            let at_origin = Node {
+                name: node.name.clone(),
+                parent: None,
+                kind: Kind::StaticModel,
+                transform: Mat4::IDENTITY.to_cols_array(),
+                asset: node.asset.clone(),
+                properties: node.properties.clone(),
+            };
+            load_static_shape(
+                &root,
+                &bundle,
+                bindings,
+                &at_origin,
+                &mut alone,
+                &mut BTreeMap::new(),
+                legacy,
+            )?;
+            movers.push((u32::try_from(node_index)?, alone));
+            continue;
+        }
         match node.kind {
             Kind::Interior=>{
                 let interior = &interiors[node.asset.as_deref().context("Interior placement has no native asset")?];
@@ -433,6 +465,7 @@ fn load_bundle(root: &Path, map_id: &str, legacy: bool) -> Result<MapScene> {
         terrain,
         repeated_water,
         shape_indices,
+        movers,
         modern_lights,
         light_animations,
         light_spots,

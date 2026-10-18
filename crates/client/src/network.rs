@@ -67,6 +67,8 @@ pub struct View {
     pub targets: Vec<bri_sim::tutorial::TargetView>,
     /// Add-On map light rules, oldest first.
     pub map_lights: Vec<bri_sim::session::MapLightRule>,
+    /// Where each map mover (door) is in its motion.
+    pub map_movers: Vec<bri_content::mover::MoverState>,
     /// Add-On world shapes by key; an unchanged set keeps its pointer.
     pub world_shapes: BTreeMap<String, std::sync::Arc<Vec<bri_package_runtime::ops::WorldShape>>>,
     /// The host's environment settings (the Admin Menu's Environment
@@ -434,6 +436,7 @@ fn publish(
         broken_shapes: client.replica.broken_shapes.clone(),
         targets: client.replica.targets.clone(),
         map_lights: client.replica.map_lights.clone(),
+        map_movers: client.replica.map_movers.clone(),
         world_shapes: client.replica.world_shapes.clone(),
         environment: client.replica.environment.clone(),
         weapon_settings: Arc::new(client.replica.weapon_settings.clone()),

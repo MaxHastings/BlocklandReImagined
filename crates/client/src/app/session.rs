@@ -117,6 +117,7 @@ impl App {
         self.fx.decals.clear();
         self.fx.body_flashes.clear();
         self.fx.tutorial_targets.update(&[], 0.0);
+        self.fx.map_movers.set_map(Vec::new(), Vec::new());
         self.fx.explosion_debris.reset(0);
         self.fx.weapon_shells.clear();
         self.fx.weapon_cues.clear();
@@ -563,6 +564,7 @@ impl App {
                 );
                 mirror.attach_terrain(loaded.terrain.clone())?;
                 mirror.set_breakables(&loaded.breakables);
+                mirror.set_movers(&loaded.movers);
                 let mut building = crate::building::Building::new(
                     loaded.simulation.definitions.clone(),
                     loaded.query_colliders.clone(),
@@ -581,6 +583,7 @@ impl App {
                 }
                 let waters = loaded.simulation.waters.clone();
                 let plate = loaded.plate;
+                let movers = loaded.movers.clone();
                 let foliage = crate::foliage::PreparedFoliage::load_for_map(
                     &paths.foliage,
                     paths.maps.root(&base_map)?,
@@ -606,6 +609,8 @@ impl App {
                         building,
                         mirror,
                         shape_indices: visual.shape_indices,
+                        map_movers: movers,
+                        mover_scenes: visual.movers,
                         light_volume,
                     },
                     identity,

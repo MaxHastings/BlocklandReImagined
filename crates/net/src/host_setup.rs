@@ -52,6 +52,8 @@ pub struct MapSession {
     pub spawn_points: Vec<Vec3>,
     pub breakables: Vec<Breakable>,
     pub teleporters: Vec<bri_content::scene::Teleporter>,
+    /// The map's keyed movers (doors).
+    pub movers: Vec<bri_sim::map::MapMover>,
     pub tutorial: Option<TutorialMap>,
 }
 
@@ -284,6 +286,7 @@ impl HostSetup {
         session.set_spawn_points(map.spawn_points.clone())?;
         session.set_breakables(map.breakables)?;
         session.set_teleporters(map.teleporters)?;
+        session.set_map_movers(map.movers)?;
         session.set_map_list(self.maps.clone())?;
         if let Some(copies) = &self.copies {
             session.set_copy_store(copies.clone());

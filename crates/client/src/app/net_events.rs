@@ -1039,6 +1039,9 @@ impl App {
             self.lighting.light_volume = prepared.light_volume;
             self.scene.cpu_scene = Some(prepared.scene);
             self.scene.shape_indices = prepared.shape_indices;
+            self.fx
+                .map_movers
+                .set_map(prepared.map_movers, prepared.mover_scenes);
             self.scene.cpu_terrain = prepared.terrain;
             self.scene.cpu_water = prepared.repeated_water;
             self.scene.meshes = Some(prepared.meshes);

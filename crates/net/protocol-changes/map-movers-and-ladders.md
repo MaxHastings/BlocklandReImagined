@@ -1,0 +1,1 @@
+`Checkpoint::map_movers` and `Delta::map_movers`: the state of each of the map's keyed movers (doors) in map order (`bri_content::mover::MoverState`: from and to key, progress, start tick, rate, moving, blocked), sent whole when one changes. `PlayerState::posture.climbing`: a body holding a ladder (own corrections only).

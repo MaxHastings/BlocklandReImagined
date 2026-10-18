@@ -58,6 +58,7 @@ mod highlight;
 mod inventory;
 mod map_change;
 mod map_lights;
+mod map_movers;
 mod special;
 mod trust;
 mod tutorial;
@@ -217,6 +218,7 @@ pub const EMOTES: [&str; 7] = ["alarm", "bsd", "confusion", "hate", "hug", "love
 /// (`%player.getEyePoint()`).
 const V20_EYE_NODE: f32 = 2.156;
 pub use map_lights::{MAX_MAP_LIGHT_RULES, MapLightRule};
+pub use map_movers::MoverView;
 pub use tools::{FX_CAN_IMAGES, InspectMode, SPRAY_CAN_IMAGE, ToolAction, ToolCatalog};
 pub use trust::{MAX_TRUST_LIST, PlayerTrust, TrustEntry, TrustLevel};
 pub use undo::UNDO_QUEUE_SIZE;
@@ -1177,6 +1179,8 @@ pub struct Session {
     map_teleporters: teleporters::MapTeleporters,
     /// Add-On map light rules (`set_map_lights`), replicated to clients.
     map_lights: Vec<map_lights::MapLightRule>,
+    /// The map's keyed movers (doors) and where each is in its motion.
+    map_movers: map_movers::MapMovers,
     /// The music an Add-On rule plays for everyone (`play_music_all`),
     /// sent to joiners too; cleared by a map change.
     music: Option<MusicPlay>,
@@ -1224,6 +1228,7 @@ impl Session {
             breakables: Default::default(),
             map_teleporters: Default::default(),
             map_lights: Vec::new(),
+            map_movers: Default::default(),
             music: None,
             ambient: BTreeMap::new(),
             world_shapes: Default::default(),
@@ -3155,6 +3160,7 @@ impl Session {
             }
         };
         contain("events", self.start_event_tick(tick + 1));
+        contain("map movers", self.step_map_movers());
         let thinking = crate::cpu_time::thread();
         let bots = self.step_bots();
         self.bots.think_nanos +=

@@ -360,6 +360,10 @@ impl App {
                     driven,
                     &self.motion.passages(),
                 );
+                self.fx.map_movers.update(
+                    &view.map_movers,
+                    self.motion.server_tick().unwrap_or(view.tick as f64),
+                );
                 self.fx.tutorial_targets.update(
                     &view.targets,
                     self.motion.server_tick().unwrap_or(view.tick as f64),

@@ -32,6 +32,8 @@ pub mod brick_events;
 pub use brick_events::*;
 pub mod bots;
 pub use bots::*;
+pub mod movers;
+pub use movers::*;
 
 #[macro_export]
 macro_rules! for_each_op {
@@ -133,6 +135,8 @@ macro_rules! for_each_op {
             Ambient = effects,
             PlayThread = effects,
             SetMapLights = lighting,
+            MoverGoto = movers,
+            MoverStop = movers,
             SetEnvironment = environment,
             SetFov = player,
             SetSpeedScale = player,

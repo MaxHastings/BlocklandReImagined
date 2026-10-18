@@ -71,6 +71,7 @@ fn dedicated_and_common_local_host_setup_register_the_same_verified_native_clip(
         spawn_points: vec![glam::Vec3::new(0., 0.05, 0.)],
         breakables: vec![],
         teleporters: vec![],
+        movers: Vec::new(),
         tutorial: None,
     };
     let (mut local, _) = dedicated.setup.session_with(&hosted, map, None)?;
@@ -283,6 +284,7 @@ fn assert_stock_host(setup: &host_setup::HostSetup, root: &std::path::Path) -> R
         spawn_points: vec![glam::Vec3::new(0., 0.05, 0.)],
         breakables: vec![],
         teleporters: vec![],
+        movers: Vec::new(),
         tutorial: None,
     };
     let (mut session, _) = setup.session_with(&hosted, map, None)?;

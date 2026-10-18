@@ -743,6 +743,10 @@ pub struct Checkpoint {
     /// Add-On map light rules, oldest first.
     #[serde(default)]
     pub map_lights: Vec<bri_sim::session::MapLightRule>,
+    /// Where each of the map's movers (doors) is in its motion, in map
+    /// order.
+    #[serde(default)]
+    pub map_movers: Vec<bri_content::mover::MoverState>,
     /// The live environment over the map's own.
     #[serde(default)]
     pub environment: bri_content::atmosphere::Settings,
@@ -814,6 +818,7 @@ impl Checkpoint {
             broken_shapes: session.broken_shapes(),
             targets: session.tutorial_targets(),
             map_lights: session.map_light_rules(),
+            map_movers: session.map_mover_states(),
             environment: session.environment(),
             weapon_settings: session.weapon_settings().clone(),
             archetypes: session.archetypes().clone(),
@@ -1196,6 +1201,9 @@ pub struct Delta {
     /// Add-On map light rules, whole, whenever one changed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub map_lights: Option<Vec<bri_sim::session::MapLightRule>>,
+    /// The map movers' states, whole, whenever one changed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub map_movers: Option<Vec<bri_content::mover::MoverState>>,
     /// The live environment, whole, whenever it changed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub environment: Option<bri_content::atmosphere::Settings>,
@@ -1242,6 +1250,7 @@ impl Delta {
             broken_shapes,
             targets,
             map_lights,
+            map_movers,
             environment,
             archetypes,
             weapon_settings,
@@ -1264,6 +1273,7 @@ impl Delta {
             && broken_shapes.is_none()
             && targets.is_none()
             && map_lights.is_none()
+            && map_movers.is_none()
             && environment.is_none()
             && archetypes.is_none()
             && weapon_settings.is_none()

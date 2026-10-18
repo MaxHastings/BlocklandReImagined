@@ -39,6 +39,8 @@ pub struct Replica {
     pub targets: Vec<bri_sim::tutorial::TargetView>,
     /// Add-On map light rules, oldest first.
     pub map_lights: Vec<bri_sim::session::MapLightRule>,
+    /// Where each map mover (door) is in its motion, in map order.
+    pub map_movers: Vec<bri_content::mover::MoverState>,
     /// The live environment over the map's own.
     pub environment: bri_content::atmosphere::Settings,
     /// The server settings the weapons pack's bindings read
@@ -78,6 +80,22 @@ fn validate_entities(entities: &[bri_sim::session::EntityInfo]) -> Result<()> {
     for e in entities {
         e.validate()?;
     }
+    Ok(())
+}
+fn validate_map_movers(states: &[bri_content::mover::MoverState]) -> Result<()> {
+    ensure!(
+        states.len() <= bri_content::mover::MAX_MOVERS,
+        "Too many map mover states"
+    );
+    ensure!(
+        states.iter().all(|s| s.alpha.is_finite()
+            && (0.0..=1.0).contains(&s.alpha)
+            && s.rate.is_finite()
+            && (0.0..=1.0).contains(&s.rate)
+            && usize::from(s.from) < bri_content::mover::MAX_KEYS
+            && usize::from(s.to) < bri_content::mover::MAX_KEYS),
+        "Invalid map mover state"
+    );
     Ok(())
 }
 fn validate_map_lights(rules: &[bri_sim::session::MapLightRule]) -> Result<()> {
@@ -262,6 +280,7 @@ impl Replica {
         validate_broken_shapes(&checkpoint.broken_shapes)?;
         validate_targets(&checkpoint.targets)?;
         validate_map_lights(&checkpoint.map_lights)?;
+        validate_map_movers(&checkpoint.map_movers)?;
         validate_world_shapes(&checkpoint.world_shapes)?;
         checkpoint.environment.validate()?;
         validate_weapon_settings(&checkpoint.weapon_settings)?;
@@ -312,6 +331,7 @@ impl Replica {
             broken_shapes: checkpoint.broken_shapes,
             targets: checkpoint.targets,
             map_lights: checkpoint.map_lights,
+            map_movers: checkpoint.map_movers,
             environment: checkpoint.environment,
             weapon_settings: checkpoint.weapon_settings,
             archetypes: archetypes.into(),
@@ -413,6 +433,9 @@ impl Replica {
         if let Some(targets) = &delta.targets {
             validate_targets(targets)?;
         }
+        if let Some(states) = &delta.map_movers {
+            validate_map_movers(states)?;
+        }
         if let Some(rules) = &delta.map_lights {
             validate_map_lights(rules)?;
         }
@@ -502,6 +525,9 @@ impl Replica {
         }
         if let Some(targets) = delta.targets {
             self.targets = targets;
+        }
+        if let Some(states) = delta.map_movers {
+            self.map_movers = states;
         }
         if let Some(rules) = delta.map_lights {
             self.map_lights = rules;

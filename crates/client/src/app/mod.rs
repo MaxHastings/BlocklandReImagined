@@ -134,6 +134,9 @@ struct Prepared {
     building: crate::building::Building,
     mirror: bri_sim::prediction::CollisionMirror,
     shape_indices: BTreeMap<u32, std::ops::Range<u32>>,
+    /// The map's keyed movers (doors) and their scenes.
+    map_movers: Vec<bri_sim::map::MapMover>,
+    mover_scenes: Vec<(u32, SceneData)>,
     light_volume: LightVolumeState,
 }
 /// A background chunk update: the replica revision it reached, and the
@@ -430,6 +433,7 @@ fn prepare_map(
     let mut building = crate::building::Building::new(definitions, native_map.colliders)?;
     building.set_map_surfaces(native_map.surfaces);
     building.set_breakables(&native_map.breakables);
+    mirror.set_movers(&native_map.movers);
     building.attach_terrain(native_map.terrain);
     building.set_catalog(selected)?;
     if let Some(print) = &catalog.default_print {
@@ -464,6 +468,8 @@ fn prepare_map(
         building,
         mirror,
         shape_indices: visual.shape_indices,
+        map_movers: native_map.movers,
+        mover_scenes: visual.movers,
         light_volume,
     })
 }
@@ -1698,6 +1704,7 @@ impl PlatformApp for App {
         self.fx.decals.gpu_stopped();
         self.fx.body_flashes.gpu_stopped();
         self.fx.tutorial_targets.gpu_stopped();
+        self.fx.map_movers.gpu_stopped();
         self.gpu.shell_gpu = None;
         for avatar in self.avatar.avatars.values_mut() {
             avatar.gpu = None;
@@ -1852,6 +1859,7 @@ impl PlatformApp for App {
         self.fx.decals.gpu_stopped();
         self.fx.body_flashes.gpu_stopped();
         self.fx.tutorial_targets.gpu_stopped();
+        self.fx.map_movers.gpu_stopped();
         self.gpu.shell_gpu = None;
         self.avatar.gpu_stopped();
         self.gpu.renderer = None;

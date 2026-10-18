@@ -214,6 +214,11 @@ pub struct Posture {
     pub lean: f32,
     /// The lean it is easing toward.
     pub lean_to: f32,
+    /// Holding a ladder (a climb volume, `crate::climb`): it faces the
+    /// rungs, gravity does not pull it and its move keys run it up and
+    /// down.
+    #[serde(default)]
+    pub climbing: bool,
 }
 /// Longest a tether's rope may be, units: a bound on state a host or
 /// player sends, past any v20 rope (the Grapple Rope's hook flies 800).
@@ -750,6 +755,8 @@ pub struct PlayerTuning {
     pub prone: Option<Prone>,
     /// Leaning left and right, when the body can: none for v20's bodies.
     pub lean: Option<Lean>,
+    /// Climbing ladders, when the body can: none for v20's bodies.
+    pub climb: Option<crate::climb::Climb>,
     /// The archetype's movement controller, bound from its module by the
     /// side that runs it (`Archetypes::bind_controllers`). Never data: the
     /// archetype carries the module, and a table read from data has none
@@ -821,6 +828,7 @@ impl Default for PlayerTuning {
             swim_coverage: 0.9,
             prone: None,
             lean: None,
+            climb: None,
             controller: None,
         }
     }
@@ -1015,6 +1023,9 @@ impl PlayerTuning {
                     && (0.05..=2.0).contains(&l.seconds),
                 "Invalid lean: distance 0 to half the body's width, angle 0 to 0.6, seconds 0.05 to 2"
             );
+        }
+        if let Some(c) = &self.climb {
+            c.validate()?;
         }
         Ok(())
     }
@@ -1808,6 +1819,7 @@ impl Player {
             None => {
                 *posture = Posture {
                     prone: posture.prone,
+                    climbing: posture.climbing,
                     ..Posture::default()
                 }
             }
@@ -1953,6 +1965,51 @@ impl Player {
             }
             None => input,
         };
+        // A ladder: the body takes hold of one it faces and pushes toward,
+        // runs along it while it holds on, and lets go when it leaves the
+        // volume, jumps or comes down onto a floor (`crate::climb`).
+        let mut input = input;
+        let mut climb_velocity = None;
+        if let Some(climb) = t.climb {
+            let middle = feet + Vec3::Y * (t.height(self.state.crouched) * 0.5);
+            match crate::climb::find(physics, middle) {
+                None => self.state.posture.climbing = false,
+                Some(volume) => {
+                    let mut let_go = false;
+                    if self.state.posture.climbing && input.jump {
+                        // A hop off the rungs.
+                        self.state.posture.climbing = false;
+                        self.state.velocity[1] = climb.jump_speed;
+                        input.jump = false;
+                        let_go = true;
+                    }
+                    if !self.state.posture.climbing && !let_go {
+                        let rising = self.state.velocity[1].abs();
+                        let wish = move_vec;
+                        let facing = volume.facing();
+                        let airborne = !self.state.grounded;
+                        self.state.posture.climbing = !self.state.posture.prone
+                            && (!airborne || rising <= climb.grab_speed)
+                            && forward.dot(facing) > climb.facing
+                            && (wish.length() < 1e-3
+                                || airborne
+                                || wish.normalize().dot(facing) > climb.push);
+                    }
+                    if self.state.posture.climbing {
+                        self.state.yaw = volume.yaw;
+                        let along = volume.up * (input.forward * volume.speed);
+                        let across = if volume.strafe {
+                            right * (input.right * volume.speed)
+                        } else {
+                            Vec3::ZERO
+                        };
+                        climb_velocity = Some(along + across);
+                    }
+                }
+            }
+        } else {
+            self.state.posture.climbing = false;
+        }
         // Torque's convex working list: every solid polygon this tick can reach,
         // including a jump, a step and the contact slab under the feet.
         let half = t.width * 0.5;
@@ -2170,6 +2227,11 @@ impl Player {
         velocity.x *= horizontal_keep;
         velocity.z *= horizontal_keep;
         velocity.y *= (1.0 - vertical_drag * dt).max(0.0);
+        // On a ladder the move keys set the speed outright: no gravity,
+        // drag or run force.
+        if let Some(on_ladder) = climb_velocity {
+            velocity = on_ladder;
+        }
         // A rope holds the body within its length of the anchor; the keys
         // pump a swing while it hangs.
         if let Some(mut tether) = self.state.tether {
@@ -2262,6 +2324,10 @@ impl Player {
             .collect();
         self.state.feet = moved.feet.to_array();
         self.state.velocity = velocity.to_array();
+        // Coming down a ladder onto a floor steps off it.
+        if self.state.posture.climbing && moved.floor && input.forward < 0.0 {
+            self.state.posture.climbing = false;
+        }
         // updatePos: landing on a floor reopens the jump window at once, so a
         // held jump hops on the next tick and a bunny hop loses one tick of
         // ground friction, not four.

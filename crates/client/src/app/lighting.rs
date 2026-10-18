@@ -549,6 +549,7 @@ mod tests {
             terrain: Vec::new(),
             repeated_water: Vec::new(),
             shape_indices: Default::default(),
+            movers: Vec::new(),
             modern_lights: Some(Vec::new()),
             light_animations: Vec::new(),
             light_spots: Vec::new(),

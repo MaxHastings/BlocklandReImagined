@@ -112,6 +112,7 @@ fn actual_common_and_dedicated_setup_keep_bind_only_and_provider_precedence() ->
             spawn_points: vec![glam::Vec3::new(0., 0.05, 0.)],
             breakables: vec![],
             teleporters: vec![],
+            movers: Vec::new(),
             tutorial: None,
         },
         None,

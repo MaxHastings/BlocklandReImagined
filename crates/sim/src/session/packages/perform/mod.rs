@@ -20,6 +20,7 @@ mod entity;
 mod environment;
 mod lighting;
 mod minigame;
+mod movers;
 mod physics;
 mod player;
 mod storage;

@@ -70,6 +70,33 @@ pub struct NativeMap {
     /// What each collider's triangles are made of, for footsteps and
     /// impacts ([`MapSurfaces`]).
     pub surfaces: MapSurfaces,
+    /// Static models that follow keyed motions (doors): their nodes and
+    /// the colliders that move with them.
+    pub movers: Vec<MapMover>,
+}
+
+/// A static model a package moves along authored keys (a door). Its
+/// colliders are in [`NativeMap::colliders`] like any other, built about
+/// the model's origin and placed at `placement` (its pose at key 0).
+#[derive(Clone, Debug, PartialEq)]
+pub struct MapMover {
+    /// Scene node index: the stable identity clients draw.
+    pub node: u32,
+    pub def: bri_content::mover::MoverDef,
+    /// The node's world transform at rest.
+    pub placement: glam::Mat4,
+    /// Indices into `NativeMap::colliders`.
+    pub colliders: std::ops::Range<usize>,
+}
+impl MapMover {
+    /// Where the model's origin is at `tick` in `state`.
+    pub fn transform(&self, state: &bri_content::mover::MoverState, tick: u64) -> glam::Mat4 {
+        state.offset(&self.def, tick).apply(self.placement)
+    }
+    /// [`Self::transform`] between ticks, for drawing.
+    pub fn transform_at(&self, state: &bri_content::mover::MoverState, tick: f64) -> glam::Mat4 {
+        state.offset_f(&self.def, tick).apply(self.placement)
+    }
 }
 
 /// The surface kind a body stands on or a shot strikes, a short name a map
@@ -327,6 +354,9 @@ impl NativeMap {
         let surface_table = MapSurfaces::table(&bundle, map_id)?;
         let mut surfaces = MapSurfaces::default();
         let mut breakables = Vec::new();
+        let mut movers = Vec::new();
+        let mover_defs: std::collections::BTreeMap<usize, bri_content::mover::MoverDef> =
+            scene.movers()?.into_iter().collect();
         let mut pending_objects: Vec<_> = scene
             .pending_scripts
             .iter()
@@ -347,6 +377,53 @@ impl NativeMap {
                             .user_data(MapSurface::Interior as u128),
                     );
                     surfaces.triangles.push(None);
+                }
+                Kind::StaticModel | Kind::DatablockModel
+                    if node.asset.is_some() && mover_defs.contains_key(&index) =>
+                {
+                    // A model a package moves: its collision is built about
+                    // its own origin and put where the placement says, so
+                    // the session can move it.
+                    let def = mover_defs[&index].clone();
+                    let id = node.asset.as_ref().context("Missing mover asset")?;
+                    let path = native_file(
+                        root,
+                        bundle["assets"][id]
+                            .as_str()
+                            .context("Missing mover model file")?,
+                    )?;
+                    let shape: bri_content::shape::Shape =
+                        serde_json::from_slice(&std::fs::read(path)?)?;
+                    let first = colliders.len();
+                    if def.collide {
+                        for (collider, materials) in
+                            bri_physics::content::static_shape_collider_materials(
+                                &shape,
+                                glam::Mat4::IDENTITY,
+                            )?
+                        {
+                            let kept = collider
+                                .shape
+                                .as_trimesh()
+                                .is_some_and(|m| m.indices().len() == materials.len());
+                            surfaces.push(
+                                &surface_table,
+                                &shape,
+                                kept.then_some(&materials[..]),
+                            )?;
+                            colliders.push(
+                                collider
+                                    .position(mover_pose(transform))
+                                    .user_data(MapSurface::Static as u128),
+                            );
+                        }
+                    }
+                    movers.push(MapMover {
+                        node: u32::try_from(index)?,
+                        def,
+                        placement: transform,
+                        colliders: first..colliders.len(),
+                    });
                 }
                 Kind::StaticModel | Kind::DatablockModel if node.asset.is_some() => {
                     let id = node.asset.as_ref().context("Missing static model asset")?;
@@ -402,12 +479,27 @@ impl NativeMap {
                         pending_objects.push(format!("{}: {pending}", node.name));
                     }
                 }
+                Kind::Climb => {
+                    // Added below with the others, so each reads its own
+                    // numbers.
+                }
                 Kind::StaticModel => anyhow::bail!("Missing static model asset: {}", node.name),
                 Kind::DatablockModel | Kind::Water | Kind::Unadapted => {
                     pending_objects.push(node.name.clone())
                 }
                 _ => {}
             }
+        }
+        // Ladders: sensor boxes the player motor finds by a body's middle.
+        for climb in scene.climbs()? {
+            colliders.push(bri_motor::climb::collider(
+                climb.center,
+                climb.half,
+                climb.yaw,
+                climb.speed,
+                climb.strafe,
+            ));
+            surfaces.triangles.push(None);
         }
         let mut instances: Vec<TerrainInstance> = match bundle
             .get("terrains")
@@ -446,8 +538,18 @@ impl NativeMap {
             teleporters,
             plate,
             surfaces,
+            movers,
         })
     }
+}
+
+/// The pose of a model placed at `transform`, for its collider.
+fn mover_pose(transform: glam::Mat4) -> rapier3d::prelude::Pose {
+    let (_, rotation, translation) = transform.to_scale_rotation_translation();
+    rapier3d::prelude::Pose::from_parts(
+        rapier3d::prelude::Vector::from_array(translation.to_array()),
+        rapier3d::prelude::Rotation::from_array(rotation.to_array()),
+    )
 }
 
 /// Center of the shape's bounds at its default pose, in object space.

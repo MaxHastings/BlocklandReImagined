@@ -77,6 +77,11 @@ pub enum Kind {
     /// `properties` hold `role` (`entrance` or `exit`), `channel` and
     /// `radius`.
     Teleporter,
+    /// A climb volume (a ladder): `properties` hold `half` (half extents
+    /// "x y z" in the node's axes), `speed` (units a second along the
+    /// rungs), `strafe` (1 to let the strafe keys move sideways) and an
+    /// `id`. The climber faces the node's local +Z, as at a teleporter exit.
+    Climb,
     Unadapted,
 }
 
@@ -353,7 +358,115 @@ pub struct Teleporter {
     pub yaw: f32,
     pub radius: f32,
 }
+/// Most climb volumes a scene may hold.
+pub const MAX_CLIMBS: usize = 256;
+
 impl Scene {
+    /// Every static model with a `mover` property, read and checked:
+    /// the node's index and its keyed motion ([`crate::mover`]).
+    pub fn movers(&self) -> anyhow::Result<Vec<(usize, crate::mover::MoverDef)>> {
+        use anyhow::Context;
+        let mut out: Vec<(usize, crate::mover::MoverDef)> = Vec::new();
+        for (index, node) in self.nodes.iter().enumerate() {
+            let Some(text) = node.properties.get("mover") else {
+                continue;
+            };
+            anyhow::ensure!(
+                matches!(node.kind, Kind::StaticModel | Kind::DatablockModel)
+                    && node.asset.is_some(),
+                "Mover {}: only a static model with an asset can move",
+                node.name
+            );
+            let mut def: crate::mover::MoverDef = serde_json::from_str(text)
+                .with_context(|| format!("Mover {}: its definition", node.name))?;
+            if def.keys.is_empty() {
+                def.keys.push(crate::mover::MoverKey::default());
+            }
+            def.validate()?;
+            anyhow::ensure!(
+                !out.iter().any(|(_, other)| other.id == def.id),
+                "Two movers are called {}",
+                def.id
+            );
+            out.push((index, def));
+        }
+        anyhow::ensure!(
+            out.len() <= crate::mover::MAX_MOVERS,
+            "A map holds at most {} movers",
+            crate::mover::MAX_MOVERS
+        );
+        Ok(out)
+    }
+    /// Every [`Kind::Climb`] node, read and checked.
+    pub fn climbs(&self) -> anyhow::Result<Vec<crate::mover::Climb>> {
+        use anyhow::{Context, ensure};
+        let mut out = Vec::new();
+        for (index, node) in self.nodes.iter().enumerate() {
+            if !matches!(node.kind, Kind::Climb) {
+                continue;
+            }
+            let numbers = |key: &str| -> anyhow::Result<Vec<f32>> {
+                node.properties
+                    .get(key)
+                    .map(|v| {
+                        v.split_whitespace()
+                            .map(|w| w.parse::<f32>())
+                            .collect::<Result<Vec<_>, _>>()
+                    })
+                    .transpose()
+                    .with_context(|| format!("Climb {}: {key} is not numbers", node.name))
+                    .map(Option::unwrap_or_default)
+            };
+            let half = numbers("half")?;
+            ensure!(
+                half.len() == 3
+                    && half
+                        .iter()
+                        .all(|h| h.is_finite() && *h > 0.0 && *h <= 1000.0),
+                "Climb {}: half needs three sizes above 0",
+                node.name
+            );
+            let speed = numbers("speed")?.first().copied().unwrap_or(8.0);
+            ensure!(
+                speed.is_finite() && speed > 0.0 && speed <= 100.0,
+                "Climb {}: speed must be above 0 and at most 100",
+                node.name
+            );
+            let matrix = Mat4::from_cols_array(&node.transform);
+            let forward = matrix.transform_vector3(Vec3::Z);
+            ensure!(
+                matrix.w_axis.is_finite() && forward.is_finite(),
+                "Climb {}: placement is not finite",
+                node.name
+            );
+            let yaw = if forward.x.abs() + forward.z.abs() > 1e-6 {
+                forward.x.atan2(-forward.z)
+            } else {
+                0.0
+            };
+            out.push(crate::mover::Climb {
+                node: index,
+                id: node
+                    .properties
+                    .get("id")
+                    .cloned()
+                    .unwrap_or_else(|| node.name.clone()),
+                center: matrix.w_axis.truncate(),
+                half: Vec3::new(half[0], half[1], half[2]),
+                yaw,
+                speed,
+                strafe: node
+                    .properties
+                    .get("strafe")
+                    .is_some_and(|v| v.trim() == "1"),
+            });
+        }
+        ensure!(
+            out.len() <= MAX_CLIMBS,
+            "A map holds at most {MAX_CLIMBS} climb volumes"
+        );
+        Ok(out)
+    }
     /// Every [`Kind::Teleporter`] node, read and checked.
     pub fn teleporters(&self) -> anyhow::Result<Vec<Teleporter>> {
         use anyhow::{Context, ensure};
