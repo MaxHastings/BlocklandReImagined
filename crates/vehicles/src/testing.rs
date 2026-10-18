@@ -238,6 +238,7 @@ fn base(id: &str, name: &str, family: Family) -> Definition {
         engine_force: 0.,
         engine_brake: 0.,
         brake_force: 0.,
+        drive: None,
         max_speed: 0.,
         reverse_speed: 0.,
         max_steering: 0.6,
@@ -342,6 +343,7 @@ pub fn car() -> Definition {
         engine_force: 10000.,
         engine_brake: 500.,
         brake_force: 2000.,
+        drive: None,
         max_speed: 30.,
         max_steering: 0.8,
         strafe_steering: true,
@@ -410,6 +412,7 @@ pub fn tank() -> Definition {
         engine_force: 6000.,
         engine_brake: 1000.,
         brake_force: 4000.,
+        drive: None,
         max_speed: 20.,
         ..wheeled(TANK, "Test Tank", [3., 1.2, 5.], 0.4)
     }
@@ -433,6 +436,7 @@ pub fn flying_car() -> Definition {
         engine_force: 2000.,
         engine_brake: 300.,
         brake_force: 1500.,
+        drive: None,
         max_speed: 20.,
         thrust: 1500.,
         reverse_thrust: 500.,

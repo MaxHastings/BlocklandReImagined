@@ -375,6 +375,24 @@ impl Wheel {
         (self.steering * squared.sin()).atan2(squared.cos())
     }
 }
+/// A vehicle's authored acceleration and braking ([`Definition::drive`]),
+/// in units a second a second.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DriveRates {
+    /// Speed gained a second from a standstill at full throttle.
+    pub acceleration: f32,
+    /// Speed lost a second with the brake held, every wheel braked.
+    pub deceleration: f32,
+}
+impl DriveRates {
+    pub fn valid(&self) -> bool {
+        [self.acceleration, self.deceleration]
+            .iter()
+            .all(|r| r.is_finite() && *r > 0. && *r <= 1000.)
+    }
+}
+
 /// Halo's seat acceleration overlays for a body: three additive clips (front
 /// to back, left to right, up and down; the middle key is the pose with no
 /// acceleration) blended by how the vehicle is being accelerated
@@ -832,6 +850,13 @@ pub struct Definition {
     pub engine_force: f32,
     pub engine_brake: f32,
     pub brake_force: f32,
+    /// How hard the vehicle speeds up and brakes, as the speed change a
+    /// second on flat ground, in place of `engine_force` and `brake_force`
+    /// (Halo's `speed_acceleration` and `speed_deceleration`). Loading turns
+    /// them into those forces for this vehicle's wheels and mass
+    /// ([`Definition::resolve_drive`]). Left out, the forces stand as given.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub drive: Option<DriveRates>,
     pub max_speed: f32,
     pub reverse_speed: f32,
     pub max_steering: f32,
@@ -1259,6 +1284,28 @@ impl Definition {
     pub fn gravity(&self) -> f32 {
         crate::world::VEHICLE_GRAVITY * self.gravity_scale.unwrap_or(1.)
     }
+    /// Turn `drive` into the `engine_force` and `brake_force` that give a
+    /// rolling body those rates. Each wheel carries `mass / wheels` as its
+    /// spin inertia, so with no slip a body of `mass` on `n` powered wheels
+    /// of radius `r` and `wheels` wheels in all speeds up at
+    /// `n E r / (mass (1 + r^2))` for engine force `E` and slows at
+    /// `wheels B r / (mass (1 + r^2))` for brake `B`.
+    pub fn resolve_drive(&mut self) {
+        let Some(rates) = self.drive else { return };
+        let powered: Vec<f32> = self
+            .wheels
+            .iter()
+            .filter(|w| w.powered)
+            .map(|w| w.radius)
+            .collect();
+        if powered.is_empty() || self.wheels.is_empty() {
+            return;
+        }
+        let r = powered.iter().sum::<f32>() / powered.len() as f32;
+        let share = self.mass * (1. + r * r) / r;
+        self.engine_force = rates.acceleration * share / powered.len() as f32;
+        self.brake_force = rates.deceleration * share / self.wheels.len() as f32;
+    }
     /// The share of `engine_force` a powered wheel gets turning at
     /// `share` of its top speed (`max_speed` over its radius), past which
     /// it gets none: `engine_curve`, else Torque's straight fall.
@@ -1474,6 +1521,10 @@ impl Pack {
                     "invalid animation thread"
                 );
             }
+            ensure!(
+                d.drive.is_none_or(|r| r.valid()),
+                "drive acceleration and deceleration must be above 0"
+            );
             d.effects.validate()?;
             if let Some(engine) = &d.engine_sound {
                 engine.validate()?;

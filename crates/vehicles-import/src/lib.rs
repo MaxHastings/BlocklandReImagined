@@ -570,6 +570,7 @@ pub fn lower(
         engine_force: number(b, "engineTorque", number(b, "runForce", 4320.)),
         engine_brake: number(b, "engineBrake", 0.),
         brake_force: number(b, "brakeTorque", 0.),
+        drive: None,
         max_speed: number(b, "maxWheelSpeed", number(b, "maxForwardSpeed", 20.)),
         reverse_speed: number(b, "maxBackwardSpeed", 20.),
         max_steering: number(b, "maxSteeringAngle", 1.),
