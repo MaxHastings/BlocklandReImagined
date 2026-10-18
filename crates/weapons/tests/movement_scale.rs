@@ -11,7 +11,19 @@ fn reloading_and_aiming_multiply_and_each_stays_in_range() {
     // A field left out slows nothing.
     let only: MovementScale = serde_json::from_str(r#"{ "aiming": 0.75 }"#).unwrap();
     assert_eq!(only.scale(true, false), 1.0);
-    assert!(!MovementScale { reloading: 0.0, aiming: 1.0 }.valid());
-    assert!(!MovementScale { reloading: 1.0, aiming: 1.5 }.valid());
+    assert!(
+        !MovementScale {
+            reloading: 0.0,
+            aiming: 1.0
+        }
+        .valid()
+    );
+    assert!(
+        !MovementScale {
+            reloading: 1.0,
+            aiming: 1.5
+        }
+        .valid()
+    );
     assert!(serde_json::from_str::<MovementScale>(r#"{ "walking": 0.5 }"#).is_err());
 }

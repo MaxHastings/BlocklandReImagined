@@ -2804,7 +2804,9 @@ impl Contrail {
                 && self.keys.iter().all(|k| {
                     k.age.is_finite()
                         && (0.0..=100.0).contains(&k.width)
-                        && k.color.iter().all(|c| c.is_finite() && (0.0..=4.0).contains(c))
+                        && k.color
+                            .iter()
+                            .all(|c| c.is_finite() && (0.0..=4.0).contains(c))
                 }),
             "Invalid contrail: a texture key, 1 to 240 points a second, 2 to 8 keys by \
              rising age from 0 to at most 10 s, widths to 100, colours 0 to 4"

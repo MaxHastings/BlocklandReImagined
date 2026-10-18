@@ -2042,7 +2042,6 @@ mod tests {
         assert!(Switch.enabled(true, false, false) && Always.enabled(false, false, false));
     }
 
-
     #[test]
     fn engine_curves_rise_in_speed_and_stay_in_range() {
         let sound = |curve: serde_json::Value| -> EngineSound {

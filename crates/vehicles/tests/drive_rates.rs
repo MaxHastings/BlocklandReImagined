@@ -174,7 +174,8 @@ fn it_reaches_speed_at_the_authored_acceleration() {
 #[test]
 fn it_brakes_at_the_authored_deceleration() {
     let (distance, seconds) = stop_from(tagged(), 28.);
-    let (ideal_time, ideal_distance) = (28. / TAG.deceleration, 28. * 28. / (2. * TAG.deceleration));
+    let (ideal_time, ideal_distance) =
+        (28. / TAG.deceleration, 28. * 28. / (2. * TAG.deceleration));
     assert!(
         (seconds - ideal_time).abs() < 0.3 * ideal_time
             && (distance - ideal_distance).abs() < 0.3 * ideal_distance,
