@@ -1459,6 +1459,22 @@ fn physical_diffuse(v:VertexOut,n:vec3<f32>)->vec3<f32> {
     return ambient_at(share)+camera.sun_color.rgb*facing*share+local.diffuse
         +baked_surroundings(p,v.normal)+v.point_light;
 }
+// The light on a physical surface. With a baked lightmap (material flag 16,
+// read with lightmap_uv and multiplied by material[7].w) the map's own sun,
+// ambient and shadows are baked in, so only moving shadows darken it and the
+// live lights add to it; without one, the live sun and ambient.
+fn physical_light(v:VertexOut,n:vec3<f32>)->vec3<f32> {
+    if (u32(material[0].w)&16u)==0u {return physical_diffuse(v,n);}
+    let p=v.world_position;
+    let baked=textureSample(lightmap,clamped,v.lightmap_uv).rgb*material[7].w;
+    var light=shadowed_lightmap(baked,p,n);
+    if lighting_mode()==3 {
+        light+=dynamic_light_sum(p,n,SPECULAR_POWER).diffuse+point_illumination(p,n);
+    } else {
+        light+=v.point_light;
+    }
+    return light;
+}
 fn physical_surface(v:VertexOut)->vec4<f32> {
     let albedo=textureSample(layer0,tiled,v.uv);
     var alpha=albedo.a*v.color.a;
@@ -1492,13 +1508,13 @@ fn physical_surface(v:VertexOut)->vec4<f32> {
         let parallel=material[4].yzw;
         let reflectance=mix(parallel,perpendicular,clamp(dot(n,e),0.0,1.0));
         let glow=material[2].rgb*textureSample(layer5,tiled,v.uv).rgb;
-        let display=display_color(colour)*tint*physical_diffuse(v,n)
+        let display=display_color(colour)*tint*physical_light(v,n)
             +environment*reflectance*reflection_mask+display_color(glow);
         return vec4<f32>(fogged(display,v.world_position),alpha);
     }
     // Diffuse: the painted share, lit as other models are (display space).
     let pigment=display_color(colour*(1.0-metallic))*tint*occlusion;
-    var display=pigment*physical_diffuse(v,n);
+    var display=pigment*physical_light(v,n);
     // Highlights and reflections (linear), as for metal.
     let f0=mix(vec3<f32>(0.04),base,metallic);
     let nv=max(dot(n,e),0.0001);

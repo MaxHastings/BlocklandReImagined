@@ -125,6 +125,7 @@ pub fn cuboid(centre: Vec3, half: Vec3, paint: Paint) -> Mesh {
         skin: None,
         billboard: false,
         billboard_y: false,
+        uv1: Vec::new(),
     }
 }
 

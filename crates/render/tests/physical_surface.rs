@@ -71,6 +71,8 @@ fn surface() -> Surface {
         detail_scale: 1.0,
         emissive: [0.0; 3],
         reflection: None,
+        lightmap: None,
+        lightmap_strength: 1.0,
     }
 }
 

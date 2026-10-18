@@ -642,6 +642,7 @@ fn mesh(
         skin,
         billboard: mesh_flags & 0x80000000 != 0,
         billboard_y: mesh_flags & 0x20000000 != 0,
+        uv1: Vec::new(),
     }))
 }
 

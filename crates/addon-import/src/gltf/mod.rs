@@ -766,6 +766,7 @@ pub fn convert(
                 "metal_rough" => surface.metallic_roughness = k,
                 "occlusion" => surface.occlusion = k,
                 "detail" => surface.detail = k,
+                "lightmap" => surface.lightmap = k,
                 _ => surface.emissive_map = k,
             }
         }
@@ -822,6 +823,7 @@ pub fn convert(
             skin: None,
             billboard: false,
             billboard_y: false,
+            uv1: Vec::new(),
         };
         let mut influences: Vec<Influence> = Vec::new();
         let mut unweighted = 0;
@@ -858,6 +860,10 @@ pub fn convert(
                 .map(|a| doc.floats(a as usize))
                 .transpose()?;
             let uv = attr["TEXCOORD_0"]
+                .as_u64()
+                .map(|a| doc.floats(a as usize))
+                .transpose()?;
+            let uv1 = attr["TEXCOORD_1"]
                 .as_u64()
                 .map(|a| doc.floats(a as usize))
                 .transpose()?;
@@ -939,6 +945,16 @@ pub fn convert(
             match &uv {
                 Some(uv) => mesh.uv.extend(uv.iter().map(|u| [u[0], u[1]])),
                 None => mesh.uv.extend(std::iter::repeat_n([0.0, 0.0], count)),
+            }
+            // The second UV set rides along only once a primitive has one; the
+            // vertices before it get (0, 0), and so do later ones without.
+            if uv1.is_some() || !mesh.uv1.is_empty() {
+                let filled = mesh.positions.len() - count;
+                mesh.uv1.resize(filled, [0.0, 0.0]);
+                match &uv1 {
+                    Some(uv) => mesh.uv1.extend(uv.iter().map(|u| [u[0], u[1]])),
+                    None => mesh.uv1.extend(std::iter::repeat_n([0.0, 0.0], count)),
+                }
             }
             if skinned {
                 let joint_rows =
@@ -2079,12 +2095,19 @@ fn make_material(
         if m["extras"]["bri_detail"].is_object() {
             maps.detail = Some(png_of(&m["extras"]["bri_detail"], report)?);
         }
+        // `extras.bri_lightmap`: a baked lightmap the second UV set reads,
+        // as a texture reference (`index`) plus `strength`, its multiplier.
+        // It takes the place of the sun and ambient light on the surface.
+        if m["extras"]["bri_lightmap"].is_object() {
+            maps.lightmap = Some(png_of(&m["extras"]["bri_lightmap"], report)?);
+        }
     }
     let textured = maps.normal.is_some()
         || maps.metallic_roughness.is_some()
         || maps.occlusion.is_some()
         || maps.emissive.is_some()
-        || maps.detail.is_some();
+        || maps.detail.is_some()
+        || maps.lightmap.is_some();
     // glTF's default metallic factor is 1, but exporters write 0 for every
     // plain surface: without a metal map only a stated factor counts.
     let metallic = match pbr["metallicFactor"].as_f64() {
@@ -2114,6 +2137,11 @@ fn make_material(
         detail: None,
         detail_scale: (m["extras"]["bri_detail"]["scale"].as_f64().unwrap_or(1.0) as f32)
             .clamped(0.01, 4096.0),
+        lightmap: None,
+        lightmap_strength: (m["extras"]["bri_lightmap"]["strength"]
+            .as_f64()
+            .unwrap_or(1.0) as f32)
+            .clamped(0.0, 16.0),
     });
     let metal = pbr["metallicFactor"]
         .as_f64()
@@ -2231,6 +2259,7 @@ pub(crate) struct SurfaceMaps {
     pub occlusion: Option<Vec<u8>>,
     pub emissive: Option<Vec<u8>>,
     pub detail: Option<Vec<u8>>,
+    pub lightmap: Option<Vec<u8>>,
 }
 impl SurfaceMaps {
     /// Each map with the suffix its material takes.
@@ -2241,6 +2270,7 @@ impl SurfaceMaps {
             ("occlusion", self.occlusion),
             ("glow", self.emissive),
             ("detail", self.detail),
+            ("lightmap", self.lightmap),
         ]
         .into_iter()
         .filter_map(|(k, png)| Some((k, png?)))

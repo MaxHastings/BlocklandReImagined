@@ -108,7 +108,7 @@ impl SceneData {
                         .normalize_or_zero()
                         .to_array(),
                     uv: vertex.uv,
-                    lightmap_uv: [0.0; 2],
+                    lightmap_uv: vertex.uv1,
                     color,
                     fx: [0.; 4],
                 });

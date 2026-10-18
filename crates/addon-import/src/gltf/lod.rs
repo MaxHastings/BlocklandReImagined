@@ -250,6 +250,7 @@ pub fn simplify(mesh: &Mesh, target: usize) -> Mesh {
         skin: None,
         billboard: mesh.billboard,
         billboard_y: mesh.billboard_y,
+        uv1: Vec::new(),
     };
     triangles.retain({
         let mut i = 0;
@@ -267,6 +268,9 @@ pub fn simplify(mesh: &Mesh, target: usize) -> Mesh {
                 out.normals
                     .push(mesh.normals.get(v).copied().unwrap_or([0.0, 1.0, 0.0]));
                 out.uv.push(mesh.uv.get(v).copied().unwrap_or([0.0, 0.0]));
+                if !mesh.uv1.is_empty() {
+                    out.uv1.push(mesh.uv1.get(v).copied().unwrap_or([0.0, 0.0]));
+                }
             }
         }
     }
@@ -355,6 +359,7 @@ mod tests {
             skin: None,
             billboard: false,
             billboard_y: false,
+            uv1: Vec::new(),
         }
     }
 

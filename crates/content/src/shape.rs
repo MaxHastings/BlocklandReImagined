@@ -119,6 +119,10 @@ pub struct Mesh {
     pub positions: Vec<[f32; 3]>,
     pub normals: Vec<[f32; 3]>,
     pub uv: Vec<[f32; 2]>,
+    /// A second UV set, one per vertex or none: where a baked lightmap
+    /// ([`Surface::lightmap`]) is read (glTF `TEXCOORD_1`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub uv1: Vec<[f32; 2]>,
     pub primitives: Vec<Primitive>,
     pub skin: Option<Skin>,
     pub billboard: bool,
@@ -238,6 +242,15 @@ pub struct Surface {
     pub occlusion: Option<usize>,
     #[serde(default = "Metal::one")]
     pub occlusion_strength: f32,
+    /// A baked lightmap (RGB, sRGB-free linear light) read with the mesh's
+    /// second UV set. It stands for the sun and ambient light on the
+    /// surface, shadows included, so the live ones are not added to it;
+    /// lights, moving shadows and highlights still are. `lightmap_strength`
+    /// multiplies it (the map's brightest texels can exceed 1).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lightmap: Option<usize>,
+    #[serde(default = "Metal::one")]
+    pub lightmap_strength: f32,
     /// Glow colour map (sRGB), multiplying `emissive`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub emissive_map: Option<usize>,
@@ -439,7 +452,8 @@ impl Shape {
             ensure!(
                 mesh.frame_vertices > 0
                     && mesh.positions.len() % mesh.frame_vertices == 0
-                    && mesh.normals.len() == mesh.positions.len(),
+                    && mesh.normals.len() == mesh.positions.len()
+                    && (mesh.uv1.is_empty() || mesh.uv1.len() == mesh.positions.len()),
                 "Invalid mesh frame layout: frame={} positions={} normals={}",
                 mesh.frame_vertices,
                 mesh.positions.len(),
@@ -509,6 +523,8 @@ impl Shape {
                     index(surface.normal)
                         && index(surface.metallic_roughness)
                         && index(surface.occlusion)
+                        && index(surface.lightmap)
+                        && (0.0..=16.0).contains(&surface.lightmap_strength)
                         && index(surface.emissive_map)
                         && index(surface.detail)
                         && surface.reflection.as_ref().is_none_or(|r| {
