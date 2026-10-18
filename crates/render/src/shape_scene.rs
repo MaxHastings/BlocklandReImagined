@@ -58,6 +58,13 @@ impl SceneData {
             "Unbound model materials"
         );
         let colors: Vec<_> = shape.objects.iter().map(|o| appearance(&o.name)).collect();
+        // A material with a masked tint takes its slot's colour, whatever
+        // the object around it is painted.
+        let slot_colors: Vec<Option<[f32; 4]>> = shape
+            .materials
+            .iter()
+            .map(|m| m.tint.as_ref().and_then(|t| appearance(&t.slot)))
+            .collect();
         ensure!(
             translucent_materials.is_none_or(
                 |m| m.len() == materials.len() && m.iter().all(|i| *i < self.materials.len())
@@ -67,6 +74,7 @@ impl SceneData {
         ensure!(
             colors
                 .iter()
+                .chain(&slot_colors)
                 .flatten()
                 .flatten()
                 .all(|c| c.is_finite() && (0.0..=1.0).contains(c)),
@@ -91,8 +99,12 @@ impl SceneData {
         let normal = transform.inverse().transpose();
         let mut groups: BTreeMap<usize, Vec<SceneVertex>> = BTreeMap::new();
         for triangle in geometry {
-            let color = colors[triangle.object].expect("filtered visible object");
-            let bindings = if color[3] < 1.0 {
+            let object_color = colors[triangle.object].expect("filtered visible object");
+            let color = triangle
+                .material
+                .and_then(|i| slot_colors[i])
+                .unwrap_or(object_color);
+            let bindings = if object_color[3] < 1.0 {
                 translucent_materials.unwrap_or(materials)
             } else {
                 materials

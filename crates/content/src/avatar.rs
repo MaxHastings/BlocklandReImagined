@@ -36,6 +36,13 @@ pub struct Appearance {
     pub decal: String,
 }
 impl Appearance {
+    /// The colour of the avatar slot a masked tint names
+    /// ([`crate::shape::TintMask::slot`]): the slot's own, with `chest` the
+    /// torso's, as an object named `chest` is painted.
+    pub fn slot_color(&self, slot: &str) -> Option<[f32; 4]> {
+        let key = if slot == "chest" { "torso" } else { slot };
+        self.colors.get(key).copied()
+    }
     pub fn validate_bounds(&self) -> Result<()> {
         ensure!(
             self.parts.len() <= 12

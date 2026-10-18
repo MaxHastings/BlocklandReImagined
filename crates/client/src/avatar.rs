@@ -656,6 +656,19 @@ impl AvatarAssets {
                     bri_render::scene::MaterialKind::Unlit
                 };
             }
+            // A masked tint reads its mask material's texture as data.
+            if let Some(mask) = source
+                .tint
+                .as_ref()
+                .and_then(|t| horse.rig.shape.materials.get(t.mask))
+                .and_then(|m| horse.images.get(&m.name.to_ascii_lowercase()))
+            {
+                let mut mask = mask.clone();
+                mask.srgb = false;
+                material.images[10] = data.images.len();
+                data.images.push(mask);
+                material.tint_mask = true;
+            }
             data.materials.push(material);
         }
         let translucent_materials: Vec<_> = materials
@@ -2369,6 +2382,19 @@ impl AvatarMesh {
                     .filter(|_| !self.hidden_nodes.contains(name))
             })
             .collect();
+        // A material with a masked tint takes its slot's colour from the
+        // wearer's avatar, whatever object it is on.
+        let material_colors: Vec<_> = assets
+            .rig
+            .shape
+            .materials
+            .iter()
+            .map(|m| {
+                m.tint
+                    .as_ref()
+                    .and_then(|t| self.appearance.slot_color(&t.slot))
+            })
+            .collect();
         let binding = crate::avatar_mesh::Binding {
             shape: &assets.rig.shape,
             detail: assets.detail_at(self.screen_height),
@@ -2376,6 +2402,7 @@ impl AvatarMesh {
             translucent_materials: &self.translucent_materials,
             unassigned_material: self.materials[0],
             colors: &colors,
+            material_colors: &material_colors,
         };
         if self.instanced
             && !self.restructured

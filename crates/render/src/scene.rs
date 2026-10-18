@@ -341,6 +341,10 @@ pub struct Material {
     /// white colour, `TSMesh` 0x63ac97), so the model's colour shift does not
     /// tint it.
     pub untinted: bool,
+    /// The vertex colour tints only where image slot 10's red channel says
+    /// (`bri_content::shape::TintMask`): texel * ((1 - mask) + mask * colour).
+    /// Lit model materials (`VertexLit`, `Physical`) only.
+    pub tint_mask: bool,
     /// Kind-specific uniforms, required for water and terrain only.
     /// Water: flow/wave/opacity, distortion/depth flag, surface+shore
     /// tiling/reflection/parallax. Terrain: see `terrain_scene::parameters`.
@@ -431,6 +435,7 @@ impl Material {
             temp_brick_flash: false,
             ignore_texture_alpha: false,
             untinted: false,
+            tint_mask: false,
             parameters: None,
         }
     }
@@ -3485,12 +3490,14 @@ impl SceneRenderer {
                     _ => 0.0,
                 },
                 if material.clamp_nearest { 1.0 } else { 0.0 },
-                // Flags: 1 temp-brick flash, 2 ignore texture alpha, 4 untinted.
+                // Flags: 1 temp-brick flash, 2 ignore texture alpha, 4 untinted,
+                // 8 multiply, 16 masked tint.
                 f32::from(
                     u8::from(material.temp_brick_flash)
                         | u8::from(material.ignore_texture_alpha) << 1
                         | u8::from(material.untinted) << 2
-                        | u8::from(material.alpha == AlphaMode::Multiply) << 3,
+                        | u8::from(material.alpha == AlphaMode::Multiply) << 3
+                        | u8::from(material.tint_mask) << 4,
                 ),
             ]);
             if let Some(groups) = material.parameters {

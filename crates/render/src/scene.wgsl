@@ -1226,14 +1226,17 @@ fn shade_surface(v:VertexOut)->vec4<f32> {
     } else {
         albedo=slot_sample(slot,tiled,v.uv,dx,dy);
     }
-    let base_color=v.color.rgb;
-    var alpha=albedo.a*v.color.a;
+    var base_color=v.color.rgb;
     let flags=u32(material[0].w);
+    // Masked tint (bit 16): the vertex colour paints only where slot 10's red says.
+    if (flags&16u)!=0u {base_color=mix(vec3<f32>(1.0),v.color.rgb,textureSample(weights1,tiled,v.uv).r);}
+    var alpha=albedo.a*v.color.a;
     // Opaque Torque model materials ignore texture alpha (no blend, no test).
     if (flags&2u)!=0u {alpha=v.color.a;}
     var pigment=display_color(albedo.rgb)*base_color;
     // A model texture with no translucent texel: texture times light alone.
     if (flags&4u)!=0u {pigment=display_color(albedo.rgb);}
+    if (flags&16u)!=0u {pigment=display_color(albedo.rgb)*base_color;}
     let decal=overlay;
     if decal {
         // v20 fxBrickBatcher uses GL_DECAL (0x52d120): lit paint first, then
@@ -1543,7 +1546,8 @@ fn physical_surface(v:VertexOut)->vec4<f32> {
     var alpha=albedo.a*v.color.a;
     if (u32(material[0].w)&2u)!=0u {alpha=v.color.a;}
     if alpha<=material[0].y {discard;}
-    let tint=clamp(v.color.rgb,vec3<f32>(0.0),vec3<f32>(1.0));
+    var tint=clamp(v.color.rgb,vec3<f32>(0.0),vec3<f32>(1.0));
+    if (u32(material[0].w)&16u)!=0u {tint=mix(vec3<f32>(1.0),tint,textureSample(weights1,tiled,v.uv).r);}
     // A repeating detail texture over the colour, mid-grey leaving it as
     // it is (material[3]: repeats, strength).
     let grain=textureSample(layer6,tiled,v.uv*max(material[3].x,0.0001)).rgb;

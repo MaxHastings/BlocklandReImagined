@@ -114,6 +114,7 @@ impl SkinnedModel {
                 translucent_materials: &materials,
                 unassigned_material: materials.len(),
                 colors: &colors,
+                material_colors: &[],
             },
             &pose,
             Mat4::IDENTITY,

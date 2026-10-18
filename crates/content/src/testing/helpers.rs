@@ -148,6 +148,7 @@ pub fn material(name: &str, blend: &str) -> Material {
         uv_motion: None,
         metal: None,
         surface: None,
+        tint: None,
     }
 }
 

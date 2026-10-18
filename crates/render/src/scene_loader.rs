@@ -1080,6 +1080,7 @@ fn load_terrain(
         temp_brick_flash: false,
         ignore_texture_alpha: false,
         untinted: false,
+        tint_mask: false,
         parameters: Some(parameters),
     });
     out.omissions.push(format!(

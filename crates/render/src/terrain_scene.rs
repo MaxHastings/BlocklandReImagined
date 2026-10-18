@@ -382,6 +382,7 @@ mod tests {
                 temp_brick_flash: false,
                 ignore_texture_alpha: false,
                 untinted: false,
+                tint_mask: false,
                 parameters: Some([[0.0; 4]; 4]),
             }],
             ..Default::default()

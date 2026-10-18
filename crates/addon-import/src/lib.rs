@@ -2550,6 +2550,7 @@ fn placeholder() -> bri_content::shape::Shape {
             uv_motion: None,
             metal: None,
             surface: None,
+            tint: None,
         }],
         animations: vec![],
     }
