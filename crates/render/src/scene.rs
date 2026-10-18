@@ -341,6 +341,11 @@ pub struct Material {
     /// white colour, `TSMesh` 0x63ac97), so the model's colour shift does not
     /// tint it.
     pub untinted: bool,
+    /// A baked lightmap ([`Material::images`] slot 8, read with the vertices'
+    /// `lightmap_uv`) on a [`MaterialKind::Physical`] material, and how much
+    /// it is multiplied by. It stands for the sun and ambient light, shadows
+    /// included; lights, moving shadows and highlights still add to it.
+    pub baked_lightmap: Option<f32>,
     /// Kind-specific uniforms, required for water and terrain only.
     /// Water: flow/wave/opacity, distortion/depth flag, surface+shore
     /// tiling/reflection/parallax. Terrain: see `terrain_scene::parameters`.
@@ -431,6 +436,7 @@ impl Material {
             temp_brick_flash: false,
             ignore_texture_alpha: false,
             untinted: false,
+            baked_lightmap: None,
             parameters: None,
         }
     }
@@ -3497,12 +3503,13 @@ impl SceneRenderer {
                     _ => 0.0,
                 },
                 if material.clamp_nearest { 1.0 } else { 0.0 },
-                // Flags: 1 temp-brick flash, 2 ignore texture alpha, 4 untinted.
+                // Flags: 1 temp-brick flash, 2 ignore texture alpha, 4 untinted, 8 multiply, 16 baked lightmap.
                 f32::from(
                     u8::from(material.temp_brick_flash)
                         | u8::from(material.ignore_texture_alpha) << 1
                         | u8::from(material.untinted) << 2
-                        | u8::from(material.alpha == AlphaMode::Multiply) << 3,
+                        | u8::from(material.alpha == AlphaMode::Multiply) << 3
+                        | u8::from(material.baked_lightmap.is_some()) << 4,
                 ),
             ]);
             if let Some(groups) = material.parameters {
@@ -3530,6 +3537,10 @@ impl SceneRenderer {
                     uv.rotation_rate_degrees.to_radians(),
                     0.,
                 ]);
+            }
+            if let Some(strength) = material.baked_lightmap {
+                // material[7].w, which no uv motion reads.
+                parameters[31] = strength;
             }
             let buffer = device.buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: Some(&material.name),

@@ -35,6 +35,8 @@ fn quad(texel: [u8; 4], uv: [Vec2; 2], turn: Quat, reference: Option<Vec3>) -> S
         detail: None,
         detail_scale: 1.,
         reflection: None,
+        lightmap: None,
+        lightmap_strength: 1.0,
     };
     let mut scene = SceneData {
         images: vec![

@@ -15,6 +15,8 @@ pub struct PosedVertex {
     pub position: Vec3,
     pub normal: Vec3,
     pub uv: [f32; 2],
+    /// The mesh's second UV set ([`Mesh::uv1`]), (0, 0) without one.
+    pub uv1: [f32; 2],
 }
 pub struct PosedTriangle {
     pub object: usize,
@@ -401,6 +403,7 @@ pub fn triangles(
                         position: positions[v],
                         normal: normals[v].normalize_or_zero(),
                         uv: mesh.uv.get(uv_offset + v).copied().unwrap_or([0.0; 2]),
+                        uv1: mesh.uv1.get(v).copied().unwrap_or([0.0; 2]),
                     }
                 });
                 out.push(PosedTriangle {
@@ -474,6 +477,7 @@ mod tests {
             skin: None,
             billboard: false,
             billboard_y: false,
+            uv1: Vec::new(),
         })];
         shape.objects = vec![Object {
             name: "ones".into(),

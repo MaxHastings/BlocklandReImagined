@@ -31,6 +31,14 @@ exporter cannot write one, so tools that write the `.glb` themselves add
 it to the material's `extras` as `"bri_detail": {"index": <texture>,
 "scale": <repeats across the colour texture>}`.
 
+**Baked lightmaps.** A map compiled elsewhere can bring its baked light:
+a second UV set on the mesh (`TEXCOORD_1`) and, in the material's `extras`,
+`"bri_lightmap": {"index": <texture>, "strength": <multiplier>}`. The
+texture stands for the sun and ambient light on that surface, shadows
+included, so Dynamic lighting uses it in their place (lights, moving shadows
+and highlights still add), and Unified and Classic draw it as an interior
+lightmap (without the strength). Only materials with a lightmap change.
+
 **What players stand on.** With no special meshes, everything drawn is
 solid. For anything else, model simple collision meshes and name them
 starting with `col_` (`col_floor`, `col_stairs`): then only those collide

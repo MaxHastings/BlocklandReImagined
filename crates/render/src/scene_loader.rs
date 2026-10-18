@@ -677,6 +677,32 @@ fn load_static_shape(
             }
             material = Material::physical(material.name.clone(), diffuse, maps, surface);
         }
+        // A baked lightmap (second UV set) on a surface: Dynamic adds the
+        // lights to it in place of live sun and ambient; Classic and Unified
+        // draw it as an interior lightmap (without its strength).
+        if let Some(surface) = authored
+            .surface
+            .as_ref()
+            .filter(|s| s.lightmap.is_some() && !authored.unlit)
+        {
+            let index = surface.lightmap.expect("filtered");
+            let file = bindings
+                .iter()
+                .find(|b| {
+                    b["asset"].as_str() == Some(id)
+                        && b["shape_material"].as_u64() == Some(index as u64)
+                        && b["skin"].as_str().unwrap_or("") == skin
+                })
+                .and_then(|b| b["texture"].as_str())
+                .with_context(|| format!("Missing static lightmap {id}/{index}"))?;
+            let lightmap = texture(root, file, false, out, cache)?;
+            if legacy {
+                material = Material::surface(material.name.clone(), diffuse, lightmap);
+            } else {
+                material.images[8] = lightmap;
+                material.baked_lightmap = Some(surface.lightmap_strength);
+            }
+        }
         // Bare metal on an Add-On map: its texture tints the reflectance and
         // a flat detail leaves the authored roughness as it is.
         if let Some(metal) = authored
@@ -1103,6 +1129,7 @@ fn load_terrain(
         temp_brick_flash: false,
         ignore_texture_alpha: false,
         untinted: false,
+        baked_lightmap: None,
         parameters: Some(parameters),
     });
     out.omissions.push(format!(
