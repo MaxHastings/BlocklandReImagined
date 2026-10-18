@@ -203,6 +203,9 @@ pub struct VehicleSnapshot {
     pub charge: u8,
     pub energy: f32,
     pub jetting: bool,
+    /// The driver is holding the jump input: what an input-lit lamp follows.
+    #[serde(default)]
+    pub driver_jump_held: bool,
     pub turret_aim: [f32; 2],
     pub turret_damage: Option<f32>,
     pub turret_transform: Option<Transform>,
@@ -2508,6 +2511,7 @@ impl VehiclesWorld {
             charge: v.charge,
             energy: v.energy,
             jetting: v.jetting,
+            driver_jump_held: v.jump_held,
             turret_aim: [
                 if d.is_actor() {
                     0.

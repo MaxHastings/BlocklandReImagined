@@ -1,0 +1,1 @@
+`VehicleView::driver_jump_held` (and `VehiclePose::driver_jump_held`, `VehicleSnapshot::driver_jump_held`): the vehicle's driver is holding the jump input, replicated with the pose so every client can follow it (input-lit lamps). Defaults false.

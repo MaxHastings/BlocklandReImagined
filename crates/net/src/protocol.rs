@@ -466,6 +466,8 @@ pub struct VehicleView {
     pub wheel_contact: Vec<bool>,
     pub turret_aim: [f32; 2],
     pub jetting: bool,
+    #[serde(default)]
+    pub driver_jump_held: bool,
     /// None for the identity frame (no passage crossed). Last and left out
     /// when none.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -485,6 +487,7 @@ impl VehicleView {
             wheel_contact: pose.wheel_contact.clone(),
             turret_aim: pose.turret_aim,
             jetting: pose.jetting,
+            driver_jump_held: pose.driver_jump_held,
             passage_frame: (pose.passage_frame != Default::default()).then_some(pose.passage_frame),
         }
     }
@@ -509,6 +512,7 @@ impl VehicleView {
             wheel_tire: Vec::new(),
             turret_aim: self.turret_aim,
             jetting: self.jetting,
+            driver_jump_held: self.driver_jump_held,
             angular_velocity: [0.0; 3],
             mouse_steering: [0.0; 2],
             driver_input: 0,
@@ -1516,4 +1520,36 @@ pub enum Message {
     /// can fetch what it lacks from the server and join again
     /// ([`crate::client::Client::connect_fetching`]).
     PackagesDiffer(Vec<bri_package::environment::Mismatch>),
+}
+
+#[cfg(test)]
+mod driver_jump_held_tests {
+    use super::*;
+
+    #[test]
+    fn the_jump_bit_travels_in_the_vehicle_view() {
+        let mut pose = VehicleView::of(&sample_pose()).into_pose();
+        assert!(!pose.driver_jump_held);
+        pose.driver_jump_held = true;
+        assert!(VehicleView::of(&pose).into_pose().driver_jump_held);
+    }
+
+    fn sample_pose() -> bri_sim::session::VehiclePose {
+        VehicleView {
+            id: 1,
+            tick: 1,
+            position: [0; 3],
+            rotation: [0, 0, 0, 10000],
+            velocity: [0; 3],
+            steering: 0.0,
+            wheel_suspension: vec![],
+            wheel_rotation: vec![],
+            wheel_contact: vec![],
+            turret_aim: [0.0; 2],
+            jetting: false,
+            driver_jump_held: false,
+            passage_frame: None,
+        }
+        .into_pose()
+    }
 }

@@ -2742,6 +2742,7 @@ mod tests {
                 wheel_tire: s.wheel_tire,
                 turret_aim: s.turret_aim,
                 jetting: s.jetting,
+                driver_jump_held: s.driver_jump_held,
                 angular_velocity: s.angular_velocity,
                 mouse_steering: s.mouse_steering,
                 driver_input,

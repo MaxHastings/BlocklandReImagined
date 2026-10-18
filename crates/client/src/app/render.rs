@@ -1282,6 +1282,7 @@ impl App {
                         body,
                         info.lights,
                         assets.driver_present(info),
+                        f.driver_jump_held,
                         info.definition.clone(),
                     ))
                 })
