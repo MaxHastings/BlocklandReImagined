@@ -606,7 +606,9 @@ impl App {
             self.ui.core.package_panels.clear();
             self.ui.core.hud_regions.clear();
             self.ui.core.package_keys.clear();
+            self.ui.set_profile_defs(Vec::new());
             self.ui.set_package_binds(Vec::new());
+            self.ui.set_control_context("", None);
             self.ui.core.addon_help.clear();
             self.addons.client_code.set_hud_owners(Default::default());
             self.addons.hud_regions.forget_drawn();
@@ -617,7 +619,9 @@ impl App {
             self.ui.core.package_panels.clear();
             self.ui.core.hud_regions.clear();
             self.ui.core.package_keys.clear();
+            self.ui.set_profile_defs(Vec::new());
             self.ui.set_package_binds(Vec::new());
+            self.ui.set_control_context("", None);
             self.ui.core.addon_help.clear();
             self.addons.client_code.set_hud_owners(Default::default());
             self.addons.hud_regions.forget_drawn();
@@ -626,6 +630,8 @@ impl App {
         };
         let mac = self.ui.core.platform == Platform::MacOs;
         let binds = crate::packages::binds(catalog, &view.package_state, mac);
+        self.ui
+            .set_profile_defs(crate::packages::profiles(catalog, &view.package_state));
         self.ui.set_package_binds(binds);
         let help = crate::packages::help(catalog, &view.package_state);
         if self.ui.core.addon_help != help {
@@ -669,6 +675,16 @@ impl App {
         // HUD regions: the viewer's body, held item and seat pick the claims.
         let presented = self.motion.presented().get(&view.owner);
         let body = presented.map_or("", |p| view.archetypes.resolve(p.archetype).id.as_str());
+        // The control profile follows the body; a layer follows the seat.
+        self.ui.set_control_context(
+            body,
+            self.controls.ride_context().map(|(driver, mouse_driver)| {
+                bri_ui::profiles::RideContext {
+                    driver,
+                    mouse_driver,
+                }
+            }),
+        );
         let vitals = view.vitals.get(&view.owner);
         let vehicle = vitals
             .and_then(|v| v.mounted)

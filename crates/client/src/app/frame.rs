@@ -97,10 +97,10 @@ impl App {
             bri_ui::screens::options::default_fov(prefs),
             bri_ui::screens::options::zoom_fov(prefs),
         );
-        self.controls.set_invert_prefs(
-            prefs.bool_or("$pref::Input::MouseInvert", false),
-            prefs.bool_or("$Pref::Input::VehicleMouseInvert", true),
-        );
+        let mouse = self.ui.core.mouse_settings();
+        self.controls
+            .set_invert_prefs(mouse.invert, mouse.vehicle_invert);
+        let prefs = &self.ui.core.prefs;
         let steering = steering_prefs(prefs);
         if let Some(a) = self.net.attempt.as_ref().filter(|a| a.entered)
             && self.net.steering_sent != Some((a.id, steering))

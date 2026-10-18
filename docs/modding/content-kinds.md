@@ -52,6 +52,62 @@ is taken, as the New Duplicator's own keys were; a key the player binds it to
 instead is kept. Binds show only while the host
 runs their package.
 
+**Actions and control profiles.** A bind is an *action*: a named command
+with a suggested default input. Add-Ons never read keys; players rebind the
+action in Options → Controls. `key` (and `mac_key`) is the default key, and
+`"mouse"` a default mouse input instead (`button0` to `button4`, or `zaxis`
+for the wheel; each wheel notch is one press). Mouse movement is not an
+action input.
+
+Actions belong to a *control profile*. Blockland's own is the default
+profile, and a bind that names none goes in it, as above. An Add-On declares
+more in the same file and puts its binds in one with `"profile"`:
+
+```json
+{
+  "schema_version": 1,
+  "division": "Arena Assault",
+  "profile": "aa",
+  "profiles": [{
+    "id": "aa", "name": "Arena Assault",
+    "player_types": ["aa-rules:archetype/soldier"],
+    "mouse_sensitivity": 0.75,
+    "layers": [{ "id": "aircraft", "when": "mouse_driver", "invert_mouse": true }]
+  }],
+  "binds": [
+    { "name": "Sprint", "package": "aa-rules", "command": "sprint",
+      "key": "lshift", "hold": true },
+    { "name": "Fire Mode", "package": "aa-rules", "command": "firemode", "key": "v" }
+  ]
+}
+```
+
+- **Player types reference a profile.** `player_types` lists archetype ids
+  (`your-id:archetype/soldier`).
+  The active profile switches by itself with the local player's body, back
+  to Blockland's for any other.
+- **Layers.** A layer stacks on the profile while a rider matches `when`
+  (`vehicle`, `driver`, `mouse_driver`, `passenger`) and is removed when they
+  leave. Its `invert_mouse` (in vehicles) and `mouse_sensitivity` replace
+  the profile's for as long as it is on.
+- **Inheritance.** Inputs a profile does not bind fall through to
+  Blockland's (movement, chat, menus), so a profile lists only its own
+  actions; its binds win over the same input there. `"inherit": false`
+  makes a profile replace every input.
+- **Moving a stock action.** `{ "name": "Crouch", "package": "aa-rules",
+  "stock": "crouch", "key": "lcontrol" }` binds Blockland's own Crouch in the
+  profile (also `moveforward`, `movebackward`, `moveleft`, `moveright`,
+  `jump`, `jet`, `walk`, `mousefire`), so a profile that takes Shift for
+  Sprint can give Crouch another key. It needs a `profile` and no `command`.
+- **Controls menu.** Each profile gets a tab, and a profile with layers a row
+  of layer buttons. Rebinds, mouse sensitivity and invert are saved per
+  profile (and per layer), and a conflict is flagged only within the profile
+  being edited. Mouse sensitivity and invert declared in `profiles` are
+  defaults; the player's own choice wins. Choices for a profile whose Add-On
+  is not running are kept.
+- Profile ids and layer ids are lower-case letters, digits, `_` and `-`;
+  `blockland` is reserved. Existing binds and saved settings are unchanged.
+
 **A mode's own mini-game.** A `mode` may carry a `minigame` block, and the
 host then runs that one mini-game for the whole server, as v20's game-mode
 servers did: everyone joins it on arrival, and nobody can make, join or

@@ -10,6 +10,7 @@ pub mod body_pose;
 pub mod brick;
 pub mod camera;
 pub mod collision;
+pub mod controls;
 pub mod effects;
 pub mod hold;
 pub mod hud;

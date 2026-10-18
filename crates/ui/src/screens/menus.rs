@@ -1137,8 +1137,8 @@ impl MessageScreen {
             // optionsDlg.clearAllBinds: only the remappable controls; Options
             // saves them when it closes.
             Callback::ClearBinds => {
-                for c in core.remap_commands.clone() {
-                    core.binds.unbind_command(&c);
+                for c in core.edit_remap_commands().to_vec() {
+                    core.edit_binds_mut().unbind_command(&c);
                 }
             }
             Callback::DefaultBinds => core.push(ScreenId::DefaultControls),

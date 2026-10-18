@@ -136,7 +136,10 @@ pub fn binds(catalog: &Catalog, state: &PackageStateView, mac: bool) -> Vec<Pack
                 .screen
                 .as_ref()
                 .map_or_else(|| bind.command.clone(), |s| format!("screen:{s}"));
-            let command = format!("package:{}:{}", bind.package, name);
+            let command = bind
+                .stock
+                .clone()
+                .unwrap_or_else(|| format!("package:{}:{}", bind.package, name));
             if out.iter().any(|b| b.bind_command() == command) {
                 continue;
             }
@@ -152,7 +155,37 @@ pub fn binds(catalog: &Catalog, state: &PackageStateView, mac: bool) -> Vec<Pack
                     bind.key.clone()
                 },
                 hold: bind.hold,
+                mouse: bind.mouse.clone(),
+                stock: bind.stock.clone(),
+                profile: binds
+                    .profile
+                    .clone()
+                    .filter(|p| p != bri_content::controls::DEFAULT_PROFILE)
+                    .unwrap_or_default(),
             });
+        }
+    }
+    out
+}
+/// The control profiles declared by files of binds whose package this
+/// server runs, the first declaration of an id winning.
+pub fn profiles(
+    catalog: &Catalog,
+    state: &PackageStateView,
+) -> Vec<bri_content::controls::ProfileDef> {
+    let mut out: Vec<bri_content::controls::ProfileDef> = Vec::new();
+    for (_, binds) in catalog.binds() {
+        if !binds
+            .binds
+            .iter()
+            .any(|b| state.packages.contains_key(&b.package))
+        {
+            continue;
+        }
+        for profile in &binds.profiles {
+            if !out.iter().any(|p| p.id == profile.id) {
+                out.push(profile.clone());
+            }
         }
     }
     out
