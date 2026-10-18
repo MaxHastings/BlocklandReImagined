@@ -34,6 +34,7 @@ fn soldier() -> PlayerTuning {
         lean: Some(Lean {
             distance: 0.5,
             angle: 0.3,
+            body_angle: None,
             seconds: 0.25,
         }),
         ..Default::default()
@@ -107,6 +108,21 @@ fn a_lean_eases_the_eye_sideways_within_the_body() {
     );
     assert!(moved.x <= p.tuning().width * 0.5);
     assert!((p.state().lean_tilt(p.tuning()) - 0.3).abs() < 1e-4);
+    // The body tilts with the view unless the lean sets its own angle.
+    assert!((p.state().lean_body_tilt(p.tuning()) - 0.3).abs() < 1e-4);
+    let mut tuning = p.tuning().clone();
+    tuning.lean.as_mut().unwrap().body_angle = Some(0.0);
+    assert!(
+        (p.state().lean_tilt(&tuning) - 0.3).abs() < 1e-4,
+        "the view still rolls"
+    );
+    assert_eq!(
+        p.state().lean_body_tilt(&tuning),
+        0.0,
+        "the body stays upright"
+    );
+    tuning.lean.as_mut().unwrap().body_angle = Some(0.1);
+    assert!((p.state().lean_body_tilt(&tuning) - 0.1).abs() < 1e-4);
     // A body without a lean cannot.
     let mut q = Player::spawn(
         &mut w,

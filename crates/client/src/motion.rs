@@ -957,7 +957,8 @@ impl Motion {
             .eye_height
             .unwrap_or_else(|| state.eye(&tuning).y - feet.y);
         let ahead = Vec3::new(yaw.sin(), 0.0, -yaw.cos()) * tuning.eye_forward;
-        self.local_eye = Some(feet + Vec3::Y * height + ahead);
+        // The eye slides sideways with a lean as well as dropping with a crouch.
+        self.local_eye = Some(feet + Vec3::Y * height + ahead + state.lean_offset(&tuning));
         self.presented.insert(owner, state);
         true
     }

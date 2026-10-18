@@ -170,8 +170,9 @@ a lying body is hit only around its middle. `movement.lean` lets it lean
 (`set_lean`): `{ "distance": 0.5, "angle": 0.3, "seconds": 0.25 }`, how
 far the eye slides sideways (at most half the box's width, so a lean
 never sees past the body it can be shot at), how far the view and the
-body tilt (radians, up to 0.6) and how long a full lean takes. v20's
-bodies have neither.
+body tilt (radians, up to 0.6) and how long a full lean takes. An optional
+`body_angle` tilts the drawn body by that much instead (0 leaves it upright
+while the view still rolls). v20's bodies have neither.
 
 **Distant detail (optional, off by default).** Classic-era models are light
 enough to skip this. For a heavy model, `--lod TRIANGLES` adds a lighter

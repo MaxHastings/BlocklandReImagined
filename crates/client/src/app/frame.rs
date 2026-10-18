@@ -1363,7 +1363,8 @@ impl App {
                     lean_tilt: if riding || dead {
                         0.0
                     } else {
-                        player.lean_tilt(&view.archetypes.tuning(player.archetype, player.scale))
+                        player
+                            .lean_body_tilt(&view.archetypes.tuning(player.archetype, player.scale))
                     },
                     intent_clip: player.controller.filter(|_| !riding).and_then(|c| {
                         view.archetypes
