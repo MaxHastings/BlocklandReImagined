@@ -568,6 +568,7 @@ impl App {
                 self.mounts.rider_fallback_hips.clear();
                 self.mounts.rider_hands.clear();
                 self.mounts.rider_aims.clear();
+                self.mounts.rider_overlays.clear();
                 self.mounts.posed_eye = None;
                 for (owner, vitals) in &view.vitals {
                     let Some((vehicle, seat)) = vitals.mounted else {
@@ -648,6 +649,14 @@ impl App {
                                 .seat_aim(&self.vehicle_assets, info, usize::from(seat))
                         {
                             self.mounts.rider_aims.insert(*owner, aim);
+                        }
+                        let overlays = self.vehicles.seat_overlays(
+                            &self.vehicle_assets,
+                            info,
+                            usize::from(seat),
+                        );
+                        if !overlays.is_empty() {
+                            self.mounts.rider_overlays.insert(*owner, overlays);
                         }
                         let velocity = self
                             .vehicles
@@ -1276,6 +1285,13 @@ impl App {
                     look_limits,
                     mount_rotation: self.mounts.rider_rotations.get(owner).copied(),
                     seat_aim: self.mounts.rider_aims.get(owner).copied().filter(|_| !dead),
+                    seat_overlays: self
+                        .mounts
+                        .rider_overlays
+                        .get(owner)
+                        .cloned()
+                        .filter(|_| !dead)
+                        .unwrap_or_default(),
                     hand_holds: self
                         .mounts
                         .rider_hands

@@ -77,6 +77,38 @@ struct LookRig {
     parts: Vec<(String, usize, Mat4)>,
     skinned: bool,
 }
+/// A model's acceleration overlays and how far along each is (0..1), for
+/// posing its barrel with the vehicle's acceleration.
+type Bob<'a> = (&'a bri_vehicles::schema::AccelerationOverlays, [f32; 3]);
+impl LookRig {
+    /// The pose at `phase` along the `look` clip, with the model's additive
+    /// acceleration overlays in `bob` on top.
+    fn sample(&self, phase: f32, bob: Option<Bob<'_>>) -> Result<bri_content::animation::Pose> {
+        let mut layers = vec![bri_content::animation::Layer {
+            animation: &self.clip,
+            time: phase * self.clip.duration,
+            weight: 1.0,
+        }];
+        if let Some((overlays, values)) = bob {
+            for (name, value) in overlays.clips.iter().zip(values) {
+                let Some(clip) = self
+                    .shape
+                    .animations
+                    .iter()
+                    .find(|a| a.additive && a.name.eq_ignore_ascii_case(name))
+                else {
+                    continue;
+                };
+                layers.push(bri_content::animation::Layer {
+                    animation: clip,
+                    time: value.clamped(0.0, 1.0) * clip.duration,
+                    weight: 1.0,
+                });
+            }
+        }
+        bri_content::animation::sample_layers(&self.shape, &layers)
+    }
+}
 
 struct SkinnedModel {
     data: bri_render::scene::SceneData,
@@ -90,9 +122,8 @@ struct SkinnedModel {
 }
 
 impl SkinnedModel {
-    fn pose(&mut self, rig: &LookRig, phase: f32) -> Result<()> {
-        let pose =
-            bri_content::animation::sample(&rig.shape, Some(&rig.clip), phase * rig.clip.duration)?;
+    fn pose(&mut self, rig: &LookRig, phase: f32, bob: Option<Bob<'_>>) -> Result<()> {
+        let pose = rig.sample(phase, bob)?;
         let detail = rig
             .shape
             .details
@@ -196,6 +227,7 @@ fn posed<'a>(
     looks: &'a BTreeMap<String, LookRig>,
     model: &'a str,
     phase: f32,
+    bob: Option<Bob<'_>>,
     transform: Mat4,
 ) -> Vec<(&'a str, Mat4)> {
     let mut out = vec![(model, transform)];
@@ -203,8 +235,7 @@ fn posed<'a>(
         if rig.skinned {
             return Vec::new();
         }
-        let time = phase * rig.clip.duration;
-        if let Ok(pose) = bri_content::animation::sample(&rig.shape, Some(&rig.clip), time) {
+        if let Ok(pose) = rig.sample(phase, bob) {
             for (key, node, inverse) in &rig.parts {
                 out.push((key.as_str(), transform * pose.nodes[*node] * *inverse));
             }
@@ -790,10 +821,16 @@ pub struct ClientVehicles {
     middles: BTreeMap<u64, Vec3>,
     /// Each swaying turret's spring (`Definition::turret_sway`).
     sways: BTreeMap<u64, TurretSpring>,
+    /// Felt acceleration per vehicle and seat ([`TURRET`] for the turret
+    /// model's own), for the seats and turrets that author overlays.
+    accels: BTreeMap<(u64, usize), bri_vehicles::accel::SeatAcceleration>,
     /// Bodies as they collide ([`bri_vehicles::body_shape`]), by definition
     /// and scale: what shoves this client's debris.
     shapes: std::sync::Mutex<BodyShapes>,
 }
+/// [`ClientVehicles::accels`]'s seat number for the turret model.
+const TURRET: usize = usize::MAX;
+
 /// A turret's sway: its tip (pitch about the vehicle's right, roll about
 /// its forward, radians) and how fast each changes, with the vehicle's
 /// velocity and clock when last stepped.
@@ -1107,12 +1144,12 @@ impl ClientVehicles {
         let frame = self.frame(info.id)?;
         let model = d.attachment_model.as_ref()?;
         let local_node = if let Some(rig) = assets.looks.get(model) {
-            let pose = bri_content::animation::sample(
-                &rig.shape,
-                Some(&rig.clip),
-                d.look_phase(frame.turret_aim[1]) * rig.clip.duration,
-            )
-            .ok()?;
+            let pose = rig
+                .sample(
+                    d.look_phase(frame.turret_aim[1]),
+                    self.turret_bob(d, info.id),
+                )
+                .ok()?;
             let index = rig
                 .shape
                 .nodes
@@ -1274,7 +1311,40 @@ impl ClientVehicles {
         if d.weapon_seat() != Some(seat) || info.turret_broken || d.is_actor() {
             return None;
         }
-        Some(seat_aim_phase(d.look_pitch, frame.turret_aim[1]))
+        Some(match d.seats.get(seat)?.rider_aim_pitch {
+            Some([down, up]) => bri_vehicles::muzzle::aim_phase(down, up, frame.turret_aim[1]),
+            None => seat_aim_phase(d.look_pitch, frame.turret_aim[1]),
+        })
+    }
+    /// The additive clips seat `seat`'s rider's body plays with the
+    /// vehicle's acceleration, each with how far along it is (0..1).
+    pub fn seat_overlays(
+        &self,
+        assets: &VehicleAssets,
+        info: &VehicleInfo,
+        seat: usize,
+    ) -> Vec<(String, f32)> {
+        let Some(overlays) = assets
+            .definition(&info.definition)
+            .and_then(|d| d.seats.get(seat))
+            .and_then(|s| s.rider_acceleration.as_ref())
+        else {
+            return Vec::new();
+        };
+        let value = self
+            .accels
+            .get(&(info.id, seat))
+            .map_or([0.5; 3], |a| a.value());
+        overlays.clips.iter().cloned().zip(value).collect()
+    }
+    /// The turret model's acceleration overlays and where each is.
+    fn turret_bob<'a>(&self, d: &'a Definition, id: u64) -> Option<Bob<'a>> {
+        let overlays = d.turret_acceleration.as_ref()?;
+        let value = self
+            .accels
+            .get(&(id, TURRET))
+            .map_or([0.5; 3], |a| a.value());
+        Some((overlays, value))
     }
     /// Refresh per-model instance lists (chassis, wheels, turrets).
     pub fn prepare(&mut self, assets: &mut VehicleAssets, infos: &BTreeMap<u64, VehicleInfo>) {
@@ -1307,11 +1377,47 @@ impl ClientVehicles {
         }
         self.straddles.clear();
         self.sways.retain(|id, _| infos.contains_key(id));
+        self.accels.retain(|(id, _), _| infos.contains_key(id));
         for (id, frame) in &self.frames {
             let Some(info) = infos.get(id) else { continue };
             let Some(d) = index.get(&info.definition).map(|i| &pack.definitions[*i]) else {
                 continue;
             };
+            // Halo's seat acceleration, felt by the turret model and by
+            // each seat that authors overlays: the vehicle's origin's
+            // change of velocity along its own axes.
+            let (forward, up) = (frame.rotation * Vec3::NEG_Z, frame.rotation * Vec3::Y);
+            let seconds = self.clock / TICK_RATE;
+            if let Some(overlays) = &d.turret_acceleration {
+                self.accels.entry((*id, TURRET)).or_default().step(
+                    seconds,
+                    frame.position,
+                    forward,
+                    up,
+                    overlays,
+                );
+            }
+            for (seat, overlays) in d
+                .seats
+                .iter()
+                .enumerate()
+                .filter_map(|(i, s)| Some((i, s.rider_acceleration.as_ref()?)))
+            {
+                self.accels.entry((*id, seat)).or_default().step(
+                    seconds,
+                    frame.position,
+                    forward,
+                    up,
+                    overlays,
+                );
+            }
+            let bob = d.turret_acceleration.as_ref().map(|overlays| {
+                let value = self
+                    .accels
+                    .get(&(*id, TURRET))
+                    .map_or([0.5; 3], |a| a.value());
+                (overlays, value)
+            });
             let body = to_transform(frame.position, frame.rotation);
             let drawn_body = body * Mat4::from_scale(Vec3::splat(info.scale));
             // Openings carry a vehicle by its centre of mass, as the host
@@ -1365,7 +1471,7 @@ impl ClientVehicles {
                                 topology_dirty: true,
                                 faulted: false,
                             });
-                    if let Err(error) = slot.pose(rig, phase) {
+                    if let Err(error) = slot.pose(rig, phase, bob) {
                         if !slot.faulted {
                             bri_console::warn(format!("Vehicle animation {model}: {error:#}"));
                             slot.faulted = true;
@@ -1384,7 +1490,7 @@ impl ClientVehicles {
                     }
                     return;
                 }
-                for (model, transform) in posed(looks, model, phase, transform) {
+                for (model, transform) in posed(looks, model, phase, bob, transform) {
                     if let Some(m) = models.get_mut(model)
                         && transform.is_finite()
                     {
@@ -1977,6 +2083,7 @@ pub(crate) mod tests {
             duration,
             looping: true,
             additive: false,
+            parent_translations: false,
             priority: 0,
             nodes: vec![bri_content::shape::NodeTrack {
                 node: "prop".into(),
@@ -2525,7 +2632,13 @@ pub(crate) mod tests {
             for step in 0..=40 {
                 let pitch =
                     d.look_pitch[0] + (d.look_pitch[1] - d.look_pitch[0]) * step as f32 / 40.0;
-                let draws = posed(&assets.looks, &model, d.look_phase(pitch), Mat4::IDENTITY);
+                let draws = posed(
+                    &assets.looks,
+                    &model,
+                    d.look_phase(pitch),
+                    None,
+                    Mat4::IDENTITY,
+                );
                 assert_eq!(draws.len(), 2);
                 let barrel = draws[1].1.transform_point3(rest);
                 let (origin, _) = d.muzzle([0.0, pitch]).unwrap();
@@ -2868,6 +2981,105 @@ pub(crate) mod tests {
         assert!((seat_aim_phase([-0.5, 1.0], 0.25) - 0.5).abs() < 1e-6);
         assert_eq!(seat_aim_phase([-0.5, 1.0], 3.0), 0.0);
         assert_eq!(seat_aim_phase([0.0, 0.0], 0.3), 0.5);
+    }
+
+    /// A one-node gun model: a `look` clip tipping `gun` about X and an
+    /// acceleration overlay tipping it about X a further 5 degrees each way.
+    fn bobbing_gun() -> LookRig {
+        use bri_content::shape::{Node, NodeTrack};
+        let clip = |name: &str, degrees: [f32; 3], additive: bool| Animation {
+            name: name.into(),
+            frames: 3,
+            duration: 1.0,
+            looping: false,
+            additive,
+            parent_translations: false,
+            priority: 0,
+            rotation_interpolation: Default::default(),
+            nodes: vec![NodeTrack {
+                node: "gun".into(),
+                rotations: degrees
+                    .map(|d| Quat::from_rotation_x(d.to_radians()).to_array())
+                    .to_vec(),
+                translations: vec![],
+                scales: vec![],
+                scale_rotations: vec![],
+            }],
+            objects: vec![],
+            ground_translations: vec![],
+            ground_rotations: vec![],
+            triggers: vec![],
+        };
+        let look = clip("look", [35.0, 0.0, -15.0], true);
+        LookRig {
+            shape: Shape {
+                schema_version: 1,
+                id: "gun".into(),
+                nodes: vec![Node {
+                    name: "gun".into(),
+                    parent: None,
+                    translation: [0.0; 3],
+                    rotation: [0.0, 0.0, 0.0, 1.0],
+                }],
+                objects: vec![],
+                details: vec![],
+                meshes: vec![],
+                materials: vec![],
+                animations: vec![
+                    look.clone(),
+                    clip("accel_front_back", [-5.0, 0.0, 5.0], true),
+                ],
+            },
+            clip: look,
+            parts: vec![],
+            skinned: false,
+        }
+    }
+    #[test]
+    fn a_barrels_acceleration_overlay_tips_it_further_and_neutral_leaves_it() {
+        let rig = bobbing_gun();
+        let overlays = bri_vehicles::schema::AccelerationOverlays {
+            clips: [
+                "accel_front_back".into(),
+                "ACCEL_FRONT_BACK".into(),
+                "absent".into(),
+            ],
+            scale: [200.0, 200.0, 150.0],
+            native_per_unit: 4.12,
+        };
+        let tip = |pose: &bri_content::animation::Pose| {
+            pose.nodes[0]
+                .transform_vector3(Vec3::NEG_Z)
+                .y
+                .asin()
+                .to_degrees()
+        };
+        // Level look (middle key), no acceleration: no tip.
+        let level = rig.sample(0.5, None).unwrap();
+        assert!(tip(&level).abs() < 1e-3);
+        // The overlays' middle keys are the unaccelerated pose.
+        let neutral = rig.sample(0.5, Some((&overlays, [0.5; 3]))).unwrap();
+        assert!(neutral.nodes[0].abs_diff_eq(level.nodes[0], 1e-6));
+        // A push to one end tips by the authored 5 degrees; the second
+        // listed clip (the same one) and a missing clip add nothing odd.
+        let pushed = rig.sample(0.5, Some((&overlays, [1.0, 0.5, 0.5]))).unwrap();
+        assert!((tip(&pushed).abs() - 5.0).abs() < 1e-3, "{}", tip(&pushed));
+        // The overlay rides on top of the pitch: look at its 35 degree key.
+        let aimed = rig.sample(0.0, Some((&overlays, [1.0, 0.5, 0.5]))).unwrap();
+        assert!((tip(&aimed) - 35.0).abs() > 4.9);
+    }
+    #[test]
+    fn a_gunners_pose_follows_halos_two_pitch_halves() {
+        use bri_vehicles::muzzle::aim_phase;
+        let (down, up) = (-0.349_065_85, 0.610_865_2);
+        assert_eq!(aim_phase(down, up, up), 0.0);
+        assert!((aim_phase(down, up, 0.0) - 0.5).abs() < 1e-6);
+        assert_eq!(aim_phase(down, up, down), 1.0);
+        // The even mapping would call the level aim a third of the way.
+        assert!((aim_phase(down, up, 0.5 * up) - 0.25).abs() < 1e-6);
+        assert!((aim_phase(down, up, 0.5 * down) - 0.75).abs() < 1e-6);
+        assert_eq!(aim_phase(down, up, 3.0), 0.0);
+        assert_eq!(aim_phase(down, up, -3.0), 1.0);
     }
 
     #[test]

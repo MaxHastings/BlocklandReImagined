@@ -149,6 +149,7 @@ fn held_tool(id: &str, handle: f32, head: [f32; 3]) -> Shape {
         duration: 0.3,
         looping: false,
         additive: false,
+        parent_translations: false,
         priority: 0,
         nodes: vec![NodeTrack {
             node: "swing".into(),

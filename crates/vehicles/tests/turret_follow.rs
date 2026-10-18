@@ -90,10 +90,16 @@ fn the_barrel_lags_its_gunner_and_arrives() {
     step(&mut v, &mut w, 60);
     let half_second = barrel(&v, &w);
     // A barrel at the speed limit from the first tick would be at 1.57.
-    assert!(half_second[0] > 0.05 && half_second[0] < 1.2, "{half_second:?}");
+    assert!(
+        half_second[0] > 0.05 && half_second[0] < 1.2,
+        "{half_second:?}"
+    );
     step(&mut v, &mut w, 600);
     let there = barrel(&v, &w);
-    assert!((there[0] - 2.0).abs() < 1e-3 && (there[1] - 0.3).abs() < 1e-3, "{there:?}");
+    assert!(
+        (there[0] - 2.0).abs() < 1e-3 && (there[1] - 0.3).abs() < 1e-3,
+        "{there:?}"
+    );
 }
 #[test]
 fn without_limits_the_barrel_is_on_the_aim_at_once() {
@@ -113,7 +119,10 @@ fn a_new_gunner_takes_the_barrel_where_it_points() {
     v.dismount(&w, OwnerId(10), GUNNER, false).unwrap();
     step(&mut v, &mut w, 600);
     let left = barrel(&v, &w);
-    assert!(left[0] > moving[0] && (left[0] - 2.0).abs() < 1e-3, "{moving:?} {left:?}");
+    assert!(
+        left[0] > moving[0] && (left[0] - 2.0).abs() < 1e-3,
+        "{moving:?} {left:?}"
+    );
 }
 #[test]
 fn shots_leave_along_the_barrel_not_the_look() {

@@ -325,6 +325,12 @@ pub struct Animation {
     pub duration: f32,
     pub looping: bool,
     pub additive: bool,
+    /// An additive clip whose translations add to the node's translation in
+    /// its parent's frame, as Halo's overlays do, instead of being carried
+    /// by the node's own pose (the default, which rotates and scales them by
+    /// it). Rotations and scales are unaffected.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub parent_translations: bool,
     pub priority: i32,
     #[serde(default, skip_serializing_if = "RotationInterpolation::is_spherical")]
     pub rotation_interpolation: RotationInterpolation,

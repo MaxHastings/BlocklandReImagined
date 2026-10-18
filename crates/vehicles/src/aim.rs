@@ -161,7 +161,8 @@ fn couple(first: &mut Plan, second: &mut Plan, max_acceleration: f32) {
     };
     let factor = (extension + adjust.coast_time) * max_acceleration;
     let peak = adjust.acceleration_time * adjust.acceleration + adjust.initial_velocity;
-    let discriminant = (factor * factor - (-extension * peak.abs()) * max_acceleration * 4.).max(0.);
+    let discriminant =
+        (factor * factor - (-extension * peak.abs()) * max_acceleration * 4.).max(0.);
     let adjustment = (discriminant.sqrt() - factor) / (max_acceleration + max_acceleration);
     let adjustment = adjustment.min(adjust.acceleration_time.min(adjust.deceleration_time));
     if adjustment <= 0. {
@@ -210,7 +211,11 @@ fn wrap(angle: f32) -> f32 {
 }
 /// The unit direction of a `[yaw, pitch]`, for the angle between two aims.
 fn direction([yaw, pitch]: [f32; 2]) -> glam::Vec3 {
-    glam::Vec3::new(pitch.cos() * yaw.sin(), pitch.sin(), pitch.cos() * yaw.cos())
+    glam::Vec3::new(
+        pitch.cos() * yaw.sin(),
+        pitch.sin(),
+        pitch.cos() * yaw.cos(),
+    )
 }
 
 /// A barrel's `[yaw, pitch]` (radians, relative to its hull, pitch up
@@ -339,7 +344,10 @@ mod tests {
         assert!(aims[59][0] < unlimited * 0.7, "{:?}", aims[59]);
         assert!(aims[59][0] > 0.05);
         let last = aims.last().unwrap();
-        assert!((last[0] - 2.0).abs() < 1e-3 && follow.velocity == [0.; 2], "{last:?}");
+        assert!(
+            (last[0] - 2.0).abs() < 1e-3 && follow.velocity == [0.; 2],
+            "{last:?}"
+        );
     }
     #[test]
     fn the_barrel_brakes_without_overshooting() {
@@ -374,7 +382,10 @@ mod tests {
         let aims = run(&mut follow, [2.0, 0.4], 600);
         let pitch_done = aims.iter().position(|a| (a[1] - 0.4).abs() < 1e-3).unwrap();
         let yaw_done = aims.iter().position(|a| (a[0] - 2.0).abs() < 1e-3).unwrap();
-        assert!(yaw_done.abs_diff(pitch_done) <= 8, "{pitch_done} {yaw_done}");
+        assert!(
+            yaw_done.abs_diff(pitch_done) <= 8,
+            "{pitch_done} {yaw_done}"
+        );
     }
     #[test]
     fn no_limits_aim_instantly() {
@@ -388,25 +399,34 @@ mod tests {
             follow.step([1.0, 0.3], &none, RANGE);
         }
         let aim = follow.aim();
-        assert!((aim[0] - 1.0).abs() < 1e-6 && (aim[1] - 0.3).abs() < 1e-6, "{aim:?}");
+        assert!(
+            (aim[0] - 1.0).abs() < 1e-6 && (aim[1] - 0.3).abs() < 1e-6,
+            "{aim:?}"
+        );
     }
     #[test]
     fn a_speed_limit_needs_an_acceleration_limit() {
         assert!(WARTHOG.valid());
-        assert!(AimLimits {
-            max_velocity: 0.,
-            max_acceleration: 5.
-        }
-        .valid());
-        assert!(!AimLimits {
-            max_velocity: 3.,
-            max_acceleration: 0.
-        }
-        .valid());
-        assert!(!AimLimits {
-            max_velocity: f32::NAN,
-            max_acceleration: 1.
-        }
-        .valid());
+        assert!(
+            AimLimits {
+                max_velocity: 0.,
+                max_acceleration: 5.
+            }
+            .valid()
+        );
+        assert!(
+            !AimLimits {
+                max_velocity: 3.,
+                max_acceleration: 0.
+            }
+            .valid()
+        );
+        assert!(
+            !AimLimits {
+                max_velocity: f32::NAN,
+                max_acceleration: 1.
+            }
+            .valid()
+        );
     }
 }

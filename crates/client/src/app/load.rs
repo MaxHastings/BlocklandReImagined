@@ -371,6 +371,7 @@ impl App {
                 rider_fallback_hips: BTreeMap::new(),
                 rider_hands: BTreeMap::new(),
                 rider_aims: BTreeMap::new(),
+                rider_overlays: BTreeMap::new(),
                 posed_eye: None,
                 tumble: None,
             },

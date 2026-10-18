@@ -100,6 +100,17 @@ pub struct Seat {
     /// and tip with the gun's aim. Every body reaches its arms there.
     #[serde(default, skip_serializing_if = "SeatHands::is_empty")]
     pub hands: SeatHands,
+    /// Where the rider's `seat_aim` clip's end keys sit, [down, up] pitch
+    /// radians, with its middle key level: a gunner's pose is sampled
+    /// piecewise across the two halves, as Halo's aiming screens are
+    /// (`down_pitch_per_frame`, `up_pitch_per_frame`). Left out, the clip
+    /// spans the vehicle's whole `look_pitch` range evenly.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rider_aim_pitch: Option<[f32; 2]>,
+    /// Overlay clips the rider's body plays with the vehicle's acceleration
+    /// at this seat.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rider_acceleration: Option<AccelerationOverlays>,
 }
 /// Mirrors weapons::IMAGE_SLOTS; cross-crate regression guards this domain.
 pub const SEAT_READY_IMAGE_SLOTS: usize = 4;
@@ -362,6 +373,36 @@ impl Wheel {
             steering * steering.abs()
         };
         (self.steering * squared.sin()).atan2(squared.cos())
+    }
+}
+/// Halo's seat acceleration overlays for a body: three additive clips (front
+/// to back, left to right, up and down; the middle key is the pose with no
+/// acceleration) blended by how the vehicle is being accelerated
+/// ([`crate::accel::SeatAcceleration`]). Used by a rider's body
+/// ([`Seat::rider_acceleration`]) and a turret's model
+/// ([`Definition::turret_acceleration`]).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AccelerationOverlays {
+    /// The clips, by name in the body or model they pose.
+    pub clips: [String; 3],
+    /// Halo's `acceleration_scale` per axis, for accelerations in its world
+    /// units a tick.
+    pub scale: [f32; 3],
+    /// Native units in one of those world units.
+    pub native_per_unit: f32,
+}
+impl AccelerationOverlays {
+    pub fn valid(&self) -> bool {
+        self.clips
+            .iter()
+            .all(|c| !c.is_empty() && c.len() <= 64 && !c.chars().any(char::is_control))
+            && self
+                .scale
+                .iter()
+                .all(|s| s.is_finite() && (0.0..=10_000.).contains(s))
+            && self.native_per_unit.is_finite()
+            && (0.01..=1000.).contains(&self.native_per_unit)
     }
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -763,6 +804,11 @@ pub struct Definition {
     /// are unchanged. Left out, the turret sits rigid, as in v20.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub turret_sway: Option<TurretSway>,
+    /// The turret model's acceleration overlays: its own authored clips
+    /// move the gun with the vehicle's acceleration (Halo's, in place of
+    /// the guessed `turret_sway` spring).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub turret_acceleration: Option<AccelerationOverlays>,
     pub collision_hulls: Vec<Vec<[f32; 3]>>,
     pub bounds_min: [f32; 3],
     pub bounds_max: [f32; 3],
@@ -1648,6 +1694,25 @@ impl Pack {
                         })
                 }),
                 "seat hand nodes need a weapon attachment seat and names up to 64 characters"
+            );
+            ensure!(
+                d.turret_acceleration
+                    .as_ref()
+                    .is_none_or(|a| a.valid() && d.attachment_model.is_some()),
+                "invalid turret acceleration overlays"
+            );
+            ensure!(
+                d.seats.iter().all(|s| {
+                    s.rider_acceleration.as_ref().is_none_or(|a| a.valid())
+                        && s.rider_aim_pitch.is_none_or(|[down, up]| {
+                            down.is_finite()
+                                && up.is_finite()
+                                && (-std::f32::consts::FRAC_PI_2..0.).contains(&down)
+                                && up > 0.
+                                && up <= std::f32::consts::FRAC_PI_2
+                        })
+                }),
+                "invalid seat rider aim pitch or acceleration overlays"
             );
             if let Some(w) = &d.weapon {
                 ensure!(

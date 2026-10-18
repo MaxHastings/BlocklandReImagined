@@ -178,6 +178,7 @@ pub fn write_pack(dir: &Path) -> Result<Pack> {
         duration: 1.0,
         looping: false,
         additive: false,
+        parent_translations: false,
         priority: 0,
         nodes: vec![NodeTrack {
             node: "barrel".into(),
@@ -263,6 +264,7 @@ fn horse_clips() -> Vec<(&'static str, Animation)> {
         duration: 0.8,
         looping,
         additive: false,
+        parent_translations: false,
         priority: 0,
         nodes: vec![NodeTrack {
             node: node.into(),

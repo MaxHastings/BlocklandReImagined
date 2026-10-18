@@ -1124,6 +1124,10 @@ pub struct AvatarAnimationInput {
     /// lowest: the body's `seat_aim` clip holds there in place of `look`,
     /// so the whole seated pose bends with the gun.
     pub seat_aim: Option<f32>,
+    /// Additive clips a seat's rider holds at a place along their length,
+    /// ahead of `seat_aim`: Halo's acceleration overlays
+    /// (`Seat::rider_acceleration`), each `(clip, phase 0..1)`.
+    pub seat_overlays: Vec<(String, f32)>,
     /// Where a seated rider's right and left hands hold on, in the world
     /// (a seat's `hands`): each arm reaches its hand there after the clip
     /// pose ([`reach_hands`]).
@@ -2150,6 +2154,14 @@ impl AvatarMesh {
                     started_at: action.started_at,
                 })
         });
+        let seat_overlays: Vec<_> = animation_input
+            .seat_overlays
+            .iter()
+            .map(|(clip, phase)| bri_content::body_pose::SeatOverlay {
+                clip: clip.as_str(),
+                phase: *phase,
+            })
+            .collect();
         let bri_content::body_pose::BodyLayerPlan {
             layers,
             unacted,
@@ -2173,6 +2185,7 @@ impl AvatarMesh {
                 time,
                 head_up: self.outfit.head_up,
                 seat_aim: animation_input.seat_aim,
+                seat_overlays: &seat_overlays,
                 look_phase: look_position(player.pitch, animation_input.look_limits),
                 head_yaw: player.head_yaw,
             },

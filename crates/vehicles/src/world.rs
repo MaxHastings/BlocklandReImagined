@@ -426,7 +426,10 @@ impl Instance {
         let c = self.controls[seat];
         match &self.aim {
             Some(follow) if d.weapon_seat() == Some(seat) => follow.aim(),
-            _ => [c.aim_yaw, c.aim_pitch.clamped(d.look_pitch[0], d.look_pitch[1])],
+            _ => [
+                c.aim_yaw,
+                c.aim_pitch.clamped(d.look_pitch[0], d.look_pitch[1]),
+            ],
         }
     }
     /// Advance the barrel one physics tick toward its gunner's aim.
@@ -440,7 +443,10 @@ impl Instance {
             return;
         };
         let c = self.controls[seat];
-        let desired = [c.aim_yaw, c.aim_pitch.clamped(d.look_pitch[0], d.look_pitch[1])];
+        let desired = [
+            c.aim_yaw,
+            c.aim_pitch.clamped(d.look_pitch[0], d.look_pitch[1]),
+        ];
         self.aim
             .get_or_insert_with(|| AimFollow::at(desired))
             .step(desired, &limits, d.look_pitch);
