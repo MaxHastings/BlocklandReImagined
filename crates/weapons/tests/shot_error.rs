@@ -120,3 +120,17 @@ fn error_must_be_ordered_and_in_range() {
     let bad = PACK.replace("\"rise_ticks\": 60", "\"rise_ticks\": 0");
     assert!(Pack::from_json(bad.as_bytes()).is_err());
 }
+
+#[test]
+fn a_hitscan_may_reach_a_long_way_but_not_without_bound() {
+    let long = PACK.replace(
+        "\"hitscan\": { \"range\": 200 }",
+        "\"hitscan\": { \"range\": 4120 }",
+    );
+    assert!(Pack::from_json(long.as_bytes()).is_ok());
+    let far = PACK.replace(
+        "\"hitscan\": { \"range\": 200 }",
+        "\"hitscan\": { \"range\": 9000 }",
+    );
+    assert!(Pack::from_json(far.as_bytes()).is_err());
+}

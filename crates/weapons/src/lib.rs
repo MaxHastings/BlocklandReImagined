@@ -2308,7 +2308,7 @@ pub struct Rested {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Hitscan {
-    /// Units, 1 to 2000, times the shooter's scale.
+    /// Units, 1 to 8192, times the shooter's scale.
     pub range: f32,
     /// The range while the shooter moves faster than the shot's
     /// `moving_speed` (Tier+Tactical's guns reach less on the move).
@@ -2415,10 +2415,10 @@ impl Hitscan {
             HitSounds::MAX
         );
         ensure!(
-            (1.0..=2000.0).contains(&self.range)
+            (1.0..=8192.0).contains(&self.range)
                 && self
                     .moving_range
-                    .is_none_or(|r| (1.0..=2000.0).contains(&r))
+                    .is_none_or(|r| (1.0..=8192.0).contains(&r))
                 && self.eye_within.is_none_or(|r| (0.1..=50.0).contains(&r))
                 && self.damage.is_none_or(|d| (-100.0..=100.0).contains(&d))
                 && self.tracer.is_none_or(|t| {
@@ -2433,7 +2433,7 @@ impl Hitscan {
                         && (-100.0..=100.0).contains(&r.damage)
                         && (0.0..=1.0).contains(&r.shooter)
                 }),
-            "Invalid hitscan of {what}: range 1 to 2000, eye_within 0.1 to 50, damage -100 \
+            "Invalid hitscan of {what}: range 1 to 8192, eye_within 0.1 to 50, damage -100 \
              to 100, tracer colour 0 to 1, width to 1, seconds to 2, ricochet 1 to 8 times, \
              damage -100 to 100, shooter 0 to 1"
         );

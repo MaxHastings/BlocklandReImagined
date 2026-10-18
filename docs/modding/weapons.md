@@ -303,7 +303,7 @@ and name them as usual. They are found when the game loads the packs
 together; an image whose projectile no loaded package declares is left
 out, with a note.
 
-An image's `shot` can say more of how it fires. `hitscan` (`range`, and
+An image's `shot` can say more of how it fires. `hitscan` (`range`, 1 to 8192 units, and
 `moving_range`) lands each projectile at once along a ray, with its
 damage and push. The ray meets other players where the shooter's own game
 showed them when they fired (lag compensation, up to half a second back),
@@ -334,7 +334,7 @@ the truer first shot after a pause. `crouched_spread` is the spread
 while the shooter crouches and is not moving (used when tighter than their
 standing spread), and `airborne_spread` the spread while they are off the
 ground and not riding, in place of every other: a tactical rifle that is
-steadiest crouched and wild mid-jump. An image's `state_shots` fire on
+steadiest crouched and wild mid-jump. `error` (`min`, `max`, `rise_ticks`, `fall_ticks`, `recover_ticks`) is a spread that builds as the holder keeps firing and settles when they stop, in place of all of those: the holder's error rises by `1 / rise_ticks` every tick the trigger is held or a shot was fired in the last `recover_ticks`, falls by `1 / fall_ticks` otherwise (0 to 1), and a shot's spread is `min` at 0 and `max` at 1. An image's `state_shots` fire on
 entering a state whose script is not `onFire` (`"onfire2": { ... }`),
 each a shot of its own, hitscan or not (a knife's weaker stab beside its
 slash); a shot with `"free": true` takes no rounds. `recoil` pushes the shooter back along
