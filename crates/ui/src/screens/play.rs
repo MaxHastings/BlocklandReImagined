@@ -894,7 +894,11 @@ fn scope_overlay(dl: &mut DrawList, core: &Core) -> Option<Rect> {
     }
     let stretch = core.scope_fit == crate::api::ScopeFit::Stretch;
     let side = if stretch { w as f32 } else { h as f32 * aspect };
-    let x = if stretch { 0.0 } else { (w as f32 - side) / 2.0 };
+    let x = if stretch {
+        0.0
+    } else {
+        (w as f32 - side) / 2.0
+    };
     let lens = Rect::new(x.floor() as i32, 0, side.ceil() as i32, h);
     if core.scope_fit == crate::api::ScopeFit::HeightBlack {
         let black = [0, 0, 0, 255];
