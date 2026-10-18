@@ -504,6 +504,9 @@ pub struct Snapshot {
     /// The host's game version, as players see it on the main menu
     /// (`game_version()`).
     pub game_version: String,
+    /// The map being played (`map_id()`): `<package>:map/<name>` for an
+    /// Add-On's map, the base map's name otherwise; empty when unknown.
+    pub map_id: String,
     pub seed: i64,
     /// The live environment settings (`environment()`).
     pub environment: bri_content::atmosphere::Settings,
@@ -1453,6 +1456,7 @@ fn register_api(engine: &mut Engine) {
     engine.register_fn("game_version", || {
         with(|i| Ok(i.snapshot.game_version.clone()))
     });
+    engine.register_fn("map_id", || with(|i| Ok(i.snapshot.map_id.clone())));
     // Players, bots and entities are views ([`view`]): a list of them, or
     // a script's own list of some, never meets a script value's limits.
     engine.register_fn("players", || {
@@ -2955,6 +2959,16 @@ fn register_presentation(engine: &mut Engine) {
     });
     engine.register_fn("effect_at", |e: &str, p: Array, d: Array, s: Dynamic| {
         effect_at(e, p, d, float(&s)?)
+    });
+    // set_teleport_sound(profile): what a map teleporter plays at the ears
+    // of each player it sends through; () for none.
+    engine.register_fn("set_teleport_sound", |profile: &str| {
+        push(Op::SetTeleportSound(ops::SetTeleportSound {
+            profile: Some(profile.to_owned()),
+        }))
+    });
+    engine.register_fn("set_teleport_sound", |_none: ()| {
+        push(Op::SetTeleportSound(ops::SetTeleportSound { profile: None }))
     });
     engine.register_fn("beam", |from: Array, to: Array| beam(from, to, Map::new()));
     engine.register_fn("beam", beam);

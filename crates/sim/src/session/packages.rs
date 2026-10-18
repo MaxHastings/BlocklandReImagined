@@ -1315,6 +1315,7 @@ impl Session {
         Snapshot {
             tick: self.simulation.state().tick,
             game_version: self.game_version.clone(),
+            map_id: self.map_id.clone(),
             environment: self.environment.clone(),
             seed: host.and_then(|h| h.world.as_ref()).map_or(0, |w| w.seed),
             players: self

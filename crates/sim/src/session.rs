@@ -1126,6 +1126,8 @@ pub struct Session {
     addon_data: Option<std::sync::Arc<dyn AddOnData>>,
     /// The host's game version, for Add-Ons to show (`game_version()`).
     game_version: String,
+    /// The map being played, for `map_id()` (empty until the host says).
+    map_id: String,
     /// The image each player held in their right hand last tick, for
     /// images' `mount` and `unmount` commands.
     held_images: BTreeMap<OwnerId, String>,
@@ -1287,6 +1289,7 @@ impl Session {
             saved_copies: Default::default(),
             addon_data: None,
             game_version: "dev".into(),
+            map_id: String::new(),
             held_images: BTreeMap::new(),
             mirrors: Default::default(),
             last_prints: BTreeMap::new(),

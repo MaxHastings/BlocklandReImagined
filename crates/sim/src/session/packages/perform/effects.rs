@@ -95,6 +95,13 @@ impl Perform for ops::EffectAt {
         Ok(())
     }
 }
+impl Perform for ops::SetTeleportSound {
+    fn perform(self, session: &mut Session, cx: OpCall<'_>) -> Result<()> {
+        session.take_cue(cx.package)?;
+        session.map_teleporters.set_sound(self.profile);
+        Ok(())
+    }
+}
 impl Perform for ops::PlayThread {
     fn perform(self, session: &mut Session, cx: OpCall<'_>) -> Result<()> {
         let OpCall { package, tick, .. } = cx;
