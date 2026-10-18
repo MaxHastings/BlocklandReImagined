@@ -1697,7 +1697,11 @@ pub fn resolve_live(
                 let to_ahead = dx * ahead[0] + dz * ahead[1];
                 let to_right = -dx * ahead[1] + dz * ahead[0];
                 let nearest = if to_ahead.abs() >= to_right.abs() {
-                    if to_ahead > 0.0 { Edge::Top } else { Edge::Bottom }
+                    if to_ahead > 0.0 {
+                        Edge::Top
+                    } else {
+                        Edge::Bottom
+                    }
                 } else if to_right > 0.0 {
                     Edge::Right
                 } else {
@@ -2238,8 +2242,16 @@ mod tests {
         assert_eq!(drawn("top", 5.0, 1.0, 1.0), Some(0.5), "ahead is the top");
         assert_eq!(drawn("bottom", 5.0, 1.0, 1.0), None);
         assert_eq!(drawn("bottom", -5.0, 1.0, 1.0), Some(0.5));
-        assert_eq!(drawn("left", 1.0, -5.0, 1.0), Some(0.5), "to -z is the left");
-        assert_eq!(drawn("right", 1.0, 5.0, 0.5), Some(0.25), "to +z is the right, faded");
+        assert_eq!(
+            drawn("left", 1.0, -5.0, 1.0),
+            Some(0.5),
+            "to -z is the left"
+        );
+        assert_eq!(
+            drawn("right", 1.0, 5.0, 0.5),
+            Some(0.25),
+            "to +z is the right, faded"
+        );
         assert_eq!(drawn("top", 5.0, 0.0, 0.0), None, "no strength, no arrow");
         assert_eq!(drawn("top", 0.0, 0.0, 1.0), None, "no direction, no arrow");
     }
@@ -2344,14 +2356,23 @@ mod strip_tests {
         let mid = pieces(&items(180.0));
         assert_eq!(mid.len(), 2, "{mid:?}");
         assert_eq!((mid[0].0, mid[1].0), (1, 2));
-        assert!((mid[0].1[0] - 0.75).abs() < 1e-4 && (mid[0].1[2] - 1.0).abs() < 1e-4, "{mid:?}");
-        assert!(mid[1].1[0].abs() < 1e-4 && (mid[1].1[2] - 0.25).abs() < 1e-4, "{mid:?}");
+        assert!(
+            (mid[0].1[0] - 0.75).abs() < 1e-4 && (mid[0].1[2] - 1.0).abs() < 1e-4,
+            "{mid:?}"
+        );
+        assert!(
+            mid[1].1[0].abs() < 1e-4 && (mid[1].1[2] - 0.25).abs() < 1e-4,
+            "{mid:?}"
+        );
         // Facing 0 the window straddles the end and start of the strip.
         let wrap = pieces(&items(0.0));
         assert_eq!(wrap.len(), 2, "{wrap:?}");
         assert_eq!(wrap[0].0, 2);
         assert_eq!(wrap[1].0, 1);
-        assert!((wrap[0].2[2] + wrap[1].2[2] - 100.0).abs() < 1e-3, "the pieces fill the rect");
+        assert!(
+            (wrap[0].2[2] + wrap[1].2[2] - 100.0).abs() < 1e-3,
+            "the pieces fill the rect"
+        );
         assert!((wrap[1].2[0] - wrap[0].2[2]).abs() < 1e-3, "side by side");
     }
 
@@ -2373,6 +2394,9 @@ mod strip_tests {
         };
         let drawn = pieces(&resolve(&layout, &value, &|_| Some((1, [1024, 32]))));
         assert_eq!(drawn.len(), 1);
-        assert!((drawn[0].1[2] - drawn[0].1[0] - 0.1).abs() < 1e-4, "36 of 360 degrees: {drawn:?}");
+        assert!(
+            (drawn[0].1[2] - drawn[0].1[0] - 0.1).abs() < 1e-4,
+            "36 of 360 degrees: {drawn:?}"
+        );
     }
 }
