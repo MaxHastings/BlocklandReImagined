@@ -82,10 +82,25 @@ impl Footsteps {
             }
             // A landing: on the ground now, falling fast a moment ago.
             if player.grounded && !walker.grounded {
-                if walker.falling >= Sounds::LAND_SPEED
-                    && let Some(land) = sounds.land.as_ref().filter(|s| !s.is_empty())
-                {
-                    out.push((land.clone(), player.feet));
+                if walker.falling >= Sounds::LAND_SPEED {
+                    if let Some(land) = sounds.land.as_ref() {
+                        if !land.is_empty() {
+                            out.push((land.clone(), player.feet));
+                        }
+                    } else if sounds.land_on_surface {
+                        // AA's PlayLanded: the floor material's foot-contact sound.
+                        let steps = if sounds.surfaces.is_empty() {
+                            &sounds.footsteps[..]
+                        } else {
+                            sounds.footsteps_on(&surface(player.feet))
+                        };
+                        if !steps.is_empty() {
+                            self.turn = self.turn.wrapping_mul(1_103_515_245).wrapping_add(12_345);
+                            let pick = (self.turn >> 16) as usize % steps.len();
+                            walker.last = pick;
+                            out.push((steps[pick].clone(), player.feet));
+                        }
+                    }
                 }
                 // Feet down: the next step is a whole stride away.
                 walker.covered = 0.0;
@@ -168,6 +183,33 @@ mod tests {
         }
         assert!((5..=6).contains(&heard.len()), "{heard:?}");
         assert!(heard.windows(2).all(|w| w[0].0 != w[1].0), "{heard:?}");
+    }
+
+    #[test]
+    fn a_landing_can_sound_like_a_footfall_on_the_surface_underfoot() {
+        let (mut archetypes, walker) = walker_body();
+        let mut body = archetypes.resolve(walker).clone();
+        body.id = "test:archetype/lander".into();
+        body.sounds.land = None;
+        body.sounds.land_on_surface = true;
+        body.sounds
+            .surfaces
+            .insert("metal".into(), vec!["test:metal_step".into()]);
+        let lander = archetypes.add(body).expect("valid body");
+        let mut steps = Footsteps::default();
+        let falling = player(lander, [0.0, -9.0, 0.0], false);
+        let landed = player(lander, [0.0, 0.0, 0.0], true);
+        steps.update(1.0 / 60.0, [falling], &archetypes, |_| "metal".into());
+        let heard = steps.update(1.0 / 60.0, [landed], &archetypes, |_| "metal".into());
+        assert_eq!(heard.len(), 1, "{heard:?}");
+        assert_eq!(heard[0].0, "test:metal_step");
+        // A body with no landing option stays silent.
+        let mut quiet = Footsteps::default();
+        let plain = player(walker, [0.0, -9.0, 0.0], false);
+        let down = player(walker, [0.0, 0.0, 0.0], true);
+        quiet.update(1.0 / 60.0, [plain], &archetypes, |_| "metal".into());
+        let heard = quiet.update(1.0 / 60.0, [down], &archetypes, |_| "metal".into());
+        assert_eq!(heard.iter().filter(|h| h.0 == "test:metal_step").count(), 0);
     }
 
     #[test]

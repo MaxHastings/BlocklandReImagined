@@ -115,6 +115,9 @@ impl App {
         self.controls.advance_sway(elapsed.as_secs_f32());
         self.controls.advance_zoom(elapsed.as_secs_f32());
         self.controls.advance_view_shake(elapsed.as_secs_f32());
+        if let Some(breath) = self.controls.advance_breath(elapsed.as_secs_f32()) {
+            self.audio.profile(&breath, bri_audio::Placement::Listener);
+        }
         self.controls.ease_roll(elapsed.as_secs_f32());
         let third_person_only = self
             .net

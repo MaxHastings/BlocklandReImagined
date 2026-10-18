@@ -63,6 +63,11 @@ pub struct Controls {
     server_fov: Option<f32>,
     /// A rule's view shake in progress ([`Self::start_view_shake`]).
     view_shake: Option<ViewShake>,
+    /// Seconds of breathing since the game began ([`Self::advance_breath`]).
+    breath_clock: f32,
+    /// Whether the breath cycle was past zero (breathing out) when last seen
+    /// while aiming.
+    breath_out: Option<bool>,
     /// The body's archetype is `thirdPersonOnly`.
     third_person_only: bool,
     /// Target zoom FOV (`$Pref::player::CurrentFOV`); the wheel steps it.
@@ -1122,6 +1127,25 @@ impl Controls {
             }
             None => self.view_shake = None,
         }
+    }
+    /// Aiming with a [`bri_weapons::Breath`]: the sound to play when the
+    /// breath turns (out as the cycle goes negative, in as it comes back),
+    /// as `AGP_Pawn::BreatheCycle` plays `BreathOutSound` and
+    /// `BreathInSound` where its cycle crosses zero. The clock runs
+    /// whether or not the player aims.
+    pub fn advance_breath(&mut self, seconds: f32) -> Option<String> {
+        if !seconds.is_finite() {
+            return None;
+        }
+        self.breath_clock = (self.breath_clock + seconds.min(0.25)) % 3600.0;
+        let Some(breath) = self.aim_while_aiming().and_then(|a| a.breath.clone()) else {
+            self.breath_out = None;
+            return None;
+        };
+        let out = (self.breath_clock * std::f32::consts::TAU / breath.period).sin() < 0.0;
+        let turned = self.breath_out.is_some_and(|before| before != out);
+        self.breath_out = Some(out);
+        turned.then(|| if out { breath.exhale } else { breath.inhale })
     }
     pub fn set_server_fov(&mut self, fov: Option<f32>) {
         self.server_fov = fov.filter(|f| f.is_finite()).map(|f| {
@@ -2632,5 +2656,50 @@ mod view_shake_tests {
             c.yaw.abs() < 0.02 && c.pitch.abs() < 0.02,
             "back to where it was with min 0"
         );
+    }
+}
+
+#[cfg(test)]
+mod breath_tests {
+    use super::*;
+
+    fn scoped() -> Controls {
+        let mut c = Controls::default();
+        let zoom: bri_weapons::Zoom = serde_json::from_value(serde_json::json!({
+            "fov": 40.0,
+            "breath": { "exhale": "t:out", "inhale": "t:in", "period": 4.0 }
+        }))
+        .expect("zoom");
+        c.set_aim_in_state(Some(zoom), None);
+        c
+    }
+
+    #[test]
+    fn breath_alternates_each_half_period_only_while_aiming() {
+        let mut c = scoped();
+        // Not aiming: nothing, however long.
+        for _ in 0..600 {
+            assert!(c.advance_breath(1.0 / 60.0).is_none());
+        }
+        c.action(&GameAction::Held {
+            control: HeldControl::Zoom,
+            down: true,
+        });
+        let mut heard = vec![];
+        for _ in 0..(60 * 10) {
+            heard.extend(c.advance_breath(1.0 / 60.0));
+        }
+        assert!(
+            heard.windows(2).all(|w| w[0] != w[1]),
+            "out and in alternate: {heard:?}"
+        );
+        assert!(
+            (4..=6).contains(&heard.len()),
+            "a turn every two seconds: {heard:?}"
+        );
+        c.let_go(HeldControl::Zoom);
+        for _ in 0..600 {
+            assert!(c.advance_breath(1.0 / 60.0).is_none(), "stops with the aim");
+        }
     }
 }

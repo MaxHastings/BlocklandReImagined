@@ -691,6 +691,9 @@ pub(super) fn archetype(
             to.clone_from(from);
         }
     }
+    if def.sounds.land_on_surface {
+        sounds.land_on_surface = true;
+    }
     if !def.sounds.footsteps.is_empty() {
         sounds.footsteps.clone_from(&def.sounds.footsteps);
     }
