@@ -442,6 +442,8 @@ fn weapons(v: Variant, seed: u64) -> Pack {
             ballistic: true,
             elasticity: 0.35 + 0.05 * s,
             friction: 0.4,
+            elasticity_surfaces: Default::default(),
+            bounce_surfaces: Default::default(),
             lifetime_ticks: 600,
             arm_ticks: 600,
             explosion: Explosion {

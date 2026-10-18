@@ -349,6 +349,8 @@ pub fn lower(definitions: Vec<Definition>) -> Result<Pack> {
             ballistic: flag(d, "isBallistic", false),
             elasticity: num(d, "bounceElasticity", 1.0),
             friction: num(d, "bounceFriction", 0.0),
+            elasticity_surfaces: Default::default(),
+            bounce_surfaces: Default::default(),
             damage: num(d, "directDamage", 0.0),
             damage_type: field(d, "directDamageType"),
             radius_damage_type: field(d, "radiusDamageType"),

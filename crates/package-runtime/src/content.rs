@@ -312,6 +312,12 @@ pub struct Behaviour {
     /// tick.
     #[serde(default)]
     pub on_projectile_hit: bool,
+    /// `on_explosion(blast)` after a projectile of this package's weapons
+    /// (or one it depends on) explodes with a blast radius. `blast` is
+    /// `#{ projectile, by, x, y, z, radius }`. Delivered at the start of the
+    /// next tick.
+    #[serde(default)]
+    pub on_explosion: bool,
     /// `on_minigame(event)` after something happens to a mini-game:
     /// `event` is `#{ kind, game, player, team }`, `kind` being `created`,
     /// `configured`, `reset`, `ended`, `joined`, `left`, `team` (a member's
