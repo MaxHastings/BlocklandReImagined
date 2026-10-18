@@ -14,6 +14,8 @@ struct Camera {
     sky_bands:array<vec4<f32>,128>,
     shading:vec4<f32>,
     haze:vec4<f32>,
+    // Ambient inside spaces the sky cannot see (SceneData::enclosed_ambient); w 1 when set.
+    enclosed:vec4<f32>,
 };
 @group(0) @binding(0) var<uniform> camera:Camera;
 // color.w 1 marks a map light drawn with the shaded lights' linear falloff.
@@ -489,11 +491,11 @@ struct SkyExposure {
 @group(0) @binding(20) var<uniform> sky_exposure:SkyExposure;
 // Cosine-weighted visibility of the upper hemisphere, independent of sun
 // direction. Preserve authored ambient beyond this view's measured region.
-fn sky_visibility(position:vec3<f32>,normal:vec3<f32>)->f32 {
-    if sky_exposure.params.z<0.5 {return 0.0;}
+fn sky_exposure_at(position:vec3<f32>,normal:vec3<f32>)->vec2<f32> {
+    if sky_exposure.params.z<0.5 {return vec2<f32>(0.0);}
     let distance=max(max(abs(position.x-sky_exposure.centre.x),abs(position.y-sky_exposure.centre.y)),abs(position.z-sky_exposure.centre.z));
     let fade=1.0-smoothstep(sky_exposure.centre.w*0.65,sky_exposure.centre.w*0.85,distance);
-    if fade<=0.0 {return 0.0;}
+    if fade<=0.0 {return vec2<f32>(0.0);}
     let size=i32(sky_exposure.params.x);
     // A small world-space normal offset avoids self occlusion without moving
     // a receiver across thin walls or using view-dependent depth.
@@ -519,8 +521,21 @@ fn sky_visibility(position:vec3<f32>,normal:vec3<f32>)->f32 {
         open+=seen*share;
         weight+=share;
     }
-    return open/max(weight,0.0001)*fade;
+    return vec2<f32>(open/max(weight,0.0001),fade);
 }
+fn sky_visibility(position:vec3<f32>,normal:vec3<f32>)->f32 {
+    let e=sky_exposure_at(position,normal);
+    return e.x*e.y;
+}
+// The ambient light `outside` where the sky is seen, the map's enclosed
+// ambient (SceneData::enclosed_ambient) where it is not. Only where the
+// exposure field measured the point; elsewhere `outside` stands.
+fn enclosed_ambient(position:vec3<f32>,normal:vec3<f32>,outside:vec3<f32>)->vec3<f32> {
+    if !MODERN_SKY_SHADING || camera.enclosed.w<0.5 {return outside;}
+    let e=sky_exposure_at(position,normal);
+    return mix(outside,camera.enclosed.rgb,e.y*(1.0-e.x));
+}
+
 fn hemisphere(position:vec3<f32>,normal:vec3<f32>)->vec3<f32> {
     if !MODERN_SKY_SHADING || camera.shading.x<=0.0 || lighting_mode()==0 {return vec3<f32>(1.0);}
     let tinted=select(mix(vec3<f32>(1.0),vec3<f32>(HEMISPHERE_DOWN),-normal.y),
@@ -700,7 +715,7 @@ fn dynamic_illumination(position:vec3<f32>,normal:vec3<f32>)->LocalLight {
         return LocalLight(ambient_at(sun)+camera.sun_color.rgb*facing*sun+local.diffuse,
             (camera.sun_color.rgb*sun*select(0.0,highlight(n,toward,eye),facing>0.0)+local.specular)*SPECULAR_STRENGTH);
     }
-    return LocalLight(ambient_at(sun)*hemisphere(position,n)+camera.sun_color.rgb*facing*sun+local.diffuse,
+    return LocalLight(enclosed_ambient(position,n,ambient_at(sun)*hemisphere(position,n))+camera.sun_color.rgb*facing*sun+local.diffuse,
         (camera.sun_color.rgb*sun*select(0.0,highlight(n,toward,eye),facing>0.0)+local.specular)*SPECULAR_STRENGTH);
 }
 // A stored share of 1 (map_lighting::SHARE_ONE levels of 255), so a

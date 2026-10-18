@@ -289,6 +289,11 @@ fn load_bundle(root: &Path, map_id: &str, legacy: bool) -> Result<MapScene> {
         out.sun_direction = [d.x, d.z, -d.y]; // original Z-up to native Y-up
         out.sun_color = rgb(sun.properties.get("color"), out.sun_color);
         out.ambient = rgb(sun.properties.get("ambient"), out.ambient);
+        // Light in spaces the sky cannot see; absent, they keep the ambient.
+        out.enclosed_ambient = sun
+            .properties
+            .get("enclosed")
+            .map(|v| rgb(Some(v), out.ambient));
     }
     if let Some(sky) = scene.nodes.iter().find(|n| matches!(n.kind, Kind::Sky)) {
         let c = rgb(sky.properties.get("skysolidcolor"), [0.05, 0.08, 0.12]);
