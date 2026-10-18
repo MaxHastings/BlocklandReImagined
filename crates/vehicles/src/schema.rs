@@ -990,6 +990,11 @@ pub struct Definition {
     /// v20's vehicles have none.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub skid: Option<Skid>,
+    /// Effects and sounds a slipping tyre makes by the surface it is on.
+    /// Cosmetic: each client works the slip out from the vehicle's
+    /// presented motion and looks the surface up in its own world.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wheel_contacts: Option<WheelContacts>,
     /// Authored fields retained as metadata only. Runtime reads typed native fields above.
     pub authored: BTreeMap<String, String>,
     pub adaptations: Vec<String>,
@@ -1033,6 +1038,68 @@ impl LampActivation {
 fn is_origin(v: &[f32; 3]) -> bool {
     *v == [0.0; 3]
 }
+/// What a vehicle's tyres throw up as they slip, by the surface each
+/// stands on ([`Definition::wheel_contacts`]; Halo's `vehicle_tire_slip`
+/// material-effect row).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WheelContacts {
+    /// How fast a tyre must slip, units per second, to make an effect.
+    pub min_slip: f32,
+    /// Seconds between a slipping wheel's effects, and between its sounds.
+    pub interval: f32,
+    #[serde(default = "WheelContacts::default_sound_interval")]
+    pub sound_interval: f32,
+    /// By surface kind (`sand`, `stone`...), or `*` for any other. A kind
+    /// listed nowhere makes nothing.
+    pub effects: Vec<ContactEffect>,
+}
+/// One surface's row of [`WheelContacts`].
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ContactEffect {
+    pub surface: String,
+    /// An effect of a weapons pack, burst at the wheel's contact.
+    pub effect: String,
+    /// A sound of a weapons pack played there.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sound: Option<String>,
+}
+impl WheelContacts {
+    fn default_sound_interval() -> f32 {
+        0.5
+    }
+    /// What a tyre on surface `kind` makes: the entry for that kind, else
+    /// the `*` entry. A kind with neither makes nothing, as an empty row of
+    /// Halo's material table makes nothing.
+    pub fn effect_on(&self, kind: &str) -> Option<&ContactEffect> {
+        self.effects
+            .iter()
+            .find(|e| e.surface == kind)
+            .or_else(|| self.effects.iter().find(|e| e.surface == "*"))
+    }
+    pub fn valid(&self) -> bool {
+        let name =
+            |n: &str| !n.trim().is_empty() && n.len() <= 128 && !n.chars().any(char::is_control);
+        self.min_slip.is_finite()
+            && (0.1..=100.).contains(&self.min_slip)
+            && self.interval.is_finite()
+            && (0.01..=10.).contains(&self.interval)
+            && self.sound_interval.is_finite()
+            && (0.05..=30.).contains(&self.sound_interval)
+            && self.effects.len() <= 64
+            && self.effects.iter().all(|e| {
+                crate::schema::surface_name(&e.surface)
+                    && name(&e.effect)
+                    && e.sound.as_deref().is_none_or(name)
+            })
+    }
+}
+/// A surface kind name, or `*` for any.
+fn surface_name(kind: &str) -> bool {
+    kind == "*" || bri_content::surface::valid_name(kind)
+}
+
 /// [`Definition::skid`].
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -1540,6 +1607,10 @@ impl Pack {
             if let Some(skid) = &d.skid {
                 skid.validate()?;
             }
+            ensure!(
+                d.wheel_contacts.as_ref().is_none_or(WheelContacts::valid),
+                "invalid wheel contact effects"
+            );
             ensure!(d.trails.len() <= 16, "too many trails");
             for t in &d.trails {
                 ensure!(

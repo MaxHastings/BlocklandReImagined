@@ -670,6 +670,7 @@ pub fn lower(
         engine_layers: vec![],
         lights: vec![],
         skid: None,
+        wheel_contacts: None,
         authored: b.fields.clone(),
         adaptations,
     })

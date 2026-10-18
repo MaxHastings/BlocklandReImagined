@@ -293,6 +293,7 @@ fn base(id: &str, name: &str, family: Family) -> Definition {
         engine_layers: vec![],
         lights: vec![],
         skid: None,
+        wheel_contacts: None,
         authored: BTreeMap::new(),
         adaptations: vec![],
     }

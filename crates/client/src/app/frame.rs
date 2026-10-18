@@ -1655,6 +1655,48 @@ impl App {
             ) {
                 self.audio.profile(&sound, bri_audio::Placement::World(at));
             }
+            // Slipping tyres throw up what the surface under them says.
+            let drawn: Vec<_> = view
+                .vehicles
+                .iter()
+                .filter(|(_, info)| !info.destroyed)
+                .filter_map(|(id, info)| {
+                    Some((
+                        *id,
+                        self.vehicle_assets.definition(&info.definition)?,
+                        self.vehicles.frame(*id)?,
+                    ))
+                })
+                .collect();
+            for burst in self
+                .fx
+                .wheel_contacts
+                .update(game_elapsed.as_secs_f32(), drawn, |at| {
+                    building
+                        .surface_at(at + Vec3::Y * 0.5, at - Vec3::Y)
+                        .ok()
+                        .flatten()
+                        .map_or(bri_content::surface::DEFAULT, |(_, kind)| kind)
+                        .to_string()
+                })
+            {
+                let transform = bri_fx_runtime::SourceTransform {
+                    position: burst.position,
+                    ..Default::default()
+                };
+                if let Some(effect) = &burst.effect
+                    && self.fx.weapon_effects.resolves(effect)
+                    && let Err(error) = self.fx.weapon_effects.burst_at(effect, transform)
+                {
+                    bri_console::warn(format!("Wheel contact effect {effect}: {error:#}"));
+                }
+                if let Some(sound) = &burst.sound {
+                    self.audio.profile(
+                        sound,
+                        bri_audio::Placement::World(burst.position.to_array()),
+                    );
+                }
+            }
             self.fx
                 .explosion_debris
                 .advance(game_elapsed.as_secs_f32(), |from, to| {
