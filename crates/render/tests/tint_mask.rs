@@ -33,6 +33,8 @@ fn plane(mask: u8, tint: [f32; 4], masked: bool, kind: MaterialKind) -> SceneDat
                 detail_scale: 1.0,
                 emissive: [0.0; 3],
                 reflection: None,
+                lightmap: None,
+                lightmap_strength: 1.0,
             },
         );
     }
