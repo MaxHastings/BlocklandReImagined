@@ -739,6 +739,15 @@ fn every_operation_needs_its_declared_capability() {
             player: 1,
             ammo: false,
         }),
+        Op::SetAimScale(ops::SetAimScale {
+            player: 1,
+            scale: 0.5,
+        }),
+        Op::KickView(ops::KickView {
+            player: 1,
+            pitch: 0.8,
+            yaw: 0.5,
+        }),
         Op::SetImageLoaded(ops::SetImageLoaded {
             player: 1,
             loaded: false,

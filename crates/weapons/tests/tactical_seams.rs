@@ -948,3 +948,37 @@ fn crouching_steadies_and_jumping_throws_the_spread() {
     // Without them, as before.
     assert_eq!(Shot::SINGLE.spread_in(0.0, None, true, false), 0.0);
 }
+
+#[test]
+fn an_aim_scale_shrinks_or_removes_the_spread_of_the_next_shot() {
+    let shoot = |scale: f32| {
+        let (mut w, mut q) = holding("kit:weapon/pistol");
+        q.player = Vec3::new(500.0, 0.0, 0.0);
+        w.set_frame(
+            A,
+            Frame {
+                velocity: Vec3::new(5.0, 0.0, 0.0),
+                ..Frame::default()
+            },
+        )
+        .unwrap();
+        w.set_aim_scale(A, scale).unwrap();
+        tracers(&click(&mut w, &mut q))[0]
+            .1
+            .distance(Vec3::new(0.0, 0.0, -200.0))
+    };
+    let full = shoot(1.0);
+    assert!(full > 1.0, "a moving shot strays: {full}");
+    let half = shoot(0.5);
+    assert!(
+        half < full && half > 0.0,
+        "half the cone: {half} against {full}"
+    );
+    let zero = shoot(0.0);
+    assert!(
+        zero < half,
+        "a scale of 0 keeps none of the cone: {zero} against {half}"
+    );
+    let (mut w, _) = holding("kit:weapon/pistol");
+    assert!(w.set_aim_scale(A, -1.0).is_err() && w.set_aim_scale(A, f32::NAN).is_err());
+}

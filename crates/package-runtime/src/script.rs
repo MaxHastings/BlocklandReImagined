@@ -113,6 +113,10 @@ pub struct PlayerView {
     pub archetype: String,
     #[serde(default)]
     pub crouched: bool,
+    /// Whether the jet button is held, whatever the body or the tool in hand
+    /// makes of it (an aim-down-sights gun takes it as its aim).
+    #[serde(default)]
+    pub jet_held: bool,
     /// Seated on a vehicle or riding another player.
     #[serde(default)]
     pub mounted: bool,
@@ -862,6 +866,7 @@ fn player_map(p: &PlayerView) -> Dynamic {
         float_entry("max_health", p.max_health),
         ("archetype", p.archetype.clone().into()),
         ("crouched", p.crouched.into()),
+        ("jet_held", p.jet_held.into()),
         ("mounted", p.mounted.into()),
         (
             "mount",
@@ -3376,6 +3381,22 @@ fn register_presentation(engine: &mut Engine) {
             loaded,
         }))
     });
+    engine.register_fn("set_aim_scale", |player: Dynamic, scale: Dynamic| {
+        push(Op::SetAimScale(ops::SetAimScale {
+            player: id(&player)?,
+            scale: number(&scale)? as f32,
+        }))
+    });
+    engine.register_fn(
+        "kick_view",
+        |player: Dynamic, pitch: Dynamic, yaw: Dynamic| {
+            push(Op::KickView(ops::KickView {
+                player: id(&player)?,
+                pitch: number(&pitch)? as f32,
+                yaw: number(&yaw)? as f32,
+            }))
+        },
+    );
     engine.register_fn("unmount_image", |player: Dynamic| {
         push(Op::UnmountImage(ops::UnmountImage {
             player: id(&player)?,

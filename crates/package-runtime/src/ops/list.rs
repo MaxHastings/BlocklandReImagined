@@ -146,6 +146,8 @@ macro_rules! for_each_op {
             QuickUse = player,
             SetImageAmmo = player,
             SetImageLoaded = player,
+            SetAimScale = player,
+            KickView = player,
             MountImage = player,
             Emote = player,
             WearImage = player,

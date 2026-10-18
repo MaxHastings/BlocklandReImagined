@@ -793,6 +793,11 @@ impl App {
                             self.net.held_ammo = held;
                             continue;
                         }
+                        bri_sim::session::Notice::ViewKick { pitch, yaw } => {
+                            self.controls
+                                .kick_view(yaw.to_radians(), pitch.to_radians());
+                            continue;
+                        }
                         bri_sim::session::Notice::Fov(fov) => {
                             self.controls.set_server_fov(fov);
                             continue;
