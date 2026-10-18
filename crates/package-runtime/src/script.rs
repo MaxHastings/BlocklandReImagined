@@ -2935,6 +2935,25 @@ fn register_presentation(engine: &mut Engine) {
             }))
         },
     );
+    // effect_at(effect, position, direction[, scale]): direction is the
+    // surface normal the effect faces out of; it need not be unit length.
+    fn effect_at(effect: &str, position: Array, direction: Array, scale: f32) -> Fallible<INT> {
+        let direction = vector(&direction)?;
+        let length = direction.iter().map(|v| v * v).sum::<f32>().sqrt();
+        if !(length.is_finite() && length > 1e-6) {
+            return fail("effect_at needs a direction that is not zero");
+        }
+        push(Op::EffectAt(ops::EffectAt {
+            effect: effect.to_owned(),
+            position: vector(&position)?,
+            direction: direction.map(|v| v / length),
+            scale,
+        }))
+    }
+    engine.register_fn("effect_at", |e: &str, p: Array, d: Array| effect_at(e, p, d, 1.0));
+    engine.register_fn("effect_at", |e: &str, p: Array, d: Array, s: Dynamic| {
+        effect_at(e, p, d, float(&s)?)
+    });
     engine.register_fn("beam", |from: Array, to: Array| beam(from, to, Map::new()));
     engine.register_fn("beam", beam);
     // play_music(player, track[, options]) / play_music_all(track[, options]),
