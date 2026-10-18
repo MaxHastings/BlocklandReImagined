@@ -374,7 +374,10 @@ mod tests {
             m.advance(&p, 1.0 / 60.0, 0.0, true, (4.0 / 60.0, 0.0));
         }
         let (side, up) = m.weapon_bob(&p);
-        assert!((side + 0.04).abs() < 1e-3, "left of centre at the full rate: {side}");
+        assert!(
+            (side + 0.04).abs() < 1e-3,
+            "left of centre at the full rate: {side}"
+        );
         assert!(up.abs() < 1e-6);
         // Half the rate gives half the shift; turning the other way reverses it.
         let mut half = CameraMotion::default();
@@ -383,7 +386,10 @@ mod tests {
         }
         let (side, up) = half.weapon_bob(&p);
         assert!((side - 0.02).abs() < 1e-3, "{side}");
-        assert!((up + 0.0075).abs() < 1e-3, "pitch at a quarter of the rate: {up}");
+        assert!(
+            (up + 0.0075).abs() < 1e-3,
+            "pitch at a quarter of the rate: {up}"
+        );
         // Settled: no turn brings it back to the middle.
         for _ in 0..120 {
             m.advance(&p, 1.0 / 60.0, 0.0, true, (0.0, 0.0));

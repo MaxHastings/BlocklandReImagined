@@ -486,7 +486,13 @@ pub fn native_shape_scene(
                     _ => AlphaMode::Blend,
                 }
             };
-            bind_tint_mask(&mut scene, &mut image_bindings, &mut material, source, textures);
+            bind_tint_mask(
+                &mut scene,
+                &mut image_bindings,
+                &mut material,
+                source,
+                textures,
+            );
             bindings.push(scene.materials.len());
             material.uv_motion = source.uv_motion;
             scene.materials.push(material);
@@ -583,7 +589,13 @@ pub fn native_shape_scene(
                 source.name
             ));
         }
-        bind_tint_mask(&mut scene, &mut image_bindings, &mut material, source, textures);
+        bind_tint_mask(
+            &mut scene,
+            &mut image_bindings,
+            &mut material,
+            source,
+            textures,
+        );
         bindings.push(scene.materials.len());
         material.uv_motion = source.uv_motion;
         scene.materials.push(material);

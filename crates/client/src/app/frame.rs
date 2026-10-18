@@ -1440,8 +1440,7 @@ impl App {
             // drawn_controls is cloned from these controls after presentation.
             self.world_items.set_first_person_fov(self.controls.fov());
             if let Some(mine) = self.avatar.avatars.get(&view.owner) {
-                self.world_items
-                    .set_wearer_colors(&mine.appearance.colors);
+                self.world_items.set_wearer_colors(&mine.appearance.colors);
             }
             let items = self.world_items.sync(
                 weapons,
