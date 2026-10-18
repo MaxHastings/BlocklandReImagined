@@ -1654,6 +1654,12 @@ impl VehiclesWorld {
         });
         Ok(())
     }
+    /// What is left of a live vehicle's hull, 1 whole to 0 destroyed.
+    pub fn health_fraction(&self, id: VehicleId) -> Option<f32> {
+        let v = self.instances.get(&id).filter(|v| v.dead_at.is_none())?;
+        let max = self.catalog[&v.spawn.definition].max_damage;
+        Some((1.0 - v.damage / max).clamp(0.0, 1.0))
+    }
     /// The damage a part of a live vehicle takes to be destroyed: its
     /// definition's `max_damage`, or an attached turret's own pool.
     pub fn max_damage(&self, id: VehicleId, part: VehiclePart) -> Option<f32> {

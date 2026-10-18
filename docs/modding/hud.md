@@ -129,7 +129,7 @@ held weapon's `ammo`, that is a two-weapon game.
 
 **When.** `when` limits the claim to a body (`body`: archetype ids), a held
 item (`holding`: a weapons Add-On's id or an image id) and a vehicle seat
-(`vehicle`: vehicle ids), and to playing in a mini-game or not
+(`vehicle`: vehicle ids; `seat`: seat numbers from 0, the driver's first, of the vehicle they ride), and to playing in a mini-game or not
 (`minigame`: true or false). Every condition given must match. The HUD switches
 with the body, the weapon and the seat the moment they change, and goes
 back to the stock HUD when nothing claims a region.
@@ -184,7 +184,7 @@ back to the stock HUD when nothing claims a region.
 - Any element takes `show` `{ "value", "above", "below" }` to appear only
   while a value is in range: a low-health flash, a reload prompt.
 
-**Values** (`value`, `max`, `show`): `health`, `health_max`, `energy` (jet
+**Values** (`value`, `max`, `show`): `health`, `health_max`, `vehicle_health` (what is left of the hull of the vehicle the viewer rides, 0 to 1; missing on foot), `energy` (jet
 energy 0 to 1), `alive` (1 or 0), `center_print` and `bottom_print` (the
 stock prints' text, without markup), or a rule's state as a panel binds it,
 `rule-id:player/key` or `rule-id:global/key`. The held gun gives `ammo`

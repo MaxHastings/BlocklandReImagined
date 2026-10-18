@@ -613,6 +613,11 @@ impl Session {
             .collect()
     }
     /// The vehicle and seat a player occupies.
+    /// What is left of the hull of the vehicle `owner` rides, 1 to 0.
+    pub fn mounted_health(&self, owner: OwnerId) -> Option<f32> {
+        let mount = self.vehicles.mounted.get(&owner)?;
+        self.vehicles.world.as_ref()?.health_fraction(mount.vehicle)
+    }
     pub fn mounted(&self, owner: OwnerId) -> Option<(u64, u8)> {
         self.vehicles
             .mounted

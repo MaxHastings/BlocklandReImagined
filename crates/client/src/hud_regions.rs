@@ -22,6 +22,8 @@ const MAX_TEXTURES: usize = 512;
 pub struct GameValues {
     pub health: f32,
     pub health_max: f32,
+    /// What is left of the ridden vehicle's hull, 0 to 1, while riding.
+    pub vehicle_health: Option<f32>,
     pub energy: f32,
     pub alive: bool,
     pub center_print: String,
@@ -195,6 +197,7 @@ impl HudRegions {
             Some(match source {
                 Source::Health => Value::Number(game.health),
                 Source::HealthMax => Value::Number(game.health_max),
+                Source::VehicleHealth => Value::Number(game.vehicle_health?),
                 Source::Energy => Value::Number(game.energy),
                 Source::Alive => Value::Number(if game.alive { 1.0 } else { 0.0 }),
                 Source::CenterPrint => Value::Text(game.center_print.clone()),
@@ -569,5 +572,49 @@ mod tests {
                 .iter()
                 .any(|i| matches!(i,Item::Text{text,..} if text=="0"))
         );
+    }
+
+    #[test]
+    fn a_seat_claim_matches_only_that_seat_and_reads_the_hull() {
+        let driver = layout(
+            serde_json::json!({ "schema_version": 1, "region": "crosshair",
+            "when": { "vehicle": ["v:vehicle/car"], "seat": [0] },
+            "elements": [{ "type": "text", "at": [0, 0], "text": "driver" }] }),
+        );
+        let rider = layout(
+            serde_json::json!({ "schema_version": 1, "region": "crosshair",
+            "when": { "vehicle": ["v:vehicle/car"], "seat": [1, 2] },
+            "elements": [{ "type": "bar", "rect": [0, 0, 100, 4], "value": "vehicle_health", "fill": { "color": [1, 1, 1, 1] } }] }),
+        );
+        let mut regions = regions(&[("hud", vec![driver, rider])]);
+        let state = PackageStateView::default();
+        let game = GameValues {
+            vehicle_health: Some(0.5),
+            ..Default::default()
+        };
+        let text = |regions: &mut HudRegions, seat: Option<u8>| {
+            let draws = regions.draws(
+                &state,
+                1,
+                &Viewer {
+                    vehicle: "v:vehicle/car",
+                    seat,
+                    ..Default::default()
+                },
+                &game,
+            );
+            draws.first().and_then(|d| {
+                d.items.iter().find_map(|i| match i {
+                    Item::Text { text, .. } => Some(text.clone()),
+                    Item::Fill { rect, .. } => Some(format!("hull {}", rect[2])),
+                    _ => None,
+                })
+            })
+        };
+        assert_eq!(text(&mut regions, Some(0)).as_deref(), Some("driver"));
+        assert_eq!(text(&mut regions, Some(1)).as_deref(), Some("hull 50"));
+        assert_eq!(text(&mut regions, Some(2)).as_deref(), Some("hull 50"));
+        assert_eq!(text(&mut regions, Some(3)), None, "no such seat claim");
+        assert_eq!(text(&mut regions, None), None, "on foot");
     }
 }
