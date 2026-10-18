@@ -2183,8 +2183,27 @@ pub struct Binds {
     pub schema_version: u32,
     /// The Controls heading the binds go under.
     pub division: String,
+    /// The profile the binds belong to; none: the stock Blockland one.
+    /// Must be declared by this package's `profiles` (or another's).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub profile: Option<String>,
+    /// Profiles this file declares ([`bri_content::controls`]).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub profiles: Vec<bri_content::controls::ProfileDef>,
     pub binds: Vec<BindDef>,
 }
+/// Stock actions a control profile may bind to its own inputs.
+pub const STOCK_COMMANDS: [&str; 9] = [
+    "moveforward",
+    "movebackward",
+    "moveleft",
+    "moveright",
+    "jump",
+    "crouch",
+    "jet",
+    "walk",
+    "mousefire",
+];
 /// Most binds one file may offer.
 pub const MAX_BINDS: usize = 32;
 impl Binds {
@@ -2198,7 +2217,50 @@ impl Binds {
             !self.binds.is_empty() && self.binds.len() <= MAX_BINDS,
             "1 to {MAX_BINDS} binds"
         );
+        ensure!(
+            self.profiles.len() <= bri_content::controls::MAX_PROFILES,
+            "up to {} profiles",
+            bri_content::controls::MAX_PROFILES
+        );
+        for (i, p) in self.profiles.iter().enumerate() {
+            p.validate()?;
+            ensure!(
+                !self.profiles[..i].iter().any(|o| o.id == p.id),
+                "profile `{}` declared twice",
+                p.id
+            );
+        }
+        if let Some(profile) = &self.profile {
+            ensure!(
+                profile == bri_content::controls::DEFAULT_PROFILE
+                    || !profile.is_empty() && profile.len() <= 32,
+                "bad profile `{profile}`"
+            );
+        }
         for (i, bind) in self.binds.iter().enumerate() {
+            if let Some(m) = &bind.mouse {
+                ensure!(
+                    bri_content::controls::MOUSE_INPUTS.contains(&m.as_str()),
+                    "bind `{}` mouse input `{m}` must be one of {}",
+                    bind.name,
+                    bri_content::controls::MOUSE_INPUTS.join(", ")
+                );
+            }
+            if let Some(stock) = &bind.stock {
+                ensure!(
+                    STOCK_COMMANDS.contains(&stock.as_str())
+                        && bind.command.is_empty()
+                        && bind.screen.is_none()
+                        && !bind.hold
+                        && self
+                            .profile
+                            .as_deref()
+                            .is_some_and(|p| p != bri_content::controls::DEFAULT_PROFILE),
+                    "bind `{}` names a stock action ({}) with no command, in a control profile",
+                    bind.name,
+                    STOCK_COMMANDS.join(", ")
+                );
+            }
             ensure!(text(&bind.name, 64), "bind names are 1 to 64 characters");
             ensure!(
                 !self.binds[..i].iter().any(|b| b.name == bind.name),
@@ -2208,6 +2270,7 @@ impl Binds {
             ensure!(
                 bri_package::id::namespace_problem(&bind.package).is_none()
                     && match &bind.screen {
+                        None if bind.stock.is_some() => true,
                         None => identifier(&bind.command),
                         Some(screen) => {
                             bind.command.is_empty()
@@ -2411,6 +2474,15 @@ pub struct BindDef {
     /// The default key on a Mac, when it differs (`cmd c`).
     #[serde(default)]
     pub mac_key: Option<String>,
+    /// A stock Blockland action this binds in the file's control profile
+    /// ([`STOCK_COMMANDS`]), so a profile can move one (Crouch off Shift
+    /// when Shift sprints). Needs a non-default `profile`, and no `command`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stock: Option<String>,
+    /// A default mouse input instead of a key (`button0`..`button4`,
+    /// `zaxis` for the wheel). Mouse movement is not an action input.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mouse: Option<String>,
     /// Sent with `true` as the key goes down and `false` as it comes up,
     /// to a command taking one `bool`; else sent once as it goes down, to
     /// a command with no arguments.
@@ -2583,6 +2655,94 @@ mod tests {
         bytes.extend(width.to_be_bytes());
         bytes.extend(height.to_be_bytes());
         bytes
+    }
+
+    #[test]
+    fn binds_can_declare_control_profiles_actions_and_mouse_defaults() {
+        let binds: Binds = serde_json::from_value(serde_json::json!({
+            "schema_version": 1, "division": "Arena Assault", "profile": "aa",
+            "profiles": [{
+                "id": "aa", "name": "Arena Assault",
+                "player_types": ["aa-soldier"],
+                "mouse_sensitivity": 0.5,
+                "layers": [{ "id": "aircraft", "when": "mouse_driver", "invert_mouse": true }]
+            }],
+            "binds": [
+                { "name": "Sprint", "package": "aa-rules", "command": "sprint",
+                  "key": "lshift", "hold": true },
+                { "name": "Next Weapon", "package": "aa-rules", "command": "next",
+                  "mouse": "zaxis" }
+            ]
+        }))
+        .unwrap();
+        binds.validate().unwrap();
+        assert_eq!(binds.profiles[0].layers[0].id, "aircraft");
+        // Old files without profiles still parse.
+        let old: Binds = serde_json::from_value(serde_json::json!({
+            "schema_version": 1, "division": "Tools",
+            "binds": [{ "name": "Copy", "package": "t", "command": "copy" }]
+        }))
+        .unwrap();
+        old.validate().unwrap();
+        assert!(old.profile.is_none() && old.profiles.is_empty());
+    }
+
+    #[test]
+    fn bad_control_profiles_and_mouse_defaults_are_refused() {
+        let with = |profile: serde_json::Value, bind: serde_json::Value| {
+            let binds: Binds = serde_json::from_value(serde_json::json!({
+                "schema_version": 1, "division": "D", "profiles": [profile],
+                "binds": [bind]
+            }))
+            .unwrap();
+            binds.validate()
+        };
+        let ok_bind = serde_json::json!({ "name": "A", "package": "p", "command": "a" });
+        let ok_profile = serde_json::json!({ "id": "aa", "name": "AA" });
+        assert!(with(ok_profile.clone(), ok_bind.clone()).is_ok());
+        // The Blockland profile is the engine's, not an Add-On's to declare.
+        assert!(
+            with(
+                serde_json::json!({ "id": "blockland", "name": "B" }),
+                ok_bind.clone()
+            )
+            .is_err()
+        );
+        assert!(
+            with(
+                serde_json::json!({ "id": "Bad Id", "name": "B" }),
+                ok_bind.clone()
+            )
+            .is_err()
+        );
+        assert!(
+            with(
+                serde_json::json!({ "id": "aa", "name": "AA", "mouse_sensitivity": 9.0 }),
+                ok_bind.clone()
+            )
+            .is_err()
+        );
+        // A stock action can be moved only inside a control profile.
+        let crouch = serde_json::json!({ "name": "Crouch", "package": "p", "stock": "crouch", "key": "lcontrol" });
+        let in_profile = |bind: serde_json::Value| {
+            let binds: Binds = serde_json::from_value(serde_json::json!({
+                "schema_version": 1, "division": "D", "profile": "aa",
+                "profiles": [{ "id": "aa", "name": "AA" }], "binds": [bind]
+            }))
+            .unwrap();
+            binds.validate()
+        };
+        assert!(in_profile(crouch.clone()).is_ok());
+        assert!(
+            with(ok_profile.clone(), crouch).is_err(),
+            "not in the default profile"
+        );
+        let unknown = serde_json::json!({ "name": "X", "package": "p", "stock": "quit" });
+        assert!(in_profile(unknown).is_err());
+        // Mouse movement is not an action input: only buttons and the wheel.
+        let axis =
+            serde_json::json!({ "name": "A", "package": "p", "command": "a", "mouse": "xaxis" });
+        assert!(with(ok_profile, axis).is_err());
     }
 
     #[test]

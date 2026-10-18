@@ -31,6 +31,7 @@ pub mod ml;
 pub mod models;
 pub mod pack;
 pub mod prefs;
+pub mod profiles;
 pub mod schema;
 pub mod testing;
 pub mod text;

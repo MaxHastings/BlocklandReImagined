@@ -490,6 +490,17 @@ impl Controls {
     fn free_looking(&self) -> bool {
         self.held(HeldControl::FreeLook) && (self.mounted || self.camera_pos != 0.0)
     }
+    /// What the rider is doing, for control profile layers: (driving, steering
+    /// with the mouse). None when not riding anything.
+    pub fn ride_context(&self) -> Option<(bool, bool)> {
+        match self.ride {
+            Some(Ride::Seat(_, SeatLook::Passenger)) => Some((false, false)),
+            Some(Ride::Seat(_, SeatLook::StrafeDriver)) => Some((true, false)),
+            Some(Ride::Seat(_, SeatLook::MouseDriver)) => Some((true, true)),
+            Some(Ride::Hull(_)) => Some((false, false)),
+            None => None,
+        }
+    }
     fn seat_look(&self) -> Option<SeatLook> {
         match self.ride {
             Some(Ride::Seat(_, look)) => Some(look),

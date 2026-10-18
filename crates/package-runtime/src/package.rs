@@ -863,7 +863,7 @@ impl Catalog {
                         continue;
                     };
                     // A screen bind opens a screen of the game.
-                    if bind.screen.is_some() {
+                    if bind.screen.is_some() || bind.stock.is_some() {
                         continue;
                     }
                     let takes: &[content::ArgType] = if bind.hold {

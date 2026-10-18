@@ -7,9 +7,11 @@ use crate::api::{BindInput, DisplayModes, UiAction};
 use crate::binds::{BindMap, RemapOutcome};
 use crate::input::Chord;
 use crate::prefs::Prefs;
+use crate::profiles;
 use crate::ui::Callback;
 use crate::view::EventKind;
 use bri_console::Clamp;
+use bri_content::controls::DEFAULT_PROFILE;
 use std::collections::HashMap;
 
 /// Local screenshot encoding. JPEG uses the client's high-quality encoder;
@@ -1048,11 +1050,24 @@ fn audio_pane(v: &mut View) {
     }
 }
 
+/// A button above the Controls list: a profile, or one of its layers.
+struct ProfileTab {
+    node: NodeId,
+    profile: String,
+    layer: Option<String>,
+    label: String,
+}
+
 pub struct Options {
     view: View,
     draft: Prefs,
     initial: Prefs,
     saved_binds: BindMap,
+    saved_profiles: std::collections::BTreeMap<String, BindMap>,
+    /// Controls tabs for the control profiles Add-Ons declare, and the
+    /// layer of the viewed profile the mouse settings below belong to.
+    tabs: Vec<ProfileTab>,
+    scope_layer: Option<String>,
     saved_hardware: (u8, u8),
     applied_display: DisplaySettings,
     pending_display: Option<(RequestId, DisplaySettings, bool)>,
@@ -1060,6 +1075,12 @@ pub struct Options {
     resolutions: Vec<(u32, u32)>,
     modes: Option<DisplayModes>,
     committed: bool,
+    sens_pref: String,
+    list_top: Option<i32>,
+    list_height: Option<i32>,
+    /// The mouse controls: Invert Mouse and Invert Mouse in Vehicles.
+    invert_node: Option<NodeId>,
+    vehicle_node: Option<NodeId>,
     /// A volume slider was dragged, so its channel plays the draft value.
     previewed: bool,
 }
@@ -1074,6 +1095,9 @@ impl Options {
             draft: core.prefs.clone(),
             initial: core.prefs.clone(),
             saved_binds: core.binds.clone(),
+            saved_profiles: core.profiles.maps().clone(),
+            tabs: Vec::new(),
+            scope_layer: None,
             saved_hardware: (core.settings.mouse_type, core.settings.keyboard_type),
             applied_display: current,
             pending_display: None,
@@ -1081,6 +1105,11 @@ impl Options {
             resolutions,
             modes,
             committed: false,
+            sens_pref: MOUSE_SENSITIVITY.into(),
+            list_top: None,
+            list_height: None,
+            invert_node: None,
+            vehicle_node: None,
             previewed: false,
         };
         s.native_layout();
@@ -1224,9 +1253,237 @@ impl Options {
         s.refresh_quality();
         s.refresh_readouts();
         s.pane("Graphics");
+        for n in s.view.walk().collect::<Vec<_>>() {
+            match s.view.node(n).ctrl.variable.as_deref() {
+                Some(v) if v.eq_ignore_ascii_case("$pref::Input::MouseInvert") => {
+                    s.invert_node = Some(n)
+                }
+                Some(v) if v.eq_ignore_ascii_case(VEHICLE_MOUSE_INVERT) => s.vehicle_node = Some(n),
+                _ => {}
+            }
+        }
+        s.profile_tabs(core);
         s.refresh_binds(core);
         s.smart_toggle();
         s
+    }
+
+    /// Tabs above the Controls list, one per control profile an Add-On
+    /// declares (and a second row for the layers of the viewed one). They
+    /// take their room from the list, so nothing overlaps.
+    fn profile_tabs(&mut self, core: &Core) {
+        let tabs = core.profiles.tabs();
+        if tabs.len() < 2 {
+            return;
+        }
+        let layers: Vec<String> = core
+            .profiles
+            .def(&core.profiles.viewed)
+            .map_or(Vec::new(), |d| {
+                d.layers.iter().map(|l| l.id.clone()).collect()
+            });
+        let Some(list) = self.view.id("OptRemapList") else {
+            return;
+        };
+        let Some(parent) = self.view.node(list).parent else {
+            return;
+        };
+        for t in self.tabs.drain(..) {
+            self.view.set_visible(t.node, false);
+        }
+        let ctl = self.view.node(list).ctrl.clone();
+        let top = *self.list_top.get_or_insert(ctl.position[1]);
+        let height = *self.list_height.get_or_insert(ctl.extent[1]);
+        let mut rows: Vec<Vec<(String, Option<String>, String)>> = vec![
+            tabs.iter()
+                .map(|(id, name)| (id.clone(), None, name.clone()))
+                .collect(),
+        ];
+        if !layers.is_empty() {
+            let viewed = core.profiles.viewed.clone();
+            let mut items = vec![(viewed.clone(), None, "Profile".to_string())];
+            items.extend(layers.into_iter().map(|l| {
+                let label = format!("{l} layer");
+                (viewed.clone(), Some(l), label)
+            }));
+            rows.push(items);
+        }
+        let mut y = top;
+        for (r, items) in rows.into_iter().enumerate() {
+            let w = (ctl.extent[0] / items.len().max(1) as i32).max(40);
+            for (i, (profile, layer, label)) in items.into_iter().enumerate() {
+                let mut b = button(
+                    "BlockButtonProfile",
+                    Rect::new(ctl.position[0] + i as i32 * w, y, w, 20),
+                    "base/client/ui/button1",
+                    &label,
+                    &format!("optionsDlg.setProfile({r},{i});"),
+                );
+                b.name = Some(format!("OptProfileTab{r}_{i}"));
+                let node = self.view.add(parent, b);
+                self.tabs.push(ProfileTab {
+                    node,
+                    profile,
+                    layer,
+                    label,
+                });
+            }
+            y += 22;
+        }
+        let c = &mut self.view.nodes[list].ctrl;
+        c.position[1] = y;
+        c.extent[1] = (height - (y - top)).max(40);
+        self.mark_tabs(core);
+    }
+    fn mark_tabs(&mut self, core: &Core) {
+        let profiles = core.profiles.tabs().len();
+        for i in 0..self.tabs.len() {
+            let t = &self.tabs[i];
+            let on = if i < profiles {
+                t.profile == core.profiles.viewed
+            } else {
+                t.layer == self.scope_layer
+            };
+            let text = if on {
+                format!("[{}]", t.label)
+            } else {
+                t.label.clone()
+            };
+            let node = t.node;
+            self.view.set_text(node, text);
+        }
+    }
+    /// The preference each mouse control writes for the scope being viewed:
+    /// sensitivity, Invert Mouse, Invert Mouse in Vehicles.
+    fn mouse_prefs(&self, core: &Core) -> [String; 3] {
+        let p = &core.profiles.viewed;
+        if p == DEFAULT_PROFILE {
+            return [
+                MOUSE_SENSITIVITY.into(),
+                "$pref::Input::MouseInvert".into(),
+                VEHICLE_MOUSE_INVERT.into(),
+            ];
+        }
+        match &self.scope_layer {
+            None => [
+                profiles::sensitivity_pref(p),
+                profiles::invert_pref(p),
+                profiles::vehicle_invert_pref(p),
+            ],
+            Some(l) => [
+                profiles::pref_key(p, Some(l), "MouseSensitivity"),
+                String::new(),
+                profiles::pref_key(p, Some(l), "MouseInvert"),
+            ],
+        }
+    }
+    /// A tab was clicked: `row,index` as written into its command.
+    fn pick_tab(&mut self, core: &mut Core, row: usize, index: usize) {
+        let profiles = core.profiles.tabs().len();
+        let Some(t) = self
+            .tabs
+            .get(if row == 0 { index } else { profiles + index })
+        else {
+            return;
+        };
+        let (profile, layer) = (t.profile.clone(), t.layer.clone());
+        self.show_scope(core, &profile, layer);
+    }
+    /// Show another profile tab or layer: the controls list, the mouse
+    /// settings and each setting's preference follow it. What was set so
+    /// far is kept in the draft under the scope being left.
+    fn show_scope(&mut self, core: &mut Core, profile: &str, layer: Option<String>) {
+        if profile == core.profiles.viewed && layer == self.scope_layer {
+            return;
+        }
+        self.collect_mouse(core);
+        let switched = profile != core.profiles.viewed;
+        core.profiles.viewed = profile.to_string();
+        self.scope_layer = if switched { None } else { layer };
+        let prefs = self.mouse_prefs(core);
+        self.sens_pref = prefs[0].clone();
+        let def = core.profiles.def(profile).cloned();
+        let draft = &self.draft;
+        let (g_sens, g_inv, g_veh) = (
+            mouse_sensitivity(draft),
+            draft.bool_or("$pref::Input::MouseInvert", false),
+            draft.bool_or(VEHICLE_MOUSE_INVERT, true),
+        );
+        let layer_def = self
+            .scope_layer
+            .as_ref()
+            .and_then(|l| def.as_ref()?.layers.iter().find(|d| &d.id == l).cloned());
+        let sens = draft
+            .get(&prefs[0])
+            .and_then(|v| v.trim().parse::<f32>().ok())
+            .or(layer_def.as_ref().and_then(|l| l.mouse_sensitivity))
+            .or(def.as_ref().and_then(|d| d.mouse_sensitivity))
+            .unwrap_or(g_sens);
+        let on_foot = draft
+            .get(&prefs[1])
+            .map(|_| draft.bool_or(&prefs[1], false))
+            .or(def.as_ref().and_then(|d| d.invert_mouse))
+            .unwrap_or(g_inv);
+        let vehicle = draft
+            .get(&prefs[2])
+            .map(|_| draft.bool_or(&prefs[2], false))
+            .or(layer_def.as_ref().and_then(|l| l.invert_mouse))
+            .or(def.as_ref().and_then(|d| d.vehicle_invert_mouse))
+            .unwrap_or(g_veh);
+        self.slider("SliderControlsMouseSensitivity", sens);
+        for (node, var, on) in [
+            (self.invert_node, prefs[1].clone(), on_foot),
+            (self.vehicle_node, prefs[2].clone(), vehicle),
+        ] {
+            if let Some(n) = node {
+                if var.is_empty() {
+                    // A layer holds only vehicle settings.
+                    self.view.set_visible(n, false);
+                } else {
+                    self.view.set_visible(n, true);
+                    self.view.nodes[n].ctrl.variable = Some(var);
+                    self.view.set_bool(n, on);
+                }
+            }
+        }
+        if switched {
+            if let (Some(list), Some(top), Some(height)) = (
+                self.view.id("OptRemapList"),
+                self.list_top,
+                self.list_height,
+            ) {
+                let c = &mut self.view.nodes[list].ctrl;
+                c.position[1] = top;
+                c.extent[1] = height;
+            }
+            self.profile_tabs(core);
+        }
+        self.mark_tabs(core);
+        self.refresh_binds(core);
+    }
+    /// Keep the mouse controls' values in the draft under the scope shown.
+    fn collect_mouse(&mut self, core: &Core) {
+        let prefs = self.mouse_prefs(core);
+        if let Some(n) = self.view.id("SliderControlsMouseSensitivity") {
+            let v = self.view.num(n);
+            if v.is_finite() {
+                self.draft.set(
+                    &prefs[0],
+                    v.clamped(MOUSE_SENSITIVITY_RANGE.0, MOUSE_SENSITIVITY_RANGE.1)
+                        .to_string(),
+                );
+            }
+        }
+        for (node, var) in [
+            (self.invert_node, &prefs[1]),
+            (self.vehicle_node, &prefs[2]),
+        ] {
+            if let Some(n) = node
+                && !var.is_empty()
+            {
+                self.draft.set_bool(var, self.view.bool_value(n));
+            }
+        }
     }
 
     /// Hide the Torque-only settings and close up the authored layout
@@ -1779,12 +2036,13 @@ impl Options {
     fn refresh_binds(&mut self, core: &Core) {
         if let Some(n) = self.view.id("OptRemapList") {
             let mut rows = Vec::new();
-            for (i, r) in core.remap.iter().enumerate() {
+            let binds = core.edit_binds();
+            for (i, r) in core.edit_remap().iter().enumerate() {
                 if let Some(division) = &r.division {
                     rows.push((format!("   {division}"), -(i as i64) - 1));
                 }
                 rows.push((
-                    format!("{}\t{}", r.name, core.binds.display(&r.command)),
+                    format!("{}\t{}", r.name, binds.display(&r.command)),
                     i as i64,
                 ));
             }
@@ -1803,10 +2061,11 @@ impl Options {
                 self.draft.set_bool(&var, self.view.bool_value(n));
             }
         }
+        let sens_pref = self.sens_pref.clone();
         for (name, pref, lo, hi) in [
             (
                 "SliderControlsMouseSensitivity",
-                MOUSE_SENSITIVITY,
+                sens_pref.as_str(),
                 MOUSE_SENSITIVITY_RANGE.0,
                 MOUSE_SENSITIVITY_RANGE.1,
             ),
@@ -2031,7 +2290,7 @@ impl Options {
                 .and_then(|n| self.view.selected(n))
                 .and_then(|i| usize::try_from(i).ok())
         };
-        if let Some(i) = index.filter(|i| *i < core.remap_commands.len()) {
+        if let Some(i) = index.filter(|i| *i < core.edit_remap_commands().len()) {
             core.remap_target = Some(i);
             core.remap_all = all;
             core.push(ScreenId::Remap);
@@ -2070,12 +2329,14 @@ impl Screen for Options {
                 });
             }
             core.binds = self.saved_binds.clone();
+            core.profiles.restore(self.saved_profiles.clone());
             core.settings.mouse_type = self.saved_hardware.0;
             core.settings.keyboard_type = self.saved_hardware.1;
         }
         core.options_open = false;
         core.remap_all = false;
         core.remap_target = None;
+        core.profiles.viewed = DEFAULT_PROFILE.into();
     }
     fn tick(&mut self, _dt: u64, core: &mut Core) {
         self.refresh_binds(core);
@@ -2156,6 +2417,15 @@ impl Screen for Options {
             return;
         }
         let cmd = command_of(&self.view, ev.node);
+        if let Some((row, index)) = cmd
+            .strip_prefix("optionsDlg.setProfile(")
+            .and_then(|c| c.strip_suffix(");"))
+            .and_then(|c| c.split_once(','))
+            .and_then(|(r, i)| Some((r.parse().ok()?, i.parse().ok()?)))
+        {
+            self.pick_tab(core, row, index);
+            return;
+        }
         if let Some(pane) = cmd
             .strip_prefix("optionsDlg.setPane(")
             .and_then(|c| c.strip_suffix(");"))
@@ -2202,6 +2472,7 @@ impl Screen for Options {
                 // Remaps are live, as in v20; Player Appearance saves settings
                 // with the current controls, so they become the baseline.
                 self.saved_binds = core.binds.clone();
+                self.saved_profiles = core.profiles.maps().clone();
                 self.saved_hardware = (core.settings.mouse_type, core.settings.keyboard_type);
                 core.push(ScreenId::Avatar);
             }
@@ -2239,6 +2510,11 @@ impl Screen for Options {
                     put_display(&mut prefs, d);
                     settings.prefs = prefs.overrides();
                     settings.binds = Some(self.saved_binds.entries.clone());
+                    settings.profile_binds = self
+                        .saved_profiles
+                        .iter()
+                        .map(|(k, m)| (k.clone(), m.entries.clone()))
+                        .collect();
                     settings.mouse_type = self.saved_hardware.0;
                     settings.keyboard_type = self.saved_hardware.1;
                     core.request(UiAction::SaveSettings(Box::new(settings)));
@@ -2291,7 +2567,7 @@ impl Remap {
     fn prompt(&mut self, core: &Core) {
         let name = self
             .index
-            .and_then(|i| core.remap.get(i))
+            .and_then(|i| core.edit_remap().get(i))
             .map(|r| r.name.as_str())
             .unwrap_or("No control selected");
         self.set_text(format!("REMAP \"{name}\""));
@@ -2301,7 +2577,7 @@ impl Remap {
             && let Some(i) = self
                 .index
                 .and_then(|i| i.checked_add(1))
-                .filter(|i| *i < core.remap_commands.len())
+                .filter(|i| *i < core.edit_remap_commands().len())
         {
             self.index = Some(i);
             core.remap_target = Some(i);
@@ -2325,10 +2601,12 @@ impl Remap {
             if self.conflict.is_some() {
                 match c.key {
                     Key::Return | Key::Letter('y') => {
-                        if let Some(command) =
-                            self.index.and_then(|i| core.remap_commands.get(i)).cloned()
+                        if let Some(command) = self
+                            .index
+                            .and_then(|i| core.edit_remap_commands().get(i))
+                            .cloned()
                         {
-                            core.binds
+                            core.edit_binds_mut()
                                 .force_remap(&command, self.conflict.take().unwrap());
                             self.next(core);
                         }
@@ -2342,8 +2620,12 @@ impl Remap {
                 return true;
             }
             if c.key == Key::Backspace {
-                if let Some(command) = self.index.and_then(|i| core.remap_commands.get(i)) {
-                    core.binds.unbind_command(command);
+                if let Some(command) = self
+                    .index
+                    .and_then(|i| core.edit_remap_commands().get(i))
+                    .cloned()
+                {
+                    core.edit_binds_mut().unbind_command(&command);
                 }
                 self.next(core);
                 return true;
@@ -2352,7 +2634,11 @@ impl Remap {
         if self.conflict.is_some() {
             return true;
         }
-        let Some(command) = self.index.and_then(|i| core.remap_commands.get(i)).cloned() else {
+        let Some(command) = self
+            .index
+            .and_then(|i| core.edit_remap_commands().get(i))
+            .cloned()
+        else {
             self.cancel(core);
             return true;
         };
@@ -2367,14 +2653,15 @@ impl Remap {
             ));
             return true;
         }
-        match core.binds.remap(&command, input, &core.remap_commands) {
+        let remappable = core.edit_remap_commands().to_vec();
+        match core.edit_binds_mut().remap(&command, input, &remappable) {
             RemapOutcome::Bound => {
-                core.binds.force_remap(&command, input);
+                core.edit_binds_mut().force_remap(&command, input);
                 self.next(core);
             }
             RemapOutcome::Conflict { other } => {
                 let name = core
-                    .remap
+                    .edit_remap()
                     .iter()
                     .find(|r| r.command.eq_ignore_ascii_case(&other))
                     .map_or(other.as_str(), |r| r.name.as_str());
@@ -2717,6 +3004,9 @@ mod tests {
             package: "slayer".into(),
             command: String::new(),
             key: None,
+            mouse: None,
+            profile: String::new(),
+            stock: None,
             hold: false,
             screen: Some("options".into()),
         }]);
@@ -4083,5 +4373,96 @@ mod tests {
         let output = root.join("artifacts/ui-native-dialogs");
         std::fs::create_dir_all(&output).unwrap();
         options_save_players_offscreen(pack, Some(&output));
+    }
+
+    #[test]
+    fn control_profile_tabs_edit_their_own_bindings_and_mouse_settings() {
+        use bri_content::controls::{LayerDef, LayerWhen, ProfileDef};
+        let mut ui = fixture();
+        ui.set_profile_defs(vec![ProfileDef {
+            id: "aa".into(),
+            name: "Arena Assault".into(),
+            inherit: true,
+            player_types: vec!["soldier".into()],
+            layers: vec![LayerDef {
+                id: "aircraft".into(),
+                when: LayerWhen::MouseDriver,
+                invert_mouse: Some(true),
+                mouse_sensitivity: None,
+            }],
+            invert_mouse: None,
+            vehicle_invert_mouse: None,
+            mouse_sensitivity: Some(1.0),
+        }]);
+        ui.set_package_binds(vec![crate::api::PackageBind {
+            division: "Arena Assault".into(),
+            name: "Sprint".into(),
+            package: "aa".into(),
+            command: "sprint".into(),
+            key: Some("lshift".into()),
+            mouse: None,
+            profile: "aa".into(),
+            stock: None,
+            hold: true,
+            screen: None,
+        }]);
+        let blockland = ui.core.binds.clone();
+        let mut s = Options::new(&ui.core);
+        // One tab per profile; the Blockland tab lists Blockland's own.
+        assert_eq!(s.tabs.len(), 2);
+        let list = s.view.id("OptRemapList").unwrap();
+        s.refresh_binds(&ui.core);
+        assert!(
+            s.view
+                .node(list)
+                .state
+                .items
+                .iter()
+                .all(|(t, _)| !t.contains("Sprint"))
+        );
+        s.pick_tab(&mut ui.core, 0, 1);
+        assert_eq!(ui.core.profiles.viewed, "aa");
+        assert_eq!(s.tabs.len(), 4, "the profile's layer row appears");
+        assert!(
+            s.view
+                .node(list)
+                .state
+                .items
+                .iter()
+                .any(|(t, _)| t.starts_with("Sprint	LSHIFT")),
+            "{:?}",
+            s.view.node(list).state.items
+        );
+        // The mouse sensitivity here is the profile's, kept apart.
+        let slider = s.view.id("SliderControlsMouseSensitivity").unwrap();
+        assert_eq!(s.view.num(slider), 1.0);
+        s.view.set_num(slider, 0.3);
+        // The vehicle layer takes its own invert.
+        s.pick_tab(&mut ui.core, 1, 1);
+        assert_eq!(s.scope_layer.as_deref(), Some("aircraft"));
+        let inv = s.view.id("OptVehicleInvert").unwrap();
+        assert!(s.view.bool_value(inv), "the layer's declared invert");
+        s.view.set_bool(inv, false);
+        s.pick_tab(&mut ui.core, 0, 0);
+        assert_eq!(ui.core.profiles.viewed, "blockland");
+        click(&mut s, "done", &mut ui);
+        let saved = ui
+            .drain_actions()
+            .into_iter()
+            .find_map(|(_, a)| match a {
+                UiAction::SaveSettings(s) => Some(s),
+                _ => None,
+            })
+            .expect("Done saves settings");
+        let prefs = Prefs::new(&Default::default(), &saved.prefs);
+        assert_eq!(prefs.f32_or(&profiles::sensitivity_pref("aa"), 0.0), 0.3);
+        assert!(!prefs.bool_or(
+            &profiles::pref_key("aa", Some("aircraft"), "MouseInvert"),
+            true
+        ));
+        // The player's own Blockland sensitivity was not touched.
+        assert_eq!(mouse_sensitivity(&prefs), 0.75);
+        assert_eq!(saved.binds, Some(blockland.entries));
+        assert!(saved.profile_binds.contains_key("aa"));
     }
 }
