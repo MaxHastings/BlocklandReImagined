@@ -13,3 +13,10 @@ time (cosmetic; nothing is replicated), scaling the lamp's colour.
 Evidence: `render/tests/point_light_cone.rs` (beam lit under it and dark off to
 the side, all round without a cone, both shaders). Not built: a replicated
 brake or input bit for taillights.
+
+## Input-lit lamps
+
+`VehicleSnapshot`, `VehiclePose` and the wire `VehicleView` carry
+`driver_jump_held` (the driver holds the jump input; protocol-changes
+`vehicle-driver-jump-held.md`), and a lamp may use `activation: "jump_held"`,
+lit while its driver holds it. Each client draws it from the replicated pose.

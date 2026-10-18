@@ -211,6 +211,9 @@ pub struct VehiclePose {
     pub wheel_tire: Vec<veh::TireState>,
     pub turret_aim: [f32; 2],
     pub jetting: bool,
+    /// The driver is holding the jump input (lamps that follow it).
+    #[serde(default)]
+    pub driver_jump_held: bool,
     /// The body's spin (rad/s) and the driver's accumulated mouse steering:
     /// with the rest, all a driving client needs to predict its vehicle.
     pub angular_velocity: [f32; 3],
@@ -598,6 +601,7 @@ impl Session {
                 wheel_tire: v.wheel_tire,
                 turret_aim: v.turret_aim,
                 jetting: v.jetting,
+                driver_jump_held: v.driver_jump_held,
                 angular_velocity: v.angular_velocity,
                 mouse_steering: v.mouse_steering,
                 steering_quiet: v.steering_quiet,

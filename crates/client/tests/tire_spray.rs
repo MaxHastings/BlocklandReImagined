@@ -104,6 +104,7 @@ fn frame(d: &bri_vehicles::Definition, speed: f32, contact: bool) -> VehicleFram
         wheel_rotation: vec![0.; d.wheels.len()],
         wheel_contact: vec![contact; d.wheels.len()],
         turret_aim: [0.; 2],
+        driver_jump_held: false,
     }
 }
 

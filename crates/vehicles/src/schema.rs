@@ -1040,13 +1040,16 @@ pub enum LampActivation {
     Switch,
     Driver,
     Always,
+    /// While the driver holds the jump input.
+    JumpHeld,
 }
 impl LampActivation {
-    pub fn enabled(self, switched: bool, driver: bool) -> bool {
+    pub fn enabled(self, switched: bool, driver: bool, jump_held: bool) -> bool {
         match self {
             Self::Switch => switched,
             Self::Driver => driver,
             Self::Always => true,
+            Self::JumpHeld => driver && jump_held,
         }
     }
 }
@@ -1866,6 +1869,15 @@ impl Pack {
 }
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_jump_held_lamp_follows_the_driver_holding_jump() {
+        use super::LampActivation::*;
+        assert!(JumpHeld.enabled(false, true, true));
+        assert!(!JumpHeld.enabled(true, true, false));
+        assert!(!JumpHeld.enabled(true, false, true), "nobody driving");
+        assert!(Switch.enabled(true, false, false) && Always.enabled(false, false, false));
+    }
+
     use super::*;
     #[test]
     fn reordered_capabilities_and_ambiguous_roles_are_explicit() {
