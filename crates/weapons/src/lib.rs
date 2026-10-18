@@ -1345,6 +1345,13 @@ pub struct Magazine {
     /// magazine counted `from_reserve`.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub clear_when_out: bool,
+    /// A round comes back every this many ticks (120 a second) while the
+    /// gun is held, the magazine is neither full nor empty and no reload is
+    /// under way: a gun whose rounds are heat, which leaves as time passes
+    /// (a Halo plasma gun's heat loss per second). Nothing is refunded from
+    /// the reserve. 0 for none; up to 1200.
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub cool_ticks: u32,
 }
 /// [`Magazine::supply`]: what a shot uses and a reload fills, as
 /// Tier+Tactical's four ammo systems (`$Pref::Server::TT::Ammo`) did.
@@ -1541,6 +1548,10 @@ impl Magazine {
         ensure!(
             !self.from_reserve || self.supply == Supply::Reserve,
             "A magazine counted from the reserve has no other supply"
+        );
+        ensure!(
+            self.cool_ticks <= 1200,
+            "A magazine cools by a round every 1200 ticks at most"
         );
         ensure!(
             self.from_reserve || !self.clear_when_out,
@@ -2349,6 +2360,10 @@ pub struct ProjectileDef {
     /// and machine gun bullets do.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub slow: Option<Slow>,
+    /// Its direct damage changes with the distance it has flown, as a Halo
+    /// projectile's air damage range does.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub falloff: Option<Falloff>,
     /// Its direct damage stays as authored at any scale, where v20's own
     /// `ProjectileData::damage` scaled it with the projectile: projectiles
     /// whose `damage` method dealt `directDamage` as it was.
@@ -2381,6 +2396,27 @@ pub struct ProjectileDef {
     /// Effects only: the blast's damage and push stay `explosion`'s.
     #[serde(skip_serializing_if = "Impacts::is_empty")]
     pub impacts: Impacts,
+}
+/// [`ProjectileDef::falloff`]: its direct damage is `damage` up to `near`
+/// units from where it was fired, `far_damage` from `far` on, and moves in
+/// a line between.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Falloff {
+    /// 0 to 10000.
+    pub near: f32,
+    /// `near` to 10000.
+    pub far: f32,
+    /// 0 to 100.
+    pub far_damage: f32,
+}
+impl Falloff {
+    /// The damage after flying `distance`, from the `damage` it starts with.
+    pub fn damage_at(&self, damage: f32, distance: f32) -> f32 {
+        let span = (self.far - self.near).max(f32::EPSILON);
+        let along = ((distance - self.near) / span).clamped(0.0, 1.0);
+        damage + (self.far_damage - damage) * along
+    }
 }
 /// A projectile's explosion effect by what it lands on, each an explosion
 /// effect as `Explosion::effect` names one. One left empty, and a burst in
@@ -2781,6 +2817,7 @@ impl Default for ProjectileDef {
             children: Vec::new(),
             aura: None,
             slow: None,
+            falloff: None,
             fixed_damage: false,
             collision_sound: None,
             sport_hit: None,
@@ -3719,6 +3756,15 @@ impl Pack {
                 ensure!(
                     (1.0..=10.0).contains(&slow.divisor),
                     "Invalid slow of projectile {id}: divisor 1 to 10"
+                );
+            }
+            if let Some(f) = p.falloff {
+                ensure!(
+                    (0.0..=10_000.0).contains(&f.near)
+                        && (f.near..=10_000.0).contains(&f.far)
+                        && (0.0..=100.0).contains(&f.far_damage),
+                    "Invalid falloff of projectile {id}: near 0 to 10000, far from near to \
+                     10000, far_damage 0 to 100"
                 );
             }
         }

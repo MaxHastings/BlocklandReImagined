@@ -129,6 +129,7 @@ The fields you are most likely to change:
 | image | `cook` | a grenade whose fuse burns from a state in the hand (below) |
 | image | `guard` | a shield raised in some states (below) |
 | projectile | `fixed_damage` | its direct damage stays as authored at any scale |
+| projectile | `falloff` | `{ "near": 10, "far": 50, "far_damage": 5 }`: its direct damage is `damage` up to `near` units from where it was fired, `far_damage` from `far` on, and moves in a line between (a Halo projectile's air damage range) |
 | item | `ui_name` | the name players see |
 | image | `zoom` | `{ "fov": 20, "on_jet": true, "crosshair": false, "first_person": true }`: aim with the zoom key (and the right mouse button with `on_jet`), hide the crosshair, force first person while aiming. More under "Scopes" below |
 | image | `eye_offset`, `eye_rotation` | where the weapon sits in first person: exactly there, relative to the camera, as Torque places it, so a scope whose sight is on the eye line stays centred at any zoom |
@@ -218,6 +219,8 @@ sent to them alone and only when it changes; with `display_ticks` (up to
 `display_scripts` names show it again (a dry pull), as does the light key
 when there is nothing to load. A size is 1 to 1000 rounds;
 an ammo name is 1 to 32 letters, digits, `.`, `_` or `-`.
+
+A magazine with `"cool_ticks": 30` gets a round back every 30 ticks while the gun is held and the magazine is neither full nor empty, as a gun whose rounds are heat (a Halo plasma gun): nothing is refunded from the reserve, and an empty one reloads as usual.
 
 A magazine with `"from_reserve": true` (size 1) has no rounds of its own:
 each throw takes `per_shot` straight from the reserve and nothing
