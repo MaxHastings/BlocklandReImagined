@@ -2275,11 +2275,19 @@ impl Session {
                             .last_look
                             .insert(owner, (peer.input.yaw, peer.input.pitch));
                         let feet = peer.player.state().feet;
+                        let own = self
+                            .vehicles
+                            .world
+                            .as_ref()
+                            .and_then(|w| w.definition_of(vehicle))
+                            .and_then(|d| d.seats.get(seat))
+                            .map(|s| s.enter_sound.clone())
+                            .filter(|s| !s.is_empty());
                         self.cues.emit(
                             tick,
                             crate::presentation::CueKind::VehicleSound {
                                 vehicle: vehicle.0,
-                                sound: "player.mount".into(),
+                                sound: own.unwrap_or_else(|| "player.mount".into()),
                             },
                             feet,
                         );
@@ -2317,8 +2325,31 @@ impl Session {
                     {
                         peer.control = super::ControlObject::Player;
                     }
+                    let exit_sound = self
+                        .vehicles
+                        .mounted
+                        .get(&owner)
+                        .and_then(|m| {
+                            self.vehicles
+                                .world
+                                .as_ref()
+                                .and_then(|w| w.definition_of(vehicle))
+                                .and_then(|d| d.seats.get(m.seat))
+                        })
+                        .map(|s| s.exit_sound.clone())
+                        .filter(|s| !s.is_empty());
                     self.vehicles.mounted.remove(&owner);
                     self.vehicles.last_dismount.insert(owner, tick);
+                    if let Some(sound) = exit_sound {
+                        self.cues.emit(
+                            tick,
+                            crate::presentation::CueKind::VehicleSound {
+                                vehicle: vehicle.0,
+                                sound,
+                            },
+                            transform.position,
+                        );
+                    }
                     if let Some(peer) = self.peers.get_mut(&owner) {
                         let yaw = peer.player.state().yaw;
                         peer.player.teleport(

@@ -111,6 +111,14 @@ pub struct Seat {
     /// at this seat.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rider_acceleration: Option<AccelerationOverlays>,
+    /// A sound profile (a weapons pack's `sounds`, or the vehicle pack's)
+    /// played where a rider boards this seat, in place of the base game's
+    /// mount sound, and where they leave it. Empty plays the base game's
+    /// mount sound on boarding and nothing on leaving.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub enter_sound: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub exit_sound: String,
 }
 /// Mirrors weapons::IMAGE_SLOTS; cross-crate regression guards this domain.
 pub const SEAT_READY_IMAGE_SLOTS: usize = 4;
@@ -1676,6 +1684,12 @@ impl Pack {
                 "ambiguous vehicle control roles"
             );
             for seat in &d.seats {
+                ensure!(
+                    [&seat.enter_sound, &seat.exit_sound].iter().all(|s| {
+                        s.len() <= 128 && !s.contains('.') && !s.chars().any(char::is_control)
+                    }),
+                    "invalid seat enter/exit sound: a sound profile name of at most 128 characters without a dot"
+                );
                 ensure!(
                     seat.rider_fallback_hip
                         .is_none_or(|p| seat.rider_pose.is_some()

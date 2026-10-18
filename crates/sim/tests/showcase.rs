@@ -270,6 +270,8 @@ fn vehicles() -> bri_vehicles::Pack {
         controls: false,
         weapon: false,
         hands: Default::default(),
+        enter_sound: String::new(),
+        exit_sound: String::new(),
     }];
     pack.definitions.push(crate_);
     pack.definitions.push(tumble);

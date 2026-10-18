@@ -306,6 +306,8 @@ pub fn lower(
             weapon: matches!(family, Family::Cannon | Family::Turret)
                 || (name == "TankVehicle" && i == 2),
             hands: Default::default(),
+            enter_sound: String::new(),
+            exit_sound: String::new(),
         });
     }
     let mut wheels = vec![];

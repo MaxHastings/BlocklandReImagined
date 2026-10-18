@@ -96,3 +96,12 @@ clip/hip. This does not change hand, eye or aim policy or authoritative origins.
 Halo owns recovering and binding original seat/hip evidence and comparing the
 original/native consumer at the exact committed engine SHA. Root owns the later
 authoritative mounted-pose/Session work. Synthetic points do not close either.
+
+## Seat sounds
+
+A seat may name `enter_sound` and `exit_sound`: sound profiles (a weapons pack's `sounds`, or
+the vehicle pack's) played where a rider boards the seat, in place of the base game's mount
+sound, and where they leave it. A profile name has at most 128 characters and no dot. Empty keeps
+the base game's mount sound on boarding and nothing on leaving. Halo's Warthog seats use their
+animations' own enter and exit sounds. Test: `crates/sim/tests/vehicles.rs`
+(`a_seats_own_sounds_play_on_boarding_and_leaving`).
