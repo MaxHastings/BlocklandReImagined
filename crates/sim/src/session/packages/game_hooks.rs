@@ -369,14 +369,22 @@ impl Session {
                     })
                     .collect()
             });
+            // `[x, y, z]`, or `[x, y, z, yaw]` to face a way (radians, the
+            // motor's yaw: 0 looks down -Z, a quarter turn to +X).
             match point.as_deref() {
                 Some(&[x, y, z]) if [x, y, z].iter().all(|v| v.is_finite() && v.abs() < 1e6) => {
                     return Some((Vec3::new(x as f32, y as f32, z as f32), 0.0));
                 }
+                Some(&[x, y, z, yaw])
+                    if [x, y, z].iter().all(|v| v.is_finite() && v.abs() < 1e6)
+                        && yaw.is_finite() =>
+                {
+                    return Some((Vec3::new(x as f32, y as f32, z as f32), yaw as f32));
+                }
                 _ => self.hook_warning(
                     &package,
                     format!(
-                        "on_pick_spawn must return (), a brick id, [x, y, z] or \"map\", not {}",
+                        "on_pick_spawn must return (), a brick id, [x, y, z], [x, y, z, yaw] or \"map\", not {}",
                         answer.type_name()
                     ),
                 ),
