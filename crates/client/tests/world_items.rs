@@ -743,6 +743,7 @@ fn a_stuck_arrow_keeps_pointing_the_way_it_flew(f: &ItemFixture) -> Result<()> {
         heading: None,
         stuck_to: None,
         bounces: 0,
+        fuse_started: None,
         spawned: 0,
     };
     let nose = |adapter: &WorldItems| {

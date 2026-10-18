@@ -155,6 +155,7 @@ fn malformed_weapon_state_or_presentation_rejects_before_mutation() {
         origin: glam::Vec3::ZERO,
         was_thrown: false,
         bounces: 0,
+        fuse_started: None,
         spawned: 0,
     };
     let weapons = WeaponDelta {

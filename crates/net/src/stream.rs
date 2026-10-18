@@ -1145,6 +1145,7 @@ mod tests {
             paint: None,
             heading: None,
             bounces: 0,
+            fuse_started: None,
             spawned: 0,
         }
     }

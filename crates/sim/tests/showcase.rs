@@ -1884,6 +1884,7 @@ fn add_launcher(
         friction: 0.,
         elasticity_surfaces: Default::default(),
         bounce_surfaces: Default::default(),
+        fuse: None,
         damage: 0.,
         damage_type: String::new(),
         radius_damage_type: String::new(),

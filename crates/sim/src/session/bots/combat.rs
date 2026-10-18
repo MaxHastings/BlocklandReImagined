@@ -2518,6 +2518,7 @@ mod tests {
             friction: 0.2,
             elasticity_surfaces: Default::default(),
             bounce_surfaces: Default::default(),
+            fuse: None,
             lifetime_ticks: 600,
             arm_ticks: 600,
             explode_death: true,
@@ -2571,6 +2572,7 @@ mod tests {
                     friction: 0.6,
                     elasticity_surfaces: Default::default(),
                     bounce_surfaces: Default::default(),
+                    fuse: None,
                     lifetime_ticks: 400,
                     ..grenade("t:p/roll")
                 },

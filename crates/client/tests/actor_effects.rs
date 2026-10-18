@@ -758,6 +758,7 @@ fn each_hand_that_shot_kicks_once() {
         paint: None,
         heading: None,
         bounces: 0,
+        fuse_started: None,
         spawned: 0,
     };
     let view = |shots: Vec<bri_weapons::Projectile>| bri_sim::session::WeaponView {

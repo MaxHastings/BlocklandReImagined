@@ -815,6 +815,7 @@ fn app_weapon_effect_path_consumes_cues_once_and_syncs_projectile_trails(
         paint: None,
         heading: None,
         bounces: 0,
+        fuse_started: None,
         spawned: 0,
         id: 1,
         definition: trail.id.clone(),

@@ -691,6 +691,7 @@ impl RemotePose {
                             prone: p.prone,
                             lean,
                             lean_to: lean,
+                            climbing: false,
                         }
                     },
                 ),
