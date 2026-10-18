@@ -170,6 +170,17 @@ back to the stock HUD when nothing claims a region.
   however they move. `allies`, `enemies` and `others` (all true) pick which
   sides show: your team, the other teams of your game, and everyone else.
   Put a background image or a sweep under it as ordinary `image` elements.
+- `edge_arrow`: a hit indicator. Draws `texture` into `rect` only while the
+  last hit came from its `edge` (`top`, `bottom`, `left` or `right`). `x` and
+  `z` are rule values giving where the hit came from as a horizontal world
+  offset from the viewer (any length: the rule writes the attacker's position
+  minus the victim's, or a shot's direction reversed), and `strength` is a
+  0 to 1 rule value the rule counts down, which fades the arrow (`tint` alpha
+  times `strength`; 0 draws nothing). The edge is the nearest of ahead (top),
+  behind (bottom), left and right by the viewer's facing, so the arrow follows
+  the camera. Claim `top_center`, `bottom_center`, `left` and `right` with one
+  arrow each. Flashing a meter needs nothing more than `show` on a value the
+  rule flips.
 - Any element takes `show` `{ "value", "above", "below" }` to appear only
   while a value is in range: a low-health flash, a reload prompt.
 
