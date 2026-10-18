@@ -16,6 +16,7 @@ struct Camera {
     haze:vec4<f32>,
 };
 @group(0) @binding(0) var<uniform> camera:Camera;
+// color.w 1 marks a map light drawn with the shaded lights' linear falloff.
 struct PointLight { position_radius:vec4<f32>, color:vec4<f32> };
 // count.x lights; the grid (crate::light_grid) has its origin and inverse
 // cell size in grid_origin, its dimensions and 1 when built in grid_dims.
@@ -48,7 +49,10 @@ fn point_illumination(position:vec3<f32>,normal:vec3<f32>)->vec3<f32> {
         let delta=light.position_radius.xyz-position;
         let distance=length(delta);
         let falloff=max(1.0-distance/max(light.position_radius.w,0.0001),0.0);
-        result+=light.color.rgb*falloff*falloff*max(dot(n,delta/max(distance,0.0001)),0.0);
+        // color.w 1: a map light past the shaded budget, linear like the
+        // shaded ones (light_given); effect and vehicle lights stay smooth.
+        let shaped=select(falloff*falloff,falloff,light.color.w>0.5);
+        result+=light.color.rgb*shaped*max(dot(n,delta/max(distance,0.0001)),0.0);
     }
     return result;
 }
