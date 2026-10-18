@@ -36,6 +36,8 @@ pub struct GameValues {
     pub kills: Vec<FeedKill>,
     /// Other players as trackers see them.
     pub contacts: Vec<Contact>,
+    /// The viewer's level facing (x, z), for edge arrows.
+    pub facing: [f32; 2],
 }
 
 /// The layouts of one catalog and their textures.
@@ -231,6 +233,7 @@ impl HudRegions {
         let live = Live {
             kills: &game.kills,
             contacts: &game.contacts,
+            facing: game.facing,
         };
         let mut texts = BTreeMap::new();
         let mut kill_feed = false;

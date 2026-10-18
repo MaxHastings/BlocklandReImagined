@@ -82,6 +82,39 @@ impl ScriptOp for BodyFlash {
     }
 }
 
+/// Spawn one of an Add-On's effects (a weapons pack's `effects` explosion)
+/// at a point, facing out along `direction` (a unit vector, a surface
+/// normal), `scale` times its size: a hit spark, a shield ripple, a puff of
+/// dust. Presentation only; every player near sees it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct EffectAt {
+    pub effect: String,
+    pub position: [f32; 3],
+    pub direction: [f32; 3],
+    pub scale: f32,
+}
+impl ScriptOp for EffectAt {
+    const CAPABILITY: &str = "effects";
+    const NAME: &str = "effect_at";
+    fn bounded(&self) -> bool {
+        let EffectAt {
+            effect,
+            position,
+            direction,
+            scale,
+        } = self;
+        !effect.is_empty()
+            && effect.len() <= 128
+            && !effect.chars().any(char::is_control)
+            && finite(position)
+            && position.iter().all(|c| c.abs() <= 1_000_000.0)
+            && finite(direction)
+            && (direction.iter().map(|v| v * v).sum::<f32>() - 1.).abs() < 0.001
+            && scale.is_finite()
+            && (0.01..=100.0).contains(scale)
+    }
+}
+
 /// Play a music track (a sound an Add-On marks `music`, or one of the
 /// game's music loops) at a player's ears on the music bus, or stop it
 /// (`track` none), fading over `fade` seconds. For one player, or for

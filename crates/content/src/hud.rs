@@ -337,6 +337,16 @@ impl Claim<'_> {
     }
 }
 
+/// A screen edge ([`Element::EdgeArrow`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Edge {
+    Top,
+    Bottom,
+    Left,
+    Right,
+}
+
 /// One thing a layout draws.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
@@ -389,6 +399,27 @@ pub enum Element {
         color: [f32; 4],
         #[serde(default, skip_serializing_if = "Option::is_none")]
         glyphs: Option<Glyphs>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        show: Option<Show>,
+    },
+    /// A hit indicator: draws only while the last hit came from the `edge`
+    /// this arrow marks. `x` and `z` (rule values) say where it came from as
+    /// a horizontal world offset from the viewer (any length), and `strength`
+    /// (0 to 1, counted down by the rule) fades it (`tint` alpha times
+    /// `strength`; 0 draws nothing). The edge is the nearest of ahead (top),
+    /// behind (bottom), left and right by the viewer's facing, so it follows
+    /// the camera. Claim `top_center`, `bottom_center`, `left` and `right`
+    /// with one arrow each.
+    EdgeArrow {
+        texture: String,
+        edge: Edge,
+        /// x, y, width, height in units from the region's corner.
+        rect: [f32; 4],
+        x: String,
+        z: String,
+        strength: String,
+        #[serde(default = "white")]
+        tint: [f32; 4],
         #[serde(default, skip_serializing_if = "Option::is_none")]
         show: Option<Show>,
     },
@@ -600,6 +631,9 @@ impl Contact {
 pub struct Live<'a> {
     pub kills: &'a [FeedKill],
     pub contacts: &'a [Contact],
+    /// The viewer's level facing as a unit (x, z) in the world; (0, 0)
+    /// when unknown (edge arrows then read "ahead" as -z).
+    pub facing: [f32; 2],
 }
 
 /// A strip of equal frames in one texture, left to right then down. The
@@ -1036,6 +1070,27 @@ impl Layout {
                     );
                     show_ok(show)?;
                 }
+                Element::EdgeArrow {
+                    texture,
+                    rect,
+                    x,
+                    z,
+                    strength,
+                    tint,
+                    show,
+                    ..
+                } => {
+                    texture_ok(texture)?;
+                    ensure!(
+                        rect_ok(rect),
+                        "edge arrow rect must be finite with no negative size"
+                    );
+                    for s in [x, z, strength] {
+                        source_ok(s)?;
+                    }
+                    ensure!(color_ok(tint), "tint must be 0..1 RGBA");
+                    show_ok(show)?;
+                }
                 Element::Tracker {
                     rect,
                     range,
@@ -1122,7 +1177,9 @@ impl Layout {
         let mut out = Vec::new();
         for e in &self.elements {
             match e {
-                Element::Image { texture, .. } => out.push(texture.as_str()),
+                Element::Image { texture, .. } | Element::EdgeArrow { texture, .. } => {
+                    out.push(texture.as_str());
+                }
                 Element::Bar { fill, back, .. } => out.extend(
                     std::iter::once(fill)
                         .chain(back)
@@ -1179,6 +1236,16 @@ impl Layout {
                 }
                 Element::Text { value, show, .. } => {
                     names.extend(value.as_deref());
+                    names.extend(show.as_ref().map(|s| s.value.as_str()));
+                }
+                Element::EdgeArrow {
+                    x,
+                    z,
+                    strength,
+                    show,
+                    ..
+                } => {
+                    names.extend([x.as_str(), z.as_str(), strength.as_str()]);
                     names.extend(show.as_ref().map(|s| s.value.as_str()));
                 }
                 Element::KillFeed { show, .. } | Element::Tracker { show, .. } => {
@@ -1491,6 +1558,48 @@ pub fn resolve_live(
                         at: [at[0], at[1] + row as f32 * spacing],
                         align: *align,
                         spans,
+                    });
+                }
+            }
+            Element::EdgeArrow {
+                texture: id,
+                edge,
+                rect,
+                x,
+                z,
+                strength,
+                tint,
+                show,
+            } => {
+                let Some((key, _)) = texture(id).filter(|_| shown(show)) else {
+                    continue;
+                };
+                let strength = number(strength).unwrap_or(0.0).clamped(0.0, 1.0);
+                let (dx, dz) = (number(x).unwrap_or(0.0), number(z).unwrap_or(0.0));
+                if strength <= 0.0 || dx.hypot(dz) < 1e-4 {
+                    continue;
+                }
+                // The tracker's frame: right = (-ahead.z, ahead.x).
+                let ahead = if live.facing == [0.0, 0.0] {
+                    [0.0, -1.0]
+                } else {
+                    live.facing
+                };
+                let to_ahead = dx * ahead[0] + dz * ahead[1];
+                let to_right = -dx * ahead[1] + dz * ahead[0];
+                let nearest = if to_ahead.abs() >= to_right.abs() {
+                    if to_ahead > 0.0 { Edge::Top } else { Edge::Bottom }
+                } else if to_right > 0.0 {
+                    Edge::Right
+                } else {
+                    Edge::Left
+                };
+                if nearest == *edge {
+                    out.push(Item::Image {
+                        texture: key,
+                        uv: [0.0, 0.0, 1.0, 1.0],
+                        rect: *rect,
+                        tint: [tint[0], tint[1], tint[2], tint[3] * strength],
                     });
                 }
             }
@@ -1910,6 +2019,7 @@ mod tests {
         let live = Live {
             kills: &kills,
             contacts: &[],
+            ..Live::default()
         };
         let items = resolve_live(&l, &values, &textures, &live);
         // Three are recent; the newest two show, one line apart.
@@ -1966,6 +2076,7 @@ mod tests {
         let live = Live {
             kills: &[],
             contacts: &contacts,
+            ..Live::default()
         };
         let items = resolve_live(&l, &values, &textures, &live);
         let at: Vec<[f32; 2]> = items
@@ -1978,6 +2089,50 @@ mod tests {
         // Right is right, ahead is up; out of range, crouch-walking and
         // standing still do not show; firing does.
         assert_eq!(at, [[75.0, 50.0], [50.0, 0.0], [50.0, 40.0]]);
+    }
+
+    #[test]
+    fn edge_arrows_pick_the_edge_the_hit_came_from_and_fade() {
+        let arrow = |edge: &str| {
+            layout(serde_json::json!({
+                "schema_version": 1, "region": "top_left",
+                "elements": [{ "type": "edge_arrow", "texture": "pack:texture/bar",
+                    "edge": edge, "rect": [10, 0, 8, 8],
+                    "x": "game:player/hit_x", "z": "game:player/hit_z",
+                    "strength": "game:player/hit_strength", "tint": [1, 1, 1, 0.5] }]
+            }))
+        };
+        assert_eq!(arrow("top").sources().len(), 3);
+        let read = |x: f32, z: f32, strength: f32| {
+            move |source: &Source| match source {
+                Source::State(s) if s == "game:player/hit_x" => Some(Value::Number(x)),
+                Source::State(s) if s == "game:player/hit_z" => Some(Value::Number(z)),
+                Source::State(s) if s == "game:player/hit_strength" => {
+                    Some(Value::Number(strength))
+                }
+                _ => None,
+            }
+        };
+        // The viewer faces +x (ahead = (1, 0)), so right = (0, 1).
+        let live = Live {
+            facing: [1.0, 0.0],
+            ..Live::default()
+        };
+        let drawn = |edge: &str, x: f32, z: f32, strength: f32| -> Option<f32> {
+            let items = resolve_live(&arrow(edge), &read(x, z, strength), &textures, &live);
+            match items.as_slice() {
+                [] => None,
+                [Item::Image { tint, .. }] => Some(tint[3]),
+                other => panic!("{other:?}"),
+            }
+        };
+        assert_eq!(drawn("top", 5.0, 1.0, 1.0), Some(0.5), "ahead is the top");
+        assert_eq!(drawn("bottom", 5.0, 1.0, 1.0), None);
+        assert_eq!(drawn("bottom", -5.0, 1.0, 1.0), Some(0.5));
+        assert_eq!(drawn("left", 1.0, -5.0, 1.0), Some(0.5), "to -z is the left");
+        assert_eq!(drawn("right", 1.0, 5.0, 0.5), Some(0.25), "to +z is the right, faded");
+        assert_eq!(drawn("top", 5.0, 0.0, 0.0), None, "no strength, no arrow");
+        assert_eq!(drawn("top", 0.0, 0.0, 1.0), None, "no direction, no arrow");
     }
 
     #[test]

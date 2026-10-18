@@ -725,6 +725,7 @@ impl App {
             respawn: None,
             kills: Vec::new(),
             contacts: Vec::new(),
+            facing: presented.map_or([0.0, 0.0], |me| [me.yaw.sin(), -me.yaw.cos()]),
         };
         let mut game = game;
         let tick = self.motion.server_tick().unwrap_or(view.tick as f64);
