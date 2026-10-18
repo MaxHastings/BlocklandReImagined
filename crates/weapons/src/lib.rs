@@ -419,7 +419,9 @@ impl Zoom {
     pub fn level_fov_from(&self, level: usize, unzoomed: f32) -> f32 {
         match (level.min(self.levels.len()), self.magnification) {
             (0, Some(m)) if m.is_finite() && m > 0.0 && unzoomed.is_finite() => {
-                2.0 * ((unzoomed.to_radians() / 2.0).tan() / m).atan().to_degrees()
+                2.0 * ((unzoomed.to_radians() / 2.0).tan() / m)
+                    .atan()
+                    .to_degrees()
             }
             _ => self.level_fov(level),
         }
@@ -2537,6 +2539,38 @@ pub struct ProjectileDef {
     /// Effects only: the blast's damage and push stay `explosion`'s.
     #[serde(skip_serializing_if = "Impacts::is_empty")]
     pub impacts: Impacts,
+    /// A fuse that starts burning when something happens to the projectile
+    /// rather than at launch: a grenade that goes off a moment after its
+    /// first bounce, or once it lies still ([`Fuse`]).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fuse: Option<Fuse>,
+}
+/// When a projectile's [`Fuse`] starts burning.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FuseStart {
+    /// At its first bounce.
+    Bounce,
+    /// When it lies still: a bounce that leaves it slower than
+    /// [`ProjectileDef::rest_speed`], or sticking to anything.
+    Rest,
+}
+/// A fuse that starts at a moment of the flight ([`ProjectileDef::fuse`]).
+/// It goes off `ticks` after it starts, and never before the projectile is
+/// `not_before_ticks` old.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Fuse {
+    pub start: FuseStart,
+    /// How long it burns, in ticks (120 a second), 1 to 36000.
+    pub ticks: u32,
+    /// The least age it may go off at, in ticks (0 to 36000).
+    #[serde(default)]
+    pub not_before_ticks: u32,
+    /// The explosion effect played where it starts burning, a plasma
+    /// grenade's flare and beeping.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub effect: String,
 }
 /// A projectile's explosion effect by what it lands on, each an explosion
 /// effect as `Explosion::effect` names one. One left empty, and a burst in
@@ -2944,6 +2978,7 @@ impl Default for ProjectileDef {
             decal: None,
             stick_to_bodies: false,
             impacts: Impacts::default(),
+            fuse: None,
         }
     }
 }
@@ -3793,6 +3828,14 @@ impl Pack {
             ensure!(
                 p.max_bounces <= 64,
                 "Invalid max_bounces of projectile {id}: 0 to 64"
+            );
+            ensure!(
+                p.fuse
+                    .as_ref()
+                    .is_none_or(|f| (1..=36_000).contains(&f.ticks)
+                        && f.not_before_ticks <= 36_000
+                        && f.effect.len() <= 128),
+                "Invalid fuse of projectile {id}: 1 to 36000 ticks"
             );
             ensure!(
                 p.turns_into

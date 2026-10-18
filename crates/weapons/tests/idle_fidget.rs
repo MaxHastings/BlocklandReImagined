@@ -66,10 +66,16 @@ fn run(w: &mut WeaponsWorld, ticks: usize) -> Vec<String> {
 fn a_rested_image_fidgets_within_its_range_and_returns() {
     let mut w = world(0.0);
     let states = run(&mut w, 18 + 120 * 2 + 60 + 4);
-    let first = states.iter().position(|s| s == "Posing").expect("it fidgets");
+    let first = states
+        .iter()
+        .position(|s| s == "Posing")
+        .expect("it fidgets");
     // Ready from tick 18 on; a wait of 1 to 2 seconds.
     assert!((18 + 119..=18 + 241).contains(&first), "{first}");
-    let back = states[first..].iter().position(|s| s == "Ready").expect("it returns");
+    let back = states[first..]
+        .iter()
+        .position(|s| s == "Ready")
+        .expect("it returns");
     assert_eq!(back, 60, "the posing state times out back into the rest");
 }
 
@@ -93,7 +99,10 @@ fn skipped_draws_wait_again_and_the_draws_are_deterministic() {
             .count()
     };
     assert_eq!(seen(0.0), seen(0.0));
-    assert!(seen(0.0) >= 8, "no skips: a fidget every 1 to 2 s plus the 0.5 s clip");
+    assert!(
+        seen(0.0) >= 8,
+        "no skips: a fidget every 1 to 2 s plus the 0.5 s clip"
+    );
     assert!(seen(0.9) < seen(0.0), "skips space them out");
 }
 
