@@ -666,6 +666,7 @@ pub fn lower(
         trails: vec![],
         effects: Default::default(),
         engine_sound: None,
+        engine_layers: vec![],
         lights: vec![],
         skid: None,
         authored: b.fields.clone(),

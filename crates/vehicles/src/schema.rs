@@ -949,6 +949,11 @@ pub struct Definition {
     /// from the vehicle's presented motion. v20's vehicles have none.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub engine_sound: Option<EngineSound>,
+    /// More loops that play with `engine_sound` while it runs, each with its
+    /// own volume and pitch curve (Halo's layered engine: two tracks, each
+    /// with pitch ranges). A layer whose volume reaches 0 is not played.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub engine_layers: Vec<EngineSound>,
     /// Lamps at nodes of its model (headlights) that light the world while
     /// its driver has them on: the light key in the driving seat turns them
     /// on and off. Who has them on is shared; the light is each client's.
@@ -1090,6 +1095,12 @@ pub struct EngineSound {
     /// without a top speed).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub full_speed: Option<f32>,
+    /// Keys of (fraction of `full_speed`, volume, pitch), rising in speed
+    /// from 0 to 1, that replace the straight line between the idle and
+    /// full values: the loop's volume and pitch follow them piece by piece
+    /// (a pitch range that fades in and out as the engine revs).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub curve: Vec<[f32; 3]>,
 }
 impl EngineSound {
     fn default_idle_pitch() -> f32 {
@@ -1119,6 +1130,19 @@ impl EngineSound {
         } else {
             0.
         };
+        if let Some(after) = self.curve.iter().position(|k| k[0] >= t) {
+            let key = self.curve[after];
+            let Some(before) = after.checked_sub(1).map(|i| self.curve[i]) else {
+                return (key[1], key[2]);
+            };
+            let along = (t - before[0]) / (key[0] - before[0]).max(1e-6);
+            return (
+                before[1] + (key[1] - before[1]) * along,
+                before[2] + (key[2] - before[2]) * along,
+            );
+        } else if let Some(last) = self.curve.last() {
+            return (last[1], last[2]);
+        }
         (
             self.idle_volume + (self.full_volume - self.idle_volume) * t,
             self.idle_pitch + (self.full_pitch - self.idle_pitch) * t,
@@ -1145,6 +1169,16 @@ impl EngineSound {
             self.full_speed
                 .is_none_or(|s| s.is_finite() && s > 0. && s <= 10_000.),
             "engine_sound full_speed must be above 0"
+        );
+        ensure!(
+            self.curve.len() <= 64
+                && self.curve.windows(2).all(|w| w[0][0] < w[1][0])
+                && self.curve.iter().all(|[t, volume, pitch]| {
+                    (0. ..=1.).contains(t)
+                        && (0. ..=4.).contains(volume)
+                        && (0.25..=4.).contains(pitch)
+                }),
+            "engine_sound curve keys must rise in speed within 0..1, volume 0..4, pitch 0.25..4"
         );
         Ok(())
     }
@@ -1443,6 +1477,14 @@ impl Pack {
             d.effects.validate()?;
             if let Some(engine) = &d.engine_sound {
                 engine.validate()?;
+            }
+            ensure!(
+                d.engine_layers.len() <= 15
+                    && (d.engine_layers.is_empty() || d.engine_sound.is_some()),
+                "engine_layers need an engine_sound and number at most 15"
+            );
+            for layer in &d.engine_layers {
+                layer.validate()?;
             }
             if let Some(skid) = &d.skid {
                 skid.validate()?;
@@ -1808,6 +1850,39 @@ impl Pack {
 }
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn engine_curves_rise_in_speed_and_stay_in_range() {
+        let sound = |curve: serde_json::Value| -> EngineSound {
+            serde_json::from_value(serde_json::json!({ "sound": "a:b", "curve": curve })).unwrap()
+        };
+        assert!(
+            sound(serde_json::json!([[0.0, 0.5, 1.0], [1.0, 1.0, 2.0]]))
+                .validate()
+                .is_ok()
+        );
+        assert!(
+            sound(serde_json::json!([[0.5, 0.5, 1.0], [0.5, 1.0, 2.0]]))
+                .validate()
+                .is_err()
+        );
+        assert!(
+            sound(serde_json::json!([[0.0, 5.0, 1.0]]))
+                .validate()
+                .is_err()
+        );
+        assert!(
+            sound(serde_json::json!([[0.0, 1.0, 0.1]]))
+                .validate()
+                .is_err()
+        );
+        let engine = sound(serde_json::json!([[0.2, 0.0, 1.0], [0.6, 1.0, 2.0]]));
+        // Before the first key and past the last the ends hold; between, linear.
+        assert_eq!(engine.at(0.0, 10.0), (0.0, 1.0));
+        assert_eq!(engine.at(100.0, 10.0), (1.0, 2.0));
+        let (volume, pitch) = engine.at(4.0, 10.0);
+        assert!((volume - 0.5).abs() < 1e-5 && (pitch - 1.5).abs() < 1e-5);
+    }
     use super::*;
     #[test]
     fn reordered_capabilities_and_ambiguous_roles_are_explicit() {

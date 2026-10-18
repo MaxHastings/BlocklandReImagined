@@ -389,12 +389,17 @@ fn engine_sound_problems(
     let mut problems = Vec::new();
     for d in definitions.into_iter().flatten() {
         let vehicle = d.get("id").and_then(|i| i.as_str()).unwrap_or("?");
-        for (field, what) in [("engine_sound", "engine sound"), ("skid", "skid sound")] {
-            let Some(sound) = d
-                .get(field)
-                .and_then(|e| e.get("sound"))
-                .and_then(|s| s.as_str())
-            else {
+        let layers = d
+            .get("engine_layers")
+            .and_then(|l| l.as_array())
+            .into_iter()
+            .flatten()
+            .map(|layer| (layer, "engine layer"));
+        let singles = [("engine_sound", "engine sound"), ("skid", "skid sound")]
+            .into_iter()
+            .filter_map(|(field, what)| Some((d.get(field)?, what)));
+        for (entry, what) in singles.chain(layers) {
+            let Some(sound) = entry.get("sound").and_then(|s| s.as_str()) else {
                 continue;
             };
             match sounds.get(&sound.to_ascii_lowercase()) {

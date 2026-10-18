@@ -785,8 +785,12 @@ impl App {
                     ) else {
                         continue;
                     };
-                    if let Some(e) = crate::audio::engine_loop(d, info, frame) {
-                        engines.insert(*id, e);
+                    // Layer n plays under the key of its vehicle and n.
+                    for (layer, e) in crate::audio::engine_loops(d, info, frame)
+                        .into_iter()
+                        .enumerate()
+                    {
+                        engines.insert(*id | (layer as u64) << 56, e);
                     }
                     // The squeal plays beside the engine, keyed apart from it.
                     if let Some(e) = crate::audio::skid_loop(d, info, frame) {
