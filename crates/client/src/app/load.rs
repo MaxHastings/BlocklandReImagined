@@ -275,6 +275,7 @@ impl App {
                 camera_wheel: false,
                 aim_wheel: false,
                 scope_overlay: None,
+                scope_fit: Default::default(),
                 observer_eye: None,
                 rendered_camera: None,
                 addon_camera: false,

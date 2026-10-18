@@ -1710,6 +1710,18 @@ pub struct DisplayModes {
     pub windowed: Vec<(u32, u32)>,
 }
 
+/// Where a scope picture sits on screen (`Zoom::overlay_fit`).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ScopeFit {
+    /// Fitted to the height and centred, black either side.
+    #[default]
+    HeightBlack,
+    /// Fitted to the height and centred, the world either side.
+    Height,
+    /// Stretched over the whole screen.
+    Stretch,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum UiUpdate {
     /// Show a splash over the main menu.
@@ -1826,6 +1838,8 @@ pub enum UiUpdate {
     /// (`Zoom::overlay`): the host's texture key and its width over its
     /// height; `None` takes it away.
     ScopeOverlay(Option<(u64, f32)>),
+    /// How the scope picture is laid out (`Zoom::overlay_fit`).
+    ScopeFit(ScopeFit),
     /// A net graph sample (`NetGraph::updateStats`); dropped while hidden.
     NetSample(crate::models::perf::NetSample),
     /// A presented frame's timing; dropped while the overlay is hidden.

@@ -155,6 +155,7 @@ The fields you are most likely to change:
 | `allowed_states` | Optional image-state names that permit visual aiming. Omitted allows all states; `[]` allows none. A restricted profile without a known current state does not aim. | Up to 64 unique ASCII names, 1 to 128 bytes each; each must name exactly one state of this image, matched without ASCII case |
 | `levels` | further fields of view the mouse wheel steps through while aiming (back on rolling the other way); each narrower than the last. The step resets when the aim ends | up to 8, 5 to 85 degrees |
 | `sensitivity` | look speed while aimed, on top of the usual slowing with the field of view | 0.1 to 4, default 1 |
+| `overlay_fit` | optional: `height_black` (default, the fit below), `height` (fitted to the height and centred with the world showing either side) or `stretch` (over the whole screen whatever its shape) | one of the three words |
 | `overlay` | your own PNG (named without `.png`, relative to `assets/`) drawn over the whole view while aimed in first person, fitted to the screen's height with black either side, under the HUD. Its transparent middle is the lens; the held model is hidden meanwhile | up to 2048 px a side and 4 MB |
 | `sway` | the aim drifts on a figure of eight, `degrees` to each side, once every `seconds`; `crouched` and `moving` scale it. Only on foot, only on the holder's screen, and the mouse turns freely under it; it eases in and out | 0 to 5 degrees, 0.5 to 30 seconds, crouched 0 to 1, moving 1 to 4 |
 

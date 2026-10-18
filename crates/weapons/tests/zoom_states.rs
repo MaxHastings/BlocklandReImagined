@@ -99,3 +99,24 @@ fn state_list_and_name_bounds_are_enforced() {
     );
     assert!(load(&boundary).is_ok());
 }
+
+#[test]
+fn overlay_fit_defaults_to_the_legacy_black_fit_and_rejects_unknown_words() {
+    let legacy: Zoom = serde_json::from_value(json!({"fov":40})).unwrap();
+    assert_eq!(legacy.overlay_fit, bri_weapons::OverlayFit::HeightBlack);
+    assert!(
+        serde_json::to_value(&legacy)
+            .unwrap()
+            .get("overlay_fit")
+            .is_none()
+    );
+    for (word, fit) in [
+        ("height", bri_weapons::OverlayFit::Height),
+        ("stretch", bri_weapons::OverlayFit::Stretch),
+    ] {
+        let z: Zoom = serde_json::from_value(json!({"fov":40,"overlay_fit":word})).unwrap();
+        assert_eq!(z.overlay_fit, fit);
+        assert_eq!(serde_json::to_value(&z).unwrap()["overlay_fit"], word);
+    }
+    assert!(serde_json::from_value::<Zoom>(json!({"fov":40,"overlay_fit":"cover"})).is_err());
+}
