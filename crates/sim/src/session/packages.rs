@@ -3058,6 +3058,7 @@ impl Session {
         self.deliver_loadouts();
         self.deliver_spawns();
         self.deliver_hits();
+        self.deliver_blasts();
         self.deliver_minigame_events();
         self.deliver_addon_events();
         self.deliver_object_changes();

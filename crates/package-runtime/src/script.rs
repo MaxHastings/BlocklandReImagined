@@ -4112,6 +4112,9 @@ impl Runtime {
             if behaviour.on_projectile_hit {
                 need("on_projectile_hit".into(), 1, "on_projectile_hit");
             }
+            if behaviour.on_explosion {
+                need("on_explosion".into(), 1, "on_explosion");
+            }
             if behaviour.on_minigame {
                 need("on_minigame".into(), 1, "on_minigame");
             }

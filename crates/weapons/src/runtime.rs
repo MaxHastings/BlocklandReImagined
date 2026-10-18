@@ -650,6 +650,8 @@ pub enum Event {
         source: ActorId,
         position: Vec3,
         radius: f32,
+        /// The exploding projectile's definition id.
+        projectile: String,
     },
     Diagnostic {
         actor: Option<ActorId>,
@@ -4441,6 +4443,7 @@ impl WeaponsWorld {
             } else {
                 rebound(d, p.velocity, normal, p.bounces)
             };
+            let bounce_effect: Option<String>;
             let (velocity, last) = match rebounded {
                 Rebound::Stuck => {
                     if sticks && let Some((at, turn)) = self.target_frame(q, hit.target) {
@@ -4456,7 +4459,23 @@ impl WeaponsWorld {
                     self.effect(p, &d.stick_effect, Some(normal), contact_geometry);
                     return true;
                 }
-                Rebound::Bounced { velocity, bursts } => (velocity, bursts),
+                Rebound::Bounced { velocity, bursts } => {
+                    // What this kind of surface keeps of the bounce, and the
+                    // sound it makes.
+                    let kind = q
+                        .surface_kind(hit.target, p.position, normal)
+                        .map(str::to_owned);
+                    let keeps = kind
+                        .as_ref()
+                        .and_then(|kind| d.elasticity_surfaces.get(kind))
+                        .copied()
+                        .unwrap_or(1.0);
+                    bounce_effect = kind
+                        .as_ref()
+                        .and_then(|kind| d.bounce_surfaces.get(kind))
+                        .cloned();
+                    (velocity * keeps, bursts)
+                }
             };
             p.velocity = velocity;
             p.position += normal * 0.001;
@@ -4471,7 +4490,12 @@ impl WeaponsWorld {
                 position: p.position,
                 velocity: p.velocity,
             });
-            self.effect(p, &d.bounce_effect, Some(normal), contact_geometry);
+            self.effect(
+                p,
+                bounce_effect.as_deref().unwrap_or(&d.bounce_effect),
+                Some(normal),
+                contact_geometry,
+            );
             for (set, c) in d.children.iter().enumerate().filter(|(_, c)| c.on_bounce) {
                 self.children(p, c, set);
             }
@@ -5221,6 +5245,7 @@ impl WeaponsWorld {
             source: p.source,
             position: p.position,
             radius,
+            projectile: p.definition.clone(),
         });
         let targets = q.radius(p.position, radius, MAX_QUERY_TARGETS);
         if targets.len() > MAX_QUERY_TARGETS {

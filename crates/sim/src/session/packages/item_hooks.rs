@@ -9,6 +9,8 @@ use bri_weapons::{ActorId, ProjectileContact, TargetId};
 
 /// Projectile contacts waiting for `on_projectile_hit`, oldest first.
 const MAX_PENDING_HITS: usize = 256;
+/// Explosions waiting for `on_explosion`, oldest first.
+const MAX_PENDING_BLASTS: usize = 64;
 /// Dropped items carrying what `on_drop` kept with them.
 const MAX_DROP_DATA: usize = 1024;
 /// Items one package may have lying in the world from `drop_item`.
@@ -30,6 +32,8 @@ pub(in crate::session) enum Pickup {
 pub(in crate::session) struct ItemHooks {
     /// Each with the part of the player it struck, measured as it struck.
     hits: VecDeque<(ProjectileContact, Option<&'static str>)>,
+    /// Projectile explosions: the projectile, who fired it, where, how far.
+    blasts: VecDeque<(String, ActorId, Vec3, f32)>,
     /// What `on_drop` returned, by drop id.
     drop_data: BTreeMap<u64, serde_json::Value>,
     /// The package that put each `drop_item` pickup in the world.
@@ -273,6 +277,68 @@ impl Session {
         };
         let host = self.packages.as_mut().expect("hooked packages run");
         host.item_hooks.hits.push_back((impact.clone(), region));
+    }
+
+    /// A projectile exploded: packages owning it hear of it next tick.
+    pub(in crate::session) fn package_blast(
+        &mut self,
+        source: ActorId,
+        projectile: String,
+        position: Vec3,
+        radius: f32,
+    ) {
+        if self.hooked(|b| b.on_explosion, &projectile).is_empty() {
+            return;
+        }
+        let host = self.packages.as_mut().expect("hooked packages run");
+        if host.item_hooks.blasts.len() == MAX_PENDING_BLASTS {
+            note(
+                host,
+                Diagnostic::warning(
+                    "hook.dropped",
+                    "Too many explosions in one tick for on_explosion",
+                ),
+            );
+            return;
+        }
+        host.item_hooks
+            .blasts
+            .push_back((projectile, source, position, radius));
+    }
+
+    /// `on_explosion(blast)` for each explosion since the last tick, in
+    /// order: `#{ projectile, by, x, y, z, radius }`.
+    pub(super) fn deliver_blasts(&mut self) {
+        let Some(host) = self.packages.as_mut() else {
+            return;
+        };
+        let blasts = std::mem::take(&mut host.item_hooks.blasts);
+        for (projectile, source, position, radius) in blasts {
+            let by = Some(source.0).filter(|o| self.peers.contains_key(o));
+            let mut m = bri_package_runtime::rhai::Map::new();
+            m.insert("projectile".into(), projectile.clone().into());
+            m.insert(
+                "by".into(),
+                by.map_or(Dynamic::UNIT, |o| Dynamic::from_int(o as i64)),
+            );
+            for (key, v) in ["x", "y", "z"].into_iter().zip(position.to_array()) {
+                m.insert(key.into(), Dynamic::from_float(f64::from(v)));
+            }
+            m.insert("radius".into(), Dynamic::from_float(f64::from(radius)));
+            let map = Dynamic::from_map(m);
+            for package in self.hooked(|b| b.on_explosion, &projectile) {
+                let _ = self.run_package(
+                    &package,
+                    "on_explosion",
+                    vec![map.clone()],
+                    Budget::Command,
+                    by,
+                    None,
+                    None,
+                );
+                self.charge_work(&package);
+            }
+        }
     }
 
     /// `on_projectile_hit(hit)` for each hit since the last tick, in order.

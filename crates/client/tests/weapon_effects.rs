@@ -115,6 +115,8 @@ fn weapons() -> Arc<Pack> {
         ballistic: false,
         elasticity: 0.,
         friction: 0.,
+        elasticity_surfaces: Default::default(),
+        bounce_surfaces: Default::default(),
         damage: 0.,
         damage_type: String::new(),
         radius_damage_type: String::new(),

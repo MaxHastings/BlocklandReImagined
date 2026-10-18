@@ -2516,6 +2516,16 @@ pub struct ProjectileDef {
     pub ballistic: bool,
     pub elasticity: f32,
     pub friction: f32,
+    /// What a bounce keeps off a surface of each authored kind, times
+    /// `elasticity` (a grenade bounces off wood and glass harder than off
+    /// dirt). A kind left out keeps `elasticity`; each 0 to 2.
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub elasticity_surfaces: BTreeMap<String, f32>,
+    /// The effect (an explosion effect, as `bounce_effect` names one) a
+    /// bounce off a surface of each authored kind makes, in place of
+    /// `bounce_effect`: a grenade's different knock off wood, dirt and metal.
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub bounce_surfaces: BTreeMap<String, String>,
     pub damage: f32,
     pub damage_type: String,
     pub radius_damage_type: String,
@@ -2965,6 +2975,8 @@ impl Default for ProjectileDef {
             ballistic: false,
             elasticity: 0.999,
             friction: 0.3,
+            elasticity_surfaces: BTreeMap::new(),
+            bounce_surfaces: BTreeMap::new(),
             damage: 0.0,
             damage_type: String::new(),
             radius_damage_type: String::new(),
@@ -3842,6 +3854,13 @@ impl Pack {
             ensure!(
                 p.elasticity <= 1.0 && p.friction <= 1.0 && p.speed <= 10000.0,
                 "Invalid trajectory"
+            );
+            ensure!(
+                p.elasticity_surfaces.len() <= 32
+                    && p.elasticity_surfaces
+                        .values()
+                        .all(|e| e.is_finite() && (0.0..=2.0).contains(e)),
+                "Invalid projectile elasticity_surfaces {id}"
             );
             ensure!(
                 p.max_bounces <= 64,

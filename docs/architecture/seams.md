@@ -44,6 +44,7 @@ labels are retained so earlier progress notes remain traceable.
 | Rule-driven view shake | `view_shake(p, direction, min, max, rate)`, `Notice::ViewShake`, `Controls::start_view_shake`: the real aim kicked out and back, leaving `min` | AA2.5 hit feedback lane | codex/aa-hit-feedback |
 | Source falling law and velocity scaling | archetype `movement.fall` (`threshold`, `per_speed`: damage by downward impact speed, replacing the v20 formula), `scale_velocity(p, horizontal, vertical)` | AA2.5 movement lane | codex/aa-movement |
 | Landing eye dip | archetype `camera.land` (`unit`, `eye`, `force`, `save_above`), `Controls::land_body_camera`: Unreal's `UpdateEyeHeight` landing dip | AA2.5 movement lane | codex/aa-movement |
+| Explosion hook and surface bounces | `on_explosion(blast)` rule hook, projectile `elasticity_surfaces` and `bounce_surfaces` | AA2.5 grenade lane | codex/aa-grenades |
 | Image scripts | `Image.scripts` state-machine hooks | Butterfly Knife and Grenade | on main |
 | Voxel bricks and own models | `place_voxel`, `*.shape.json` loading, textured item icons, `mode.json` | Trench Warfare game mode | on main |
 | Gun behaviour | hitscan, spread, shake, `left_image`, `set_speed_scale`, projectile bounces, children and aura, damage direction, Add-On settings, HUD format, magazines, explosions | Tier Tactical weapons | on main |
