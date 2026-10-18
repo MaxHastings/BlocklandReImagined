@@ -2670,7 +2670,10 @@ mod breath_tests {
         for _ in 0..600 {
             assert!(c.advance_breath(1.0 / 60.0).is_none());
         }
-        c.hold(HeldControl::Zoom);
+        c.action(&GameAction::Held {
+            control: HeldControl::Zoom,
+            down: true,
+        });
         let mut heard = vec![];
         for _ in 0..(60 * 10) {
             heard.extend(c.advance_breath(1.0 / 60.0));
