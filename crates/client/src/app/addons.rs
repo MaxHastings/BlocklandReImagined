@@ -726,6 +726,9 @@ impl App {
             kills: Vec::new(),
             contacts: Vec::new(),
             facing: presented.map_or([0.0, 0.0], |me| [me.yaw.sin(), -me.yaw.cos()]),
+            heading: presented.map_or(0.0, |me| me.yaw.to_degrees().rem_euclid(360.0)),
+            fov: self.controls.fov(),
+            aiming: self.controls.aiming(),
         };
         let mut game = game;
         let tick = self.motion.server_tick().unwrap_or(view.tick as f64);

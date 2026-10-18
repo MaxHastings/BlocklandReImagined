@@ -38,6 +38,11 @@ pub struct GameValues {
     pub contacts: Vec<Contact>,
     /// The viewer's level facing (x, z), for edge arrows.
     pub facing: [f32; 2],
+    /// The way the viewer's body faces in degrees (clockwise from -z), the
+    /// camera's field of view, and whether they aim down sights.
+    pub heading: f32,
+    pub fov: f32,
+    pub aiming: bool,
 }
 
 /// The layouts of one catalog and their textures.
@@ -201,6 +206,9 @@ impl HudRegions {
                     Value::Number(f32::from(u8::from(game.ammo.as_ref()?.reloading)))
                 }
                 Source::Respawn => Value::Number(game.respawn?),
+                Source::Heading => Value::Number(game.heading),
+                Source::Fov => Value::Number(game.fov),
+                Source::Aiming => Value::Number(f32::from(u8::from(game.aiming))),
                 Source::ItemAmmo { item, field } => {
                     use bri_content::hud::AmmoField;
                     let ammo = game
