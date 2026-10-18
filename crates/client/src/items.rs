@@ -3908,6 +3908,42 @@ mod texture_rule_tests {
         assert_eq!(unsampled.kind, MaterialKind::VertexLit);
         Ok(())
     }
+
+    /// A material with a masked tint reads its mask material's texture, as
+    /// data, in image slot 10, and the wearer's slot colour paints only
+    /// where it says (`bri_render` tint_mask test).
+    #[test]
+    fn a_masked_tint_binds_its_mask_as_linear_data() -> Result<()> {
+        let mut shape = rigid_shape(
+            "test/armor.dts",
+            &[("root", None, [0.0; 3])],
+            &[(0, [0.0; 3], [0.2; 3], plain(0))],
+            vec![material("armor", "opaque"), material("mask", "opaque")],
+        );
+        shape.materials[0].tint = Some(bri_content::shape::TintMask {
+            mask: 1,
+            slot: "chest".into(),
+        });
+        let pose = bri_content::animation::sample(&shape, None, 0.0)?;
+        let plating = image(|_, _| 255);
+        let mut mask = image(|_, _| 255);
+        mask.label = "mask".into();
+        let scene = native_shape_scene(
+            "test",
+            &shape,
+            &[&plating, &mask],
+            [1.0; 4],
+            false,
+            Mat4::IDENTITY,
+            &pose,
+        )?;
+        let tinted = &scene.materials[0];
+        assert!(tinted.tint_mask);
+        assert!(!scene.images[tinted.images[10]].srgb, "the mask is data");
+        assert_eq!(scene.images[tinted.images[10]].label, "mask");
+        assert!(!scene.materials[1].tint_mask, "the mask itself is plain");
+        Ok(())
+    }
 }
 
 #[cfg(test)]
