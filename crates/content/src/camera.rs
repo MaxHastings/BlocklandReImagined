@@ -42,6 +42,9 @@ pub struct CameraProfile {
     /// or lower. Its distance is the archetype's `camera_distance`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub third_person: Option<ThirdPerson>,
+    /// The eye dropping when the body lands hard, and coming back.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub land: Option<Land>,
 }
 fn is_zero(v: &[f32; 3]) -> bool {
     *v == [0.0; 3]
@@ -108,6 +111,25 @@ fn settle() -> f32 {
     8.0
 }
 
+/// The landing dip of Unreal's `UpdateEyeHeight`: a hard landing pulls a
+/// dip value down in steps (the harder, the bigger the steps) until it
+/// passes a target the fall speed sets, then it eases back to nothing. The
+/// eye sits `eye` times the dip lower. Speeds and lengths in the profile are
+/// in the source's own units; `unit` is how many native units one is.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Land {
+    /// Native units per source unit.
+    pub unit: f32,
+    /// Source units the eye drops per unit of dip.
+    pub eye: f32,
+    /// The dip target per unit of downward fall speed.
+    pub force: f32,
+    /// Falls slower than this (source units a second) do not change the
+    /// remembered fall speed.
+    pub save_above: f32,
+}
+
 /// The third-person pivot, at scale 1.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
@@ -169,6 +191,17 @@ impl CameraProfile {
                 "camera third_person side and height must be within 4 units"
             );
         }
+        if let Some(l) = &self.land {
+            ensure!(
+                l.unit.is_finite()
+                    && (0.001..=1.0).contains(&l.unit)
+                    && finite(l.eye, 20.0)
+                    && finite(l.force, 1.0)
+                    && l.save_above.is_finite()
+                    && l.save_above >= 0.0,
+                "camera land needs a unit of 0.001 to 1, an eye within 20, a force within 1 and a save_above of 0 or more"
+            );
+        }
         Ok(())
     }
     /// The field of view this body shows for a player whose own normal FOV
@@ -194,6 +227,13 @@ pub struct CameraMotion {
     pub trail: (f32, f32),
     /// Through the weapon's own bob cycle (`Sway::walk`), 0 to 1.
     pub weapon_phase: f32,
+    /// The landing dip ([`Land`]), 0 or below, in source units.
+    pub land_bob: f32,
+    /// Landed and not yet back, and easing back from it.
+    pub landed: bool,
+    pub recovering: bool,
+    /// The last hard fall's downward speed, source units a second, negative.
+    pub saved_fall: f32,
 }
 /// How fast the bob eases in and out, per second.
 const BOB_EASE: f32 = 4.0;
@@ -234,7 +274,19 @@ impl CameraMotion {
         } else {
             *self = Self {
                 trail: self.trail,
+                land_bob: self.land_bob,
+                landed: self.landed,
+                recovering: self.recovering,
+                saved_fall: self.saved_fall,
                 ..Self::default()
+            }
+        }
+        match &profile.land {
+            Some(land) => self.step_land(land, seconds),
+            None => {
+                self.land_bob = 0.0;
+                self.landed = false;
+                self.recovering = false;
             }
         }
         match &profile.sway {
@@ -250,13 +302,62 @@ impl CameraMotion {
             None => self.trail = (0.0, 0.0),
         }
     }
+    /// The body struck the ground going `fall_speed` native units a second
+    /// down: remember the speed when it was a hard fall, and start the dip.
+    pub fn land(&mut self, profile: &CameraProfile, fall_speed: f32) {
+        let Some(land) = &profile.land else { return };
+        if !fall_speed.is_finite() || fall_speed < 0.0 {
+            return;
+        }
+        let source = fall_speed / land.unit;
+        if source >= land.save_above {
+            self.saved_fall = -source;
+        }
+        self.landed = true;
+        self.recovering = false;
+    }
+    /// `AGP_Character.UpdateEyeHeight`'s landing dip, a step of `seconds`.
+    fn step_land(&mut self, land: &Land, seconds: f32) {
+        let slow = (10.0 * seconds).min(0.9);
+        if !self.landed {
+            self.land_bob *= 1.0 - slow;
+        } else if self.recovering {
+            self.land_bob *= 1.0 - slow;
+            if self.land_bob >= -0.01 {
+                self.landed = false;
+                self.recovering = false;
+                self.land_bob = 0.0;
+            }
+        } else {
+            let smooth = (40.0 * seconds).min(1.35);
+            let force = land.force * self.saved_fall;
+            self.land_bob -= if force > -3.0 {
+                smooth / 3.0
+            } else if force > -4.0 {
+                smooth / 1.4
+            } else if force > -5.0 {
+                smooth / 1.2
+            } else {
+                1.2 * smooth
+            };
+            if self.land_bob < force {
+                self.recovering = true;
+            }
+        }
+        if self.land_bob.abs() < 1e-5 && !self.landed {
+            self.land_bob = 0.0;
+        }
+    }
     /// The bob's offset this moment: (right, up) in units at scale 1. The
-    /// camera dips at each footfall and rocks once a cycle.
+    /// camera dips at each footfall and rocks once a cycle, and drops with a
+    /// hard landing.
     pub fn bob(&self, profile: &CameraProfile) -> (f32, f32) {
-        match &profile.bob {
+        let (side, dip) = match &profile.bob {
             Some(bob) => bob.offset(self.phase, self.gain),
             None => (0.0, 0.0),
-        }
+        };
+        let landing = profile.land.map_or(0.0, |l| self.land_bob * l.eye * l.unit);
+        (side, dip + landing)
     }
     /// The held weapon's bob against the view this moment: (right, up) in
     /// view-space units at scale 1. The camera's bob times `Sway::bob`,
@@ -273,7 +374,7 @@ impl CameraMotion {
     }
     /// At rest: no bob and no trail, as the stock camera.
     pub fn at_rest(&self) -> bool {
-        self.gain == 0.0 && self.trail == (0.0, 0.0)
+        self.gain == 0.0 && self.trail == (0.0, 0.0) && self.land_bob == 0.0 && !self.landed
     }
 }
 
@@ -423,5 +524,62 @@ mod tests {
             assert!(p.validate().is_err(), "{bad}");
         }
         assert!(serde_json::from_str::<CameraProfile>(r#"{"zoom": 1}"#).is_err());
+    }
+
+    fn landing() -> CameraProfile {
+        CameraProfile {
+            land: Some(Land {
+                unit: 0.04,
+                eye: 2.0,
+                force: 0.2 / 35.0,
+                save_above: 375.0,
+            }),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn a_hard_landing_drops_the_eye_by_the_fall_force_and_it_comes_back() {
+        let p = landing();
+        p.validate().unwrap();
+        let mut m = CameraMotion::default();
+        // 450 source units a second is 18 native: FallForce 0.2 * -450 / 35 = -2.57.
+        m.land(&p, 18.0);
+        assert!(m.landed && m.saved_fall == -450.0, "{m:?}");
+        let mut lowest = 0.0f32;
+        let mut back = None;
+        for i in 0..240 {
+            m.advance(&p, 1.0 / 60.0, 0.0, true, (0.0, 0.0));
+            let drop = m.bob(&p).1;
+            lowest = lowest.min(drop);
+            if back.is_none() && lowest < -0.1 && drop > -0.002 {
+                back = Some(i);
+            }
+        }
+        // The dip steps down 0.222 at 60 Hz until it passes -2.57: -2.67, an eye 2 * 0.04 * 2.67 lower.
+        assert!((lowest + 0.2133).abs() < 0.01, "{lowest}");
+        assert!(back.is_some_and(|i| i < 150), "it eases back: {back:?}");
+        assert!(m.at_rest(), "and is at rest: {m:?}");
+    }
+
+    #[test]
+    fn a_landing_with_no_remembered_fall_dips_a_hair_and_recovers() {
+        let p = landing();
+        let mut m = CameraMotion::default();
+        m.land(&p, 5.0); // 125 units a second is under save_above: the old (zero) fall stays
+        assert_eq!(m.saved_fall, 0.0);
+        for _ in 0..120 {
+            m.advance(&p, 1.0 / 60.0, 0.0, true, (0.0, 0.0));
+        }
+        assert!(m.at_rest(), "{m:?}");
+    }
+
+    #[test]
+    fn a_profile_without_a_landing_dip_ignores_landings() {
+        let p = CameraProfile::default();
+        let mut m = CameraMotion::default();
+        m.land(&p, 30.0);
+        m.advance(&p, 0.1, 0.0, true, (0.0, 0.0));
+        assert!(m.at_rest() && m.bob(&p) == (0.0, 0.0));
     }
 }

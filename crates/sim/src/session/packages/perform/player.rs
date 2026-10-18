@@ -381,6 +381,22 @@ impl Perform for ops::SetSpeedScale {
         session.apply_speed(player)
     }
 }
+impl Perform for ops::ScaleVelocity {
+    fn perform(self, session: &mut Session, _cx: OpCall<'_>) -> Result<()> {
+        let ops::ScaleVelocity {
+            player,
+            horizontal,
+            vertical,
+        } = self;
+        session
+            .peers
+            .get_mut(&player)
+            .context("No such player")?
+            .player
+            .scale_velocity(horizontal, vertical);
+        Ok(())
+    }
+}
 impl Perform for ops::SetProne {
     fn check(&self, session: &Session, _cx: OpCall<'_>) -> Result<()> {
         let peer = session.peers.get(&self.player).context("No such player")?;

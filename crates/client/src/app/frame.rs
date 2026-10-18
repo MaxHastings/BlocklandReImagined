@@ -307,6 +307,7 @@ impl App {
                 self.controls.carry_look(&carry);
             }
             if let Some((speed, archetype)) = self.motion.take_impact() {
+                self.controls.land_body_camera(speed);
                 let min = bri_sim::player_types::PlayerType::from_archetype(archetype)
                     .unwrap_or_default()
                     .min_impact_speed();

@@ -1350,6 +1350,16 @@ impl Controls {
             turned,
         );
     }
+    /// The body struck the ground going `speed` units a second downward:
+    /// the profile's landing dip, when it has one.
+    pub fn land_body_camera(&mut self, speed: f32) {
+        if !self.body_owns_view() {
+            return;
+        }
+        let scale = self.body_camera.scale.max(0.01);
+        let profile = self.body_camera.profile.clone();
+        self.body_camera.motion.land(&profile, speed / scale);
+    }
     /// Where the body moves the first-person camera from its eye, in the
     /// world, for a look heading `yaw`: the profile's `eye_offset` plus
     /// the bob. Zero for the stock camera and whenever the body does not

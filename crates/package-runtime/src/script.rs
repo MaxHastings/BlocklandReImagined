@@ -3299,6 +3299,17 @@ fn register_presentation(engine: &mut Engine) {
             scale: float(&scale)?,
         }))
     });
+    // `scale_velocity(p, horizontal, vertical)` ([`ops::ScaleVelocity`]).
+    engine.register_fn(
+        "scale_velocity",
+        |player: Dynamic, horizontal: Dynamic, vertical: Dynamic| {
+            push(Op::ScaleVelocity(ops::ScaleVelocity {
+                player: id(&player)?,
+                horizontal: float(&horizontal)?,
+                vertical: float(&vertical)?,
+            }))
+        },
+    );
     engine.register_fn(
         "give_ammo",
         |player: Dynamic, ammo: &str, rounds: Dynamic| {

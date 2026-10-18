@@ -753,3 +753,21 @@ impl ScriptOp for ViewShake {
             && (0.01..=100.0).contains(&rate.abs())
     }
 }
+
+/// Scale a player's velocity: the horizontal part by `horizontal`, the
+/// vertical part by `vertical` (both 0 to 2). A jump that takes some of its
+/// run with it, as AA's `DoJump` slows a hopper.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ScaleVelocity {
+    pub player: u64,
+    pub horizontal: f32,
+    pub vertical: f32,
+}
+impl ScriptOp for ScaleVelocity {
+    const CAPABILITY: &str = "player";
+    const NAME: &str = "scale_velocity";
+    fn bounded(&self) -> bool {
+        let ScaleVelocity { horizontal, vertical, .. } = self;
+        [horizontal, vertical].iter().all(|v| v.is_finite() && (0.0..=2.0).contains(*v))
+    }
+}
