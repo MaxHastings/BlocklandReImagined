@@ -1111,7 +1111,7 @@ impl Controls {
         }
         match shake.advance(seconds.min(0.1)) {
             Some((pitch, yaw)) => {
-                self.pitch = (self.pitch + pitch).clamp(-FRAC_PI_2, FRAC_PI_2);
+                self.pitch = (self.pitch + pitch).clamped(-FRAC_PI_2, FRAC_PI_2);
                 self.yaw += yaw;
             }
             None => self.view_shake = None,
@@ -1134,7 +1134,7 @@ impl Controls {
         let out = (self.breath_clock * std::f32::consts::TAU / breath.period).sin() < 0.0;
         let turned = self.breath_out.is_some_and(|before| before != out);
         self.breath_out = Some(out);
-        turned.then(|| if out { breath.exhale } else { breath.inhale })
+        turned.then_some(if out { breath.exhale } else { breath.inhale })
     }
     pub fn set_server_fov(&mut self, fov: Option<f32>) {
         self.server_fov = fov.filter(|f| f.is_finite()).map(|f| {
