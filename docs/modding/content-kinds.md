@@ -185,7 +185,7 @@ travel divided by the cycle's length.
 `look.animations` maps roles to the body's own clips: `idle`, `run`,
 `back`, `side`, `crouch`, `crouch_run`, `crouch_back`, `crouch_side`,
 `jump`, `fall`, `sit`, `aim_right`, `aim_left`, `aim_both`,
-`look`, `head_up`, `head_side`, `seat_aim`, `swim` and `death`. `seat_aim`
+`look`, `look_crouch`, `head_up`, `head_side`, `seat_aim`, `swim` and `death`. `seat_aim`
 is a seated gunner's pose from aiming the gun at its highest (the clip's
 start) to its lowest (its end): it holds at the gun's pitch across the
 vehicle's `look_pitch` range in place of `look`, so the whole seated body,

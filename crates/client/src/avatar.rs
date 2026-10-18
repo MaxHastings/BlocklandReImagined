@@ -2175,6 +2175,7 @@ impl AvatarMesh {
                 seat_aim: animation_input.seat_aim,
                 look_phase: look_position(player.pitch, animation_input.look_limits),
                 head_yaw: player.head_yaw,
+                crouched: player.crouched,
             },
         )?;
         self.skipped.extend(skipped);
