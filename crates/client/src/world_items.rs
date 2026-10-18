@@ -113,6 +113,9 @@ struct ModelKey {
     /// Drawn only in mirrors (`ItemIdentity::Reflected`).
     reflected: bool,
     local_view: Option<(u64, u8)>,
+    /// The holder's avatar slot colours a first-person image's masked tints
+    /// take, as bits, empty for everyone else's images.
+    wearer: Vec<(String, [u32; 4])>,
 }
 impl ModelKey {
     fn new(model: &str, tint: [f32; 4]) -> Self {
@@ -122,6 +125,7 @@ impl ModelKey {
             first_person: false,
             reflected: false,
             local_view: None,
+            wearer: Vec::new(),
         }
     }
     fn tint(&self) -> [f32; 4] {
@@ -264,6 +268,9 @@ pub struct WorldItems {
     hide_own_first_person: bool,
     scoped: bool,
     first_person_fov: Option<f32>,
+    /// The local avatar's slot colours, for the first-person images' masked
+    /// tints ([`Self::set_wearer_colors`]).
+    wearer_colors: Vec<(String, [u32; 4])>,
     /// Each projectile's last flight direction. A stuck arrow's velocity is
     /// zero, but it keeps pointing the way it flew into the wall, as v20's
     /// projectile keeps its last render transform.
@@ -326,6 +333,7 @@ impl WorldItems {
             hide_own_first_person: false,
             scoped: false,
             first_person_fov: None,
+            wearer_colors: Vec::new(),
             headings: BTreeMap::new(),
             prepares: 0,
             diagnostics: Default::default(),
@@ -376,6 +384,18 @@ impl WorldItems {
     /// first-person weapon is not drawn behind its picture.
     /// The same drawn stock-eye FOV used by this frame's camera. A custom
     /// camera suppresses opted local layers at render instead of reposing them.
+    /// The local avatar's slot colours (`Appearance::colors`): what the hands
+    /// of a first-person image paint their masked tints with. A change
+    /// rebuilds those images' models.
+    pub fn set_wearer_colors(&mut self, colors: &BTreeMap<String, [f32; 4]>) {
+        let bits: Vec<_> = colors
+            .iter()
+            .map(|(slot, c)| (slot.clone(), c.map(f32::to_bits)))
+            .collect();
+        if bits != self.wearer_colors {
+            self.wearer_colors = bits;
+        }
+    }
     pub fn set_first_person_fov(&mut self, fov: f32) {
         self.first_person_fov = (fov.is_finite() && fov > 0. && fov < 180.).then_some(fov);
     }
@@ -764,6 +784,11 @@ impl WorldItems {
             let held = Candidate {
                 identity: ItemIdentity::Mounted(owner, hand),
                 model: ModelKey {
+                    wearer: if local_first {
+                        self.wearer_colors.clone()
+                    } else {
+                        Vec::new()
+                    },
                     first_person: local_first,
                     local_view: policy.map(|_| (owner, hand)),
                     ..ModelKey::new(&image.model, image.tint)
@@ -1138,6 +1163,18 @@ impl WorldItems {
             } else {
                 let mut mesh = self.assets.mesh(&key.model, key.tint())?;
                 mesh.first_person = key.first_person;
+                if !key.wearer.is_empty() {
+                    mesh.set_wearer(Some(bri_content::avatar::Appearance {
+                        colors: key
+                            .wearer
+                            .iter()
+                            .map(|(slot, c)| (slot.clone(), c.map(f32::from_bits)))
+                            .collect(),
+                        parts: BTreeMap::new(),
+                        face: String::new(),
+                        decal: String::new(),
+                    }));
+                }
                 if mesh.data.vertices.is_empty() {
                     self.missing(format!("Model {} has no visible geometry", key.model));
                     continue;

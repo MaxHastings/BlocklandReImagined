@@ -291,6 +291,7 @@ impl App {
                 beams: Default::default(),
                 decals: Default::default(),
                 footsteps: Default::default(),
+                clip_sounds: Default::default(),
                 body_flashes: Default::default(),
                 tutorial_targets,
                 map_movers: Default::default(),

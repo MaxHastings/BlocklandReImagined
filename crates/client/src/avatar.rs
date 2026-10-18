@@ -656,6 +656,19 @@ impl AvatarAssets {
                     bri_render::scene::MaterialKind::Unlit
                 };
             }
+            // A masked tint reads its mask material's texture as data.
+            if let Some(mask) = source
+                .tint
+                .as_ref()
+                .and_then(|t| horse.rig.shape.materials.get(t.mask))
+                .and_then(|m| horse.images.get(&m.name.to_ascii_lowercase()))
+            {
+                let mut mask = mask.clone();
+                mask.srgb = false;
+                material.images[10] = data.images.len();
+                data.images.push(mask);
+                material.tint_mask = true;
+            }
             data.materials.push(material);
         }
         let translucent_materials: Vec<_> = materials
@@ -787,6 +800,8 @@ impl AvatarAssets {
             forward: true,
             phase: 0.0,
             last_time: None,
+            death_announced: false,
+            started_clips: Vec::new(),
             channels: None,
             transition: None,
             stood_at: None,
@@ -884,6 +899,10 @@ pub struct AvatarMesh {
     forward: bool,
     phase: f32,
     last_time: Option<f64>,
+    /// A death clip has been announced for the body's current death.
+    death_announced: bool,
+    /// Clips (lower case) the body started since the last take.
+    started_clips: Vec<String>,
     /// Locomotion channels of the last pose, frozen when a transition starts.
     channels: Option<Channels>,
     /// Frozen source pose and start time of the current action transition.
@@ -2039,6 +2058,16 @@ impl AvatarMesh {
         } else {
             None
         };
+        // A death starts its clip once; sounds tied to the clip are queued
+        // from it ([`Self::take_started_clips`]).
+        match scripted {
+            Some(clip) if animation_input.dead => {
+                if !std::mem::replace(&mut self.death_announced, true) {
+                    self.started_clips.push(clip.to_ascii_lowercase());
+                }
+            }
+            _ => self.death_announced = false,
+        }
         // v20 picks every client frame: it kept `delayTicks` but dropped the
         // test that would hold an action for `sNewAnimationTickTime`.
         let next = Some(scripted.map_or_else(
@@ -2403,6 +2432,19 @@ impl AvatarMesh {
                     .filter(|_| !self.hidden_nodes.contains(name))
             })
             .collect();
+        // A material with a masked tint takes its slot's colour from the
+        // wearer's avatar, whatever object it is on.
+        let material_colors: Vec<_> = assets
+            .rig
+            .shape
+            .materials
+            .iter()
+            .map(|m| {
+                m.tint
+                    .as_ref()
+                    .and_then(|t| self.appearance.slot_color(&t.slot))
+            })
+            .collect();
         let binding = crate::avatar_mesh::Binding {
             shape: &assets.rig.shape,
             detail: assets.detail_at(self.screen_height),
@@ -2410,6 +2452,7 @@ impl AvatarMesh {
             translucent_materials: &self.translucent_materials,
             unassigned_material: self.materials[0],
             colors: &colors,
+            material_colors: &material_colors,
         };
         if self.instanced
             && !self.restructured
@@ -2444,6 +2487,10 @@ impl AvatarMesh {
             });
         }
         Ok(())
+    }
+    /// The clips the body started since the last call, lower case.
+    pub fn take_started_clips(&mut self) -> Vec<String> {
+        std::mem::take(&mut self.started_clips)
     }
     /// Takes over another mesh's action thread (sequence, direction, time
     /// and transition), for a rebuilt outfit of the same player.

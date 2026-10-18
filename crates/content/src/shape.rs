@@ -177,6 +177,10 @@ pub struct Material {
     /// `metal` when both are set.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub surface: Option<Surface>,
+    /// Painted only where a mask says so, in the colour of an avatar slot:
+    /// the change-colour mask of a team-coloured armour plate ([`TintMask`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tint: Option<TintMask>,
 }
 /// Texture coordinates in UV space: scale, rotate about center, then offset
 /// and scroll. Angles are degrees, rates per second. Geometry and lighting UVs stay put.
@@ -269,6 +273,21 @@ pub struct Surface {
     /// inferred metallic response. Maps and colours belong to the Add-On.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reflection: Option<SurfaceReflection>,
+}
+/// A masked tint: each texel of the material's colour is multiplied by
+/// `(1 - mask) + mask * colour`, so the mask's 0 leaves the texel as it is
+/// and its 1 takes the colour of the avatar slot `slot` (the colour the
+/// holder or wearer's avatar, or a rule's `set_avatar_colors`, gives that
+/// slot: team colours are set that way). Halo's change-colour mask works
+/// this way. Lit model materials only.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TintMask {
+    /// The material (by index) whose texture is the mask, in its red
+    /// channel (linear, 0 to 1).
+    pub mask: usize,
+    /// An avatar colour slot (`chest`, `pants`, `larm` ...).
+    pub slot: String,
 }
 /// A display-space reflection layer, useful for imported fixed-function
 /// materials. The mask's red channel controls reflection coverage.
@@ -516,6 +535,17 @@ impl Shape {
             ensure!(
                 material.uv_motion.is_none_or(UvMotion::valid),
                 "Invalid material UV motion"
+            );
+            ensure!(
+                material.tint.as_ref().is_none_or(|t| {
+                    t.mask < self.materials.len()
+                        && (1..=32).contains(&t.slot.len())
+                        && t.slot
+                            .bytes()
+                            .all(|b| b.is_ascii_alphanumeric() || b == b'_')
+                }),
+                "Invalid tint mask on {}",
+                material.name
             );
             ensure!(
                 material

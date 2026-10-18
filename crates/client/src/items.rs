@@ -215,8 +215,15 @@ pub struct ItemMesh {
     pub first_person: bool,
     model: String,
     tint: [f32; 4],
+    /// The avatar colours masked-tint materials take (the holder's), by slot.
+    wearer: Option<bri_content::avatar::Appearance>,
 }
 impl ItemMesh {
+    /// The avatar whose slot colours masked-tint materials take: the holder
+    /// of a first-person image's hands. None leaves them uncoloured.
+    pub fn set_wearer(&mut self, wearer: Option<bri_content::avatar::Appearance>) {
+        self.wearer = wearer;
+    }
     /// Returns true when visibility/detail changes require a fresh GPU upload.
     /// False permits GpuScene::update_vertices with these vertices/batch centers.
     /// Failure leaves the current scene unchanged.
@@ -255,6 +262,17 @@ impl ItemMesh {
         // the drawn parts are unchanged (`avatar_mesh`).
         let bindings: Vec<_> = (0..shape.materials.len()).collect();
         let colors = vec![Some(self.tint); shape.objects.len()];
+        let material_colors: Vec<_> = shape
+            .materials
+            .iter()
+            .map(|m| {
+                m.tint.as_ref().and_then(|t| {
+                    self.wearer
+                        .as_ref()
+                        .and_then(|appearance| appearance.slot_color(&t.slot))
+                })
+            })
+            .collect();
         let binding = crate::avatar_mesh::Binding {
             shape,
             detail,
@@ -262,6 +280,7 @@ impl ItemMesh {
             translucent_materials: &bindings,
             unassigned_material: bindings.len(),
             colors: &colors,
+            material_colors: &material_colors,
         };
         let before =
             crate::avatar_mesh::Layout::restructures(&self.layout, &self.data, &binding, &pose)?
@@ -467,6 +486,13 @@ pub fn native_shape_scene(
                     _ => AlphaMode::Blend,
                 }
             };
+            bind_tint_mask(
+                &mut scene,
+                &mut image_bindings,
+                &mut material,
+                source,
+                textures,
+            );
             bindings.push(scene.materials.len());
             material.uv_motion = source.uv_motion;
             scene.materials.push(material);
@@ -563,6 +589,13 @@ pub fn native_shape_scene(
                 source.name
             ));
         }
+        bind_tint_mask(
+            &mut scene,
+            &mut image_bindings,
+            &mut material,
+            source,
+            textures,
+        );
         bindings.push(scene.materials.len());
         material.uv_motion = source.uv_motion;
         scene.materials.push(material);
@@ -600,6 +633,30 @@ pub fn native_shape_scene(
     Ok(scene)
 }
 
+/// Gives a lit material its masked tint (`bri_content::shape::TintMask`): the
+/// mask material's texture, linear, in image slot 10.
+fn bind_tint_mask(
+    scene: &mut SceneData,
+    image_bindings: &mut BTreeMap<(String, bool), usize>,
+    material: &mut Material,
+    source: &bri_content::shape::Material,
+    textures: &[&SceneImage],
+) {
+    let Some(tint) = &source.tint else { return };
+    let Some(mask) = textures.get(tint.mask) else {
+        return;
+    };
+    let index = *image_bindings
+        .entry((mask.label.clone(), true))
+        .or_insert_with(|| {
+            let mut image = (*mask).clone();
+            image.srgb = false;
+            scene.images.push(image);
+            scene.images.len() - 1
+        });
+    material.images[10] = index;
+    material.tint_mask = true;
+}
 /// Whether v20 counts `image` as having a translucent texel, as its texture
 /// manager does when it loads one (0x509d79-0x509dc2): every 16th texel
 /// along each row and column, both walks bounded by the width, any alpha
@@ -638,6 +695,7 @@ impl ItemAssets {
             first_person: false,
             model: model.into(),
             tint,
+            wearer: None,
         })
     }
     /// The look of image `image` (a held item).
@@ -3848,6 +3906,42 @@ mod texture_rule_tests {
         // One it does not sample leaves it a plain texture.
         let unsampled = scene(&image(|x, y| if (x, y) == (3, 5) { 0 } else { 255 }))?;
         assert_eq!(unsampled.kind, MaterialKind::VertexLit);
+        Ok(())
+    }
+
+    /// A material with a masked tint reads its mask material's texture, as
+    /// data, in image slot 10, and the wearer's slot colour paints only
+    /// where it says (`bri_render` tint_mask test).
+    #[test]
+    fn a_masked_tint_binds_its_mask_as_linear_data() -> Result<()> {
+        let mut shape = rigid_shape(
+            "test/armor.dts",
+            &[("root", None, [0.0; 3])],
+            &[(0, [0.0; 3], [0.2; 3], plain(0))],
+            vec![material("armor", "opaque"), material("mask", "opaque")],
+        );
+        shape.materials[0].tint = Some(bri_content::shape::TintMask {
+            mask: 1,
+            slot: "chest".into(),
+        });
+        let pose = bri_content::animation::sample(&shape, None, 0.0)?;
+        let plating = image(|_, _| 255);
+        let mut mask = image(|_, _| 255);
+        mask.label = "mask".into();
+        let scene = native_shape_scene(
+            "test",
+            &shape,
+            &[&plating, &mask],
+            [1.0; 4],
+            false,
+            Mat4::IDENTITY,
+            &pose,
+        )?;
+        let tinted = &scene.materials[0];
+        assert!(tinted.tint_mask);
+        assert!(!scene.images[tinted.images[10]].srgb, "the mask is data");
+        assert_eq!(scene.images[tinted.images[10]].label, "mask");
+        assert!(!scene.materials[1].tint_mask, "the mask itself is plain");
         Ok(())
     }
 }

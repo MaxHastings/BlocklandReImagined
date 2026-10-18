@@ -1163,6 +1163,7 @@ fn load_terrain(
         ignore_texture_alpha: false,
         untinted: false,
         baked_lightmap: None,
+        tint_mask: false,
         parameters: Some(parameters),
     });
     out.omissions.push(format!(

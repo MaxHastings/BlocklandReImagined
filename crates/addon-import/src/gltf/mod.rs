@@ -2189,6 +2189,7 @@ fn make_material(
             uv_motion,
             metal,
             surface,
+            tint: None,
         },
         png,
         maps,

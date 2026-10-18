@@ -18,6 +18,7 @@ pub(super) struct Effects {
     /// Marks projectiles leave on bricks: bullet holes.
     pub(super) decals: crate::decals::Decals,
     pub(super) footsteps: crate::footsteps::Footsteps,
+    pub(super) clip_sounds: crate::clip_sounds::ClipSounds,
     pub(super) body_flashes: crate::body_flash::BodyFlashes,
     /// The Tutorial's target practice targets.
     pub(super) tutorial_targets: crate::tutorial_targets::TutorialTargets,
