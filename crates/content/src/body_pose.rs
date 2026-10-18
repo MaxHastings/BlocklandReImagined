@@ -17,6 +17,15 @@ pub struct ActionRef<'input> {
     pub started_at: f64,
 }
 
+/// An additive clip a seat holds at a place along its length, ahead of the
+/// seat's aim and look overlays: Halo's acceleration overlays, sampled
+/// continuously across their keys. `phase` runs 0..1 across the clip.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SeatOverlay<'input> {
+    pub clip: &'input str,
+    pub phase: f32,
+}
+
 /// Already selected/clocked inputs to the existing body layer composition.
 /// The base and crouch clips must belong to the supplied immutable rig.
 pub struct LayerPlanInput<'rig, 'input> {
@@ -30,6 +39,9 @@ pub struct LayerPlanInput<'rig, 'input> {
     pub time: f64,
     pub head_up: bool,
     pub seat_aim: Option<f32>,
+    /// A seat's authored overlays, applied before `seat_aim`/`look`. Clips a
+    /// body lacks, or that are not additive, are skipped and reported.
+    pub seat_overlays: &'input [SeatOverlay<'input>],
     /// Normalized phase from the caller's existing pitch/limit mapping.
     pub look_phase: f32,
     pub head_yaw: f32,
@@ -116,6 +128,17 @@ pub fn plan_body_layers<'rig>(
     layers.extend(absolute_actions.iter().copied());
     order(&mut layers);
     let mut overlays = Vec::new();
+    for overlay in input.seat_overlays {
+        match named(&overlay.clip.to_ascii_lowercase()).filter(|clip| clip.additive) {
+            Some(clip) if overlay.phase.is_finite() => overlays.push(Layer {
+                animation: clip,
+                time: overlay.phase.clamped(0., 1.) * clip.duration,
+                weight: 1.,
+            }),
+            Some(_) => {}
+            None => skipped.push(overlay.clip.to_ascii_lowercase()),
+        }
+    }
     if input.head_up
         && let Some(clip) = role(Role::HeadUp)
     {
@@ -687,6 +710,7 @@ mod tests {
             duration,
             looping: false,
             additive,
+            parent_translations: false,
             priority,
             nodes: vec![crate::shape::NodeTrack {
                 node: "Mount0".into(),
@@ -735,6 +759,7 @@ mod tests {
             time: 0.1,
             head_up: false,
             seat_aim: None,
+            seat_overlays: &[],
             look_phase: 0.25,
             head_yaw: 0.,
             crouched: false,
@@ -886,6 +911,62 @@ mod tests {
         input.ready_role = Some(Role::AimBoth);
         input.omit_ready = true;
         assert!(!names(&plan_body_layers(&rig, &roles, input)?.layers).contains(&"armreadyright"));
+        Ok(())
+    }
+    #[test]
+    fn seat_overlays_sample_additive_clips_ahead_of_the_aim_and_report_the_rest() -> Result<()> {
+        let mut rig = planning_rig();
+        for (name, additive) in [("accel_a", true), ("accel_b", true), ("rigid", false)] {
+            let clip = planning_clip(name, 3, additive, 4.);
+            rig.sequences.insert(clip.name.clone(), clip);
+        }
+        let roles = RoleClips::resolve(&Default::default(), |n| rig.sequence(n).is_some());
+        let overlays = [
+            SeatOverlay {
+                clip: "ACCEL_A",
+                phase: 0.25,
+            },
+            SeatOverlay {
+                clip: "accel_b",
+                phase: 7.,
+            },
+            SeatOverlay {
+                clip: "rigid",
+                phase: 0.5,
+            },
+            SeatOverlay {
+                clip: "absent",
+                phase: 0.5,
+            },
+            SeatOverlay {
+                clip: "accel_a",
+                phase: f32::NAN,
+            },
+        ];
+        rig.sequences.get_mut("seataim").unwrap().additive = true;
+        let roles = RoleClips::resolve(&Default::default(), |n| rig.sequence(n).is_some());
+        let mut input = planning_input(rig.sequence("base"), &[]);
+        input.seat_aim = Some(0.5);
+        input.seat_overlays = &overlays;
+        let plan = plan_body_layers(&rig, &roles, input)?;
+        let layer = |name: &str| plan.layers.iter().position(|l| l.animation.name == name);
+        let at = |name: &str| plan.layers[layer(name).unwrap()].time;
+        // Phase runs 0..1 across the clip's own length, clamped.
+        assert_eq!(at("accel_a"), 1.);
+        assert_eq!(at("accel_b"), 4.);
+        // They sit before the aim overlay, as Halo applies them.
+        assert!(layer("accel_a") < layer("seataim") && layer("accel_b") < layer("seataim"));
+        // A rigid clip is no overlay and a missing one is none: both are
+        // reported by name.
+        assert!(layer("rigid").is_none());
+        assert_eq!(plan.skipped, vec!["rigid".to_string(), "absent".to_string()]);
+        // Still a sampleable stack.
+        crate::animation::sample_layers_with_transition(
+            &rig.shape,
+            &plan.layers,
+            plan.transition_at,
+            None,
+        )?;
         Ok(())
     }
     #[test]

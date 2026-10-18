@@ -25,6 +25,7 @@ fn clip(name: &str, node: &str, at: Vec3) -> Animation {
         duration: 1.,
         looping: false,
         additive: false,
+        parent_translations: false,
         priority: 12,
         nodes: vec![NodeTrack {
             node: node.into(),

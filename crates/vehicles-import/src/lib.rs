@@ -292,6 +292,8 @@ pub fn lower(
             rider_pose: None,
             rider_ready_policy: None,
             rider_fallback_hip: None,
+            rider_aim_pitch: None,
+            rider_acceleration: None,
             eye: None,
             transform: find_node(s, &n, &node)?,
             node,
@@ -449,6 +451,7 @@ pub fn lower(
             automatic: None,
             recoil: None,
             look_animation_pitch: None,
+            aim_limits: None,
             look_muzzle: Vec::new(),
         })
     } else {
@@ -531,6 +534,7 @@ pub fn lower(
         attachment_mount,
         attachment_fallback_seat,
         turret_sway: None,
+        turret_acceleration: None,
         collision_hulls: hulls,
         bounds_min: lo.to_array(),
         bounds_max: hi.to_array(),

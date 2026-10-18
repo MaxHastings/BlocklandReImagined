@@ -352,6 +352,7 @@ fn lower_sequence(
         duration: s.duration,
         looping: s.flags & 16 != 0,
         additive: s.flags & 8 != 0,
+        parent_translations: false,
         priority: s.priority,
         nodes: tracks.into_values().collect(),
         objects,

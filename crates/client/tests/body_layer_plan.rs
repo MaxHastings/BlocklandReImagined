@@ -24,6 +24,7 @@ fn clip(
         duration: 1.,
         looping: false,
         additive,
+        parent_translations: false,
         priority,
         nodes: vec![NodeTrack {
             node: node.into(),

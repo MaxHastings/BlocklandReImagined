@@ -67,6 +67,9 @@ pub struct VehicleSave {
     /// transform, velocity and `grounded` above.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub actor: Option<PlayerState>,
+    /// Where a barrel with aim limits has followed its gunner's aim to.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub aim: Option<crate::aim::AimFollow>,
 }
 impl Checkpoint {
     pub fn decode(bytes: &[u8]) -> Result<Self> {
@@ -129,6 +132,7 @@ impl VehiclesWorld {
                 steering_quiet: v.steering_quiet,
                 grounded: v.actor.as_ref().is_some_and(|a| a.state().grounded),
                 actor: v.actor.as_ref().map(|a| a.state().clone()),
+                aim: v.aim,
             });
         }
         Ok(Checkpoint {
@@ -210,13 +214,16 @@ impl VehiclesWorld {
             };
             if let (Some(handle), Some(mount)) = (turret_collider, &d.attachment_mount) {
                 let mut pose = local_pose(mount, saved.spawn.scale);
-                pose.rotation *= Quat::from_rotation_y(
-                    d.weapon_seat()
-                        .and_then(|i| saved.controls.get(i))
-                        .copied()
-                        .unwrap_or_default()
-                        .aim_yaw,
-                );
+                pose.rotation *= Quat::from_rotation_y(saved.aim.map_or_else(
+                    || {
+                        d.weapon_seat()
+                            .and_then(|i| saved.controls.get(i))
+                            .copied()
+                            .unwrap_or_default()
+                            .aim_yaw
+                    },
+                    |follow| follow.aim()[0],
+                ));
                 world.colliders[handle].set_position_wrt_parent(pose);
             }
             let actor = if d.is_actor() {
@@ -292,6 +299,7 @@ impl VehiclesWorld {
                     actor,
                     relocations: 0,
                     turret_aim: None,
+                    aim: saved.aim,
                     straddles: Vec::new(),
                     fills: Vec::new(),
                 },

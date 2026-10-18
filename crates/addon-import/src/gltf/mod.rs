@@ -1893,6 +1893,7 @@ fn sample_clip(
         duration: if frames == 1 { 0.0 } else { duration },
         looping,
         additive,
+        parent_translations: false,
         priority,
         nodes: tracks,
         objects: Vec::new(),

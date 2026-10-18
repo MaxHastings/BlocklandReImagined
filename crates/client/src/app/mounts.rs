@@ -25,6 +25,9 @@ pub(super) struct Mounts {
     /// This frame's aim across its range for every gunner, 0 aiming
     /// highest to 1 lowest (`ClientVehicles::seat_aim`).
     pub(super) rider_aims: BTreeMap<bri_world::OwnerId, f32>,
+    /// This frame's seat overlays (Halo's acceleration poses) for every
+    /// rider whose seat authors them (`ClientVehicles::seat_overlays`).
+    pub(super) rider_overlays: BTreeMap<bri_world::OwnerId, Vec<(String, f32)>>,
     /// This frame's first-person eye while the local player rides a vehicle
     /// or another player, or sits, from their posed `eye` node.
     pub(super) posed_eye: Option<Vec3>,

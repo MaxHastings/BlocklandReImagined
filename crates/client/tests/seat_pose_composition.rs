@@ -40,6 +40,7 @@ fn clip(name: &str, priority: i32, nodes: &[(&str, [f32; 3])]) -> Animation {
         duration: 1.,
         looping: false,
         additive: false,
+        parent_translations: false,
         priority,
         nodes: nodes
             .iter()

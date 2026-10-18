@@ -69,12 +69,23 @@ fn read(root: &Path, asset: &Asset, limit: u64) -> Result<Vec<u8>> {
     Ok(bytes)
 }
 
+/// Where `pitch` falls along a three-key aim clip ordered highest, level,
+/// lowest whose end keys sit at `up` and `down` radians: 0 at `up`, 0.5
+/// level, 1 at `down`, each half sampled evenly (Halo's aiming screens, with
+/// different `up_pitch_per_frame` and `down_pitch_per_frame`).
+pub fn aim_phase(down: f32, up: f32, pitch: f32) -> f32 {
+    if pitch >= 0. {
+        0.5 * (1. - pitch / up).clamped(0., 1.)
+    } else {
+        0.5 + 0.5 * (pitch / down).clamped(0., 1.)
+    }
+}
+
 impl Definition {
     /// Shared look phase for rendered geometry, effect sockets and host shots.
     pub fn look_phase(&self, pitch: f32) -> f32 {
         match self.weapon.as_ref().and_then(|w| w.look_animation_pitch) {
-            Some([_, up]) if pitch >= 0. => 0.5 * (1. - pitch / up).clamped(0., 1.),
-            Some([down, _]) => 0.5 + 0.5 * (pitch / down).clamped(0., 1.),
+            Some([down, up]) => aim_phase(down, up, pitch),
             None => look_phase(pitch),
         }
     }

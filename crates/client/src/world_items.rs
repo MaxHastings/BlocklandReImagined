@@ -1699,6 +1699,7 @@ mod tests {
             duration: 0.5,
             looping,
             additive: false,
+            parent_translations: false,
             priority: 0,
             nodes: vec![],
             objects: vec![],

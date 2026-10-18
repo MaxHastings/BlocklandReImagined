@@ -221,6 +221,7 @@ impl App {
         self.mounts.rider_fallback_hips.clear();
         self.mounts.rider_hands.clear();
         self.mounts.rider_aims.clear();
+        self.mounts.rider_overlays.clear();
         self.mounts.posed_eye = None;
         self.mounts.tumble = None;
         self.view.observer_eye = None;
