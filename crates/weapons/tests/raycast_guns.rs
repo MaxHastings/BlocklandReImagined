@@ -345,7 +345,7 @@ fn bad_hitscans_and_slowdowns_are_refused() {
     for (good, bad) in [
         (r#""explosion": "SparkProjectile","#, long.as_str()),
         (r#""divisor": 2"#, r#""divisor": 0.5"#),
-        (r#""moving_range": 85"#, r#""moving_range": 5000"#),
+        (r#""moving_range": 85"#, r#""moving_range": 9000"#),
         (r#""not_loaded": 9"#, r#""not_loaded": 99"#),
     ] {
         assert!(GUNS.contains(good), "{good}");

@@ -376,7 +376,7 @@ fn left_images_and_hitscans_are_checked() {
         "\"mount_point\": 1, \"left_image\": \"kit:image/pistol\",",
     );
     assert!(Pack::from_json(nested.as_bytes()).is_err());
-    let far = PISTOLS.replace("\"range\": 200, \"tracer\"", "\"range\": 5000, \"tracer\"");
+    let far = PISTOLS.replace("\"range\": 200, \"tracer\"", "\"range\": 9000, \"tracer\"");
     assert!(Pack::from_json(far.as_bytes()).is_err());
     let rest = PISTOLS.replace("\"after_ticks\": 60", "\"after_ticks\": 0");
     assert!(Pack::from_json(rest.as_bytes()).is_err());
