@@ -1075,8 +1075,13 @@ impl ClientVehicles {
     }
     /// Aim the local gunner's barrel from their own look this frame, as v20
     /// clients do for the object they control, instead of waiting for the
-    /// server's copy. Mirrors the host's mapping in `vehicle_input`.
+    /// server's copy. Mirrors the host's mapping in `vehicle_input`. A
+    /// barrel with aim limits lags its look by design, so it keeps the
+    /// server's copy: the barrel the shots leave along.
     pub fn aim_locally(&mut self, vehicle: u64, d: &Definition, look_yaw: f32, look_pitch: f32) {
+        if d.weapon.as_ref().is_some_and(|w| w.aim_limits.is_some()) {
+            return;
+        }
         let Some(frame) = self.frames.get_mut(&vehicle) else {
             return;
         };

@@ -449,6 +449,7 @@ pub fn lower(
             automatic: None,
             recoil: None,
             look_animation_pitch: None,
+            aim_limits: None,
             look_muzzle: Vec::new(),
         })
     } else {

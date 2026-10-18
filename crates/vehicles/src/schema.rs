@@ -389,6 +389,12 @@ pub struct Weapon {
     /// sample is halfway through. Omitted clips retain v20's +/-90 degrees.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub look_animation_pitch: Option<[f32; 2]>,
+    /// How fast the barrel swings onto its gunner's aim (Halo's
+    /// `aiming_velocity_maximum` and `aiming_acceleration_maximum`): it
+    /// lags the look and turns no faster than this, and shots leave along
+    /// where it points. Left out, the barrel is on the look at once, as in v20.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub aim_limits: Option<crate::aim::AimLimits>,
     /// Weapon-frame muzzle node positions from full up to full down, sampled
     /// from the model's `look` clip at load (see `muzzle`). Empty without one.
     #[serde(skip)]
@@ -1644,6 +1650,10 @@ impl Pack {
                 "seat hand nodes need a weapon attachment seat and names up to 64 characters"
             );
             if let Some(w) = &d.weapon {
+                ensure!(
+                    w.aim_limits.is_none_or(|l| l.valid()),
+                    "invalid weapon aim limits"
+                );
                 ensure!(
                     w.look_animation_pitch.is_none_or(|[down, up]| {
                         down.is_finite()
