@@ -130,7 +130,7 @@ The fields you are most likely to change:
 | image | `guard` | a shield raised in some states (below) |
 | projectile | `fixed_damage` | its direct damage stays as authored at any scale |
 | item | `ui_name` | the name players see |
-| image | `zoom` | `{ "fov": 20, "on_jet": true, "crosshair": false, "first_person": true }`: aim with the zoom key (and the right mouse button with `on_jet`), hide the crosshair, force first person while aiming. More under "Scopes" below |
+| image | `zoom` | `{ "fov": 20, "on_jet": true, "crosshair": false, "first_person": true }` (or `"magnification": 2`: zoom to that many times the player's own view by tangent, 90 to 53.1 and 70 to 38.6, with `fov` kept as a fallback): aim with the zoom key (and the right mouse button with `on_jet`), hide the crosshair, force first person while aiming. More under "Scopes" below |
 | image | `eye_offset`, `eye_rotation` | where the weapon sits in first person: exactly there, relative to the camera, as Torque places it, so a scope whose sight is on the eye line stays centred at any zoom |
 | image | `hide_nodes` | the holder's body nodes hidden while the image is held, shown again when it goes: `["lhand", "rhand", "lhook", "rhook"]` for a model that draws its own hands (v20's `hideNode` in `onMount`). Up to 16 |
 | image | `both_arms` | `true` holds it up with both arms (`armReadyBoth`), not the mount hand's arm alone |

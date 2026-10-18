@@ -1322,7 +1322,12 @@ impl Controls {
     }
     fn target_fov(&self) -> f32 {
         if let Some(aim) = self.aim_while_aiming() {
-            aim.level_fov(self.aim_level)
+            let unzoomed = self.server_fov.unwrap_or_else(|| {
+                self.body_camera
+                    .profile
+                    .fov_for(self.normal_fov.unwrap_or(90.0))
+            });
+            aim.level_fov_from(self.aim_level, unzoomed)
                 .clamped(ZOOM_FOV_RANGE.0, ZOOM_FOV_RANGE.1)
         } else if self.held(HeldControl::Zoom) && (self.aim.is_none() || self.aim_state_allowed) {
             self.zoom_fov.unwrap_or(10.0)
@@ -2259,6 +2264,30 @@ mod tests {
             c.advance_zoom(1.0 / 60.0);
             c.advance_view(1.0 / 60.0);
         }
+    }
+    #[test]
+    fn a_magnified_aim_zooms_by_tangent_from_the_players_own_view() {
+        let mut zoom = scope();
+        zoom.magnification = Some(2.0);
+        for (normal, expected) in [(90.0_f32, 53.130_1), (70.0, 38.590_7)] {
+            let mut c = Controls::default();
+            c.set_fov_prefs(normal, 10.0);
+            held(&mut c, HeldControl::Jet, true);
+            c.set_aim_in_state(Some(zoom.clone()), Some("Ready"));
+            settle(&mut c);
+            assert!(
+                (c.fov() - expected).abs() < 0.01,
+                "{normal}: {} not {expected}",
+                c.fov()
+            );
+        }
+        // The wheel's further levels keep their own fixed fields of view.
+        let mut c = Controls::default();
+        held(&mut c, HeldControl::Jet, true);
+        c.set_aim_in_state(Some(zoom), Some("Ready"));
+        assert!(c.aim_wheel(1));
+        settle(&mut c);
+        assert!((c.fov() - 10.0).abs() < 0.01);
     }
     fn restricted_scope() -> bri_weapons::Zoom {
         let mut profile = scope();

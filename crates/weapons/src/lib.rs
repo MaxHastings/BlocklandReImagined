@@ -321,6 +321,13 @@ fn zero3(v: &[f32; 3]) -> bool {
 pub struct Zoom {
     /// Horizontal field of view while aiming, 5 to 85 degrees.
     pub fov: f32,
+    /// A magnification in place of `fov` for the first aim step, 1.05 to 16:
+    /// the view zooms to this many times the view the player has when not
+    /// aiming, by tangent (a 2 narrows 90 degrees to 53.1 and 70 to 38.6), as a
+    /// weapon's zoom range does. `fov` stays as the fallback and must still be
+    /// valid; `levels` keep their own fixed fields of view.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub magnification: Option<f32>,
     /// Image states that permit visual aiming. Omitted allows every state;
     /// an explicit empty list allows none. Names match ASCII case-insensitively.
     /// This never changes trigger eligibility or the right button's jet ownership.
@@ -376,6 +383,16 @@ impl Zoom {
             n => self.levels[n - 1],
         }
     }
+    /// [`Self::level_fov`], with a `magnification` applied to the field of
+    /// view `unzoomed` the player has when not aiming.
+    pub fn level_fov_from(&self, level: usize, unzoomed: f32) -> f32 {
+        match (level.min(self.levels.len()), self.magnification) {
+            (0, Some(m)) if m.is_finite() && m > 0.0 && unzoomed.is_finite() => {
+                2.0 * ((unzoomed.to_radians() / 2.0).tan() / m).atan().to_degrees()
+            }
+            _ => self.level_fov(level),
+        }
+    }
     /// Whether a known current image state allows visual aiming. Restricted
     /// profiles with no current state fail closed; an omitted list is legacy.
     pub fn allows_state(&self, state: Option<&str>) -> bool {
@@ -399,6 +416,12 @@ impl Zoom {
                 "levels: up to {} fields of view, 5 to 85 degrees, each narrower than the last",
                 Self::MAX_LEVELS
             ));
+        }
+        if self
+            .magnification
+            .is_some_and(|m| !(m.is_finite() && (1.05..=16.0).contains(&m)))
+        {
+            return Err("magnification 1.05 to 16".into());
         }
         if !(self.sensitivity.is_finite() && (0.1..=4.0).contains(&self.sensitivity)) {
             return Err("sensitivity 0.1 to 4".into());
