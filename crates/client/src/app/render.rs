@@ -1264,6 +1264,13 @@ impl App {
             );
         }
         lights.truncate(bri_render::scene::MAX_POINT_LIGHTS);
+        // Map lights past the shaded budget fill what the effects leave.
+        let overflow = super::lighting::overflow_point_lights(
+            &self.lighting.light_volume.overflow,
+            eye,
+            lights.len(),
+        );
+        lights.extend(overflow);
         renderer.update_lights(frame.queue, &lights)?;
         let effects_renderer = self
             .gpu
@@ -1889,6 +1896,7 @@ impl App {
             );
             self.lighting.light_volume.animations = visual.light_animations;
             self.lighting.light_volume.spots = visual.light_spots;
+            self.lighting.light_volume.overflow = visual.overflow_lights;
             self.scene.cpu_scene = Some(visual.scene);
             self.scene.cpu_terrain = visual.terrain.into_iter().map(Arc::new).collect();
             self.scene.scenery.reset();
