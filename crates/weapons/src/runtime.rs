@@ -683,6 +683,9 @@ pub struct Projectile {
     /// Bounces so far, for `max_bounces`. Host bookkeeping, not replicated.
     #[serde(skip)]
     pub bounces: u32,
+    /// The age its [`crate::Fuse`] started burning at. Host bookkeeping.
+    #[serde(skip)]
+    pub fuse_started: Option<u32>,
     /// The runtime tick it was made on; `children` and `aura` count from it.
     /// Host bookkeeping, not replicated.
     #[serde(skip)]
@@ -2661,8 +2664,8 @@ impl WeaponsWorld {
                 hand,
                 paint: None,
                 magazine,
-            fidget: None,
-        });
+                fidget: None,
+            });
             if self
                 .pack
                 .images
@@ -3079,6 +3082,7 @@ impl WeaponsWorld {
                 paint: None,
                 heading: None,
                 bounces: 0,
+                fuse_started: None,
                 spawned: self.tick,
             },
         );
@@ -3135,6 +3139,7 @@ impl WeaponsWorld {
             paint: None,
             heading: None,
             bounces: 0,
+            fuse_started: None,
             spawned: self.tick,
         });
         Ok(())
@@ -4277,6 +4282,13 @@ impl WeaponsWorld {
                 None => p.stuck_to = None,
             }
         }
+        if let Some(fuse) = &d.fuse
+            && p.fuse_started.is_some_and(|at| p.age >= at + fuse.ticks)
+            && p.age >= fuse.not_before_ticks
+        {
+            self.explode(p, d, q, None, None, None);
+            return false;
+        }
         if let Some(bursts) = expires(d, p.age, self.fuses.get(&p.id).copied()) {
             if bursts {
                 self.explode(p, d, q, None, None, None);
@@ -4457,6 +4469,7 @@ impl WeaponsWorld {
                     p.heading = p.velocity.try_normalize();
                     p.velocity = Vec3::ZERO;
                     self.effect(p, &d.stick_effect, Some(normal), contact_geometry);
+                    self.start_fuse(p, d, true, normal, contact_geometry);
                     return true;
                 }
                 Rebound::Bounced { velocity, bursts } => {
@@ -4481,6 +4494,8 @@ impl WeaponsWorld {
             p.position += normal * 0.001;
             p.bounced = true;
             p.bounces += 1;
+            let at_rest = d.rest_speed > 0.0 && p.velocity.length() < d.rest_speed;
+            self.start_fuse(p, d, at_rest, normal, contact_geometry);
             if last {
                 self.explode(p, d, q, Some(normal), Some(hit.target), contact_geometry);
                 return false;
@@ -4563,6 +4578,26 @@ impl WeaponsWorld {
         true
     }
     /// An explosion's composite plus its `soundProfile`, both at the projectile.
+    /// Starts the projectile's [`crate::Fuse`] if this is the moment it waits
+    /// for: any bounce for `Bounce`, a still projectile (`at_rest`) for
+    /// `Rest`.
+    fn start_fuse(
+        &mut self,
+        p: &mut Projectile,
+        d: &ProjectileDef,
+        at_rest: bool,
+        normal: Vec3,
+        contact: Option<ContactGeometry>,
+    ) {
+        let Some(fuse) = &d.fuse else { return };
+        if p.fuse_started.is_some() {
+            return;
+        }
+        if fuse.start == FuseStart::Bounce || at_rest {
+            p.fuse_started = Some(p.age);
+            self.effect(p, &fuse.effect, Some(normal), contact);
+        }
+    }
     fn effect(
         &mut self,
         p: &Projectile,
@@ -4993,6 +5028,7 @@ impl WeaponsWorld {
             paint: None,
             heading: None,
             bounces: landing,
+            fuse_started: None,
             spawned: self.tick,
         };
         let contact = ProjectileContact {
