@@ -208,6 +208,10 @@ pub struct State {
     pub emitter_node: String,
     pub emitter_seconds: f32,
     pub eject_shell: bool,
+    /// After the image rests in this state for a random while, it goes to
+    /// another ([`Fidget`]): a weapon's idle fidget.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fidget: Option<Fidget>,
     /// What happens a while after the state is entered, as v20 scripts
     /// scheduled it by hand (`%obj.schedule(450, "playThread", 2, plant)`,
     /// `schedule(650, 0, serverPlay3D, ...)`): up to 16, each played even
@@ -289,6 +293,33 @@ impl Spin {
             Self::SpinDown => 1. - through,
             Self::FullSpeed => 1.,
         }
+    }
+}
+/// [`State::fidget`]: once the image has been in the state for a random time
+/// in `seconds`, it enters state `to`, unless the draw falls under `skip`,
+/// which draws a new time instead. Any other transition out of the state
+/// (the trigger, a timeout) comes first and ends the wait. Halo's rifle waits
+/// 10 to 15 seconds, skips a quarter of the draws, and plays its posing clip.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Fidget {
+    /// The shortest and longest wait, seconds (0.1 to 3600).
+    pub seconds: [f32; 2],
+    /// The state it goes to, by index.
+    pub to: usize,
+    /// The share of draws that skip the fidget (0 to 0.95).
+    #[serde(default)]
+    pub skip: f32,
+}
+impl Fidget {
+    pub fn valid(&self) -> bool {
+        let [low, high] = self.seconds;
+        low.is_finite()
+            && high.is_finite()
+            && (0.1..=3600.0).contains(&low)
+            && (low..=3600.0).contains(&high)
+            && self.skip.is_finite()
+            && (0.0..=0.95).contains(&self.skip)
     }
 }
 impl State {
@@ -3656,6 +3687,12 @@ impl Pack {
                 .flatten()
                 {
                     ensure!(index < image.states.len(), "Invalid state target");
+                }
+                if let Some(fidget) = &state.fidget {
+                    ensure!(
+                        fidget.valid() && fidget.to < image.states.len(),
+                        "Invalid state fidget: seconds 0.1 to 3600 (shortest first), a state of the image, skip 0 to 0.95"
+                    );
                 }
             }
             for p in image.projectile_refs() {

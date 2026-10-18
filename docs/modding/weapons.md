@@ -589,6 +589,16 @@ Everyone in a
 game needs the same weapons, so give the Add-On to the people you play
 with.
 
+## Idle fidget
+
+A state may carry `"fidget": { "seconds": [10, 15], "to": 7, "skip": 0.25 }`: once the
+image has rested in that state for a random time in `seconds`, it enters state `to` (by index),
+unless the draw falls under `skip` (0 to 0.95), which waits again for a new time. A trigger
+transition or timeout out of the state comes first and ends the wait, and the state `to` goes
+where any state goes (back to the rest by `timeout`, to a shot by `down`). The draws are
+deterministic in the world's tick and the holder. Halo's rifle waits 10 to 15 seconds and
+plays its 118-frame posing clip.
+
 ## Timing the check reports before the game runs
 
 `bri-addon-check` (and the port tool) reads each weapon image's state machine

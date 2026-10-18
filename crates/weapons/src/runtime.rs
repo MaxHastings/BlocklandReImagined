@@ -800,6 +800,10 @@ struct Equipped {
     /// The key its magazine's rounds are kept under, fixed as it mounts.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     magazine: Option<String>,
+    /// Ticks until the state's idle fidget ([`crate::State::fidget`]), drawn
+    /// as the state is entered.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    fidget: Option<u32>,
 }
 /// Torque's `nextImage`: a right-hand image asked for while the held one's
 /// state forbids image changes. It mounts on the next state that allows one.
@@ -2471,6 +2475,7 @@ impl WeaponsWorld {
             hand: EMOTE_SLOT,
             paint: None,
             magazine: None,
+            fidget: None,
         });
         if let Some(command) = self.pack.images[image].commands.mount.clone() {
             self.events.push(Event::ToolFire {
@@ -2641,7 +2646,8 @@ impl WeaponsWorld {
                 hand,
                 paint: None,
                 magazine,
-            });
+            fidget: None,
+        });
             if self
                 .pack
                 .images
@@ -3313,6 +3319,9 @@ impl WeaponsWorld {
         if e.entered && e.remaining > 0 {
             e.remaining -= 1;
         }
+        if let Some(wait) = e.fidget.as_mut() {
+            *wait = wait.saturating_sub(1);
+        }
         // The state the image just left, for `arm_once`.
         let mut left = None;
         for _ in 0..16 {
@@ -3328,6 +3337,9 @@ impl WeaponsWorld {
                     return Advance::Switch;
                 }
                 e.entered = true;
+                e.fidget = state
+                    .fidget
+                    .map(|f| fidget_wait(self.tick, id.0, e.state as u64, &f));
                 e.remaining = if self_loop {
                     ((state.emitter_seconds * TICK_HZ as f32).ceil() as u32).max(1)
                 } else {
@@ -3508,6 +3520,18 @@ impl WeaponsWorld {
                 state.timeout
             } else {
                 None
+            });
+            // The fidget: when its wait is over, go there, or draw again.
+            let next = next.or_else(|| match (state.fidget, e.fidget) {
+                (Some(f), Some(0)) => {
+                    if unit_random(self.tick, id.0, FIDGET_SKIP + e.state as u64) < f.skip {
+                        e.fidget = Some(fidget_wait(self.tick, id.0, e.state as u64 + 64, &f));
+                        None
+                    } else {
+                        Some(f.to)
+                    }
+                }
+                _ => None,
             });
             let Some(next) = next else {
                 return Advance::Keep;
@@ -5381,6 +5405,15 @@ fn guard_held<'a>(
 /// The middle of a holder's body (Torque's hack position).
 fn body(a: &Actor) -> Vec3 {
     a.frame.middle.unwrap_or(a.frame.eye)
+}
+/// [`unit_random`]'s `n` for whether an idle fidget is skipped, and for its wait.
+const FIDGET_SKIP: u64 = 7000;
+const FIDGET_WAIT: u64 = 7100;
+/// Ticks of an idle fidget's wait, drawn from its range.
+fn fidget_wait(tick: u64, actor: u64, salt: u64, fidget: &crate::Fidget) -> u32 {
+    let [low, high] = fidget.seconds;
+    let seconds = low + (high - low) * unit_random(tick, actor, FIDGET_WAIT + salt);
+    ((seconds * TICK_HZ as f32).round() as u32).max(1)
 }
 fn unit_random(tick: u64, actor: u64, n: u64) -> f32 {
     let mut z = tick
