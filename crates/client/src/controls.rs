@@ -2598,8 +2598,15 @@ mod view_shake_tests {
             steps += 1;
         }
         assert!(c.view_shake.is_none(), "it ends");
-        assert!((0.3..0.4).contains(&peak), "out to about the peak, not past a frame's step: {peak}");
-        assert!((0.03..0.1).contains(&c.pitch), "the aim is left off by about the minimum: {}", c.pitch);
+        assert!(
+            (0.3..0.4).contains(&peak),
+            "out to about the peak, not past a frame's step: {peak}"
+        );
+        assert!(
+            (0.03..0.1).contains(&c.pitch),
+            "the aim is left off by about the minimum: {}",
+            c.pitch
+        );
         assert!(c.yaw.abs() < 1e-6, "direction 0 turns pitch only");
     }
 
@@ -2610,6 +2617,9 @@ mod view_shake_tests {
         for _ in 0..600 {
             c.advance_view_shake(1.0 / 120.0);
         }
-        assert!(c.yaw.abs() < 0.02 && c.pitch.abs() < 0.02, "back to where it was with min 0");
+        assert!(
+            c.yaw.abs() < 0.02 && c.pitch.abs() < 0.02,
+            "back to where it was with min 0"
+        );
     }
 }

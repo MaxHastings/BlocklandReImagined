@@ -2950,7 +2950,9 @@ fn register_presentation(engine: &mut Engine) {
             scale,
         }))
     }
-    engine.register_fn("effect_at", |e: &str, p: Array, d: Array| effect_at(e, p, d, 1.0));
+    engine.register_fn("effect_at", |e: &str, p: Array, d: Array| {
+        effect_at(e, p, d, 1.0)
+    });
     engine.register_fn("effect_at", |e: &str, p: Array, d: Array, s: Dynamic| {
         effect_at(e, p, d, float(&s)?)
     });
