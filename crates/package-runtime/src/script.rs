@@ -2965,8 +2965,7 @@ fn register_presentation(engine: &mut Engine) {
             profile: Some(profile.to_owned()),
         }))
     });
-    engine.register_fn("set_teleport_sound", |profile: ()| {
-        let _ = profile;
+    engine.register_fn("set_teleport_sound", |_none: ()| {
         push(Op::SetTeleportSound(ops::SetTeleportSound { profile: None }))
     });
     engine.register_fn("beam", |from: Array, to: Array| beam(from, to, Map::new()));
