@@ -638,12 +638,18 @@ impl PlayerState {
         };
         Vec3::new(self.yaw.cos(), 0.0, self.yaw.sin()) * (self.posture.lean * lean.distance)
     }
-    /// How far a lean tilts the view and the body, radians (right
-    /// positive).
+    /// How far a lean tilts the view, radians (right positive).
     pub fn lean_tilt(&self, tuning: &PlayerTuning) -> f32 {
         tuning
             .lean
             .map_or(0.0, |lean| self.posture.lean * lean.angle)
+    }
+    /// How far a lean tilts the drawn body, radians (right positive): the
+    /// view's tilt unless the lean sets its own `body_angle`.
+    pub fn lean_body_tilt(&self, tuning: &PlayerTuning) -> f32 {
+        tuning.lean.map_or(0.0, |lean| {
+            self.posture.lean * lean.body_angle.unwrap_or(lean.angle)
+        })
     }
     /// [`Self::eye`], or with `seated` the `Eye` node of the held `sit`
     /// pose (`/sit`, a seat whose pose is `sit`): it owns the node over
@@ -849,6 +855,11 @@ pub struct Lean {
     /// How far the view and the body tilt at full lean, radians, 0 to 0.6.
     #[serde(default = "Lean::default_angle")]
     pub angle: f32,
+    /// How far the drawn body tilts at full lean when that is not the view's
+    /// `angle` (a game that rolls the view but poses the body itself leaves
+    /// it upright with 0), radians, 0 to 0.6.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub body_angle: Option<f32>,
     /// Seconds from upright to full lean, 0.05 to 2.
     #[serde(default = "Lean::default_seconds")]
     pub seconds: f32,
@@ -1011,6 +1022,8 @@ impl PlayerTuning {
                     && l.distance <= self.width * 0.5 + 1e-4
                     && l.angle.is_finite()
                     && (0.0..=0.6).contains(&l.angle)
+                    && l.body_angle
+                        .is_none_or(|a| a.is_finite() && (0.0..=0.6).contains(&a))
                     && l.seconds.is_finite()
                     && (0.05..=2.0).contains(&l.seconds),
                 "Invalid lean: distance 0 to half the body's width, angle 0 to 0.6, seconds 0.05 to 2"
