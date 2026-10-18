@@ -67,10 +67,9 @@ fn motion(s: &Session, owner: u64) -> bri_sim::player::PlayerState {
 }
 
 #[test]
-fn a_fourth_number_is_the_way_the_player_faces() {
+fn a_fourth_number_is_the_way_the_player_faces_when_they_spawn() {
     let (mut s, _root) = session("fn on_pick_spawn(p) { [10.0, 0.05, -20.0, 1.25] }", "four");
-    let p = s.join("P".into(), Vec3::ZERO, false).unwrap();
-    s.step().unwrap();
+    let p = s.join("P".into(), Vec3::new(0.0, 0.05, 0.0), false).unwrap();
     let state = motion(&s, p);
     assert!((Vec3::from(state.feet) - Vec3::new(10.0, 0.05, -20.0)).length() < 0.01, "{:?}", state.feet);
     assert!((state.yaw - 1.25).abs() < 1e-4, "yaw {}", state.yaw);
@@ -80,8 +79,7 @@ fn a_fourth_number_is_the_way_the_player_faces() {
 #[test]
 fn three_numbers_still_face_the_default_way() {
     let (mut s, _root) = session("fn on_pick_spawn(p) { [10.0, 0.05, -20.0] }", "three");
-    let p = s.join("P".into(), Vec3::ZERO, false).unwrap();
-    s.step().unwrap();
+    let p = s.join("P".into(), Vec3::new(0.0, 0.05, 0.0), false).unwrap();
     let state = motion(&s, p);
     assert!((Vec3::from(state.feet) - Vec3::new(10.0, 0.05, -20.0)).length() < 0.01, "{:?}", state.feet);
     assert!(state.yaw.abs() < 1e-4, "yaw {}", state.yaw);
