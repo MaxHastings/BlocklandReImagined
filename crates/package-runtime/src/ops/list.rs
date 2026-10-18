@@ -183,6 +183,7 @@ macro_rules! for_each_op {
             FollowPath = player,
             Camera = player,
             OrbitCamera = player,
+            ViewShake = player,
         }
     };
 }

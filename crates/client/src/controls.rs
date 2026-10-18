@@ -11,6 +11,38 @@ use std::{
     f32::consts::{FRAC_PI_2, PI},
 };
 
+/// `HumanController::ViewShake`: the look moves along a direction at `rate`
+/// radians a second; at `max` it turns back at half the speed and stops
+/// when it is down to `min`, leaving the aim off by that much.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ViewShake {
+    pitch: f32,
+    yaw: f32,
+    offset: f32,
+    min: f32,
+    max: f32,
+    rate: f32,
+}
+impl ViewShake {
+    /// Step by `seconds`; the pitch and yaw to add, or `None` once it stops.
+    pub fn advance(&mut self, seconds: f32) -> Option<(f32, f32)> {
+        if self.rate == 0.0 {
+            return None;
+        }
+        let delta = seconds * self.rate;
+        self.offset += delta;
+        let turn = (delta * self.pitch, delta * self.yaw);
+        if self.rate > 0.0 {
+            if self.offset >= self.max {
+                self.rate *= -0.5;
+            }
+        } else if self.offset <= self.min {
+            self.rate = 0.0;
+        }
+        Some(turn)
+    }
+}
+
 #[derive(Clone, Default)]
 pub struct Controls {
     /// The corpse camera holds still on the body (a mini-game's
@@ -29,6 +61,8 @@ pub struct Controls {
     /// The host's `setControlCameraFov` (an Add-On's rules), in place of
     /// `normal_fov` until the host hands it back.
     server_fov: Option<f32>,
+    /// A rule's view shake in progress ([`Self::start_view_shake`]).
+    view_shake: Option<ViewShake>,
     /// The body's archetype is `thirdPersonOnly`.
     third_person_only: bool,
     /// Target zoom FOV (`$Pref::player::CurrentFOV`); the wheel steps it.
@@ -1059,6 +1093,36 @@ impl Controls {
     }
     /// The field of view the host sets, or `None` for the player's own. It
     /// glides like any other FOV change.
+    /// A rule kicks the aim (`view_shake`): see [`ViewShake`]. A new kick
+    /// replaces one still running.
+    pub fn start_view_shake(&mut self, direction: f32, min: f32, max: f32, rate: f32) {
+        if [direction, min, max, rate].iter().all(|v| v.is_finite()) {
+            self.view_shake = Some(ViewShake {
+                pitch: direction.cos(),
+                yaw: direction.sin(),
+                offset: 0.0,
+                min,
+                max,
+                rate,
+            });
+        }
+    }
+    /// Run the kick for `seconds`, turning the real look.
+    pub fn advance_view_shake(&mut self, seconds: f32) {
+        let Some(shake) = self.view_shake.as_mut() else {
+            return;
+        };
+        if !seconds.is_finite() || self.death_view {
+            return;
+        }
+        match shake.advance(seconds.min(0.1)) {
+            Some((pitch, yaw)) => {
+                self.pitch = (self.pitch + pitch).clamp(-FRAC_PI_2, FRAC_PI_2);
+                self.yaw += yaw;
+            }
+            None => self.view_shake = None,
+        }
+    }
     pub fn set_server_fov(&mut self, fov: Option<f32>) {
         self.server_fov = fov.filter(|f| f.is_finite()).map(|f| {
             f.clamped(
@@ -2526,5 +2590,47 @@ mod tests {
         held(&mut c, HeldControl::Jet, true);
         swayed(&mut c, 300);
         assert_eq!((c.yaw, c.pitch), (0.0, 0.0));
+    }
+}
+
+#[cfg(test)]
+mod view_shake_tests {
+    use super::*;
+
+    #[test]
+    fn a_view_shake_goes_out_to_its_peak_comes_back_slower_and_leaves_the_minimum() {
+        let mut c = Controls::default();
+        c.start_view_shake(0.0, 0.04, 0.3, 4.0);
+        let mut peak = 0.0f32;
+        let mut steps = 0;
+        while c.view_shake.is_some() && steps < 10_000 {
+            c.advance_view_shake(1.0 / 120.0);
+            peak = peak.max(c.pitch);
+            steps += 1;
+        }
+        assert!(c.view_shake.is_none(), "it ends");
+        assert!(
+            (0.3..0.4).contains(&peak),
+            "out to about the peak, not past a frame's step: {peak}"
+        );
+        assert!(
+            (0.03..0.1).contains(&c.pitch),
+            "the aim is left off by about the minimum: {}",
+            c.pitch
+        );
+        assert!(c.yaw.abs() < 1e-6, "direction 0 turns pitch only");
+    }
+
+    #[test]
+    fn a_sideways_shake_turns_the_yaw() {
+        let mut c = Controls::default();
+        c.start_view_shake(std::f32::consts::FRAC_PI_2, 0.0, 0.2, 4.0);
+        for _ in 0..600 {
+            c.advance_view_shake(1.0 / 120.0);
+        }
+        assert!(
+            c.yaw.abs() < 0.02 && c.pitch.abs() < 0.02,
+            "back to where it was with min 0"
+        );
     }
 }

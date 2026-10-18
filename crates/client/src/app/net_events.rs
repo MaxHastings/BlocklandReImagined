@@ -767,6 +767,15 @@ impl App {
                         bri_sim::session::Notice::Flash { color, seconds } => {
                             UiUpdate::Flash { color, seconds }
                         }
+                        bri_sim::session::Notice::ViewShake {
+                            direction,
+                            min,
+                            max,
+                            rate,
+                        } => {
+                            self.controls.start_view_shake(direction, min, max, rate);
+                            continue;
+                        }
                         bri_sim::session::Notice::Music(play) => {
                             self.audio.play_music(&play);
                             continue;

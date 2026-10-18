@@ -462,6 +462,14 @@ pub enum Notice {
         color: [f32; 4],
         seconds: f32,
     },
+    /// The aim kicked by a rule (`view_shake`): out along `direction` to
+    /// `max`, back to `min`, radians and radians a second.
+    ViewShake {
+        direction: f32,
+        min: f32,
+        max: f32,
+        rate: f32,
+    },
     /// Invitation from a minigame owner, answered with Accept/Reject.
     Invite {
         game: u64,

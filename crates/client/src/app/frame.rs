@@ -114,6 +114,7 @@ impl App {
         self.update_held_weapon();
         self.controls.advance_sway(elapsed.as_secs_f32());
         self.controls.advance_zoom(elapsed.as_secs_f32());
+        self.controls.advance_view_shake(elapsed.as_secs_f32());
         self.controls.ease_roll(elapsed.as_secs_f32());
         let third_person_only = self
             .net
