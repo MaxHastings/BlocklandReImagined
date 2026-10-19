@@ -378,6 +378,11 @@ impl StaticLighting {
         Some(set)
     }
 
+    /// The grid width of the terrain node called `name`, when the lane gave sector lights for it.
+    pub(super) fn terrain_width(&self, name: &str) -> Option<usize> {
+        self.terrains.get(&terrain_key(name)).map(|t| t.width)
+    }
+
     /// Whether the lane gave sector lights for the terrain node called `name`.
     pub(super) fn has_terrain(&self, name: &str) -> bool {
         self.terrains.contains_key(&terrain_key(name))
@@ -408,6 +413,34 @@ impl StaticLighting {
     pub(super) fn maps(&self, k: usize) -> bool {
         self.vertex_map.contains_key(&k)
     }
+}
+
+/// A terrain pass's vertex normals as the engine makes them (`ATerrainInfo::UpdateVertices` 0x2430f0 and `GetVertexNormal` 0x240290): each
+/// grid cell has two triangles, `(a, b, d)` and `(a, d, c)` over its corners `a = (x, y)`, `b = (x + 1, y)`, `c = (x, y + 1)`, `d = (x + 1, y + 1)`,
+/// each with a unit normal; a vertex takes the unit sum of both triangles of each of the (up to four) cells around it. `positions` are the
+/// grid row by row; `reference` says which side is up (the sign of the glTF's own normals).
+pub(super) fn engine_terrain_normals(
+    positions: &[Vec3],
+    reference: &[Vec3],
+    width: usize,
+) -> Vec<Vec3> {
+    let at = |x: usize, y: usize| positions[y * width + x];
+    let up = |n: Vec3, i: usize| {
+        let n = n.normalize_or_zero();
+        if n.dot(reference[i]) < 0.0 { -n } else { n }
+    };
+    let mut sum = vec![Vec3::ZERO; width * width];
+    for y in 0..width - 1 {
+        for x in 0..width - 1 {
+            let i = y * width + x;
+            let (a, b, c, d) = (at(x, y), at(x + 1, y), at(x, y + 1), at(x + 1, y + 1));
+            let cell = up((b - a).cross(d - a), i) + up((d - a).cross(c - a), i);
+            for (cx, cy) in [(x, y), (x + 1, y), (x, y + 1), (x + 1, y + 1)] {
+                sum[cy * width + cx] += cell;
+            }
+        }
+    }
+    sum.into_iter().map(Vec3::normalize_or_zero).collect()
 }
 
 /// The world mesh's [`Rig`] as its primitives are read in order: for each vertex the set (one per static-mesh actor, shared between

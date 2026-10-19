@@ -1052,6 +1052,13 @@ pub fn convert(
                     smooth.clone()
                 }
             };
+            // A lit terrain pass takes the engine's own vertex normals for the sector lights.
+            let normals = match terrain_lighting.and_then(|l| l.terrain_width(&names[k])) {
+                Some(width) if count == width * width => {
+                    static_lighting::engine_terrain_normals(&local, &normals, width)
+                }
+                _ => normals,
+            };
             for (p, nrm) in local.iter().zip(&normals) {
                 mesh.positions.push(place(*p).to_array());
                 let nrm = if skinned { *nrm } else { *nrm / own_scale };
