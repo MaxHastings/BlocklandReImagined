@@ -34,6 +34,8 @@ pub struct MapScene {
     pub scatter: Vec<ScatterScene>,
     /// The map's backdrop, when it has one.
     pub backdrop: Option<BackdropScene>,
+    /// The map's regions with their own fog, when it has them.
+    pub regions: Option<bri_content::regions::RegionMap>,
     /// Set only by the modern loader, which never decodes illumination images.
     pub modern_lights: Option<Vec<crate::map_lighting::MapLight>>,
     /// Animated map lights: an index into `modern_lights` and how it
@@ -100,6 +102,25 @@ fn load_backdrop(
         scene: alone,
         eye: record.eye,
     }))
+}
+
+/// The regions `bundle` lists for `scene` ([`bri_content::regions`]).
+fn load_regions(
+    root: &Path,
+    bundle: &Value,
+    scene: &Scene,
+) -> Result<Option<bri_content::regions::RegionMap>> {
+    let Some(name) = bundle
+        .get("regions")
+        .and_then(|s| s.get(&scene.id))
+        .and_then(Value::as_str)
+    else {
+        return Ok(None);
+    };
+    let map: bri_content::regions::RegionMap =
+        serde_json::from_slice(&read(root, name)?).context("Reading the map's regions")?;
+    map.validate()?;
+    Ok(Some(map))
 }
 
 /// One scatter layer: the model about its own origin and where it is placed.
@@ -674,6 +695,7 @@ fn load_bundle_unscoped(root: &Path, map_id: &str, legacy: bool) -> Result<MapSc
     out.validate()?;
     let scatter = load_scatter(&root, &bundle, bindings, &scene, legacy)?;
     let backdrop = load_backdrop(&root, &bundle, bindings, &scene, legacy)?;
+    let regions = load_regions(&root, &bundle, &scene)?;
     Ok(MapScene {
         scene: out,
         terrain,
@@ -682,6 +704,7 @@ fn load_bundle_unscoped(root: &Path, map_id: &str, legacy: bool) -> Result<MapSc
         movers,
         scatter,
         backdrop,
+        regions,
         modern_lights,
         light_animations,
         light_spots,

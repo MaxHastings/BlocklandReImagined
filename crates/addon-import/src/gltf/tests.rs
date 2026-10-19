@@ -916,6 +916,50 @@ fn a_backdrop_without_an_eye_is_refused() {
 }
 
 #[test]
+fn regions_move_into_the_native_frame_and_the_import_scale() {
+    use bri_content::regions::{Fog, Region, RegionMap};
+    let root = tempfile::tempdir().unwrap();
+    let input = root.path().join("Test Room.glb");
+    std::fs::write(&input, room(false)).unwrap();
+    let fog = Fog {
+        color: [128, 128, 160],
+        start: 10.0,
+        end: 30.0,
+        blend_time: 0.0,
+        clear_to_fog: true,
+    };
+    let map = RegionMap {
+        planes: vec![[1.0, 0.0, 0.0, 5.0]],
+        front: vec![-1],
+        back: vec![-1],
+        front_region: vec![1],
+        back_region: vec![0],
+        regions: vec![Region::default(), Region { fog: Some(fog) }],
+    };
+    let file = root.path().join("regions.json");
+    std::fs::write(&file, serde_json::to_vec(&map).unwrap()).unwrap();
+    let mut opts = Options::new(&input, root.path().join("test_room"), Kind::Map);
+    opts.scale = Some(2.0);
+    opts.regions = Some(file);
+    let report = import(&opts).unwrap();
+    let dir = root.path().join("test_room");
+    let bundle: Value =
+        serde_json::from_slice(&std::fs::read(dir.join("map/bundle.json")).unwrap()).unwrap();
+    let name = bundle["regions"]["test_room:map/test_room"]
+        .as_str()
+        .unwrap();
+    let back: RegionMap =
+        serde_json::from_slice(&std::fs::read(dir.join("map").join(name)).unwrap()).unwrap();
+    // glTF to native flips x and z; lengths take the scale of 2.
+    assert_eq!(back.planes[0], [-1.0, 0.0, 0.0, 10.0]);
+    assert_eq!(back.regions[1].fog.unwrap().end, 60.0);
+    // The same point, 7 glTF units along +x, is in front in both frames.
+    assert_eq!(map.locate([7.0, 0.0, 0.0]), back.locate([-14.0, 0.0, 0.0]));
+    let check = bri_package_runtime::check::check(&dir);
+    assert!(check.ok, "{check} {:?}", report.warnings);
+}
+
+#[test]
 fn a_map_imports_as_an_add_on_the_game_loads() {
     let (root, report) = import_room(false);
     let dir = root.path().join("test_room");

@@ -771,6 +771,28 @@ impl App {
             FAR_PLANE,
         );
         apply_environment(&mut camera);
+        // The region the eye is in sets the fog (linear, the colour and distances the region names).
+        let mut region_clear = None;
+        if let Some(regions) = &self.scene.regions {
+            let now = self.avatar.animation_time;
+            let dt = (now - self.scene.fog_time).clamped(0.0, 1.0) as f32;
+            self.scene.fog_time = now;
+            let fog = self
+                .scene
+                .fog_blend
+                .step(regions, regions.locate(eye.to_array()), dt);
+            if fog.enabled {
+                let [r, g, b] = fog.color.map(|c| f32::from(c) / 255.0);
+                camera.fog_color = [r, g, b, 0.0];
+                camera.atmosphere[0] = fog.start;
+                camera.atmosphere[1] = fog.end;
+                camera.atmosphere[3] = 1.0;
+                camera.haze = [bri_content::environment::FOG_HEIGHT, 1.0, 0.0, 1.0];
+            } else {
+                camera.atmosphere[3] = 0.0;
+            }
+            region_clear = fog.clear;
+        }
         if let Some(vignette) = &mut self.gpu.vignette {
             vignette.update(
                 frame.queue,
@@ -1508,6 +1530,15 @@ impl App {
             }
             _ => scene.clear_color,
         };
+        let clear_color = match region_clear {
+            Some(c) => [
+                f32::from(c[0]) / 255.0,
+                f32::from(c[1]) / 255.0,
+                f32::from(c[2]) / 255.0,
+                1.0,
+            ],
+            None => clear_color,
+        };
         let [r, g, b, a] = clear_color.map(f64::from);
         if let (Some(gpu), Some(view)) = (
             self.gpu.gpu_scene.as_mut(),
@@ -2037,6 +2068,7 @@ impl App {
             self.lighting.light_volume.overflow = visual.overflow_lights;
             self.scene.cpu_scene = Some(visual.scene);
             self.scene.backdrop = visual.backdrop;
+            self.scene.regions = visual.regions;
             self.scene.cpu_terrain = visual.terrain.into_iter().map(Arc::new).collect();
             self.scene.cpu_water = visual.repeated_water.into_iter().map(Arc::new).collect();
             self.scene.scenery.reset();

@@ -9,8 +9,8 @@
 //! types. The result is an Add-On folder holding `package.json` and a
 //! native map bundle in `map/`, the same files the converted v20 maps use.
 use super::{
-    Converted, Document, Options, Point, Report, map_backdrop, map_environment, map_scatter,
-    map_terrain, title,
+    Converted, Document, Options, Point, Report, map_backdrop, map_environment, map_regions,
+    map_scatter, map_terrain, title,
 };
 use anyhow::{Context, Result, ensure};
 use bri_content::scene::{Kind as NodeKind, LIGHT_TYPES, Node as SceneNode, Scene};
@@ -431,6 +431,12 @@ pub(super) fn write(
         &mut |rel, bytes, report| put(rel, bytes, report),
         &mut report,
     )?;
+    let regions_file = map_regions::regions(
+        opts,
+        id,
+        &mut |rel, bytes, report| put(rel, bytes, report),
+        &mut report,
+    )?;
     let backdrop = map_backdrop::backdrop(
         opts,
         &map_id,
@@ -524,6 +530,7 @@ pub(super) fn write(
         "terrains": { map_id.clone(): instances },
         "scatter": { map_id.clone(): scattered.records },
         "backdrops": { map_id.clone(): backdrop.record },
+        "regions": { map_id.clone(): regions_file },
         "environments": { map_id.clone(): environment },
         "waters": { map_id.clone(): waters },
     });

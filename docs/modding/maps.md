@@ -87,6 +87,11 @@ lights are left out.
 player's rotation and projection and no fog, then depth starts over and the map is drawn on top, so the backdrop shows
 wherever the map draws nothing (an opening cut into it). The eye does not move with the player.
 
+**Regions with their own fog.** `--regions FILE.json` divides the map into numbered regions, each optionally with linear
+distance fog (`bri_content::regions::RegionMap`: a plane tree, the region on each side of each plane, and per region a `fog`
+of `color` bytes, `start`, `end`, `blend_time` and `clear_to_fog`), written in the glTF's own frame and unit. The fog that
+applies is the one of the region the eye is in; entering a region blends over its `blend_time`.
+
 **The sky.** Without anything set, the sky is a plain daytime blue. Set
 these as custom properties on the Blender *scene* (**Scene Properties >
 Custom Properties**):

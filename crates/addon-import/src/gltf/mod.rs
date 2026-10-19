@@ -15,6 +15,7 @@ mod lod;
 mod map;
 mod map_backdrop;
 mod map_environment;
+mod map_regions;
 mod map_scatter;
 mod map_terrain;
 mod read;
@@ -116,6 +117,8 @@ pub struct Options {
     pub scatter: Vec<PathBuf>,
     /// A map's backdrop: a glTF file holding the model drawn behind the map (`map_backdrop.rs`).
     pub backdrop: Option<PathBuf>,
+    /// A map's regions: a JSON file in the glTF's frame (`map_regions.rs`).
+    pub regions: Option<PathBuf>,
 }
 impl Options {
     pub fn new(input: impl Into<PathBuf>, out: impl Into<PathBuf>, kind: Kind) -> Self {
@@ -141,6 +144,7 @@ impl Options {
             terrain: None,
             scatter: Vec::new(),
             backdrop: None,
+            regions: None,
         }
     }
 }

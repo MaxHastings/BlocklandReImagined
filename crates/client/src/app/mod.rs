@@ -141,6 +141,8 @@ struct Prepared {
     scatter: Vec<bri_render::scene_loader::ScatterScene>,
     /// The map's backdrop, drawn before the map from its own eye.
     backdrop: Option<bri_render::scene_loader::BackdropScene>,
+    /// The map's regions with their own fog.
+    regions: Option<bri_content::regions::RegionMap>,
     light_volume: LightVolumeState,
 }
 /// A background chunk update: the replica revision it reached, and the
@@ -476,6 +478,7 @@ fn prepare_map(
         mover_scenes: visual.movers,
         scatter: visual.scatter,
         backdrop: visual.backdrop,
+        regions: visual.regions,
         light_volume,
     })
 }

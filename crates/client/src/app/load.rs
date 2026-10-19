@@ -248,6 +248,9 @@ impl App {
             scene: SceneState {
                 cpu_scene: None,
                 backdrop: None,
+                regions: None,
+                fog_blend: Default::default(),
+                fog_time: 0.0,
                 cpu_terrain: Vec::new(),
                 cpu_water: Vec::new(),
                 scenery: Default::default(),

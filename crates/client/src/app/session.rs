@@ -168,6 +168,8 @@ impl App {
         self.controls = Controls::default();
         self.scene.cpu_scene = None;
         self.scene.backdrop = None;
+        self.scene.regions = None;
+        self.scene.fog_blend = Default::default();
         self.gpu.gpu_backdrop = None;
         self.lighting.light_volume = LightVolumeState::default();
         self.scene.cpu_terrain.clear();
@@ -617,6 +619,7 @@ impl App {
                         mover_scenes: visual.movers,
                         scatter: visual.scatter,
                         backdrop: visual.backdrop,
+                        regions: visual.regions,
                         light_volume,
                     },
                     identity,
