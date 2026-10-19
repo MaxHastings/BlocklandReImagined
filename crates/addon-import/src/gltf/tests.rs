@@ -953,6 +953,71 @@ fn a_col_mesh_keeps_the_surface_its_material_names() {
 }
 
 #[test]
+fn col_meshes_keep_the_query_types_they_block() {
+    use bri_physics::blocks::{MOVE, RAY, SHOT, SWEEP, query_groups};
+    // Three collision slabs: one that stops bodies and sweeps, one that only
+    // shots and rays see, one with no mask (it blocks every query).
+    let mut g = super::testing::Gltf::new();
+    let flat = |v: &[Vec3]| v.iter().flat_map(|v| v.to_array()).collect::<Vec<f32>>();
+    for (name, x, blocks) in [
+        ("Floor", 0.0, None),
+        ("col_walk", 10.0, Some(json!(["move", "sweep"]))),
+        ("col_shoot", 20.0, Some(json!(["ray", "shot"]))),
+        ("col_all", 30.0, None),
+    ] {
+        let (p, _, _, i) = super::testing::cuboid(Vec3::new(x, 0.0, 0.0), Vec3::new(4.0, 1.0, 4.0));
+        let (a, b) = (g.floats(&flat(&p), 3), g.uints(&i, 1));
+        let mesh = g.mesh(
+            name,
+            vec![json!({ "attributes": { "POSITION": a }, "indices": b })],
+        );
+        let mut node = json!({ "name": name, "mesh": mesh });
+        if let Some(blocks) = blocks {
+            node["extras"] = json!({ "bri_blocks": blocks });
+        }
+        g.node(node, None);
+    }
+    let root = tempfile::tempdir().unwrap();
+    let input = root.path().join("slabs.glb");
+    std::fs::write(&input, g.glb()).unwrap();
+    let report = import(&Options::new(&input, root.path().join("slabs"), Kind::Map)).unwrap();
+    assert!(report.warnings.iter().all(|w| !w.contains("bri_blocks")));
+    let shape: Shape = serde_json::from_slice(
+        &std::fs::read(root.path().join("slabs/map/slabs.shape.json")).unwrap(),
+    )
+    .unwrap();
+    let details: Vec<_> = shape.details.iter().filter(|d| d.collision).collect();
+    assert_eq!(details.len(), 3, "one collision detail per distinct mask");
+    assert_eq!(details[0].blocks, None, "the unmasked one comes first");
+    // Each becomes a collider of its own that answers only the queries it lists.
+    let colliders =
+        bri_physics::content::static_shape_colliders(&shape, glam::Mat4::IDENTITY).unwrap();
+    assert_eq!(colliders.len(), 3);
+    let meets = |collider: usize, kind| {
+        colliders[collider]
+            .build()
+            .collision_groups()
+            .test(query_groups(kind))
+    };
+    for kind in [MOVE, RAY, SWEEP, SHOT] {
+        assert!(meets(0, kind), "unmasked meets every query");
+    }
+    let by = |blocks: &[&str]| {
+        details
+            .iter()
+            .position(|d| {
+                d.blocks.as_deref()
+                    == Some(&blocks.iter().map(|s| s.to_string()).collect::<Vec<_>>()[..])
+            })
+            .unwrap()
+    };
+    let walk = by(&["move", "sweep"]);
+    let shoot = by(&["ray", "shot"]);
+    assert!(meets(walk, MOVE) && meets(walk, SWEEP) && !meets(walk, RAY) && !meets(walk, SHOT));
+    assert!(meets(shoot, RAY) && meets(shoot, SHOT) && !meets(shoot, MOVE) && !meets(shoot, SWEEP));
+}
+
+#[test]
 fn a_map_without_a_spawn_or_with_col_meshes_says_what_it_did() {
     let (root, report) = import_room(true);
     let shape: Shape = serde_json::from_slice(

@@ -200,6 +200,7 @@ pub fn rigid_shape(
             object_count: parts.len(),
             mesh_offset: 0,
             collision: false,
+            blocks: None,
         }],
         meshes: parts
             .iter()

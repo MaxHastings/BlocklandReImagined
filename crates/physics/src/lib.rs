@@ -1,6 +1,7 @@
 //! Rust physics adapter. Gameplay identities stay independent of physics handles.
 
 use rapier3d::prelude::*;
+pub mod blocks;
 pub mod content;
 pub mod portal;
 pub mod terrain;

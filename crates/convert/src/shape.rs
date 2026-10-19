@@ -844,6 +844,7 @@ pub fn read_dts(data: &[u8], id: String) -> Result<(Shape, Provenance)> {
             object_count: sizes[subshapes + sub],
             mesh_offset: index(offset)?,
             collision: size < 0.0,
+            blocks: None,
         });
     }
     let count = file.count(100_000)?;
