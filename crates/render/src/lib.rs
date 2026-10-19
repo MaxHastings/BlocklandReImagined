@@ -2,6 +2,7 @@ pub mod ambient_occlusion;
 pub mod bloom;
 mod buffer_init;
 pub mod color;
+pub mod dynamic_sprites;
 pub mod environment_choices;
 pub mod environment_planes;
 pub mod environment_probe;
