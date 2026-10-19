@@ -163,6 +163,10 @@ pub struct Material {
     pub double_sided: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub uv_motion: Option<UvMotion>,
+    /// Several texture modifiers around one picture, outermost first, multiplied into one map
+    /// each frame (`crate::uv_affine::chain_affine`). When present it replaces `uv_motion`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub uv_chain: Vec<UvMotion>,
     pub unlit: bool,
     pub environment: bool,
     pub mipmaps: bool,

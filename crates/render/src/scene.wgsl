@@ -994,7 +994,10 @@ struct VertexOut {
     let color=local_color*tint;
     var out:VertexOut;out.position=camera.view_projection*vec4<f32>(position,1.0);
     out.uv=uv;
-    if material[5].x>0.5 {
+    if material[5].x>1.5 {
+        // A chain of modifiers composed on the CPU: u' = a u + c v + tx, v' = b u + d v + ty.
+        out.uv=vec2(material[5].y*uv.x+material[5].w*uv.y+material[6].y,material[5].z*uv.x+material[6].x*uv.y+material[6].z);
+    } else if material[5].x>0.5 {
         let angle=material[5].w+camera.atmosphere.z*material[7].z;
         let c=cos(angle);let s=sin(angle);
         let wu=uv_wave(material[8],camera.atmosphere.z);

@@ -350,6 +350,11 @@ Two optional additions come from Unreal Engine 2's texture modifiers:
   two-by-two of the rotation matrix those angles make, about `center`; yaw is the in-plane
   turn. It replaces `rotation_degrees` and `rotation_rate_degrees` when present.
 
+A material may also supply `extras.bri_uv_chain`: an array of motions, outermost first, for
+several texture modifiers around one picture (a rotator around a panner around a texture).
+They are multiplied out each frame into one map, `acc = acc x motion` in the order given,
+so the first motion acts on the coordinates first; when present it replaces `bri_uv_motion`.
+
 This is a single UV transformation per material. Independent layer combinations,
 meter thresholds and live per-instance shader inputs are separate capabilities;
 texture motion alone does not implement them.

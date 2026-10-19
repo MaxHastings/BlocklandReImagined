@@ -1103,6 +1103,7 @@ fn load_static_shape(
             soft_edges.insert(out.materials.len(), out.materials.len() + 1);
             materials.push(out.materials.len());
             material.uv_motion = authored.uv_motion;
+            material.uv_chain.clone_from(&authored.uv_chain);
             out.materials.push(material);
             out.materials.push(edges);
             continue;
@@ -1487,6 +1488,7 @@ fn load_terrain(
         alpha: AlphaMode::Opaque,
         double_sided: false,
         uv_motion: None,
+        uv_chain: Vec::new(),
         layer_transforms: None,
         clamp_nearest: false,
         temp_brick_flash: false,

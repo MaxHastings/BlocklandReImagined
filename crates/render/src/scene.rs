@@ -368,6 +368,9 @@ pub struct Material {
     pub alpha: AlphaMode,
     pub double_sided: bool,
     pub uv_motion: Option<bri_content::shape::UvMotion>,
+    /// A chain of texture modifiers, outermost first, composed on the CPU every frame into one
+    /// map (`bri_content::uv_affine`); it replaces `uv_motion`.
+    pub uv_chain: Vec<bri_content::shape::UvMotion>,
     /// [`MaterialKind::LayerBlend`]: per layer `[a, b, c, d, tx, ty]` with
     /// `uv' = (a u + c v + tx, b u + d v + ty)`.
     pub layer_transforms: Option<[[f32; 6]; 4]>,
@@ -482,6 +485,7 @@ impl Material {
             alpha: AlphaMode::Opaque,
             double_sided: false,
             uv_motion: None,
+            uv_chain: Vec::new(),
             layer_transforms: None,
             clamp_nearest: false,
             temp_brick_flash: false,
@@ -1232,6 +1236,21 @@ impl Default for Camera {
     }
 }
 
+/// The material buffers of a scene whose texture coordinates follow a chain of modifiers.
+pub(crate) struct DynamicUv {
+    entries: Vec<(wgpu::Buffer, Vec<bri_content::shape::UvMotion>)>,
+}
+
+impl DynamicUv {
+    /// Write the map each chain makes at `time` seconds into its buffer (floats 21 to 26).
+    fn write(&self, queue: &wgpu::Queue, time: f64) {
+        for (buffer, chain) in &self.entries {
+            let map = bri_content::uv_affine::chain_affine(chain, time).to_array();
+            queue.write_buffer(buffer, 21 * 4, bytemuck::cast_slice(&map));
+        }
+    }
+}
+
 pub struct GpuScene {
     sky_revision: Arc<std::sync::atomic::AtomicU64>,
     /// Unique to this scene value (a batch view gets its own), so a shadow
@@ -1244,6 +1263,9 @@ pub struct GpuScene {
     vertices: wgpu::Buffer,
     indices: wgpu::Buffer,
     materials: Vec<wgpu::BindGroup>,
+    /// Material buffers whose texture map is rewritten every frame (UV chains).
+    #[allow(dead_code)] // held so the renderer registry keeps seeing it
+    dynamic_uv: Option<Arc<DynamicUv>>,
     batches: Vec<MeshBatch>,
     /// Opaque/alpha/additive, double sided, background, alpha-masked.
     /// (blend, double sided, sky/cloud background, alpha mask, water plane)
@@ -1699,6 +1721,7 @@ impl GpuScene {
             .context("Scene batch view out of range")?
             .clone();
         Ok(GpuScene {
+            dynamic_uv: None,
             sky_revision: self.sky_revision.clone(),
             unique: next_unique(),
             material_descriptors: self.material_descriptors.clone(),
@@ -2420,7 +2443,7 @@ impl VolumeBinding {
             parameters: device.buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: Some("light volume placement"),
                 contents: bytemuck::cast_slice(&parameters),
-                usage: wgpu::BufferUsages::UNIFORM,
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             }),
         }
     }
@@ -2907,6 +2930,8 @@ pub struct WorldPass<'a> {
 const BLEND_VARIANTS: usize = 10;
 
 pub struct SceneRenderer {
+    /// Scenes with UV chains, rewritten each frame from the camera's clock.
+    dynamic_uv: std::cell::RefCell<Vec<std::sync::Weak<DynamicUv>>>,
     identity_instance: wgpu::Buffer,
     light_buffer: wgpu::Buffer,
     /// The lights' grid: cell table and per-cell lists (`light_grid`).
@@ -3175,6 +3200,7 @@ impl SceneRenderer {
         let volume = VolumeBinding::new(device, None);
         let map_lights = MapLightBinding::new(device, None, None);
         let mut renderer = Self {
+            dynamic_uv: Default::default(),
             identity_instance: device.buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: Some("identity scene instance"),
                 contents: bytemuck::bytes_of(&SceneTransform::default().record(KEEP_ALL)),
@@ -3580,6 +3606,7 @@ impl SceneRenderer {
             c.textures += made;
         });
         let mut materials = vec![];
+        let mut chains = Vec::new();
         for material in &data.materials {
             let mut parameters: [f32; 80] = [0.0; 80];
             parameters[..4].copy_from_slice(&[
@@ -3636,7 +3663,7 @@ impl SceneRenderer {
                     parameters[(i + 1) * 4..(i + 2) * 4].copy_from_slice(group);
                 }
             }
-            if let Some(uv) = material.uv_motion {
+            if let Some(uv) = material.uv_motion.filter(|_| material.uv_chain.is_empty()) {
                 ensure!(uv.valid(), "Invalid UV motion on {}", material.name);
                 parameters[20..24].copy_from_slice(&[
                     1.,
@@ -3665,7 +3692,23 @@ impl SceneRenderer {
                     ]);
                 }
             }
-            if let Some(r) = material.uv_motion.and_then(|uv| uv.rotator) {
+            let chained = !material.uv_chain.is_empty();
+            if chained {
+                ensure!(
+                    material.uv_chain.iter().all(|m| m.valid()),
+                    "Invalid UV motion chain on {}",
+                    material.name
+                );
+                // material[5].x = 2 selects the map in floats 21 to 26, written every frame.
+                parameters[20] = 2.;
+                let map = bri_content::uv_affine::chain_affine(&material.uv_chain, 0.).to_array();
+                parameters[21..27].copy_from_slice(&map);
+            }
+            if let Some(r) = material
+                .uv_motion
+                .and_then(|uv| uv.rotator)
+                .filter(|_| !chained)
+            {
                 // material[16..20]: flag and base angles, constant rates, swing amplitudes
                 // and swing rates and phases, in radians and cycles.
                 let rad = |v: [f32; 3]| v.map(f32::to_radians);
@@ -3701,7 +3744,7 @@ impl SceneRenderer {
             let buffer = device.buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: Some(&material.name),
                 contents: bytemuck::cast_slice(&parameters),
-                usage: wgpu::BufferUsages::UNIFORM,
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             });
             let mut entries: Vec<_> = material
                 .images
@@ -3727,13 +3770,22 @@ impl SceneRenderer {
                 binding: 15,
                 resource: buffer.as_entire_binding(),
             });
+            if chained {
+                chains.push((buffer.clone(), material.uv_chain.clone()));
+            }
             materials.push(device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some(&material.name),
                 layout: &self.material_layout,
                 entries: &entries,
             }));
         }
+        let dynamic_uv = (!chains.is_empty()).then(|| {
+            let set = Arc::new(DynamicUv { entries: chains });
+            self.dynamic_uv.borrow_mut().push(Arc::downgrade(&set));
+            set
+        });
         Ok(GpuScene {
+            dynamic_uv,
             sky_revision: fresh_revision(),
             unique: next_unique(),
             material_descriptors: data.materials.clone(),
@@ -3869,6 +3921,7 @@ impl SceneRenderer {
         emissive: bool,
     ) -> GpuScene {
         GpuScene {
+            dynamic_uv: None,
             emissive,
             sky_revision: fresh_revision(),
             unique: next_unique(),
@@ -3931,6 +3984,7 @@ impl SceneRenderer {
         // does, because wgpu panics on slicing an empty buffer.
         let (vertices, indices) = geometry_buffers(device, "shared-material posed vertices", data);
         Ok(GpuScene {
+            dynamic_uv: None,
             sky_revision: fresh_revision(),
             unique: next_unique(),
             vertices,
@@ -4140,6 +4194,14 @@ impl SceneRenderer {
         *self.queue.borrow_mut() = Some(queue.clone());
         self.indirect.borrow_mut().1 = 0;
         self.update_view(queue, 0, camera);
+        {
+            let mut scenes = self.dynamic_uv.borrow_mut();
+            scenes.retain(|w| w.strong_count() > 0);
+            let time = f64::from(camera.atmosphere[2]);
+            for scene in scenes.iter().filter_map(std::sync::Weak::upgrade) {
+                scene.write(queue, time);
+            }
+        }
         // Lamps cast only in the Unified modes (Classic keeps v20's look).
         let lamps: &[crate::shadow::LampLight] = if camera.ambient[3] >= 0.5 {
             &self.map_lights.lamps

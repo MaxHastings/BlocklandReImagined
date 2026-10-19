@@ -378,6 +378,7 @@ mod tests {
                 alpha: AlphaMode::Opaque,
                 double_sided: false,
                 uv_motion: None,
+                uv_chain: Vec::new(),
                 layer_transforms: None,
                 clamp_nearest: false,
                 temp_brick_flash: false,

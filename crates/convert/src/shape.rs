@@ -882,6 +882,7 @@ pub fn read_dts(data: &[u8], id: String) -> Result<(Shape, Provenance)> {
             alpha_cutoff: None,
             double_sided: false,
             uv_motion: None,
+            uv_chain: Vec::new(),
             metal: None,
             surface: None,
             tint: None,

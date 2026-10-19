@@ -1487,6 +1487,7 @@ fn metal_and_glow_come_from_the_material() {
                 { "name": "Ember", "emissiveFactor": [0.2, 0.0, 0.0] },
                 {"name":"Panel","extras":{"bri_uv_motion":{"center":[0.5,0.5],"rotation_rate_degrees":180.0}}},
                 {"name":"Invalid motion","extras":{"bri_uv_motion":{"rotation_rate_degrees":1e9}}},
+                {"name":"Chained","extras":{"bri_uv_chain":[{"scale":[0.5,0.5]},{"offset":[0.1,0.2],"rotator":{"base_degrees":[0,90,0]}}]}},
             ]
         }))
         .unwrap()
@@ -1502,7 +1503,7 @@ fn metal_and_glow_come_from_the_material() {
             .0
     };
     let (steel, paint, lamp, ember) = (get(0), get(1), get(2), get(3));
-    let panel = get(4);
+    let (panel, chained) = (get(4), get(6));
     let motion = panel
         .uv_motion
         .expect("authored texture motion survives import");
@@ -1511,6 +1512,13 @@ fn metal_and_glow_come_from_the_material() {
     assert!(
         super::make_material(&doc, None, Some(5), "", &mut taken, &mut report).is_err(),
         "invalid motion must be reported, never silently ignored"
+    );
+    // A chain of modifiers, outermost first, survives import in order.
+    assert_eq!(chained.uv_chain.len(), 2);
+    assert_eq!(chained.uv_chain[0].scale, [0.5, 0.5]);
+    assert_eq!(
+        chained.uv_chain[1].rotator.unwrap().base_degrees,
+        [0., 90., 0.]
     );
     let metal = steel.metal.expect("steel is metal");
     assert_eq!((metal.color, metal.roughness), ([1.0; 3], 0.3));

@@ -29,6 +29,7 @@ pub mod terrain_field;
 pub mod terrain_mesh;
 pub mod testing;
 pub mod tutorial;
+pub mod uv_affine;
 pub mod water;
 
 pub const TERRAIN_SCHEMA: u32 = 1;

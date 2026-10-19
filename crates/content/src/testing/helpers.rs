@@ -149,6 +149,7 @@ pub fn material(name: &str, blend: &str) -> Material {
         alpha_cutoff: None,
         double_sided: false,
         uv_motion: None,
+        uv_chain: Vec::new(),
         metal: None,
         surface: None,
         tint: None,

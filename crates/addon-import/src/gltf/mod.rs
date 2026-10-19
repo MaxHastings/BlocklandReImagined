@@ -2295,6 +2295,15 @@ fn make_material(
         ensure!(motion.valid(), "Invalid material UV motion");
         Some(motion)
     };
+    let uv_chain: Vec<bri_content::shape::UvMotion> = if m["extras"]["bri_uv_chain"].is_null() {
+        Vec::new()
+    } else {
+        let chain: Vec<bri_content::shape::UvMotion> =
+            serde_json::from_value(m["extras"]["bri_uv_chain"].clone())
+                .context("Material bri_uv_chain")?;
+        ensure!(chain.iter().all(|c| c.valid()), "Invalid material UV chain");
+        chain
+    };
     let mut png = Vec::new();
     image::DynamicImage::ImageRgba8(pixels)
         .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)?;
@@ -2317,6 +2326,7 @@ fn make_material(
                 .then(|| m["alphaCutoff"].as_f64().unwrap_or(0.5) as f32),
             double_sided: m["doubleSided"].as_bool().unwrap_or(false),
             uv_motion,
+            uv_chain,
             metal,
             surface,
             tint: None,
