@@ -2941,6 +2941,10 @@ struct WorldPipelines {
     shader: wgpu::ShaderModule,
     constants: Vec<(&'static str, f64)>,
     slots: Vec<std::sync::OnceLock<wgpu::RenderPipeline>>,
+    /// Slots a worker has been asked to build (or has).
+    requested: Vec<std::sync::atomic::AtomicBool>,
+    /// Workers still compiling.
+    outstanding: std::sync::atomic::AtomicUsize,
 }
 
 impl WorldPipelines {
@@ -2966,6 +2970,10 @@ impl WorldPipelines {
             slots: (0..2 * BLEND_VARIANTS * 2)
                 .map(|_| std::sync::OnceLock::new())
                 .collect(),
+            requested: (0..2 * BLEND_VARIANTS * 2)
+                .map(|_| std::sync::atomic::AtomicBool::new(false))
+                .collect(),
+            outstanding: std::sync::atomic::AtomicUsize::new(0),
         }
     }
 
@@ -2976,6 +2984,44 @@ impl WorldPipelines {
     /// The pipeline in slot `index`, built now if no one has needed it yet.
     fn get(&self, index: usize) -> &wgpu::RenderPipeline {
         self.slots[index].get_or_init(|| self.create(index))
+    }
+
+    /// The pipeline if it is built; never waits.
+    fn ready(&self, index: usize) -> Option<&wgpu::RenderPipeline> {
+        self.slots[index].get()
+    }
+
+    /// Start building slot `index` on a worker, if nobody has: a draw that needs it is skipped until it is built.
+    fn request(self: &Arc<Self>, index: usize) {
+        use std::sync::atomic::Ordering;
+        if self.slots[index].get().is_some() || self.requested[index].swap(true, Ordering::AcqRel) {
+            return;
+        }
+        self.outstanding.fetch_add(1, Ordering::AcqRel);
+        let me = Arc::clone(self);
+        let started = std::thread::Builder::new()
+            .name("scene pipeline".into())
+            .spawn(move || {
+                let start = std::time::Instant::now();
+                me.slots[index].get_or_init(|| me.create(index));
+                bri_console::echo(format!(
+                    "Compiled scene pipeline {index} in {} ms",
+                    start.elapsed().as_millis()
+                ));
+                me.outstanding.fetch_sub(1, Ordering::AcqRel);
+            });
+        if started.is_err() {
+            // No thread to compile on: build it here rather than never.
+            self.outstanding.fetch_sub(1, Ordering::AcqRel);
+            self.get(index);
+        }
+    }
+
+    /// Ask for the pipelines these materials draw with (`material_modes`) without waiting.
+    fn request_modes(self: &Arc<Self>, modes: &[MaterialMode]) {
+        for &(blend, double_sided, background, _, _) in modes {
+            self.request(Self::index(background, blend, double_sided));
+        }
     }
 
     /// Build the pipelines in `indices` that are not built. One at a time: measured on this machine, compiling them side by side
@@ -3105,10 +3151,12 @@ pub struct SceneRenderer {
     camera_layout: wgpu::BindGroupLayout,
     views: Vec<View>,
     material_layout: wgpu::BindGroupLayout,
-    pipelines: WorldPipelines,
-    modern_pipelines: Option<WorldPipelines>,
+    pipelines: Arc<WorldPipelines>,
+    modern_pipelines: Option<Arc<WorldPipelines>>,
     /// Every (background, blend, sidedness) a scene uploaded here draws with, so a set made later is warmed for them.
     used_modes: std::cell::RefCell<std::collections::BTreeSet<MaterialMode>>,
+    /// Compile what a scene needs on workers and skip its draws until it is built (a game), rather than wait for it (tests, tools).
+    background_pipelines: std::cell::Cell<bool>,
     color_format: wgpu::TextureFormat,
     occlusion_mask_pipelines: std::cell::RefCell<Vec<wgpu::RenderPipeline>>,
     filtering: TextureFiltering,
@@ -3341,7 +3389,14 @@ impl SceneRenderer {
                 crate::color::shader_source(include_str!("scene_original.wgsl")).into(),
             ),
         });
-        let pipelines = WorldPipelines::new(device, color_format, samples, layout, shader, false);
+        let pipelines = Arc::new(WorldPipelines::new(
+            device,
+            color_format,
+            samples,
+            layout,
+            shader,
+            false,
+        ));
         pipelines.warm_basics();
         let light_buffer = device.buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("native point lights"),
@@ -3382,6 +3437,7 @@ impl SceneRenderer {
             pipelines,
             modern_pipelines: None,
             used_modes: Default::default(),
+            background_pipelines: std::cell::Cell::new(false),
             color_format,
             occlusion_mask_pipelines: std::cell::RefCell::new(Vec::new()),
             filtering,
@@ -4075,12 +4131,61 @@ impl SceneRenderer {
                 )
             })
             .collect();
-        self.pipelines.warm(&modes);
-        if let Some(modern) = &self.modern_pipelines {
-            modern.warm(&modes);
+        if self.background_pipelines.get() {
+            self.pipelines.request_modes(&modes);
+            if let Some(modern) = &self.modern_pipelines {
+                modern.request_modes(&modes);
+            }
+        } else {
+            self.pipelines.warm(&modes);
+            if let Some(modern) = &self.modern_pipelines {
+                modern.warm(&modes);
+            }
         }
         self.used_modes.borrow_mut().extend(modes.iter().copied());
         modes
+    }
+
+    /// A game compiles pipelines on workers and skips draws that wait for one; the default waits for them where they are needed.
+    pub fn set_background_pipelines(&self, on: bool) {
+        self.background_pipelines.set(on);
+    }
+
+    /// Start compiling the pipelines these materials draw with, behind a loading screen; poll [`Self::pipelines_pending`].
+    pub fn request_materials(&self, materials: &[Material]) {
+        self.noted_modes(materials);
+    }
+
+    /// Pipelines still compiling on workers; a draw that needs one is skipped until it is built.
+    pub fn pipelines_pending(&self) -> usize {
+        use std::sync::atomic::Ordering;
+        self.pipelines.outstanding.load(Ordering::Acquire)
+            + self
+                .modern_pipelines
+                .as_ref()
+                .map_or(0, |m| m.outstanding.load(Ordering::Acquire))
+    }
+
+    /// The pipeline slot `index` for a modern or classic view, if built; asks for it otherwise. A modern view falls back to the
+    /// classic one while its own is compiling.
+    fn ready_pipeline(&self, modern: bool, index: usize) -> Option<&wgpu::RenderPipeline> {
+        if !self.background_pipelines.get() {
+            return Some(match (&self.modern_pipelines, modern) {
+                (Some(set), true) => set.get(index),
+                _ => self.pipelines.get(index),
+            });
+        }
+        if modern && let Some(set) = &self.modern_pipelines {
+            if let Some(p) = set.ready(index) {
+                return Some(p);
+            }
+            set.request(index);
+        }
+        let classic = self.pipelines.ready(index);
+        if classic.is_none() {
+            self.pipelines.request(index);
+        }
+        classic
     }
     pub fn samples(&self) -> u32 {
         self.samples
@@ -4226,13 +4331,15 @@ impl SceneRenderer {
     /// absorb it. Building them again is a no-op.
     pub fn prepare_lighting_pipelines(&mut self, soft_shading: bool, occlusion: bool) {
         if soft_shading {
-            self.build_modern_pipelines();
+            self.build_modern_pipelines(true);
         }
         if occlusion {
             self.build_occlusion_mask_pipelines();
         }
     }
-    fn build_modern_pipelines(&mut self) {
+    /// The modern set. `block`: build its basics now (the worker that prepares lighting); otherwise ask for them, and a view that
+    /// is modern draws with the classic pipelines until they are built.
+    fn build_modern_pipelines(&mut self, block: bool) {
         if self.modern_pipelines.is_some() {
             return;
         }
@@ -4251,17 +4358,26 @@ impl SceneRenderer {
                     crate::color::shader_source(include_str!("scene.wgsl")).into(),
                 ),
             });
-        let modern = WorldPipelines::new(
+        let modern = Arc::new(WorldPipelines::new(
             &self.device,
             self.color_format,
             self.samples,
             layout,
             shader,
             true,
-        );
-        modern.warm_basics();
+        ));
         let used: Vec<_> = self.used_modes.borrow().iter().copied().collect();
-        modern.warm(&used);
+        if block {
+            modern.warm_basics();
+            modern.warm(&used);
+        } else {
+            for blend in [0, 1] {
+                for double_sided in [false, true] {
+                    modern.request(WorldPipelines::index(false, blend, double_sided));
+                }
+            }
+            modern.request_modes(&used);
+        }
         self.modern_pipelines = Some(modern);
     }
     /// Call once before encoding/submitting a frame. Multiple writes before a
@@ -4311,7 +4427,7 @@ impl SceneRenderer {
         let modern = camera.shading[0] > 0.0 && camera.ambient[3] >= 0.5;
         // Keep main's original shader and uniform prefix when the effects are off.
         if modern {
-            self.build_modern_pipelines();
+            self.build_modern_pipelines(!self.background_pipelines.get());
         }
         let sky_on = camera.shading[0] > 0.0 && camera.ambient[3] >= 0.5;
         if sky_on && !self.views[view].sky.enabled {
@@ -5923,19 +6039,18 @@ impl SceneRenderer {
             }
             let draw = &order[start];
             let (scene, batch) = (draw.scene, draw.batch);
-            bound.pipeline(
-                &mut pass,
-                if mask_only {
-                    &mask_pipelines.as_ref().expect("mask pass")[pipeline_of(draw) % 2]
-                } else if view.modern {
-                    self.modern_pipelines
-                        .as_ref()
-                        .expect("a modern view builds its pipelines in update_view")
-                        .get(pipeline_of(draw))
-                } else {
-                    self.pipelines.get(pipeline_of(draw))
-                },
-            );
+            let pipeline = if mask_only {
+                &mask_pipelines.as_ref().expect("mask pass")[pipeline_of(draw) % 2]
+            } else if let Some(pipeline) = self.ready_pipeline(view.modern, pipeline_of(draw)) {
+                pipeline
+            } else {
+                // Still compiling on a worker: nothing is drawn with it until it is.
+                if end - start > 1 {
+                    next_args += (end - start) as u64;
+                }
+                continue;
+            };
+            bound.pipeline(&mut pass, pipeline);
             bound.material(&mut pass, &scene.materials[batch.material]);
             bound.geometry(&mut pass, &scene.vertices, draw.buffer, &scene.indices);
             for d in &order[start..end] {

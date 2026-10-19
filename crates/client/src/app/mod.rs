@@ -1753,6 +1753,7 @@ impl PlatformApp for App {
         let modern = self.graphics.lighting != 0;
         let soft_shading = modern && self.graphics.soft_shading;
         let occlusion = modern && self.graphics.ambient_occlusion;
+        self.gpu.pipelines_requested = None;
         self.gpu.renderer = Some(crate::gpu_build::Building::spawn(
             "scene pipelines",
             move || {
@@ -1760,6 +1761,8 @@ impl PlatformApp for App {
                 let mut renderer =
                     SceneRenderer::with_settings(&scene_device, format, samples, shadows);
                 renderer.prepare_lighting_pipelines(soft_shading, occlusion);
+                // From here a game never waits on a compile: what a scene needs later builds on workers.
+                renderer.set_background_pipelines(true);
                 renderer
             },
         ));

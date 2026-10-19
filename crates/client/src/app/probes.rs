@@ -45,12 +45,20 @@ impl App {
             return true;
         }
         // A map change rebuilds the renderers before its next frame.
-        !self.gpu.gpu_restart
-            && self
-                .gpu
-                .renderer
-                .as_mut()
-                .is_some_and(|r| r.ready().is_some())
+        if self.gpu.gpu_restart {
+            return false;
+        }
+        let Some(renderer) = self.gpu.renderer.as_mut().and_then(|r| r.ready()) else {
+            return false;
+        };
+        // The pipelines the map's materials draw with compile behind the loading screen, on workers.
+        if let Some(scene) = &self.scene.cpu_scene
+            && self.gpu.pipelines_requested.as_deref() != Some(scene.id.as_str())
+        {
+            renderer.request_materials(&scene.materials);
+            self.gpu.pipelines_requested = Some(scene.id.clone());
+        }
+        renderer.pipelines_pending() == 0
     }
     pub fn work_counters(&self) -> crate::perf::WorkCounters {
         crate::perf::WorkCounters {

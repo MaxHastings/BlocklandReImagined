@@ -168,6 +168,7 @@ impl App {
                 gpu_scene: None,
                 gpu_backdrop: None,
                 decal_layer: None,
+                pipelines_requested: None,
                 gpu_broken: BTreeSet::new(),
                 gpu_terrain: Vec::new(),
                 gpu_water: Vec::new(),
