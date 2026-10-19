@@ -126,6 +126,9 @@ pub struct Options {
     pub decals: Option<PathBuf>,
     /// The asset lane's static-mesh lighting inputs (`static_lighting.rs`).
     pub lighting: Option<PathBuf>,
+    /// The model is lit as the original engine lights a baked level (set for a map's backdrop when the map has `lighting`): a
+    /// surface with a lightmap is lit by it alone, one without is drawn as its picture.
+    pub original_lighting: bool,
 }
 impl Options {
     pub fn new(input: impl Into<PathBuf>, out: impl Into<PathBuf>, kind: Kind) -> Self {
@@ -154,6 +157,7 @@ impl Options {
             regions: None,
             decals: None,
             lighting: None,
+            original_lighting: false,
         }
     }
 }
@@ -1343,6 +1347,21 @@ pub fn convert(
 
     let mut materials = materials;
     // A map brought with the original engine's lighting (`--lighting`) is lit by its lightmaps alone where it has them.
+    if opts.original_lighting {
+        for (m, source) in material_sources.iter().enumerate() {
+            let baked = source
+                .is_some_and(|g| array(json, "materials")[g]["extras"]["bri_lightmap"].is_object());
+            let layered = materials[m].layers.is_some();
+            match (baked, materials[m].surface.as_mut()) {
+                (true, Some(surface)) => surface.lightmap_exact = true,
+                (false, _) if !layered => {
+                    materials[m].unlit = true;
+                    materials[m].vertex_light = true;
+                }
+                _ => {}
+            }
+        }
+    }
     if opts.lighting.is_some() {
         for (m, source) in material_sources.iter().enumerate() {
             let baked = source
