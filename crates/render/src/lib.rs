@@ -24,6 +24,7 @@ pub mod shadow;
 pub mod shape_material;
 pub mod shape_scene;
 mod sky_exposure;
+pub mod surface_projections;
 pub mod terrain_scene;
 pub mod testing;
 pub mod textured;
