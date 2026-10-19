@@ -27,6 +27,8 @@ pub(super) struct Effects {
     pub(super) tutorial_targets: crate::tutorial_targets::TutorialTargets,
     /// The map's keyed movers (doors) where the host has them.
     pub(super) map_movers: crate::map_movers::ClientMovers,
+    /// The map's scatter layers (grass, rocks) as instanced models.
+    pub(super) map_scatter: crate::map_scatter::ClientScatter,
     /// Pieces thrown by explosions with `debris` (vehicle wrecks, tank shells).
     pub(super) explosion_debris: crate::explosion_debris::ExplosionDebris,
     /// Ejected gun casings (`stateEjectShell`) and their GPU model.

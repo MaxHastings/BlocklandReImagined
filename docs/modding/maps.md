@@ -143,6 +143,12 @@ for Classic and Unified lighting; your models don't cast shadows on it
 there yet. Heightmaps and masks from World Machine or Gaea work, and so
 does a greyscale picture you paint.
 
+**Scattered models.** Grass, rocks or trees repeated over a map are a scatter layer: one model and a list of placements, drawn as instances that fade out
+with distance. Export the model alone as its own `.glb` (one mesh at the origin), write the placements with `bri_content::scatter::encode` (a `BRIS` file of position, rotation
+quaternion, scale and an RGBA tint each, in the model's own frame), and name that file and the fade range in the model's scene custom property:
+`bri_scatter` = `{"instances": "grass.bin", "fade": [100, 140]}`. Import the map with one `--scatter grass.glb` per layer. An instance is drawn whole out to the first
+distance, fades to nothing by the second and is not drawn beyond it; leave `fade` out to draw every instance at any distance. Scatter layers have no collision and no gameplay meaning.
+
 **Blinking lights.** A `strobe`, `pulse`, `pulse2`, `flicker` or
 `runway` light goes between its colour and a second one, in step for every
 player. Set these on the light too:

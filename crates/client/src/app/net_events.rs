@@ -1061,6 +1061,7 @@ impl App {
             self.fx
                 .map_movers
                 .set_map(prepared.map_movers, prepared.mover_scenes);
+            self.fx.map_scatter.set_map(prepared.scatter);
             self.scene.cpu_terrain = prepared.terrain;
             self.scene.cpu_water = prepared.repeated_water;
             self.scene.meshes = Some(prepared.meshes);
