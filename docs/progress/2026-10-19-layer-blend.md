@@ -10,3 +10,7 @@ diffuse. This is that shape, named generally.
 
 Probe: `crates/render/tests/layer_blend.rs` renders solid layers with known weights and checks the pixel against
 weight x layer x 2 x vertex light (clamped), and that a layer's translation selects the other texel of a 2x1 strip. Played: nothing, headless only.
+
+Passes: a `LayerBlend` pass drawn with `AlphaMode::Frame(FrameBlend::TrueAdditive)` adds its colour (extra weighted-layer passes), and one drawn
+with `AlphaMode::Blend` blends over what is behind it by the weights' total (a one-layer pass whose map is that layer's alpha). Probe:
+`extra_passes_add_and_single_layer_passes_blend_over` (first pass 128 plus an additive pass of 64 reads 192; a half-weight green pass over red reads 64 / 32).

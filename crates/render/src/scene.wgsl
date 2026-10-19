@@ -1358,23 +1358,9 @@ fn shade_surface(v:VertexOut)->vec4<f32> {
     if alpha<=material[0].y {discard;}
     if material[0].x==13.0 {
         // LayerBlend: layers weighted by one RGBA map, times twice the vertex light.
+        // Alpha is the weights' total, so a one-layer pass whose map is that layer's alpha blends over what is behind it.
         let w=textureSample(weights0,clamped,v.lightmap_uv);
-        var sum=vec3<f32>(0.0);
-        for (var i=0u;i<4u;i++) {
-            let m=material[10u+i];
-            let t=material[14u+i/2u];
-            let off=select(t.xy,t.zw,(i&1u)==1u);
-            let luv=vec2<f32>(m.x*v.uv.x+m.z*v.uv.y,m.y*v.uv.x+m.w*v.uv.y)+off;
-            var texel:vec3<f32>;
-            switch i {
-                case 0u: {texel=textureSample(layer0,tiled,luv).rgb;}
-                case 1u: {texel=textureSample(layer1,tiled,luv).rgb;}
-                case 2u: {texel=textureSample(layer2,tiled,luv).rgb;}
-                default: {texel=textureSample(layer3,tiled,luv).rgb;}
-            }
-            sum+=display_color(texel)*w[i];
-        }
-        return vec4<f32>(fogged(min(sum*v.color.rgb*2.0,vec3<f32>(1.0)),v.world_position),v.color.a);
+        return vec4<f32>(fogged(layer_blend_rgb(v),v.world_position),v.color.a*clamp(w.x+w.y+w.z+w.w,0.0,1.0));
     }
     if material[0].x==7.0 || material[0].x==8.0 {
         return vec4<f32>(fogged(pigment,v.world_position),alpha);
@@ -1454,12 +1440,34 @@ fn shade_surface(v:VertexOut)->vec4<f32> {
     return vec4<f32>(fogged(display,v.world_position),alpha);
 }
 
+// LayerBlend: layers weighted by one RGBA map, times twice the vertex light.
+fn layer_blend_rgb(v:VertexOut)->vec3<f32> {
+    let w=textureSample(weights0,clamped,v.lightmap_uv);
+    var sum=vec3<f32>(0.0);
+    for (var i=0u;i<4u;i++) {
+        let m=material[10u+i];
+        let t=material[14u+i/2u];
+        let off=select(t.xy,t.zw,(i&1u)==1u);
+        let luv=vec2<f32>(m.x*v.uv.x+m.z*v.uv.y,m.y*v.uv.x+m.w*v.uv.y)+off;
+        var texel:vec3<f32>;
+        switch i {
+            case 0u: {texel=textureSample(layer0,tiled,luv).rgb;}
+            case 1u: {texel=textureSample(layer1,tiled,luv).rgb;}
+            case 2u: {texel=textureSample(layer2,tiled,luv).rgb;}
+            default: {texel=textureSample(layer3,tiled,luv).rgb;}
+        }
+        sum+=display_color(texel)*w[i];
+    }
+    return min(sum*v.color.rgb*2.0,vec3<f32>(1.0));
+}
 fn multiplicative_surface(v:VertexOut)->vec4<f32> {
     if v.clip<0.0 {discard;}
     if faded_out(v.position.xy,v.world_position-camera.eye.xyz,camera.atmosphere,camera.haze) {discard;}
     let texel=textureSample(layer0,tiled,v.uv);
-    let alpha=clamp(texel.a*v.color.a,0.0,1.0)*(1.0-fog_amount(v.world_position));
-    let multiplier=display_color(texel.rgb)*v.color.rgb;
+    // A LayerBlend pass drawn through a frame blend (extra terrain passes add): its own colour, vertex alpha.
+    let layered=material[0].x==12.0;
+    let alpha=select(clamp(texel.a*v.color.a,0.0,1.0),v.color.a,layered)*(1.0-fog_amount(v.world_position));
+    let multiplier=select(display_color(texel.rgb)*v.color.rgb,layer_blend_rgb(v),layered);
     let flags=u32(material[0].w);
     // Frame blends fed by colour times alpha (Darken, Screen, Premultiplied),
     // and Invisible, which blends (zero, one) and so adds nothing.
