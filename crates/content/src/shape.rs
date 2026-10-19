@@ -123,6 +123,10 @@ pub struct Mesh {
     /// ([`Surface::lightmap`]) is read (glTF `TEXCOORD_1`).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub uv1: Vec<[f32; 2]>,
+    /// Per-vertex colours (RGBA, glTF `COLOR_0`) of a surface lit by its vertices alone (a layer-blended terrain's baked light), one
+    /// per vertex or none. Models and other surfaces ignore them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub colors: Vec<[u8; 4]>,
     pub primitives: Vec<Primitive>,
     pub skin: Option<Skin>,
     pub billboard: bool,

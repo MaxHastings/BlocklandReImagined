@@ -112,13 +112,9 @@ impl SceneData {
             let material = triangle
                 .material
                 .map_or(unassigned_material, |i| bindings[i]);
-            // A layer-blended surface (a terrain) is lit by its vertex colour alone, doubled: 0.5 is the neutral light
-            // until the surface is given baked light of its own.
-            let color = if self.materials[material].kind == crate::scene::MaterialKind::LayerBlend {
-                [color[0] * 0.5, color[1] * 0.5, color[2] * 0.5, color[3]]
-            } else {
-                color
-            };
+            // A layer-blended surface (a terrain) is lit by its vertex colour alone, doubled: the mesh's own colours are that baked
+            // light; without them 0.5 is the neutral light.
+            let layered = self.materials[material].kind == crate::scene::MaterialKind::LayerBlend;
             for vertex in triangle.vertices {
                 groups.entry(material).or_default().push(SceneVertex {
                     position: transform.transform_point3(vertex.position).to_array(),
@@ -128,7 +124,16 @@ impl SceneData {
                         .to_array(),
                     uv: vertex.uv,
                     lightmap_uv: vertex.uv1,
-                    color,
+                    color: match vertex.color {
+                        Some(c) if layered => [
+                            c[0] * color[0],
+                            c[1] * color[1],
+                            c[2] * color[2],
+                            c[3] * color[3],
+                        ],
+                        _ if layered => [color[0] * 0.5, color[1] * 0.5, color[2] * 0.5, color[3]],
+                        _ => color,
+                    },
                     fx: [0.; 4],
                 });
             }

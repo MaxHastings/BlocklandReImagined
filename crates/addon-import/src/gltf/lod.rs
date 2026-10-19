@@ -251,6 +251,7 @@ pub fn simplify(mesh: &Mesh, target: usize) -> Mesh {
         billboard: mesh.billboard,
         billboard_y: mesh.billboard_y,
         uv1: Vec::new(),
+        colors: Vec::new(),
     };
     triangles.retain({
         let mut i = 0;
@@ -360,6 +361,7 @@ mod tests {
             billboard: false,
             billboard_y: false,
             uv1: Vec::new(),
+            colors: Vec::new(),
         }
     }
 

@@ -1210,12 +1210,14 @@ fn a_layer_blend_material_becomes_a_weighted_layer_pass_the_renderer_draws() {
         g.floats(&uv.concat(), 2),
         g.uints(&i, 1),
     );
+    // The first pass carries baked vertex light (0.2); the second gives none.
+    let light = g.floats(&[0.2, 0.2, 0.2, 1.0].repeat(p.len()), 4);
     let mesh = g.mesh(
         "Terrain",
-        [base, over]
-            .iter()
-            .map(|m| json!({ "attributes": { "POSITION": a, "NORMAL": b, "TEXCOORD_0": c, "TEXCOORD_1": c }, "indices": d, "material": m }))
-            .collect(),
+        vec![
+            json!({ "attributes": { "POSITION": a, "NORMAL": b, "TEXCOORD_0": c, "TEXCOORD_1": c, "COLOR_0": light }, "indices": d, "material": base }),
+            json!({ "attributes": { "POSITION": a, "NORMAL": b, "TEXCOORD_0": c, "TEXCOORD_1": c }, "indices": d, "material": over }),
+        ],
     );
     g.node(json!({ "name": "Terrain", "mesh": mesh }), None);
     g.node(
@@ -1264,12 +1266,21 @@ fn a_layer_blend_material_becomes_a_weighted_layer_pass_the_renderer_draws() {
         layered[0].images[9], layered[1].images[9],
         "each pass has its own weight map"
     );
+    // The first pass's vertices carry the file's light (0.2, to a byte); the second pass, which gave none, the neutral 0.5.
+    let near = |a: f32, b: f32| (a - b).abs() < 0.005;
     assert!(
         drawn
             .scene
             .vertices
             .iter()
-            .any(|v| v.color[0] == 0.5 && v.color[3] == 1.0)
+            .any(|v| near(v.color[0], 0.2) && v.color[3] == 1.0)
+    );
+    assert!(
+        drawn
+            .scene
+            .vertices
+            .iter()
+            .any(|v| near(v.color[0], 0.5) && v.color[3] == 1.0)
     );
 }
 

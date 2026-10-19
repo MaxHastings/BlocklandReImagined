@@ -370,6 +370,9 @@ struct GNode {
     skin: Option<usize>,
 }
 
+/// A layer-blended surface's vertex colour where the file gives none: the light the shader doubles back to 1.
+const NEUTRAL_LIGHT: [u8; 4] = [128, 128, 128, 255];
+
 /// A node's uniform scale and whether its scale was uniform.
 fn uniform(s: Vec3) -> (f32, bool) {
     let u = (s.x * s.y * s.z).abs().cbrt();
@@ -861,6 +864,7 @@ pub fn convert(
             billboard: false,
             billboard_y: false,
             uv1: Vec::new(),
+            colors: Vec::new(),
         };
         let mut influences: Vec<Influence> = Vec::new();
         let mut unweighted = 0;
@@ -904,7 +908,18 @@ pub fn convert(
                 .as_u64()
                 .map(|a| doc.floats(a as usize))
                 .transpose()?;
-            if attr.get("COLOR_0").is_some() && warned.insert("color") {
+            // A layer-blended surface (a terrain) is lit by its vertex colours: they are its baked light and are kept.
+            let layered = p["material"].as_u64().is_some_and(|m| {
+                array(json, "materials")
+                    .get(m as usize)
+                    .is_some_and(|g| g["extras"]["bri_layer_blend"].is_object())
+            });
+            let colors = attr["COLOR_0"]
+                .as_u64()
+                .filter(|_| layered)
+                .map(|a| doc.floats(a as usize))
+                .transpose()?;
+            if attr.get("COLOR_0").is_some() && !layered && warned.insert("color") {
                 report.warnings.push(
                     "vertex colours are ignored; bake them into the Base Color texture".into(),
                 );
@@ -991,6 +1006,25 @@ pub fn convert(
                 match &uv1 {
                     Some(uv) => mesh.uv1.extend(uv.iter().map(|u| [u[0], u[1]])),
                     None => mesh.uv1.extend(std::iter::repeat_n([0.0, 0.0], count)),
+                }
+            }
+            // Vertex colours ride along once a primitive has them; the vertices before it, and later ones without, get the neutral light (128).
+            if colors.is_some() || !mesh.colors.is_empty() {
+                let filled = mesh.positions.len() - count;
+                mesh.colors.resize(filled, NEUTRAL_LIGHT);
+                match &colors {
+                    Some(rows) => mesh.colors.extend(rows.iter().map(|c| {
+                        let byte = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
+                        [
+                            byte(c[0]),
+                            byte(c[1]),
+                            byte(c[2]),
+                            c.get(3).map_or(255, |a| byte(*a)),
+                        ]
+                    })),
+                    None => mesh
+                        .colors
+                        .extend(std::iter::repeat_n(NEUTRAL_LIGHT, count)),
                 }
             }
             if skinned {
