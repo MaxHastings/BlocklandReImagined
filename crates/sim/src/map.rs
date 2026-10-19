@@ -64,6 +64,8 @@ pub struct NativeMap {
     pub breakables: Vec<Breakable>,
     /// Teleporter entrances and exits (`Scene::teleporters`).
     pub teleporters: Vec<bri_content::scene::Teleporter>,
+    /// Looping sounds placed in the map (`Scene::sounds`), for the client to play.
+    pub sounds: Vec<bri_content::scene::MapSound>,
     /// The plate a flat map stands on, where the Environment window's
     /// ground and water go; None on every other map.
     pub plate: Option<bri_content::scene::Plate>,
@@ -660,6 +662,7 @@ impl NativeMap {
             "Native map has no physical geometry"
         );
         let teleporters = scene.teleporters()?;
+        let sounds = scene.sounds()?;
         Ok(Self {
             scene,
             colliders,
@@ -668,6 +671,7 @@ impl NativeMap {
             pending_objects,
             breakables,
             teleporters,
+            sounds,
             plate,
             surfaces,
             movers,

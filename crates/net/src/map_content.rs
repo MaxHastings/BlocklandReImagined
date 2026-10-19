@@ -69,6 +69,8 @@ pub struct LoadedMap {
     pub breakables: Vec<Breakable>,
     /// Teleporter entrances and exits.
     pub teleporters: Vec<bri_content::scene::Teleporter>,
+    /// Looping sounds placed in the map, for the client to play.
+    pub sounds: Vec<bri_content::scene::MapSound>,
     /// The map's keyed movers (doors).
     pub movers: Vec<bri_sim::map::MapMover>,
     /// The plate a flat map stands on.
@@ -216,6 +218,7 @@ impl MapContent {
             tutorial,
             breakables: native.breakables,
             teleporters: native.teleporters,
+            sounds: native.sounds,
             movers: native.movers,
             plate: native.plate,
         })

@@ -135,6 +135,83 @@ fn teleporters(
     Ok(out)
 }
 
+/// Empties named `sound...` as looping sound sources: `bri_sound` names the sound (an id some package offers), `bri_volume` (0 to 1,
+/// 1 by default), `bri_pitch` (1), `bri_range` how far it carries and `bri_inner` how far it is at full volume (a quarter of the range),
+/// both in the model's units.
+fn sounds(
+    doc: &Document,
+    shape: &Shape,
+    globals: &[Mat4],
+    report: &mut Report,
+) -> Result<Vec<SceneNode>> {
+    let mut out = Vec::new();
+    for (k, node) in shape.nodes.iter().enumerate() {
+        if !node.name.to_ascii_lowercase().starts_with("sound") {
+            continue;
+        }
+        let json = doc.json["nodes"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .find(|n| n["name"].as_str().map(str::trim) == Some(node.name.as_str()))
+            .cloned()
+            .unwrap_or(Value::Null);
+        let Some(sound) = json["extras"]["bri_sound"].as_str().map(str::trim) else {
+            // A node merely named sound... (a mesh, say) is not a source.
+            if json["mesh"].is_null() {
+                report.warnings.push(format!(
+                    "`{}` looks like a sound source but has no bri_sound; left out",
+                    node.name
+                ));
+            }
+            continue;
+        };
+        let number = |key: &str, default: f64| json["extras"][key].as_f64().unwrap_or(default);
+        let range = number("bri_range", 20.0) as f32 * report.scale;
+        let inner = json["extras"]["bri_inner"]
+            .as_f64()
+            .map_or(range * 0.25, |v| v as f32 * report.scale);
+        let (volume, pitch) = (
+            number("bri_volume", 1.0) as f32,
+            number("bri_pitch", 1.0) as f32,
+        );
+        ensure!(
+            (0.0..=1.0).contains(&volume)
+                && (0.1..=4.0).contains(&pitch)
+                && range.is_finite()
+                && range > 0.0
+                && range <= bri_content::scene::MAX_SOUND_RANGE
+                && inner.is_finite()
+                && inner > 0.0
+                && inner <= range,
+            "sound `{}`: bri_volume 0 to 1, bri_pitch 0.1 to 4, bri_range above 0 and at most {} units once scaled, bri_inner above 0 and no more than the range",
+            node.name,
+            bri_content::scene::MAX_SOUND_RANGE
+        );
+        let (_, _, position) = globals[k].to_scale_rotation_translation();
+        report.sounds.push(format!(
+            "`{}`: `{sound}` at {:?}, full volume to {inner:.1}, silent at {range:.1}",
+            node.name,
+            position.to_array()
+        ));
+        out.push(SceneNode {
+            name: node.name.clone(),
+            parent: None,
+            kind: NodeKind::Sound,
+            transform: Mat4::from_translation(position).to_cols_array(),
+            asset: None,
+            properties: BTreeMap::from([
+                ("sound".to_string(), sound.to_string()),
+                ("volume".to_string(), volume.to_string()),
+                ("pitch".to_string(), pitch.to_string()),
+                ("range".to_string(), range.to_string()),
+                ("inner".to_string(), inner.to_string()),
+            ]),
+        });
+    }
+    Ok(out)
+}
+
 /// The map's light nodes from the glTF scene's `KHR_lights_punctual`
 /// lights, placed where the converted model put their nodes.
 fn lights(
@@ -352,6 +429,7 @@ pub(super) fn write(
         });
     }
     nodes.extend(teleporters(doc, &shape, &globals, &mut report)?);
+    nodes.extend(sounds(doc, &shape, &globals, &mut report)?);
     nodes.extend(lights(doc, &shape, &globals, &mut report)?);
     // Sky and water pictures, written into `map/` under their hashes.
     let mut pictures: Vec<(String, Vec<u8>)> = Vec::new();

@@ -1055,6 +1055,7 @@ impl App {
             self.weather
                 .set_map(&prepared.map_id, prepared.waters.clone())?;
             self.scene.scenery.set_map(prepared.plate, prepared.waters);
+            self.audio.start_map_sounds(&prepared.map_sounds);
             self.lighting.light_volume = prepared.light_volume;
             self.scene.cpu_scene = Some(prepared.scene);
             self.scene.shape_indices = prepared.shape_indices;

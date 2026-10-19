@@ -382,6 +382,8 @@ pub struct ClientAudio {
     /// The ambient beds Add-On rules play, by key
     /// ([`ClientAudio::play_ambient`]).
     rule_ambient: BTreeMap<String, RuleMusic>,
+    /// The looping sounds a map places, started by [`ClientAudio::start_map_sounds`].
+    map_sounds: Vec<SoundHandle>,
 }
 /// A rule's music track as it plays, fading in over `fade` seconds.
 struct RuleMusic {
@@ -467,6 +469,7 @@ impl ClientAudio {
             music_bricks: MusicBricks::default(),
             rule_music: None,
             rule_ambient: BTreeMap::new(),
+            map_sounds: Vec::new(),
             projectiles: BTreeSet::new(),
             image_loops: BTreeMap::new(),
             engines: BTreeMap::new(),
@@ -825,6 +828,40 @@ impl ClientAudio {
             Err(error) => self.record(Err(error)),
         }
     }
+    /// Start the looping sounds a map places, each heard in full within its inner distance and fading out by its range; the
+    /// mixer keeps the far ones silent until the listener nears. A sound no package offers is a counted fallback, not an error.
+    pub fn start_map_sounds(&mut self, sounds: &[bri_content::scene::MapSound]) {
+        for old in std::mem::take(&mut self.map_sounds) {
+            let result = self.runtime.stop(old);
+            self.record(result);
+        }
+        for source in sounds {
+            let found = match self.pack_asset(&source.sound) {
+                Some(found) => Ok(found),
+                None => self
+                    .runtime
+                    .bank()
+                    .resolve(&source.sound)
+                    .map(|asset| (asset.clone(), 1.0)),
+            };
+            let (asset, volume) = match found {
+                Ok(found) => found,
+                Err(error) => {
+                    self.record(Err(error));
+                    continue;
+                }
+            };
+            let asset = Arc::new(asset.placed(source.inner, source.range, source.pitch));
+            match self.runtime.play_asset(
+                asset,
+                Placement::World(source.position),
+                volume * source.volume,
+            ) {
+                Ok(handle) => self.map_sounds.push(handle),
+                Err(error) => self.record(Err(error)),
+            }
+        }
+    }
     /// Whether `profile` names a sound this client can play: an Add-On
     /// pack's own that loaded, else the bank's ([`Self::start`]).
     pub fn has_sound(&self, profile: &str) -> bool {
@@ -1027,6 +1064,7 @@ impl ClientAudio {
         self.music_bricks = MusicBricks::default();
         self.rule_music = None;
         self.rule_ambient.clear();
+        self.map_sounds.clear();
         self.projectiles.clear();
         self.image_loops.clear();
         self.engines.clear();
@@ -1454,6 +1492,52 @@ mod tests {
         assert_eq!(breaks(&audio), Some(3));
         assert!(audio.set_volume("master", f32::NAN).is_err());
         assert!(audio.set_volume("unknown", 0.5).is_err());
+        Ok(())
+    }
+
+    /// A map's placed sounds loop where they are put: heard when the listener is within their range, silent beyond it, and still
+    /// looping when it returns; a sound nothing offers is skipped.
+    #[test]
+    fn a_map_sound_loops_in_place_and_is_heard_only_within_its_range() -> Result<()> {
+        let fx = Pack::synthetic()?;
+        let mut audio = ClientAudio::load(&fx.root, &mut Settings::default(), OutputKind::Offline)?;
+        let source = |sound: &str, position: [f32; 3]| bri_content::scene::MapSound {
+            node: 0,
+            position,
+            sound: sound.into(),
+            volume: 1.0,
+            pitch: 1.0,
+            inner: 5.0,
+            range: 40.0,
+        };
+        audio.start_map_sounds(&[
+            source(&fx.note, [1000., 1., 0.]),
+            source("nothing:offers_this", [1000., 1., 0.]),
+        ]);
+        assert_eq!(audio.map_sounds.len(), 1, "the unknown sound is skipped");
+        let near = Listener {
+            position: [1000., 1., 0.],
+            ..Default::default()
+        };
+        audio.tick(0.3, near);
+        let samples = audio.take_capture();
+        assert!(
+            samples.iter().any(|v| v.abs() > 0.00001),
+            "heard at its place"
+        );
+        // Far away it is silent, and it keeps looping for when the listener comes back.
+        let far = Listener {
+            position: [2000., 1., 0.],
+            ..Default::default()
+        };
+        audio.tick(0.3, far);
+        audio.tick(0.3, far);
+        let silent = audio.take_capture();
+        assert!(silent.iter().rev().take(2048).all(|v| v.abs() < 0.00001));
+        assert_eq!(audio.stats().finished, 0, "a loop does not end");
+        // A new map replaces them.
+        audio.start_map_sounds(&[]);
+        assert!(audio.map_sounds.is_empty());
         Ok(())
     }
 

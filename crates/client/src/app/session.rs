@@ -584,6 +584,7 @@ impl App {
                 }
                 let waters = loaded.simulation.waters.clone();
                 let plate = loaded.plate;
+                let map_sounds = loaded.sounds.clone();
                 let movers = loaded.movers.clone();
                 let foliage = crate::foliage::PreparedFoliage::load_for_map(
                     &paths.foliage,
@@ -600,6 +601,7 @@ impl App {
                         map_id: base_map.clone(),
                         waters,
                         plate,
+                        map_sounds,
                         scene: visual.scene,
                         terrain: visual.terrain.into_iter().map(Arc::new).collect(),
                         repeated_water: visual.repeated_water.into_iter().map(Arc::new).collect(),

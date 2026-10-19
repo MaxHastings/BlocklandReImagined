@@ -82,6 +82,9 @@ pub enum Kind {
     /// rungs), `strafe` (1 to let the strafe keys move sideways) and an
     /// `id`. The climber faces the node's local +Z, as at a teleporter exit.
     Climb,
+    /// A placed looping sound source ([`MapSound`]): `properties` hold `sound` (the sound's id, from a package that offers
+    /// it), `volume` (0 to 1), `pitch`, `range` (the distance it carries) and `inner` (the distance it is at full volume).
+    Sound,
     Unadapted,
 }
 
@@ -360,6 +363,28 @@ pub struct Teleporter {
 }
 /// Most climb volumes a scene may hold.
 pub const MAX_CLIMBS: usize = 256;
+/// Most sound sources a scene may hold.
+pub const MAX_SOUNDS: usize = 4096;
+/// The farthest a sound source carries, in units.
+pub const MAX_SOUND_RANGE: f32 = 4000.0;
+
+/// A looping sound placed in a map (a computer's hum, wind in a canyon, a stream): heard in full within `inner` of
+/// `position` and fading to silence at `range`. Long sounds stream.
+#[derive(Clone, Debug, PartialEq)]
+pub struct MapSound {
+    pub node: usize,
+    pub position: [f32; 3],
+    /// The sound's id, as a package offers it.
+    pub sound: String,
+    /// 0 to 1, multiplying the sound's own volume.
+    pub volume: f32,
+    /// 1 plays it as recorded.
+    pub pitch: f32,
+    /// Full volume inside this distance.
+    pub inner: f32,
+    /// Silent beyond this distance.
+    pub range: f32,
+}
 
 impl Scene {
     /// Every static model with a `mover` property, read and checked:
@@ -464,6 +489,66 @@ impl Scene {
         ensure!(
             out.len() <= MAX_CLIMBS,
             "A map holds at most {MAX_CLIMBS} climb volumes"
+        );
+        Ok(out)
+    }
+    /// Every [`Kind::Sound`] node, read and checked.
+    pub fn sounds(&self) -> anyhow::Result<Vec<MapSound>> {
+        use anyhow::{Context, ensure};
+        let mut out = Vec::new();
+        for (index, node) in self.nodes.iter().enumerate() {
+            if !matches!(node.kind, Kind::Sound) {
+                continue;
+            }
+            let number = |key: &str, default: f32| -> anyhow::Result<f32> {
+                node.properties
+                    .get(key)
+                    .map(|v| v.trim().parse::<f32>())
+                    .transpose()
+                    .with_context(|| format!("Sound {}: {key} is not a number", node.name))
+                    .map(|v| v.unwrap_or(default))
+            };
+            let sound = node.properties.get("sound").cloned().unwrap_or_default();
+            ensure!(
+                !sound.is_empty() && sound.len() <= 128 && !sound.chars().any(char::is_control),
+                "Sound {}: sound must name a sound (1 to 128 characters)",
+                node.name
+            );
+            let volume = number("volume", 1.0)?;
+            let pitch = number("pitch", 1.0)?;
+            let range = number("range", 20.0)?;
+            let inner = number("inner", range * 0.25)?;
+            ensure!(
+                (0.0..=1.0).contains(&volume)
+                    && (0.1..=4.0).contains(&pitch)
+                    && range.is_finite()
+                    && range > 0.0
+                    && range <= MAX_SOUND_RANGE
+                    && inner.is_finite()
+                    && inner > 0.0
+                    && inner <= range,
+                "Sound {}: volume 0 to 1, pitch 0.1 to 4, range above 0 and at most {MAX_SOUND_RANGE}, inner above 0 and at most range",
+                node.name
+            );
+            let position = Mat4::from_cols_array(&node.transform).w_axis.truncate();
+            ensure!(
+                position.is_finite(),
+                "Sound {}: placement is not finite",
+                node.name
+            );
+            out.push(MapSound {
+                node: index,
+                position: position.to_array(),
+                sound,
+                volume,
+                pitch,
+                inner,
+                range,
+            });
+        }
+        ensure!(
+            out.len() <= MAX_SOUNDS,
+            "A map holds at most {MAX_SOUNDS} sound sources"
         );
         Ok(out)
     }
