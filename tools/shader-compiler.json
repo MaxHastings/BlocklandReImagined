@@ -11,6 +11,11 @@
       "sha256": "f79943b02f73b621421b58a569fd6ee120d0023fb6bfa23844ecad6b00d6a295"
     },
     {
+      "from": "bin/x64/dxil.dll",
+      "to": "dxil.dll",
+      "sha256": "62736e99aa534a942873f92b881a71b2cb6ad62b8d7481ea7a8ad8e9888a8056"
+    },
+    {
       "from": "LICENSE-LLVM.txt",
       "to": "licenses/DirectXShaderCompiler/LICENSE-LLVM.txt",
       "sha256": "729615317e28dd03907e46f0fc3b5e88f7853cee61d1a1471d2749335516b46f"
@@ -19,6 +24,11 @@
       "from": "LICENSE-MIT.txt",
       "to": "licenses/DirectXShaderCompiler/LICENSE-MIT.txt",
       "sha256": "903df5512f7d02609fed0c780a9b704f5a3eeb6e4d84ebe42a29845c81899a3c"
+    },
+    {
+      "from": "LICENSE-MS.txt",
+      "to": "licenses/DirectXShaderCompiler/LICENSE-MS.txt",
+      "sha256": "734f72f239fe7b07b4c7203f294c1a7ce27095687278bab7e56d630d7c672963"
     }
   ]
 }

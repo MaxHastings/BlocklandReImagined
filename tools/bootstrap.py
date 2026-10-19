@@ -203,6 +203,13 @@ def main():
         print("No Steam Blockland folder given (--steam): the Environment window offers the v20 maps' skies only.")
     regen.regenerate(v20, content, regen.STEPS, keep_stale=args.keep_stale, force=args.rebuild, steam=steam)
     install_originals(v20, content)
+    if os.name == 'nt':
+        # wgpu compiles the world's shaders with DXC when dxcompiler.dll is beside the game, in seconds; FXC takes minutes.
+        try:
+            import fetch_dxc
+            fetch_dxc.install(REPO / 'target' / 'release')
+        except (OSError, SystemExit, KeyError) as error:
+            print(f'DirectX Shader Compiler not placed beside the game ({error}); shaders will compile slowly with FXC. python tools/fetch_dxc.py retries.')
     client = REPO / 'target' / 'release' / ('bri-client' + regen.EXE)
     print('\nSetup complete. Start the game with:')
     print(f'  "{client}" --run "{content}"')

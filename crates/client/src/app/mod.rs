@@ -1728,10 +1728,16 @@ impl PlatformApp for App {
         self.avatar.body_textures.clear();
         // The avatar preview and the world compile their pipelines on
         // worker threads; the menus draw meanwhile (see gpu_build).
+        // The world's pipelines come first: the preview waits for them, so the map never queues behind the avatar's.
         let preview_device = device.clone();
+        let scene_first = crate::gpu_build::Gate::default();
+        let scene_done = scene_first.opener();
         self.avatar.avatar_preview = Some(crate::gpu_build::Building::spawn(
             "avatar preview pipelines",
-            move || crate::avatar::Preview::new(&preview_device),
+            move || {
+                scene_first.wait();
+                crate::avatar::Preview::new(&preview_device)
+            },
         ));
         self.avatar.preview_dirty = self.avatar.preview_request.is_some();
         bri_render::color::set_color_vision(bri_ui::screens::options::color_vision(
@@ -1750,6 +1756,7 @@ impl PlatformApp for App {
         self.gpu.renderer = Some(crate::gpu_build::Building::spawn(
             "scene pipelines",
             move || {
+                let _opens_the_gate = scene_done;
                 let mut renderer =
                     SceneRenderer::with_settings(&scene_device, format, samples, shadows);
                 renderer.prepare_lighting_pipelines(soft_shading, occlusion);

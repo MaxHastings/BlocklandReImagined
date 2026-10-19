@@ -2931,6 +2931,165 @@ pub struct WorldPass<'a> {
 /// multiply, then one per [`FrameBlend`] (see `world_pipelines`).
 const BLEND_VARIANTS: usize = 10;
 
+/// The world's pipelines for one shader: a slot for each background, blend and sidedness that is built the first time something
+/// needs it. Most scenes use a few of the forty combinations, and each one costs seconds to compile.
+struct WorldPipelines {
+    device: wgpu::Device,
+    color_format: wgpu::TextureFormat,
+    samples: u32,
+    layout: wgpu::PipelineLayout,
+    shader: wgpu::ShaderModule,
+    constants: Vec<(&'static str, f64)>,
+    slots: Vec<std::sync::OnceLock<wgpu::RenderPipeline>>,
+}
+
+impl WorldPipelines {
+    fn new(
+        device: &wgpu::Device,
+        color_format: wgpu::TextureFormat,
+        samples: u32,
+        layout: wgpu::PipelineLayout,
+        shader: wgpu::ShaderModule,
+        modern: bool,
+    ) -> Self {
+        let mut constants = crate::color::output_constants(color_format).to_vec();
+        if modern {
+            constants.push(("MODERN_SKY_SHADING", 1.0));
+        }
+        Self {
+            device: device.clone(),
+            color_format,
+            samples,
+            layout,
+            shader,
+            constants,
+            slots: (0..2 * BLEND_VARIANTS * 2)
+                .map(|_| std::sync::OnceLock::new())
+                .collect(),
+        }
+    }
+
+    fn index(background: bool, blend: usize, double_sided: bool) -> usize {
+        usize::from(background) * BLEND_VARIANTS * 2 + blend * 2 + usize::from(double_sided)
+    }
+
+    /// The pipeline in slot `index`, built now if no one has needed it yet.
+    fn get(&self, index: usize) -> &wgpu::RenderPipeline {
+        self.slots[index].get_or_init(|| self.create(index))
+    }
+
+    /// Build the pipelines in `indices` that are not built. One at a time: measured on this machine, compiling them side by side
+    /// is no faster with DXC and several times slower with FXC, which serialises them and fights for the cores.
+    fn warm_indices(&self, indices: impl IntoIterator<Item = usize>) {
+        for index in indices {
+            self.get(index);
+        }
+    }
+
+    /// The pipelines a scene with these materials draws with (`material_modes`).
+    fn warm(&self, modes: &[(usize, bool, bool, bool, bool)]) {
+        self.warm_indices(
+            modes
+                .iter()
+                .map(|&(blend, double_sided, background, _, _)| {
+                    Self::index(background, blend, double_sided)
+                }),
+        );
+    }
+
+    /// What every renderer needs at once: opaque and alpha, either side.
+    fn warm_basics(&self) {
+        self.warm_indices([0, 1].into_iter().flat_map(|blend| {
+            [false, true].map(|double_sided| Self::index(false, blend, double_sided))
+        }));
+    }
+
+    fn create(&self, index: usize) -> wgpu::RenderPipeline {
+        let double_sided = index % 2 == 1;
+        let blend = (index / 2) % BLEND_VARIANTS;
+        let background = index / (BLEND_VARIANTS * 2) == 1;
+        let device = &self.device;
+        use wgpu::BlendFactor::{Dst, One, OneMinusSrc, OneMinusSrcAlpha, Src, SrcAlpha, Zero};
+        // (source, destination) colour factors; the alpha channel keeps
+        // the target's alpha.
+        let factors = match blend {
+            0 => None,
+            1 => Some((SrcAlpha, OneMinusSrcAlpha)),
+            3 => Some((Dst, Zero)),
+            4 => Some((Dst, Src)),
+            5 => Some((Zero, OneMinusSrc)),
+            6 => Some((One, OneMinusSrc)),
+            7 => Some((One, OneMinusSrcAlpha)),
+            8 => Some((Zero, One)),
+            9 => Some((One, One)),
+            _ => Some((SrcAlpha, One)),
+        };
+        let blend_state = factors.map(|(src_factor, dst_factor)| wgpu::BlendState {
+            color: wgpu::BlendComponent {
+                src_factor,
+                dst_factor,
+                operation: wgpu::BlendOperation::Add,
+            },
+            alpha: if blend == 1 {
+                wgpu::BlendState::ALPHA_BLENDING.alpha
+            } else {
+                wgpu::BlendComponent {
+                    src_factor: Zero,
+                    dst_factor: One,
+                    operation: wgpu::BlendOperation::Add,
+                }
+            },
+        });
+        device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("persistent scene"),
+            layout: Some(&self.layout),
+            vertex: wgpu::VertexState {
+                module: &self.shader,
+                entry_point: Some("vs_main"),
+                compilation_options: Default::default(),
+                buffers: &vertex_layouts(),
+            },
+            primitive: wgpu::PrimitiveState {
+                cull_mode: if double_sided {
+                    None
+                } else {
+                    Some(wgpu::Face::Back)
+                },
+                ..Default::default()
+            },
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: DEPTH_FORMAT,
+                depth_write_enabled: Some(blend == 0 && !background),
+                depth_compare: Some(DEPTH_NEARER),
+                stencil: Default::default(),
+                bias: Default::default(),
+            }),
+            multisample: wgpu::MultisampleState {
+                count: self.samples,
+                ..Default::default()
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &self.shader,
+                entry_point: Some("fs_main"),
+                compilation_options: wgpu::PipelineCompilationOptions {
+                    constants: &self.constants,
+                    ..Default::default()
+                },
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: self.color_format,
+                    blend: blend_state,
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            multiview_mask: None,
+            cache: None,
+        })
+    }
+}
+
+/// A material's (blend, double sided, background, masked, water), which choose its pipeline.
+type MaterialMode = (usize, bool, bool, bool, bool);
+
 pub struct SceneRenderer {
     /// Scenes with UV chains, rewritten each frame from the camera's clock.
     dynamic_uv: std::cell::RefCell<Vec<std::sync::Weak<DynamicUv>>>,
@@ -2946,8 +3105,10 @@ pub struct SceneRenderer {
     camera_layout: wgpu::BindGroupLayout,
     views: Vec<View>,
     material_layout: wgpu::BindGroupLayout,
-    pipelines: Vec<wgpu::RenderPipeline>,
-    modern_pipelines: Vec<wgpu::RenderPipeline>,
+    pipelines: WorldPipelines,
+    modern_pipelines: Option<WorldPipelines>,
+    /// Every (background, blend, sidedness) a scene uploaded here draws with, so a set made later is warmed for them.
+    used_modes: std::cell::RefCell<std::collections::BTreeSet<MaterialMode>>,
     color_format: wgpu::TextureFormat,
     occlusion_mask_pipelines: std::cell::RefCell<Vec<wgpu::RenderPipeline>>,
     filtering: TextureFiltering,
@@ -3180,8 +3341,8 @@ impl SceneRenderer {
                 crate::color::shader_source(include_str!("scene_original.wgsl")).into(),
             ),
         });
-        let pipelines =
-            Self::world_pipelines(device, color_format, samples, &layout, &shader, false);
+        let pipelines = WorldPipelines::new(device, color_format, samples, layout, shader, false);
+        pipelines.warm_basics();
         let light_buffer = device.buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("native point lights"),
             contents: &vec![
@@ -3219,7 +3380,8 @@ impl SceneRenderer {
             views: Vec::new(),
             material_layout,
             pipelines,
-            modern_pipelines: Vec::new(),
+            modern_pipelines: None,
+            used_modes: Default::default(),
             color_format,
             occlusion_mask_pipelines: std::cell::RefCell::new(Vec::new()),
             filtering,
@@ -3398,106 +3560,6 @@ impl SceneRenderer {
         queue.write_buffer(&buffer, offset, &bytes);
         *cursor = (offset + bytes.len() as u64).next_multiple_of(wgpu::COPY_BUFFER_ALIGNMENT);
         Some((buffer, offset))
-    }
-    fn world_pipelines(
-        device: &wgpu::Device,
-        color_format: wgpu::TextureFormat,
-        samples: u32,
-        layout: &wgpu::PipelineLayout,
-        shader: &wgpu::ShaderModule,
-        modern: bool,
-    ) -> Vec<wgpu::RenderPipeline> {
-        let mut constants = crate::color::output_constants(color_format).to_vec();
-        if modern {
-            constants.push(("MODERN_SKY_SHADING", 1.0));
-        }
-        let mut pipelines = vec![];
-        for background in [false, true] {
-            for blend in 0..BLEND_VARIANTS {
-                use wgpu::BlendFactor::{
-                    Dst, One, OneMinusSrc, OneMinusSrcAlpha, Src, SrcAlpha, Zero,
-                };
-                // (source, destination) colour factors; the alpha channel keeps
-                // the target's alpha.
-                let factors = match blend {
-                    0 => None,
-                    1 => Some((SrcAlpha, OneMinusSrcAlpha)),
-                    3 => Some((Dst, Zero)),
-                    4 => Some((Dst, Src)),
-                    5 => Some((Zero, OneMinusSrc)),
-                    6 => Some((One, OneMinusSrc)),
-                    7 => Some((One, OneMinusSrcAlpha)),
-                    8 => Some((Zero, One)),
-                    9 => Some((One, One)),
-                    _ => Some((SrcAlpha, One)),
-                };
-                let blend_state = factors.map(|(src_factor, dst_factor)| wgpu::BlendState {
-                    color: wgpu::BlendComponent {
-                        src_factor,
-                        dst_factor,
-                        operation: wgpu::BlendOperation::Add,
-                    },
-                    alpha: if blend == 1 {
-                        wgpu::BlendState::ALPHA_BLENDING.alpha
-                    } else {
-                        wgpu::BlendComponent {
-                            src_factor: Zero,
-                            dst_factor: One,
-                            operation: wgpu::BlendOperation::Add,
-                        }
-                    },
-                });
-                for double_sided in [false, true] {
-                    pipelines.push(device.create_render_pipeline(
-                        &wgpu::RenderPipelineDescriptor {
-                            label: Some("persistent scene"),
-                            layout: Some(layout),
-                            vertex: wgpu::VertexState {
-                                module: shader,
-                                entry_point: Some("vs_main"),
-                                compilation_options: Default::default(),
-                                buffers: &vertex_layouts(),
-                            },
-                            primitive: wgpu::PrimitiveState {
-                                cull_mode: if double_sided {
-                                    None
-                                } else {
-                                    Some(wgpu::Face::Back)
-                                },
-                                ..Default::default()
-                            },
-                            depth_stencil: Some(wgpu::DepthStencilState {
-                                format: DEPTH_FORMAT,
-                                depth_write_enabled: Some(blend == 0 && !background),
-                                depth_compare: Some(DEPTH_NEARER),
-                                stencil: Default::default(),
-                                bias: Default::default(),
-                            }),
-                            multisample: wgpu::MultisampleState {
-                                count: samples,
-                                ..Default::default()
-                            },
-                            fragment: Some(wgpu::FragmentState {
-                                module: shader,
-                                entry_point: Some("fs_main"),
-                                compilation_options: wgpu::PipelineCompilationOptions {
-                                    constants: &constants,
-                                    ..Default::default()
-                                },
-                                targets: &[Some(wgpu::ColorTargetState {
-                                    format: color_format,
-                                    blend: blend_state,
-                                    write_mask: wgpu::ColorWrites::ALL,
-                                })],
-                            }),
-                            multiview_mask: None,
-                            cache: None,
-                        },
-                    ));
-                }
-            }
-        }
-        pipelines
     }
     /// Counts from the passes recorded since the last `update_camera`.
     pub fn stats(&self) -> RenderStats {
@@ -3797,25 +3859,7 @@ impl SceneRenderer {
             indices,
             materials,
             batches: data.batches.clone(),
-            material_modes: data
-                .materials
-                .iter()
-                .map(|m| {
-                    (
-                        match m.alpha {
-                            AlphaMode::Blend => 1,
-                            AlphaMode::Additive => 2,
-                            AlphaMode::Multiply => 3,
-                            AlphaMode::Frame(f) => 4 + f as usize,
-                            _ => 0,
-                        },
-                        m.double_sided,
-                        matches!(m.kind, MaterialKind::Sky | MaterialKind::Cloud),
-                        matches!(m.alpha, AlphaMode::Mask(_)),
-                        m.kind == MaterialKind::Water,
-                    )
-                })
-                .collect(),
+            material_modes: self.noted_modes(&data.materials),
             emissive: emissive_geometry(&data.materials, &data.vertices),
             bounds: None,
             extent: vertex_extent(&data.vertices),
@@ -4010,6 +4054,34 @@ impl SceneRenderer {
             image_count: base.image_count,
         })
     }
+    /// A scene's materials as (blend, double sided, background, masked, water), with the pipelines they draw with built now (while the
+    /// map loads) and remembered for a lighting set built later.
+    fn noted_modes(&self, materials: &[Material]) -> Vec<(usize, bool, bool, bool, bool)> {
+        let modes: Vec<_> = materials
+            .iter()
+            .map(|m| {
+                (
+                    match m.alpha {
+                        AlphaMode::Blend => 1,
+                        AlphaMode::Additive => 2,
+                        AlphaMode::Multiply => 3,
+                        AlphaMode::Frame(f) => 4 + f as usize,
+                        _ => 0,
+                    },
+                    m.double_sided,
+                    matches!(m.kind, MaterialKind::Sky | MaterialKind::Cloud),
+                    matches!(m.alpha, AlphaMode::Mask(_)),
+                    m.kind == MaterialKind::Water,
+                )
+            })
+            .collect();
+        self.pipelines.warm(&modes);
+        if let Some(modern) = &self.modern_pipelines {
+            modern.warm(&modes);
+        }
+        self.used_modes.borrow_mut().extend(modes.iter().copied());
+        modes
+    }
     pub fn samples(&self) -> u32 {
         self.samples
     }
@@ -4161,7 +4233,7 @@ impl SceneRenderer {
         }
     }
     fn build_modern_pipelines(&mut self) {
-        if !self.modern_pipelines.is_empty() {
+        if self.modern_pipelines.is_some() {
             return;
         }
         let layout = self
@@ -4179,14 +4251,18 @@ impl SceneRenderer {
                     crate::color::shader_source(include_str!("scene.wgsl")).into(),
                 ),
             });
-        self.modern_pipelines = Self::world_pipelines(
+        let modern = WorldPipelines::new(
             &self.device,
             self.color_format,
             self.samples,
-            &layout,
-            &shader,
+            layout,
+            shader,
             true,
         );
+        modern.warm_basics();
+        let used: Vec<_> = self.used_modes.borrow().iter().copied().collect();
+        modern.warm(&used);
+        self.modern_pipelines = Some(modern);
     }
     /// Call once before encoding/submitting a frame. Multiple writes before a
     /// single submission would intentionally use the latest camera everywhere.
@@ -5852,9 +5928,12 @@ impl SceneRenderer {
                 if mask_only {
                     &mask_pipelines.as_ref().expect("mask pass")[pipeline_of(draw) % 2]
                 } else if view.modern {
-                    &self.modern_pipelines[pipeline_of(draw)]
+                    self.modern_pipelines
+                        .as_ref()
+                        .expect("a modern view builds its pipelines in update_view")
+                        .get(pipeline_of(draw))
                 } else {
-                    &self.pipelines[pipeline_of(draw)]
+                    self.pipelines.get(pipeline_of(draw))
                 },
             );
             bound.material(&mut pass, &scene.materials[batch.material]);

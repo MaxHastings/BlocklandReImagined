@@ -153,14 +153,14 @@ bundle back out of an unpacked release.)
 
 ## The DirectX Shader Compiler (Windows)
 
-The Windows release carries `dxcompiler.dll` from Microsoft's open-source
-DirectX Shader Compiler beside `bri-client.exe`, with its LLVM and MIT
-licences under `licenses/DirectXShaderCompiler/`. wgpu's default compiler
+The Windows release carries `dxcompiler.dll` and `dxil.dll` from Microsoft's
+DirectX Shader Compiler beside `bri-client.exe`, with the LLVM, MIT and
+Microsoft licences under `licenses/DirectXShaderCompiler/`. wgpu's default compiler
 choice loads it, and the world's shaders compile in about 3 s instead of
 about 20 s with the system's FXC (minutes on a busy CPU). The session log
 says which one the game used. Without the file the game still runs, on FXC.
-`dxil.dll`, under Microsoft's own licence terms, does not ship: DXC hashes
-shaders itself without it.
+Maxwell approved shipping `dxil.dll` too (2026-10-19). A loose build gets the
+same files from `python tools/fetch_dxc.py` (bootstrap runs it).
 
 `tools/shader-compiler.json` pins the release by URL and sha256, and each
 shipped file by sha256. `tools/package_playtest.ps1` downloads it into
