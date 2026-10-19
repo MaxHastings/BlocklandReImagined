@@ -8,6 +8,8 @@ pub(super) struct SceneState {
     pub(super) backdrop: Option<bri_render::scene_loader::BackdropScene>,
     /// The map's regions with their own fog, and the viewer's fog across them.
     pub(super) regions: Option<bri_content::regions::RegionMap>,
+    /// The map's decals and the triangles they draw on.
+    pub(super) decals: Option<bri_render::decals::LoadedDecals>,
     pub(super) fog_blend: bri_content::regions::FogBlend,
     /// Game time of the last fog step.
     pub(super) fog_time: f64,

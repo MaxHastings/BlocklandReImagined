@@ -109,6 +109,22 @@ impl App {
             crate::frame_trace::note("uploaded the map");
             self.gpu.gpu_broken.clear();
             self.gpu.gpu_scene = Some(renderer.upload(frame.device, frame.queue, scene)?);
+            self.gpu.decal_layer = self.scene.decals.as_ref().map(|loaded| {
+                let layer = bri_render::decals::DecalLayer::new(
+                    frame.device,
+                    frame.queue,
+                    frame.format,
+                    bri_render::scene::DEPTH_FORMAT,
+                    renderer.samples(),
+                    loaded,
+                );
+                crate::frame_trace::note(format!(
+                    "uploaded {} decals ({} triangles)",
+                    loaded.set.decals.len(),
+                    layer.triangle_counts().iter().sum::<usize>()
+                ));
+                layer
+            });
             self.gpu.gpu_backdrop = match &self.scene.backdrop {
                 Some(backdrop) => {
                     Some(renderer.upload(frame.device, frame.queue, &backdrop.scene)?)
@@ -1930,6 +1946,15 @@ impl App {
                 renderer.mark(frame.encoder, "world");
             }
         }
+        if let Some(layer) = &mut self.gpu.decal_layer {
+            layer.prepare(
+                frame.device,
+                frame.queue,
+                glam::Mat4::from_cols_array(&camera.view_projection),
+                glam::Vec3::new(camera.eye[0], camera.eye[1], camera.eye[2]),
+                (self.avatar.animation_time % 86400.0) as f32,
+            );
+        }
         let mut pass = frame
             .encoder
             .begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -1962,6 +1987,9 @@ impl App {
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
+        if let Some(layer) = &self.gpu.decal_layer {
+            layer.render(&mut pass);
+        }
         self.foliage.render(&mut pass);
         effects_renderer.render(&mut pass);
         weather_renderer.render(&mut pass);
@@ -2073,6 +2101,7 @@ impl App {
             self.scene.cpu_scene = Some(visual.scene);
             self.scene.backdrop = visual.backdrop;
             self.scene.regions = visual.regions;
+            self.scene.decals = visual.decals;
             self.scene.cpu_terrain = visual.terrain.into_iter().map(Arc::new).collect();
             self.scene.cpu_water = visual.repeated_water.into_iter().map(Arc::new).collect();
             self.scene.scenery.reset();

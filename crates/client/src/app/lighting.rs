@@ -553,6 +553,7 @@ mod tests {
             scatter: Vec::new(),
             backdrop: None,
             regions: None,
+            decals: None,
             modern_lights: Some(Vec::new()),
             light_animations: Vec::new(),
             light_spots: Vec::new(),

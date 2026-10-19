@@ -92,6 +92,13 @@ distance fog (`bri_content::regions::RegionMap`: a plane tree, the region on eac
 of `color` bytes, `start`, `end`, `blend_time` and `clear_to_fog`), written in the glTF's own frame and unit. The fog that
 applies is the one of the region the eye is in; entering a region blends over its `blend_time`.
 
+**Decals.** `--decals FILE.json` lists projected pictures (`bri_content::decals::DecalSet`) in the native frame, each picture a PNG
+beside the file: a blob shadow, a stain, a light pattern. A decal is a world-to-picture matrix (orthographic, or perspective with a
+divide), six planes that choose the map's triangles inside its volume, a blend (`modulate2x`, `alpha`, `add`), whether the picture
+wraps, a `facing_limit` and fade for the flat surfaces and the ground (the terrain materials), and optionally a spin in degrees a
+second. The renderer finds each decal's triangles when the map loads and draws them again with the picture on them, a little in
+front of themselves, every frame.
+
 **The sky.** Without anything set, the sky is a plain daytime blue. Set
 these as custom properties on the Blender *scene* (**Scene Properties >
 Custom Properties**):

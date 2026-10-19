@@ -14,6 +14,7 @@ mod export;
 mod lod;
 mod map;
 mod map_backdrop;
+mod map_decals;
 mod map_environment;
 mod map_regions;
 mod map_scatter;
@@ -119,6 +120,8 @@ pub struct Options {
     pub backdrop: Option<PathBuf>,
     /// A map's regions: a JSON file in the glTF's frame (`map_regions.rs`).
     pub regions: Option<PathBuf>,
+    /// A map's decals: a JSON file in the native frame with its pictures beside it (`map_decals.rs`).
+    pub decals: Option<PathBuf>,
 }
 impl Options {
     pub fn new(input: impl Into<PathBuf>, out: impl Into<PathBuf>, kind: Kind) -> Self {
@@ -145,6 +148,7 @@ impl Options {
             scatter: Vec::new(),
             backdrop: None,
             regions: None,
+            decals: None,
         }
     }
 }

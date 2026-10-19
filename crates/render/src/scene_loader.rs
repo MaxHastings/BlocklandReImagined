@@ -36,6 +36,8 @@ pub struct MapScene {
     pub backdrop: Option<BackdropScene>,
     /// The map's regions with their own fog, when it has them.
     pub regions: Option<bri_content::regions::RegionMap>,
+    /// The map's decals and their pictures (in order), when it has them.
+    pub decals: Option<crate::decals::LoadedDecals>,
     /// Set only by the modern loader, which never decodes illumination images.
     pub modern_lights: Option<Vec<crate::map_lighting::MapLight>>,
     /// Animated map lights: an index into `modern_lights` and how it
@@ -101,6 +103,39 @@ fn load_backdrop(
     Ok(Some(BackdropScene {
         scene: alone,
         eye: record.eye,
+    }))
+}
+
+/// The decals `bundle` lists for `scene` ([`bri_content::decals`]) with their pictures decoded.
+fn load_decals(
+    root: &Path,
+    bundle: &Value,
+    scene: &Scene,
+    world: &SceneData,
+) -> Result<Option<crate::decals::LoadedDecals>> {
+    let Some(name) = bundle
+        .get("decals")
+        .and_then(|s| s.get(&scene.id))
+        .and_then(Value::as_str)
+    else {
+        return Ok(None);
+    };
+    let set: bri_content::decals::DecalSet =
+        serde_json::from_slice(&read(root, name)?).context("Reading the map's decals")?;
+    set.validate()?;
+    let mut pictures = Vec::with_capacity(set.decals.len());
+    for decal in &set.decals {
+        pictures.push(decode(&read(root, &decal.picture)?, &decal.picture, true)?);
+    }
+    let receivers = set
+        .decals
+        .iter()
+        .map(|decal| crate::decals::gather(world, decal))
+        .collect();
+    Ok(Some(crate::decals::LoadedDecals {
+        set,
+        pictures,
+        receivers,
     }))
 }
 
@@ -696,6 +731,7 @@ fn load_bundle_unscoped(root: &Path, map_id: &str, legacy: bool) -> Result<MapSc
     let scatter = load_scatter(&root, &bundle, bindings, &scene, legacy)?;
     let backdrop = load_backdrop(&root, &bundle, bindings, &scene, legacy)?;
     let regions = load_regions(&root, &bundle, &scene)?;
+    let decals = load_decals(&root, &bundle, &scene, &out)?;
     Ok(MapScene {
         scene: out,
         terrain,
@@ -705,6 +741,7 @@ fn load_bundle_unscoped(root: &Path, map_id: &str, legacy: bool) -> Result<MapSc
         scatter,
         backdrop,
         regions,
+        decals,
         modern_lights,
         light_animations,
         light_spots,

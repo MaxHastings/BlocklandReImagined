@@ -143,6 +143,8 @@ struct Prepared {
     backdrop: Option<bri_render::scene_loader::BackdropScene>,
     /// The map's regions with their own fog.
     regions: Option<bri_content::regions::RegionMap>,
+    /// The map's decals with the triangles they draw on.
+    decals: Option<bri_render::decals::LoadedDecals>,
     light_volume: LightVolumeState,
 }
 /// A background chunk update: the replica revision it reached, and the
@@ -479,6 +481,7 @@ fn prepare_map(
         scatter: visual.scatter,
         backdrop: visual.backdrop,
         regions: visual.regions,
+        decals: visual.decals,
         light_volume,
     })
 }

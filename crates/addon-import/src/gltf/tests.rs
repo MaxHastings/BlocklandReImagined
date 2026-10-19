@@ -966,6 +966,58 @@ fn regions_move_into_the_native_frame_and_the_import_scale() {
 }
 
 #[test]
+fn decals_copy_their_pictures_and_list_the_set_in_the_bundle() {
+    use bri_content::decals::{Blend, Decal, DecalSet, Receivers};
+    let root = tempfile::tempdir().unwrap();
+    let input = root.path().join("Test Room.glb");
+    std::fs::write(&input, room(false)).unwrap();
+    let receivers = Receivers {
+        enabled: true,
+        facing_limit: 0.0,
+        fade_by_facing: false,
+    };
+    let set = DecalSet {
+        decals: vec![Decal {
+            picture: "spot.png".into(),
+            world_to_texture: glam::Mat4::IDENTITY.to_cols_array(),
+            perspective: false,
+            planes: [[0.0, 1.0, 0.0, 0.0]; 6],
+            forward: [0.0, -1.0, 0.0],
+            blend: Blend::Alpha,
+            wrap: [false, true],
+            two_sided: false,
+            spin_degrees_per_second: 0.0,
+            surfaces: receivers,
+            ground: receivers,
+        }],
+        notes: vec!["a note".into()],
+    };
+    let dir = root.path().join("decals");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("decals.json"), serde_json::to_vec(&set).unwrap()).unwrap();
+    std::fs::write(
+        dir.join("spot.png"),
+        bri_content::testing::png(2, 2, |_, _| [10, 20, 30, 255]).unwrap(),
+    )
+    .unwrap();
+    let mut opts = Options::new(&input, root.path().join("test_room"), Kind::Map);
+    opts.decals = Some(dir.join("decals.json"));
+    let report = import(&opts).unwrap();
+    let out = root.path().join("test_room");
+    let bundle: Value =
+        serde_json::from_slice(&std::fs::read(out.join("map/bundle.json")).unwrap()).unwrap();
+    let file = bundle["decals"]["test_room:map/test_room"]
+        .as_str()
+        .unwrap();
+    let back: DecalSet =
+        serde_json::from_slice(&std::fs::read(out.join("map").join(file)).unwrap()).unwrap();
+    assert!(out.join("map").join(&back.decals[0].picture).is_file());
+    assert!(report.warnings.iter().any(|w| w.contains("a note")));
+    let check = bri_package_runtime::check::check(&out);
+    assert!(check.ok, "{check} {:?}", report.warnings);
+}
+
+#[test]
 fn a_map_imports_as_an_add_on_the_game_loads() {
     let (root, report) = import_room(false);
     let dir = root.path().join("test_room");

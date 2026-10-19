@@ -12,6 +12,7 @@ pub mod brick;
 pub mod camera;
 pub mod collision;
 pub mod controls;
+pub mod decals;
 pub mod effects;
 pub mod hold;
 pub mod hud;
