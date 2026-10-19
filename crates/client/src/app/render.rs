@@ -777,10 +777,12 @@ impl App {
             let now = self.avatar.animation_time;
             let dt = (now - self.scene.fog_time).clamped(0.0, 1.0) as f32;
             self.scene.fog_time = now;
-            let fog = self
-                .scene
-                .fog_blend
-                .step(regions, regions.locate(eye.to_array()), dt);
+            let zone = regions.locate(eye.to_array());
+            // The zone's ambient is what lit models take; lightmaps carry it already.
+            if let Some(ambient) = regions.ambient(zone) {
+                camera.ambient[..3].copy_from_slice(&ambient);
+            }
+            let fog = self.scene.fog_blend.step(regions, zone, dt);
             if fog.enabled {
                 let [r, g, b] = fog.color.map(|c| f32::from(c) / 255.0);
                 camera.fog_color = [r, g, b, 0.0];

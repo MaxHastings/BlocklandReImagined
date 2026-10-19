@@ -32,6 +32,9 @@ pub struct Fog {
 pub struct Region {
     #[serde(default)]
     pub fog: Option<Fog>,
+    /// The light actors in the region take from everywhere (linear RGB, as lit models add it).
+    #[serde(default)]
+    pub ambient: Option<[f32; 3]>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -117,6 +120,12 @@ impl RegionMap {
             node = child as usize;
         }
         region
+    }
+
+    pub fn ambient(&self, region: u16) -> Option<[f32; 3]> {
+        self.regions
+            .get(usize::from(region))
+            .and_then(|r| r.ambient)
     }
 
     pub fn fog(&self, region: u16) -> Option<Fog> {
@@ -235,7 +244,17 @@ mod tests {
             back: vec![-1],
             front_region: vec![1],
             back_region: vec![2],
-            regions: vec![Region::default(), Region { fog: a }, Region { fog: b }],
+            regions: vec![
+                Region::default(),
+                Region {
+                    fog: a,
+                    ambient: None,
+                },
+                Region {
+                    fog: b,
+                    ambient: None,
+                },
+            ],
         }
     }
 
