@@ -64,24 +64,31 @@ class Plans(unittest.TestCase):
         steps = dict(check.plan("focused", {"bri-world"}, REVERSE, depth=1))
         self.assertIn("clippy bri-world", steps)
         self.assertNotIn("clippy bri-sim", steps)
-        self.assertEqual(steps["tests bri-sim"], ["cargo", "test", "-p", "bri-sim", "--locked"])
-        self.assertNotIn("tests bri-net", steps)
+        # one test call over the whole affected set (a single build graph), naming the dependents one step away only
+        (tests,) = [argv for label, argv in steps.items() if label.startswith("tests ")]
+        self.assertEqual(tests[:2], ["cargo", "test"])
+        self.assertIn("bri-sim", tests)
+        self.assertNotIn("bri-net", tests)
 
     def test_render_and_app_crates_run_unit_tests_only_unless_named(self):
         steps = dict(check.plan("focused", {"bri-net"}, REVERSE))
         self.assertEqual(
-            steps["unit bri-client"], ["cargo", "test", "-p", "bri-client", "--lib", "--locked"])
-        self.assertNotIn("tests bri-client", steps)
+            steps["unit bri-client"],
+            ["cargo", "test", "-p", "bri-client", "--lib", "--locked", "--no-fail-fast"])
+        for label, argv in steps.items():
+            if label.startswith("tests "):
+                self.assertNotIn("bri-client", argv)
         named = dict(check.plan("focused", {"bri-net"}, REVERSE,
                                 extra_tests=[("bri-client", "large_build_perf")]))
         self.assertEqual(
             named["test bri-client:large_build_perf"],
             ["cargo", "test", "-p", "bri-client", "--locked", "--test", "large_build_perf"])
 
-    def test_every_cargo_call_names_one_crate_so_windows_limits_hold(self):
+    def test_every_cargo_call_stays_inside_the_windows_command_line_limit(self):
+        # One call per kind names many crates; even the whole workspace stays far below cmd.exe's 8191 characters.
         for _, argv in check.plan("focused", set(DIRS), REVERSE):
-            self.assertLessEqual(argv.count("-p") + argv.count("--package"), 1, argv)
-            self.assertLess(len(" ".join(argv)), 200)
+            self.assertLess(len(" ".join(argv)), 4000, argv)
+            self.assertNotIn("--workspace", argv)
 
     def test_soak_selects_only_the_labelled_long_cases(self):
         for _, argv in check.soak_plan({"bri-net"}):
