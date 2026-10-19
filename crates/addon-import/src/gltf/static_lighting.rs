@@ -34,6 +34,7 @@ struct Instance {
     unlit: bool,
     static_lighting: bool,
     zone: usize,
+    ambient_glow: u8,
 }
 
 struct Masks {
@@ -47,7 +48,7 @@ pub(super) struct StaticLighting {
     lights: HashMap<i64, Value>,
     masks: HashMap<i64, Masks>,
     vertex_map: HashMap<usize, (Vec<i32>, Vec<i32>)>,
-    ambient: Vec<[f32; 3]>,
+    regions: Option<bri_content::regions::RegionMap>,
 }
 
 /// An `.npy` array: its dtype text, shape and raw little-endian bytes.
@@ -138,8 +139,11 @@ fn direction(rotation: [i32; 3]) -> [f32; 3] {
 }
 
 impl StaticLighting {
-    /// `ambient`: the light each zone's meshes take where no light reaches (linear RGB by zone number).
-    pub(super) fn load(dir: &Path, ambient: Vec<[f32; 3]>) -> Result<Self> {
+    /// `regions`: the map's regions (in the lane's frame), whose ambient the meshes take where no light reaches.
+    pub(super) fn load(
+        dir: &Path,
+        regions: Option<bri_content::regions::RegionMap>,
+    ) -> Result<Self> {
         let read_json = |suffix: &str| -> Result<Value> {
             let path = find(dir, suffix)?;
             serde_json::from_slice(&std::fs::read(&path)?)
@@ -166,6 +170,7 @@ impl StaticLighting {
                     unlit: i["unlit"].as_bool().unwrap_or(false),
                     static_lighting: i["static_lighting"].as_bool().unwrap_or(false),
                     zone: i["zone"].as_u64().unwrap_or(0) as usize,
+                    ambient_glow: i["ambient_glow"].as_u64().unwrap_or(0).min(255) as u8,
                 },
             );
         }
@@ -218,15 +223,22 @@ impl StaticLighting {
             lights,
             masks,
             vertex_map,
-            ambient,
+            regions,
         })
+    }
+
+    fn zone_ambient(&self, zone: usize) -> [f32; 3] {
+        self.regions
+            .as_ref()
+            .and_then(|r| r.ambient(zone as u16))
+            .unwrap_or([0.0; 3])
     }
 
     fn set(&self, actor: i64) -> Option<Set> {
         let instance = self.instances.get(&actor)?;
         let masks = self.masks.get(&actor)?;
         let mut set = Set {
-            ambient: self.ambient.get(instance.zone).copied().unwrap_or([0.0; 3]),
+            ambient: self.zone_ambient(instance.zone),
             ..Set::default()
         };
         for (row, export) in instance.lights.iter().enumerate() {
@@ -258,6 +270,7 @@ impl StaticLighting {
                 glow: instance.scale_glow,
                 effect,
                 negative: effect_id == NEGATIVE,
+                id: u32::try_from(*export).unwrap_or(0),
             });
             set.visible
                 .push(masks.data[row * masks.bytes..(row + 1) * masks.bytes].to_vec());
@@ -280,11 +293,14 @@ pub(super) struct RigBuilder {
     by_key: HashMap<i64, u32>,
     vertex_set: Vec<u32>,
     vertex_index: Vec<u32>,
+    /// Each actor-keyed set's render box (the lane's frame) and glow, for the ambient of the zones the box reaches.
+    boxes: HashMap<u32, (Vec3, Vec3, f32)>,
 }
 
 impl RigBuilder {
     /// The next `count` vertices are primitive `k`'s: the world mesh's static meshes name their actor and vertex, others take no light.
-    pub(super) fn extend(&mut self, lighting: &StaticLighting, k: usize, count: usize) {
+    pub(super) fn extend(&mut self, lighting: &StaticLighting, k: usize, positions: &[Vec3]) {
+        let count = positions.len();
         let entry = lighting
             .vertex_map
             .get(&k)
@@ -296,6 +312,10 @@ impl RigBuilder {
         };
         for i in 0..count {
             let set = self.set_of(lighting, i64::from(actors[i]));
+            if let Some(entry) = self.boxes.get_mut(&set) {
+                entry.0 = entry.0.min(positions[i]);
+                entry.1 = entry.1.max(positions[i]);
+            }
             self.vertex_set.push(set);
             self.vertex_index.push(vertices[i].max(0) as u32);
         }
@@ -308,13 +328,7 @@ impl RigBuilder {
         let Some(instance) = lighting.instances.get(&actor) else {
             return 0;
         };
-        let key = if instance.unlit {
-            i64::MIN
-        } else if !instance.static_lighting {
-            i64::MIN + 1 + instance.zone as i64
-        } else {
-            actor
-        };
+        let key = if instance.unlit { i64::MIN } else { actor };
         if let Some(&at) = self.by_key.get(&key) {
             return at;
         }
@@ -325,11 +339,7 @@ impl RigBuilder {
             })
         } else if !instance.static_lighting {
             Some(Set {
-                ambient: lighting
-                    .ambient
-                    .get(instance.zone)
-                    .copied()
-                    .unwrap_or([0.0; 3]),
+                ambient: lighting.zone_ambient(instance.zone),
                 ..Set::default()
             })
         } else {
@@ -338,7 +348,18 @@ impl RigBuilder {
         let at = match set {
             Some(set) => {
                 self.sets.push(set);
-                self.sets.len() as u32
+                let at = self.sets.len() as u32;
+                if !instance.unlit {
+                    // AmbientGlow 255 pulses with the clock in the engine; its mean is used.
+                    let glow = if instance.ambient_glow == 255 {
+                        0.25
+                    } else {
+                        f32::from(instance.ambient_glow) / 255.0
+                    };
+                    self.boxes
+                        .insert(at, (Vec3::splat(f32::MAX), Vec3::splat(f32::MIN), glow));
+                }
+                at
             }
             None => 0,
         };
@@ -348,7 +369,16 @@ impl RigBuilder {
 
     /// The rig, for mesh positions `m` placed from the lane's glTF `g` by `m = point(g * scale)`, with the package frame `p = (g.z,
     /// -g.x, g.y) / UNIT` that the lights are in.
-    pub(super) fn finish(self, scale: Vec3) -> Rig {
+    pub(super) fn finish(mut self, scale: Vec3, lighting: &StaticLighting) -> Rig {
+        // An actor's ambient is the mean over the zones its render box reaches, plus its glow (`AActor::UpdateRenderData`).
+        if let Some(regions) = &lighting.regions {
+            for (at, (min, max, glow)) in &self.boxes {
+                if min.x <= max.x {
+                    self.sets[*at as usize - 1].ambient =
+                        regions.actor_ambient(min.to_array(), max.to_array(), *glow);
+                }
+            }
+        }
         // p = (-m.z / s.z, m.x / s.x, m.y / s.y) / UNIT: column i is where mesh axis i goes.
         let cols = [
             [0.0, 1.0 / (scale.x * UNIT), 0.0],

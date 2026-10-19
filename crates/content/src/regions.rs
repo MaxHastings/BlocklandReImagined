@@ -122,6 +122,66 @@ impl RegionMap {
         region
     }
 
+    /// Every region a box reaches, once each, in the order found: the zones the original engine's `UModel::BoxLeaves` gives an actor
+    /// (`UpdateRenderData`, Engine 0xeed00). A box wholly on one side of a plane takes that side only; one that straddles it takes both.
+    pub fn regions_in_box(&self, min: [f32; 3], max: [f32; 3]) -> Vec<u16> {
+        let mut found = Vec::new();
+        if self.planes.is_empty() {
+            return vec![0];
+        }
+        let mut stack = vec![0usize];
+        let mut budget = self.planes.len() * 2 + 2;
+        while let Some(node) = stack.pop() {
+            if budget == 0 {
+                break;
+            }
+            budget -= 1;
+            let n = self.planes[node];
+            // The nearest and farthest corners along the normal.
+            let (mut low, mut high) = (-n[3], -n[3]);
+            for axis in 0..3 {
+                let (a, b) = (n[axis] * min[axis], n[axis] * max[axis]);
+                low += a.min(b);
+                high += a.max(b);
+            }
+            for (take, child, region) in [
+                (high >= 0.0, self.front[node], self.front_region[node]),
+                (low < 0.0, self.back[node], self.back_region[node]),
+            ] {
+                if !take {
+                    continue;
+                }
+                if child < 0 {
+                    if !found.contains(&region) {
+                        found.push(region);
+                    }
+                } else {
+                    stack.push(child as usize);
+                }
+            }
+        }
+        found
+    }
+
+    /// The ambient light an actor with this render box takes (`AActor::UpdateRenderData`): the mean of the ambient of the distinct zones
+    /// its box reaches, `(0.13, 0.125, 0.12)` when it reaches none, plus `glow` (AmbientGlow / 255) on every channel.
+    pub fn actor_ambient(&self, min: [f32; 3], max: [f32; 3], glow: f32) -> [f32; 3] {
+        let zones = self.regions_in_box(min, max);
+        let mut sum = [0.0f32; 3];
+        let mut count = 0.0;
+        for z in zones {
+            let a = self.ambient(z).unwrap_or([0.0; 3]);
+            for (s, v) in sum.iter_mut().zip(a) {
+                *s += v;
+            }
+            count += 1.0;
+        }
+        if count == 0.0 {
+            return [0.13 + glow, 0.125 + glow, 0.12 + glow];
+        }
+        sum.map(|s| s / count + glow)
+    }
+
     pub fn ambient(&self, region: u16) -> Option<[f32; 3]> {
         self.regions
             .get(usize::from(region))

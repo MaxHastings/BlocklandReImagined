@@ -604,24 +604,20 @@ pub fn convert(
         ..Report::default()
     };
     let json = &doc.json;
-    // The lane's static-mesh lighting inputs, with each zone's ambient from the regions file.
+    // The lane's static-mesh lighting inputs, with the regions whose ambient the meshes take.
     let static_lighting = match &opts.lighting {
         Some(dir) => {
-            let ambient = match &opts.regions {
-                Some(path) => {
-                    let map: bri_content::regions::RegionMap = serde_json::from_slice(
+            let regions = match &opts.regions {
+                Some(path) => Some(
+                    serde_json::from_slice::<bri_content::regions::RegionMap>(
                         &std::fs::read(path)
                             .with_context(|| format!("Reading regions {}", path.display()))?,
                     )
-                    .context("Reading the map's regions")?;
-                    map.regions
-                        .iter()
-                        .map(|r| r.ambient.unwrap_or([0.0; 3]))
-                        .collect()
-                }
-                None => Vec::new(),
+                    .context("Reading the map's regions")?,
+                ),
+                None => None,
             };
-            Some(static_lighting::StaticLighting::load(dir, ambient)?)
+            Some(static_lighting::StaticLighting::load(dir, regions)?)
         }
         None => None,
     };
@@ -1076,7 +1072,7 @@ pub fn convert(
                 _ => colors,
             };
             if let (Some(builder), Some(lighting)) = (rig.as_mut(), world_lighting) {
-                builder.extend(lighting, pi, count);
+                builder.extend(lighting, pi, &local);
             }
             // A node that names its lights has its layer-blended surfaces lit by them, times any colours they already have.
             let colors = match (&vertex_lights, layered) {
@@ -1251,7 +1247,8 @@ pub fn convert(
             report.bones = report.bones.max(joints.len());
         }
         if let Some(builder) = rig.take() {
-            let built = builder.finish(own_scale);
+            let built =
+                builder.finish(own_scale, world_lighting.expect("the rig is built from it"));
             built.validate(mesh.positions.len())?;
             mesh.vertex_rig = Some(built);
         }
