@@ -924,6 +924,35 @@ fn a_map_imports_as_an_add_on_the_game_loads() {
 }
 
 #[test]
+fn a_col_mesh_keeps_the_surface_its_material_names() {
+    // Collision is never drawn, but a hit on it still says what it struck: a
+    // `col_` primitive keeps its material when that names a `bri_surface`.
+    let (root, report) = import_room(true);
+    let map = root.path().join("test_room/map");
+    let shape: Shape =
+        serde_json::from_slice(&std::fs::read(map.join("test_room.shape.json")).unwrap()).unwrap();
+    let collision = shape.details.iter().find(|d| d.collision).unwrap();
+    let materials: Vec<usize> = (collision.object_start
+        ..collision.object_start + collision.object_count)
+        .flat_map(|o| shape.objects[o].meshes.iter())
+        .filter_map(|m| shape.meshes[*m].as_ref())
+        .flat_map(|m| m.primitives.iter())
+        .filter_map(|p| p.material)
+        .collect();
+    assert!(
+        !materials.is_empty(),
+        "col_floor's primitive keeps its material"
+    );
+    let bundle: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(map.join("bundle.json")).unwrap()).unwrap();
+    let table = bundle["surfaces"][&report.model].as_object().unwrap();
+    for m in &materials {
+        let name = &shape.materials[*m].name;
+        assert_eq!(table[name], "metal", "{name}: {table:?}");
+    }
+}
+
+#[test]
 fn a_map_without_a_spawn_or_with_col_meshes_says_what_it_did() {
     let (root, report) = import_room(true);
     let shape: Shape = serde_json::from_slice(

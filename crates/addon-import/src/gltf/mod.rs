@@ -1019,8 +1019,16 @@ pub fn convert(
                     names[k]
                 );
             }
-            // Collision is never drawn, so it needs no texture.
-            let material = if is_collision || is_water {
+            // Collision is never drawn, so it needs no texture; it keeps its
+            // material only when that names what the surface is made of
+            // (`bri_surface`), which a hit on the collider looks up.
+            let names_surface = is_collision
+                && p["material"].as_u64().is_some_and(|m| {
+                    array(json, "materials")
+                        .get(m as usize)
+                        .is_some_and(|g| g["extras"]["bri_surface"].is_string())
+                });
+            let material = if is_water || (is_collision && !names_surface) {
                 None
             } else {
                 Some(material(
