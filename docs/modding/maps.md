@@ -23,6 +23,9 @@ Put the floor near Z = 0 in Blender; the game's up is Blender's up.
 base colour texture with its colour factor baked in, or a plain colour when
 it has no texture. Keep textures in PNG or JPEG.
 
+**Lightmap brightness.** A baked lightmap holds half the light it stands for and a material's `bri_lightmap` `strength` brings it back (2 for the original game's maps; 1 for a level that
+turned overbright off). A game can raise the brightness of every baked lightmap while a view needs it (night vision) with `App::set_lightmap_scale`; the lightmaps of physical materials follow it.
+
 **Detail textures.** Ground stretched under one big texture blurs up
 close. A material can also carry a small texture repeated many times over
 it for close-up grain, as Torque terrain and Halo do: mid-grey leaves the

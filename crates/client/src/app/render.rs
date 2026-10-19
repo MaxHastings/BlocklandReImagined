@@ -847,6 +847,7 @@ impl App {
         // Classic stays exactly v20's flat shade.
         let modern = camera.ambient[3] >= 0.5;
         camera.set_sky_ambient(self.graphics.soft_shading && modern);
+        camera.set_lightmap_scale(self.lighting.lightmap_scale);
         let occlusion_on = self.graphics.ambient_occlusion && modern;
         camera.atmosphere[2] = (self.avatar.animation_time % 86400.0) as f32;
         // `$pref::visibleDistanceMax` caps the map's visible distance; the

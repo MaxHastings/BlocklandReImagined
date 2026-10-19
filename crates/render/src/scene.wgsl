@@ -16,6 +16,8 @@ struct Camera {
     haze:vec4<f32>,
     // Ambient inside spaces the sky cannot see (SceneData::enclosed_ambient); w 1 when set.
     enclosed:vec4<f32>,
+    // x: the run-time multiplier of baked lightmaps on physical materials (Camera::lightmap).
+    lightmap:vec4<f32>,
 };
 @group(0) @binding(0) var<uniform> camera:Camera;
 // color.w 1 marks a map light drawn with the shaded lights' linear falloff; 2 the cubic curve 2 (1 - 3 t^2 + 2 t^3) of t = distance / radius.
@@ -1719,7 +1721,7 @@ fn physical_diffuse(v:VertexOut,n:vec3<f32>)->vec3<f32> {
 fn physical_light(v:VertexOut,n:vec3<f32>)->vec3<f32> {
     if (u32(material[0].w)&16u)==0u {return physical_diffuse(v,n);}
     let p=v.world_position;
-    let baked=textureSample(lightmap,clamped,v.lightmap_uv).rgb*material[7].w;
+    let baked=textureSample(lightmap,clamped,v.lightmap_uv).rgb*material[7].w*camera.lightmap.x;
     var light=shadowed_lightmap(baked*sky_follow(),p,n);
     if lighting_mode()==3 {
         light+=dynamic_light_sum(p,n,SPECULAR_POWER).diffuse+point_illumination(p,n);

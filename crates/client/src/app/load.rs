@@ -353,6 +353,7 @@ impl App {
                 light_volume: LightVolumeState::default(),
                 reflections: None,
                 environment_probe: None,
+                lightmap_scale: 1.0,
             },
             graphics,
             load_limit: Arc::new(tokio::sync::Semaphore::new(2)),

@@ -1039,8 +1039,19 @@ pub struct Camera {
     /// The ambient light in spaces the sky cannot see
     /// ([`SceneData::enclosed_ambient`]); w 1 when the map sets one.
     pub enclosed: [f32; 4],
+    /// x: the run-time multiplier of every baked lightmap on a physical material (1: as the material's own strength gives it). The level's own factor
+    /// is each material's `baked_lightmap` strength; a game raises this one for a view that brightens lightmaps (night vision doubles them again).
+    pub lightmap: [f32; 4],
 }
 impl Camera {
+    /// Set the run-time lightmap multiplier ([`Camera::lightmap`]); a non-finite or negative value is 1.
+    pub fn set_lightmap_scale(&mut self, scale: f32) {
+        self.lightmap[0] = if scale.is_finite() && scale >= 0.0 {
+            scale.min(16.0)
+        } else {
+            1.0
+        };
+    }
     /// Native world uses Y up, right-handed coordinates and reversed 0..1
     /// depth ([`perspective`]).
     pub fn perspective(
@@ -1238,6 +1249,7 @@ impl Default for Camera {
             shading: [0.0; 4],
             haze: bri_content::environment::Fog::default().haze_uniform(),
             enclosed: [0.0; 4],
+            lightmap: [1.0, 0.0, 0.0, 0.0],
             sky_bands: Default::default(),
         }
     }
@@ -6209,6 +6221,20 @@ mod tests {
             &[Material::surface("wall", 0, 0)],
             &[plain]
         ));
+    }
+
+    #[test]
+    fn the_lightmap_scale_is_one_until_set_and_refuses_nonsense() {
+        let mut camera = Camera::default();
+        assert_eq!(camera.lightmap[0], 1.0);
+        camera.set_lightmap_scale(2.0);
+        assert_eq!(camera.lightmap[0], 2.0);
+        camera.set_lightmap_scale(f32::NAN);
+        assert_eq!(camera.lightmap[0], 1.0);
+        camera.set_lightmap_scale(-3.0);
+        assert_eq!(camera.lightmap[0], 1.0);
+        camera.set_lightmap_scale(1.0e6);
+        assert_eq!(camera.lightmap[0], 16.0);
     }
 
     #[test]

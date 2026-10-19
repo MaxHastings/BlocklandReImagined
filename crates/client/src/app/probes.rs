@@ -247,6 +247,10 @@ impl App {
             .world_node(&self.avatar.avatar_assets, name)
     }
     /// The camera the last rendered frame was drawn from: eye, yaw, pitch.
+    /// Set the run-time multiplier of baked lightmaps for the views that follow (1: none; a game mode doubles it for night vision).
+    pub fn set_lightmap_scale(&mut self, scale: f32) {
+        self.lighting.lightmap_scale = scale;
+    }
     pub fn rendered_camera(&self) -> Option<(Vec3, f32, f32)> {
         self.view.rendered_camera
     }
