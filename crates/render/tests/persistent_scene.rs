@@ -1881,3 +1881,35 @@ fn a_linear_fog_grows_in_a_straight_line_on_geometry() -> Result<()> {
     }
     Ok(())
 }
+
+/// A light whose colour.w is 2 falls off along the cubic 2 (1 - 3 t^2 + 2 t^3) of the distance over its radius, with N.L, in place of
+/// v20's 1 / (1 + 0.1 d^2): corners 1.5 (squared) away under a radius of 2.
+#[test]
+fn a_cubic_light_falls_off_along_the_smooth_curve() -> Result<()> {
+    let gpu = Gpu::turn()?;
+    let mut renderer = SceneRenderer::new(&gpu.device, wgpu::TextureFormat::Rgba8UnormSrgb);
+    let camera = Camera {
+        sun_color: [0.; 4],
+        ambient: [0.; 4],
+        ..Default::default()
+    };
+    let center = (32 * 64 + 32) * 4;
+    let small = renderer.upload(&gpu.device, &gpu.queue, &square(0.5, 0.5))?;
+    renderer.update_lights(
+        &gpu.queue,
+        &[PointLight {
+            position_radius: [0., 0., 1.5, 2.],
+            color: [1., 1., 1., 2.],
+            ..Default::default()
+        }],
+    )?;
+    let lit = gpu.frame(&mut renderer, &[&small], &camera, (64, 64))?;
+    let (d, t) = (1.5_f32.sqrt(), 1.5_f32.sqrt() / 2.0);
+    let expected = (2.0 * (1.0 - 3.0 * t * t + 2.0 * t * t * t) / d * 255.0).round() as u8;
+    assert!(
+        lit[center].abs_diff(expected) <= 2,
+        "{} vs {expected}",
+        lit[center]
+    );
+    Ok(())
+}

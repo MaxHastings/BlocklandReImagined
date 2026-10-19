@@ -99,6 +99,13 @@ wraps, a `facing_limit` and fade for the flat surfaces and the ground (the terra
 second. The renderer finds each decal's triangles when the map loads and draws them again with the picture on them, a little in
 front of themselves, every frame.
 
+**Light baked into a mesh.** A node's custom property `bri_vertex_lights` names the fixed lights that reach its mesh
+(`bri_content::vertex_lighting`: `lights` with `position`, `color`, `radius`, optional `glow` and `negative`, and an `effect`
+of `{"kind": "point"}` or `{"kind": "directional", "direction": [x, y, z]}`; `ambient`; and `visible`, one hex mask per light with
+a bit per vertex of the node's mesh, least significant bit first). Positions and radii are in the node's own frame, like its
+POSITIONs. A layer-blended surface is lit by its vertex colours alone, so the importer writes the sum
+`clamp(0.5 * ambient + sum colour * glow * (1 - 3t^2 + 2t^3) * max(n.l, 0))`, times any COLOR_0 the mesh already has, as that colour.
+
 **The sky.** Without anything set, the sky is a plain daytime blue. Set
 these as custom properties on the Blender *scene* (**Scene Properties >
 Custom Properties**):

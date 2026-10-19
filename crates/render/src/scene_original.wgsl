@@ -54,7 +54,9 @@ fn point_illumination(position:vec3<f32>,normal:vec3<f32>)->vec3<f32> {
         let falloff=max(1.0-distance/max(light.position_radius.w,0.0001),0.0);
         // color.w 1: a map light past the shaded budget, linear like the
         // shaded ones (light_given); effect and vehicle lights stay smooth.
-        let shaped=select(falloff*falloff,falloff,light.color.w>0.5);
+        var shaped=select(falloff*falloff,falloff,light.color.w>0.5);
+        // color.w 2: the cubic curve 2 (1 - 3 t^2 + 2 t^3), t the distance over the radius.
+        if light.color.w>1.5 {let t=min(distance/max(light.position_radius.w,0.0001),1.0); shaped=2.0*(1.0-3.0*t*t+2.0*t*t*t);}
         result+=light.color.rgb*shaped*max(dot(n,delta/max(distance,0.0001)),0.0)*point_cone(light,-delta/max(distance,0.0001));
     }
     return result;
@@ -77,7 +79,9 @@ fn vertex_point_illumination(position:vec3<f32>,normal:vec3<f32>)->vec3<f32> {
         let radius=light.position_radius.w;
         if d2>=radius*radius {continue;}
         let facing=max(dot(n,delta*inverseSqrt(max(d2,0.00000001))),0.0);
-        result+=light.color.rgb*facing*point_cone(light,-delta*inverseSqrt(max(d2,0.00000001)))/(1.0+GL_QUADRATIC_ATTENUATION*d2);
+        var reach=1.0/(1.0+GL_QUADRATIC_ATTENUATION*d2);
+        if light.color.w>1.5 {let t=sqrt(d2)/max(radius,0.0001); reach=2.0*(1.0-3.0*t*t+2.0*t*t*t);}
+        result+=light.color.rgb*facing*point_cone(light,-delta*inverseSqrt(max(d2,0.00000001)))*reach;
     }
     return result;
 }

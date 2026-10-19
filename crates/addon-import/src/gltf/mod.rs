@@ -20,6 +20,7 @@ mod map_regions;
 mod map_scatter;
 mod map_terrain;
 mod read;
+mod vertex_lights;
 mod write;
 pub use export::{ExportReport, export_map, find_map};
 #[doc(hidden)]
@@ -870,6 +871,21 @@ pub fn convert(
             uv1: Vec::new(),
             colors: Vec::new(),
         };
+        // Baked light for this node's vertices, counted across its primitives.
+        let node_vertices: usize = array(gmesh, "primitives")
+            .iter()
+            .filter_map(|p| p["attributes"]["POSITION"].as_u64())
+            .map(|a| {
+                array(json, "accessors")
+                    .get(a as usize)
+                    .and_then(|a| a["count"].as_u64())
+                    .unwrap_or(0) as usize
+            })
+            .sum();
+        let vertex_lights =
+            vertex_lights::read(&json["nodes"][n]["extras"], own_scale, node_vertices)
+                .with_context(|| format!("`{}`'s bri_vertex_lights", names[k]))?;
+        let mut node_vertex = 0usize;
         let mut influences: Vec<Influence> = Vec::new();
         let mut unweighted = 0;
         let mut dropped_weights = 0;
@@ -1012,6 +1028,42 @@ pub fn convert(
                     None => mesh.uv1.extend(std::iter::repeat_n([0.0, 0.0], count)),
                 }
             }
+            // A node that names its lights has its layer-blended surfaces lit by them, times any colours they already have.
+            let colors = match (&vertex_lights, layered) {
+                (Some(set), true) => Some(
+                    (0..count)
+                        .map(|i| {
+                            let light = set.at(
+                                node_vertex + i,
+                                Vec3::from(mesh.positions[base as usize + i]),
+                                Vec3::from(mesh.normals[base as usize + i]),
+                            );
+                            let own = colors.as_ref().map_or([1.0; 4], |rows| {
+                                [
+                                    rows[i][0],
+                                    rows[i][1],
+                                    rows[i][2],
+                                    rows[i].get(3).copied().unwrap_or(1.0),
+                                ]
+                            });
+                            vec![
+                                light[0] * own[0],
+                                light[1] * own[1],
+                                light[2] * own[2],
+                                own[3],
+                            ]
+                        })
+                        .collect::<Vec<_>>(),
+                ),
+                (Some(_), false) if warned.insert("vertex lights") => {
+                    report.warnings.push(
+                        "bri_vertex_lights lights a layer-blended surface; others keep their lightmap or texture".into(),
+                    );
+                    colors
+                }
+                _ => colors,
+            };
+            node_vertex += count;
             // Vertex colours ride along once a primitive has them; the vertices before it, and later ones without, get the neutral light (128).
             if colors.is_some() || !mesh.colors.is_empty() {
                 let filled = mesh.positions.len() - count;

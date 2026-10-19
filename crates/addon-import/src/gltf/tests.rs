@@ -1017,6 +1017,77 @@ fn decals_copy_their_pictures_and_list_the_set_in_the_bundle() {
     assert!(check.ok, "{check} {:?}", report.warnings);
 }
 
+/// A one-layer lit-by-vertex mesh whose node names its lights (`mask` is the visibility mask of its one light).
+fn vertex_lit_import(mask: &str) -> Vec<[f32; 4]> {
+    let mut g = super::testing::Gltf::new();
+    g.material(
+        "sand",
+        [1.0; 4],
+        Some((2, 2, vec![200, 180, 120, 255].repeat(4))),
+        json!({}),
+    );
+    g.material(
+        "weights",
+        [1.0; 4],
+        Some((2, 2, vec![255, 0, 0, 255].repeat(4))),
+        json!({}),
+    );
+    let base = g.material(
+        "pass0",
+        [1.0; 4],
+        None,
+        json!({ "extras": { "bri_layer_blend": {
+            "layers": [{ "index": 0, "transform": [1.0, 0.0, 0.0, 1.0, 0.0, 0.0] }],
+            "weights": { "index": 1 },
+        } } }),
+    );
+    let (p, n, uv, i) = super::testing::cuboid(Vec3::ZERO, Vec3::new(4.0, 1.0, 4.0));
+    let flat = |v: &[Vec3]| v.iter().flat_map(|v| v.to_array()).collect::<Vec<f32>>();
+    let (a, b, c, d) = (
+        g.floats(&flat(&p), 3),
+        g.floats(&flat(&n), 3),
+        g.floats(&uv.concat(), 2),
+        g.uints(&i, 1),
+    );
+    let mesh = g.mesh(
+        "Mesh",
+        vec![json!({ "attributes": { "POSITION": a, "NORMAL": b, "TEXCOORD_0": c, "TEXCOORD_1": c }, "indices": d, "material": base })],
+    );
+    let bytes = p.len().div_ceil(8);
+    let mask = mask.repeat(bytes);
+    g.node(
+        json!({ "name": "Mesh", "mesh": mesh, "extras": { "bri_vertex_lights": {
+            "ambient": [0.0, 0.0, 0.0],
+            "lights": [{ "position": [0.0, 2.0, 0.0], "color": [1.0, 0.0, 0.0], "radius": 10.0, "effect": { "kind": "point" } }],
+            "visible": [mask],
+        } } }),
+        None,
+    );
+    g.node(
+        json!({ "name": "spawn", "translation": [0.0, 2.0, 0.0] }),
+        None,
+    );
+    let root = tempfile::tempdir().unwrap();
+    let input = root.path().join("lit.glb");
+    std::fs::write(&input, g.glb()).unwrap();
+    let report = import(&Options::new(&input, root.path().join("lit"), Kind::Map)).unwrap();
+    let dir = root.path().join("lit");
+    let drawn =
+        bri_render::scene_loader::load_map_bundle_dynamic(&dir.join("map"), &report.model).unwrap();
+    drawn.scene.vertices.iter().map(|v| v.color).collect()
+}
+
+#[test]
+fn a_node_that_names_its_lights_is_lit_by_them_per_vertex() {
+    let lit = vertex_lit_import("ff");
+    assert!(lit.iter().any(|c| c[0] > 0.2 && c[1] == 0.0), "{lit:?}");
+    let dark = vertex_lit_import("00");
+    assert!(
+        !dark.iter().any(|c| c[0] > 0.0 && c[1] == 0.0),
+        "no light reaches any vertex: {dark:?}"
+    );
+}
+
 #[test]
 fn a_map_imports_as_an_add_on_the_game_loads() {
     let (root, report) = import_room(false);

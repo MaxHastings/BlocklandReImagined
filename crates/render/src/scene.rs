@@ -2772,6 +2772,8 @@ impl MapLightBinding {
 #[derive(Clone, Copy, Debug, Default, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct PointLight {
     pub position_radius: [f32; 4],
+    /// RGB, then the falloff curve: 0 the smooth native one (squared linear), 1 a map light's linear one, 2 the cubic
+    /// `2 (1 - 3 t^2 + 2 t^3)` of `t` = distance over radius (on objects it replaces v20's `1 / (1 + 0.1 d^2)`).
     pub color: [f32; 4],
     /// A cone: the unit direction scaled by `1 / (cos inner - cos outer)`
     /// and `cos outer` times that scale ([`spot_words`] without its all-round
