@@ -1360,6 +1360,9 @@ fn image_texture(
     }
 }
 
+/// Most a tint channel may be: above 1 brightens (a 2x modulated colour reaches 2).
+pub const MAX_TINT: f32 = 4.0;
+
 /// Per-object state. Geometry, materials and textures remain in a shared GpuScene.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct SceneTransform {
@@ -1391,7 +1394,7 @@ impl SceneTransform {
                 && self
                     .tint
                     .iter()
-                    .all(|v| v.is_finite() && (0. ..=1.).contains(v)),
+                    .all(|v| v.is_finite() && (0. ..=MAX_TINT).contains(v)),
             "Invalid scene instance transform/tint"
         );
         Ok(())

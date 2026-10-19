@@ -56,6 +56,19 @@ impl Instance {
     }
 }
 
+/// The order a layer's instances are drawn in, for the blending of those that are not opaque.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Order {
+    /// As the placements file lists them.
+    #[default]
+    Unsorted,
+    /// Farthest from the viewer first.
+    FarToNear,
+    /// Nearest to the viewer first.
+    NearToFar,
+}
+
 /// One entry of a bundle's `scatter` table: a layer and where its placements are.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Record {
@@ -68,6 +81,15 @@ pub struct Record {
     /// Near and far fade distances, in world units, or None to draw every instance at any distance.
     #[serde(default)]
     pub fade: Option<[f32; 2]>,
+    /// How the instances are ordered for drawing, by distance from the viewer.
+    #[serde(default)]
+    pub order: Order,
+    /// Draw colour times tint times two (a texture and a diffuse colour modulated 2x, saturating), so a tint of 0.5 leaves the texture as it is.
+    #[serde(default)]
+    pub modulate_2x: bool,
+    /// The layer is drawn only when the viewer's detail setting is at least this (0 always). The setting is the game's own; with none, every layer draws.
+    #[serde(default)]
+    pub detail: u8,
 }
 impl Record {
     pub fn validate(&self) -> Result<()> {
@@ -80,6 +102,7 @@ impl Record {
             "Scatter layer {} needs an asset and a file",
             self.name
         );
+        ensure!(self.detail <= 3, "Scatter layer {}'s detail is 0 to 3", self.name);
         if let Some([near, far]) = self.fade {
             ensure!(
                 near.is_finite() && far.is_finite() && near >= 0.0 && far > near,
@@ -236,11 +259,17 @@ mod tests {
             asset: "m/grass".into(),
             file: "grass.bin".into(),
             fade: Some([5.0, 50.0]),
+            order: Order::FarToNear,
+            modulate_2x: true,
+            detail: 1,
         };
         assert!(record.validate().is_ok());
         record.fade = Some([50.0, 5.0]);
         assert!(record.validate().is_err());
         record.fade = Some([-1.0, 5.0]);
+        assert!(record.validate().is_err());
+        record.fade = None;
+        record.detail = 4;
         assert!(record.validate().is_err());
     }
 }

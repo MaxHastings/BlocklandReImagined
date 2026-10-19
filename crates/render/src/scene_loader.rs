@@ -53,6 +53,9 @@ pub struct ScatterScene {
     pub instances: Arc<[bri_content::scatter::Instance]>,
     /// Near and far fade distances, in world units; None draws every instance at any distance.
     pub fade: Option<[f32; 2]>,
+    pub order: bri_content::scatter::Order,
+    pub modulate_2x: bool,
+    pub detail: u8,
 }
 
 /// The scatter layers `bundle` lists for `scene`: each model loaded as a shape about the origin, with its placements read and checked.
@@ -95,6 +98,9 @@ fn load_scatter(
             scene: alone,
             instances: instances.into(),
             fade: record.fade,
+            order: record.order,
+            modulate_2x: record.modulate_2x,
+            detail: record.detail,
         });
     }
     Ok(out)
@@ -1497,6 +1503,9 @@ mod tests {
             asset: "grass".into(),
             file: "grass.scatter".into(),
             fade: Some([10.0, 40.0]),
+            order: bri_content::scatter::Order::FarToNear,
+            modulate_2x: true,
+            detail: 1,
         };
         let bundle = serde_json::json!({
             "assets": { "grass": "grass.json" },
@@ -1516,6 +1525,9 @@ mod tests {
         assert_eq!(layers.len(), 1);
         assert_eq!(layers[0].instances.len(), 2);
         assert_eq!(layers[0].fade, Some([10.0, 40.0]));
+        assert_eq!(layers[0].order, bri_content::scatter::Order::FarToNear);
+        assert!(layers[0].modulate_2x);
+        assert_eq!(layers[0].detail, 1);
         assert!(!layers[0].scene.indices.is_empty(), "the model is drawn");
         // A map with no table has no layers; a damaged placements file is refused.
         assert!(load_scatter(&root, &serde_json::json!({}), &bindings, &scene, false)?.is_empty());

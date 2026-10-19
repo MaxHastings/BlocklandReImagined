@@ -72,6 +72,15 @@ pub(super) fn layers(
                 Some([list[0] * scale, list[1] * scale])
             }
         };
+        let order = match extras.get("order").and_then(Value::as_str) {
+            None | Some("unsorted") => scatter::Order::Unsorted,
+            Some("far_to_near") => scatter::Order::FarToNear,
+            Some("near_to_far") => scatter::Order::NearToFar,
+            Some(other) => anyhow::bail!("Scatter layer {layer}: bri_scatter `order` is unsorted, far_to_near or near_to_far, not {other}"),
+        };
+        let modulate_2x = extras.get("modulate_2x").and_then(Value::as_bool).unwrap_or(false);
+        let detail = extras.get("detail").and_then(Value::as_u64).unwrap_or(0);
+        ensure!(detail <= 3, "Scatter layer {layer}: bri_scatter `detail` is 0 to 3");
         let mut layer_opts = Options::new(path.clone(), opts.out.clone(), Kind::Prop);
         layer_opts.scale = opts.scale;
         layer_opts.fps = opts.fps;
@@ -122,6 +131,9 @@ pub(super) fn layers(
             asset: asset.clone(),
             file: placements,
             fade,
+            order,
+            modulate_2x,
+            detail: detail as u8,
         };
         record.validate()?;
         built.assets.insert(asset, shape_file);
