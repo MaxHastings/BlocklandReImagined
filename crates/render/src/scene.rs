@@ -3570,7 +3570,7 @@ impl SceneRenderer {
         });
         let mut materials = vec![];
         for material in &data.materials {
-            let mut parameters: [f32; 32] = [0.0; 32];
+            let mut parameters: [f32; 40] = [0.0; 40];
             parameters[..4].copy_from_slice(&[
                 match material.kind {
                     MaterialKind::Surface => 0.0,
@@ -3644,6 +3644,14 @@ impl SceneRenderer {
                     uv.rotation_rate_degrees.to_radians(),
                     0.,
                 ]);
+                for (axis, wave) in uv.waves.iter().enumerate() {
+                    parameters[32 + axis * 4..36 + axis * 4].copy_from_slice(&[
+                        wave.kind as u32 as f32,
+                        wave.rate,
+                        wave.phase,
+                        wave.amplitude,
+                    ]);
+                }
             }
             if let Some(strength) = material.baked_lightmap {
                 // material[7].w, which no uv motion reads.

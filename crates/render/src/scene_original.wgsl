@@ -837,7 +837,27 @@ fn map_light_sum(position:vec3<f32>,normal:vec3<f32>,visibility:MapVisibility,la
     }
     return out;
 }
-@group(1) @binding(15) var<uniform> material:array<vec4<f32>,8>;
+@group(1) @binding(15) var<uniform> material:array<vec4<f32>,10>;
+fn uv_hash(i:f32)->f32 {
+    var h=u32(abs(i)) *747796405u+2891336453u;
+    h=((h>>((h>>28u)+4u))^h)*277803737u;
+    return f32(((h>>22u)^h)&32767u)/32768.0;
+}
+// A UvMotion wave (material[8] u, material[9] v): x the offset, y the scale.
+fn uv_wave(w:vec4<f32>,time:f32)->vec2<f32> {
+    let kind=u32(w.x+0.5);
+    let cycles=time*w.y;
+    let f=cycles-floor(cycles);
+    let tau=6.283185307;
+    if kind==1u { return vec2(sin(tau*(f+w.z))*w.w,1.0); }
+    if kind==2u { return vec2(0.0,1.0+sin(tau*(f+w.z))*w.w); }
+    if kind==3u { return vec2(0.0,1.0+sin(f*1.5707963+tau*w.z)*w.w); }
+    if kind==4u {
+        let held=select(floor(cycles)/max(abs(w.y),1e-6),time,f>w.z);
+        return vec2(uv_hash(floor(held*60.0))*w.w,1.0);
+    }
+    return vec2(0.0,1.0);
+}
 // v20 brick FX (blocklandv20.exe quad emitter 0x52ed70, docs/audits/bricks.md).
 // fx.w packs 1 + color + 8*shape + 32*corner + 128*depthStuds; fx.xyz is the
 // brick centre. Only brick materials read it.
@@ -881,8 +901,11 @@ struct VertexOut {
     if material[5].x>0.5 {
         let angle=material[5].w+camera.atmosphere.z*material[7].z;
         let c=cos(angle);let s=sin(angle);
-        let local=uv*material[5].yz-material[7].xy;
-        out.uv=vec2(local.x*c-local.y*s,local.x*s+local.y*c)+material[7].xy+material[6].xy+camera.atmosphere.z*material[6].zw;
+        let wu=uv_wave(material[8],camera.atmosphere.z);
+        let wv=uv_wave(material[9],camera.atmosphere.z);
+        let stretched=(uv-material[7].xy)*vec2(wu.y,wv.y)+material[7].xy;
+        let local=stretched*material[5].yz-material[7].xy;
+        out.uv=vec2(local.x*c-local.y*s,local.x*s+local.y*c)+material[7].xy+material[6].xy+camera.atmosphere.z*material[6].zw+vec2(wu.x,wv.x);
     }
     out.lightmap_uv=lightmap_uv;out.color=color;out.normal=normal;out.world_position=position;
     out.clip=dot(clip.xyz,position)+clip.w;

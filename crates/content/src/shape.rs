@@ -196,6 +196,47 @@ pub struct UvMotion {
     pub center: [f32; 2],
     pub rotation_degrees: f32,
     pub rotation_rate_degrees: f32,
+    /// A periodic wave on each texture axis (u, then v), on top of the rest.
+    pub waves: [UvWave; 2],
+}
+/// The shape of a [`UvWave`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum UvWaveKind {
+    /// No motion on this axis.
+    #[default]
+    None,
+    /// Slides the texture back and forth: offset = sin(2pi(cycle + phase)) x amplitude.
+    Pan,
+    /// Stretches the texture about `center`: scale = 1 + sin(2pi(cycle + phase)) x amplitude.
+    Stretch,
+    /// Like `Stretch`, but the sine runs a quarter turn per cycle and then restarts:
+    /// scale = 1 + sin(pi/2 x cycle + 2pi x phase) x amplitude.
+    StretchRepeat,
+    /// Shakes the texture by a random offset in [0, amplitude), redrawn every frame
+    /// (60 a second) during the part of each cycle after `phase` and held at the
+    /// value the previous cycle ended with before it.
+    Jitter,
+}
+/// One axis of a [`UvMotion`] wave. `rate` is cycles a second and `phase` a
+/// fraction of a cycle.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct UvWave {
+    pub kind: UvWaveKind,
+    pub rate: f32,
+    pub phase: f32,
+    pub amplitude: f32,
+}
+impl Default for UvWave {
+    fn default() -> Self {
+        Self {
+            kind: UvWaveKind::None,
+            rate: 0.,
+            phase: 0.,
+            amplitude: 0.,
+        }
+    }
 }
 impl Default for UvMotion {
     fn default() -> Self {
@@ -206,6 +247,7 @@ impl Default for UvMotion {
             center: [0.; 2],
             rotation_degrees: 0.,
             rotation_rate_degrees: 0.,
+            waves: [UvWave::default(); 2],
         }
     }
 }
@@ -221,6 +263,11 @@ impl UvMotion {
             && self.rotation_degrees.abs() <= 36000.
             && self.rotation_rate_degrees.is_finite()
             && self.rotation_rate_degrees.abs() <= 36000.
+            && self.waves.iter().all(|w| {
+                [w.rate, w.phase, w.amplitude]
+                    .iter()
+                    .all(|v| v.is_finite() && v.abs() <= 10000.)
+            })
     }
 }
 /// Physically based maps for a [`Material`], each naming another material
