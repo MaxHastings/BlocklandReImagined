@@ -382,8 +382,37 @@ pub struct ClientAudio {
     /// The ambient beds Add-On rules play, by key
     /// ([`ClientAudio::play_ambient`]).
     rule_ambient: BTreeMap<String, RuleMusic>,
-    /// The looping sounds a map places, started by [`ClientAudio::start_map_sounds`].
-    map_sounds: Vec<SoundHandle>,
+    /// The looping positional sources a game mode asked for, by key ([`ClientAudio::sync_positional_sources`]).
+    positional: BTreeMap<u64, PlayingSource>,
+}
+/// A looping sound a game mode places in the world and keeps current ([`ClientAudio::sync_positional_sources`]). Distances are in world
+/// units; the sound fades by inverse distance, full inside `reference_distance` and silent beyond `max_distance`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PositionalSource {
+    /// Identifies the source across ticks (the emitting actor).
+    pub key: u64,
+    pub sound: String,
+    pub position: [f32; 3],
+    /// Linear volume multiple of the sound's own.
+    pub volume: f32,
+    /// Playback rate multiple.
+    pub pitch: f32,
+    pub reference_distance: f32,
+    pub max_distance: f32,
+}
+impl PositionalSource {
+    /// Whether `other` can be the same playing voice, moved and re-volumed, rather than a restart.
+    fn same_voice(&self, other: &Self) -> bool {
+        self.sound == other.sound
+            && self.pitch == other.pitch
+            && self.reference_distance == other.reference_distance
+            && self.max_distance == other.max_distance
+    }
+}
+struct PlayingSource {
+    handle: SoundHandle,
+    pack_volume: f32,
+    source: PositionalSource,
 }
 /// A rule's music track as it plays, fading in over `fade` seconds.
 struct RuleMusic {
@@ -469,7 +498,7 @@ impl ClientAudio {
             music_bricks: MusicBricks::default(),
             rule_music: None,
             rule_ambient: BTreeMap::new(),
-            map_sounds: Vec::new(),
+            positional: BTreeMap::new(),
             projectiles: BTreeSet::new(),
             image_loops: BTreeMap::new(),
             engines: BTreeMap::new(),
@@ -828,14 +857,45 @@ impl ClientAudio {
             Err(error) => self.record(Err(error)),
         }
     }
-    /// Start the looping sounds a map places, each heard in full within its inner distance and fading out by its range; the
-    /// mixer keeps the far ones silent until the listener nears. A sound no package offers is a counted fallback, not an error.
-    pub fn start_map_sounds(&mut self, sounds: &[bri_content::scene::MapSound]) {
-        for old in std::mem::take(&mut self.map_sounds) {
-            let result = self.runtime.stop(old);
-            self.record(result);
+    /// Make the looping positional sources playing match `sources`: a key not yet playing starts, one still wanted is moved and
+    /// re-volumed, one no longer listed stops. A game mode calls this each tick with whatever its actors currently emit, so a
+    /// source follows its actor and ends when the actor does. A sound no package offers is a counted fallback, not an error.
+    pub fn sync_positional_sources(&mut self, sources: &[PositionalSource]) {
+        let wanted: BTreeSet<u64> = sources.iter().map(|s| s.key).collect();
+        let gone: Vec<u64> = self
+            .positional
+            .keys()
+            .copied()
+            .filter(|key| !wanted.contains(key))
+            .collect();
+        for key in gone {
+            if let Some(old) = self.positional.remove(&key) {
+                let result = self.runtime.stop(old.handle);
+                self.record(result);
+            }
         }
-        for source in sounds {
+        for source in sources {
+            if let Some(playing) = self.positional.get(&source.key) {
+                if playing.source.same_voice(source) {
+                    let (handle, scale) = (playing.handle, playing.pack_volume);
+                    let moved = self
+                        .runtime
+                        .set_source_position(handle, source.position)
+                        .and_then(|()| {
+                            self.runtime
+                                .set_voice_params(handle, scale * source.volume, 1.0)
+                        });
+                    self.record(moved);
+                    if let Some(playing) = self.positional.get_mut(&source.key) {
+                        playing.source = source.clone();
+                    }
+                    continue;
+                }
+                if let Some(old) = self.positional.remove(&source.key) {
+                    let result = self.runtime.stop(old.handle);
+                    self.record(result);
+                }
+            }
             let found = match self.pack_asset(&source.sound) {
                 Some(found) => Ok(found),
                 None => self
@@ -844,20 +904,34 @@ impl ClientAudio {
                     .resolve(&source.sound)
                     .map(|asset| (asset.clone(), 1.0)),
             };
-            let (asset, volume) = match found {
+            let (asset, pack_volume) = match found {
                 Ok(found) => found,
                 Err(error) => {
                     self.record(Err(error));
                     continue;
                 }
             };
-            let asset = Arc::new(asset.placed(source.inner, source.range, source.pitch));
+            let asset = Arc::new(asset.placed(
+                source.reference_distance,
+                source.max_distance,
+                source.pitch,
+                bri_audio::schema::Falloff::InverseClamped,
+            ));
             match self.runtime.play_asset(
                 asset,
                 Placement::World(source.position),
-                volume * source.volume,
+                pack_volume * source.volume,
             ) {
-                Ok(handle) => self.map_sounds.push(handle),
+                Ok(handle) => {
+                    self.positional.insert(
+                        source.key,
+                        PlayingSource {
+                            handle,
+                            pack_volume,
+                            source: source.clone(),
+                        },
+                    );
+                }
                 Err(error) => self.record(Err(error)),
             }
         }
@@ -1064,7 +1138,10 @@ impl ClientAudio {
         self.music_bricks = MusicBricks::default();
         self.rule_music = None;
         self.rule_ambient.clear();
-        self.map_sounds.clear();
+        for (_, old) in std::mem::take(&mut self.positional) {
+            let result = self.runtime.stop(old.handle);
+            self.record(result);
+        }
         self.projectiles.clear();
         self.image_loops.clear();
         self.engines.clear();
@@ -1498,23 +1575,23 @@ mod tests {
     /// A map's placed sounds loop where they are put: heard when the listener is within their range, silent beyond it, and still
     /// looping when it returns; a sound nothing offers is skipped.
     #[test]
-    fn a_map_sound_loops_in_place_and_is_heard_only_within_its_range() -> Result<()> {
+    fn positional_sources_follow_their_key_and_are_heard_only_within_their_range() -> Result<()> {
         let fx = Pack::synthetic()?;
         let mut audio = ClientAudio::load(&fx.root, &mut Settings::default(), OutputKind::Offline)?;
-        let source = |sound: &str, position: [f32; 3]| bri_content::scene::MapSound {
-            node: 0,
-            position,
+        let source = |key: u64, sound: &str, position: [f32; 3]| PositionalSource {
+            key,
             sound: sound.into(),
+            position,
             volume: 1.0,
             pitch: 1.0,
-            inner: 5.0,
-            range: 40.0,
+            reference_distance: 5.0,
+            max_distance: 40.0,
         };
-        audio.start_map_sounds(&[
-            source(&fx.note, [1000., 1., 0.]),
-            source("nothing:offers_this", [1000., 1., 0.]),
+        audio.sync_positional_sources(&[
+            source(1, &fx.note, [1000., 1., 0.]),
+            source(2, "nothing:offers_this", [1000., 1., 0.]),
         ]);
-        assert_eq!(audio.map_sounds.len(), 1, "the unknown sound is skipped");
+        assert_eq!(audio.positional.len(), 1, "the unknown sound is skipped");
         let near = Listener {
             position: [1000., 1., 0.],
             ..Default::default()
@@ -1525,19 +1602,18 @@ mod tests {
             samples.iter().any(|v| v.abs() > 0.00001),
             "heard at its place"
         );
-        // Far away it is silent, and it keeps looping for when the listener comes back.
-        let far = Listener {
-            position: [2000., 1., 0.],
-            ..Default::default()
-        };
-        audio.tick(0.3, far);
-        audio.tick(0.3, far);
+        // Moving the source far from the listener silences it; it keeps looping and does not restart.
+        let handle = audio.positional[&1].handle;
+        audio.sync_positional_sources(&[source(1, &fx.note, [2000., 1., 0.])]);
+        assert_eq!(audio.positional[&1].handle, handle, "moved, not restarted");
+        audio.tick(0.3, near);
+        audio.tick(0.3, near);
         let silent = audio.take_capture();
         assert!(silent.iter().rev().take(2048).all(|v| v.abs() < 0.00001));
         assert_eq!(audio.stats().finished, 0, "a loop does not end");
-        // A new map replaces them.
-        audio.start_map_sounds(&[]);
-        assert!(audio.map_sounds.is_empty());
+        // A source no longer listed stops.
+        audio.sync_positional_sources(&[]);
+        assert!(audio.positional.is_empty());
         Ok(())
     }
 

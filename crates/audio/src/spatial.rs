@@ -89,6 +89,28 @@ pub fn torque_attenuation(distance: f32, reference: f32, max: f32) -> f32 {
     1.0 - (d - reference) / (max - reference)
 }
 
+/// Inverse-distance attenuation clamped at the reference distance (full volume inside it) and culled beyond `max`: the gain is
+/// `reference / distance` between the two.
+pub fn inverse_clamped_attenuation(distance: f32, reference: f32, max: f32) -> f32 {
+    if !distance.is_finite() || distance > max {
+        return 0.0;
+    }
+    let reference = reference.max(0.01);
+    reference / distance.max(reference)
+}
+
+/// The gain a positional sound's falloff gives at `distance`.
+pub fn attenuation(spatial: &crate::schema::Spatial, distance: f32) -> f32 {
+    match spatial.falloff {
+        crate::schema::Falloff::Linear => {
+            torque_attenuation(distance, spatial.reference_distance, spatial.max_distance)
+        }
+        crate::schema::Falloff::InverseClamped => {
+            inverse_clamped_attenuation(distance, spatial.reference_distance, spatial.max_distance)
+        }
+    }
+}
+
 /// TGE `linearToDB` lookup table (128 entries): maps the product of volume,
 /// channel, master and attenuation to the gain handed to OpenAL.
 pub const TORQUE_GAIN_TABLE: [f32; 128] = [
@@ -267,6 +289,16 @@ mod tests {
         assert_eq!(torque_attenuation(f32::NAN, 10.0, 60.0), 0.0);
         assert_eq!(torque_attenuation(5.0, 10.0, 10.0), 1.0);
         assert_eq!(torque_attenuation(11.0, 10.0, 10.0), 0.0);
+    }
+
+    #[test]
+    fn inverse_clamped_attenuation_is_full_inside_the_reference_and_culled_beyond_the_maximum() {
+        assert_eq!(inverse_clamped_attenuation(0.0, 10.0, 100.0), 1.0);
+        assert_eq!(inverse_clamped_attenuation(10.0, 10.0, 100.0), 1.0);
+        assert!((inverse_clamped_attenuation(40.0, 10.0, 100.0) - 0.25).abs() < 1e-6);
+        assert!((inverse_clamped_attenuation(100.0, 10.0, 100.0) - 0.1).abs() < 1e-6);
+        assert_eq!(inverse_clamped_attenuation(100.1, 10.0, 100.0), 0.0);
+        assert_eq!(inverse_clamped_attenuation(f32::NAN, 10.0, 100.0), 0.0);
     }
 
     #[test]

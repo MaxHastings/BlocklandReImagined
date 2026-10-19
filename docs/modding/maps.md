@@ -45,16 +45,6 @@ starting with `col_` (`col_floor`, `col_stairs`): then only those collide
 and they are never drawn. Boxes and simple shapes collide best; a stairway
 is better as a `col_` ramp.
 
-**Sounds.** Add an Empty named `sound` (copies such as `sound.001`, `sound_wind`
-work the same) with the custom property `bri_sound`, the id of a sound some
-add-on offers, and it loops from that spot. `bri_range` is how far it carries
-(20 by default) and `bri_inner` how far it is at full volume (a quarter of the
-range), both in the model's units; `bri_volume` (0 to 1) and `bri_pitch`
-(1 plays it as recorded) are optional. A long sound (a minute of wind) is a
-`music` sound in its pack and streams. Sounds far from the player stay silent
-until they come near. An Empty named `sound...` without `bri_sound` is left out
-with a warning.
-
 **Where players start.** Add an Empty named `spawn` (Blender names copies
 `spawn.001`, `spawn.002`, and every one is a spawn point). Without one,
 players start above the middle of the map and the import says so.

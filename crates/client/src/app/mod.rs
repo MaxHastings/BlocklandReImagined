@@ -124,8 +124,6 @@ struct Prepared {
     waters: Vec<bri_content::water::Water>,
     /// The plate a flat map stands on.
     plate: Option<bri_content::scene::Plate>,
-    /// Looping sounds placed in the map.
-    map_sounds: Vec<bri_content::scene::MapSound>,
     scene: SceneData,
     terrain: Vec<Arc<bri_render::terrain_scene::TerrainScene>>,
     repeated_water: Vec<Arc<bri_render::water_scene::WaterScene>>,
@@ -460,7 +458,6 @@ fn prepare_map(
         map_id: map,
         waters: native_map.waters,
         plate: native_map.plate,
-        map_sounds: native_map.sounds,
         scene: visual.scene,
         terrain: visual.terrain.into_iter().map(Arc::new).collect(),
         repeated_water: visual.repeated_water.into_iter().map(Arc::new).collect(),

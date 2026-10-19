@@ -174,8 +174,6 @@ pub struct Report {
     pub movement: Option<Movement>,
     /// A map's teleporters, one line each: name, role, channel, radius.
     pub teleporters: Vec<String>,
-    /// A map's placed sound sources, one line each: name, sound, range.
-    pub sounds: Vec<String>,
     pub warnings: Vec<String>,
 }
 #[derive(Debug, Clone, Copy, Serialize)]
@@ -2464,13 +2462,6 @@ impl Report {
         if !self.teleporters.is_empty() {
             let _ = writeln!(s, "## Teleporters\n");
             for t in &self.teleporters {
-                let _ = writeln!(s, "- {t}");
-            }
-            let _ = writeln!(s);
-        }
-        if !self.sounds.is_empty() {
-            let _ = writeln!(s, "## Sound sources\n");
-            for t in &self.sounds {
                 let _ = writeln!(s, "- {t}");
             }
             let _ = writeln!(s);

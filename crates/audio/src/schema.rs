@@ -188,12 +188,26 @@ pub struct Playback {
     pub bus: Bus,
 }
 
+/// How a positional sound fades with distance.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum Falloff {
+    /// Linear from full volume at `reference_distance` to silence at `max_distance` (Torque).
+    #[default]
+    Linear,
+    /// Inverse distance: `reference_distance / distance` between the two, full volume inside the reference distance, and silent
+    /// beyond `max_distance` (OpenAL's AL_INVERSE_DISTANCE_CLAMPED with a rolloff of 1, the model Unreal 2's audio device sets).
+    InverseClamped,
+}
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
 pub struct Spatial {
     /// Full volume inside this distance (world units).
     pub reference_distance: f32,
-    /// Silent at and beyond this distance (world units).
+    /// Silent at and beyond this distance (world units); for [`Falloff::InverseClamped`], silent beyond it.
     pub max_distance: f32,
+    #[serde(default)]
+    pub falloff: Falloff,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
