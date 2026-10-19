@@ -16,6 +16,7 @@ pub mod lines;
 pub mod map_lighting;
 pub mod mipmap;
 mod pool;
+pub mod projected_textures;
 pub mod reflection;
 pub mod scene;
 pub mod scene_loader;
