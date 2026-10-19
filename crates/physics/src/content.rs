@@ -207,6 +207,7 @@ mod tests {
             billboard_y: false,
             uv1: Vec::new(),
             colors: Vec::new(),
+            vertex_rig: None,
         };
         let mut shape = Shape {
             schema_version: 1,

@@ -2533,6 +2533,7 @@ fn placeholder() -> bri_content::shape::Shape {
             billboard_y: false,
             uv1: Vec::new(),
             colors: Vec::new(),
+            vertex_rig: None,
         })],
         materials: vec![Material {
             name: "white".into(),

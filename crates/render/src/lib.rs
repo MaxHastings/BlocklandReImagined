@@ -13,6 +13,7 @@ pub mod lens_flare;
 pub mod light_grid;
 pub mod light_volume;
 pub mod lighting_parameters;
+pub mod lighting_report;
 pub mod lines;
 pub mod map_lighting;
 pub mod mipmap;

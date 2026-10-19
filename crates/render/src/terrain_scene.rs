@@ -385,6 +385,7 @@ mod tests {
                 ignore_texture_alpha: false,
                 untinted: false,
                 baked_lightmap: None,
+                baked_exact: false,
                 tint_mask: false,
                 parameters: Some([[0.0; 4]; 4]),
             }],

@@ -419,6 +419,15 @@ pub fn triangles(
             }
         }
         let uv_offset = pose.material_frames[i] * mesh.frame_vertices;
+        // A mesh of static meshes takes the light its lights give each vertex now, times any colour the vertex already has.
+        let lit = mesh.vertex_rig.as_ref().map(|rig| {
+            rig.colors(
+                &mesh.positions[offset..offset + mesh.frame_vertices],
+                &mesh.normals[offset..offset + mesh.frame_vertices],
+                |_, _| 1.0,
+            )
+        });
+        let own = |v: usize| mesh.colors.get(v).map(|c| c.map(|b| f32::from(b) / 255.0));
         for primitive in &mesh.primitives {
             for triangle in &primitive.triangles {
                 let vertices = triangle.map(|v| {
@@ -428,7 +437,13 @@ pub fn triangles(
                         normal: normals[v].normalize_or_zero(),
                         uv: mesh.uv.get(uv_offset + v).copied().unwrap_or([0.0; 2]),
                         uv1: mesh.uv1.get(v).copied().unwrap_or([0.0; 2]),
-                        color: mesh.colors.get(v).map(|c| c.map(|b| f32::from(b) / 255.0)),
+                        color: match lit.as_ref().and_then(|l| l.get(v).copied().flatten()) {
+                            Some(l) => {
+                                let own = own(v).unwrap_or([1.0; 4]);
+                                Some([l[0] * own[0], l[1] * own[1], l[2] * own[2], own[3]])
+                            }
+                            None => own(v),
+                        },
                     }
                 });
                 out.push(PosedTriangle {
@@ -504,6 +519,7 @@ mod tests {
             billboard_y: false,
             uv1: Vec::new(),
             colors: Vec::new(),
+            vertex_rig: None,
         })];
         shape.objects = vec![Object {
             name: "ones".into(),

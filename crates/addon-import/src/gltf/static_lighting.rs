@@ -10,10 +10,9 @@
 //!
 //! The lane's glTF is `(-y, z, x) * 0.02` of the package's `(x, y, z)`, which is undone to compare vertices with the lights.
 use anyhow::{Context, Result, ensure};
-use bri_content::vertex_lighting::{Effect, Light, Set};
+use bri_content::vertex_lighting::{Effect, Light, Rig, Set};
 use glam::Vec3;
 use serde_json::Value;
-use std::cell::RefCell;
 use std::collections::HashMap;
 use std::io::Read;
 use std::path::Path;
@@ -49,7 +48,6 @@ pub(super) struct StaticLighting {
     masks: HashMap<i64, Masks>,
     vertex_map: HashMap<usize, (Vec<i32>, Vec<i32>)>,
     ambient: Vec<[f32; 3]>,
-    sets: RefCell<HashMap<i64, Option<Set>>>,
 }
 
 /// An `.npy` array: its dtype text, shape and raw little-endian bytes.
@@ -221,7 +219,6 @@ impl StaticLighting {
             masks,
             vertex_map,
             ambient,
-            sets: RefCell::default(),
         })
     }
 
@@ -269,38 +266,102 @@ impl StaticLighting {
         Some(set)
     }
 
-    /// The light each vertex of primitive `k` of the world mesh takes (`positions` and `normals` in the lane's glTF frame), or None
-    /// for a vertex that is not a static mesh's or whose actor takes no baked light.
-    pub(super) fn colors(
-        &self,
-        k: usize,
-        positions: &[Vec3],
-        normals: &[Vec3],
-    ) -> Option<Vec<Option<[f32; 3]>>> {
-        let (actors, vertices) = self.vertex_map.get(&k)?;
-        if actors.len() != positions.len() || vertices.len() != positions.len() {
-            return None;
+    /// Whether primitive `k` of the world mesh has static-mesh vertices to light.
+    pub(super) fn maps(&self, k: usize) -> bool {
+        self.vertex_map.contains_key(&k)
+    }
+}
+
+/// The world mesh's [`Rig`] as its primitives are read in order: for each vertex the set (one per static-mesh actor, shared between
+/// its vertices) and the vertex within it.
+#[derive(Default)]
+pub(super) struct RigBuilder {
+    sets: Vec<Set>,
+    by_key: HashMap<i64, u32>,
+    vertex_set: Vec<u32>,
+    vertex_index: Vec<u32>,
+}
+
+impl RigBuilder {
+    /// The next `count` vertices are primitive `k`'s: the world mesh's static meshes name their actor and vertex, others take no light.
+    pub(super) fn extend(&mut self, lighting: &StaticLighting, k: usize, count: usize) {
+        let entry = lighting
+            .vertex_map
+            .get(&k)
+            .filter(|(actors, vertices)| actors.len() == count && vertices.len() == count);
+        let Some((actors, vertices)) = entry else {
+            self.vertex_set.extend(std::iter::repeat_n(0, count));
+            self.vertex_index.extend(std::iter::repeat_n(0, count));
+            return;
+        };
+        for i in 0..count {
+            let set = self.set_of(lighting, i64::from(actors[i]));
+            self.vertex_set.push(set);
+            self.vertex_index.push(vertices[i].max(0) as u32);
         }
-        let package = |g: Vec3| Vec3::new(g.z, -g.x, g.y);
-        let mut sets = self.sets.borrow_mut();
-        Some(
-            (0..positions.len())
-                .map(|i| {
-                    let actor = i64::from(actors[i]);
-                    let instance = self.instances.get(&actor)?;
-                    if !instance.static_lighting {
-                        return None;
-                    }
-                    if instance.unlit {
-                        return Some([0.5; 3]);
-                    }
-                    let set = sets.entry(actor).or_insert_with(|| self.set(actor));
-                    let set = set.as_ref()?;
-                    let n = package(normals[i]).normalize_or_zero();
-                    Some(set.at(vertices[i].max(0) as usize, package(positions[i]) / UNIT, n))
-                })
-                .collect(),
-        )
+    }
+
+    /// The set an actor's vertices take, plus one (0 for none). An unlit actor is a constant half (the doubling makes it the
+    /// picture); one that takes no baked light keeps its zone's ambient (the engine lights it per frame with up to four lights, which
+    /// this does not do).
+    fn set_of(&mut self, lighting: &StaticLighting, actor: i64) -> u32 {
+        let Some(instance) = lighting.instances.get(&actor) else {
+            return 0;
+        };
+        let key = if instance.unlit {
+            i64::MIN
+        } else if !instance.static_lighting {
+            i64::MIN + 1 + instance.zone as i64
+        } else {
+            actor
+        };
+        if let Some(&at) = self.by_key.get(&key) {
+            return at;
+        }
+        let set = if instance.unlit {
+            Some(Set {
+                ambient: [1.0; 3],
+                ..Set::default()
+            })
+        } else if !instance.static_lighting {
+            Some(Set {
+                ambient: lighting
+                    .ambient
+                    .get(instance.zone)
+                    .copied()
+                    .unwrap_or([0.0; 3]),
+                ..Set::default()
+            })
+        } else {
+            lighting.set(actor)
+        };
+        let at = match set {
+            Some(set) => {
+                self.sets.push(set);
+                self.sets.len() as u32
+            }
+            None => 0,
+        };
+        self.by_key.insert(key, at);
+        at
+    }
+
+    /// The rig, for mesh positions `m` placed from the lane's glTF `g` by `m = point(g * scale)`, with the package frame `p = (g.z,
+    /// -g.x, g.y) / UNIT` that the lights are in.
+    pub(super) fn finish(self, scale: Vec3) -> Rig {
+        // p = (-m.z / s.z, m.x / s.x, m.y / s.y) / UNIT: column i is where mesh axis i goes.
+        let cols = [
+            [0.0, 1.0 / (scale.x * UNIT), 0.0],
+            [0.0, 0.0, 1.0 / (scale.y * UNIT)],
+            [-1.0 / (scale.z * UNIT), 0.0, 0.0],
+            [0.0; 3],
+        ];
+        Rig {
+            to_lights: std::array::from_fn(|i| cols[i / 3][i % 3]),
+            sets: self.sets,
+            vertex_set: self.vertex_set,
+            vertex_index: self.vertex_index,
+        }
     }
 }
 

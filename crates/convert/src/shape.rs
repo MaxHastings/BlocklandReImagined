@@ -645,6 +645,7 @@ fn mesh(
         billboard_y: mesh_flags & 0x20000000 != 0,
         uv1: Vec::new(),
         colors: Vec::new(),
+        vertex_rig: None,
     }))
 }
 

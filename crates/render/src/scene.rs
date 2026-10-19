@@ -398,6 +398,9 @@ pub struct Material {
     /// it is multiplied by. It stands for the sun and ambient light, shadows
     /// included; lights, moving shadows and highlights still add to it.
     pub baked_lightmap: Option<f32>,
+    /// The baked lightmap is the surface's only light: texture times lightmap times its strength, then fog (see
+    /// `bri_content::shape::Surface::lightmap_exact`).
+    pub baked_exact: bool,
     /// The vertex colour tints only where image slot 10's red channel says
     /// (`bri_content::shape::TintMask`): texel * ((1 - mask) + mask * colour).
     /// Lit model materials (`VertexLit`, `Physical`) only.
@@ -495,6 +498,7 @@ impl Material {
             ignore_texture_alpha: false,
             untinted: false,
             baked_lightmap: None,
+            baked_exact: false,
             tint_mask: false,
             parameters: None,
         }
@@ -3772,19 +3776,19 @@ impl SceneRenderer {
                 // Flags: 1 temp-brick flash, 2 ignore texture alpha, 4 untinted,
                 // 8 unlit frame blend (multiply and `Frame`), 16 baked lightmap,
                 // 32 masked tint, 64 neutral output 0.5 (Modulate), 128 colour times
-                // alpha output (Darken, Screen, Premultiplied; Invisible draws none).
+                // alpha output (Darken, Screen, Premultiplied; Invisible draws none), 256 lit by the baked lightmap alone.
                 f32::from(
-                    u8::from(material.temp_brick_flash)
-                        | u8::from(material.ignore_texture_alpha) << 1
-                        | u8::from(material.untinted) << 2
-                        | u8::from(matches!(
+                    u16::from(material.temp_brick_flash)
+                        | u16::from(material.ignore_texture_alpha) << 1
+                        | u16::from(material.untinted) << 2
+                        | u16::from(matches!(
                             material.alpha,
                             AlphaMode::Multiply | AlphaMode::Frame(_)
                         )) << 3
-                        | u8::from(material.baked_lightmap.is_some()) << 4
-                        | u8::from(material.tint_mask) << 5
-                        | u8::from(material.alpha == AlphaMode::Frame(FrameBlend::Modulate)) << 6
-                        | u8::from(matches!(
+                        | u16::from(material.baked_lightmap.is_some()) << 4
+                        | u16::from(material.tint_mask) << 5
+                        | u16::from(material.alpha == AlphaMode::Frame(FrameBlend::Modulate)) << 6
+                        | u16::from(matches!(
                             material.alpha,
                             AlphaMode::Frame(
                                 FrameBlend::Darken
@@ -3793,7 +3797,8 @@ impl SceneRenderer {
                                     | FrameBlend::Invisible
                                     | FrameBlend::TrueAdditive
                             )
-                        )) << 7,
+                        )) << 7
+                        | u16::from(material.baked_exact) << 8,
                 ),
             ]);
             if let Some(groups) = material.parameters {

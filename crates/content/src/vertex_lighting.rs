@@ -82,8 +82,19 @@ impl Set {
 
     /// The light at vertex `index` (a position and unit normal in the lights' frame).
     pub fn at(&self, index: usize, position: Vec3, normal: Vec3) -> [f32; 3] {
+        self.at_scaled(index, position, normal, |_| 1.0)
+    }
+
+    /// [`Self::at`] with each light's strength multiplied by `scale(light)`: a light that has dimmed or gone out since the map loaded.
+    pub fn at_scaled(
+        &self,
+        index: usize,
+        position: Vec3,
+        normal: Vec3,
+        scale: impl Fn(usize) -> f32,
+    ) -> [f32; 3] {
         let mut sum = Vec3::from(self.ambient) * 0.5;
-        for (light, mask) in self.lights.iter().zip(&self.visible) {
+        for (n, (light, mask)) in self.lights.iter().zip(&self.visible).enumerate() {
             if mask
                 .get(index / 8)
                 .is_none_or(|b| b >> (index % 8) & 1 == 0)
@@ -128,7 +139,7 @@ impl Set {
                     facing
                 }
             };
-            let add = Vec3::from(light.color) * (light.glow * strength);
+            let add = Vec3::from(light.color) * (light.glow * strength * scale(n));
             if light.negative {
                 sum -= add;
             } else {
@@ -137,6 +148,71 @@ impl Set {
             sum = sum.clamp(Vec3::ZERO, Vec3::ONE);
         }
         sum.to_array()
+    }
+}
+
+/// The light of a whole mesh whose vertices come from several meshes that each took their own lights (a map's static meshes merged
+/// into one world mesh), kept as data so the colours are worked out when the map loads and again when a light changes, not once
+/// when the map is converted.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct Rig {
+    /// A mesh position as the lights' frame sees it: the columns of a 3x3 matrix, then the offset.
+    pub to_lights: [f32; 12],
+    pub sets: Vec<Set>,
+    /// Per mesh vertex: its set plus one (0 for a vertex that takes no baked light).
+    pub vertex_set: Vec<u32>,
+    /// Per mesh vertex: its index within its set's masks.
+    pub vertex_index: Vec<u32>,
+}
+
+impl Rig {
+    pub fn validate(&self, vertices: usize) -> Result<()> {
+        ensure!(
+            self.vertex_set.len() == vertices && self.vertex_index.len() == vertices,
+            "A mesh's light rig names a set and a vertex for each of its {vertices} vertices"
+        );
+        ensure!(
+            self.to_lights.iter().all(|v| v.is_finite()),
+            "A light rig's frame is not finite"
+        );
+        for &set in &self.vertex_set {
+            ensure!(
+                set as usize <= self.sets.len(),
+                "A light rig names a missing set"
+            );
+        }
+        Ok(())
+    }
+
+    /// The light each vertex takes, for the mesh's `positions` and `normals` (None where it takes no baked light). `scale(set, light)`
+    /// multiplies a light's strength, 1 for a light as the map placed it.
+    pub fn colors(
+        &self,
+        positions: &[[f32; 3]],
+        normals: &[[f32; 3]],
+        scale: impl Fn(usize, usize) -> f32,
+    ) -> Vec<Option<[f32; 3]>> {
+        let [c0, c1, c2, offset] = std::array::from_fn(|i| {
+            Vec3::new(
+                self.to_lights[i * 3],
+                self.to_lights[i * 3 + 1],
+                self.to_lights[i * 3 + 2],
+            )
+        });
+        let matrix = glam::Mat3::from_cols(c0, c1, c2);
+        (0..positions.len().min(self.vertex_set.len()))
+            .map(|v| {
+                let set = (self.vertex_set[v] as usize).checked_sub(1)?;
+                let position = matrix * Vec3::from(positions[v]) + offset;
+                let normal = (matrix * Vec3::from(normals[v])).normalize_or_zero();
+                Some(self.sets.get(set)?.at_scaled(
+                    self.vertex_index[v] as usize,
+                    position,
+                    normal,
+                    |light| scale(set, light),
+                ))
+            })
+            .collect()
     }
 }
 

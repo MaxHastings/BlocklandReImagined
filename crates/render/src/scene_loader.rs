@@ -1023,6 +1023,7 @@ fn load_static_shape(
             } else {
                 material.images[8] = lightmap;
                 material.baked_lightmap = Some(surface.lightmap_strength);
+                material.baked_exact = surface.lightmap_exact;
             }
         }
         // Bare metal on an Add-On map: its texture tints the reflectance and
@@ -1535,6 +1536,7 @@ fn load_terrain(
         ignore_texture_alpha: false,
         untinted: false,
         baked_lightmap: None,
+        baked_exact: false,
         tint_mask: false,
         parameters: Some(parameters),
     });

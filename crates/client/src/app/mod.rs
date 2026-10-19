@@ -395,11 +395,17 @@ fn load_visual_map(
     id: &str,
     lighting: u8,
 ) -> Result<bri_render::scene_loader::MapScene> {
-    if lighting == 3 {
+    let map = if lighting == 3 {
         bri_render::scene_loader::load_map_bundle_dynamic(root, id)
     } else {
         load_map_bundle(root, id)
+    }?;
+    // Once per load: how each kind of surface in the map is lit, against the original engine's path for it.
+    for line in bri_render::lighting_report::lines(&bri_render::lighting_report::report(&map.scene))
+    {
+        bri_console::echo(line);
     }
+    Ok(map)
 }
 fn prepare_map(
     paths: &crate::content::ContentPaths,

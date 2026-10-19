@@ -1399,6 +1399,12 @@ fn shade_surface(v:VertexOut)->vec4<f32> {
     if material[0].x==7.0 || material[0].x==8.0 {
         return vec4<f32>(fogged(pigment,v.world_position),alpha);
     }
+    if (u32(material[0].w)&256u)!=0u {
+        // The original engine's baked surface: the picture times the lightmap times its strength (the lightmap holds half the
+        // light), saturated, then fog. Nothing live adds to it.
+        let baked=textureSampleLevel(lightmap,clamped_exact,v.lightmap_uv,0.0).rgb*material[7].w*camera.lightmap.x;
+        return vec4<f32>(fogged(min(pigment*baked,vec3<f32>(1.0)),v.world_position),alpha);
+    }
     var baked_light=vec4<f32>(1.0);
     if lighting_mode()!=3 {baked_light=textureSampleLevel(lightmap,clamped_exact,v.lightmap_uv,0.0);}
     var illumination=baked_light.rgb;

@@ -127,6 +127,9 @@ pub struct Mesh {
     /// per vertex or none. Models and other surfaces ignore them.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub colors: Vec<[u8; 4]>,
+    /// The baked light of a mesh of static meshes among fixed lights, worked out when it loads: times `colors` where both are given.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vertex_rig: Option<crate::vertex_lighting::Rig>,
     pub primitives: Vec<Primitive>,
     pub skin: Option<Skin>,
     pub billboard: bool,
@@ -365,6 +368,10 @@ pub struct Surface {
     pub lightmap: Option<usize>,
     #[serde(default = "Metal::one")]
     pub lightmap_strength: f32,
+    /// Lit by the lightmap alone: the picture times the lightmap times `lightmap_strength`, then fog, whatever the live sun, ambient
+    /// or lights are. How the original engine draws a surface it baked (`lighting-zone-lights.md` 1.3).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub lightmap_exact: bool,
     /// Glow colour map (sRGB), multiplying `emissive`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub emissive_map: Option<usize>,
