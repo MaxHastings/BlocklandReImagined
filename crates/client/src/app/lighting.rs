@@ -551,6 +551,7 @@ mod tests {
             shape_indices: Default::default(),
             movers: Vec::new(),
             scatter: Vec::new(),
+            backdrop: None,
             modern_lights: Some(Vec::new()),
             light_animations: Vec::new(),
             light_spots: Vec::new(),

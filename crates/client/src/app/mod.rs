@@ -139,6 +139,8 @@ struct Prepared {
     mover_scenes: Vec<(u32, SceneData)>,
     /// The map's scatter layers.
     scatter: Vec<bri_render::scene_loader::ScatterScene>,
+    /// The map's backdrop, drawn before the map from its own eye.
+    backdrop: Option<bri_render::scene_loader::BackdropScene>,
     light_volume: LightVolumeState,
 }
 /// A background chunk update: the replica revision it reached, and the
@@ -473,6 +475,7 @@ fn prepare_map(
         map_movers: native_map.movers,
         mover_scenes: visual.movers,
         scatter: visual.scatter,
+        backdrop: visual.backdrop,
         light_volume,
     })
 }

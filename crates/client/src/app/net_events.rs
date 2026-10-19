@@ -1057,6 +1057,7 @@ impl App {
             self.scene.scenery.set_map(prepared.plate, prepared.waters);
             self.lighting.light_volume = prepared.light_volume;
             self.scene.cpu_scene = Some(prepared.scene);
+            self.scene.backdrop = prepared.backdrop;
             self.scene.shape_indices = prepared.shape_indices;
             self.fx
                 .map_movers

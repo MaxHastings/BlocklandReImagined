@@ -850,6 +850,71 @@ fn a_scatter_layer_without_placements_or_with_a_bad_fade_is_refused() {
     assert!(import(&opts).is_err(), "no placements file");
 }
 
+/// A backdrop's glTF: one box with the scene's `bri_backdrop` naming the eye it is viewed from.
+fn backdrop_model(dir: &std::path::Path, eye: Option<[f32; 3]>) -> PathBuf {
+    use super::testing::{Gltf, cuboid};
+    let mut g = Gltf::new();
+    let (p, n, uv, i) = cuboid(Vec3::ZERO, Vec3::splat(1.0));
+    let flat = |v: &[Vec3]| v.iter().flat_map(|v| v.to_array()).collect::<Vec<f32>>();
+    let (a, b, c, d) = (
+        g.floats(&flat(&p), 3),
+        g.floats(&flat(&n), 3),
+        g.floats(&uv.concat(), 2),
+        g.uints(&i, 1),
+    );
+    let sky = g.material(
+        "Sky",
+        [1.0; 4],
+        Some((1, 1, vec![90, 140, 220, 255])),
+        json!({}),
+    );
+    let mesh = g.mesh(
+        "Sky",
+        vec![json!({ "attributes": { "POSITION": a, "NORMAL": b, "TEXCOORD_0": c }, "indices": d, "material": sky })],
+    );
+    g.node(json!({ "name": "Sky", "mesh": mesh }), None);
+    if let Some(eye) = eye {
+        g.json["scenes"][0]["extras"] = json!({ "bri_backdrop": { "eye": eye } });
+    }
+    let path = dir.join("sky.glb");
+    std::fs::write(&path, g.glb()).unwrap();
+    path
+}
+
+#[test]
+fn a_backdrop_becomes_a_shape_and_an_eye_in_the_native_frame() {
+    let root = tempfile::tempdir().unwrap();
+    let input = root.path().join("Test Room.glb");
+    std::fs::write(&input, room(false)).unwrap();
+    let mut opts = Options::new(&input, root.path().join("test_room"), Kind::Map);
+    opts.scale = Some(2.0);
+    opts.backdrop = Some(backdrop_model(root.path(), Some([1.0, 2.0, 3.0])));
+    let report = import(&opts).unwrap();
+    let dir = root.path().join("test_room");
+    let bundle: Value =
+        serde_json::from_slice(&std::fs::read(dir.join("map/bundle.json")).unwrap()).unwrap();
+    let record: bri_content::backdrop::Record =
+        serde_json::from_value(bundle["backdrops"]["test_room:map/test_room"].clone()).unwrap();
+    assert!(
+        bundle["assets"][&record.asset].is_string(),
+        "the model is an asset"
+    );
+    // glTF to native is half a turn about Y, then the import's scale of 2.
+    assert!(near(Vec3::from(record.eye), Vec3::new(-2.0, 4.0, -6.0)));
+    let check = bri_package_runtime::check::check(&dir);
+    assert!(check.ok, "{check} {:?}", report.warnings);
+}
+
+#[test]
+fn a_backdrop_without_an_eye_is_refused() {
+    let root = tempfile::tempdir().unwrap();
+    let input = root.path().join("Test Room.glb");
+    std::fs::write(&input, room(false)).unwrap();
+    let mut opts = Options::new(&input, root.path().join("a"), Kind::Map);
+    opts.backdrop = Some(backdrop_model(root.path(), None));
+    assert!(import(&opts).is_err());
+}
+
 #[test]
 fn a_map_imports_as_an_add_on_the_game_loads() {
     let (root, report) = import_room(false);

@@ -109,6 +109,10 @@ impl App {
             crate::frame_trace::note("uploaded the map");
             self.gpu.gpu_broken.clear();
             self.gpu.gpu_scene = Some(renderer.upload(frame.device, frame.queue, scene)?);
+            self.gpu.gpu_backdrop = match &self.scene.backdrop {
+                Some(backdrop) => Some(renderer.upload(frame.device, frame.queue, &backdrop.scene)?),
+                None => None,
+            };
             self.lighting.light_volume.uploaded = false;
             self.gpu.gpu_terrain = self
                 .scene
@@ -1121,6 +1125,17 @@ impl App {
             }
         }
 
+        // The map's backdrop looks from its own eye with the player's rotation and projection.
+        let backdrop_view = LOCAL_IMAGE_FIRST_VIEW + local_views.len();
+        if let (Some(backdrop), Some(_)) = (&self.scene.backdrop, &self.gpu.gpu_backdrop) {
+            renderer.set_view_count(frame.device, backdrop_view + 1);
+            renderer.update_view(
+                frame.queue,
+                backdrop_view,
+                &backdrop_camera(&camera, backdrop.eye),
+            );
+        }
+
         let rgb = |v: [f32; 4]| [v[0], v[1], v[2]];
         self.addons.item_skins.prepare(
             frame.device,
@@ -1791,6 +1806,49 @@ impl App {
                 &late,
             );
         }
+        // The backdrop first, then depth starts over under the map; where the map draws nothing the backdrop shows.
+        let backdrop_drawn = match &self.gpu.gpu_backdrop {
+            Some(gpu) if self.scene.backdrop.is_some() => {
+                renderer.render_world(
+                    frame.encoder,
+                    bri_render::scene::WorldPass {
+                        view: backdrop_view,
+                        color: world_target,
+                        resolve: None,
+                        depth: &depth,
+                        viewport: None,
+                        clear: Some(clear),
+                        after_opaque: None,
+                        after_all: None,
+                    },
+                    &[gpu],
+                    &[],
+                );
+                drop(
+                    frame
+                        .encoder
+                        .begin_render_pass(&wgpu::RenderPassDescriptor {
+                            label: Some("backdrop fresh depth"),
+                            color_attachments: &[],
+                            depth_stencil_attachment: Some(
+                                wgpu::RenderPassDepthStencilAttachment {
+                                    view: &depth,
+                                    depth_ops: Some(wgpu::Operations {
+                                        load: wgpu::LoadOp::Clear(bri_render::scene::DEPTH_CLEAR),
+                                        store: wgpu::StoreOp::Store,
+                                    }),
+                                    stencil_ops: None,
+                                },
+                            ),
+                            timestamp_writes: None,
+                            occlusion_query_set: None,
+                            multiview_mask: None,
+                        }),
+                );
+                true
+            }
+            _ => false,
+        };
         let surfaces = |pass: &mut wgpu::RenderPass<'_>| reflections.draw_surfaces(pass, 0);
         let world_pass = bri_render::scene::WorldPass {
             view: 0,
@@ -1798,7 +1856,7 @@ impl App {
             resolve: None,
             depth: &depth,
             viewport: None,
-            clear: Some(clear),
+            clear: (!backdrop_drawn).then_some(clear),
             after_opaque: (!mirrors.is_empty()).then_some(&surfaces as _),
             after_all: None,
         };
@@ -1978,6 +2036,7 @@ impl App {
             self.lighting.light_volume.spots = visual.light_spots;
             self.lighting.light_volume.overflow = visual.overflow_lights;
             self.scene.cpu_scene = Some(visual.scene);
+            self.scene.backdrop = visual.backdrop;
             self.scene.cpu_terrain = visual.terrain.into_iter().map(Arc::new).collect();
             self.scene.cpu_water = visual.repeated_water.into_iter().map(Arc::new).collect();
             self.scene.scenery.reset();
@@ -2234,6 +2293,18 @@ impl WholeUploads {
 }
 
 const LOCAL_IMAGE_FIRST_VIEW: usize = bri_render::environment_probe::FIRST_VIEW + 6;
+/// The player's camera as the map's backdrop sees it: the same rotation and projection from `eye` (no fog).
+fn backdrop_camera(camera: &Camera, eye: [f32; 3]) -> Camera {
+    let from = glam::Vec3::new(camera.eye[0], camera.eye[1], camera.eye[2]);
+    let shift = glam::Mat4::from_translation(from - glam::Vec3::from(eye));
+    let mut out = *camera;
+    out.view_projection =
+        (glam::Mat4::from_cols_array(&camera.view_projection) * shift).to_cols_array();
+    out.eye = [eye[0], eye[1], eye[2], camera.eye[3]];
+    out.atmosphere[3] = 0.0;
+    out.shading = [0.0; 4];
+    out
+}
 struct LocalImagePass {
     affinity: std::sync::Arc<bri_fx_runtime::LocalViewAffinity>,
     policy: bri_weapons::FirstPersonView,

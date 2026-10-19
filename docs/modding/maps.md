@@ -81,6 +81,12 @@ three numbers) is how bright the shade is, 0.45 by default. Without a Sun
 the map gets a high, slightly warm one. A map has one sun; any other Sun
 lights are left out.
 
+**A backdrop.** A map can carry a model drawn behind it from an eye of its own: a sky room, a distant city.
+`--backdrop MODEL.gltf` takes a glTF whose scene has the custom property `bri_backdrop` with the `eye` to look from
+(`{"eye": [x, y, z]}`, in the file's own frame and unit). Each frame the backdrop is drawn first, from that eye with the
+player's rotation and projection and no fog, then depth starts over and the map is drawn on top, so the backdrop shows
+wherever the map draws nothing (an opening cut into it). The eye does not move with the player.
+
 **The sky.** Without anything set, the sky is a plain daytime blue. Set
 these as custom properties on the Blender *scene* (**Scene Properties >
 Custom Properties**):

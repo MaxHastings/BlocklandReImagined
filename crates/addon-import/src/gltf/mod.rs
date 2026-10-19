@@ -13,6 +13,7 @@ mod brick;
 mod export;
 mod lod;
 mod map;
+mod map_backdrop;
 mod map_environment;
 mod map_scatter;
 mod map_terrain;
@@ -113,6 +114,8 @@ pub struct Options {
     pub terrain: Option<PathBuf>,
     /// A map's scatter layers: glTF files each holding the one model a layer repeats (`map_scatter.rs`).
     pub scatter: Vec<PathBuf>,
+    /// A map's backdrop: a glTF file holding the model drawn behind the map (`map_backdrop.rs`).
+    pub backdrop: Option<PathBuf>,
 }
 impl Options {
     pub fn new(input: impl Into<PathBuf>, out: impl Into<PathBuf>, kind: Kind) -> Self {
@@ -137,6 +140,7 @@ impl Options {
             sky: None,
             terrain: None,
             scatter: Vec::new(),
+            backdrop: None,
         }
     }
 }

@@ -166,6 +166,7 @@ impl App {
                 effects_renderer: None,
                 retired_renderer: None,
                 gpu_scene: None,
+                gpu_backdrop: None,
                 gpu_broken: BTreeSet::new(),
                 gpu_terrain: Vec::new(),
                 gpu_water: Vec::new(),
@@ -246,6 +247,7 @@ impl App {
             copy_report: None,
             scene: SceneState {
                 cpu_scene: None,
+                backdrop: None,
                 cpu_terrain: Vec::new(),
                 cpu_water: Vec::new(),
                 scenery: Default::default(),
