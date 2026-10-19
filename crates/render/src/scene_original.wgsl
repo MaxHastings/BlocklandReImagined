@@ -1061,7 +1061,13 @@ fn multiplicative_surface(v:VertexOut)->vec4<f32> {
     let texel=textureSample(layer0,tiled,v.uv);
     let alpha=clamp(texel.a*v.color.a,0.0,1.0)*(1.0-fog_amount(v.world_position));
     let multiplier=display_color(texel.rgb)*v.color.rgb;
-    return vec4<f32>(output_color(mix(vec3<f32>(1.0),multiplier,alpha)),0.0);
+    let flags=u32(material[0].w);
+    // Frame blends fed by colour times alpha (Darken, Screen, Premultiplied),
+    // and Invisible, which blends (zero, one) and so adds nothing.
+    if (flags&128u)!=0u {return vec4<f32>(output_color(multiplier*alpha),alpha);}
+    // Multiply fades toward 1; Modulate (2 x source x destination) toward 0.5 in linear light.
+    let neutral=select(vec3<f32>(1.0),display_color(vec3<f32>(0.5)),(flags&64u)!=0u);
+    return vec4<f32>(output_color(mix(neutral,multiplier,alpha)),0.0);
 }
 // A plasma shell (MaterialKind::Plasma, Halo's `shader_transparent_plasma`): an
 // unlit glow whose colour runs from `material[1].rgb` where the surface faces

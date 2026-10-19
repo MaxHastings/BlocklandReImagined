@@ -319,6 +319,31 @@ pub enum AlphaMode {
     Additive,
     /// Unlit modulation of the existing surface, fading toward a neutral multiplier.
     Multiply,
+    /// One of Unreal Engine 2's frame-buffer blends the other modes lack
+    /// ([`FrameBlend`]); unlit, like `Multiply`.
+    Frame(FrameBlend),
+}
+/// Unreal Engine 2 `FinalBlend.FrameBufferBlending` modes with their own
+/// (source, destination) blend factors, read from D3DDrv.dll's switch at RVA
+/// 0x9e6f (see `docs/modding/materials.md`). `Multiply` stands for
+/// TrueModulated (zero, source colour) and `Additive` for Brighten (source
+/// alpha, one); the rest are here. Each draws the texture times the vertex
+/// colour, fading with its alpha toward the mode's neutral output.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FrameBlend {
+    /// Modulate: (destination colour, source colour) = 2 x source x destination;
+    /// neutral output is 0.5.
+    Modulate,
+    /// Darken: (zero, 1 - source colour); neutral output is 0.
+    Darken,
+    /// Translucent and BrightenSmooth: (one, 1 - source colour); neutral 0.
+    Screen,
+    /// AlphaModulate: (one, 1 - source alpha) on colour times alpha.
+    Premultiplied,
+    /// Invisible: (zero, one); draws nothing.
+    Invisible,
+    /// TrueAdditive: (one, one) on colour times alpha.
+    TrueAdditive,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -807,7 +832,7 @@ impl SceneData {
                 self.indices[batch.indices.start as usize..batch.indices.end as usize].to_vec();
             if matches!(
                 self.materials[batch.material].alpha,
-                AlphaMode::Blend | AlphaMode::Additive | AlphaMode::Multiply
+                AlphaMode::Blend | AlphaMode::Additive | AlphaMode::Multiply | AlphaMode::Frame(_)
             ) {
                 translucent.push((batch.material, batch.center, indices));
             } else {
@@ -2866,6 +2891,10 @@ pub struct WorldPass<'a> {
     pub after_all: Option<&'a dyn Fn(&mut wgpu::RenderPass<'_>)>,
 }
 
+/// Blend variants a pipeline is built for: opaque, alpha, additive,
+/// multiply, then one per [`FrameBlend`] (see `world_pipelines`).
+const BLEND_VARIANTS: usize = 10;
+
 pub struct SceneRenderer {
     identity_instance: wgpu::Buffer,
     light_buffer: wgpu::Buffer,
@@ -3280,7 +3309,10 @@ impl SceneRenderer {
             for batch in &chunk.batches {
                 let clear = matches!(
                     chunk.materials[batch.material].alpha,
-                    AlphaMode::Blend | AlphaMode::Additive | AlphaMode::Multiply
+                    AlphaMode::Blend
+                        | AlphaMode::Additive
+                        | AlphaMode::Multiply
+                        | AlphaMode::Frame(_)
                 );
                 let count = u64::from(batch.indices.end - batch.indices.start);
                 // Quads: four vertices for six indices.
@@ -3342,35 +3374,40 @@ impl SceneRenderer {
         }
         let mut pipelines = vec![];
         for background in [false, true] {
-            for blend in 0..4 {
-                let blend_state = match blend {
-                    0 => None,
-                    1 => Some(wgpu::BlendState::ALPHA_BLENDING),
-                    3 => Some(wgpu::BlendState {
-                        color: wgpu::BlendComponent {
-                            src_factor: wgpu::BlendFactor::Dst,
-                            dst_factor: wgpu::BlendFactor::Zero,
-                            operation: wgpu::BlendOperation::Add,
-                        },
-                        alpha: wgpu::BlendComponent {
-                            src_factor: wgpu::BlendFactor::Zero,
-                            dst_factor: wgpu::BlendFactor::One,
-                            operation: wgpu::BlendOperation::Add,
-                        },
-                    }),
-                    _ => Some(wgpu::BlendState {
-                        color: wgpu::BlendComponent {
-                            src_factor: wgpu::BlendFactor::SrcAlpha,
-                            dst_factor: wgpu::BlendFactor::One,
-                            operation: wgpu::BlendOperation::Add,
-                        },
-                        alpha: wgpu::BlendComponent {
-                            src_factor: wgpu::BlendFactor::Zero,
-                            dst_factor: wgpu::BlendFactor::One,
-                            operation: wgpu::BlendOperation::Add,
-                        },
-                    }),
+            for blend in 0..BLEND_VARIANTS {
+                use wgpu::BlendFactor::{
+                    Dst, One, OneMinusSrc, OneMinusSrcAlpha, Src, SrcAlpha, Zero,
                 };
+                // (source, destination) colour factors; the alpha channel keeps
+                // the target's alpha.
+                let factors = match blend {
+                    0 => None,
+                    1 => Some((SrcAlpha, OneMinusSrcAlpha)),
+                    3 => Some((Dst, Zero)),
+                    4 => Some((Dst, Src)),
+                    5 => Some((Zero, OneMinusSrc)),
+                    6 => Some((One, OneMinusSrc)),
+                    7 => Some((One, OneMinusSrcAlpha)),
+                    8 => Some((Zero, One)),
+                    9 => Some((One, One)),
+                    _ => Some((SrcAlpha, One)),
+                };
+                let blend_state = factors.map(|(src_factor, dst_factor)| wgpu::BlendState {
+                    color: wgpu::BlendComponent {
+                        src_factor,
+                        dst_factor,
+                        operation: wgpu::BlendOperation::Add,
+                    },
+                    alpha: if blend == 1 {
+                        wgpu::BlendState::ALPHA_BLENDING.alpha
+                    } else {
+                        wgpu::BlendComponent {
+                            src_factor: Zero,
+                            dst_factor: One,
+                            operation: wgpu::BlendOperation::Add,
+                        }
+                    },
+                });
                 for double_sided in [false, true] {
                     pipelines.push(device.create_render_pipeline(
                         &wgpu::RenderPipelineDescriptor {
@@ -3556,14 +3593,30 @@ impl SceneRenderer {
                 },
                 if material.clamp_nearest { 1.0 } else { 0.0 },
                 // Flags: 1 temp-brick flash, 2 ignore texture alpha, 4 untinted,
-                // 8 multiply, 16 baked lightmap, 32 masked tint.
+                // 8 unlit frame blend (multiply and `Frame`), 16 baked lightmap,
+                // 32 masked tint, 64 neutral output 0.5 (Modulate), 128 colour times
+                // alpha output (Darken, Screen, Premultiplied; Invisible draws none).
                 f32::from(
                     u8::from(material.temp_brick_flash)
                         | u8::from(material.ignore_texture_alpha) << 1
                         | u8::from(material.untinted) << 2
-                        | u8::from(material.alpha == AlphaMode::Multiply) << 3
+                        | u8::from(matches!(
+                            material.alpha,
+                            AlphaMode::Multiply | AlphaMode::Frame(_)
+                        )) << 3
                         | u8::from(material.baked_lightmap.is_some()) << 4
-                        | u8::from(material.tint_mask) << 5,
+                        | u8::from(material.tint_mask) << 5
+                        | u8::from(material.alpha == AlphaMode::Frame(FrameBlend::Modulate)) << 6
+                        | u8::from(matches!(
+                            material.alpha,
+                            AlphaMode::Frame(
+                                FrameBlend::Darken
+                                    | FrameBlend::Screen
+                                    | FrameBlend::Premultiplied
+                                    | FrameBlend::Invisible
+                                    | FrameBlend::TrueAdditive
+                            )
+                        )) << 7,
                 ),
             ]);
             if let Some(groups) = material.parameters {
@@ -3650,6 +3703,7 @@ impl SceneRenderer {
                             AlphaMode::Blend => 1,
                             AlphaMode::Additive => 2,
                             AlphaMode::Multiply => 3,
+                            AlphaMode::Frame(f) => 4 + f as usize,
                             _ => 0,
                         },
                         m.double_sided,
@@ -5413,7 +5467,7 @@ impl SceneRenderer {
         }
         fn pipeline_of(d: &Draw<'_>) -> usize {
             let (_, double_sided, background, _, _) = d.scene.material_modes[d.batch.material];
-            usize::from(background) * 8 + d.blend * 2 + usize::from(double_sided)
+            usize::from(background) * BLEND_VARIANTS * 2 + d.blend * 2 + usize::from(double_sided)
         }
         /// What a pooled chunk batch binds; None for everything else.
         #[allow(clippy::type_complexity)]

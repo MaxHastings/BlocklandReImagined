@@ -389,7 +389,10 @@ impl Baker {
             if material.kind != MaterialKind::Surface
                 || matches!(
                     material.alpha,
-                    AlphaMode::Blend | AlphaMode::Additive | AlphaMode::Multiply
+                    AlphaMode::Blend
+                        | AlphaMode::Additive
+                        | AlphaMode::Multiply
+                        | AlphaMode::Frame(_)
                 )
             {
                 continue;
