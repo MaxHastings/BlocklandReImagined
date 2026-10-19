@@ -60,7 +60,7 @@ pub(super) fn read(extras: &Value, own_scale: Vec3, vertices: usize) -> Result<O
         } = light;
         *position = point(Vec3::from(*position) * own_scale).to_array();
         *radius *= length;
-        if let Effect::Directional { direction } = effect {
+        if let Effect::Directional { direction } | Effect::Spot { direction, .. } = effect {
             *direction = point(Vec3::from(*direction)).to_array();
         }
     }

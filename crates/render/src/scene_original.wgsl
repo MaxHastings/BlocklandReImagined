@@ -1175,15 +1175,19 @@ fn plasma_surface(v:VertexOut)->vec4<f32> {
     let glow=display_color(tint)*(first*second)*v.color.a;
     return vec4<f32>(fogged(glow,v.world_position),1.0);
 }
+// Which family of surface this pipeline draws, so the others are not compiled into it (the shader is
+// large and a compile costs seconds per pipeline): 0 ordinary, 1 water, 2 metal, 3 physical, 4 plasma,
+// 5 multiplicative (unlit frame blends). `WorldPipelines::group_of` picks it from the material.
+override SURFACE_GROUP:u32=0u;
 @fragment fn fs_main(v:VertexOut)->@location(0) vec4<f32> {
-    if (u32(material[0].w)&8u)!=0u {return multiplicative_surface(v);}
+    if SURFACE_GROUP==5u {return multiplicative_surface(v);}
     if v.clip<0.0 {discard;}
     // The sky (faces, clouds, fog backdrop) is what lies behind the world:
     // everything else fades out into it toward the visible distance.
     if material[0].x!=4.0 && material[0].x!=5.0
         && faded_out(v.position.xy,v.world_position-camera.eye.xyz,camera.atmosphere,camera.haze) {discard;}
-    if material[0].x==12.0 {return plasma_surface(v);}
-    if material[0].x==6.0 {
+    if SURFACE_GROUP==4u {return plasma_surface(v);}
+    if SURFACE_GROUP==1u {
         let time=camera.atmosphere.z;
         // Fluid space: Torque x/y plus the terrain's 1024 offset.
         let fluid=vec2<f32>(v.world_position.x+1024.0,1024.0-v.world_position.z);
@@ -1243,8 +1247,8 @@ fn plasma_surface(v:VertexOut)->vec4<f32> {
         }
         return vec4<f32>(fogged(rgb,v.world_position),alpha);
     }
-    if material[0].x==10.0 {return metal_surface(v);}
-    if material[0].x==11.0 {return physical_surface(v);}
+    if SURFACE_GROUP==2u {return metal_surface(v);}
+    if SURFACE_GROUP==3u {return physical_surface(v);}
     if (material[0].x==4.0 || material[0].x==5.0) {
         // material[1].x: 0 a sky face or cloud (tinted by the sky colour),
         // 1 the fog backdrop (the live fog colour). Faces and clouds take the
@@ -1348,6 +1352,11 @@ fn plasma_surface(v:VertexOut)->vec4<f32> {
         // Alpha is the weights' total, so a one-layer pass whose map is that layer's alpha blends over what is behind it.
         let w=textureSample(weights0,clamped,v.lightmap_uv);
         return vec4<f32>(fogged(layer_blend_rgb(v),v.world_position),v.color.a*clamp(w.x+w.y+w.z+w.w,0.0,1.0));
+    }
+    if material[0].x==14.0 {
+        // Light baked into the vertices: the picture times twice the vertex colour, lit by nothing else.
+        let lit=min(display_color(textureSample(layer0,tiled,v.uv).rgb)*v.color.rgb*2.0,vec3<f32>(1.0));
+        return vec4<f32>(fogged(lit,v.world_position),alpha);
     }
     if material[0].x==7.0 || material[0].x==8.0 {
         return vec4<f32>(fogged(pigment,v.world_position),alpha);

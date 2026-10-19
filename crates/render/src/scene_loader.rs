@@ -1048,6 +1048,9 @@ fn load_static_shape(
                 [0.0; 4],
             ]);
         }
+        if authored.vertex_light && authored.layers.is_none() {
+            material.kind = MaterialKind::VertexLight;
+        }
         // A terrain's layers: up to four textures weighted by one map's channels (its materials name them), lit by the vertex
         // light only. Layers the material does not have repeat the first and carry no weight.
         if let Some(blend) = authored.layers.as_ref() {

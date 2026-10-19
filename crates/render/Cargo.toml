@@ -19,5 +19,6 @@ glam.workspace = true
 wgpu.workspace = true
 
 [dev-dependencies]
+naga = { version = "=30.0.1", default-features = false, features = ["wgsl-in", "hlsl-out"] }
 bri-package = { path = "../package" }
 tempfile.workspace = true

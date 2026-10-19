@@ -8,8 +8,10 @@ use std::time::Instant;
 #[ignore = "timing"]
 fn world_pipelines_build_time() -> Result<()> {
     let (device, info) = pollster::block_on(async {
-        let instance =
-            wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
+        // A game's flags, without the debug shaders (-Zi -Od) a debug build asks for.
+        let mut descriptor = wgpu::InstanceDescriptor::new_without_display_handle_from_env();
+        descriptor.flags = wgpu::InstanceFlags::empty();
+        let instance = wgpu::Instance::new(descriptor);
         let adapter = instance
             .request_adapter(&wgpu::RequestAdapterOptions {
                 power_preference: wgpu::PowerPreference::HighPerformance,

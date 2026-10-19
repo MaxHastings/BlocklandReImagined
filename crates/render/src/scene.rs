@@ -298,6 +298,9 @@ pub enum MaterialKind {
     /// strength; `parameters[1]`: glow (linear RGB); `parameters[2]`:
     /// detail repeats, detail strength.
     Physical,
+    /// The picture times twice the vertex colour (0.5 neutral), fogged, lit by nothing else: a mesh whose light was baked into its
+    /// vertices. Slot 0 is the picture.
+    VertexLight,
     /// A glow whose colour runs from `parameters[0].rgb` where the surface faces
     /// the eye to `parameters[1].rgb` where it turns edge on (brightness
     /// already multiplied in), patterned by the product of two scrolling noise
@@ -1269,7 +1272,7 @@ pub struct GpuScene {
     batches: Vec<MeshBatch>,
     /// Opaque/alpha/additive, double sided, background, alpha-masked.
     /// (blend, double sided, sky/cloud background, alpha mask, water plane)
-    material_modes: Vec<(usize, bool, bool, bool, bool)>,
+    material_modes: Vec<MaterialMode>,
     /// Whether any of its surfaces can be emissive (unlit materials, or a
     /// brick with the Glow colour FX): only those scenes draw into the
     /// ambient occlusion exclusion mask, so the mask pass skips the rest
@@ -2930,6 +2933,11 @@ pub struct WorldPass<'a> {
 /// Blend variants a pipeline is built for: opaque, alpha, additive,
 /// multiply, then one per [`FrameBlend`] (see `world_pipelines`).
 const BLEND_VARIANTS: usize = 10;
+/// Families of surface the fragment shader is specialised for (`SURFACE_GROUP` in the shaders): ordinary, water, metal, physical,
+/// plasma and the unlit frame blends. Each pipeline compiles only its own family; the whole shader costs several times as much.
+const SURFACE_GROUPS: usize = 6;
+/// Slots for a group's background, blend and sidedness variants.
+const GROUP_SLOTS: usize = 2 * BLEND_VARIANTS * 2;
 
 /// The world's pipelines for one shader: a slot for each background, blend and sidedness that is built the first time something
 /// needs it. Most scenes use a few of the forty combinations, and each one costs seconds to compile.
@@ -2967,18 +2975,23 @@ impl WorldPipelines {
             layout,
             shader,
             constants,
-            slots: (0..2 * BLEND_VARIANTS * 2)
+            slots: (0..SURFACE_GROUPS * GROUP_SLOTS)
                 .map(|_| std::sync::OnceLock::new())
                 .collect(),
-            requested: (0..2 * BLEND_VARIANTS * 2)
+            requested: (0..SURFACE_GROUPS * GROUP_SLOTS)
                 .map(|_| std::sync::atomic::AtomicBool::new(false))
                 .collect(),
             outstanding: std::sync::atomic::AtomicUsize::new(0),
         }
     }
 
-    fn index(background: bool, blend: usize, double_sided: bool) -> usize {
-        usize::from(background) * BLEND_VARIANTS * 2 + blend * 2 + usize::from(double_sided)
+    /// The slot for a surface `group` drawn with `blend`; the unlit frame blends (3 and up) are one family whatever the material.
+    fn index(group: usize, background: bool, blend: usize, double_sided: bool) -> usize {
+        let group = if blend >= 3 { 5 } else { group };
+        group * GROUP_SLOTS
+            + usize::from(background) * BLEND_VARIANTS * 2
+            + blend * 2
+            + usize::from(double_sided)
     }
 
     /// The pipeline in slot `index`, built now if no one has needed it yet.
@@ -3019,8 +3032,8 @@ impl WorldPipelines {
 
     /// Ask for the pipelines these materials draw with (`material_modes`) without waiting.
     fn request_modes(self: &Arc<Self>, modes: &[MaterialMode]) {
-        for &(blend, double_sided, background, _, _) in modes {
-            self.request(Self::index(background, blend, double_sided));
+        for &(blend, double_sided, background, _, group) in modes {
+            self.request(Self::index(group, background, blend, double_sided));
         }
     }
 
@@ -3033,12 +3046,12 @@ impl WorldPipelines {
     }
 
     /// The pipelines a scene with these materials draws with (`material_modes`).
-    fn warm(&self, modes: &[(usize, bool, bool, bool, bool)]) {
+    fn warm(&self, modes: &[MaterialMode]) {
         self.warm_indices(
             modes
                 .iter()
-                .map(|&(blend, double_sided, background, _, _)| {
-                    Self::index(background, blend, double_sided)
+                .map(|&(blend, double_sided, background, _, group)| {
+                    Self::index(group, background, blend, double_sided)
                 }),
         );
     }
@@ -3046,14 +3059,18 @@ impl WorldPipelines {
     /// What every renderer needs at once: opaque and alpha, either side.
     fn warm_basics(&self) {
         self.warm_indices([0, 1].into_iter().flat_map(|blend| {
-            [false, true].map(|double_sided| Self::index(false, blend, double_sided))
+            [false, true].map(|double_sided| Self::index(0, false, blend, double_sided))
         }));
     }
 
     fn create(&self, index: usize) -> wgpu::RenderPipeline {
+        let group = index / GROUP_SLOTS;
+        let index = index % GROUP_SLOTS;
         let double_sided = index % 2 == 1;
         let blend = (index / 2) % BLEND_VARIANTS;
         let background = index / (BLEND_VARIANTS * 2) == 1;
+        let mut constants = self.constants.clone();
+        constants.push(("SURFACE_GROUP", group as f64));
         let device = &self.device;
         use wgpu::BlendFactor::{Dst, One, OneMinusSrc, OneMinusSrcAlpha, Src, SrcAlpha, Zero};
         // (source, destination) colour factors; the alpha channel keeps
@@ -3118,7 +3135,7 @@ impl WorldPipelines {
                 module: &self.shader,
                 entry_point: Some("fs_main"),
                 compilation_options: wgpu::PipelineCompilationOptions {
-                    constants: &self.constants,
+                    constants: &constants,
                     ..Default::default()
                 },
                 targets: &[Some(wgpu::ColorTargetState {
@@ -3133,8 +3150,8 @@ impl WorldPipelines {
     }
 }
 
-/// A material's (blend, double sided, background, masked, water), which choose its pipeline.
-type MaterialMode = (usize, bool, bool, bool, bool);
+/// A material's (blend, double sided, background, masked, surface group), which choose its pipeline.
+type MaterialMode = (usize, bool, bool, bool, usize);
 
 pub struct SceneRenderer {
     /// Scenes with UV chains, rewritten each frame from the camera's clock.
@@ -3745,6 +3762,7 @@ impl SceneRenderer {
                     MaterialKind::Physical => 11.0,
                     MaterialKind::Plasma => 12.0,
                     MaterialKind::LayerBlend => 13.0,
+                    MaterialKind::VertexLight => 14.0,
                 },
                 match material.alpha {
                     AlphaMode::Mask(c) => c,
@@ -4112,7 +4130,7 @@ impl SceneRenderer {
     }
     /// A scene's materials as (blend, double sided, background, masked, water), with the pipelines they draw with built now (while the
     /// map loads) and remembered for a lighting set built later.
-    fn noted_modes(&self, materials: &[Material]) -> Vec<(usize, bool, bool, bool, bool)> {
+    fn noted_modes(&self, materials: &[Material]) -> Vec<MaterialMode> {
         let modes: Vec<_> = materials
             .iter()
             .map(|m| {
@@ -4127,7 +4145,13 @@ impl SceneRenderer {
                     m.double_sided,
                     matches!(m.kind, MaterialKind::Sky | MaterialKind::Cloud),
                     matches!(m.alpha, AlphaMode::Mask(_)),
-                    m.kind == MaterialKind::Water,
+                    match m.kind {
+                        MaterialKind::Water => 1,
+                        MaterialKind::Metal => 2,
+                        MaterialKind::Physical => 3,
+                        MaterialKind::Plasma => 4,
+                        _ => 0,
+                    },
                 )
             })
             .collect();
@@ -4373,7 +4397,7 @@ impl SceneRenderer {
         } else {
             for blend in [0, 1] {
                 for double_sided in [false, true] {
-                    modern.request(WorldPipelines::index(false, blend, double_sided));
+                    modern.request(WorldPipelines::index(0, false, blend, double_sided));
                 }
             }
             modern.request_modes(&used);
@@ -5771,8 +5795,8 @@ impl SceneRenderer {
             blend: usize,
         }
         fn pipeline_of(d: &Draw<'_>) -> usize {
-            let (_, double_sided, background, _, _) = d.scene.material_modes[d.batch.material];
-            usize::from(background) * BLEND_VARIANTS * 2 + d.blend * 2 + usize::from(double_sided)
+            let (_, double_sided, background, _, group) = d.scene.material_modes[d.batch.material];
+            WorldPipelines::index(group, background, d.blend, double_sided)
         }
         /// What a pooled chunk batch binds; None for everything else.
         #[allow(clippy::type_complexity)]
@@ -5897,9 +5921,7 @@ impl SceneRenderer {
             .map(|d| {
                 (
                     d.center,
-                    d.scene.material_modes[d.batch.material]
-                        .4
-                        .then_some(d.center.y),
+                    (d.scene.material_modes[d.batch.material].4 == 1).then_some(d.center.y),
                 )
             })
             .collect();

@@ -114,7 +114,10 @@ impl SceneData {
                 .map_or(unassigned_material, |i| bindings[i]);
             // A layer-blended surface (a terrain) is lit by its vertex colour alone, doubled: the mesh's own colours are that baked
             // light; without them 0.5 is the neutral light.
-            let layered = self.materials[material].kind == crate::scene::MaterialKind::LayerBlend;
+            let layered = matches!(
+                self.materials[material].kind,
+                crate::scene::MaterialKind::LayerBlend | crate::scene::MaterialKind::VertexLight
+            );
             for vertex in triangle.vertices {
                 groups.entry(material).or_default().push(SceneVertex {
                     position: transform.transform_point3(vertex.position).to_array(),

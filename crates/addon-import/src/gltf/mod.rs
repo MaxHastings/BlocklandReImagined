@@ -20,6 +20,7 @@ mod map_regions;
 mod map_scatter;
 mod map_terrain;
 mod read;
+mod static_lighting;
 mod vertex_lights;
 mod write;
 pub use export::{ExportReport, export_map, find_map};
@@ -123,6 +124,8 @@ pub struct Options {
     pub regions: Option<PathBuf>,
     /// A map's decals: a JSON file in the native frame with its pictures beside it (`map_decals.rs`).
     pub decals: Option<PathBuf>,
+    /// The asset lane's static-mesh lighting inputs (`static_lighting.rs`).
+    pub lighting: Option<PathBuf>,
 }
 impl Options {
     pub fn new(input: impl Into<PathBuf>, out: impl Into<PathBuf>, kind: Kind) -> Self {
@@ -150,6 +153,7 @@ impl Options {
             backdrop: None,
             regions: None,
             decals: None,
+            lighting: None,
         }
     }
 }
@@ -596,6 +600,27 @@ pub fn convert(
         ..Report::default()
     };
     let json = &doc.json;
+    // The lane's static-mesh lighting inputs, with each zone's ambient from the regions file.
+    let static_lighting = match &opts.lighting {
+        Some(dir) => {
+            let ambient = match &opts.regions {
+                Some(path) => {
+                    let map: bri_content::regions::RegionMap = serde_json::from_slice(
+                        &std::fs::read(path)
+                            .with_context(|| format!("Reading regions {}", path.display()))?,
+                    )
+                    .context("Reading the map's regions")?;
+                    map.regions
+                        .iter()
+                        .map(|r| r.ambient.unwrap_or([0.0; 3]))
+                        .collect()
+                }
+                None => Vec::new(),
+            };
+            Some(static_lighting::StaticLighting::load(dir, ambient)?)
+        }
+        None => None,
+    };
     // Nodes, their parents and rest transforms.
     let mut nodes: Vec<GNode> = Vec::new();
     for (i, n) in array(json, "nodes").iter().enumerate() {
@@ -871,6 +896,12 @@ pub fn convert(
             uv1: Vec::new(),
             colors: Vec::new(),
         };
+        // Baked static-mesh light for the world node's vertices (the lane's inputs).
+        let world_lighting = if names[k] == static_lighting::WORLD_NODE {
+            static_lighting.as_ref()
+        } else {
+            None
+        };
         // Baked light for this node's vertices, counted across its primitives.
         let node_vertices: usize = array(gmesh, "primitives")
             .iter()
@@ -930,9 +961,10 @@ pub fn convert(
                 .transpose()?;
             // A layer-blended surface (a terrain) is lit by its vertex colours: they are its baked light and are kept.
             let layered = p["material"].as_u64().is_some_and(|m| {
-                array(json, "materials")
-                    .get(m as usize)
-                    .is_some_and(|g| g["extras"]["bri_layer_blend"].is_object())
+                array(json, "materials").get(m as usize).is_some_and(|g| {
+                    g["extras"]["bri_layer_blend"].is_object()
+                        || g["extras"]["bri_vertex_light"].as_bool() == Some(true)
+                })
             });
             let colors = attr["COLOR_0"]
                 .as_u64()
@@ -1028,6 +1060,34 @@ pub fn convert(
                     None => mesh.uv1.extend(std::iter::repeat_n([0.0, 0.0], count)),
                 }
             }
+            // The world mesh's static meshes take the light their lights give each vertex, times any colour they already have.
+            let colors = match world_lighting
+                .filter(|_| layered)
+                .and_then(|lit| lit.colors(pi, &local, &normals))
+            {
+                Some(lit) => Some(
+                    (0..count)
+                        .map(|i| {
+                            let own = colors.as_ref().map_or([1.0, 1.0, 1.0, 1.0], |rows| {
+                                [
+                                    rows[i][0],
+                                    rows[i][1],
+                                    rows[i][2],
+                                    rows[i].get(3).copied().unwrap_or(1.0),
+                                ]
+                            });
+                            match lit[i] {
+                                Some(c) => {
+                                    vec![c[0] * own[0], c[1] * own[1], c[2] * own[2], own[3]]
+                                }
+                                None if colors.is_some() => own.to_vec(),
+                                None => vec![0.5, 0.5, 0.5, 1.0],
+                            }
+                        })
+                        .collect::<Vec<_>>(),
+                ),
+                None => colors,
+            };
             // A node that names its lights has its layer-blended surfaces lit by them, times any colours they already have.
             let colors = match (&vertex_lights, layered) {
                 (Some(set), true) => Some(
@@ -2387,6 +2447,7 @@ fn make_material(
             surface,
             tint: None,
             layers: None,
+            vertex_light: m["extras"]["bri_vertex_light"].as_bool().unwrap_or(false),
         },
         png,
         maps,

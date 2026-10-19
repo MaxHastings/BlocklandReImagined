@@ -154,6 +154,7 @@ pub fn material(name: &str, blend: &str) -> Material {
         surface: None,
         tint: None,
         layers: None,
+        vertex_light: false,
     }
 }
 

@@ -106,6 +106,12 @@ a bit per vertex of the node's mesh, least significant bit first). Positions and
 POSITIONs. A layer-blended surface is lit by its vertex colours alone, so the importer writes the sum
 `clamp(0.5 * ambient + sum colour * glow * (1 - 3t^2 + 2t^3) * max(n.l, 0))`, times any COLOR_0 the mesh already has, as that colour.
 
+**Vertex-lit surfaces.** A glTF material with the custom property `bri_vertex_light: true` is drawn as the picture times twice
+the mesh's vertex colour (0.5 is neutral), fogged, lit by nothing else, in every lighting setting: a mesh whose light was baked
+into its vertices. The importer keeps the mesh's `COLOR_0` for such materials. `--lighting DIR` fills those colours for a map's
+world mesh from an asset lane's static-mesh lighting inputs (`*-instances.json`, `*-lights.json`, `*-instances.npz`,
+`*-vertex-map.npz`; with `--regions` for each zone's ambient); see `gltf/static_lighting.rs`.
+
 **The sky.** Without anything set, the sky is a plain daytime blue. Set
 these as custom properties on the Blender *scene* (**Scene Properties >
 Custom Properties**):

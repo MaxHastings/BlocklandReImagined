@@ -20,6 +20,9 @@ pub enum Effect {
     Point,
     /// Parallel light travelling along `direction`; reaches everywhere.
     Directional { direction: [f32; 3] },
+    /// A point light inside a cone about `direction`: `cone` is the cone's cosine range (the cone is where `cos > 1 - cone`), and
+    /// the light is scaled by `((cos - (1 - cone)) / cone)^2`.
+    Spot { direction: [f32; 3], cone: f32 },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
@@ -101,6 +104,22 @@ impl Set {
                     }
                     (1.0 - 3.0 * t * t + 2.0 * t * t * t) * facing
                 }
+                Effect::Spot { direction, cone } => {
+                    let delta = Vec3::from(light.position) - position;
+                    let distance = delta.length();
+                    if distance > light.radius || distance <= 0.0 || cone <= 0.0 {
+                        continue;
+                    }
+                    let facing = normal.dot(delta / distance);
+                    let along = -(delta / distance).dot(Vec3::from(direction).normalize_or_zero());
+                    let floor = 1.0 - cone;
+                    if facing <= 0.0 || along <= 0.0 || along < floor {
+                        continue;
+                    }
+                    let t = distance / light.radius;
+                    let spread = (along - floor) / cone;
+                    (1.0 - 3.0 * t * t + 2.0 * t * t * t) * facing * spread * spread
+                }
                 Effect::Directional { direction } => {
                     let facing = -normal.dot(Vec3::from(direction).normalize_or_zero());
                     if facing <= 0.0 {
@@ -174,6 +193,31 @@ mod tests {
             visible: vec![vec![1]],
         };
         assert_eq!(both.at(0, Vec3::ZERO, Vec3::Y), [0.0; 3]);
+    }
+
+    #[test]
+    fn a_spot_light_lights_only_inside_its_cone() {
+        let spot = |cone| Set {
+            ambient: [0.0; 3],
+            lights: vec![Light {
+                effect: Effect::Spot {
+                    direction: [0.0, -1.0, 0.0],
+                    cone,
+                },
+                color: [1.0; 3],
+                ..point([0.0, 2.0, 0.0], 8.0)
+            }],
+            visible: vec![vec![1]],
+        };
+        // Straight below the light: the whole cone term (1) and the point value.
+        let centre = spot(0.5).at(0, Vec3::ZERO, Vec3::Y)[0];
+        let point_value = (1.0 - 3.0 * 0.25_f32.powi(2) + 2.0 * 0.25_f32.powi(3)) * 1.0;
+        assert!((centre - point_value).abs() < 1e-5, "{centre}");
+        // Far to the side, outside a narrow cone: nothing.
+        assert_eq!(spot(0.1).at(0, Vec3::new(2.0, 0.0, 0.0), Vec3::Y), [0.0; 3]);
+        // Just inside a wide cone it is dimmer than the centre.
+        let edge = spot(0.9).at(0, Vec3::new(1.0, 0.0, 0.0), Vec3::Y)[0];
+        assert!(edge > 0.0 && edge < centre, "{edge}");
     }
 
     #[test]

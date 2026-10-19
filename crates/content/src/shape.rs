@@ -196,6 +196,10 @@ pub struct Material {
     /// transform, lit by the vertex light only (a terrain's layers). See [`LayerBlend`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub layers: Option<LayerBlend>,
+    /// Lit by the mesh's vertex colours alone: the picture times twice the vertex colour (0.5 is neutral), fogged, with no other
+    /// light. A static mesh whose light was baked into its vertices (`bri_vertex_lights`).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub vertex_light: bool,
 }
 /// A material that is a weighted sum of up to four texture layers, as a terrain's are: the weight map's red, green, blue and
 /// alpha weight layers 0 to 3, read with the mesh's second UV set; each layer's own UVs go through its affine first.
