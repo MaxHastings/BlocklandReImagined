@@ -92,7 +92,7 @@ impl Fixture {
     }
 }
 
-synthetic_and_content!(Fixture: vehicles_spray_their_tire_emitter_by_speed_over_max_wheel_speed);
+synthetic_and_release_content!(Fixture: vehicles_spray_their_tire_emitter_by_speed_over_max_wheel_speed);
 
 fn frame(d: &bri_vehicles::Definition, speed: f32, contact: bool) -> VehicleFrame {
     VehicleFrame {
@@ -104,6 +104,7 @@ fn frame(d: &bri_vehicles::Definition, speed: f32, contact: bool) -> VehicleFram
         wheel_rotation: vec![0.; d.wheels.len()],
         wheel_contact: vec![contact; d.wheels.len()],
         turret_aim: [0.; 2],
+        driver_jump_held: false,
     }
 }
 

@@ -2,6 +2,7 @@
 //! assets and never searches the original installation for missing resources.
 use crate::{scene::*, terrain_scene::TerrainScene};
 use anyhow::{Context, Result, ensure};
+use bri_console::Clamp;
 use bri_content::{
     Terrain,
     interior::Interior,
@@ -25,6 +26,10 @@ pub struct MapScene {
     /// Index range of each static shape by scene node, so a smashed shape
     /// can stop drawing (`GpuScene::hide_indices`).
     pub shape_indices: BTreeMap<u32, std::ops::Range<u32>>,
+    /// The models a package moves (doors), each its own scene about its
+    /// own origin, by scene node: drawn instanced where the session's
+    /// mover states put them rather than baked into the map.
+    pub movers: Vec<(u32, SceneData)>,
     /// Set only by the modern loader, which never decodes illumination images.
     pub modern_lights: Option<Vec<crate::map_lighting::MapLight>>,
     /// Animated map lights: an index into `modern_lights` and how it
@@ -33,6 +38,10 @@ pub struct MapScene {
     /// Spot lights: an index into `modern_lights` and its cone words
     /// (`scene::spot_words`), for `SceneRenderer::set_map_light_spots`.
     pub light_spots: Vec<(usize, [f32; 4])>,
+    /// Plain lights past the shadowed budget (`map_lighting::MAX_LIGHTS`):
+    /// they draw as unshadowed point lights with the same linear falloff, the
+    /// nearest ones each frame (`SceneRenderer::update_lights`, colour w 1).
+    pub overflow_lights: Vec<crate::map_lighting::MapLight>,
 }
 
 pub(crate) fn file(root: &Path, name: &str) -> Result<PathBuf> {
@@ -181,6 +190,9 @@ fn centroid(vertices: &[SceneVertex], indices: &[u32]) -> [f32; 3] {
         ((min + max) * 0.5).to_array()
     }
 }
+/// A colour property of a scene node: three finite numbers, or the default.
+/// Absent is the default by design; present and unreadable is a reported
+/// fallback under the map the loader is reading (`with_owner`).
 fn rgb(value: Option<&String>, default: [f32; 3]) -> [f32; 3] {
     let values: Vec<_> = value
         .into_iter()
@@ -190,7 +202,46 @@ fn rgb(value: Option<&String>, default: [f32; 3]) -> [f32; 3] {
         .collect();
     match values.as_slice() {
         [Ok(r), Ok(g), Ok(b)] if r.is_finite() && g.is_finite() && b.is_finite() => [*r, *g, *b],
-        _ => default,
+        _ => {
+            if let Some(value) = value {
+                bri_console::fallback::report(
+                    bri_console::fallback::kind::DEFAULTED_FIELD,
+                    "",
+                    &format!("colour {value:?}"),
+                    "the default colour",
+                );
+            }
+            default
+        }
+    }
+}
+
+#[cfg(test)]
+mod rgb_fallback_tests {
+    use super::*;
+
+    #[test]
+    fn a_colour_that_is_present_and_unreadable_is_a_reported_fallback_but_absent_is_not() {
+        let scene = "fallback-test-colour";
+        let good = "0.1 0.2 0.3".to_string();
+        let bad = "red".to_string();
+        bri_console::fallback::with_owner(scene, || {
+            assert_eq!(rgb(Some(&good), [1.0; 3]), [0.1, 0.2, 0.3]);
+            assert_eq!(rgb(None, [1.0; 3]), [1.0; 3]);
+            assert!(
+                bri_console::fallback::snapshot()
+                    .iter()
+                    .all(|e| e.addon != scene)
+            );
+            assert_eq!(rgb(Some(&bad), [1.0; 3]), [1.0; 3]);
+        });
+        let mine: Vec<_> = bri_console::fallback::snapshot()
+            .into_iter()
+            .filter(|e| e.addon == scene)
+            .collect();
+        assert_eq!(mine.len(), 1, "{mine:?}");
+        assert_eq!(mine[0].kind, "defaulted_field");
+        assert!(mine[0].item.contains("red"));
     }
 }
 
@@ -205,6 +256,9 @@ pub fn load_map_bundle_dynamic(root: &Path, map_id: &str) -> Result<MapScene> {
     load_bundle(root, map_id, false)
 }
 fn load_bundle(root: &Path, map_id: &str, legacy: bool) -> Result<MapScene> {
+    bri_console::fallback::with_owner(map_id, || load_bundle_unscoped(root, map_id, legacy))
+}
+fn load_bundle_unscoped(root: &Path, map_id: &str, legacy: bool) -> Result<MapScene> {
     let root = root.canonicalize().context("Opening native map bundle")?;
     let bundle: Value = serde_json::from_slice(&read(&root, "bundle.json")?)?;
     ensure!(
@@ -217,7 +271,7 @@ fn load_bundle(root: &Path, map_id: &str, legacy: bool) -> Result<MapScene> {
         .iter()
         .find(|m| m["id"].as_str() == Some(map_id))
         .with_context(|| format!("Map {map_id} not present in native bundle"))?;
-    let mut scene: Scene = serde_json::from_slice(&read(
+    let mut scene: Scene = bri_content::strict::from_slice(&read(
         &root,
         record["file"]
             .as_str()
@@ -238,7 +292,7 @@ fn load_bundle(root: &Path, map_id: &str, legacy: bool) -> Result<MapScene> {
             .as_deref()
             .context("Interior placement has no native asset")?;
         if !interiors.contains_key(id) {
-            let interior: Interior = serde_json::from_slice(&read(
+            let interior: Interior = bri_content::strict::from_slice(&read(
                 &root,
                 bundle["assets"][id]
                     .as_str()
@@ -270,11 +324,22 @@ fn load_bundle(root: &Path, map_id: &str, legacy: bool) -> Result<MapScene> {
     if let Some(sun) = scene.nodes.iter().find(|n| matches!(n.kind, Kind::Sun)) {
         // The same angles the lighting bake uses; `direction` is stale.
         let angle = |key, default| {
-            sun.properties
+            let read = sun
+                .properties
                 .get(key)
                 .and_then(|v| v.trim().parse::<f32>().ok())
-                .filter(|v| v.is_finite())
-                .unwrap_or(default)
+                .filter(|v| v.is_finite());
+            if read.is_none()
+                && let Some(value) = sun.properties.get(key)
+            {
+                bri_console::fallback::report(
+                    bri_console::fallback::kind::DEFAULTED_FIELD,
+                    &scene.id,
+                    &format!("sun {key} = {value:?}"),
+                    &format!("{default}"),
+                );
+            }
+            read.unwrap_or(default)
         };
         let d = bri_content::scene::sun_direction(
             angle("azimuth", 0.0),
@@ -285,6 +350,14 @@ fn load_bundle(root: &Path, map_id: &str, legacy: bool) -> Result<MapScene> {
         out.sun_direction = [d.x, d.z, -d.y]; // original Z-up to native Y-up
         out.sun_color = rgb(sun.properties.get("color"), out.sun_color);
         out.ambient = rgb(sun.properties.get("ambient"), out.ambient);
+        // The share of a lightmap's static light that came from the sun and
+        // sky; absent, none (it follows only the ambient).
+        out.lightmap_sky_share = angle("lightmap_sky_share", 0.0).clamped(0.0, 1.0);
+        // Light in spaces the sky cannot see; absent, they keep the ambient.
+        out.enclosed_ambient = sun
+            .properties
+            .get("enclosed")
+            .map(|v| rgb(Some(v), out.ambient));
     }
     if let Some(sky) = scene.nodes.iter().find(|n| matches!(n.kind, Kind::Sky)) {
         let c = rgb(sky.properties.get("skysolidcolor"), [0.05, 0.08, 0.12]);
@@ -329,8 +402,36 @@ fn load_bundle(root: &Path, map_id: &str, legacy: bool) -> Result<MapScene> {
         })
         .collect::<Result<Vec<_>>>()?;
     let mut shape_indices = BTreeMap::new();
+    let mut movers = Vec::new();
     for (node_index, node) in scene.nodes.iter().enumerate() {
         let first = out.indices.len() as u32;
+        if node.properties.contains_key("mover") && node.asset.is_some() {
+            // Its own scene, at the origin: the client places it each frame.
+            let mut alone = SceneData {
+                id: format!("{}#mover{node_index}", scene.id),
+                name: node.name.clone(),
+                ..Default::default()
+            };
+            let at_origin = Node {
+                name: node.name.clone(),
+                parent: None,
+                kind: Kind::StaticModel,
+                transform: Mat4::IDENTITY.to_cols_array(),
+                asset: node.asset.clone(),
+                properties: node.properties.clone(),
+            };
+            load_static_shape(
+                &root,
+                &bundle,
+                bindings,
+                &at_origin,
+                &mut alone,
+                &mut BTreeMap::new(),
+                legacy,
+            )?;
+            movers.push((u32::try_from(node_index)?, alone));
+            continue;
+        }
         match node.kind {
             Kind::Interior=>{
                 let interior = &interiors[node.asset.as_deref().context("Interior placement has no native asset")?];
@@ -346,6 +447,32 @@ fn load_bundle(root: &Path, map_id: &str, legacy: bool) -> Result<MapScene> {
             _=>{},
         }
     }
+    // What the pass above left out: counted fallbacks (the loop's own arms
+    // stay as they are).
+    for node in &scene.nodes {
+        if node.properties.contains_key("mover") && node.asset.is_none() {
+            bri_console::fallback::report(
+                bri_console::fallback::kind::DROPPED_ITEM,
+                &scene.id,
+                &node.name,
+                "drawn as a fixed node: its mover has no asset",
+            );
+        }
+        let undrawn = match node.kind {
+            Kind::DatablockModel => node.asset.is_none(),
+            Kind::Water => !water_bound,
+            Kind::Foliage | Kind::Precipitation | Kind::Unadapted => true,
+            _ => false,
+        };
+        if undrawn {
+            bri_console::fallback::report(
+                bri_console::fallback::kind::DROPPED_ITEM,
+                &scene.id,
+                &format!("{:?} '{}'", node.kind, node.name),
+                "not drawn (retained in the bundle only)",
+            );
+        }
+    }
     out.omissions.push(
         "Storm transitions/fog volumes and texture mip/anisotropic filtering remain incomplete"
             .into(),
@@ -355,6 +482,7 @@ fn load_bundle(root: &Path, map_id: &str, legacy: bool) -> Result<MapScene> {
     let authored = scene.lights()?;
     let mut light_animations = Vec::new();
     let mut light_spots = Vec::new();
+    let mut overflow_lights = Vec::new();
     let modern_lights = if legacy {
         None
     } else {
@@ -370,20 +498,32 @@ fn load_bundle(root: &Path, map_id: &str, legacy: bool) -> Result<MapScene> {
             Vec::new()
         };
         for light in &authored {
-            if lights.len() >= crate::map_lighting::MAX_LIGHTS {
-                out.omissions.push(format!(
-                    "Map light at node {} left out: a map draws at most {} lights",
-                    light.node,
-                    crate::map_lighting::MAX_LIGHTS
-                ));
-                continue;
-            }
             if !crate::lighting_parameters::valid_geometry(light.position, light.inner, light.outer)
             {
                 out.omissions.push(format!(
                     "Map light at node {} left out: its falloff is too small to draw",
                     light.node
                 ));
+                continue;
+            }
+            if lights.len() >= crate::map_lighting::MAX_LIGHTS {
+                // Past the shadowed budget only plain lights can draw: a cone
+                // or an animation needs a shaded slot.
+                if light.spot.is_some() || light.animation.is_some() {
+                    out.omissions.push(format!(
+                        "Map light at node {} left out: a map shades at most {} lights, and only plain lights draw past them",
+                        light.node,
+                        crate::map_lighting::MAX_LIGHTS
+                    ));
+                } else {
+                    overflow_lights.push(crate::map_lighting::MapLight {
+                        position: light.position,
+                        color: light.color,
+                        inner: light.inner,
+                        outer: light.outer,
+                        channel: None,
+                    });
+                }
                 continue;
             }
             if let Some(spot) = light.spot {
@@ -411,9 +551,11 @@ fn load_bundle(root: &Path, map_id: &str, legacy: bool) -> Result<MapScene> {
         terrain,
         repeated_water,
         shape_indices,
+        movers,
         modern_lights,
         light_animations,
         light_spots,
+        overflow_lights,
     })
 }
 
@@ -437,7 +579,7 @@ fn terrain_fields(
         instance.origin[1] += lift;
     }
     bri_content::terrain_field::map_fields(scene, instances, |id| {
-        Ok(serde_json::from_slice::<Terrain>(&read(
+        Ok(bri_content::strict::from_slice::<Terrain>(&read(
             root,
             bundle["assets"][id]
                 .as_str()
@@ -546,22 +688,35 @@ fn load_waters(
 /// A WaterBlock's authored `specularColor` and `specularPower`, or the
 /// block defaults (white, and `mSpecPower` 6 from the v20 constructor).
 fn water_specular(node: &BTreeMap<String, String>) -> ([f32; 4], f32) {
-    let color = node
-        .get("specularcolor")
-        .and_then(|c| {
+    let report = |key: &str, value: &str, used: &str| {
+        bri_console::fallback::report(
+            bri_console::fallback::kind::DEFAULTED_FIELD,
+            "",
+            &format!("water {key} = {value:?}"),
+            used,
+        );
+    };
+    let color = node.get("specularcolor").and_then(|c| {
+        let read = (|| {
             let v: Vec<f32> = c
                 .split_whitespace()
                 .map(|v| v.parse().ok())
                 .collect::<Option<_>>()?;
             (v.len() == 4 && v.iter().all(|v| v.is_finite())).then(|| [v[0], v[1], v[2], v[3]])
-        })
-        .unwrap_or([1.0; 4]);
-    let power = node
-        .get("specularpower")
-        .and_then(|p| p.parse::<f32>().ok())
-        .filter(|p| p.is_finite() && *p >= 0.0)
-        .unwrap_or(6.0);
-    (color, power)
+        })();
+        if read.is_none() {
+            report("specularcolor", c, "white");
+        }
+        read
+    });
+    let power = node.get("specularpower").and_then(|p| {
+        let read = p.parse::<f32>().ok().filter(|p| p.is_finite() && *p >= 0.0);
+        if read.is_none() {
+            report("specularpower", p, "6");
+        }
+        read
+    });
+    (color.unwrap_or([1.0; 4]), power.unwrap_or(6.0))
 }
 
 fn load_static_shape(
@@ -577,7 +732,7 @@ fn load_static_shape(
         .asset
         .as_deref()
         .context("Static model has no native asset")?;
-    let shape: bri_content::shape::Shape = serde_json::from_slice(&read(
+    let shape: bri_content::shape::Shape = bri_content::strict::from_slice(&read(
         root,
         bundle["assets"][id]
             .as_str()
@@ -654,6 +809,32 @@ fn load_static_shape(
             }
             material = Material::physical(material.name.clone(), diffuse, maps, surface);
         }
+        // A baked lightmap (second UV set) on a surface: Dynamic adds the
+        // lights to it in place of live sun and ambient; Classic and Unified
+        // draw it as an interior lightmap (without its strength).
+        if let Some(surface) = authored
+            .surface
+            .as_ref()
+            .filter(|s| s.lightmap.is_some() && !authored.unlit)
+        {
+            let index = surface.lightmap.expect("filtered");
+            let file = bindings
+                .iter()
+                .find(|b| {
+                    b["asset"].as_str() == Some(id)
+                        && b["shape_material"].as_u64() == Some(index as u64)
+                        && b["skin"].as_str().unwrap_or("") == skin
+                })
+                .and_then(|b| b["texture"].as_str())
+                .with_context(|| format!("Missing static lightmap {id}/{index}"))?;
+            let lightmap = texture(root, file, false, out, cache)?;
+            if legacy {
+                material = Material::surface(material.name.clone(), diffuse, lightmap);
+            } else {
+                material.images[8] = lightmap;
+                material.baked_lightmap = Some(surface.lightmap_strength);
+            }
+        }
         // Bare metal on an Add-On map: its texture tints the reflectance and
         // a flat detail leaves the authored roughness as it is.
         if let Some(metal) = authored
@@ -677,20 +858,38 @@ fn load_static_shape(
                 [0.0; 4],
             ]);
         }
-        material.alpha = match authored.blend.as_str() {
-            "opaque" => AlphaMode::Opaque,
-            "alpha" => alpha(&out.images[diffuse]),
-            // Torque's additive DTS materials (glass, glows).
-            "additive" => AlphaMode::Additive,
-            other => anyhow::bail!("Unsupported static material blend {other} for {id}"),
-        };
         // Torque culls DTS back faces and blends only Translucent materials;
         // opaque ones ignore texture alpha entirely (TSMesh::initMaterials,
-        // TSMesh::setMaterial). Palm frond stems sit on alpha-0 texels.
+        // TSMesh::setMaterial). Palm frond stems sit on alpha-0 texels. A
+        // cutout (glTF MASK) is the exception: its cutoff is the material's
+        // own alpha test, applied by the shared shape-material mapping.
         material.ignore_texture_alpha = authored.blend == "opaque";
+        crate::shape_material::apply(
+            &mut material,
+            authored,
+            &format!("static material {id}"),
+            |blend| {
+                Ok(match blend {
+                    "opaque" => AlphaMode::Opaque,
+                    "alpha" => alpha(&out.images[diffuse]),
+                    // Torque's additive DTS materials (glass, glows).
+                    _ => AlphaMode::Additive,
+                })
+            },
+        )?;
         // One blended batch holds a whole crown of leaves in mesh order, so
         // back leaves painted over front ones. Solid texels now write depth in
         // a cutout pass; a blended twin then adds only the soft edges.
+        let unbound_effects =
+            authored.environment || authored.detail_map.is_some() || authored.bump_map.is_some();
+        if unbound_effects {
+            bri_console::fallback::report(
+                bri_console::fallback::kind::DROPPED_ITEM,
+                id,
+                &format!("material {} reflection/detail/bump", authored.name),
+                "drawn without them (not bound)",
+            );
+        }
         if material.alpha == AlphaMode::Blend && soft_cutout(&out.images[diffuse]) {
             let mut edges = material.clone();
             edges.name = format!("{}/soft-edges", material.name);
@@ -702,7 +901,7 @@ fn load_static_shape(
             out.materials.push(edges);
             continue;
         }
-        if authored.environment || authored.detail_map.is_some() || authored.bump_map.is_some() {
+        if unbound_effects {
             out.omissions.push(format!(
                 "Static material {id}/{} has unbound reflection/detail/bump effects",
                 authored.name
@@ -816,6 +1015,12 @@ fn load_interior(
                     cache,
                 )?,
                 None => {
+                    bri_console::fallback::report(
+                        bri_console::fallback::kind::MISSING_TEXTURE,
+                        id,
+                        &format!("interior node {node_index} lightmap {slot}"),
+                        "the original embedded lightmap (composed replacement absent)",
+                    );
                     out.omissions.push(format!("Interior node {node_index} lightmap {slot} uses the original embedded lightmap: composed mission replacement absent"));
                     let index = out.images.len();
                     out.images.push(base.clone());
@@ -1080,6 +1285,8 @@ fn load_terrain(
         temp_brick_flash: false,
         ignore_texture_alpha: false,
         untinted: false,
+        baked_lightmap: None,
+        tint_mask: false,
         parameters: Some(parameters),
     });
     out.omissions.push(format!(
@@ -1126,5 +1333,88 @@ mod tests {
             lightmap_inset(&[vertex(1.0, 1.0)], &sheet, false),
             [(0.0, 1.0); 2]
         );
+    }
+
+    /// A map static model with this authored material, loaded the way a map
+    /// bundle loads it.
+    fn load_leaf(authored: bri_content::shape::Material) -> Result<SceneData> {
+        use bri_content::testing::{plain, png, rigid_shape, write_file};
+        let dir = tempfile::tempdir()?;
+        let root = dir.path().canonicalize()?;
+        let shape = rigid_shape(
+            "leaf",
+            &[("root", None, [0.0; 3])],
+            &[(0, [0.0; 3], [1.0; 3], plain(0))],
+            vec![authored],
+        );
+        write_file(&root, "leaf.json", &serde_json::to_vec(&shape)?)?;
+        // Left half a clear black texel, right half solid green: the shape of a
+        // leaf card, whose clear texels hold black RGB.
+        let image = png(2, 1, |x, _| {
+            if x == 0 {
+                [0, 0, 0, 0]
+            } else {
+                [0, 200, 0, 255]
+            }
+        })?;
+        write_file(&root, "leaf.png", &image)?;
+        let bundle = serde_json::json!({ "assets": { "leaf": "leaf.json" } });
+        let bindings = vec![serde_json::json!(
+            { "asset": "leaf", "shape_material": 0, "skin": "", "texture": "leaf.png" }
+        )];
+        let node = Node {
+            name: "tree".into(),
+            parent: None,
+            kind: bri_content::scene::Kind::StaticModel,
+            transform: Mat4::IDENTITY.to_cols_array(),
+            asset: Some("leaf".into()),
+            properties: BTreeMap::new(),
+        };
+        let mut out = SceneData::default();
+        load_static_shape(
+            &root,
+            &bundle,
+            &bindings,
+            &node,
+            &mut out,
+            &mut BTreeMap::new(),
+            false,
+        )?;
+        Ok(out)
+    }
+    fn leaf_material(blend: &str, cutoff: Option<f32>) -> bri_content::shape::Material {
+        let mut m = bri_content::testing::material("leaf", blend);
+        m.alpha_cutoff = cutoff;
+        m
+    }
+    /// An AlphaRef 120 FinalBlend arrives as glTF MASK: blend "opaque" plus a
+    /// cutoff. The loader drew it opaque and ignored texture alpha, so the clear
+    /// texels showed their black RGB as solid squares.
+    #[test]
+    fn a_cutout_map_model_keeps_its_cutoff_and_texture_alpha() {
+        let out = load_leaf(leaf_material("opaque", Some(120.0 / 255.0))).unwrap();
+        let leaf = out
+            .materials
+            .iter()
+            .find(|m| m.name.ends_with("leaf"))
+            .unwrap();
+        assert_eq!(leaf.alpha, AlphaMode::Mask(120.0 / 255.0));
+        assert!(!leaf.ignore_texture_alpha);
+    }
+    #[test]
+    fn a_plain_opaque_map_model_still_ignores_texture_alpha() {
+        let out = load_leaf(leaf_material("opaque", None)).unwrap();
+        let leaf = out
+            .materials
+            .iter()
+            .find(|m| m.name.ends_with("leaf"))
+            .unwrap();
+        assert_eq!(leaf.alpha, AlphaMode::Opaque);
+        assert!(leaf.ignore_texture_alpha);
+    }
+    #[test]
+    fn a_map_model_blend_the_loader_cannot_honour_is_refused() {
+        let error = load_leaf(leaf_material("multiply", None)).unwrap_err();
+        assert!(error.to_string().contains("multiply"), "{error}");
     }
 }

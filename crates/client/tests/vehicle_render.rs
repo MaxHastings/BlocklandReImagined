@@ -13,7 +13,7 @@ use bri_ui::gpu::Headless;
 use std::collections::BTreeMap;
 use support::{gpu, vehicle_fixture::VehicleFixture};
 
-synthetic_and_content!(
+synthetic_and_release_content!(
     VehicleFixture: vehicles_render_with_wheels_and_paint,
     riders_tilt_with_a_car_on_a_slope,
     every_explosion_debris_model_is_in_the_vehicle_pack,
@@ -133,6 +133,7 @@ fn vehicles_render_with_wheels_and_paint(f: &VehicleFixture) -> Result<()> {
                 wheel_tire: vec![Default::default(); wheels],
                 turret_aim: [0.4, 0.0],
                 jetting: false,
+                driver_jump_held: false,
                 angular_velocity: [0.0; 3],
                 mouse_steering: [0.0; 2],
                 driver_input: 0,
@@ -217,6 +218,7 @@ fn riders_tilt_with_a_car_on_a_slope(f: &VehicleFixture) -> Result<()> {
             wheel_tire: vec![Default::default(); wheels],
             turret_aim: [0.0, 0.0],
             jetting: false,
+            driver_jump_held: false,
             angular_velocity: [0.0; 3],
             mouse_steering: [0.0; 2],
             driver_input: 0,

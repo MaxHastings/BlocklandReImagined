@@ -15,6 +15,8 @@ pub struct PosedVertex {
     pub position: Vec3,
     pub normal: Vec3,
     pub uv: [f32; 2],
+    /// The mesh's second UV set ([`Mesh::uv1`]), (0, 0) without one.
+    pub uv1: [f32; 2],
 }
 pub struct PosedTriangle {
     pub object: usize,
@@ -142,8 +144,24 @@ pub fn sample_layers_with_transition(
     at: usize,
     from: Option<(&Channels, f32)>,
 ) -> Result<(Pose, Channels)> {
+    let (pose, mut marks) = sample_layers_with_transitions(shape, layers, &[(at, from)])?;
+    Ok((pose, marks.remove(0)))
+}
+
+/// [`sample_layers_with_transition`] at several layers: for each `(at, from)`, in rising order of `at`, the absolute
+/// channels reached before layer `at` blend toward `from` and are returned frozen. A body's locomotion thread
+/// transitions at the end of its movement layer; a rule's thread action blends the whole absolute stack.
+pub fn sample_layers_with_transitions(
+    shape: &Shape,
+    layers: &[Layer<'_>],
+    marks: &[(usize, Option<(&Channels, f32)>)],
+) -> Result<(Pose, Vec<Channels>)> {
     ensure!(layers.len() <= 32, "Too many animation layers");
-    ensure!(at <= layers.len(), "Invalid animation transition layer");
+    ensure!(
+        marks.iter().all(|(at, _)| *at <= layers.len())
+            && marks.windows(2).all(|w| w[0].0 <= w[1].0),
+        "Invalid animation transition layer"
+    );
     let mut translations: Vec<_> = shape
         .nodes
         .iter()
@@ -157,6 +175,8 @@ pub fn sample_layers_with_transition(
     let mut scales = vec![Vec3::ONE; shape.nodes.len()];
     let mut axes = vec![Quat::IDENTITY; shape.nodes.len()];
     let mut additive = vec![Mat4::IDENTITY; shape.nodes.len()];
+    // Translations additive clips add in the parent's frame.
+    let mut parent_added = vec![Vec3::ZERO; shape.nodes.len()];
     let mut pose = Pose {
         nodes: vec![],
         visibility: shape.objects.iter().map(|o| o.visibility).collect(),
@@ -168,16 +188,16 @@ pub fn sample_layers_with_transition(
             .collect(),
     };
     let mut additive_started = false;
-    let mut snapshot = None;
+    let mut snapshots = Vec::new();
     for index in 0..=layers.len() {
-        if index == at {
+        for (_, from) in marks.iter().filter(|(at, _)| *at == index) {
             let mut channels = Channels {
                 translations,
                 rotations,
                 scales,
                 axes,
             };
-            if let Some((from, weight)) = from {
+            if let Some((from, weight)) = *from {
                 channels.blend_toward(from, weight)?;
             }
             (translations, rotations, scales, axes) = (
@@ -186,7 +206,7 @@ pub fn sample_layers_with_transition(
                 channels.scales.clone(),
                 channels.axes.clone(),
             );
-            snapshot = Some(channels);
+            snapshots.push(channels);
         }
         let Some(layer) = layers.get(index) else {
             break;
@@ -218,7 +238,10 @@ pub fn sample_layers_with_transition(
                 continue;
             };
             if animation.additive {
-                let translation = vector(&track.translations, a, b, t, Vec3::ZERO) * w;
+                let mut translation = vector(&track.translations, a, b, t, Vec3::ZERO) * w;
+                if animation.parent_translations {
+                    parent_added[node] += std::mem::take(&mut translation);
+                }
                 let rotation = Quat::IDENTITY
                     .slerp(node_rotation(animation, &track.rotations, a, b, t), w)
                     .normalize();
@@ -274,7 +297,7 @@ pub fn sample_layers_with_transition(
     }
     let local: Vec<_> = (0..shape.nodes.len())
         .map(|i| {
-            Mat4::from_rotation_translation(rotations[i], translations[i])
+            Mat4::from_rotation_translation(rotations[i], translations[i] + parent_added[i])
                 * Mat4::from_quat(axes[i])
                 * Mat4::from_scale(scales[i])
                 * Mat4::from_quat(axes[i].conjugate())
@@ -312,10 +335,11 @@ pub fn sample_layers_with_transition(
         pose.nodes
             .push(world(i, shape, &local, &mut cache, &mut visiting, 0)?);
     }
-    Ok((
-        pose,
-        snapshot.context("Missing animation transition snapshot")?,
-    ))
+    ensure!(
+        snapshots.len() == marks.len(),
+        "Missing animation transition snapshot"
+    );
+    Ok((pose, snapshots))
 }
 
 /// `visible` selects avatar parts or other named-object customization.
@@ -401,6 +425,7 @@ pub fn triangles(
                         position: positions[v],
                         normal: normals[v].normalize_or_zero(),
                         uv: mesh.uv.get(uv_offset + v).copied().unwrap_or([0.0; 2]),
+                        uv1: mesh.uv1.get(v).copied().unwrap_or([0.0; 2]),
                     }
                 });
                 out.push(PosedTriangle {
@@ -474,6 +499,7 @@ mod tests {
             skin: None,
             billboard: false,
             billboard_y: false,
+            uv1: Vec::new(),
         })];
         shape.objects = vec![Object {
             name: "ones".into(),
@@ -546,6 +572,7 @@ mod tests {
             duration: 1.0,
             looping: true,
             additive: true,
+            parent_translations: false,
             priority: 0,
             nodes: vec![NodeTrack {
                 node: "root".into(),
@@ -583,6 +610,7 @@ mod tests {
             duration: 1.0,
             looping: false,
             additive,
+            parent_translations: false,
             priority: 0,
             nodes: vec![NodeTrack {
                 node: node.into(),
@@ -641,6 +669,32 @@ mod tests {
         )
         .unwrap();
         assert!(zero.nodes[0].abs_diff_eq(empty.nodes[0], 1e-6));
+    }
+
+    #[test]
+    fn parent_frame_additive_translation_ignores_the_nodes_own_turn() {
+        let shape = fixture();
+        let mut push = clip("root", Some([2.0, 0.0, 0.0]), None, true);
+        let rest = sample_layers(&shape, &[]).unwrap();
+        fn layer(animation: &Animation) -> Layer<'_> {
+            Layer {
+                animation,
+                time: 0.0,
+                weight: 1.0,
+            }
+        }
+        // Default: the push is carried by the node's turn.
+        let local = sample_layers(&shape, &[layer(&push)]).unwrap();
+        let turn = Quat::from_mat4(&rest.nodes[1]);
+        let carried = rest.nodes[1] * Mat4::from_translation(Vec3::new(2.0, 0.0, 0.0));
+        assert!(local.nodes[1].abs_diff_eq(carried, 1e-5));
+        // Parent frame: the push adds along the parent's X whatever the turn.
+        push.parent_translations = true;
+        let parent = sample_layers(&shape, &[layer(&push)]).unwrap();
+        let moved = rest.nodes[1].w_axis.truncate() + Vec3::new(2.0, 0.0, 0.0);
+        assert!(parent.nodes[1].w_axis.truncate().abs_diff_eq(moved, 1e-5));
+        assert!(Quat::from_mat4(&parent.nodes[1]).abs_diff_eq(turn, 1e-5));
+        assert!(!local.nodes[1].abs_diff_eq(parent.nodes[1], 1e-3));
     }
 
     #[test]

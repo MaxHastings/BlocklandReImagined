@@ -67,6 +67,69 @@ impl Perform for ops::BodyFlash {
         Ok(())
     }
 }
+impl Perform for ops::BodyShell {
+    fn perform(self, session: &mut Session, cx: OpCall<'_>) -> Result<()> {
+        let OpCall { package, tick, .. } = cx;
+        let ops::BodyShell {
+            player,
+            shell,
+            strength,
+            seconds,
+        } = self;
+        let feet = session
+            .peers
+            .get(&player)
+            .map(|peer| peer.player.state().feet)
+            .context("No such player")?;
+        session.take_cue(package)?;
+        session.cues.emit(
+            tick,
+            crate::presentation::CueKind::BodyShell {
+                owner: player,
+                shell,
+                strength,
+                seconds,
+            },
+            feet,
+        );
+        Ok(())
+    }
+}
+impl Perform for ops::EffectAt {
+    fn perform(self, session: &mut Session, cx: OpCall<'_>) -> Result<()> {
+        let OpCall { package, tick, .. } = cx;
+        let ops::EffectAt {
+            effect,
+            position,
+            direction,
+            scale,
+        } = self;
+        session.take_cue(package)?;
+        session.cues.emit(
+            tick,
+            crate::presentation::CueKind::WeaponEffect {
+                source: bri_weapons::TargetId::Map(0),
+                definition: effect,
+                node: String::new(),
+                seconds: 0.,
+                image: None,
+                hand: None,
+                direction: Some(direction),
+                contact: None,
+                scale,
+            },
+            position,
+        );
+        Ok(())
+    }
+}
+impl Perform for ops::SetTeleportSound {
+    fn perform(self, session: &mut Session, cx: OpCall<'_>) -> Result<()> {
+        session.take_cue(cx.package)?;
+        session.map_teleporters.set_sound(self.profile);
+        Ok(())
+    }
+}
 impl Perform for ops::PlayThread {
     fn perform(self, session: &mut Session, cx: OpCall<'_>) -> Result<()> {
         let OpCall { package, tick, .. } = cx;

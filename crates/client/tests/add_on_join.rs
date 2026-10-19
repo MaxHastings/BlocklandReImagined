@@ -19,7 +19,7 @@ use std::{
 mod support;
 use support::{content_root::ContentRoot, files, wait};
 
-synthetic_and_content!(
+synthetic_and_release_content!(
     ContentRoot: add_ons_the_host_turns_off_are_not_required_and_ones_it_runs_download,
     a_guest_joins_a_host_running_every_repository_add_on,
     a_guest_without_a_vehicle_add_on_downloads_it_and_can_spawn_it,

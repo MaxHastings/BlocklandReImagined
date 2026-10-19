@@ -507,7 +507,14 @@ impl Simulation {
             .into_iter()
             .map(|c| {
                 let shape = c.user_data == crate::map::MapSurface::Static as u128;
-                let handle = physics.insert_collider(c.user_data(MAP_TAG), None);
+                // A ladder's sensor keeps its own tag: it carries its
+                // facing and speed (`bri_motor::climb`).
+                let tag = if bri_motor::climb::is_climb(c.user_data) {
+                    c.user_data
+                } else {
+                    MAP_TAG
+                };
+                let handle = physics.insert_collider(c.user_data(tag), None);
                 if shape {
                     map_statics.insert(handle);
                 }
@@ -736,6 +743,68 @@ impl Simulation {
         } else {
             crate::map::TERRAIN_SURFACE
         })
+    }
+    /// Put map colliders at `pose`, which moves them as a mover (a door)
+    /// swings. Bodies resting on them wake, and queries see the change at
+    /// once.
+    pub fn move_map_colliders(
+        &mut self,
+        colliders: std::ops::Range<usize>,
+        pose: rapier3d::prelude::Pose,
+    ) {
+        let handles = self.map_handles.get(colliders).unwrap_or_default();
+        if handles.is_empty() {
+            return;
+        }
+        for handle in handles {
+            if let Some(collider) = self.physics.colliders.get_mut(*handle) {
+                collider.set_position(pose);
+            }
+        }
+        self.support_epoch = self.support_epoch.wrapping_add(1);
+        bri_physics::detect_collisions(&mut self.physics);
+    }
+    /// How far `shape` at `pose` is from map collider `collider`, or None
+    /// when farther than `reach` (a negative distance: they overlap).
+    pub fn map_collider_distance(
+        &self,
+        collider: usize,
+        pose: &rapier3d::prelude::Pose,
+        shape: &dyn rapier3d::prelude::Shape,
+        reach: f32,
+    ) -> Option<f32> {
+        let mover = self
+            .physics
+            .colliders
+            .get(*self.map_handles.get(collider)?)?;
+        rapier3d::parry::query::contact(mover.position(), mover.shape(), pose, shape, reach)
+            .ok()
+            .flatten()
+            .map(|contact| contact.dist)
+    }
+    /// Whether a player's body overlaps the shape of map collider
+    /// `collider` placed at `pose` (a mover's next step).
+    pub fn map_collider_meets_player(
+        &self,
+        collider: usize,
+        pose: &rapier3d::prelude::Pose,
+    ) -> bool {
+        let Some(handle) = self.map_handles.get(collider) else {
+            return false;
+        };
+        let Some(mover) = self.physics.colliders.get(*handle) else {
+            return false;
+        };
+        let is_player = |_: ColliderHandle, c: &Collider| c.user_data >> 64 == 1;
+        self.physics
+            .query_pipeline_with_filter(
+                QueryFilter::default()
+                    .exclude_sensors()
+                    .predicate(&is_player),
+            )
+            .intersect_shape(*pose, mover.shape())
+            .next()
+            .is_some()
     }
     /// Make map colliders (a hidden static shape) intangible to every body
     /// and query, or solid again.

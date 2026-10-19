@@ -4,6 +4,7 @@ use bri_console::Clamp;
 
 impl App {
     pub(super) fn render_frame(&mut self, frame: &mut RenderContext<'_>) -> Result<bool> {
+        self.fx.weapon_frame_observation = None;
         let span = crate::frame_trace::span("prepare");
         self.prepare_render(frame)?;
         drop(span);
@@ -572,9 +573,15 @@ impl App {
             .explosion_shapes
             .upload(renderer, frame.device, frame.queue)?;
         self.fx.beams.upload(renderer, frame.device, frame.queue)?;
+        self.fx
+            .weapon_effects
+            .upload_contrails(renderer, frame.device, frame.queue)?;
         self.fx.decals.upload(renderer, frame.device, frame.queue)?;
         self.fx
             .tutorial_targets
+            .upload(renderer, frame.device, frame.queue)?;
+        self.fx
+            .map_movers
             .upload(renderer, frame.device, frame.queue)?;
         let shells: Vec<_> = self
             .fx
@@ -767,6 +774,29 @@ impl App {
                 aspect,
             );
         }
+        if let (Some(flare), Some(scene)) = (&mut self.gpu.lens_flare, &self.scene.cpu_scene) {
+            // The sun's lens flare, where the map has one: shown while the
+            // sun is in view and nothing drawn stands in front of it.
+            flare.set_scene(frame.device, frame.queue, scene.lens_flare.as_ref());
+            let toward = -Vec3::from_slice(&camera.sun_direction[..3]).normalize_or_zero();
+            if toward != Vec3::ZERO {
+                let bricks = self.build.building.as_ref().is_some_and(|b| {
+                    b.solid_segment(eye, eye + toward * 1500.0)
+                        .is_ok_and(|h| h.is_some())
+                });
+                let (at, strength) = self.gpu.sun_flare.update(
+                    scene,
+                    eye,
+                    forward,
+                    toward,
+                    &glam::Mat4::from_cols_array(&camera.view_projection),
+                    bricks,
+                );
+                flare.update(frame.queue, at, strength, aspect);
+            } else {
+                flare.update(frame.queue, glam::Vec2::ZERO, 0.0, aspect);
+            }
+        }
         camera.ambient[3] = f32::from(self.lighting.light_volume.mode(self.graphics.lighting));
         // Classic stays exactly v20's flat shade.
         let modern = camera.ambient[3] >= 0.5;
@@ -935,6 +965,13 @@ impl App {
             &self.avatar.avatars,
             |owner| bodies_drawn.contains(&owner),
         )?;
+        self.fx.body_shells.upload(
+            renderer,
+            frame.device,
+            frame.queue,
+            &self.avatar.avatars,
+            |owner| bodies_drawn.contains(&owner),
+        )?;
         // Horses likewise: posed every frame (riders sit on their nodes),
         // their mesh built and drawn only where it can show.
         let mut mounts_drawn = BTreeSet::new();
@@ -1025,6 +1062,65 @@ impl App {
             },
         );
         let eyes = crate::views::eyes(eye, &other_views);
+        // Slots are disjoint from every mirror and the six probe faces.
+        let local_bindings = if !stock_third_person && shot.is_none() {
+            self.world_items.local_views(view.owner)
+        } else {
+            Vec::new()
+        };
+        let mut local_views = Vec::with_capacity(local_bindings.len());
+        for (affinity, policy) in local_bindings {
+            let vertical = policy.vertical_fov(aspect);
+            let mut local_camera = camera;
+            local_camera.view_projection = Camera::oriented(
+                eye.to_array(),
+                forward.to_array(),
+                up.to_array(),
+                aspect,
+                vertical,
+                policy.near,
+                policy.far,
+            )
+            .view_projection;
+            let effects_camera = bri_fx_runtime::Camera {
+                view_projection: glam::Mat4::from_cols_array(&local_camera.view_projection),
+                position: eye,
+                right,
+                up,
+            };
+            ensure!(
+                effects_camera.view_projection.is_finite(),
+                "Invalid local image projection"
+            );
+            let effects = self
+                .fx
+                .weapon_effects
+                .world()
+                .snapshot_in_local_view(&effects_camera, &affinity);
+            let prebudget_particles = effects.particles.len();
+            local_views.push(LocalImagePass {
+                affinity,
+                policy,
+                camera: local_camera,
+                effects_camera,
+                effects,
+                prebudget_particles,
+                cut_sprites: 0,
+            });
+        }
+        self.fx.weapon_effects.check_local_views(
+            &local_views
+                .iter()
+                .map(|v| v.affinity.clone())
+                .collect::<Vec<_>>(),
+        );
+        if !local_views.is_empty() {
+            renderer.set_view_count(frame.device, LOCAL_IMAGE_FIRST_VIEW + local_views.len());
+            for (index, local) in local_views.iter().enumerate() {
+                renderer.update_view(frame.queue, LOCAL_IMAGE_FIRST_VIEW + index, &local.camera);
+            }
+        }
+
         let rgb = |v: [f32; 4]| [v[0], v[1], v[2]];
         self.addons.item_skins.prepare(
             frame.device,
@@ -1058,6 +1154,27 @@ impl App {
             .weapon_effects
             .world()
             .snapshot_in_view(&effects_camera);
+        // Probe the already computed inputs only when explicitly requested.
+        // Keep local until the entire render attempt succeeds, so failures do
+        // not expose a partial preparation or a previous frame.
+        let mut weapon_observation =
+            self.fx
+                .weapon_frame_probe
+                .then(|| crate::weapon_effects::WeaponFrameObservation {
+                    session: self.fx.weapon_effect_session,
+                    replica_tick: view.tick,
+                    owner: view.owner,
+                    cue_cursor: self.fx.weapon_effects.cue_cursor(),
+                    camera: effects_camera,
+                    attachments: self.fx.weapon_effects.timed_attachments().collect(),
+                    mounted_images: self.world_items.mounted_image_observations().collect(),
+                    local_views: Vec::new(),
+                    weapon_frame: weapon_frame.clone(),
+                    combined_particles: 0,
+                    combined_lights: 0,
+                    cut_sprites: 0,
+                    cut_lights: 0,
+                });
         let actor_frame = self
             .fx
             .actor_effects
@@ -1069,12 +1186,26 @@ impl App {
             .as_ref()
             .context("Effects GPU not initialized")?
             .max_instances();
-        let (effects_frame, cuts) = combine_effect_frames(
+        let (mut effects_frame, mut cuts) = combine_effect_frames(
             world_frame,
             [weapon_frame, actor_frame],
             &eyes,
-            sprite_budget,
+            if local_views.is_empty() {
+                sprite_budget
+            } else {
+                usize::MAX
+            },
         );
+        if !local_views.is_empty() {
+            let mut partitions: Vec<_> = std::iter::once(&mut effects_frame)
+                .chain(local_views.iter_mut().map(|v| &mut v.effects))
+                .collect();
+            let removed = trim_effect_partitions(&mut partitions, eye, sprite_budget);
+            cuts.sprites += removed.iter().sum::<usize>();
+            for (local, cut) in local_views.iter_mut().zip(removed.into_iter().skip(1)) {
+                local.cut_sprites = cut;
+            }
+        }
         let (fog_start, fog_end) = if camera.atmosphere[3] > 0. {
             (camera.atmosphere[0], camera.atmosphere[1])
         } else {
@@ -1164,31 +1295,44 @@ impl App {
             .map(|light| bri_render::scene::PointLight {
                 position_radius: light.position.extend(light.radius).to_array(),
                 color: light.color.extend(0.).to_array(),
+                ..Default::default()
             })
             .collect();
         // Vehicle lamps their drivers turned on light the world too.
         let mut lights = lights;
         if let Some(view) = self.net.attempt.as_ref().and_then(|a| a.view.as_ref()) {
             let vehicles = &self.vehicles;
-            lights.extend(
-                self.vehicle_assets
-                    .lamp_lights(view.vehicles.values().filter_map(|info| {
-                        let f = vehicles.frame(info.id)?;
-                        let body = glam::Mat4::from_scale_rotation_translation(
-                            glam::Vec3::splat(info.scale),
-                            f.rotation,
-                            f.position,
-                        );
-                        Some((
-                            body,
-                            info.lights,
-                            self.vehicle_assets.driver_present(info),
-                            info.definition.clone(),
-                        ))
-                    })),
-            );
+            let assets = &self.vehicle_assets;
+            let infos: Vec<_> = view
+                .vehicles
+                .values()
+                .filter_map(|info| {
+                    let f = vehicles.frame(info.id)?;
+                    let body = glam::Mat4::from_scale_rotation_translation(
+                        glam::Vec3::splat(info.scale),
+                        f.rotation,
+                        f.position,
+                    );
+                    Some((
+                        info.id,
+                        body,
+                        info.lights,
+                        assets.driver_present(info),
+                        f.driver_jump_held,
+                        info.definition.clone(),
+                    ))
+                })
+                .collect();
+            lights.extend(self.vehicle_assets.lamp_lights(infos));
         }
         lights.truncate(bri_render::scene::MAX_POINT_LIGHTS);
+        // Map lights past the shaded budget fill what the effects leave.
+        let overflow = super::lighting::overflow_point_lights(
+            &self.lighting.light_volume.overflow,
+            eye,
+            lights.len(),
+        );
+        lights.extend(overflow);
         renderer.update_lights(frame.queue, &lights)?;
         let effects_renderer = self
             .gpu
@@ -1209,6 +1353,59 @@ impl App {
                 .collect::<Vec<_>>(),
         )?;
         effects_renderer.prepare(frame.queue, &effects_camera, &effects_frame)?;
+        for (index, local) in local_views.iter().enumerate() {
+            effects_renderer.prepare_view(
+                frame.device,
+                frame.queue,
+                LOCAL_IMAGE_FIRST_VIEW + index,
+                &local.effects_camera,
+                &local.effects,
+            )?;
+            self.addons.item_skins.prepare_local_view(
+                frame.device,
+                frame.queue,
+                frame.format,
+                bri_render::scene::DEPTH_FORMAT,
+                renderer.samples(),
+                &mut self.world_items,
+                self.addons.client_code.trusts_server(),
+                crate::item_skins::Light {
+                    sun_direction: rgb(camera.sun_direction),
+                    sun_color: rgb(camera.sun_color),
+                    ambient: rgb(camera.ambient),
+                },
+                index,
+                &local.affinity,
+                local.effects_camera.view_projection,
+                eye,
+                [frame.size.0, frame.size.1],
+                self.avatar.animation_time as f32,
+                local.policy.horizontal_fov,
+            );
+        }
+        if let Some(o) = &mut weapon_observation {
+            o.combined_particles = effects_frame.particles.len()
+                + local_views
+                    .iter()
+                    .map(|v| v.effects.particles.len())
+                    .sum::<usize>();
+            o.local_views = local_views
+                .iter()
+                .map(|v| crate::weapon_effects::LocalViewObservation {
+                    affinity: v.affinity.clone(),
+                    policy: v.policy,
+                    viewport: [frame.size.0, frame.size.1],
+                    world_horizontal_fov: shown_fov,
+                    camera: v.effects_camera,
+                    weapon_frame: v.effects.clone(),
+                    prebudget_particles: v.prebudget_particles,
+                    cut_sprites: v.cut_sprites,
+                })
+                .collect();
+            o.combined_lights = effects_frame.lights.len();
+            o.cut_sprites = cuts.sprites;
+            o.cut_lights = cuts.lights;
+        }
         // A sky's rain or snow changed the weather pack: its pictures go up.
         if self.gpu.weather_revision != self.weather.revision {
             let limits = bri_weather::WeatherLimits::default();
@@ -1342,6 +1539,7 @@ impl App {
             .filter_map(|(_, mesh)| Some((mesh.gpu.as_ref()?, mesh.instance.as_ref()?)))
             .collect();
         scenes.extend(self.fx.fade_models.scenes());
+        scenes.extend(self.fx.weapon_effects.contrail_scenes());
         // Models every view draws; the player's own body and held items
         // differ between the player's view and a mirror's.
         let mut shared_draws = Vec::new();
@@ -1355,6 +1553,7 @@ impl App {
         shared_draws.extend(self.fx.beams.draws());
         shared_draws.extend(self.fx.decals.draws());
         shared_draws.extend(self.fx.tutorial_targets.draws());
+        shared_draws.extend(self.fx.map_movers.draws());
         if let Some((scene, instances)) = &self.gpu.shell_gpu
             && self.fx.weapon_shells.active_count() > 0
         {
@@ -1372,6 +1571,11 @@ impl App {
         item_draws.extend(shared_draws.iter().copied());
         item_draws.extend(
             self.fx.body_flashes.draws(|owner| {
+                bodies_drawn.contains(&owner) && (owner != view.owner || third_person)
+            }),
+        );
+        item_draws.extend(
+            self.fx.body_shells.draws(|owner| {
                 bodies_drawn.contains(&owner) && (owner != view.owner || third_person)
             }),
         );
@@ -1438,7 +1642,7 @@ impl App {
             };
             (bodies, models, blockers, blocking, map, terrain_map)
         };
-        let shadows = |encoder: &mut wgpu::CommandEncoder, view: usize| {
+        let sky_exposure = |encoder: &mut wgpu::CommandEncoder, view: usize| {
             let sky_scenes: Vec<_> = self
                 .gpu
                 .gpu_scene
@@ -1460,6 +1664,9 @@ impl App {
                     instances: &sky_moving,
                 },
             );
+        };
+        let shadows = |encoder: &mut wgpu::CommandEncoder, view: usize| {
+            sky_exposure(encoder, view);
             renderer.render_view_shadows(
                 encoder,
                 view,
@@ -1478,6 +1685,11 @@ impl App {
             );
         };
         let _recording = crate::frame_trace::span("record passes");
+        // Prepare environmental occlusion from the world, never from only the
+        // rifle supplied to the later model-only pass. Sun shadow inputs stay main.
+        for index in 0..local_views.len() {
+            sky_exposure(frame.encoder, LOCAL_IMAGE_FIRST_VIEW + index);
+        }
         renderer.begin_timing(frame.encoder);
         // Live mirror and window planes record the player's shadows
         // themselves, after those with their own.
@@ -1629,10 +1841,12 @@ impl App {
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: world_target,
                     depth_slice: None,
-                    resolve_target: multisampled.as_ref().map(|_| frame.target),
+                    resolve_target: (local_views.is_empty())
+                        .then(|| multisampled.as_ref().map(|_| frame.target))
+                        .flatten(),
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Load,
-                        store: if multisampled.is_some() {
+                        store: if multisampled.is_some() && local_views.is_empty() {
                             wgpu::StoreOp::Discard
                         } else {
                             wgpu::StoreOp::Store
@@ -1668,13 +1882,75 @@ impl App {
         if let Some(shapes) = &self.world_shapes {
             shapes.render(&mut pass);
         }
-        if let Some(vignette) = &self.gpu.vignette {
-            vignette.render(&mut pass);
+        if local_views.is_empty() {
+            if let Some(flare) = &self.gpu.lens_flare {
+                flare.render(&mut pass);
+            }
+            if let Some(vignette) = &self.gpu.vignette {
+                vignette.render(&mut pass);
+            }
         }
         drop(pass);
+        for (index, local) in local_views.iter().enumerate() {
+            // Every world-depth consumer has finished. Load the existing color,
+            // clear only depth; no world/observer camera or geometry is replayed.
+            drop(
+                frame
+                    .encoder
+                    .begin_render_pass(&wgpu::RenderPassDescriptor {
+                        label: Some("local held image fresh depth"),
+                        color_attachments: &[],
+                        depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                            view: &depth,
+                            depth_ops: Some(wgpu::Operations {
+                                load: wgpu::LoadOp::Clear(bri_render::scene::DEPTH_CLEAR),
+                                store: wgpu::StoreOp::Store,
+                            }),
+                            stencil_ops: None,
+                        }),
+                        timestamp_writes: None,
+                        occlusion_query_set: None,
+                        multiview_mask: None,
+                    }),
+            );
+            let draws = self
+                .world_items
+                .local_view_draws(local.affinity.owner, local.affinity.slot);
+            let late = |pass: &mut wgpu::RenderPass<'_>| {
+                effects_renderer.render_view(pass, LOCAL_IMAGE_FIRST_VIEW + index);
+                self.addons.item_skins.render_local_view(pass, index);
+                // Screen tint remains above every image; HUD still follows render_scene.
+                if index + 1 == local_views.len() {
+                    if let Some(flare) = &self.gpu.lens_flare {
+                        flare.render(pass);
+                    }
+                    if let Some(vignette) = &self.gpu.vignette {
+                        vignette.render(pass);
+                    }
+                }
+            };
+            renderer.render_world(
+                frame.encoder,
+                bri_render::scene::WorldPass {
+                    view: LOCAL_IMAGE_FIRST_VIEW + index,
+                    color: world_target,
+                    resolve: (index + 1 == local_views.len())
+                        .then(|| multisampled.as_ref().map(|_| frame.target))
+                        .flatten(),
+                    depth: &depth,
+                    viewport: None,
+                    clear: None,
+                    after_opaque: None,
+                    after_all: Some(&late),
+                },
+                &[],
+                &draws,
+            );
+        }
         self.addons.item_skins.resolve(frame.encoder);
         self.addons.client_code.resolve(frame.encoder);
         renderer.end_timing(frame.encoder, "effects");
+        self.fx.weapon_frame_observation = weapon_observation;
         Ok(true)
     }
 
@@ -1696,11 +1972,13 @@ impl App {
             );
             self.lighting.light_volume.animations = visual.light_animations;
             self.lighting.light_volume.spots = visual.light_spots;
+            self.lighting.light_volume.overflow = visual.overflow_lights;
             self.scene.cpu_scene = Some(visual.scene);
             self.scene.cpu_terrain = visual.terrain.into_iter().map(Arc::new).collect();
             self.scene.cpu_water = visual.repeated_water.into_iter().map(Arc::new).collect();
             self.scene.scenery.reset();
             self.scene.shape_indices = visual.shape_indices;
+            self.fx.map_movers.replace_scenes(visual.movers);
             crate::frame_trace::note("the map's lighting source changed");
             self.gpu.gpu_scene = None;
             self.lighting.reflections = None;
@@ -1947,6 +2225,90 @@ impl WholeUploads {
                 self.deferred
             ));
         }
+    }
+}
+
+const LOCAL_IMAGE_FIRST_VIEW: usize = bri_render::environment_probe::FIRST_VIEW + 6;
+struct LocalImagePass {
+    affinity: std::sync::Arc<bri_fx_runtime::LocalViewAffinity>,
+    policy: bri_weapons::FirstPersonView,
+    camera: Camera,
+    effects_camera: bri_fx_runtime::Camera,
+    effects: bri_fx_runtime::FrameEffects,
+    prebudget_particles: usize,
+    cut_sprites: usize,
+}
+/// Snapshots are far-first from the same eye. Remove globally farthest prefixes
+/// before preparing any view, retaining the existing single renderer budget.
+fn trim_effect_partitions(
+    frames: &mut [&mut bri_fx_runtime::FrameEffects],
+    eye: Vec3,
+    budget: usize,
+) -> Vec<usize> {
+    let mut heads = vec![0; frames.len()];
+    let excess = frames
+        .iter()
+        .map(|f| f.particles.len())
+        .sum::<usize>()
+        .saturating_sub(budget);
+    for _ in 0..excess {
+        let mut best: Option<(usize, f32)> = None;
+        for (index, frame) in frames.iter().enumerate() {
+            if let Some(p) = frame.particles.get(heads[index]) {
+                let distance = eye.distance_squared(p.position);
+                if best.is_none_or(|(_, previous)| distance.total_cmp(&previous).is_gt()) {
+                    best = Some((index, distance));
+                }
+            }
+        }
+        if let Some((index, _)) = best {
+            heads[index] += 1;
+        }
+    }
+    for (frame, &count) in frames.iter_mut().zip(&heads) {
+        frame.particles.drain(..count);
+    }
+    heads
+}
+
+#[cfg(test)]
+mod local_budget_tests {
+    use super::*;
+    #[test]
+    fn local_and_world_particles_share_one_budget_and_ties_are_stable() {
+        let particle = |z| bri_fx_runtime::ParticleInstance {
+            lit: false,
+            layout: Default::default(),
+            position: Vec3::new(0., 0., z),
+            size: 1.,
+            color: glam::Vec4::ONE,
+            spin: 0.,
+            axis: Vec3::ZERO,
+            plane_right: Vec3::ZERO,
+            texture: 0,
+            blend: bri_fx_runtime::BlendMode::Alpha,
+            depth_test: true,
+        };
+        let mut world = bri_fx_runtime::FrameEffects {
+            particles: vec![particle(9.), particle(3.)],
+            lights: vec![],
+        };
+        let mut first = bri_fx_runtime::FrameEffects {
+            particles: vec![particle(9.), particle(2.)],
+            lights: vec![],
+        };
+        let mut second = bri_fx_runtime::FrameEffects {
+            particles: vec![particle(8.), particle(1.)],
+            lights: vec![],
+        };
+        let cuts =
+            trim_effect_partitions(&mut [&mut world, &mut first, &mut second], Vec3::ZERO, 3);
+        assert_eq!(cuts, vec![1, 1, 1]);
+        assert_eq!(world.particles[0].position.z, 3.);
+        let cuts =
+            trim_effect_partitions(&mut [&mut world, &mut first, &mut second], Vec3::ZERO, 2);
+        assert_eq!(cuts, vec![1, 0, 0]);
+        assert_eq!(first.particles.len() + second.particles.len(), 2);
     }
 }
 

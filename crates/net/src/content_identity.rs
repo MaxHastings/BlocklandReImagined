@@ -1543,8 +1543,10 @@ mod tests {
                     crosshair: true,
                     follow_arm: false,
                     first_person_origin: None,
+                    first_person_view: None,
                     hide_nodes: Vec::new(),
                     aim_assist: None,
+                    movement: None,
                     both_arms: false,
                     paint_tint: false,
                     left_image: None,
@@ -1701,6 +1703,7 @@ mod tests {
                     flare: None,
                 }],
                 explosions: vec![],
+                shells: vec![],
             },
             bindings: vec![],
         };

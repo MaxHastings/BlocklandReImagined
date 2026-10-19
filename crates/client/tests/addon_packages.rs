@@ -13,7 +13,7 @@ use std::path::{Path, PathBuf};
 mod support;
 use support::content_root::ContentRoot;
 
-synthetic_and_content!(
+synthetic_and_release_content!(
     ContentRoot: client_loads_imported_packages_beside_the_base_game,
     a_broken_add_on_is_left_out_instead_of_stopping_the_game
 );

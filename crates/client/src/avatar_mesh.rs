@@ -15,7 +15,11 @@ use std::collections::BTreeMap;
 /// frame, material frame and paint. The same key means the same vertices,
 /// indices and batches in the same order.
 #[derive(Clone, Debug, PartialEq)]
-struct Key(Vec<(usize, usize, usize, usize, [u32; 4])>);
+struct Key(
+    Vec<(usize, usize, usize, usize, [u32; 4])>,
+    /// Each tinted material's paint, by shape material.
+    Vec<Option<[u32; 4]>>,
+);
 
 /// One drawn object: where its mesh's vertices come from this frame.
 struct Part {
@@ -47,6 +51,10 @@ pub struct Binding<'a> {
     pub unassigned_material: usize,
     /// Per object: its paint, or None to hide it.
     pub colors: &'a [Option<[f32; 4]>],
+    /// Per shape material: the paint a masked tint gives it (its slot's
+    /// colour), taking the place of the object's. Empty, or None entries,
+    /// leave every corner the object's paint.
+    pub material_colors: &'a [Option<[f32; 4]>],
 }
 
 fn key(binding: &Binding<'_>, pose: &Pose) -> Result<Key> {
@@ -77,7 +85,12 @@ fn key(binding: &Binding<'_>, pose: &Pose) -> Result<Key> {
             color.map(f32::to_bits),
         ));
     }
-    Ok(Key(parts))
+    let tinted = binding
+        .material_colors
+        .iter()
+        .map(|c| c.map(|c| c.map(f32::to_bits)))
+        .collect();
+    Ok(Key(parts, tinted))
 }
 
 impl Layout {
@@ -148,6 +161,11 @@ impl Layout {
         );
         let mut parts = Vec::new();
         let mut groups: BTreeMap<usize, Vec<Corner>> = BTreeMap::new();
+        let material_colors: Vec<Option<[f32; 4]>> = key
+            .1
+            .iter()
+            .map(|c| c.map(|c| c.map(f32::from_bits)))
+            .collect();
         for &(object, mesh_index, frame, material_frame, color) in &key.0 {
             let color = color.map(f32::from_bits);
             ensure!(
@@ -176,6 +194,10 @@ impl Layout {
                     .material
                     .map_or(binding.unassigned_material, |i| bindings[i]);
                 let group = groups.entry(material).or_default();
+                let corner_color = primitive
+                    .material
+                    .and_then(|i| material_colors.get(i).copied().flatten())
+                    .unwrap_or(color);
                 for triangle in &primitive.triangles {
                     for &v in triangle {
                         ensure!((v as usize) < mesh.frame_vertices, "Vertex out of range");
@@ -184,7 +206,7 @@ impl Layout {
                             .get(uv_offset + v as usize)
                             .copied()
                             .unwrap_or([0.0; 2]);
-                        group.push((slot, v, uv, color));
+                        group.push((slot, v, uv, corner_color));
                     }
                 }
             }

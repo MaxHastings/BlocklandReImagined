@@ -312,6 +312,12 @@ pub struct Behaviour {
     /// tick.
     #[serde(default)]
     pub on_projectile_hit: bool,
+    /// `on_explosion(blast)` after a projectile of this package's weapons
+    /// (or one it depends on) explodes with a blast radius. `blast` is
+    /// `#{ projectile, by, x, y, z, radius }`. Delivered at the start of the
+    /// next tick.
+    #[serde(default)]
+    pub on_explosion: bool,
     /// `on_minigame(event)` after something happens to a mini-game:
     /// `event` is `#{ kind, game, player, team }`, `kind` being `created`,
     /// `configured`, `reset`, `ended`, `joined`, `left`, `team` (a member's
@@ -1762,6 +1768,13 @@ pub struct ArchetypeDef {
     /// out asks for the Blockhead's clip name, then falls back.
     #[serde(default)]
     pub animations: Option<bri_content::body::Animations>,
+    /// Animation libraries the body links, as UE2 meshes link animation sets: asset ids
+    /// (`package:asset/file.shape.json`) of shapes whose clips join the body's own, keyed by
+    /// their original sequence names and matched without regard to case (`PlayAnim`'s rule).
+    /// A clip the body has itself wins; an unknown library or a clip on a bone the body does
+    /// not have is a fault of the Add-On, named in its health report.
+    #[serde(default)]
+    pub animation_libraries: Vec<String>,
     /// How the body composes crouched locomotion with the legacy crouch thread.
     #[serde(default)]
     pub crouch_composition: Option<bri_content::body::CrouchComposition>,
@@ -1786,6 +1799,13 @@ pub struct ArchetypeDef {
     /// `maxTimeScale`, 1.5).
     #[serde(default)]
     pub max_time_scale: Option<f32>,
+    /// Seconds a thread action a rule starts or ends blends from the pose
+    /// before it (AA's `BlendChangeTime`, .25); 0 cuts as v20 does, 0 to 2.
+    #[serde(default)]
+    pub action_blend: Option<f32>,
+    /// How the ground locomotion clip is picked: `torque` (v20) or `ue2_four_way` (Army Ops).
+    #[serde(default)]
+    pub locomotion_pick: Option<bri_content::body::LocomotionPick>,
     /// Its own movement rules: a `controller` this Add-On or one it
     /// depends on provides (`namespace:controller/name`).
     #[serde(default)]
@@ -1819,6 +1839,21 @@ pub struct ArchetypeSounds {
     /// The sound of landing from a fall.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub land: Option<String>,
+    /// With no `land` sound, landing sounds like a footfall on the surface
+    /// underfoot.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub land_on_surface: bool,
+    /// Sounds tied to a clip by its name: the sound plays at the body once
+    /// the clip has run `seconds` (at most 32 clips; 0 to 60 s).
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub clips: BTreeMap<String, ClipSoundDef>,
+}
+/// [`ArchetypeSounds::clips`]: a sound at a moment of a clip.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ClipSoundDef {
+    pub sound: String,
+    pub seconds: f32,
 }
 /// One rider seat: the model node riders follow, its rest position from
 /// the feet (facing -Z, at scale 1) and the rider's action (`root`, `sit`).
@@ -1858,6 +1893,14 @@ impl ArchetypeDef {
             bri_content::body::validate_animations(animations)?;
         }
         ensure!(
+            self.animation_libraries.len() <= 8
+                && self
+                    .animation_libraries
+                    .iter()
+                    .all(|l| text(l, 160) && l.contains(":asset/")),
+            "animation_libraries names up to 8 asset ids (`package:asset/file.shape.json`)"
+        );
+        ensure!(
             [&self.intent_clips, &self.intent_sounds]
                 .into_iter()
                 .flatten()
@@ -1874,6 +1917,11 @@ impl ArchetypeDef {
             self.max_time_scale
                 .is_none_or(|v| v.is_finite() && (0.1..=16.0).contains(&v)),
             "max_time_scale must be 0.1 to 16"
+        );
+        ensure!(
+            self.action_blend
+                .is_none_or(|v| v.is_finite() && (0.0..=2.0).contains(&v)),
+            "action_blend must be 0 to 2"
         );
         if let Some(camera) = &self.camera {
             camera.validate()?;
@@ -1912,6 +1960,16 @@ impl ArchetypeDef {
                 .stride
                 .is_none_or(|s| s.is_finite() && (0.25..=32.0).contains(&s)),
             "sounds.stride must be 0.25 to 32 units"
+        );
+        ensure!(
+            self.sounds.clips.len() <= 32
+                && self.sounds.clips.iter().all(|(clip, c)| {
+                    text(clip, 64)
+                        && text(&c.sound, 128)
+                        && c.seconds.is_finite()
+                        && (0.0..=60.0).contains(&c.seconds)
+                }),
+            "sounds.clips names up to 32 clips, each with a sound profile and 0 to 60 seconds"
         );
         if let Some(stock) = &self.adjusts {
             ensure!(
@@ -2183,8 +2241,27 @@ pub struct Binds {
     pub schema_version: u32,
     /// The Controls heading the binds go under.
     pub division: String,
+    /// The profile the binds belong to; none: the stock Blockland one.
+    /// Must be declared by this package's `profiles` (or another's).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub profile: Option<String>,
+    /// Profiles this file declares ([`bri_content::controls`]).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub profiles: Vec<bri_content::controls::ProfileDef>,
     pub binds: Vec<BindDef>,
 }
+/// Stock actions a control profile may bind to its own inputs.
+pub const STOCK_COMMANDS: [&str; 9] = [
+    "moveforward",
+    "movebackward",
+    "moveleft",
+    "moveright",
+    "jump",
+    "crouch",
+    "jet",
+    "walk",
+    "mousefire",
+];
 /// Most binds one file may offer.
 pub const MAX_BINDS: usize = 32;
 impl Binds {
@@ -2198,7 +2275,50 @@ impl Binds {
             !self.binds.is_empty() && self.binds.len() <= MAX_BINDS,
             "1 to {MAX_BINDS} binds"
         );
+        ensure!(
+            self.profiles.len() <= bri_content::controls::MAX_PROFILES,
+            "up to {} profiles",
+            bri_content::controls::MAX_PROFILES
+        );
+        for (i, p) in self.profiles.iter().enumerate() {
+            p.validate()?;
+            ensure!(
+                !self.profiles[..i].iter().any(|o| o.id == p.id),
+                "profile `{}` declared twice",
+                p.id
+            );
+        }
+        if let Some(profile) = &self.profile {
+            ensure!(
+                profile == bri_content::controls::DEFAULT_PROFILE
+                    || !profile.is_empty() && profile.len() <= 32,
+                "bad profile `{profile}`"
+            );
+        }
         for (i, bind) in self.binds.iter().enumerate() {
+            if let Some(m) = &bind.mouse {
+                ensure!(
+                    bri_content::controls::MOUSE_INPUTS.contains(&m.as_str()),
+                    "bind `{}` mouse input `{m}` must be one of {}",
+                    bind.name,
+                    bri_content::controls::MOUSE_INPUTS.join(", ")
+                );
+            }
+            if let Some(stock) = &bind.stock {
+                ensure!(
+                    STOCK_COMMANDS.contains(&stock.as_str())
+                        && bind.command.is_empty()
+                        && bind.screen.is_none()
+                        && !bind.hold
+                        && self
+                            .profile
+                            .as_deref()
+                            .is_some_and(|p| p != bri_content::controls::DEFAULT_PROFILE),
+                    "bind `{}` names a stock action ({}) with no command, in a control profile",
+                    bind.name,
+                    STOCK_COMMANDS.join(", ")
+                );
+            }
             ensure!(text(&bind.name, 64), "bind names are 1 to 64 characters");
             ensure!(
                 !self.binds[..i].iter().any(|b| b.name == bind.name),
@@ -2208,6 +2328,7 @@ impl Binds {
             ensure!(
                 bri_package::id::namespace_problem(&bind.package).is_none()
                     && match &bind.screen {
+                        None if bind.stock.is_some() => true,
                         None => identifier(&bind.command),
                         Some(screen) => {
                             bind.command.is_empty()
@@ -2411,6 +2532,15 @@ pub struct BindDef {
     /// The default key on a Mac, when it differs (`cmd c`).
     #[serde(default)]
     pub mac_key: Option<String>,
+    /// A stock Blockland action this binds in the file's control profile
+    /// ([`STOCK_COMMANDS`]), so a profile can move one (Crouch off Shift
+    /// when Shift sprints). Needs a non-default `profile`, and no `command`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stock: Option<String>,
+    /// A default mouse input instead of a key (`button0`..`button4`,
+    /// `zaxis` for the wheel). Mouse movement is not an action input.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mouse: Option<String>,
     /// Sent with `true` as the key goes down and `false` as it comes up,
     /// to a command taking one `bool`; else sent once as it goes down, to
     /// a command with no arguments.
@@ -2583,6 +2713,94 @@ mod tests {
         bytes.extend(width.to_be_bytes());
         bytes.extend(height.to_be_bytes());
         bytes
+    }
+
+    #[test]
+    fn binds_can_declare_control_profiles_actions_and_mouse_defaults() {
+        let binds: Binds = serde_json::from_value(serde_json::json!({
+            "schema_version": 1, "division": "Arena Assault", "profile": "aa",
+            "profiles": [{
+                "id": "aa", "name": "Arena Assault",
+                "player_types": ["aa-soldier"],
+                "mouse_sensitivity": 0.5,
+                "layers": [{ "id": "aircraft", "when": "mouse_driver", "invert_mouse": true }]
+            }],
+            "binds": [
+                { "name": "Sprint", "package": "aa-rules", "command": "sprint",
+                  "key": "lshift", "hold": true },
+                { "name": "Next Weapon", "package": "aa-rules", "command": "next",
+                  "mouse": "zaxis" }
+            ]
+        }))
+        .unwrap();
+        binds.validate().unwrap();
+        assert_eq!(binds.profiles[0].layers[0].id, "aircraft");
+        // Old files without profiles still parse.
+        let old: Binds = serde_json::from_value(serde_json::json!({
+            "schema_version": 1, "division": "Tools",
+            "binds": [{ "name": "Copy", "package": "t", "command": "copy" }]
+        }))
+        .unwrap();
+        old.validate().unwrap();
+        assert!(old.profile.is_none() && old.profiles.is_empty());
+    }
+
+    #[test]
+    fn bad_control_profiles_and_mouse_defaults_are_refused() {
+        let with = |profile: serde_json::Value, bind: serde_json::Value| {
+            let binds: Binds = serde_json::from_value(serde_json::json!({
+                "schema_version": 1, "division": "D", "profiles": [profile],
+                "binds": [bind]
+            }))
+            .unwrap();
+            binds.validate()
+        };
+        let ok_bind = serde_json::json!({ "name": "A", "package": "p", "command": "a" });
+        let ok_profile = serde_json::json!({ "id": "aa", "name": "AA" });
+        assert!(with(ok_profile.clone(), ok_bind.clone()).is_ok());
+        // The Blockland profile is the engine's, not an Add-On's to declare.
+        assert!(
+            with(
+                serde_json::json!({ "id": "blockland", "name": "B" }),
+                ok_bind.clone()
+            )
+            .is_err()
+        );
+        assert!(
+            with(
+                serde_json::json!({ "id": "Bad Id", "name": "B" }),
+                ok_bind.clone()
+            )
+            .is_err()
+        );
+        assert!(
+            with(
+                serde_json::json!({ "id": "aa", "name": "AA", "mouse_sensitivity": 9.0 }),
+                ok_bind.clone()
+            )
+            .is_err()
+        );
+        // A stock action can be moved only inside a control profile.
+        let crouch = serde_json::json!({ "name": "Crouch", "package": "p", "stock": "crouch", "key": "lcontrol" });
+        let in_profile = |bind: serde_json::Value| {
+            let binds: Binds = serde_json::from_value(serde_json::json!({
+                "schema_version": 1, "division": "D", "profile": "aa",
+                "profiles": [{ "id": "aa", "name": "AA" }], "binds": [bind]
+            }))
+            .unwrap();
+            binds.validate()
+        };
+        assert!(in_profile(crouch.clone()).is_ok());
+        assert!(
+            with(ok_profile.clone(), crouch).is_err(),
+            "not in the default profile"
+        );
+        let unknown = serde_json::json!({ "name": "X", "package": "p", "stock": "quit" });
+        assert!(in_profile(unknown).is_err());
+        // Mouse movement is not an action input: only buttons and the wheel.
+        let axis =
+            serde_json::json!({ "name": "A", "package": "p", "command": "a", "mouse": "xaxis" });
+        assert!(with(ok_profile, axis).is_err());
     }
 
     #[test]

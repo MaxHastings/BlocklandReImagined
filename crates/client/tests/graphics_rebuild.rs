@@ -23,7 +23,7 @@ use std::time::Duration;
 mod support;
 use support::{content_root::ContentRoot, wait};
 
-synthetic_and_content!(ContentRoot: a_shadow_quality_change_keeps_the_world_uploaded);
+synthetic_and_release_content!(ContentRoot: a_shadow_quality_change_keeps_the_world_uploaded);
 
 const SIZE: (u32, u32) = (320, 240);
 /// The frames the staged skylight field takes to draw (`bri-render`'s

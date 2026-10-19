@@ -22,7 +22,7 @@ use std::{
 mod support;
 use support::{content_root::ContentRoot, wait};
 
-synthetic_and_content!(ContentRoot: horse_players_draw_as_horses_and_fuel_jets_show_energy);
+synthetic_and_release_content!(ContentRoot: horse_players_draw_as_horses_and_fuel_jets_show_energy);
 
 const SIZE: (u32, u32) = (640, 480);
 

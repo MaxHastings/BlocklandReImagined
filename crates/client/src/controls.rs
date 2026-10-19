@@ -11,8 +11,70 @@ use std::{
     f32::consts::{FRAC_PI_2, PI},
 };
 
+/// `HumanController::ViewShake`: the look moves along a direction at `rate`
+/// radians a second; at `max` it turns back at half the speed and stops
+/// when it is down to `min`, leaving the aim off by that much.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ViewShake {
+    pitch: f32,
+    yaw: f32,
+    offset: f32,
+    min: f32,
+    max: f32,
+    rate: f32,
+}
+impl ViewShake {
+    /// Step by `seconds`; the pitch and yaw to add, or `None` once it stops.
+    pub fn advance(&mut self, seconds: f32) -> Option<(f32, f32)> {
+        if self.rate == 0.0 {
+            return None;
+        }
+        let delta = seconds * self.rate;
+        self.offset += delta;
+        let turn = (delta * self.pitch, delta * self.yaw);
+        if self.rate > 0.0 {
+            if self.offset >= self.max {
+                self.rate *= -0.5;
+            }
+        } else if self.offset <= self.min {
+            self.rate = 0.0;
+        }
+        Some(turn)
+    }
+}
+
+/// A rule's camera shake (`camera_shake`): the view alone jittered, up to
+/// `translation` units and `rotation` radians, fading over `seconds`.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct CameraShake {
+    translation: f32,
+    rotation: f32,
+    seconds: f32,
+    hold: f32,
+    left: f32,
+}
+impl CameraShake {
+    /// The share of the shake showing: `1 - (1 - left / seconds)^hold`.
+    fn share(&self) -> f32 {
+        1.0 - (1.0 - (self.left / self.seconds).clamped(0.0, 1.0)).powf(self.hold)
+    }
+}
+/// The camera shakes' jitter this frame, in the view's own frame.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct CameraJolt {
+    /// Right, up.
+    pub offset: [f32; 2],
+    pub yaw: f32,
+    pub pitch: f32,
+    pub roll: f32,
+}
+
 #[derive(Clone, Default)]
 pub struct Controls {
+    /// Rules' camera shakes running, and the jitter they give this frame.
+    camera_shakes: Vec<CameraShake>,
+    camera_jolt: CameraJolt,
+    jolt_state: u32,
     /// The corpse camera holds still on the body (a mini-game's
     /// `death_view_ms` after death): the mouse does not turn it.
     pub death_view: bool,
@@ -29,6 +91,13 @@ pub struct Controls {
     /// The host's `setControlCameraFov` (an Add-On's rules), in place of
     /// `normal_fov` until the host hands it back.
     server_fov: Option<f32>,
+    /// A rule's view shake in progress ([`Self::start_view_shake`]).
+    view_shake: Option<ViewShake>,
+    /// Seconds of breathing since the game began ([`Self::advance_breath`]).
+    breath_clock: f32,
+    /// Whether the breath cycle was past zero (breathing out) when last seen
+    /// while aiming.
+    breath_out: Option<bool>,
     /// The body's archetype is `thirdPersonOnly`.
     third_person_only: bool,
     /// Target zoom FOV (`$Pref::player::CurrentFOV`); the wheel steps it.
@@ -490,6 +559,17 @@ impl Controls {
     fn free_looking(&self) -> bool {
         self.held(HeldControl::FreeLook) && (self.mounted || self.camera_pos != 0.0)
     }
+    /// What the rider is doing, for control profile layers: (driving, steering
+    /// with the mouse). None when not riding anything.
+    pub fn ride_context(&self) -> Option<(bool, bool)> {
+        match self.ride {
+            Some(Ride::Seat(_, SeatLook::Passenger)) => Some((false, false)),
+            Some(Ride::Seat(_, SeatLook::StrafeDriver)) => Some((true, false)),
+            Some(Ride::Seat(_, SeatLook::MouseDriver)) => Some((true, true)),
+            Some(Ride::Hull(_)) => Some((false, false)),
+            None => None,
+        }
+    }
     fn seat_look(&self) -> Option<SeatLook> {
         match self.ride {
             Some(Ride::Seat(_, look)) => Some(look),
@@ -643,6 +723,21 @@ impl Controls {
                     * Quat::from_rotation_x(self.pitch.clamped(-FRAC_PI_2, FRAC_PI_2))
             }
         })
+    }
+    /// Turn the look by a rule's `kick_view`: `yaw` to the right and `pitch`
+    /// up, in radians, and leave it turned. A corpse camera that holds still,
+    /// a spectator's orbit and a rider's seat look are not the holder's aim
+    /// and stay as they are.
+    pub fn kick_view(&mut self, yaw: f32, pitch: f32) {
+        if !(yaw.is_finite() && pitch.is_finite())
+            || self.death_view
+            || self.observer.is_some()
+            || self.seat_look().is_some()
+        {
+            return;
+        }
+        self.yaw = wrap(self.yaw + yaw);
+        self.pitch = (self.pitch + pitch).clamped(-FRAC_PI_2, FRAC_PI_2);
     }
     /// Take control of a turret looking along it: the look becomes the
     /// barrel's (`yaw`, `pitch`), as v20's control object hands the camera
@@ -1048,6 +1143,113 @@ impl Controls {
     }
     /// The field of view the host sets, or `None` for the player's own. It
     /// glides like any other FOV change.
+    /// A rule shakes the view alone (`camera_shake`); up to 8 run at once.
+    pub fn start_camera_shake(&mut self, translation: f32, rotation: f32, seconds: f32, hold: f32) {
+        if [translation, rotation, seconds, hold]
+            .iter()
+            .all(|v| v.is_finite())
+            && seconds > 0.0
+            && self.camera_shakes.len() < 8
+        {
+            self.camera_shakes.push(CameraShake {
+                translation: translation.clamped(0.0, 4.0),
+                rotation: rotation.clamped(0.0, 0.5),
+                seconds: seconds.clamped(0.05, 10.0),
+                hold: hold.clamped(1.0, 8.0),
+                left: seconds.clamped(0.05, 10.0),
+            });
+        }
+    }
+    /// Run the camera shakes for `seconds` and settle this frame's jitter.
+    pub fn advance_camera_shakes(&mut self, seconds: f32) {
+        let seconds = if seconds.is_finite() {
+            seconds.clamped(0.0, 0.25)
+        } else {
+            0.0
+        };
+        for shake in &mut self.camera_shakes {
+            shake.left -= seconds;
+        }
+        let mut jolt = CameraJolt::default();
+        let unit = |state: &mut u32| {
+            // xorshift32 to -1..1: the jitter is cosmetic, any stream will do.
+            *state ^= *state << 13;
+            *state ^= *state >> 17;
+            *state ^= *state << 5;
+            *state as f32 / u32::MAX as f32 * 2.0 - 1.0
+        };
+        if self.jolt_state == 0 {
+            self.jolt_state = 0x9e37_79b9;
+        }
+        for shake in &self.camera_shakes {
+            let share = shake.share();
+            if share <= 0.0 {
+                continue;
+            }
+            let (t, r) = (shake.translation * share, shake.rotation * share);
+            jolt.offset[0] += unit(&mut self.jolt_state) * t;
+            jolt.offset[1] += unit(&mut self.jolt_state) * t;
+            jolt.yaw += unit(&mut self.jolt_state) * r;
+            jolt.pitch += unit(&mut self.jolt_state) * r;
+            jolt.roll += unit(&mut self.jolt_state) * r;
+        }
+        self.camera_shakes.retain(|s| s.left > 0.0);
+        self.camera_jolt = jolt;
+    }
+    /// This frame's camera jitter, to move and turn the view by; none while
+    /// no shake runs.
+    pub fn camera_jolt(&self) -> CameraJolt {
+        self.camera_jolt
+    }
+    /// A rule kicks the aim (`view_shake`): see [`ViewShake`]. A new kick
+    /// replaces one still running.
+    pub fn start_view_shake(&mut self, direction: f32, min: f32, max: f32, rate: f32) {
+        if [direction, min, max, rate].iter().all(|v| v.is_finite()) {
+            self.view_shake = Some(ViewShake {
+                pitch: direction.cos(),
+                yaw: direction.sin(),
+                offset: 0.0,
+                min,
+                max,
+                rate,
+            });
+        }
+    }
+    /// Run the kick for `seconds`, turning the real look.
+    pub fn advance_view_shake(&mut self, seconds: f32) {
+        let Some(shake) = self.view_shake.as_mut() else {
+            return;
+        };
+        if !seconds.is_finite() || self.death_view {
+            return;
+        }
+        match shake.advance(seconds.min(0.1)) {
+            Some((pitch, yaw)) => {
+                self.pitch = (self.pitch + pitch).clamped(-FRAC_PI_2, FRAC_PI_2);
+                self.yaw += yaw;
+            }
+            None => self.view_shake = None,
+        }
+    }
+    /// Aiming with a [`bri_weapons::Breath`]: the sound to play when the
+    /// breath turns (out as the cycle goes negative, in as it comes back),
+    /// as `AGP_Pawn::BreatheCycle` plays `BreathOutSound` and
+    /// `BreathInSound` where its cycle crosses zero. The clock runs
+    /// whether or not the player aims.
+    pub fn advance_breath(&mut self, seconds: f32) -> Option<String> {
+        if !seconds.is_finite() {
+            return None;
+        }
+        self.breath_clock = (self.breath_clock + seconds.min(0.25)) % 3600.0;
+        let Some(breath) = self.aim_while_aiming().and_then(|a| a.breath.clone()) else {
+            self.breath_out = None;
+            return None;
+        };
+        let out = (self.breath_clock * std::f32::consts::TAU / breath.period).sin() < 0.0;
+        let turned = self.breath_out.is_some_and(|before| before != out);
+        self.breath_out = Some(out);
+        turned.then_some(if out { breath.exhale } else { breath.inhale })
+    }
     pub fn set_server_fov(&mut self, fov: Option<f32>) {
         self.server_fov = fov.filter(|f| f.is_finite()).map(|f| {
             f.clamped(
@@ -1101,6 +1303,13 @@ impl Controls {
                 && self.observer.is_none()
                 && (self.held(HeldControl::Zoom) || (a.on_jet && self.held(HeldControl::Jet)))
         })
+    }
+    /// Which of the aim's zoom steps is showing while aiming: 1 for the
+    /// aim's own field of view, 2 and up for each of its wheel `levels`; 0
+    /// when not aiming (a HUD marker for the scope's level).
+    pub fn zoom_level(&self) -> u32 {
+        self.aim_while_aiming()
+            .map_or(0, |_| self.aim_level as u32 + 1)
     }
     fn aim_while_aiming(&self) -> Option<&bri_weapons::Zoom> {
         self.aim.as_ref().filter(|_| self.aiming())
@@ -1262,6 +1471,16 @@ impl Controls {
             turned,
         );
     }
+    /// The body struck the ground going `speed` units a second downward:
+    /// the profile's landing dip, when it has one.
+    pub fn land_body_camera(&mut self, speed: f32) {
+        if !self.body_owns_view() {
+            return;
+        }
+        let scale = self.body_camera.scale.max(0.01);
+        let profile = self.body_camera.profile.clone();
+        self.body_camera.motion.land(&profile, speed / scale);
+    }
     /// Where the body moves the first-person camera from its eye, in the
     /// world, for a look heading `yaw`: the profile's `eye_offset` plus
     /// the bob. Zero for the stock camera and whenever the body does not
@@ -1322,7 +1541,12 @@ impl Controls {
     }
     fn target_fov(&self) -> f32 {
         if let Some(aim) = self.aim_while_aiming() {
-            aim.level_fov(self.aim_level)
+            let unzoomed = self.server_fov.unwrap_or_else(|| {
+                self.body_camera
+                    .profile
+                    .fov_for(self.normal_fov.unwrap_or(90.0))
+            });
+            aim.level_fov_from(self.aim_level, unzoomed)
                 .clamped(ZOOM_FOV_RANGE.0, ZOOM_FOV_RANGE.1)
         } else if self.held(HeldControl::Zoom) && (self.aim.is_none() || self.aim_state_allowed) {
             self.zoom_fov.unwrap_or(10.0)
@@ -2260,6 +2484,32 @@ mod tests {
             c.advance_view(1.0 / 60.0);
         }
     }
+    #[test]
+    fn a_magnified_aim_zooms_by_tangent_from_the_players_own_view() {
+        let mut zoom = scope();
+        zoom.magnification = Some(2.0);
+        for (normal, expected) in [(90.0_f32, 53.130_1), (70.0, 38.590_7)] {
+            let mut c = Controls::default();
+            c.set_fov_prefs(normal, 10.0);
+            held(&mut c, HeldControl::Jet, true);
+            c.set_aim_in_state(Some(zoom.clone()), Some("Ready"));
+            settle(&mut c);
+            assert!(
+                (c.fov() - expected).abs() < 0.01,
+                "{normal}: {} not {expected}",
+                c.fov()
+            );
+        }
+        // The wheel's further levels keep their own fixed fields of view.
+        let mut c = Controls::default();
+        held(&mut c, HeldControl::Jet, true);
+        c.set_aim_in_state(Some(zoom), Some("Ready"));
+        assert_eq!(c.zoom_level(), 1, "the scope's own step");
+        assert!(c.aim_wheel(1));
+        assert_eq!(c.zoom_level(), 2, "the wheel's step");
+        settle(&mut c);
+        assert!((c.fov() - 10.0).abs() < 0.01);
+    }
     fn restricted_scope() -> bri_weapons::Zoom {
         let mut profile = scope();
         profile.allowed_states = Some(vec!["Ready".into(), "Fire".into(), "WaitRelease".into()]);
@@ -2281,6 +2531,7 @@ mod tests {
             settle(&mut c);
             assert!(!c.aiming() && c.scope_overlay().is_none());
             assert!(!c.aim_hides_crosshair() && !c.aim_takes_wheel() && !c.aim_wheel(1));
+            assert_eq!(c.zoom_level(), 0, "no level while barred: {state}");
             assert_eq!(c.aim_sensitivity(), 1.0);
             assert_eq!(c.fov(), 90.0);
             assert!(c.third_person_view());
@@ -2515,5 +2766,153 @@ mod tests {
         held(&mut c, HeldControl::Jet, true);
         swayed(&mut c, 300);
         assert_eq!((c.yaw, c.pitch), (0.0, 0.0));
+    }
+}
+
+#[cfg(test)]
+mod camera_shake_tests {
+    use super::*;
+
+    #[test]
+    fn a_camera_shake_jitters_the_view_within_its_bounds_and_fades_without_touching_the_aim() {
+        let mut c = Controls::default();
+        let aim = (c.yaw, c.pitch);
+        c.start_camera_shake(0.4, 0.1, 1.0, 1.0);
+        let mut peak = 0.0f32;
+        let mut frames = 0;
+        while !c.camera_shakes.is_empty() && frames < 1000 {
+            c.advance_camera_shakes(1.0 / 120.0);
+            let j = c.camera_jolt();
+            assert!(
+                j.offset[0].abs() <= 0.4 && j.offset[1].abs() <= 0.4,
+                "{j:?}"
+            );
+            assert!(
+                j.yaw.abs() <= 0.1 && j.pitch.abs() <= 0.1 && j.roll.abs() <= 0.1,
+                "{j:?}"
+            );
+            peak = peak.max(j.offset[0].abs());
+            frames += 1;
+        }
+        assert!(peak > 0.01, "it moves the view");
+        assert!(
+            c.camera_shakes.is_empty() && frames >= 119,
+            "it ends after its second"
+        );
+        c.advance_camera_shakes(1.0 / 120.0);
+        assert_eq!(
+            c.camera_jolt(),
+            CameraJolt::default(),
+            "nothing left once it is over"
+        );
+        assert_eq!((c.yaw, c.pitch), aim, "the aim is not moved");
+    }
+
+    #[test]
+    fn broken_numbers_start_nothing_and_a_hold_keeps_the_shake_longer() {
+        let mut c = Controls::default();
+        c.start_camera_shake(f32::NAN, 0.1, 1.0, 1.0);
+        c.start_camera_shake(0.1, 0.1, 0.0, 1.0);
+        assert!(c.camera_shakes.is_empty());
+        let straight = CameraShake {
+            translation: 1.0,
+            rotation: 0.0,
+            seconds: 1.0,
+            hold: 1.0,
+            left: 0.5,
+        };
+        let held = CameraShake {
+            hold: 3.0,
+            ..straight
+        };
+        assert!((straight.share() - 0.5).abs() < 1e-6);
+        assert!((held.share() - 0.875).abs() < 1e-6);
+    }
+}
+
+#[cfg(test)]
+mod view_shake_tests {
+    use super::*;
+
+    #[test]
+    fn a_view_shake_goes_out_to_its_peak_comes_back_slower_and_leaves_the_minimum() {
+        let mut c = Controls::default();
+        c.start_view_shake(0.0, 0.04, 0.3, 4.0);
+        let mut peak = 0.0f32;
+        let mut steps = 0;
+        while c.view_shake.is_some() && steps < 10_000 {
+            c.advance_view_shake(1.0 / 120.0);
+            peak = peak.max(c.pitch);
+            steps += 1;
+        }
+        assert!(c.view_shake.is_none(), "it ends");
+        assert!(
+            (0.3..0.4).contains(&peak),
+            "out to about the peak, not past a frame's step: {peak}"
+        );
+        assert!(
+            (0.03..0.1).contains(&c.pitch),
+            "the aim is left off by about the minimum: {}",
+            c.pitch
+        );
+        assert!(c.yaw.abs() < 1e-6, "direction 0 turns pitch only");
+    }
+
+    #[test]
+    fn a_sideways_shake_turns_the_yaw() {
+        let mut c = Controls::default();
+        c.start_view_shake(std::f32::consts::FRAC_PI_2, 0.0, 0.2, 4.0);
+        for _ in 0..600 {
+            c.advance_view_shake(1.0 / 120.0);
+        }
+        assert!(
+            c.yaw.abs() < 0.02 && c.pitch.abs() < 0.02,
+            "back to where it was with min 0"
+        );
+    }
+}
+
+#[cfg(test)]
+mod breath_tests {
+    use super::*;
+
+    fn scoped() -> Controls {
+        let mut c = Controls::default();
+        let zoom: bri_weapons::Zoom = serde_json::from_value(serde_json::json!({
+            "fov": 40.0,
+            "breath": { "exhale": "t:out", "inhale": "t:in", "period": 4.0 }
+        }))
+        .expect("zoom");
+        c.set_aim_in_state(Some(zoom), None);
+        c
+    }
+
+    #[test]
+    fn breath_alternates_each_half_period_only_while_aiming() {
+        let mut c = scoped();
+        // Not aiming: nothing, however long.
+        for _ in 0..600 {
+            assert!(c.advance_breath(1.0 / 60.0).is_none());
+        }
+        c.action(&GameAction::Held {
+            control: HeldControl::Zoom,
+            down: true,
+        });
+        let mut heard = vec![];
+        for _ in 0..(60 * 10) {
+            heard.extend(c.advance_breath(1.0 / 60.0));
+        }
+        assert!(
+            heard.windows(2).all(|w| w[0] != w[1]),
+            "out and in alternate: {heard:?}"
+        );
+        assert!(
+            (4..=6).contains(&heard.len()),
+            "a turn every two seconds: {heard:?}"
+        );
+        c.let_go(HeldControl::Zoom);
+        for _ in 0..600 {
+            assert!(c.advance_breath(1.0 / 60.0).is_none(), "stops with the aim");
+        }
     }
 }

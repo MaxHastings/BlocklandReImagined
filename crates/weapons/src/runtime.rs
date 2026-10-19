@@ -52,6 +52,20 @@ pub fn blast_falloff(distance: f32, radius: f32) -> f32 {
     }
 }
 
+/// The share of a blast's damage reaching `distance` when it holds out to
+/// `core`, then falls straight to `edge` (a share of the damage) at `radius`
+/// and stops there ([`crate::Explosion::core_radius`]).
+pub fn linear_blast(distance: f32, radius: f32, core: f32, edge: f32) -> f32 {
+    if radius.is_nan() || radius <= 0.0 || distance > radius {
+        return 0.0;
+    }
+    let core = core.clamped(0.0, radius);
+    if distance <= core || radius <= core {
+        return 1.0;
+    }
+    1.0 + (edge.clamped(0.0, 1.0) - 1.0) * (distance - core) / (radius - core)
+}
+
 /// What a projectile does on its own clock at `age` ticks, before it
 /// moves: `Some(true)` goes off (its cooked `fuse` ran out, or its life
 /// ended with `explode_death`), `Some(false)` fades at the end of its life,
@@ -513,6 +527,17 @@ pub enum Event {
         position: Vec3,
         velocity: Vec3,
     },
+    /// A projectile with a `decal` went off in the air or by its fuse and
+    /// the surface below it (within the blast's reach) takes its mark: a
+    /// grenade's scorch. One that hit a surface leaves its mark with its
+    /// contact instead.
+    Mark {
+        projectile: String,
+        position: Vec3,
+        normal: Vec3,
+        target: TargetId,
+        scale: f32,
+    },
     Damage {
         source: ActorId,
         target: TargetId,
@@ -650,6 +675,8 @@ pub enum Event {
         source: ActorId,
         position: Vec3,
         radius: f32,
+        /// The exploding projectile's definition id.
+        projectile: String,
     },
     Diagnostic {
         actor: Option<ActorId>,
@@ -681,6 +708,9 @@ pub struct Projectile {
     /// Bounces so far, for `max_bounces`. Host bookkeeping, not replicated.
     #[serde(skip)]
     pub bounces: u32,
+    /// The age its [`crate::Fuse`] started burning at. Host bookkeeping.
+    #[serde(skip)]
+    pub fuse_started: Option<u32>,
     /// The runtime tick it was made on; `children` and `aura` count from it.
     /// Host bookkeeping, not replicated.
     #[serde(skip)]
@@ -705,6 +735,8 @@ impl Attached {
 pub fn attach_frame(feet: Vec3, yaw: f32) -> (Vec3, Quat) {
     (feet, Quat::from_rotation_y(-yaw))
 }
+/// How far below a bursting projectile a surface still takes its mark, units.
+const MARK_REACH: f32 = 6.0;
 /// Vertical speed a projectile loses each tick of flight (`gravityMod`);
 /// none unless it is ballistic.
 pub fn fall_per_tick(d: &crate::ProjectileDef) -> f32 {
@@ -782,6 +814,9 @@ impl Default for DropLook {
 fn loaded() -> bool {
     true
 }
+fn one_scale() -> f32 {
+    1.0
+}
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct Equipped {
     #[serde(default)]
@@ -800,6 +835,10 @@ struct Equipped {
     /// The key its magazine's rounds are kept under, fixed as it mounts.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     magazine: Option<String>,
+    /// Ticks until the state's idle fidget ([`crate::State::fidget`]), drawn
+    /// as the state is entered.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    fidget: Option<u32>,
 }
 /// Torque's `nextImage`: a right-hand image asked for while the held one's
 /// state forbids image changes. It mounts on the next state that allows one.
@@ -818,6 +857,9 @@ pub struct Actor {
     pub selected: Option<usize>,
     pub frame: Frame,
     pub ammo: bool,
+    /// How much of its spread a shot keeps (`set_aim_scale`): 1 all of it.
+    #[serde(default = "one_scale")]
+    pub aim_scale: f32,
     /// Whether the image in hand is loaded (`setImageLoaded`), which its
     /// states' `loaded` and `not_loaded` transitions read.
     #[serde(default = "loaded")]
@@ -835,6 +877,9 @@ pub struct Actor {
     #[serde(default)]
     next: Option<NextImage>,
     last_shot: Option<u64>,
+    /// The holder's firing error, 0 to 1 ([`crate::ShotError`]).
+    #[serde(default)]
+    error: f32,
     /// The palette colour the holder last picked for their spray can,
     /// which `paint_tint` images take.
     #[serde(default)]
@@ -853,6 +898,10 @@ pub struct Actor {
     reserve: BTreeMap<String, Reserve>,
     #[serde(default)]
     reload: Option<Reload>,
+    /// The tick each cooling magazine ([`crate::Magazine::cool_ticks`]) next
+    /// gets a round back, by [`slot_key`]. Host bookkeeping, not replicated.
+    #[serde(skip)]
+    cool_at: BTreeMap<String, u64>,
     /// The grenade whose fuse is burning in the hand ([`crate::Cook`]).
     #[serde(default)]
     cook: Option<Cooking>,
@@ -1101,6 +1150,9 @@ pub struct WeaponsWorld {
     /// Projectiles that go off at this age, before their lifetime: a cooked
     /// grenade's fuse, a cluster's bomblets ([`crate::Children::fuse_ticks`]).
     fuses: BTreeMap<u64, u32>,
+    /// What each homing projectile ([`crate::ProjectileDef::homing`]) turns
+    /// toward: picked on its first tick, None when nothing was in reach.
+    homed: BTreeMap<u64, Option<TargetId>>,
     /// The tick each projectile last played its collision sound
     /// ([`crate::CollisionSound::gap_ticks`]).
     sounded: BTreeMap<u64, u64>,
@@ -1371,6 +1423,7 @@ impl WeaponsWorld {
             events: vec![],
             explosions: vec![],
             fuses: BTreeMap::new(),
+            homed: BTreeMap::new(),
             sounded: BTreeMap::new(),
             reflected: BTreeMap::new(),
             stopped: vec![],
@@ -1516,7 +1569,9 @@ impl WeaponsWorld {
                 images: Default::default(),
                 trigger: false,
                 next: None,
+                aim_scale: 1.0,
                 last_shot: None,
+                error: 0.0,
                 spray: 0,
                 ball_ready: 0,
                 spawn_tick: self.tick,
@@ -1524,6 +1579,7 @@ impl WeaponsWorld {
                 rounds: BTreeMap::new(),
                 reserve: BTreeMap::new(),
                 reload: None,
+                cool_at: BTreeMap::new(),
                 cook: None,
                 cues: Vec::new(),
                 emote: None,
@@ -1597,6 +1653,12 @@ impl WeaponsWorld {
     }
     pub fn set_ammo(&mut self, id: ActorId, ammo: bool) -> Result<()> {
         self.actors.get_mut(&id).context("Unknown actor")?.ammo = ammo;
+        Ok(())
+    }
+    /// Scale the random spread of this actor's shots (`set_aim_scale`).
+    pub fn set_aim_scale(&mut self, id: ActorId, scale: f32) -> Result<()> {
+        ensure!(scale.is_finite() && scale >= 0.0, "Invalid aim scale");
+        self.actors.get_mut(&id).context("Unknown actor")?.aim_scale = scale;
         Ok(())
     }
     pub fn set_loaded(&mut self, id: ActorId, loaded: bool) -> Result<()> {
@@ -1983,6 +2045,23 @@ impl WeaponsWorld {
             return false;
         }
         let scripted = magazine.scripted();
+        // Started with nothing loaded, a gun may reload another way.
+        let empty = rounds == 0;
+        let ticks = if empty && magazine.empty_reload_ticks > 0 {
+            magazine.empty_reload_ticks
+        } else {
+            magazine.reload_ticks
+        };
+        let image_sequence = if empty && !magazine.empty_reload_image_sequence.is_empty() {
+            &magazine.empty_reload_image_sequence
+        } else {
+            &magazine.reload_image_sequence
+        };
+        let sound = if empty && !magazine.empty_reload_sound.is_empty() {
+            &magazine.empty_reload_sound
+        } else {
+            &magazine.reload_sound
+        };
         if scripted
             && !magazine.light_states.is_empty()
             && !a.images[0]
@@ -2003,7 +2082,7 @@ impl WeaponsWorld {
             done: if scripted {
                 u64::MAX
             } else {
-                self.tick + u64::from(magazine.reload_ticks)
+                self.tick + u64::from(ticks)
             },
         });
         if let Some(image) = a.images[0].as_ref().map(|e| e.image.clone()) {
@@ -2015,24 +2094,48 @@ impl WeaponsWorld {
         if !magazine.reload_sequence.is_empty() {
             self.animation(id, a, None, &magazine.reload_sequence);
         }
-        if !magazine.reload_image_sequence.is_empty() {
+        if !image_sequence.is_empty() {
             self.emit_animation(
                 id,
                 0,
-                magazine.reload_image_sequence.clone(),
+                image_sequence.clone(),
                 Some(0),
                 Some(self.animation_binding(a, None)),
             );
         }
-        if !magazine.reload_sound.is_empty() {
+        if !sound.is_empty() {
             self.events.push(Event::Sound {
                 source: TargetId::Actor(id),
-                profile: magazine.reload_sound.clone(),
+                profile: sound.clone(),
                 position: a.frame.position,
             });
         }
         self.events.push(Event::Ammo { actor: id });
         true
+    }
+    /// A held gun whose rounds are heat ([`crate::Magazine::cool_ticks`])
+    /// gets one back each time its cooling comes due, while it is neither
+    /// full nor empty (an empty one vents by reloading).
+    fn cool_magazine(&mut self, id: ActorId, a: &mut Actor) {
+        let Some((key, magazine)) = self.magazine_of(a).filter(|(_, m)| m.cool_ticks > 0) else {
+            a.cool_at.clear();
+            return;
+        };
+        let rounds = a.rounds.get(&key).copied().unwrap_or(0);
+        if a.reload.is_some() || rounds == 0 || rounds >= magazine.size {
+            a.cool_at.remove(&key);
+            return;
+        }
+        let due = *a
+            .cool_at
+            .entry(key.clone())
+            .or_insert(self.tick + u64::from(magazine.cool_ticks));
+        if self.tick >= due {
+            a.rounds.insert(key.clone(), rounds + 1);
+            a.cool_at
+                .insert(key, self.tick + u64::from(magazine.cool_ticks));
+            self.events.push(Event::Ammo { actor: id });
+        }
     }
     /// A reload whose time is up moves its rounds: all it can, or one and
     /// the next one's wait.
@@ -2471,6 +2574,7 @@ impl WeaponsWorld {
             hand: EMOTE_SLOT,
             paint: None,
             magazine: None,
+            fidget: None,
         });
         if let Some(command) = self.pack.images[image].commands.mount.clone() {
             self.events.push(Event::ToolFire {
@@ -2641,6 +2745,7 @@ impl WeaponsWorld {
                 hand,
                 paint: None,
                 magazine,
+                fidget: None,
             });
             if self
                 .pack
@@ -3058,6 +3163,7 @@ impl WeaponsWorld {
                 paint: None,
                 heading: None,
                 bounces: 0,
+                fuse_started: None,
                 spawned: self.tick,
             },
         );
@@ -3069,6 +3175,23 @@ impl WeaponsWorld {
             velocity,
         });
         Ok(id)
+    }
+    /// A projectile that has already lived `age` ticks (a grenade whose fuse
+    /// was lit in the hand): its life counts on from there, short of its
+    /// last tick.
+    pub fn set_age(&mut self, id: u64, age: u32) {
+        let lifetime = |p: &Projectile| {
+            self.pack
+                .projectiles
+                .get(&p.definition)
+                .map_or(0, |d| d.lifetime_ticks)
+        };
+        if let Some(p) = self.projectiles.get(&id) {
+            let limit = lifetime(p).saturating_sub(1);
+            if let Some(p) = self.projectiles.get_mut(&id) {
+                p.age = age.min(limit);
+            }
+        }
     }
     /// `fxDTSBrick::spawnExplosion`: a projectile made where it is and
     /// exploded at once (`%p.explode()`), without flying or becoming a live
@@ -3114,6 +3237,7 @@ impl WeaponsWorld {
             paint: None,
             heading: None,
             bounces: 0,
+            fuse_started: None,
             spawned: self.tick,
         });
         Ok(())
@@ -3134,6 +3258,7 @@ impl WeaponsWorld {
         for id in ids {
             let mut a = self.actors.remove(&id).unwrap();
             self.finish_reload(id, &mut a);
+            self.cool_magazine(id, &mut a);
             self.burn_fuse(id, &mut a);
             self.play_cues(id, &mut a);
             // v20 `Player::updateMove` sets image slot 1's trigger from move
@@ -3167,6 +3292,22 @@ impl WeaponsWorld {
                     break;
                 }
             }
+            // The firing error of the gun in hand rises while its trigger is
+            // held or it is recovering from a shot, and settles otherwise.
+            let error = a.images[0]
+                .as_ref()
+                .and_then(|e| self.pack.images.get(&e.image))
+                .and_then(|image| image.shot.as_ref())
+                .and_then(|shot| shot.error);
+            a.error = match error {
+                Some(error) => {
+                    let recovering = a
+                        .last_shot
+                        .is_some_and(|t| self.tick < t + u64::from(error.recover_ticks));
+                    error.step(a.error, a.trigger || recovering)
+                }
+                None => 0.0,
+            };
             if let Some(mut e) = a.emote.take()
                 && self.advance_emote(id, &mut e)
             {
@@ -3186,6 +3327,10 @@ impl WeaponsWorld {
         if !self.fuses.is_empty() {
             let live = &self.projectiles;
             self.fuses.retain(|id, _| live.contains_key(id));
+        }
+        if !self.homed.is_empty() {
+            let live = &self.projectiles;
+            self.homed.retain(|id, _| live.contains_key(id));
         }
         if !self.reflected.is_empty() {
             let live = &self.projectiles;
@@ -3313,6 +3458,9 @@ impl WeaponsWorld {
         if e.entered && e.remaining > 0 {
             e.remaining -= 1;
         }
+        if let Some(wait) = e.fidget.as_mut() {
+            *wait = wait.saturating_sub(1);
+        }
         // The state the image just left, for `arm_once`.
         let mut left = None;
         for _ in 0..16 {
@@ -3328,6 +3476,9 @@ impl WeaponsWorld {
                     return Advance::Switch;
                 }
                 e.entered = true;
+                e.fidget = state
+                    .fidget
+                    .map(|f| fidget_wait(self.tick, id.0, e.state as u64, &f));
                 e.remaining = if self_loop {
                     ((state.emitter_seconds * TICK_HZ as f32).ceil() as u32).max(1)
                 } else {
@@ -3508,6 +3659,18 @@ impl WeaponsWorld {
                 state.timeout
             } else {
                 None
+            });
+            // The fidget: when its wait is over, go there, or draw again.
+            let next = next.or_else(|| match (state.fidget, e.fidget) {
+                (Some(f), Some(0)) => {
+                    if unit_random(self.tick, id.0, FIDGET_SKIP + e.state as u64) < f.skip {
+                        e.fidget = Some(fidget_wait(self.tick, id.0, e.state as u64 + 64, &f));
+                        None
+                    } else {
+                        Some(f.to)
+                    }
+                }
+                _ => None,
             });
             let Some(next) = next else {
                 return Advance::Keep;
@@ -3955,7 +4118,10 @@ impl WeaponsWorld {
                 }
                 let pace = a.frame.velocity.length();
                 let footing = a.frame.grounded || a.frame.mount != Mount::None;
-                let spread = shot.spread_in(pace, idle_ticks, a.frame.crouched, footing);
+                let spread = match shot.error {
+                    Some(error) => error.spread(a.error),
+                    None => shot.spread_in(pace, idle_ticks, a.frame.crouched, footing),
+                } * a.aim_scale;
                 let kick = shot.recoil_velocity(direction);
                 if kick != Vec3::ZERO {
                     // Recoil lands before the projectiles, which inherit it.
@@ -4224,6 +4390,54 @@ impl WeaponsWorld {
         }
         .filter(|(at, turn)| at.is_finite() && turn.is_finite())
     }
+    /// Turn a homing projectile toward its target by this tick's share of
+    /// its turn rate, picking the target on its first tick.
+    fn steer(&mut self, p: &mut Projectile, homing: crate::Homing, q: &mut impl Query) {
+        let heading = p.velocity.normalize_or_zero();
+        if heading == Vec3::ZERO {
+            return;
+        }
+        let target = match self.homed.get(&p.id) {
+            Some(target) => *target,
+            None => {
+                let picked = q
+                    .radius(p.position, homing.range, 32)
+                    .into_iter()
+                    .filter(|n| {
+                        matches!(n.target, TargetId::Actor(_) | TargetId::Vehicle(_))
+                            && n.target != TargetId::Actor(p.source)
+                            && q.can_affect(p.source, n.target)
+                            && n.center.is_finite()
+                            && heading.angle_between((n.center - p.position).normalize_or_zero())
+                                <= homing.angle
+                    })
+                    .min_by(|a, b| a.distance.total_cmp(&b.distance))
+                    .map(|n| n.target);
+                self.homed.insert(p.id, picked);
+                picked
+            }
+        };
+        let aim = match target {
+            Some(TargetId::Actor(id)) => self.actors.get(&id).map(|a| {
+                a.frame
+                    .middle
+                    .unwrap_or(a.frame.position + Vec3::Y * a.frame.scale)
+            }),
+            Some(TargetId::Vehicle(id)) => q.vehicle_frame(id).map(|(at, _)| at),
+            _ => None,
+        };
+        let Some(aim) = aim.filter(|a| a.is_finite()) else {
+            return;
+        };
+        let want = (aim - p.position).normalize_or_zero();
+        let angle = heading.angle_between(want);
+        let axis = heading.cross(want);
+        if want == Vec3::ZERO || angle < 1e-5 || axis.length_squared() < 1e-12 {
+            return;
+        }
+        let turn = angle.min(homing.turn_rate / 120.0);
+        p.velocity = Quat::from_axis_angle(axis.normalize(), turn) * p.velocity;
+    }
     /// One tick of a projectile's flight. [`coast`] is the same motion when
     /// it hits nothing.
     fn projectile_step(&mut self, p: &mut Projectile, q: &mut impl Query) -> bool {
@@ -4236,6 +4450,13 @@ impl WeaponsWorld {
                 // Its target is gone: it stays where it was last.
                 None => p.stuck_to = None,
             }
+        }
+        if let Some(fuse) = &d.fuse
+            && p.fuse_started.is_some_and(|at| p.age >= at + fuse.ticks)
+            && p.age >= fuse.not_before_ticks
+        {
+            self.explode(p, d, q, None, None, None);
+            return false;
         }
         if let Some(bursts) = expires(d, p.age, self.fuses.get(&p.id).copied()) {
             if bursts {
@@ -4266,6 +4487,9 @@ impl WeaponsWorld {
             return true;
         }
         p.velocity.y -= fall_per_tick(d);
+        if let Some(homing) = d.homing {
+            self.steer(p, homing, q);
+        }
         let mut remaining = 1.0 / 120.0;
         for _ in 0..4 {
             let end = p.position + p.velocity * remaining;
@@ -4294,6 +4518,15 @@ impl WeaponsWorld {
                 p.position = end;
                 return true;
             };
+            // A projectile that passes its shooter's body goes on through it.
+            if d.pass_source && hit.target == TargetId::Actor(p.source) {
+                let ahead = (end - p.position).normalize_or_zero();
+                if hit.fraction.is_finite() && ahead != Vec3::ZERO {
+                    p.position = hit.position + ahead * PAST;
+                    remaining *= (1.0 - hit.fraction).max(0.0);
+                    continue;
+                }
+            }
             if !hit.position.is_finite()
                 || !hit.normal.is_finite()
                 || hit.normal.length_squared() < 0.1
@@ -4403,6 +4636,7 @@ impl WeaponsWorld {
             } else {
                 rebound(d, p.velocity, normal, p.bounces)
             };
+            let bounce_effect: Option<String>;
             let (velocity, last) = match rebounded {
                 Rebound::Stuck => {
                     if sticks && let Some((at, turn)) = self.target_frame(q, hit.target) {
@@ -4416,14 +4650,36 @@ impl WeaponsWorld {
                     p.heading = p.velocity.try_normalize();
                     p.velocity = Vec3::ZERO;
                     self.effect(p, &d.stick_effect, Some(normal), contact_geometry);
+                    self.start_fuse(p, d, true, normal, contact_geometry);
                     return true;
                 }
-                Rebound::Bounced { velocity, bursts } => (velocity, bursts),
+                Rebound::Bounced { velocity, bursts } => {
+                    // What this kind of surface keeps of the bounce, and the
+                    // sound it makes.
+                    let kind = q
+                        .surface_kind(hit.target, p.position, normal)
+                        .map(str::to_owned);
+                    let keeps = kind
+                        .as_ref()
+                        .and_then(|kind| d.elasticity_surfaces.get(kind))
+                        .copied()
+                        .unwrap_or(1.0);
+                    bounce_effect = kind
+                        .as_ref()
+                        .and_then(|kind| d.bounce_surfaces.get(kind))
+                        .cloned();
+                    (velocity * keeps, bursts)
+                }
             };
-            p.velocity = velocity;
+            // A bounce that would leave it under `settle_speed` stops it: no effect, sound or on-bounce children,
+            // so a grenade lying on the floor is not an impact every tick (`ThrowWeaponPickup.HitWall`).
+            let settled = d.settle_speed > 0.0 && velocity.length() < d.settle_speed;
+            p.velocity = if settled { Vec3::ZERO } else { velocity };
             p.position += normal * 0.001;
             p.bounced = true;
             p.bounces += 1;
+            let at_rest = d.rest_speed > 0.0 && p.velocity.length() < d.rest_speed;
+            self.start_fuse(p, d, at_rest, normal, contact_geometry);
             if last {
                 self.explode(p, d, q, Some(normal), Some(hit.target), contact_geometry);
                 return false;
@@ -4433,9 +4689,16 @@ impl WeaponsWorld {
                 position: p.position,
                 velocity: p.velocity,
             });
-            self.effect(p, &d.bounce_effect, Some(normal), contact_geometry);
-            for (set, c) in d.children.iter().enumerate().filter(|(_, c)| c.on_bounce) {
-                self.children(p, c, set);
+            if !settled {
+                self.effect(
+                    p,
+                    bounce_effect.as_deref().unwrap_or(&d.bounce_effect),
+                    Some(normal),
+                    contact_geometry,
+                );
+                for (set, c) in d.children.iter().enumerate().filter(|(_, c)| c.on_bounce) {
+                    self.children(p, c, set);
+                }
             }
             // `onRest`: at rest it is the item that holds its ball's image.
             if let Some(item) = d
@@ -4501,6 +4764,26 @@ impl WeaponsWorld {
         true
     }
     /// An explosion's composite plus its `soundProfile`, both at the projectile.
+    /// Starts the projectile's [`crate::Fuse`] if this is the moment it waits
+    /// for: any bounce for `Bounce`, a still projectile (`at_rest`) for
+    /// `Rest`.
+    fn start_fuse(
+        &mut self,
+        p: &mut Projectile,
+        d: &ProjectileDef,
+        at_rest: bool,
+        normal: Vec3,
+        contact: Option<ContactGeometry>,
+    ) {
+        let Some(fuse) = &d.fuse else { return };
+        if p.fuse_started.is_some() {
+            return;
+        }
+        if fuse.start == FuseStart::Bounce || at_rest {
+            p.fuse_started = Some(p.age);
+            self.effect(p, &fuse.effect, Some(normal), contact);
+        }
+    }
     fn effect(
         &mut self,
         p: &Projectile,
@@ -4508,10 +4791,17 @@ impl WeaponsWorld {
         direction: Option<Vec3>,
         contact: Option<ContactGeometry>,
     ) {
+        // An explosion is keyed by its symbol; an Add-On's effect reference is its full id
+        // (`pack:explosion/name`), which names the same one.
         if let Some(sound) = self
             .pack
             .explosions
             .get(&definition.to_ascii_lowercase())
+            .or_else(|| {
+                self.pack
+                    .explosions
+                    .get(&crate::effect_symbol(definition).to_ascii_lowercase())
+            })
             .map(|e| e.sound.clone())
             .filter(|s| !s.is_empty())
         {
@@ -4583,7 +4873,12 @@ impl WeaponsWorld {
             self.events.push(Event::Damage {
                 source: p.source,
                 target,
-                amount: d.damage.clamped(0.0, 100.0)
+                amount: d
+                    .falloff
+                    .map_or(d.damage, |f| {
+                        f.damage_at(d.damage, p.origin.distance(position))
+                    })
+                    .clamped(0.0, 100.0)
                     * if d.fixed_damage { 1.0 } else { p.scale }
                     * hurt,
                 kind: d.damage_type.clone(),
@@ -4931,6 +5226,7 @@ impl WeaponsWorld {
             paint: None,
             heading: None,
             bounces: landing,
+            fuse_started: None,
             spawned: self.tick,
         };
         let contact = ProjectileContact {
@@ -5164,6 +5460,29 @@ impl WeaponsWorld {
             .unwrap_or(&d.explosion.effect)
             .to_owned();
         self.effect(p, &effect, direction, contact);
+        if d.decal.is_some() && direction.is_none() {
+            let reach = (d.explosion.radius.max(1.0) * p.scale).min(MARK_REACH);
+            if let Some(hit) = q.sweep(
+                p.position + Vec3::Y * 0.25,
+                p.position - Vec3::Y * reach,
+                Filter {
+                    projectile_age_ticks: None,
+                    source: p.source,
+                    players: false,
+                    world_only: true,
+                },
+            ) && matches!(hit.target, TargetId::Map(_) | TargetId::Brick(_))
+                && hit.normal.is_normalized()
+            {
+                self.events.push(Event::Mark {
+                    projectile: p.definition.clone(),
+                    position: hit.position,
+                    normal: hit.normal,
+                    target: hit.target,
+                    scale: p.scale,
+                });
+            }
+        }
         for (set, c) in d.children.iter().enumerate().filter(|(_, c)| c.on_explode) {
             self.children(p, c, set);
         }
@@ -5183,6 +5502,7 @@ impl WeaponsWorld {
             source: p.source,
             position: p.position,
             radius,
+            projectile: p.definition.clone(),
         });
         let targets = q.radius(p.position, radius, MAX_QUERY_TARGETS);
         if targets.len() > MAX_QUERY_TARGETS {
@@ -5206,7 +5526,16 @@ impl WeaponsWorld {
                 .iter()
                 .find(|(id, holder, _)| *id == p.id && target.target == TargetId::Actor(*holder))
                 .map(|(.., push)| *push);
-            let damage_factor = falloff(distance, d.explosion.radius * p.scale);
+            let damage_factor = if d.explosion.edge_damage > 0.0 {
+                linear_blast(
+                    distance,
+                    d.explosion.radius * p.scale,
+                    d.explosion.core_radius * p.scale,
+                    d.explosion.edge_damage,
+                )
+            } else {
+                falloff(distance, d.explosion.radius * p.scale)
+            };
             if damage_factor > 0.0 && d.explosion.damage > 0.0 && spared.is_none() {
                 self.events.push(Event::Damage {
                     source: p.source,
@@ -5382,6 +5711,15 @@ fn guard_held<'a>(
 fn body(a: &Actor) -> Vec3 {
     a.frame.middle.unwrap_or(a.frame.eye)
 }
+/// [`unit_random`]'s `n` for whether an idle fidget is skipped, and for its wait.
+const FIDGET_SKIP: u64 = 7000;
+const FIDGET_WAIT: u64 = 7100;
+/// Ticks of an idle fidget's wait, drawn from its range.
+fn fidget_wait(tick: u64, actor: u64, salt: u64, fidget: &crate::Fidget) -> u32 {
+    let [low, high] = fidget.seconds;
+    let seconds = low + (high - low) * unit_random(tick, actor, FIDGET_WAIT + salt);
+    ((seconds * TICK_HZ as f32).round() as u32).max(1)
+}
 fn unit_random(tick: u64, actor: u64, n: u64) -> f32 {
     let mut z = tick
         .wrapping_mul(0x9E37_79B9_7F4A_7C15)
@@ -5391,4 +5729,24 @@ fn unit_random(tick: u64, actor: u64, n: u64) -> f32 {
     z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
     z ^= z >> 31;
     (z >> 40) as f32 / (1u64 << 24) as f32
+}
+
+#[cfg(test)]
+mod linear_blast_tests {
+    use super::linear_blast;
+
+    #[test]
+    fn a_blast_holds_to_its_core_then_falls_in_a_line_to_its_edge_and_stops() {
+        // Halo's frag: 120 within 0.4 world units, 80 at 2.5 (a 2/3 share).
+        let (radius, core, edge) = (10.3, 1.648, 80.0 / 120.0);
+        assert_eq!(linear_blast(0.0, radius, core, edge), 1.0);
+        assert_eq!(linear_blast(1.648, radius, core, edge), 1.0);
+        let halfway = 1.648 + (10.3 - 1.648) / 2.0;
+        assert!((linear_blast(halfway, radius, core, edge) - (1.0 + edge) / 2.0).abs() < 1e-5);
+        assert!((linear_blast(10.3, radius, core, edge) - edge).abs() < 1e-5);
+        assert_eq!(linear_blast(10.31, radius, core, edge), 0.0);
+        assert_eq!(linear_blast(1.0, 0.0, core, edge), 0.0);
+        // A core wider than the radius is the radius.
+        assert_eq!(linear_blast(5.0, 5.0, 9.0, edge), 1.0);
+    }
 }

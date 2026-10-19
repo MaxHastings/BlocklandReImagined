@@ -2,6 +2,41 @@
 use super::*;
 
 impl App {
+    /// Opt into one current render observation, never a history. Off by default;
+    /// every toggle drops any retained snapshot, including its cloned buffers.
+    pub fn set_weapon_frame_probe(&mut self, on: bool) {
+        self.fx.weapon_frame_probe = on;
+        self.fx.weapon_frame_observation = None;
+    }
+    /// Last successful render attempt's actual prepared weapon inputs. The
+    /// camera and weapon snapshot come from that render, not a probe resample.
+    /// Prebudget data alone proves neither GPU submission nor visible pixels.
+    pub fn weapon_frame_observation(
+        &self,
+    ) -> Option<&crate::weapon_effects::WeaponFrameObservation> {
+        self.fx.weapon_frame_observation.as_ref().filter(|o| {
+            self.fx.weapon_frame_probe
+                && o.session == self.fx.weapon_effect_session
+                && self
+                    .net
+                    .attempt
+                    .as_ref()
+                    .filter(|a| a.entered)
+                    .is_some_and(|a| o.session == Some(a.id))
+        })
+    }
+    /// Exact current mounted-image inputs with the same current-image guard as
+    /// the live node resolver; no pose reconstruction or time advancement.
+    pub fn mounted_image_observation(
+        &self,
+        owner: u64,
+        hand: u8,
+        image: &str,
+    ) -> Option<crate::world_items::MountedImageObservation> {
+        self.world_items
+            .mounted_image_observation(owner, hand, image)
+    }
+
     /// Whether the world's pipelines have compiled, so entering a game or
     /// a new map draws it at once instead of stalling the window on the
     /// compile. Without a GPU (headless) there is nothing to wait for.

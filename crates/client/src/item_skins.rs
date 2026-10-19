@@ -88,6 +88,8 @@ pub struct ItemSkins {
     /// This frame's draws: the player's view, then mirrors'.
     frames: [Frame; 2],
     renderers: Option<[LayerRenderer; 2]>,
+    local_frames: Vec<Frame>,
+    local_renderers: Vec<LayerRenderer>,
 }
 
 impl Default for ItemSkins {
@@ -105,6 +107,8 @@ impl Default for ItemSkins {
             meshes: BTreeMap::new(),
             frames: Default::default(),
             renderers: None,
+            local_frames: Vec::new(),
+            local_renderers: Vec::new(),
         }
     }
 }
@@ -233,10 +237,16 @@ impl ItemSkins {
         {
             *self = Self::build(items.assets().clone());
         }
+        self.local_frames.clear();
         if self.materials.is_empty() {
             return;
         }
-        let copies = items.skinned().to_vec();
+        let copies: Vec<_> = items
+            .skinned()
+            .iter()
+            .filter(|c| !items.is_local_view_copy(c))
+            .cloned()
+            .collect();
         self.frame(&copies, trusted, light, |model| items.addon_mesh(model));
         if self.source.stopped.is_some() {
             return;
@@ -273,6 +283,115 @@ impl ItemSkins {
         }
     }
 
+    /// A bounded current local image's own skin layer and exact camera.
+    #[allow(clippy::too_many_arguments)]
+    pub fn prepare_local_view(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        color: wgpu::TextureFormat,
+        depth: wgpu::TextureFormat,
+        samples: u32,
+        items: &mut WorldItems,
+        trusted: bool,
+        light: Light,
+        index: usize,
+        affinity: &bri_fx_runtime::LocalViewAffinity,
+        view_projection: Mat4,
+        eye: Vec3,
+        size: [u32; 2],
+        time: f32,
+        horizontal_fov: f32,
+    ) {
+        if index >= bri_weapons::IMAGE_SLOTS || self.materials.is_empty() {
+            return;
+        }
+        let copies: Vec<_> = items
+            .skinned()
+            .iter()
+            .filter(|copy| {
+                copy.first_person
+                    && !copy.reflected
+                    && copy.image == affinity.image
+                    && copy.identity == ItemIdentity::Mounted(affinity.owner, affinity.slot)
+            })
+            .cloned()
+            .collect();
+        let original = std::mem::take(&mut self.frames);
+        self.frame(&copies, trusted, light, |model| items.addon_mesh(model));
+        let mut local = std::mem::take(&mut self.frames[0]);
+        self.frames = original;
+        let mut used_draws = self.frames[0].draws.len()
+            + self
+                .local_frames
+                .iter()
+                .map(|f| f.draws.len())
+                .sum::<usize>();
+        let mut used_triangles =
+            self.frames[0].triangles + self.local_frames.iter().map(|f| f.triangles).sum::<u64>();
+        let before = local.draws.len();
+        local.draws.retain(|draw| {
+            let triangles = (self.source.layer.meshes[draw.mesh].indices.len() / 3) as u64;
+            if used_draws >= self.source.budgets.draws_per_frame
+                || used_triangles + triangles > self.source.budgets.triangles_per_frame
+            {
+                return false;
+            }
+            used_draws += 1;
+            used_triangles += triangles;
+            true
+        });
+        local.triangles = local
+            .draws
+            .iter()
+            .map(|draw| (self.source.layer.meshes[draw.mesh].indices.len() / 3) as u64)
+            .sum();
+        if local.draws.len() != before {
+            bri_console::warn(
+                "Item skin combined local/world draw budget exceeded; remaining skins draw plain",
+            );
+        }
+        while self.local_frames.len() <= index {
+            self.local_frames.push(Frame::default());
+        }
+        self.local_frames[index] = local;
+        while self.local_renderers.len() <= index {
+            self.local_renderers.push(LayerRenderer::new(
+                device,
+                queue,
+                None,
+                color,
+                Some(depth),
+                samples,
+                Budgets::default().draws_per_frame,
+            ));
+        }
+        if let Err(reason) = self.local_renderers[index].prepare(
+            device,
+            queue,
+            &mut self.source,
+            &self.local_frames[index],
+            Camera {
+                view_proj: view_projection,
+                position: eye,
+                size,
+                normal_fov: horizontal_fov,
+            },
+            [time, 0.],
+        ) {
+            bri_console::warn(format!("Local item skin stopped: {reason}"));
+            self.local_frames[index].draws.clear();
+        }
+    }
+    pub fn render_local_view(&self, pass: &mut wgpu::RenderPass<'_>, index: usize) {
+        if let (Some(renderer), Some(frame)) = (
+            self.local_renderers.get(index),
+            self.local_frames.get(index),
+        ) {
+            renderer.draw(pass, frame, &self.source.layer);
+        }
+    }
+
     /// The skins from another view (a mirror's or the environment
     /// probe's), after [`Self::prepare`].
     pub fn prepare_view(
@@ -304,6 +423,9 @@ impl ItemSkins {
 
     /// After the pass `render` drew into ends, before it is submitted.
     pub fn resolve(&self, encoder: &mut wgpu::CommandEncoder) {
+        for renderer in self.local_renderers.iter().take(self.local_frames.len()) {
+            renderer.resolve(encoder);
+        }
         if let Some([player, _]) = &self.renderers {
             player.resolve(encoder);
         }
@@ -312,6 +434,8 @@ impl ItemSkins {
     /// The device went away or the pass changed shape: rebuild renderers.
     pub fn gpu_stopped(&mut self) {
         self.renderers = None;
+        self.local_renderers.clear();
+        self.local_frames.clear();
     }
 }
 
@@ -513,5 +637,166 @@ mod tests {
             |_| Some(mesh()),
         );
         assert!(skins.frames.iter().all(|f| f.draws.is_empty()));
+    }
+}
+
+#[cfg(test)]
+mod local_view_skin_tests {
+    use super::*;
+    use crate::{
+        testing::content_root::ContentRoot,
+        world_items::{MountPose, WorldItemFrame, WorldItemLimits},
+    };
+    #[test]
+    fn enabled_local_skin_prepares_separately_and_shares_the_main_draw_budget() -> anyhow::Result<()>
+    {
+        let f = ContentRoot::synthetic()?;
+        let packages = bri_package::packages::PackageSet::load_root(&f.root)?;
+        let weapon_dir = packages.role_dir(&f.root, "weapons")?;
+        let item_dir = packages.role_dir(&f.root, "item_presentation")?;
+        let gun = bri_weapons::testing::GUN_IMAGE;
+        std::fs::write(
+            weapon_dir.join("local-skin.wgsl"),
+            "@vertex fn vs_main(v: BriVertex) -> @builtin(position) vec4<f32> { return bri_frame.view_proj * bri_draw.model * vec4<f32>(v.position,1.0); } @fragment fn fs_main() -> @location(0) vec4<f32> { return bri_draw.params[0]; }",
+        )?;
+        std::fs::write(weapon_dir.join("looks.json"),serde_json::json!({"schema_version":1,"images":{gun:{"skin":{"shader":"local-skin.wgsl","color":[1.,0.,1.]}}}}).to_string())?;
+        let assets = Arc::new(ItemAssets::load_with(
+            &item_dir,
+            &weapon_dir,
+            &[("local-skin-test".into(), weapon_dir.clone())],
+        )?);
+        assert!(assets.skin(gun).is_some(), "actual authored skin admission");
+        let mut pack =
+            bri_weapons::Pack::from_json(&std::fs::read(weapon_dir.join("weapons.json"))?)?;
+        let policy = bri_weapons::FirstPersonView {
+            horizontal_fov: 62.,
+            near: 0.03,
+            far: 400.,
+            scale: 0.7,
+            eye_offset_reference_fov: None,
+            reference_aspect: None,
+        };
+        pack.images.get_mut(gun).unwrap().first_person_view = Some(policy);
+        let mut items = WorldItems::new(assets, Arc::new(pack), WorldItemLimits::default())?;
+        let mounted = || bri_sim::session::MountedImage {
+            paint: None,
+            image: gun.into(),
+            state: "Ready".into(),
+            hand: 0,
+        };
+        let view = bri_sim::session::WeaponView {
+            images: BTreeMap::from([(1, vec![mounted()]), (2, vec![mounted()])]),
+            ..Default::default()
+        };
+        items.sync(
+            &view,
+            WorldItemFrame {
+                tick: 1,
+                seconds: 1.,
+                eye: Vec3::ZERO,
+                local_owner: Some(1),
+                first_person: true,
+                reflected_self: true,
+                held_values: Default::default(),
+            },
+            |_| {
+                Some(MountPose {
+                    eye: Mat4::IDENTITY,
+                    mounts: BTreeMap::from([(0, Mat4::from_translation(Vec3::new(0., 0., -1.)))]),
+                    actions: BTreeMap::new(),
+                    velocity: Vec3::ZERO,
+                    straddle: None,
+                })
+            },
+        )?;
+        let (affinity, _) = items.local_views(1).remove(0);
+        let gpu = bri_ui::gpu::Headless::new()?;
+        let mut skins = ItemSkins::default();
+        skins.prepare(
+            &gpu.device,
+            &gpu.queue,
+            wgpu::TextureFormat::Rgba8Unorm,
+            bri_render::scene::DEPTH_FORMAT,
+            1,
+            &mut items,
+            true,
+            Light::default(),
+            Mat4::IDENTITY,
+            Vec3::ZERO,
+            [64, 64],
+            0.,
+        );
+        assert_eq!(
+            skins.frames[0].draws.len(),
+            1,
+            "main skin contains remote copy only"
+        );
+        skins.prepare_local_view(
+            &gpu.device,
+            &gpu.queue,
+            wgpu::TextureFormat::Rgba8Unorm,
+            bri_render::scene::DEPTH_FORMAT,
+            1,
+            &mut items,
+            true,
+            Light::default(),
+            0,
+            &affinity,
+            Mat4::IDENTITY,
+            Vec3::ZERO,
+            [64, 64],
+            0.,
+            policy.horizontal_fov,
+        );
+        assert_eq!(
+            skins.local_frames[0].draws.len(),
+            1,
+            "local skin uploaded under local camera"
+        );
+        let current = items.mounted_transform(1, 0).unwrap();
+        assert_eq!(
+            skins.local_frames[0].draws[0].model,
+            current.to_cols_array()
+        );
+        skins.source.budgets.draws_per_frame = 1;
+        skins.prepare(
+            &gpu.device,
+            &gpu.queue,
+            wgpu::TextureFormat::Rgba8Unorm,
+            bri_render::scene::DEPTH_FORMAT,
+            1,
+            &mut items,
+            true,
+            Light::default(),
+            Mat4::IDENTITY,
+            Vec3::ZERO,
+            [64, 64],
+            0.,
+        );
+        skins.prepare_local_view(
+            &gpu.device,
+            &gpu.queue,
+            wgpu::TextureFormat::Rgba8Unorm,
+            bri_render::scene::DEPTH_FORMAT,
+            1,
+            &mut items,
+            true,
+            Light::default(),
+            0,
+            &affinity,
+            Mat4::IDENTITY,
+            Vec3::ZERO,
+            [64, 64],
+            0.,
+            policy.horizontal_fov,
+        );
+        assert_eq!(
+            skins.frames[0].draws.len() + skins.local_frames[0].draws.len(),
+            1,
+            "local views cannot multiply the original main budget"
+        );
+        skins.gpu_stopped();
+        assert!(skins.local_renderers.is_empty() && skins.local_frames.is_empty());
+        Ok(())
     }
 }

@@ -14,17 +14,13 @@ use bri_ui::{
     models::admin::AdminAction,
     screens::ScreenId,
 };
-use std::{
-    path::Path,
-    thread,
-    time::{Duration, Instant},
-};
+use std::{path::Path, time::Duration};
 
 #[macro_use]
 mod support;
-use support::content_root::ContentRoot;
+use support::{content_root::ContentRoot, wait};
 
-synthetic_and_content!(ContentRoot: two_clients_see_names_minigames_trust_and_follow_a_map_change);
+synthetic_and_release_content!(ContentRoot: two_clients_see_names_minigames_trust_and_follow_a_map_change);
 
 const SIZE: (u32, u32) = (960, 720);
 const BEDROOM: &str = "v20/add-ons/map_bedroom/bedroom.mis";
@@ -40,27 +36,26 @@ fn step(app: &mut App, elapsed: Duration) -> Result<()> {
     Ok(())
 }
 
-/// Step both apps until `ready` holds for them.
+/// Step both apps until `ready` holds for them. The budget is game time (see `support::wait`), not wall time:
+/// a loaded machine compiles the scene pipelines slowly without anything being wrong.
 fn until(
     apps: &mut [&mut App],
     what: &str,
-    timeout: Duration,
+    game: Duration,
     ready: impl Fn(&[&mut App]) -> bool,
 ) -> Result<()> {
-    let start = Instant::now();
-    let mut previous = start;
-    loop {
-        let now = Instant::now();
-        for app in apps.iter_mut() {
-            step(app, now.duration_since(previous))?;
-        }
-        previous = now;
-        if ready(apps) {
-            return Ok(());
-        }
-        ensure!(start.elapsed() < timeout, "Timed out waiting for {what}");
-        thread::sleep(Duration::from_millis(10));
-    }
+    wait::until(
+        apps,
+        what,
+        game,
+        |apps, elapsed| {
+            for app in apps.iter_mut() {
+                step(app, elapsed)?;
+            }
+            Ok(())
+        },
+        |apps| Ok(ready(&*apps)),
+    )
 }
 
 fn request(app: &mut App, action: UiAction) -> Result<()> {

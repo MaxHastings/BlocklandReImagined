@@ -46,6 +46,10 @@ pub struct Damage {
     pub amount: f32,
     pub by: Option<u64>,
     pub damage_type: Option<String>,
+    /// `TakeDamage`'s Momentum / Mass: a velocity change in units a second
+    /// a living player takes with the hit, whoever may move them.
+    #[serde(default)]
+    pub knock: Option<[f32; 3]>,
 }
 impl ScriptOp for Damage {
     const CAPABILITY: &str = "damage";
@@ -54,9 +58,11 @@ impl ScriptOp for Damage {
         let Damage {
             amount,
             damage_type,
+            knock,
             ..
         } = self;
-        amount.is_finite()
+        knock.is_none_or(|k| k.iter().all(|v| v.is_finite() && v.abs() <= 200.0))
+            && amount.is_finite()
             && (0.0..=1000.0).contains(amount)
             && damage_type
                 .as_deref()
@@ -74,6 +80,10 @@ pub struct Fire {
     pub position: [f32; 3],
     pub velocity: [f32; 3],
     pub by: Option<u64>,
+    /// Ticks of its life it has already used: a thrown grenade whose fuse
+    /// was lit in the hand.
+    #[serde(default)]
+    pub age: u32,
 }
 impl ScriptOp for Fire {
     const CAPABILITY: &str = "damage";

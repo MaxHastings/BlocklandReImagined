@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/files", "crates/chaos", "crates/crash", "crates/render", "crates/physics", "crates/content", "crates/convert", "crates/bls", "crates/world", "crates/progress", "crates/admin", "crates/identity", "crates/sim", "crates/motor", "crates/net", "crates/ui", "crates/ui-import", "crates/client", "crates/weapons", "crates/minigames", "crates/events", "crates/weapons-import", "crates/fx-runtime", "crates/fx-import", "crates/vehicles", "crates/vehicles-import", "crates/audio", "crates/audio-import", "crates/weather", "crates/weather-import", "crates/foliage", "crates/foliage-import", "crates/console", "crates/package", "crates/package-runtime", "crates/addon-import", "crates/stresslab", "crates/client-sandbox", "crates/controller"]
+members = ["crates/files", "crates/chaos", "crates/crash", "crates/render", "crates/physics", "crates/content", "crates/convert", "crates/bls", "crates/world", "crates/progress", "crates/admin", "crates/identity", "crates/sim", "crates/motor", "crates/net", "crates/ui", "crates/ui-import", "crates/client", "crates/weapons", "crates/minigames", "crates/events", "crates/weapons-import", "crates/fx-runtime", "crates/fx-import", "crates/vehicles", "crates/vehicles-import", "crates/audio", "crates/audio-import", "crates/weather", "crates/weather-import", "crates/foliage", "crates/foliage-import", "crates/console", "crates/package", "crates/package-runtime", "crates/addon-import", "crates/stresslab", "crates/client-sandbox", "crates/controller", "crates/ue2-rules"]
 resolver = "2"
 exclude = ["vendor/winit"]
 
@@ -37,14 +37,22 @@ anyhow = "1.0"
 mimalloc = { version = "0.1", default-features = false }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
+# Reports the keys a deserializer ignores (bri_content::strict).
+serde_ignored = "0.1"
 bri-admin = { path = "crates/admin" }
 bri-files = { path = "crates/files" }
 
 # Full debug info tripled every build's output (42 GB for a cold
-# `cargo build --workspace --all-targets`, 13.5 GB with these settings on
-# 2026-09-28). Line tables keep file:line in panics and backtraces.
+# `cargo build --workspace --all-targets`, 13.5 GB with line tables on
+# 2026-09-28). Line tables then doubled it again as ~400 test executables each
+# grew a PDB twice their own size (17.6 GB of PDBs against 8.5 GB of
+# executables in the gate's target dir, 2026-10-17), which pushed every gate
+# build past `TARGET_DEPS_CAP` into a cold 17-minute rebuild. A failed test
+# still names file:line (panics carry their location without debug info); only
+# backtrace frames lose names. Release builds keep their line tables below, so
+# shipped crash dumps are unchanged.
 [profile.dev]
-debug = "line-tables-only"
+debug = false
 
 [profile.dev.package."*"]
 opt-level = 2
@@ -78,3 +86,11 @@ debug = "line-tables-only"
 # 5-15% but made every release relink 15x slower, which the benchmark lanes
 # pay on each iteration. panic stays unwind: saves and chaos catch panics.
 lto = "thin"
+
+# The playtest preview: the release code without the link-time work, rebuilt incrementally, so a small change to
+# one crate is minutes, not the 13 of a release build. Shipped releases still use [profile.release].
+[profile.playtest]
+inherits = "release"
+lto = false
+incremental = true
+codegen-units = 16

@@ -17,7 +17,7 @@ use std::{
 mod support;
 use support::content_root::ContentRoot;
 
-synthetic_and_content!(ContentRoot: players_see_each_others_swings_and_look_as_the_swinger_draws_them);
+synthetic_and_release_content!(ContentRoot: players_see_each_others_swings_and_look_as_the_swinger_draws_them);
 
 const SIZE: (u32, u32) = (960, 720);
 /// Longest game time one frame may advance. A loaded machine runs slow

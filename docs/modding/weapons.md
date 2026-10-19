@@ -113,8 +113,13 @@ The fields you are most likely to change:
 | projectile | `speed`, `gravity`, `lifetime_ticks` | how fast, how much it drops, how long it lives (120 ticks = 1 s) |
 | projectile | `damage`, `impulse`, `vertical` | hurt, and how hard it shoves |
 | projectile | `ballistic`, `elasticity` | bounces, and how much |
-| projectile | `decal` | the mark it leaves where it hits a brick or the map (its meshes and ground), a bullet hole: `{ "size": 0.15, "color": [0.04, 0.035, 0.03, 0.9], "seconds": 30 }`, a soft disc `size` across (0.02 to 4, times the projectile's scale) on the face it hit, darkest in the middle, gone after `seconds` (0.5 to 600, fading over the last one) or when the brick goes (a mark on the map stays until it fades); each player keeps the newest 512. `color` and `seconds` may be left out (near black, 30). None leaves no mark, as v20's own projectiles |
+| projectile | `elasticity_surfaces`, `bounce_surfaces` | what a bounce keeps and the effect it makes, by authored surface kind: `{ "metal": 1.25, "sand": 0.375 }` multiplies `elasticity`, `{ "wood": "pack:explosion/knock-wood" }` names the bounce's effect or sound-only explosion in place of `bounce_effect` |
+| projectile | `decal` | the mark it leaves where it hits a brick or the map (its meshes and ground), a bullet hole: `{ "size": 0.15, "color": [0.04, 0.035, 0.03, 0.9], "seconds": 30 }`, a soft disc `size` across (0.02 to 12, times the projectile's scale) on the face it hit, darkest in the middle, gone after `seconds` (0.5 to 600, fading over the last one) or when the brick goes (a mark on the map stays until it fades); each player keeps the newest 512. `color` and `seconds` may be left out (near black, 30). None leaves no mark, as v20's own projectiles. A projectile that goes off in the air or by its `fuse` marks the surface below it, within its blast radius (at most 6 units), with the same decal: a grenade's scorch |
+| projectile | `pass_source` | `true` lets it fly through its shooter's body (a thrown grenade, which meets every other body and bounces off it with `collide_players`, as `ThrowWeaponPickup.Touch` skips the Instigator). Off: it may meet the shooter once it has left their body |
+| projectile | `settle_speed` | a bounce that would leave it slower than this (native units a second) stops it and plays no bounce effect, sound or `on_bounce` children, so a grenade lying on the floor is not an impact every tick (a thrown grenade under 20 source units a second stops, `ThrowWeaponPickup.HitWall`). 0 leaves every bounce an impact. Test: `crates/weapons/tests/addon_seams.rs` |
 | projectile | `stick_to_bodies` | `true` sticks it to any player or vehicle it hits, whatever its speed or angle, and it rides along on them until it goes off (a sticky grenade: pair it with `ballistic`, an `arm_ticks` as long as its `lifetime_ticks` and `explode_death`). If the body leaves the game it stays where it was. Off: v20's sticking, in place, only to what it meets fast and steep enough (`min_stick_speed`, `bounce_angle`) |
+| projectile | `fuse` | a fuse that starts at a moment of the flight: `{ "start": "bounce", "ticks": 60, "not_before_ticks": 180, "effect": "fuseLit" }` goes off `ticks` after its first bounce (`start: "rest"`: after a bounce leaves it slower than `rest_speed`, or it sticks to anything), never before the projectile is `not_before_ticks` old, and plays the explosion effect `effect` where it starts. A frag grenade's timer starts at its first bounce, a plasma grenade's when it lies still. Pair it with `ballistic`, an `arm_ticks` as long as `lifetime_ticks` so it does not burst on contact, and let `lifetime_ticks` outlast the fuse. Test: `crates/weapons/tests/tactical_seams.rs` |
+| projectile | `explosion.core_radius`, `explosion.edge_damage` | a blast whose damage holds, then falls in a line: full `damage` out to `core_radius` (units), straight down to `edge_damage` times `damage` at `radius`, and nothing past it (Halo's grenades: 120 near the middle, 80 at the edge). `edge_damage` left at 0 keeps v20's quadratic fall from the middle |
 | projectile | `impacts` | the explosion effect it makes by what it lands on, in place of `explosion.effect`: `{ "vehicle": "sparks", "map": "dust", "brick": "chips", "player": "puff" }`, each an explosion effect as `explosion.effect` names one (`player` also covers Add-On creatures, `map` the map's terrain, buildings and moving shapes). One left out, and a burst in the air, play `explosion.effect`; the blast's damage and push stay `explosion`'s. A ray lands it as a flying round does |
 | image state | `ticks` | how long a state (`Fire` is the reload time) lasts |
 | image | `shot` | several projectiles per shot, their spread and the recoil ([porting.md](porting.md#the-image-shot-field)); `scale` sizes the projectiles against their holder (0.1 to 10) |
@@ -129,13 +134,16 @@ The fields you are most likely to change:
 | image | `cook` | a grenade whose fuse burns from a state in the hand (below) |
 | image | `guard` | a shield raised in some states (below) |
 | projectile | `fixed_damage` | its direct damage stays as authored at any scale |
+| projectile | `falloff` | `{ "near": 10, "far": 50, "far_damage": 5 }`: its direct damage is `damage` up to `near` units from where it was fired, `far_damage` from `far` on, and moves in a line between (a Halo projectile's air damage range) |
+| projectile | `homing` | `{ "turn_rate": 0.576, "range": 165, "angle": 0.21 }`: as it is made it picks the nearest player or vehicle (not its shooter) within `range` units and `angle` radians of its heading, then turns toward it by at most `turn_rate` radians a second at the same speed; straight on without one or once it is gone |
 | item | `ui_name` | the name players see |
-| image | `zoom` | `{ "fov": 20, "on_jet": true, "crosshair": false, "first_person": true }`: aim with the zoom key (and the right mouse button with `on_jet`), hide the crosshair, force first person while aiming. More under "Scopes" below |
+| image | `zoom` | `{ "fov": 20, "on_jet": true, "crosshair": false, "first_person": true }` (or `"magnification": 2`: zoom to that many times the player's own view by tangent, 90 to 53.1 and 70 to 38.6, with `fov` kept as a fallback): aim with the zoom key (and the right mouse button with `on_jet`), hide the crosshair, force first person while aiming. More under "Scopes" below |
 | image | `eye_offset`, `eye_rotation` | where the weapon sits in first person: exactly there, relative to the camera, as Torque places it, so a scope whose sight is on the eye line stays centred at any zoom |
 | image | `hide_nodes` | the holder's body nodes hidden while the image is held, shown again when it goes: `["lhand", "rhand", "lhook", "rhook"]` for a model that draws its own hands (v20's `hideNode` in `onMount`). Up to 16 |
 | image | `both_arms` | `true` holds it up with both arms (`armReadyBoth`), not the mount hand's arm alone |
 | image | `scripts` | what each state `script` does, by lower-case name: `{ "onfire": { "arm": "spearThrow", "fire": true, "use_up": true } }` swings the arm, launches the image's projectile (or the entry's own `projectile`) and uses the item up, as a thrown grenade ([torque-equivalents.md](torque-equivalents.md#image-state-scripts-as-data)) |
 | image | `follow_arm` | `true` also moves a first-person `eye_offset` image with the arm's actions (shift, plant, swing), as the base game's brick, hammer and spray cans do; off by default |
+| image | `movement` | `{ "reloading": 0.75, "aiming": 0.75 }`: the share of the holder's speeds the image leaves (0.05 to 1 each, 1 slows nothing) while its magazine reloads and while the holder aims it with the right mouse button (`zoom.on_jet`: the host sees the jet button held; a zoom on the zoom key alone is the holder's own view and does not slow them). They multiply with each other, a rule's `set_speed_scale` and a bullet's slowdown. | 0.05 to 1 each |
 | image | `aim_assist` | `{ "angle": 0.05, "range": 120, "slowdown": 0.5 }`: help aiming at a body the holder could hurt (not a teammate, inside its mini-game's rules). A shot turns onto the middle of the nearest such body in sight whose middle is within `angle` radians of the aim and `range` units (at the holder's scale), before spread; the holder's own look slows to `slowdown` while their aim is on one. Bots firing the gun get the same help. Test: `crates/weapons/tests/aim_assist.rs` | angle 0 to 0.35, range 1 to 1000, slowdown 0.1 to 1 (default 1); off by default |
 | image | `rope` | `{ "projectile": "your-id:projectile/chain", "speed": 160 }`: while the holder hangs on a rope (`tether`), every player's game draws it with that projectile's trail, swept from the muzzle to the rope's end as densely as the projectile flying it at `speed` would lay it, as v20 rope tools did by firing a stream of them; nothing is sent for it |
 | pack | `sounds` | `{ "your-id:shot": { "file": "sounds/shot.wav", "volume": 0.8 } }`: your own `.wav`/`.ogg` files, named by a state's `sound` and by rules; `local` for sounds only the holder hears, `looping` for a state-long hum or a vehicle's `engine_sound` ([content-kinds.md](content-kinds.md)), `music` for a track rules play with `play_music` (up to 10 minutes, [rules.md](rules.md#music)). `bri-addon-check` decodes each file as the game does and fails one it cannot play |
@@ -155,6 +163,7 @@ The fields you are most likely to change:
 | `allowed_states` | Optional image-state names that permit visual aiming. Omitted allows all states; `[]` allows none. A restricted profile without a known current state does not aim. | Up to 64 unique ASCII names, 1 to 128 bytes each; each must name exactly one state of this image, matched without ASCII case |
 | `levels` | further fields of view the mouse wheel steps through while aiming (back on rolling the other way); each narrower than the last. The step resets when the aim ends | up to 8, 5 to 85 degrees |
 | `sensitivity` | look speed while aimed, on top of the usual slowing with the field of view | 0.1 to 4, default 1 |
+| `overlay_fit` | optional: `height_black` (default, the fit below), `height` (fitted to the height and centred with the world showing either side) or `stretch` (over the whole screen whatever its shape) | one of the three words |
 | `overlay` | your own PNG (named without `.png`, relative to `assets/`) drawn over the whole view while aimed in first person, fitted to the screen's height with black either side, under the HUD. Its transparent middle is the lens; the held model is hidden meanwhile | up to 2048 px a side and 4 MB |
 | `sway` | the aim drifts on a figure of eight, `degrees` to each side, once every `seconds`; `crouched` and `moving` scale it. Only on foot, only on the holder's screen, and the mouse turns freely under it; it eases in and out | 0 to 5 degrees, 0.5 to 30 seconds, crouched 0 to 1, moving 1 to 4 |
 
@@ -204,7 +213,7 @@ Each shot takes `per_shot` rounds (1 when left out); a shot without them
 clicks with `empty_sound` and reloads. The last round, the light key and
 `reload(p)` start a reload that lasts `reload_ticks` (120 a second, up to
 1200) and fills the magazine from the holder's reserve of its `ammo`.
-Every gun loading the same `ammo` shares that reserve; each gun keeps its
+A reload that starts with nothing loaded may take its own `empty_reload_ticks`, `empty_reload_image_sequence` and `empty_reload_sound` in place of the ordinary ones (a gun whose empty reload also works its slide or bolt). Every gun loading the same `ammo` shares that reserve; each gun keeps its
 own rounds, by the tool slot it sits in (two of one gun each keep theirs),
 also when thrown and picked up by someone else. `one_by_one`
 loads a round per `reload_ticks` (`per_load` rounds with a two-barrel
@@ -218,6 +227,8 @@ sent to them alone and only when it changes; with `display_ticks` (up to
 `display_scripts` names show it again (a dry pull), as does the light key
 when there is nothing to load. A size is 1 to 1000 rounds;
 an ammo name is 1 to 32 letters, digits, `.`, `_` or `-`.
+
+A magazine with `"cool_ticks": 30` gets a round back every 30 ticks while the gun is held and the magazine is neither full nor empty, as a gun whose rounds are heat (a Halo plasma gun): nothing is refunded from the reserve, and an empty one reloads as usual.
 
 A magazine with `"from_reserve": true` (size 1) has no rounds of its own:
 each throw takes `per_shot` straight from the reserve and nothing
@@ -295,7 +306,7 @@ and name them as usual. They are found when the game loads the packs
 together; an image whose projectile no loaded package declares is left
 out, with a note.
 
-An image's `shot` can say more of how it fires. `hitscan` (`range`, and
+An image's `shot` can say more of how it fires. `hitscan` (`range`, 1 to 8192 units, and
 `moving_range`) lands each projectile at once along a ray, with its
 damage and push. The ray meets other players where the shooter's own game
 showed them when they fired (lag compensation, up to half a second back),
@@ -326,7 +337,7 @@ the truer first shot after a pause. `crouched_spread` is the spread
 while the shooter crouches and is not moving (used when tighter than their
 standing spread), and `airborne_spread` the spread while they are off the
 ground and not riding, in place of every other: a tactical rifle that is
-steadiest crouched and wild mid-jump. An image's `state_shots` fire on
+steadiest crouched and wild mid-jump. `error` (`min`, `max`, `rise_ticks`, `fall_ticks`, `recover_ticks`) is a spread that builds as the holder keeps firing and settles when they stop, in place of all of those: the holder's error rises by `1 / rise_ticks` every tick the trigger is held or a shot was fired in the last `recover_ticks`, falls by `1 / fall_ticks` otherwise (0 to 1), and a shot's spread is `min` at 0 and `max` at 1. An image's `state_shots` fire on
 entering a state whose script is not `onFire` (`"onfire2": { ... }`),
 each a shot of its own, hitscan or not (a knife's weaker stab beside its
 slash); a shot with `"free": true` takes no rounds. `recoil` pushes the shooter back along
@@ -588,6 +599,16 @@ Everyone in a
 game needs the same weapons, so give the Add-On to the people you play
 with.
 
+## Idle fidget
+
+A state may carry `"fidget": { "seconds": [10, 15], "to": 7, "skip": 0.25 }`: once the
+image has rested in that state for a random time in `seconds`, it enters state `to` (by index),
+unless the draw falls under `skip` (0 to 0.95), which waits again for a new time. A trigger
+transition or timeout out of the state comes first and ends the wait, and the state `to` goes
+where any state goes (back to the rest by `timeout`, to a shot by `down`). The draws are
+deterministic in the world's tick and the holder. Halo's rifle waits 10 to 15 seconds and
+plays its 118-frame posing clip.
+
 ## Timing the check reports before the game runs
 
 `bri-addon-check` (and the port tool) reads each weapon image's state machine
@@ -661,6 +682,20 @@ Composite `effects.explosions` can contain up to 32 independently placed
 and local `direction`. The source's +Y axis follows the impact normal or
 attachment rotation. Existing `burst` and continuous `emitters` still work;
 all burst groups share the ordinary live-particle/source budgets.
+
+`effects.shells` are glowing layers a rule draws over a body with
+`body_shell(p, shell, strength, seconds)` (a shield taking a hit). A shell has an
+`id`, `facing` and `edge` colours (`[r, g, b, brightness]`: the colour where the
+body faces the eye and where it turns edge on), `stand_off` (units off the body at
+full strength, squared with the strength, 0 to 2), `ease` (the strength shown is
+`1 - (1 - s)^ease` of the fade's remaining share `s`; 1 is a straight fade, more
+holds the glow, 1 to 8) and two `noise` layers `{ texture, repeats, scroll: [u, v, depth],
+seconds }`: the layers' red channels multiply into the pattern, each scrolling
+`scroll` every `seconds` (u and v in repeats). A texture taller than it is wide
+is a volume of square slices stacked down it; `depth` moves through it, in
+volumes, blending the neighbouring slices. Textures are named as particles name theirs.
+Every player sees it, apart from the owner in first person. Tests:
+`crates/render/tests/plasma_shell.rs`, `crates/client/src/body_shell.rs`.
 
 An image's `shell_effect` names an authored emitter/composite to play for
 `eject_shell` states. It replaces mesh `casing` presentation and uses the posed
@@ -743,3 +778,50 @@ person always retains that ordinary mount path. Base images without an explicit
 origin retain stock forced arm following; explicit origins keep their authored
 `follow_arm` choice. Native image and authored
 presentation selectors must agree; unknown selector values are rejected.
+
+
+## An independent local held-image view
+
+An image can opt into `first_person_view`:
+
+```json
+"first_person_view": {
+  "horizontal_fov": 62,
+  "near": 0.03,
+  "far": 400,
+  "scale": 0.7,
+  "eye_offset_reference_fov": 100
+}
+```
+
+These are invented example values. Author the projection and camera-relative
+native-unit conversion from your own reference. Horizontal FOV is in degrees;
+`near` and `far` must be positive and ordered. `scale` defaults to 1. Values
+must also produce a finite, invertible projection and a nondegenerate native
+transform. Omission of the entire block keeps the existing view and serialization.
+
+The local held image uses the current stock eye/rotation and this independent
+projection, after the world, with fresh depth. Its model and posed attachment
+nodes receive the uniform visual scale; its eye translation does not. Optional
+`eye_offset_reference_fov` multiplies eye translation by that reference divided
+by the same frame's resolved stock horizontal FOV. Leaving it out keeps the
+existing eye translation. It does not change third-person scale or placement.
+
+Current custom Add-On camera shots suppress these opted local layers. Composing
+an independent held-image view with arbitrary custom camera callbacks requires
+separate qualification. World-space effects, diagnostic geometry and other
+world-depth consumers finish first; the screen vignette remains above local
+images and the HUD follows. MSAA resolves after the final local layer.
+
+The image's skin and explicitly attached local weapon sprites use its local
+view. Their immutable owner/slot/image/policy affinity survives particle/source
+expiry and holstering. A particle without an eligible exact current image stays
+hidden while its original lifetime drains; it is never redirected into another
+weapon's projection or into the world. At most the existing image-slot count
+allocates current views. A same-image policy mismatch is diagnosed. Shared
+sprite and skin budgets still apply across world and local layers. Point lights
+remain in the world once; particle size/light radius do not inherit mesh scale.
+
+This rendering policy does not recover source pose, ADS state selection,
+lighting or interpolation laws. Those still need an ordinary integrated consumer
+and original-reference comparison.

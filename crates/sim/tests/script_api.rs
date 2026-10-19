@@ -64,6 +64,13 @@ fn cmd_reload_gun(p) { reload(p); }
 fn cmd_nade(p) { give_item(p, "probe:weapon/nade", false); }
 fn cmd_quick(p) { quick_use(p, "probe:weapon/nade"); }
 fn cmd_flash(p) { screen_flash(p, [0.3, 0.6, 1.0, 0.5], 0.4); body_flash(p, [0.4, 0.8, 1.0, 0.6], 0.5); }
+fn cmd_jolt(p) { camera_shake(p, 0.4, 0.1, 1.5, 2.0); }
+fn cmd_spark(p) {
+    effect_at("probe:explosion/spark", [1.0, 2.0, 3.0], [0.0, 2.0, 0.0], 1.5);
+    set_teleport_sound("probe:sound/whoosh");
+    set_teleport_sound(());
+    note("held", map_id());
+}
 fn cmd_bash(p) { set_image_state(p, "Bash"); }
 fn cmd_held(p) { let me = player(p); note("held", me.item + "|" + me.image_state); }
 fn cmd_boom(p, look) {
@@ -104,7 +111,8 @@ fn cmd_env_bad(p) { set_environment(#{ sun_elevation: 120.0 }); }
 fn cmd_env_bad_sky(p) { set_environment(#{ sky: "Base\\Sky" }); }
 fn cmd_env_bad_water(p) { set_environment(#{ water_height: 500.0 }); }
 fn cmd_env_reset(p) { reset_environment(); }
-fn cmd_speed(p, scale) { set_speed_scale(p, scale); }
+// A negative scale is a share under the key "lock" instead: -1 is 0, -1.5 is 0.5, -2 is 1.
+fn cmd_speed(p, scale) { if scale < 0.0 { set_speed_modifier(p, "lock", -1.0 - scale); } else { set_speed_scale(p, scale); } }
 fn cmd_again(p) { respawn(p); }
 fn cmd_dart(p, x, z, vx, vz) { fire("probe:projectile/dart", x, 1.2, z, vx, 0.0, vz); }
 fn on_damage(victim, attacker, amount, info) {
@@ -220,6 +228,8 @@ fn behaviour() -> Value {
             command("nade", &[]),
             command("quick", &[]),
             command("flash", &[]),
+            command("jolt", &[]),
+            command("spark", &[]),
             command("bash", &[]),
             command("held", &[]),
             command("boom", &["string"]),
@@ -705,7 +715,29 @@ fn view_beams_and_animations_reach_players_as_notices_and_cues() {
     assert!(g.s.take_cues().iter().any(|c| matches!(&c.kind,
         CueKind::BodyFlash { owner, color, seconds }
             if *owner == a && *color == [0.4, 0.8, 1.0, 0.6] && *seconds == 0.5)));
+    g.s.take_private_notices();
+    g.run(a, "jolt", vec![]);
+    assert!(
+        g.s.take_private_notices()
+            .iter()
+            .any(|(owner, n)| *owner == a
+                && matches!(n, Notice::CameraShake { translation, rotation, seconds, hold }
+                if *translation == 0.4 && *rotation == 0.1 && *seconds == 1.5 && *hold == 2.0)),
+        "the view shake reaches only the player it names"
+    );
     g.s.take_cues();
+    g.s.set_map_id("probe:map/arena");
+    g.run(a, "spark", vec![]);
+    assert_eq!(g.text("held"), "probe:map/arena");
+    let cues = g.s.take_cues();
+    assert!(cues.iter().any(|c| matches!(&c.kind,
+        CueKind::WeaponEffect { definition, direction, scale, .. }
+            if definition == "probe:explosion/spark"
+                && *direction == Some([0.0, 1.0, 0.0]) && *scale == 1.5)
+        && c.position == [1.0, 2.0, 3.0]));
+    for cue in &cues {
+        cue.validate().unwrap();
+    }
     g.run(a, "show", vec![]);
     let cues = g.s.take_cues();
     assert!(cues.iter().any(|c| matches!(
@@ -1027,6 +1059,51 @@ fn scripts_slow_a_players_feet_until_they_respawn() {
         refused.is_err_and(|e| format!("{e:#}").contains("outside the operation's limits")),
         "4 at most"
     );
+    g.run(p, "again", vec![]);
+    g.steps(240);
+    let fresh = walk(&mut g, p);
+    assert!(
+        (fresh / full - 1.0).abs() < 0.08,
+        "a new body walks normally: {fresh} of {full}"
+    );
+}
+
+#[test]
+fn named_speed_modifiers_multiply_and_a_lock_survives_another_systems_per_tick_write() {
+    let mut g = Game::new();
+    let p = g.join(Vec3::new(0.0, 0.1, 0.0));
+    g.steps(30);
+    let full = walk(&mut g, p);
+    // One system locks the player under its own key; another keeps writing its share every tick.
+    g.run(p, "speed", vec![PackageArg::Float(-1.0)]);
+    for _ in 0..10 {
+        g.run(p, "speed", vec![PackageArg::Float(1.5)]);
+        g.steps(3);
+    }
+    assert!(
+        walk(&mut g, p) < 0.5,
+        "the lock holds against set_speed_scale"
+    );
+    // The shares multiply: half under one key and half under the other is a quarter.
+    g.run(p, "speed", vec![PackageArg::Float(-1.5)]);
+    g.run(p, "speed", vec![PackageArg::Float(0.5)]);
+    g.steps(30);
+    let quarter = walk(&mut g, p);
+    assert!(
+        (quarter / full - 0.25).abs() < 0.06,
+        "half times half walks a quarter as far: {quarter} of {full}"
+    );
+    // Clearing the key (1) leaves the other system's share alone.
+    g.run(p, "speed", vec![PackageArg::Float(-2.0)]);
+    g.steps(30);
+    let half = walk(&mut g, p);
+    assert!(
+        (half / full - 0.5).abs() < 0.08,
+        "only the base share is left: {half} of {full}"
+    );
+    // A new life clears every key.
+    g.run(p, "speed", vec![PackageArg::Float(-1.0)]);
+    g.run(p, "speed", vec![PackageArg::Float(1.0)]);
     g.run(p, "again", vec![]);
     g.steps(240);
     let fresh = walk(&mut g, p);

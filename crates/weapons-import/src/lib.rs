@@ -333,6 +333,7 @@ pub fn lower(definitions: Vec<Definition>) -> Result<Pack> {
             impulse_radius: e.map_or(0.0, |e| num(e, "impulseRadius", 0.0)),
             impulse_vertical: e.map_or(0.0, |e| num(e, "impulseVertical", 0.0)),
             burn_seconds: e.map_or(0.0, |e| num(e, "playerBurnTime", 0.0) / 1000.0),
+            ..Default::default()
         };
         let sport = field(d, "sportBallImage");
         let id = native_id("projectile", &d.name);
@@ -349,6 +350,9 @@ pub fn lower(definitions: Vec<Definition>) -> Result<Pack> {
             ballistic: flag(d, "isBallistic", false),
             elasticity: num(d, "bounceElasticity", 1.0),
             friction: num(d, "bounceFriction", 0.0),
+            elasticity_surfaces: Default::default(),
+            bounce_surfaces: Default::default(),
+            fuse: None,
             damage: num(d, "directDamage", 0.0),
             damage_type: field(d, "directDamageType"),
             radius_damage_type: field(d, "radiusDamageType"),
@@ -357,6 +361,8 @@ pub fn lower(definitions: Vec<Definition>) -> Result<Pack> {
             explode_player: flag(d, "explodeOnPlayerImpact", false),
             explode_death: flag(d, "explodeOnDeath", false),
             collide_players: flag(d, "collideWithPlayers", true),
+            pass_source: false,
+            settle_speed: 0.0,
             explosion,
             brick: BrickImpact {
                 radius: num(d, "brickExplosionRadius", 0.0),
@@ -384,6 +390,10 @@ pub fn lower(definitions: Vec<Definition>) -> Result<Pack> {
             children: Vec::new(),
             aura: None,
             slow: None,
+            falloff: None,
+            homing: None,
+            contrail: None,
+            flare: None,
             fixed_damage: false,
             collision_sound: None,
             sport_hit: None,
@@ -455,6 +465,7 @@ pub fn lower(definitions: Vec<Definition>) -> Result<Pack> {
                 emitter: f("stateEmitter"),
                 emitter_node: f("stateEmitterNode"),
                 emitter_seconds: num(d, &format!("stateEmitterTime[{n}]"), 0.0),
+                fidget: None,
                 eject_shell: flag(d, &format!("stateEjectShell[{n}]"), false),
                 // v20 swings arms from script by image name, never from state data.
                 arm: String::new(),
@@ -557,8 +568,10 @@ pub fn lower(definitions: Vec<Definition>) -> Result<Pack> {
                 crosshair: true,
                 follow_arm: false,
                 first_person_origin: None,
+                first_person_view: None,
                 hide_nodes: Vec::new(),
                 aim_assist: None,
+                movement: None,
                 both_arms: false,
                 paint_tint: false,
                 left_image: None,

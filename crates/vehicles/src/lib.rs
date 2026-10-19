@@ -2,6 +2,8 @@
 mod contact_push;
 mod merge;
 pub use merge::asset_root;
+pub mod accel;
+pub mod aim;
 pub mod muzzle;
 pub mod schema;
 pub mod testing;

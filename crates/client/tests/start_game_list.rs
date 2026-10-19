@@ -13,7 +13,7 @@ use support::content_root::ContentRoot;
 
 const SIZE: (u32, u32) = (960, 720);
 
-synthetic_and_content!(ContentRoot: start_game_lists_and_draws_every_loadable_map);
+synthetic_and_release_content!(ContentRoot: start_game_lists_and_draws_every_loadable_map);
 
 fn start_game_lists_and_draws_every_loadable_map(f: &ContentRoot) -> Result<()> {
     let content = &f.root;

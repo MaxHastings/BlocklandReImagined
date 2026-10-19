@@ -38,8 +38,16 @@ impl Perform for ops::Damage {
             amount,
             by,
             damage_type,
+            knock,
         } = self;
-        session.package_damage_op(package, target, amount, by, damage_type)
+        session.package_damage_op(package, target, amount, by, damage_type)?;
+        if let (Some(knock), ObjectRef::Player(player)) = (knock, target)
+            && let Some(peer) = session.peers.get_mut(&player)
+            && peer.combat.alive
+        {
+            peer.player.push(Vec3::from(knock));
+        }
+        Ok(())
     }
 }
 impl Perform for ops::Fire {
@@ -50,6 +58,7 @@ impl Perform for ops::Fire {
             position,
             velocity,
             by,
+            age,
         } = self;
         let tick = session.simulation.state().tick;
         let host = session
@@ -69,13 +78,14 @@ impl Perform for ops::Fire {
         let shooter = by
             .filter(|p| session.peers.contains_key(p))
             .unwrap_or(PACKAGE_SHOOTER);
-        session.weapons.spawn(
+        let id = session.weapons.spawn(
             &projectile,
             bri_weapons::ActorId(shooter),
             Vec3::from(position),
             Vec3::from(velocity),
             1.0,
         )?;
+        session.weapons.set_age(id, age);
         Ok(())
     }
 }

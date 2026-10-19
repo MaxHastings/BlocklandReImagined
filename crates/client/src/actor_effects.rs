@@ -595,6 +595,12 @@ impl ActorEffects {
         self.cursor = checkpoint_cursor;
     }
     fn note(&mut self, message: String) {
+        bri_console::fallback::report(
+            bri_console::fallback::kind::DROPPED_PARTICLE_GROUP,
+            "",
+            &message,
+            "the effect is not drawn",
+        );
         self.diagnostics.missing = self.diagnostics.missing.saturating_add(1);
         if self.diagnostics.messages.len() < MAX_MESSAGES {
             self.diagnostics.messages.insert(message);
@@ -1537,8 +1543,10 @@ fn teleport_image() -> bri_weapons::Image {
         crosshair: true,
         follow_arm: false,
         first_person_origin: None,
+        first_person_view: None,
         hide_nodes: Vec::new(),
         aim_assist: None,
+        movement: None,
         both_arms: false,
         paint_tint: false,
         left_image: None,

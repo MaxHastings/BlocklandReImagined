@@ -156,6 +156,110 @@ reason = "1.8 min on WARP"
 target = "bri-render/unified_lamp_geometry"
 reason = "1.7 min on WARP"
 
+# 2026-10-19 test cost audit (docs/progress/2026-10-19-test-cost-cut.md).
+# Opt-in tools: they measure or generate and assert nothing a player feels.
+
+[[skip]]
+test = "profile_sixteen_bots_in_the_real_bedroom"
+reason = "Timing profile; reports numbers and asserts nothing (2026-10-19 test cost audit). Run by hand, see docs/audits/v0.2.1-performance.md."
+
+[[skip]]
+test = "sixteen_objective_controllers_and_mixed_inventory_combat"
+reason = "Timing profile; no timing assertions (2026-10-19 test cost audit). Run by hand."
+
+[[skip]]
+test = "brick_family_audit_scene"
+reason = "Writes renders for tools/brick_reference.py; asserts nothing. Run by hand, see docs/audits/bricks.md."
+
+[[skip]]
+test = "brick_fx_audit_scene"
+reason = "Writes renders for tools/brick_reference.py; asserts nothing. Run by hand."
+
+[[skip]]
+test = "brick_top_audit_scene"
+reason = "Writes renders for tools/brick_reference.py; asserts nothing. Run by hand."
+
+[[skip]]
+test = "every_map_every_mode_two_players_build_save_reload_change_map"
+reason = "Overnight QA matrix (docs/audits/night-qa.md); opt-in only."
+
+[[skip]]
+test = "new_player_screens"
+reason = "Overnight QA matrix (docs/audits/night-qa.md); opt-in only."
+
+[[skip]]
+test = "click_places_the_ghost_after_the_brick_is_in_hand"
+reason = "Overnight QA matrix (docs/audits/night-qa.md); opt-in only."
+
+[[skip]]
+test = "placing_the_ghost_shows_the_brick_trail_and_puff"
+reason = "Overnight QA matrix (docs/audits/night-qa.md); opt-in only."
+
+[[skip]]
+test = "imported_v20_add_ons_play"
+reason = "Overnight QA matrix (docs/audits/night-qa.md); opt-in only."
+
+[[skip]]
+test = "soak_four_players_build_drive_fire_chat_and_save"
+reason = "Overnight QA matrix (docs/audits/night-qa.md); opt-in only."
+
+[[skip]]
+test = "stress_lab_single_player_build_save_reload"
+reason = "Overnight QA matrix (docs/audits/night-qa.md); opt-in only."
+
+[[skip]]
+test = "plant_probe_single_player"
+reason = "Overnight QA matrix (docs/audits/night-qa.md); opt-in only."
+
+[[skip]]
+test = "long_soak_builds_and_uploads_nothing_whole"
+reason = "Five-round soak (several minutes); the one-round steady_play test stays in the gate. Run with check.py soak."
+
+[[skip]]
+test = "all_dials_on"
+reason = "All-on bot gauntlet, slow; opt-in measurement (2026-10-19 test cost audit)."
+
+# Release-only tests: the push gate skips them; `python tools/gate.py
+# --release-content` runs them (with every `release_content` test, the
+# real-content copies made by `synthetic_and_release_content!`). Matched by
+# substring of the test path, like [[skip]].
+
+[[release_only]]
+test = "soak_all_features_with_classic_add_ons"
+reason = "Three-minute soak that mirrors crossover_soak; release gate only."
+
+[[release_only]]
+test = "bundled_originals_load_their_host_rules_however_they_were_turned_on"
+reason = "Tests the release bundle's packaging; release gate only."
+
+[[release_only]]
+test = "bundled_originals_work_for_a_client_in_a_hosted_game"
+reason = "Tests the release bundle's packaging; release gate only."
+
+[[release_only]]
+test = "stress_sized_join_over_a_throttled_link"
+reason = "150 MB join acceptance; release gate only."
+
+[[release_only]]
+test = "content_chaos_never_panics_fails_or_replicates_nan"
+reason = "Real-content copy of session_chaos; release gate only."
+
+[[release_only]]
+test = "lan_host_and_guest_both_see_each_others_pickup_ghosts::synthetic"
+reason = "The LAN guest sees replicated item state the net targets cover; release gate only."
+
+[[release_only]]
+test = "native_core_tools_render_from_eye_and_original_mounts::synthetic"
+reason = "held_items_render and item_rendering cover held items per landing; release gate only."
+
+[[release_only]]
+test = "the_mirror_shows_the_room_behind_the_camera_on_slopes::synthetic"
+reason = "bri-render's mirrors target proves the mirror; the Bedroom run stays per landing."
+
+[[release_only]]
+test = "avatar_clan_tags_show_in_chat_as_single_player_and_guest::synthetic"
+reason = "The rename test covers the name reaching the server; release gate only."
+
 # Test targets that host a game on the fixed ports (UDP 28000/28050). The gate
 # runs them one at a time, after one another, instead of in parallel. Prefer
 # BRI_TEST_HOST_PORT / BRI_TEST_DISCOVERY_PORT (see multiplayer.rs) so a test

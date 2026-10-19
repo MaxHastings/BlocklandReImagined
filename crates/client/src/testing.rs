@@ -385,6 +385,7 @@ pub mod explosions {
             duration: 0.35,
             looping: false,
             additive: false,
+            parent_translations: false,
             priority: 0,
             nodes: vec![NodeTrack {
                 node: "ball".into(),

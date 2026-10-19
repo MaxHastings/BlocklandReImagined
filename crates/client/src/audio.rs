@@ -159,6 +159,44 @@ impl PreparedSounds {
     }
 }
 
+/// A sound that cannot play is a counted fallback (`fallbacks.json`), not
+/// only a log line: the game carries on silent.
+fn report_fallback(error: &AudioError) {
+    use bri_console::fallback::{kind, report};
+    match error {
+        AudioError::UnknownSound(sound) => report(
+            kind::MISSING_SOUND,
+            "",
+            sound,
+            "plays silently (no such sound)",
+        ),
+        AudioError::SoundUnavailable { sound, reason } => report(
+            kind::MISSING_SOUND,
+            "",
+            sound,
+            &format!("plays silently ({reason})"),
+        ),
+        AudioError::Decode { clip, message } => report(
+            kind::MISSING_SOUND,
+            "",
+            clip,
+            &format!("plays silently (cannot decode: {message})"),
+        ),
+        AudioError::Integrity { clip, .. } => report(
+            kind::MISSING_SOUND,
+            "",
+            clip,
+            "plays silently (the file does not match its manifest)",
+        ),
+        other => report(
+            kind::OTHER,
+            "",
+            &other.to_string(),
+            "the audio request is skipped",
+        ),
+    }
+}
+
 /// A vehicle's engine sound this frame ([`bri_vehicles::EngineSound`]).
 #[derive(Clone, Debug, PartialEq)]
 pub struct EngineLoop {
@@ -178,21 +216,41 @@ pub fn engine_loop(
     info: &bri_sim::session::VehicleInfo,
     frame: &crate::vehicles::VehicleFrame,
 ) -> Option<EngineLoop> {
-    let engine = d.engine_sound.as_ref()?;
+    engine_loops(d, info, frame).into_iter().next()
+}
+/// Every loop of vehicle `info`'s engine this frame: its `engine_sound`
+/// first, then each of its `engine_layers` that is audible, with the layer's
+/// number (0 for the first).
+pub fn engine_loops(
+    d: &bri_vehicles::Definition,
+    info: &bri_sim::session::VehicleInfo,
+    frame: &crate::vehicles::VehicleFrame,
+) -> Vec<EngineLoop> {
+    let Some(engine) = d.engine_sound.as_ref() else {
+        return Vec::new();
+    };
     let running = match d.control_seat() {
         Some(seat) => info.occupants.get(seat).is_some_and(Option::is_some),
         None => info.occupants.iter().any(Option::is_some),
     };
     if !running || info.destroyed || !frame.position.is_finite() {
-        return None;
+        return Vec::new();
     }
-    let (volume, pitch) = engine.at(frame.velocity.length(), d.max_speed);
-    Some(EngineLoop {
-        sound: engine.sound.clone(),
-        position: frame.position.to_array(),
-        volume,
-        pitch,
-    })
+    let speed = frame.velocity.length();
+    std::iter::once(engine)
+        .chain(&d.engine_layers)
+        .enumerate()
+        .filter_map(|(layer, engine)| {
+            let (volume, pitch) = engine.at(speed, d.max_speed);
+            // The first loop always plays: it is what marks the engine on.
+            (layer == 0 || volume > 0.001).then(|| EngineLoop {
+                sound: engine.sound.clone(),
+                position: frame.position.to_array(),
+                volume,
+                pitch,
+            })
+        })
+        .collect()
 }
 
 /// The squeal of vehicle `info`'s sliding tyres this frame, if its
@@ -427,6 +485,7 @@ impl ClientAudio {
     }
     fn record(&mut self, result: std::result::Result<(), AudioError>) {
         if let Err(error) = result {
+            report_fallback(&error);
             // Keep diagnostics bounded even for a malformed remote catalog.
             if self.warnings.len() < 64 {
                 self.warnings.insert(error.to_string());
@@ -553,7 +612,8 @@ impl ClientAudio {
             | CueKind::Beam { .. }
             | CueKind::Tracer { .. }
             | CueKind::Decal { .. }
-            | CueKind::BodyFlash { .. } => return,
+            | CueKind::BodyFlash { .. }
+            | CueKind::BodyShell { .. } => return,
             CueKind::WeaponSound { profile } => {
                 // A looping state sound belongs to the state, not to its
                 // entry; `sync_image_loops` owns it.
@@ -1060,6 +1120,7 @@ mod tests {
             wheel_suspension: vec![],
             wheel_rotation: vec![],
             wheel_contact: vec![],
+            driver_jump_held: false,
             turret_aim: [0.0; 2],
         };
         // Only a passenger: the engine is off.
@@ -1080,6 +1141,69 @@ mod tests {
         info.destroyed = false;
         d.engine_sound = None;
         assert_eq!(engine_loop(&d, &info, &frame(15.0)), None);
+    }
+
+    /// A layered engine plays its main loop and every layer whose curve has
+    /// volume at this speed, and none that has gone quiet.
+    #[test]
+    fn engine_layers_play_only_while_audible_and_follow_their_curves() {
+        let mut d = bri_vehicles::testing::car();
+        d.max_speed = 30.0;
+        let sound = |name: &str, curve: serde_json::Value| -> bri_vehicles::schema::EngineSound {
+            serde_json::from_value(serde_json::json!({ "sound": name, "curve": curve })).unwrap()
+        };
+        d.engine_sound = Some(sound(
+            "buggy:low",
+            serde_json::json!([[0.0, 0.5, 1.0], [0.5, 0.5, 1.5], [0.6, 0.0, 1.6]]),
+        ));
+        d.engine_layers = vec![sound(
+            "buggy:high",
+            serde_json::json!([
+                [0.0, 0.0, 1.0],
+                [0.5, 0.0, 1.4],
+                [0.6, 0.8, 1.5],
+                [1.0, 0.8, 2.0]
+            ]),
+        )];
+        let info = bri_sim::session::VehicleInfo {
+            id: 1,
+            definition: d.id.clone(),
+            color: None,
+            occupants: vec![Some(7), None, None, None],
+            destroyed: false,
+            turret_broken: false,
+            scale: 1.0,
+            lights: false,
+        };
+        let frame = |speed: f32| crate::vehicles::VehicleFrame {
+            position: glam::Vec3::ZERO,
+            rotation: glam::Quat::IDENTITY,
+            velocity: glam::Vec3::new(speed, 0.0, 0.0),
+            steering: 0.0,
+            wheel_suspension: vec![],
+            wheel_rotation: vec![],
+            wheel_contact: vec![],
+            driver_jump_held: false,
+            turret_aim: [0.0; 2],
+        };
+        let at = |speed: f32| engine_loops(&d, &info, &frame(speed));
+        // Parked: only the main loop, at its first key.
+        let idle = at(0.0);
+        assert_eq!(idle.len(), 1);
+        assert_eq!(
+            (idle[0].sound.as_str(), idle[0].volume, idle[0].pitch),
+            ("buggy:low", 0.5, 1.0)
+        );
+        // Half way along the first segment: pitch is half way up.
+        assert!((at(7.5)[0].pitch - 1.25).abs() < 1e-5);
+        // Past the crossover both are heard, then only the high layer sounds
+        // but the main loop is kept as the engine's marker.
+        let fast = at(27.0);
+        assert_eq!(fast.len(), 2);
+        assert_eq!(fast[0].volume, 0.0);
+        assert!((fast[1].volume - 0.8).abs() < 1e-5 && fast[1].sound == "buggy:high");
+        // Past the last key the curve holds.
+        assert_eq!(at(300.0)[1].pitch, 2.0);
     }
 
     /// A car sliding sideways skids at its grounded wheels, harder and
@@ -1113,6 +1237,7 @@ mod tests {
             wheel_suspension: vec![],
             wheel_rotation: vec![],
             wheel_contact: vec![grounded; wheels],
+            driver_jump_held: false,
             turret_aim: [0.0; 2],
         };
         let straight = frame(glam::Vec3::new(0.0, 0.0, 25.0), true);
@@ -1684,5 +1809,22 @@ mod tests {
         );
         assert_eq!(far, 0.0, "out of earshot");
         Ok(())
+    }
+
+    #[test]
+    fn a_sound_that_cannot_play_is_a_counted_fallback_of_kind_sound() {
+        report_fallback(&AudioError::UnknownSound(
+            "audio-fallback-test-track".into(),
+        ));
+        report_fallback(&AudioError::UnknownSound(
+            "audio-fallback-test-track".into(),
+        ));
+        let mine: Vec<_> = bri_console::fallback::snapshot()
+            .into_iter()
+            .filter(|e| e.item == "audio-fallback-test-track")
+            .collect();
+        assert_eq!(mine.len(), 1, "{mine:?}");
+        assert_eq!(mine[0].kind, "sound");
+        assert_eq!(mine[0].count, 2);
     }
 }

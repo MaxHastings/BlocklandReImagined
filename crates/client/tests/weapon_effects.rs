@@ -115,6 +115,9 @@ fn weapons() -> Arc<Pack> {
         ballistic: false,
         elasticity: 0.,
         friction: 0.,
+        elasticity_surfaces: Default::default(),
+        bounce_surfaces: Default::default(),
+        fuse: None,
         damage: 0.,
         damage_type: String::new(),
         radius_damage_type: String::new(),
@@ -123,6 +126,8 @@ fn weapons() -> Arc<Pack> {
         explode_player: false,
         explode_death: false,
         collide_players: false,
+        pass_source: false,
+        settle_speed: 0.0,
         explosion: Default::default(),
         brick: Default::default(),
         bounce_effect: String::new(),
@@ -140,6 +145,10 @@ fn weapons() -> Arc<Pack> {
         children: Vec::new(),
         aura: None,
         slow: None,
+        falloff: None,
+        homing: None,
+        contrail: None,
+        flare: None,
         fixed_damage: false,
         collision_sound: None,
         sport_hit: None,
@@ -171,6 +180,7 @@ fn view() -> WeaponView {
             paint: None,
             heading: None,
             bounces: 0,
+            fuse_started: None,
             spawned: 0,
             id: 1,
             definition: "projectile".into(),
@@ -702,6 +712,7 @@ fn an_add_on_explosion_with_a_light_plays_by_its_name() -> Result<()> {
             light: Some(light.id.clone()),
             burst: Some(("kit:emitter/flash".into(), 10, 0.2)),
         }],
+        ..Default::default()
     };
     pack.validate()?;
     let mut fx = WeaponEffects::new(base, Arc::new(pack), EffectsLimits::default())?;
@@ -758,6 +769,7 @@ fn an_add_on_pack_brings_its_own_emitters_and_explosions() -> Result<()> {
             light: None,
             burst: Some(("kit:emitter/flash".into(), 4, 0.5)),
         }],
+        ..Default::default()
     };
     pack.validate()?;
     let fx = WeaponEffects::new(base, Arc::new(pack), EffectsLimits::default())?;
@@ -838,6 +850,7 @@ fn a_particle_whose_texture_is_missing_draws_the_cloud() -> Result<()> {
             light: None,
             burst: Some(("kit:emitter/star".into(), 4, 0.5)),
         }],
+        ..Default::default()
     };
     pack.validate()?;
     let fx = WeaponEffects::new(base, Arc::new(pack), EffectsLimits::default())?;
@@ -900,6 +913,7 @@ fn an_add_on_particle_draws_its_own_texture() -> Result<()> {
         }],
         lights: vec![],
         explosions: vec![],
+        ..Default::default()
     };
     pack.validate()?;
     let pack = Arc::new(pack);
@@ -955,6 +969,7 @@ fn an_add_on_particle_draws_an_interface_picture() -> Result<()> {
         }],
         lights: vec![],
         explosions: vec![],
+        ..Default::default()
     };
     pack.validate()?;
     let dir = tempfile::tempdir()?;

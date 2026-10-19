@@ -26,11 +26,13 @@ mod games;
 pub mod interop;
 mod lint;
 mod math;
+mod movers;
 mod physics;
 pub mod view;
 pub use bots::BotKindView;
 pub use games::{BrickView, DropView, MAX_BRICKS_LISTED, MinigameView, TeamView, brick_map};
 pub use interop::{Emitted, Nested};
+pub use movers::MoverInfo;
 use view::{Of, view_in};
 
 /// Operation budgets per kind of call.
@@ -113,6 +115,16 @@ pub struct PlayerView {
     pub archetype: String,
     #[serde(default)]
     pub crouched: bool,
+    /// Whether the jet button is held, whatever the body or the tool in hand
+    /// makes of it (an aim-down-sights gun takes it as its aim).
+    #[serde(default)]
+    pub jet_held: bool,
+    /// Standing on something (not falling or jumping).
+    #[serde(default)]
+    pub grounded: bool,
+    /// Lying prone (`set_prone`); a prone body is also `crouched`.
+    #[serde(default)]
+    pub prone: bool,
     /// Seated on a vehicle or riding another player.
     #[serde(default)]
     pub mounted: bool,
@@ -227,6 +239,15 @@ pub trait World {
         range: f32,
         ignore: Option<u64>,
     ) -> Option<RayHit>;
+    /// The map's keyed movers (doors), in map order.
+    fn movers(&self) -> Vec<MoverInfo> {
+        Vec::new()
+    }
+    /// The movers whose collision lies within `reach` of player `player`'s
+    /// body (touching it, for a reach of a hair), nearest first.
+    fn movers_near(&self, _player: u64, _reach: f32) -> Vec<String> {
+        Vec::new()
+    }
     /// Whether the minigame and trust rules let player `by` hurt `target`
     /// (`minigameCanDamage`).
     fn can_damage(&self, by: u64, target: ObjectRef) -> bool;
@@ -504,6 +525,9 @@ pub struct Snapshot {
     /// The host's game version, as players see it on the main menu
     /// (`game_version()`).
     pub game_version: String,
+    /// The map being played (`map_id()`): `<package>:map/<name>` for an
+    /// Add-On's map, the base map's name otherwise; empty when unknown.
+    pub map_id: String,
     pub seed: i64,
     /// The live environment settings (`environment()`).
     pub environment: bri_content::atmosphere::Settings,
@@ -859,6 +883,9 @@ fn player_map(p: &PlayerView) -> Dynamic {
         float_entry("max_health", p.max_health),
         ("archetype", p.archetype.clone().into()),
         ("crouched", p.crouched.into()),
+        ("jet_held", p.jet_held.into()),
+        ("grounded", p.grounded.into()),
+        ("prone", p.prone.into()),
         ("mounted", p.mounted.into()),
         (
             "mount",
@@ -1453,6 +1480,7 @@ fn register_api(engine: &mut Engine) {
     engine.register_fn("game_version", || {
         with(|i| Ok(i.snapshot.game_version.clone()))
     });
+    engine.register_fn("map_id", || with(|i| Ok(i.snapshot.map_id.clone())));
     // Players, bots and entities are views ([`view`]): a list of them, or
     // a script's own list of some, never meets a script value's limits.
     engine.register_fn("players", || {
@@ -1751,7 +1779,15 @@ fn register_api(engine: &mut Engine) {
          z: Dynamic,
          vx: Dynamic,
          vy: Dynamic,
-         vz: Dynamic| { fire_op(projectile, [x, y, z], [vx, vy, vz], Dynamic::UNIT) },
+         vz: Dynamic| {
+            fire_op(
+                projectile,
+                [x, y, z],
+                [vx, vy, vz],
+                Dynamic::UNIT,
+                Dynamic::from(0 as INT),
+            )
+        },
     );
     engine.register_fn(
         "fire",
@@ -1762,19 +1798,53 @@ fn register_api(engine: &mut Engine) {
          vx: Dynamic,
          vy: Dynamic,
          vz: Dynamic,
-         by: Dynamic| { fire_op(projectile, [x, y, z], [vx, vy, vz], by) },
+         by: Dynamic| {
+            fire_op(
+                projectile,
+                [x, y, z],
+                [vx, vy, vz],
+                by,
+                Dynamic::from(0 as INT),
+            )
+        },
+    );
+    // `fire(projectile, x, y, z, vx, vy, vz, by, age)`: `age` ticks of its life already used.
+    engine.register_fn(
+        "fire",
+        |projectile: &str,
+         x: Dynamic,
+         y: Dynamic,
+         z: Dynamic,
+         vx: Dynamic,
+         vy: Dynamic,
+         vz: Dynamic,
+         by: Dynamic,
+         age: Dynamic| { fire_op(projectile, [x, y, z], [vx, vy, vz], by, age) },
     );
     engine.register_fn("damage", |target: Dynamic, amount: Dynamic| {
-        damage_op(&target, &amount, &Dynamic::UNIT, None)
+        damage_op(&target, &amount, &Dynamic::UNIT, None, None)
     });
     // `()` credits nobody, as `on_death` passes `()` for no killer.
     engine.register_fn("damage", |target: Dynamic, amount: Dynamic, by: Dynamic| {
-        damage_op(&target, &amount, &by, None)
+        damage_op(&target, &amount, &by, None, None)
     });
     engine.register_fn(
         "damage",
         |target: Dynamic, amount: Dynamic, by: Dynamic, damage_type: &str| {
-            damage_op(&target, &amount, &by, Some(damage_type.into()))
+            damage_op(&target, &amount, &by, Some(damage_type.into()), None)
+        },
+    );
+    // `damage(target, amount, by, type, [vx, vy, vz])`: the hit's Momentum / Mass, a velocity change in units a second.
+    engine.register_fn(
+        "damage",
+        |target: Dynamic, amount: Dynamic, by: Dynamic, damage_type: &str, knock: Array| {
+            damage_op(
+                &target,
+                &amount,
+                &by,
+                Some(damage_type.into()),
+                Some(vector(&knock)?),
+            )
         },
     );
     engine.register_fn(
@@ -2716,12 +2786,14 @@ fn damage_op(
     amount: &Dynamic,
     by: &Dynamic,
     damage_type: Option<String>,
+    knock: Option<[f32; 3]>,
 ) -> Fallible<INT> {
     push(Op::Damage(ops::Damage {
         target: target(target_value)?,
         amount: float(amount)?,
         by: player_or_none(by)?,
         damage_type,
+        knock,
     }))
 }
 
@@ -2935,6 +3007,52 @@ fn register_presentation(engine: &mut Engine) {
             }))
         },
     );
+    // body_shell(player, shell, strength, seconds): one of the weapons pack's
+    // shells over a body at a strength from 0 to 1, fading over `seconds`.
+    engine.register_fn(
+        "body_shell",
+        |player: Dynamic, shell: &str, strength: Dynamic, seconds: Dynamic| {
+            push(Op::BodyShell(ops::BodyShell {
+                player: id(&player)?,
+                shell: shell.to_owned(),
+                strength: float(&strength)?,
+                seconds: float(&seconds)?,
+            }))
+        },
+    );
+    // effect_at(effect, position, direction[, scale]): direction is the
+    // surface normal the effect faces out of; it need not be unit length.
+    fn effect_at(effect: &str, position: Array, direction: Array, scale: f32) -> Fallible<INT> {
+        let direction = vector(&direction)?;
+        let length = direction.iter().map(|v| v * v).sum::<f32>().sqrt();
+        if !(length.is_finite() && length > 1e-6) {
+            return fail("effect_at needs a direction that is not zero");
+        }
+        push(Op::EffectAt(ops::EffectAt {
+            effect: effect.to_owned(),
+            position: vector(&position)?,
+            direction: direction.map(|v| v / length),
+            scale,
+        }))
+    }
+    engine.register_fn("effect_at", |e: &str, p: Array, d: Array| {
+        effect_at(e, p, d, 1.0)
+    });
+    engine.register_fn("effect_at", |e: &str, p: Array, d: Array, s: Dynamic| {
+        effect_at(e, p, d, float(&s)?)
+    });
+    // set_teleport_sound(profile): what a map teleporter plays at the ears
+    // of each player it sends through; () for none.
+    engine.register_fn("set_teleport_sound", |profile: &str| {
+        push(Op::SetTeleportSound(ops::SetTeleportSound {
+            profile: Some(profile.to_owned()),
+        }))
+    });
+    engine.register_fn("set_teleport_sound", |_none: ()| {
+        push(Op::SetTeleportSound(ops::SetTeleportSound {
+            profile: None,
+        }))
+    });
     engine.register_fn("beam", |from: Array, to: Array| beam(from, to, Map::new()));
     engine.register_fn("beam", beam);
     // play_music(player, track[, options]) / play_music_all(track[, options]),
@@ -3114,6 +3232,66 @@ fn register_presentation(engine: &mut Engine) {
         }))
     }
     engine.register_fn("set_map_lights", set_map_lights);
+    // The map's keyed movers (doors): #[id, key (-1 between keys), from, to,
+    // moving, blocked, progress, keys, position, rest, params].
+    engine.register_fn("movers", || {
+        with_world(|world, _| {
+            Ok(Dynamic::from_array(
+                world
+                    .movers()
+                    .iter()
+                    .map(|m| {
+                        // Without the params, which one `mover(id)` gives:
+                        // a script's values hold 4096 bytes together.
+                        let mut m = m.clone();
+                        m.params.clear();
+                        movers::mover_map(&m)
+                    })
+                    .collect(),
+            ))
+        })
+    });
+    // One mover, with its params, or ().
+    engine.register_fn("mover", |name: &str| {
+        with_world(|world, _| {
+            Ok(world
+                .movers()
+                .iter()
+                .find(|m| m.id == name)
+                .map_or(Dynamic::UNIT, movers::mover_map))
+        })
+    });
+    // The ids of the movers touching a player's body (within `reach`).
+    engine.register_fn("movers_near", |player: Dynamic, reach: Dynamic| {
+        let player = id(&player)?;
+        let reach = float(&reach)?;
+        if !(0.0..=64.0).contains(&reach) {
+            return fail("movers_near reaches 0 to 64 units");
+        }
+        with_world(|world, _| {
+            Ok(Dynamic::from_array(
+                world
+                    .movers_near(player, reach)
+                    .into_iter()
+                    .map(Dynamic::from)
+                    .collect(),
+            ))
+        })
+    });
+    // Send a mover to a key over a number of seconds, or hold it.
+    engine.register_fn("mover_goto", |name: &str, key: i64, seconds: Dynamic| {
+        let key = u8::try_from(key).map_err(|_| "a mover key is 0 to 15")?;
+        push(Op::MoverGoto(ops::MoverGoto {
+            id: name.to_owned(),
+            key,
+            seconds: float(&seconds)?,
+        }))
+    });
+    engine.register_fn("mover_stop", |name: &str| {
+        push(Op::MoverStop(ops::MoverStop {
+            id: name.to_owned(),
+        }))
+    });
     // A uniform over the avatar's own colours: #{ torso: [r, g, b], ... }
     // per colour slot, or () for the player's own colours again.
     engine.register_fn("set_avatar_colors", |player: Dynamic, colors: Dynamic| {
@@ -3279,6 +3457,27 @@ fn register_presentation(engine: &mut Engine) {
         }))
     });
     engine.register_fn(
+        "set_speed_modifier",
+        |player: Dynamic, key: &str, scale: Dynamic| {
+            push(Op::SetSpeedModifier(ops::SetSpeedModifier {
+                player: id(&player)?,
+                key: key.into(),
+                scale: float(&scale)?,
+            }))
+        },
+    );
+    // `scale_velocity(p, horizontal, vertical)` ([`ops::ScaleVelocity`]).
+    engine.register_fn(
+        "scale_velocity",
+        |player: Dynamic, horizontal: Dynamic, vertical: Dynamic| {
+            push(Op::ScaleVelocity(ops::ScaleVelocity {
+                player: id(&player)?,
+                horizontal: float(&horizontal)?,
+                vertical: float(&vertical)?,
+            }))
+        },
+    );
+    engine.register_fn(
         "give_ammo",
         |player: Dynamic, ammo: &str, rounds: Dynamic| {
             push(Op::GiveAmmo(ops::GiveAmmo {
@@ -3341,6 +3540,22 @@ fn register_presentation(engine: &mut Engine) {
             loaded,
         }))
     });
+    engine.register_fn("set_aim_scale", |player: Dynamic, scale: Dynamic| {
+        push(Op::SetAimScale(ops::SetAimScale {
+            player: id(&player)?,
+            scale: number(&scale)? as f32,
+        }))
+    });
+    engine.register_fn(
+        "kick_view",
+        |player: Dynamic, pitch: Dynamic, yaw: Dynamic| {
+            push(Op::KickView(ops::KickView {
+                player: id(&player)?,
+                pitch: number(&pitch)? as f32,
+                yaw: number(&yaw)? as f32,
+            }))
+        },
+    );
     engine.register_fn("unmount_image", |player: Dynamic| {
         push(Op::UnmountImage(ops::UnmountImage {
             player: id(&player)?,
@@ -3418,6 +3633,38 @@ fn register_presentation(engine: &mut Engine) {
             knots: Some(knots.iter().map(path_knot).collect::<Fallible<_>>()?),
         }))
     });
+    // `view_shake(p, direction, min, max, rate)`, radians: the aim kicked
+    // out along `direction` to `max`, back to `min` ([`ops::ViewShake`]).
+    engine.register_fn(
+        "view_shake",
+        |player: Dynamic, direction: Dynamic, min: Dynamic, max: Dynamic, rate: Dynamic| {
+            push(Op::ViewShake(ops::ViewShake {
+                player: id(&player)?,
+                direction: float(&direction)?,
+                min: float(&min)?,
+                max: float(&max)?,
+                rate: float(&rate)?,
+            }))
+        },
+    );
+    // `camera_shake(p, translation, rotation, seconds, hold)`: the player's view
+    // alone shaken ([`ops::CameraShake`]); the aim is not touched.
+    engine.register_fn(
+        "camera_shake",
+        |player: Dynamic,
+         translation: Dynamic,
+         rotation: Dynamic,
+         seconds: Dynamic,
+         hold: Dynamic| {
+            push(Op::CameraShake(ops::CameraShake {
+                player: id(&player)?,
+                translation: float(&translation)?,
+                rotation: float(&rotation)?,
+                seconds: float(&seconds)?,
+                hold: float(&hold)?,
+            }))
+        },
+    );
     engine.register_fn("follow_path", |player: Dynamic, _: ()| {
         push(Op::FollowPath(ops::FollowPath {
             player: id(&player)?,
@@ -3606,6 +3853,7 @@ fn fire_op(
     at: [Dynamic; 3],
     velocity: [Dynamic; 3],
     by: Dynamic,
+    age: Dynamic,
 ) -> Fallible<INT> {
     let [x, y, z] = at;
     let [vx, vy, vz] = velocity;
@@ -3614,6 +3862,7 @@ fn fire_op(
         position: [float(&x)?, float(&y)?, float(&z)?],
         velocity: [float(&vx)?, float(&vy)?, float(&vz)?],
         by: credit(&by)?,
+        age: u32::try_from(id(&age)?).or_else(|_| fail("an age is 0 or more ticks"))?,
     }))
 }
 fn push_op(target: Dynamic, x: Dynamic, y: Dynamic, z: Dynamic, by: Dynamic) -> Fallible<INT> {
@@ -3955,6 +4204,9 @@ impl Runtime {
             }
             if behaviour.on_projectile_hit {
                 need("on_projectile_hit".into(), 1, "on_projectile_hit");
+            }
+            if behaviour.on_explosion {
+                need("on_explosion".into(), 1, "on_explosion");
             }
             if behaviour.on_minigame {
                 need("on_minigame".into(), 1, "on_minigame");

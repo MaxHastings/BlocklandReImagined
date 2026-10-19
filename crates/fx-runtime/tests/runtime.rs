@@ -259,6 +259,59 @@ fn composite_particle_groups_share_one_budget_and_reject_atomically() {
 }
 
 #[test]
+fn a_groups_count_scales_by_the_effects_input() {
+    let library = bri_fx_runtime::testing::library();
+    let mut manifest = bri_fx_runtime::testing::manifest();
+    manifest.composites.push(pack::Composite {
+        id: "slip".into(),
+        lifetime: 0.1,
+        emitters: vec![],
+        light: None,
+        burst: None,
+        bursts: vec![Burst {
+            emitter: "emitter".into(),
+            count: [1, 5],
+            input: bri_content::effects::BurstInput {
+                count: [false, true],
+                ..Default::default()
+            },
+            ..Default::default()
+        }],
+    });
+    let pack = bri_fx_runtime::testing::pack_from(library, manifest);
+    let counts = |input: f32| {
+        let mut seen = std::collections::BTreeSet::new();
+        for seed in 0..200 {
+            let mut w = EffectsWorld::new(pack.clone(), EffectsLimits::default(), seed).unwrap();
+            w.play_composite(
+                "slip",
+                SourceTransform::default(),
+                SourceOptions {
+                    input,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+            seen.insert(w.particle_count());
+        }
+        seen
+    };
+    assert_eq!(counts(0.), [1].into(), "no input makes the least");
+    assert_eq!(counts(1.), (1..=5).collect(), "full input spans the range");
+    assert!(counts(0.5).iter().all(|n| (1..=3).contains(n)));
+}
+
+#[test]
+fn an_input_scales_the_base_and_the_spread_of_a_range_apart() {
+    use bri_content::effects::BurstInput;
+    let range = [2., 6.];
+    assert_eq!(BurstInput::scale(range, [false, false], 0.25), [2., 6.]);
+    assert_eq!(BurstInput::scale(range, [false, true], 0.25), [2., 3.]);
+    assert_eq!(BurstInput::scale(range, [true, false], 0.5), [1., 5.]);
+    assert_eq!(BurstInput::scale(range, [true, true], 0.5), [1., 3.]);
+}
+
+#[test]
 fn hsv_tints_are_sampled_once_without_changing_emission_or_alpha() {
     let make = |mode| {
         world(fixture(|l| {

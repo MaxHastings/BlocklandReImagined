@@ -127,9 +127,20 @@ With rules that keep two guns (`on_pickup` returning false to swap with
 `drop_item` and `give_item`, or `set_tools`), and a layout showing the
 held weapon's `ammo`, that is a two-weapon game.
 
+**A game with no building.** A `building` claim hides the whole building
+interface (brick bar, "Press B for more bricks", paint box, tool bar) and
+turns off its keys and wheel: B, the number keys, the use-bricks, use-tools
+and spray-can keys, the inventory arrows, the ghost brick shifts, the
+Drop Camera at Player and Drop Player at Camera keys and the wheel's brick,
+paint and tool scrolling. A claim that applies to a control profile's player
+types also leaves those actions out of that game's Options > Controls list. An Add-On declares it once for its
+bodies (`"region": "building"`, `"when": { "body": [...] }`, no elements);
+the engine enforces it, so nothing of Blockland's building HUD or binds shows
+in a game that does not claim it. `docs/architecture/seams.md` lists the owner.
+
 **When.** `when` limits the claim to a body (`body`: archetype ids), a held
 item (`holding`: a weapons Add-On's id or an image id) and a vehicle seat
-(`vehicle`: vehicle ids), and to playing in a mini-game or not
+(`vehicle`: vehicle ids; `seat`: seat numbers from 0, the driver's first, of the vehicle they ride), and to playing in a mini-game or not
 (`minigame`: true or false). Every condition given must match. The HUD switches
 with the body, the weapon and the seat the moment they change, and goes
 back to the stock HUD when nothing claims a region.
@@ -170,10 +181,21 @@ back to the stock HUD when nothing claims a region.
   however they move. `allies`, `enemies` and `others` (all true) pick which
   sides show: your team, the other teams of your game, and everyone else.
   Put a background image or a sweep under it as ordinary `image` elements.
+- `edge_arrow`: a hit indicator. Draws `texture` into `rect` only while the
+  last hit came from its `edge` (`top`, `bottom`, `left` or `right`). `x` and
+  `z` are rule values giving where the hit came from as a horizontal world
+  offset from the viewer (any length: the rule writes the attacker's position
+  minus the victim's, or a shot's direction reversed), and `strength` is a
+  0 to 1 rule value the rule counts down, which fades the arrow (`tint` alpha
+  times `strength`; 0 draws nothing). The edge is the nearest of ahead (top),
+  behind (bottom), left and right by the viewer's facing, so the arrow follows
+  the camera. Claim `top_center`, `bottom_center`, `left` and `right` with one
+  arrow each. Flashing a meter needs nothing more than `show` on a value the
+  rule flips.
 - Any element takes `show` `{ "value", "above", "below" }` to appear only
   while a value is in range: a low-health flash, a reload prompt.
 
-**Values** (`value`, `max`, `show`): `health`, `health_max`, `energy` (jet
+**Values** (`value`, `max`, `show`): `health`, `health_max`, `vehicle_health` (what is left of the hull of the vehicle the viewer rides, 0 to 1; missing on foot), `energy` (jet
 energy 0 to 1), `alive` (1 or 0), `center_print` and `bottom_print` (the
 stock prints' text, without markup), or a rule's state as a panel binds it,
 `rule-id:player/key` or `rule-id:global/key`. The held gun gives `ammo`
@@ -184,7 +206,9 @@ missing with no gun that has a magazine, and `ammo` and `ammo_reserve` are
 missing when they never run out. A missing value reads as `-` in text and
 0 in a bar or `show`, so `"show": { "value": "ammo_max", "above": 0 }`
 shows an element only with such a gun out. A `max` left out is the value's
-own (`health_max` for `health`, `ammo_max` for `ammo`, else 1). A layout reading a rule's
+own (`health_max` for `health`, `ammo_max` for `ammo`, else 1). `aiming` is 1 while the viewer aims down a gun's sights, and `zoom_level` is the scope's step while they do (1 for the gun's
+own field of view, 2 and up for each wheel level of `Zoom::levels`, 0 when not aiming), so a level marker can show with `show` ranges.
+A layout reading a rule's
 state is not drawn on a server that does not run that rule.
 
 `respawn` is the seconds until you may respawn while dead (0 once a click

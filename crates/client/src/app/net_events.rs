@@ -240,6 +240,15 @@ impl App {
         {
             self.ui.apply_session(a.id, update);
         }
+        // A game that claims the building interface has no bricks in hand: the stock brick and its ghost never show.
+        if self.ui.core.building_off()
+            && let Some(building) = self.build.building.as_mut()
+            && matches!(building.equipment(), crate::building::Equipment::Brick(_))
+        {
+            for update in building.put_away() {
+                self.ui.apply_session(a.id, update);
+            }
+        }
         if let (Some(building), Some(view)) = (&mut self.build.building, &a.view) {
             building.set_held_brick(view.weapons.images.get(&view.owner).is_some_and(|images| {
                 images.iter().any(|image| {
@@ -767,6 +776,25 @@ impl App {
                         bri_sim::session::Notice::Flash { color, seconds } => {
                             UiUpdate::Flash { color, seconds }
                         }
+                        bri_sim::session::Notice::ViewShake {
+                            direction,
+                            min,
+                            max,
+                            rate,
+                        } => {
+                            self.controls.start_view_shake(direction, min, max, rate);
+                            continue;
+                        }
+                        bri_sim::session::Notice::CameraShake {
+                            translation,
+                            rotation,
+                            seconds,
+                            hold,
+                        } => {
+                            self.controls
+                                .start_camera_shake(translation, rotation, seconds, hold);
+                            continue;
+                        }
                         bri_sim::session::Notice::Music(play) => {
                             self.audio.play_music(&play);
                             continue;
@@ -782,6 +810,11 @@ impl App {
                         bri_sim::session::Notice::Ammo(held) => {
                             self.net.next_print_is_ammo = held.as_ref().is_some_and(|h| h.printed);
                             self.net.held_ammo = held;
+                            continue;
+                        }
+                        bri_sim::session::Notice::ViewKick { pitch, yaw } => {
+                            self.controls
+                                .kick_view(yaw.to_radians(), pitch.to_radians());
                             continue;
                         }
                         bri_sim::session::Notice::Fov(fov) => {
@@ -1025,6 +1058,9 @@ impl App {
             self.lighting.light_volume = prepared.light_volume;
             self.scene.cpu_scene = Some(prepared.scene);
             self.scene.shape_indices = prepared.shape_indices;
+            self.fx
+                .map_movers
+                .set_map(prepared.map_movers, prepared.mover_scenes);
             self.scene.cpu_terrain = prepared.terrain;
             self.scene.cpu_water = prepared.repeated_water;
             self.scene.meshes = Some(prepared.meshes);

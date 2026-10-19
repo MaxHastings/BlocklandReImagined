@@ -37,7 +37,7 @@ use std::{
 mod support;
 use support::{content_root::ContentRoot, wait};
 
-synthetic_and_content!(
+synthetic_and_release_content!(
     ContentRoot: steady_play_builds_and_uploads_nothing_whole,
     a_tap_inside_one_frame_still_fires
 );

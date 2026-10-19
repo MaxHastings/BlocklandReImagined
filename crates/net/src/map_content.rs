@@ -69,6 +69,8 @@ pub struct LoadedMap {
     pub breakables: Vec<Breakable>,
     /// Teleporter entrances and exits.
     pub teleporters: Vec<bri_content::scene::Teleporter>,
+    /// The map's keyed movers (doors).
+    pub movers: Vec<bri_sim::map::MapMover>,
     /// The plate a flat map stands on.
     pub plate: Option<bri_content::scene::Plate>,
 }
@@ -81,6 +83,7 @@ impl LoadedMap {
             spawn_points: self.spawn_points,
             breakables: self.breakables,
             teleporters: self.teleporters,
+            movers: self.movers,
             tutorial: self.tutorial,
         }
     }
@@ -98,7 +101,18 @@ impl MapContent {
             maps: catalog(content_root, packages)?,
             brick_catalog: role("brick_catalog")?,
             geometry: role("geometry")?,
-            tutorial: role("tutorial").ok(),
+            tutorial: match role("tutorial") {
+                Ok(dir) => Some(dir),
+                Err(error) => {
+                    bri_console::fallback::report(
+                        bri_console::fallback::kind::DROPPED_ITEM,
+                        "",
+                        "tutorial role",
+                        &format!("no tutorial pack ({error:#})"),
+                    );
+                    None
+                }
+            },
             brick_extras: crate::content_identity::brick_catalog_providers(content_root, packages)?,
             brick_geometry: crate::content_identity::brick_geometry_assets(content_root, packages)?,
             weapons,
@@ -202,6 +216,7 @@ impl MapContent {
             tutorial,
             breakables: native.breakables,
             teleporters: native.teleporters,
+            movers: native.movers,
             plate: native.plate,
         })
     }
@@ -226,10 +241,18 @@ pub fn environments(
         Ok(dir) => {
             bri_content::environment_pack::Pack::load(&dir).context("Loading the environment pack")
         }
-        Err(_) => Ok(bri_content::environment_pack::Pack {
-            schema_version: bri_content::environment_pack::SCHEMA,
-            ..Default::default()
-        }),
+        Err(error) => {
+            bri_console::fallback::report(
+                bri_console::fallback::kind::DROPPED_ITEM,
+                "",
+                "environments role",
+                &format!("an empty environment pack ({error:#})"),
+            );
+            Ok(bri_content::environment_pack::Pack {
+                schema_version: bri_content::environment_pack::SCHEMA,
+                ..Default::default()
+            })
+        }
     }
 }
 

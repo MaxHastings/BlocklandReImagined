@@ -82,6 +82,81 @@ impl ScriptOp for BodyFlash {
     }
 }
 
+/// Show one of an Add-On's weapons-pack shells (`effects.shells`) over a
+/// player's body at `strength` (0 to 1), fading to nothing over `seconds`: a
+/// shield taking a hit. A new call restarts it. Every player sees it.
+/// Presentation only.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct BodyShell {
+    pub player: u64,
+    pub shell: String,
+    pub strength: f32,
+    pub seconds: f32,
+}
+impl ScriptOp for BodyShell {
+    const CAPABILITY: &str = "effects";
+    const NAME: &str = "body_shell";
+    fn bounded(&self) -> bool {
+        !self.shell.is_empty()
+            && self.shell.len() <= 160
+            && !self.shell.chars().any(char::is_control)
+            && self.strength.is_finite()
+            && (0.0..=1.0).contains(&self.strength)
+            && self.seconds.is_finite()
+            && (0.05..=60.0).contains(&self.seconds)
+    }
+}
+
+/// Spawn one of an Add-On's effects (a weapons pack's `effects` explosion)
+/// at a point, facing out along `direction` (a unit vector, a surface
+/// normal), `scale` times its size: a hit spark, a shield ripple, a puff of
+/// dust. Presentation only; every player near sees it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct EffectAt {
+    pub effect: String,
+    pub position: [f32; 3],
+    pub direction: [f32; 3],
+    pub scale: f32,
+}
+impl ScriptOp for EffectAt {
+    const CAPABILITY: &str = "effects";
+    const NAME: &str = "effect_at";
+    fn bounded(&self) -> bool {
+        let EffectAt {
+            effect,
+            position,
+            direction,
+            scale,
+        } = self;
+        !effect.is_empty()
+            && effect.len() <= 128
+            && !effect.chars().any(char::is_control)
+            && finite(position)
+            && position.iter().all(|c| c.abs() <= 1_000_000.0)
+            && finite(direction)
+            && (direction.iter().map(|v| v * v).sum::<f32>() - 1.).abs() < 0.001
+            && scale.is_finite()
+            && (0.01..=100.0).contains(scale)
+    }
+}
+
+/// The sound a map teleporter plays at the ears of each player it sends
+/// through (`None` for silence, the default). Applies to the map being
+/// played; a new map starts with none.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SetTeleportSound {
+    pub profile: Option<String>,
+}
+impl ScriptOp for SetTeleportSound {
+    const CAPABILITY: &str = "effects";
+    const NAME: &str = "set_teleport_sound";
+    fn bounded(&self) -> bool {
+        self.profile.as_ref().is_none_or(|p| {
+            !p.is_empty() && p.len() <= 128 && !p.chars().any(char::is_control)
+        })
+    }
+}
+
 /// Play a music track (a sound an Add-On marks `music`, or one of the
 /// game's music loops) at a player's ears on the music bus, or stop it
 /// (`track` none), fading over `fade` seconds. For one player, or for

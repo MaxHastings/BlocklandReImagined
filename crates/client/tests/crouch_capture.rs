@@ -12,7 +12,7 @@ use bri_sim::player::PlayerState;
 use bri_ui::gpu::Headless;
 use support::{avatar_fixture::AvatarFixture, gpu};
 
-synthetic_and_content!(AvatarFixture: recrouching_while_rising_snaps_the_rig_to_standing);
+synthetic_and_release_content!(AvatarFixture: recrouching_while_rising_snaps_the_rig_to_standing);
 
 const TILE: (u32, u32) = (240, 360);
 

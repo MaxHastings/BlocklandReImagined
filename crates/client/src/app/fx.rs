@@ -18,9 +18,15 @@ pub(super) struct Effects {
     /// Marks projectiles leave on bricks: bullet holes.
     pub(super) decals: crate::decals::Decals,
     pub(super) footsteps: crate::footsteps::Footsteps,
+    pub(super) clip_sounds: crate::clip_sounds::ClipSounds,
+    /// What each vehicle's slipping tyres throw up, by surface.
+    pub(super) wheel_contacts: crate::wheel_contacts::WheelContactEffects,
     pub(super) body_flashes: crate::body_flash::BodyFlashes,
+    pub(super) body_shells: crate::body_shell::BodyShells,
     /// The Tutorial's target practice targets.
     pub(super) tutorial_targets: crate::tutorial_targets::TutorialTargets,
+    /// The map's keyed movers (doors) where the host has them.
+    pub(super) map_movers: crate::map_movers::ClientMovers,
     /// Pieces thrown by explosions with `debris` (vehicle wrecks, tank shells).
     pub(super) explosion_debris: crate::explosion_debris::ExplosionDebris,
     /// Ejected gun casings (`stateEjectShell`) and their GPU model.
@@ -38,6 +44,8 @@ pub(super) struct Effects {
     /// The farthest sprites the last frame left out past the renderer's budget.
     pub(super) effect_sprites_cut: usize,
     pub(super) weapon_effect_session: Option<RequestId>,
+    pub(super) weapon_frame_probe: bool,
+    pub(super) weapon_frame_observation: Option<crate::weapon_effects::WeaponFrameObservation>,
     pub(super) weapon_animation_cues: VecDeque<(bri_sim::presentation::Cue, f32, f64)>,
     pub(super) weapon_animation_drops: u64,
     pub(super) weapon_animation_cursor: u64,
@@ -241,6 +249,24 @@ impl App {
         } = &cue.kind
         {
             self.fx.body_flashes.add(*owner, *color, *seconds);
+        }
+        if let bri_sim::presentation::CueKind::BodyShell {
+            owner,
+            shell,
+            strength,
+            seconds,
+        } = &cue.kind
+        {
+            // A shell the pack lacks, or whose noise did not load, shows nothing.
+            let effects = &self.content.weapons.pack.effects;
+            if let Some(shell) = effects.shells.iter().find(|s| &s.id == shell) {
+                let image = |i: usize| self.item_assets.texture(&shell.noise[i].texture).cloned();
+                if let (Some(a), Some(b)) = (image(0), image(1)) {
+                    self.fx
+                        .body_shells
+                        .add(*owner, shell, [a, b], *strength, *seconds);
+                }
+            }
         }
         self.fx.actor_effects.cue(&cue);
         self.fx.explosion_shapes.cue(&cue);
@@ -463,12 +489,14 @@ impl App {
         if self.fx.weapon_effect_session == Some(session) {
             return;
         }
+        self.fx.weapon_frame_observation = None;
         self.fx.weapon_effects.reset(checkpoint_cursor);
         self.fx.actor_effects.reset(checkpoint_cursor);
         self.fx.explosion_shapes.reset(checkpoint_cursor);
         self.fx.beams.clear();
         self.fx.decals.clear();
         self.fx.body_flashes.clear();
+        self.fx.body_shells.clear();
         self.fx.explosion_debris.reset(checkpoint_cursor);
         self.fx.weapon_shells.reset(checkpoint_cursor);
         self.fx
@@ -532,7 +560,11 @@ impl App {
                     .effect_cue(weapon_cues.pop_front().unwrap().0, weapon_effects.weapons()),
             );
         }
-        weapon_effects.cues(&ready, |cue| world_items.effect_pose(cue))?;
+        weapon_effects.cues_with_local_view(
+            &ready,
+            |cue| world_items.effect_pose(cue),
+            |cue| world_items.local_effect_affinity(cue),
+        )?;
         // queue_weapon_cue already transfers these same reliable IDs into App's
         // bounded avatar queue (including its own observable overflow policy).
         // Do not retain a second copy indefinitely in the effects adapter.

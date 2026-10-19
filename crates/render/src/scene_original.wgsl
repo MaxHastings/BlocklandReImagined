@@ -15,7 +15,7 @@ struct Camera {
     shading:vec4<f32>, haze:vec4<f32>,
 };
 @group(0) @binding(0) var<uniform> camera:Camera;
-struct PointLight { position_radius:vec4<f32>, color:vec4<f32> };
+struct PointLight { position_radius:vec4<f32>, color:vec4<f32>, cone:vec4<f32> };
 // count.x lights; the grid (crate::light_grid) has its origin and inverse
 // cell size in grid_origin, its dimensions and 1 when built in grid_dims.
 struct PointLights { count:vec4<u32>, grid_origin:vec4<f32>, grid_dims:vec4<u32>, values:array<PointLight,256> };
@@ -36,6 +36,11 @@ fn light_cell(position:vec3<f32>)->vec2<u32> {
 fn listed_light(list:vec2<u32>,i:u32)->PointLight {
     return lights.values[min(light_grid[list.x+i],255u)];
 }
+// A point light's cone (PointLight::cone): 1 inside, fading to 0 at its edge, all round when unset.
+fn point_cone(light:PointLight,toward:vec3<f32>)->f32 {
+    if dot(light.cone.xyz,light.cone.xyz)==0.0 {return 1.0;}
+    return clamp(dot(toward,light.cone.xyz)-light.cone.w,0.0,1.0);
+}
 // Map surfaces and terrain: smooth finite-radius native falloff per pixel.
 // Vertex-lit objects use vertex_point_illumination below.
 fn point_illumination(position:vec3<f32>,normal:vec3<f32>)->vec3<f32> {
@@ -47,7 +52,10 @@ fn point_illumination(position:vec3<f32>,normal:vec3<f32>)->vec3<f32> {
         let delta=light.position_radius.xyz-position;
         let distance=length(delta);
         let falloff=max(1.0-distance/max(light.position_radius.w,0.0001),0.0);
-        result+=light.color.rgb*falloff*falloff*max(dot(n,delta/max(distance,0.0001)),0.0);
+        // color.w 1: a map light past the shaded budget, linear like the
+        // shaded ones (light_given); effect and vehicle lights stay smooth.
+        let shaped=select(falloff*falloff,falloff,light.color.w>0.5);
+        result+=light.color.rgb*shaped*max(dot(n,delta/max(distance,0.0001)),0.0)*point_cone(light,-delta/max(distance,0.0001));
     }
     return result;
 }
@@ -69,7 +77,7 @@ fn vertex_point_illumination(position:vec3<f32>,normal:vec3<f32>)->vec3<f32> {
         let radius=light.position_radius.w;
         if d2>=radius*radius {continue;}
         let facing=max(dot(n,delta*inverseSqrt(max(d2,0.00000001))),0.0);
-        result+=light.color.rgb*facing/(1.0+GL_QUADRATIC_ATTENUATION*d2);
+        result+=light.color.rgb*facing*point_cone(light,-delta*inverseSqrt(max(d2,0.00000001)))/(1.0+GL_QUADRATIC_ATTENUATION*d2);
     }
     return result;
 }
@@ -460,6 +468,19 @@ fn baked_sun_direction()->vec3<f32> {
     return d/max(length(d),0.0001);
 }
 // The live sun comes from where the map's lightmaps were baked from.
+// The share of a lightmap's static light that came from the sun and sky
+// (SceneData::lightmap_sky_share, in baked_ambient.w), and what that light
+// is multiplied by under the live sun and ambient: their ratio to the
+// baked ones, per channel, never brighter than baked. 1 for a map that did
+// not say (its lightmaps' static light stays, as lamps and bounce).
+fn sky_share()->f32 {return select(0.0,camera.baked_ambient.w,relit());}
+fn sky_follow()->vec3<f32> {
+    let share=sky_share();
+    if share<=0.0 {return vec3<f32>(1.0);}
+    let live=camera.ambient.rgb+camera.sun_color.rgb;
+    let baked=camera.baked_ambient.rgb+camera.baked_sun_color.rgb;
+    return mix(vec3<f32>(1.0),clamp(live/max(baked,vec3<f32>(0.001)),vec3<f32>(0.0),vec3<f32>(1.0)),share);
+}
 fn baked_sun_direction_kept()->bool {
     return !relit() || distance(camera.sun_direction.xyz,camera.baked_sun_direction.xyz)<0.0001;
 }
@@ -561,8 +582,8 @@ fn decomposed_lightmap(mission:vec3<f32>,parts:vec4<f32>,uv:vec2<f32>,position:v
         }
     }
     let baked=min(parts.rgb+baked_sun_color()*baked_facing*parts.a,vec3<f32>(1.0));
-    let ambient=camera.ambient.rgb-baked_ambient();
-    let live=clamp(parts.rgb-shaded+ambient+camera.sun_color.rgb*facing*sun,vec3<f32>(0.0),vec3<f32>(1.0));
+    let ambient=(camera.ambient.rgb-baked_ambient())*(1.0-sky_share());
+    let live=clamp((parts.rgb-shaded)*sky_follow()+ambient+camera.sun_color.rgb*facing*sun,vec3<f32>(0.0),vec3<f32>(1.0));
     return max(mission-(baked-live),vec3<f32>(0.0));
 }
 // Every recovered light reaching a map surface as the map compiler lit it
@@ -1042,6 +1063,38 @@ fn multiplicative_surface(v:VertexOut)->vec4<f32> {
     let multiplier=display_color(texel.rgb)*v.color.rgb;
     return vec4<f32>(output_color(mix(vec3<f32>(1.0),multiplier,alpha)),0.0);
 }
+// A plasma shell (MaterialKind::Plasma, Halo's `shader_transparent_plasma`): an
+// unlit glow whose colour runs from `material[1].rgb` where the surface faces
+// the eye to `material[2].rgb` where it turns edge on (brightness already
+// multiplied in), the product of two scrolling noise maps (layer0, layer1) for
+// its pattern, and the vertex colour's alpha for its strength. `material[3]` and
+// `material[4]`: noise repeats, scroll u and v (in repeats), the seconds one
+// scroll takes. A noise image taller than wide is a volume of square slices
+// stacked down it, blended between neighbours as the depth moves: the depth
+// scroll (volumes per scroll) is `material[1].w` for the first noise and
+// `material[2].w` for the second.
+fn plasma_noise(tex:texture_2d<f32>,uv:vec2<f32>,depth:f32)->f32 {
+    let size=vec2<f32>(textureDimensions(tex));
+    let slices=max(1.0,floor(size.y/size.x+0.5));
+    let plane=vec2<f32>(fract(uv.x),fract(uv.y));
+    let at=fract(depth)*slices;
+    let first=floor(at);
+    let second=(first+1.0)%slices;
+    let a=textureSampleLevel(tex,tiled,vec2<f32>(plane.x,(first+plane.y)/slices),0.0).r;
+    let b=textureSampleLevel(tex,tiled,vec2<f32>(plane.x,(second+plane.y)/slices),0.0).r;
+    return mix(a,b,at-first);
+}
+fn plasma_surface(v:VertexOut)->vec4<f32> {
+    let t=camera.atmosphere.z;
+    let facing=clamp(abs(dot(normalize(v.normal),normalize(camera.eye.xyz-v.world_position))),0.0,1.0);
+    let tint=mix(material[2].rgb,material[1].rgb,facing);
+    let step1=t/max(material[3].w,0.001);
+    let step2=t/max(material[4].w,0.001);
+    let first=plasma_noise(layer0,v.uv*material[3].x+material[3].yz*step1,material[1].w*step1);
+    let second=plasma_noise(layer1,v.uv*material[4].x+material[4].yz*step2,material[2].w*step2);
+    let glow=display_color(tint)*(first*second)*v.color.a;
+    return vec4<f32>(fogged(glow,v.world_position),1.0);
+}
 @fragment fn fs_main(v:VertexOut)->@location(0) vec4<f32> {
     if (u32(material[0].w)&8u)!=0u {return multiplicative_surface(v);}
     if v.clip<0.0 {discard;}
@@ -1049,6 +1102,7 @@ fn multiplicative_surface(v:VertexOut)->vec4<f32> {
     // everything else fades out into it toward the visible distance.
     if material[0].x!=4.0 && material[0].x!=5.0
         && faded_out(v.position.xy,v.world_position-camera.eye.xyz,camera.atmosphere,camera.haze) {discard;}
+    if material[0].x==12.0 {return plasma_surface(v);}
     if material[0].x==6.0 {
         let time=camera.atmosphere.z;
         // Fluid space: Torque x/y plus the terrain's 1024 offset.
@@ -1172,14 +1226,17 @@ fn multiplicative_surface(v:VertexOut)->vec4<f32> {
     } else {
         albedo=slot_sample(slot,tiled,v.uv,dx,dy);
     }
-    let base_color=v.color.rgb;
-    var alpha=albedo.a*v.color.a;
+    var base_color=v.color.rgb;
     let flags=u32(material[0].w);
+    // Masked tint (bit 16): the vertex colour paints only where slot 10's red says.
+    if (flags&32u)!=0u {base_color=mix(vec3<f32>(1.0),v.color.rgb,textureSample(weights1,tiled,v.uv).r);}
+    var alpha=albedo.a*v.color.a;
     // Opaque Torque model materials ignore texture alpha (no blend, no test).
     if (flags&2u)!=0u {alpha=v.color.a;}
     var pigment=display_color(albedo.rgb)*base_color;
     // A model texture with no translucent texel: texture times light alone.
     if (flags&4u)!=0u {pigment=display_color(albedo.rgb);}
+    if (flags&32u)!=0u {pigment=display_color(albedo.rgb)*base_color;}
     let decal=overlay;
     if decal {
         // v20 fxBrickBatcher uses GL_DECAL (0x52d120): lit paint first, then
@@ -1270,7 +1327,7 @@ fn multiplicative_surface(v:VertexOut)->vec4<f32> {
             +point_illumination(v.world_position,v.normal);
         // A lightmap without its decomposition: only the ambient light
         // changes with the live environment.
-        if relit() {illumination=max(illumination+camera.ambient.rgb-baked_ambient(),vec3<f32>(0.0));}
+        if relit() {illumination=max(illumination*sky_follow()+(camera.ambient.rgb-baked_ambient())*(1.0-sky_share()),vec3<f32>(0.0));}
     }
     var display=pigment*illumination;
     // Fixed-function lighting clamps the vertex colour before texturing.
@@ -1424,7 +1481,7 @@ fn metal_surface(v:VertexOut)->vec4<f32> {
         let radius=light.position_radius.w;
         if d2>=radius*radius {continue;}
         let rgb=linear_color(clamp(light.color.rgb,vec3<f32>(0.0),vec3<f32>(1.0)));
-        radiance+=rgb*ggx_light(n,delta*inverseSqrt(max(d2,0.00000001)),e,alpha,f0)/(1.0+GL_QUADRATIC_ATTENUATION*d2);
+        radiance+=rgb*ggx_light(n,delta*inverseSqrt(max(d2,0.00000001)),e,alpha,f0)*point_cone(light,-delta*inverseSqrt(max(d2,0.00000001)))/(1.0+GL_QUADRATIC_ATTENUATION*d2);
     }
     radiance*=cavity;
     return vec4<f32>(fogged(display_color(radiance),v.world_position),1.0);
@@ -1456,12 +1513,29 @@ fn physical_diffuse(v:VertexOut,n:vec3<f32>)->vec3<f32> {
     return ambient_at(share)+camera.sun_color.rgb*facing*share+local.diffuse
         +baked_surroundings(p,v.normal)+v.point_light;
 }
+// The light on a physical surface. With a baked lightmap (material flag 16,
+// read with lightmap_uv and multiplied by material[7].w) the map's own sun,
+// ambient and shadows are baked in, so only moving shadows darken it and the
+// live lights add to it; without one, the live sun and ambient.
+fn physical_light(v:VertexOut,n:vec3<f32>)->vec3<f32> {
+    if (u32(material[0].w)&16u)==0u {return physical_diffuse(v,n);}
+    let p=v.world_position;
+    let baked=textureSample(lightmap,clamped,v.lightmap_uv).rgb*material[7].w;
+    var light=shadowed_lightmap(baked*sky_follow(),p,n);
+    if lighting_mode()==3 {
+        light+=dynamic_light_sum(p,n,SPECULAR_POWER).diffuse+point_illumination(p,n);
+    } else {
+        light+=v.point_light;
+    }
+    return light;
+}
 fn physical_surface(v:VertexOut)->vec4<f32> {
     let albedo=textureSample(layer0,tiled,v.uv);
     var alpha=albedo.a*v.color.a;
     if (u32(material[0].w)&2u)!=0u {alpha=v.color.a;}
     if alpha<=material[0].y {discard;}
-    let tint=clamp(v.color.rgb,vec3<f32>(0.0),vec3<f32>(1.0));
+    var tint=clamp(v.color.rgb,vec3<f32>(0.0),vec3<f32>(1.0));
+    if (u32(material[0].w)&32u)!=0u {tint=mix(vec3<f32>(1.0),tint,textureSample(weights1,tiled,v.uv).r);}
     // A repeating detail texture over the colour, mid-grey leaving it as
     // it is (material[3]: repeats, strength).
     let grain=textureSample(layer6,tiled,v.uv*max(material[3].x,0.0001)).rgb;
@@ -1489,13 +1563,13 @@ fn physical_surface(v:VertexOut)->vec4<f32> {
         let parallel=material[4].yzw;
         let reflectance=mix(parallel,perpendicular,clamp(dot(n,e),0.0,1.0));
         let glow=material[2].rgb*textureSample(layer5,tiled,v.uv).rgb;
-        let display=display_color(colour)*tint*physical_diffuse(v,n)
+        let display=display_color(colour)*tint*physical_light(v,n)
             +environment*reflectance*reflection_mask+display_color(glow);
         return vec4<f32>(fogged(display,v.world_position),alpha);
     }
     // Diffuse: the painted share, lit as other models are (display space).
     let pigment=display_color(colour*(1.0-metallic))*tint*occlusion;
-    var display=pigment*physical_diffuse(v,n);
+    var display=pigment*physical_light(v,n);
     // Highlights and reflections (linear), as for metal.
     let f0=mix(vec3<f32>(0.04),base,metallic);
     let nv=max(dot(n,e),0.0001);
@@ -1523,7 +1597,7 @@ fn physical_surface(v:VertexOut)->vec4<f32> {
         let radius=light.position_radius.w;
         if d2>=radius*radius {continue;}
         let rgb=linear_color(clamp(light.color.rgb,vec3<f32>(0.0),vec3<f32>(1.0)));
-        radiance+=rgb*ggx_light(n,delta*inverseSqrt(max(d2,0.00000001)),e,a,f0)/(1.0+GL_QUADRATIC_ATTENUATION*d2);
+        radiance+=rgb*ggx_light(n,delta*inverseSqrt(max(d2,0.00000001)),e,a,f0)*point_cone(light,-delta*inverseSqrt(max(d2,0.00000001)))/(1.0+GL_QUADRATIC_ATTENUATION*d2);
     }
     // Glow, whatever the world's light.
     radiance+=material[2].rgb*textureSample(layer5,tiled,v.uv).rgb;

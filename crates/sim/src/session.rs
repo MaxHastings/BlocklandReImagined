@@ -58,6 +58,7 @@ mod highlight;
 mod inventory;
 mod map_change;
 mod map_lights;
+mod map_movers;
 mod special;
 mod trust;
 mod tutorial;
@@ -217,6 +218,7 @@ pub const EMOTES: [&str; 7] = ["alarm", "bsd", "confusion", "hate", "hug", "love
 /// (`%player.getEyePoint()`).
 const V20_EYE_NODE: f32 = 2.156;
 pub use map_lights::{MAX_MAP_LIGHT_RULES, MapLightRule};
+pub use map_movers::MoverView;
 pub use tools::{FX_CAN_IMAGES, InspectMode, SPRAY_CAN_IMAGE, ToolAction, ToolCatalog};
 pub use trust::{MAX_TRUST_LIST, PlayerTrust, TrustEntry, TrustLevel};
 pub use undo::UNDO_QUEUE_SIZE;
@@ -831,6 +833,9 @@ struct Peer {
     input_budget: f32,
     last_sequence: u64,
     last_move_sequence: u64,
+    /// A transport client joined and has not sent a move yet: it is still loading the world, and nothing
+    /// can hurt a player who is not there to see it ([`Session::join_client`]).
+    awaiting_client: bool,
     last_input_tick: u64,
     /// The datablock a basketball shot swapped for `BallShootPlayer`.
     sport_datablock: Option<crate::archetype::ArchetypeId>,
@@ -973,6 +978,7 @@ impl Peer {
             input_budget: INPUT_BURST,
             last_sequence: 0,
             last_move_sequence: 0,
+            awaiting_client: false,
             last_input_tick: tick,
             sport_datablock: None,
             chosen_body: None,
@@ -1126,6 +1132,8 @@ pub struct Session {
     addon_data: Option<std::sync::Arc<dyn AddOnData>>,
     /// The host's game version, for Add-Ons to show (`game_version()`).
     game_version: String,
+    /// The map being played, for `map_id()` (empty until the host says).
+    map_id: String,
     /// The image each player held in their right hand last tick, for
     /// images' `mount` and `unmount` commands.
     held_images: BTreeMap<OwnerId, String>,
@@ -1175,6 +1183,8 @@ pub struct Session {
     map_teleporters: teleporters::MapTeleporters,
     /// Add-On map light rules (`set_map_lights`), replicated to clients.
     map_lights: Vec<map_lights::MapLightRule>,
+    /// The map's keyed movers (doors) and where each is in its motion.
+    map_movers: map_movers::MapMovers,
     /// The music an Add-On rule plays for everyone (`play_music_all`),
     /// sent to joiners too; cleared by a map change.
     music: Option<MusicPlay>,
@@ -1222,6 +1232,7 @@ impl Session {
             breakables: Default::default(),
             map_teleporters: Default::default(),
             map_lights: Vec::new(),
+            map_movers: Default::default(),
             music: None,
             ambient: BTreeMap::new(),
             world_shapes: Default::default(),
@@ -1287,6 +1298,7 @@ impl Session {
             saved_copies: Default::default(),
             addon_data: None,
             game_version: "dev".into(),
+            map_id: String::new(),
             held_images: BTreeMap::new(),
             mirrors: Default::default(),
             last_prints: BTreeMap::new(),
@@ -1426,6 +1438,22 @@ impl Session {
     }
     pub fn join(&mut self, name: String, spawn: Vec3, administrator: bool) -> Result<OwnerId> {
         self.join_verified(name, spawn, administrator, None)
+    }
+    /// [`Self::join_verified`] for a player whose game is still loading the world on its own PC: they cannot
+    /// be hurt until their first move arrives, so a hazard that fires while a slow machine compiles its
+    /// graphics (a Stress Lab creeper every ten seconds) does not kill a player who has not yet seen the map.
+    pub fn join_client(
+        &mut self,
+        name: String,
+        spawn: Vec3,
+        trusted_host: bool,
+        principal: Option<bri_admin::Principal>,
+    ) -> Result<OwnerId> {
+        let owner = self.join_verified(name, spawn, trusted_host, principal)?;
+        if let Some(peer) = self.peers.get_mut(&owner) {
+            peer.awaiting_client = true;
+        }
+        Ok(owner)
     }
     /// Register a transport-verified persistent principal. Callers must verify
     /// proof of possession before passing a principal here.
@@ -2160,6 +2188,7 @@ impl Session {
         }
         peer.inputs.push_back((sequence, input));
         peer.last_move_sequence = sequence;
+        peer.awaiting_client = false;
         Ok(())
     }
     /// The host skipped `ticks` ticks of real time to catch up after a
@@ -3152,6 +3181,7 @@ impl Session {
             }
         };
         contain("events", self.start_event_tick(tick + 1));
+        contain("map movers", self.step_map_movers());
         let thinking = crate::cpu_time::thread();
         let bots = self.step_bots();
         self.bots.think_nanos +=
@@ -3403,6 +3433,7 @@ impl Session {
         self.sync_seated();
         self.advance_animations();
         contain("weapons", self.step_weapons());
+        contain("image speeds", self.step_image_speeds());
         self.step_temp_colors();
         contain("items", self.step_items());
         contain("combat", self.step_combat(impacts));

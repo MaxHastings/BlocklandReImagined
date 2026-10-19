@@ -177,8 +177,10 @@ fn image(name: &str, states: Vec<State>) -> (String, Image) {
             crosshair: true,
             follow_arm: false,
             first_person_origin: None,
+            first_person_view: None,
             hide_nodes: Vec::new(),
             aim_assist: None,
+            movement: None,
             both_arms: false,
             paint_tint: false,
             left_image: None,
@@ -756,6 +758,7 @@ fn each_hand_that_shot_kicks_once() {
         paint: None,
         heading: None,
         bounces: 0,
+        fuse_started: None,
         spawned: 0,
     };
     let view = |shots: Vec<bri_weapons::Projectile>| bri_sim::session::WeaponView {
@@ -924,6 +927,7 @@ fn ground_trails_require_their_own_wheel_and_ignore_vertical_speed() {
         wheel_rotation: vec![],
         wheel_contact: vec![false; 4],
         turret_aim: [0.; 2],
+        driver_jump_held: false,
     };
     assert_eq!(
         vehicle_trails(1, &d, &frame)

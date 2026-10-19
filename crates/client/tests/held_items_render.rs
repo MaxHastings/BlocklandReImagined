@@ -18,7 +18,7 @@ use std::{path::Path, time::Duration};
 mod support;
 use support::{content_root::ContentRoot, wait};
 
-synthetic_and_content!(ContentRoot: start_ball_is_held_and_thrown_and_akimbo_raises_both_arms);
+synthetic_and_release_content!(ContentRoot: start_ball_is_held_and_thrown_and_akimbo_raises_both_arms);
 
 const SIZE: (u32, u32) = (640, 480);
 

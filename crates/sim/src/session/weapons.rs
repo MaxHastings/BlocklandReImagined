@@ -276,6 +276,30 @@ impl Session {
         }
     }
 
+    /// Each holder's speeds follow what their image leaves while it reloads
+    /// and is aimed ([`bri_weapons::Image::movement`]).
+    pub(super) fn step_image_speeds(&mut self) -> Result<()> {
+        let owners: Vec<OwnerId> = self.peers.keys().copied().collect();
+        for owner in owners {
+            let actor = ActorId(owner);
+            let scale = match self.weapons.image_state(actor, 0) {
+                Some((image, _)) => image.movement.as_ref().map_or(1.0, |m| {
+                    let reloading = self.weapons.ammo(actor).is_some_and(|a| a.reloading);
+                    let aiming = self.peers[&owner].input.jet
+                        && image.zoom.as_ref().is_some_and(|z| z.on_jet);
+                    m.scale(reloading, aiming)
+                }),
+                None => 1.0,
+            };
+            if self.peers[&owner].combat.image_speed != scale {
+                if let Some(peer) = self.peers.get_mut(&owner) {
+                    peer.combat.image_speed = scale;
+                }
+                self.apply_speed(owner)?;
+            }
+        }
+        Ok(())
+    }
     pub(super) fn step_weapons(&mut self) -> Result<()> {
         self.end_gun_slows()?;
         self.step_quick_uses()?;
@@ -618,6 +642,31 @@ impl Session {
                     if impact
                         .definition
                         .eq_ignore_ascii_case("v20.projectile.brickdeployprojectile") => {}
+                WeaponEvent::Mark {
+                    projectile,
+                    position,
+                    normal,
+                    target,
+                    scale,
+                } => {
+                    let brick = match target {
+                        TargetId::Brick(brick) => Some(Some(brick)),
+                        TargetId::Map(_) => Some(None),
+                        _ => None,
+                    };
+                    if let Some(brick) = brick {
+                        self.cues.emit(
+                            tick,
+                            crate::presentation::CueKind::Decal {
+                                brick,
+                                normal: normal.to_array(),
+                                projectile,
+                                scale,
+                            },
+                            position.to_array(),
+                        );
+                    }
+                }
                 WeaponEvent::Contact { impact } => {
                     self.package_hit(&impact);
                     self.tutorial_contact(&impact);
@@ -955,10 +1004,15 @@ impl Session {
                 // Ski nodes follow the ski vehicle the avatar rides.
                 WeaponEvent::SkiNodes { .. } => {}
                 WeaponEvent::Blast {
-                    position, radius, ..
-                } => self
-                    .bots
-                    .notice(super::bots::Stimulus::blast(position, radius)),
+                    source,
+                    position,
+                    radius,
+                    projectile,
+                } => {
+                    self.bots
+                        .notice(super::bots::Stimulus::blast(position, radius));
+                    self.package_blast(source, projectile, position, radius);
+                }
                 WeaponEvent::Tumble {
                     actor, velocity, ..
                 } => self.tumble_player(actor.0, velocity)?,

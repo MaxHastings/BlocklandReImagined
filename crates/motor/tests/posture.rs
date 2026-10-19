@@ -27,6 +27,7 @@ fn soldier() -> PlayerTuning {
         prone: Some(Prone {
             height: 0.5,
             eye: 0.35,
+            seconds: 0.0,
             forward: 1.0,
             backward: 0.5,
             sideways: 0.5,
@@ -34,6 +35,7 @@ fn soldier() -> PlayerTuning {
         lean: Some(Lean {
             distance: 0.5,
             angle: 0.3,
+            body_angle: None,
             seconds: 0.25,
         }),
         ..Default::default()
@@ -107,6 +109,21 @@ fn a_lean_eases_the_eye_sideways_within_the_body() {
     );
     assert!(moved.x <= p.tuning().width * 0.5);
     assert!((p.state().lean_tilt(p.tuning()) - 0.3).abs() < 1e-4);
+    // The body tilts with the view unless the lean sets its own angle.
+    assert!((p.state().lean_body_tilt(p.tuning()) - 0.3).abs() < 1e-4);
+    let mut tuning = p.tuning().clone();
+    tuning.lean.as_mut().unwrap().body_angle = Some(0.0);
+    assert!(
+        (p.state().lean_tilt(&tuning) - 0.3).abs() < 1e-4,
+        "the view still rolls"
+    );
+    assert_eq!(
+        p.state().lean_body_tilt(&tuning),
+        0.0,
+        "the body stays upright"
+    );
+    tuning.lean.as_mut().unwrap().body_angle = Some(0.1);
+    assert!((p.state().lean_body_tilt(&tuning) - 0.1).abs() < 1e-4);
     // A body without a lean cannot.
     let mut q = Player::spawn(
         &mut w,
@@ -131,4 +148,36 @@ fn mounted_eye_is_shared_by_interactions_and_clears_on_dismount() {
     p.set_mounted_eye(Some(Vec3::new(3.25, 5.1, 4.8)));
     p.set_seated(false);
     assert!(p.eye().distance(standing) < 1e-5);
+}
+
+#[test]
+fn a_prone_or_locked_body_does_not_jump_but_a_standing_one_does() {
+    let jump = MoveInput {
+        jump: true,
+        ..Default::default()
+    };
+    let rise = |setup: &dyn Fn(&mut Player, &mut PhysicsWorld)| {
+        let mut w = world(None);
+        let mut p = Player::spawn(&mut w, 1, Vec3::new(0.0, 0.05, 0.0), soldier()).unwrap();
+        settle(&mut w, &mut p, MoveInput::default(), 60);
+        setup(&mut p, &mut w);
+        let floor = p.state().feet[1];
+        let mut highest = 0.0f32;
+        for _ in 0..90 {
+            p.step(&mut w, jump).unwrap();
+            highest = highest.max(p.state().feet[1] - floor);
+        }
+        highest
+    };
+    assert!(rise(&|_, _| {}) > 0.3, "a standing body jumps");
+    assert!(
+        rise(&|p, w| {
+            assert!(p.set_prone(w, true));
+        }) < 0.01,
+        "a prone body stays down"
+    );
+    assert!(
+        rise(&|p, _| p.set_speed_scale(0.0).unwrap()) < 0.01,
+        "a locked body (speed scale 0) stays down"
+    );
 }

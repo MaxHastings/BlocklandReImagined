@@ -16,7 +16,7 @@ use std::{
 mod support;
 use support::content_root::ContentRoot;
 
-synthetic_and_content!(ContentRoot: clear_all_bricks_from_the_admin_menu_finishes_on_a_big_build);
+synthetic_and_release_content!(ContentRoot: clear_all_bricks_from_the_admin_menu_finishes_on_a_big_build);
 
 const SIZE: (u32, u32) = (640, 480);
 const KITCHEN: &str = "v20/add-ons/map_kitchen/kitchen.mis";

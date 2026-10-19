@@ -8,6 +8,7 @@ use bri_net::{
     client::Client,
     server::{self, ServerOptions},
 };
+use bri_sim::player::MoveInput;
 use bri_sim::session::PackageArg;
 use bri_stresslab::net::{DOWN, command, own, package, wait};
 use glam::Vec3;
@@ -31,7 +32,7 @@ async fn join(
     host: bool,
 ) -> Result<Client> {
     let host = host.then(|| server.host_token.clone());
-    let client = Client::connect_with_identity(
+    let mut client = Client::connect_with_identity(
         server.address,
         &server.certificate,
         name.into(),
@@ -41,6 +42,8 @@ async fn join(
         identity,
     )
     .await?;
+    // A player is untouchable until its client's first move arrives (it is still loading); these clients are in the game.
+    client.movement(1, &[MoveInput::default()], None, None)?;
     Ok(client)
 }
 /// Mine straight down until `count` blocks are mined, waiting out the

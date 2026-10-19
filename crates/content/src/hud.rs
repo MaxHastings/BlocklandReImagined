@@ -62,9 +62,14 @@ pub enum Region {
     /// The names drawn over other players' heads: claiming it hides the
     /// stock ones, and a layout's `name_tags` draws them its own way.
     NameTags,
+    /// The building interface: the brick bar, paint box, tool bar and
+    /// their prompts. Claiming it hides all of it and turns off the stock
+    /// building keys and wheel, so a game that has no building shows none
+    /// of Blockland's build HUD and nothing of its binds.
+    Building,
 }
 impl Region {
-    pub const ALL: [Region; 16] = [
+    pub const ALL: [Region; 17] = [
         Region::TopLeft,
         Region::TopCenter,
         Region::TopRight,
@@ -81,6 +86,7 @@ impl Region {
         Region::Chat,
         Region::Tools,
         Region::NameTags,
+        Region::Building,
     ];
     pub fn name(self) -> &'static str {
         match self {
@@ -100,6 +106,7 @@ impl Region {
             Region::Chat => "chat",
             Region::Tools => "tools",
             Region::NameTags => "name_tags",
+            Region::Building => "building",
         }
     }
     pub fn parse(name: &str) -> Option<Self> {
@@ -116,6 +123,7 @@ impl Region {
             Region::Chat => Some("chat"),
             Region::Tools => Some("tool bar"),
             Region::NameTags => Some("player names"),
+            Region::Building => Some("building interface and keys"),
             _ => None,
         }
     }
@@ -144,7 +152,7 @@ impl Region {
             Region::Ammo => [w - 240.0, 400.0, 240.0, 80.0],
             Region::Chat => [0.0, 0.0, 320.0, 120.0],
             Region::Tools => [w - 64.0, 0.0, 64.0, HEIGHT],
-            Region::NameTags => [0.0, 0.0, w, HEIGHT],
+            Region::NameTags | Region::Building => [0.0, 0.0, w, HEIGHT],
         }
     }
 }
@@ -262,6 +270,10 @@ pub struct When {
     /// The viewer sits in one of these vehicles (`namespace:vehicle/name`,
     /// or a v20 `v20.vehicle.<datablock>`).
     pub vehicle: Vec<String>,
+    /// The viewer sits in one of these seats of their vehicle (from 0, the
+    /// driver's first): a driver's reticle, a gunner's hull meter.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub seat: Vec<u8>,
     /// `true` only while the viewer plays in a mini-game, `false` only
     /// while they do not.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -272,6 +284,7 @@ impl When {
         self.body.is_empty()
             && self.holding.is_empty()
             && self.vehicle.is_empty()
+            && self.seat.is_empty()
             && self.minigame.is_none()
     }
 }
@@ -285,6 +298,8 @@ pub struct Viewer<'a> {
     pub holding: &'a str,
     /// The vehicle definition sat in, `""` on foot.
     pub vehicle: &'a str,
+    /// The seat sat in, from 0, while `vehicle` is not empty.
+    pub seat: Option<u8>,
     /// Playing in a mini-game.
     pub minigame: bool,
 }
@@ -305,14 +320,15 @@ impl When {
                 }));
         let vehicle = self.vehicle.is_empty()
             || (!viewer.vehicle.is_empty() && self.vehicle.iter().any(|v| same(v, viewer.vehicle)));
+        let seat = self.seat.is_empty() || viewer.seat.is_some_and(|s| self.seat.contains(&s));
         let minigame = self.minigame.is_none_or(|m| m == viewer.minigame);
-        body && holding && vehicle && minigame
+        body && holding && vehicle && seat && minigame
     }
     /// How specific the claim is: a vehicle seat (8), then a held item (4),
     /// then a body (2), then being in a mini-game or not (1), added
     /// together.
     pub fn specificity(&self) -> u8 {
-        u8::from(!self.vehicle.is_empty()) * 8
+        u8::from(!self.vehicle.is_empty() || !self.seat.is_empty()) * 8
             + u8::from(!self.holding.is_empty()) * 4
             + u8::from(!self.body.is_empty()) * 2
             + u8::from(self.minigame.is_some())
@@ -335,6 +351,16 @@ impl Claim<'_> {
             self.package.to_ascii_lowercase(),
         )
     }
+}
+
+/// A screen edge ([`Element::EdgeArrow`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Edge {
+    Top,
+    Bottom,
+    Left,
+    Right,
 }
 
 /// One thing a layout draws.
@@ -389,6 +415,42 @@ pub enum Element {
         color: [f32; 4],
         #[serde(default, skip_serializing_if = "Option::is_none")]
         glyphs: Option<Glyphs>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        show: Option<Show>,
+    },
+    /// A hit indicator: draws only while the last hit came from the `edge`
+    /// this arrow marks. `x` and `z` (rule values) say where it came from as
+    /// a horizontal world offset from the viewer (any length), and `strength`
+    /// (0 to 1, counted down by the rule) fades it (`tint` alpha times
+    /// `strength`; 0 draws nothing). The edge is the nearest of ahead (top),
+    /// behind (bottom), left and right by the viewer's facing, so it follows
+    /// the camera. Claim `top_center`, `bottom_center`, `left` and `right`
+    /// with one arrow each.
+    EdgeArrow {
+        texture: String,
+        edge: Edge,
+        /// x, y, width, height in units from the region's corner.
+        rect: [f32; 4],
+        x: String,
+        z: String,
+        strength: String,
+        #[serde(default = "white")]
+        tint: [f32; 4],
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        show: Option<Show>,
+    },
+    /// A picture strip scrolled by a heading, as AA's compass: `textures`
+    /// (one to eight, equal width) are laid end to end to make one whole turn,
+    /// and `rect` shows the `span` degrees (a number or a source such as
+    /// `fov`) centred on `heading`'s source, wrapping round.
+    Strip {
+        textures: Vec<String>,
+        /// x, y, width, height in units from the region's corner.
+        rect: [f32; 4],
+        heading: String,
+        span: Amount,
+        #[serde(default = "white")]
+        tint: [f32; 4],
         #[serde(default, skip_serializing_if = "Option::is_none")]
         show: Option<Show>,
     },
@@ -600,6 +662,9 @@ impl Contact {
 pub struct Live<'a> {
     pub kills: &'a [FeedKill],
     pub contacts: &'a [Contact],
+    /// The viewer's level facing as a unit (x, z) in the world; (0, 0)
+    /// when unknown (edge arrows then read "ahead" as -z).
+    pub facing: [f32; 2],
 }
 
 /// A strip of equal frames in one texture, left to right then down. The
@@ -691,6 +756,9 @@ pub enum Source {
     /// The viewer's health, and their body's full health.
     Health,
     HealthMax,
+    /// What is left of the hull of the vehicle the viewer rides, 0 to 1
+    /// (missing on foot).
+    VehicleHealth,
     /// Jet energy, 0 to 1 (0 for a body with no jet).
     Energy,
     /// 1 while alive, 0 while dead.
@@ -709,6 +777,16 @@ pub enum Source {
     /// Seconds until the dead viewer may respawn, 0 once they may click;
     /// missing while alive or while a rule holds their respawn.
     Respawn,
+    /// The way the viewer's body faces, degrees 0 to 360 turning clockwise
+    /// from straight ahead along the world's -z (`Element::Strip`'s compass).
+    Heading,
+    /// The camera's field of view now, degrees.
+    Fov,
+    /// 1 while the viewer aims down a gun's sights, else 0.
+    Aiming,
+    /// The scope's zoom step while the viewer aims: 1 for the gun's own field of view, 2 and up for each
+    /// wheel level (`Zoom::levels`), 0 when not aiming.
+    ZoomLevel,
     /// Owner-private ammunition for an inventory item, including stowed items.
     ItemAmmo {
         item: String,
@@ -749,6 +827,7 @@ impl Source {
         Some(match text {
             "health" => Source::Health,
             "health_max" => Source::HealthMax,
+            "vehicle_health" => Source::VehicleHealth,
             "energy" => Source::Energy,
             "alive" => Source::Alive,
             "center_print" => Source::CenterPrint,
@@ -758,6 +837,10 @@ impl Source {
             "ammo_reserve" => Source::AmmoReserve,
             "reloading" => Source::Reloading,
             "respawn" => Source::Respawn,
+            "heading" => Source::Heading,
+            "fov" => Source::Fov,
+            "aiming" => Source::Aiming,
+            "zoom_level" => Source::ZoomLevel,
             state => {
                 let (package, rest) = state.split_once(':')?;
                 let (scope, key) = rest.split_once('/')?;
@@ -813,7 +896,7 @@ fn rect_ok(r: &[f32; 4]) -> bool {
 fn source_ok(s: &str) -> Result<()> {
     ensure!(
         Source::parse(s).is_some(),
-        "`{s}` is not a HUD value: health, health_max, energy, alive, center_print, bottom_print, ammo, ammo_max, ammo_reserve, reloading, respawn, or a rule's package:player/key or package:global/key"
+        "`{s}` is not a HUD value: health, health_max, vehicle_health, energy, alive, center_print, bottom_print, ammo, ammo_max, ammo_reserve, reloading, respawn, or a rule's package:player/key or package:global/key"
     );
     Ok(())
 }
@@ -1036,6 +1119,51 @@ impl Layout {
                     );
                     show_ok(show)?;
                 }
+                Element::Strip {
+                    textures,
+                    rect,
+                    heading,
+                    span,
+                    tint,
+                    show,
+                } => {
+                    ensure!(
+                        (1..=8).contains(&textures.len()),
+                        "a strip lays one to eight textures end to end"
+                    );
+                    for t in textures {
+                        texture_ok(t)?;
+                    }
+                    ensure!(
+                        rect_ok(rect),
+                        "strip rect must be finite with no negative size"
+                    );
+                    source_ok(heading)?;
+                    amount_ok(span)?;
+                    ensure!(color_ok(tint), "tint must be 0..1 RGBA");
+                    show_ok(show)?;
+                }
+                Element::EdgeArrow {
+                    texture,
+                    rect,
+                    x,
+                    z,
+                    strength,
+                    tint,
+                    show,
+                    ..
+                } => {
+                    texture_ok(texture)?;
+                    ensure!(
+                        rect_ok(rect),
+                        "edge arrow rect must be finite with no negative size"
+                    );
+                    for s in [x, z, strength] {
+                        source_ok(s)?;
+                    }
+                    ensure!(color_ok(tint), "tint must be 0..1 RGBA");
+                    show_ok(show)?;
+                }
                 Element::Tracker {
                     rect,
                     range,
@@ -1122,7 +1250,10 @@ impl Layout {
         let mut out = Vec::new();
         for e in &self.elements {
             match e {
-                Element::Image { texture, .. } => out.push(texture.as_str()),
+                Element::Image { texture, .. } | Element::EdgeArrow { texture, .. } => {
+                    out.push(texture.as_str());
+                }
+                Element::Strip { textures, .. } => out.extend(textures.iter().map(String::as_str)),
                 Element::Bar { fill, back, .. } => out.extend(
                     std::iter::once(fill)
                         .chain(back)
@@ -1179,6 +1310,28 @@ impl Layout {
                 }
                 Element::Text { value, show, .. } => {
                     names.extend(value.as_deref());
+                    names.extend(show.as_ref().map(|s| s.value.as_str()));
+                }
+                Element::EdgeArrow {
+                    x,
+                    z,
+                    strength,
+                    show,
+                    ..
+                } => {
+                    names.extend([x.as_str(), z.as_str(), strength.as_str()]);
+                    names.extend(show.as_ref().map(|s| s.value.as_str()));
+                }
+                Element::Strip {
+                    heading,
+                    span,
+                    show,
+                    ..
+                } => {
+                    names.push(heading);
+                    if let Amount::Source(s) = span {
+                        names.push(s.as_str());
+                    }
                     names.extend(show.as_ref().map(|s| s.value.as_str()));
                 }
                 Element::KillFeed { show, .. } | Element::Tracker { show, .. } => {
@@ -1494,6 +1647,99 @@ pub fn resolve_live(
                     });
                 }
             }
+            Element::Strip {
+                textures,
+                rect,
+                heading,
+                span,
+                tint,
+                show,
+            } => {
+                if !shown(show) {
+                    continue;
+                }
+                let keys: Vec<u64> = textures
+                    .iter()
+                    .filter_map(|t| texture(t).map(|(key, _)| key))
+                    .collect();
+                if keys.len() != textures.len() {
+                    continue;
+                }
+                let (Some(heading), Some(span)) = (number(heading), amount(span)) else {
+                    continue;
+                };
+                let n = keys.len() as f32;
+                let span = span.clamped(1.0, 360.0) / 360.0;
+                let start = (heading / 360.0 - span / 2.0).rem_euclid(1.0);
+                let end = start + span;
+                let mut at = start;
+                while at < end - 1e-6 {
+                    let wrapped = at.rem_euclid(1.0);
+                    let cell = ((wrapped * n).floor() as usize).min(keys.len() - 1);
+                    let cell_end = (at - wrapped) + (cell as f32 + 1.0) / n;
+                    let stop = cell_end.min(end);
+                    let u0 = wrapped * n - cell as f32;
+                    let u1 = (wrapped + (stop - at)) * n - cell as f32;
+                    out.push(Item::Image {
+                        texture: keys[cell],
+                        uv: [u0, 0.0, u1, 1.0],
+                        rect: [
+                            rect[0] + rect[2] * (at - start) / span,
+                            rect[1],
+                            rect[2] * (stop - at) / span,
+                            rect[3],
+                        ],
+                        tint: *tint,
+                    });
+                    at = stop;
+                }
+            }
+            Element::EdgeArrow {
+                texture: id,
+                edge,
+                rect,
+                x,
+                z,
+                strength,
+                tint,
+                show,
+            } => {
+                let Some((key, _)) = texture(id).filter(|_| shown(show)) else {
+                    continue;
+                };
+                let strength = number(strength).unwrap_or(0.0).clamped(0.0, 1.0);
+                let (dx, dz) = (number(x).unwrap_or(0.0), number(z).unwrap_or(0.0));
+                if strength <= 0.0 || dx.hypot(dz) < 1e-4 {
+                    continue;
+                }
+                // The tracker's frame: right = (-ahead.z, ahead.x).
+                let ahead = if live.facing == [0.0, 0.0] {
+                    [0.0, -1.0]
+                } else {
+                    live.facing
+                };
+                let to_ahead = dx * ahead[0] + dz * ahead[1];
+                let to_right = -dx * ahead[1] + dz * ahead[0];
+                let nearest = if to_ahead.abs() >= to_right.abs() {
+                    if to_ahead > 0.0 {
+                        Edge::Top
+                    } else {
+                        Edge::Bottom
+                    }
+                } else if to_right > 0.0 {
+                    Edge::Right
+                } else {
+                    Edge::Left
+                };
+                if nearest == *edge {
+                    out.push(Item::Image {
+                        texture: key,
+                        uv: [0.0, 0.0, 1.0, 1.0],
+                        rect: *rect,
+                        tint: [tint[0], tint[1], tint[2], tint[3] * strength],
+                    });
+                }
+            }
             Element::Tracker {
                 rect,
                 range,
@@ -1654,6 +1900,9 @@ mod tests {
         let tools = layout(serde_json::json!({ "schema_version": 1, "region": "tools" }));
         assert_eq!(tools.region.stock(), Some("tool bar"));
         assert_eq!(Region::parse("name_tags"), Some(Region::NameTags));
+        let building = layout(serde_json::json!({ "schema_version": 1, "region": "building" }));
+        assert_eq!(Region::parse("building"), Some(Region::Building));
+        assert!(building.region.stock().is_some());
         assert_eq!(Region::Tools.rect(640.0), [576.0, 0.0, 64.0, HEIGHT]);
     }
 
@@ -1838,12 +2087,14 @@ mod tests {
             body: vec!["a:archetype/runner".into()],
             holding: vec!["guns".into()],
             vehicle: vec![],
+            seat: vec![],
             minigame: None,
         };
         let viewer = |body, holding| Viewer {
             body,
             holding,
             vehicle: "",
+            seat: None,
             minigame: false,
         };
         assert!(when.matches(&viewer("a:archetype/runner", "guns:image/rifle")));
@@ -1861,6 +2112,7 @@ mod tests {
             body: "",
             holding: "",
             vehicle: "",
+            seat: None,
             minigame,
         };
         let playing = When {
@@ -1910,6 +2162,7 @@ mod tests {
         let live = Live {
             kills: &kills,
             contacts: &[],
+            ..Live::default()
         };
         let items = resolve_live(&l, &values, &textures, &live);
         // Three are recent; the newest two show, one line apart.
@@ -1966,6 +2219,7 @@ mod tests {
         let live = Live {
             kills: &[],
             contacts: &contacts,
+            ..Live::default()
         };
         let items = resolve_live(&l, &values, &textures, &live);
         let at: Vec<[f32; 2]> = items
@@ -1978,6 +2232,58 @@ mod tests {
         // Right is right, ahead is up; out of range, crouch-walking and
         // standing still do not show; firing does.
         assert_eq!(at, [[75.0, 50.0], [50.0, 0.0], [50.0, 40.0]]);
+    }
+
+    #[test]
+    fn edge_arrows_pick_the_edge_the_hit_came_from_and_fade() {
+        let arrow = |edge: &str| {
+            layout(serde_json::json!({
+                "schema_version": 1, "region": "top_left",
+                "elements": [{ "type": "edge_arrow", "texture": "pack:texture/bar",
+                    "edge": edge, "rect": [10, 0, 8, 8],
+                    "x": "game:player/hit_x", "z": "game:player/hit_z",
+                    "strength": "game:player/hit_strength", "tint": [1, 1, 1, 0.5] }]
+            }))
+        };
+        assert_eq!(arrow("top").sources().len(), 3);
+        let read = |x: f32, z: f32, strength: f32| {
+            move |source: &Source| match source {
+                Source::State(s) if s == "game:player/hit_x" => Some(Value::Number(x)),
+                Source::State(s) if s == "game:player/hit_z" => Some(Value::Number(z)),
+                Source::State(s) if s == "game:player/hit_strength" => {
+                    Some(Value::Number(strength))
+                }
+                _ => None,
+            }
+        };
+        // The viewer faces +x (ahead = (1, 0)), so right = (0, 1).
+        let live = Live {
+            facing: [1.0, 0.0],
+            ..Live::default()
+        };
+        let drawn = |edge: &str, x: f32, z: f32, strength: f32| -> Option<f32> {
+            let items = resolve_live(&arrow(edge), &read(x, z, strength), &textures, &live);
+            match items.as_slice() {
+                [] => None,
+                [Item::Image { tint, .. }] => Some(tint[3]),
+                other => panic!("{other:?}"),
+            }
+        };
+        assert_eq!(drawn("top", 5.0, 1.0, 1.0), Some(0.5), "ahead is the top");
+        assert_eq!(drawn("bottom", 5.0, 1.0, 1.0), None);
+        assert_eq!(drawn("bottom", -5.0, 1.0, 1.0), Some(0.5));
+        assert_eq!(
+            drawn("left", 1.0, -5.0, 1.0),
+            Some(0.5),
+            "to -z is the left"
+        );
+        assert_eq!(
+            drawn("right", 1.0, 5.0, 0.5),
+            Some(0.25),
+            "to +z is the right, faded"
+        );
+        assert_eq!(drawn("top", 5.0, 0.0, 0.0), None, "no strength, no arrow");
+        assert_eq!(drawn("top", 0.0, 0.0, 1.0), None, "no direction, no arrow");
     }
 
     #[test]
@@ -2026,5 +2332,101 @@ mod tests {
         assert!(Source::parse("item_ammo:").is_none());
         assert!(Source::parse("item_ammo:bad id").is_none());
         assert!(Source::parse(&format!("item_ammo:{}", "x".repeat(161))).is_none());
+    }
+}
+
+#[cfg(test)]
+mod strip_tests {
+    use super::*;
+
+    fn compass() -> Layout {
+        serde_json::from_value(serde_json::json!({
+            "schema_version": 1, "region": "top_center",
+            "elements": [{
+                "type": "strip",
+                "textures": ["t:texture/left", "t:texture/right"],
+                "rect": [0.0, 0.0, 100.0, 10.0],
+                "heading": "heading", "span": 90.0
+            }]
+        }))
+        .expect("layout")
+    }
+
+    fn items(heading: f32) -> Vec<Item> {
+        let layout = compass();
+        layout.validate().expect("valid");
+        let value = move |s: &Source| match s {
+            Source::Heading => Some(Value::Number(heading)),
+            _ => None,
+        };
+        let texture = |t: &str| match t {
+            "t:texture/left" => Some((1, [1024, 32])),
+            "t:texture/right" => Some((2, [1024, 32])),
+            _ => None,
+        };
+        resolve(&layout, &value, &texture)
+    }
+
+    fn pieces(items: &[Item]) -> Vec<(u64, [f32; 4], [f32; 4])> {
+        items
+            .iter()
+            .filter_map(|i| match i {
+                Item::Image {
+                    texture, uv, rect, ..
+                } => Some((*texture, *uv, *rect)),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_strip_scrolls_by_heading_and_wraps_round_the_turn() {
+        // Facing 180 degrees, a quarter turn wide: it straddles the seam of
+        // the two textures (the left's last quarter, the right's first).
+        let mid = pieces(&items(180.0));
+        assert_eq!(mid.len(), 2, "{mid:?}");
+        assert_eq!((mid[0].0, mid[1].0), (1, 2));
+        assert!(
+            (mid[0].1[0] - 0.75).abs() < 1e-4 && (mid[0].1[2] - 1.0).abs() < 1e-4,
+            "{mid:?}"
+        );
+        assert!(
+            mid[1].1[0].abs() < 1e-4 && (mid[1].1[2] - 0.25).abs() < 1e-4,
+            "{mid:?}"
+        );
+        // Facing 0 the window straddles the end and start of the strip.
+        let wrap = pieces(&items(0.0));
+        assert_eq!(wrap.len(), 2, "{wrap:?}");
+        assert_eq!(wrap[0].0, 2);
+        assert_eq!(wrap[1].0, 1);
+        assert!(
+            (wrap[0].2[2] + wrap[1].2[2] - 100.0).abs() < 1e-3,
+            "the pieces fill the rect"
+        );
+        assert!((wrap[1].2[0] - wrap[0].2[2]).abs() < 1e-3, "side by side");
+    }
+
+    #[test]
+    fn a_strip_reads_a_field_of_view_source_for_its_span() {
+        let layout: Layout = serde_json::from_value(serde_json::json!({
+            "schema_version": 1, "region": "top_center",
+            "elements": [{
+                "type": "strip", "textures": ["t:texture/left"],
+                "rect": [0.0, 0.0, 100.0, 10.0], "heading": "heading", "span": "fov"
+            }]
+        }))
+        .expect("layout");
+        layout.validate().expect("valid");
+        let value = |s: &Source| match s {
+            Source::Heading => Some(Value::Number(180.0)),
+            Source::Fov => Some(Value::Number(36.0)),
+            _ => None,
+        };
+        let drawn = pieces(&resolve(&layout, &value, &|_| Some((1, [1024, 32]))));
+        assert_eq!(drawn.len(), 1);
+        assert!(
+            (drawn[0].1[2] - drawn[0].1[0] - 0.1).abs() < 1e-4,
+            "36 of 360 degrees: {drawn:?}"
+        );
     }
 }

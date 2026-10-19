@@ -4,6 +4,9 @@
 //!   reports errors into it; the console window and stderr show it.
 //! - [`registry`]: typed commands and cvars that subsystems register into,
 //!   with a small command-line parser, help and tab completion.
+//! - [`fallback`]: counted, named fallbacks. A loader that carries on with a
+//!   stand-in or a default after bad or missing input reports it there;
+//!   `bri-client --check` writes the list to `fallbacks.json`.
 //! - [`clamp`]: [`Clamp::clamped`], the float clamp that names a caller
 //!   whose bounds are out of order instead of panicking inside `core`.
 //! - [`names`]: which characters player names and clan tags may hold, shared
@@ -13,6 +16,7 @@
 //! shared game state go through the same requests and host trust checks as
 //! the menus that already expose them.
 pub mod clamp;
+pub mod fallback;
 pub mod log;
 pub mod names;
 pub mod registry;

@@ -88,7 +88,7 @@ impl Fixture {
     }
 }
 
-synthetic_and_content!(Fixture: spray_mist_and_splash_use_the_palette_colour_offscreen);
+synthetic_and_release_content!(Fixture: spray_mist_and_splash_use_the_palette_colour_offscreen);
 
 /// v20 default colorset entries: opaque red, green, yellow and white, and
 /// the translucent blue and black.

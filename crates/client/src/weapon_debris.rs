@@ -270,9 +270,13 @@ impl WeaponDebrisAssets {
                 .with_context(|| format!("missing source texture {image_id}"))?;
             let mut native =
                 Material::vertex_lit(format!("weapon-debris/{}", material.name), image);
-            if material.blend != "opaque" {
-                native.alpha = AlphaMode::Blend;
-            }
+            bri_render::shape_material::apply(&mut native, material, "weapon-debris", |blend| {
+                Ok(if blend != "opaque" {
+                    AlphaMode::Blend
+                } else {
+                    AlphaMode::Opaque
+                })
+            })?;
             bindings.push(scene.materials.len());
             scene.materials.push(native);
         }

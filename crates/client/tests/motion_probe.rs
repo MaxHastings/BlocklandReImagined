@@ -13,7 +13,7 @@ use std::{
 mod support;
 use support::content_root::ContentRoot;
 
-synthetic_and_content!(ContentRoot: predicted_local_player_settles_on_the_authoritative_pose);
+synthetic_and_release_content!(ContentRoot: predicted_local_player_settles_on_the_authoritative_pose);
 
 /// Samples in a row the server must hold the player's feet unchanged.
 const STILL_SAMPLES: usize = 120;

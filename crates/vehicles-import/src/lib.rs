@@ -292,6 +292,8 @@ pub fn lower(
             rider_pose: None,
             rider_ready_policy: None,
             rider_fallback_hip: None,
+            rider_aim_pitch: None,
+            rider_acceleration: None,
             eye: None,
             transform: find_node(s, &n, &node)?,
             node,
@@ -304,6 +306,8 @@ pub fn lower(
             weapon: matches!(family, Family::Cannon | Family::Turret)
                 || (name == "TankVehicle" && i == 2),
             hands: Default::default(),
+            enter_sound: String::new(),
+            exit_sound: String::new(),
         });
     }
     let mut wheels = vec![];
@@ -449,6 +453,7 @@ pub fn lower(
             automatic: None,
             recoil: None,
             look_animation_pitch: None,
+            aim_limits: None,
             look_muzzle: Vec::new(),
         })
     } else {
@@ -531,6 +536,7 @@ pub fn lower(
         attachment_mount,
         attachment_fallback_seat,
         turret_sway: None,
+        turret_acceleration: None,
         collision_hulls: hulls,
         bounds_min: lo.to_array(),
         bounds_max: hi.to_array(),
@@ -566,6 +572,7 @@ pub fn lower(
         engine_force: number(b, "engineTorque", number(b, "runForce", 4320.)),
         engine_brake: number(b, "engineBrake", 0.),
         brake_force: number(b, "brakeTorque", 0.),
+        drive: None,
         max_speed: number(b, "maxWheelSpeed", number(b, "maxForwardSpeed", 20.)),
         reverse_speed: number(b, "maxBackwardSpeed", 20.),
         max_steering: number(b, "maxSteeringAngle", 1.),
@@ -662,8 +669,11 @@ pub fn lower(
         trails: vec![],
         effects: Default::default(),
         engine_sound: None,
+        engine_layers: vec![],
         lights: vec![],
         skid: None,
+        wheel_contacts: None,
+        body_contacts: None,
         authored: b.fields.clone(),
         adaptations,
     })

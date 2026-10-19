@@ -38,7 +38,7 @@ use std::{
 mod support;
 use support::{content_root::ContentRoot, wait};
 
-synthetic_and_content!(
+synthetic_and_release_content!(
     ContentRoot: every_tank_seat_sees_from_the_riders_eye_for_host_and_guest,
     invert_mouse_in_vehicles_turns_the_nose_both_ways_through_the_app,
     the_tank_turret_keeps_its_aim_through_seat_changes_for_gunner_and_watcher

@@ -1036,6 +1036,51 @@ mod tests {
         );
     }
 
+    /// A `building` claim turns the stock building keys off: B does not open
+    /// the selector, the number keys pick nothing and the wheel scrolls nothing.
+    #[test]
+    fn a_building_claim_turns_the_building_keys_off() {
+        let mut ui = fixture();
+        ui.core.run_command("openBSD", true);
+        assert!(
+            ui.core
+                .cmds
+                .contains(&StackCmd::Push(ScreenId::BrickSelector)),
+            "stock: B opens the selector"
+        );
+        ui.core.cmds.clear();
+        ui.core.hud_regions.push(crate::api::HudRegionDraw {
+            region: bri_content::hud::Region::Building,
+            pixelated: false,
+            items: vec![],
+            name_tags: None,
+        });
+        assert!(ui.core.building_off());
+        for c in [
+            "openBSD",
+            "useBricks",
+            "useTools",
+            "useSprayCan",
+            "useFirstSlot",
+            "invUp",
+            "shiftBrickAway",
+        ] {
+            assert!(
+                ui.core.run_command(c, true),
+                "{c} is swallowed, not unknown"
+            );
+        }
+        assert!(
+            ui.core.cmds.is_empty(),
+            "no building command reaches the selector: {:?}",
+            ui.core.cmds
+        );
+        assert!(
+            ui.drain_actions().is_empty(),
+            "no building command reaches the game"
+        );
+    }
+
     #[test]
     fn cart_pointer_favorites_and_tabs() {
         let mut ui = fixture();

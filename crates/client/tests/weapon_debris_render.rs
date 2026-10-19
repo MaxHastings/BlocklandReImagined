@@ -11,7 +11,7 @@ use bri_ui::gpu::Headless;
 use glam::{Mat4, Vec3};
 use support::{debris_fixture::DebrisFixture, gpu};
 
-synthetic_and_content!(DebrisFixture: shell_uses_persistent_shared_scene_and_instanced_gpu_draw);
+synthetic_and_release_content!(DebrisFixture: shell_uses_persistent_shared_scene_and_instanced_gpu_draw);
 async fn pixels(
     gpu: &Headless,
     renderer: &mut SceneRenderer,

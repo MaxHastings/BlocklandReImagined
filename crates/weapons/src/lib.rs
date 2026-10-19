@@ -208,6 +208,10 @@ pub struct State {
     pub emitter_node: String,
     pub emitter_seconds: f32,
     pub eject_shell: bool,
+    /// After the image rests in this state for a random while, it goes to
+    /// another ([`Fidget`]): a weapon's idle fidget.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fidget: Option<Fidget>,
     /// What happens a while after the state is entered, as v20 scripts
     /// scheduled it by hand (`%obj.schedule(450, "playThread", 2, plant)`,
     /// `schedule(650, 0, serverPlay3D, ...)`): up to 16, each played even
@@ -291,6 +295,33 @@ impl Spin {
         }
     }
 }
+/// [`State::fidget`]: once the image has been in the state for a random time
+/// in `seconds`, it enters state `to`, unless the draw falls under `skip`,
+/// which draws a new time instead. Any other transition out of the state
+/// (the trigger, a timeout) comes first and ends the wait. Halo's rifle waits
+/// 10 to 15 seconds, skips a quarter of the draws, and plays its posing clip.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Fidget {
+    /// The shortest and longest wait, seconds (0.1 to 3600).
+    pub seconds: [f32; 2],
+    /// The state it goes to, by index.
+    pub to: usize,
+    /// The share of draws that skip the fidget (0 to 0.95).
+    #[serde(default)]
+    pub skip: f32,
+}
+impl Fidget {
+    pub fn valid(&self) -> bool {
+        let [low, high] = self.seconds;
+        low.is_finite()
+            && high.is_finite()
+            && (0.1..=3600.0).contains(&low)
+            && (low..=3600.0).contains(&high)
+            && self.skip.is_finite()
+            && (0.0..=0.95).contains(&self.skip)
+    }
+}
 impl State {
     /// What a field left out of `weapons.json` means: v20's
     /// `ShapeBaseImageData` defaults, which wait for their timeout and let
@@ -312,6 +343,23 @@ fn is_true(b: &bool) -> bool {
 fn zero3(v: &[f32; 3]) -> bool {
     *v == [0.0; 3]
 }
+/// Where a scope picture sits on screen ([`Zoom::overlay_fit`]).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OverlayFit {
+    /// Fitted to the screen's height and centred, the rest of the screen black.
+    #[default]
+    HeightBlack,
+    /// Fitted to the screen's height and centred, the world showing either side.
+    Height,
+    /// Stretched over the whole screen, whatever its shape.
+    Stretch,
+}
+impl OverlayFit {
+    fn is_default(&self) -> bool {
+        *self == Self::HeightBlack
+    }
+}
 /// Aiming with an image: the view zooms to `fov` while the zoom key is
 /// held (and, with `on_jet`, while jet, the right mouse button, is held).
 /// Presentation only: each player's own game zooms its own view, draws
@@ -321,6 +369,13 @@ fn zero3(v: &[f32; 3]) -> bool {
 pub struct Zoom {
     /// Horizontal field of view while aiming, 5 to 85 degrees.
     pub fov: f32,
+    /// A magnification in place of `fov` for the first aim step, 1.05 to 16:
+    /// the view zooms to this many times the view the player has when not
+    /// aiming, by tangent (a 2 narrows 90 degrees to 53.1 and 70 to 38.6), as a
+    /// weapon's zoom range does. `fov` stays as the fallback and must still be
+    /// valid; `levels` keep their own fixed fields of view.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub magnification: Option<f32>,
     /// Image states that permit visual aiming. Omitted allows every state;
     /// an explicit empty list allows none. Names match ASCII case-insensitively.
     /// This never changes trigger eligibility or the right button's jet ownership.
@@ -361,10 +416,43 @@ pub struct Zoom {
     /// not drawn while it shows.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub overlay: Option<String>,
+    /// How `overlay` is laid out on screens wider than its picture.
+    #[serde(default, skip_serializing_if = "OverlayFit::is_default")]
+    pub overlay_fit: OverlayFit,
     /// The aim drifting while aiming: a steady figure of eight, as a
     /// marksman's breathing moves a scope.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sway: Option<Sway>,
+    /// The sound of breath while aiming: the owner hears `exhale` and
+    /// `inhale` alternate every half `period` (AA's `BreatheCycle`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub breath: Option<Breath>,
+}
+/// Breathing sounds while aiming ([`Zoom::breath`]): sound profile names,
+/// heard only by the player aiming.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Breath {
+    pub exhale: String,
+    pub inhale: String,
+    /// Seconds for one breath out and in, 1 to 30.
+    #[serde(default = "Breath::default_period")]
+    pub period: f32,
+}
+impl Breath {
+    fn default_period() -> f32 {
+        std::f32::consts::TAU
+    }
+    fn validate(&self) -> std::result::Result<(), String> {
+        let name = |s: &String| !s.is_empty() && s.len() <= 128 && !s.chars().any(char::is_control);
+        if !(name(&self.exhale) && name(&self.inhale)) {
+            return Err("breath: exhale and inhale name sound profiles".into());
+        }
+        if !(self.period.is_finite() && (1.0..=30.0).contains(&self.period)) {
+            return Err("breath: period 1 to 30 seconds".into());
+        }
+        Ok(())
+    }
 }
 impl Zoom {
     pub const MAX_LEVELS: usize = 8;
@@ -374,6 +462,18 @@ impl Zoom {
         match level.min(self.levels.len()) {
             0 => self.fov,
             n => self.levels[n - 1],
+        }
+    }
+    /// [`Self::level_fov`], with a `magnification` applied to the field of
+    /// view `unzoomed` the player has when not aiming.
+    pub fn level_fov_from(&self, level: usize, unzoomed: f32) -> f32 {
+        match (level.min(self.levels.len()), self.magnification) {
+            (0, Some(m)) if m.is_finite() && m > 0.0 && unzoomed.is_finite() => {
+                2.0 * ((unzoomed.to_radians() / 2.0).tan() / m)
+                    .atan()
+                    .to_degrees()
+            }
+            _ => self.level_fov(level),
         }
     }
     /// Whether a known current image state allows visual aiming. Restricted
@@ -399,6 +499,12 @@ impl Zoom {
                 "levels: up to {} fields of view, 5 to 85 degrees, each narrower than the last",
                 Self::MAX_LEVELS
             ));
+        }
+        if self
+            .magnification
+            .is_some_and(|m| !(m.is_finite() && (1.05..=16.0).contains(&m)))
+        {
+            return Err("magnification 1.05 to 16".into());
         }
         if !(self.sensitivity.is_finite() && (0.1..=4.0).contains(&self.sensitivity)) {
             return Err("sensitivity 0.1 to 4".into());
@@ -435,6 +541,9 @@ impl Zoom {
         }
         if let Some(s) = &self.sway {
             s.validate()?;
+        }
+        if let Some(b) = &self.breath {
+            b.validate()?;
         }
         Ok(())
     }
@@ -764,6 +873,83 @@ pub enum FirstPersonOrigin {
     Eye,
     Mount,
 }
+/// Opt-in local held-image camera. FOV is horizontal in degrees; near/far
+/// use the authored camera-relative native units. A fresh depth layer is drawn
+/// after the world. Scale changes local model/nodes, never eye translation.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FirstPersonView {
+    pub horizontal_fov: f32,
+    pub near: f32,
+    pub far: f32,
+    #[serde(default = "one")]
+    pub scale: f32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub eye_offset_reference_fov: Option<f32>,
+    /// The screen aspect the held image's field of view is measured at. With it the image keeps the
+    /// vertical field of view `horizontal_fov` has at this aspect on every screen (a wider one shows
+    /// more to the side, never a more cropped gun); without it the horizontal field is kept, as
+    /// Torque does, and the gun crops on a screen wider than the one the view was authored for.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reference_aspect: Option<f32>,
+}
+impl FirstPersonView {
+    /// The vertical field of view (radians) to draw the held image with on a screen of `screen_aspect`.
+    pub fn vertical_fov(&self, screen_aspect: f32) -> f32 {
+        let aspect = self.reference_aspect.unwrap_or(screen_aspect);
+        2. * ((self.horizontal_fov.to_radians() * 0.5).tan() / aspect).atan()
+    }
+    pub fn validate(&self) -> Result<()> {
+        let fov = |f: f32| {
+            let tangent = (f.to_radians() * 0.5).tan();
+            f.is_finite()
+                && f > 0.
+                && f < 180.
+                && tangent.is_normal()
+                && tangent.recip().is_normal()
+        };
+        ensure!(
+            fov(self.horizontal_fov)
+                && self.near.is_finite()
+                && self.near > 0.
+                && self.far.is_finite()
+                && self.far > self.near
+                && self.scale.is_finite()
+                && self.scale > 0.
+                && self.eye_offset_reference_fov.is_none_or(fov)
+                && self
+                    .reference_aspect
+                    .is_none_or(|a| a.is_finite() && (0.5..=4.).contains(&a)),
+            "Invalid first-person view: finite FOV in (0,180), 0 < near < far, positive scale"
+        );
+        let determinant = self.scale * self.scale * self.scale;
+        let projection = glam::camera::rh::proj::directx::perspective(
+            self.horizontal_fov.to_radians(),
+            1.,
+            self.far,
+            self.near,
+        );
+        ensure!(
+            determinant.is_finite()
+                && determinant > 1e-8
+                && projection.is_finite()
+                && projection.inverse().is_finite(),
+            "First-person view exceeds native transform/projection precision"
+        );
+        Ok(())
+    }
+    /// Exact immutable policy identity; zero means no eye-offset compensation.
+    pub fn key(self) -> [u32; 6] {
+        [
+            self.horizontal_fov.to_bits(),
+            self.near.to_bits(),
+            self.far.to_bits(),
+            self.scale.to_bits(),
+            self.eye_offset_reference_fov.unwrap_or(0.).to_bits(),
+            self.reference_aspect.unwrap_or(0.).to_bits(),
+        ]
+    }
+}
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Image {
@@ -776,6 +962,8 @@ pub struct Image {
     pub eye_offset: [f32; 3],
     #[serde(skip_serializing_if = "Option::is_none")]
     pub first_person_origin: Option<FirstPersonOrigin>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub first_person_view: Option<FirstPersonView>,
     /// Logical attachment name to authored node for the local first-person model.
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub first_person_nodes: BTreeMap<String, String>,
@@ -839,6 +1027,10 @@ pub struct Image {
     /// for v20's unaided aim.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub aim_assist: Option<AimAssist>,
+    /// How much of its holder's speed this image leaves while it reloads
+    /// and while its holder aims it ([`MovementScale`]). None slows nothing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub movement: Option<MovementScale>,
     /// Held up with both arms (`armReadyBoth`), as `onMount`'s
     /// `%obj.playThread(2, armReadyBoth)` did, not with the mount hand's
     /// arm alone.
@@ -1273,6 +1465,16 @@ pub struct Magazine {
     pub reload_sound: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub empty_sound: String,
+    /// A reload that starts with nothing loaded takes these in place of
+    /// `reload_ticks`, `reload_image_sequence` and `reload_sound` (a gun
+    /// whose empty reload also works the slide or the bolt): 0 or empty
+    /// keeps the usual one.
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub empty_reload_ticks: u32,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub empty_reload_image_sequence: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub empty_reload_sound: String,
     /// What the ammo display calls it; the `ammo` name when empty.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub display: String,
@@ -1345,6 +1547,13 @@ pub struct Magazine {
     /// magazine counted `from_reserve`.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub clear_when_out: bool,
+    /// A round comes back every this many ticks (120 a second) while the
+    /// gun is held, the magazine is neither full nor empty and no reload is
+    /// under way: a gun whose rounds are heat, which leaves as time passes
+    /// (a Halo plasma gun's heat loss per second). Nothing is refunded from
+    /// the reserve. 0 for none; up to 1200.
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub cool_ticks: u32,
 }
 /// [`Magazine::supply`]: what a shot uses and a reload fills, as
 /// Tier+Tactical's four ammo systems (`$Pref::Server::TT::Ammo`) did.
@@ -1477,6 +1686,7 @@ impl Magazine {
                 && (1..=self.size).contains(&self.per_load)
                 && self.last_rounds <= self.size
                 && (1..=1200).contains(&self.reload_ticks)
+                && self.empty_reload_ticks <= 1200
                 && self.reserve <= 100_000
                 && (1..=100_000).contains(&self.max_reserve),
             "Invalid magazine numbers"
@@ -1500,11 +1710,20 @@ impl Magazine {
                     .reload_sequence
                     .bytes()
                     .all(|b| b.is_ascii_alphanumeric() || b == b'_')
+                && self.empty_reload_image_sequence.len() <= 64
+                && self
+                    .empty_reload_image_sequence
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b == b'_')
                 && self.display.len() <= 64
                 && self.reload_state.len() <= 64,
             "Invalid magazine reload sequence, display or reload state"
         );
-        for sound in [&self.reload_sound, &self.empty_sound] {
+        for sound in [
+            &self.reload_sound,
+            &self.empty_sound,
+            &self.empty_reload_sound,
+        ] {
             ensure!(sound.len() <= 128, "Invalid magazine sound");
         }
         ensure!(
@@ -1541,6 +1760,10 @@ impl Magazine {
         ensure!(
             !self.from_reserve || self.supply == Supply::Reserve,
             "A magazine counted from the reserve has no other supply"
+        );
+        ensure!(
+            self.cool_ticks <= 1200,
+            "A magazine cools by a round every 1200 ticks at most"
         );
         ensure!(
             self.from_reserve || !self.clear_when_out,
@@ -1731,6 +1954,40 @@ pub fn is_image_command(c: &str) -> bool {
         })
 }
 
+/// [`Image::movement`]: the share of the holder's speeds the image leaves,
+/// each 0.05 to 1 (1 slows nothing): Halo's rocket launcher slows its holder
+/// to 0.75 while zoomed or reloading.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MovementScale {
+    /// While the magazine reloads.
+    #[serde(default = "full_speed")]
+    pub reloading: f32,
+    /// While the holder aims it with the right mouse button ([`Zoom::on_jet`]),
+    /// which the host sees as the jet button held. A zoom on the zoom key
+    /// alone is the holder's own view and does not slow them.
+    #[serde(default = "full_speed")]
+    pub aiming: f32,
+}
+impl MovementScale {
+    pub fn valid(&self) -> bool {
+        [self.reloading, self.aiming]
+            .iter()
+            .all(|s| s.is_finite() && (0.05..=1.0).contains(s))
+    }
+    /// The share of speed left in this moment. Reloading and aiming multiply.
+    pub fn scale(&self, reloading: bool, aiming: bool) -> f32 {
+        let mut scale = 1.0;
+        if reloading {
+            scale *= self.reloading;
+        }
+        if aiming {
+            scale *= self.aiming;
+        }
+        scale
+    }
+}
+
 /// [`Image::aim_assist`].
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -1803,6 +2060,11 @@ pub struct Shot {
     /// with `still`, stands still): the first shot of a burst.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rested: Option<Rested>,
+    /// A spread that builds as the holder keeps firing and settles when
+    /// they stop (Halo's trigger error): it replaces `spread` and the
+    /// `moving`, `crouched`, `airborne` and `rested` variants.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<ShotError>,
     /// Each projectile arrives instantly along a ray instead of flying.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hitscan: Option<Hitscan>,
@@ -1948,6 +2210,7 @@ impl Shot {
         airborne_spread: None,
         moving_projectile: None,
         rested: None,
+        error: None,
         hitscan: None,
         kick: None,
         scale: 1.0,
@@ -2017,6 +2280,44 @@ impl Shot {
         })
     }
 }
+/// [`Shot::error`]: each tick (120 a second) a holder's error rises by
+/// `1 / rise_ticks` while the trigger is held or a shot was fired within
+/// `recover_ticks`, and falls by `1 / fall_ticks` otherwise, between 0 and
+/// 1; a shot's spread is `min` at error 0 and `max` at 1, as Halo's
+/// `weapon_trigger` error runs (`weapons.c`).
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ShotError {
+    pub min: f32,
+    pub max: f32,
+    pub rise_ticks: u32,
+    pub fall_ticks: u32,
+    /// How long after a shot the error keeps rising with the trigger up:
+    /// the trigger's recovering state, a round's own period.
+    pub recover_ticks: u32,
+}
+impl ShotError {
+    pub fn valid(&self) -> bool {
+        (0.0..=1.0).contains(&self.min)
+            && (0.0..=1.0).contains(&self.max)
+            && self.min <= self.max
+            && (1..=7200).contains(&self.rise_ticks)
+            && (1..=7200).contains(&self.fall_ticks)
+            && self.recover_ticks <= 7200
+    }
+    /// The error a tick on, from `error`.
+    pub fn step(&self, error: f32, rising: bool) -> f32 {
+        if rising {
+            (error + 1.0 / self.rise_ticks as f32).min(1.0)
+        } else {
+            (error - 1.0 / self.fall_ticks as f32).max(0.0)
+        }
+    }
+    /// The spread at `error`.
+    pub fn spread(&self, error: f32) -> f32 {
+        self.min + (self.max - self.min) * error.clamped(0.0, 1.0)
+    }
+}
 /// [`Shot::rested`].
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -2042,7 +2343,7 @@ pub struct Rested {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Hitscan {
-    /// Units, 1 to 2000, times the shooter's scale.
+    /// Units, 1 to 8192, times the shooter's scale.
     pub range: f32,
     /// The range while the shooter moves faster than the shot's
     /// `moving_speed` (Tier+Tactical's guns reach less on the move).
@@ -2149,10 +2450,10 @@ impl Hitscan {
             HitSounds::MAX
         );
         ensure!(
-            (1.0..=2000.0).contains(&self.range)
+            (1.0..=8192.0).contains(&self.range)
                 && self
                     .moving_range
-                    .is_none_or(|r| (1.0..=2000.0).contains(&r))
+                    .is_none_or(|r| (1.0..=8192.0).contains(&r))
                 && self.eye_within.is_none_or(|r| (0.1..=50.0).contains(&r))
                 && self.damage.is_none_or(|d| (-100.0..=100.0).contains(&d))
                 && self.tracer.is_none_or(|t| {
@@ -2167,7 +2468,7 @@ impl Hitscan {
                         && (-100.0..=100.0).contains(&r.damage)
                         && (0.0..=1.0).contains(&r.shooter)
                 }),
-            "Invalid hitscan of {what}: range 1 to 2000, eye_within 0.1 to 50, damage -100 \
+            "Invalid hitscan of {what}: range 1 to 8192, eye_within 0.1 to 50, damage -100 \
              to 100, tracer colour 0 to 1, width to 1, seconds to 2, ricochet 1 to 8 times, \
              damage -100 to 100, shooter 0 to 1"
         );
@@ -2282,6 +2583,13 @@ pub struct Explosion {
     /// `impulseVertical`: a straight-up push alongside the radial one.
     pub impulse_vertical: f32,
     pub burn_seconds: f32,
+    /// A blast whose damage holds, then falls in a line: `damage` out to
+    /// `core_radius`, then straight down to `edge_damage` times `damage` at
+    /// `radius`, and nothing past it. Left at 0 (`edge_damage`), the damage
+    /// falls off as v20's does, quadratically from the middle. Both up to
+    /// the radius, and `edge_damage` up to 1.
+    pub core_radius: f32,
+    pub edge_damage: f32,
 }
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
@@ -2307,6 +2615,16 @@ pub struct ProjectileDef {
     pub ballistic: bool,
     pub elasticity: f32,
     pub friction: f32,
+    /// What a bounce keeps off a surface of each authored kind, times
+    /// `elasticity` (a grenade bounces off wood and glass harder than off
+    /// dirt). A kind left out keeps `elasticity`; each 0 to 2.
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub elasticity_surfaces: BTreeMap<String, f32>,
+    /// The effect (an explosion effect, as `bounce_effect` names one) a
+    /// bounce off a surface of each authored kind makes, in place of
+    /// `bounce_effect`: a grenade's different knock off wood, dirt and metal.
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub bounce_surfaces: BTreeMap<String, String>,
     pub damage: f32,
     pub damage_type: String,
     pub radius_damage_type: String,
@@ -2315,6 +2633,10 @@ pub struct ProjectileDef {
     pub explode_player: bool,
     pub explode_death: bool,
     pub collide_players: bool,
+    /// Never meets its shooter's body: it flies through it, as a thrown grenade does
+    /// (`ThrowWeaponPickup.Touch` skips the Instigator). The default: it may come back
+    /// to the shooter after leaving their body.
+    pub pass_source: bool,
     pub explosion: Explosion,
     pub brick: BrickImpact,
     pub bounce_effect: String,
@@ -2328,6 +2650,11 @@ pub struct ProjectileDef {
     pub light_color: [f32; 3],
     pub sport_image: Option<String>,
     pub rest_speed: f32,
+    /// A bounce that would leave it slower than this (native units/second) settles it instead: it stops, and makes no
+    /// bounce effect, sound or on-bounce children (a thrown grenade under 20 source units a second stops bouncing).
+    /// 0 leaves every bounce an impact.
+    #[serde(default, skip_serializing_if = "is_zero_f32")]
+    pub settle_speed: f32,
     /// Explode on this bounce (a grenade that pops on its third knock);
     /// 0 leaves bounces to `arm_ticks` and the lifetime.
     #[serde(skip_serializing_if = "is_zero_u32")]
@@ -2349,6 +2676,24 @@ pub struct ProjectileDef {
     /// and machine gun bullets do.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub slow: Option<Slow>,
+    /// Its direct damage changes with the distance it has flown, as a Halo
+    /// projectile's air damage range does.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub falloff: Option<Falloff>,
+    /// It turns toward a player or vehicle it picks as it is made, as a
+    /// guided shot.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub homing: Option<Homing>,
+    /// A ribbon it leaves behind it as it flies, drawn by each player's own
+    /// game from where the projectile has been.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub contrail: Option<Contrail>,
+    /// A lens flare on the light it carries (`light_radius`): a sprite
+    /// drawn at the projectile, sized and faded by the camera's distance as an
+    /// effect light's flare is. Its texture is an Add-On presentation texture
+    /// key, as a particle's.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub flare: Option<bri_content::effects::Flare>,
     /// Its direct damage stays as authored at any scale, where v20's own
     /// `ProjectileData::damage` scaled it with the projectile: projectiles
     /// whose `damage` method dealt `directDamage` as it was.
@@ -2381,6 +2726,153 @@ pub struct ProjectileDef {
     /// Effects only: the blast's damage and push stay `explosion`'s.
     #[serde(skip_serializing_if = "Impacts::is_empty")]
     pub impacts: Impacts,
+    /// A fuse that starts burning when something happens to the projectile
+    /// rather than at launch: a grenade that goes off a moment after its
+    /// first bounce, or once it lies still ([`Fuse`]).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fuse: Option<Fuse>,
+}
+/// When a projectile's [`Fuse`] starts burning.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FuseStart {
+    /// At its first bounce.
+    Bounce,
+    /// When it lies still: a bounce that leaves it slower than
+    /// [`ProjectileDef::rest_speed`], or sticking to anything.
+    Rest,
+}
+/// A fuse that starts at a moment of the flight ([`ProjectileDef::fuse`]).
+/// It goes off `ticks` after it starts, and never before the projectile is
+/// `not_before_ticks` old.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Fuse {
+    pub start: FuseStart,
+    /// How long it burns, in ticks (120 a second), 1 to 36000.
+    pub ticks: u32,
+    /// The least age it may go off at, in ticks (0 to 36000).
+    #[serde(default)]
+    pub not_before_ticks: u32,
+    /// The explosion effect played where it starts burning, a plasma
+    /// grenade's flare and beeping.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub effect: String,
+}
+/// [`ProjectileDef::falloff`]: its direct damage is `damage` up to `near`
+/// units from where it was fired, `far_damage` from `far` on, and moves in
+/// a line between.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Falloff {
+    /// 0 to 10000.
+    pub near: f32,
+    /// `near` to 10000.
+    pub far: f32,
+    /// 0 to 100.
+    pub far_damage: f32,
+}
+impl Falloff {
+    /// The damage after flying `distance`, from the `damage` it starts with.
+    pub fn damage_at(&self, damage: f32, distance: f32) -> f32 {
+        let span = (self.far - self.near).max(f32::EPSILON);
+        let along = ((distance - self.near) / span).clamped(0.0, 1.0);
+        damage + (self.far_damage - damage) * along
+    }
+}
+/// [`ProjectileDef::homing`]: as it is made it picks the nearest player or
+/// vehicle (not its shooter, nothing `can_affect` refuses) within `range`
+/// units and `angle` radians of the way it is flying, then turns toward
+/// that target by at most `turn_rate` radians a second, keeping its speed.
+/// It flies straight on without one, and when its target is gone.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Homing {
+    /// Radians a second, above 0 to 20.
+    pub turn_rate: f32,
+    /// Units, 1 to 1000.
+    pub range: f32,
+    /// Radians either side of its heading, 0 to 3.2.
+    pub angle: f32,
+}
+fn one_f32() -> f32 {
+    1.0
+}
+/// [`ProjectileDef::contrail`]: a ribbon of textured quads through the points
+/// the projectile has passed, a camera-facing strip (`rate` points a second,
+/// each a quad to the next) whose width and colour change with a point's age
+/// along `keys` (linear between them) and which is gone when the last key's
+/// age is reached. Presentation only: nothing is sent while it shows.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Contrail {
+    /// An Add-On presentation texture key, as a particle's.
+    pub texture: String,
+    /// Points a second, 1 to 240.
+    pub rate: f32,
+    /// 2 to 8 keys, ages ascending from 0 and ending by 10 seconds.
+    pub keys: Vec<ContrailKey>,
+    /// Added to the picture behind (light) rather than blended over it.
+    #[serde(default)]
+    pub additive: bool,
+    /// Times the texture repeats along the ribbon from a point's birth to the
+    /// last key's age (its length); 0.01 to 64.
+    #[serde(default = "one_f32")]
+    pub repeats: f32,
+}
+/// One key of a [`Contrail`]: at `age` seconds a point is `width` units wide
+/// and `color` (RGB, and alpha as opacity).
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ContrailKey {
+    pub age: f32,
+    /// 0 to 100 units.
+    pub width: f32,
+    pub color: [f32; 4],
+}
+impl Contrail {
+    pub fn validate(&self) -> Result<()> {
+        ensure!(
+            !self.texture.is_empty()
+                && self.texture.len() <= 256
+                && !self.texture.contains(':')
+                && !self.texture.contains('\\')
+                && !self.texture.chars().any(char::is_control)
+                && self.texture.split('/').all(|s| !s.is_empty() && s != "..")
+                && self.rate.is_finite()
+                && (1.0..=240.0).contains(&self.rate)
+                && self.repeats.is_finite()
+                && (0.01..=64.0).contains(&self.repeats)
+                && (2..=8).contains(&self.keys.len())
+                && self.keys[0].age == 0.0
+                && self.keys.windows(2).all(|k| k[0].age < k[1].age)
+                && self.keys.last().is_some_and(|k| k.age <= 10.0)
+                && self.keys.iter().all(|k| {
+                    k.age.is_finite()
+                        && (0.0..=100.0).contains(&k.width)
+                        && k.color
+                            .iter()
+                            .all(|c| c.is_finite() && (0.0..=4.0).contains(c))
+                }),
+            "Invalid contrail: a texture key, 1 to 240 points a second, repeats 0.01 to 64, 2 to 8 keys by \
+             rising age from 0 to at most 10 s, widths to 100, colours 0 to 4"
+        );
+        Ok(())
+    }
+    /// The width and colour of a point `age` seconds old (None once it has
+    /// gone).
+    pub fn at(&self, age: f32) -> Option<(f32, [f32; 4])> {
+        let end = self.keys.last()?.age;
+        if !(0.0..end).contains(&age) {
+            return None;
+        }
+        let pair = self.keys.windows(2).find(|k| age < k[1].age)?;
+        let t = (age - pair[0].age) / (pair[1].age - pair[0].age);
+        Some((
+            pair[0].width + (pair[1].width - pair[0].width) * t,
+            std::array::from_fn(|i| pair[0].color[i] + (pair[1].color[i] - pair[0].color[i]) * t),
+        ))
+    }
 }
 /// A projectile's explosion effect by what it lands on, each an explosion
 /// effect as `Explosion::effect` names one. One left empty, and a burst in
@@ -2486,7 +2978,7 @@ impl DecalProfile {
             v[0] <= v[1] && v.iter().all(|v| v.is_finite() && (min..=max).contains(v))
         };
         decal_texture_valid(&self.texture)
-            && range(self.size, 0.02, 4.)
+            && range(self.size, 0.02, 12.)
             && range(self.seconds, 0.5, 600.)
             && range(self.rotation_degrees, -36000., 36000.)
             && self
@@ -2568,7 +3060,7 @@ impl Decal {
                 .keys()
                 .all(|k| bri_content::surface::valid_name(k))
             && self.size.is_finite()
-            && (0.02..=4.0).contains(&self.size)
+            && (0.02..=12.0).contains(&self.size)
             && self.color.iter().all(|c| (0.0..=1.0).contains(c))
             && self.seconds.is_finite()
             && (0.5..=600.0).contains(&self.seconds)
@@ -2756,6 +3248,8 @@ impl Default for ProjectileDef {
             ballistic: false,
             elasticity: 0.999,
             friction: 0.3,
+            elasticity_surfaces: BTreeMap::new(),
+            bounce_surfaces: BTreeMap::new(),
             damage: 0.0,
             damage_type: String::new(),
             radius_damage_type: String::new(),
@@ -2764,6 +3258,8 @@ impl Default for ProjectileDef {
             explode_player: false,
             explode_death: false,
             collide_players: true,
+            pass_source: false,
+            settle_speed: 0.0,
             explosion: Explosion::default(),
             brick: BrickImpact::default(),
             bounce_effect: String::new(),
@@ -2781,6 +3277,10 @@ impl Default for ProjectileDef {
             children: Vec::new(),
             aura: None,
             slow: None,
+            falloff: None,
+            homing: None,
+            contrail: None,
+            flare: None,
             fixed_damage: false,
             collision_sound: None,
             sport_hit: None,
@@ -2788,6 +3288,7 @@ impl Default for ProjectileDef {
             decal: None,
             stick_to_bodies: false,
             impacts: Impacts::default(),
+            fuse: None,
         }
     }
 }
@@ -2967,6 +3468,75 @@ pub struct PackEffects {
     pub lights: Vec<bri_content::effects::Light>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub explosions: Vec<ExplosionEffect>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub shells: Vec<Shell>,
+}
+/// A glowing shell drawn over a body, just outside it, that a rule shows at
+/// a strength and lets fade (`body_shell`): a shield taking a hit. Its colour
+/// runs from `facing` where the body faces the eye to `edge` where it turns
+/// away, patterned by the product of two scrolling noise images, and the
+/// shell stands `stand_off` units off the body at full strength.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Shell {
+    pub id: String,
+    /// Red, green, blue (0 to 4, as light can be brighter than white) and
+    /// the brightness they are multiplied by (0 to 16).
+    pub facing: [f32; 4],
+    pub edge: [f32; 4],
+    /// Units off the body at full strength (squared with the strength), 0 to 2.
+    #[serde(default)]
+    pub stand_off: f32,
+    /// How quickly the strength falls away at first: the strength shown is
+    /// `1 - (1 - s)^ease` for the remaining share `s` of the fade (1 is a
+    /// straight fade; more holds the glow longer), 1 to 8.
+    #[serde(default = "Shell::default_ease")]
+    pub ease: f32,
+    pub noise: [ShellNoise; 2],
+}
+impl Shell {
+    fn default_ease() -> f32 {
+        1.0
+    }
+    pub fn valid(&self) -> bool {
+        let colour = |c: &[f32; 4]| {
+            c[..3]
+                .iter()
+                .all(|v| v.is_finite() && (0.0..=4.0).contains(v))
+                && c[3].is_finite()
+                && (0.0..=16.0).contains(&c[3])
+        };
+        !self.id.is_empty()
+            && self.id.len() <= 160
+            && !self.id.chars().any(char::is_control)
+            && colour(&self.facing)
+            && colour(&self.edge)
+            && self.stand_off.is_finite()
+            && (0.0..=2.0).contains(&self.stand_off)
+            && self.ease.is_finite()
+            && (1.0..=8.0).contains(&self.ease)
+            && self.noise.iter().all(ShellNoise::valid)
+    }
+}
+/// One of a shell's two noise images and how it moves: `repeats` over the
+/// body, scrolling `scroll` (u and v in repeats, and through the depth of an
+/// image that is a stack of square slices, in volumes) every `seconds`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ShellNoise {
+    pub texture: String,
+    pub repeats: f32,
+    pub scroll: [f32; 3],
+    pub seconds: f32,
+}
+impl ShellNoise {
+    fn valid(&self) -> bool {
+        self.repeats.is_finite()
+            && (0.01..=64.0).contains(&self.repeats)
+            && self.scroll.iter().all(|v| v.is_finite() && v.abs() <= 64.0)
+            && self.seconds.is_finite()
+            && (0.01..=3600.0).contains(&self.seconds)
+    }
 }
 /// What an explosion draws: emitters running for its lifetime, a light, and
 /// a burst of one emitter's particles at once (`particleEmitter`,
@@ -3002,6 +3572,11 @@ impl PackEffects {
                     .as_ref()
                     .map(|f| (l.id.as_str(), f.texture.as_str()))
             }))
+            .chain(self.shells.iter().flat_map(|s| {
+                s.noise
+                    .iter()
+                    .map(move |n| (s.id.as_str(), n.texture.as_str()))
+            }))
     }
 
     pub fn is_empty(&self) -> bool {
@@ -3009,6 +3584,7 @@ impl PackEffects {
             && self.emitters.is_empty()
             && self.lights.is_empty()
             && self.explosions.is_empty()
+            && self.shells.is_empty()
     }
     /// Checks the definitions as the effects library would, textures aside:
     /// the client finds those among the base game's, or else among the
@@ -3032,7 +3608,8 @@ impl PackEffects {
                 self.particles.len(),
                 self.emitters.len(),
                 self.lights.len(),
-                self.explosions.len()
+                self.explosions.len(),
+                self.shells.len()
             ]
             .iter()
             .all(|n| *n <= 4096),
@@ -3049,6 +3626,14 @@ impl PackEffects {
                 .collect(),
         };
         library.validate()?;
+        let mut shells = std::collections::BTreeSet::new();
+        for s in &self.shells {
+            ensure!(
+                s.valid() && shells.insert(s.id.to_ascii_lowercase()),
+                "Invalid shell {}",
+                s.id
+            );
+        }
         let mut ids = std::collections::BTreeSet::new();
         for e in &self.explosions {
             let emitter = |id: &String| {
@@ -3125,7 +3710,7 @@ impl Pack {
             bytes.len() <= 32 * 1024 * 1024,
             "Weapon pack exceeds byte limit"
         );
-        let mut pack: Self = serde_json::from_slice(bytes)?;
+        let mut pack: Self = bri_content::strict::from_slice(bytes)?;
         pack.fill_ids();
         pack.validate()?;
         Ok(pack)
@@ -3368,7 +3953,8 @@ impl Pack {
                 "Invalid image command {id}"
             );
             let shot_ok = |s: &Shot| {
-                (1..=64).contains(&s.projectiles)
+                s.error.is_none_or(|e| e.valid())
+                    && (1..=64).contains(&s.projectiles)
                     && (0.0..=1.0).contains(&s.spread)
                     && (0.0..=100.0).contains(&s.recoil)
                     && s.recoil_vertical.is_none_or(|v| (0.0..=100.0).contains(&v))
@@ -3426,11 +4012,15 @@ impl Pack {
                  without hitscan"
             );
             ensure!(
+                image.movement.as_ref().is_none_or(MovementScale::valid),
+                "Invalid image movement {id}: reloading and aiming 0.05 to 1"
+            );
+            ensure!(
                 image.aim_assist.as_ref().is_none_or(AimAssist::valid),
                 "Invalid image aim_assist {id}: angle 0 to 0.35 radians, range 1 to 1000, slowdown 0.1 to 1"
             );
             ensure!(
-                image.state_shots.len() <= 8
+                image.state_shots.len() <= 16
                     && image.state_shots.iter().all(|(script, s)| {
                         !script.is_empty()
                             && script.len() <= 64
@@ -3438,7 +4028,7 @@ impl Pack {
                             && script != "onfire"
                             && shot_ok(s)
                     }),
-                "Invalid state shots of image {id}: at most 8, by lowercase state script other \
+                "Invalid state shots of image {id}: at most 16, by lowercase state script other \
                  than onfire, each a shot as its own"
             );
             if let Some(guard) = &image.guard {
@@ -3483,6 +4073,9 @@ impl Pack {
                     }),
                 "Invalid image hide_nodes {id}: up to 16 body node names"
             );
+            if let Some(view) = image.first_person_view {
+                view.validate().with_context(|| format!("Image {id}"))?;
+            }
             if let Some(zoom) = &image.zoom {
                 zoom.validate()
                     .map_err(|e| anyhow::anyhow!("Invalid image zoom {id}: {e}"))?;
@@ -3524,6 +4117,12 @@ impl Pack {
                 .flatten()
                 {
                     ensure!(index < image.states.len(), "Invalid state target");
+                }
+                if let Some(fidget) = &state.fidget {
+                    ensure!(
+                        fidget.valid() && fidget.to < image.states.len(),
+                        "Invalid state fidget: seconds 0.1 to 3600 (shortest first), a state of the image, skip 0 to 0.95"
+                    );
                 }
             }
             for p in image.projectile_refs() {
@@ -3605,6 +4204,8 @@ impl Pack {
                     p.explosion.impulse_radius,
                     p.rest_speed,
                     p.explosion.burn_seconds,
+                    p.explosion.core_radius,
+                    p.explosion.edge_damage,
                     p.brick.radius,
                     p.brick.force,
                     p.brick.max_volume,
@@ -3622,8 +4223,23 @@ impl Pack {
                 "Invalid trajectory"
             );
             ensure!(
+                p.elasticity_surfaces.len() <= 32
+                    && p.elasticity_surfaces
+                        .values()
+                        .all(|e| e.is_finite() && (0.0..=2.0).contains(e)),
+                "Invalid projectile elasticity_surfaces {id}"
+            );
+            ensure!(
                 p.max_bounces <= 64,
                 "Invalid max_bounces of projectile {id}: 0 to 64"
+            );
+            ensure!(
+                p.fuse
+                    .as_ref()
+                    .is_none_or(|f| (1..=36_000).contains(&f.ticks)
+                        && f.not_before_ticks <= 36_000
+                        && f.effect.len() <= 128),
+                "Invalid fuse of projectile {id}: 1 to 36000 ticks"
             );
             ensure!(
                 p.turns_into
@@ -3648,7 +4264,7 @@ impl Pack {
             );
             ensure!(
                 p.decal.as_ref().is_none_or(Decal::valid),
-                "Invalid decal of projectile {id}: size 0.02 to 4, colour 0 to 1, seconds 0.5 to 600"
+                "Invalid decal of projectile {id}: size 0.02 to 12, colour 0 to 1, seconds 0.5 to 600"
             );
             if let Some(c) = &p.collision_sound {
                 ensure!(
@@ -3719,6 +4335,49 @@ impl Pack {
                 ensure!(
                     (1.0..=10.0).contains(&slow.divisor),
                     "Invalid slow of projectile {id}: divisor 1 to 10"
+                );
+            }
+            if let Some(f) = &p.flare {
+                ensure!(
+                    p.light_radius > 0.0
+                        && !f.texture.is_empty()
+                        && f.texture.len() <= 256
+                        && !f.texture.contains(':')
+                        && !f.texture.contains('\\')
+                        && !f.texture.chars().any(char::is_control)
+                        && f.texture.split('/').all(|s| !s.is_empty() && s != "..")
+                        && f.color
+                            .iter()
+                            .all(|c| c.is_finite() && (0.0..=4.0).contains(c))
+                        && [f.near_size, f.far_size, f.near_distance, f.far_distance]
+                            .iter()
+                            .all(|v| v.is_finite() && (0.0..=10_000.0).contains(v))
+                        && f.far_distance > f.near_distance
+                        && f.blend_mode <= 2,
+                    "Invalid flare of projectile {id}: a light_radius, a texture key, finite sizes and distances (far above near), blend_mode 0 to 2"
+                );
+            }
+            if let Some(c) = &p.contrail {
+                c.validate()
+                    .map_err(|e| anyhow::anyhow!("projectile {id}: {e}"))?;
+            }
+            if let Some(h) = p.homing {
+                ensure!(
+                    h.turn_rate > 0.0
+                        && h.turn_rate <= 20.0
+                        && (1.0..=1000.0).contains(&h.range)
+                        && (0.0..=3.2).contains(&h.angle),
+                    "Invalid homing of projectile {id}: turn_rate above 0 to 20, range 1 to \
+                     1000, angle 0 to 3.2"
+                );
+            }
+            if let Some(f) = p.falloff {
+                ensure!(
+                    (0.0..=10_000.0).contains(&f.near)
+                        && (f.near..=10_000.0).contains(&f.far)
+                        && (0.0..=100.0).contains(&f.far_damage),
+                    "Invalid falloff of projectile {id}: near 0 to 10000, far from near to \
+                     10000, far_damage 0 to 100"
                 );
             }
         }

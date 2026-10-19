@@ -309,7 +309,7 @@ impl Audit {
     }
 }
 
-synthetic_and_content!(
+synthetic_and_release_content!(
     Audit: brick_family_audit_scene,
     brick_fx_audit_scene,
     brick_top_audit_scene,

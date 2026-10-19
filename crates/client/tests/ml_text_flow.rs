@@ -15,7 +15,7 @@ use std::{
 mod support;
 use support::content_root::ContentRoot;
 
-synthetic_and_content!(ContentRoot: host_and_guest_chat_markup_and_player_text);
+synthetic_and_release_content!(ContentRoot: host_and_guest_chat_markup_and_player_text);
 
 /// A free port for this test's host, so a game already hosting on 28000
 /// (the player's own, say) does not break the test. Set under the GPU

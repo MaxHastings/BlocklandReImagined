@@ -1,0 +1,1 @@
+`CueKind::BodyShell { owner, shell, strength, seconds }`: a rule's `body_shell` shows one of the weapons pack's shells (a glowing, patterned layer) over a body at `strength` (0 to 1), fading over `seconds`.

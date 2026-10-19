@@ -109,6 +109,12 @@ impl Pack {
                     .all()
                     .into_iter()
                     .map(|e| (Kind::Explosion, e)),
+            )
+            .chain(
+                projectile
+                    .bounce_surfaces
+                    .values()
+                    .map(|e| (Kind::Effect, e.as_str())),
             ) {
                 // A bounce that only makes a sound (Explosive 1's and the
                 // HE grenade's) has nothing to show; its sound is listed.
@@ -135,6 +141,7 @@ impl Pack {
             // The explosions' own sounds, as its projectile's Add-On uses them.
             for explosion in std::iter::once(projectile.explosion.effect.as_str())
                 .chain(projectile.impacts.all())
+                .chain(projectile.bounce_surfaces.values().map(String::as_str))
             {
                 if let Some(info) = self
                     .explosions

@@ -15,7 +15,7 @@ use glam::{Mat4, Vec3};
 use std::collections::BTreeMap;
 use support::item_fixture::ItemFixture;
 
-synthetic_and_content!(
+synthetic_and_release_content!(
     ItemFixture: first_person_eye_offset_images_move_with_the_arms_actions_as_they_do_in_the_hand
 );
 

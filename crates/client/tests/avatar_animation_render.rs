@@ -13,7 +13,7 @@ use glam::{Mat4, Quat, Vec3};
 use std::time::Duration;
 use support::{avatar_fixture::AvatarFixture, gpu};
 
-synthetic_and_content!(
+synthetic_and_release_content!(
     AvatarFixture: diagonal_walk_keeps_a_continuous_leg_cycle,
     builder_animations_render_on_the_avatar,
     uploads_follow_posed_topology_changes,

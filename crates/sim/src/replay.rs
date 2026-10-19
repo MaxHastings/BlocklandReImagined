@@ -540,7 +540,7 @@ fn apply(
             spawn,
             trusted_host,
             principal,
-        } => Returned::Owner(s.join_verified(name, vec(spawn), trusted_host, principal)),
+        } => Returned::Owner(s.join_client(name, vec(spawn), trusted_host, principal)),
         Call::Resume {
             owner,
             spawn,
@@ -1086,7 +1086,7 @@ impl Recorder {
         principal: Option<bri_admin::Principal>,
     ) -> Result<OwnerId> {
         if self.live.is_none() {
-            return s.join_verified(name, spawn, trusted_host, principal);
+            return s.join_client(name, spawn, trusted_host, principal);
         }
         let call = Call::Join {
             name,

@@ -269,17 +269,24 @@ const DEATH: Play = Play::Absolute {
 const LEVEL: Play = Play::Overlay { reference: 0.5 };
 const FIRST: Play = Play::Overlay { reference: 0.0 };
 #[rustfmt::skip]
-const ROLES: [(&str, &str, Play, &str); 19] = [
+const ROLES: [(&str, &str, Play, &str); 28] = [
     ("idle", "root", LOOP, "it stands in its bind pose"),
     ("run", "run", LOOP, "it plays its `idle`"),
     ("back", "back", LOOP, "it plays its `run` reversed"),
     ("side", "side", LOOP, "it plays its `run`"),
+    ("side_right", "sideright", LOOP, "it plays its `side` reversed"),
     ("jump", "jump", ONCE, "it plays its `idle`"),
     ("fall", "fall", LOOP, "it plays its `jump`"),
     ("crouch", "crouch", ONCE, "it plays its `idle`"),
     ("crouch_run", "crouchrun", LOOP, "it plays its `crouch`"),
     ("crouch_back", "crouchback", LOOP, "it plays its `crouch`"),
     ("crouch_side", "crouchside", LOOP, "it plays its `crouch`"),
+    ("crouch_side_right", "crouchsideright", LOOP, "it plays its `crouch_side` reversed"),
+    ("prone", "prone", LOOP, "it is laid face down in its standing pose"),
+    ("prone_run", "pronerun", LOOP, "it crawls in its `prone` pose"),
+    ("prone_back", "proneback", LOOP, "it crawls on its `prone_run` reversed"),
+    ("prone_side", "proneside", LOOP, "it crawls on its `prone_run`"),
+    ("prone_side_right", "pronesideright", LOOP, "it plays its `prone_side` reversed"),
     ("aim_right", "armreadyright", AIM, "its arm does not raise a held item"),
     ("aim_left", "armreadyleft", AIM, "its arm does not raise a held item"),
     ("aim_both", "armreadyboth", AIM, "it plays its `aim_right`"),
@@ -287,6 +294,8 @@ const ROLES: [(&str, &str, Play, &str); 19] = [
     ("death", "death1", DEATH, "it falls in its `idle`"),
     ("swim", "swim", LOOP, "it swims in its locomotion pose"),
     ("look", "look", LEVEL, "it does not look up and down"),
+    ("look_crouch", "lookcrouch", LEVEL, "it plays its `look`"),
+    ("look_prone", "lookprone", LEVEL, "it plays its `look_crouch`"),
     ("head_side", "headside", LEVEL, "its head does not turn in free look"),
     ("head_up", "headup", FIRST, "its head does not tilt under a pack"),
 ];
@@ -766,6 +775,7 @@ pub fn convert(
                 "metal_rough" => surface.metallic_roughness = k,
                 "occlusion" => surface.occlusion = k,
                 "detail" => surface.detail = k,
+                "lightmap" => surface.lightmap = k,
                 _ => surface.emissive_map = k,
             }
         }
@@ -822,6 +832,7 @@ pub fn convert(
             skin: None,
             billboard: false,
             billboard_y: false,
+            uv1: Vec::new(),
         };
         let mut influences: Vec<Influence> = Vec::new();
         let mut unweighted = 0;
@@ -858,6 +869,10 @@ pub fn convert(
                 .map(|a| doc.floats(a as usize))
                 .transpose()?;
             let uv = attr["TEXCOORD_0"]
+                .as_u64()
+                .map(|a| doc.floats(a as usize))
+                .transpose()?;
+            let uv1 = attr["TEXCOORD_1"]
                 .as_u64()
                 .map(|a| doc.floats(a as usize))
                 .transpose()?;
@@ -939,6 +954,16 @@ pub fn convert(
             match &uv {
                 Some(uv) => mesh.uv.extend(uv.iter().map(|u| [u[0], u[1]])),
                 None => mesh.uv.extend(std::iter::repeat_n([0.0, 0.0], count)),
+            }
+            // The second UV set rides along only once a primitive has one; the
+            // vertices before it get (0, 0), and so do later ones without.
+            if uv1.is_some() || !mesh.uv1.is_empty() {
+                let filled = mesh.positions.len() - count;
+                mesh.uv1.resize(filled, [0.0, 0.0]);
+                match &uv1 {
+                    Some(uv) => mesh.uv1.extend(uv.iter().map(|u| [u[0], u[1]])),
+                    None => mesh.uv1.extend(std::iter::repeat_n([0.0, 0.0], count)),
+                }
             }
             if skinned {
                 let joint_rows =
@@ -1874,6 +1899,7 @@ fn sample_clip(
         duration: if frames == 1 { 0.0 } else { duration },
         looping,
         additive,
+        parent_translations: false,
         priority,
         nodes: tracks,
         objects: Vec::new(),
@@ -1951,6 +1977,10 @@ fn sample(
     }
 }
 
+/// The material extensions the importer maps (unlit, emissive strength).
+const MAPPED_MATERIAL_EXTENSIONS: [&str; 2] =
+    ["KHR_materials_unlit", "KHR_materials_emissive_strength"];
+
 /// A material and its PNG: the base colour texture times the base colour
 /// factor, or a swatch of the factor alone.
 fn make_material(
@@ -1979,6 +2009,24 @@ fn make_material(
         name = format!("{base}_{k}");
         k += 1;
     }
+    // Every material property is mapped below or refused here: an extension
+    // that changes how the surface looks must not be dropped without a word.
+    if let Some(extensions) = m["extensions"].as_object() {
+        for key in extensions.keys() {
+            ensure!(
+                MAPPED_MATERIAL_EXTENSIONS.contains(&key.as_str()),
+                "material `{source}` uses glTF extension `{key}`, which no importer maps;                  remove it or map it in gltf/mod.rs"
+            );
+        }
+    }
+    ensure!(
+        matches!(
+            m["alphaMode"].as_str(),
+            None | Some("OPAQUE" | "MASK" | "BLEND")
+        ),
+        "material `{source}` has an unknown alphaMode {}",
+        m["alphaMode"]
+    );
     let pbr = &m["pbrMetallicRoughness"];
     let factor: Vec<f32> = pbr["baseColorFactor"]
         .as_array()
@@ -2079,12 +2127,19 @@ fn make_material(
         if m["extras"]["bri_detail"].is_object() {
             maps.detail = Some(png_of(&m["extras"]["bri_detail"], report)?);
         }
+        // `extras.bri_lightmap`: a baked lightmap the second UV set reads,
+        // as a texture reference (`index`) plus `strength`, its multiplier.
+        // It takes the place of the sun and ambient light on the surface.
+        if m["extras"]["bri_lightmap"].is_object() {
+            maps.lightmap = Some(png_of(&m["extras"]["bri_lightmap"], report)?);
+        }
     }
     let textured = maps.normal.is_some()
         || maps.metallic_roughness.is_some()
         || maps.occlusion.is_some()
         || maps.emissive.is_some()
-        || maps.detail.is_some();
+        || maps.detail.is_some()
+        || maps.lightmap.is_some();
     // glTF's default metallic factor is 1, but exporters write 0 for every
     // plain surface: without a metal map only a stated factor counts.
     let metallic = match pbr["metallicFactor"].as_f64() {
@@ -2114,6 +2169,11 @@ fn make_material(
         detail: None,
         detail_scale: (m["extras"]["bri_detail"]["scale"].as_f64().unwrap_or(1.0) as f32)
             .clamped(0.01, 4096.0),
+        lightmap: None,
+        lightmap_strength: (m["extras"]["bri_lightmap"]["strength"]
+            .as_f64()
+            .unwrap_or(1.0) as f32)
+            .clamped(0.0, 16.0),
     });
     let metal = pbr["metallicFactor"]
         .as_f64()
@@ -2154,9 +2214,11 @@ fn make_material(
             paint_overlay: Some(false),
             alpha_cutoff: (m["alphaMode"].as_str() == Some("MASK"))
                 .then(|| m["alphaCutoff"].as_f64().unwrap_or(0.5) as f32),
+            double_sided: m["doubleSided"].as_bool().unwrap_or(false),
             uv_motion,
             metal,
             surface,
+            tint: None,
         },
         png,
         maps,
@@ -2231,6 +2293,7 @@ pub(crate) struct SurfaceMaps {
     pub occlusion: Option<Vec<u8>>,
     pub emissive: Option<Vec<u8>>,
     pub detail: Option<Vec<u8>>,
+    pub lightmap: Option<Vec<u8>>,
 }
 impl SurfaceMaps {
     /// Each map with the suffix its material takes.
@@ -2241,6 +2304,7 @@ impl SurfaceMaps {
             ("occlusion", self.occlusion),
             ("glow", self.emissive),
             ("detail", self.detail),
+            ("lightmap", self.lightmap),
         ]
         .into_iter()
         .filter_map(|(k, png)| Some((k, png?)))

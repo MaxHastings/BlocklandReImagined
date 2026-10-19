@@ -211,6 +211,9 @@ pub struct VehiclePose {
     pub wheel_tire: Vec<veh::TireState>,
     pub turret_aim: [f32; 2],
     pub jetting: bool,
+    /// The driver is holding the jump input (lamps that follow it).
+    #[serde(default)]
+    pub driver_jump_held: bool,
     /// The body's spin (rad/s) and the driver's accumulated mouse steering:
     /// with the rest, all a driving client needs to predict its vehicle.
     pub angular_velocity: [f32; 3],
@@ -598,6 +601,7 @@ impl Session {
                 wheel_tire: v.wheel_tire,
                 turret_aim: v.turret_aim,
                 jetting: v.jetting,
+                driver_jump_held: v.driver_jump_held,
                 angular_velocity: v.angular_velocity,
                 mouse_steering: v.mouse_steering,
                 steering_quiet: v.steering_quiet,
@@ -609,6 +613,11 @@ impl Session {
             .collect()
     }
     /// The vehicle and seat a player occupies.
+    /// What is left of the hull of the vehicle `owner` rides, 1 to 0.
+    pub fn mounted_health(&self, owner: OwnerId) -> Option<f32> {
+        let mount = self.vehicles.mounted.get(&owner)?;
+        self.vehicles.world.as_ref()?.health_fraction(mount.vehicle)
+    }
     pub fn mounted(&self, owner: OwnerId) -> Option<(u64, u8)> {
         self.vehicles
             .mounted
@@ -2275,11 +2284,19 @@ impl Session {
                             .last_look
                             .insert(owner, (peer.input.yaw, peer.input.pitch));
                         let feet = peer.player.state().feet;
+                        let own = self
+                            .vehicles
+                            .world
+                            .as_ref()
+                            .and_then(|w| w.definition_of(vehicle))
+                            .and_then(|d| d.seats.get(seat))
+                            .map(|s| s.enter_sound.clone())
+                            .filter(|s| !s.is_empty());
                         self.cues.emit(
                             tick,
                             crate::presentation::CueKind::VehicleSound {
                                 vehicle: vehicle.0,
-                                sound: "player.mount".into(),
+                                sound: own.unwrap_or_else(|| "player.mount".into()),
                             },
                             feet,
                         );
@@ -2317,8 +2334,31 @@ impl Session {
                     {
                         peer.control = super::ControlObject::Player;
                     }
+                    let exit_sound = self
+                        .vehicles
+                        .mounted
+                        .get(&owner)
+                        .and_then(|m| {
+                            self.vehicles
+                                .world
+                                .as_ref()
+                                .and_then(|w| w.definition_of(vehicle))
+                                .and_then(|d| d.seats.get(m.seat))
+                        })
+                        .map(|s| s.exit_sound.clone())
+                        .filter(|s| !s.is_empty());
                     self.vehicles.mounted.remove(&owner);
                     self.vehicles.last_dismount.insert(owner, tick);
+                    if let Some(sound) = exit_sound {
+                        self.cues.emit(
+                            tick,
+                            crate::presentation::CueKind::VehicleSound {
+                                vehicle: vehicle.0,
+                                sound,
+                            },
+                            transform.position,
+                        );
+                    }
                     if let Some(peer) = self.peers.get_mut(&owner) {
                         let yaw = peer.player.state().yaw;
                         peer.player.teleport(
@@ -2359,6 +2399,56 @@ impl Session {
                             },
                             position,
                         );
+                    }
+                }
+                // The hull grazed fixed ground or a wall: the row of the
+                // definition's `body_contacts` for the surface it touched.
+                Intent::BodyContact {
+                    vehicle,
+                    point,
+                    normal,
+                    effect,
+                    sound,
+                    ..
+                } => {
+                    let kind = self
+                        .simulation
+                        .map_surface_at(glam::Vec3::from(point), glam::Vec3::from(normal))
+                        .unwrap_or(bri_content::surface::DEFAULT)
+                        .to_string();
+                    let row = self
+                        .vehicles
+                        .world
+                        .as_ref()
+                        .and_then(|w| w.definition_of(vehicle))
+                        .and_then(|d| d.body_contacts.as_ref())
+                        .and_then(|c| c.effect_on(&kind))
+                        .cloned();
+                    if let Some(row) = row {
+                        if effect {
+                            self.cues.emit(
+                                tick,
+                                crate::presentation::CueKind::WeaponEffect {
+                                    source: bri_weapons::TargetId::Map(0),
+                                    definition: row.effect,
+                                    node: String::new(),
+                                    seconds: 0.,
+                                    image: None,
+                                    hand: None,
+                                    direction: Some(normal),
+                                    contact: None,
+                                    scale: 1.,
+                                },
+                                point,
+                            );
+                        }
+                        if let (true, Some(profile)) = (sound, row.sound) {
+                            self.cues.emit(
+                                tick,
+                                crate::presentation::CueKind::WeaponSound { profile },
+                                point,
+                            );
+                        }
                     }
                 }
                 Intent::Animation { .. } => {}
@@ -2802,6 +2892,8 @@ mod tests {
             offset: [0.0, 0.0, -1.0],
             color: [1.0; 3],
             radius: 20.0,
+            cone: None,
+            ramp: None,
         };
         let (mut s, tank) = tank_session_with(bri_vehicles::testing::pack_with(|d| {
             d.lights = vec![lamp.clone()]

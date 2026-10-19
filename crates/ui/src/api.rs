@@ -645,6 +645,16 @@ pub struct PackageBind {
     pub command: String,
     /// Default key on this platform, as Controls writes it.
     pub key: Option<String>,
+    /// Default mouse input instead of a key (`button0`..`button4`, `zaxis`).
+    #[serde(default)]
+    pub mouse: Option<String>,
+    /// The control profile it belongs to; empty: Blockland's own.
+    #[serde(default)]
+    pub profile: String,
+    /// A stock Blockland action it binds in that profile instead of a
+    /// package command (`crouch`).
+    #[serde(default)]
+    pub stock: Option<String>,
     /// Sent as the key goes down and again as it comes up.
     pub hold: bool,
     /// A screen it opens instead of sending `command`: `minigame_addons`
@@ -655,6 +665,9 @@ pub struct PackageBind {
 impl PackageBind {
     /// The bind's command in the key map and saved controls.
     pub fn bind_command(&self) -> String {
+        if let Some(stock) = &self.stock {
+            return stock.clone();
+        }
         format!("package:{}:{}", self.package, self.command)
     }
 }
@@ -1710,6 +1723,18 @@ pub struct DisplayModes {
     pub windowed: Vec<(u32, u32)>,
 }
 
+/// Where a scope picture sits on screen (`Zoom::overlay_fit`).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ScopeFit {
+    /// Fitted to the height and centred, black either side.
+    #[default]
+    HeightBlack,
+    /// Fitted to the height and centred, the world either side.
+    Height,
+    /// Stretched over the whole screen.
+    Stretch,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum UiUpdate {
     /// Show a splash over the main menu.
@@ -1826,6 +1851,8 @@ pub enum UiUpdate {
     /// (`Zoom::overlay`): the host's texture key and its width over its
     /// height; `None` takes it away.
     ScopeOverlay(Option<(u64, f32)>),
+    /// How the scope picture is laid out (`Zoom::overlay_fit`).
+    ScopeFit(ScopeFit),
     /// A net graph sample (`NetGraph::updateStats`); dropped while hidden.
     NetSample(crate::models::perf::NetSample),
     /// A presented frame's timing; dropped while the overlay is hidden.
@@ -1953,6 +1980,9 @@ pub struct Settings {
     /// Current key binds (command name → chords). `None` = never configured
     /// (first run shows Default Controls).
     pub binds: Option<Vec<BindEntry>>,
+    /// Key binds of each control profile an Add-On declared, by profile id
+    /// (the Blockland profile is `binds`). Absent in older files.
+    pub profile_binds: BTreeMap<String, Vec<BindEntry>>,
     /// Hardware choice from Default Controls.
     pub mouse_type: u8,
     pub keyboard_type: u8,

@@ -22,6 +22,24 @@ impl CrouchComposition {
     }
 }
 
+/// How a body's ground locomotion clip is picked from its velocity.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LocomotionPick {
+    /// v20's `Player::pickActionAnimation`: the clip whose direction beats the others.
+    #[default]
+    Torque,
+    /// Army Ops' `APawn::Get4WayDirection`: forward within 35 degrees, backward within 35 degrees, a strafe
+    /// clip for everything between; the clip plays at speed over class ground speed (3D, no cap but
+    /// `max_time_scale`).
+    Ue2FourWay,
+}
+impl LocomotionPick {
+    pub fn is_torque(&self) -> bool {
+        *self == Self::Torque
+    }
+}
+
 /// Where on a body something attaches: a node of its model, an offset, or
 /// both. With a node the offset is in that node's frame; without one it is
 /// from the feet, facing -Z, at scale 1 (a box body has no nodes).
@@ -127,12 +145,25 @@ pub enum Role {
     Run,
     Back,
     Side,
+    /// `side` for strafing right, when the body has its own right clip rather
+    /// than playing its left one reversed.
+    SideRight,
     Jump,
     Fall,
     Crouch,
     CrouchRun,
     CrouchBack,
     CrouchSide,
+    /// `crouch_side` for strafing right, as `side_right` is for `side`.
+    CrouchSideRight,
+    /// Lying prone, on a body whose clips author the lying pose (a body without
+    /// them is laid face down by its posture frame). Idle, then crawling forward,
+    /// back and sideways, as the crouch roles are for crouching.
+    Prone,
+    ProneRun,
+    ProneBack,
+    ProneSide,
+    ProneSideRight,
     AimRight,
     AimLeft,
     AimBoth,
@@ -140,22 +171,33 @@ pub enum Role {
     Death,
     Swim,
     Look,
+    /// `look` while the body is crouched; a body without it keeps its `look`.
+    LookCrouch,
+    /// `look` while the body is prone; a body without it keeps its `look_crouch`.
+    LookProne,
     HeadSide,
     HeadUp,
     SeatAim,
 }
 impl Role {
-    pub const ALL: [Role; 20] = [
+    pub const ALL: [Role; 29] = [
         Role::Idle,
         Role::Run,
         Role::Back,
         Role::Side,
+        Role::SideRight,
         Role::Jump,
         Role::Fall,
         Role::Crouch,
         Role::CrouchRun,
         Role::CrouchBack,
         Role::CrouchSide,
+        Role::CrouchSideRight,
+        Role::Prone,
+        Role::ProneRun,
+        Role::ProneBack,
+        Role::ProneSide,
+        Role::ProneSideRight,
         Role::AimRight,
         Role::AimLeft,
         Role::AimBoth,
@@ -163,6 +205,8 @@ impl Role {
         Role::Death,
         Role::Swim,
         Role::Look,
+        Role::LookCrouch,
+        Role::LookProne,
         Role::HeadSide,
         Role::HeadUp,
         Role::SeatAim,
@@ -174,12 +218,19 @@ impl Role {
             Role::Run => "run",
             Role::Back => "back",
             Role::Side => "side",
+            Role::SideRight => "side_right",
             Role::Jump => "jump",
             Role::Fall => "fall",
             Role::Crouch => "crouch",
             Role::CrouchRun => "crouch_run",
             Role::CrouchBack => "crouch_back",
             Role::CrouchSide => "crouch_side",
+            Role::CrouchSideRight => "crouch_side_right",
+            Role::Prone => "prone",
+            Role::ProneRun => "prone_run",
+            Role::ProneBack => "prone_back",
+            Role::ProneSide => "prone_side",
+            Role::ProneSideRight => "prone_side_right",
             Role::AimRight => "aim_right",
             Role::AimLeft => "aim_left",
             Role::AimBoth => "aim_both",
@@ -187,6 +238,8 @@ impl Role {
             Role::Death => "death",
             Role::Swim => "swim",
             Role::Look => "look",
+            Role::LookCrouch => "look_crouch",
+            Role::LookProne => "look_prone",
             Role::HeadSide => "head_side",
             Role::HeadUp => "head_up",
             Role::SeatAim => "seat_aim",
@@ -200,12 +253,19 @@ impl Role {
             Role::Run => "run",
             Role::Back => "back",
             Role::Side => "side",
+            Role::SideRight => "sideright",
             Role::Jump => "jump",
             Role::Fall => "fall",
             Role::Crouch => "crouch",
             Role::CrouchRun => "crouchrun",
             Role::CrouchBack => "crouchback",
             Role::CrouchSide => "crouchside",
+            Role::CrouchSideRight => "crouchsideright",
+            Role::Prone => "prone",
+            Role::ProneRun => "pronerun",
+            Role::ProneBack => "proneback",
+            Role::ProneSide => "proneside",
+            Role::ProneSideRight => "pronesideright",
             Role::AimRight => "armreadyright",
             Role::AimLeft => "armreadyleft",
             Role::AimBoth => "armreadyboth",
@@ -213,6 +273,8 @@ impl Role {
             Role::Death => "death1",
             Role::Swim => "swim",
             Role::Look => "look",
+            Role::LookCrouch => "lookcrouch",
+            Role::LookProne => "lookprone",
             Role::HeadSide => "headside",
             Role::HeadUp => "headup",
             Role::SeatAim => "seataim",
@@ -239,12 +301,19 @@ impl Role {
             Role::Run => &[(Role::Idle, false)],
             Role::Back => &[(Role::Run, true), (Role::Idle, false)],
             Role::Side => &[(Role::Run, false), (Role::Idle, false)],
+            Role::SideRight => &[(Role::Side, true)],
             Role::Jump => &[(Role::Idle, false)],
             Role::Fall => &[(Role::Jump, false), (Role::Idle, false)],
             Role::Crouch => &[(Role::Idle, false)],
             Role::CrouchRun => &[(Role::Crouch, false), (Role::Run, false)],
             Role::CrouchBack => &[(Role::Crouch, false), (Role::Back, false)],
             Role::CrouchSide => &[(Role::Crouch, false), (Role::Side, false)],
+            Role::CrouchSideRight => &[(Role::CrouchSide, true), (Role::SideRight, false)],
+            Role::Prone => &[],
+            Role::ProneRun => &[(Role::Prone, false)],
+            Role::ProneBack => &[(Role::ProneRun, true), (Role::Prone, false)],
+            Role::ProneSide => &[(Role::ProneRun, false), (Role::Prone, false)],
+            Role::ProneSideRight => &[(Role::ProneSide, true)],
             Role::AimRight => &[],
             Role::AimLeft => &[],
             Role::AimBoth => &[(Role::AimRight, false)],
@@ -252,6 +321,8 @@ impl Role {
             Role::Death => &[(Role::Idle, false)],
             Role::Swim => &[],
             Role::Look => &[],
+            Role::LookCrouch => &[(Role::Look, false)],
+            Role::LookProne => &[(Role::LookCrouch, false)],
             Role::HeadSide => &[],
             Role::HeadUp => &[],
             Role::SeatAim => &[],
@@ -266,6 +337,37 @@ impl Role {
             Role::Run | Role::CrouchRun => Some([0.0, 0.0, -1.0]),
             Role::Back | Role::CrouchBack => Some([0.0, 0.0, 1.0]),
             Role::Side | Role::CrouchSide => Some([-1.0, 0.0, 0.0]),
+            Role::SideRight | Role::CrouchSideRight => Some([1.0, 0.0, 0.0]),
+            Role::ProneRun => Some([0.0, 0.0, -1.0]),
+            Role::ProneBack => Some([0.0, 0.0, 1.0]),
+            Role::ProneSide => Some([-1.0, 0.0, 0.0]),
+            Role::ProneSideRight => Some([1.0, 0.0, 0.0]),
+            _ => None,
+        }
+    }
+    /// Roles a body supplies only to improve on another's: a body without
+    /// one is not reported as missing it.
+    pub fn optional(self) -> bool {
+        matches!(
+            self,
+            Role::LookCrouch
+                | Role::LookProne
+                | Role::SideRight
+                | Role::CrouchSideRight
+                | Role::Prone
+                | Role::ProneRun
+                | Role::ProneBack
+                | Role::ProneSide
+                | Role::ProneSideRight
+        )
+    }
+    /// The role whose ground speed stands in for this one's when the
+    /// archetype names none for it.
+    pub fn speed_alias(self) -> Option<Role> {
+        match self {
+            Role::SideRight => Some(Role::Side),
+            Role::CrouchSideRight => Some(Role::CrouchSide),
+            Role::ProneSideRight => Some(Role::ProneSide),
             _ => None,
         }
     }
@@ -274,7 +376,7 @@ impl Role {
         match self {
             Role::Idle => "it stands in its bind pose",
             Role::AimRight | Role::AimLeft => "its arm does not raise a held item",
-            Role::Look => "it does not look up and down",
+            Role::Look | Role::LookCrouch | Role::LookProne => "it does not look up and down",
             Role::HeadSide => "its head does not turn in free look",
             Role::HeadUp => "its head does not tilt under a pack",
             Role::SeatAim => "a seated gunner bends only with its `look` clip",
@@ -323,9 +425,23 @@ pub struct Deaths {
     /// Whatever the side, and for a death with no side (a fall, lava).
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub any: Vec<String>,
+    /// A body that died crouched plays one of these, whatever the side:
+    /// the clip must start from a crouch. A body with `deaths` needs them.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub crouched: Vec<String>,
+    /// The same for a body that died lying prone, needed by a body that can lie prone.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub prone: Vec<String>,
 }
 /// Most clips one side of [`Deaths`] lists.
 pub const MAX_DEATH_CLIPS: usize = 8;
+/// The posture a body died in, for [`Deaths::pick`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DeathPosture {
+    Standing,
+    Crouched,
+    Prone,
+}
 /// A side of the body, for [`Deaths::pick`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Side {
@@ -338,6 +454,20 @@ impl Deaths {
     pub fn is_empty(&self) -> bool {
         *self == Self::default()
     }
+    /// Every clip any list names.
+    pub fn clips(&self) -> impl Iterator<Item = &String> {
+        [
+            &self.front,
+            &self.back,
+            &self.left,
+            &self.right,
+            &self.any,
+            &self.crouched,
+            &self.prone,
+        ]
+        .into_iter()
+        .flatten()
+    }
     pub fn validate(&self) -> Result<()> {
         for (side, clips) in [
             ("front", &self.front),
@@ -345,6 +475,8 @@ impl Deaths {
             ("left", &self.left),
             ("right", &self.right),
             ("any", &self.any),
+            ("crouched", &self.crouched),
+            ("prone", &self.prone),
         ] {
             ensure!(
                 clips.len() <= MAX_DEATH_CLIPS,
@@ -362,14 +494,13 @@ impl Deaths {
     /// The clip for a death from `side` with `roll`, among those the body
     /// has (`has` takes a lower-case clip name), lower case; `None` plays
     /// the `death` role.
-    pub fn pick(&self, side: Option<Side>, roll: u8, has: impl Fn(&str) -> bool) -> Option<String> {
-        let sided = match side {
-            Some(Side::Front) => &self.front,
-            Some(Side::Back) => &self.back,
-            Some(Side::Left) => &self.left,
-            Some(Side::Right) => &self.right,
-            None => &self.any,
-        };
+    pub fn pick(
+        &self,
+        posture: DeathPosture,
+        side: Option<Side>,
+        roll: u8,
+        has: impl Fn(&str) -> bool,
+    ) -> Option<String> {
         let owned = |clips: &Vec<String>| -> Vec<String> {
             clips
                 .iter()
@@ -377,10 +508,26 @@ impl Deaths {
                 .filter(|c| has(c))
                 .collect()
         };
-        let mut clips = owned(sided);
-        if clips.is_empty() {
-            clips = owned(&self.any);
-        }
+        // A crouched or prone body plays only its own posture's clips: a standing clip on it is a wrong pose, so
+        // with none it plays the `death` role and the body's report says so.
+        let mut clips = match (posture, side) {
+            (DeathPosture::Prone, _) => owned(&self.prone),
+            (DeathPosture::Crouched, _) => owned(&self.crouched),
+            (DeathPosture::Standing, side) => {
+                let sided = match side {
+                    Some(Side::Front) => &self.front,
+                    Some(Side::Back) => &self.back,
+                    Some(Side::Left) => &self.left,
+                    Some(Side::Right) => &self.right,
+                    None => &self.any,
+                };
+                let mut clips = owned(sided);
+                if clips.is_empty() {
+                    clips = owned(&self.any);
+                }
+                clips
+            }
+        };
         (!clips.is_empty()).then(|| clips.swap_remove(usize::from(roll) % clips.len()))
     }
 }
@@ -393,7 +540,7 @@ pub fn validate_ground_speeds(speeds: &GroundSpeeds) -> Result<()> {
     for (role, speed) in speeds {
         ensure!(
             Role::from_name(role).is_some_and(|r| r.ground_axis().is_some()),
-            "ground speed role `{role}` must be one of run, back, side, crouch_run, crouch_back or crouch_side"
+            "ground speed role `{role}` must be a locomotion role (run, back, side, side_right, crouch_run, crouch_back, crouch_side, crouch_side_right, prone_run, prone_back, prone_side or prone_side_right)"
         );
         ensure!(
             speed.is_finite() && (0.01..=1000.0).contains(speed),
@@ -411,6 +558,12 @@ pub struct RoleClips {
     /// Roles with no clip of their own: what stands in (`None`: nothing,
     /// the layer is skipped).
     pub missing: Vec<(Role, Option<Role>)>,
+    /// Roles the body has a clip of its own for (not a stand-in).
+    own: std::collections::BTreeSet<Role>,
+    /// What the archetype's `animations` names that cannot be honoured: a key
+    /// that is no role, or a clip the body does not have (also for the
+    /// optional roles, which are otherwise never reported).
+    pub unhonoured: Vec<String>,
 }
 impl RoleClips {
     /// Resolve `animations` against the clips the body has (`has` takes a
@@ -454,12 +607,38 @@ impl RoleClips {
                         .map(|(r, rev)| (*r, *rev != reversed)),
                 );
             }
-            missing.push((role, stand_in.as_ref().map(|(r, _, _)| *r)));
+            // An optional role is polish over another, never a gap to report.
+            if !role.optional() {
+                missing.push((role, stand_in.as_ref().map(|(r, _, _)| *r)));
+            }
             if let Some((_, clip, reversed)) = stand_in {
                 clips.insert(role, (clip, reversed));
             }
         }
-        Self { clips, missing }
+        let own = own.keys().copied().collect();
+        let mut unhonoured = Vec::new();
+        for (key, clip) in animations {
+            match Role::from_name(key) {
+                None => unhonoured.push(format!(
+                    "`animations` names `{key}`, which is no animation role, so its clip `{clip}` never plays"
+                )),
+                Some(role) if !has(&clip.to_ascii_lowercase()) => unhonoured.push(format!(
+                    "`animations` maps `{}` to the clip `{clip}`, which the body does not have",
+                    role.name()
+                )),
+                Some(_) => {}
+            }
+        }
+        Self {
+            clips,
+            missing,
+            own,
+            unhonoured,
+        }
+    }
+    /// Whether the body names a clip of its own for `role`.
+    pub fn has_own(&self, role: Role) -> bool {
+        self.own.contains(&role)
     }
     /// The clip (lower case) playing `role`, and whether it plays reversed.
     pub fn clip(&self, role: Role) -> Option<(&str, bool)> {
@@ -467,16 +646,17 @@ impl RoleClips {
     }
     /// One line per role the body has no clip of its own for.
     pub fn report(&self) -> Vec<String> {
-        self.missing
+        self.unhonoured
             .iter()
-            .map(|(role, stand_in)| match stand_in {
+            .cloned()
+            .chain(self.missing.iter().map(|(role, stand_in)| match stand_in {
                 Some(s) => format!(
                     "no `{}` animation; it plays its `{}` instead",
                     role.name(),
                     s.name()
                 ),
                 None => format!("no `{}` animation; {}", role.name(), role.cost()),
-            })
+            }))
             .collect()
     }
 }
@@ -494,19 +674,56 @@ mod tests {
         };
         let has = |c: &str| matches!(c, "die_back" | "die1" | "die2");
         assert_eq!(
-            deaths.pick(Some(Side::Front), 7, has).as_deref(),
+            deaths
+                .pick(DeathPosture::Standing, Some(Side::Front), 7, has)
+                .as_deref(),
             Some("die_back")
         );
         assert_eq!(
-            deaths.pick(Some(Side::Left), 0, has).as_deref(),
+            deaths
+                .pick(DeathPosture::Standing, Some(Side::Left), 0, has)
+                .as_deref(),
             Some("die1")
         );
         assert_eq!(
-            deaths.pick(Some(Side::Left), 1, has).as_deref(),
+            deaths
+                .pick(DeathPosture::Standing, Some(Side::Left), 1, has)
+                .as_deref(),
             Some("die2")
         );
-        assert_eq!(deaths.pick(None, 3, has).as_deref(), Some("die2"));
-        assert_eq!(Deaths::default().pick(None, 3, has), None);
+        assert_eq!(
+            deaths.pick(DeathPosture::Standing, None, 3, has).as_deref(),
+            Some("die2")
+        );
+        assert_eq!(
+            Deaths::default().pick(DeathPosture::Standing, None, 3, has),
+            None
+        );
+        // A crouched or prone body plays only its own posture's clips, never a standing one.
+        let crouch = Deaths {
+            crouched: vec!["crh_kill".into()],
+            prone: vec!["prn_kill".into()],
+            ..deaths.clone()
+        };
+        let has_all = |c: &str| matches!(c, "die_back" | "die1" | "die2" | "crh_kill" | "prn_kill");
+        assert_eq!(
+            crouch
+                .pick(DeathPosture::Crouched, Some(Side::Front), 5, has_all)
+                .as_deref(),
+            Some("crh_kill")
+        );
+        assert_eq!(
+            crouch
+                .pick(DeathPosture::Prone, None, 0, has_all)
+                .as_deref(),
+            Some("prn_kill")
+        );
+        let standing_only = |c: &str| matches!(c, "die1" | "die2" | "die_back");
+        assert_eq!(
+            crouch.pick(DeathPosture::Prone, None, 0, standing_only),
+            None,
+            "no clip for the posture plays the death role, not a standing one"
+        );
         assert!(
             Deaths {
                 any: vec!["x".into(); 9],
@@ -550,14 +767,24 @@ mod tests {
                 &"no `aim_right` animation; its arm does not raise a held item".to_string()
             )
         );
-        assert_eq!(report.len(), Role::ALL.len() - 2);
+        // Not reported: the two roles it names and every optional role.
+        let optional = Role::ALL.into_iter().filter(|r| r.optional()).count();
+        assert_eq!(report.len(), Role::ALL.len() - 2 - optional);
+        assert_eq!(
+            roles.clip(Role::SideRight),
+            Some(("walk", true)),
+            "reversed"
+        );
+        assert_eq!(roles.clip(Role::CrouchSideRight), Some(("stand", true)));
+        assert!(!roles.has_own(Role::SideRight) && roles.has_own(Role::Run));
     }
 
     #[test]
     fn a_body_with_no_clips_resolves_nothing_and_says_so() {
         let roles = RoleClips::resolve(&Animations::new(), |_| false);
         assert!(Role::ALL.into_iter().all(|r| roles.clip(r).is_none()));
-        assert_eq!(roles.report().len(), Role::ALL.len());
+        let optional = Role::ALL.into_iter().filter(|r| r.optional()).count();
+        assert_eq!(roles.report().len(), Role::ALL.len() - optional);
     }
 
     #[test]
@@ -579,5 +806,26 @@ mod tests {
         };
         assert!(bad.validate().is_err());
         assert!(validate_animations(&[("dance".into(), "x".into())].into()).is_err());
+    }
+
+    #[test]
+    fn a_role_mapped_to_a_clip_the_body_lacks_is_named_even_when_optional() {
+        // `look_prone` is optional (a body without one is not reported), but
+        // an archetype that names a clip for it and has none says so.
+        let animations: Animations = [("look_prone".to_string(), "Look_Prone".to_string())].into();
+        let roles = RoleClips::resolve(&animations, |clip| clip == "root");
+        let lines = roles.report();
+        assert!(
+            lines
+                .iter()
+                .any(|l| l.contains("look_prone") && l.contains("Look_Prone")),
+            "{lines:?}"
+        );
+        // Naming a clip it does have is not a gap.
+        let roles = RoleClips::resolve(&animations, |clip| clip == "look_prone");
+        assert!(roles.unhonoured.is_empty());
+        // Nothing named, nothing to name.
+        let roles = RoleClips::resolve(&Animations::new(), |_| false);
+        assert!(roles.unhonoured.is_empty());
     }
 }

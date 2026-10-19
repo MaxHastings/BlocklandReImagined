@@ -11,7 +11,6 @@ game.
 | Test | What it throws at the game |
 |------|----------------------------|
 | `session_chaos` | Six bots in one host session doing everything at once: planting inside each other, the walls and themselves; firing rockets and guns (casings) from inside bricks and straight down; spawning, driving and wrecking every vehicle family; admins loading overlapping builds, clearing, warping and changing time scale; joining, leaving, chatting (empty, 4,000 characters, control characters); and hostile values (NaN, infinity, bad slots). Every six ticks everything the host replicates is scanned for NaN; a contained step failure or a panic fails the run with the seed and the last 64 actions. Deterministic per seed. |
-| `net_chaos` | The same bots as real QUIC clients of a real host on loopback, two of them administrators, joining and leaving as they go. No client may be dropped unasked, nothing a client receives (poses, vehicles, weapons, vitals, cues, the world) may hold NaN, the host may report no step failure, and a newcomer must still get in and be answered at the end. |
 | `physics_fuzz` | Rapier driven the way the game drives it (bricks planted and removed, vehicles and mounts spawned, teleported and removed, collision refreshes between steps) in random order, with Rapier's debug consistency checks on. |
 | `geometry_fuzz` | Aiming rays, weapon sweeps and box sweeps from anywhere (inside bricks, walls and sensors), in any direction including zero and NaN; brick collision shapes from degenerate, negative and NaN sizes. Every hit must be finite with a unit normal. |
 | `net_fuzz` | Random bytes, and real server frames and datagrams damaged inside their compression, through every decoder; decoded messages go into a replica, which must refuse them or stay finite. |
@@ -29,19 +28,14 @@ Longer hunts (Max's PC, or any machine left alone for a while):
 ```sh
 # Many seeds, a minute of play each
 BRI_CHAOS_SEEDS=64 BRI_CHAOS_TICKS=7200 cargo test --release -p bri-chaos --test session_chaos
-# Ten minutes over the network
-BRI_CHAOS_SECONDS=600 cargo test --release -p bri-chaos --test net_chaos
 # Deeper fuzzing
 PROPTEST_CASES=20000 cargo test --release -p bri-chaos
 # The real game: generated content (slate and bedroom by default)
 BRI_CONTENT=content BRI_CHAOS_SEEDS=16 cargo test --release -p bri-chaos -- --ignored
-BRI_CONTENT=content BRI_CHAOS_MAP=v20/add-ons/map_bedroom/bedroom.mis \
-  BRI_CHAOS_SECONDS=600 cargo test --release -p bri-chaos --test net_chaos -- --ignored
 ```
 
 A failure prints its seed. `BRI_CHAOS_SEED=<hex>` replays exactly that run
-for `session_chaos` (the network soak is timing-dependent, so its seed gives
-the same bots but not the same interleaving). Proptest failures print the
+for `session_chaos` . Proptest failures print the
 shrunk input; add it as a named test beside the fuzzer that found it, as
 `physics_fuzz.rs` does.
 

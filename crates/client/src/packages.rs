@@ -136,7 +136,10 @@ pub fn binds(catalog: &Catalog, state: &PackageStateView, mac: bool) -> Vec<Pack
                 .screen
                 .as_ref()
                 .map_or_else(|| bind.command.clone(), |s| format!("screen:{s}"));
-            let command = format!("package:{}:{}", bind.package, name);
+            let command = bind
+                .stock
+                .clone()
+                .unwrap_or_else(|| format!("package:{}:{}", bind.package, name));
             if out.iter().any(|b| b.bind_command() == command) {
                 continue;
             }
@@ -152,10 +155,80 @@ pub fn binds(catalog: &Catalog, state: &PackageStateView, mac: bool) -> Vec<Pack
                     bind.key.clone()
                 },
                 hold: bind.hold,
+                mouse: bind.mouse.clone(),
+                stock: bind.stock.clone(),
+                profile: binds
+                    .profile
+                    .clone()
+                    .filter(|p| p != bri_content::controls::DEFAULT_PROFILE)
+                    .unwrap_or_default(),
             });
         }
     }
     out
+}
+/// The control profiles declared by files of binds whose package this
+/// server runs, the first declaration of an id winning.
+pub fn profiles(
+    catalog: &Catalog,
+    state: &PackageStateView,
+) -> Vec<bri_content::controls::ProfileDef> {
+    let mut out: Vec<bri_content::controls::ProfileDef> = Vec::new();
+    for (_, binds) in catalog.binds() {
+        if !binds
+            .binds
+            .iter()
+            .any(|b| state.packages.contains_key(&b.package))
+        {
+            continue;
+        }
+        for profile in &binds.profiles {
+            if !out.iter().any(|p| p.id == profile.id) {
+                out.push(profile.clone());
+            }
+        }
+    }
+    out
+}
+/// What each control profile leaves out of Blockland's Controls list,
+/// from declarations the game already makes: a `building` HUD claim that
+/// applies to the profile's bodies whatever they hold or ride, and bodies
+/// that cannot jet (`can_jet`, `None` for a body this session lacks).
+pub fn profile_hides(
+    catalog: &Catalog,
+    state: &PackageStateView,
+    profiles: &[bri_content::controls::ProfileDef],
+    can_jet: impl Fn(&str) -> Option<bool>,
+) -> BTreeMap<String, bri_ui::profiles::Hides> {
+    use bri_content::hud::Region;
+    let claims: Vec<&bri_content::hud::Layout> = catalog
+        .hud_regions()
+        .filter(|(package, ..)| state.packages.contains_key(*package))
+        .map(|(.., layout)| layout)
+        .filter(|l| l.region == Region::Building)
+        .filter(|l| {
+            let w = &l.when;
+            !w.body.is_empty()
+                && w.holding.is_empty()
+                && w.vehicle.is_empty()
+                && w.seat.is_empty()
+                && w.minigame.is_none()
+        })
+        .collect();
+    profiles
+        .iter()
+        .map(|p| {
+            let building = claims.iter().any(|l| {
+                l.when
+                    .body
+                    .iter()
+                    .any(|b| p.player_types.iter().any(|t| t.eq_ignore_ascii_case(b)))
+            });
+            let jets: Vec<bool> = p.player_types.iter().filter_map(|t| can_jet(t)).collect();
+            let jet = !jets.is_empty() && jets.iter().all(|j| !j);
+            (p.id.clone(), bri_ui::profiles::Hides { building, jet })
+        })
+        .collect()
 }
 /// The help pages of the packages this server runs, for the Help dialog.
 pub fn help(catalog: &Catalog, state: &PackageStateView) -> Vec<bri_ui::api::AddOnHelpPage> {

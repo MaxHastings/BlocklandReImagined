@@ -43,7 +43,7 @@ mod support;
 
 use support::host_content::HostContent;
 
-synthetic_and_content!(HostContent: tool_kills_fall_through_the_world_and_blasts_tumble_on_every_screen);
+synthetic_and_release_content!(HostContent: tool_kills_fall_through_the_world_and_blasts_tumble_on_every_screen);
 
 fn ground() -> Vec<ColliderBuilder> {
     vec![ColliderBuilder::cuboid(200.0, 0.5, 200.0).translation(Vector::new(0.0, -0.5, 0.0))]

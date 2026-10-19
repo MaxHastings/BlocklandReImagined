@@ -4,9 +4,9 @@ use anyhow::{Context, Result, ensure};
 use bri_client_sandbox::world::{Bounds, Rig as NodeTree, Skeleton};
 use bri_console::Clamp;
 use bri_content::{
-    animation::{Channels, Layer, sample_layers_with_transition},
+    animation::{Channels, Layer, sample_layers_with_transition, sample_layers_with_transitions},
     avatar::{Appearance, Outfit, Package, Rig},
-    body::{Animations, CrouchComposition, Role, RoleClips, Sockets},
+    body::{Animations, CrouchComposition, LocomotionPick, Role, RoleClips, Sockets},
     body_pose::{
         BodyFitInput, BodyFits as Fits, BodyFittingInput, BodyHolds, BodySocketInput,
         apply_body_fitting, body_mount_action, body_mount_node, body_offset_socket,
@@ -424,6 +424,12 @@ impl AvatarAssets {
     pub fn load_bodies(&mut self, root: &Path, packages: &bri_package::packages::PackageSet) {
         for entry in packages.packages.iter().filter(|p| p.role.is_none()) {
             let Ok(dir) = bri_package::packages::package_dir(root, entry) else {
+                bri_console::fallback::report(
+                    bri_console::fallback::kind::DROPPED_ITEM,
+                    &entry.id,
+                    "package folder",
+                    "its bodies are never tried (the folder cannot be found)",
+                );
                 continue;
             };
             let models = body_models(&dir, &entry.id);
@@ -432,7 +438,12 @@ impl AvatarAssets {
                     continue;
                 }
                 // One that does not load leaves its players Blockheads.
-                match self.package_body(&dir, &model, file.as_deref()) {
+                match self
+                    .package_body(&dir, &model, file.as_deref())
+                    .and_then(|mut body| {
+                        link_animation_libraries(&mut body, root, packages, &dir, &model)?;
+                        Ok(body)
+                    }) {
                     Ok(body) => {
                         self.bodies.insert(model, Box::new(body));
                     }
@@ -646,15 +657,30 @@ impl AvatarAssets {
                 data.images[image].srgb = true;
                 material.untinted = source.blend == "opaque";
             }
-            if model != HORSE_SHAPE && source.blend == "alpha" {
-                material.alpha = AlphaMode::Blend;
-            }
+            let blended = model != HORSE_SHAPE && source.blend == "alpha";
+            let kept = material.alpha;
+            bri_render::shape_material::apply(&mut material, source, model, |_| {
+                Ok(if blended { AlphaMode::Blend } else { kept })
+            })?;
             if source.unlit {
                 material.kind = if overlay {
                     bri_render::scene::MaterialKind::UnlitOverlay
                 } else {
                     bri_render::scene::MaterialKind::Unlit
                 };
+            }
+            // A masked tint reads its mask material's texture as data.
+            if let Some(mask) = source
+                .tint
+                .as_ref()
+                .and_then(|t| horse.rig.shape.materials.get(t.mask))
+                .and_then(|m| horse.images.get(&m.name.to_ascii_lowercase()))
+            {
+                let mut mask = mask.clone();
+                mask.srgb = false;
+                material.images[10] = data.images.len();
+                data.images.push(mask);
+                material.tint_mask = true;
             }
             data.materials.push(material);
         }
@@ -739,9 +765,14 @@ impl AvatarAssets {
                 index
             });
             let mut material = Material::brick_overlay(format!("avatar/{name}"), image);
-            if source.blend == "alpha" {
-                material.alpha = AlphaMode::Blend;
-            }
+            let kept = material.alpha;
+            bri_render::shape_material::apply(&mut material, source, "avatar", |blend| {
+                Ok(if blend == "alpha" {
+                    AlphaMode::Blend
+                } else {
+                    kept
+                })
+            })?;
             materials.push(data.materials.len());
             data.materials.push(material);
         }
@@ -787,8 +818,13 @@ impl AvatarAssets {
             forward: true,
             phase: 0.0,
             last_time: None,
+            death_announced: false,
+            started_clips: Vec::new(),
             channels: None,
             transition: None,
+            action_channels: None,
+            action_from: None,
+            body_threads: [None, None],
             stood_at: None,
             crouch: CrouchThread::default(),
             body: None,
@@ -884,10 +920,20 @@ pub struct AvatarMesh {
     forward: bool,
     phase: f32,
     last_time: Option<f64>,
+    /// A death clip has been announced for the body's current death.
+    death_announced: bool,
+    /// Clips (lower case) the body started since the last take.
+    started_clips: Vec<String>,
     /// Locomotion channels of the last pose, frozen when a transition starts.
     channels: Option<Channels>,
     /// Frozen source pose and start time of the current action transition.
     transition: Option<(Channels, f64)>,
+    /// How long the transition a rule's thread action started lasts (`BodyKind::action_blend`), until it ends.
+    action_channels: Option<Channels>,
+    /// The pose before a rule-started thread, frozen, and when it started blending away.
+    action_from: Option<(Channels, f64)>,
+    /// The rule-driven body threads of the last pose, to see one start or end.
+    body_threads: [Option<(String, u64)>; 2],
     /// When the body last left the [`SIT`] pose.
     stood_at: Option<f64>,
     crouch: CrouchThread,
@@ -937,8 +983,12 @@ pub struct BodyKind {
     /// The fastest a locomotion clip plays (`Look::max_time_scale`); 0
     /// takes v20's 1.5.
     pub max_time_scale: f32,
+    /// Seconds a rule's thread action blends in from the pose before it (`Look::action_blend`); 0 cuts.
+    pub action_blend: f32,
     /// Its own death clips by side and at random (`Look::deaths`).
     pub deaths: bri_content::body::Deaths,
+    /// How the ground locomotion clip is picked and timed (`Look::locomotion_pick`).
+    pub locomotion_pick: bri_content::body::LocomotionPick,
 }
 impl BodyKind {
     /// The archetype's fit for a mesh: `stand_in` when it draws a box model
@@ -954,7 +1004,9 @@ impl BodyKind {
             sit_eye: Vec3::new(0.0, m.sit_eye, -m.sit_eye_forward),
             ground_speeds: archetype.look.ground_speeds.clone(),
             max_time_scale: archetype.look.max_time_scale,
+            action_blend: archetype.look.action_blend,
             deaths: archetype.look.deaths.clone(),
+            locomotion_pick: archetype.look.locomotion_pick,
         }
     }
     /// How fast `clip` plays for `role` while the body moves at `velocity`
@@ -977,17 +1029,31 @@ impl BodyKind {
             .last()
             .map(|&t| Vec3::from(t))
             .filter(|t| t.is_finite() && clip.duration > 0.0 && t.length() > 1e-4);
-        let (speed, dir) = match self.ground_speeds.get(role.name()) {
+        let named = self.ground_speeds.get(role.name()).or_else(|| {
+            role.speed_alias()
+                .and_then(|alias| self.ground_speeds.get(alias.name()))
+        });
+        let max = if self.max_time_scale > 0.0 {
+            self.max_time_scale
+        } else {
+            bri_sim::archetype::MAX_TIME_SCALE
+        };
+        // `APawn::PlayRunning`: the loop rate is the pawn's whole speed over the class ground speed,
+        // whichever way the clip faces (see `bri_ue2_rules::ground`).
+        if let (LocomotionPick::Ue2FourWay, Some(&speed)) = (self.locomotion_pick, named) {
+            let scale = velocity.length() / speed;
+            return if scale.is_finite() {
+                scale.min(max)
+            } else {
+                1.0
+            };
+        }
+        let (speed, dir) = match named {
             Some(&speed) => (speed, Vec3::from(axis)),
             None => match ground {
                 Some(t) => (t.length() / clip.duration, t.normalize()),
                 None => return 1.0,
             },
-        };
-        let max = if self.max_time_scale > 0.0 {
-            self.max_time_scale
-        } else {
-            bri_sim::archetype::MAX_TIME_SCALE
         };
         let scale = (velocity.dot(dir) / speed).abs().min(max);
         if scale.is_finite() { scale } else { 1.0 }
@@ -1124,6 +1190,10 @@ pub struct AvatarAnimationInput {
     /// lowest: the body's `seat_aim` clip holds there in place of `look`,
     /// so the whole seated pose bends with the gun.
     pub seat_aim: Option<f32>,
+    /// Additive clips a seat's rider holds at a place along their length,
+    /// ahead of `seat_aim`: Halo's acceleration overlays
+    /// (`Seat::rider_acceleration`), each `(clip, phase 0..1)`.
+    pub seat_overlays: Vec<(String, f32)>,
     /// Where a seated rider's right and left hands hold on, in the world
     /// (a seat's `hands`): each arm reaches its hand there after the clip
     /// pose ([`reach_hands`]).
@@ -1184,12 +1254,18 @@ pub use bri_content::hold::reach as reach_hands;
 /// middle over the feet and its back up, `depth` (half its thickness,
 /// scaled) above the ground.
 pub fn posture_frame(player: &PlayerState, lean_tilt: f32, depth: f32) -> Mat4 {
+    posture_frame_for(lean_tilt, depth, player.posture.prone)
+}
+
+/// [`posture_frame`], laying the body face down only when `lie_down`: a body
+/// whose own clips pose it lying prone is not laid down a second time.
+pub fn posture_frame_for(lean_tilt: f32, depth: f32, lie_down: bool) -> Mat4 {
     let lean = if lean_tilt.is_finite() && lean_tilt != 0.0 {
         Mat4::from_rotation_z(-lean_tilt)
     } else {
         Mat4::IDENTITY
     };
-    if !player.posture.prone {
+    if !lie_down {
         return lean;
     }
     // Head forward (-Z): the body's up turns to its facing.
@@ -1431,6 +1507,66 @@ pub fn locomotion(player: &PlayerState, coverage: f32) -> LocomotionAction {
         }
     }
     action
+}
+/// Army Ops' ground pick, `APawn::Get4WayDirection`, in place of v20's: a ground run, back or side pick
+/// (the stance prefix kept) becomes the direction the unit horizontal velocity falls in, relative to the
+/// body's facing. Forward and backward each take a cone of 0.82 (cos 34.9 degrees) of the facing axis,
+/// so a 45 degree diagonal plays a strafe clip. Right plays the left strafe clip reversed (or its own).
+/// Every other pick (root, jump, fall, swim) keeps v20's rule.
+pub fn ue2_four_way(action: LocomotionAction, player: &PlayerState) -> LocomotionAction {
+    let crouch = match action.sequence {
+        "crouchrun" | "crouchback" | "crouchside" => true,
+        "run" | "back" | "side" => false,
+        _ => return action,
+    };
+    let facing = [player.yaw.sin(), -player.yaw.cos(), 0.0];
+    let right = [player.yaw.cos(), player.yaw.sin(), 0.0];
+    let velocity = [player.velocity[0], player.velocity[2], 0.0];
+    let (sequence, forward) =
+        match bri_ue2_rules::ground::four_way_direction(velocity, facing, right) {
+            bri_ue2_rules::ground::BACKWARD => (if crouch { "crouchback" } else { "back" }, true),
+            bri_ue2_rules::ground::LEFT => (if crouch { "crouchside" } else { "side" }, true),
+            bri_ue2_rules::ground::RIGHT => (if crouch { "crouchside" } else { "side" }, false),
+            _ => (if crouch { "crouchrun" } else { "run" }, true),
+        };
+    LocomotionAction { sequence, forward }
+}
+/// A body lying prone whose clips pose the lying body plays its prone locomotion
+/// roles for the stance names `locomotion` picks from the velocity. A right
+/// strafe takes its own clip when it has one, else the left clip reversed.
+fn own_prone_action(action: LocomotionAction, roles: &RoleClips) -> LocomotionAction {
+    let stay = |sequence| LocomotionAction {
+        sequence,
+        forward: true,
+    };
+    match (action.sequence, action.forward) {
+        ("run", _) => stay("pronerun"),
+        ("back", _) => stay("proneback"),
+        ("side", true) => stay("proneside"),
+        ("side", false) if roles.has_own(Role::ProneSideRight) => stay("pronesideright"),
+        ("side", false) => LocomotionAction {
+            sequence: "proneside",
+            forward: false,
+        },
+        _ => stay("prone"),
+    }
+}
+
+/// A body with its own right-strafe clip plays it, rather than its left clip
+/// reversed (v20's only way to strafe right, which `locomotion` returns).
+fn own_right_strafe(action: LocomotionAction, roles: &RoleClips) -> LocomotionAction {
+    let (sequence, role) = match action.sequence {
+        "side" => ("sideright", Role::SideRight),
+        "crouchside" => ("crouchsideright", Role::CrouchSideRight),
+        _ => return action,
+    };
+    if action.forward || !roles.has_own(role) {
+        return action;
+    }
+    LocomotionAction {
+        sequence,
+        forward: true,
+    }
 }
 impl AvatarMesh {
     /// The same sampled node matrices used by this frame's visible character.
@@ -1728,6 +1864,14 @@ impl AvatarMesh {
         let assets = assets.for_mesh(self);
         let roles = self.roles(assets);
         let mut lines = self.kind.report(Some(&roles));
+        // A death clip the model does not have plays nothing: say which, rather than fall to another pose.
+        for clip in self.kind.deaths.clips() {
+            if assets.rig.sequence(&clip.to_ascii_lowercase()).is_none() {
+                lines.push(format!(
+                    "its model has no death clip `{clip}`, so a death that picks it plays the `death` role"
+                ));
+            }
+        }
         if !self.kind.stand_in {
             let sockets = &self.kind.sockets;
             for (name, socket) in [
@@ -2004,9 +2148,17 @@ impl AvatarMesh {
                             HitSide::Left => Side::Left,
                             HitSide::Right => Side::Right,
                         });
-                        self.kind
-                            .deaths
-                            .pick(side, death.roll, |clip| assets.rig.sequence(clip).is_some())
+                        use bri_content::body::DeathPosture;
+                        let posture = if movement.posture.prone {
+                            DeathPosture::Prone
+                        } else if movement.crouched {
+                            DeathPosture::Crouched
+                        } else {
+                            DeathPosture::Standing
+                        };
+                        self.kind.deaths.pick(posture, side, death.roll, |clip| {
+                            assets.rig.sequence(clip).is_some()
+                        })
                     })
                     .map_or("death1", |clip| interned(&clip)),
             )
@@ -2015,8 +2167,19 @@ impl AvatarMesh {
         } else {
             None
         };
+        // A death starts its clip once; sounds tied to the clip are queued
+        // from it ([`Self::take_started_clips`]).
+        match scripted {
+            Some(clip) if animation_input.dead => {
+                if !std::mem::replace(&mut self.death_announced, true) {
+                    self.started_clips.push(clip.to_ascii_lowercase());
+                }
+            }
+            _ => self.death_announced = false,
+        }
         // v20 picks every client frame: it kept `delayTicks` but dropped the
         // test that would hold an action for `sNewAnimationTickTime`.
+        let player_prone_authored = movement.posture.prone && roles.has_own(Role::Prone);
         let next = Some(scripted.map_or_else(
             || {
                 if self.model.is_some()
@@ -2038,10 +2201,17 @@ impl AvatarMesh {
                     }
                 } else {
                     let mut action = locomotion(movement, animation_input.water_coverage);
+                    if self.kind.locomotion_pick == LocomotionPick::Ue2FourWay {
+                        action = ue2_four_way(action, movement);
+                    }
                     if movement.jump.jet_flight && action.sequence == "jump" {
                         action.sequence = if movement.crouched { "crouch" } else { "root" };
                     }
-                    action
+                    if player_prone_authored {
+                        own_prone_action(action, &roles)
+                    } else {
+                        own_right_strafe(action, &roles)
+                    }
                 }
             },
             |sequence| LocomotionAction {
@@ -2150,6 +2320,14 @@ impl AvatarMesh {
                     started_at: action.started_at,
                 })
         });
+        let seat_overlays: Vec<_> = animation_input
+            .seat_overlays
+            .iter()
+            .map(|(clip, phase)| bri_content::body_pose::SeatOverlay {
+                clip: clip.as_str(),
+                phase: *phase,
+            })
+            .collect();
         let bri_content::body_pose::BodyLayerPlan {
             layers,
             unacted,
@@ -2173,8 +2351,11 @@ impl AvatarMesh {
                 time,
                 head_up: self.outfit.head_up,
                 seat_aim: animation_input.seat_aim,
+                seat_overlays: &seat_overlays,
                 look_phase: look_position(player.pitch, animation_input.look_limits),
                 head_yaw: player.head_yaw,
+                crouched: player.crouched,
+                prone: player.posture.prone,
             },
         )?;
         self.skipped.extend(skipped);
@@ -2210,7 +2391,44 @@ impl AvatarMesh {
             let progress = ((time - start) / transition_time).clamped(0.0, 1.0);
             (channels, 1.0 - progress as f32)
         });
-        let (pose, channels) = sample_layers_with_transition(&assets.rig.shape, &layers, at, from)?;
+        // A thread a rule starts or ends (a posture change, `play_thread`) blends from the whole pose before it
+        // over the body's `action_blend`, as the locomotion's own transition does for the movement clip: a body
+        // that declares none cuts.
+        let threads = animation_input.body.clone().map(|action| {
+            action
+                .filter(|a| !a.sequence.eq_ignore_ascii_case("root"))
+                .map(|a| (a.sequence.to_ascii_lowercase(), a.started_at.to_bits()))
+        });
+        let blend = f64::from(self.kind.action_blend);
+        if blend > 0.0 && threads != self.body_threads && !first {
+            self.action_from = self
+                .action_channels
+                .clone()
+                .map(|channels| (channels, time));
+        }
+        self.body_threads = threads;
+        if self
+            .action_from
+            .as_ref()
+            .is_some_and(|(_, start)| blend <= 0.0 || time - start >= blend)
+        {
+            self.action_from = None;
+        }
+        let action_mark = self.action_from.as_ref().map(|(channels, start)| {
+            let progress = ((time - start) / blend).clamped(0.0, 1.0);
+            (channels, 1.0 - progress as f32)
+        });
+        let absolute_end = layers
+            .iter()
+            .position(|l| l.animation.additive)
+            .unwrap_or(layers.len());
+        let (pose, mut marks) = sample_layers_with_transitions(
+            &assets.rig.shape,
+            &layers,
+            &[(at, from), (absolute_end.max(at), action_mark)],
+        )?;
+        self.action_channels = marks.pop();
+        let channels = marks.pop().context("movement transition channels")?;
         self.unacted_nodes.clear();
         if acted && self.wants_unacted {
             let (rest, _) = sample_layers_with_transition(
@@ -2277,6 +2495,8 @@ impl AvatarMesh {
         lean_tilt: f32,
         holds: Holds,
     ) -> Result<()> {
+        // A body whose own clips pose it lying is not laid face down as well.
+        let lie_down = player.posture.prone && !self.roles(assets).has_own(Role::Prone);
         // `setScale` scales the whole shape about the feet.
         let model_transform = Mat4::from_scale_rotation_translation(
             Vec3::splat(player.scale),
@@ -2294,11 +2514,11 @@ impl AvatarMesh {
                 model_transform * Mat4::from_translation(shift)
             }
             // On foot a body leans and lies down as its posture says.
-            _ if mount_rotation.is_none() && (player.posture.prone || lean_tilt != 0.0) => {
+            _ if mount_rotation.is_none() && (lie_down || lean_tilt != 0.0) => {
                 Mat4::from_rotation_translation(
                     Quat::from_rotation_y(-player.body_yaw()),
                     Vec3::from(player.feet),
-                ) * posture_frame(player, lean_tilt, 0.3 * player.scale)
+                ) * posture_frame_for(lean_tilt, 0.3 * player.scale, lie_down)
                     * Mat4::from_scale(Vec3::splat(player.scale))
             }
             _ => model_transform,
@@ -2369,6 +2589,19 @@ impl AvatarMesh {
                     .filter(|_| !self.hidden_nodes.contains(name))
             })
             .collect();
+        // A material with a masked tint takes its slot's colour from the
+        // wearer's avatar, whatever object it is on.
+        let material_colors: Vec<_> = assets
+            .rig
+            .shape
+            .materials
+            .iter()
+            .map(|m| {
+                m.tint
+                    .as_ref()
+                    .and_then(|t| self.appearance.slot_color(&t.slot))
+            })
+            .collect();
         let binding = crate::avatar_mesh::Binding {
             shape: &assets.rig.shape,
             detail: assets.detail_at(self.screen_height),
@@ -2376,6 +2609,7 @@ impl AvatarMesh {
             translucent_materials: &self.translucent_materials,
             unassigned_material: self.materials[0],
             colors: &colors,
+            material_colors: &material_colors,
         };
         if self.instanced
             && !self.restructured
@@ -2411,6 +2645,10 @@ impl AvatarMesh {
         }
         Ok(())
     }
+    /// The clips the body started since the last call, lower case.
+    pub fn take_started_clips(&mut self) -> Vec<String> {
+        std::mem::take(&mut self.started_clips)
+    }
     /// Takes over another mesh's action thread (sequence, direction, time
     /// and transition), for a rebuilt outfit of the same player.
     pub fn continue_animation(&mut self, old: &AvatarMesh) {
@@ -2420,6 +2658,9 @@ impl AvatarMesh {
         self.last_time = old.last_time;
         self.channels.clone_from(&old.channels);
         self.transition.clone_from(&old.transition);
+        self.action_channels.clone_from(&old.action_channels);
+        self.action_from.clone_from(&old.action_from);
+        self.body_threads.clone_from(&old.body_threads);
         self.stood_at = old.stood_at;
         self.crouch = old.crouch;
         self.body = old.body;
@@ -2751,15 +2992,118 @@ pub fn appearance_from_prefs(package: &Package, prefs: &AvatarPrefs) -> Result<A
     Ok(appearance)
 }
 
+/// Largest animation library shape file read (the 409 clips of AA's Soldier_3P are about 70 MB).
+const LIBRARY_LIMIT: u64 = 256 << 20;
+
+/// UE2 links animation sets to a mesh and `PlayAnim` looks a sequence up by name without regard to case. A body's archetypes (in its
+/// own package) list `animation_libraries`, asset ids of shapes whose clips join the body's, keyed by their original names. A clip
+/// the body has itself wins. A library that is not there, or a clip on a bone the body lacks, fails the body (named in the Add-On's
+/// health report) instead of leaving a script's `PlayAnim` to miss quietly.
+fn link_animation_libraries(
+    body: &mut AvatarAssets,
+    root: &Path,
+    packages: &bri_package::packages::PackageSet,
+    dir: &Path,
+    model: &str,
+) -> Result<()> {
+    let mut libraries: Vec<String> = Vec::new();
+    if let Ok(archetypes) = std::fs::read_dir(dir.join("assets/archetypes")) {
+        for entry in archetypes.flatten() {
+            let Some(json) = std::fs::read(entry.path())
+                .ok()
+                .and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok())
+            else {
+                continue;
+            };
+            if json["model"].as_str() != Some(model) {
+                continue;
+            }
+            for library in json["animation_libraries"].as_array().into_iter().flatten() {
+                if let Some(id) = library.as_str()
+                    && !libraries.iter().any(|l| l.eq_ignore_ascii_case(id))
+                {
+                    libraries.push(id.to_owned());
+                }
+            }
+        }
+    }
+    for id in libraries {
+        let (package, _) = id
+            .split_once(':')
+            .context("an animation library is `package:asset/file`")?;
+        let entry = packages
+            .packages
+            .iter()
+            .find(|p| p.id.eq_ignore_ascii_case(package))
+            .with_context(|| format!("animation library {id}: package {package} is not enabled"))?;
+        let lib_dir = bri_package::packages::package_dir(root, entry)?.canonicalize()?;
+        let content: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(lib_dir.join("assets/content.json"))?)?;
+        let file = content["content"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .find(|c| {
+                c["id"]
+                    .as_str()
+                    .is_some_and(|c| c.eq_ignore_ascii_case(&id))
+            })
+            .and_then(|c| c["file"].as_str())
+            .with_context(|| format!("animation library {id} is not in its package"))?;
+        let shape: bri_content::shape::Shape = serde_json::from_slice(
+            &crate::materials::read_resource(&lib_dir, file, LIBRARY_LIMIT)?,
+        )?;
+        let bones: std::collections::BTreeSet<&str> = body
+            .rig
+            .shape
+            .nodes
+            .iter()
+            .map(|n| n.name.as_str())
+            .collect();
+        for clip in &shape.animations {
+            clip.validate()
+                .with_context(|| format!("animation library {id}: clip `{}`", clip.name))?;
+            if let Some(track) = clip.nodes.iter().find(|t| !bones.contains(t.node.as_str())) {
+                anyhow::bail!(
+                    "animation library {id}: clip `{}` animates `{}`, which the body does not have",
+                    clip.name,
+                    track.node
+                );
+            }
+        }
+        for clip in shape.animations {
+            let key = clip.name.to_ascii_lowercase();
+            if !body.rig.sequences.contains_key(&key) {
+                body.rig.shape.animations.push(clip.clone());
+                body.rig.sequences.insert(key, clip);
+            }
+        }
+    }
+    Ok(())
+}
+
 /// The bodies the Add-On `id` at `dir` brings, each with its shape file when
 /// it names one: its `body` content (an imported glTF body), and the bodies
 /// its own player types name among its assets (a v20 import's, whose file
 /// `assets/content.json` gives).
 pub fn body_models(dir: &Path, id: &str) -> Vec<(String, Option<String>)> {
+    let unread = |what: &str, error: &dyn std::fmt::Display| {
+        bri_console::fallback::report(
+            bri_console::fallback::kind::DROPPED_ITEM,
+            id,
+            what,
+            &format!("the bodies it names are never offered ({error})"),
+        );
+    };
     let mut models: Vec<(String, Option<String>)> =
         std::fs::read(dir.join(bri_package::library::MANIFEST_FILE))
+            .map_err(|e| unread("package manifest", &e))
             .ok()
-            .and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok())
+            .and_then(|b| {
+                serde_json::from_slice::<serde_json::Value>(&b)
+                    .map_err(|e| unread("package manifest", &e))
+                    .ok()
+            })
             .and_then(|m| m["provides"].as_array().cloned())
             .into_iter()
             .flatten()
@@ -2775,8 +3119,20 @@ pub fn body_models(dir: &Path, id: &str) -> Vec<(String, Option<String>)> {
         models.extend(
             archetypes
                 .flatten()
-                .filter_map(|e| std::fs::read(e.path()).ok())
-                .filter_map(|b| serde_json::from_slice::<serde_json::Value>(&b).ok())
+                .filter_map(|e| {
+                    std::fs::read(e.path())
+                        .map_err(|error| {
+                            unread(&format!("archetype {}", e.path().display()), &error)
+                        })
+                        .ok()
+                        .and_then(|b| {
+                            serde_json::from_slice::<serde_json::Value>(&b)
+                                .map_err(|error| {
+                                    unread(&format!("archetype {}", e.path().display()), &error)
+                                })
+                                .ok()
+                        })
+                })
                 .filter_map(|a| a["model"].as_str().map(str::to_owned))
                 .filter(|m| m.starts_with(&format!("{id}:asset/")))
                 .map(|m| (m, None)),
@@ -2790,6 +3146,119 @@ pub fn body_models(dir: &Path, id: &str) -> Vec<(String, Option<String>)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// UE2 links animation sets to a mesh: a body's archetype lists `animation_libraries` and the clips join the body's, keyed by
+    /// their original names, matched without regard to case; the body's own clips win, and a missing library fails the body.
+    #[test]
+    fn an_archetype_links_an_animation_library_by_original_names() -> Result<()> {
+        let rig = crate::testing::avatar::rig();
+        let build = |libraries: &str,
+                     with_library: bool|
+         -> Result<(
+            crate::testing::ScratchDir,
+            bri_package::packages::PackageSet,
+        )> {
+            let root = crate::testing::ScratchDir::new("anim-library")?;
+            let dir = root.path().join("addons/fish");
+            std::fs::create_dir_all(dir.join("assets/archetypes"))?;
+            let mut shape = rig.shape.clone();
+            shape.animations = rig.sequences.values().cloned().collect();
+            std::fs::write(
+                dir.join("assets/fish.shape.json"),
+                serde_json::to_vec(&shape)?,
+            )?;
+            let mut content = vec![serde_json::json!({
+                "kind": "asset", "id": "fish:asset/fish.dts", "file": "assets/fish.shape.json"})];
+            for material in &shape.materials {
+                let png = format!("assets/{}.png", material.name);
+                image::RgbaImage::from_pixel(1, 1, image::Rgba([255; 4])).save(dir.join(&png))?;
+                content.push(serde_json::json!({
+                    "kind": "asset", "id": format!("fish:asset/{}.png", material.name), "file": png}));
+            }
+            std::fs::write(
+                dir.join("assets/content.json"),
+                serde_json::to_vec(&serde_json::json!({ "content": content }))?,
+            )?;
+            std::fs::write(
+                dir.join("assets/archetypes/fishbot.json"),
+                format!(
+                    r#"{{"schema_version":1,"name":"","model":"fish:asset/fish.dts","animation_libraries":{libraries}}}"#
+                ),
+            )?;
+            let mut entries = vec![
+                serde_json::json!({ "id": "fish", "version": "1.0.0", "side": "shared", "dir": "addons/fish" }),
+            ];
+            if with_library {
+                let lib = root.path().join("addons/clips");
+                std::fs::create_dir_all(lib.join("assets"))?;
+                let mut library = rig.shape.clone();
+                library.animations = Vec::new();
+                for name in ["StdGnPull", "PLFGetupMilesDead_End ", "root"] {
+                    let mut clip = rig.sequence("root").unwrap().clone();
+                    clip.name = name.into();
+                    library.animations.push(clip);
+                }
+                std::fs::write(
+                    lib.join("assets/lib.shape.json"),
+                    serde_json::to_vec(&library)?,
+                )?;
+                std::fs::write(
+                    lib.join("assets/content.json"),
+                    serde_json::to_vec(&serde_json::json!({ "content": [
+                        { "kind": "asset", "id": "clips:asset/lib.shape.json", "file": "assets/lib.shape.json" }] }))?,
+                )?;
+                entries.push(serde_json::json!({ "id": "clips", "version": "1.0.0", "side": "shared", "dir": "addons/clips" }));
+            }
+            let packages = serde_json::from_value(
+                serde_json::json!({ "schema_version": 1, "packages": entries }),
+            )?;
+            Ok((root, packages))
+        };
+        // Linked: the library's clips are found by their original names in any case; a trailing space is part of a name.
+        let (root, packages) = build(r#"["clips:asset/lib.shape.json"]"#, true)?;
+        let mut assets = crate::testing::avatar::assets()?;
+        assets.load_bodies(root.path(), &packages);
+        let body = &assets.bodies["fish:asset/fish.dts"];
+        for name in [
+            "stdgnpull",
+            "StdGnPull",
+            "STDGNPULL".to_ascii_lowercase().as_str(),
+            "plfgetupmilesdead_end ",
+        ] {
+            assert!(
+                body.rig.sequences.contains_key(&name.to_ascii_lowercase()),
+                "{name} resolves"
+            );
+        }
+        assert!(
+            !body.rig.sequences.contains_key("plfgetupmilesdead_end"),
+            "the trailing space is kept, not trimmed"
+        );
+        assert!(
+            !body.rig.sequences.contains_key("nosuchclip"),
+            "an unknown name is not invented"
+        );
+        assert!(
+            body.rig
+                .shape
+                .animations
+                .iter()
+                .any(|a| a.name == "StdGnPull"),
+            "joins the shape's clips under its original name"
+        );
+        // The body's own clip wins over the library's of the same name.
+        let own = rig.sequence("root").unwrap().frames;
+        assert_eq!(body.rig.sequences["root"].frames, own);
+        // A library that is not enabled fails the body (named in the Add-On's health report) rather than missing quietly.
+        let (root, packages) = build(r#"["clips:asset/lib.shape.json"]"#, false)?;
+        let mut assets = crate::testing::avatar::assets()?;
+        assets.load_bodies(root.path(), &packages);
+        assert!(
+            !assets.has_body("fish:asset/fish.dts"),
+            "a body whose library is missing does not load"
+        );
+        Ok(())
+    }
 
     /// An Add-On's own player model (Import Add-On's `shapeFile`, the
     /// Shark's `shark.dts`) loads from its package and draws in place of
@@ -3000,6 +3469,7 @@ mod tests {
         seated_body_takes_the_mount_rotation,
         a_seated_rider_reaches_the_seats_hand_holds,
         getting_up_eases_out_of_the_sit_over_one_transition,
+        a_rule_started_thread_blends_in_over_the_bodys_action_blend,
         jet_release_keeps_the_root_pose_until_landing,
         jets_interrupt_a_jump_without_restarting_it_on_release,
         jet_history_survives_skipped_poses_and_first_remote_observation,
@@ -4209,6 +4679,7 @@ mod tests {
             invite: None,
             light: false,
             mounted: None,
+            vehicle_health: None,
             ride: None,
             look_limits: None,
             control: Default::default(),
@@ -4311,6 +4782,162 @@ mod tests {
         p.crouched = true;
         p.velocity = [2.0, 0.0, 0.0];
         assert_eq!(action(&p), ("crouchside", false));
+    }
+
+    /// Army Ops' `PlayRunning` (Engine.dll 0x19e670): the loop rate is the whole speed over the class ground
+    /// speed whichever way the clip faces, and a sprint is not held to v20's cap.
+    #[test]
+    fn the_army_ops_rate_is_whole_speed_over_ground_speed() -> Result<()> {
+        let rig = crate::testing::avatar::rig();
+        let side = rig.sequence("side").context("side")?.clone();
+        let mut archetype = bri_sim::archetype::Archetypes::default()
+            .resolve(Default::default())
+            .clone();
+        archetype.look.ground_speeds = [("side".to_string(), 3.96)].into();
+        archetype.look.max_time_scale = 16.0;
+        archetype.look.locomotion_pick = LocomotionPick::Ue2FourWay;
+        archetype.validate()?;
+        let kind = BodyKind::of(&archetype, false);
+        let scale = |v: Vec3| kind.time_scale(&side, Role::Side, v);
+        // 8.8 units/s over a 3.96 ground speed: 2.22x, forward or sideways alike.
+        assert!((scale(Vec3::new(0.0, 0.0, -8.8)) - 8.8 / 3.96).abs() < 1e-5);
+        assert!((scale(Vec3::new(8.8, 0.0, 0.0)) - 8.8 / 3.96).abs() < 1e-5);
+        assert!((scale(Vec3::new(3.96, 3.96, 0.0)) - 3.96 * 2f32.sqrt() / 3.96).abs() < 1e-5);
+        Ok(())
+    }
+
+    /// Army Ops' `Get4WayDirection` (Engine.dll 0x19ab40): the diagonal that v20 runs forward on plays a
+    /// strafe clip, and the cones are 0.82 of the facing axis either side of forward and backward.
+    #[test]
+    fn the_army_ops_pick_strafes_on_a_diagonal_where_v20_runs() {
+        let mut p = player();
+        let ue2 = |p: &PlayerState| {
+            let a = ue2_four_way(locomotion(p, 0.0), p);
+            (a.sequence, a.forward)
+        };
+        // Yaw 0 faces -Z with +X on the right.
+        p.velocity = [0.0, 0.0, -6.0];
+        assert_eq!(ue2(&p), ("run", true));
+        p.velocity = [4.0, 0.0, -4.0];
+        assert_eq!(
+            locomotion(&p, 0.0).sequence,
+            "run",
+            "v20 keeps the diagonal on run"
+        );
+        assert_eq!(ue2(&p), ("side", false), "W+D: the right strafe");
+        p.velocity = [-4.0, 0.0, -4.0];
+        assert_eq!(ue2(&p), ("side", true), "W+A: the left strafe");
+        p.velocity = [-4.0, 0.0, 4.0];
+        assert_eq!(ue2(&p), ("side", true), "S+A strafes too");
+        p.velocity = [0.0, 0.0, 6.0];
+        assert_eq!(ue2(&p), ("back", true));
+        // 34 degrees off forward is still forward, 36 is not.
+        let at = |degrees: f32| {
+            let a = degrees.to_radians();
+            [6.0 * a.sin(), 0.0, -6.0 * a.cos()]
+        };
+        p.velocity = at(34.0);
+        assert_eq!(ue2(&p).0, "run");
+        p.velocity = at(36.0);
+        assert_eq!(ue2(&p), ("side", false));
+        p.crouched = true;
+        p.velocity = at(-45.0);
+        assert_eq!(ue2(&p), ("crouchside", true));
+        // Turned to yaw 90 degrees the same world velocity is another direction.
+        p.crouched = false;
+        p.yaw = std::f32::consts::FRAC_PI_2;
+        p.velocity = [6.0, 0.0, 0.0];
+        assert_eq!(ue2(&p), ("run", true));
+        // Standing, jumping and falling keep v20's rule.
+        p.velocity = [0.0, 0.0, 0.0];
+        assert_eq!(ue2(&p), ("root", true));
+    }
+
+    #[test]
+    fn a_body_with_its_own_right_clip_strafes_right_on_it() {
+        let mut p = player();
+        p.velocity = [6.0, 0.0, 0.0];
+        let picked = locomotion(&p, 0.0);
+        let own: bri_content::body::Animations = [
+            ("side_right".into(), "StrafeR".into()),
+            ("crouch_side_right".into(), "CrouchR".into()),
+        ]
+        .into();
+        let has = |c: &str| matches!(c, "run" | "side" | "strafer" | "crouchr" | "crouchside");
+        let with = RoleClips::resolve(&own, has);
+        let without = RoleClips::resolve(&Default::default(), has);
+        let right = own_right_strafe(picked, &with);
+        assert_eq!((right.sequence, right.forward), ("sideright", true));
+        let reversed = own_right_strafe(picked, &without);
+        assert_eq!((reversed.sequence, reversed.forward), ("side", false));
+        p.velocity = [-6.0, 0.0, 0.0];
+        let left = own_right_strafe(locomotion(&p, 0.0), &with);
+        assert_eq!((left.sequence, left.forward), ("side", true));
+        p.crouched = true;
+        p.velocity = [2.0, 0.0, 0.0];
+        let crouch = own_right_strafe(locomotion(&p, 0.0), &with);
+        assert_eq!((crouch.sequence, crouch.forward), ("crouchsideright", true));
+        assert_eq!(with.clip(Role::SideRight), Some(("strafer", false)));
+        assert_eq!(without.clip(Role::SideRight), Some(("side", true)));
+        assert!(!without.report().iter().any(|l| l.contains("side_right")));
+    }
+
+    #[test]
+    fn a_prone_body_with_its_own_clips_crawls_on_them_and_is_not_laid_down_again() {
+        let own: bri_content::body::Animations = [
+            ("prone".into(), "Prn".into()),
+            ("prone_run".into(), "Crawl".into()),
+            ("prone_back".into(), "CrawlBack".into()),
+            ("prone_side".into(), "CrawlLeft".into()),
+            ("prone_side_right".into(), "CrawlRight".into()),
+        ]
+        .into();
+        let has = |c: &str| {
+            matches!(
+                c,
+                "prn" | "crawl" | "crawlback" | "crawlleft" | "crawlright"
+            )
+        };
+        let with = RoleClips::resolve(&own, has);
+        assert!(with.has_own(Role::Prone));
+        let pick = |sequence: &'static str, forward| {
+            let a = own_prone_action(LocomotionAction { sequence, forward }, &with);
+            (a.sequence, a.forward)
+        };
+        assert_eq!(pick("root", true), ("prone", true));
+        assert_eq!(pick("run", true), ("pronerun", true));
+        assert_eq!(pick("back", true), ("proneback", true));
+        assert_eq!(pick("side", true), ("proneside", true));
+        assert_eq!(pick("side", false), ("pronesideright", true));
+        assert_eq!(with.clip(Role::ProneSideRight), Some(("crawlright", false)));
+        // Without a right clip the left one plays reversed; and no report line.
+        let left_only = RoleClips::resolve(
+            &[
+                ("prone".into(), "Prn".into()),
+                ("prone_side".into(), "CrawlLeft".into()),
+            ]
+            .into(),
+            has,
+        );
+        let a = own_prone_action(
+            LocomotionAction {
+                sequence: "side",
+                forward: false,
+            },
+            &left_only,
+        );
+        assert_eq!((a.sequence, a.forward), ("proneside", false));
+        assert_eq!(
+            left_only.clip(Role::ProneSideRight),
+            Some(("crawlleft", true))
+        );
+        assert!(!left_only.report().iter().any(|l| l.contains("prone")));
+        // The face-down frame is only for bodies without lying clips.
+        let mut p = player();
+        p.posture.prone = true;
+        let down = posture_frame(&p, 0.0, 0.3);
+        assert_ne!(down, Mat4::IDENTITY);
+        assert_eq!(posture_frame_for(0.0, 0.3, false), Mat4::IDENTITY);
     }
 
     #[test]
@@ -5204,6 +5831,86 @@ mod tests {
         p.jump.jet_flight = false;
         mesh.pose(assets, &p, 1.0)?;
         assert_eq!(mesh.mode, "jump", "respawn forgets the previous flight");
+        Ok(())
+    }
+
+    /// A thread a rule starts (a posture clip on `play_thread`) used to cut in: the pose jumped to the clip's first
+    /// frame. A body with `look.action_blend` blends from the pose before it, over that time, and one without cuts.
+    fn a_rule_started_thread_blends_in_over_the_bodys_action_blend(fx: &Avatar) -> Result<()> {
+        let assets = &fx.assets;
+        let p = player();
+        let spread = |a: &[Mat4], b: &[Mat4]| -> f32 {
+            a.iter()
+                .zip(b)
+                .map(|(x, y)| {
+                    (x.to_cols_array().iter().zip(y.to_cols_array()))
+                        .map(|(u, v)| (u - v).abs())
+                        .fold(0.0_f32, f32::max)
+                })
+                .fold(0.0, f32::max)
+        };
+        let jump_at = |clip: &str, blend: f32| -> Result<(f32, f32)> {
+            let mut mesh = assets.mesh(assets.package.defaults.clone())?;
+            mesh.kind.action_blend = blend;
+            let none = AvatarAnimationInput::default();
+            for frame in 0..12 {
+                mesh.pose_with_animation(assets, &p, f64::from(frame) / 60.0, &none)?;
+            }
+            let before = mesh.posed_nodes.clone();
+            let started = AvatarAnimationInput {
+                body: [
+                    Some(ActionAnimation {
+                        sequence: clip.into(),
+                        started_at: 0.0,
+                    }),
+                    None,
+                ],
+                ..Default::default()
+            };
+            mesh.pose_with_animation(assets, &p, 0.2, &started)?;
+            let first = spread(&before, &mesh.posed_nodes);
+            // A quarter second on, the blend is done: it is the clip's own pose either way.
+            for frame in 1..=20 {
+                mesh.pose_with_animation(assets, &p, 0.2 + f64::from(frame) / 60.0, &started)?;
+            }
+            let late = mesh.posed_nodes.clone();
+            let mut cut = assets.mesh(assets.package.defaults.clone())?;
+            for frame in 0..12 {
+                cut.pose_with_animation(assets, &p, f64::from(frame) / 60.0, &none)?;
+            }
+            for frame in 0..=20 {
+                cut.pose_with_animation(assets, &p, 0.2 + f64::from(frame) / 60.0, &started)?;
+            }
+            Ok((first, spread(&late, &cut.posed_nodes)))
+        };
+        // Some clip that starts away from the pose before it.
+        let mut found = None;
+        for animation in assets
+            .rig
+            .sequences
+            .values()
+            .filter(|a| !a.additive && !a.name.starts_with("root"))
+        {
+            let (cuts, _) = jump_at(&animation.name, 0.0)?;
+            if cuts > 0.05 {
+                found = Some((animation.name.clone(), cuts));
+                break;
+            }
+        }
+        let (clip, cuts) = found.context("a clip that starts away from the idle pose")?;
+        let (blends, settled) = jump_at(&clip, 0.25)?;
+        assert!(
+            cuts > 0.05,
+            "without a blend the pose jumps to the clip: {cuts}"
+        );
+        assert!(
+            blends < cuts * 0.25,
+            "with one the first frame stays near the pose before: {blends} against {cuts}"
+        );
+        assert!(
+            settled < 1e-3,
+            "after the blend it is the clip's own pose: {settled}"
+        );
         Ok(())
     }
 

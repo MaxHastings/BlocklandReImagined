@@ -41,7 +41,7 @@ fn until(app: &mut App, what: &str, ready: impl Fn(&App) -> bool) -> Result<()> 
     })
 }
 
-synthetic_and_content!(ContentRoot: wheel_scrolls_the_brick_bar_in_the_real_app);
+synthetic_and_release_content!(ContentRoot: wheel_scrolls_the_brick_bar_in_the_real_app);
 
 fn wheel_scrolls_the_brick_bar_in_the_real_app(f: &ContentRoot) -> Result<()> {
     let state = f.state()?;

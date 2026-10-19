@@ -156,9 +156,14 @@ pub(super) struct Combat {
     pub pain_tick: u64,
     /// The share of their speeds an Add-On's `set_speed_scale` gives.
     pub speed_rule: f32,
+    /// Named shares systems own (`set_speed_modifier`), multiplied in with the rest.
+    pub speed_mods: std::collections::BTreeMap<String, f32>,
     /// A gun's slowdown on top ([`bri_weapons::Slow`]): the share kept and
     /// the tick it ends.
     pub gun_slow: Option<(f32, u64)>,
+    /// The share of their speeds the held image leaves
+    /// ([`bri_weapons::MovementScale`]), 1 with none.
+    pub image_speed: f32,
     /// `Player::emote`'s spam check (`lastVoiceTime`, `voiceCount`): the
     /// tick of the last emote let through and the quick ones counted.
     pub voice: Option<u64>,
@@ -277,6 +282,9 @@ pub struct Vitals {
     pub light: bool,
     /// Vehicle id and seat while riding.
     pub mounted: Option<(u64, u8)>,
+    /// What is left of the hull of the vehicle they ride, 1 to 0.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vehicle_health: Option<f32>,
     /// The player this one rides, and the seat.
     pub ride: Option<super::Ride>,
     /// A rule's look limits for this body (`setLookLimits`), `[down, up]`.
@@ -462,6 +470,23 @@ pub enum Notice {
         color: [f32; 4],
         seconds: f32,
     },
+    /// The aim kicked by a rule (`view_shake`): out along `direction` to
+    /// `max`, back to `min`, radians and radians a second.
+    ViewShake {
+        direction: f32,
+        min: f32,
+        max: f32,
+        rate: f32,
+    },
+    /// The view alone shaken (rules' `camera_shake`): up to `translation`
+    /// units and `rotation` radians a frame, fading over `seconds` held by
+    /// `hold`.
+    CameraShake {
+        translation: f32,
+        rotation: f32,
+        seconds: f32,
+        hold: f32,
+    },
     /// Invitation from a minigame owner, answered with Accept/Reject.
     Invite {
         game: u64,
@@ -597,6 +622,12 @@ pub enum Notice {
     /// A panel an Add-On shows this player (`show_panel`), in place of any
     /// open one, or `None` to close it.
     Panel(Option<Box<crate::session::PanelShown>>),
+    /// A rule turned this player's view (`kick_view`): degrees up and to
+    /// the right, added to where they look.
+    ViewKick {
+        pitch: f32,
+        yaw: f32,
+    },
 }
 
 /// Minigame requests. The actor is always the authenticated connection.
@@ -999,7 +1030,9 @@ impl Session {
             pain_level: 0.0,
             pain_tick: 0,
             speed_rule: 1.0,
+            speed_mods: Default::default(),
             gun_slow: None,
+            image_speed: 1.0,
             voice: None,
             voice_count: 0,
             pushed: None,
@@ -1068,6 +1101,7 @@ impl Session {
                         invite: state.and_then(|s| s.invite).map(|g| g.0),
                         light: peer.combat.light,
                         mounted: self.mounted(*owner),
+                        vehicle_health: self.mounted_health(*owner),
                         ride: self.ride(*owner),
                         look_limits: peer.look_limits,
                         control: peer.control,
@@ -1260,6 +1294,13 @@ impl Session {
         source: Option<OwnerId>,
         at: Option<Vec3>,
     ) -> Result<()> {
+        if self
+            .peers
+            .get(&target)
+            .is_some_and(|peer| peer.awaiting_client)
+        {
+            return Ok(());
+        }
         let tick = self.simulation.state().tick;
         if !matches!(kind, DamageKind::Suicide | DamageKind::Event)
             && self.passenger_protected(
@@ -2547,6 +2588,7 @@ impl Session {
             peer.player.refill_energy();
             peer.overlays = None;
             peer.combat.speed_rule = 1.0;
+            peer.combat.speed_mods.clear();
             peer.combat.gun_slow = None;
             peer.player.set_speed_scale(1.0)?;
             peer.player.set_solid(&mut self.simulation.physics, true);
@@ -2868,8 +2910,11 @@ impl Session {
     /// The one fall formula ([`Self::fall_harm`]): None when the blow does
     /// not hurt at all.
     fn fall_damage(&self, owner: OwnerId, impact: Vec3) -> Option<f32> {
-        let speed = impact.length();
         let peer = self.peers.get(&owner)?;
+        // A body with its own falling law (`movement.fall`): only the speed
+        // downward counts, and nothing below the threshold hurts.
+        let law = peer.player.tuning().fall;
+        let speed = law.map_or_else(|| impact.length(), |_| -impact.y);
         // The engine raises `onImpact` past the datablock's
         // `minImpactSpeed` (the Horse's is 250), and `Armor::onImpact`
         // also wants `minImpactSpeed` times the player's height scale.
@@ -2877,7 +2922,10 @@ impl Session {
         let min = PlayerType::from_archetype(state.archetype)
             .unwrap_or_default()
             .min_impact_speed();
-        if speed <= min || speed < min * state.scale {
+        if law.is_none() && (speed <= min || speed < min * state.scale) {
+            return None;
+        }
+        if law.is_some_and(|l| speed <= l.threshold * state.scale) {
             return None;
         }
         // `Armor::onImpact` never hurts a player holding the admin wand.
@@ -2906,7 +2954,10 @@ impl Session {
             return None;
         }
         // A guard faced the way they fell takes some of it.
-        let amount = speed * SPEED_DAMAGE_SCALE;
+        let amount = match law {
+            Some(l) => l.harm(speed, state.scale)?,
+            None => speed * SPEED_DAMAGE_SCALE,
+        };
         Some(
             self.weapons
                 .guard_fall_share(ActorId(owner), impact.normalize_or_zero())
@@ -2919,7 +2970,11 @@ impl Session {
     pub(super) fn apply_speed(&mut self, target: OwnerId) -> Result<()> {
         if let Some(peer) = self.peers.get_mut(&target) {
             let slow = peer.combat.gun_slow.map_or(1.0, |(m, _)| m);
-            peer.player.set_speed_scale(peer.combat.speed_rule * slow)?;
+            let named: f32 = peer.combat.speed_mods.values().product();
+            peer.player.set_speed_scale(
+                (peer.combat.speed_rule * named * slow * peer.combat.image_speed)
+                    .min(bri_package_runtime::ops::MAX_SPEED_SCALE),
+            )?;
         }
         Ok(())
     }
@@ -3107,6 +3162,34 @@ mod tests {
             vec![ColliderBuilder::cuboid(100., 0.5, 100.).translation(Vector::new(0., -0.5, 0.))],
         )?;
         Ok(Session::new(simulation))
+    }
+
+    /// A client still loading its world cannot be hurt (a hazard that fires while a slow machine compiles its
+    /// graphics must not kill a player who has not seen the map); its first move makes it as vulnerable as anyone.
+    #[test]
+    fn a_player_whose_client_is_still_loading_takes_no_damage_until_it_moves() -> Result<()> {
+        let mut s = session()?;
+        let loading = s.join_client("Loading".into(), Vec3::new(0.0, 0.1, 0.0), false, None)?;
+        let local = s.join("Local".into(), Vec3::new(6.0, 0.1, 0.0), false)?;
+        for _ in 0..30 {
+            s.step()?;
+        }
+        let health = |s: &Session, who| s.peers[&who].combat.health;
+        let full = health(&s, loading);
+        s.damage_player(loading, 30.0, DamageKind::Event, None)?;
+        s.damage_player(local, 30.0, DamageKind::Event, None)?;
+        assert_eq!(health(&s, loading), full, "a loading client is not hurt");
+        assert!(
+            health(&s, local) < full,
+            "a player made without a client is"
+        );
+        s.movement(loading, 1, MoveInput::default())?;
+        s.damage_player(loading, 30.0, DamageKind::Event, None)?;
+        assert!(
+            health(&s, loading) < full,
+            "its first move makes it vulnerable"
+        );
+        Ok(())
     }
 
     /// Spawn feet per `fxDTSBrick::getSpawnPoint`: on the floor brick or

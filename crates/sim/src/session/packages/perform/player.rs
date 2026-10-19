@@ -381,6 +381,43 @@ impl Perform for ops::SetSpeedScale {
         session.apply_speed(player)
     }
 }
+impl Perform for ops::SetSpeedModifier {
+    fn check(&self, session: &Session, _cx: OpCall<'_>) -> Result<()> {
+        let peer = session.peers.get(&self.player).context("No such player")?;
+        ensure!(
+            peer.combat.speed_mods.contains_key(&self.key)
+                || peer.combat.speed_mods.len() < bri_package_runtime::ops::MAX_SPEED_KEYS,
+            "Too many speed modifiers"
+        );
+        Ok(())
+    }
+    fn perform(self, session: &mut Session, _cx: OpCall<'_>) -> Result<()> {
+        let ops::SetSpeedModifier { player, key, scale } = self;
+        let peer = session.peers.get_mut(&player).context("No such player")?;
+        if scale == 1.0 {
+            peer.combat.speed_mods.remove(&key);
+        } else {
+            peer.combat.speed_mods.insert(key, scale);
+        }
+        session.apply_speed(player)
+    }
+}
+impl Perform for ops::ScaleVelocity {
+    fn perform(self, session: &mut Session, _cx: OpCall<'_>) -> Result<()> {
+        let ops::ScaleVelocity {
+            player,
+            horizontal,
+            vertical,
+        } = self;
+        session
+            .peers
+            .get_mut(&player)
+            .context("No such player")?
+            .player
+            .scale_velocity(horizontal, vertical);
+        Ok(())
+    }
+}
 impl Perform for ops::SetProne {
     fn check(&self, session: &Session, _cx: OpCall<'_>) -> Result<()> {
         let peer = session.peers.get(&self.player).context("No such player")?;
@@ -518,6 +555,23 @@ impl Perform for ops::SetImageLoaded {
             .set_loaded(bri_weapons::ActorId(player), loaded)
     }
 }
+impl Perform for ops::SetAimScale {
+    fn perform(self, session: &mut Session, _cx: OpCall<'_>) -> Result<()> {
+        let ops::SetAimScale { player, scale } = self;
+        ensure!(session.peers.contains_key(&player), "No such player");
+        session
+            .weapons
+            .set_aim_scale(bri_weapons::ActorId(player), scale)
+    }
+}
+impl Perform for ops::KickView {
+    fn perform(self, session: &mut Session, _cx: OpCall<'_>) -> Result<()> {
+        let ops::KickView { player, pitch, yaw } = self;
+        ensure!(session.peers.contains_key(&player), "No such player");
+        session.notify(player, Notice::ViewKick { pitch, yaw });
+        Ok(())
+    }
+}
 impl Perform for ops::MountImage {
     fn perform(self, session: &mut Session, cx: OpCall<'_>) -> Result<()> {
         let OpCall { package, .. } = cx;
@@ -601,6 +655,54 @@ impl Perform for ops::FollowPath {
             player,
             knots.map(|k| k.iter().map(super::camera_path::Knot::from_op).collect()),
         )
+    }
+}
+impl Perform for ops::ViewShake {
+    fn perform(self, session: &mut Session, cx: OpCall<'_>) -> Result<()> {
+        let OpCall { package, .. } = cx;
+        let ops::ViewShake {
+            player,
+            direction,
+            min,
+            max,
+            rate,
+        } = self;
+        session.take_cue(package)?;
+        ensure!(session.peers.contains_key(&player), "No such player");
+        session.notify(
+            player,
+            Notice::ViewShake {
+                direction,
+                min,
+                max,
+                rate,
+            },
+        );
+        Ok(())
+    }
+}
+impl Perform for ops::CameraShake {
+    fn perform(self, session: &mut Session, cx: OpCall<'_>) -> Result<()> {
+        let OpCall { package, .. } = cx;
+        let ops::CameraShake {
+            player,
+            translation,
+            rotation,
+            seconds,
+            hold,
+        } = self;
+        session.take_cue(package)?;
+        ensure!(session.peers.contains_key(&player), "No such player");
+        session.notify(
+            player,
+            Notice::CameraShake {
+                translation,
+                rotation,
+                seconds,
+                hold,
+            },
+        );
+        Ok(())
     }
 }
 impl Perform for ops::Camera {

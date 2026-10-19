@@ -190,6 +190,8 @@ pub enum Callback {
         input: BindInput,
     },
     ClearBinds,
+    /// Every control of the game Options shows back to its Add-On's key.
+    DefaultProfileBinds,
     DefaultBinds,
     OverwriteSave {
         name: String,
@@ -311,6 +313,12 @@ pub struct Core {
     pub prefs: Prefs,
     pub binds: BindMap,
     pub globals: BindMap,
+    /// Control profiles an Add-On declares: the active one follows the
+    /// player type, and each has bindings of its own ([`crate::profiles`]).
+    pub profiles: crate::profiles::ProfileState,
+    /// The profiles the running Add-Ons declare, as last given.
+    pub profile_defs: Vec<bri_content::controls::ProfileDef>,
+    profiles_dirty: bool,
     /// The Options remap list ([`crate::binds::remap_entries`]).
     pub remap: Vec<crate::schema::RemapEntry>,
     pub remap_commands: Vec<String>,
@@ -468,6 +476,8 @@ pub struct Core {
     pub aim_wheel: bool,
     /// The scope picture drawn over the screen while aiming, if any.
     pub scope_overlay: Option<(u64, f32)>,
+    /// How that picture is laid out.
+    pub scope_fit: crate::api::ScopeFit,
     pub cursor_forced: bool,
     /// The chat input (newMessageHud) is open under the chat.
     pub chat_input_open: bool,
@@ -492,6 +502,17 @@ pub struct Core {
 }
 
 impl Core {
+    /// An Add-On claims the building interface (`building`): the brick bar,
+    /// paint box and tool bar are not drawn and their keys and wheel do
+    /// nothing.
+    pub fn building_off(&self) -> bool {
+        self.hud_claimed(bri_content::hud::Region::Building)
+    }
+    /// A stock command of the building interface (see
+    /// [`crate::profiles::building_command`]).
+    fn is_building_command(c: &str) -> bool {
+        crate::profiles::building_command(c)
+    }
     /// An Add-On claims `region` this frame, so its stock element hides.
     pub fn hud_claimed(&self, region: bri_content::hud::Region) -> bool {
         self.hud_regions.iter().any(|r| r.region == region)
@@ -607,6 +628,7 @@ impl Core {
         self.wheel_camera = false;
         self.aim_wheel = false;
         self.scope_overlay = None;
+        self.scope_fit = Default::default();
         self.cursor_forced = false;
         self.print_aspect = None;
         self.last_print.clear();
@@ -881,6 +903,54 @@ impl Core {
             buttons: Some([q.yes, q.no]),
         })));
     }
+    /// Gameplay lookups: the active control profile's bindings, then the
+    /// Blockland ones it inherits.
+    pub fn game_command_for(&self, input: &BindInput) -> Option<&str> {
+        self.profiles.command_for(&self.binds, input)
+    }
+    pub fn game_command_for_key(&self, key: Key, mods: Modifiers) -> Option<&str> {
+        self.profiles.command_for_key(&self.binds, key, mods)
+    }
+    /// The mouse settings in force: the Add-On profile's and layer's, else
+    /// the player's own Blockland ones.
+    pub fn mouse_settings(&self) -> crate::profiles::MouseSettings {
+        let p = &self.prefs;
+        self.profiles.mouse(
+            p,
+            crate::profiles::MouseSettings {
+                sensitivity: crate::screens::options::mouse_sensitivity(p),
+                invert: p.bool_or("$pref::Input::MouseInvert", false),
+                vehicle_invert: p.bool_or(crate::screens::options::VEHICLE_MOUSE_INVERT, true),
+            },
+        )
+    }
+    /// The bindings, Controls list and its commands of the profile tab
+    /// Options shows (Blockland's own unless a tab was picked).
+    pub fn edit_binds(&self) -> &BindMap {
+        self.profiles.viewed_map().unwrap_or(&self.binds)
+    }
+    pub fn edit_binds_mut(&mut self) -> &mut BindMap {
+        match self.profiles.viewed_map_mut() {
+            Some(m) => m,
+            None => &mut self.binds,
+        }
+    }
+    pub fn edit_remap(&self) -> &[crate::schema::RemapEntry] {
+        self.profiles.viewed_remap().map_or(&self.remap, |r| r.0)
+    }
+    /// How many rows Remap All walks: all of Blockland's list, but only a
+    /// game's own actions (not the Blockland ones it inherits).
+    pub fn remap_all_limit(&self) -> usize {
+        self.profiles
+            .viewed_own_count()
+            .unwrap_or_else(|| self.edit_remap_commands().len())
+    }
+    pub fn edit_remap_commands(&self) -> &[String] {
+        self.profiles
+            .viewed_remap()
+            .map_or(&self.remap_commands, |r| r.1)
+    }
+
     /// `strupr(getWord(moveMap.getBinding(cmd), 1))` as used in HUD tips.
     pub fn key_name(&self, command: &str) -> String {
         match self.binds.binding_of(command) {
@@ -904,6 +974,7 @@ impl Core {
     pub fn save_settings(&mut self) {
         self.settings.prefs = self.prefs.overrides();
         self.settings.binds = Some(self.binds.entries.clone());
+        self.settings.profile_binds = self.profiles.entries();
         self.settings.brick_favorites = self.selector.favorites.clone();
         let s = Box::new(self.settings.clone());
         self.request(UiAction::SaveSettings(s));
@@ -1122,6 +1193,9 @@ impl Core {
                 };
                 self.game(action);
             }
+            return true;
+        }
+        if self.building_off() && Self::is_building_command(&c) {
             return true;
         }
         let bsd_key = self.key_name("openBSD");
@@ -1408,6 +1482,9 @@ impl Core {
             self.game(GameAction::SetZoomFov { fov });
             return;
         }
+        if self.building_off() {
+            return;
+        }
         let key = self.key_name("openBSD");
         let mut o = Outbox::default();
         self.hud.scroll_inventory(dir, &key, &mut o);
@@ -1466,6 +1543,8 @@ impl Ui {
             ),
         };
         let globals = BindMap::globals(&pack.data.data, platform);
+        let mut profiles = crate::profiles::ProfileState::default();
+        profiles.load(&settings.profile_binds);
         let mut selector = SelectorModel {
             favorites: settings.brick_favorites.clone(),
             ..Default::default()
@@ -1502,6 +1581,9 @@ impl Ui {
             prefs,
             binds,
             globals,
+            profiles,
+            profile_defs: Vec::new(),
+            profiles_dirty: false,
             remap,
             remap_commands,
             remap_target: None,
@@ -1603,6 +1685,7 @@ impl Ui {
             wheel_camera: false,
             aim_wheel: false,
             scope_overlay: None,
+            scope_fit: Default::default(),
             cursor_forced: false,
             chat_input_open: false,
             print_aspect: None,
@@ -2091,6 +2174,7 @@ impl Ui {
             UiUpdate::ScopeOverlay(overlay) => {
                 c.scope_overlay = overlay.filter(|(_, aspect)| aspect.is_finite() && *aspect > 0.0)
             }
+            UiUpdate::ScopeFit(fit) => c.scope_fit = fit,
             UiUpdate::Whiteout(amount) => {
                 if amount.is_finite() {
                     c.whiteout = c.whiteout.max(amount.clamped(0.0, 1.0));
@@ -2413,12 +2497,9 @@ impl Ui {
                     && dx.is_finite()
                     && dy.is_finite()
                 {
-                    let sens = crate::screens::options::mouse_sensitivity(&self.core.prefs);
-                    let inv = if self.core.prefs.bool_or("$pref::Input::MouseInvert", false) {
-                        -1.0
-                    } else {
-                        1.0
-                    };
+                    let mouse = self.core.mouse_settings();
+                    let sens = mouse.sensitivity;
+                    let inv = if mouse.invert { -1.0 } else { 1.0 };
                     self.core.game(GameAction::Look {
                         yaw: dx * sens * 0.005,
                         pitch: dy * sens * 0.005 * inv,
@@ -2456,8 +2537,7 @@ impl Ui {
                 } else if self.game_input_active() && self.dialogs.is_empty() {
                     if let Some(cmd) = self
                         .core
-                        .binds
-                        .command_for(&BindInput::Mouse(button))
+                        .game_command_for(&BindInput::Mouse(button))
                         .map(str::to_string)
                     {
                         self.core.held.insert(HeldInput::Mouse(button), cmd.clone());
@@ -2538,10 +2618,21 @@ impl Ui {
                     return;
                 }
                 if self.content.id() == ScreenId::Play && dialogs == 0 {
-                    match self.core.binds.command_for(&BindInput::Wheel) {
+                    match self
+                        .core
+                        .game_command_for(&BindInput::Wheel)
+                        .map(str::to_string)
+                    {
                         Some(c) if c.eq_ignore_ascii_case("scrollInventory") => {
                             for _ in 0..(steps.abs() as usize).min(NUM_WHEEL_STEPS) {
                                 self.core.wheel_scroll(steps.signum());
+                            }
+                        }
+                        // An Add-On action on the wheel: one press per notch.
+                        Some(c) if c.starts_with("package:") => {
+                            for _ in 0..(steps.abs() as usize).min(NUM_WHEEL_STEPS) {
+                                self.core.run_command(&c, true);
+                                self.core.run_command(&c, false);
                             }
                         }
                         _ => {}
@@ -2726,8 +2817,7 @@ impl Ui {
         }
         let Some(cmd) = self
             .core
-            .binds
-            .command_for_key(key, mods)
+            .game_command_for_key(key, mods)
             .map(str::to_string)
         else {
             // Keys the base game leaves unbound may belong to a package HUD.
@@ -2874,32 +2964,95 @@ impl Ui {
     /// stays as it is while Options is open.
     pub fn set_package_binds(&mut self, binds: Vec<crate::api::PackageBind>) {
         let c = &mut self.core;
-        if c.package_binds == binds || c.options_open {
+        if (c.package_binds == binds && !c.profiles_dirty) || c.options_open {
             return;
         }
+        c.profiles_dirty = false;
         let mut remap = crate::binds::remap_entries(&c.pack.data.data);
         let mut division: Option<&str> = None;
+        let mut actions: BTreeMap<String, Vec<crate::profiles::ProfileAction>> = BTreeMap::new();
+        let mut last_division: BTreeMap<String, String> = BTreeMap::new();
         for bind in &binds {
             let command = bind.bind_command();
-            remap.push(crate::schema::RemapEntry {
-                division: (division != Some(bind.division.as_str())).then(|| bind.division.clone()),
+            let entry = crate::schema::RemapEntry {
+                division: None,
                 name: bind.name.clone(),
                 command: command.clone(),
+            };
+            let default = bind
+                .mouse
+                .as_deref()
+                .and_then(|m| BindInput::parse(crate::schema::Device::Mouse, m))
+                .or_else(|| {
+                    bind.key
+                        .as_deref()
+                        .and_then(|key| BindInput::parse(crate::schema::Device::Keyboard, key))
+                });
+            if bind.stock.is_some() && bind.profile.is_empty() {
+                continue;
+            }
+            if !bind.profile.is_empty() {
+                // A declared profile's action; one naming a profile no
+                // running Add-On declares is not offered.
+                if c.profile_defs.iter().any(|d| d.id == bind.profile) {
+                    let last = last_division.insert(bind.profile.clone(), bind.division.clone());
+                    actions.entry(bind.profile.clone()).or_default().push(
+                        crate::profiles::ProfileAction {
+                            entry: crate::schema::RemapEntry {
+                                division: (last.as_deref() != Some(bind.division.as_str()))
+                                    .then(|| bind.division.clone()),
+                                ..entry
+                            },
+                            default,
+                        },
+                    );
+                }
+                continue;
+            }
+            remap.push(crate::schema::RemapEntry {
+                division: (division != Some(bind.division.as_str())).then(|| bind.division.clone()),
+                ..entry
             });
             division = Some(&bind.division);
-            if let Some(input) = bind
-                .key
-                .as_deref()
-                .and_then(|key| BindInput::parse(crate::schema::Device::Keyboard, key))
+            if let Some(input) = default
                 && c.binds.binding_of(&command).is_none()
                 && c.binds.command_for(&input).is_none()
             {
                 c.binds.bind(input, &command);
             }
         }
+        let stock = remap.clone();
+        c.profiles.declare(c.profile_defs.clone(), actions, stock);
         c.remap_commands = remap.iter().map(|r| r.command.clone()).collect();
         c.remap = remap;
         c.package_binds = binds;
+    }
+
+    /// The control profiles the running Add-Ons declare (their
+    /// `binds.json`). Applied with the next [`Ui::set_package_binds`].
+    pub fn set_profile_defs(&mut self, defs: Vec<bri_content::controls::ProfileDef>) {
+        if self.core.profile_defs != defs {
+            self.core.profile_defs = defs;
+            self.core.profiles_dirty = true;
+            let binds = self.core.package_binds.clone();
+            self.set_package_binds(binds);
+        }
+    }
+
+    /// What each control profile leaves out of Blockland's Controls list.
+    pub fn set_profile_hides(&mut self, hides: BTreeMap<String, crate::profiles::Hides>) {
+        self.core.profiles.set_hides(hides);
+    }
+
+    /// What the local player is: the control profile follows the player
+    /// type (the body's archetype id), and a layer follows what is ridden.
+    pub fn set_control_context(
+        &mut self,
+        player_type: &str,
+        ride: Option<crate::profiles::RideContext>,
+    ) {
+        self.core.profiles.select_for(player_type);
+        self.core.profiles.set_ride(ride);
     }
 
     /// Build the frame's draw list (logical pixels).
@@ -2923,6 +3076,7 @@ impl Ui {
         let mut s = self.core.settings.clone();
         s.prefs = self.core.prefs.overrides();
         s.binds = Some(self.core.binds.entries.clone());
+        s.profile_binds = self.core.profiles.entries();
         s.brick_favorites = self.core.selector.favorites.clone();
         s
     }

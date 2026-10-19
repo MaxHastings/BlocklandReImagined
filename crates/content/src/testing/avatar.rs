@@ -701,6 +701,7 @@ pub fn rig() -> Rig {
                 duration: clip.duration,
                 looping: clip.looping,
                 additive: clip.additive,
+                parent_translations: false,
                 priority: clip.priority,
                 nodes: clip.nodes,
                 objects: Vec::new(),

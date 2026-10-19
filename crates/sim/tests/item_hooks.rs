@@ -38,6 +38,10 @@ fn on_drop(p, item, slot) { #{ rounds: 7 } }
 fn on_projectile_hit(hit) {
     set("hit", `${hit.kind}|${hit.by}|${hit.projectile}|${hit.ny}`);
 }
+fn on_explosion(b) {
+    set("boom", `${b.projectile}|${b.by}|${b.radius}|${b.y > 0.0}`);
+}
+fn cmd_lob(p) { fire("kit:projectile/blast", 30.0, 5.0, 30.0, 0.0, -10.0, 0.0, p); }
 fn cmd_shoot(p) { fire("kit:projectile/round", 30.0, 5.0, 30.0, 0.0, -60.0, 0.0, p); }
 fn cmd_toss(p, item, x, z) { drop_item(item, x, 0.2, z); }
 fn cmd_bag(p, x, z) { drop_item("kit:weapon/ammo", x, 0.2, z, 0.0, 0.0, 0.0, #{ rounds: 25 }); }
@@ -86,8 +90,10 @@ fn behaviour() -> Value {
         "on_drop": true,
         "on_collected": true,
         "on_projectile_hit": true,
+        "on_explosion": true,
         "commands": [
             command("shoot", &[]),
+            command("lob", &[]),
             command("toss", &["string", "float", "float"]),
             command("bag", &["float", "float"]),
             command("take", &["string"]),
@@ -109,7 +115,8 @@ fn behaviour() -> Value {
                 "fired": counter, "mode": counter, "collected": counter, "sales": counter,
                 "bits": counter,
                 "collected_from": { "default": "", "visible": "everyone" },
-                "hit": { "default": "", "visible": "everyone" }
+                "hit": { "default": "", "visible": "everyone" },
+                "boom": { "default": "", "visible": "everyone" }
             }
         }
     })
@@ -146,7 +153,14 @@ fn weapons() -> bri_weapons::Pack {
             }
         },
         "projectiles": {
-            "kit:projectile/round": { "speed": 60.0, "lifetime_ticks": 240, "fade_ticks": 240 }
+            "kit:projectile/round": { "speed": 60.0, "lifetime_ticks": 240, "fade_ticks": 240 },
+            "kit:projectile/blast": {
+                "speed": 10.0, "lifetime_ticks": 600, "fade_ticks": 0, "ballistic": true,
+                "gravity": 3.0, "elasticity": 0.5, "friction": 0.0, "arm_ticks": 600, "explode_death": true,
+                "collide_players": false,
+                "elasticity_surfaces": { "metal": 1.25 },
+                "explosion": { "damage": 0.0, "radius": 20.0 }
+            }
         }
     });
     bri_weapons::Pack::from_json(&serde_json::to_vec(&pack).unwrap()).unwrap()
@@ -351,6 +365,24 @@ fn on_projectile_hit_hears_where_its_round_struck() {
         g.value("hit"),
         json!(format!("map|{a}|kit:projectile/round|1.0"))
     );
+}
+
+#[test]
+fn on_explosion_hears_a_blast_that_hurts_nobody_and_where_it_went_off() {
+    let mut g = Game::new();
+    let a = g.join(Vec3::new(0.0, 0.05, 0.0));
+    g.steps(2);
+    g.run(a, "lob", vec![]).unwrap();
+    g.steps(30);
+    assert_eq!(g.value("boom"), json!(""), "still in flight");
+    g.steps(600);
+    let boom = g.value("boom");
+    assert_eq!(
+        boom,
+        json!(format!("kit:projectile/blast|{a}|20.0|true")),
+        "{boom}"
+    );
+    assert!(g.diagnostics().is_empty(), "{:?}", g.diagnostics());
 }
 
 #[test]

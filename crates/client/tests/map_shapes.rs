@@ -19,7 +19,7 @@ use std::time::{Duration, Instant};
 mod support;
 use support::{content_root::ContentRoot, wait};
 
-synthetic_and_content!(ContentRoot: kitchen_palms_render_for_host_and_guest);
+synthetic_and_release_content!(ContentRoot: kitchen_palms_render_for_host_and_guest);
 
 /// A free port for this test's host, so a game already hosting on 28000
 /// (the player's own, say) does not break the test. Set under the GPU

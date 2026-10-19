@@ -1,4 +1,4 @@
-use crate::{FIXED_DT, schema::*};
+use crate::{FIXED_DT, aim::AimFollow, schema::*};
 use anyhow::{Context, Result, ensure};
 use bri_console::Clamp;
 use bri_motor::player::{MoveInput, Player, PlayerState, PlayerTuning, TORQUE_TICK};
@@ -203,6 +203,9 @@ pub struct VehicleSnapshot {
     pub charge: u8,
     pub energy: f32,
     pub jetting: bool,
+    /// The driver is holding the jump input: what an input-lit lamp follows.
+    #[serde(default)]
+    pub driver_jump_held: bool,
     pub turret_aim: [f32; 2],
     pub turret_damage: Option<f32>,
     pub turret_transform: Option<Transform>,
@@ -287,6 +290,18 @@ pub enum Intent {
     Audio {
         vehicle: VehicleId,
         id: String,
+    },
+    /// The hull slid along something at `slip` units a second
+    /// ([`Definition::body_contacts`]): `point` is where, `normal` the
+    /// surface's, out of it.
+    BodyContact {
+        vehicle: VehicleId,
+        point: [f32; 3],
+        normal: [f32; 3],
+        slip: f32,
+        /// Which of the row's two outputs are due, each paced on its own.
+        effect: bool,
+        sound: bool,
     },
     Animation {
         vehicle: VehicleId,
@@ -409,6 +424,9 @@ struct Instance {
     /// The aim the turret collider was last posed at, so a still turret
     /// is not re-posed (a collider update) every tick.
     turret_aim: Option<f32>,
+    /// Where the barrel has followed the gunner's aim to, for a weapon with
+    /// [`Weapon::aim_limits`]; `None` until its first step.
+    aim: Option<AimFollow>,
     /// The openings the body is part way into, as this step began, and
     /// what stands beyond their partners brought back for the step
     /// ([`bri_physics::portal`]); never saved, found again each step.
@@ -416,6 +434,38 @@ struct Instance {
     fills: Vec<(bri_content::passage::Passage, bri_physics::portal::Fill)>,
 }
 impl Instance {
+    /// The barrel's `[yaw, pitch]` as it points now: where the weapon seat's
+    /// gunner aims, or, for a weapon with aim limits, where the barrel has
+    /// followed it to.
+    fn barrel(&self, d: &Definition, seat: usize) -> [f32; 2] {
+        let c = self.controls[seat];
+        match &self.aim {
+            Some(follow) if d.weapon_seat() == Some(seat) => follow.aim(),
+            _ => [
+                c.aim_yaw,
+                c.aim_pitch.clamped(d.look_pitch[0], d.look_pitch[1]),
+            ],
+        }
+    }
+    /// Advance the barrel one physics tick toward its gunner's aim.
+    fn follow_aim(&mut self, d: &Definition) {
+        let Some((limits, seat)) = d
+            .weapon
+            .as_ref()
+            .and_then(|w| w.aim_limits)
+            .zip(d.weapon_seat())
+        else {
+            return;
+        };
+        let c = self.controls[seat];
+        let desired = [
+            c.aim_yaw,
+            c.aim_pitch.clamped(d.look_pitch[0], d.look_pitch[1]),
+        ];
+        self.aim
+            .get_or_insert_with(|| AimFollow::at(desired))
+            .step(desired, &limits, d.look_pitch);
+    }
     fn weapon_available(&self, d: &Definition) -> bool {
         self.dead_at.is_none()
             && d.weapon.is_some()
@@ -532,6 +582,8 @@ pub struct VehiclesWorld {
     occupied: BTreeMap<OccupantId, (VehicleId, usize)>,
     tick: u64,
     intents: Vec<Intent>,
+    /// Ticks until a vehicle's hull may scrape again ([`BodyContacts`]); cosmetic, not checkpointed.
+    body_waits: BTreeMap<VehicleId, (u32, u32)>,
     respawns: Vec<PendingRespawn>,
     catalog_fingerprint: String,
     step_pending: bool,
@@ -598,7 +650,7 @@ fn effective_seat_pose(b: &RigidBody, d: &Definition, v: &Instance, index: usize
             .attachment_mount
             .as_ref()
             .map_or(Vec3::ZERO, |t| Vec3::from_array(t.position));
-        let yaw = Quat::from_rotation_y(v.controls[index].aim_yaw);
+        let yaw = Quat::from_rotation_y(v.barrel(d, index)[0]);
         let mut local = pose(&base.transform);
         local.translation = pivot + yaw * (local.translation - pivot);
         local.rotation = yaw * local.rotation;
@@ -611,6 +663,10 @@ impl VehiclesWorld {
     pub fn new(pack: Pack) -> Result<Self> {
         pack.validate()?;
         let catalog_fingerprint = format!("{:x}", Sha256::digest(serde_json::to_vec(&pack)?));
+        let mut pack = pack;
+        pack.definitions
+            .iter_mut()
+            .for_each(Definition::resolve_drive);
         Ok(Self {
             catalog_fingerprint,
             step_pending: false,
@@ -623,6 +679,7 @@ impl VehiclesWorld {
             occupied: BTreeMap::new(),
             tick: 0,
             intents: vec![],
+            body_waits: BTreeMap::new(),
             respawns: vec![],
             prediction: false,
             held: BTreeSet::new(),
@@ -942,6 +999,7 @@ impl VehiclesWorld {
                 actor,
                 relocations: 0,
                 turret_aim: None,
+                aim: None,
                 straddles: Vec::new(),
                 fills: Vec::new(),
             },
@@ -1615,6 +1673,12 @@ impl VehiclesWorld {
         });
         Ok(())
     }
+    /// What is left of a live vehicle's hull, 1 whole to 0 destroyed.
+    pub fn health_fraction(&self, id: VehicleId) -> Option<f32> {
+        let v = self.instances.get(&id).filter(|v| v.dead_at.is_none())?;
+        let max = self.catalog[&v.spawn.definition].max_damage;
+        Some((1.0 - v.damage / max).clamped(0.0, 1.0))
+    }
     /// The damage a part of a live vehicle takes to be destroyed: its
     /// definition's `max_damage`, or an attached turret's own pool.
     pub fn max_damage(&self, id: VehicleId, part: VehiclePart) -> Option<f32> {
@@ -1682,6 +1746,7 @@ impl VehiclesWorld {
             let alive = v.dead_at.is_none();
             let driven = alive && driver_seat.is_some_and(|seat| v.seats[seat].is_some());
             let c = if alive { control } else { Controls::default() };
+            v.follow_aim(d);
             let wants_jet = alive && (c.jet || c.vertical > 0.);
             if !wants_jet {
                 v.jetting = false;
@@ -1918,14 +1983,12 @@ impl VehiclesWorld {
                 world.remove_collider(collider);
             }
             if let (Some(collider), Some(mount)) = (v.turret_collider, &d.attachment_mount) {
-                let aim = d
-                    .weapon_seat()
-                    .map_or_else(Controls::default, |seat| v.controls[seat]);
-                if v.turret_aim != Some(aim.aim_yaw) {
+                let yaw = d.weapon_seat().map_or(0., |seat| v.barrel(d, seat)[0]);
+                if v.turret_aim != Some(yaw) {
                     let mut p = local_pose(mount, v.spawn.scale);
-                    p.rotation *= Quat::from_rotation_y(aim.aim_yaw);
+                    p.rotation *= Quat::from_rotation_y(yaw);
                     world.colliders[collider].set_position_wrt_parent(p);
-                    v.turret_aim = Some(aim.aim_yaw);
+                    v.turret_aim = Some(yaw);
                 }
             }
             if resting {
@@ -2329,6 +2392,72 @@ impl VehiclesWorld {
                         }
                     }
                 }
+                // The hull sliding along fixed ground or walls: what
+                // `body_contacts` makes by the surface it grazes. The body's
+                // own colliders only (the wheels are not among them), and
+                // never another vehicle or a thing that moves.
+                let waits = self.body_waits.entry(*id).or_insert((0, 0));
+                waits.0 = waits.0.saturating_sub(1);
+                waits.1 = waits.1.saturating_sub(1);
+                let (effect_wait, sound_wait) = *waits;
+                if let Some(contacts) = &d.body_contacts
+                    && !d.is_actor()
+                    && (effect_wait == 0 || sound_wait == 0)
+                {
+                    let velocity = v.velocity(d, b);
+                    let scrape = b.colliders().iter().find_map(|c| {
+                        world.contact_pairs_with(*c).find_map(|p| {
+                            let (other, outward) = if p.collider1 == *c {
+                                (p.collider2, 1.)
+                            } else {
+                                (p.collider1, -1.)
+                            };
+                            let fixed = world
+                                .colliders
+                                .get(other)
+                                .and_then(|c| c.parent())
+                                .is_none_or(|body| world.bodies[body].is_fixed());
+                            if !fixed {
+                                return None;
+                            }
+                            p.solver_manifolds().iter().find_map(|m| {
+                                let local = m.points.first()?.local_p1;
+                                let point = world.colliders.get(p.collider1)?.position() * local;
+                                let normal = -m.data.normal * outward;
+                                let slip = (velocity - normal * velocity.dot(normal)).length();
+                                (m.data.num_active_contacts() > 0 && slip >= contacts.min_slip)
+                                    .then_some((point, normal, slip))
+                            })
+                        })
+                    });
+                    if let Some((point, normal, slip)) = scrape {
+                        let ticks = |seconds: f32| (seconds / FIXED_DT).round().max(1.) as u32;
+                        let (effect, sound) = (effect_wait == 0, sound_wait == 0);
+                        self.body_waits.insert(
+                            *id,
+                            (
+                                if effect {
+                                    ticks(contacts.interval)
+                                } else {
+                                    effect_wait
+                                },
+                                if sound {
+                                    ticks(contacts.sound_interval)
+                                } else {
+                                    sound_wait
+                                },
+                            ),
+                        );
+                        self.intents.push(Intent::BodyContact {
+                            vehicle: *id,
+                            point: point.to_array(),
+                            normal: normal.to_array(),
+                            slip,
+                            effect,
+                            sound,
+                        });
+                    }
+                }
                 let delta = (v.previous_velocity - v.velocity(d, b)).length();
                 // Vehicle::updatePos (0x56ecb1): a body collision raises
                 // `onImpact` and the impact sounds. v20 applies no damage
@@ -2464,12 +2593,11 @@ impl VehiclesWorld {
     fn snapshot_of(&self, world: &PhysicsWorld, id: VehicleId, v: &Instance) -> VehicleSnapshot {
         let d = &self.catalog[&v.spawn.definition];
         let b = &world.bodies[v.body];
-        let weapon_control = d
+        let barrel = d
             .seats
             .iter()
             .position(|s| s.weapon)
-            .map(|i| v.controls[i])
-            .unwrap_or_default();
+            .map_or([0.; 2], |i| v.barrel(d, i));
         VehicleSnapshot {
             scale: v.spawn.scale,
             id,
@@ -2508,16 +2636,8 @@ impl VehiclesWorld {
             charge: v.charge,
             energy: v.energy,
             jetting: v.jetting,
-            turret_aim: [
-                if d.is_actor() {
-                    0.
-                } else {
-                    weapon_control.aim_yaw
-                },
-                weapon_control
-                    .aim_pitch
-                    .clamped(d.look_pitch[0], d.look_pitch[1]),
-            ],
+            driver_jump_held: v.jump_held,
+            turret_aim: [if d.is_actor() { 0. } else { barrel[0] }, barrel[1]],
             turret_damage: v.turret_damage,
             turret_transform: d
                 .attachment_mount
@@ -2682,10 +2802,10 @@ fn weapon_step(
         return;
     };
     let mut c = v.controls[index];
+    [c.aim_yaw, c.aim_pitch] = v.barrel(d, index);
     if d.is_actor() {
         c.aim_yaw = 0.;
     }
-    c.aim_pitch = c.aim_pitch.clamped(d.look_pitch[0], d.look_pitch[1]);
     let ready = v
         .last_shot
         .is_none_or(|last| tick - last >= weapon.cooldown_ticks);

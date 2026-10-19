@@ -45,11 +45,12 @@ refused. The engine calls:
 | `on_drop(player, item, slot)` | a player drops a tool of your Add-On (or one it depends on), when `"on_drop": true`. What it returns (a number, a map such as `#{ rounds: 7 }`) is kept with the dropped item and handed to `on_pickup` as `info.data` |
 | `on_collected(player, item, info)` | a player has really taken an item of your Add-On (or one it depends on), when `"on_collected": true`: it is in their tools or was used up, and a spawn brick's item is gone until it comes back. `on_pickup` is the attempt and this the result, so a point or a coin awarded here is awarded once per item taken and never for a touch that found no room. `info` is `#{ drop, spawner }`: the dropped item's id or the spawn brick's. What it returns is ignored |
 | `on_projectile_hit(hit)` | a projectile of your weapons (or a dependency's) struck something, delivered at the start of the next tick, when `"on_projectile_hit": true`. `hit` is `#{ projectile, by, kind, id, ref, x, y, z, nx, ny, nz, vx, vy, vz }`: `kind` is `player`, `vehicle`, `entity`, `brick` or `map`, `by` the shooter or `()`; a player hit also has `region` |
+| `on_explosion(blast)` | a projectile of your weapons (or a dependency's) exploded with a blast radius, delivered at the start of the next tick, when `"on_explosion": true`. `blast` is `#{ projectile, by, x, y, z, radius }`: a rule that gives the projectile `explosion.damage` 0 and its own blast law (line of sight, falloff) hurts whom it chooses with `damage` |
 | `on_activate(player)` | a living player clicks with nothing in their hand (v20's `Player::activateStuff`), when `"on_activate": true`: return `true` to take the click, or anything else to pass it on. Add-Ons are asked in load order, and a click nobody takes does the usual thing (opens doors, presses buttons, flips vehicles) |
 | `on_path_node(player, knot)` | a camera path the rules gave (`follow_path`) reaches knot `knot`, from 0, when `"on_path_node": true` |
 | `on_observer(player, button)` | a spectator (dead with their respawn held, or under a rules camera) presses `"fire"`, `"jump"`, `"jet"` or `"light"`, when `"on_observer": true`: return `true` to take it |
 | `on_minigame(event)` | something happened to a mini-game, delivered at the start of the next tick, when `"on_minigame": true`. `event` is `#{ kind, game, player, team }`: `kind` is `created`, `configured`, `reset`, `ended`, `joined`, `left`, `team` (`player`'s team changed to `team`, or `()`), `teams` (the game's team list changed) or `loaded` (a loaded build set the game up again, `per_minigame` state included) |
-| `on_pick_spawn(player)` | a player is about to spawn or respawn, when `"on_pick_spawn": true`: return a brick id to appear on that brick, `[x, y, z]` to appear there, or `()` to leave it to the engine (spawn bricks, then the map). The first Add-On to answer decides. Called as it happens, so keep it quick |
+| `on_pick_spawn(player)` | a player is about to spawn or respawn, when `"on_pick_spawn": true`: return a brick id to appear on that brick, `[x, y, z]` to appear there (`[x, y, z, yaw]` to face a way: radians, 0 looking down -Z and a quarter turn to +X), or `()` to leave it to the engine (spawn bricks, then the map). The first Add-On to answer decides. Called as it happens, so keep it quick |
 | `on_brick_output(output, target, params, info)` | a builder's wrench row ran one of the outputs in `brick_outputs` (see **Brick events**) |
 | `on_brick_input(input, brick, player)` | a player set off an engine input that some of your `brick_inputs` follow, on a brick with rows on one of them: return the name of one to run it too, or `()` (see **Brick events**) |
 | `on_event_row(player, brick, row)` | a player sends a row of wrench events for a brick, before it is saved, when `"on_event_row": true`: return `false` or a reason to leave it out (see **Brick events**) |
@@ -111,12 +112,16 @@ run are left out. Your rules remove a game's entry when it ends.
 
 | Read | Change state | Act on the world (needs capability) |
 |---|---|---|
-| `tick()`, `seed()`, `caller()`, `game_version()` (the host's, as the main menu shows it) | `get(key)`, `set(key, value)` | `tell(player, text)`, `broadcast(text)`: `chat` |
+| `tick()`, `seed()`, `caller()`, `game_version()` (the host's, as the main menu shows it), `map_id()` (the map being played: `package:map/name` for an Add-On's map, so a rule can start a map's own ambience or lights) | `get(key)`, `set(key, value)` | `tell(player, text)`, `broadcast(text)`: `chat` |
 | `players()`, `bots()`, `player(id)` | `get_player(p, key)`, `set_player(p, key, v)` | `remove_brick`, `place_brick`, `set_block_state(brick, state)`: `world.edit` |
 | `aim()`, `me()`, `entities()` | `add_player(p, key, amount)` | `damage(target, amount[, by[, type]])`, `explode(...)`: `damage` |
+| `movers()` (every map mover), `mover(id)` (one, with its `params`), `movers_near(p, reach)` (the ids of the movers a player's body is within `reach` units of, 0 to 64: the doors in the Use key's reach) | | `mover_goto(id, key, seconds)` (send a mover to key 0 to 15 over up to 600 seconds), `mover_stop(id)` (hold it where it is): `movers` ([Map movers](#map-movers)) |
+| `aim()`, `me()`, `entities()` | `add_player(p, key, amount)` | `damage(target, amount[, by[, type[, knock]]])` (`knock` is `[vx, vy, vz]` in units a second, at most 200 a part: the hit's Momentum / Mass, which a living player takes whoever may move them), `explode(...)`: `damage` |
 | `noise(seed, x, z)`, `hash3(seed, x, y, z)` | `entity_get(e, key)`, `entity_set(e, key, v)` | `spawn_entity`, `remove_entity`, `steer`, `label`: `entity` |
 | `object(ref)`, `objects()`, `objects_near(x, y, z, r)`, `held(p)`, `tethered(p)` | | `teleport`, `respawn`, `remove_body(p)` (takes the body away without a death: no score, no death line, no `on_death`; they wait to respawn like the dead), `scroll_mode(p, mode)` (what the mouse wheel and number keys pick: `"none"`, `"bricks"`, `"paint"` or `"tools"`, leaving what is in hand), `set_archetype`, `push_archetype`, `pop_archetype`, `control(p, entity)`, `release(p)`, `give_item(p, item, equip)`, `take_item(p, item)`, `drop_item(item, x, y, z[, vx, vy, vz[, data]])`, `drop_item(item, #{ ... })`, `remove_drop(id)`, `name_drop(id, text, c)`: `player` |
-| `raycast(from, dir, range[, ignore])`, `can_damage(by, target)`, `enabled(add_on)`, `lan()` | | `set_fov(p, fov)`, `set_speed_scale(p, scale)`, `set_prone(p, prone)`, `set_lean(p, lean)`, `set_image_ammo(p, ammo)`, `set_image_loaded(p, loaded)`, `mount_image(p, image)`, `mount_image(p, image, slot[, paint or #{ paint, keep }])`, `unmount_image(p)`, `emote(p, image[, skip_spam])`, `set_scale(p, scale)`, `set_look_limits(p, up, down)`, `orbit_camera(p, target[, nearest, farthest], distance[, body])`: `player` |
+| `raycast(from, dir, range[, ignore])`, `can_damage(by, target)`, `enabled(add_on)`, `lan()` | | `set_fov(p, fov)`, `set_speed_scale(p, scale)`, `set_prone(p, prone)`, `set_lean(p, lean)`, `set_image_ammo(p, ammo)`, `set_image_loaded(p, loaded)`, `mount_image(p, image)`, `mount_image(p, image, slot[, paint or #{ paint, keep }])`, `unmount_image(p)`, `emote(p, image[, skip_spam])`, `set_scale(p, scale)`, `set_look_limits(p, up, down)`, `orbit_camera(p, target[, nearest, farthest], distance[, body])`, `camera_shake(p, translation, rotation, seconds, hold)` (shakes only that player's view, never their aim: each frame the camera moves a random way up to `translation` units and turns up to `rotation` radians (0 to 0.5), fading over 0.05 to 10 seconds as `1 - (1 - left)^hold` of the time left, `hold` 1 to 8, so more holds the shake before it drops: an explosion near the camera), `view_shake(p, direction, min, max, rate)` (kicks the player's real aim, in radians: out along `direction` (0 up, 1.57 across) to `max`, back at half the speed to `min`, which stays as a small offset; `rate` radians a second. A hit's view shake, AA's `ClientStartViewShake`): `player` |
+| `raycast(from, dir, range[, ignore])`, `can_damage(by, target)`, `enabled(add_on)`, `lan()` | | `set_fov(p, fov)`, `set_speed_scale(p, scale)`, `set_prone(p, prone)`, `set_lean(p, lean)`, `set_image_ammo(p, ammo)`, `set_image_loaded(p, loaded)`, `set_aim_scale(p, scale)`, `kick_view(p, pitch, yaw)`, `mount_image(p, image)`, `mount_image(p, image, slot[, paint or #{ paint, keep }])`, `unmount_image(p)`, `emote(p, image[, skip_spam])`, `set_scale(p, scale)`, `set_look_limits(p, up, down)`, `orbit_camera(p, target[, nearest, farthest], distance[, body])`: `player` |
+| `raycast(from, dir, range[, ignore])`, `can_damage(by, target)`, `enabled(add_on)`, `lan()` | | `set_fov(p, fov)`, `set_speed_scale(p, scale)`, `set_prone(p, prone)`, `set_lean(p, lean)`, `set_image_ammo(p, ammo)`, `set_image_loaded(p, loaded)`, `mount_image(p, image)`, `mount_image(p, image, slot[, paint or #{ paint, keep }])`, `unmount_image(p)`, `emote(p, image[, skip_spam])`, `set_scale(p, scale)`, `set_look_limits(p, up, down)`, `orbit_camera(p, target[, nearest, farthest], distance[, body])`, `scale_velocity(p, horizontal, vertical)` (multiplies the player's level and vertical velocity, each 0 to 2: a jump that keeps only part of its run), `view_shake(p, direction, min, max, rate)` (kicks the player's real aim, in radians: out along `direction` (0 up, 1.57 across) to `max`, back at half the speed to `min`, which stays as a small offset; `rate` radians a second. A hit's view shake, AA's `ClientStartViewShake`): `player` |
 | | | `give_ammo(p, ammo, rounds)`, `set_reserve(p, ammo, rounds)`, `set_rounds(p, item, rounds)`, `reload(p)`, `set_image_state(p, state)`, `quick_use(p, item)`: `player` |
 | `minigames()`, `minigame(id)`, `setting(game, key)`, `team_setting(game, team, key)`, `server_setting(key)`, `pref(global)`, `bricks(kind)`, `brick(id)`, `palette()`, `drops()` | | `set_teams(game, teams, options)`, `set_team(p, team)`, `set_score(p, n)`, `add_score(p, n)`, `reset_minigame(game)`, `set_setting(game, key, v)`, `set_team_setting(game, team, key, v)`, `hold_respawn(p, held)`, `end_round(game, winners)`, `report_column(game, key, title, cells)`: `minigame`; `show_report(p, report)`, `hide_report(p)`: `chat`; `watch(p, target)`, `follow_path(p, knots)`, `free_camera(p)`, `orbit_point(p, at, distance)`, `orbit_object(p, object, distance)`: `player`; `set_brick_item(brick, item)`, `set_brick_color(brick, c)`, `set_brick_shown(brick, rendering, colliding, raycasting)`: `world.edit`; `fire_brick_input(brick, input, p)`, `fire_game_input(game, input, p, killer)`, `set_brick_field(brick, key, v)`: `brick_events`; `brick_field(brick, key)` reads |
 | `brick_box(brick)`, `voxel(brick)`, `can_place_voxel(x, y, z)` | | `place_voxel(x, y, z, material)`: `world.edit`; `set_avatar_colors(p, colors)`, `temp_look(p, look, seconds)`: `player` |
@@ -125,7 +130,7 @@ run are left out. Your rules remove a game's entry when it ends.
 | | | `cut_copy(p)`, `paint_copy(p, color)`, `paint_copy(p, paint)`, `wrench_copy(p)`, `super_cut(p, min, max)`, `fill_box(p, min, max, color)`, `paint_fill(p, brick, paint, options)`, `paint_vehicle(p, vehicle, paint, options)`: `world.edit` |
 | | | `push`, `tumble`, `hold`, `reach`, `hold_distance`, `let_go`, `tether`, `tether_length`, `untether`, `spawn_vehicle`, `remove_vehicle`, `mount_object(mount, rider, node, can_dismount[, turn])`, `unmount_object(rider)`: `physics` |
 | | | `heal(p, amount)`, `fire(...)`, `spawn_explosion(p, projectile, scale)`: `damage` |
-| | | `play_sound(p, sound)` at a player's ears, `body_flash(p, [r, g, b, a], seconds)` (a see-through colour drawn over the body, just outside it, fading over 0.05 to 60 seconds, for everyone: a shield taking a hit, a glow), `sound_at(sound, x, y, z)`, `beam(from, to[, options])`, `play_thread(p, thread, sequence[, after])`, `play_music(p, track[, options])`, `play_music_all(track[, options])`, `stop_music(p[, fade])`, `stop_music_all([fade])` ([Music](#music)), `play_ambient(p, key, track[, options])`, `play_ambient_all(key, track[, options])`, `stop_ambient(p, key[, fade])`, `stop_ambient_all(key[, fade])` ([Ambient sound](#ambient-sound)), `show_box(p, min, max, tool)`, `hide_box(p)`, `show_shapes(owner, key, shapes)`, `hide_shapes(owner, key)`: `effects` |
+| | | `play_sound(p, sound)` at a player's ears, `body_flash(p, [r, g, b, a], seconds)` (a see-through colour drawn over the body, just outside it, fading over 0.05 to 60 seconds, for everyone: a shield taking a hit, a glow), `body_shell(p, shell, strength, seconds)` (one of your weapons pack's `effects.shells` over the body at a strength from 0 to 1, fading over 0.05 to 60 seconds: a patterned plasma glow that shifts from a facing to an edge colour), `sound_at(sound, x, y, z)`, `set_teleport_sound(sound)` (what a map teleporter plays at the ears of each player it sends through; `()` for none), `effect_at(effect, [x, y, z], [nx, ny, nz][, scale])` (one of your weapons pack's effects spawned at a point, facing out along the normal: a hit spark, a shield ripple), `beam(from, to[, options])`, `play_thread(p, thread, sequence[, after])`, `play_music(p, track[, options])`, `play_music_all(track[, options])`, `stop_music(p[, fade])`, `stop_music_all([fade])` ([Music](#music)), `play_ambient(p, key, track[, options])`, `play_ambient_all(key, track[, options])`, `stop_ambient(p, key[, fade])`, `stop_ambient_all(key[, fade])` ([Ambient sound](#ambient-sound)), `show_box(p, min, max, tool)`, `hide_box(p)`, `show_shapes(owner, key, shapes)`, `hide_shapes(owner, key)`: `effects` |
 | | | `center_print(p, text, seconds)`, `bottom_print(p, text, seconds[, hide_bar])` (`()` for everyone), `screen_flash(p, [r, g, b, a], seconds)` (the screen tinted that colour, fading over 0.05 to 10 seconds; `()` for everyone: a shield breaking, a hit taken), `tell_minigame(game, text[, except])`, `center_print_minigame(game, text, seconds)`, `bottom_print_minigame(game, text, seconds)` (a mini-game's members, counted once), `ask(p, title, text, command)` (a yes/no box; yes sends the package's own argument-less `command` as if typed, as v20's `MessageBoxYesNo` did), `plant_error(p, error)`, `message_box(p, title, text)` (an OK box, v20's `MessageBoxOK`): `chat` |
 | `bot_kinds()` (each `#{ id, name, first_names }`, `first_names` a count), `bot_kind(id)`, `bot_first_name(kind, i)`, `bot_limit()`, `bot_name_limit()` (a longer name keeps its first characters) | | `add_bot(game, #{ kind, name[, team] })`, `remove_bot(bot)`, `rest_bot(bot, rest)`, `bot_tool(bot, slot or ())`: `bots` |
 | | | `set_map_lights([x, y, z], radius, options)`: `lighting` |
@@ -161,7 +166,7 @@ A value from `players()` is a map with `id`, `name`, `x`, `y`, `z` (the
 feet), `alive`, `admin`, `ex`, `ey`, `ez` (the eye), `lx`, `ly`, `lz` (the
 unit direction they look), `vx`, `vy`, `vz`, `item` (the id of the item
 in their hand, or `""`), `minigame` (its id, or `()` outside one),
-`health`, `max_health`, `archetype`, `crouched`, `mounted` (seated on a
+`health`, `max_health`, `archetype`, `crouched`, `grounded` (standing on something, not falling or jumping), `jet_held` (the jet button is held, whatever the body or tool makes of it: an aim-down-sights gun's aim), `mounted` (seated on a
 vehicle or riding a player), `mount` (the player/bot carrying this actor,
 or `()`; vehicle seats stay in `riding`/`seat`), `model` (current body model),
 `bot_kind` (the bot brain's authored kind, `""` for humans), `scale`, `cx`, `cy`, `cz` (the middle of the
@@ -297,7 +302,13 @@ turns the image's `spin` sequence while it is in that state: the New
 Duplicator spins while a job runs this way.
 `set_speed_scale(p, scale)` moves a player at that share of their running,
 crouching and swimming speeds (0 to 4) until they respawn: a heavy gun's
-slowdown. `set_prone(p, true)` lays a player down and `set_prone(p, false)`
+slowdown. When more than one system of an Add-On (or two Add-Ons) set a
+player's speed, give each its own key with `set_speed_modifier(p, "key", scale)`
+(0 to 4, keys of a to z, 0 to 9 and `_`, 16 a player, cleared on respawn):
+the engine multiplies every key's share (and `set_speed_scale`'s, which is
+the key "base"), so a lock (0) one system sets, a posture change's, cannot be
+undone by another system writing its own share every tick. A key set to 1 is
+dropped. `set_prone(p, true)` lays a player down and `set_prone(p, false)`
 gets them up, for a body whose archetype's `movement` has `prone`; getting
 up under something too low to crouch leaves them down (ask again later).
 `set_lean(p, lean)` leans them from -1 (fully left) through 0 (upright) to
@@ -310,6 +321,8 @@ degrees), and `set_fov(p, ())` hands it back to their own setting; aiming
 and the zoom key still work on top of it. `unmount_image(p)` empties the
 player's hand (`unMountImage(0)`): a tool, a spray can or bricks, which the
 player's client puts away too.
+
+`set_aim_scale(p, scale)` scales the random spread of the player's next shots (0 to 8): 1 keeps the image's `shot.spread` and its stance variants, 0.5 halves the cone, 0 makes shots true. A rule that models how steady a shooter is (a combat-effectiveness meter) sets it as that changes. `kick_view(p, pitch, yaw)` turns the player's own view by `pitch` degrees up and `yaw` degrees to the right (each up to 30) and leaves it there, a rifle's recoil climb: the player's game adds it to where they look, and nothing pulls it back. Both need `player`.
 
 **Worn images.** `mount_image(p, image, slot)` puts an image in one of a
 player's two worn slots, `2` or `3` (`mountImage(%image, 3)`), beside
@@ -847,6 +860,19 @@ small) where other sounds stop at 30 seconds, and is streamed while it
 plays. Each call spends one of the 64 prints and sounds a second. Brick
 music loops play on as before.
 
+#### Map movers
+
+A map can place keyed movers: doors, lids, vents that rest at one key and
+swing, slide or turn to another ([map movers](../architecture/map-movers.md)).
+The engine moves them, holds them when a body is in the way and tells every
+client; what opens them, and when, is the rules package's policy (a Use key,
+a switch, a timer). Each mover reads as a map: `id`, `key` (the key it rests
+at, or -1 between keys), `from` and `to`, `moving`, `blocked` (held by a
+body), `progress` (0 to 1), `keys`, `position`, `rest`, and `params`, the
+package's own facts about it (`movers()` leaves `params` out; `mover(id)` has
+them). `mover_goto` does not redirect a mover that is already on its way to
+another key; stop it or let it finish. Needs the `movers` capability.
+
 #### Ambient sound
 
 **Ambient beds** (`effects`) loop a sound under the game on the effects
@@ -923,6 +949,9 @@ argument to make it their shot, hurting whom their shots may; without one
 it is your Add-On's own, which hurts any living player (as `damage` could)
 and credits nobody. Start it clear of the shooter's body. 240 a second per
 Add-On. The Commando's sentry does this from its think.
+A ninth argument, `age`, is the ticks of its life it has already used (120 a
+second): a grenade whose fuse was lit in the hand is fired with the time it burned,
+and goes off that much sooner.
 
 **Bricks by kind** (`world.edit`). `brick(id)` reads a placed brick:
 `#{ id, kind, x, y, z, turns, min, max, color, owner, game, name, item,

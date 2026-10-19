@@ -24,6 +24,8 @@ Checks, cheapest first, on the exact commit being pushed:
      in tools/gate-known-failures.toml tolerated
   7. the fixed save corpus (crates/client/tests/save-corpus.json), only when
      the change touches a path in SAVE_CORPUS_PATHS
+     The real-content copies of the client probes (tests named
+     `release_content`) run only with --release-content, the release gate.
   8. the performance budget (PERF_RUNS): 32 bots for 30 game seconds on
      the owner's Crazy Collage Madness save and Team Deathmatch on
      Afghanistan, release build; fails when the host's step mean is over
@@ -83,8 +85,9 @@ HEAVY_PREFIXES = ("bri-client/", "bri-render/")
 DOC_SUFFIXES = (".md",)
 # Cargo never deletes superseded artifacts, so the gate's target dir kept
 # every old test binary (953 executables for 149 targets, 296 GB). Past this
-# much in target/debug/deps the gate starts from an empty target dir, which
-# sccache refills quickly.
+# much in target/debug/deps the gate first prunes the superseded executables
+# (`prune_stale_artifacts`), and starts from an empty target dir only if that
+# leaves it over the cap.
 TARGET_DEPS_CAP = 40 * 2**30
 # Changes under these paths (prefixes) also host the fixed corpus of tricky
 # .bls saves: saving, loading, the .bls converter, brick and print data.
@@ -145,6 +148,10 @@ PERF_RUNS = (
 PERF_TEST = "bots_fight_a_free_for_all_on_real_content"
 PERF_SUMMARY = "BRI_STRESS_SUMMARY"
 SKIP_PERF = False
+# Real-content copies of the client probes (`synthetic_and_release_content!`)
+# are skipped by name unless the gate runs with --release-content.
+RELEASE_CONTENT = False
+RELEASE_ONLY_TESTS = ["release_content"]
 
 
 class GateError(Exception):
@@ -468,6 +475,18 @@ def tail(log, marker, lines=60):
     return "\n".join(section.splitlines()[-lines:])
 
 
+def release_only_tests(worktree):
+    """Tests the push gate leaves to `--release-content`: the toml's
+    `[[release_only]]` entries (matched by libtest's --skip, so by substring of
+    the test path) plus every test named in RELEASE_ONLY_TESTS."""
+    path = worktree / "tools" / "gate-known-failures.toml"
+    entries = []
+    if path.exists():
+        data = tomllib.loads(path.read_text(encoding="utf-8"))
+        entries = [entry["test"] for entry in data.get("release_only", [])]
+    return [*RELEASE_ONLY_TESTS, *entries]
+
+
 def known_failures(worktree):
     path = worktree / "tools" / "gate-known-failures.toml"
     if not path.exists():
@@ -572,16 +591,56 @@ def tree_intact(worktree, sha):
     return True
 
 
+def prune_stale_artifacts(deps):
+    """Delete superseded test executables and their debug files from `deps`.
+
+    Cargo names each one `<target>-<hash>.<ext>` and never removes the older
+    hashes, so a target dir grows by a whole generation (every test binary,
+    ~200 MB each for bri-client) per distinct build. Keep the newest file of
+    each (target, extension) and delete the rest; the current build's files
+    are the newest, and cargo relinks anything it still wants.
+    """
+    newest = {}
+    for entry in os.scandir(deps):
+        stem, dot, extension = entry.name.rpartition(".")
+        if not (entry.is_file() and dot and extension in ("exe", "pdb")):
+            continue
+        target = stem.rpartition("-")[0]
+        key = (target, extension)
+        if key not in newest or entry.stat().st_mtime > newest[key].stat().st_mtime:
+            newest[key] = entry
+    kept = {entry.path for entry in newest.values()}
+    removed = 0
+    for entry in os.scandir(deps):
+        stem, dot, extension = entry.name.rpartition(".")
+        if entry.is_file() and dot and extension in ("exe", "pdb") \
+                and stem.rpartition("-")[0] and entry.path not in kept:
+            os.remove(entry.path)
+            removed += 1
+    return removed
+
+
 def trim_target(target):
-    """Drop incremental state, and the whole target dir once stale builds pile up."""
+    """Drop incremental state; past the cap, drop superseded test executables
+    first and the whole target dir only if that was not enough (a cold rebuild
+    of ~670 crates took 17-18 minutes in the gate's two latest runs)."""
     shutil.rmtree(target / "debug" / "incremental", ignore_errors=True)
     deps = target / "debug" / "deps"
     if not deps.is_dir():
         return
-    size = sum(entry.stat().st_size for entry in os.scandir(deps) if entry.is_file())
+    size = deps_size(deps)
+    if size <= TARGET_DEPS_CAP:
+        return
+    removed = prune_stale_artifacts(deps)
+    size = deps_size(deps)
+    say(f"pruned {removed} superseded test executables from {deps}; {size / 2**30:.0f} GB left")
     if size > TARGET_DEPS_CAP:
         say(f"{size / 2**30:.0f} GB of old builds in {deps}; starting from an empty target dir")
         shutil.rmtree(target, ignore_errors=True)
+
+
+def deps_size(deps):
+    return sum(entry.stat().st_size for entry in os.scandir(deps) if entry.is_file())
 
 
 def documentation_only(paths):
@@ -965,6 +1024,8 @@ def full_gate(sha, root, changed=()):
             return False
         phases["content-check"] = time.time() - check_started
         known, skips = known_failures(worktree)
+        if not RELEASE_CONTENT:
+            skips = [*skips, *release_only_tests(worktree)]
         skip_args = [arg for name in skips for arg in ("--skip", name)]
         test_started = time.time()
         with open(log, "a", encoding="utf-8") as handle:
@@ -1585,7 +1646,7 @@ def forget_hook_repository():
 
 
 def main():
-    global TEST_JOBS, BINARY_TIMEOUT, SKIP_PERF
+    global TEST_JOBS, BINARY_TIMEOUT, SKIP_PERF, RELEASE_CONTENT
     forget_hook_repository()
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     parser.add_argument("--hook", nargs="*", help=argparse.SUPPRESS)
@@ -1610,6 +1671,9 @@ def main():
     parser.add_argument("--skip-perf", action="store_true",
                         help="skip the performance budget step (the pass is then not "
                         "recorded); BRI_GATE_SKIP_PERF=1 does the same for the hook")
+    parser.add_argument("--release-content", action="store_true",
+                        help="also run the client probes' real-content copies "
+                        "(tests named release_content): the release gate")
     parser.add_argument("--perf-only", action="store_true",
                         help="only run the performance budget, on this checkout")
     parser.add_argument("--dry-run", action="store_true",
@@ -1617,6 +1681,7 @@ def main():
     parser.add_argument("commit", nargs="?", default="HEAD")
     args = parser.parse_args()
     SKIP_PERF = args.skip_perf
+    RELEASE_CONTENT = args.release_content
     if args.binary_timeout:
         BINARY_TIMEOUT = args.binary_timeout * 60
     if args.jobs:

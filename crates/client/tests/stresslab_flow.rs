@@ -21,7 +21,7 @@ use std::{path::Path, time::Duration};
 mod support;
 use support::{content_root::ContentRoot, wait};
 
-synthetic_and_content!(ContentRoot: stress_lab_hosts_shows_the_miner_hud_mines_and_meets_a_creeper);
+synthetic_and_release_content!(ContentRoot: stress_lab_hosts_shows_the_miner_hud_mines_and_meets_a_creeper);
 
 const SIZE: (u32, u32) = (960, 720);
 const WORLD: &str = "stresslab-world:world/strata";

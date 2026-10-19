@@ -20,7 +20,7 @@ use std::{
 mod support;
 use support::content_root::ContentRoot;
 
-synthetic_and_content!(
+synthetic_and_release_content!(
     ContentRoot: avatar_name_reaches_server_on_join_and_live_rename,
     first_open_asks_for_a_name_once,
     avatar_clan_tags_show_in_chat_as_single_player_and_guest

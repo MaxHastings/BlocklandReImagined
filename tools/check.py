@@ -148,14 +148,19 @@ def plan(tier, crates, reverse, extra_tests=(), depth=None):
     if tier != "focused":
         raise ValueError(tier)
     affected = sorted(closure(crates, reverse, depth))
-    for name in ordered:
-        steps.append((f"clippy {name}", [
-            "cargo", "clippy", "-p", name, "--all-targets", "--locked", "--", "-D", "warnings"]))
-    for name in affected:
-        if name in HEAVY_CRATES:
-            steps.append((f"unit {name}", ["cargo", "test", "-p", name, "--lib", "--locked"]))
-        else:
-            steps.append((f"tests {name}", ["cargo", "test", "-p", name, "--locked"]))
+    # One cargo call per kind, not one per crate: a single build graph compiles each dependency once, instead
+    # of every `-p crate` call re-resolving features and relinking on its own.
+    steps.append(("clippy " + ",".join(ordered), [
+        "cargo", "clippy", *[x for name in ordered for x in ("-p", name)], "--all-targets", "--locked",
+        "--", "-D", "warnings"]))
+    heavy = [name for name in affected if name in HEAVY_CRATES]
+    light = [name for name in affected if name not in HEAVY_CRATES]
+    if light:
+        steps.append((f"tests {len(light)} crates", [
+            "cargo", "test", *[x for name in light for x in ("-p", name)], "--locked", "--no-fail-fast"]))
+    if heavy:
+        steps.append(("unit " + ",".join(heavy), [
+            "cargo", "test", *[x for name in heavy for x in ("-p", name)], "--lib", "--locked", "--no-fail-fast"]))
     for crate, target in extra_tests:
         steps.append((f"test {crate}:{target}", [
             "cargo", "test", "-p", crate, "--locked", "--test", target]))

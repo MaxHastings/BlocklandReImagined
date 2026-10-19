@@ -205,6 +205,7 @@ mod tests {
             skin: None,
             billboard: false,
             billboard_y: false,
+            uv1: Vec::new(),
         };
         let mut shape = Shape {
             schema_version: 1,

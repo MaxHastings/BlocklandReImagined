@@ -7,9 +7,11 @@ use crate::api::{BindInput, DisplayModes, UiAction};
 use crate::binds::{BindMap, RemapOutcome};
 use crate::input::Chord;
 use crate::prefs::Prefs;
+use crate::profiles;
 use crate::ui::Callback;
 use crate::view::EventKind;
 use bri_console::Clamp;
+use bri_content::controls::DEFAULT_PROFILE;
 use std::collections::HashMap;
 
 /// Local screenshot encoding. JPEG uses the client's high-quality encoder;
@@ -1048,11 +1050,37 @@ fn audio_pane(v: &mut View) {
     }
 }
 
+/// Name of the dropdown that picks which game's controls are shown, and of
+/// the one that picks a context (a layer) of that game's mouse settings.
+const GAME_MENU: &str = "OptGameMenu";
+const LAYER_MENU: &str = "OptLayerMenu";
+/// Room the game dropdown takes above the Controls list (logical pixels).
+const GAME_ROWS: i32 = 26;
+
+/// Controls added for games' control profiles: the dropdown above the list
+/// and the context menu of the mouse panel.
+struct GameUi {
+    layer_label: NodeId,
+    layer_menu: NodeId,
+    /// The mouse sensitivity slider and where it sits without the menu.
+    slider: Option<(NodeId, i32)>,
+    /// The checkboxes of the Options panel in their authored order, and
+    /// the rows they may take; those the profile hides are listed apart.
+    checks: Vec<NodeId>,
+    slots: Vec<i32>,
+    hidden: Vec<NodeId>,
+}
+
 pub struct Options {
     view: View,
     draft: Prefs,
     initial: Prefs,
     saved_binds: BindMap,
+    saved_profiles: std::collections::BTreeMap<String, BindMap>,
+    /// The game selector (control profiles Add-Ons declare) and the layer
+    /// of the viewed profile the mouse settings below belong to.
+    game: Option<GameUi>,
+    scope_layer: Option<String>,
     saved_hardware: (u8, u8),
     applied_display: DisplaySettings,
     pending_display: Option<(RequestId, DisplaySettings, bool)>,
@@ -1060,6 +1088,10 @@ pub struct Options {
     resolutions: Vec<(u32, u32)>,
     modes: Option<DisplayModes>,
     committed: bool,
+    sens_pref: String,
+    /// The mouse controls: Invert Mouse and Invert Mouse in Vehicles.
+    invert_node: Option<NodeId>,
+    vehicle_node: Option<NodeId>,
     /// A volume slider was dragged, so its channel plays the draft value.
     previewed: bool,
 }
@@ -1074,6 +1106,9 @@ impl Options {
             draft: core.prefs.clone(),
             initial: core.prefs.clone(),
             saved_binds: core.binds.clone(),
+            saved_profiles: core.profiles.maps().clone(),
+            game: None,
+            scope_layer: None,
             saved_hardware: (core.settings.mouse_type, core.settings.keyboard_type),
             applied_display: current,
             pending_display: None,
@@ -1081,6 +1116,9 @@ impl Options {
             resolutions,
             modes,
             committed: false,
+            sens_pref: MOUSE_SENSITIVITY.into(),
+            invert_node: None,
+            vehicle_node: None,
             previewed: false,
         };
         s.native_layout();
@@ -1224,9 +1262,327 @@ impl Options {
         s.refresh_quality();
         s.refresh_readouts();
         s.pane("Graphics");
+        for n in s.view.walk().collect::<Vec<_>>() {
+            match s.view.node(n).ctrl.variable.as_deref() {
+                Some(v) if v.eq_ignore_ascii_case("$pref::Input::MouseInvert") => {
+                    s.invert_node = Some(n)
+                }
+                Some(v) if v.eq_ignore_ascii_case(VEHICLE_MOUSE_INVERT) => s.vehicle_node = Some(n),
+                _ => {}
+            }
+        }
+        s.game_selector(core);
         s.refresh_binds(core);
         s.smart_toggle();
+        s.refresh_game_ui(core);
         s
+    }
+
+    /// The dropdown above the Controls list: the games whose control
+    /// profiles Add-Ons declare (Blockland first). The list's header and
+    /// rows move down to make room.
+    fn game_selector(&mut self, core: &Core) {
+        if core.profiles.tabs().len() < 2 {
+            return;
+        }
+        let Some(list) = self.view.id("OptRemapList") else {
+            return;
+        };
+        let Some(scroll) = self.view.node(list).parent else {
+            return;
+        };
+        // The authored list sits in a scroll in the swatch that holds its
+        // header; a bare list stands in its own container.
+        let swatch = self.view.node(scroll).parent.unwrap_or(scroll);
+        for k in self.view.node(swatch).children.clone() {
+            let c = &mut self.view.nodes[k].ctrl;
+            c.position[1] += GAME_ROWS;
+            if k == scroll {
+                c.extent[1] -= GAME_ROWS;
+            }
+        }
+        let width = self.view.node(swatch).ctrl.extent[0];
+        let mut menu = ctrl(
+            "GuiPopUpMenuCtrl",
+            "GuiPopUpMenuProfile",
+            Rect::new(2, 2, width - 4, 22),
+        );
+        menu.name = Some(GAME_MENU.into());
+        self.view.add(swatch, menu);
+        let options_panel = self.invert_node.and_then(|n| self.view.node(n).parent);
+
+        // The mouse panel's context menu, under the sensitivity slider.
+        let slider = self.view.id("SliderControlsMouseSensitivity");
+        let panel = slider
+            .and_then(|n| self.view.node(n).parent)
+            .unwrap_or(swatch);
+        let mut label = ctrl("GuiTextCtrl", "GuiTextProfile", Rect::new(9, 55, 80, 18));
+        label.text = Some("Mouse while:".into());
+        let layer_label = self.view.add(panel, label);
+        let mut menu = ctrl(
+            "GuiPopUpMenuCtrl",
+            "GuiPopUpMenuProfile",
+            Rect::new(92, 53, 200, 22),
+        );
+        menu.name = Some(LAYER_MENU.into());
+        let layer_menu = self.view.add(panel, menu);
+
+        // The Options panel's rows and their authored places.
+        let mut checks: Vec<(i32, NodeId)> = options_panel
+            .map(|p| {
+                self.view
+                    .node(p)
+                    .children
+                    .iter()
+                    .copied()
+                    .filter(|&k| self.view.node(k).ctrl.class == "GuiCheckBoxCtrl")
+                    .map(|k| (self.view.node(k).ctrl.position[1], k))
+                    .collect()
+            })
+            .unwrap_or_default();
+        checks.sort();
+        self.game = Some(GameUi {
+            layer_label,
+            layer_menu,
+            slider: slider.map(|n| (n, self.view.node(n).ctrl.position[1])),
+            slots: checks.iter().map(|c| c.0).collect(),
+            checks: checks.into_iter().map(|c| c.1).collect(),
+            hidden: Vec::new(),
+        });
+    }
+    /// Everything that follows the game and context being viewed: the
+    /// dropdowns' items and the options rows the game has no use for.
+    fn refresh_game_ui(&mut self, core: &Core) {
+        let Some(g) = self.game.as_ref() else {
+            return;
+        };
+        let (layer_label, layer_menu, slider) = (g.layer_label, g.layer_menu, g.slider);
+        let games = core.profiles.tabs();
+        let active = core.profiles.active().to_string();
+        let viewed = core.profiles.viewed.clone();
+        let in_game = matches!(core.conn, crate::api::ConnectionState::InGame { .. });
+        let items = games
+            .iter()
+            .enumerate()
+            .map(|(i, (id, n))| {
+                let label = if in_game && *id == active {
+                    format!("{n}  (in use)")
+                } else {
+                    n.clone()
+                };
+                (label, i as i64)
+            })
+            .collect();
+        let selected = games.iter().position(|(i, _)| *i == viewed).unwrap_or(0);
+        self.menu(GAME_MENU, items, selected as i64);
+
+        // The mouse panel's context menu, when the game has layers.
+        let layers: Vec<(String, String)> = core
+            .profiles
+            .def(&viewed)
+            .map(|d| {
+                d.layers
+                    .iter()
+                    .map(|l| (l.id.clone(), l.label().to_string()))
+                    .collect()
+            })
+            .unwrap_or_default();
+        let has_layers = !layers.is_empty();
+        self.view.set_visible(layer_label, has_layers);
+        self.view.set_visible(layer_menu, has_layers);
+        if let Some((n, y)) = slider {
+            self.view.nodes[n].ctrl.position[1] = if has_layers { y - 9 } else { y };
+        }
+        if has_layers {
+            let mut items = vec![("On foot".to_string(), 0)];
+            items.extend(
+                layers
+                    .iter()
+                    .enumerate()
+                    .map(|(i, (_, label))| (label.clone(), i as i64 + 1)),
+            );
+            let at = self
+                .scope_layer
+                .as_ref()
+                .and_then(|l| layers.iter().position(|(id, _)| id == l))
+                .map_or(0, |i| i as i64 + 1);
+            self.menu(LAYER_MENU, items, at);
+        }
+        self.reflow_options(core);
+        // Moved and resized controls take their places.
+        self.view.relayout();
+    }
+    /// Hide the Options rows the viewed game has no use for (brick options
+    /// where there is no building, the Jump/Jet Combo where nobody jets) and
+    /// close the rest up into the rows left.
+    fn reflow_options(&mut self, core: &Core) {
+        let Some(g) = self.game.as_mut() else {
+            return;
+        };
+        let hides = core.profiles.hides(&core.profiles.viewed);
+        let (checks, slots) = (g.checks.clone(), g.slots.clone());
+        let mut mine = std::mem::take(&mut g.hidden);
+        for &n in &checks {
+            let text = self.view.text_of(n);
+            let off = match text.trim() {
+                "Use Jump/Jet Combo" => hides.jet,
+                "Reverse Brick Scrolling" | "Queue Brick Buying" | "Use Super Shift Toggle" => {
+                    hides.building
+                }
+                _ => {
+                    self.view.node(n).ctrl.name.as_deref() == Some("Opt_SSSmartToggle")
+                        && hides.building
+                }
+            };
+            if off {
+                self.view.set_visible(n, false);
+                if !mine.contains(&n) {
+                    mine.push(n);
+                }
+            } else if let Some(i) = mine.iter().position(|&m| m == n) {
+                mine.remove(i);
+                self.view.set_visible(n, true);
+            }
+        }
+        // Super Shift's own choice decides its Smart Toggle again.
+        if !hides.building {
+            self.smart_toggle();
+        }
+        let shown: Vec<NodeId> = checks
+            .iter()
+            .copied()
+            .filter(|&n| self.view.node(n).state.visible)
+            .collect();
+        for (n, y) in shown.into_iter().zip(slots) {
+            self.view.nodes[n].ctrl.position[1] = y;
+        }
+        if let Some(g) = self.game.as_mut() {
+            g.hidden = mine;
+        }
+    }
+    /// The preference each mouse control writes for the scope being viewed:
+    /// sensitivity, Invert Mouse, Invert Mouse in Vehicles.
+    fn mouse_prefs(&self, core: &Core) -> [String; 3] {
+        let p = &core.profiles.viewed;
+        if p == DEFAULT_PROFILE {
+            return [
+                MOUSE_SENSITIVITY.into(),
+                "$pref::Input::MouseInvert".into(),
+                VEHICLE_MOUSE_INVERT.into(),
+            ];
+        }
+        match &self.scope_layer {
+            None => [
+                profiles::sensitivity_pref(p),
+                profiles::invert_pref(p),
+                profiles::vehicle_invert_pref(p),
+            ],
+            Some(l) => [
+                profiles::pref_key(p, Some(l), "MouseSensitivity"),
+                String::new(),
+                profiles::pref_key(p, Some(l), "MouseInvert"),
+            ],
+        }
+    }
+    /// A game was picked in the dropdown (an index into the games).
+    fn pick_game(&mut self, core: &mut Core, index: usize) {
+        if let Some((id, _)) = core.profiles.tabs().get(index).cloned() {
+            self.show_scope(core, &id, None);
+        }
+    }
+    /// A context was picked in the mouse panel: 0 is on foot, then the
+    /// viewed game's layers in order.
+    fn pick_layer(&mut self, core: &mut Core, index: usize) {
+        let viewed = core.profiles.viewed.clone();
+        let layer = index
+            .checked_sub(1)
+            .and_then(|i| core.profiles.def(&viewed)?.layers.get(i))
+            .map(|l| l.id.clone());
+        self.show_scope(core, &viewed, layer);
+    }
+    /// Show another game or layer: the controls list, the mouse
+    /// settings and each setting's preference follow it. What was set so
+    /// far is kept in the draft under the scope being left.
+    fn show_scope(&mut self, core: &mut Core, profile: &str, layer: Option<String>) {
+        if profile == core.profiles.viewed && layer == self.scope_layer {
+            return;
+        }
+        self.collect_mouse(core);
+        let switched = profile != core.profiles.viewed;
+        core.profiles.viewed = profile.to_string();
+        self.scope_layer = if switched { None } else { layer };
+        let prefs = self.mouse_prefs(core);
+        self.sens_pref = prefs[0].clone();
+        let def = core.profiles.def(profile).cloned();
+        let draft = &self.draft;
+        let (g_sens, g_inv, g_veh) = (
+            mouse_sensitivity(draft),
+            draft.bool_or("$pref::Input::MouseInvert", false),
+            draft.bool_or(VEHICLE_MOUSE_INVERT, true),
+        );
+        let layer_def = self
+            .scope_layer
+            .as_ref()
+            .and_then(|l| def.as_ref()?.layers.iter().find(|d| &d.id == l).cloned());
+        let sens = draft
+            .get(&prefs[0])
+            .and_then(|v| v.trim().parse::<f32>().ok())
+            .or(layer_def.as_ref().and_then(|l| l.mouse_sensitivity))
+            .or(def.as_ref().and_then(|d| d.mouse_sensitivity))
+            .unwrap_or(g_sens);
+        let on_foot = draft
+            .get(&prefs[1])
+            .map(|_| draft.bool_or(&prefs[1], false))
+            .or(def.as_ref().and_then(|d| d.invert_mouse))
+            .unwrap_or(g_inv);
+        let vehicle = draft
+            .get(&prefs[2])
+            .map(|_| draft.bool_or(&prefs[2], false))
+            .or(layer_def.as_ref().and_then(|l| l.invert_mouse))
+            .or(def.as_ref().and_then(|d| d.vehicle_invert_mouse))
+            .unwrap_or(g_veh);
+        self.slider("SliderControlsMouseSensitivity", sens);
+        for (node, var, on) in [
+            (self.invert_node, prefs[1].clone(), on_foot),
+            (self.vehicle_node, prefs[2].clone(), vehicle),
+        ] {
+            if let Some(n) = node {
+                if var.is_empty() {
+                    // A layer holds only vehicle settings.
+                    self.view.set_visible(n, false);
+                } else {
+                    self.view.set_visible(n, true);
+                    self.view.nodes[n].ctrl.variable = Some(var);
+                    self.view.set_bool(n, on);
+                }
+            }
+        }
+        self.refresh_game_ui(core);
+        self.refresh_binds(core);
+    }
+    /// Keep the mouse controls' values in the draft under the scope shown.
+    fn collect_mouse(&mut self, core: &Core) {
+        let prefs = self.mouse_prefs(core);
+        if let Some(n) = self.view.id("SliderControlsMouseSensitivity") {
+            let v = self.view.num(n);
+            if v.is_finite() {
+                self.draft.set(
+                    &prefs[0],
+                    v.clamped(MOUSE_SENSITIVITY_RANGE.0, MOUSE_SENSITIVITY_RANGE.1)
+                        .to_string(),
+                );
+            }
+        }
+        for (node, var) in [
+            (self.invert_node, &prefs[1]),
+            (self.vehicle_node, &prefs[2]),
+        ] {
+            if let Some(n) = node
+                && !var.is_empty()
+            {
+                self.draft.set_bool(var, self.view.bool_value(n));
+            }
+        }
     }
 
     /// Hide the Torque-only settings and close up the authored layout
@@ -1779,17 +2135,53 @@ impl Options {
     fn refresh_binds(&mut self, core: &Core) {
         if let Some(n) = self.view.id("OptRemapList") {
             let mut rows = Vec::new();
-            for (i, r) in core.remap.iter().enumerate() {
+            let mut flagged = Vec::new();
+            let binds = core.edit_binds();
+            let entries = core.edit_remap();
+            // Past the first `own` rows of a game's list are Blockland's
+            // actions, which the game inherits unless it binds the input.
+            let own = core.profiles.viewed_own_count();
+            for (i, r) in entries.iter().enumerate() {
                 if let Some(division) = &r.division {
                     rows.push((format!("   {division}"), -(i as i64) - 1));
                 }
-                rows.push((
-                    format!("{}\t{}", r.name, core.binds.display(&r.command)),
-                    i as i64,
-                ));
+                let key = match own {
+                    Some(n) if i < n => {
+                        let d = binds.display(&r.command);
+                        if d.is_empty() {
+                            flagged.push(i as i64);
+                        }
+                        d
+                    }
+                    Some(_) if binds.binding_of(&r.command).is_none() => {
+                        let taken = core
+                            .binds
+                            .binding_of(&r.command)
+                            .and_then(|input| binds.command_for(&input))
+                            .and_then(|other| {
+                                entries
+                                    .iter()
+                                    .find(|e| e.command.eq_ignore_ascii_case(other))
+                            });
+                        match taken {
+                            Some(other) => {
+                                flagged.push(i as i64);
+                                format!("Taken: {}", other.name)
+                            }
+                            None => core.binds.display(&r.command),
+                        }
+                    }
+                    _ => binds.display(&r.command),
+                };
+                rows.push((format!("{}\t{}", r.name, key), i as i64));
             }
             if self.view.node(n).state.items != rows {
                 self.view.state(n).items = rows;
+            }
+            // An action with no key, or whose key another action took,
+            // draws red where the player scrolls past it.
+            if self.view.node(n).state.flagged != flagged {
+                self.view.state(n).flagged = flagged;
             }
         }
     }
@@ -1803,10 +2195,11 @@ impl Options {
                 self.draft.set_bool(&var, self.view.bool_value(n));
             }
         }
+        let sens_pref = self.sens_pref.clone();
         for (name, pref, lo, hi) in [
             (
                 "SliderControlsMouseSensitivity",
-                MOUSE_SENSITIVITY,
+                sens_pref.as_str(),
                 MOUSE_SENSITIVITY_RANGE.0,
                 MOUSE_SENSITIVITY_RANGE.1,
             ),
@@ -2022,16 +2415,29 @@ impl Options {
         core.save_settings();
         core.pop(ScreenId::Options);
     }
+    /// The name of the viewed game when it is not Blockland (whose controls
+    /// the buttons' own wording already describes).
+    fn viewed_game(&self, core: &Core) -> Option<String> {
+        let viewed = &core.profiles.viewed;
+        (viewed != DEFAULT_PROFILE).then(|| {
+            core.profiles
+                .tabs()
+                .into_iter()
+                .find(|(id, _)| id == viewed)
+                .map_or(viewed.clone(), |(_, name)| name)
+        })
+    }
     fn begin_remap(&mut self, core: &mut Core, all: bool) {
         let index = if all {
-            Some(0)
+            // A game's Remap All walks its own actions, not Blockland's.
+            Some(0).filter(|_| core.remap_all_limit() > 0)
         } else {
             self.view
                 .id("OptRemapList")
                 .and_then(|n| self.view.selected(n))
                 .and_then(|i| usize::try_from(i).ok())
         };
-        if let Some(i) = index.filter(|i| *i < core.remap_commands.len()) {
+        if let Some(i) = index.filter(|i| *i < core.edit_remap_commands().len()) {
             core.remap_target = Some(i);
             core.remap_all = all;
             core.push(ScreenId::Remap);
@@ -2053,6 +2459,12 @@ impl Screen for Options {
     }
     fn on_wake(&mut self, core: &mut Core) {
         core.options_open = true;
+        // Opened in a game: show the controls in force there.
+        if matches!(core.conn, crate::api::ConnectionState::InGame { .. }) {
+            let active = core.profiles.active().to_string();
+            self.show_scope(core, &active, None);
+        }
+        self.refresh_game_ui(core);
         // An Add-On's Options key: the pane holding its preferences.
         if let Some(title) = core.options_section.take()
             && let Some(pane) = self.pane_of_section(&title)
@@ -2070,12 +2482,14 @@ impl Screen for Options {
                 });
             }
             core.binds = self.saved_binds.clone();
+            core.profiles.restore(self.saved_profiles.clone());
             core.settings.mouse_type = self.saved_hardware.0;
             core.settings.keyboard_type = self.saved_hardware.1;
         }
         core.options_open = false;
         core.remap_all = false;
         core.remap_target = None;
+        core.profiles.viewed = DEFAULT_PROFILE.into();
     }
     fn tick(&mut self, _dt: u64, core: &mut Core) {
         self.refresh_binds(core);
@@ -2108,6 +2522,20 @@ impl Screen for Options {
                         value: value.clamped(0.0, 1.0),
                     });
                 }
+            }
+            if name == GAME_MENU || name == LAYER_MENU {
+                if let Some(i) = self
+                    .view
+                    .selected(ev.node)
+                    .and_then(|i| usize::try_from(i).ok())
+                {
+                    if name == GAME_MENU {
+                        self.pick_game(core, i);
+                    } else {
+                        self.pick_layer(core, i);
+                    }
+                }
+                return;
             }
             if name == QUALITY_MENU {
                 if let Some(i) = self
@@ -2192,16 +2620,35 @@ impl Screen for Options {
             "Canvas.popDialog(optionsDlg);" => self.apply(core, true),
             "optionsDlg.applyGraphics();" => self.apply(core, false),
             "optionsDlg.RemapAll();" => self.begin_remap(core, true),
-            "optionsDlg.clearAllBinds();" => core.message_yes_no(
-                "Clear All Binds?",
-                "Are you sure you want to clear your control configuration?",
-                Callback::ClearBinds,
-            ),
-            "canvas.pushDialog(DefaultControlsGui);" => core.push(ScreenId::DefaultControls),
+            "optionsDlg.clearAllBinds();" => match self.viewed_game(core) {
+                None => core.message_yes_no(
+                    "Clear All Binds?",
+                    "Are you sure you want to clear your control configuration?",
+                    Callback::ClearBinds,
+                ),
+                Some(game) => core.message_yes_no(
+                    &format!("Clear {game} Controls?"),
+                    &format!(
+                        "Clear every key you set for {game}? Blockland's own controls are not changed."
+                    ),
+                    Callback::ClearBinds,
+                ),
+            },
+            "canvas.pushDialog(DefaultControlsGui);" => match self.viewed_game(core) {
+                None => core.push(ScreenId::DefaultControls),
+                Some(game) => core.message_yes_no(
+                    &format!("Reset {game} Controls?"),
+                    &format!(
+                        "Put every {game} control back to the key its Add-On suggests? Blockland's own controls are not changed."
+                    ),
+                    Callback::DefaultProfileBinds,
+                ),
+            },
             "Canvas.pushDialog(AvatarGui);" => {
                 // Remaps are live, as in v20; Player Appearance saves settings
                 // with the current controls, so they become the baseline.
                 self.saved_binds = core.binds.clone();
+                self.saved_profiles = core.profiles.maps().clone();
                 self.saved_hardware = (core.settings.mouse_type, core.settings.keyboard_type);
                 core.push(ScreenId::Avatar);
             }
@@ -2239,6 +2686,11 @@ impl Screen for Options {
                     put_display(&mut prefs, d);
                     settings.prefs = prefs.overrides();
                     settings.binds = Some(self.saved_binds.entries.clone());
+                    settings.profile_binds = self
+                        .saved_profiles
+                        .iter()
+                        .map(|(k, m)| (k.clone(), m.entries.clone()))
+                        .collect();
                     settings.mouse_type = self.saved_hardware.0;
                     settings.keyboard_type = self.saved_hardware.1;
                     core.request(UiAction::SaveSettings(Box::new(settings)));
@@ -2291,7 +2743,7 @@ impl Remap {
     fn prompt(&mut self, core: &Core) {
         let name = self
             .index
-            .and_then(|i| core.remap.get(i))
+            .and_then(|i| core.edit_remap().get(i))
             .map(|r| r.name.as_str())
             .unwrap_or("No control selected");
         self.set_text(format!("REMAP \"{name}\""));
@@ -2301,7 +2753,7 @@ impl Remap {
             && let Some(i) = self
                 .index
                 .and_then(|i| i.checked_add(1))
-                .filter(|i| *i < core.remap_commands.len())
+                .filter(|i| *i < core.remap_all_limit())
         {
             self.index = Some(i);
             core.remap_target = Some(i);
@@ -2325,10 +2777,12 @@ impl Remap {
             if self.conflict.is_some() {
                 match c.key {
                     Key::Return | Key::Letter('y') => {
-                        if let Some(command) =
-                            self.index.and_then(|i| core.remap_commands.get(i)).cloned()
+                        if let Some(command) = self
+                            .index
+                            .and_then(|i| core.edit_remap_commands().get(i))
+                            .cloned()
                         {
-                            core.binds
+                            core.edit_binds_mut()
                                 .force_remap(&command, self.conflict.take().unwrap());
                             self.next(core);
                         }
@@ -2342,8 +2796,12 @@ impl Remap {
                 return true;
             }
             if c.key == Key::Backspace {
-                if let Some(command) = self.index.and_then(|i| core.remap_commands.get(i)) {
-                    core.binds.unbind_command(command);
+                if let Some(command) = self
+                    .index
+                    .and_then(|i| core.edit_remap_commands().get(i))
+                    .cloned()
+                {
+                    core.edit_binds_mut().unbind_command(&command);
                 }
                 self.next(core);
                 return true;
@@ -2352,7 +2810,11 @@ impl Remap {
         if self.conflict.is_some() {
             return true;
         }
-        let Some(command) = self.index.and_then(|i| core.remap_commands.get(i)).cloned() else {
+        let Some(command) = self
+            .index
+            .and_then(|i| core.edit_remap_commands().get(i))
+            .cloned()
+        else {
             self.cancel(core);
             return true;
         };
@@ -2367,14 +2829,15 @@ impl Remap {
             ));
             return true;
         }
-        match core.binds.remap(&command, input, &core.remap_commands) {
+        let remappable = core.edit_remap_commands().to_vec();
+        match core.edit_binds_mut().remap(&command, input, &remappable) {
             RemapOutcome::Bound => {
-                core.binds.force_remap(&command, input);
+                core.edit_binds_mut().force_remap(&command, input);
                 self.next(core);
             }
             RemapOutcome::Conflict { other } => {
                 let name = core
-                    .remap
+                    .edit_remap()
                     .iter()
                     .find(|r| r.command.eq_ignore_ascii_case(&other))
                     .map_or(other.as_str(), |r| r.name.as_str());
@@ -2717,6 +3180,9 @@ mod tests {
             package: "slayer".into(),
             command: String::new(),
             key: None,
+            mouse: None,
+            profile: String::new(),
+            stock: None,
             hold: false,
             screen: Some("options".into()),
         }]);
@@ -4083,5 +4549,101 @@ mod tests {
         let output = root.join("artifacts/ui-native-dialogs");
         std::fs::create_dir_all(&output).unwrap();
         options_save_players_offscreen(pack, Some(&output));
+    }
+
+    #[test]
+    fn control_profile_tabs_edit_their_own_bindings_and_mouse_settings() {
+        use bri_content::controls::{LayerDef, LayerWhen, ProfileDef};
+        let mut ui = fixture();
+        ui.set_profile_defs(vec![ProfileDef {
+            id: "aa".into(),
+            name: "Arena Assault".into(),
+            inherit: true,
+            player_types: vec!["soldier".into()],
+            layers: vec![LayerDef {
+                id: "aircraft".into(),
+                name: None,
+                when: LayerWhen::MouseDriver,
+                invert_mouse: Some(true),
+                mouse_sensitivity: None,
+            }],
+            invert_mouse: None,
+            vehicle_invert_mouse: None,
+            mouse_sensitivity: Some(1.0),
+        }]);
+        ui.set_package_binds(vec![crate::api::PackageBind {
+            division: "Arena Assault".into(),
+            name: "Sprint".into(),
+            package: "aa".into(),
+            command: "sprint".into(),
+            key: Some("lshift".into()),
+            mouse: None,
+            profile: "aa".into(),
+            stock: None,
+            hold: true,
+            screen: None,
+        }]);
+        let blockland = ui.core.binds.clone();
+        let mut s = Options::new(&ui.core);
+        // One entry per game; the Blockland one lists Blockland's own.
+        assert!(s.game.is_some());
+        let list = s.view.id("OptRemapList").unwrap();
+        s.refresh_binds(&ui.core);
+        assert!(
+            s.view
+                .node(list)
+                .state
+                .items
+                .iter()
+                .all(|(t, _)| !t.contains("Sprint"))
+        );
+        s.pick_game(&mut ui.core, 1);
+        assert_eq!(ui.core.profiles.viewed, "aa");
+        let layer_menu = s.view.id(LAYER_MENU).unwrap();
+        assert!(
+            s.view.node(layer_menu).state.visible,
+            "the layer menu appears"
+        );
+        assert!(
+            s.view
+                .node(list)
+                .state
+                .items
+                .iter()
+                .any(|(t, _)| t.starts_with("Sprint	LSHIFT")),
+            "{:?}",
+            s.view.node(list).state.items
+        );
+        // The mouse sensitivity here is the profile's, kept apart.
+        let slider = s.view.id("SliderControlsMouseSensitivity").unwrap();
+        assert_eq!(s.view.num(slider), 1.0);
+        s.view.set_num(slider, 0.3);
+        // The vehicle layer takes its own invert.
+        s.pick_layer(&mut ui.core, 1);
+        assert_eq!(s.scope_layer.as_deref(), Some("aircraft"));
+        let inv = s.view.id("OptVehicleInvert").unwrap();
+        assert!(s.view.bool_value(inv), "the layer's declared invert");
+        s.view.set_bool(inv, false);
+        s.pick_game(&mut ui.core, 0);
+        assert_eq!(ui.core.profiles.viewed, "blockland");
+        click(&mut s, "done", &mut ui);
+        let saved = ui
+            .drain_actions()
+            .into_iter()
+            .find_map(|(_, a)| match a {
+                UiAction::SaveSettings(s) => Some(s),
+                _ => None,
+            })
+            .expect("Done saves settings");
+        let prefs = Prefs::new(&Default::default(), &saved.prefs);
+        assert_eq!(prefs.f32_or(&profiles::sensitivity_pref("aa"), 0.0), 0.3);
+        assert!(!prefs.bool_or(
+            &profiles::pref_key("aa", Some("aircraft"), "MouseInvert"),
+            true
+        ));
+        // The player's own Blockland sensitivity was not touched.
+        assert_eq!(mouse_sensitivity(&prefs), 0.75);
+        assert_eq!(saved.binds, Some(blockland.entries));
+        assert!(saved.profile_binds.contains_key("aa"));
     }
 }

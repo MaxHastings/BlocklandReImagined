@@ -35,6 +35,30 @@ pub fn collecting<T>(load: impl FnOnce() -> T) -> (T, Vec<Problem>) {
 /// Report an Add-On problem: to the [`collecting`] load running on this
 /// thread, else to the log.
 pub fn report(problem: Problem) {
+    use bri_console::fallback::kind;
+    use bri_package::health::Kind;
+    bri_console::fallback::report(
+        match problem.kind {
+            Kind::LeftOut => kind::DROPPED_ITEM,
+            Kind::Rules
+            | Kind::Companion
+            | Kind::Dependency
+            | Kind::Item
+            | Kind::Image
+            | Kind::Projectile
+            | Kind::Explosion
+            | Kind::Vehicle
+            | Kind::DamageType => kind::MISSING_REFERENCE,
+            Kind::Effect => kind::DROPPED_PARTICLE_GROUP,
+            Kind::Sound => kind::MISSING_SOUND,
+            Kind::Model => kind::MISSING_MODEL,
+            Kind::Texture | Kind::Icon | Kind::Presentation => kind::MISSING_TEXTURE,
+            Kind::Import | Kind::Script => kind::OTHER,
+        },
+        &problem.add_on,
+        &problem.reference,
+        &problem.effect,
+    );
     let unheard = SINK.with(|s| match s.borrow_mut().as_mut() {
         Some(list) => {
             list.push(problem);
@@ -101,10 +125,44 @@ pub struct Loaded<'a> {
     pub audio: Option<&'a dyn crate::audio::SoundLookup>,
 }
 
+/// Effects made where nothing was touched (a projectile whose fuse ran out or whose life ended) have no contact to take an axis
+/// from, and a group framed on one (`contact_normal`, `contact_travel`, ...) is dropped without a word: the blast then draws
+/// nothing. Name each such group.
+pub fn contact_problems(
+    weapons: &bri_weapons::Pack,
+    effects: &crate::weapon_effects::WeaponEffects,
+) -> Vec<Problem> {
+    let mut out = Vec::new();
+    for (id, projectile) in &weapons.projectiles {
+        let effect = &projectile.explosion.effect;
+        if effect.is_empty() || !(projectile.explode_death || projectile.fuse.is_some()) {
+            continue;
+        }
+        let Some(add_on) = bri_weapons::add_on_of(id) else {
+            continue;
+        };
+        for (group, emitter, frame) in effects.contact_groups(effect) {
+            out.push(
+                Problem::new(
+                    add_on,
+                    Kind::Effect,
+                    effect,
+                    format!(
+                        "group {group} ({emitter}) takes its axis from a contact ({frame:?}); the projectile can go off without one, so the group is dropped and nothing is drawn"
+                    ),
+                )
+                .used_by(format!("projectile {id}")),
+            );
+        }
+    }
+    out
+}
+
 /// Every sound, effect, damage type and model an Add-On's weapons name
 /// that nothing loaded provides.
 pub fn check_references(loaded: &Loaded) -> Vec<Problem> {
     let mut out = Vec::new();
+    out.extend(contact_problems(loaded.weapons, loaded.effects));
     for r in loaded.weapons.add_on_references() {
         let (found, effect) = match r.kind {
             Kind::Sound => match loaded.audio {

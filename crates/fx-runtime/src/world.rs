@@ -94,8 +94,20 @@ impl SourceTransform {
         }
     }
 }
+/// Immutable local-image rendering affinity. This is not an authority identity
+/// or a lifetime: current-view eligibility is supplied by the host at render.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub struct LocalViewAffinity {
+    pub owner: u64,
+    pub slot: u8,
+    pub image: String,
+    pub policy: [u32; 6],
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct SourceOptions {
+    /// Copied into emitted particles; never inferred from currently alive emitters.
+    pub local_view: Option<Arc<LocalViewAffinity>>,
     /// Carry emitted particles with subsequent attachment-frame motion.
     pub follow_source: bool,
     /// Cosmetic emission clock multiplier. Attached projectile/player sources use 1.
@@ -127,10 +139,18 @@ pub struct SourceOptions {
     pub hidden_from_own_eye: bool,
     /// Host-computed occlusion fraction; fades over authored flare fade time.
     pub flare_visibility: f32,
+    /// The effect's input, 0 to 1 (Halo's `A` scaled values, such as how hard a tyre
+    /// slips): scales the count and radius of the groups that name it
+    /// ([`bri_content::effects::BurstInput`]). Full by default.
+    pub input: f32,
+    /// Multipliers of an emitter's speed range, base and spread, from the input
+    /// ([`bri_content::effects::BurstInput::speed`]). 1 by default.
+    pub speed_scale: [f32; 2],
 }
 impl Default for SourceOptions {
     fn default() -> Self {
         Self {
+            local_view: None,
             follow_source: false,
             time_scale: 1.,
             half_extents: Vec3::ZERO,
@@ -145,6 +165,8 @@ impl Default for SourceOptions {
             first_person_owner: false,
             hidden_from_own_eye: false,
             flare_visibility: 1.,
+            input: 1.,
+            speed_scale: [1.; 2],
         }
     }
 }
@@ -165,7 +187,9 @@ impl SourceOptions {
                 && self.half_extents.min_element() >= 0.
                 && self.wind.is_finite()
                 && self.flare_visibility.is_finite()
-                && (0.0..=1.0).contains(&self.flare_visibility),
+                && (0.0..=1.0).contains(&self.flare_visibility)
+                && self.input.is_finite()
+                && (0.0..=1.0).contains(&self.input),
             "Invalid source options"
         );
         ensure!(
@@ -335,6 +359,7 @@ struct Source {
     emission: u64,
 }
 struct Particle {
+    local_view: Option<Arc<LocalViewAffinity>>,
     serial: u64,
     impacts: u32,
     last_sound_age: Option<f32>,
@@ -407,6 +432,10 @@ pub struct EffectsWorld {
     decays: Vec<Option<(f32, f32)>>,
 }
 impl EffectsWorld {
+    /// A composite effect of the pack by id.
+    pub fn composite(&self, id: &str) -> Option<&crate::pack::Composite> {
+        self.pack.manifest.composites.iter().find(|c| c.id == id)
+    }
     /// The world's portals ([`bri_content::passage`]), as the player's game
     /// sees them: every particle that flies in through one comes out of
     /// its partner, turned with it, as bodies and shots do. Drawn only.
@@ -661,6 +690,10 @@ impl EffectsWorld {
             .sources
             .get_mut(&handle)
             .context("Stale effect handle")?;
+        ensure!(
+            source.options.local_view == options.local_view,
+            "A source's local view affinity is immutable"
+        );
         if source.options != options {
             source.options = options;
             self.options_changed = true;
@@ -735,6 +768,12 @@ impl EffectsWorld {
         for b in &composite.bursts {
             ensure!(b.valid(), "Invalid authored composite group");
             if b.frame.needs_contact() && contact.is_none() {
+                bri_console::fallback::report(
+                    bri_console::fallback::kind::DROPPED_PARTICLE_GROUP,
+                    "",
+                    &format!("composite {id}: a group whose frame needs a contact"),
+                    "the group is dropped (no contact was supplied)",
+                );
                 missing_contacts += 1;
                 continue;
             }
@@ -742,6 +781,14 @@ impl EffectsWorld {
                 && b.frame != bri_content::effects::BurstFrame::Source
                 && (b.frame.needs_contact() || contact.is_some())
             {
+                bri_console::fallback::report(
+                    bri_console::fallback::kind::DROPPED_PARTICLE_GROUP,
+                    "",
+                    &format!(
+                        "composite {id}: a group that follows its source on a non-source frame"
+                    ),
+                    "the group is dropped (not supported)",
+                );
                 unsupported_attachments += 1;
                 continue;
             }
@@ -762,7 +809,13 @@ impl EffectsWorld {
             };
             group.validate()?;
             let mut group_options = options.clone();
-            group_options.radius = Some(b.radius);
+            group_options.radius = Some(bri_content::effects::BurstInput::scale(
+                b.radius,
+                b.input.radius,
+                options.input,
+            ));
+            let k = |on: bool| if on { options.input } else { 1. };
+            group_options.speed_scale = [k(b.input.speed[0]), k(b.input.speed[1])];
             group_options.follow_source = b.follow_source;
             group_options.validate()?;
             groups.push((b.clone(), group, group_options));
@@ -857,8 +910,12 @@ impl EffectsWorld {
         }
         for (b, group, options) in groups {
             let mut rng = Rng(self.seed ^ self.next_handle.wrapping_mul(0xa0761d6478bd642f));
-            let count =
-                (rng.range(b.count[0] as f32, b.count[1] as f32 + 1.) as u32).min(b.count[1]);
+            let [least, most] = bri_content::effects::BurstInput::scale(
+                [b.count[0] as f32, b.count[1] as f32],
+                b.input.count,
+                options.input,
+            );
+            let count = (rng.range(least, most + 1.) as u32).min(most as u32);
             handles.push(self.burst(&b.emitter, group, options, count as usize)?);
         }
         Ok(handles)
@@ -1209,7 +1266,13 @@ impl EffectsWorld {
         } else {
             t.velocity * p.inherited_velocity
         };
-        let velocity = velocity_axis * s.rng.variance(e.speed, e.speed_variance) + inherited;
+        let speed = {
+            let [base, delta] = s.options.speed_scale;
+            let lo = (e.speed - e.speed_variance) * base;
+            let spread = e.speed_variance * delta;
+            s.rng.variance(lo + spread, spread)
+        };
+        let velocity = velocity_axis * speed + inherited;
         let tint_factor = if p.variation.is_some() {
             s.rng.unit()
         } else {
@@ -1303,6 +1366,7 @@ impl EffectsWorld {
                 .or(s.options.paint.filter(|_| e.use_emitter_colors)),
             visible: s.options.visible,
             hidden_from_own_eye: s.options.hidden_from_own_eye,
+            local_view: s.options.local_view.clone(),
         };
         Self::integrate_with(
             &self.pack,
@@ -1491,7 +1555,7 @@ impl EffectsWorld {
     }
     /// This frame's particles, farthest from the camera first, and lights.
     pub fn snapshot(&self, camera: &Camera) -> FrameEffects {
-        self.snapshot_culled(camera, None, true)
+        self.snapshot_culled(camera, None, true, None)
     }
     /// [`EffectsWorld::snapshot`] without the sprites wholly outside the
     /// camera's view, which would draw nothing: what a renderer needs.
@@ -1606,19 +1670,62 @@ impl EffectsWorld {
     /// What the player's own eye sees: without what its first-person owner
     /// hides (`SourceOptions::hidden_from_own_eye`, third-person flares).
     pub fn snapshot_in_view(&self, camera: &Camera) -> FrameEffects {
-        self.snapshot_culled(camera, Some(Frustum::new(camera.view_projection)), true)
+        self.snapshot_culled(
+            camera,
+            Some(Frustum::new(camera.view_projection)),
+            true,
+            None,
+        )
     }
     /// [`Self::snapshot_in_view`] for another view of the world (a mirror,
     /// a portal, the environment probe), which sees the player from
     /// outside: their own jets and third-person flares included.
     pub fn snapshot_in_other_view(&self, camera: &Camera) -> FrameEffects {
-        self.snapshot_culled(camera, Some(Frustum::new(camera.view_projection)), false)
+        self.snapshot_culled(
+            camera,
+            Some(Frustum::new(camera.view_projection)),
+            false,
+            None,
+        )
+    }
+    /// Sprites belonging to this exact retained policy/owner/image only. The
+    /// host admits current bindings; absent ones remain hidden, never world.
+    /// Point lights stay in the ordinary world snapshot; only flares project.
+    pub fn has_mismatched_local_policy(&self, eligible: &[Arc<LocalViewAffinity>]) -> bool {
+        let mismatch = |view: &LocalViewAffinity| {
+            eligible.iter().any(|e| {
+                e.owner == view.owner
+                    && e.slot == view.slot
+                    && e.image == view.image
+                    && e.policy != view.policy
+            })
+        };
+        self.particles
+            .iter()
+            .any(|p| p.local_view.as_deref().is_some_and(mismatch))
+            || self
+                .sources
+                .values()
+                .any(|s| s.options.local_view.as_deref().is_some_and(mismatch))
+    }
+    pub fn snapshot_in_local_view(
+        &self,
+        camera: &Camera,
+        view: &LocalViewAffinity,
+    ) -> FrameEffects {
+        self.snapshot_culled(
+            camera,
+            Some(Frustum::new(camera.view_projection)),
+            true,
+            Some(view),
+        )
     }
     fn snapshot_culled(
         &self,
         camera: &Camera,
         frustum: Option<Frustum>,
         own_eye: bool,
+        local_view: Option<&LocalViewAffinity>,
     ) -> FrameEffects {
         let sees = |center, size| frustum.as_ref().is_none_or(|f| f.sees(center, size));
         // Each sprite's squared distance, computed once for the sort. A
@@ -1628,6 +1735,7 @@ impl EffectsWorld {
         let sample = |particles: &[Particle]| -> Vec<(f32, ParticleInstance)> {
             particles
                 .iter()
+                .filter(|p| p.local_view.as_deref() == local_view)
                 .filter_map(|p| self.particle_instance(p, camera, own_eye, &sees))
                 .collect()
         };
@@ -1656,13 +1764,16 @@ impl EffectsWorld {
             if color.max_element() <= 0. {
                 continue;
             }
-            if radius > 0. {
+            if radius > 0. && local_view.is_none() {
                 lights.push(LightSnapshot {
                     handle: *handle,
                     position: s.transform.position,
                     color,
                     radius,
                 });
+            }
+            if s.options.local_view.as_deref() != local_view {
+                continue;
             }
             if let (Some(f), Some(texture)) = (&def.flare, self.flare_texture[s.definition]) {
                 let own = (f.third_person && s.options.first_person_owner)

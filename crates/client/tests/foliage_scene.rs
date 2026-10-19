@@ -20,7 +20,7 @@ use std::{collections::BTreeMap, path::PathBuf, time::Duration};
 mod support;
 use support::content_root::ContentRoot;
 
-synthetic_and_content!(ContentRoot: original_grass_composes_over_actual_bedroom_terrain);
+synthetic_and_release_content!(ContentRoot: original_grass_composes_over_actual_bedroom_terrain);
 
 /// The map the grass grows on and the foliage pack's folder: v20's Bedroom
 /// and its converted pack, or the made-up root's open room (the sky above

@@ -277,6 +277,34 @@ pub struct Burst {
     pub offset: [f32; 3],
     /// Local ejection axis, relative to the contact normal or socket.
     pub direction: [f32; 3],
+    /// Which of `count` and `radius` an effect input scales (Halo's `A`/`B`
+    /// scaled values): the group makes `count[0]` at input 0 and `count[1]` at 1.
+    #[serde(default, skip_serializing_if = "BurstInput::is_none")]
+    pub input: BurstInput,
+}
+/// What an effect's input (0 to 1) scales in a [`Burst`] (Halo's `A` scaled values). Each pair is
+/// `[base, delta]`: a range `[from, to]` becomes `[from * k0, from * k0 + (to - from) * k1]`,
+/// where `k0` is the input when `base` is set and 1 otherwise, `k1` likewise for `delta`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BurstInput {
+    #[serde(default)]
+    pub count: [bool; 2],
+    #[serde(default)]
+    pub radius: [bool; 2],
+    #[serde(default)]
+    pub speed: [bool; 2],
+}
+impl BurstInput {
+    pub fn is_none(&self) -> bool {
+        *self == Self::default()
+    }
+    /// `range` as the input scales it.
+    pub fn scale(range: [f32; 2], flags: [bool; 2], input: f32) -> [f32; 2] {
+        let k = |on: bool| if on { input } else { 1. };
+        let lo = range[0] * k(flags[0]);
+        [lo, lo + (range[1] - range[0]) * k(flags[1])]
+    }
 }
 impl Default for Burst {
     fn default() -> Self {
@@ -288,6 +316,7 @@ impl Default for Burst {
             radius: [0.; 2],
             offset: [0.; 3],
             direction: [0., 1., 0.],
+            input: BurstInput::default(),
         }
     }
 }

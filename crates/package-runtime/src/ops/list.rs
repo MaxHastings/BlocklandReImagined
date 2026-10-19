@@ -32,6 +32,8 @@ pub mod brick_events;
 pub use brick_events::*;
 pub mod bots;
 pub use bots::*;
+pub mod movers;
+pub use movers::*;
 
 #[macro_export]
 macro_rules! for_each_op {
@@ -127,13 +129,19 @@ macro_rules! for_each_op {
             Sound = effects,
             Beam = effects,
             BodyFlash = effects,
+            BodyShell = effects,
+            EffectAt = effects,
+            SetTeleportSound = effects,
             Music = effects,
             Ambient = effects,
             PlayThread = effects,
             SetMapLights = lighting,
+            MoverGoto = movers,
+            MoverStop = movers,
             SetEnvironment = environment,
             SetFov = player,
             SetSpeedScale = player,
+            SetSpeedModifier = player,
             SetProne = player,
             SetLean = player,
             GiveAmmo = player,
@@ -144,6 +152,8 @@ macro_rules! for_each_op {
             QuickUse = player,
             SetImageAmmo = player,
             SetImageLoaded = player,
+            SetAimScale = player,
+            KickView = player,
             MountImage = player,
             Emote = player,
             WearImage = player,
@@ -182,6 +192,9 @@ macro_rules! for_each_op {
             FollowPath = player,
             Camera = player,
             OrbitCamera = player,
+            ViewShake = player,
+            CameraShake = player,
+            ScaleVelocity = player,
         }
     };
 }

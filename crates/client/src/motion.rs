@@ -71,6 +71,19 @@ pub(crate) struct DriveTarget {
 /// Which vehicle prediction follows. It lives with the prediction it
 /// chooses, so whatever resets one (a map change, leaving the game) resets
 /// the other.
+/// One frame of the first-person eye going to a posture's height: at the pace that crosses the whole way
+/// between standing and lying in `Prone::seconds`, however the target moves meanwhile.
+fn slide_eye(
+    from: f32,
+    target: f32,
+    stand_eye: f32,
+    prone: bri_sim::player::Prone,
+    seconds: f32,
+) -> f32 {
+    let rate = (stand_eye - prone.eye).abs().max(0.01) / prone.seconds.max(0.01);
+    let step = rate * seconds;
+    from + (target - from).clamped(-step, step)
+}
 #[derive(Default)]
 pub(crate) struct DriveState {
     pub target: Option<DriveTarget>,
@@ -96,6 +109,9 @@ pub struct Motion {
     /// The local view follows v20's crouch thread, including its re-crouch snap.
     crouch: CrouchThread,
     eye_height: Option<f32>,
+    /// Whether the last frame's body was prone, and whether the eye is still sliding to a posture.
+    eye_prone: bool,
+    eye_slide: bool,
     /// Each remote's recent poses, held poses included (the replica's
     /// history, shared, not copied).
     remotes: BTreeMap<OwnerId, imbl::Vector<bri_net::protocol::Pose>>,
@@ -509,9 +525,11 @@ impl Motion {
         match (&mut self.predictor, &mut self.mirror) {
             (Some(predictor), _) => {
                 predictor.set_broken_shapes(&view.broken_shapes)?;
+                predictor.set_map_movers(&view.map_movers, view.tick);
             }
             (None, Some(mirror)) => {
                 mirror.set_broken_shapes(&view.broken_shapes)?;
+                mirror.set_map_movers(&view.map_movers, view.tick);
             }
             (None, None) => {}
         }
@@ -847,7 +865,25 @@ impl Motion {
         let tuning = predictor.tuning().clone();
         self.crouch
             .update(predictor.state().crouched, seconds, CROUCH_SECONDS);
-        self.eye_height = Some(tuning.eye_height(self.crouch.eye_fraction(CROUCH_SECONDS)));
+        let target = tuning.eye_height(self.crouch.eye_fraction(CROUCH_SECONDS));
+        // Lying down or getting up moves the eye over the posture's own time (`Prone::seconds`), not a
+        // crouch's: the source eye follows the camera bone through the transition clip.
+        let prone = predictor.state().posture.prone;
+        if prone != self.eye_prone {
+            self.eye_prone = prone;
+            self.eye_slide = tuning.prone.is_some_and(|p| p.seconds > 0.0);
+        }
+        self.eye_height = Some(match (self.eye_slide, self.eye_height, tuning.prone) {
+            (true, Some(from), Some(p)) => {
+                let next = slide_eye(from, target, tuning.stand_eye, p, seconds);
+                self.eye_slide = (next - target).abs() > 1e-4;
+                next
+            }
+            _ => {
+                self.eye_slide = false;
+                target
+            }
+        });
         // Every input this frame produced plus recent history: a slow frame
         // that ran more ticks than the redundancy window loses none of them.
         let sent = (steps > 0).then(|| {
@@ -955,7 +991,8 @@ impl Motion {
             .eye_height
             .unwrap_or_else(|| state.eye(&tuning).y - feet.y);
         let ahead = Vec3::new(yaw.sin(), 0.0, -yaw.cos()) * tuning.eye_forward;
-        self.local_eye = Some(feet + Vec3::Y * height + ahead);
+        // The eye slides sideways with a lean as well as dropping with a crouch.
+        self.local_eye = Some(feet + Vec3::Y * height + ahead + state.lean_offset(&tuning));
         self.presented.insert(owner, state);
         true
     }
@@ -1183,6 +1220,39 @@ mod crossing_tests;
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn the_eye_takes_the_postures_own_time_to_go_down_and_never_jumps() {
+        let prone = bri_sim::player::Prone {
+            height: 0.5,
+            eye: 0.4,
+            seconds: 0.7,
+            forward: 1.0,
+            backward: 1.0,
+            sideways: 1.0,
+        };
+        let (stand, frame) = (1.6_f32, 1.0 / 60.0);
+        let mut eye = stand;
+        let mut frames = 0;
+        let mut biggest = 0.0_f32;
+        while (eye - prone.eye).abs() > 1e-4 {
+            let next = slide_eye(eye, prone.eye, stand, prone, frame);
+            biggest = biggest.max((eye - next).abs());
+            eye = next;
+            frames += 1;
+            assert!(frames < 200, "never arrives");
+        }
+        let seconds = frames as f32 * frame;
+        assert!(
+            (seconds - 0.7).abs() < 0.05,
+            "takes {seconds} s for the whole way"
+        );
+        assert!(
+            biggest < (stand - prone.eye) * frame / 0.7 * 1.01,
+            "no single frame jumps: {biggest}"
+        );
+        // A target that moves while it slides (a crouch easing under it) is followed, not overshot.
+        assert!((slide_eye(1.0, 1.0, stand, prone, frame) - 1.0).abs() < 1e-6);
+    }
     fn state(x: f32, yaw: f32) -> PlayerState {
         PlayerState {
             owner: 2,
@@ -2742,6 +2812,7 @@ mod tests {
                 wheel_tire: s.wheel_tire,
                 turret_aim: s.turret_aim,
                 jetting: s.jetting,
+                driver_jump_held: s.driver_jump_held,
                 angular_velocity: s.angular_velocity,
                 mouse_steering: s.mouse_steering,
                 driver_input,

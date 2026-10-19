@@ -15,7 +15,7 @@ use std::time::{Duration, Instant};
 mod support;
 use support::content_root::ContentRoot;
 
-synthetic_and_content!(ContentRoot: a_player_starts_single_player_and_walks_using_only_clicks_and_keys);
+synthetic_and_release_content!(ContentRoot: a_player_starts_single_player_and_walks_using_only_clicks_and_keys);
 
 const SIZE: (u32, u32) = (960, 720);
 

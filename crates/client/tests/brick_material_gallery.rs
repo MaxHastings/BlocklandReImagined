@@ -15,7 +15,7 @@ use bri_world::{Brick, ContentRef};
 use std::path::{Path, PathBuf};
 use support::{brick_fixture::BrickFixture, files::repo_root, gpu};
 
-synthetic_and_content!(BrickFixture: surfaces_all_prints_and_sentinels);
+synthetic_and_release_content!(BrickFixture: surfaces_all_prints_and_sentinels);
 
 #[test]
 #[ignore = "requires generated v20 content"]

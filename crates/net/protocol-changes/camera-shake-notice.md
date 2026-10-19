@@ -1,0 +1,1 @@
+`Notice::CameraShake { translation, rotation, seconds, hold }`: a rule's `camera_shake` jitters the receiving player's view alone (not their aim) up to `translation` units and `rotation` radians, fading over `seconds`.

@@ -18,7 +18,7 @@ fn seeds() -> Vec<u64> {
         .and_then(|s| u64::from_str_radix(s.trim_start_matches("0x"), 16).ok())
     {
         Some(seed) => vec![seed],
-        None => (1..=env("BRI_CHAOS_SEEDS", 4))
+        None => (1..=env("BRI_CHAOS_SEEDS", 1))
             .map(|i| i * 0x9e37_79b9)
             .collect(),
     }

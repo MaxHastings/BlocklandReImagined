@@ -352,6 +352,7 @@ fn lower_sequence(
         duration: s.duration,
         looping: s.flags & 16 != 0,
         additive: s.flags & 8 != 0,
+        parent_translations: false,
         priority: s.priority,
         nodes: tracks.into_values().collect(),
         objects,
@@ -642,6 +643,7 @@ fn mesh(
         skin,
         billboard: mesh_flags & 0x80000000 != 0,
         billboard_y: mesh_flags & 0x20000000 != 0,
+        uv1: Vec::new(),
     }))
 }
 
@@ -877,9 +879,11 @@ pub fn read_dts(data: &[u8], id: String) -> Result<(Shape, Provenance)> {
             reflectance: reflection[i],
             paint_overlay: None,
             alpha_cutoff: None,
+            double_sided: false,
             uv_motion: None,
             metal: None,
             surface: None,
+            tint: None,
         });
     }
     for (material, f) in materials.iter().zip(&flags) {

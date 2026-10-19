@@ -214,6 +214,11 @@ pub struct Posture {
     pub lean: f32,
     /// The lean it is easing toward.
     pub lean_to: f32,
+    /// Holding a ladder (a climb volume, `crate::climb`): it faces the
+    /// rungs, gravity does not pull it and its move keys run it up and
+    /// down.
+    #[serde(default)]
+    pub climbing: bool,
 }
 /// Longest a tether's rope may be, units: a bound on state a host or
 /// player sends, past any v20 rope (the Grapple Rope's hook flies 800).
@@ -638,12 +643,18 @@ impl PlayerState {
         };
         Vec3::new(self.yaw.cos(), 0.0, self.yaw.sin()) * (self.posture.lean * lean.distance)
     }
-    /// How far a lean tilts the view and the body, radians (right
-    /// positive).
+    /// How far a lean tilts the view, radians (right positive).
     pub fn lean_tilt(&self, tuning: &PlayerTuning) -> f32 {
         tuning
             .lean
             .map_or(0.0, |lean| self.posture.lean * lean.angle)
+    }
+    /// How far a lean tilts the drawn body, radians (right positive): the
+    /// view's tilt unless the lean sets its own `body_angle`.
+    pub fn lean_body_tilt(&self, tuning: &PlayerTuning) -> f32 {
+        tuning.lean.map_or(0.0, |lean| {
+            self.posture.lean * lean.body_angle.unwrap_or(lean.angle)
+        })
     }
     /// [`Self::eye`], or with `seated` the `Eye` node of the held `sit`
     /// pose (`/sit`, a seat whose pose is `sit`): it owns the node over
@@ -746,10 +757,15 @@ pub struct PlayerTuning {
     /// Water coverage from which the underwater speeds apply. A floating
     /// rowboat is always in the water.
     pub swim_coverage: f32,
+    /// Falling damage by a source law, when the body has one: none for v20's
+    /// bodies, which take `speed * SPEED_DAMAGE_SCALE` past `minImpactSpeed`.
+    pub fall: Option<Fall>,
     /// Lying prone, when the body can: none for v20's bodies.
     pub prone: Option<Prone>,
     /// Leaning left and right, when the body can: none for v20's bodies.
     pub lean: Option<Lean>,
+    /// Climbing ladders, when the body can: none for v20's bodies.
+    pub climb: Option<crate::climb::Climb>,
     /// The archetype's movement controller, bound from its module by the
     /// side that runs it (`Archetypes::bind_controllers`). Never data: the
     /// archetype carries the module, and a table read from data has none
@@ -819,10 +835,39 @@ impl Default for PlayerTuning {
             min_jet_energy: 0.0,
             jet_drain: 0.0,
             swim_coverage: 0.9,
+            fall: None,
             prone: None,
             lean: None,
+            climb: None,
             controller: None,
         }
+    }
+}
+/// [`PlayerTuning::fall`]: striking the ground downward faster than
+/// `threshold` units a second costs `(speed - threshold) * per_speed` health
+/// (a body that falls less far takes none). Only the downward speed counts.
+/// A game whose falling damage starts at a minimum and tops out sets `base`
+/// (the harm of a fall at the threshold, 0 when left out) and `max` (the most
+/// a fall costs, no limit when left out).
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Fall {
+    pub threshold: f32,
+    pub per_speed: f32,
+    #[serde(default)]
+    pub base: f32,
+    #[serde(default)]
+    pub max: Option<f32>,
+}
+impl Fall {
+    /// The harm of landing at `speed` for a body at `scale` (the threshold
+    /// grows with it): None when it is below the threshold.
+    pub fn harm(&self, speed: f32, scale: f32) -> Option<f32> {
+        let threshold = self.threshold * scale;
+        (speed > threshold).then(|| {
+            let harm = self.base + (speed - threshold) * self.per_speed;
+            self.max.map_or(harm, |m| harm.min(m))
+        })
     }
 }
 /// [`PlayerTuning::prone`]: the body lying down, in place of its crouch.
@@ -833,6 +878,10 @@ pub struct Prone {
     pub height: f32,
     /// The eye's height above the feet lying down.
     pub eye: f32,
+    /// Seconds the first-person eye takes to go between the standing or
+    /// crouched height and the lying one, 0 to 5 (0: as quickly as a crouch).
+    #[serde(default)]
+    pub seconds: f32,
     /// Crawling speeds forward, backward and sideways.
     pub forward: f32,
     pub backward: f32,
@@ -849,6 +898,11 @@ pub struct Lean {
     /// How far the view and the body tilt at full lean, radians, 0 to 0.6.
     #[serde(default = "Lean::default_angle")]
     pub angle: f32,
+    /// How far the drawn body tilts at full lean when that is not the view's
+    /// `angle` (a game that rolls the view but poses the body itself leaves
+    /// it upright with 0), radians, 0 to 0.6.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub body_angle: Option<f32>,
     /// Seconds from upright to full lean, 0.05 to 2.
     #[serde(default = "Lean::default_seconds")]
     pub seconds: f32,
@@ -998,10 +1052,12 @@ impl PlayerTuning {
                     && p.height <= self.crouch_height
                     && p.eye.is_finite()
                     && (0.0..=self.crouch_height).contains(&p.eye)
+                    && p.seconds.is_finite()
+                    && (0.0..=5.0).contains(&p.seconds)
                     && [p.forward, p.backward, p.sideways]
                         .iter()
                         .all(|n| n.is_finite() && (0.0..=1000.0).contains(n)),
-                "Invalid prone: height above 0 and at most the crouch's, eye within the crouch, speeds 0 to 1000"
+                "Invalid prone: height above 0 and at most the crouch's, eye within the crouch, seconds 0 to 5, speeds 0 to 1000"
             );
         }
         if let Some(l) = &self.lean {
@@ -1011,10 +1067,15 @@ impl PlayerTuning {
                     && l.distance <= self.width * 0.5 + 1e-4
                     && l.angle.is_finite()
                     && (0.0..=0.6).contains(&l.angle)
+                    && l.body_angle
+                        .is_none_or(|a| a.is_finite() && (0.0..=0.6).contains(&a))
                     && l.seconds.is_finite()
                     && (0.05..=2.0).contains(&l.seconds),
                 "Invalid lean: distance 0 to half the body's width, angle 0 to 0.6, seconds 0.05 to 2"
             );
+        }
+        if let Some(c) = &self.climb {
+            c.validate()?;
         }
         Ok(())
     }
@@ -1652,6 +1713,14 @@ impl Player {
             self.state.head_yaw = input.head_yaw;
         }
     }
+    /// Scale the velocity: the level part by `horizontal`, the vertical part
+    /// by `vertical`.
+    pub fn scale_velocity(&mut self, horizontal: f32, vertical: f32) {
+        if horizontal.is_finite() && vertical.is_finite() {
+            let v = self.state.velocity;
+            self.state.velocity = [v[0] * horizontal, v[1] * vertical, v[2] * horizontal];
+        }
+    }
     /// Add an impulse-derived velocity change (weapon knockback).
     pub fn push(&mut self, delta: Vec3) {
         if delta.is_finite() {
@@ -1808,6 +1877,7 @@ impl Player {
             None => {
                 *posture = Posture {
                     prone: posture.prone,
+                    climbing: posture.climbing,
                     ..Posture::default()
                 }
             }
@@ -1953,6 +2023,61 @@ impl Player {
             }
             None => input,
         };
+        // A ladder: the body takes hold of one it faces and pushes toward,
+        // runs along it while it holds on, and lets go when it leaves the
+        // volume, jumps or comes down onto a floor (`crate::climb`).
+        let mut input = input;
+        let mut climb_velocity = None;
+        if let Some(climb) = t.climb {
+            let middle = feet + Vec3::Y * (t.height(self.state.crouched) * 0.5);
+            match crate::climb::find(physics, middle) {
+                None => self.state.posture.climbing = false,
+                Some(volume) => {
+                    let mut let_go = false;
+                    if self.state.posture.climbing && input.jump {
+                        // A hop off the rungs.
+                        self.state.posture.climbing = false;
+                        self.state.velocity[1] = climb.jump_speed;
+                        input.jump = false;
+                        let_go = true;
+                    }
+                    if !self.state.posture.climbing && !let_go {
+                        let rising = self.state.velocity[1].abs();
+                        let wish = move_vec;
+                        let facing = volume.facing();
+                        let airborne = !self.state.grounded;
+                        self.state.posture.climbing = !self.state.posture.prone
+                            && (!airborne || rising <= climb.grab_speed)
+                            && forward.dot(facing) > climb.facing
+                            && (wish.length() < 1e-3
+                                || airborne
+                                || wish.normalize().dot(facing) > climb.push);
+                    }
+                    if self.state.posture.climbing {
+                        self.state.yaw = volume.yaw;
+                        let along = volume.up * (input.forward * volume.speed);
+                        let across = if volume.strafe {
+                            right * (input.right * volume.speed)
+                        } else {
+                            Vec3::ZERO
+                        };
+                        // Drawn toward the wall until it touches or the far
+                        // side of the volume is reached.
+                        let facing = volume.facing();
+                        let pull = if climb.wall_pull > 0.0
+                            && (middle - volume.center).dot(facing) < volume.depth - 0.05
+                        {
+                            facing * climb.wall_pull
+                        } else {
+                            Vec3::ZERO
+                        };
+                        climb_velocity = Some(along + across + pull);
+                    }
+                }
+            }
+        } else {
+            self.state.posture.climbing = false;
+        }
         // Torque's convex working list: every solid polygon this tick can reach,
         // including a jump, a step and the contact slab under the feet.
         let half = t.width * 0.5;
@@ -2061,7 +2186,12 @@ impl Player {
         }
         // canJump (0x5A2AA0): no jump right after a ceiling hit, and none while
         // rising faster than 3 unless moving faster than 4 across the ground.
+        // A body lying prone does not jump, nor one a rule has locked
+        // (`set_speed_scale` 0: AA's `LockMovement` during a posture change,
+        // whose `CanJump` is false).
         let can_jump = input.jump
+            && !self.state.posture.prone
+            && self.state.speed_scale > 0.0
             && jump.delay == 0
             && jump.since_contact < JUMP_WINDOW_TICKS
             && !jump.ceiling
@@ -2170,6 +2300,11 @@ impl Player {
         velocity.x *= horizontal_keep;
         velocity.z *= horizontal_keep;
         velocity.y *= (1.0 - vertical_drag * dt).max(0.0);
+        // On a ladder the move keys set the speed outright: no gravity,
+        // drag or run force.
+        if let Some(on_ladder) = climb_velocity {
+            velocity = on_ladder;
+        }
         // A rope holds the body within its length of the anchor; the keys
         // pump a swing while it hangs.
         if let Some(mut tether) = self.state.tether {
@@ -2262,6 +2397,10 @@ impl Player {
             .collect();
         self.state.feet = moved.feet.to_array();
         self.state.velocity = velocity.to_array();
+        // Coming down a ladder onto a floor steps off it.
+        if self.state.posture.climbing && moved.floor && input.forward < 0.0 {
+            self.state.posture.climbing = false;
+        }
         // updatePos: landing on a floor reopens the jump window at once, so a
         // held jump hops on the next tick and a bunny hop loses one tick of
         // ground friction, not four.
@@ -2438,4 +2577,30 @@ fn air_control_direction(horizontal: Vec3, move_vec: Vec3, move_speed: f32) -> V
         }
     }
     move_vec.normalize_or_zero()
+}
+
+#[cfg(test)]
+mod fall_tests {
+    use super::Fall;
+    #[test]
+    fn a_fall_starts_at_its_base_and_stops_at_its_max() {
+        let law = Fall {
+            threshold: 10.0,
+            per_speed: 2.0,
+            base: 5.0,
+            max: Some(25.0),
+        };
+        assert_eq!(law.harm(10.0, 1.0), None);
+        assert_eq!(law.harm(11.0, 1.0), Some(7.0));
+        assert_eq!(law.harm(100.0, 1.0), Some(25.0));
+        // A bigger body needs a harder landing before it hurts.
+        assert_eq!(law.harm(15.0, 2.0), None);
+        let plain = Fall {
+            threshold: 10.0,
+            per_speed: 2.0,
+            base: 0.0,
+            max: None,
+        };
+        assert_eq!(plain.harm(14.0, 1.0), Some(8.0));
+    }
 }

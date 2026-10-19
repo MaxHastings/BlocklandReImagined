@@ -63,6 +63,9 @@ pub struct NodeState {
     pub value: Value,
     /// Popup/list items: (text, id). List text uses `\t` to separate columns.
     pub items: Vec<(String, i64)>,
+    /// List items (ids) drawn in the warning colour: a row that needs the
+    /// player's attention.
+    pub flagged: Vec<i64>,
     /// Optional local disclosure groups; item IDs and selected values stay intact.
     pub popup_groups: HashMap<i64, String>,
     /// Gameplay search words, without changing the displayed or authored identity.
@@ -373,6 +376,9 @@ fn keep_inside(r: Rect, within: Rect) -> Rect {
     Rect::new(x, y, r.w, r.h)
 }
 
+/// A list row that needs attention (see `NodeState::flagged`).
+const WARNING: Rgba = [179, 38, 30, 255];
+
 fn authored_rect(c: &Control) -> Rect {
     Rect::new(c.position[0], c.position[1], c.extent[0], c.extent[1])
 }
@@ -438,6 +444,7 @@ impl View {
                 items: Vec::new(),
                 popup_groups: HashMap::new(),
                 popup_aliases: HashMap::new(),
+                flagged: Vec::new(),
                 scroll_y: 0,
                 cursor: 0,
                 frame: 0,
@@ -1832,7 +1839,7 @@ impl View {
                         cell,
                         field,
                         Some(Justify::Left),
-                        None,
+                        n.state.flagged.contains(item).then_some(WARNING),
                         false,
                     );
                     dl.pop_clip();

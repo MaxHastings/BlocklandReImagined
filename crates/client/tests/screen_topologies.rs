@@ -27,7 +27,7 @@ use std::{
 mod support;
 use support::content_root::ContentRoot;
 
-synthetic_and_content!(ContentRoot: screens_reach_the_server_in_every_topology);
+synthetic_and_release_content!(ContentRoot: screens_reach_the_server_in_every_topology);
 
 const SIZE: (u32, u32) = (1280, 800);
 

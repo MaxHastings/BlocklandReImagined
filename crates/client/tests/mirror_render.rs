@@ -29,7 +29,10 @@ use std::{
 mod support;
 use support::content_root::ContentRoot;
 
-synthetic_and_content!(ContentRoot: the_mirror_shows_the_room_behind_the_camera);
+synthetic_and_release_content!(
+    ContentRoot: the_mirror_shows_the_room_behind_the_camera_in_the_bedroom,
+    the_mirror_shows_the_room_behind_the_camera_on_slopes,
+);
 
 const SIZE: (u32, u32) = (640, 480);
 const BEDROOM: &str = "v20/add-ons/map_bedroom/bedroom.mis";
@@ -462,23 +465,37 @@ fn probe(
     result
 }
 
-fn the_mirror_shows_the_room_behind_the_camera(f: &ContentRoot) -> Result<()> {
+fn the_mirror_shows_the_room_behind_the_camera(
+    f: &ContentRoot,
+    map: &str,
+    name: &str,
+) -> Result<()> {
     let artifact = f.out("mirror-render")?;
-    for (map, name) in [(BEDROOM, "Bedroom"), (SLOPES, "Slopes")] {
-        for (view, changed, live, silver) in probe(f, map, name, &artifact)? {
+    for (view, changed, live, silver) in probe(f, map, name, &artifact)? {
+        ensure!(
+            changed > 20_000,
+            "{name} {view}: the mirrors show nothing but silver ({changed} px differ)"
+        );
+        // Straight on, the red pillar behind the camera shows only in
+        // the mirrors.
+        if view == "straight" {
             ensure!(
-                changed > 20_000,
-                "{name} {view}: the mirrors show nothing but silver ({changed} px differ)"
+                live > silver + 200,
+                "{name}: the red pillar behind the camera is not in the mirror (red {live} vs {silver})"
             );
-            // Straight on, the red pillar behind the camera shows only in
-            // the mirrors.
-            if view == "straight" {
-                ensure!(
-                    live > silver + 200,
-                    "{name}: the red pillar behind the camera is not in the mirror (red {live} vs {silver})"
-                );
-            }
         }
     }
     Ok(())
+}
+
+fn the_mirror_shows_the_room_behind_the_camera_in_the_bedroom(f: &ContentRoot) -> Result<()> {
+    the_mirror_shows_the_room_behind_the_camera(f, BEDROOM, "Bedroom")
+}
+
+/// Sky, terrain and snow behind the camera. The push gate leaves the
+/// synthetic run to the release gate (`gate-known-failures.toml`,
+/// `release_only`); the planar mirror itself is proved by `bri-render`'s
+/// `mirrors` target.
+fn the_mirror_shows_the_room_behind_the_camera_on_slopes(f: &ContentRoot) -> Result<()> {
+    the_mirror_shows_the_room_behind_the_camera(f, SLOPES, "Slopes")
 }

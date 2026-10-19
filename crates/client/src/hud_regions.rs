@@ -22,6 +22,8 @@ const MAX_TEXTURES: usize = 512;
 pub struct GameValues {
     pub health: f32,
     pub health_max: f32,
+    /// What is left of the ridden vehicle's hull, 0 to 1, while riding.
+    pub vehicle_health: Option<f32>,
     pub energy: f32,
     pub alive: bool,
     pub center_print: String,
@@ -36,6 +38,15 @@ pub struct GameValues {
     pub kills: Vec<FeedKill>,
     /// Other players as trackers see them.
     pub contacts: Vec<Contact>,
+    /// The viewer's level facing (x, z), for edge arrows.
+    pub facing: [f32; 2],
+    /// The way the viewer's body faces in degrees (clockwise from -z), the
+    /// camera's field of view, and whether they aim down sights.
+    pub heading: f32,
+    pub fov: f32,
+    pub aiming: bool,
+    /// The scope's zoom step while aiming (1 is the first, 2 the next wheel level), 0 when not.
+    pub zoom_level: u32,
 }
 
 /// The layouts of one catalog and their textures.
@@ -88,10 +99,25 @@ impl HudRegions {
             .collect();
         for (package, _, layout) in catalog.hud_regions() {
             let Some(p) = catalog.packages.get(package) else {
+                bri_console::fallback::report(
+                    bri_console::fallback::kind::DROPPED_ITEM,
+                    package,
+                    "HUD layout",
+                    "the layout is skipped (its package is not in the catalog)",
+                );
                 continue;
             };
             for texture in layout.textures() {
-                if self.keys.contains_key(texture) || self.keys.len() >= MAX_TEXTURES {
+                if self.keys.contains_key(texture) {
+                    continue;
+                }
+                if self.keys.len() >= MAX_TEXTURES {
+                    bri_console::fallback::report(
+                        bri_console::fallback::kind::MISSING_TEXTURE,
+                        package,
+                        texture,
+                        "not loaded (more than the HUD texture limit): elements using it show no image",
+                    );
                     continue;
                 }
                 let decoded = p
@@ -188,6 +214,7 @@ impl HudRegions {
             Some(match source {
                 Source::Health => Value::Number(game.health),
                 Source::HealthMax => Value::Number(game.health_max),
+                Source::VehicleHealth => Value::Number(game.vehicle_health?),
                 Source::Energy => Value::Number(game.energy),
                 Source::Alive => Value::Number(if game.alive { 1.0 } else { 0.0 }),
                 Source::CenterPrint => Value::Text(game.center_print.clone()),
@@ -199,6 +226,10 @@ impl HudRegions {
                     Value::Number(f32::from(u8::from(game.ammo.as_ref()?.reloading)))
                 }
                 Source::Respawn => Value::Number(game.respawn?),
+                Source::Heading => Value::Number(game.heading),
+                Source::Fov => Value::Number(game.fov),
+                Source::Aiming => Value::Number(f32::from(u8::from(game.aiming))),
+                Source::ZoomLevel => Value::Number(game.zoom_level as f32),
                 Source::ItemAmmo { item, field } => {
                     use bri_content::hud::AmmoField;
                     let ammo = game
@@ -231,6 +262,7 @@ impl HudRegions {
         let live = Live {
             kills: &game.kills,
             contacts: &game.contacts,
+            facing: game.facing,
         };
         let mut texts = BTreeMap::new();
         let mut kill_feed = false;
@@ -558,5 +590,49 @@ mod tests {
                 .iter()
                 .any(|i| matches!(i,Item::Text{text,..} if text=="0"))
         );
+    }
+
+    #[test]
+    fn a_seat_claim_matches_only_that_seat_and_reads_the_hull() {
+        let driver = layout(
+            serde_json::json!({ "schema_version": 1, "region": "crosshair",
+            "when": { "vehicle": ["v:vehicle/car"], "seat": [0] },
+            "elements": [{ "type": "text", "at": [0, 0], "text": "driver" }] }),
+        );
+        let rider = layout(
+            serde_json::json!({ "schema_version": 1, "region": "crosshair",
+            "when": { "vehicle": ["v:vehicle/car"], "seat": [1, 2] },
+            "elements": [{ "type": "bar", "rect": [0, 0, 100, 4], "value": "vehicle_health", "fill": { "color": [1, 1, 1, 1] } }] }),
+        );
+        let mut regions = regions(&[("hud", vec![driver, rider])]);
+        let state = PackageStateView::default();
+        let game = GameValues {
+            vehicle_health: Some(0.5),
+            ..Default::default()
+        };
+        let text = |regions: &mut HudRegions, seat: Option<u8>| {
+            let draws = regions.draws(
+                &state,
+                1,
+                &Viewer {
+                    vehicle: "v:vehicle/car",
+                    seat,
+                    ..Default::default()
+                },
+                &game,
+            );
+            draws.first().and_then(|d| {
+                d.items.iter().find_map(|i| match i {
+                    Item::Text { text, .. } => Some(text.clone()),
+                    Item::Fill { rect, .. } => Some(format!("hull {}", rect[2])),
+                    _ => None,
+                })
+            })
+        };
+        assert_eq!(text(&mut regions, Some(0)).as_deref(), Some("driver"));
+        assert_eq!(text(&mut regions, Some(1)).as_deref(), Some("hull 50"));
+        assert_eq!(text(&mut regions, Some(2)).as_deref(), Some("hull 50"));
+        assert_eq!(text(&mut regions, Some(3)), None, "no such seat claim");
+        assert_eq!(text(&mut regions, None), None, "on foot");
     }
 }

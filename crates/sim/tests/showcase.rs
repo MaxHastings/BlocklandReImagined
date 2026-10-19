@@ -261,6 +261,8 @@ fn vehicles() -> bri_vehicles::Pack {
         rider_pose: None,
         rider_ready_policy: None,
         rider_fallback_hip: None,
+        rider_aim_pitch: None,
+        rider_acceleration: None,
         eye: None,
         node: "mount0".into(),
         transform: Transform::default(),
@@ -268,6 +270,8 @@ fn vehicles() -> bri_vehicles::Pack {
         controls: false,
         weapon: false,
         hands: Default::default(),
+        enter_sound: String::new(),
+        exit_sound: String::new(),
     }];
     pack.definitions.push(crate_);
     pack.definitions.push(tumble);
@@ -1832,6 +1836,7 @@ fn add_launcher(
         crosshair: true,
         follow_arm: false,
         first_person_origin: None,
+        first_person_view: None,
         paint_tint: false,
         left_image: None,
         magazine: None,
@@ -1849,6 +1854,7 @@ fn add_launcher(
         scripts: Default::default(),
         hide_nodes: Vec::new(),
         aim_assist: None,
+        movement: None,
         both_arms: false,
         states,
     };
@@ -1876,6 +1882,9 @@ fn add_launcher(
         ballistic: false,
         elasticity: 0.,
         friction: 0.,
+        elasticity_surfaces: Default::default(),
+        bounce_surfaces: Default::default(),
+        fuse: None,
         damage: 0.,
         damage_type: String::new(),
         radius_damage_type: String::new(),
@@ -1884,6 +1893,8 @@ fn add_launcher(
         explode_player: true,
         explode_death: true,
         collide_players: true,
+        pass_source: false,
+        settle_speed: 0.0,
         explosion: bri_weapons::Explosion {
             effect: String::new(),
             damage: 0.,
@@ -1892,6 +1903,7 @@ fn add_launcher(
             impulse_radius: radius,
             impulse_vertical: vertical,
             burn_seconds: 0.,
+            ..Default::default()
         },
         brick: bri_weapons::BrickImpact {
             radius: 0.,
@@ -1916,6 +1928,10 @@ fn add_launcher(
         aura: None,
         fixed_damage: false,
         slow: None,
+        falloff: None,
+        homing: None,
+        contrail: None,
+        flare: None,
         collision_sound: None,
         sport_hit: None,
         turns_into: None,

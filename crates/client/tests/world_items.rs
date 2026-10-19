@@ -48,7 +48,7 @@ fn mounted(image: &str, state: &str) -> bri_sim::session::MountedImage {
     }
 }
 
-synthetic_and_content!(
+synthetic_and_release_content!(
     ItemFixture: model_instances_share_cpu_model_and_missing_mounts_never_guess,
     shared_gpu_geometry_clears_and_recreates_without_cpu_loss,
     a_picked_up_brick_item_stays_as_a_ghost_until_it_respawns,
@@ -743,6 +743,7 @@ fn a_stuck_arrow_keeps_pointing_the_way_it_flew(f: &ItemFixture) -> Result<()> {
         heading: None,
         stuck_to: None,
         bounces: 0,
+        fuse_started: None,
         spawned: 0,
     };
     let nose = |adapter: &WorldItems| {

@@ -668,6 +668,12 @@ pub(super) fn archetype(
     if let Some(v) = def.max_time_scale {
         archetype.look.max_time_scale = v;
     }
+    if let Some(v) = def.action_blend {
+        archetype.look.action_blend = v;
+    }
+    if let Some(v) = def.locomotion_pick {
+        archetype.look.locomotion_pick = v;
+    }
     if let Some(v) = def.uses_items {
         archetype.uses_items = v;
     }
@@ -691,6 +697,9 @@ pub(super) fn archetype(
             to.clone_from(from);
         }
     }
+    if def.sounds.land_on_surface {
+        sounds.land_on_surface = true;
+    }
     if !def.sounds.footsteps.is_empty() {
         sounds.footsteps.clone_from(&def.sounds.footsteps);
     }
@@ -699,6 +708,22 @@ pub(super) fn archetype(
     }
     if def.sounds.stride.is_some() {
         sounds.stride = def.sounds.stride;
+    }
+    if !def.sounds.clips.is_empty() {
+        sounds.clips = def
+            .sounds
+            .clips
+            .iter()
+            .map(|(clip, c)| {
+                (
+                    clip.to_ascii_lowercase(),
+                    crate::archetype::ClipSound {
+                        sound: c.sound.clone(),
+                        seconds: c.seconds,
+                    },
+                )
+            })
+            .collect();
     }
     archetype.validate()?;
     Ok(archetype)
@@ -1232,6 +1257,9 @@ impl Session {
                 .id
                 .clone(),
             crouched: state.crouched,
+            jet_held: p.input.jet,
+            grounded: state.grounded,
+            prone: state.posture.prone,
             mounted: self.seated(owner),
             mount: self.riding_seat(owner).map(|(mount, _)| mount),
             model: self.archetypes.resolve(state.archetype).look.model.clone(),
@@ -1315,6 +1343,7 @@ impl Session {
         Snapshot {
             tick: self.simulation.state().tick,
             game_version: self.game_version.clone(),
+            map_id: self.map_id.clone(),
             environment: self.environment.clone(),
             seed: host.and_then(|h| h.world.as_ref()).map_or(0, |w| w.seed),
             players: self
@@ -3036,6 +3065,7 @@ impl Session {
         self.deliver_loadouts();
         self.deliver_spawns();
         self.deliver_hits();
+        self.deliver_blasts();
         self.deliver_minigame_events();
         self.deliver_addon_events();
         self.deliver_object_changes();

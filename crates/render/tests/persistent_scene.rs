@@ -76,6 +76,7 @@ fn point_lights_update_and_clear_without_reuploading_geometry() -> Result<()> {
     let mut light = PointLight {
         position_radius: [0., 0., 1.5, 4.],
         color: [1., 0., 0., 0.],
+        ..Default::default()
     };
     renderer.update_lights(&gpu.queue, &[light])?;
     let red = gpu.frame(&mut renderer, &[&mesh], &camera, (64, 64))?;
@@ -133,6 +134,7 @@ fn point_lights_light_objects_per_vertex_with_v20_attenuation() -> Result<()> {
         &[PointLight {
             position_radius: [0., 0., 1.5, 10.],
             color: [1., 1., 1., 0.],
+            ..Default::default()
         }],
     )?;
     let lit = gpu.frame(&mut renderer, &[&small], &camera, (64, 64))?;
@@ -150,6 +152,7 @@ fn point_lights_light_objects_per_vertex_with_v20_attenuation() -> Result<()> {
         &[PointLight {
             position_radius: [0., 0., 0.8, 0.8],
             color: [5., 5., 5., 0.],
+            ..Default::default()
         }],
     )?;
     let far = gpu.frame(&mut renderer, &[&large], &camera, (64, 64))?;
@@ -173,10 +176,12 @@ fn a_full_light_budget_lights_each_pixel_with_the_lights_that_reach_it() -> Resu
         PointLight {
             position_radius: [0.3, 0., 1.5, 4.],
             color: [0.6, 0., 0., 0.],
+            ..Default::default()
         },
         PointLight {
             position_radius: [-0.3, 0.2, 1.2, 3.],
             color: [0., 0.5, 0.3, 0.],
+            ..Default::default()
         },
     ];
     renderer.update_lights(&gpu.queue, &near)?;
@@ -187,6 +192,7 @@ fn a_full_light_budget_lights_each_pixel_with_the_lights_that_reach_it() -> Resu
         .map(|i| PointLight {
             position_radius: [20. + (i % 16) as f32 * 9., (i / 16) as f32 * 7., -30., 6.],
             color: [1., 1., 1., 0.],
+            ..Default::default()
         })
         .collect();
     all.insert(100, near[0]);
@@ -327,6 +333,7 @@ fn sky_fixture() -> (SceneData, bri_content::environment::Environment) {
             color: [1.0; 3],
             ..Default::default()
         },
+        lens_flare: None,
         warnings: vec![],
     };
     (data, env)
@@ -1828,5 +1835,49 @@ fn display_colors_match_on_srgb_and_unorm_output_attachments() -> Result<()> {
             .zip(&images[1])
             .all(|(a, b)| a.abs_diff(*b) <= 1)
     );
+    Ok(())
+}
+
+/// A linear fog (`Fog::linear`, a Halo sky's) grows in a straight line from
+/// the start to its most at the density distance, as its CPU twin says.
+#[test]
+fn a_linear_fog_grows_in_a_straight_line_on_geometry() -> Result<()> {
+    let gpu = Gpu::turn()?;
+    let mut renderer = SceneRenderer::new(&gpu.device, wgpu::TextureFormat::Rgba8UnormSrgb);
+    let (mut data, mut env) = sky_fixture();
+    env.fog.max = 0.6;
+    env.fog.linear = true;
+    env.fog.density_end = Some(2.0);
+    bri_render::environment_scene::append(&mut data, &env, &[1, 2, 3, 4, 5, 6], &[])?;
+    let sky = renderer.upload(&gpu.device, &gpu.queue, &data)?;
+    let center = (32 * 64 + 32) * 4;
+    let mut camera = Camera::perspective(
+        [0.0; 3],
+        [0.0, 0.0, -1.0],
+        1.0,
+        60_f32.to_radians(),
+        0.05,
+        10.0,
+    );
+    camera.apply_environment(&data);
+    assert_eq!(camera.haze, [60.0, 0.6, 2.0, 1.0]);
+    // Start 1, full at 2: nothing at 1, a third of the most at 1.33, all at 2.
+    assert_eq!(env.fog.amount(1.0), 0.0);
+    assert!((env.fog.amount(1.5) - 0.3).abs() < 1e-6);
+    assert!((env.fog.amount(2.0) - 0.6).abs() < 1e-6);
+    assert!((env.fog.amount_along([0.0, 1.5, 0.0], false) - 0.3).abs() < 1e-6);
+    let edge = env.fog.sky_amount(0.0, env.bottom);
+    let behind = [0.0, 0.0, 255.0].map(|c: f32| c * (1.0 - edge) + 255.0 * edge);
+    let mut half = triangle([0.0, 0.0, 0.0, 1.0], -1.5, AlphaMode::Opaque);
+    half.materials[0].double_sided = true;
+    let half = renderer.upload(&gpu.device, &gpu.queue, &half)?;
+    let fogged = gpu.frame(&mut renderer, &[&half, &sky], &camera, (64, 64))?;
+    for (value, behind) in fogged[center..center + 3].iter().zip(behind) {
+        let want = (behind * env.fog.amount(1.5)).round() as u8;
+        assert!(
+            value.abs_diff(want) <= 2,
+            "Expected {want} linear fog halfway, got {value}"
+        );
+    }
     Ok(())
 }

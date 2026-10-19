@@ -100,6 +100,25 @@ pub struct Seat {
     /// and tip with the gun's aim. Every body reaches its arms there.
     #[serde(default, skip_serializing_if = "SeatHands::is_empty")]
     pub hands: SeatHands,
+    /// Where the rider's `seat_aim` clip's end keys sit, [down, up] pitch
+    /// radians, with its middle key level: a gunner's pose is sampled
+    /// piecewise across the two halves, as Halo's aiming screens are
+    /// (`down_pitch_per_frame`, `up_pitch_per_frame`). Left out, the clip
+    /// spans the vehicle's whole `look_pitch` range evenly.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rider_aim_pitch: Option<[f32; 2]>,
+    /// Overlay clips the rider's body plays with the vehicle's acceleration
+    /// at this seat.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rider_acceleration: Option<AccelerationOverlays>,
+    /// A sound profile (a weapons pack's `sounds`, or the vehicle pack's)
+    /// played where a rider boards this seat, in place of the base game's
+    /// mount sound, and where they leave it. Empty plays the base game's
+    /// mount sound on boarding and nothing on leaving.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub enter_sound: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub exit_sound: String,
 }
 /// Mirrors weapons::IMAGE_SLOTS; cross-crate regression guards this domain.
 pub const SEAT_READY_IMAGE_SLOTS: usize = 4;
@@ -364,6 +383,54 @@ impl Wheel {
         (self.steering * squared.sin()).atan2(squared.cos())
     }
 }
+/// A vehicle's authored acceleration and braking ([`Definition::drive`]),
+/// in units a second a second.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DriveRates {
+    /// Speed gained a second from a standstill at full throttle.
+    pub acceleration: f32,
+    /// Speed lost a second with the brake held, every wheel braked.
+    pub deceleration: f32,
+}
+impl DriveRates {
+    pub fn valid(&self) -> bool {
+        [self.acceleration, self.deceleration]
+            .iter()
+            .all(|r| r.is_finite() && *r > 0. && *r <= 1000.)
+    }
+}
+
+/// Halo's seat acceleration overlays for a body: three additive clips (front
+/// to back, left to right, up and down; the middle key is the pose with no
+/// acceleration) blended by how the vehicle is being accelerated
+/// ([`crate::accel::SeatAcceleration`]). Used by a rider's body
+/// ([`Seat::rider_acceleration`]) and a turret's model
+/// ([`Definition::turret_acceleration`]).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AccelerationOverlays {
+    /// The clips, by name in the body or model they pose.
+    pub clips: [String; 3],
+    /// Halo's `acceleration_scale` per axis, for accelerations in its world
+    /// units a tick.
+    pub scale: [f32; 3],
+    /// Native units in one of those world units.
+    pub native_per_unit: f32,
+}
+impl AccelerationOverlays {
+    pub fn valid(&self) -> bool {
+        self.clips
+            .iter()
+            .all(|c| !c.is_empty() && c.len() <= 64 && !c.chars().any(char::is_control))
+            && self
+                .scale
+                .iter()
+                .all(|s| s.is_finite() && (0.0..=10_000.).contains(s))
+            && self.native_per_unit.is_finite()
+            && (0.01..=1000.).contains(&self.native_per_unit)
+    }
+}
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Weapon {
     pub projectile: String,
@@ -389,6 +456,12 @@ pub struct Weapon {
     /// sample is halfway through. Omitted clips retain v20's +/-90 degrees.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub look_animation_pitch: Option<[f32; 2]>,
+    /// How fast the barrel swings onto its gunner's aim (Halo's
+    /// `aiming_velocity_maximum` and `aiming_acceleration_maximum`): it
+    /// lags the look and turns no faster than this, and shots leave along
+    /// where it points. Left out, the barrel is on the look at once, as in v20.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub aim_limits: Option<crate::aim::AimLimits>,
     /// Weapon-frame muzzle node positions from full up to full down, sampled
     /// from the model's `look` clip at load (see `muzzle`). Empty without one.
     #[serde(skip)]
@@ -757,6 +830,11 @@ pub struct Definition {
     /// are unchanged. Left out, the turret sits rigid, as in v20.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub turret_sway: Option<TurretSway>,
+    /// The turret model's acceleration overlays: its own authored clips
+    /// move the gun with the vehicle's acceleration (Halo's, in place of
+    /// the guessed `turret_sway` spring).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub turret_acceleration: Option<AccelerationOverlays>,
     pub collision_hulls: Vec<Vec<[f32; 3]>>,
     pub bounds_min: [f32; 3],
     pub bounds_max: [f32; 3],
@@ -780,6 +858,13 @@ pub struct Definition {
     pub engine_force: f32,
     pub engine_brake: f32,
     pub brake_force: f32,
+    /// How hard the vehicle speeds up and brakes, as the speed change a
+    /// second on flat ground, in place of `engine_force` and `brake_force`
+    /// (Halo's `speed_acceleration` and `speed_deceleration`). Loading turns
+    /// them into those forces for this vehicle's wheels and mass
+    /// ([`Definition::resolve_drive`]). Left out, the forces stand as given.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub drive: Option<DriveRates>,
     pub max_speed: f32,
     pub reverse_speed: f32,
     pub max_steering: f32,
@@ -897,6 +982,11 @@ pub struct Definition {
     /// from the vehicle's presented motion. v20's vehicles have none.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub engine_sound: Option<EngineSound>,
+    /// More loops that play with `engine_sound` while it runs, each with its
+    /// own volume and pitch curve (Halo's layered engine: two tracks, each
+    /// with pitch ranges). A layer whose volume reaches 0 is not played.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub engine_layers: Vec<EngineSound>,
     /// Lamps at nodes of its model (headlights) that light the world while
     /// its driver has them on: the light key in the driving seat turns them
     /// on and off. Who has them on is shared; the light is each client's.
@@ -908,6 +998,17 @@ pub struct Definition {
     /// v20's vehicles have none.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub skid: Option<Skid>,
+    /// Effects and sounds a slipping tyre makes by the surface it is on.
+    /// Cosmetic: each client works the slip out from the vehicle's
+    /// presented motion and looks the surface up in its own world.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wheel_contacts: Option<WheelContacts>,
+    /// Effects and sounds the hull makes as it scrapes along what it meets,
+    /// by the surface it touches (Halo's chassis row of the vehicle
+    /// material-effect table). Made where the body collides, so it is the
+    /// simulation's, and cued to every client.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub body_contacts: Option<BodyContacts>,
     /// Authored fields retained as metadata only. Runtime reads typed native fields above.
     pub authored: BTreeMap<String, String>,
     pub adaptations: Vec<String>,
@@ -930,6 +1031,48 @@ pub struct Lamp {
     pub color: [f32; 3],
     /// How far it reaches, units.
     pub radius: f32,
+    /// A beam instead of an all-round light.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cone: Option<LampCone>,
+    /// How fast it comes up to full light and goes out.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ramp: Option<LampRamp>,
+}
+/// A lamp's beam ([`Lamp::cone`]): full light within `inner` degrees of
+/// `axis` (in the node's own frame), fading to none at `outer`.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LampCone {
+    pub inner: f32,
+    pub outer: f32,
+    #[serde(default = "LampCone::forward")]
+    pub axis: [f32; 3],
+}
+impl LampCone {
+    fn forward() -> [f32; 3] {
+        [0.0, 0.0, -1.0]
+    }
+    fn valid(&self) -> bool {
+        (0.0..=180.0).contains(&self.inner)
+            && self.outer.is_finite()
+            && self.outer > self.inner
+            && self.outer <= 180.0
+            && self.axis.iter().all(|v| v.is_finite())
+            && self.axis.iter().any(|v| *v != 0.0)
+    }
+}
+/// Seconds a lamp takes to reach full light from dark and to go dark again
+/// ([`Lamp::ramp`]): a client's own cosmetic fade.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LampRamp {
+    pub up: f32,
+    pub down: f32,
+}
+impl LampRamp {
+    fn valid(&self) -> bool {
+        (0.0..=60.0).contains(&self.up) && (0.0..=60.0).contains(&self.down)
+    }
 }
 #[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -938,19 +1081,133 @@ pub enum LampActivation {
     Switch,
     Driver,
     Always,
+    /// While the driver holds the jump input.
+    JumpHeld,
 }
 impl LampActivation {
-    pub fn enabled(self, switched: bool, driver: bool) -> bool {
+    pub fn enabled(self, switched: bool, driver: bool, jump_held: bool) -> bool {
         match self {
             Self::Switch => switched,
             Self::Driver => driver,
             Self::Always => true,
+            Self::JumpHeld => driver && jump_held,
         }
     }
 }
 fn is_origin(v: &[f32; 3]) -> bool {
     *v == [0.0; 3]
 }
+/// What a vehicle's tyres throw up as they slip, by the surface each
+/// stands on ([`Definition::wheel_contacts`]; Halo's `vehicle_tire_slip`
+/// material-effect row).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WheelContacts {
+    /// How fast a tyre must slip, units per second, to make an effect.
+    pub min_slip: f32,
+    /// Seconds between a slipping wheel's effects, and between its sounds.
+    pub interval: f32,
+    #[serde(default = "WheelContacts::default_sound_interval")]
+    pub sound_interval: f32,
+    /// The slip, units per second, at which an effect's input is full (1); the
+    /// groups that scale by it make `count[0]` at no slip and `count[1]` here
+    /// (Halo's `A` scaled values). None: always full.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub full_slip: Option<f32>,
+    /// By surface kind (`sand`, `stone`...), or `*` for any other. A kind
+    /// listed nowhere makes nothing.
+    pub effects: Vec<ContactEffect>,
+}
+/// What a vehicle's hull makes as it scrapes along a surface
+/// ([`Definition::body_contacts`]): the same rows as [`WheelContacts`].
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BodyContacts {
+    /// How fast the hull must slide along what it touches, units per
+    /// second, to make an effect.
+    pub min_slip: f32,
+    /// Seconds between the hull's effects.
+    pub interval: f32,
+    /// Seconds between its sounds.
+    #[serde(default = "WheelContacts::default_sound_interval")]
+    pub sound_interval: f32,
+    /// By surface kind, or `*` for any other; a kind listed nowhere makes
+    /// nothing.
+    pub effects: Vec<ContactEffect>,
+}
+impl BodyContacts {
+    pub fn effect_on(&self, kind: &str) -> Option<&ContactEffect> {
+        self.effects
+            .iter()
+            .find(|e| e.surface == kind)
+            .or_else(|| self.effects.iter().find(|e| e.surface == "*"))
+    }
+    pub fn valid(&self) -> bool {
+        let name =
+            |n: &str| !n.trim().is_empty() && n.len() <= 128 && !n.chars().any(char::is_control);
+        self.min_slip.is_finite()
+            && (0.1..=100.).contains(&self.min_slip)
+            && self.interval.is_finite()
+            && (0.01..=10.).contains(&self.interval)
+            && self.sound_interval.is_finite()
+            && (0.05..=30.).contains(&self.sound_interval)
+            && self.effects.len() <= 64
+            && self.effects.iter().all(|e| {
+                crate::schema::surface_name(&e.surface)
+                    && name(&e.effect)
+                    && e.sound.as_deref().is_none_or(name)
+            })
+    }
+}
+/// One surface's row of [`WheelContacts`].
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ContactEffect {
+    pub surface: String,
+    /// An effect of a weapons pack, burst at the wheel's contact.
+    pub effect: String,
+    /// A sound of a weapons pack played there.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sound: Option<String>,
+}
+impl WheelContacts {
+    fn default_sound_interval() -> f32 {
+        0.5
+    }
+    /// What a tyre on surface `kind` makes: the entry for that kind, else
+    /// the `*` entry. A kind with neither makes nothing, as an empty row of
+    /// Halo's material table makes nothing.
+    pub fn effect_on(&self, kind: &str) -> Option<&ContactEffect> {
+        self.effects
+            .iter()
+            .find(|e| e.surface == kind)
+            .or_else(|| self.effects.iter().find(|e| e.surface == "*"))
+    }
+    pub fn valid(&self) -> bool {
+        let name =
+            |n: &str| !n.trim().is_empty() && n.len() <= 128 && !n.chars().any(char::is_control);
+        self.min_slip.is_finite()
+            && (0.1..=100.).contains(&self.min_slip)
+            && self.interval.is_finite()
+            && (0.01..=10.).contains(&self.interval)
+            && self.sound_interval.is_finite()
+            && (0.05..=30.).contains(&self.sound_interval)
+            && self
+                .full_slip
+                .is_none_or(|s| s.is_finite() && s > self.min_slip && s <= 1000.)
+            && self.effects.len() <= 64
+            && self.effects.iter().all(|e| {
+                crate::schema::surface_name(&e.surface)
+                    && name(&e.effect)
+                    && e.sound.as_deref().is_none_or(name)
+            })
+    }
+}
+/// A surface kind name, or `*` for any.
+fn surface_name(kind: &str) -> bool {
+    kind == "*" || bri_content::surface::valid_name(kind)
+}
+
 /// [`Definition::skid`].
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -1038,6 +1295,12 @@ pub struct EngineSound {
     /// without a top speed).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub full_speed: Option<f32>,
+    /// Keys of (fraction of `full_speed`, volume, pitch), rising in speed
+    /// from 0 to 1, that replace the straight line between the idle and
+    /// full values: the loop's volume and pitch follow them piece by piece
+    /// (a pitch range that fades in and out as the engine revs).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub curve: Vec<[f32; 3]>,
 }
 impl EngineSound {
     fn default_idle_pitch() -> f32 {
@@ -1067,6 +1330,19 @@ impl EngineSound {
         } else {
             0.
         };
+        if let Some(after) = self.curve.iter().position(|k| k[0] >= t) {
+            let key = self.curve[after];
+            let Some(before) = after.checked_sub(1).map(|i| self.curve[i]) else {
+                return (key[1], key[2]);
+            };
+            let along = (t - before[0]) / (key[0] - before[0]).max(1e-6);
+            return (
+                before[1] + (key[1] - before[1]) * along,
+                before[2] + (key[2] - before[2]) * along,
+            );
+        } else if let Some(last) = self.curve.last() {
+            return (last[1], last[2]);
+        }
         (
             self.idle_volume + (self.full_volume - self.idle_volume) * t,
             self.idle_pitch + (self.full_pitch - self.idle_pitch) * t,
@@ -1093,6 +1369,16 @@ impl EngineSound {
             self.full_speed
                 .is_none_or(|s| s.is_finite() && s > 0. && s <= 10_000.),
             "engine_sound full_speed must be above 0"
+        );
+        ensure!(
+            self.curve.len() <= 64
+                && self.curve.windows(2).all(|w| w[0][0] < w[1][0])
+                && self.curve.iter().all(|[t, volume, pitch]| {
+                    (0. ..=1.).contains(t)
+                        && (0. ..=4.).contains(volume)
+                        && (0.25..=4.).contains(pitch)
+                }),
+            "engine_sound curve keys must rise in speed within 0..1, volume 0..4, pitch 0.25..4"
         );
         Ok(())
     }
@@ -1172,6 +1458,28 @@ impl Definition {
     /// The gravity this vehicle falls with: v20's, times `gravity_scale`.
     pub fn gravity(&self) -> f32 {
         crate::world::VEHICLE_GRAVITY * self.gravity_scale.unwrap_or(1.)
+    }
+    /// Turn `drive` into the `engine_force` and `brake_force` that give a
+    /// rolling body those rates. Each wheel carries `mass / wheels` as its
+    /// spin inertia, so with no slip a body of `mass` on `n` powered wheels
+    /// of radius `r` and `wheels` wheels in all speeds up at
+    /// `n E r / (mass (1 + r^2))` for engine force `E` and slows at
+    /// `wheels B r / (mass (1 + r^2))` for brake `B`.
+    pub fn resolve_drive(&mut self) {
+        let Some(rates) = self.drive else { return };
+        let powered: Vec<f32> = self
+            .wheels
+            .iter()
+            .filter(|w| w.powered)
+            .map(|w| w.radius)
+            .collect();
+        if powered.is_empty() || self.wheels.is_empty() {
+            return;
+        }
+        let r = powered.iter().sum::<f32>() / powered.len() as f32;
+        let share = self.mass * (1. + r * r) / r;
+        self.engine_force = rates.acceleration * share / powered.len() as f32;
+        self.brake_force = rates.deceleration * share / self.wheels.len() as f32;
     }
     /// The share of `engine_force` a powered wheel gets turning at
     /// `share` of its top speed (`max_speed` over its radius), past which
@@ -1305,6 +1613,8 @@ impl Pack {
                             && (l.radius > 0. || l.effect.is_some())
                             && l.radius >= 0.
                             && l.radius <= 100.
+                            && l.cone.is_none_or(|c| c.valid())
+                            && l.ramp.is_none_or(|r| r.valid())
                             && l.effect.as_ref().is_none_or(|id| {
                                 !id.is_empty()
                                     && id.len() <= 160
@@ -1373,7 +1683,7 @@ impl Pack {
                 .all(|v| v.is_finite() && *v >= 0.),
                 "invalid steering"
             );
-            ensure!(d.threads.len() <= 16, "too many animation threads");
+            ensure!(d.threads.len() <= 64, "too many animation threads");
             for t in &d.threads {
                 ensure!(
                     t.slot < 4
@@ -1388,13 +1698,33 @@ impl Pack {
                     "invalid animation thread"
                 );
             }
+            ensure!(
+                d.drive.is_none_or(|r| r.valid()),
+                "drive acceleration and deceleration must be above 0"
+            );
             d.effects.validate()?;
             if let Some(engine) = &d.engine_sound {
                 engine.validate()?;
             }
+            ensure!(
+                d.engine_layers.len() <= 15
+                    && (d.engine_layers.is_empty() || d.engine_sound.is_some()),
+                "engine_layers need an engine_sound and number at most 15"
+            );
+            for layer in &d.engine_layers {
+                layer.validate()?;
+            }
             if let Some(skid) = &d.skid {
                 skid.validate()?;
             }
+            ensure!(
+                d.wheel_contacts.as_ref().is_none_or(WheelContacts::valid),
+                "invalid wheel contact effects"
+            );
+            ensure!(
+                d.body_contacts.as_ref().is_none_or(BodyContacts::valid),
+                "invalid body contact effects"
+            );
             ensure!(d.trails.len() <= 16, "too many trails");
             for t in &d.trails {
                 ensure!(
@@ -1581,6 +1911,12 @@ impl Pack {
             );
             for seat in &d.seats {
                 ensure!(
+                    [&seat.enter_sound, &seat.exit_sound].iter().all(|s| {
+                        s.len() <= 128 && !s.contains('.') && !s.chars().any(char::is_control)
+                    }),
+                    "invalid seat enter/exit sound: a sound profile name of at most 128 characters without a dot"
+                );
+                ensure!(
                     seat.rider_fallback_hip
                         .is_none_or(|p| seat.rider_pose.is_some()
                             && p.iter().all(|v| v.is_finite() && v.abs() <= 64.)),
@@ -1643,7 +1979,30 @@ impl Pack {
                 }),
                 "seat hand nodes need a weapon attachment seat and names up to 64 characters"
             );
+            ensure!(
+                d.turret_acceleration
+                    .as_ref()
+                    .is_none_or(|a| a.valid() && d.attachment_model.is_some()),
+                "invalid turret acceleration overlays"
+            );
+            ensure!(
+                d.seats.iter().all(|s| {
+                    s.rider_acceleration.as_ref().is_none_or(|a| a.valid())
+                        && s.rider_aim_pitch.is_none_or(|[down, up]| {
+                            down.is_finite()
+                                && up.is_finite()
+                                && (-std::f32::consts::FRAC_PI_2..0.).contains(&down)
+                                && up > 0.
+                                && up <= std::f32::consts::FRAC_PI_2
+                        })
+                }),
+                "invalid seat rider aim pitch or acceleration overlays"
+            );
             if let Some(w) = &d.weapon {
+                ensure!(
+                    w.aim_limits.is_none_or(|l| l.valid()),
+                    "invalid weapon aim limits"
+                );
                 ensure!(
                     w.look_animation_pitch.is_none_or(|[down, up]| {
                         down.is_finite()
@@ -1733,6 +2092,47 @@ impl Pack {
 }
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_jump_held_lamp_follows_the_driver_holding_jump() {
+        use super::LampActivation::*;
+        assert!(JumpHeld.enabled(false, true, true));
+        assert!(!JumpHeld.enabled(true, true, false));
+        assert!(!JumpHeld.enabled(true, false, true), "nobody driving");
+        assert!(Switch.enabled(true, false, false) && Always.enabled(false, false, false));
+    }
+
+    #[test]
+    fn engine_curves_rise_in_speed_and_stay_in_range() {
+        let sound = |curve: serde_json::Value| -> EngineSound {
+            serde_json::from_value(serde_json::json!({ "sound": "a:b", "curve": curve })).unwrap()
+        };
+        assert!(
+            sound(serde_json::json!([[0.0, 0.5, 1.0], [1.0, 1.0, 2.0]]))
+                .validate()
+                .is_ok()
+        );
+        assert!(
+            sound(serde_json::json!([[0.5, 0.5, 1.0], [0.5, 1.0, 2.0]]))
+                .validate()
+                .is_err()
+        );
+        assert!(
+            sound(serde_json::json!([[0.0, 5.0, 1.0]]))
+                .validate()
+                .is_err()
+        );
+        assert!(
+            sound(serde_json::json!([[0.0, 1.0, 0.1]]))
+                .validate()
+                .is_err()
+        );
+        let engine = sound(serde_json::json!([[0.2, 0.0, 1.0], [0.6, 1.0, 2.0]]));
+        // Before the first key and past the last the ends hold; between, linear.
+        assert_eq!(engine.at(0.0, 10.0), (0.0, 1.0));
+        assert_eq!(engine.at(100.0, 10.0), (1.0, 2.0));
+        let (volume, pitch) = engine.at(4.0, 10.0);
+        assert!((volume - 0.5).abs() < 1e-5 && (pitch - 1.5).abs() < 1e-5);
+    }
     use super::*;
     #[test]
     fn reordered_capabilities_and_ambiguous_roles_are_explicit() {

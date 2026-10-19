@@ -94,6 +94,49 @@ struct Timed {
     previous: SourceTransform,
 }
 
+/// A current timed attachment, copied only when explicitly observed. `cue` is
+/// the actual accepted adapter cue (including source/image/hand/node), and
+/// `previous` is its last resolved transform, not a reconstructed pose.
+#[derive(Clone, Debug)]
+pub struct TimedAttachmentObservation {
+    pub cue: Cue,
+    pub handle: EffectHandle,
+    pub previous: SourceTransform,
+}
+
+/// One current eligible local image projection and its prepared sprite partition.
+#[derive(Clone)]
+pub struct LocalViewObservation {
+    pub affinity: Arc<bri_fx_runtime::LocalViewAffinity>,
+    pub policy: bri_weapons::FirstPersonView,
+    pub viewport: [u32; 2],
+    pub world_horizontal_fov: f32,
+    pub camera: bri_fx_runtime::Camera,
+    /// Actual affinity-partitioned, budgeted sprites prepared for this view.
+    pub weapon_frame: bri_fx_runtime::FrameEffects,
+    pub prebudget_particles: usize,
+    pub cut_sprites: usize,
+}
+/// One successful render preparation's weapon inputs, before the shared budget.
+/// This is not proof of queue submission, pixels, or source-game fidelity. A
+/// consumer must qualify the combined cuts and capture the same GPU frame.
+#[derive(Clone)]
+pub struct WeaponFrameObservation {
+    pub session: Option<u64>,
+    pub replica_tick: u64,
+    pub owner: u64,
+    pub cue_cursor: u64,
+    pub camera: bri_fx_runtime::Camera,
+    pub attachments: Vec<TimedAttachmentObservation>,
+    pub mounted_images: Vec<crate::world_items::MountedImageObservation>,
+    pub local_views: Vec<LocalViewObservation>,
+    pub weapon_frame: bri_fx_runtime::FrameEffects,
+    pub combined_particles: usize,
+    pub combined_lights: usize,
+    pub cut_sprites: usize,
+    pub cut_lights: usize,
+}
+
 /// Shell and avatar/image animation need the host's original posed models.
 /// Ownership and sequence/hand are preserved in the original reliable cue.
 #[derive(Clone, Debug)]
@@ -111,6 +154,8 @@ pub struct WeaponEffects {
     /// was started for.
     image_lights: BTreeMap<(u64, u8), (String, Option<u8>, EffectHandle)>,
     attached_lights: BTreeMap<(u64, u16), (String, EffectHandle)>,
+    /// The ribbons projectiles leave ([`bri_weapons::ProjectileDef::contrail`]).
+    contrails: crate::contrails::Contrails,
     ropes: BTreeMap<u64, RopeSweep>,
     timed: Vec<Timed>,
     pending: VecDeque<HostRequest>,
@@ -156,7 +201,7 @@ impl WeaponEffects {
                 color_curves: None,
                 brightness_curve: None,
                 radius_curve: None,
-                flare: None,
+                flare: p.flare.clone(),
             });
         }
         for i in weapons.images.values() {
@@ -190,11 +235,32 @@ impl WeaponEffects {
             .collect();
         add_add_on_textures(
             &weapons.effects,
+            weapons.projectiles.values().filter_map(|p| {
+                p.flare
+                    .as_ref()
+                    .map(|f| (p.id.as_str(), f.texture.as_str()))
+            }),
             &mut library,
             &mut textures,
-            texture,
+            &texture,
             &mut notes,
         );
+        // A projectile's flare whose picture did not load (a startup check, a
+        // missing file) is left out, the light kept: it does not stop the effects.
+        for light in &mut library.lights {
+            if light
+                .flare
+                .as_ref()
+                .is_some_and(|f| !library.textures.contains_key(&f.texture))
+            {
+                notes.push(format!(
+                    "{} left its lens flare out: its texture did not load",
+                    light.id
+                ));
+                light.flare = None;
+            }
+        }
+        let contrails = crate::contrails::Contrails::new(&weapons.projectiles, &texture);
         add_pack_effects(&weapons.effects, &mut library, &mut manifest, &mut notes);
         let pack = EffectsPack::from_parts(library, manifest, textures)?;
         let mut bindings = BTreeMap::new();
@@ -281,6 +347,7 @@ impl WeaponEffects {
             trails: BTreeMap::new(),
             image_lights: BTreeMap::new(),
             attached_lights: BTreeMap::new(),
+            contrails,
             ropes: BTreeMap::new(),
             timed: Vec::new(),
             pending: VecDeque::new(),
@@ -295,6 +362,24 @@ impl WeaponEffects {
         })
     }
 
+    /// Age the projectiles' contrails and turn their quads to face `eye`.
+    pub fn advance_contrails(&mut self, dt: f32, eye: glam::Vec3) {
+        self.contrails.advance(dt, eye);
+    }
+    pub fn upload_contrails(
+        &mut self,
+        renderer: &bri_render::scene::SceneRenderer,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+    ) -> Result<()> {
+        self.contrails.upload(renderer, device, queue)
+    }
+    pub fn contrail_scenes(&self) -> impl Iterator<Item = &bri_render::scene::GpuScene> {
+        self.contrails.scenes()
+    }
+    pub fn contrails_gpu_stopped(&mut self) {
+        self.contrails.gpu_stopped();
+    }
     pub fn weapons(&self) -> &bri_weapons::Pack {
         &self.weapons
     }
@@ -309,6 +394,25 @@ impl WeaponEffects {
     }
     pub fn timed_count(&self) -> usize {
         self.timed.len()
+    }
+    /// Iterate only currently retained timed attachments. No history, cursor
+    /// consumption, or pose evaluation; cloning happens only on iteration.
+    pub fn check_local_views(&mut self, eligible: &[Arc<bri_fx_runtime::LocalViewAffinity>]) {
+        if self.world.has_mismatched_local_policy(eligible)
+            && self.diagnostics.messages.len() < MAX_MESSAGES
+        {
+            self.diagnostics.messages.insert(
+                "Local effect policy no longer matches current mounted image; hidden until expiry"
+                    .into(),
+            );
+        }
+    }
+    pub fn timed_attachments(&self) -> impl Iterator<Item = TimedAttachmentObservation> + '_ {
+        self.timed.iter().map(|t| TimedAttachmentObservation {
+            cue: t.cue.clone(),
+            handle: t.handle,
+            previous: t.previous,
+        })
     }
     pub fn set_passages(&mut self, passages: &Passages) {
         if &self.passages != passages {
@@ -345,11 +449,46 @@ impl WeaponEffects {
     }
     /// A sprite casing or other detached effect at the image's actual socket.
     pub fn burst_at(&mut self, definition: &str, transform: SourceTransform) -> Result<()> {
-        let (binding, options) = self
+        self.burst_at_input(definition, transform, 1.)
+    }
+    /// [`Self::burst_at`] with the effect's input (0 to 1) for the groups that scale by it.
+    pub fn burst_at_input(
+        &mut self,
+        definition: &str,
+        transform: SourceTransform,
+        input: f32,
+    ) -> Result<()> {
+        let (binding, mut options) = self
             .resolve(definition)
             .ok_or_else(|| anyhow::anyhow!("Missing ejection effect {definition}"))?;
+        options.input = input.clamped(0., 1.);
         self.world.burst_effect(&binding.id, transform, options)?;
         Ok(())
+    }
+    /// The groups of the composite effect `definition` whose axis comes from a contact (`contact_normal`, `contact_travel`,
+    /// `opposite_travel`, `reflected_travel`): (index, emitter, frame). A cue without a contact drops them
+    /// ([`bri_fx_runtime::EffectsWorld`] counts them as missing contacts), so an effect made where nothing was touched
+    /// must have none.
+    pub fn contact_groups(
+        &self,
+        definition: &str,
+    ) -> Vec<(usize, String, bri_content::effects::BurstFrame)> {
+        let Some((binding, _)) = self.resolve(definition) else {
+            return Vec::new();
+        };
+        if !matches!(binding.kind, Kind::Composite) {
+            return Vec::new();
+        }
+        self.world
+            .composite(&binding.id)
+            .map_or_else(Vec::new, |c| {
+                c.bursts
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, b)| b.frame.needs_contact())
+                    .map(|(i, b)| (i, b.emitter.clone(), b.frame))
+                    .collect()
+            })
     }
     /// Whether this effect is defined, whatever the palette: a
     /// `color<N>Paint*` copy is known when its `bluePaint*` base is.
@@ -395,6 +534,7 @@ impl WeaponEffects {
         self.trails.clear();
         self.image_lights.clear();
         self.attached_lights.clear();
+        self.contrails.clear();
         self.ropes.clear();
         self.timed.clear();
         self.pending.clear();
@@ -402,6 +542,12 @@ impl WeaponEffects {
         self.diagnostics = Diagnostics::default();
     }
     fn missing(&mut self, message: String) {
+        bri_console::fallback::report(
+            bri_console::fallback::kind::DROPPED_PARTICLE_GROUP,
+            "",
+            &message,
+            "the effect is not drawn",
+        );
         self.diagnostics.missing_bindings = self.diagnostics.missing_bindings.saturating_add(1);
         if self.diagnostics.messages.len() < MAX_MESSAGES {
             self.diagnostics.messages.insert(message);
@@ -416,6 +562,7 @@ impl WeaponEffects {
             view.projectiles.len() <= bri_weapons::MAX_PROJECTILES,
             "Weapon effects view exceeds projectile limit"
         );
+        self.contrails.observe(&view.projectiles);
         let mut ids = BTreeSet::new();
         let mut desired = BTreeMap::new();
         for p in &view.projectiles {
@@ -728,7 +875,15 @@ impl WeaponEffects {
     pub fn cues(
         &mut self,
         cues: &[Cue],
+        pose: impl FnMut(&Cue) -> Option<SourceTransform>,
+    ) -> Result<()> {
+        self.cues_with_local_view(cues, pose, |_| None)
+    }
+    pub fn cues_with_local_view(
+        &mut self,
+        cues: &[Cue],
         mut pose: impl FnMut(&Cue) -> Option<SourceTransform>,
+        mut local_view: impl FnMut(&Cue) -> Option<Arc<bri_fx_runtime::LocalViewAffinity>>,
     ) -> Result<()> {
         ensure!(cues.len() <= MAX_CUES, "Weapon effects cue batch too large");
         for cue in cues {
@@ -766,10 +921,11 @@ impl WeaponEffects {
                 ..
             } = &cue.kind
             {
-                let Some((binding, options)) = self.resolve(definition) else {
+                let Some((binding, mut options)) = self.resolve(definition) else {
                     prepared.insert(cue.id, Prepared::MissingBinding);
                     continue;
                 };
+                options.local_view = local_view(cue);
                 let attached = image.is_some() || !node.is_empty() || *seconds > 0.;
                 let transform = if attached {
                     pose(cue)
@@ -1053,8 +1209,9 @@ pub const MISSING_PARTICLE_TEXTURE: &str = "base/data/particles/cloud";
 /// The textures an Add-On's particles draw that the effects pack lacks,
 /// from `texture` (keyed as the particle names it), each fitted within
 /// [`ADD_ON_TEXTURE_SIDE`]; at most [`ADD_ON_TEXTURES`].
-fn add_add_on_textures<'t>(
-    effects: &bri_weapons::PackEffects,
+fn add_add_on_textures<'t, 'p>(
+    effects: &'p bri_weapons::PackEffects,
+    flares: impl Iterator<Item = (&'p str, &'p str)>,
     library: &mut bri_content::effects::Library,
     textures: &mut Vec<bri_fx_runtime::pack::TextureImage>,
     texture: impl Fn(&str) -> Option<&'t bri_render::scene::SceneImage>,
@@ -1062,7 +1219,7 @@ fn add_add_on_textures<'t>(
 ) {
     let mut added = 0;
     let mut decoded_bytes = textures.iter().map(|t| t.rgba.len()).sum::<usize>();
-    for (id, name) in effects.textures() {
+    for (id, name) in effects.textures().chain(flares) {
         if library.textures.contains_key(name) {
             continue;
         }
@@ -1189,6 +1346,12 @@ fn add_pack_effects(
         } else if library.textures.contains_key(MISSING_PARTICLE_TEXTURE) {
             // v20's `ParticleData` preload (0x558c60) loads the cloud
             // whenever a named texture does not load, and never fails.
+            bri_console::fallback::report(
+                bri_console::fallback::kind::MISSING_TEXTURE,
+                owner(&p.id),
+                &p.texture,
+                MISSING_PARTICLE_TEXTURE,
+            );
             notes.push(format!(
                 "{}: texture {} is missing, so it draws {MISSING_PARTICLE_TEXTURE} as v20 did",
                 p.id, p.texture
@@ -1348,4 +1511,70 @@ fn owner(id: &str) -> &str {
 fn fault(notes: &mut Vec<String>, problem: Problem) {
     notes.push(problem.to_string());
     crate::add_on_health::report(problem);
+}
+
+#[cfg(test)]
+mod observation_tests {
+    use super::*;
+    #[test]
+    fn timed_observation_keeps_actual_cue_transform_and_cursor_without_history() -> Result<()> {
+        let mut fx = WeaponEffects::new(
+            bri_fx_runtime::testing::pack(|_| {}),
+            Arc::new(bri_weapons::testing::pack()),
+            EffectsLimits::default(),
+        )?;
+        let cue = Cue {
+            id: 9,
+            tick: 37,
+            position: [9., 8., 7.],
+            kind: CueKind::WeaponEffect {
+                source: bri_weapons::TargetId::Actor(bri_weapons::ActorId(42)),
+                definition: "emitter".into(),
+                node: "inventedSocket".into(),
+                seconds: 0.2,
+                image: Some("synthetic:image/gun".into()),
+                hand: Some(1),
+                direction: None,
+                contact: None,
+                scale: 1.,
+            },
+        };
+        let original = SourceTransform {
+            position: Vec3::new(2., 3., 4.),
+            rotation: Quat::from_rotation_z(0.25),
+            velocity: Vec3::X,
+        };
+        fx.cues(std::slice::from_ref(&cue), |_| Some(original))?;
+        let mut first = fx.timed_attachments().collect::<Vec<_>>();
+        assert_eq!(first.len(), 1);
+        assert_eq!(first[0].cue, cue);
+        assert_eq!(first[0].previous.position, original.position);
+        assert_eq!(first[0].previous.rotation, original.rotation);
+        assert_eq!(first[0].previous.velocity, original.velocity);
+        let handle = first[0].handle;
+        assert!(fx.world().attachment_alive(handle));
+        first[0].cue.position = [0.; 3];
+        let moved = SourceTransform {
+            position: Vec3::new(-3., 5., 1.),
+            ..original
+        };
+        fx.advance(0.01, Vec3::ZERO, |_| Some(moved))?;
+        let current = fx.timed_attachments().collect::<Vec<_>>();
+        assert_eq!(current.len(), 1);
+        assert_eq!(
+            current[0].cue, cue,
+            "returned copies cannot alter retained cue"
+        );
+        assert_eq!(current[0].handle, handle);
+        assert_eq!(current[0].previous.position, moved.position);
+        assert_eq!(
+            fx.cue_cursor(),
+            9,
+            "observation must not consume reliable cues"
+        );
+        fx.reset(40);
+        assert_eq!(fx.timed_attachments().count(), 0);
+        assert_eq!(fx.cue_cursor(), 40);
+        Ok(())
+    }
 }

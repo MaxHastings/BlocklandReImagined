@@ -11,7 +11,7 @@ use bri_ui::{
 };
 use support::{avatar_fixture::AvatarFixture, gpu};
 
-synthetic_and_content!(AvatarFixture: the_editor_portrait_plays_and_loops_the_authored_run);
+synthetic_and_release_content!(AvatarFixture: the_editor_portrait_plays_and_loops_the_authored_run);
 
 fn the_editor_portrait_plays_and_loops_the_authored_run(f: &AvatarFixture) -> Result<()> {
     let gpu = gpu::turn()?;

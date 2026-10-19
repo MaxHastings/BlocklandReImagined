@@ -301,7 +301,7 @@ fn render_uploaded(
     Ok(pixels.to_vec())
 }
 
-synthetic_and_content!(BrickFixture: literal_rgb_candidates_offscreen, brick_fx_prints_phase_and_paint_offscreen);
+synthetic_and_release_content!(BrickFixture: literal_rgb_candidates_offscreen, brick_fx_prints_phase_and_paint_offscreen);
 
 /// Total RGB of a rendered frame.
 fn brightness(pixels: &[u8]) -> u64 {

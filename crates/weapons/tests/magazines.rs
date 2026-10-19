@@ -515,3 +515,45 @@ fn reload_routes_body_and_image_animation_to_their_own_threads() {
     assert!(events.iter().any(|event| matches!(event, Event::Animation { thread: 2, sequence, image_hand: None, .. } if sequence == "body_reload")));
     assert!(events.iter().any(|event| matches!(event, Event::Animation { thread: 0, sequence, image_hand: Some(0), .. } if sequence == "image_reload")));
 }
+
+#[test]
+fn a_reload_from_empty_may_take_its_own_time_animation_and_sound() {
+    let mut pack = Pack::from_json(GUNS.as_bytes()).unwrap();
+    let magazine = pack
+        .images
+        .get_mut("mag:image/pistol")
+        .unwrap()
+        .magazine
+        .as_mut()
+        .unwrap();
+    magazine.reload_image_sequence = "image_reload".into();
+    magazine.empty_reload_image_sequence = "image_reload_empty".into();
+    magazine.empty_reload_ticks = 40;
+    magazine.empty_reload_sound = "mag:sound/click".into();
+    let mut world = WeaponsWorld::new(pack).unwrap();
+    world.add_actor(A, 5).unwrap();
+    holding(&mut world, A, "mag:weapon/pistol");
+    // One round spent, then a light-key reload: the ordinary one.
+    click(&mut world);
+    assert!(world.reload(A).unwrap());
+    let events = step(&mut world, 1);
+    assert!(events.iter().any(|e| matches!(e, Event::Animation { sequence, image_hand: Some(0), .. } if sequence == "image_reload")));
+    assert!(sounds(&events).contains(&"mag:sound/reload".to_string()));
+    step(&mut world, 24);
+    assert_eq!(rounds(&world).0, 3);
+    // Out of rounds, the last shot's own reload takes its 40 ticks.
+    click(&mut world);
+    click(&mut world);
+    let (_, events) = click(&mut world);
+    assert!(events.iter().any(|e| matches!(e, Event::Animation { sequence, image_hand: Some(0), .. } if sequence == "image_reload_empty")));
+    assert!(sounds(&events).contains(&"mag:sound/click".to_string()));
+    assert!(!sounds(&events).contains(&"mag:sound/reload".to_string()));
+    assert!(rounds(&world).2);
+    step(&mut world, 20);
+    assert!(
+        rounds(&world).2,
+        "still reloading after the ordinary 24 ticks"
+    );
+    step(&mut world, 30);
+    assert_eq!(rounds(&world).0, 3);
+}

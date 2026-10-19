@@ -24,7 +24,7 @@ use std::{
 mod support;
 use support::{content_root::ContentRoot, wait};
 
-synthetic_and_content!(ContentRoot: the_runner_holds_the_carbine_sits_in_the_buggy_and_climbs_out);
+synthetic_and_release_content!(ContentRoot: the_runner_holds_the_carbine_sits_in_the_buggy_and_climbs_out);
 
 const SIZE: (u32, u32) = (640, 480);
 

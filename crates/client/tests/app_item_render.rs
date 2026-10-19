@@ -17,7 +17,7 @@ use std::{path::Path, time::Duration};
 mod support;
 use support::{content_root::ContentRoot, wait};
 
-synthetic_and_content!(
+synthetic_and_release_content!(
     ContentRoot: native_core_tools_render_from_eye_and_original_mounts,
     bricks_in_hand_render_the_grey_brick_in_first_and_third_person,
     detection_regions_render_with_building_tools_and_hide_when_put_away,

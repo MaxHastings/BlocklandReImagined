@@ -383,6 +383,7 @@ fn sky(root: &Path, out: &Path, dml: &str) -> Result<Sky> {
             color: rgb(fog),
             ..Default::default()
         },
+        lens_flare: None,
         warnings,
     };
     let flare_color = color_of(&v, "$sky::sunflarecolor", [1.0; 4]);

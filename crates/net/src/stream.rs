@@ -165,6 +165,8 @@ fn player_same(a: &PlayerState, b: &PlayerState) -> bool {
         && (a.energy - b.energy).abs() <= ENERGY
         && a.grounded == b.grounded
         && a.crouched == b.crouched
+        && a.posture.prone == b.posture.prone
+        && (a.posture.lean - b.posture.lean).abs() <= 0.01
         && a.jetting == b.jetting
         && a.jump.jet_flight == b.jump.jet_flight
         && a.archetype == b.archetype
@@ -181,6 +183,7 @@ fn vehicle_same(a: &VehiclePose, b: &VehiclePose) -> bool {
         && near(&a.turret_aim, &b.turret_aim, ANGLE)
         && a.wheel_contact == b.wheel_contact
         && a.jetting == b.jetting
+        && a.driver_jump_held == b.driver_jump_held
         && a.driver_steering == b.driver_steering
         && a.passage_frame == b.passage_frame
 }
@@ -878,6 +881,37 @@ mod tests {
         );
     }
 
+    /// Others are told a player lies prone or leans, and an upright body
+    /// costs no byte for it.
+    #[test]
+    fn others_see_a_prone_or_leaning_body() {
+        let mut state = pose(4, 1_000_000, 123.456).player;
+        let upright = RemotePose::of(0, &state);
+        assert_eq!(upright.controller, None);
+        state.posture.prone = true;
+        state.posture.lean = -0.5;
+        state.posture.lean_to = -0.5;
+        let lying = RemotePose::of(0, &state);
+        let back = lying.clone().into_pose().player;
+        assert!(back.posture.prone);
+        assert_eq!((back.posture.lean * 100.0).round(), -50.0);
+        let size = |p: RemotePose| {
+            crate::codec::encode_datagram_item(&Datagram::Remote(p))
+                .unwrap()
+                .len()
+        };
+        // Through the real datagram: a prone body with no controller must not
+        // shift a skipped trailing field into the wrong slot.
+        let bytes = crate::codec::encode_datagram_item(&Datagram::Remote(lying.clone())).unwrap();
+        let Datagram::Remote(wire) = crate::codec::decode_datagram::<Datagram>(&bytes).unwrap()
+        else {
+            panic!("a remote pose")
+        };
+        assert!(wire.into_pose().player.posture.prone);
+        let larger = size(lying) - size(upright);
+        assert!(larger > 0 && larger <= 8, "{larger} extra bytes");
+    }
+
     /// Others see a body its movement controller turned itself (Mario
     /// running across the camera) face its own way, with its intent's clip;
     /// the controller's memory stays its owner's, and a blank controller
@@ -1015,6 +1049,7 @@ mod tests {
             wheel_tire: vec![Default::default(); 4],
             turret_aim: [0.0; 2],
             jetting: false,
+            driver_jump_held: false,
             angular_velocity: [0.0, 0.4, 0.0],
             mouse_steering: [0.2, 0.0],
             driver_input: 42,
@@ -1062,6 +1097,7 @@ mod tests {
                 wheel_tire: vec![Default::default(); 4],
                 turret_aim: [0.0; 2],
                 jetting: false,
+                driver_jump_held: false,
                 angular_velocity: [0.0; 3],
                 mouse_steering: [0.0; 2],
                 driver_input: 0,
@@ -1109,6 +1145,7 @@ mod tests {
             paint: None,
             heading: None,
             bounces: 0,
+            fuse_started: None,
             spawned: 0,
         }
     }

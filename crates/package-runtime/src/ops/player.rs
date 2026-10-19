@@ -378,6 +378,32 @@ impl ScriptOp for SetSpeedScale {
     }
 }
 
+/// A named share of a player's speeds, for one Add-On system to own: the
+/// shares of every key (and of `set_speed_scale`, which is the key "") are
+/// multiplied, so a lock another system writes (0, as a posture change
+/// does) cannot be undone by a system that writes its own key every tick.
+/// A key set to 1 is dropped. 0 to 4 each, at most [`MAX_SPEED_KEYS`] keys
+/// a player; they clear when the player respawns.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SetSpeedModifier {
+    pub player: u64,
+    pub key: String,
+    pub scale: f32,
+}
+/// Most [`SetSpeedModifier`] keys one player may hold at once.
+pub const MAX_SPEED_KEYS: usize = 16;
+/// Whether `key` is a fine modifier key: 1 to 32 of a to z, 0 to 9 and `_`.
+pub fn speed_key_ok(key: &str) -> bool {
+    (1..=32).contains(&key.len()) && key.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_')
+}
+impl ScriptOp for SetSpeedModifier {
+    const CAPABILITY: &str = "player";
+    const NAME: &str = "set_speed_modifier";
+    fn bounded(&self) -> bool {
+        speed_key_ok(&self.key) && self.scale.is_finite() && (0.0..=MAX_SPEED_SCALE).contains(&self.scale)
+    }
+}
+
 /// Lay a player down or get them up, for a body whose archetype can lie
 /// prone (`movement.prone`). Getting up needs room to crouch.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -534,6 +560,39 @@ impl ScriptOp for SetImageLoaded {
     const NAME: &str = "set_image_loaded";
     fn bounded(&self) -> bool {
         true
+    }
+}
+
+/// Scale the random spread of a player's next shots (`shot.spread` and its
+/// stance variants): 1 leaves it, 0 makes shots true, 2 doubles the cone. A
+/// rule that models how steady a shooter is sets it as that changes.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SetAimScale {
+    pub player: u64,
+    pub scale: f32,
+}
+impl ScriptOp for SetAimScale {
+    const CAPABILITY: &str = "player";
+    const NAME: &str = "set_aim_scale";
+    fn bounded(&self) -> bool {
+        self.scale.is_finite() && (0.0..=8.0).contains(&self.scale)
+    }
+}
+
+/// Turn a player's own view by `pitch` degrees up and `yaw` degrees to the
+/// right and leave it there: a rifle's recoil climb. The player's game adds
+/// it to where they look; nothing pulls it back.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct KickView {
+    pub player: u64,
+    pub pitch: f32,
+    pub yaw: f32,
+}
+impl ScriptOp for KickView {
+    const CAPABILITY: &str = "player";
+    const NAME: &str = "kick_view";
+    fn bounded(&self) -> bool {
+        [self.pitch, self.yaw].iter().all(|a| a.is_finite() && a.abs() <= 30.0)
     }
 }
 
@@ -725,5 +784,89 @@ impl ScriptOp for OrbitCamera {
             orbit,
         } = self;
         orbit.is_none_or(|o| o.valid() && (o.target != *player || *body == OrbitBody::Frozen))
+    }
+}
+
+/// Kick a player's real view (`HumanController.ClientStartViewShake`): the
+/// look turns out along `direction` (radians in the view plane, 0 up and
+/// pi/2 across) up to `max`, bounces back at half the speed and settles
+/// where it has come back to `min`, so a hit leaves the aim a little off.
+/// `rate` is radians a second. Radians throughout; the client runs it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ViewShake {
+    pub player: u64,
+    pub direction: f32,
+    pub min: f32,
+    pub max: f32,
+    pub rate: f32,
+}
+impl ScriptOp for ViewShake {
+    const CAPABILITY: &str = "player";
+    const NAME: &str = "view_shake";
+    fn bounded(&self) -> bool {
+        let ViewShake { direction, min, max, rate, .. } = self;
+        [direction, min, max, rate].iter().all(|v| v.is_finite())
+            && direction.abs() <= 100.0
+            && (-1.0..=1.0).contains(min)
+            && (0.0..=1.0).contains(max)
+            && (0.01..=100.0).contains(&rate.abs())
+    }
+}
+
+/// Shake a player's camera and nothing else (`camera_shake`): each frame the
+/// view is moved a random way up to `translation` units in its own plane and
+/// turned a random way up to `rotation` radians, the share of both fading over
+/// `seconds` as `1 - (1 - left)^hold` of the time left (1 a straight fade, more
+/// holds the shake before it drops). The aim, the body and everyone else's view
+/// are untouched, unlike `view_shake`. Presentation only; the client runs it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CameraShake {
+    pub player: u64,
+    pub translation: f32,
+    pub rotation: f32,
+    pub seconds: f32,
+    pub hold: f32,
+}
+impl ScriptOp for CameraShake {
+    const CAPABILITY: &str = "player";
+    const NAME: &str = "camera_shake";
+    fn bounded(&self) -> bool {
+        (0.0..=4.0).contains(&self.translation)
+            && (0.0..=0.5).contains(&self.rotation)
+            && (0.05..=10.0).contains(&self.seconds)
+            && (1.0..=8.0).contains(&self.hold)
+    }
+}
+
+/// Scale a player's velocity: the horizontal part by `horizontal`, the
+/// vertical part by `vertical` (both 0 to 2). A jump that takes some of its
+/// run with it, as AA's `DoJump` slows a hopper.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ScaleVelocity {
+    pub player: u64,
+    pub horizontal: f32,
+    pub vertical: f32,
+}
+impl ScriptOp for ScaleVelocity {
+    const CAPABILITY: &str = "player";
+    const NAME: &str = "scale_velocity";
+    fn bounded(&self) -> bool {
+        let ScaleVelocity { horizontal, vertical, .. } = self;
+        [horizontal, vertical].iter().all(|v| v.is_finite() && (0.0..=2.0).contains(*v))
+    }
+}
+
+#[cfg(test)]
+mod speed_modifier_tests {
+    use super::*;
+    #[test]
+    fn keys_are_short_lowercase_names_and_shares_are_bounded() {
+        assert!(speed_key_ok("prone_lock") && speed_key_ok("movement2"));
+        for bad in ["", "Prone", "a b", "a-b", &"k".repeat(33)] {
+            assert!(!speed_key_ok(bad), "{bad:?}");
+        }
+        let op = |key: &str, scale: f32| SetSpeedModifier { player: 1, key: key.into(), scale }.bounded();
+        assert!(op("lock", 0.0) && op("lock", 4.0));
+        assert!(!op("lock", 4.5) && !op("lock", -0.1) && !op("lock", f32::NAN) && !op("Lock", 1.0));
     }
 }

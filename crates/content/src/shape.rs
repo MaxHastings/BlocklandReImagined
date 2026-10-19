@@ -119,6 +119,10 @@ pub struct Mesh {
     pub positions: Vec<[f32; 3]>,
     pub normals: Vec<[f32; 3]>,
     pub uv: Vec<[f32; 2]>,
+    /// A second UV set, one per vertex or none: where a baked lightmap
+    /// ([`Surface::lightmap`]) is read (glTF `TEXCOORD_1`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub uv1: Vec<[f32; 2]>,
     pub primitives: Vec<Primitive>,
     pub skin: Option<Skin>,
     pub billboard: bool,
@@ -150,6 +154,9 @@ pub struct Material {
     /// Solid cutout geometry: discard texels below this alpha, then write depth.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub alpha_cutoff: Option<f32>,
+    /// Both faces draw (glTF `doubleSided`): back faces are not culled.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub double_sided: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub uv_motion: Option<UvMotion>,
     pub unlit: bool,
@@ -173,6 +180,10 @@ pub struct Material {
     /// `metal` when both are set.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub surface: Option<Surface>,
+    /// Painted only where a mask says so, in the colour of an avatar slot:
+    /// the change-colour mask of a team-coloured armour plate ([`TintMask`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tint: Option<TintMask>,
 }
 /// Texture coordinates in UV space: scale, rotate about center, then offset
 /// and scroll. Angles are degrees, rates per second. Geometry and lighting UVs stay put.
@@ -238,6 +249,15 @@ pub struct Surface {
     pub occlusion: Option<usize>,
     #[serde(default = "Metal::one")]
     pub occlusion_strength: f32,
+    /// A baked lightmap (RGB, sRGB-free linear light) read with the mesh's
+    /// second UV set. It stands for the sun and ambient light on the
+    /// surface, shadows included, so the live ones are not added to it;
+    /// lights, moving shadows and highlights still are. `lightmap_strength`
+    /// multiplies it (the map's brightest texels can exceed 1).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lightmap: Option<usize>,
+    #[serde(default = "Metal::one")]
+    pub lightmap_strength: f32,
     /// Glow colour map (sRGB), multiplying `emissive`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub emissive_map: Option<usize>,
@@ -256,6 +276,21 @@ pub struct Surface {
     /// inferred metallic response. Maps and colours belong to the Add-On.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reflection: Option<SurfaceReflection>,
+}
+/// A masked tint: each texel of the material's colour is multiplied by
+/// `(1 - mask) + mask * colour`, so the mask's 0 leaves the texel as it is
+/// and its 1 takes the colour of the avatar slot `slot` (the colour the
+/// holder or wearer's avatar, or a rule's `set_avatar_colors`, gives that
+/// slot: team colours are set that way). Halo's change-colour mask works
+/// this way. Lit model materials only.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TintMask {
+    /// The material (by index) whose texture is the mask, in its red
+    /// channel (linear, 0 to 1).
+    pub mask: usize,
+    /// An avatar colour slot (`chest`, `pants`, `larm` ...).
+    pub slot: String,
 }
 /// A display-space reflection layer, useful for imported fixed-function
 /// materials. The mask's red channel controls reflection coverage.
@@ -325,6 +360,12 @@ pub struct Animation {
     pub duration: f32,
     pub looping: bool,
     pub additive: bool,
+    /// An additive clip whose translations add to the node's translation in
+    /// its parent's frame, as Halo's overlays do, instead of being carried
+    /// by the node's own pose (the default, which rotates and scales them by
+    /// it). Rotations and scales are unaffected.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub parent_translations: bool,
     pub priority: i32,
     #[serde(default, skip_serializing_if = "RotationInterpolation::is_spherical")]
     pub rotation_interpolation: RotationInterpolation,
@@ -439,7 +480,8 @@ impl Shape {
             ensure!(
                 mesh.frame_vertices > 0
                     && mesh.positions.len() % mesh.frame_vertices == 0
-                    && mesh.normals.len() == mesh.positions.len(),
+                    && mesh.normals.len() == mesh.positions.len()
+                    && (mesh.uv1.is_empty() || mesh.uv1.len() == mesh.positions.len()),
                 "Invalid mesh frame layout: frame={} positions={} normals={}",
                 mesh.frame_vertices,
                 mesh.positions.len(),
@@ -498,6 +540,17 @@ impl Shape {
                 "Invalid material UV motion"
             );
             ensure!(
+                material.tint.as_ref().is_none_or(|t| {
+                    t.mask < self.materials.len()
+                        && (1..=32).contains(&t.slot.len())
+                        && t.slot
+                            .bytes()
+                            .all(|b| b.is_ascii_alphanumeric() || b == b'_')
+                }),
+                "Invalid tint mask on {}",
+                material.name
+            );
+            ensure!(
                 material
                     .alpha_cutoff
                     .is_none_or(|a| a.is_finite() && (0.0..=1.0).contains(&a)),
@@ -509,6 +562,8 @@ impl Shape {
                     index(surface.normal)
                         && index(surface.metallic_roughness)
                         && index(surface.occlusion)
+                        && index(surface.lightmap)
+                        && (0.0..=16.0).contains(&surface.lightmap_strength)
                         && index(surface.emissive_map)
                         && index(surface.detail)
                         && surface.reflection.as_ref().is_none_or(|r| {

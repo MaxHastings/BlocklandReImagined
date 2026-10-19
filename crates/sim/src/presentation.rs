@@ -156,6 +156,14 @@ pub enum CueKind {
         color: [f32; 4],
         seconds: f32,
     },
+    /// One of the weapons pack's shells over `owner`'s body at `strength` (0 to
+    /// 1), fading over `seconds` (rules' `body_shell`).
+    BodyShell {
+        owner: u64,
+        shell: String,
+        strength: f32,
+        seconds: f32,
+    },
     /// A projectile that leaves a mark (`ProjectileDef::decal`) hit `brick`
     /// (None: the map itself, its meshes and ground) at the cue position,
     /// on the face turned to `normal`. Clients draw the projectile's own
@@ -298,6 +306,22 @@ impl Cue {
             CueKind::Tracer { actor, hand } => {
                 ensure!(*actor > 0 && *hand < 2, "Invalid tracer cue")
             }
+            CueKind::BodyShell {
+                owner,
+                shell,
+                strength,
+                seconds,
+            } => ensure!(
+                *owner > 0
+                    && !shell.is_empty()
+                    && shell.len() <= 160
+                    && !shell.chars().any(char::is_control)
+                    && strength.is_finite()
+                    && (0.0..=1.0).contains(strength)
+                    && seconds.is_finite()
+                    && (0.05..=60.0).contains(seconds),
+                "Invalid body shell cue"
+            ),
             CueKind::BodyFlash {
                 owner,
                 color,

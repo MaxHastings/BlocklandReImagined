@@ -32,7 +32,7 @@ use std::{
 mod support;
 use support::{content_root::ContentRoot, wait};
 
-synthetic_and_content!(
+synthetic_and_release_content!(
     ContentRoot: single_player_pickup_leaves_a_ghost_until_the_item_respawns,
     lan_host_and_guest_both_see_each_others_pickup_ghosts,
 );

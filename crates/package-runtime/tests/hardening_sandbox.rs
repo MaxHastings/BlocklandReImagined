@@ -669,12 +669,14 @@ fn every_operation_needs_its_declared_capability() {
             amount: 5.0,
             by: Some(2),
             damage_type: None,
+            knock: None,
         }),
         Op::Damage(ops::Damage {
             target: ObjectRef::Vehicle(3),
             amount: 5.0,
             by: None,
             damage_type: Some("gunDirect".into()),
+            knock: None,
         }),
         Op::Beam(ops::Beam {
             from: [0.0; 3],
@@ -739,6 +741,15 @@ fn every_operation_needs_its_declared_capability() {
             player: 1,
             ammo: false,
         }),
+        Op::SetAimScale(ops::SetAimScale {
+            player: 1,
+            scale: 0.5,
+        }),
+        Op::KickView(ops::KickView {
+            player: 1,
+            pitch: 0.8,
+            yaw: 0.5,
+        }),
         Op::SetImageLoaded(ops::SetImageLoaded {
             player: 1,
             loaded: false,
@@ -782,6 +793,7 @@ fn every_operation_needs_its_declared_capability() {
             position: [0.0; 3],
             velocity: [0.0, 0.0, 90.0],
             by: None,
+            age: 0,
         }),
     ];
     for op in &ops {
@@ -847,18 +859,21 @@ fn extreme_operation_parameters_are_refused() {
             amount: f32::NAN,
             by: None,
             damage_type: None,
+            knock: None,
         }),
         Op::Damage(ops::Damage {
             target: ObjectRef::Entity(1),
             amount: -5.0,
             by: None,
             damage_type: None,
+            knock: None,
         }),
         Op::Damage(ops::Damage {
             target: ObjectRef::Player(1),
             amount: 5.0,
             by: None,
             damage_type: Some("bad\ntype".into()),
+            knock: None,
         }),
         Op::Beam(ops::Beam {
             from: [0.0; 3],
@@ -976,12 +991,14 @@ fn extreme_operation_parameters_are_refused() {
             position: [0.0; 3],
             velocity: [0.0, 0.0, 1e5],
             by: None,
+            age: 0,
         }),
         Op::Fire(ops::Fire {
             projectile: "not a projectile".into(),
             position: [0.0; 3],
             velocity: [0.0; 3],
             by: None,
+            age: 0,
         }),
         Op::Teleport(ops::Teleport {
             player: 1,
@@ -1307,12 +1324,14 @@ fn script_calls_build_their_operations_and_world_questions_need_a_world() {
                 amount: 5.0,
                 by: None,
                 damage_type: Some("gunDirect".into()),
+                knock: None,
             }),
             Op::Damage(ops::Damage {
                 target: ObjectRef::Player(2),
                 amount: 1.0,
                 by: Some(1),
                 damage_type: None,
+                knock: None,
             }),
         ]
     );

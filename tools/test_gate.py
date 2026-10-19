@@ -27,6 +27,28 @@ class ProcessExit(unittest.TestCase):
         self.assertEqual(gate.exit_failure("c/t", "test a ... ok\n", 0), "")
 
 
+class PruneStaleArtifacts(unittest.TestCase):
+    def test_only_the_newest_generation_of_each_test_binary_stays(self):
+        with tempfile.TemporaryDirectory() as folder:
+            deps = Path(folder)
+            files = {
+                "item_ghost-aaaa.exe": 1, "item_ghost-bbbb.exe": 2,
+                "item_ghost-aaaa.pdb": 1, "item_ghost-bbbb.pdb": 2,
+                "libbri_world-cccc.rlib": 1, "libbri_world-dddd.rlib": 2,
+                "mirror_render-eeee.exe": 5,
+            }
+            for name, mtime in files.items():
+                path = deps / name
+                path.write_bytes(b"x")
+                os.utime(path, (mtime, mtime))
+            removed = gate.prune_stale_artifacts(deps)
+            self.assertEqual(removed, 2)
+            self.assertEqual(
+                sorted(entry.name for entry in os.scandir(deps)),
+                ["item_ghost-bbbb.exe", "item_ghost-bbbb.pdb",
+                 "libbri_world-cccc.rlib", "libbri_world-dddd.rlib", "mirror_render-eeee.exe"])
+
+
 class TestPlanning(unittest.TestCase):
     binaries = [("a/x", "x.exe", ".", "Running x"), ("b/y", "y.exe", ".", "Running y"),
                 ("c/z", "z.exe", ".", "Running z")]

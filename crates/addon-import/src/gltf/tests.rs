@@ -1162,6 +1162,65 @@ fn metal_and_glow_come_from_the_material() {
     assert!(report.warnings.is_empty(), "{:?}", report.warnings);
 }
 
+/// A material's `bri_lightmap` and the second UV set (`TEXCOORD_1`) come
+/// through: the lightmap as a helper material the surface names, the UVs on
+/// the mesh, and the strength kept.
+#[test]
+fn a_baked_lightmap_and_its_second_uv_set_survive_import() {
+    let mut g = super::testing::Gltf::new();
+    let (p, n, uv, i) = super::testing::cuboid(Vec3::ZERO, Vec3::splat(2.0));
+    let flat = |v: &[Vec3]| v.iter().flat_map(|v| v.to_array()).collect::<Vec<f32>>();
+    let second: Vec<f32> = uv
+        .iter()
+        .flat_map(|u| [u[0] * 0.5 + 0.25, u[1] * 0.5])
+        .collect();
+    let (a, b, c, d, e) = (
+        g.floats(&flat(&p), 3),
+        g.floats(&flat(&n), 3),
+        g.floats(&uv.concat(), 2),
+        g.floats(&second, 2),
+        g.uints(&i, 1),
+    );
+    let mut png = Vec::new();
+    image::RgbaImage::from_pixel(2, 2, image::Rgba([200, 150, 100, 255]))
+        .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+        .unwrap();
+    let lightmap = g.texture(&png, "image/png");
+    let wall = g.material(
+        "Wall",
+        [0.5, 0.5, 0.5, 1.0],
+        None,
+        json!({ "extras": { "bri_lightmap": { "index": lightmap, "strength": 1.5 } } }),
+    );
+    let mesh = g.mesh(
+        "Wall",
+        vec![json!({
+            "attributes": { "POSITION": a, "NORMAL": b, "TEXCOORD_0": c, "TEXCOORD_1": d },
+            "indices": e, "material": wall,
+        })],
+    );
+    g.node(json!({ "name": "Wall", "mesh": mesh }), None);
+    let doc = Document::from_bytes(&g.glb(), None).unwrap();
+    let converted = convert(
+        &doc,
+        None,
+        &Options::new("wall.glb", "out", Kind::Prop),
+        "wall",
+        "",
+    )
+    .unwrap();
+    let shape = &converted.shape;
+    shape.validate().unwrap();
+    let mesh = shape.meshes.iter().flatten().next().unwrap();
+    assert_eq!(mesh.uv1.len(), mesh.positions.len());
+    assert!((mesh.uv1[1][0] - (uv[1][0] * 0.5 + 0.25)).abs() < 1e-6);
+    let surface = shape.materials[0].surface.as_ref().expect("a surface");
+    assert_eq!(surface.lightmap_strength, 1.5);
+    let helper = surface.lightmap.expect("the lightmap map");
+    assert_eq!(shape.materials[helper].name, "wall_lightmap");
+    assert!(converted.textures.contains_key("wall_lightmap"));
+}
+
 /// A `--terrain` folder becomes the native heightmap terrain: shaped as its
 /// picture is from above in Blender, sized and placed by the scene's
 /// properties, with its ground textures where their masks say, and lit.
@@ -1237,4 +1296,38 @@ fn a_map_brings_its_own_heightmap_terrain() {
     ] {
         assert_eq!(drawn.terrain.len(), 1);
     }
+}
+
+/// A foliage card is glTF MASK with a cutoff and often doubleSided; both reach
+/// the shape material, and an extension nothing maps is refused by name.
+#[test]
+fn a_cutout_keeps_its_cutoff_and_sidedness_and_unmapped_extensions_are_refused() {
+    let doc = super::read::Document::from_bytes(
+        serde_json::to_string(&json!({
+            "asset": { "version": "2.0" },
+            "materials": [
+                { "name": "Leaf", "alphaMode": "MASK", "alphaCutoff": 0.47, "doubleSided": true },
+                { "name": "Wall" },
+                { "name": "Gem", "extensions": { "KHR_materials_transmission": {} } },
+                { "name": "Odd", "alphaMode": "MULTIPLY" },
+            ]
+        }))
+        .unwrap()
+        .as_bytes(),
+        None,
+    )
+    .unwrap();
+    let mut report = Report::default();
+    let mut taken = BTreeSet::new();
+    let mut get = |i| super::make_material(&doc, None, Some(i), "", &mut taken, &mut report);
+    let leaf = get(0).unwrap().0;
+    assert_eq!(leaf.alpha_cutoff, Some(0.47));
+    assert!(leaf.double_sided);
+    let wall = get(1).unwrap().0;
+    assert_eq!(wall.alpha_cutoff, None);
+    assert!(!wall.double_sided);
+    let gem = get(2).err().unwrap().to_string();
+    assert!(gem.contains("KHR_materials_transmission"), "{gem}");
+    let odd = get(3).err().unwrap().to_string();
+    assert!(odd.contains("MULTIPLY"), "{odd}");
 }

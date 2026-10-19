@@ -376,7 +376,7 @@ fn left_images_and_hitscans_are_checked() {
         "\"mount_point\": 1, \"left_image\": \"kit:image/pistol\",",
     );
     assert!(Pack::from_json(nested.as_bytes()).is_err());
-    let far = PISTOLS.replace("\"range\": 200, \"tracer\"", "\"range\": 5000, \"tracer\"");
+    let far = PISTOLS.replace("\"range\": 200, \"tracer\"", "\"range\": 9000, \"tracer\"");
     assert!(Pack::from_json(far.as_bytes()).is_err());
     let rest = PISTOLS.replace("\"after_ticks\": 60", "\"after_ticks\": 0");
     assert!(Pack::from_json(rest.as_bytes()).is_err());
@@ -395,6 +395,21 @@ const THROWN: &str = r#"{
         "kit:projectile/conc": { "speed": 20, "ballistic": true, "gravity": 1, "elasticity": 0.6,
                                  "friction": 0, "arm_ticks": 600, "lifetime_ticks": 600,
                                  "max_bounces": 3, "explosion": { "effect": "concExplosion" } },
+        "kit:projectile/frag": { "speed": 20, "ballistic": true, "gravity": 1, "elasticity": 0.5,
+                                 "friction": 0.3, "arm_ticks": 600, "lifetime_ticks": 600,
+                                 "fuse": { "start": "bounce", "ticks": 60, "not_before_ticks": 0,
+                                           "effect": "fuseLit" },
+                                 "explosion": { "effect": "fragBang" } },
+        "kit:projectile/late": { "speed": 20, "ballistic": true, "gravity": 1, "elasticity": 0.5,
+                                 "arm_ticks": 600, "lifetime_ticks": 600,
+                                 "fuse": { "start": "bounce", "ticks": 10, "not_before_ticks": 300 },
+                                 "explosion": { "effect": "fragBang" } },
+        "kit:projectile/plasma": { "speed": 20, "ballistic": true, "gravity": 1, "elasticity": 0.0,
+                                   "rest_speed": 3, "arm_ticks": 600, "lifetime_ticks": 600,
+                                   "fuse": { "start": "rest", "ticks": 100 },
+                                   "explosion": { "effect": "fragBang" } },
+        "kit:projectile/scorch": { "speed": 0, "lifetime_ticks": 30, "fade_ticks": 30, "explode_death": true,
+                                   "decal": { "size": 1.0 }, "explosion": { "effect": "bang", "radius": 3 } },
         "kit:projectile/flak": { "speed": 60, "lifetime_ticks": 120,
                                  "children": { "projectile": "kit:projectile/spark", "count": 4,
                                                "speed": 20, "every_ticks": 24 } },
@@ -458,6 +473,114 @@ fn a_grenade_pops_on_its_third_bounce() {
             |e| matches!(e, Event::Effect { definition, .. } if definition == "concExplosion")
         )
     );
+}
+
+/// Ticks from the first bounce to the projectile going, and the tick it
+/// was removed at, flying `projectile` down onto the floor.
+fn fuse_run(projectile: &str) -> (Option<usize>, Option<usize>, Vec<Event>) {
+    let mut w = world(THROWN);
+    let mut q = Range {
+        player: Vec3::new(500.0, 0.0, 0.0),
+        ..Range::default()
+    };
+    w.spawn(
+        projectile,
+        A,
+        Vec3::new(0.0, 0.0, 0.0),
+        Vec3::new(4.0, -6.0, 0.0),
+        1.0,
+    )
+    .unwrap();
+    let (mut bounced, mut gone, mut events) = (None, None, Vec::new());
+    for tick_number in 0..900 {
+        let tick = w.step(&mut q);
+        if bounced.is_none() && tick.iter().any(|e| matches!(e, Event::Bounced { .. })) {
+            bounced = Some(tick_number);
+        }
+        let done = removed(&tick) > 0;
+        events.extend(tick);
+        if done {
+            gone = Some(tick_number);
+            break;
+        }
+    }
+    (bounced, gone, events)
+}
+
+#[test]
+fn a_fuse_burns_from_the_first_bounce_and_says_so() {
+    let (bounced, gone, events) = fuse_run("kit:projectile/frag");
+    let (bounced, gone) = (bounced.expect("it bounces"), gone.expect("it goes off"));
+    assert_eq!(gone - bounced, 60, "a 60 tick fuse from the first bounce");
+    assert!(
+        events
+            .iter()
+            .any(|e| matches!(e, Event::Effect { definition, .. } if definition == "fuseLit"))
+    );
+    assert!(
+        events
+            .iter()
+            .any(|e| matches!(e, Event::Effect { definition, .. } if definition == "fragBang"))
+    );
+}
+
+#[test]
+fn a_fuse_never_goes_off_before_its_not_before_age() {
+    let (bounced, gone, _) = fuse_run("kit:projectile/late");
+    let (bounced, gone) = (bounced.expect("it bounces"), gone.expect("it goes off"));
+    assert!(bounced < 100, "it bounces early");
+    assert!(gone >= 299, "a 10 tick fuse waits for age 300: {gone}");
+}
+
+#[test]
+fn a_fuse_that_waits_for_rest_starts_when_the_bounce_leaves_it_still() {
+    let (bounced, gone, _) = fuse_run("kit:projectile/plasma");
+    let (bounced, gone) = (bounced.expect("it lands"), gone.expect("it goes off"));
+    assert_eq!(gone - bounced, 100, "100 ticks after it came to rest");
+}
+
+/// A burst in the air marks the surface below it, within its reach, with its decal (a grenade's scorch).
+#[test]
+fn a_projectile_that_bursts_in_the_air_marks_the_surface_below() {
+    for (height, marked) in [(1.0, true), (6.0, false)] {
+        let mut w = world(THROWN);
+        let mut q = Range {
+            player: Vec3::new(500.0, 0.0, 0.0),
+            ..Range::default()
+        };
+        w.spawn(
+            "kit:projectile/scorch",
+            A,
+            Vec3::new(0.0, height, 0.0),
+            Vec3::ZERO,
+            1.0,
+        )
+        .unwrap();
+        let mut events = Vec::new();
+        for _ in 0..60 {
+            events.extend(w.step(&mut q));
+        }
+        let marks: Vec<_> = events
+            .iter()
+            .filter_map(|e| match e {
+                Event::Mark {
+                    normal, position, ..
+                } => Some((*normal, *position)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            marks.len(),
+            usize::from(marked),
+            "height {height}: {marks:?}"
+        );
+        if let Some((normal, position)) = marks.first() {
+            assert!(
+                normal.dot(Vec3::Y) > 0.99 && (position.y + 1.0).abs() < 0.01,
+                "{marks:?}"
+            );
+        }
+    }
 }
 
 #[test]
@@ -947,4 +1070,38 @@ fn crouching_steadies_and_jumping_throws_the_spread() {
     assert_eq!(shot.spread_in(0.0, Some(1), true, false), 0.1, "in the air");
     // Without them, as before.
     assert_eq!(Shot::SINGLE.spread_in(0.0, None, true, false), 0.0);
+}
+
+#[test]
+fn an_aim_scale_shrinks_or_removes_the_spread_of_the_next_shot() {
+    let shoot = |scale: f32| {
+        let (mut w, mut q) = holding("kit:weapon/pistol");
+        q.player = Vec3::new(500.0, 0.0, 0.0);
+        w.set_frame(
+            A,
+            Frame {
+                velocity: Vec3::new(5.0, 0.0, 0.0),
+                ..Frame::default()
+            },
+        )
+        .unwrap();
+        w.set_aim_scale(A, scale).unwrap();
+        tracers(&click(&mut w, &mut q))[0]
+            .1
+            .distance(Vec3::new(0.0, 0.0, -200.0))
+    };
+    let full = shoot(1.0);
+    assert!(full > 1.0, "a moving shot strays: {full}");
+    let half = shoot(0.5);
+    assert!(
+        half < full && half > 0.0,
+        "half the cone: {half} against {full}"
+    );
+    let zero = shoot(0.0);
+    assert!(
+        zero < half,
+        "a scale of 0 keeps none of the cone: {zero} against {half}"
+    );
+    let (mut w, _) = holding("kit:weapon/pistol");
+    assert!(w.set_aim_scale(A, -1.0).is_err() && w.set_aim_scale(A, f32::NAN).is_err());
 }

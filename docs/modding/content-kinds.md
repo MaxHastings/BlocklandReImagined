@@ -52,6 +52,73 @@ is taken, as the New Duplicator's own keys were; a key the player binds it to
 instead is kept. Binds show only while the host
 runs their package.
 
+**Actions and control profiles.** A bind is an *action*: a named command
+with a suggested default input. Add-Ons never read keys; players rebind the
+action in Options → Controls. `key` (and `mac_key`) is the default key, and
+`"mouse"` a default mouse input instead (`button0` to `button4`, or `zaxis`
+for the wheel; each wheel notch is one press). Mouse movement is not an
+action input.
+
+Actions belong to a *control profile*. Blockland's own is the default
+profile, and a bind that names none goes in it, as above. An Add-On declares
+more in the same file and puts its binds in one with `"profile"`:
+
+```json
+{
+  "schema_version": 1,
+  "division": "Arena Assault",
+  "profile": "aa",
+  "profiles": [{
+    "id": "aa", "name": "Arena Assault",
+    "player_types": ["aa-rules:archetype/soldier"],
+    "mouse_sensitivity": 0.75,
+    "layers": [{ "id": "aircraft", "when": "mouse_driver", "invert_mouse": true }]
+  }],
+  "binds": [
+    { "name": "Sprint", "package": "aa-rules", "command": "sprint",
+      "key": "lshift", "hold": true },
+    { "name": "Fire Mode", "package": "aa-rules", "command": "firemode", "key": "v" }
+  ]
+}
+```
+
+- **Player types reference a profile.** `player_types` lists archetype ids
+  (`your-id:archetype/soldier`).
+  The active profile switches by itself with the local player's body, back
+  to Blockland's for any other.
+- **Layers.** A layer stacks on the profile while a rider matches `when`
+  (`vehicle`, `driver`, `mouse_driver`, `passenger`) and is removed when they
+  leave. Its `invert_mouse` (in vehicles) and `mouse_sensitivity` replace
+  the profile's for as long as it is on.
+- **Inheritance.** Inputs a profile does not bind fall through to
+  Blockland's (movement, chat, menus), so a profile lists only its own
+  actions; its binds win over the same input there. `"inherit": false`
+  makes a profile replace every input.
+- **Moving a stock action.** `{ "name": "Crouch", "package": "aa-rules",
+  "stock": "crouch", "key": "lcontrol" }` binds Blockland's own Crouch in the
+  profile (also `moveforward`, `movebackward`, `moveleft`, `moveright`,
+  `jump`, `jet`, `walk`, `mousefire`), so a profile that takes Shift for
+  Sprint can give Crouch another key. It needs a `profile` and no `command`.
+- **Controls menu.** A "Controls for" dropdown lists Blockland and every
+  declared game and tags the one in use; opening Options mid-game lands on
+  it. A game's list is its own actions, then the Blockland actions that
+  still apply (grey group headings "Blockland: ..."; changing one binds it in
+  this game only, and an input a game binds shows "Taken" on the Blockland
+  action it replaces). Blockland actions a game has no use for are hidden:
+  Building, Tools / Inventory and Drop Camera/Player follow a `building` HUD
+  claim that applies to the profile's `player_types`; Jet follows the body's
+  `can_jet`. An action with no key, or whose key another action took,
+  draws red in the list. Clear All, Remap All and Defaults name the game and touch only it
+  (Defaults restores each action's declared key and drops overrides). A
+  layer's optional `name` ("In aircraft") labels it in the mouse panel's
+  "Mouse while" dropdown. Rebinds, mouse sensitivity and invert are saved per
+  profile (and per layer), and a conflict is flagged only within the profile
+  being edited. Mouse sensitivity and invert declared in `profiles` are
+  defaults; the player's own choice wins. Choices for a profile whose Add-On
+  is not running are kept.
+- Profile ids and layer ids are lower-case letters, digits, `_` and `-`;
+  `blockland` is reserved. Existing binds and saved settings are unchanged.
+
 **A mode's own mini-game.** A `mode` may carry a `minigame` block, and the
 host then runs that one mini-game for the whole server, as v20's game-mode
 servers did: everyone joins it on arrival, and nobody can make, join or
@@ -165,12 +232,26 @@ from another game) still seats that body as it was tuned. Tests:
 `the_blockheads_aiming_hand_is_the_frame_fitted_hands_take` in
 `crates/client/src/avatar.rs` and `crates/client/tests/gltf_body.rs`.
 
+**Animation libraries.** UE2 links animation sets to a mesh and `PlayAnim` finds a sequence by name without regard to case. An
+archetype's `animation_libraries` (up to 8) lists asset ids (`package:asset/clips.shape.json`, an `asset` the library package lists in its
+`assets/content.json`) of shapes whose clips join the body's, keyed by their original sequence names (a trailing space is part of a
+name). The body's own clip wins over a library's of the same name; a library that is not enabled, or a clip on a bone the body lacks,
+fails the body, named in the Add-On's health report. AA's `aa25-soldier-clips` carries all 409 Soldier_3P sequences this way
+(`aa25/tools/build_soldier_clip_bank.py`). Test: `crates/client/src/avatar.rs`, `an_archetype_links_an_animation_library_by_original_names`.
+
 **Movement controller intents.** An archetype's `intent_clips` maps the
 animation intents a movement `controller` reports to the model's clips, and
 `intent_sounds` to a sound played where the body is each time the
 controller changes to that intent: `{"11": "triple_jump"}`. An intent
 clip replaces run, jump and fall while the controller reports it; dying,
 sitting and swimming still win, and a rider's intent is ignored.
+
+**Blending.** Moving from one locomotion clip to another blends over a quarter second (v20's
+`sAnimationTransitionTime`; the jump's is shorter). A thread a rule starts or ends on its own
+(`play_thread` for a posture change or a hand action) cuts in as v20's do, unless the archetype
+gives `action_blend`, in seconds (0 to 2): the whole pose then blends from what it was before the
+thread started or ended over that time, so a posture clip does not snap to the next pose. AA's
+`BlendChangeTime` is 0.25.
 
 **Clip speed.** As in v20, the clip for `run`, `back`, `side` and the
 crouched ones plays at the speed the body moves along the way it walks
@@ -183,9 +264,10 @@ unless the archetype gives `ground_speeds`, in units per second at 1x:
 travel divided by the cycle's length.
 
 `look.animations` maps roles to the body's own clips: `idle`, `run`,
-`back`, `side`, `crouch`, `crouch_run`, `crouch_back`, `crouch_side`,
+`back`, `side`, `side_right`, `crouch`, `crouch_run`, `crouch_back`, `crouch_side`,
+`crouch_side_right`, `prone`, `prone_run`, `prone_back`, `prone_side`, `prone_side_right`,
 `jump`, `fall`, `sit`, `aim_right`, `aim_left`, `aim_both`,
-`look`, `head_up`, `head_side`, `seat_aim`, `swim` and `death`. `seat_aim`
+`look`, `look_crouch`, `look_prone`, `head_up`, `head_side`, `seat_aim`, `swim` and `death`. `seat_aim`
 is a seated gunner's pose from aiming the gun at its highest (the clip's
 start) to its lowest (its end): it holds at the gun's pitch across the
 vehicle's `look_pitch` range in place of `look`, so the whole seated body,
@@ -198,7 +280,12 @@ picks among several death clips by where the killing hit came from:
 "right": [...], "any": ["die_spin", "die_slump"] }`. Each list holds up to 8
 of the body's own clips; the host rolls one of the side's (or of `any`
 when the side has none or the death had no direction, a fall), so every
-player sees the same one. Without `deaths` the body plays its `death`
+player sees the same one. A body that dies crouched or lying prone plays
+one of `crouched` or `prone` instead, whatever the side: a body with `deaths`
+must list `crouched`, and one with `movement.prone` must list `prone` (the
+Add-On does not load without them, so a posture never falls in a standing
+clip). A listed clip the model lacks is named in the Add-On faults log.
+Without `deaths` the body plays its `death`
 role. The client names what a
 body lacks once, in the Add-On faults log ("no `sit` animation; it plays
 its `idle` instead"). The Playground's
@@ -239,6 +326,9 @@ and `crates/client/tests/body_attachments_render.rs`.
   `"sway": { "lag": 0.5, "walk": { "height": 0.03, "side": 0.025, "stride": 3 } }`
   with no camera `bob`. Client code drawing its own first-person model
   reads the same sway from `view`.
+- `sway.look` (`side`, `up`, `rate`) shifts the held weapon on screen against a turn of the look: `side` units
+  left at a turn right of `rate` radians a second (and the reverse), `up` units down at a pitch up at that rate,
+  in proportion below it, settling at `settle`.
 - `third_person` puts the on-foot chase camera's pivot over a shoulder
   (`side`, negative for the left) and higher (`height`); its distance is
   still `camera_distance`.
@@ -289,6 +379,13 @@ under the feet (a map material's `bri_surface`, see Making maps; bricks are
 `brick`, terrain `terrain`, the rest `default`), in place of `footsteps` on
 that kind: `"surfaces": {"metal": ["your-id:clang_1"]}` (up to 16 kinds,
 1 to 8 sounds each). Test: `crates/client/src/footsteps.rs`.
+
+`clips` ties a sound to a moment of one of the body's clips, by the clip's
+name: `"clips": {"h_kill_back_gut": {"sound": "your-id:body_fall",
+"seconds": 0.57}}` plays the sound where the body is once the clip has run
+`seconds` (0 to 60; up to 32 clips), when the body dies and starts it (the archetype's
+`deaths`, or the `death` role); other clips do not play one yet. A body-fall
+is one. Test: `crates/client/src/clip_sounds.rs`.
 
 An archetype with `"adjusts": "v20.player.<datablock>"` (and no `base` or
 `name`) is no new body: it changes the constants it names on one of v20's

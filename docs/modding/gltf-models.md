@@ -110,15 +110,20 @@ action. Name them by role (the names are not case-sensitive):
 | `idle` | standing still | a loop (first frame = last frame) |
 | `run` | moving forward | a loop, running in place (no forward drift of the root) |
 | `back`, `side` | moving backward, strafing sideways | loops; if missing, `back` plays `run` reversed, `side` plays `run` |
+| `side_right` | strafing right | a loop. If missing, the body plays its `side` clip reversed |
 | `jump` | on takeoff | once |
 | `fall` | in the air | a loop; if missing it plays `jump` |
 | `crouch` | crouching down | once; its last frame is the crouched pose |
 | `crouch_run`, `crouch_back`, `crouch_side` | moving while crouched | loops |
+| `crouch_side_right` | strafing right while crouched | a loop. If missing, `crouch_side` plays reversed |
+| `prone`, `prone_run`, `prone_back`, `prone_side`, `prone_side_right` | lying prone (`movement.prone`, `set_prone`) and crawling | loops that pose the lying body themselves. With a `prone` clip the body is not laid face down by its posture frame; without one it is, as before |
 | `aim_right`, `aim_left`, `aim_both` | holding an item in that hand, or both | a held pose: the body holds the last frame. Key only the arm bones |
 | `sit` | seated in a vehicle or on a rideable | a held pose; one frame is enough. If missing it sits in `idle` |
 | `death` | on death | once; it holds the last frame |
 | `swim` | in water | a loop |
 | `look` | looking up and down | first frame looking straight up, middle frame level, last frame straight down. Key only head, neck, spine and arms |
+| `look_crouch` | looking up and down while crouched | the same frames as `look`. If missing a crouched body uses `look` |
+| `look_prone` | looking up and down while prone | the same frames as `look`. If missing a prone body uses `look_crouch` |
 | `head_side` | free look | first frame head turned fully left, middle forward, last fully right |
 | `head_up` | head tilted up under a pack | first frame neutral, last tilted |
 
@@ -158,16 +163,19 @@ The box, not the mesh, is what bullets, explosions, other players and
 vehicles hit.
 
 **Prone and lean (optional).** `movement.prone` lets the body lie down
-(`set_prone` in rules): `{ "height": 0.5, "eye": 0.35, "forward": 1,
+(`set_prone` in rules): `{ "height": 0.5, "eye": 0.35, "seconds": 0.7, "forward": 1,
 "backward": 0.5, "sideways": 0.5 }`, its box height (at most the crouch's),
-eye height and crawling speeds. The body is drawn face down along its
+eye height, the seconds the first-person eye takes to go down or come up
+(0: as fast as a crouch) and crawling speeds. A lying body does not jump, and
+neither does a body whose rules set its speed scale to 0. The body is drawn face down along its
 facing, its middle over the box, so its head and feet reach past the box:
 a lying body is hit only around its middle. `movement.lean` lets it lean
 (`set_lean`): `{ "distance": 0.5, "angle": 0.3, "seconds": 0.25 }`, how
 far the eye slides sideways (at most half the box's width, so a lean
 never sees past the body it can be shot at), how far the view and the
-body tilt (radians, up to 0.6) and how long a full lean takes. v20's
-bodies have neither.
+body tilt (radians, up to 0.6) and how long a full lean takes. An optional
+`body_angle` tilts the drawn body by that much instead (0 leaves it upright
+while the view still rolls). v20's bodies have neither.
 
 **Distant detail (optional, off by default).** Classic-era models are light
 enough to skip this. For a heavy model, `--lod TRIANGLES` adds a lighter

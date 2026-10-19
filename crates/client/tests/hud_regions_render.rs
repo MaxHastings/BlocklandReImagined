@@ -26,7 +26,7 @@ use std::{
 mod support;
 use support::{content_root::ContentRoot, wait};
 
-synthetic_and_content!(ContentRoot: the_hud_and_camera_follow_the_body);
+synthetic_and_release_content!(ContentRoot: the_hud_and_camera_follow_the_body);
 
 const SIZE: (u32, u32) = (640, 480);
 const TROOPER: &str = "sample-trooper:archetype/trooper";

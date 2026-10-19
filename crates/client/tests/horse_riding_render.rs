@@ -21,7 +21,7 @@ use std::{
 mod support;
 use support::{content_root::ContentRoot, wait};
 
-synthetic_and_content!(ContentRoot: riding_a_horse_holds_the_rider_still_on_its_animated_back);
+synthetic_and_release_content!(ContentRoot: riding_a_horse_holds_the_rider_still_on_its_animated_back);
 
 const SIZE: (u32, u32) = (640, 480);
 

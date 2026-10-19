@@ -466,6 +466,8 @@ pub struct VehicleView {
     pub wheel_contact: Vec<bool>,
     pub turret_aim: [f32; 2],
     pub jetting: bool,
+    #[serde(default)]
+    pub driver_jump_held: bool,
     /// None for the identity frame (no passage crossed). Last and left out
     /// when none.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -485,6 +487,7 @@ impl VehicleView {
             wheel_contact: pose.wheel_contact.clone(),
             turret_aim: pose.turret_aim,
             jetting: pose.jetting,
+            driver_jump_held: pose.driver_jump_held,
             passage_frame: (pose.passage_frame != Default::default()).then_some(pose.passage_frame),
         }
     }
@@ -509,6 +512,7 @@ impl VehicleView {
             wheel_tire: Vec::new(),
             turret_aim: self.turret_aim,
             jetting: self.jetting,
+            driver_jump_held: self.driver_jump_held,
             angular_velocity: [0.0; 3],
             mouse_steering: [0.0; 2],
             driver_input: 0,
@@ -574,11 +578,24 @@ pub struct RemotePose {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub controller: Option<RemoteController>,
 }
-/// The part of [`bri_sim::archetype::ControllerState`] others draw.
+/// The part of [`bri_sim::archetype::ControllerState`] others draw, and the part
+/// of [`bri_sim::player::Posture`] they draw too: whether the body lies prone
+/// and how far it leans in hundredths (-100 fully left to 100 fully right).
+/// The one trailing pose field, so a pose of an upright body with a blank
+/// controller still costs no byte (two skipped trailing fields would shift).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RemoteController {
     pub intent: u8,
     pub heading: Option<i16>,
+    /// Last and left out when upright, so a controller costs what it did.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub posture: Option<RemotePosture>,
+}
+/// Lying prone, and how far leaning in hundredths (-100 fully left, 100 fully right).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RemotePosture {
+    pub prone: bool,
+    pub lean: i8,
 }
 const CENTIMETRES: f32 = 100.0;
 const LOOK_UNITS: f32 = 10_000.0;
@@ -611,13 +628,20 @@ impl RemotePose {
                 | (p.pass_group.min(bri_sim::player::MAX_PASS_GROUP) << Self::PASS_GROUP_SHIFT),
             archetype: p.archetype,
             scale: (p.scale != 1.0).then_some(p.scale),
-            controller: p
-                .controller
-                .filter(|c| c.intent != 0 || c.heading.is_some())
-                .map(|c| RemoteController {
-                    intent: c.intent,
-                    heading: c.heading,
-                }),
+            controller: {
+                let controller = p
+                    .controller
+                    .filter(|c| c.intent != 0 || c.heading.is_some());
+                let posed = p.posture.prone || p.posture.lean != 0.0;
+                (controller.is_some() || posed).then(|| RemoteController {
+                    intent: controller.map_or(0, |c| c.intent),
+                    heading: controller.and_then(|c| c.heading),
+                    posture: posed.then(|| RemotePosture {
+                        prone: p.posture.prone,
+                        lean: (p.posture.lean * 100.0).round().clamped(-100.0, 100.0) as i8,
+                    }),
+                })
+            },
         }
     }
     /// As a pose, with owner-only state at its defaults and flight history
@@ -652,13 +676,25 @@ impl RemotePose {
                 tether: None,
                 controller: self
                     .controller
+                    .filter(|c| c.intent != 0 || c.heading.is_some())
                     .map(|c| bri_sim::archetype::ControllerState {
                         intent: c.intent,
                         heading: c.heading,
                         ..Default::default()
                     }),
                 pass_group: self.flags >> Self::PASS_GROUP_SHIFT,
-                posture: Default::default(),
+                posture: self.controller.and_then(|c| c.posture).map_or_else(
+                    Default::default,
+                    |p| {
+                        let lean = f32::from(p.lean) / 100.0;
+                        bri_sim::player::Posture {
+                            prone: p.prone,
+                            lean,
+                            lean_to: lean,
+                            climbing: false,
+                        }
+                    },
+                ),
             },
         }
     }
@@ -739,6 +775,10 @@ pub struct Checkpoint {
     /// Add-On map light rules, oldest first.
     #[serde(default)]
     pub map_lights: Vec<bri_sim::session::MapLightRule>,
+    /// Where each of the map's movers (doors) is in its motion, in map
+    /// order.
+    #[serde(default)]
+    pub map_movers: Vec<bri_content::mover::MoverState>,
     /// The live environment over the map's own.
     #[serde(default)]
     pub environment: bri_content::atmosphere::Settings,
@@ -810,6 +850,7 @@ impl Checkpoint {
             broken_shapes: session.broken_shapes(),
             targets: session.tutorial_targets(),
             map_lights: session.map_light_rules(),
+            map_movers: session.map_mover_states(),
             environment: session.environment(),
             weapon_settings: session.weapon_settings().clone(),
             archetypes: session.archetypes().clone(),
@@ -1192,6 +1233,9 @@ pub struct Delta {
     /// Add-On map light rules, whole, whenever one changed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub map_lights: Option<Vec<bri_sim::session::MapLightRule>>,
+    /// The map movers' states, whole, whenever one changed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub map_movers: Option<Vec<bri_content::mover::MoverState>>,
     /// The live environment, whole, whenever it changed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub environment: Option<bri_content::atmosphere::Settings>,
@@ -1238,6 +1282,7 @@ impl Delta {
             broken_shapes,
             targets,
             map_lights,
+            map_movers,
             environment,
             archetypes,
             weapon_settings,
@@ -1260,6 +1305,7 @@ impl Delta {
             && broken_shapes.is_none()
             && targets.is_none()
             && map_lights.is_none()
+            && map_movers.is_none()
             && environment.is_none()
             && archetypes.is_none()
             && weapon_settings.is_none()
@@ -1516,4 +1562,36 @@ pub enum Message {
     /// can fetch what it lacks from the server and join again
     /// ([`crate::client::Client::connect_fetching`]).
     PackagesDiffer(Vec<bri_package::environment::Mismatch>),
+}
+
+#[cfg(test)]
+mod driver_jump_held_tests {
+    use super::*;
+
+    #[test]
+    fn the_jump_bit_travels_in_the_vehicle_view() {
+        let mut pose = VehicleView::of(&sample_pose()).into_pose();
+        assert!(!pose.driver_jump_held);
+        pose.driver_jump_held = true;
+        assert!(VehicleView::of(&pose).into_pose().driver_jump_held);
+    }
+
+    fn sample_pose() -> bri_sim::session::VehiclePose {
+        VehicleView {
+            id: 1,
+            tick: 1,
+            position: [0; 3],
+            rotation: [0, 0, 0, 10000],
+            velocity: [0; 3],
+            steering: 0.0,
+            wheel_suspension: vec![],
+            wheel_rotation: vec![],
+            wheel_contact: vec![],
+            turret_aim: [0.0; 2],
+            jetting: false,
+            driver_jump_held: false,
+            passage_frame: None,
+        }
+        .into_pose()
+    }
 }

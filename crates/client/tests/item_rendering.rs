@@ -16,7 +16,7 @@ fn assets(f: &ItemFixture) -> Result<ItemAssets> {
     ItemAssets::load(&f.presentation, &f.weapons)
 }
 
-synthetic_and_content!(
+synthetic_and_release_content!(
     ItemFixture: models_tints_mounts_icons_and_persistent_pose,
     corrupt_or_oversized_native_resources_reject,
     all_items_projectiles_and_pose_offscreen,
@@ -379,6 +379,7 @@ fn additive_unlit_and_ordinary_alpha_pixels() -> Result<()> {
         &[PointLight {
             position_radius: [0., 0., 1., 5.],
             color: [4., 4., 4., 0.],
+            ..Default::default()
         }],
     )?;
     assert_eq!(

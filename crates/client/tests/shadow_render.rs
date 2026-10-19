@@ -32,7 +32,7 @@ use std::{
 mod support;
 use support::content_root::ContentRoot;
 
-synthetic_and_content!(ContentRoot: a_player_on_a_roof_shades_the_roof_not_the_floor_below);
+synthetic_and_release_content!(ContentRoot: a_player_on_a_roof_shades_the_roof_not_the_floor_below);
 
 const SIZE: (u32, u32) = (640, 480);
 /// Pillar layers of 2x2 bricks (0.6 units each) under the player.

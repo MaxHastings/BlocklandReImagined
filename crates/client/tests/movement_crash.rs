@@ -11,7 +11,7 @@ use bri_sim::player::PlayerState;
 use bri_ui::gpu::Headless;
 use support::{avatar_fixture::AvatarFixture, gpu};
 
-synthetic_and_content!(
+synthetic_and_release_content!(
     AvatarFixture: avatar_survives_held_crouch_jump_and_locomotion_transitions
 );
 

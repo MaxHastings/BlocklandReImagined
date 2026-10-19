@@ -21,7 +21,7 @@ use std::time::Duration;
 mod support;
 use support::{content_root::ContentRoot, wait};
 
-synthetic_and_content!(ContentRoot: the_first_person_eye_sits_and_crouches_with_the_body);
+synthetic_and_release_content!(ContentRoot: the_first_person_eye_sits_and_crouches_with_the_body);
 
 const SLATE: &str = "v20/add-ons/map_slate/slate.mis";
 

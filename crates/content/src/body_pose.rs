@@ -17,6 +17,15 @@ pub struct ActionRef<'input> {
     pub started_at: f64,
 }
 
+/// An additive clip a seat holds at a place along its length, ahead of the
+/// seat's aim and look overlays: Halo's acceleration overlays, sampled
+/// continuously across their keys. `phase` runs 0..1 across the clip.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SeatOverlay<'input> {
+    pub clip: &'input str,
+    pub phase: f32,
+}
+
 /// Already selected/clocked inputs to the existing body layer composition.
 /// The base and crouch clips must belong to the supplied immutable rig.
 pub struct LayerPlanInput<'rig, 'input> {
@@ -30,9 +39,16 @@ pub struct LayerPlanInput<'rig, 'input> {
     pub time: f64,
     pub head_up: bool,
     pub seat_aim: Option<f32>,
+    /// A seat's authored overlays, applied before `seat_aim`/`look`. Clips a
+    /// body lacks, or that are not additive, are skipped and reported.
+    pub seat_overlays: &'input [SeatOverlay<'input>],
     /// Normalized phase from the caller's existing pitch/limit mapping.
     pub look_phase: f32,
     pub head_yaw: f32,
+    /// The body is crouched: its `look_crouch` clip, if it has one, replaces `look`.
+    pub crouched: bool,
+    /// The body is prone: its `look_prone` clip, if it has one, replaces `look_crouch`.
+    pub prone: bool,
 }
 
 /// Layers borrow only the rig; temporary input names do not escape the call.
@@ -114,6 +130,17 @@ pub fn plan_body_layers<'rig>(
     layers.extend(absolute_actions.iter().copied());
     order(&mut layers);
     let mut overlays = Vec::new();
+    for overlay in input.seat_overlays {
+        match named(&overlay.clip.to_ascii_lowercase()).filter(|clip| clip.additive) {
+            Some(clip) if overlay.phase.is_finite() => overlays.push(Layer {
+                animation: clip,
+                time: overlay.phase.clamped(0., 1.) * clip.duration,
+                weight: 1.,
+            }),
+            Some(_) => {}
+            None => skipped.push(overlay.clip.to_ascii_lowercase()),
+        }
+    }
     if input.head_up
         && let Some(clip) = role(Role::HeadUp)
     {
@@ -133,7 +160,13 @@ pub fn plan_body_layers<'rig>(
             time: aim.clamped(0., 1.) * clip.duration,
             weight: 1.,
         });
-    } else if let Some(look) = role(Role::Look) {
+    } else if let Some(look) = role(if input.prone {
+        Role::LookProne
+    } else if input.crouched {
+        Role::LookCrouch
+    } else {
+        Role::Look
+    }) {
         overlays.push(Layer {
             animation: look,
             time: input.look_phase * look.duration,
@@ -681,6 +714,7 @@ mod tests {
             duration,
             looping: false,
             additive,
+            parent_translations: false,
             priority,
             nodes: vec![crate::shape::NodeTrack {
                 node: "Mount0".into(),
@@ -729,8 +763,11 @@ mod tests {
             time: 0.1,
             head_up: false,
             seat_aim: None,
+            seat_overlays: &[],
             look_phase: 0.25,
             head_yaw: 0.,
+            crouched: false,
+            prone: false,
         }
     }
     fn names<'rig>(layers: &[Layer<'rig>]) -> Vec<&'rig str> {
@@ -815,6 +852,75 @@ mod tests {
         Ok(())
     }
     #[test]
+    fn a_crouched_body_uses_its_crouch_look_and_falls_back_to_look() -> Result<()> {
+        let mut rig = planning_rig();
+        let roles = RoleClips::resolve(&Default::default(), |n| rig.sequence(n).is_some());
+        let mut input = planning_input(rig.sequence("base"), &[]);
+        input.crouched = true;
+        let plain = plan_body_layers(&rig, &roles, input)?;
+        assert_eq!(
+            names(&plain.unacted),
+            ["base", "look"],
+            "no crouch look: look"
+        );
+        let crouch_look = planning_clip("lookcrouch", 16, true, 2.);
+        rig.sequences.insert(crouch_look.name.clone(), crouch_look);
+        let roles = RoleClips::resolve(&Default::default(), |n| rig.sequence(n).is_some());
+        let mut input = planning_input(rig.sequence("base"), &[]);
+        input.crouched = true;
+        let crouched = plan_body_layers(&rig, &roles, input)?;
+        assert_eq!(names(&crouched.unacted), ["base", "lookcrouch"]);
+        let standing = plan_body_layers(&rig, &roles, planning_input(rig.sequence("base"), &[]))?;
+        assert_eq!(
+            names(&standing.unacted),
+            ["base", "look"],
+            "standing keeps look"
+        );
+        assert!(
+            !roles.report().iter().any(|l| l.contains("look_crouch")),
+            "the optional crouch look is not reported missing"
+        );
+        Ok(())
+    }
+    #[test]
+    fn a_prone_body_uses_its_prone_look_then_its_crouch_look_then_look() -> Result<()> {
+        let mut rig = planning_rig();
+        let prone = |rig: &Rig| -> Result<Vec<String>> {
+            let roles = RoleClips::resolve(&Default::default(), |n| rig.sequence(n).is_some());
+            let mut input = planning_input(rig.sequence("base"), &[]);
+            input.crouched = true;
+            input.prone = true;
+            let plan = plan_body_layers(rig, &roles, input)?;
+            Ok(names(&plan.unacted).iter().map(|n| n.to_string()).collect())
+        };
+        assert_eq!(
+            prone(&rig)?,
+            ["base", "look"],
+            "no prone or crouch look: look"
+        );
+        let crouch_look = planning_clip("lookcrouch", 16, true, 2.);
+        rig.sequences.insert(crouch_look.name.clone(), crouch_look);
+        assert_eq!(
+            prone(&rig)?,
+            ["base", "lookcrouch"],
+            "no prone look: the crouch look"
+        );
+        let prone_look = planning_clip("lookprone", 16, true, 2.);
+        rig.sequences.insert(prone_look.name.clone(), prone_look);
+        assert_eq!(prone(&rig)?, ["base", "lookprone"]);
+        let roles = RoleClips::resolve(&Default::default(), |n| rig.sequence(n).is_some());
+        let mut input = planning_input(rig.sequence("base"), &[]);
+        input.crouched = true;
+        let crouched = plan_body_layers(&rig, &roles, input)?;
+        assert_eq!(
+            names(&crouched.unacted),
+            ["base", "lookcrouch"],
+            "crouching only is not prone"
+        );
+        assert!(!roles.report().iter().any(|l| l.contains("look_prone")));
+        Ok(())
+    }
+    #[test]
     fn plan_uses_actual_roles_ready_eligibility_and_selected_overlay_duration() -> Result<()> {
         let rig = planning_rig();
         let roles = RoleClips::resolve(&Default::default(), |n| rig.sequence(n).is_some());
@@ -848,6 +954,64 @@ mod tests {
         input.ready_role = Some(Role::AimBoth);
         input.omit_ready = true;
         assert!(!names(&plan_body_layers(&rig, &roles, input)?.layers).contains(&"armreadyright"));
+        Ok(())
+    }
+    #[test]
+    fn seat_overlays_sample_additive_clips_ahead_of_the_aim_and_report_the_rest() -> Result<()> {
+        let mut rig = planning_rig();
+        for (name, additive) in [("accel_a", true), ("accel_b", true), ("rigid", false)] {
+            let clip = planning_clip(name, 3, additive, 4.);
+            rig.sequences.insert(clip.name.clone(), clip);
+        }
+        let overlays = [
+            SeatOverlay {
+                clip: "ACCEL_A",
+                phase: 0.25,
+            },
+            SeatOverlay {
+                clip: "accel_b",
+                phase: 7.,
+            },
+            SeatOverlay {
+                clip: "rigid",
+                phase: 0.5,
+            },
+            SeatOverlay {
+                clip: "absent",
+                phase: 0.5,
+            },
+            SeatOverlay {
+                clip: "accel_a",
+                phase: f32::NAN,
+            },
+        ];
+        rig.sequences.get_mut("seataim").unwrap().additive = true;
+        let roles = RoleClips::resolve(&Default::default(), |n| rig.sequence(n).is_some());
+        let mut input = planning_input(rig.sequence("base"), &[]);
+        input.seat_aim = Some(0.5);
+        input.seat_overlays = &overlays;
+        let plan = plan_body_layers(&rig, &roles, input)?;
+        let layer = |name: &str| plan.layers.iter().position(|l| l.animation.name == name);
+        let at = |name: &str| plan.layers[layer(name).unwrap()].time;
+        // Phase runs 0..1 across the clip's own length, clamped.
+        assert_eq!(at("accel_a"), 1.);
+        assert_eq!(at("accel_b"), 4.);
+        // They sit before the aim overlay, as Halo applies them.
+        assert!(layer("accel_a") < layer("seataim") && layer("accel_b") < layer("seataim"));
+        // A rigid clip is no overlay and a missing one is none: both are
+        // reported by name.
+        assert!(layer("rigid").is_none());
+        assert_eq!(
+            plan.skipped,
+            vec!["rigid".to_string(), "absent".to_string()]
+        );
+        // Still a sampleable stack.
+        crate::animation::sample_layers_with_transition(
+            &rig.shape,
+            &plan.layers,
+            plan.transition_at,
+            None,
+        )?;
         Ok(())
     }
     #[test]

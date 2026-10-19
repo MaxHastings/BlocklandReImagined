@@ -125,6 +125,7 @@ pub fn cuboid(centre: Vec3, half: Vec3, paint: Paint) -> Mesh {
         skin: None,
         billboard: false,
         billboard_y: false,
+        uv1: Vec::new(),
     }
 }
 
@@ -145,9 +146,11 @@ pub fn material(name: &str, blend: &str) -> Material {
         reflectance: 0.0,
         paint_overlay: None,
         alpha_cutoff: None,
+        double_sided: false,
         uv_motion: None,
         metal: None,
         surface: None,
+        tint: None,
     }
 }
 

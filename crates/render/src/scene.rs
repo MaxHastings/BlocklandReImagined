@@ -298,6 +298,17 @@ pub enum MaterialKind {
     /// strength; `parameters[1]`: glow (linear RGB); `parameters[2]`:
     /// detail repeats, detail strength.
     Physical,
+    /// A glow whose colour runs from `parameters[0].rgb` where the surface faces
+    /// the eye to `parameters[1].rgb` where it turns edge on (brightness
+    /// already multiplied in), patterned by the product of two scrolling noise
+    /// maps (image slots 0 and 1: repeats, scroll u, scroll v and seconds a
+    /// scroll takes in `parameters[2]` and `parameters[3]`), at the vertex
+    /// colour's alpha strength: Halo's plasma shader, a shield taking a hit. An
+    /// image taller than wide is a volume of square slices stacked down it,
+    /// moving through its depth at `parameters[0].w` (the first) and
+    /// `parameters[1].w` (the second) volumes per scroll. Unlit; use with
+    /// `AlphaMode::Additive`.
+    Plasma,
 }
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum AlphaMode {
@@ -341,6 +352,15 @@ pub struct Material {
     /// white colour, `TSMesh` 0x63ac97), so the model's colour shift does not
     /// tint it.
     pub untinted: bool,
+    /// A baked lightmap ([`Material::images`] slot 8, read with the vertices'
+    /// `lightmap_uv`) on a [`MaterialKind::Physical`] material, and how much
+    /// it is multiplied by. It stands for the sun and ambient light, shadows
+    /// included; lights, moving shadows and highlights still add to it.
+    pub baked_lightmap: Option<f32>,
+    /// The vertex colour tints only where image slot 10's red channel says
+    /// (`bri_content::shape::TintMask`): texel * ((1 - mask) + mask * colour).
+    /// Lit model materials (`VertexLit`, `Physical`) only.
+    pub tint_mask: bool,
     /// Kind-specific uniforms, required for water and terrain only.
     /// Water: flow/wave/opacity, distortion/depth flag, surface+shore
     /// tiling/reflection/parallax. Terrain: see `terrain_scene::parameters`.
@@ -431,6 +451,8 @@ impl Material {
             temp_brick_flash: false,
             ignore_texture_alpha: false,
             untinted: false,
+            baked_lightmap: None,
+            tint_mask: false,
             parameters: None,
         }
     }
@@ -474,6 +496,17 @@ pub struct SceneData {
     pub sun_direction: [f32; 3],
     pub sun_color: [f32; 3],
     pub ambient: [f32; 3],
+    /// The map's ambient light where the sky cannot see (an interior's
+    /// lamp-lit rooms), in place of `ambient`; Dynamic lighting blends to it
+    /// by how closed off from the sky a surface is (`sky_exposure`).
+    pub enclosed_ambient: Option<[f32; 3]>,
+    /// How much of a baked lightmap's static light came from the sun and
+    /// sky, 0 to 1 (the sun node's `lightmap_sky_share`; 0 when absent: the
+    /// static light is lamps and bounce, and stays). Under a dimmer live sun
+    /// and ambient (night) that share dims and tints with them
+    /// ([`Camera::apply_atmosphere`]); a sky-lit map's lightmaps otherwise
+    /// keep their daylight at night.
+    pub lightmap_sky_share: f32,
     pub fog: bri_content::environment::Fog,
     /// The sky goes on below the horizon (a bottom face, Skylands' floor),
     /// so fog below the eye thins as it does above (`Fog::sky_amount`).
@@ -487,6 +520,17 @@ pub struct SceneData {
     /// The authored sky's colour by direction, which far geometry fogs
     /// toward ([`SkyBands`]); all zero where only the fog backdrop shows.
     pub sky_bands: SkyBands,
+    /// The sun's lens flare (`Environment::lens_flare`), drawn over the world
+    /// by [`crate::lens_flare::LensFlareRenderer`].
+    pub lens_flare: Option<std::sync::Arc<LensFlareScene>>,
+}
+
+/// A map's lens flare as loaded: the cut-off angle and each element's
+/// picture, place, size and colour.
+#[derive(Debug)]
+pub struct LensFlareScene {
+    pub cutoff_angle: f32,
+    pub elements: Vec<(SceneImage, bri_content::environment::FlareElement)>,
 }
 
 /// Directions around the eye the sky's colour is kept for: 8 around
@@ -513,11 +557,14 @@ impl Default for SceneData {
             sun_direction: [0.3, -1.0, 0.4],
             sun_color: [0.7; 3],
             ambient: [0.35; 3],
+            enclosed_ambient: None,
+            lightmap_sky_share: 0.0,
             clear_color: [0.05, 0.08, 0.12, 1.0],
             fog: Default::default(),
             sky_below: false,
             lightmap_bases: vec![],
             sky_bands: Default::default(),
+            lens_flare: None,
         }
     }
 }
@@ -859,6 +906,7 @@ impl SceneData {
                     | MaterialKind::Terrain
                     | MaterialKind::Metal
                     | MaterialKind::Physical
+                    | MaterialKind::Plasma
             );
             let decomposed =
                 material.kind == MaterialKind::Surface && decomposed_lightmap(material.parameters);
@@ -941,6 +989,9 @@ pub struct Camera {
     pub shading: [f32; 4],
     /// The fog's height and most cover (`bri_content::environment::Fog::haze_uniform`).
     pub haze: [f32; 4],
+    /// The ambient light in spaces the sky cannot see
+    /// ([`SceneData::enclosed_ambient`]); w 1 when the map sets one.
+    pub enclosed: [f32; 4],
 }
 impl Camera {
     /// Native world uses Y up, right-handed coordinates and reversed 0..1
@@ -1025,6 +1076,11 @@ impl Camera {
         self.atmosphere[3] = if scene.fog.end > 0.0 { 1.0 } else { 0.0 };
         self.sky_bands = scene.sky_bands;
         self.haze = scene.fog.haze_uniform();
+        self.enclosed = scene
+            .enclosed_ambient
+            .map_or([0.0; 4], |c| [c[0], c[1], c[2], 1.0]);
+        // Kept in baked_ambient.w until a live environment relights.
+        self.baked_ambient[3] = scene.lightmap_sky_share.clamped(0.0, 1.0);
     }
     /// The live environment (`bri_content::atmosphere::resolve`) over the
     /// map's own values, set by [`Camera::apply_environment`] first.
@@ -1050,7 +1106,12 @@ impl Camera {
             f32::from(u8::from(relit)),
         ];
         self.baked_sun_color = [baked_color[0], baked_color[1], baked_color[2], 0.0];
-        self.baked_ambient = [baked_ambient[0], baked_ambient[1], baked_ambient[2], 0.0];
+        self.baked_ambient = [
+            baked_ambient[0],
+            baked_ambient[1],
+            baked_ambient[2],
+            self.baked_ambient[3],
+        ];
         self.sun_direction[..3].copy_from_slice(&live.sun_direction);
         self.sun_color[..3].copy_from_slice(&live.direct_light);
         self.ambient[..3].copy_from_slice(&live.ambient_light);
@@ -1129,6 +1190,7 @@ impl Default for Camera {
             baked_ambient: [0.0; 4],
             shading: [0.0; 4],
             haze: bri_content::environment::Fog::default().haze_uniform(),
+            enclosed: [0.0; 4],
             sky_bands: Default::default(),
         }
     }
@@ -2645,10 +2707,14 @@ impl MapLightBinding {
 }
 /// Native unshadowed point illumination. Radius and RGB come from the effect clock.
 #[repr(C)]
-#[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+#[derive(Clone, Copy, Debug, Default, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct PointLight {
     pub position_radius: [f32; 4],
     pub color: [f32; 4],
+    /// A cone: the unit direction scaled by `1 / (cos inner - cos outer)`
+    /// and `cos outer` times that scale ([`spot_words`] without its all-round
+    /// sentinel); all zero shines all round.
+    pub cone: [f32; 4],
 }
 
 /// Scenes a renderer has uploaded since it was made: what a frame's work
@@ -3479,18 +3545,22 @@ impl SceneRenderer {
                     MaterialKind::BrickSurfaces => 9.0,
                     MaterialKind::Metal => 10.0,
                     MaterialKind::Physical => 11.0,
+                    MaterialKind::Plasma => 12.0,
                 },
                 match material.alpha {
                     AlphaMode::Mask(c) => c,
                     _ => 0.0,
                 },
                 if material.clamp_nearest { 1.0 } else { 0.0 },
-                // Flags: 1 temp-brick flash, 2 ignore texture alpha, 4 untinted.
+                // Flags: 1 temp-brick flash, 2 ignore texture alpha, 4 untinted,
+                // 8 multiply, 16 baked lightmap, 32 masked tint.
                 f32::from(
                     u8::from(material.temp_brick_flash)
                         | u8::from(material.ignore_texture_alpha) << 1
                         | u8::from(material.untinted) << 2
-                        | u8::from(material.alpha == AlphaMode::Multiply) << 3,
+                        | u8::from(material.alpha == AlphaMode::Multiply) << 3
+                        | u8::from(material.baked_lightmap.is_some()) << 4
+                        | u8::from(material.tint_mask) << 5,
                 ),
             ]);
             if let Some(groups) = material.parameters {
@@ -3518,6 +3588,10 @@ impl SceneRenderer {
                     uv.rotation_rate_degrees.to_radians(),
                     0.,
                 ]);
+            }
+            if let Some(strength) = material.baked_lightmap {
+                // material[7].w, which no uv motion reads.
+                parameters[31] = strength;
             }
             let buffer = device.buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: Some(&material.name),

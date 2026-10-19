@@ -24,7 +24,7 @@ use std::{
 mod support;
 use support::{content_root::ContentRoot, wait};
 
-synthetic_and_content!(ContentRoot: body_and_held_item_hold_still_against_a_turning_camera);
+synthetic_and_release_content!(ContentRoot: body_and_held_item_hold_still_against_a_turning_camera);
 
 const SIZE: (u32, u32) = (640, 480);
 /// A steady mouse turn, in radians per second.

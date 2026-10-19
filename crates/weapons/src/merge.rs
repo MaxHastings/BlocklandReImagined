@@ -424,6 +424,7 @@ fn merge_effects(
     add(&mut into.emitters, part.emitters, |e| &e.id, dir, notes);
     add(&mut into.lights, part.lights, |l| &l.id, dir, notes);
     add(&mut into.explosions, part.explosions, |e| &e.id, dir, notes);
+    add(&mut into.shells, part.shells, |s| &s.id, dir, notes);
 }
 
 #[cfg(test)]

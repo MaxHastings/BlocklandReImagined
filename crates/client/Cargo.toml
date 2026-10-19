@@ -17,6 +17,7 @@ bri-world = { path = "../world" }
 bri-events = { path = "../events" }
 bri-bls = { path = "../bls" }
 bri-weapons = { path = "../weapons" }
+bri-ue2-rules = { path = "../ue2-rules" }
 bri-package = { path = "../package" }
 bri-package-runtime = { path = "../package-runtime" }
 bri-sim = { path = "../sim" }

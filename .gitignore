@@ -8,3 +8,6 @@ __pycache__/
 *.tmp
 /docs/research/brick-fx/*.png
 /docs/research/*/importer/target/
+
+# Build output of any name (cargo target dirs, e.g. target-nosc)
+target*/

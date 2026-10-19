@@ -97,10 +97,10 @@ impl App {
             bri_ui::screens::options::default_fov(prefs),
             bri_ui::screens::options::zoom_fov(prefs),
         );
-        self.controls.set_invert_prefs(
-            prefs.bool_or("$pref::Input::MouseInvert", false),
-            prefs.bool_or("$Pref::Input::VehicleMouseInvert", true),
-        );
+        let mouse = self.ui.core.mouse_settings();
+        self.controls
+            .set_invert_prefs(mouse.invert, mouse.vehicle_invert);
+        let prefs = &self.ui.core.prefs;
         let steering = steering_prefs(prefs);
         if let Some(a) = self.net.attempt.as_ref().filter(|a| a.entered)
             && self.net.steering_sent != Some((a.id, steering))
@@ -114,6 +114,11 @@ impl App {
         self.update_held_weapon();
         self.controls.advance_sway(elapsed.as_secs_f32());
         self.controls.advance_zoom(elapsed.as_secs_f32());
+        self.controls.advance_view_shake(elapsed.as_secs_f32());
+        self.controls.advance_camera_shakes(elapsed.as_secs_f32());
+        if let Some(breath) = self.controls.advance_breath(elapsed.as_secs_f32()) {
+            self.audio.profile(&breath, bri_audio::Placement::Listener);
+        }
         self.controls.ease_roll(elapsed.as_secs_f32());
         let third_person_only = self
             .net
@@ -303,6 +308,7 @@ impl App {
                 self.controls.carry_look(&carry);
             }
             if let Some((speed, archetype)) = self.motion.take_impact() {
+                self.controls.land_body_camera(speed);
                 let min = bri_sim::player_types::PlayerType::from_archetype(archetype)
                     .unwrap_or_default()
                     .min_impact_speed();
@@ -355,6 +361,10 @@ impl App {
                     self.motion.server_tick(),
                     driven,
                     &self.motion.passages(),
+                );
+                self.fx.map_movers.update(
+                    &view.map_movers,
+                    self.motion.server_tick().unwrap_or(view.tick as f64),
                 );
                 self.fx.tutorial_targets.update(
                     &view.targets,
@@ -568,6 +578,7 @@ impl App {
                 self.mounts.rider_fallback_hips.clear();
                 self.mounts.rider_hands.clear();
                 self.mounts.rider_aims.clear();
+                self.mounts.rider_overlays.clear();
                 self.mounts.posed_eye = None;
                 for (owner, vitals) in &view.vitals {
                     let Some((vehicle, seat)) = vitals.mounted else {
@@ -648,6 +659,14 @@ impl App {
                                 .seat_aim(&self.vehicle_assets, info, usize::from(seat))
                         {
                             self.mounts.rider_aims.insert(*owner, aim);
+                        }
+                        let overlays = self.vehicles.seat_overlays(
+                            &self.vehicle_assets,
+                            info,
+                            usize::from(seat),
+                        );
+                        if !overlays.is_empty() {
+                            self.mounts.rider_overlays.insert(*owner, overlays);
                         }
                         let velocity = self
                             .vehicles
@@ -776,8 +795,12 @@ impl App {
                     ) else {
                         continue;
                     };
-                    if let Some(e) = crate::audio::engine_loop(d, info, frame) {
-                        engines.insert(*id, e);
+                    // Layer n plays under the key of its vehicle and n.
+                    for (layer, e) in crate::audio::engine_loops(d, info, frame)
+                        .into_iter()
+                        .enumerate()
+                    {
+                        engines.insert(*id | (layer as u64) << 56, e);
                     }
                     // The squeal plays beside the engine, keyed apart from it.
                     if let Some(e) = crate::audio::skid_loop(d, info, frame) {
@@ -1276,6 +1299,13 @@ impl App {
                     look_limits,
                     mount_rotation: self.mounts.rider_rotations.get(owner).copied(),
                     seat_aim: self.mounts.rider_aims.get(owner).copied().filter(|_| !dead),
+                    seat_overlays: self
+                        .mounts
+                        .rider_overlays
+                        .get(owner)
+                        .cloned()
+                        .filter(|_| !dead)
+                        .unwrap_or_default(),
                     hand_holds: self
                         .mounts
                         .rider_hands
@@ -1334,7 +1364,8 @@ impl App {
                     lean_tilt: if riding || dead {
                         0.0
                     } else {
-                        player.lean_tilt(&view.archetypes.tuning(player.archetype, player.scale))
+                        player
+                            .lean_body_tilt(&view.archetypes.tuning(player.archetype, player.scale))
                     },
                     intent_clip: player.controller.filter(|_| !riding).and_then(|c| {
                         view.archetypes
@@ -1369,6 +1400,13 @@ impl App {
                     && let Some(nodes) = self.addons.client_code.pose(*owner)
                 {
                     avatar.override_nodes(&self.avatar.avatar_assets, nodes);
+                }
+                for clip in avatar.take_started_clips() {
+                    self.fx.clip_sounds.started(
+                        &view.archetypes.resolve(player.archetype).sounds,
+                        &clip,
+                        player.feet,
+                    );
                 }
                 avatar.remember_drawn_offset(gone.contains(owner));
                 self.cosmetic_faults.absorb("avatar pose", posed);
@@ -1437,6 +1475,11 @@ impl App {
             self.fx.effects.world.set_passages(&passages);
             self.fx.actor_effects.set_passages(&passages);
             self.fx.brick_debris.set_passages(&passages);
+            // drawn_controls is cloned from these controls after presentation.
+            self.world_items.set_first_person_fov(self.controls.fov());
+            if let Some(mine) = self.avatar.avatars.get(&view.owner) {
+                self.world_items.set_wearer_colors(&mine.appearance.colors);
+            }
             let items = self.world_items.sync(
                 weapons,
                 crate::world_items::WorldItemFrame {
@@ -1603,7 +1646,11 @@ impl App {
                 .absorb("player and vehicle effects", actors);
             self.fx.explosion_shapes.advance(game_elapsed.as_secs_f32());
             self.fx.beams.advance(game_elapsed.as_secs_f32());
+            self.fx
+                .weapon_effects
+                .advance_contrails(game_elapsed.as_secs_f32(), eye);
             self.fx.body_flashes.advance(game_elapsed.as_secs_f32());
+            self.fx.body_shells.advance(game_elapsed.as_secs_f32());
             self.fx.decals.advance(game_elapsed.as_secs_f32(), |brick| {
                 building.brick_stands(brick)
             });
@@ -1632,6 +1679,54 @@ impl App {
                 },
             ) {
                 self.audio.profile(&sound, bri_audio::Placement::World(at));
+            }
+            for (sound, at) in self.fx.clip_sounds.advance(game_elapsed.as_secs_f32()) {
+                self.audio.profile(&sound, bri_audio::Placement::World(at));
+            }
+            // Slipping tyres throw up what the surface under them says.
+            let drawn: Vec<_> = view
+                .vehicles
+                .iter()
+                .filter(|(_, info)| !info.destroyed)
+                .filter_map(|(id, info)| {
+                    Some((
+                        *id,
+                        self.vehicle_assets.definition(&info.definition)?,
+                        self.vehicles.frame(*id)?,
+                    ))
+                })
+                .collect();
+            for burst in self
+                .fx
+                .wheel_contacts
+                .update(game_elapsed.as_secs_f32(), drawn, |at| {
+                    building
+                        .surface_at(at + Vec3::Y * 0.5, at - Vec3::Y)
+                        .ok()
+                        .flatten()
+                        .map_or(bri_content::surface::DEFAULT, |(_, kind)| kind)
+                        .to_string()
+                })
+            {
+                let transform = bri_fx_runtime::SourceTransform {
+                    position: burst.position,
+                    ..Default::default()
+                };
+                if let Some(effect) = &burst.effect
+                    && self.fx.weapon_effects.resolves(effect)
+                    && let Err(error) =
+                        self.fx
+                            .weapon_effects
+                            .burst_at_input(effect, transform, burst.input)
+                {
+                    bri_console::warn(format!("Wheel contact effect {effect}: {error:#}"));
+                }
+                if let Some(sound) = &burst.sound {
+                    self.audio.profile(
+                        sound,
+                        bri_audio::Placement::World(burst.position.to_array()),
+                    );
+                }
             }
             self.fx
                 .explosion_debris

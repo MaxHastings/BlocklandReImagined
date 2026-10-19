@@ -164,6 +164,11 @@ fn game() -> Result<()> {
             "Add-On health: {}",
             health.summary().unwrap_or_else(|| "no problems".into())
         );
+        // The loaders a player's first match would run, so their silent
+        // fallbacks are counted now; the gate reads logs/fallbacks.json.
+        bri_client::fallbacks::load_maps(&app.content.paths);
+        let (path, count) = bri_client::fallbacks::write(&state)?;
+        println!("Fallbacks: {count} ({})", path.display());
         return Ok(());
     }
     bri_crash::enable_dialogs();

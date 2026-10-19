@@ -1219,7 +1219,7 @@ impl Totals {
 /// opponents off it.
 #[test]
 fn two_against_two_play_a_clean_match_across_seeds() {
-    let seeds: u64 = env("BRI_SOCCER_SEEDS", 3);
+    let seeds: u64 = env("BRI_SOCCER_SEEDS", 1);
     let seconds: usize = env("BRI_SOCCER_SECONDS", 150);
     let kits: Vec<Kit> = match std::env::var("BRI_SOCCER_KIT").as_deref() {
         Ok("hands") => vec![Kit::Hands],

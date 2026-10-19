@@ -32,7 +32,7 @@ use std::{
 mod support;
 use support::host_content::HostContent;
 
-synthetic_and_content!(
+synthetic_and_release_content!(
     HostContent: rocketed_free_build_bricks_vanish_and_come_back_on_host_and_joiner_screens
 );
 

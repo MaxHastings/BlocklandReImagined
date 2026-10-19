@@ -659,3 +659,226 @@ fn a_states_cues_play_at_their_times_after_it_begins() {
             .any(|e| matches!(e, Event::Sound { profile, .. } if profile == "kit:sound/tap"))
     );
 }
+
+/// A grenade whose fuse was lit in the hand is fired with the time it burned
+/// (`set_age`): its life counts on from there and it goes off that much sooner,
+/// and never at once.
+#[test]
+fn a_projectile_fired_aged_goes_off_sooner() {
+    let json = format!(
+        r#"{{
+            "schema_version": {SCHEMA},
+            "id": "kit",
+            "items": {{}},
+            "images": {{}},
+            "projectiles": {{
+                "kit:projectile/nade": {{ "speed": 10.0, "lifetime_ticks": 100, "fade_ticks": 0,
+                    "explode_death": true, "explosion": {{ "radius": 3.0, "damage": 0.0 }} }}
+            }}
+        }}"#
+    );
+    let blast_tick = |age: Option<u32>| {
+        let mut w = WeaponsWorld::new(Pack::from_json(json.as_bytes()).unwrap()).unwrap();
+        w.add_actor(A, 5).unwrap();
+        let id = w
+            .spawn("kit:projectile/nade", A, Vec3::ZERO, Vec3::ZERO, 1.0)
+            .unwrap();
+        if let Some(age) = age {
+            w.set_age(id, age);
+        }
+        (1..=300u32).find(|_| {
+            w.step(&mut Open)
+                .iter()
+                .any(|e| matches!(e, Event::Blast { .. }))
+        })
+    };
+    let fresh = blast_tick(None).expect("a fresh grenade goes off");
+    let aged = blast_tick(Some(70)).expect("an aged one goes off");
+    assert_eq!(fresh - aged, 70, "fresh {fresh}, aged {aged}");
+    // Older than its whole life leaves its last tick, not nothing.
+    let late = blast_tick(Some(500)).expect("an over-age one still goes off");
+    assert!(late >= 1 && late < aged, "over-age {late}");
+}
+
+/// A projectile names its explosion by the full id (`kit:explosion/boom`) while the pack keys it by its symbol: the blast's
+/// sound still plays (a grenade of an Add-On that does this went off silent).
+#[test]
+fn a_blast_plays_the_sound_of_the_explosion_its_full_id_names() {
+    let json = format!(
+        r#"{{
+            "schema_version": {SCHEMA},
+            "id": "kit",
+            "items": {{}},
+            "images": {{}},
+            "sounds": {{ "kit:sound/boom": {{ "file": "boom.wav" }} }},
+            "explosions": {{ "boom": {{ "name": "boom", "sound": "kit:sound/boom", "shake": null, "shape": "",
+                "seconds": 1.0, "play_speed": 1.0, "face_viewer": false, "scale": [1.0, 1.0, 1.0], "sizes": [] }} }},
+            "projectiles": {{
+                "kit:projectile/nade": {{ "speed": 10.0, "lifetime_ticks": 20, "fade_ticks": 0,
+                    "explode_death": true, "explosion": {{ "effect": "kit:explosion/boom", "radius": 3.0, "damage": 0.0 }} }}
+            }}
+        }}"#
+    );
+    let mut w = WeaponsWorld::new(Pack::from_json(json.as_bytes()).unwrap()).unwrap();
+    w.add_actor(A, 5).unwrap();
+    w.spawn("kit:projectile/nade", A, Vec3::ZERO, Vec3::ZERO, 1.0)
+        .unwrap();
+    let heard = (0..60).any(|_| {
+        w.step(&mut Open)
+            .iter()
+            .any(|e| matches!(e, Event::Sound { profile, .. } if profile == "kit:sound/boom"))
+    });
+    assert!(heard, "the explosion's sound played");
+}
+
+/// A floor at height 0 and nothing else.
+struct Ground;
+impl Query for Ground {
+    fn sweep(&mut self, from: Vec3, to: Vec3, _: Filter) -> Option<Hit> {
+        (from.y >= 0.0 && to.y < 0.0).then(|| {
+            let fraction = from.y / (from.y - to.y);
+            Hit {
+                target: TargetId::Map(0),
+                position: from.lerp(to, fraction),
+                normal: Vec3::Y,
+                fraction,
+                color: None,
+            }
+        })
+    }
+    fn radius(&mut self, _: Vec3, _: f32, _: usize) -> Vec<Nearby> {
+        Vec::new()
+    }
+    fn can_affect(&self, _: ActorId, _: TargetId) -> bool {
+        true
+    }
+    fn can_catch(&self, _: ActorId, _: ActorId) -> bool {
+        false
+    }
+}
+
+/// A grenade lying on the floor is not an impact every tick: a bounce that would leave it under `settle_speed` stops it and plays
+/// nothing (`ThrowWeaponPickup.HitWall`; a flash bang played its ground sound a hundred times). Without the field every contact sounds.
+#[test]
+fn a_bounce_under_the_settle_speed_stops_the_projectile_and_plays_no_impact() {
+    let thuds = |settle: &str| {
+        let json = format!(
+            r#"{{
+                "schema_version": {SCHEMA}, "id": "kit", "items": {{}}, "images": {{}},
+                "sounds": {{ "kit:sound/thud": {{ "file": "thud.wav" }} }},
+                "explosions": {{ "thud": {{ "name": "thud", "sound": "kit:sound/thud", "shake": null, "shape": "",
+                    "seconds": 1.0, "play_speed": 1.0, "face_viewer": false, "scale": [1.0, 1.0, 1.0], "sizes": [] }} }},
+                "projectiles": {{ "kit:projectile/nade": {{ "speed": 4.0, "lifetime_ticks": 600, "fade_ticks": 0,
+                    "ballistic": true, "arm_ticks": 600, "gravity": 1.5, "elasticity": 0.4, "bounce_effect": "kit:explosion/thud"{settle} }} }}
+            }}"#
+        );
+        let mut w = WeaponsWorld::new(Pack::from_json(json.as_bytes()).unwrap()).unwrap();
+        w.add_actor(A, 5).unwrap();
+        w.spawn(
+            "kit:projectile/nade",
+            A,
+            Vec3::new(0.0, 6.0, 0.0),
+            Vec3::new(2.0, 0.0, 0.0),
+            1.0,
+        )
+        .unwrap();
+        let mut sounds = 0;
+        let mut last = Vec3::ZERO;
+        for _ in 0..500 {
+            let events = w.step(&mut Ground);
+            sounds += events
+                .iter()
+                .filter(
+                    |e| matches!(e, Event::Sound { profile, .. } if profile == "kit:sound/thud"),
+                )
+                .count();
+            last = w.projectiles().next().map_or(last, |p| p.velocity);
+        }
+        (sounds, last)
+    };
+    let (every_contact, _) = thuds("");
+    assert!(
+        every_contact > 20,
+        "unset: every resting contact is an impact ({every_contact})"
+    );
+    let (settled, velocity) = thuds(r#", "settle_speed": 1.0"#);
+    assert!(
+        (2..=8).contains(&settled),
+        "one sound per real bounce, none once it lies still: {settled}"
+    );
+    assert!(velocity.length() < 1.0, "it lies still: {velocity}");
+}
+
+/// A body in the way: `target` stands across x = 5 and is hit by anything crossing it.
+struct Wall {
+    target: TargetId,
+}
+impl Query for Wall {
+    fn sweep(&mut self, from: Vec3, to: Vec3, _: Filter) -> Option<Hit> {
+        (from.x < 5.0 && to.x >= 5.0).then(|| Hit {
+            target: self.target,
+            position: Vec3::new(5.0, from.y, from.z),
+            normal: -Vec3::X,
+            fraction: (5.0 - from.x) / (to.x - from.x),
+            color: None,
+        })
+    }
+    fn radius(&mut self, _: Vec3, _: f32, _: usize) -> Vec<Nearby> {
+        Vec::new()
+    }
+    fn can_affect(&self, _: ActorId, _: TargetId) -> bool {
+        true
+    }
+    fn can_catch(&self, _: ActorId, _: ActorId) -> bool {
+        false
+    }
+}
+
+/// A thrown grenade bounces off any body but its thrower's (`ThrowWeaponPickup.Touch`): `pass_source` flies through the shooter's
+/// body and the same projectile without it meets it.
+#[test]
+fn a_projectile_that_passes_its_shooter_flies_through_their_body_and_bounces_off_others() {
+    let json = |pass: bool| {
+        format!(
+            r#"{{
+            "schema_version": {SCHEMA},
+            "id": "kit",
+            "items": {{}},
+            "images": {{}},
+            "projectiles": {{
+                "kit:projectile/nade": {{ "speed": 20.0, "lifetime_ticks": 600, "fade_ticks": 0, "ballistic": true,
+                    "elasticity": 0.4, "arm_ticks": 600, "pass_source": {pass} }}
+            }}
+        }}"#
+        )
+    };
+    let flight = |pass: bool, target: TargetId| {
+        let mut w = WeaponsWorld::new(Pack::from_json(json(pass).as_bytes()).unwrap()).unwrap();
+        w.add_actor(A, 5).unwrap();
+        w.add_actor(ActorId(2), 5).unwrap();
+        w.spawn("kit:projectile/nade", A, Vec3::ZERO, Vec3::X * 20.0, 1.0)
+            .unwrap();
+        let mut q = Wall { target };
+        let mut bounced = false;
+        for _ in 0..240 {
+            bounced |= w
+                .step(&mut q)
+                .iter()
+                .any(|e| matches!(e, Event::Bounced { .. }));
+        }
+        let end = w.projectiles().next().map(|p| p.position.x);
+        (bounced, end)
+    };
+    let (own, end) = flight(true, TargetId::Actor(A));
+    assert!(
+        !own && end.is_some_and(|x| x > 6.0),
+        "through its shooter: {own} {end:?}"
+    );
+    let (other, end) = flight(true, TargetId::Actor(ActorId(2)));
+    assert!(
+        other && end.is_some_and(|x| x < 5.0),
+        "off another body: {other} {end:?}"
+    );
+    let (control, _) = flight(false, TargetId::Actor(A));
+    assert!(control, "without the flag it meets its shooter too");
+}

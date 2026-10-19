@@ -121,8 +121,29 @@ pub struct Sounds {
     /// [`Sounds::LAND_SPEED`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub land: Option<String>,
+    /// With no `land` sound, a landing sounds like a footfall on the surface
+    /// underfoot (AA's `PlayLanded` plays the floor material's foot-contact
+    /// sound).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub land_on_surface: bool,
+    /// Sounds tied to a clip (lower-case name): when a body starts the clip
+    /// the sound plays at the body once the clip has run `seconds`. A death
+    /// clip's body-fall is one.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub clips: std::collections::BTreeMap<String, ClipSound>,
+}
+/// A sound tied to the moment of a clip ([`Sounds::clips`]).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ClipSound {
+    /// The sound profile.
+    pub sound: String,
+    /// Seconds into the clip.
+    pub seconds: f32,
 }
 impl Sounds {
+    /// Most clips with a sound of their own.
+    pub const MAX_CLIPS: usize = 32;
     /// Longest sound name, as cues carry it.
     pub const MAX_NAME: usize = 128;
     /// Most footstep variants.
@@ -153,6 +174,17 @@ impl Sounds {
             && self
                 .stride
                 .is_none_or(|s| s.is_finite() && (0.25..=32.0).contains(&s))
+            && self.clips.len() <= Self::MAX_CLIPS
+            && self.clips.iter().all(|(clip, c)| {
+                !clip.is_empty()
+                    && clip.len() <= 64
+                    && !clip.chars().any(char::is_control)
+                    && !c.sound.is_empty()
+                    && c.sound.len() <= Self::MAX_NAME
+                    && !c.sound.chars().any(char::is_control)
+                    && c.seconds.is_finite()
+                    && (0.0..=60.0).contains(&c.seconds)
+            })
     }
     /// Ground between footfalls for a body `stand_height` tall at `scale`.
     /// The footfalls on surface `kind`.
@@ -225,6 +257,21 @@ pub struct Look {
         skip_serializing_if = "is_default_max_time_scale"
     )]
     pub max_time_scale: f32,
+    /// Seconds a thread action a rule starts or ends (`play_thread` on a body
+    /// thread, a posture change) blends from the pose before it, like the
+    /// locomotion's own transition: AA's `BlendChangeTime`, .25. 0 (v20's
+    /// bodies) cuts, 0 to 2.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub action_blend: f32,
+    /// How the ground locomotion clip is picked and timed: v20's, or Army Ops' four-way pick.
+    #[serde(
+        default,
+        skip_serializing_if = "bri_content::body::LocomotionPick::is_torque"
+    )]
+    pub locomotion_pick: bri_content::body::LocomotionPick,
+}
+fn is_zero(v: &f32) -> bool {
+    *v == 0.0
 }
 /// v20's `PlayerData::maxTimeScale`.
 pub const MAX_TIME_SCALE: f32 = 1.5;
@@ -272,6 +319,8 @@ impl Archetype {
                     })
                 && self.look.max_time_scale.is_finite()
                 && (0.1..=16.0).contains(&self.look.max_time_scale)
+                && self.look.action_blend.is_finite()
+                && (0.0..=2.0).contains(&self.look.action_blend)
                 && self.sounds.valid()
                 && self.mount_points.len() <= MAX_MOUNT_POINTS
                 && self.mount_points.iter().all(|m| {
@@ -287,6 +336,16 @@ impl Archetype {
         self.sockets.validate()?;
         bri_content::body::validate_animations(&self.look.animations)?;
         self.look.deaths.validate()?;
+        if !self.look.deaths.is_empty() {
+            ensure!(
+                !self.look.deaths.crouched.is_empty(),
+                "deaths needs `crouched` clips: a body that dies crouched must not fall as a standing one"
+            );
+            ensure!(
+                self.movement.prone.is_none() || !self.look.deaths.prone.is_empty(),
+                "deaths needs `prone` clips: this body can lie prone"
+            );
+        }
         bri_content::body::validate_ground_speeds(&self.look.ground_speeds)?;
         self.look.camera.validate()?;
         if let Some(source) = &self.controller {
@@ -321,6 +380,8 @@ impl Archetype {
                 intent_sounds: BTreeMap::new(),
                 ground_speeds: Default::default(),
                 max_time_scale: MAX_TIME_SCALE,
+                action_blend: 0.0,
+                locomotion_pick: Default::default(),
             },
             uses_items: true,
             sockets: Sockets::default(),
@@ -570,5 +631,20 @@ mod tests {
         let mut loud = horse.clone();
         loud.sounds.pain = Some("x".repeat(Sounds::MAX_NAME + 1));
         assert!(loud.validate().is_err());
+    }
+    #[test]
+    fn a_clip_sound_names_a_sound_and_a_moment_in_the_clip() {
+        let table = Archetypes::default();
+        let mut body = table.resolve(PlayerType::Horse.archetype()).clone();
+        let clip = |sound: &str, seconds: f32| ClipSound {
+            sound: sound.into(),
+            seconds,
+        };
+        body.sounds.clips.insert("fall".into(), clip("thud", 0.6));
+        assert!(body.validate().is_ok());
+        for bad in [clip("", 0.6), clip("thud", -1.0), clip("thud", f32::NAN)] {
+            body.sounds.clips.insert("fall".into(), bad);
+            assert!(body.validate().is_err());
+        }
     }
 }
