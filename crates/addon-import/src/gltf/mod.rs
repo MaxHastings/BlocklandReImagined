@@ -1026,9 +1026,10 @@ pub fn convert(
             // (`bri_surface`), which a hit on the collider looks up.
             let names_surface = is_collision
                 && p["material"].as_u64().is_some_and(|m| {
-                    array(json, "materials")
-                        .get(m as usize)
-                        .is_some_and(|g| g["extras"]["bri_surface"].is_string())
+                    array(json, "materials").get(m as usize).is_some_and(|g| {
+                        g["extras"]["bri_surface"].is_string()
+                            || g["extras"]["bri_material"].is_string()
+                    })
                 });
             let material = if is_water || (is_collision && !names_surface) {
                 None

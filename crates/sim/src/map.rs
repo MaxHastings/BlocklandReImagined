@@ -113,7 +113,17 @@ pub struct MapSurfaces {
     /// (an index into `kinds`, [`NO_KIND`] for none), or None when none of
     /// its triangles has one.
     pub triangles: Vec<Option<Arc<[u16]>>>,
+    /// The identities the map gives its materials (`bri_material`: any short name the map's author chooses, which a hit reports back so the game
+    /// can find what it struck), which `identity_triangles` index.
+    pub identities: Vec<String>,
+    /// For each of [`NativeMap::colliders`] in order, each triangle's identity (an index into `identities`, [`NO_IDENTITY`] for none), or None
+    /// when none of its triangles has one.
+    pub identity_triangles: Vec<Option<Arc<[u32]>>>,
 }
+/// A triangle whose material has no identity.
+pub const NO_IDENTITY: u32 = u32::MAX;
+/// The most identities a map may name.
+pub const MAX_MATERIAL_IDENTITIES: usize = 65536;
 /// A triangle the map names no kind for.
 pub const NO_KIND: u16 = u16::MAX;
 pub use bri_content::surface::{
@@ -129,6 +139,40 @@ impl MapSurfaces {
         let kinds = self.triangles.get(collider)?.as_ref()?;
         let kind = *kinds.get(usize::try_from(triangle).ok()?)?;
         self.kinds.get(usize::from(kind)).map(String::as_str)
+    }
+    /// The identity of the material triangle `triangle` of collider `collider` is made of, when the map names one.
+    pub fn identity(&self, collider: usize, triangle: u32) -> Option<&str> {
+        let ids = self.identity_triangles.get(collider)?.as_ref()?;
+        let id = *ids.get(usize::try_from(triangle).ok()?)?;
+        self.identities
+            .get(usize::try_from(id).ok()?)
+            .map(String::as_str)
+    }
+    /// The bundle's `identities` for `map_id`: material name to identity.
+    fn identity_table(
+        bundle: &serde_json::Value,
+        map_id: &str,
+    ) -> Result<BTreeMap<String, String>> {
+        let Some(table) = bundle.get("identities").and_then(|s| s.get(map_id)) else {
+            return Ok(BTreeMap::new());
+        };
+        let table: BTreeMap<String, String> =
+            serde_json::from_value(table.clone()).context("Invalid map material identities")?;
+        ensure!(
+            table.len() <= MAX_MATERIAL_IDENTITIES
+                && table.iter().all(|(material, id)| {
+                    !material.is_empty()
+                        && material.len() <= 128
+                        && !id.is_empty()
+                        && id.len() <= 128
+                        && !id.chars().any(char::is_control)
+                }),
+            "Map material identities name materials with identities of 1 to 128 characters"
+        );
+        Ok(table
+            .into_iter()
+            .map(|(material, id)| (material.to_ascii_lowercase(), id))
+            .collect())
     }
     /// The bundle's `surfaces` for `map_id`: material name to kind.
     fn table(bundle: &serde_json::Value, map_id: &str) -> Result<BTreeMap<String, String>> {
@@ -160,9 +204,40 @@ impl MapSurfaces {
         &mut self,
         map_id: &str,
         table: &BTreeMap<String, String>,
+        identity_table: &BTreeMap<String, String>,
         shape: &bri_content::shape::Shape,
         materials: Option<&[Option<usize>]>,
     ) -> Result<()> {
+        let identity_ids = materials
+            .filter(|_| !identity_table.is_empty())
+            .map(|materials| {
+                materials
+                    .iter()
+                    .map(|m| {
+                        let Some(id) = m
+                            .and_then(|m| shape.materials.get(m))
+                            .and_then(|m| identity_table.get(&m.name.to_ascii_lowercase()))
+                        else {
+                            return Ok(NO_IDENTITY);
+                        };
+                        let at = match self.identities.iter().position(|k| k == id) {
+                            Some(at) => at,
+                            None => {
+                                ensure!(
+                                    self.identities.len() < MAX_MATERIAL_IDENTITIES,
+                                    "A map names at most {MAX_MATERIAL_IDENTITIES} material identities"
+                                );
+                                self.identities.push(id.clone());
+                                self.identities.len() - 1
+                            }
+                        };
+                        Ok(u32::try_from(at)?)
+                    })
+                    .collect::<Result<Arc<[u32]>>>()
+            })
+            .transpose()?;
+        self.identity_triangles
+            .push(identity_ids.filter(|ids| ids.iter().any(|i| *i != NO_IDENTITY)));
         let mut any = false;
         let ids = materials
             .filter(|_| !table.is_empty())
@@ -372,6 +447,7 @@ impl NativeMap {
         }
         let glass = glass_datablocks(&bundle);
         let surface_table = MapSurfaces::table(&bundle, map_id)?;
+        let identity_table = MapSurfaces::identity_table(&bundle, map_id)?;
         let mut surfaces = MapSurfaces::default();
         let mut breakables = Vec::new();
         let mut movers = Vec::new();
@@ -397,6 +473,7 @@ impl NativeMap {
                             .user_data(MapSurface::Interior as u128),
                     );
                     surfaces.triangles.push(None);
+                    surfaces.identity_triangles.push(None);
                 }
                 Kind::StaticModel | Kind::DatablockModel
                     if node.asset.is_some() && mover_defs.contains_key(&index) =>
@@ -437,6 +514,7 @@ impl NativeMap {
                             surfaces.push(
                                 map_id,
                                 &surface_table,
+                                &identity_table,
                                 &shape,
                                 kept.then_some(&materials[..]),
                             )?;
@@ -495,6 +573,7 @@ impl NativeMap {
                         surfaces.push(
                             map_id,
                             &surface_table,
+                            &identity_table,
                             &shape,
                             kept.then_some(&materials[..]),
                         )?;
@@ -550,6 +629,7 @@ impl NativeMap {
                 climb.strafe,
             ));
             surfaces.triangles.push(None);
+            surfaces.identity_triangles.push(None);
         }
         let mut instances: Vec<TerrainInstance> = match bundle
             .get("terrains")

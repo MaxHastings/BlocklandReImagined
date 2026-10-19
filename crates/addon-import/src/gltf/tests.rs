@@ -1018,6 +1018,118 @@ fn col_meshes_keep_the_query_types_they_block() {
 }
 
 #[test]
+fn a_collider_triangle_reports_the_identity_of_its_material() {
+    // Two collision slabs, their materials named by `bri_material`: a hit says which material it struck.
+    let mut g = super::testing::Gltf::new();
+    let flat = |v: &[Vec3]| v.iter().flat_map(|v| v.to_array()).collect::<Vec<f32>>();
+    let wood = g.material(
+        "a",
+        [1.0; 4],
+        None,
+        json!({ "extras": { "bri_material": "T-WOOD.misc.floor" } }),
+    );
+    let plate = g.material(
+        "b",
+        [1.0; 4],
+        None,
+        json!({ "extras": { "bri_material": "T-METAL.misc.plate", "bri_surface": "metal" } }),
+    );
+    for (name, x, material) in [
+        ("Floor", 0.0, None),
+        ("col_wood", 10.0, Some(wood)),
+        ("col_plate", 20.0, Some(plate)),
+    ] {
+        let (p, _, _, i) = super::testing::cuboid(Vec3::new(x, 0.0, 0.0), Vec3::new(4.0, 1.0, 4.0));
+        let (a, b) = (g.floats(&flat(&p), 3), g.uints(&i, 1));
+        let mut prim = json!({ "attributes": { "POSITION": a }, "indices": b });
+        if let Some(m) = material {
+            prim["material"] = json!(m);
+        }
+        let mesh = g.mesh(name, vec![prim]);
+        g.node(json!({ "name": name, "mesh": mesh }), None);
+    }
+    g.node(
+        json!({ "name": "spawn", "translation": [0.0, 1.0, 0.0] }),
+        None,
+    );
+    let root = tempfile::tempdir().unwrap();
+    let input = root.path().join("ids.glb");
+    std::fs::write(&input, g.glb()).unwrap();
+    let report = import(&Options::new(&input, root.path().join("ids"), Kind::Map)).unwrap();
+    let map = root.path().join("ids/map");
+    let native = bri_sim::map::NativeMap::load(&map, &report.model).unwrap();
+    let ids: std::collections::BTreeSet<_> = native.surfaces.identities.iter().cloned().collect();
+    assert_eq!(
+        ids,
+        ["T-METAL.misc.plate", "T-WOOD.misc.floor"]
+            .map(String::from)
+            .into_iter()
+            .collect()
+    );
+    // One collider holds both slabs' triangles; each triangle names its slab's material.
+    let all: Vec<_> = (0..native.colliders.len())
+        .flat_map(|c| {
+            let n = native.surfaces.identity_triangles[c]
+                .as_ref()
+                .map_or(0, |t| t.len());
+            (0..n as u32).map(move |t| (c, t))
+        })
+        .filter_map(|(c, t)| native.surfaces.identity(c, t))
+        .collect();
+    assert!(all.contains(&"T-WOOD.misc.floor") && all.contains(&"T-METAL.misc.plate"));
+    assert_eq!(native.surfaces.kinds, vec!["metal".to_string()]);
+}
+#[test]
+fn an_empty_named_sound_with_a_sound_becomes_a_looping_source_in_the_scene() {
+    let mut g = super::testing::Gltf::new();
+    let flat = |v: &[Vec3]| v.iter().flat_map(|v| v.to_array()).collect::<Vec<f32>>();
+    let (p, _, _, i) = super::testing::cuboid(Vec3::ZERO, Vec3::new(4.0, 1.0, 4.0));
+    let (a, b) = (g.floats(&flat(&p), 3), g.uints(&i, 1));
+    let mesh = g.mesh(
+        "Slab",
+        vec![json!({ "attributes": { "POSITION": a }, "indices": b })],
+    );
+    g.node(json!({ "name": "Slab", "mesh": mesh }), None);
+    g.node(
+        json!({ "name": "spawn", "translation": [0.0, 1.0, 0.0] }),
+        None,
+    );
+    g.node(
+        json!({ "name": "sound_hum", "translation": [1.0, 2.0, 3.0],
+                "extras": { "bri_sound": "pack:sound/hum", "bri_range": 30.0, "bri_inner": 4.0, "bri_volume": 0.5, "bri_pitch": 1.25 } }),
+        None,
+    );
+    // A node named sound... without bri_sound is no source, and says so.
+    g.node(
+        json!({ "name": "sound_unfinished", "translation": [0.0, 0.0, 0.0] }),
+        None,
+    );
+    let root = tempfile::tempdir().unwrap();
+    let input = root.path().join("hum.glb");
+    std::fs::write(&input, g.glb()).unwrap();
+    let report = import(&Options::new(&input, root.path().join("hum"), Kind::Map)).unwrap();
+    assert_eq!(report.sounds.len(), 1, "{:?}", report.sounds);
+    assert!(
+        report
+            .warnings
+            .iter()
+            .any(|w| w.contains("sound_unfinished")),
+        "{:?}",
+        report.warnings
+    );
+    let scene: bri_content::scene::Scene =
+        serde_json::from_slice(&std::fs::read(root.path().join("hum/map/hum.scene.json")).unwrap())
+            .unwrap();
+    let sounds = scene.sounds().unwrap();
+    assert_eq!(sounds.len(), 1);
+    let s = &sounds[0];
+    assert_eq!(s.sound, "pack:sound/hum");
+    assert_eq!((s.volume, s.pitch), (0.5, 1.25));
+    // Distances are in the model's units, scaled like the rest of the map.
+    assert!((s.range / s.inner - 7.5).abs() < 1e-3);
+    assert!(s.position.iter().all(|v| v.is_finite()));
+}
+#[test]
 fn a_map_without_a_spawn_or_with_col_meshes_says_what_it_did() {
     let (root, report) = import_room(true);
     let shape: Shape = serde_json::from_slice(
