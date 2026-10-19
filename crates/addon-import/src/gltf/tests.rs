@@ -1153,6 +1153,127 @@ fn a_map_imports_as_an_add_on_the_game_loads() {
 }
 
 #[test]
+fn a_layer_blend_material_becomes_a_weighted_layer_pass_the_renderer_draws() {
+    use bri_render::scene::{AlphaMode, MaterialKind};
+    // A terrain slab drawn in two passes: three layers weighted by one map, then one more layer blended over by its own map.
+    let mut g = super::testing::Gltf::new();
+    let tile = |rgb: [u8; 3]| {
+        (
+            2u32,
+            2u32,
+            rgb.iter()
+                .copied()
+                .chain([255])
+                .cycle()
+                .take(16)
+                .collect::<Vec<u8>>(),
+        )
+    };
+    let texture_of = |g: &mut super::testing::Gltf, name: &str, rgb| {
+        g.material(name, [1.0; 4], Some(tile(rgb)), json!({}));
+        g.json["textures"].as_array().unwrap().len() - 1
+    };
+    let (sand, rock, snow, weights_a, weights_b) = (
+        texture_of(&mut g, "sand", [200, 180, 120]),
+        texture_of(&mut g, "rock", [90, 90, 90]),
+        texture_of(&mut g, "snow", [240, 240, 250]),
+        texture_of(&mut g, "weights_a", [255, 0, 0]),
+        texture_of(&mut g, "weights_b", [128, 0, 0]),
+    );
+    let base = g.material(
+        "pass0",
+        [1.0; 4],
+        None,
+        json!({ "extras": { "bri_layer_blend": {
+            "layers": [
+                { "index": sand, "transform": [0.5, 0.0, 0.0, 0.5, 0.0, 0.0] },
+                { "index": rock, "transform": [0.25, 0.0, 0.0, 0.25, 0.5, 0.25] },
+                { "index": snow, "transform": [1.0, 0.0, 0.0, 1.0, 0.0, 0.0] },
+            ],
+            "weights": { "index": weights_a },
+        } } }),
+    );
+    let over = g.material(
+        "pass1",
+        [1.0; 4],
+        None,
+        json!({ "alphaMode": "BLEND", "extras": { "bri_layer_blend": {
+            "layers": [{ "index": snow, "transform": [1.0, 0.0, 0.0, 1.0, 0.0, 0.0] }],
+            "weights": { "index": weights_b },
+        } } }),
+    );
+    let (p, n, uv, i) = super::testing::cuboid(Vec3::ZERO, Vec3::new(4.0, 1.0, 4.0));
+    let flat = |v: &[Vec3]| v.iter().flat_map(|v| v.to_array()).collect::<Vec<f32>>();
+    let (a, b, c, d) = (
+        g.floats(&flat(&p), 3),
+        g.floats(&flat(&n), 3),
+        g.floats(&uv.concat(), 2),
+        g.uints(&i, 1),
+    );
+    let mesh = g.mesh(
+        "Terrain",
+        [base, over]
+            .iter()
+            .map(|m| json!({ "attributes": { "POSITION": a, "NORMAL": b, "TEXCOORD_0": c, "TEXCOORD_1": c }, "indices": d, "material": m }))
+            .collect(),
+    );
+    g.node(json!({ "name": "Terrain", "mesh": mesh }), None);
+    g.node(
+        json!({ "name": "spawn", "translation": [0.0, 2.0, 0.0] }),
+        None,
+    );
+    let root = tempfile::tempdir().unwrap();
+    let input = root.path().join("terrain.glb");
+    std::fs::write(&input, g.glb()).unwrap();
+    let report = import(&Options::new(
+        &input,
+        root.path().join("terrain"),
+        Kind::Map,
+    ))
+    .unwrap();
+    let dir = root.path().join("terrain");
+    let shape: Shape =
+        serde_json::from_slice(&std::fs::read(dir.join("map/terrain.shape.json")).unwrap())
+            .unwrap();
+    let blends: Vec<_> = shape
+        .materials
+        .iter()
+        .filter_map(|m| m.layers.as_ref())
+        .collect();
+    assert_eq!(blends.len(), 2, "both passes keep their layer lists");
+    assert_eq!(blends[0].layers.len(), 3);
+    assert_eq!(blends[0].transforms[1], [0.25, 0.0, 0.0, 0.25, 0.5, 0.25]);
+    assert_eq!(blends[1].layers.len(), 1);
+    // The renderer draws them as LayerBlend materials: the second blends over the first, and a layer-blended surface's vertex light starts neutral (0.5).
+    let drawn =
+        bri_render::scene_loader::load_map_bundle_dynamic(&dir.join("map"), &report.model).unwrap();
+    let layered: Vec<_> = drawn
+        .scene
+        .materials
+        .iter()
+        .filter(|m| m.kind == MaterialKind::LayerBlend)
+        .collect();
+    assert_eq!(layered.len(), 2);
+    assert_eq!(
+        layered[0].layer_transforms.unwrap()[1],
+        [0.25, 0.0, 0.0, 0.25, 0.5, 0.25]
+    );
+    assert_eq!(layered[0].alpha, AlphaMode::Opaque);
+    assert_eq!(layered[1].alpha, AlphaMode::Blend);
+    assert_ne!(
+        layered[0].images[9], layered[1].images[9],
+        "each pass has its own weight map"
+    );
+    assert!(
+        drawn
+            .scene
+            .vertices
+            .iter()
+            .any(|v| v.color[0] == 0.5 && v.color[3] == 1.0)
+    );
+}
+
+#[test]
 fn a_map_without_a_spawn_or_with_col_meshes_says_what_it_did() {
     let (root, report) = import_room(true);
     let shape: Shape = serde_json::from_slice(

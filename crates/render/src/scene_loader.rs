@@ -1011,6 +1011,46 @@ fn load_static_shape(
                 [0.0; 4],
             ]);
         }
+        // A terrain's layers: up to four textures weighted by one map's channels (its materials name them), lit by the vertex
+        // light only. Layers the material does not have repeat the first and carry no weight.
+        if let Some(blend) = authored.layers.as_ref() {
+            let image_of =
+                |index: usize, srgb: bool, out: &mut SceneData, cache: &mut _| -> Result<usize> {
+                    let file = bindings
+                        .iter()
+                        .find(|b| {
+                            b["asset"].as_str() == Some(id)
+                                && b["shape_material"].as_u64() == Some(index as u64)
+                                && b["skin"].as_str().unwrap_or("") == skin
+                        })
+                        .and_then(|b| b["texture"].as_str())
+                        .with_context(|| format!("Missing layer texture {id}/{index}"))?;
+                    texture(root, file, srgb, out, cache)
+                };
+            ensure!(
+                (1..=4).contains(&blend.layers.len())
+                    && blend.transforms.len() == blend.layers.len(),
+                "Static material {id}/{} needs one to four layers with a transform each",
+                authored.name
+            );
+            let first = image_of(blend.layers[0], true, out, cache)?;
+            material.kind = MaterialKind::LayerBlend;
+            material.images[0] = first;
+            let mut transforms = [[1.0, 0.0, 0.0, 1.0, 0.0, 0.0]; 4];
+            for (i, layer) in blend.layers.iter().enumerate() {
+                material.images[i] = if i == 0 {
+                    first
+                } else {
+                    image_of(*layer, true, out, cache)?
+                };
+                transforms[i] = blend.transforms[i];
+            }
+            for i in blend.layers.len()..4 {
+                material.images[i] = first;
+            }
+            material.images[9] = image_of(blend.weights, false, out, cache)?;
+            material.layer_transforms = Some(transforms);
+        }
         // Torque culls DTS back faces and blends only Translucent materials;
         // opaque ones ignore texture alpha entirely (TSMesh::initMaterials,
         // TSMesh::setMaterial). Palm frond stems sit on alpha-0 texels. A
@@ -1024,6 +1064,8 @@ fn load_static_shape(
             |blend| {
                 Ok(match blend {
                     "opaque" => AlphaMode::Opaque,
+                    // A layer pass blended over the one before (a terrain's alpha-map layers) blends by its weights, whatever its stand-in colour image says.
+                    "alpha" if authored.layers.is_some() => AlphaMode::Blend,
                     "alpha" => alpha(&out.images[diffuse]),
                     // Torque's additive DTS materials (glass, glows).
                     _ => AlphaMode::Additive,

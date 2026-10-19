@@ -151,6 +151,7 @@ pub fn material(name: &str, blend: &str) -> Material {
         metal: None,
         surface: None,
         tint: None,
+        layers: None,
     }
 }
 

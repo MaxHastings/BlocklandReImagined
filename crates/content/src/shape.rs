@@ -184,6 +184,22 @@ pub struct Material {
     /// the change-colour mask of a team-coloured armour plate ([`TintMask`]).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tint: Option<TintMask>,
+    /// Up to four diffuse layers blended by the channels of one weight map, each with its own texture-coordinate
+    /// transform, lit by the vertex light only (a terrain's layers). See [`LayerBlend`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub layers: Option<LayerBlend>,
+}
+/// A material that is a weighted sum of up to four texture layers, as a terrain's are: the weight map's red, green, blue and
+/// alpha weight layers 0 to 3, read with the mesh's second UV set; each layer's own UVs go through its affine first.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LayerBlend {
+    /// The materials (by index) whose textures are the layers, in weight-channel order (1 to 4).
+    pub layers: Vec<usize>,
+    /// The material whose texture holds the weights (red, green, blue, alpha).
+    pub weights: usize,
+    /// Per layer `[a, b, c, d, tx, ty]`, with `uv' = (a u + c v + tx, b u + d v + ty)`.
+    pub transforms: Vec<[f32; 6]>,
 }
 /// Texture coordinates in UV space: scale, rotate about center, then offset
 /// and scroll. Angles are degrees, rates per second. Geometry and lighting UVs stay put.

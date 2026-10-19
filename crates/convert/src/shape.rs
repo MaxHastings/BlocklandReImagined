@@ -884,6 +884,7 @@ pub fn read_dts(data: &[u8], id: String) -> Result<(Shape, Provenance)> {
             metal: None,
             surface: None,
             tint: None,
+            layers: None,
         });
     }
     for (material, f) in materials.iter().zip(&flags) {

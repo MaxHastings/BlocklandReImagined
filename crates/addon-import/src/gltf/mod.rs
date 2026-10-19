@@ -27,8 +27,8 @@ pub mod testing;
 use anyhow::{Context, Result, bail, ensure};
 use bri_console::Clamp;
 use bri_content::shape::{
-    Animation, Detail, Influence, Material, Mesh, Metal, Node, NodeTrack, Object, Primitive, Shape,
-    Skin, Surface,
+    Animation, Detail, Influence, LayerBlend, Material, Mesh, Metal, Node, NodeTrack, Object,
+    Primitive, Shape, Skin, Surface,
 };
 use glam::{Mat4, Quat, Vec3};
 pub use read::Document;
@@ -765,6 +765,7 @@ pub fn convert(
         material_sources.push(index);
         material_index.insert(index, at);
         // Each surface map is a material of its own, which the surface names.
+        let transforms = maps.layer_transforms.clone();
         for (suffix, png) in maps.named() {
             let mut helper = materials[at].clone();
             helper.name = format!("{name}_{suffix}");
@@ -774,10 +775,25 @@ pub fn convert(
             helper.blend = "opaque".into();
             helper.metal = None;
             helper.surface = None;
+            helper.layers = None;
             textures.insert(helper.name.clone(), png);
             materials.push(helper);
             material_sources.push(None);
             let k = Some(materials.len() - 1);
+            // A terrain's layers and weight map name their materials in a `LayerBlend` instead.
+            if suffix == "weights" || suffix.starts_with("layer") {
+                let blend = materials[at].layers.get_or_insert_with(|| LayerBlend {
+                    layers: Vec::new(),
+                    weights: 0,
+                    transforms: transforms.clone(),
+                });
+                match k {
+                    Some(k) if suffix == "weights" => blend.weights = k,
+                    Some(k) => blend.layers.push(k),
+                    None => {}
+                }
+                continue;
+            }
             let surface = materials[at]
                 .surface
                 .as_mut()
@@ -2146,6 +2162,45 @@ fn make_material(
             maps.lightmap = Some(png_of(&m["extras"]["bri_lightmap"], report)?);
         }
     }
+    // `extras.bri_layer_blend`: `layers`, up to four {texture reference (`index`), `transform` [a, b, c, d, tx, ty]}, and `weights`, a
+    // texture reference whose red, green, blue and alpha weight them, read with the second UV set. The material is then a weighted sum
+    // of the layers (a terrain's), lit by the vertex light only.
+    if let Some(spec) = m["extras"].get("bri_layer_blend").filter(|v| v.is_object()) {
+        let layers = spec["layers"].as_array().map(Vec::as_slice).unwrap_or(&[]);
+        ensure!(
+            (1..=4).contains(&layers.len()),
+            "material `{source}`'s bri_layer_blend needs 1 to 4 layers"
+        );
+        for layer in layers {
+            let transform: Vec<f32> = layer["transform"]
+                .as_array()
+                .map(|a| {
+                    a.iter()
+                        .filter_map(|v| v.as_f64())
+                        .map(|v| v as f32)
+                        .collect()
+                })
+                .unwrap_or_default();
+            ensure!(
+                transform.len() == 6 && transform.iter().all(|v| v.is_finite() && v.abs() <= 1.0e6),
+                "material `{source}`'s bri_layer_blend layer needs a `transform` of six numbers"
+            );
+            maps.layer_transforms.push([
+                transform[0],
+                transform[1],
+                transform[2],
+                transform[3],
+                transform[4],
+                transform[5],
+            ]);
+            maps.layers.push(png_of(layer, report)?);
+        }
+        ensure!(
+            spec["weights"].is_object(),
+            "material `{source}`'s bri_layer_blend needs `weights`"
+        );
+        maps.weights = Some(png_of(&spec["weights"], report)?);
+    }
     let textured = maps.normal.is_some()
         || maps.metallic_roughness.is_some()
         || maps.occlusion.is_some()
@@ -2231,6 +2286,7 @@ fn make_material(
             metal,
             surface,
             tint: None,
+            layers: None,
         },
         png,
         maps,
@@ -2306,11 +2362,16 @@ pub(crate) struct SurfaceMaps {
     pub emissive: Option<Vec<u8>>,
     pub detail: Option<Vec<u8>>,
     pub lightmap: Option<Vec<u8>>,
+    /// `bri_layer_blend`: up to four layer textures, each layer's transform, and the weight map.
+    pub layers: Vec<Vec<u8>>,
+    pub layer_transforms: Vec<[f32; 6]>,
+    pub weights: Option<Vec<u8>>,
 }
 impl SurfaceMaps {
     /// Each map with the suffix its material takes.
     pub fn named(self) -> Vec<(&'static str, Vec<u8>)> {
-        [
+        const LAYERS: [&str; 4] = ["layer0", "layer1", "layer2", "layer3"];
+        let mut named: Vec<(&'static str, Vec<u8>)> = [
             ("normal", self.normal),
             ("metal_rough", self.metallic_roughness),
             ("occlusion", self.occlusion),
@@ -2320,7 +2381,16 @@ impl SurfaceMaps {
         ]
         .into_iter()
         .filter_map(|(k, png)| Some((k, png?)))
-        .collect()
+        .collect();
+        named.extend(
+            self.layers
+                .into_iter()
+                .take(4)
+                .enumerate()
+                .map(|(i, png)| (LAYERS[i], png)),
+        );
+        named.extend(self.weights.map(|png| ("weights", png)));
+        named
     }
 }
 
