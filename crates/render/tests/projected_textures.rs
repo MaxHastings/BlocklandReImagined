@@ -17,6 +17,16 @@ struct Case {
     far: f32,
     gradient: Option<([u8; 8], Mat4)>,
     normal_fade: Option<Vec3>,
+    /// A 2 x 1 picture (left, right) instead of the single texel, mapped to
+    /// `s = centre` so the floor's middle lands at `s = centre`.
+    wide: Option<[u8; 8]>,
+    centre: f32,
+    wrap: [bool; 2],
+    /// The colour every pixel of the surface-info buffer holds (category in r, alpha in a).
+    info: Option<[u8; 4]>,
+    accept: u32,
+    surface_alpha: bool,
+    fog: Option<ViewFog>,
 }
 
 fn centre(case: &Case) -> Result<[u8; 3]> {
@@ -67,7 +77,42 @@ fn centre(case: &Case) -> Result<[u8; 3]> {
 
     // Pass 2: the projection.
     let mut projectors = DepthProjectors::new(&device, &queue, format);
-    let image = projectors.add_image(&device, &queue, &case.texel, 1, 1, true);
+    let image = match &case.wide {
+        Some(texels) => projectors.add_image(&device, &queue, texels, 2, 1, true),
+        None => projectors.add_image(&device, &queue, &case.texel, 1, 1, true),
+    };
+    let info_view = case.info.map(|colour| {
+        let texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("surface info"),
+            size: wgpu::Extent3d {
+                width: 32,
+                height: 32,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8Unorm,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        let data: Vec<u8> = (0..32 * 32).flat_map(|_| colour).collect();
+        queue.write_texture(
+            texture.as_image_copy(),
+            &data,
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(128),
+                rows_per_image: Some(32),
+            },
+            wgpu::Extent3d {
+                width: 32,
+                height: 32,
+                depth_or_array_layers: 1,
+            },
+        );
+        texture.create_view(&Default::default())
+    });
     let gradient = case.gradient.as_ref().map(|(texels, m)| {
         let mut rgba = Vec::new();
         for t in texels.chunks(4) {
@@ -79,11 +124,16 @@ fn centre(case: &Case) -> Result<[u8; 3]> {
         )
     });
     // x in [-1, 1] -> s in [0, 1]; y in [-1, 1] -> t in [1, 0]; orthographic.
+    let (s_scale, s_offset) = if case.wide.is_some() {
+        (0.0, case.centre)
+    } else {
+        (0.5, 0.5)
+    };
     let world_to_texture = Mat4::from_cols_array(&[
-        0.5, 0.0, 0.0, 0.0, //
+        s_scale, 0.0, 0.0, 0.0, //
         0.0, -0.5, 0.0, 0.0, //
         0.0, 0.0, 0.0, 0.0, //
-        0.5, 0.5, 0.0, 1.0,
+        s_offset, 0.5, 0.0, 1.0,
     ]);
     let projection_set = Projection {
         image,
@@ -97,6 +147,10 @@ fn centre(case: &Case) -> Result<[u8; 3]> {
             Vec3::new(-1.0, -1.0, -case.far),
             Vec3::new(1.0, 1.0, -case.near),
         )),
+        wrap: case.wrap,
+        accept: case.accept,
+        surface_alpha: case.surface_alpha,
+        draw_last: false,
     };
     projectors.prepare(
         &device,
@@ -106,6 +160,8 @@ fn centre(case: &Case) -> Result<[u8; 3]> {
             camera: Vec3::ZERO,
             size: (32, 32),
             depth: &depth_view,
+            surface_info: info_view.as_ref(),
+            fog: case.fog,
         },
         &[projection_set],
     );
@@ -203,6 +259,13 @@ fn case(texel: [u8; 4], blend: ProjectionBlend) -> Case {
         far: 6.0,
         gradient: None,
         normal_fade: None,
+        wide: None,
+        centre: 0.5,
+        wrap: [false, false],
+        info: None,
+        accept: 0,
+        surface_alpha: false,
+        fog: None,
     }
 }
 
@@ -257,5 +320,47 @@ fn the_gradient_and_facing_fades_scale_the_projection() -> Result<()> {
     let mut away = case([100, 0, 0, 255], ProjectionBlend::Add);
     away.normal_fade = Some(Vec3::Z);
     near(centre(&away)?, FLOOR);
+    Ok(())
+}
+
+#[test]
+fn addressing_info_buffer_and_fog_shape_the_projection() -> Result<()> {
+    // A 2 x 1 picture, red then blue, with the floor's middle at s = 1.25: wrapping reads
+    // the red texel (0.25), clamping the blue edge (1.0).
+    let mut wrapped = case([0; 4], ProjectionBlend::Alpha);
+    wrapped.wide = Some([255, 0, 0, 255, 0, 0, 255, 255]);
+    wrapped.centre = 1.25;
+    wrapped.wrap = [true, false];
+    near(centre(&wrapped)?, [255, 0, 0]);
+    wrapped.wrap = [false, false];
+    near(centre(&wrapped)?, [0, 0, 255]);
+
+    // The surface-info buffer: categories select, and its alpha scales (the base mask).
+    let mut selected = case([255, 0, 0, 255], ProjectionBlend::Alpha);
+    selected.info = Some([4, 0, 0, 255]);
+    selected.accept = 4;
+    near(centre(&selected)?, [255, 0, 0]);
+    selected.accept = 1 | 2;
+    near(centre(&selected)?, FLOOR);
+    let mut masked = case([255, 0, 0, 255], ProjectionBlend::Alpha);
+    masked.info = Some([255, 0, 0, 128]);
+    masked.surface_alpha = true;
+    near(centre(&masked)?, [178, 50, 50]);
+
+    // Fog at depth 5 with range 0..10 is half strength: additive fades toward black,
+    // alpha-blended toward the fog colour.
+    let fog = |color| {
+        Some(ViewFog {
+            start: 0.0,
+            end: 10.0,
+            color,
+        })
+    };
+    let mut added = case([100, 0, 0, 255], ProjectionBlend::Add);
+    added.fog = fog([0.0, 1.0, 0.0]);
+    near(centre(&added)?, [150, 100, 100]);
+    let mut blended = case([255, 0, 0, 255], ProjectionBlend::Alpha);
+    blended.fog = fog([0.0, 1.0, 0.0]);
+    near(centre(&blended)?, [128, 128, 0]);
     Ok(())
 }

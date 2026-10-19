@@ -105,6 +105,38 @@ pub struct Fog {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct ImageId(pub usize);
 
+/// How a projected picture joins the colour a sprite already has.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ProjectionMode {
+    /// picture x colour.
+    Modulate,
+    /// picture x colour x 2.
+    Modulate2X,
+    /// picture x its own alpha + colour x (1 - that alpha).
+    ByPictureAlpha,
+}
+impl ProjectionMode {
+    fn code(self) -> f32 {
+        match self {
+            ProjectionMode::Modulate => 0.0,
+            ProjectionMode::Modulate2X => 1.0,
+            ProjectionMode::ByPictureAlpha => 2.0,
+        }
+    }
+}
+
+/// A picture projected onto a batch's sprites through their world positions, joined to
+/// the colour after the sprite's own texture and vertex colour. Alpha is untouched.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SpriteProjection {
+    pub image: ImageId,
+    /// World position to texture space `(s, t, q)`.
+    pub world_to_texture: Mat4,
+    /// Divide `(s, t)` by `q` (perspective).
+    pub divide: bool,
+    pub mode: ProjectionMode,
+}
+
 /// How a batch's indices join into primitives.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub enum Topology {
@@ -142,6 +174,8 @@ pub struct State {
     pub two_sided: bool,
     pub fog: Option<Fog>,
     pub topology: Topology,
+    /// Up to four projected pictures.
+    pub projections: [Option<SpriteProjection>; 4],
 }
 impl State {
     pub fn new(image: ImageId) -> Self {
@@ -160,6 +194,7 @@ impl State {
             two_sided: true,
             fog: None,
             topology: Topology::Triangles,
+            projections: [None; 4],
         }
     }
 }
@@ -185,6 +220,9 @@ struct BatchUniform {
     /// has constant, fog start, fog end, fog enabled
     fog: [f32; 4],
     fog_color: [f32; 4],
+    projection_matrices: [[[f32; 4]; 4]; 4],
+    /// enabled, divide, mode, 0
+    projection_modes: [[f32; 4]; 4],
 }
 
 #[derive(Clone, PartialEq, Eq, Hash)]
@@ -264,6 +302,42 @@ impl DynamicSprites {
                 ),
                 entry(
                     2,
+                    wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                ),
+                entry(
+                    3,
+                    wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                ),
+                entry(
+                    4,
+                    wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                ),
+                entry(
+                    5,
+                    wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                ),
+                entry(
+                    6,
+                    wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                ),
+                entry(
+                    7,
                     wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
                 ),
             ],
@@ -463,6 +537,14 @@ impl DynamicSprites {
         self.pipelines.insert(key.clone(), pipeline);
     }
 
+    /// The view of projection slot `slot`'s picture, or any picture when it is unused.
+    fn projection_view(&self, state: &State, slot: usize) -> &wgpu::TextureView {
+        match state.projections[slot] {
+            Some(p) => &self.images[p.image.0].view,
+            None => &self.images[state.image.0].view,
+        }
+    }
+
     /// Upload this frame's geometry. `batches` index into `vertices`.
     pub fn prepare(
         &mut self,
@@ -537,6 +619,15 @@ impl DynamicSprites {
                     if fog.is_some() { 1.0 } else { 0.0 },
                 ],
                 fog_color: fog.map_or([0.0; 4], |f| [f.color[0], f.color[1], f.color[2], 0.0]),
+                projection_matrices: state.projections.map(|p| {
+                    p.map_or(Mat4::IDENTITY, |p| p.world_to_texture)
+                        .to_cols_array_2d()
+                }),
+                projection_modes: state.projections.map(|p| {
+                    p.map_or([0.0; 4], |p| {
+                        [1.0, if p.divide { 1.0 } else { 0.0 }, p.mode.code(), 0.0]
+                    })
+                }),
             };
             let uniform = device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("dynamic sprites batch"),
@@ -564,6 +655,34 @@ impl DynamicSprites {
                     wgpu::BindGroupEntry {
                         binding: 2,
                         resource: wgpu::BindingResource::Sampler(sampler),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 3,
+                        resource: wgpu::BindingResource::TextureView(
+                            self.projection_view(&state, 0),
+                        ),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 4,
+                        resource: wgpu::BindingResource::TextureView(
+                            self.projection_view(&state, 1),
+                        ),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 5,
+                        resource: wgpu::BindingResource::TextureView(
+                            self.projection_view(&state, 2),
+                        ),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 6,
+                        resource: wgpu::BindingResource::TextureView(
+                            self.projection_view(&state, 3),
+                        ),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 7,
+                        resource: wgpu::BindingResource::Sampler(&self.samplers[3]),
                     },
                 ],
             });

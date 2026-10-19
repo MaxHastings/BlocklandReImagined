@@ -293,3 +293,48 @@ fn line_batches_draw_the_indices_as_segments() -> Result<()> {
     );
     Ok(())
 }
+
+#[test]
+fn projected_pictures_join_the_colour_by_their_mode() -> Result<()> {
+    use glam::Mat4;
+    let white = [1., 1., 1., 1.];
+    fn project(s: &mut State, mode: ProjectionMode) {
+        s.projections[0] = Some(SpriteProjection {
+            image: ImageId(0),
+            world_to_texture: Mat4::IDENTITY,
+            divide: false,
+            mode,
+        });
+    }
+    // The picture is the sprite's own 128 grey: 0.5 x 0.5 = 64 modulated, 128 doubled.
+    near(
+        centre(
+            [128, 128, 128, 255],
+            &[(-5., white, |s| project(s, ProjectionMode::Modulate))],
+        )?,
+        [64, 64, 64],
+    );
+    near(
+        centre(
+            [128, 128, 128, 255],
+            &[(-5., white, |s| project(s, ProjectionMode::Modulate2X))],
+        )?,
+        [128, 128, 128],
+    );
+    // An opaque picture by its own alpha replaces the colour.
+    near(
+        centre(
+            [128, 128, 128, 255],
+            &[(-5., [1., 0., 0., 1.], |s| {
+                project(s, ProjectionMode::ByPictureAlpha)
+            })],
+        )?,
+        [128, 128, 128],
+    );
+    // No projection leaves it alone.
+    near(
+        centre([128, 128, 128, 255], &[(-5., white, |_| {})])?,
+        [128, 128, 128],
+    );
+    Ok(())
+}

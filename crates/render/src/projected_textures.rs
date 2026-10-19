@@ -49,6 +49,17 @@ pub struct Projection {
     pub normal_fade: Option<Vec3>,
     /// A world box around the volume, used to limit the pass to the screen area it covers.
     pub bounds: Option<(Vec3, Vec3)>,
+    /// Whether the picture repeats (true) or its edge texels extend (false) past 0..1 on
+    /// `s` and `t`. The volume alone limits where it lands.
+    pub wrap: [bool; 2],
+    /// With a surface-info buffer: the projection lands only on pixels whose category bits
+    /// share one of these (0 lands on every pixel).
+    pub accept: u32,
+    /// With a surface-info buffer: scale the projection by the pixel's surface alpha (the
+    /// base material's mask).
+    pub surface_alpha: bool,
+    /// Drawn after the projections that are not.
+    pub draw_last: bool,
 }
 
 #[repr(C)]
@@ -57,7 +68,11 @@ struct Globals {
     inverse_view_projection: [[f32; 4]; 4],
     view_projection: [[f32; 4]; 4],
     camera: [f32; 4],
+    /// width, height, surface info present, fog enabled
     size: [f32; 4],
+    /// fog start, end, 0, 0
+    fog: [f32; 4],
+    fog_color: [f32; 4],
 }
 
 #[repr(C)]
@@ -70,6 +85,8 @@ struct ProjectionUniform {
     modes: [f32; 4],
     /// xyz direction, w 1 when the normal fade is on
     forward: [f32; 4],
+    /// accept bits, surface alpha flag, 0, 0
+    extra: [u32; 4],
 }
 
 struct Image {
@@ -78,6 +95,7 @@ struct Image {
 
 struct Prepared {
     blend: ProjectionBlend,
+    draw_last: bool,
     bind: wgpu::BindGroup,
     /// x, y, width, height in pixels.
     scissor: [u32; 4],
@@ -90,7 +108,9 @@ pub struct DepthProjectors {
     globals_layout: wgpu::BindGroupLayout,
     projection_layout: wgpu::BindGroupLayout,
     target: wgpu::TextureFormat,
-    sampler: wgpu::Sampler,
+    samplers: [wgpu::Sampler; 4],
+    clamp_sampler: wgpu::Sampler,
+    blank_info: wgpu::TextureView,
     globals_buffer: wgpu::Buffer,
     images: Vec<Image>,
     blank: wgpu::TextureView,
@@ -127,6 +147,22 @@ pub struct View<'a> {
     pub size: (u32, u32),
     /// The scene's depth, single-sampled.
     pub depth: &'a wgpu::TextureView,
+    /// A screen-sized `Rgba8Unorm` buffer the host drew with what each pixel is: category
+    /// bits in `r` (as 0..255) and a surface alpha in `a`. None treats every pixel as
+    /// category bits 255 with alpha 1.
+    pub surface_info: Option<&'a wgpu::TextureView>,
+    /// Linear distance fog applied to the projection itself.
+    pub fog: Option<ViewFog>,
+}
+
+/// Distance fog as a projection sees it: the colour fades toward a neutral value by view
+/// depth, `clamp((end - d) / (end - start), 0, 1)`. Modulating projections fade toward 0.5,
+/// additive ones toward black and alpha-blended ones toward `color`.
+#[derive(Clone, Copy, Debug)]
+pub struct ViewFog {
+    pub start: f32,
+    pub end: f32,
+    pub color: [f32; 3],
 }
 
 impl DepthProjectors {
@@ -159,6 +195,14 @@ impl DepthProjectors {
                         multisampled: false,
                     },
                 ),
+                entry(
+                    2,
+                    wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                ),
             ],
         });
         let projection_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -169,6 +213,10 @@ impl DepthProjectors {
                 entry(2, float_texture),
                 entry(
                     3,
+                    wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                ),
+                entry(
+                    4,
                     wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
                 ),
             ],
@@ -190,14 +238,31 @@ impl DepthProjectors {
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-        let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
-            address_mode_u: wgpu::AddressMode::ClampToEdge,
-            address_mode_v: wgpu::AddressMode::ClampToEdge,
-            mag_filter: wgpu::FilterMode::Linear,
-            min_filter: wgpu::FilterMode::Linear,
-            mipmap_filter: wgpu::MipmapFilterMode::Linear,
-            ..Default::default()
-        });
+        let make = |u: bool, v: bool| {
+            let mode = |wrap| {
+                if wrap {
+                    wgpu::AddressMode::Repeat
+                } else {
+                    wgpu::AddressMode::ClampToEdge
+                }
+            };
+            device.create_sampler(&wgpu::SamplerDescriptor {
+                address_mode_u: mode(u),
+                address_mode_v: mode(v),
+                mag_filter: wgpu::FilterMode::Linear,
+                min_filter: wgpu::FilterMode::Linear,
+                mipmap_filter: wgpu::MipmapFilterMode::Linear,
+                ..Default::default()
+            })
+        };
+        let samplers = [
+            make(false, false),
+            make(true, false),
+            make(false, true),
+            make(true, true),
+        ];
+        let clamp_sampler = make(false, false);
+        let blank_info = Self::texture(device, queue, &[255; 4], 1, 1, false);
         let blank = Self::texture(device, queue, &[255; 4], 1, 1, false);
         Self {
             shader,
@@ -205,7 +270,9 @@ impl DepthProjectors {
             globals_layout,
             projection_layout,
             target,
-            sampler,
+            samplers,
+            clamp_sampler,
+            blank_info,
             globals_buffer,
             images: Vec::new(),
             blank,
@@ -332,11 +399,23 @@ impl DepthProjectors {
     ) {
         let (view_projection, camera, size, depth) =
             (view.view_projection, view.camera, view.size, view.depth);
+        let fog = view.fog;
         let globals = Globals {
             inverse_view_projection: view_projection.inverse().to_cols_array_2d(),
             view_projection: view_projection.to_cols_array_2d(),
             camera: [camera.x, camera.y, camera.z, 1.0],
-            size: [size.0 as f32, size.1 as f32, 0.0, 0.0],
+            size: [
+                size.0 as f32,
+                size.1 as f32,
+                if view.surface_info.is_some() {
+                    1.0
+                } else {
+                    0.0
+                },
+                if fog.is_some() { 1.0 } else { 0.0 },
+            ],
+            fog: fog.map_or([0.0; 4], |f| [f.start, f.end, 0.0, 0.0]),
+            fog_color: fog.map_or([0.0; 4], |f| [f.color[0], f.color[1], f.color[2], 1.0]),
         };
         queue.write_buffer(&self.globals_buffer, 0, bytemuck::bytes_of(&globals));
         self.globals_bind = Some(device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -350,6 +429,12 @@ impl DepthProjectors {
                 wgpu::BindGroupEntry {
                     binding: 1,
                     resource: wgpu::BindingResource::TextureView(depth),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::TextureView(
+                        view.surface_info.unwrap_or(&self.blank_info),
+                    ),
                 },
             ],
         }));
@@ -381,6 +466,12 @@ impl DepthProjectors {
                     forward.z,
                     if p.normal_fade.is_some() { 1.0 } else { 0.0 },
                 ],
+                extra: [
+                    if p.accept == 0 { u32::MAX } else { p.accept },
+                    u32::from(p.surface_alpha),
+                    0,
+                    0,
+                ],
             };
             let uniform = device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("projected texture"),
@@ -407,12 +498,19 @@ impl DepthProjectors {
                     },
                     wgpu::BindGroupEntry {
                         binding: 3,
-                        resource: wgpu::BindingResource::Sampler(&self.sampler),
+                        resource: wgpu::BindingResource::Sampler(
+                            &self.samplers[usize::from(p.wrap[0]) + 2 * usize::from(p.wrap[1])],
+                        ),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 4,
+                        resource: wgpu::BindingResource::Sampler(&self.clamp_sampler),
                     },
                 ],
             });
             self.prepared.push(Prepared {
                 blend: p.blend,
+                draw_last: p.draw_last,
                 bind,
                 scissor: scissor(view_projection, size, p.bounds),
                 _uniform: uniform,
@@ -426,7 +524,12 @@ impl DepthProjectors {
             return;
         };
         pass.set_bind_group(0, globals, &[]);
-        for p in &self.prepared {
+        let ordered = self
+            .prepared
+            .iter()
+            .filter(|p| !p.draw_last)
+            .chain(self.prepared.iter().filter(|p| p.draw_last));
+        for p in ordered {
             if p.scissor[2] == 0 || p.scissor[3] == 0 {
                 continue;
             }
