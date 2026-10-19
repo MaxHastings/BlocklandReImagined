@@ -110,6 +110,22 @@ mod tests {
         let mut material = Material::vertex_lit("odd", 0);
         let error = apply(&mut material, &source, "tree", |_| Ok(AlphaMode::Opaque)).unwrap_err();
         assert!(error.to_string().contains("multiply"));
+        // A loader that maps the frame-buffer blends may accept them; a cutout on one is refused.
+        let mut seen = String::new();
+        apply_with(&mut material, &source, "map", true, |blend| {
+            seen = blend.into();
+            Ok(AlphaMode::Opaque)
+        })
+        .unwrap();
+        assert_eq!(seen, "multiply");
+        source.alpha_cutoff = Some(0.5);
+        assert!(
+            apply_with(&mut material, &source, "map", true, |_| Ok(
+                AlphaMode::Opaque
+            ))
+            .is_err()
+        );
+        source.alpha_cutoff = None;
         source.blend = "additive".into();
         source.alpha_cutoff = Some(0.5);
         assert!(apply(&mut material, &source, "tree", |_| Ok(AlphaMode::Opaque)).is_err());

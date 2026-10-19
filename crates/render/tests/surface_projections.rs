@@ -6,7 +6,7 @@ use anyhow::Result;
 use bri_render::dynamic_sprites::{Batch, DynamicSprites, SpriteVertex, State};
 use bri_render::projected_textures::{ProjectionBlend, ViewFog};
 use bri_render::surface_projections::*;
-use glam::{Mat4, Vec3};
+use glam::{Mat3, Mat4, Vec3};
 
 const FLOOR: [u8; 3] = [100, 100, 100];
 
@@ -26,6 +26,7 @@ struct Case {
     fog: Option<ViewFog>,
     wide: Option<[u8; 8]>,
     wrap: bool,
+    cube: Option<([[u8; 4]; 6], Mat3)>,
 }
 
 fn case(texel: [u8; 4], blend: ProjectionBlend) -> Case {
@@ -44,6 +45,7 @@ fn case(texel: [u8; 4], blend: ProjectionBlend) -> Case {
         fog: None,
         wide: None,
         wrap: false,
+        cube: None,
     }
 }
 
@@ -121,6 +123,16 @@ fn centre(case: &Case) -> Result<[u8; 3]> {
         .gradient
         .as_ref()
         .map(|(t, m)| (surfaces.add_image(&device, &queue, t, 1, 2, false), *m));
+    let reflection = case.cube.map(|(faces, direction)| Reflection {
+        cube: surfaces.add_cube(
+            &device,
+            &queue,
+            &faces.map(|texel| texel.repeat(16 * 16)),
+            16,
+            true,
+        ),
+        direction,
+    });
     let vertices: Vec<SurfaceVertex> = corners
         .map(|(x, y)| SurfaceVertex {
             position: [x, y, case.z],
@@ -150,6 +162,7 @@ fn centre(case: &Case) -> Result<[u8; 3]> {
         gradient,
         mask,
         base,
+        reflection,
         normal_fade: case.normal_fade,
         vertex_fade: case.vertex_fade,
         two_sided: true,
@@ -335,5 +348,40 @@ fn fades_masks_base_pictures_and_addressing_scale_the_projection() -> Result<()>
         color: [0.0, 1.0, 0.0],
     });
     near(centre(&fogged)?, [150, 100, 100]);
+    Ok(())
+}
+
+#[test]
+fn a_reflection_looks_the_view_ray_up_in_a_cube() -> Result<()> {
+    fn centre_reflection(
+        faces: &[[u8; 4]; 6],
+        direction: Mat3,
+        blend: ProjectionBlend,
+    ) -> Result<[u8; 3]> {
+        let mut c = case([0; 4], blend);
+        c.cube = Some((*faces, direction));
+        centre(&c)
+    }
+    // Faces +X red, -X green, +Y blue, -Y yellow, +Z magenta, -Z cyan.
+    let colours: [[u8; 4]; 6] = [
+        [255, 0, 0, 255],
+        [0, 255, 0, 255],
+        [0, 0, 255, 255],
+        [255, 255, 0, 255],
+        [255, 0, 255, 255],
+        [0, 255, 255, 255],
+    ];
+    // The floor faces +Z and the ray runs along -Z, so it reflects straight back to +Z.
+    let seen =
+        |direction: Mat3, blend: ProjectionBlend| centre_reflection(&colours, direction, blend);
+    near(seen(Mat3::IDENTITY, ProjectionBlend::Alpha)?, [255, 0, 255]);
+    // Turning world +Z into the cube's -Y reads the yellow face.
+    let z_to_minus_y = Mat3::from_cols(Vec3::X, Vec3::NEG_Z, Vec3::NEG_Y);
+    near(seen(z_to_minus_y, ProjectionBlend::Alpha)?, [255, 255, 0]);
+    // Modulated 2x over the grey floor: 2 x face x floor.
+    near(
+        seen(Mat3::IDENTITY, ProjectionBlend::Modulate2X)?,
+        [200, 0, 200],
+    );
     Ok(())
 }

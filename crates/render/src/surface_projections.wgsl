@@ -7,6 +7,7 @@ struct Batch {
     modes:vec4<f32>,
     forward:vec4<f32>,
     extra:vec4<f32>,
+    direction:mat3x3<f32>,
     fog:vec4<f32>,
     fog_color:vec4<f32>,
 };
@@ -19,6 +20,7 @@ struct Batch {
 @group(1) @binding(5) var picture_sampler:sampler;
 @group(1) @binding(6) var clamp_sampler:sampler;
 @group(1) @binding(7) var repeat_sampler:sampler;
+@group(1) @binding(8) var cube_picture:texture_cube<f32>;
 
 struct VertexOut {
     @builtin(position) position:vec4<f32>,
@@ -49,6 +51,14 @@ fn fs_main(in:VertexOut)->@location(0) vec4<f32> {
         st=tc.xy/tc.z;
     }
     var texel=textureSampleLevel(picture,picture_sampler,st,0.0);
+    if batch.extra.w>0.5 {
+        // The view ray reflected off the (viewer-facing) normal, in the cube's axes.
+        let incident=normalize(in.world-globals.camera.xyz);
+        var n=normalize(in.normal);
+        if dot(n,incident)>0.0 { n=-n; }
+        let r=incident-2.0*dot(incident,n)*n;
+        texel=textureSampleLevel(cube_picture,clamp_sampler,batch.direction*r,0.0);
+    }
     texel=vec4<f32>(display_color(texel.rgb),texel.a);
     // The surface's own picture first, when it is blended in.
     if batch.extra.y>0.5 {

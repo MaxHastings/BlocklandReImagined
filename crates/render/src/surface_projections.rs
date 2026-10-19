@@ -19,11 +19,24 @@
 //! `depth_bias` units.
 use crate::color::{output_constants, shader_source};
 use crate::projected_textures::{ProjectionBlend, ViewFog};
-use glam::{Mat4, Vec3};
+use glam::{Mat3, Mat4, Vec3};
 use std::collections::HashMap;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct SurfaceImage(pub usize);
+
+/// A cube picture (six faces: +X, -X, +Y, -Y, +Z, -Z of the lookup direction).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct SurfaceCube(pub usize);
+
+/// Take the picture from a cube instead of projecting it: the reflection of the view ray
+/// off the surface normal, turned by `direction` (a rotation from world space into the
+/// cube's own axes), looked up in `cube`.
+#[derive(Clone, Copy, Debug)]
+pub struct Reflection {
+    pub cube: SurfaceCube,
+    pub direction: Mat3,
+}
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
@@ -58,6 +71,9 @@ pub struct SurfaceProjection {
     pub mask: Option<SurfaceImage>,
     /// Join the surface's own picture first.
     pub base: Option<(SurfaceImage, BaseBlend)>,
+    /// A reflection lookup in place of the projected picture (`image`, `world_to_texture`
+    /// and `divide` are then unused).
+    pub reflection: Option<Reflection>,
     /// Multiply by `max(0, -n . direction)` of the interpolated normal.
     pub normal_fade: Option<Vec3>,
     /// Multiply by the vertex fade.
@@ -89,8 +105,11 @@ struct BatchUniform {
     modes: [f32; 4],
     /// xyz direction, w normal fade on
     forward: [f32; 4],
-    /// vertex fade, base mode (0 none, 1 modulate 2x, 2 by picture alpha), fog on, 0
+    /// vertex fade, base mode (0 none, 1 modulate 2x, 2 by picture alpha), fog on,
+    /// reflection on
     extra: [f32; 4],
+    /// the reflection's world-to-cube rotation, column by column
+    direction: [[f32; 4]; 3],
     /// fog start, fog end, 0, 0
     fog: [f32; 4],
     fog_color: [f32; 4],
@@ -125,7 +144,9 @@ pub struct ProjectedSurfaces {
     repeat: wgpu::Sampler,
     clamp: wgpu::Sampler,
     images: Vec<wgpu::TextureView>,
+    cubes: Vec<wgpu::TextureView>,
     blank: wgpu::TextureView,
+    blank_cube: wgpu::TextureView,
     pipelines: HashMap<PipelineKey, wgpu::RenderPipeline>,
     vertices: wgpu::Buffer,
     vertex_capacity: u64,
@@ -185,6 +206,14 @@ impl ProjectedSurfaces {
                 entry(5, sampler),
                 entry(6, sampler),
                 entry(7, sampler),
+                entry(
+                    8,
+                    wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::Cube,
+                        multisampled: false,
+                    },
+                ),
             ],
         });
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -238,6 +267,13 @@ impl ProjectedSurfaces {
             })
         };
         let blank = Self::texture(device, queue, &[255; 4], 1, 1, false);
+        let blank_cube = Self::cube_texture(
+            device,
+            queue,
+            &[[255u8; 4]; 6].map(|f| f.to_vec()),
+            1,
+            false,
+        );
         Self {
             target,
             depth,
@@ -256,7 +292,9 @@ impl ProjectedSurfaces {
             repeat: make(true, true),
             clamp: make(false, false),
             images: Vec::new(),
+            cubes: Vec::new(),
             blank,
+            blank_cube,
             pipelines: HashMap::new(),
             vertices: buffer("projected surface vertices", wgpu::BufferUsages::VERTEX),
             vertex_capacity: 4096,
@@ -304,6 +342,78 @@ impl ProjectedSurfaces {
             size,
         );
         texture.create_view(&Default::default())
+    }
+
+    fn cube_texture(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        faces: &[Vec<u8>; 6],
+        size: u32,
+        srgb: bool,
+    ) -> wgpu::TextureView {
+        let extent = wgpu::Extent3d {
+            width: size,
+            height: size,
+            depth_or_array_layers: 6,
+        };
+        let texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("projected surface cube"),
+            size: extent,
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: if srgb {
+                wgpu::TextureFormat::Rgba8UnormSrgb
+            } else {
+                wgpu::TextureFormat::Rgba8Unorm
+            },
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        for (layer, face) in faces.iter().enumerate() {
+            assert_eq!(face.len(), (size * size * 4) as usize);
+            queue.write_texture(
+                wgpu::TexelCopyTextureInfo {
+                    texture: &texture,
+                    mip_level: 0,
+                    origin: wgpu::Origin3d {
+                        x: 0,
+                        y: 0,
+                        z: layer as u32,
+                    },
+                    aspect: wgpu::TextureAspect::All,
+                },
+                face,
+                wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(size * 4),
+                    rows_per_image: Some(size),
+                },
+                wgpu::Extent3d {
+                    width: size,
+                    height: size,
+                    depth_or_array_layers: 1,
+                },
+            );
+        }
+        texture.create_view(&wgpu::TextureViewDescriptor {
+            dimension: Some(wgpu::TextureViewDimension::Cube),
+            ..Default::default()
+        })
+    }
+
+    /// Upload a cube picture from six square RGBA faces (+X, -X, +Y, -Y, +Z, -Z).
+    pub fn add_cube(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        faces: &[Vec<u8>; 6],
+        size: u32,
+        srgb: bool,
+    ) -> SurfaceCube {
+        self.cubes
+            .push(Self::cube_texture(device, queue, faces, size, srgb));
+        SurfaceCube(self.cubes.len() - 1)
     }
 
     /// Upload a picture; `srgb` pictures are decoded like every other texture.
@@ -488,8 +598,16 @@ impl ProjectedSurfaces {
                         Some((_, BaseBlend::ByPictureAlpha)) => 2.0,
                     },
                     if p.fog.is_some() { 1.0 } else { 0.0 },
-                    0.0,
+                    if p.reflection.is_some() { 1.0 } else { 0.0 },
                 ],
+                direction: p.reflection.map_or([[0.0; 4]; 3], |r| {
+                    let c = r.direction.to_cols_array_2d();
+                    [
+                        [c[0][0], c[0][1], c[0][2], 0.0],
+                        [c[1][0], c[1][1], c[1][2], 0.0],
+                        [c[2][0], c[2][1], c[2][2], 0.0],
+                    ]
+                }),
                 fog: p.fog.map_or([0.0; 4], |f| [f.start, f.end, 0.0, 0.0]),
                 fog_color: p
                     .fog
@@ -541,6 +659,13 @@ impl ProjectedSurfaces {
                     wgpu::BindGroupEntry {
                         binding: 7,
                         resource: wgpu::BindingResource::Sampler(&self.repeat),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 8,
+                        resource: wgpu::BindingResource::TextureView(
+                            p.reflection
+                                .map_or(&self.blank_cube, |r| &self.cubes[r.cube.0]),
+                        ),
                     },
                 ],
             });
