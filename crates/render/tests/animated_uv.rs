@@ -88,6 +88,16 @@ fn authored_texture_rotation_uses_the_render_clock_and_declared_center() -> Resu
 /// Which quadrant of the 2x2 test image a panel shows at the centre pixel: 0 red, 1 green.
 fn wave_quadrants(wave: bri_content::shape::UvWave, times: &[f32]) -> Result<Vec<u8>> {
     use bri_content::shape::{UvMotion, UvWave};
+    motion_quadrants(
+        UvMotion {
+            waves: [wave, UvWave::default()],
+            ..Default::default()
+        },
+        times,
+    )
+}
+
+fn motion_quadrants(motion: bri_content::shape::UvMotion, times: &[f32]) -> Result<Vec<u8>> {
     let (device, queue) = common::gpu()?;
     let format = wgpu::TextureFormat::Rgba8Unorm;
     let mut renderer = SceneRenderer::new(&device, format);
@@ -95,10 +105,7 @@ fn wave_quadrants(wave: bri_content::shape::UvWave, times: &[f32]) -> Result<Vec
     let mut material = Material::surface("wave panel", 0, 0);
     material.kind = MaterialKind::Unlit;
     material.clamp_nearest = true;
-    material.uv_motion = Some(UvMotion {
-        waves: [wave, UvWave::default()],
-        ..Default::default()
-    });
+    material.uv_motion = Some(motion);
     let data = SceneData {
         images: vec![SceneImage {
             label: "quadrants".into(),
@@ -188,5 +195,43 @@ fn uv_waves_follow_the_engine_formulas() -> Result<()> {
     assert!((5..35).contains(&greens), "{seen:?}");
     let held = wave_quadrants(jitter, &[3.1, 3.4])?;
     assert_eq!(held[0], held[1], "held through the first half of the cycle");
+    Ok(())
+}
+
+#[test]
+fn a_three_axis_rotator_turns_the_picture_by_the_matrix_it_reads() -> Result<()> {
+    use bri_content::shape::{UvMotion, UvRotator};
+    // Yaw turns the picture in its plane (the upper-left of the rotation matrix): 90 degrees
+    // about the centre takes the red corner texel (0.25, 0.25) to the green one (0.75, 0.25).
+    let yawed = UvMotion {
+        center: [0.5; 2],
+        rotator: Some(UvRotator {
+            base_degrees: [0., 90., 0.],
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+    assert_eq!(motion_quadrants(yawed, &[0.])?, [1]);
+    // A swing of 90 degrees at one cycle a second reads red at rest and green a quarter cycle in.
+    let swinging = UvMotion {
+        center: [0.5; 2],
+        rotator: Some(UvRotator {
+            wave_amplitude_degrees: [0., 90., 0.],
+            wave_rate: [0., 1., 0.],
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+    assert_eq!(motion_quadrants(swinging, &[0., 0.25, 0.5])?, [0, 1, 0]);
+    // A constant spin of 360 degrees a second: green at a quarter second, red after a second.
+    let spinning = UvMotion {
+        center: [0.5; 2],
+        rotator: Some(UvRotator {
+            rate_degrees: [0., 360., 0.],
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+    assert_eq!(motion_quadrants(spinning, &[0., 0.25, 1.])?, [0, 1, 0]);
     Ok(())
 }

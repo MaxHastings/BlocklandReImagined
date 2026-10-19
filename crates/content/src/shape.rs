@@ -218,6 +218,25 @@ pub struct UvMotion {
     pub rotation_rate_degrees: f32,
     /// A periodic wave on each texture axis (u, then v), on top of the rest.
     pub waves: [UvWave; 2],
+    /// A three-axis rotation (pitch, yaw, roll) in place of the flat `rotation_*` pair,
+    /// with each axis able to spin or swing; the picture is turned by the upper-left
+    /// two-by-two of the rotation matrix, about `center`.
+    pub rotator: Option<UvRotator>,
+}
+/// Three-axis texture rotation (an Unreal `TexRotator`): per axis (pitch, yaw, roll) the
+/// angle is `base + rate x time + amplitude x sin(2 pi (fract(wave_rate x time) +
+/// wave_phase))`, in degrees.
+#[derive(Debug, Clone, Copy, PartialEq, Default, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct UvRotator {
+    pub base_degrees: [f32; 3],
+    /// Degrees a second of constant rotation.
+    pub rate_degrees: [f32; 3],
+    pub wave_amplitude_degrees: [f32; 3],
+    /// Cycles a second of the swing.
+    pub wave_rate: [f32; 3],
+    /// A fraction of a cycle.
+    pub wave_phase: [f32; 3],
 }
 /// The shape of a [`UvWave`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -268,6 +287,7 @@ impl Default for UvMotion {
             rotation_degrees: 0.,
             rotation_rate_degrees: 0.,
             waves: [UvWave::default(); 2],
+            rotator: None,
         }
     }
 }
@@ -287,6 +307,18 @@ impl UvMotion {
                 [w.rate, w.phase, w.amplitude]
                     .iter()
                     .all(|v| v.is_finite() && v.abs() <= 10000.)
+            })
+            && self.rotator.is_none_or(|r| {
+                [
+                    r.base_degrees,
+                    r.rate_degrees,
+                    r.wave_amplitude_degrees,
+                    r.wave_rate,
+                    r.wave_phase,
+                ]
+                .iter()
+                .flatten()
+                .all(|v| v.is_finite() && v.abs() <= 100000.)
             })
     }
 }

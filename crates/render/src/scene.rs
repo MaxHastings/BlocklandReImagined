@@ -3581,7 +3581,7 @@ impl SceneRenderer {
         });
         let mut materials = vec![];
         for material in &data.materials {
-            let mut parameters: [f32; 64] = [0.0; 64];
+            let mut parameters: [f32; 80] = [0.0; 80];
             parameters[..4].copy_from_slice(&[
                 match material.kind {
                     MaterialKind::Surface => 0.0,
@@ -3664,6 +3664,29 @@ impl SceneRenderer {
                         wave.amplitude,
                     ]);
                 }
+            }
+            if let Some(r) = material.uv_motion.and_then(|uv| uv.rotator) {
+                // material[16..20]: flag and base angles, constant rates, swing amplitudes
+                // and swing rates and phases, in radians and cycles.
+                let rad = |v: [f32; 3]| v.map(f32::to_radians);
+                let (base, rate, amplitude) = (
+                    rad(r.base_degrees),
+                    rad(r.rate_degrees),
+                    rad(r.wave_amplitude_degrees),
+                );
+                parameters[64..68].copy_from_slice(&[1., base[0], base[1], base[2]]);
+                parameters[68..72].copy_from_slice(&[0., rate[0], rate[1], rate[2]]);
+                parameters[72..76].copy_from_slice(&[0., amplitude[0], amplitude[1], amplitude[2]]);
+                parameters[76..80].copy_from_slice(&[
+                    r.wave_rate[0],
+                    r.wave_rate[1],
+                    r.wave_rate[2],
+                    0.,
+                ]);
+                // The three phases ride in the unused w of the first three groups.
+                parameters[68] = r.wave_phase[0];
+                parameters[72] = r.wave_phase[1];
+                parameters[79] = r.wave_phase[2];
             }
             if let Some(layers) = material.layer_transforms {
                 for (i, m) in layers.iter().enumerate() {

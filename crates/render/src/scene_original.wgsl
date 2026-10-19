@@ -837,11 +837,31 @@ fn map_light_sum(position:vec3<f32>,normal:vec3<f32>,visibility:MapVisibility,la
     }
     return out;
 }
-@group(1) @binding(15) var<uniform> material:array<vec4<f32>,16>;
+@group(1) @binding(15) var<uniform> material:array<vec4<f32>,20>;
 fn uv_hash(i:f32)->f32 {
     var h=u32(abs(i)) *747796405u+2891336453u;
     h=((h>>((h>>28u)+4u))^h)*277803737u;
     return f32(((h>>22u)^h)&32767u)/32768.0;
+}
+// A UvMotion rotator (material[16..20]): the upper-left two-by-two of the rotation matrix of
+// angles base + rate t + amplitude sin(tau (fract(swing rate t) + phase)) about pitch, yaw, roll.
+fn uv_rotator(time:f32)->mat2x2<f32> {
+    let tau=6.283185307;
+    let base=material[16].yzw;
+    let rate=material[17].yzw;
+    let amplitude=material[18].yzw;
+    let swing=vec3<f32>(material[19].x,material[19].y,material[19].z);
+    let phase=vec3<f32>(material[17].x,material[18].x,material[19].w);
+    let cycles=time*swing;
+    let angle=base+rate*time+amplitude*sin(tau*((cycles-floor(cycles))+phase));
+    let cp=cos(angle.x);let sp=sin(angle.x);
+    let cy=cos(angle.y);let sy=sin(angle.y);
+    let cr=cos(angle.z);let sr=sin(angle.z);
+    // (u, v) . M: out.x = M00 u + M10 v, out.y = M01 u + M11 v with M00 = cp cy, M01 = cp sy,
+    // M10 = sr sp cy - cr sy, M11 = sr sp sy + cr cy; so the columns are (M00, M01), (M10, M11).
+    return mat2x2<f32>(
+        vec2<f32>(cp*cy,cp*sy),
+        vec2<f32>(sr*sp*cy-cr*sy,sr*sp*sy+cr*cy));
 }
 // A UvMotion wave (material[8] u, material[9] v): x the offset, y the scale.
 fn uv_wave(w:vec4<f32>,time:f32)->vec2<f32> {
@@ -905,7 +925,9 @@ struct VertexOut {
         let wv=uv_wave(material[9],camera.atmosphere.z);
         let stretched=(uv-material[7].xy)*vec2(wu.y,wv.y)+material[7].xy;
         let local=stretched*material[5].yz-material[7].xy;
-        out.uv=vec2(local.x*c-local.y*s,local.x*s+local.y*c)+material[7].xy+material[6].xy+camera.atmosphere.z*material[6].zw+vec2(wu.x,wv.x);
+        var turned=vec2(local.x*c-local.y*s,local.x*s+local.y*c);
+        if material[16].x>0.5 { turned=uv_rotator(camera.atmosphere.z)*local; }
+        out.uv=turned+material[7].xy+material[6].xy+camera.atmosphere.z*material[6].zw+vec2(wu.x,wv.x);
     }
     out.lightmap_uv=lightmap_uv;out.color=color;out.normal=normal;out.world_position=position;
     out.clip=dot(clip.xyz,position)+clip.w;
