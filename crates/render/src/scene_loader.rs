@@ -1057,16 +1057,27 @@ fn load_static_shape(
         // cutout (glTF MASK) is the exception: its cutoff is the material's
         // own alpha test, applied by the shared shape-material mapping.
         material.ignore_texture_alpha = authored.blend == "opaque";
-        crate::shape_material::apply(
+        crate::shape_material::apply_with(
             &mut material,
             authored,
             &format!("static material {id}"),
+            true,
             |blend| {
                 Ok(match blend {
                     "opaque" => AlphaMode::Opaque,
                     // A layer pass blended over the one before (a terrain's alpha-map layers) blends by its weights, whatever its stand-in colour image says.
                     "alpha" if authored.layers.is_some() => AlphaMode::Blend,
                     "alpha" => alpha(&out.images[diffuse]),
+                    // Unreal Engine 2's frame-buffer blends (docs/modding/materials.md):
+                    // true modulate, modulate (2x), darken, translucent/brighten
+                    // smooth, alpha modulate and invisible, drawn unlit.
+                    "multiply" => AlphaMode::Multiply,
+                    "modulate" => AlphaMode::Frame(FrameBlend::Modulate),
+                    "darken" => AlphaMode::Frame(FrameBlend::Darken),
+                    "screen" => AlphaMode::Frame(FrameBlend::Screen),
+                    "premultiplied" => AlphaMode::Frame(FrameBlend::Premultiplied),
+                    "invisible" => AlphaMode::Frame(FrameBlend::Invisible),
+                    "true_additive" => AlphaMode::Frame(FrameBlend::TrueAdditive),
                     // Torque's additive DTS materials (glass, glows).
                     _ => AlphaMode::Additive,
                 })
@@ -1705,7 +1716,10 @@ mod tests {
     }
     #[test]
     fn a_map_model_blend_the_loader_cannot_honour_is_refused() {
-        let error = load_leaf(leaf_material("multiply", None)).unwrap_err();
-        assert!(error.to_string().contains("multiply"), "{error}");
+        // The Unreal Engine 2 frame-buffer blends are honoured for map models; a name
+        // nothing maps is still refused.
+        assert!(load_leaf(leaf_material("multiply", None)).is_ok());
+        let error = load_leaf(leaf_material("sepia", None)).unwrap_err();
+        assert!(error.to_string().contains("sepia"), "{error}");
     }
 }
