@@ -905,6 +905,10 @@ pub fn convert(
         } else {
             None
         };
+        // A terrain the lane gave sector lights for is lit by them (the engine's StaticLight), not by its saved colours.
+        let terrain_lighting = static_lighting
+            .as_ref()
+            .filter(|l| l.has_terrain(&names[k]));
         // Baked light for this node's vertices, counted across its primitives.
         let node_vertices: usize = array(gmesh, "primitives")
             .iter()
@@ -920,7 +924,9 @@ pub fn convert(
             vertex_lights::read(&json["nodes"][n]["extras"], own_scale, node_vertices)
                 .with_context(|| format!("`{}`'s bri_vertex_lights", names[k]))?;
         let mut node_vertex = 0usize;
-        let mut rig = world_lighting.map(|_| static_lighting::RigBuilder::default());
+        let mut rig = world_lighting
+            .or(terrain_lighting)
+            .map(|_| static_lighting::RigBuilder::default());
         let mut influences: Vec<Influence> = Vec::new();
         let mut unweighted = 0;
         let mut dropped_weights = 0;
@@ -974,7 +980,7 @@ pub fn convert(
                 });
             let colors = attr["COLOR_0"]
                 .as_u64()
-                .filter(|_| layered)
+                .filter(|_| layered && terrain_lighting.is_none())
                 .map(|a| doc.floats(a as usize))
                 .transpose()?;
             if attr.get("COLOR_0").is_some() && !layered && warned.insert("color") {
@@ -1067,12 +1073,15 @@ pub fn convert(
                 }
             }
             // The world mesh's static meshes keep their own colour (white without one) for the light the rig works out when the map loads.
-            let colors = match (&colors, mapped) {
+            let colors = match (&colors, mapped || terrain_lighting.is_some()) {
                 (None, true) => Some(vec![vec![1.0, 1.0, 1.0, 1.0]; count]),
                 _ => colors,
             };
             if let (Some(builder), Some(lighting)) = (rig.as_mut(), world_lighting) {
                 builder.extend(lighting, pi, &local);
+            }
+            if let (Some(builder), Some(lighting)) = (rig.as_mut(), terrain_lighting) {
+                builder.extend_terrain(lighting, &names[k], count);
             }
             // A node that names its lights has its layer-blended surfaces lit by them, times any colours they already have.
             let colors = match (&vertex_lights, layered) {
@@ -1247,8 +1256,12 @@ pub fn convert(
             report.bones = report.bones.max(joints.len());
         }
         if let Some(builder) = rig.take() {
-            let built =
-                builder.finish(own_scale, world_lighting.expect("the rig is built from it"));
+            let built = builder.finish(
+                own_scale,
+                world_lighting
+                    .or(terrain_lighting)
+                    .expect("the rig is built from it"),
+            );
             built.validate(mesh.positions.len())?;
             mesh.vertex_rig = Some(built);
         }

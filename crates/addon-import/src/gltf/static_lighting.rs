@@ -37,6 +37,32 @@ struct Instance {
     ambient_glow: u8,
 }
 
+/// One terrain's sectors (`*-terrain-lighting.json`): `UTerrainSector::StaticLight` lights each sector's vertices from its list of
+/// lights and their per-vertex visibility bits, over a base of the terrain's zone ambient.
+struct TerrainLight {
+    zone: usize,
+    level_brightness: f32,
+    width: usize,
+    sectors: Vec<TerrainSector>,
+}
+
+struct TerrainSector {
+    export: i64,
+    x0: usize,
+    y0: usize,
+    size_x: usize,
+    size_y: usize,
+    lights: Vec<i64>,
+}
+
+/// A terrain's name as the map file and the lane's glTF spell it: `TerrainInfo0` and `TerrainInfo_0` are one.
+fn terrain_key(name: &str) -> String {
+    name.chars()
+        .filter(|c| *c != '_')
+        .collect::<String>()
+        .to_ascii_lowercase()
+}
+
 struct Masks {
     rows: usize,
     bytes: usize,
@@ -48,6 +74,7 @@ pub(super) struct StaticLighting {
     lights: HashMap<i64, Value>,
     masks: HashMap<i64, Masks>,
     vertex_map: HashMap<usize, (Vec<i32>, Vec<i32>)>,
+    terrains: HashMap<String, TerrainLight>,
     regions: Option<bri_content::regions::RegionMap>,
 }
 
@@ -218,11 +245,77 @@ impl StaticLighting {
                 entry.1 = values;
             }
         }
+        // The terrain's sector lights, when the lane gave them.
+        let mut terrains = HashMap::new();
+        if let (Ok(json_path), Ok(npz_path)) = (
+            find(dir, "-terrain-lighting.json"),
+            find(dir, "-terrain-lighting.npz"),
+        ) {
+            let file: Value = serde_json::from_slice(&std::fs::read(&json_path)?)
+                .with_context(|| format!("Reading {}", json_path.display()))?;
+            for (name, data) in npz(&npz_path)? {
+                let Some(sector) = name
+                    .strip_prefix("masks_")
+                    .and_then(|n| n.parse::<i64>().ok())
+                else {
+                    continue;
+                };
+                let (_, shape, raw) = npy(&data)?;
+                ensure!(shape.len() == 2, "masks_{sector} is not rows of bytes");
+                masks.insert(
+                    sector,
+                    Masks {
+                        rows: shape[0],
+                        bytes: shape[1],
+                        data: raw.to_vec(),
+                    },
+                );
+            }
+            for t in file["terrains"].as_array().cloned().unwrap_or_default() {
+                let sectors: Vec<TerrainSector> = t["sectors"]
+                    .as_array()
+                    .cloned()
+                    .unwrap_or_default()
+                    .iter()
+                    .filter_map(|s| {
+                        Some(TerrainSector {
+                            export: s["export"].as_i64()?,
+                            x0: s["x0"].as_u64()? as usize,
+                            y0: s["y0"].as_u64()? as usize,
+                            size_x: s["size_x"].as_u64()? as usize,
+                            size_y: s["size_y"].as_u64()? as usize,
+                            lights: s["lights"]
+                                .as_array()
+                                .map(|a| a.iter().filter_map(Value::as_i64).collect())
+                                .unwrap_or_default(),
+                        })
+                    })
+                    .collect();
+                let width = sectors
+                    .iter()
+                    .map(|s| s.x0 + s.size_x + 1)
+                    .max()
+                    .unwrap_or(0);
+                let Some(name) = t["name"].as_str() else {
+                    continue;
+                };
+                terrains.insert(
+                    terrain_key(name),
+                    TerrainLight {
+                        zone: t["zone"].as_u64().unwrap_or(0) as usize,
+                        level_brightness: t["level_brightness"].as_f64().unwrap_or(1.0) as f32,
+                        width,
+                        sectors,
+                    },
+                );
+            }
+        }
         Ok(Self {
             instances,
             lights,
             masks,
             vertex_map,
+            terrains,
             regions,
         })
     }
@@ -232,6 +325,36 @@ impl StaticLighting {
             .as_ref()
             .and_then(|r| r.ambient(zone as u16))
             .unwrap_or([0.0; 3])
+    }
+
+    /// A placed light as the vertex sum takes it, its strength scaled by `glow`.
+    fn light_of(&self, export: &i64, light: &Value, glow: f32) -> Light {
+        let original = &light["original"];
+        let effect_id = original["LightEffect"].as_i64().unwrap_or(0);
+        let rotation = triple(&light["rotation"]).map(|v| v as i32);
+        let effect = if light["kind"].as_str() == Some("directional") || effect_id == SUNLIGHT {
+            Effect::Directional {
+                direction: direction(rotation),
+            }
+        } else if effect_id == STATIC_SPOT || effect_id == SPOTLIGHT {
+            Effect::Spot {
+                direction: direction(rotation),
+                cone: original["LightCone"].as_f64().unwrap_or(128.0) as f32 / 256.0,
+            }
+        } else {
+            Effect::Point
+        };
+        let color = triple(&light["color"]);
+        let brightness = number(&light["brightness"]);
+        Light {
+            position: triple(&light["location"]).map(|v| v as f32),
+            color: color.map(|c| (c * brightness) as f32),
+            radius: (original["LightRadius"].as_f64().unwrap_or(64.0) as f32 + 1.0) * 25.0,
+            glow,
+            effect,
+            negative: effect_id == NEGATIVE,
+            id: u32::try_from(*export).unwrap_or(0),
+        }
     }
 
     fn set(&self, actor: i64) -> Option<Set> {
@@ -246,36 +369,38 @@ impl StaticLighting {
             if row >= masks.rows {
                 return None;
             }
-            let original = &light["original"];
-            let effect_id = original["LightEffect"].as_i64().unwrap_or(0);
-            let rotation = triple(&light["rotation"]).map(|v| v as i32);
-            let effect = if light["kind"].as_str() == Some("directional") || effect_id == SUNLIGHT {
-                Effect::Directional {
-                    direction: direction(rotation),
-                }
-            } else if effect_id == STATIC_SPOT || effect_id == SPOTLIGHT {
-                Effect::Spot {
-                    direction: direction(rotation),
-                    cone: original["LightCone"].as_f64().unwrap_or(128.0) as f32 / 256.0,
-                }
-            } else {
-                Effect::Point
-            };
-            let color = triple(&light["color"]);
-            let brightness = number(&light["brightness"]);
-            set.lights.push(Light {
-                position: triple(&light["location"]).map(|v| v as f32),
-                color: color.map(|c| (c * brightness) as f32),
-                radius: (original["LightRadius"].as_f64().unwrap_or(64.0) as f32 + 1.0) * 25.0,
-                glow: instance.scale_glow,
-                effect,
-                negative: effect_id == NEGATIVE,
-                id: u32::try_from(*export).unwrap_or(0),
-            });
+            set.lights
+                .push(self.light_of(export, light, instance.scale_glow));
             set.visible
                 .push(masks.data[row * masks.bytes..(row + 1) * masks.bytes].to_vec());
         }
         set.validate(instance.vertices).ok()?;
+        Some(set)
+    }
+
+    /// Whether the lane gave sector lights for the terrain node called `name`.
+    pub(super) fn has_terrain(&self, name: &str) -> bool {
+        self.terrains.contains_key(&terrain_key(name))
+    }
+
+    /// A terrain sector as a set: its zone's ambient times Level.Brightness, then its lights with their visibility bits.
+    fn sector_set(&self, terrain: &TerrainLight, sector: &TerrainSector) -> Option<Set> {
+        let mut set = Set {
+            ambient: self
+                .zone_ambient(terrain.zone)
+                .map(|a| a * terrain.level_brightness),
+            ..Set::default()
+        };
+        let masks = self.masks.get(&sector.export);
+        for (row, export) in sector.lights.iter().enumerate() {
+            let masks = masks.filter(|m| row < m.rows)?;
+            let light = self.lights.get(export)?;
+            set.lights.push(self.light_of(export, light, 1.0));
+            set.visible
+                .push(masks.data[row * masks.bytes..(row + 1) * masks.bytes].to_vec());
+        }
+        set.validate((sector.size_x + 1) * (sector.size_y + 1))
+            .ok()?;
         Some(set)
     }
 
@@ -295,6 +420,8 @@ pub(super) struct RigBuilder {
     vertex_index: Vec<u32>,
     /// Each actor-keyed set's render box (the lane's frame) and glow, for the ambient of the zones the box reaches.
     boxes: HashMap<u32, (Vec3, Vec3, f32)>,
+    /// Per terrain, each grid vertex's set and index within it.
+    terrain_tables: HashMap<String, Vec<(u32, u32)>>,
 }
 
 impl RigBuilder {
@@ -318,6 +445,47 @@ impl RigBuilder {
             }
             self.vertex_set.push(set);
             self.vertex_index.push(vertices[i].max(0) as u32);
+        }
+    }
+
+    /// The next `count` vertices are a terrain pass's, in grid order (row by row): each takes the set of the last sector that holds it, as
+    /// the engine writes the sectors in turn. A pass of another size takes no light.
+    pub(super) fn extend_terrain(&mut self, lighting: &StaticLighting, name: &str, count: usize) {
+        let key = terrain_key(name);
+        let Some(terrain) = lighting.terrains.get(&key) else {
+            self.vertex_set.extend(std::iter::repeat_n(0, count));
+            self.vertex_index.extend(std::iter::repeat_n(0, count));
+            return;
+        };
+        if !self.terrain_tables.contains_key(&key) {
+            let mut table = vec![(0u32, 0u32); terrain.width * terrain.width];
+            for sector in &terrain.sectors {
+                let Some(set) = lighting.sector_set(terrain, sector) else {
+                    continue;
+                };
+                self.sets.push(set);
+                let at = self.sets.len() as u32;
+                for y in 0..=sector.size_y {
+                    for x in 0..=sector.size_x {
+                        let (gx, gy) = (sector.x0 + x, sector.y0 + y);
+                        if gx < terrain.width && gy < terrain.width {
+                            table[gy * terrain.width + gx] =
+                                (at, (y * (sector.size_x + 1) + x) as u32);
+                        }
+                    }
+                }
+            }
+            self.terrain_tables.insert(key.clone(), table);
+        }
+        let table = &self.terrain_tables[&key];
+        if count != table.len() {
+            self.vertex_set.extend(std::iter::repeat_n(0, count));
+            self.vertex_index.extend(std::iter::repeat_n(0, count));
+            return;
+        }
+        for &(set, index) in table {
+            self.vertex_set.push(set);
+            self.vertex_index.push(index);
         }
     }
 
