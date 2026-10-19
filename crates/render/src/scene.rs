@@ -309,6 +309,13 @@ pub enum MaterialKind {
     /// `parameters[1].w` (the second) volumes per scroll. Unlit; use with
     /// `AlphaMode::Additive`.
     Plasma,
+    /// Up to four diffuse layers (slots 0..=3, sRGB) blended by the red, green,
+    /// blue and alpha of one weight map (slot 9, read with `lightmap_uv`), each
+    /// layer's `uv` first moved by its own affine matrix
+    /// ([`Material::layer_transforms`]); the sum is multiplied by twice the
+    /// vertex colour (the vertex colour carries the baked light, 0.5 being
+    /// neutral), fogged, and drawn without other scene lighting.
+    LayerBlend,
 }
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum AlphaMode {
@@ -361,6 +368,9 @@ pub struct Material {
     pub alpha: AlphaMode,
     pub double_sided: bool,
     pub uv_motion: Option<bri_content::shape::UvMotion>,
+    /// [`MaterialKind::LayerBlend`]: per layer `[a, b, c, d, tx, ty]` with
+    /// `uv' = (a u + c v + tx, b u + d v + ty)`.
+    pub layer_transforms: Option<[[f32; 6]; 4]>,
     /// v20 `fxBrickBatcher` loads brickSIDE with `GL_CLAMP` and nearest
     /// magnification; every other brick surface repeats with linear filtering.
     pub clamp_nearest: bool,
@@ -472,6 +482,7 @@ impl Material {
             alpha: AlphaMode::Opaque,
             double_sided: false,
             uv_motion: None,
+            layer_transforms: None,
             clamp_nearest: false,
             temp_brick_flash: false,
             ignore_texture_alpha: false,
@@ -3570,7 +3581,7 @@ impl SceneRenderer {
         });
         let mut materials = vec![];
         for material in &data.materials {
-            let mut parameters: [f32; 40] = [0.0; 40];
+            let mut parameters: [f32; 64] = [0.0; 64];
             parameters[..4].copy_from_slice(&[
                 match material.kind {
                     MaterialKind::Surface => 0.0,
@@ -3586,6 +3597,7 @@ impl SceneRenderer {
                     MaterialKind::Metal => 10.0,
                     MaterialKind::Physical => 11.0,
                     MaterialKind::Plasma => 12.0,
+                    MaterialKind::LayerBlend => 13.0,
                 },
                 match material.alpha {
                     AlphaMode::Mask(c) => c,
@@ -3651,6 +3663,12 @@ impl SceneRenderer {
                         wave.phase,
                         wave.amplitude,
                     ]);
+                }
+            }
+            if let Some(layers) = material.layer_transforms {
+                for (i, m) in layers.iter().enumerate() {
+                    parameters[40 + i * 4..44 + i * 4].copy_from_slice(&[m[0], m[1], m[2], m[3]]);
+                    parameters[56 + i * 2..58 + i * 2].copy_from_slice(&[m[4], m[5]]);
                 }
             }
             if let Some(strength) = material.baked_lightmap {

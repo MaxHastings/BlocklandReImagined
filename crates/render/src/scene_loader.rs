@@ -1434,6 +1434,7 @@ fn load_terrain(
         alpha: AlphaMode::Opaque,
         double_sided: false,
         uv_motion: None,
+        layer_transforms: None,
         clamp_nearest: false,
         temp_brick_flash: false,
         ignore_texture_alpha: false,

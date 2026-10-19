@@ -837,7 +837,7 @@ fn map_light_sum(position:vec3<f32>,normal:vec3<f32>,visibility:MapVisibility,la
     }
     return out;
 }
-@group(1) @binding(15) var<uniform> material:array<vec4<f32>,10>;
+@group(1) @binding(15) var<uniform> material:array<vec4<f32>,16>;
 fn uv_hash(i:f32)->f32 {
     var h=u32(abs(i)) *747796405u+2891336453u;
     h=((h>>((h>>28u)+4u))^h)*277803737u;
@@ -1292,6 +1292,26 @@ fn plasma_surface(v:VertexOut)->vec4<f32> {
         alpha=offset+range*min(t,period-t)/(period*0.5);
     }
     if alpha<=material[0].y {discard;}
+    if material[0].x==13.0 {
+        // LayerBlend: layers weighted by one RGBA map, times twice the vertex light.
+        let w=textureSample(weights0,clamped,v.lightmap_uv);
+        var sum=vec3<f32>(0.0);
+        for (var i=0u;i<4u;i++) {
+            let m=material[10u+i];
+            let t=material[14u+i/2u];
+            let off=select(t.xy,t.zw,(i&1u)==1u);
+            let luv=vec2<f32>(m.x*v.uv.x+m.z*v.uv.y,m.y*v.uv.x+m.w*v.uv.y)+off;
+            var texel:vec3<f32>;
+            switch i {
+                case 0u: {texel=textureSample(layer0,tiled,luv).rgb;}
+                case 1u: {texel=textureSample(layer1,tiled,luv).rgb;}
+                case 2u: {texel=textureSample(layer2,tiled,luv).rgb;}
+                default: {texel=textureSample(layer3,tiled,luv).rgb;}
+            }
+            sum+=display_color(texel)*w[i];
+        }
+        return vec4<f32>(fogged(min(sum*v.color.rgb*2.0,vec3<f32>(1.0)),v.world_position),v.color.a);
+    }
     if material[0].x==7.0 || material[0].x==8.0 {
         return vec4<f32>(fogged(pigment,v.world_position),alpha);
     }
