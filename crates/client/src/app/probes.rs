@@ -56,6 +56,7 @@ impl App {
             && self.gpu.pipelines_requested.as_deref() != Some(scene.id.as_str())
         {
             renderer.request_materials(&scene.materials);
+            renderer.request_environment_pipelines();
             self.gpu.pipelines_requested = Some(scene.id.clone());
         }
         renderer.pipelines_pending() == 0
