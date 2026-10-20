@@ -122,8 +122,8 @@ pub struct Options {
     pub backdrop: Option<PathBuf>,
     /// A map's regions: a JSON file in the glTF's frame (`map_regions.rs`).
     pub regions: Option<PathBuf>,
-    /// A map's decals: a JSON file in the native frame with its pictures beside it (`map_decals.rs`).
-    pub decals: Option<PathBuf>,
+    /// A map's projector pictures: a JSON `DecalSet` with no decals, only `pictures`, beside their PNGs (`map_decals.rs`).
+    pub projector_pictures: Option<PathBuf>,
     /// The asset lane's static-mesh lighting inputs (`static_lighting.rs`).
     pub lighting: Option<PathBuf>,
     /// The model is lit as the original engine lights a baked level (set for a map's backdrop when the map has `lighting`): a
@@ -155,7 +155,7 @@ impl Options {
             scatter: Vec::new(),
             backdrop: None,
             regions: None,
-            decals: None,
+            projector_pictures: None,
             lighting: None,
             original_lighting: false,
         }

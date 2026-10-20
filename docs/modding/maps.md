@@ -98,12 +98,14 @@ A region may also list `suns` (up to 8; 64 per map), each a `direction`, `color`
 (see "Lit moving bodies") takes its region's `ambient` and the suns of the region it stands in, the one standing nearest its centre
 first.
 
-**Decals.** `--decals FILE.json` lists projected pictures (`bri_content::decals::DecalSet`) in the native frame, each picture a PNG
+**Decals.** The renderer's decal layer draws projected pictures (`bri_content::decals::DecalSet`) in the native frame, each picture a PNG
 beside the file: a blob shadow, a stain, a light pattern. A decal is a world-to-picture matrix (orthographic, or perspective with a
 divide), six planes that choose the map's triangles inside its volume, a blend (`modulate2x`, `alpha`, `add`), whether the picture
 wraps, a `facing_limit` and fade for the flat surfaces and the ground (the terrain materials), and optionally a spin in degrees a
 second. The renderer finds each decal's triangles when the map loads and draws them again with the picture on them, a little in
-front of themselves, every frame.
+front of themselves, every frame. A set can also list `pictures` (`name`: what a game's scripts call it, `file`: its PNG beside the
+file): pictures for projectors that attach while the game runs, held by the decal layer whether or not the map has a decal of them
+(`--projector-pictures FILE.json` gives a map a set of only these, written by `projector_bake`: the game's Projector actors attach at run time, and the importer bakes none).
 
 **Light baked into a mesh.** A node's custom property `bri_vertex_lights` names the fixed lights that reach its mesh
 (`bri_content::vertex_lighting`: `lights` with `position`, `color`, `radius`, optional `glow` and `negative`, and an `effect`

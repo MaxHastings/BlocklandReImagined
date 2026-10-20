@@ -230,6 +230,8 @@ fn gather_from(
 pub struct LoadedDecals {
     pub set: bri_content::decals::DecalSet,
     pub pictures: Vec<SceneImage>,
+    /// The set's named pictures (`set.pictures`), decoded in order.
+    pub named: Vec<SceneImage>,
     pub receivers: Vec<(Vec<SurfaceVertex>, Vec<u32>)>,
 }
 
@@ -332,6 +334,11 @@ impl DecalLayer {
         for (decal, picture) in loaded.set.decals.iter().zip(&loaded.pictures) {
             if !self.has_picture(&decal.picture) {
                 self.add_picture(device, queue, &decal.picture, picture);
+            }
+        }
+        for (picture, image) in loaded.set.pictures.iter().zip(&loaded.named) {
+            if !self.has_picture(&picture.file) {
+                self.add_picture(device, queue, &picture.file, image);
             }
         }
         for (i, (decal, (vertices, indices))) in
