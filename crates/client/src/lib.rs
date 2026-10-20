@@ -62,6 +62,7 @@ pub mod motion;
 pub mod network;
 pub mod old_saves;
 pub mod packages;
+pub mod panel_textures;
 pub mod perf;
 pub mod platform;
 pub mod playback;

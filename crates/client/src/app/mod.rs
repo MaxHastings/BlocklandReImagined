@@ -1716,6 +1716,7 @@ impl PlatformApp for App {
         self.gpu.device = Some((device.clone(), queue.clone(), format));
         self.item_ui.gpu_stopped();
         self.addons.hud_regions.gpu_stopped();
+        self.addons.panel_textures.gpu_stopped();
         self.scene.scenery.gpu_stopped();
         self.world_items.clear_gpu();
         crate::vehicles::ClientVehicles::gpu_stopped(&mut self.vehicle_assets);

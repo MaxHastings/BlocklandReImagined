@@ -998,7 +998,15 @@ impl App {
                             continue;
                         }
                         bri_sim::session::Notice::Panel(panel) => {
-                            UiUpdate::Panel(panel.map(|p| panel_view(*p)))
+                            let catalog = a
+                                .view
+                                .as_ref()
+                                .and_then(|v| packages_for(&self.addons.package_catalog, v));
+                            UiUpdate::Panel(
+                                panel.map(|p| {
+                                    panel_view(*p, catalog, &mut self.addons.panel_textures)
+                                }),
+                            )
                         }
                         bri_sim::session::Notice::Report(report) => {
                             let palette = a.view.as_ref().map_or(&[][..], |v| &v.world.palette[..]);
@@ -1397,42 +1405,89 @@ fn log_entered(a: &mut Attempt) {
     }
 }
 
-/// An Add-On's panel as the panel screen lays it out.
-fn panel_view(shown: bri_sim::session::PanelShown) -> bri_ui::api::PanelView {
+/// An Add-On's panel as the panel screen lays it out, with its pictures read
+/// from the Add-On that showed it.
+fn panel_view(
+    shown: bri_sim::session::PanelShown,
+    catalog: Option<&bri_package_runtime::Catalog>,
+    textures: &mut crate::panel_textures::PanelTextures,
+) -> bri_ui::api::PanelView {
     use bri_package_runtime::panel::PanelKind;
-    use bri_ui::api::PanelItemView;
+    use bri_ui::api::{PanelBackgroundView, PanelButtonView, PanelItemView};
     let panel = shown.panel;
+    let package = shown.package;
+    let mut picture = |texture: &str| {
+        (!texture.is_empty())
+            .then(|| textures.picture(catalog, &package, texture))
+            .flatten()
+    };
+    let rect = |x: Option<i16>, y: Option<i16>, w: Option<u16>, h: Option<u16>| {
+        Some([i32::from(x?), i32::from(y?), i32::from(w?), i32::from(h?)])
+    };
+    let background = panel.background.map(|b| PanelBackgroundView {
+        picture: picture(&b.texture),
+        slice: b.slice,
+        tint: b.tint.unwrap_or([1.0; 4]),
+    });
+    let items = panel
+        .items
+        .into_iter()
+        .map(|item| {
+            let max = item.max_chars();
+            match item.kind {
+                PanelKind::Text => PanelItemView::Text(item.text),
+                PanelKind::List => PanelItemView::List {
+                    id: item.id,
+                    rows: item.rows,
+                    selected: item.selected,
+                    height: item.height.unwrap_or(120),
+                    drag: item.drag,
+                },
+                PanelKind::Field => PanelItemView::Field {
+                    id: item.id,
+                    label: item.label,
+                    text: item.text,
+                    max,
+                },
+                PanelKind::Buttons => PanelItemView::Buttons(
+                    item.buttons
+                        .into_iter()
+                        .map(|b| {
+                            let normal = picture(&b.texture);
+                            // Without its own hover picture a button keeps its normal one.
+                            let hover = if b.hover_texture.is_empty() {
+                                normal
+                            } else {
+                                picture(&b.hover_texture)
+                            };
+                            PanelButtonView {
+                                rect: rect(b.x, b.y, b.w, b.h),
+                                id: b.id,
+                                label: b.label,
+                                picture: normal,
+                                hover_picture: hover,
+                                color: b.color,
+                            }
+                        })
+                        .collect(),
+                ),
+                PanelKind::Image => PanelItemView::Image {
+                    picture: picture(&item.texture),
+                    rect: rect(item.x, item.y, item.w, item.h).unwrap_or_default(),
+                    tint: item.tint.unwrap_or([1.0; 4]),
+                },
+            }
+        })
+        .collect();
     bri_ui::api::PanelView {
-        package: shown.package,
+        package: package.clone(),
         id: panel.id,
         title: panel.title,
         width: panel.width,
         height: panel.height,
-        items: panel
-            .items
-            .into_iter()
-            .map(|item| {
-                let max = item.max_chars();
-                match item.kind {
-                    PanelKind::Text => PanelItemView::Text(item.text),
-                    PanelKind::List => PanelItemView::List {
-                        id: item.id,
-                        rows: item.rows,
-                        selected: item.selected,
-                        height: item.height.unwrap_or(120),
-                        drag: item.drag,
-                    },
-                    PanelKind::Field => PanelItemView::Field {
-                        id: item.id,
-                        label: item.label,
-                        text: item.text,
-                        max,
-                    },
-                    PanelKind::Buttons => PanelItemView::Buttons(
-                        item.buttons.into_iter().map(|b| (b.id, b.label)).collect(),
-                    ),
-                }
-            })
-            .collect(),
+        items,
+        border: panel.border,
+        modal: panel.modal,
+        background,
     }
 }

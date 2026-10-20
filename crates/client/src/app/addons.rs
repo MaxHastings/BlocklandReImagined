@@ -41,6 +41,8 @@ pub(super) struct AddOns {
     pub(super) add_on_health: crate::add_on_health::AddOnHealth,
     /// HUD regions Add-Ons claim, and their textures.
     pub(super) hud_regions: crate::hud_regions::HudRegions,
+    /// The pictures panels draw.
+    pub(super) panel_textures: crate::panel_textures::PanelTextures,
     /// Add-On files edited while a hosted game runs.
     pub(super) edits: crate::add_on_edits::AddOnEdits,
 }

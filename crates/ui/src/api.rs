@@ -1574,6 +1574,37 @@ pub struct PanelView {
     pub width: u16,
     pub height: u16,
     pub items: Vec<PanelItemView>,
+    /// The frame and title bar are drawn.
+    pub border: bool,
+    /// The panel takes all input until closed.
+    pub modal: bool,
+    pub background: Option<PanelBackgroundView>,
+}
+/// A host texture a panel draws: its key in the renderer and size in texels.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PanelPicture {
+    pub key: u64,
+    pub size: [u32; 2],
+}
+/// A panel's background picture.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PanelBackgroundView {
+    /// None: the Add-On's texture could not be read, so there is no background.
+    pub picture: Option<PanelPicture>,
+    /// Texels kept at the left, top, right and bottom edges (nine-slice).
+    pub slice: Option<[u16; 4]>,
+    pub tint: [f32; 4],
+}
+/// One button of a panel's row.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PanelButtonView {
+    pub id: String,
+    pub label: String,
+    pub picture: Option<PanelPicture>,
+    pub hover_picture: Option<PanelPicture>,
+    pub color: Option<[f32; 4]>,
+    /// x, y, w, h in the panel, when the button has its own place.
+    pub rect: Option<[i32; 4]>,
 }
 /// A panel list's row dragged from list `from` (row `row`, from 0) and let
 /// go over row `at` of the list an event names (none: below its rows).
@@ -1602,8 +1633,15 @@ pub enum PanelItemView {
         text: String,
         max: u16,
     },
-    /// A row of buttons: id and label.
-    Buttons(Vec<(String, String)>),
+    /// A row of buttons.
+    Buttons(Vec<PanelButtonView>),
+    /// A picture at a place in the panel: x, y, w, h and a tint. None: the
+    /// Add-On's texture could not be read.
+    Image {
+        picture: Option<PanelPicture>,
+        rect: [i32; 4],
+        tint: [f32; 4],
+    },
 }
 /// A score report the host showed (Slayer's End of Round Report): plain
 /// text, laid out by the Report window.
