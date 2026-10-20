@@ -365,6 +365,15 @@ fn capture_frames() -> Result<()> {
     let state = std::env::temp_dir().join(format!("bri-capture-state-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&state);
     std::fs::create_dir_all(&state)?;
+    // A player's settings to start from (the Add-Ons they turned on): `state_from` names a client state folder whose
+    // `add-on-choices.json` is copied in, as a real player's choices are.
+    if let Some(from) = spec.get("state_from").and_then(|s| s.as_str()) {
+        std::fs::copy(
+            Path::new(from).join("add-on-choices.json"),
+            state.join("add-on-choices.json"),
+        )
+        .context("state_from: its add-on-choices.json")?;
+    }
     let mut app = App::load(&content, &state, size)?;
     app.ui.core.pop(bri_ui::screens::ScreenId::DefaultControls);
     let wanted = spec["map"].as_str().unwrap_or("").to_lowercase();
