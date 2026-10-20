@@ -769,6 +769,9 @@ pub struct PlayerTuning {
     pub lean: Option<Lean>,
     /// Climbing ladders, when the body can: none for v20's bodies.
     pub climb: Option<crate::climb::Climb>,
+    /// Getting out of geometry that has closed around the body, when it can:
+    /// none for v20's bodies.
+    pub unstick: Option<Unstick>,
     /// The archetype's movement controller, bound from its module by the
     /// side that runs it (`Archetypes::bind_controllers`). Never data: the
     /// archetype carries the module, and a table read from data has none
@@ -842,8 +845,40 @@ impl Default for PlayerTuning {
             prone: None,
             lean: None,
             climb: None,
+            unstick: None,
             controller: None,
         }
+    }
+}
+/// [`PlayerTuning::unstick`]: a body that stays inside solid geometry (a
+/// door or lift closed on it, a prop or a brick landed on it) for `seconds`
+/// is moved to the nearest free spot within `reach`, searched every `step`
+/// outward and upward. Other players never count: they move aside.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Unstick {
+    /// How long the body may stay embedded before it is moved, above zero.
+    pub seconds: f32,
+    /// The farthest the body is moved, above zero.
+    pub reach: f32,
+    /// The spacing of the spots tried, above zero and at most `reach`.
+    pub step: f32,
+}
+impl Unstick {
+    pub fn validate(&self) -> Result<()> {
+        ensure!(
+            self.seconds.is_finite() && self.seconds > 0.0,
+            "Unstick seconds must be above zero"
+        );
+        ensure!(
+            self.reach.is_finite() && self.reach > 0.0,
+            "Unstick reach must be above zero"
+        );
+        ensure!(
+            self.step.is_finite() && self.step > 0.0 && self.step <= self.reach,
+            "Unstick step must be above zero and at most its reach"
+        );
+        Ok(())
     }
 }
 /// [`PlayerTuning::fall`]: striking the ground downward faster than
@@ -1080,6 +1115,9 @@ impl PlayerTuning {
         if let Some(c) = &self.climb {
             c.validate()?;
         }
+        if let Some(u) = &self.unstick {
+            u.validate()?;
+        }
         Ok(())
     }
 }
@@ -1107,6 +1145,8 @@ pub struct Player {
     relocations: u64,
     /// The body is a corpse ([`Player::set_corpse`]).
     corpse: bool,
+    /// Seconds the body has been inside solid geometry ([`Unstick`]).
+    embedded_for: f32,
 }
 pub struct MotionEvents {
     /// A 32 ms Torque tick ran this step; the other events come only with one.
@@ -1258,6 +1298,7 @@ impl Player {
             mounted_eye_offset: None,
             relocations: 0,
             corpse: false,
+            embedded_for: 0.0,
         })
     }
     /// Drive a player-type mount (horse, rowboat, cannon, turret) with the
@@ -1308,6 +1349,7 @@ impl Player {
             mounted_eye_offset: None,
             relocations: 0,
             corpse: false,
+            embedded_for: 0.0,
         })
     }
     /// Restored or scripted motion (`setVelocity`, checkpoints).
@@ -1370,6 +1412,7 @@ impl Player {
             mounted_eye_offset: None,
             relocations: 0,
             corpse: false,
+            embedded_for: 0.0,
         };
         player.restore(physics, state, tuning)?;
         player.apply_groups(physics);
@@ -1852,6 +1895,68 @@ impl Player {
     ) -> Result<MotionEvents> {
         self.torque_tick_among(physics, input, waters, dt, &(), &Passages::default())
     }
+    /// [`PlayerTuning::unstick`]: counts the time the body spends inside
+    /// solid geometry and, past the limit, returns the nearest free spot
+    /// to move it to. Only what never gets out of the way counts (players
+    /// do), and the body is tested a hair above its feet, clear of the floor
+    /// the motor rests a hair inside.
+    fn unstick(
+        &mut self,
+        physics: &PhysicsWorld,
+        filter: QueryFilter<'_>,
+        unstick: Unstick,
+        dt: f32,
+    ) -> Option<Vec3> {
+        let solid = |_: ColliderHandle, c: &Collider| c.user_data >> 64 != 1;
+        let query = physics.query_pipeline_with_filter(filter.predicate(&solid));
+        let (pose_at, shape) = (
+            |at: Vec3| {
+                self.tuning
+                    .pose(at + Vec3::Y * ROOM_LIFT, self.state.crouched)
+            },
+            self.tuning.shape(self.state.crouched),
+        );
+        let free = |at: Vec3| {
+            query
+                .intersect_shape(pose_at(at), shape.as_ref())
+                .next()
+                .is_none()
+        };
+        let feet = Vec3::from(self.state.feet);
+        if free(feet) {
+            self.embedded_for = 0.0;
+            return None;
+        }
+        self.embedded_for += dt;
+        if self.embedded_for < unstick.seconds {
+            return None;
+        }
+        // Tried again after another `seconds` when nothing nearby is free.
+        self.embedded_for = 0.0;
+        const DIRECTIONS: u32 = 8;
+        let rings = (unstick.reach / unstick.step).floor() as u32;
+        let mut spots: Vec<Vec3> = Vec::new();
+        for up in 0..=rings {
+            for out in 0..=rings {
+                let lift = Vec3::Y * (up as f32 * unstick.step);
+                if out == 0 {
+                    spots.push(feet + lift);
+                    continue;
+                }
+                for k in 0..DIRECTIONS {
+                    let angle = k as f32 / DIRECTIONS as f32 * std::f32::consts::TAU;
+                    let away =
+                        Vec3::new(angle.cos(), 0.0, angle.sin()) * (out as f32 * unstick.step);
+                    spots.push(feet + lift + away);
+                }
+            }
+        }
+        spots.sort_by(|a, b| {
+            a.distance_squared(feet)
+                .total_cmp(&b.distance_squared(feet))
+        });
+        spots.into_iter().find(|spot| free(*spot))
+    }
     fn torque_tick_among(
         &mut self,
         physics: &mut PhysicsWorld,
@@ -1887,11 +1992,23 @@ impl Player {
         }
         let was_grounded = self.state.grounded;
         let was_crouched = self.state.crouched;
-        let feet = Vec3::from(self.state.feet);
+        let mut feet = Vec3::from(self.state.feet);
         let filter = QueryFilter::default()
             .exclude_sensors()
             .exclude_rigid_body(self.body)
             .groups(moves_against(self.state.pass_group));
+        let relocated = match t.unstick {
+            Some(unstick) => self.unstick(physics, filter, unstick, dt),
+            None => None,
+        };
+        if let Some(spot) = relocated {
+            feet = spot;
+            self.state.feet = spot.to_array();
+            self.state.velocity = [0.0; 3];
+            self.state.grounded = false;
+            self.relocations += 1;
+        }
+        let t = &self.tuning;
         let query = physics.query_pipeline_with_filter(filter);
         // v20 updateMove (0x5ae2ea) crouches a fully submerged player as if
         // crouch were held, so swimmers under water use the crouch box.
@@ -2480,7 +2597,7 @@ impl Player {
             physics.colliders[self.collider].set_shape(shape);
         }
         let pose = self.body_pose(Vec3::from(self.state.feet), self.state.crouched);
-        if passed.is_some() {
+        if passed.is_some() || relocated.is_some() {
             // Through an opening the body jumps to the partner, as a
             // teleport does: driven there as its next pose, the step would
             // sweep it across the gap and throw what it touched.

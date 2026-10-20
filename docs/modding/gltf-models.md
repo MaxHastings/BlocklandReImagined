@@ -177,6 +177,13 @@ body tilt (radians, up to 0.6) and how long a full lean takes. An optional
 `body_angle` tilts the drawn body by that much instead (0 leaves it upright
 while the view still rolls). v20's bodies have neither.
 
+**Getting out of geometry (optional).** `movement.unstick` frees a body that
+a door, a lift, a prop or a placed brick has closed around:
+`{ "seconds": 1.0, "reach": 8.0, "step": 1.0 }`. A body that stays inside
+solid geometry for `seconds` is moved to the nearest free spot within
+`reach` (tried every `step`, sideways and upward) and falls from there.
+Other players never count, as they move aside. v20's bodies have none.
+
 **Distant detail (optional, off by default).** Classic-era models are light
 enough to skip this. For a heavy model, `--lod TRIANGLES` adds a lighter
 copy with that many triangles that the body draws when it is small on
