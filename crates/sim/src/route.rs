@@ -759,6 +759,7 @@ pub fn leg_name(mode: Mode) -> &'static str {
         Mode::Swim => "swim",
         Mode::Jet { .. } => "jet",
         Mode::Leap { .. } => "leap",
+        Mode::Climb { .. } => "climb",
     }
 }
 

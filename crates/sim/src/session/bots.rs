@@ -548,6 +548,8 @@ struct Brain {
     footing: Vec3,
     /// The leap of its route it is taking, if any.
     leap_leg: Option<crate::route::LeapLeg>,
+    /// The tick the climb it is on began, for giving it up.
+    climb_since: Option<u64>,
     /// The gear its driving is in (`route::gear`).
     drive_gear: crate::route::Gear,
     /// Where it took a mount's controls (the vehicle and its feet then):
@@ -749,6 +751,7 @@ impl Brain {
             jet_leg: None,
             footing: home,
             leap_leg: None,
+            climb_since: None,
             drive_gear: crate::route::Gear::Forward,
             mount_anchor: None,
             brick_team: None,
@@ -1929,6 +1932,13 @@ impl Session {
                         })
                         .unzip()
                 };
+                // A map door the package marked for bots to open is not in
+                // their way: they walk to it and open it.
+                let passable = simulation.bot_passable();
+                let solid = |handle: rapier3d::prelude::ColliderHandle,
+                             _: &rapier3d::prelude::Collider| {
+                    !passable.contains(&handle)
+                };
                 let ground = Ground {
                     physics,
                     terrain: &terrain,
@@ -1936,6 +1946,7 @@ impl Session {
                     waters: &waters,
                     bodies: &bodies,
                     motions: &motions,
+                    solid: &solid,
                 };
                 let at = match self.bots.navs.iter().position(|(b, _)| *b == *body) {
                     Some(at) => at,
@@ -2016,7 +2027,7 @@ impl Session {
                             && d.y.abs() < body.step + 0.5
                     }
                     Mode::Swim => next.through.is_none() && flat(d).length() < near.max(0.6),
-                    Mode::Jet { .. } | Mode::Leap { .. } => {
+                    Mode::Jet { .. } | Mode::Leap { .. } | Mode::Climb { .. } => {
                         state.grounded && flat(d).length() < 2.0 && d.y.abs() < body.step + 0.5
                     }
                 };
@@ -3408,6 +3419,10 @@ impl Session {
             } else {
                 brain.yaw
             };
+            // A climber faces the rungs, going up or down.
+            if let Mode::Climb { yaw: rungs, .. } = next.mode {
+                yaw = rungs;
+            }
             // Strolling, the look drifts a little off the way.
             if idle {
                 yaw = wrap(yaw + perception::drift(&kind.perception, bot, tick));
@@ -3678,6 +3693,42 @@ impl Session {
                     });
                 }
             }
+            Some((to, Mode::Climb { from, yaw, seconds })) if driving.is_none() => {
+                brain.jet_leg = None;
+                let began = *brain.climb_since.get_or_insert(tick);
+                // Pushed into the rungs it climbs; past the last of them it
+                // steps off toward the floor above.
+                // Down, it backs off the edge facing the rungs, falls onto
+                // them and lets itself down; past the last rung it walks on
+                // toward the floor.
+                let facing = Vec3::new(yaw.sin(), 0.0, -yaw.cos());
+                let down = to.y < from.y - body.step;
+                let direction = if (!down && feet.y >= to.y - body.step)
+                    || (down && feet.y <= to.y + body.step)
+                {
+                    flat(to - feet).normalize_or_zero()
+                } else if down {
+                    -facing
+                } else {
+                    facing
+                };
+                if tick.saturating_sub(began) as f32 > (seconds * 2.0 + 4.0) * 120.0 {
+                    // Replan from what happened.
+                    missed = Some((from, to));
+                    brain.climb_since = None;
+                    brain.plan.clear();
+                    brain.search = None;
+                    brain.settled = false;
+                    brain.replans += 1;
+                } else {
+                    proposals.push(act::Proposal {
+                        jet: Some(false),
+                        jump: Some(false),
+                        crouch: Some(false),
+                        ..act::Proposal::walk(act::Mover::Climb, direction)
+                    });
+                }
+            }
             Some((to, Mode::Swim | Mode::Walk)) if swim.is_none() && wet && !state.grounded => {
                 // Afloat: swim on toward it, rising where the way on (out
                 // onto a higher bank) is higher.
@@ -3693,6 +3744,9 @@ impl Session {
         }
         if !wanted.is_some_and(|w| matches!(w.mode, Mode::Leap { .. })) {
             brain.leap_leg = None;
+        }
+        if !wanted.is_some_and(|w| matches!(w.mode, Mode::Climb { .. })) {
+            brain.climb_since = None;
         }
         if swim.is_some() {
             // Up and down as a swimmer does: jump rises, crouch dives.
@@ -3831,8 +3885,12 @@ impl Session {
             act::Ground {
                 driving: driving.is_some(),
                 swimming: swim.is_some() || wet,
-                air_leg: wanted
-                    .is_some_and(|w| matches!(w.mode, Mode::Jet { .. } | Mode::Leap { .. })),
+                air_leg: wanted.is_some_and(|w| {
+                    matches!(
+                        w.mode,
+                        Mode::Jet { .. } | Mode::Leap { .. } | Mode::Climb { .. }
+                    )
+                }),
             },
         );
         // Facing the way it walks, it turns into a sharp bend (a stair's

@@ -366,6 +366,7 @@ fn fixed_navigation_does_not_discover_the_physically_valid_actor_support() {
         waters: &[],
         bodies: &[],
         motions: &[],
+        solid: &bri_sim::nav::all_solid,
     };
     let body = Body::of(&tuning, 1.);
     let mut nav = Nav::default();
