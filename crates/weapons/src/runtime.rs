@@ -5095,7 +5095,10 @@ impl WeaponsWorld {
         }
         let base = d.damage;
         let ricochet = ray.hitscan.ricochet;
-        let turns = ricochet.map_or(0, |r| r.times);
+        let trace = ray.hitscan.trace.as_ref();
+        let turns = ricochet.map_or(0, |r| r.times)
+            + trace.map_or(0, |t| t.max_landings.saturating_sub(1));
+        let mut strength = 1.0f32;
         let mut from = ray.from;
         let mut direction = ray.direction.normalize_or(Vec3::NEG_Z);
         let mut reach = ray.range * a.frame.scale;
@@ -5163,6 +5166,9 @@ impl WeaponsWorld {
                     (base + landing as f32 * r.damage).clamped(-100.0, 100.0)
                 };
             }
+            if trace.is_some() {
+                d.damage = (base * strength).clamped(-100.0, 100.0);
+            }
             let normal = hit.normal.normalize_or(-direction);
             if !self.hitscan_land(
                 id,
@@ -5183,6 +5189,33 @@ impl WeaponsWorld {
             reach -= hit.position.distance(from);
             if reach <= 0.0 {
                 return;
+            }
+            if let Some(t) = trace {
+                if matches!(hit.target, TargetId::Actor(_)) {
+                    return;
+                }
+                let surface = q
+                    .surface_kind(hit.target, hit.position, normal)
+                    .and_then(|kind| t.surfaces.get(kind))
+                    .copied()
+                    .unwrap_or(t.other);
+                let across = (-direction.dot(normal)).clamped(0.0, 1.0);
+                let draw = unit_random(self.tick, id.0, TRACE_DRAW + u64::from(landing));
+                if across < surface.ricochet * draw {
+                    strength *= t.loss;
+                    direction =
+                        (direction - normal * 2.0 * direction.dot(normal)).normalize_or(normal);
+                    from = hit.position + normal * 0.01;
+                } else if surface.penetration > 0.0 {
+                    strength *= surface.penetration;
+                    from = hit.position + direction * 0.01;
+                } else {
+                    return;
+                }
+                if strength < t.floor {
+                    return;
+                }
+                continue;
             }
             // Mirrored about the face it met, from just off it.
             direction = (direction - normal * 2.0 * direction.dot(normal)).normalize_or(normal);
@@ -5687,6 +5720,8 @@ fn response_velocity(current: Vec3, normal: Vec3, response: ContactResponse) -> 
 /// [`unit_random`]'s `n` for a hitscan shot's landing sounds, apart from
 /// its rays' spreads (`3 * ray + axis`).
 const HIT_SOUND_DRAW: u64 = u64::MAX;
+/// The first salt of the draws a trace's glancing takes, one a landing.
+const TRACE_DRAW: u64 = u64::MAX - 64;
 /// [`unit_random`]'s draw of a stopped projectile's guard sound.
 const GUARD_SOUND_DRAW: u64 = u64::MAX - 1;
 /// How long a projectile a guard sent back cannot be sent back again: Kai's
