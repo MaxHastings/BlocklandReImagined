@@ -94,7 +94,9 @@ pub struct Record {
 impl Record {
     pub fn validate(&self) -> Result<()> {
         ensure!(
-            !self.name.is_empty() && self.name.len() <= 128 && !self.name.chars().any(char::is_control),
+            !self.name.is_empty()
+                && self.name.len() <= 128
+                && !self.name.chars().any(char::is_control),
             "A scatter layer needs a name of 1 to 128 characters"
         );
         ensure!(
@@ -102,7 +104,11 @@ impl Record {
             "Scatter layer {} needs an asset and a file",
             self.name
         );
-        ensure!(self.detail <= 3, "Scatter layer {}'s detail is 0 to 3", self.name);
+        ensure!(
+            self.detail <= 3,
+            "Scatter layer {}'s detail is 0 to 3",
+            self.name
+        );
         if let Some([near, far]) = self.fade {
             ensure!(
                 near.is_finite() && far.is_finite() && near >= 0.0 && far > near,
@@ -152,28 +158,45 @@ pub fn encode(instances: &[Instance]) -> Result<Vec<u8>> {
 
 /// The placements of a file written by [`encode`], each checked.
 pub fn decode(bytes: &[u8]) -> Result<Vec<Instance>> {
-    ensure!(bytes.len() >= 12 && bytes[..4] == MAGIC, "Not a scatter placement file");
+    ensure!(
+        bytes.len() >= 12 && bytes[..4] == MAGIC,
+        "Not a scatter placement file"
+    );
     let version = u32::from_le_bytes(bytes[4..8].try_into()?);
     if version != VERSION {
         bail!("Scatter placement file version {version} is not supported (expected {VERSION})");
     }
     let count = u32::from_le_bytes(bytes[8..12].try_into()?) as usize;
-    ensure!(count <= MAX_INSTANCES, "A scatter layer holds at most {MAX_INSTANCES} instances");
+    ensure!(
+        count <= MAX_INSTANCES,
+        "A scatter layer holds at most {MAX_INSTANCES} instances"
+    );
     ensure!(
         bytes.len() == 12 + count * RECORD_BYTES,
         "Scatter placement file is {} bytes, {} expected for {count} instances",
         bytes.len(),
         12 + count * RECORD_BYTES
     );
-    let float = |at: usize| f32::from_le_bytes([bytes[at], bytes[at + 1], bytes[at + 2], bytes[at + 3]]);
+    let float =
+        |at: usize| f32::from_le_bytes([bytes[at], bytes[at + 1], bytes[at + 2], bytes[at + 3]]);
     let mut out = Vec::with_capacity(count);
     for n in 0..count {
         let at = 12 + n * RECORD_BYTES;
         let instance = Instance {
             position: [float(at), float(at + 4), float(at + 8)],
-            rotation: [float(at + 12), float(at + 16), float(at + 20), float(at + 24)],
+            rotation: [
+                float(at + 12),
+                float(at + 16),
+                float(at + 20),
+                float(at + 24),
+            ],
             scale: [float(at + 28), float(at + 32), float(at + 36)],
-            tint: [bytes[at + 40], bytes[at + 41], bytes[at + 42], bytes[at + 43]],
+            tint: [
+                bytes[at + 40],
+                bytes[at + 41],
+                bytes[at + 42],
+                bytes[at + 43],
+            ],
         };
         instance.validate()?;
         out.push(instance);
@@ -238,7 +261,10 @@ mod tests {
             tint: [255; 4],
         };
         let moved = i.matrix().transform_point3(Vec3::X);
-        assert!((moved - Vec3::new(10.0, 2.0, 0.0)).length() < 1e-5, "{moved}");
+        assert!(
+            (moved - Vec3::new(10.0, 2.0, 0.0)).length() < 1e-5,
+            "{moved}"
+        );
     }
 
     #[test]

@@ -165,7 +165,12 @@ mod tests {
         }
     }
 
-    fn layer(list: Vec<Instance>, fade: Option<[f32; 2]>, order: Order, modulate_2x: bool) -> ScatterScene {
+    fn layer(
+        list: Vec<Instance>,
+        fade: Option<[f32; 2]>,
+        order: Order,
+        modulate_2x: bool,
+    ) -> ScatterScene {
         ScatterScene {
             name: "test".into(),
             scene: Default::default(),
@@ -184,17 +189,26 @@ mod tests {
             at(20.0, [255, 128, 0, 200]),
             at(31.0, [255; 4]),
         ];
-        let chosen = choose(&layer(list, Some([10.0, 30.0]), Order::Unsorted, false), Vec3::ZERO);
+        let chosen = choose(
+            &layer(list, Some([10.0, 30.0]), Order::Unsorted, false),
+            Vec3::ZERO,
+        );
         assert_eq!(chosen.len(), 2, "the one past 30 is gone");
         assert_eq!(chosen[0].tint, [1.0; 4]);
-        assert!((chosen[1].tint[3] - 200.0 / 255.0 * 0.5).abs() < 1e-5, "half faded");
+        assert!(
+            (chosen[1].tint[3] - 200.0 / 255.0 * 0.5).abs() < 1e-5,
+            "half faded"
+        );
         assert!((chosen[1].tint[1] - 128.0 / 255.0).abs() < 1e-5);
     }
 
     #[test]
     fn a_layer_without_a_fade_draws_everything() {
         let list = vec![at(1.0e6, [255; 4]), at(-1.0e6, [255; 4])];
-        assert_eq!(choose(&layer(list, None, Order::Unsorted, false), Vec3::ZERO).len(), 2);
+        assert_eq!(
+            choose(&layer(list, None, Order::Unsorted, false), Vec3::ZERO).len(),
+            2
+        );
     }
 
     #[test]
@@ -213,7 +227,15 @@ mod tests {
 
     #[test]
     fn a_layer_that_modulates_2x_doubles_its_tint_but_not_its_alpha() {
-        let chosen = choose(&layer(vec![at(1.0, [128, 64, 255, 100])], None, Order::Unsorted, true), Vec3::ZERO);
+        let chosen = choose(
+            &layer(
+                vec![at(1.0, [128, 64, 255, 100])],
+                None,
+                Order::Unsorted,
+                true,
+            ),
+            Vec3::ZERO,
+        );
         let t = chosen[0].tint;
         assert!((t[0] - 128.0 / 255.0 * 2.0).abs() < 1e-5 && (t[2] - 2.0).abs() < 1e-5);
         assert!((t[3] - 100.0 / 255.0).abs() < 1e-5);

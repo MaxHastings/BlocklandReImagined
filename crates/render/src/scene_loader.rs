@@ -88,8 +88,16 @@ fn load_scatter(
             asset: Some(record.asset.clone()),
             properties: BTreeMap::new(),
         };
-        load_static_shape(root, bundle, bindings, &at_origin, &mut alone, &mut BTreeMap::new(), legacy)
-            .with_context(|| format!("Scatter layer {}", record.name))?;
+        load_static_shape(
+            root,
+            bundle,
+            bindings,
+            &at_origin,
+            &mut alone,
+            &mut BTreeMap::new(),
+            legacy,
+        )
+        .with_context(|| format!("Scatter layer {}", record.name))?;
         alone.validate()?;
         let instances = bri_content::scatter::decode(&read(root, &record.file)?)
             .with_context(|| format!("Scatter layer {}'s placements", record.name))?;

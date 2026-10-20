@@ -55,7 +55,8 @@ pub(super) fn layers(
                 .map(|s| s.to_string_lossy().into_owned())
                 .unwrap_or_else(|| format!("layer{number}")),
         );
-        let doc = Document::open(path).with_context(|| format!("Reading scatter layer {}", path.display()))?;
+        let doc = Document::open(path)
+            .with_context(|| format!("Reading scatter layer {}", path.display()))?;
         let scene = doc.json["scene"].as_u64().unwrap_or(0) as usize;
         let extras = &doc.json["scenes"][scene]["extras"]["bri_scatter"];
         let file = extras["instances"]
@@ -66,9 +67,17 @@ pub(super) fn layers(
             Some(v) => {
                 let list: Vec<f32> = v
                     .as_array()
-                    .map(|a| a.iter().filter_map(Value::as_f64).map(|f| f as f32).collect())
+                    .map(|a| {
+                        a.iter()
+                            .filter_map(Value::as_f64)
+                            .map(|f| f as f32)
+                            .collect()
+                    })
                     .unwrap_or_default();
-                ensure!(list.len() == 2, "Scatter layer {layer}: bri_scatter `fade` is [near, far]");
+                ensure!(
+                    list.len() == 2,
+                    "Scatter layer {layer}: bri_scatter `fade` is [near, far]"
+                );
                 Some([list[0] * scale, list[1] * scale])
             }
         };
@@ -76,23 +85,36 @@ pub(super) fn layers(
             None | Some("unsorted") => scatter::Order::Unsorted,
             Some("far_to_near") => scatter::Order::FarToNear,
             Some("near_to_far") => scatter::Order::NearToFar,
-            Some(other) => anyhow::bail!("Scatter layer {layer}: bri_scatter `order` is unsorted, far_to_near or near_to_far, not {other}"),
+            Some(other) => anyhow::bail!(
+                "Scatter layer {layer}: bri_scatter `order` is unsorted, far_to_near or near_to_far, not {other}"
+            ),
         };
-        let modulate_2x = extras.get("modulate_2x").and_then(Value::as_bool).unwrap_or(false);
+        let modulate_2x = extras
+            .get("modulate_2x")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
         let detail = extras.get("detail").and_then(Value::as_u64).unwrap_or(0);
-        ensure!(detail <= 3, "Scatter layer {layer}: bri_scatter `detail` is 0 to 3");
+        ensure!(
+            detail <= 3,
+            "Scatter layer {layer}: bri_scatter `detail` is 0 to 3"
+        );
         let mut layer_opts = Options::new(path.clone(), opts.out.clone(), Kind::Prop);
         layer_opts.scale = opts.scale;
         layer_opts.fps = opts.fps;
         let prefix = format!("{id}_{layer}_");
         let converted = convert(&doc, path.parent(), &layer_opts, &layer, &prefix)
             .with_context(|| format!("Converting scatter layer {layer}"))?;
-        report
-            .warnings
-            .extend(converted.report.warnings.iter().map(|w| format!("scatter layer {layer}: {w}")));
+        report.warnings.extend(
+            converted
+                .report
+                .warnings
+                .iter()
+                .map(|w| format!("scatter layer {layer}: {w}")),
+        );
         let bytes = std::fs::read(path.parent().unwrap_or(Path::new(".")).join(file))
             .with_context(|| format!("Reading scatter layer {layer}'s placements {file}"))?;
-        let given = scatter::decode(&bytes).with_context(|| format!("Scatter layer {layer}'s placements"))?;
+        let given = scatter::decode(&bytes)
+            .with_context(|| format!("Scatter layer {layer}'s placements"))?;
         ensure!(!given.is_empty(), "Scatter layer {layer} has no placements");
         let placed: Vec<Instance> = given
             .iter()
@@ -125,7 +147,11 @@ pub(super) fn layers(
             );
         }
         let placements = format!("{id}_{layer}.scatter");
-        put(&format!("map/{placements}"), &scatter::encode(&placed)?, report)?;
+        put(
+            &format!("map/{placements}"),
+            &scatter::encode(&placed)?,
+            report,
+        )?;
         let record = Record {
             name: layer.clone(),
             asset: asset.clone(),

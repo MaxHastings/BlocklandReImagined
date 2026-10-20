@@ -738,8 +738,8 @@ fn import_room(col_floor: bool) -> (tempfile::TempDir, Report) {
 
 /// A scatter layer's glTF: one box with the scene's `bri_scatter` naming its placements file.
 fn scatter_layer(dir: &std::path::Path, fade: Option<[f32; 2]>) -> PathBuf {
-    use bri_content::scatter::{Instance, encode};
     use super::testing::{Gltf, cuboid};
+    use bri_content::scatter::{Instance, encode};
     let mut g = Gltf::new();
     let (p, n, uv, i) = cuboid(Vec3::ZERO, Vec3::splat(1.0));
     let flat = |v: &[Vec3]| v.iter().flat_map(|v| v.to_array()).collect::<Vec<f32>>();
@@ -771,7 +771,11 @@ fn scatter_layer(dir: &std::path::Path, fade: Option<[f32; 2]>) -> PathBuf {
         scale: [1.0, 2.0, 3.0],
         tint: [10, 20, 30, 255],
     };
-    std::fs::write(dir.join("grass.bin"), encode(&[placed(1.0), placed(-5.0)]).unwrap()).unwrap();
+    std::fs::write(
+        dir.join("grass.bin"),
+        encode(&[placed(1.0), placed(-5.0)]).unwrap(),
+    )
+    .unwrap();
     let path = dir.join("grass.glb");
     std::fs::write(&path, g.glb()).unwrap();
     path
@@ -794,8 +798,15 @@ fn a_scatter_layer_becomes_a_shape_and_placements_in_the_native_frame() {
     assert_eq!(records.as_array().unwrap().len(), 1, "{bundle}");
     let record: bri_content::scatter::Record = serde_json::from_value(records[0].clone()).unwrap();
     assert_eq!(record.name, "grass");
-    assert_eq!(record.fade, Some([20.0, 60.0]), "fade distances scale with the import");
-    assert!(bundle["assets"][&record.asset].is_string(), "the model is an asset");
+    assert_eq!(
+        record.fade,
+        Some([20.0, 60.0]),
+        "fade distances scale with the import"
+    );
+    assert!(
+        bundle["assets"][&record.asset].is_string(),
+        "the model is an asset"
+    );
     assert!(
         bundle["bindings"]
             .as_array()
@@ -809,8 +820,14 @@ fn a_scatter_layer_becomes_a_shape_and_placements_in_the_native_frame() {
             .unwrap();
     assert_eq!(placed.len(), 2);
     // glTF to native is half a turn about Y, then the import's scale of 2.
-    assert!(near(Vec3::from(placed[0].position), Vec3::new(-2.0, 2.0, -4.0)));
-    assert!(near(Vec3::from(placed[1].position), Vec3::new(10.0, 2.0, -4.0)));
+    assert!(near(
+        Vec3::from(placed[0].position),
+        Vec3::new(-2.0, 2.0, -4.0)
+    ));
+    assert!(near(
+        Vec3::from(placed[1].position),
+        Vec3::new(10.0, 2.0, -4.0)
+    ));
     assert_eq!(placed[0].scale, [1.0, 2.0, 3.0]);
     assert_eq!(placed[0].tint, [10, 20, 30, 255]);
     let check = bri_package_runtime::check::check(&dir);
