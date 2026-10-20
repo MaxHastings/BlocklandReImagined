@@ -359,16 +359,15 @@ impl StaticLighting {
 
     fn set(&self, actor: i64) -> Option<Set> {
         let instance = self.instances.get(&actor)?;
-        let masks = self.masks.get(&actor)?;
+        // An actor no light reaches has no mask rows (the lane writes none): it still takes its ambient.
+        let masks = self.masks.get(&actor);
         let mut set = Set {
             ambient: self.zone_ambient(instance.zone),
             ..Set::default()
         };
         for (row, export) in instance.lights.iter().enumerate() {
+            let masks = masks.filter(|m| row < m.rows)?;
             let light = self.lights.get(export)?;
-            if row >= masks.rows {
-                return None;
-            }
             set.lights
                 .push(self.light_of(export, light, instance.scale_glow));
             set.visible
