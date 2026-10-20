@@ -8,7 +8,10 @@
 //! and Blender lights (`KHR_lights_punctual`) are map lights in map2dif's
 //! types. The result is an Add-On folder holding `package.json` and a
 //! native map bundle in `map/`, the same files the converted v20 maps use.
-use super::{Converted, Document, Options, Point, Report, map_environment, map_terrain, title};
+use super::{
+    Converted, Document, Options, Point, Report, map_backdrop, map_decals, map_environment,
+    map_regions, map_scatter, map_terrain, title,
+};
 use anyhow::{Context, Result, ensure};
 use bri_content::scene::{Kind as NodeKind, LIGHT_TYPES, Node as SceneNode, Scene};
 use bri_content::shape::Shape;
@@ -421,6 +424,32 @@ pub(super) fn write(
 
     let model_file = format!("{id}.shape.json");
     let scene_file = format!("{id}.scene.json");
+    let scattered = map_scatter::layers(
+        opts,
+        &map_id,
+        id,
+        &mut |rel, bytes, report| put(rel, bytes, report),
+        &mut report,
+    )?;
+    let regions_file = map_regions::regions(
+        opts,
+        id,
+        &mut |rel, bytes, report| put(rel, bytes, report),
+        &mut report,
+    )?;
+    let decals = map_decals::decals(
+        opts,
+        id,
+        &mut |rel, bytes, report| put(rel, bytes, report),
+        &mut report,
+    )?;
+    let backdrop = map_backdrop::backdrop(
+        opts,
+        &map_id,
+        id,
+        &mut |rel, bytes, report| put(rel, bytes, report),
+        &mut report,
+    )?;
     put(
         &format!("map/{model_file}"),
         &serde_json::to_vec(&shape)?,
@@ -445,6 +474,11 @@ pub(super) fn write(
             json!({ "asset": model, "shape_material": slot, "skin": "", "texture": format!("{}.png", m.name) })
         })
         .collect();
+    bindings.extend(scattered.bindings.iter().cloned());
+    bindings.extend(backdrop.bindings.iter().cloned());
+    texture_files.extend(scattered.textures.clone());
+    texture_files.extend(backdrop.textures.clone());
+    texture_files.extend(decals.textures.clone());
     // A material's custom property `bri_surface` names what it is made of
     // (`dirt`, `metal`), for footsteps and impacts.
     let mut surfaces = serde_json::Map::new();
@@ -492,6 +526,12 @@ pub(super) fn write(
         }
     }
     let mut assets = json!({ model.clone(): model_file });
+    for (asset, file) in &scattered.assets {
+        assets[asset] = json!(file);
+    }
+    for (asset, file) in &backdrop.assets {
+        assets[asset] = json!(file);
+    }
     let (mut instances, mut lighting) = (Vec::new(), json!({}));
     if let Some(t) = terrain {
         put(
@@ -519,6 +559,10 @@ pub(super) fn write(
         "bindings": bindings,
         "lighting": lighting,
         "terrains": { map_id.clone(): instances },
+        "scatter": { map_id.clone(): scattered.records },
+        "backdrops": { map_id.clone(): backdrop.record },
+        "regions": { map_id.clone(): regions_file },
+        "decals": { map_id.clone(): decals.file },
         "environments": { map_id.clone(): environment },
         "waters": { map_id.clone(): waters },
     });

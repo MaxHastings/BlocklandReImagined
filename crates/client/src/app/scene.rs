@@ -4,6 +4,15 @@ use super::*;
 /// The world as the CPU sees it: map scene, brick chunks, the world log and the query mirror.
 pub(super) struct SceneState {
     pub(super) cpu_scene: Option<SceneData>,
+    /// The map's backdrop: drawn before the map from its own eye (`bri_content::backdrop`).
+    pub(super) backdrop: Option<bri_render::scene_loader::BackdropScene>,
+    /// The map's regions with their own fog, and the viewer's fog across them.
+    pub(super) regions: Option<bri_content::regions::RegionMap>,
+    /// The map's decals and the triangles they draw on.
+    pub(super) decals: Option<bri_render::decals::LoadedDecals>,
+    pub(super) fog_blend: bri_content::regions::FogBlend,
+    /// Game time of the last fog step.
+    pub(super) fog_time: f64,
     pub(super) cpu_terrain: Vec<Arc<bri_render::terrain_scene::TerrainScene>>,
     pub(super) cpu_water: Vec<Arc<bri_render::water_scene::WaterScene>>,
     /// The sky drawn over the map's own (the Environment window).

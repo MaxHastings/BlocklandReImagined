@@ -73,6 +73,7 @@ fn surface() -> Surface {
         reflection: None,
         lightmap: None,
         lightmap_strength: 1.0,
+        lightmap_exact: false,
     }
 }
 

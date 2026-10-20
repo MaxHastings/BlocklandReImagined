@@ -30,6 +30,14 @@ pub struct MapScene {
     /// own origin, by scene node: drawn instanced where the session's
     /// mover states put them rather than baked into the map.
     pub movers: Vec<(u32, SceneData)>,
+    /// The map's scatter layers: one model each, repeated at many placements ([`bri_content::scatter`]).
+    pub scatter: Vec<ScatterScene>,
+    /// The map's backdrop, when it has one.
+    pub backdrop: Option<BackdropScene>,
+    /// The map's regions with their own fog, when it has them.
+    pub regions: Option<bri_content::regions::RegionMap>,
+    /// The map's decals and their pictures (in order), when it has them.
+    pub decals: Option<crate::decals::LoadedDecals>,
     /// Set only by the modern loader, which never decodes illumination images.
     pub modern_lights: Option<Vec<crate::map_lighting::MapLight>>,
     /// Animated map lights: an index into `modern_lights` and how it
@@ -42,6 +50,180 @@ pub struct MapScene {
     /// they draw as unshadowed point lights with the same linear falloff, the
     /// nearest ones each frame (`SceneRenderer::update_lights`, colour w 1).
     pub overflow_lights: Vec<crate::map_lighting::MapLight>,
+}
+
+/// A map's backdrop ([`bri_content::backdrop`]): a model drawn before the map from `eye`, with only the viewer's rotation.
+pub struct BackdropScene {
+    pub scene: SceneData,
+    pub eye: [f32; 3],
+}
+
+/// The backdrop `bundle` lists for `scene`, its model loaded as a shape about the origin.
+fn load_backdrop(
+    root: &Path,
+    bundle: &Value,
+    bindings: &[Value],
+    scene: &Scene,
+    legacy: bool,
+) -> Result<Option<BackdropScene>> {
+    let Some(record) = bundle
+        .get("backdrops")
+        .and_then(|s| s.get(&scene.id))
+        .filter(|v| !v.is_null())
+    else {
+        return Ok(None);
+    };
+    let record: bri_content::backdrop::Record =
+        serde_json::from_value(record.clone()).context("Reading the map's backdrop")?;
+    record.validate()?;
+    let mut alone = SceneData {
+        id: format!("{}#backdrop", scene.id),
+        name: "backdrop".into(),
+        ..Default::default()
+    };
+    let at_origin = Node {
+        name: "backdrop".into(),
+        parent: None,
+        kind: Kind::StaticModel,
+        transform: Mat4::IDENTITY.to_cols_array(),
+        asset: Some(record.asset.clone()),
+        properties: BTreeMap::new(),
+    };
+    load_static_shape(
+        root,
+        bundle,
+        bindings,
+        &at_origin,
+        &mut alone,
+        &mut BTreeMap::new(),
+        legacy,
+    )
+    .context("The map's backdrop")?;
+    alone.validate()?;
+    Ok(Some(BackdropScene {
+        scene: alone,
+        eye: record.eye,
+    }))
+}
+
+/// The decals `bundle` lists for `scene` ([`bri_content::decals`]) with their pictures decoded.
+fn load_decals(
+    root: &Path,
+    bundle: &Value,
+    scene: &Scene,
+    world: &SceneData,
+) -> Result<Option<crate::decals::LoadedDecals>> {
+    let Some(name) = bundle
+        .get("decals")
+        .and_then(|s| s.get(&scene.id))
+        .and_then(Value::as_str)
+    else {
+        return Ok(None);
+    };
+    let set: bri_content::decals::DecalSet =
+        serde_json::from_slice(&read(root, name)?).context("Reading the map's decals")?;
+    set.validate()?;
+    let mut pictures = Vec::with_capacity(set.decals.len());
+    for decal in &set.decals {
+        pictures.push(decode(&read(root, &decal.picture)?, &decal.picture, true)?);
+    }
+    let receivers = set
+        .decals
+        .iter()
+        .map(|decal| crate::decals::gather(world, decal))
+        .collect();
+    Ok(Some(crate::decals::LoadedDecals {
+        set,
+        pictures,
+        receivers,
+    }))
+}
+
+/// The regions `bundle` lists for `scene` ([`bri_content::regions`]).
+fn load_regions(
+    root: &Path,
+    bundle: &Value,
+    scene: &Scene,
+) -> Result<Option<bri_content::regions::RegionMap>> {
+    let Some(name) = bundle
+        .get("regions")
+        .and_then(|s| s.get(&scene.id))
+        .and_then(Value::as_str)
+    else {
+        return Ok(None);
+    };
+    let map: bri_content::regions::RegionMap =
+        serde_json::from_slice(&read(root, name)?).context("Reading the map's regions")?;
+    map.validate()?;
+    Ok(Some(map))
+}
+
+/// One scatter layer: the model about its own origin and where it is placed.
+pub struct ScatterScene {
+    pub name: String,
+    pub scene: SceneData,
+    pub instances: Arc<[bri_content::scatter::Instance]>,
+    /// Near and far fade distances, in world units; None draws every instance at any distance.
+    pub fade: Option<[f32; 2]>,
+    pub order: bri_content::scatter::Order,
+    pub modulate_2x: bool,
+    pub detail: u8,
+}
+
+/// The scatter layers `bundle` lists for `scene`: each model loaded as a shape about the origin, with its placements read and checked.
+fn load_scatter(
+    root: &Path,
+    bundle: &Value,
+    bindings: &[Value],
+    scene: &Scene,
+    legacy: bool,
+) -> Result<Vec<ScatterScene>> {
+    let Some(records) = bundle.get("scatter").and_then(|s| s.get(&scene.id)) else {
+        return Ok(Vec::new());
+    };
+    let records: Vec<bri_content::scatter::Record> =
+        serde_json::from_value(records.clone()).context("Reading the map's scatter layers")?;
+    ensure!(records.len() <= 64, "A map names at most 64 scatter layers");
+    let mut out = Vec::with_capacity(records.len());
+    for record in records {
+        record.validate()?;
+        let mut alone = SceneData {
+            id: format!("{}#scatter-{}", scene.id, record.name),
+            name: record.name.clone(),
+            ..Default::default()
+        };
+        let at_origin = Node {
+            name: record.name.clone(),
+            parent: None,
+            kind: Kind::StaticModel,
+            transform: Mat4::IDENTITY.to_cols_array(),
+            asset: Some(record.asset.clone()),
+            properties: BTreeMap::new(),
+        };
+        load_static_shape(
+            root,
+            bundle,
+            bindings,
+            &at_origin,
+            &mut alone,
+            &mut BTreeMap::new(),
+            legacy,
+        )
+        .with_context(|| format!("Scatter layer {}", record.name))?;
+        alone.validate()?;
+        let instances = bri_content::scatter::decode(&read(root, &record.file)?)
+            .with_context(|| format!("Scatter layer {}'s placements", record.name))?;
+        out.push(ScatterScene {
+            name: record.name,
+            scene: alone,
+            instances: instances.into(),
+            fade: record.fade,
+            order: record.order,
+            modulate_2x: record.modulate_2x,
+            detail: record.detail,
+        });
+    }
+    Ok(out)
 }
 
 pub(crate) fn file(root: &Path, name: &str) -> Result<PathBuf> {
@@ -546,12 +728,20 @@ fn load_bundle_unscoped(root: &Path, map_id: &str, legacy: bool) -> Result<MapSc
         Some(lights)
     };
     out.validate()?;
+    let scatter = load_scatter(&root, &bundle, bindings, &scene, legacy)?;
+    let backdrop = load_backdrop(&root, &bundle, bindings, &scene, legacy)?;
+    let regions = load_regions(&root, &bundle, &scene)?;
+    let decals = load_decals(&root, &bundle, &scene, &out)?;
     Ok(MapScene {
         scene: out,
         terrain,
         repeated_water,
         shape_indices,
         movers,
+        scatter,
+        backdrop,
+        regions,
+        decals,
         modern_lights,
         light_animations,
         light_spots,
@@ -833,6 +1023,7 @@ fn load_static_shape(
             } else {
                 material.images[8] = lightmap;
                 material.baked_lightmap = Some(surface.lightmap_strength);
+                material.baked_exact = surface.lightmap_exact;
             }
         }
         // Bare metal on an Add-On map: its texture tints the reflectance and
@@ -858,20 +1049,76 @@ fn load_static_shape(
                 [0.0; 4],
             ]);
         }
+        if authored.vertex_light && authored.layers.is_none() {
+            material.kind = MaterialKind::VertexLight;
+        }
+        // A terrain's layers: up to four textures weighted by one map's channels (its materials name them), lit by the vertex
+        // light only. Layers the material does not have repeat the first and carry no weight.
+        if let Some(blend) = authored.layers.as_ref() {
+            let image_of =
+                |index: usize, srgb: bool, out: &mut SceneData, cache: &mut _| -> Result<usize> {
+                    let file = bindings
+                        .iter()
+                        .find(|b| {
+                            b["asset"].as_str() == Some(id)
+                                && b["shape_material"].as_u64() == Some(index as u64)
+                                && b["skin"].as_str().unwrap_or("") == skin
+                        })
+                        .and_then(|b| b["texture"].as_str())
+                        .with_context(|| format!("Missing layer texture {id}/{index}"))?;
+                    texture(root, file, srgb, out, cache)
+                };
+            ensure!(
+                (1..=4).contains(&blend.layers.len())
+                    && blend.transforms.len() == blend.layers.len(),
+                "Static material {id}/{} needs one to four layers with a transform each",
+                authored.name
+            );
+            let first = image_of(blend.layers[0], true, out, cache)?;
+            material.kind = MaterialKind::LayerBlend;
+            material.images[0] = first;
+            let mut transforms = [[1.0, 0.0, 0.0, 1.0, 0.0, 0.0]; 4];
+            for (i, layer) in blend.layers.iter().enumerate() {
+                material.images[i] = if i == 0 {
+                    first
+                } else {
+                    image_of(*layer, true, out, cache)?
+                };
+                transforms[i] = blend.transforms[i];
+            }
+            for i in blend.layers.len()..4 {
+                material.images[i] = first;
+            }
+            material.images[9] = image_of(blend.weights, false, out, cache)?;
+            material.layer_transforms = Some(transforms);
+        }
         // Torque culls DTS back faces and blends only Translucent materials;
         // opaque ones ignore texture alpha entirely (TSMesh::initMaterials,
         // TSMesh::setMaterial). Palm frond stems sit on alpha-0 texels. A
         // cutout (glTF MASK) is the exception: its cutoff is the material's
         // own alpha test, applied by the shared shape-material mapping.
         material.ignore_texture_alpha = authored.blend == "opaque";
-        crate::shape_material::apply(
+        crate::shape_material::apply_with(
             &mut material,
             authored,
             &format!("static material {id}"),
+            true,
             |blend| {
                 Ok(match blend {
                     "opaque" => AlphaMode::Opaque,
+                    // A layer pass blended over the one before (a terrain's alpha-map layers) blends by its weights, whatever its stand-in colour image says.
+                    "alpha" if authored.layers.is_some() => AlphaMode::Blend,
                     "alpha" => alpha(&out.images[diffuse]),
+                    // Unreal Engine 2's frame-buffer blends (docs/modding/materials.md):
+                    // true modulate, modulate (2x), darken, translucent/brighten
+                    // smooth, alpha modulate and invisible, drawn unlit.
+                    "multiply" => AlphaMode::Multiply,
+                    "modulate" => AlphaMode::Frame(FrameBlend::Modulate),
+                    "darken" => AlphaMode::Frame(FrameBlend::Darken),
+                    "screen" => AlphaMode::Frame(FrameBlend::Screen),
+                    "premultiplied" => AlphaMode::Frame(FrameBlend::Premultiplied),
+                    "invisible" => AlphaMode::Frame(FrameBlend::Invisible),
+                    "true_additive" => AlphaMode::Frame(FrameBlend::TrueAdditive),
                     // Torque's additive DTS materials (glass, glows).
                     _ => AlphaMode::Additive,
                 })
@@ -897,6 +1144,7 @@ fn load_static_shape(
             soft_edges.insert(out.materials.len(), out.materials.len() + 1);
             materials.push(out.materials.len());
             material.uv_motion = authored.uv_motion;
+            material.uv_chain.clone_from(&authored.uv_chain);
             out.materials.push(material);
             out.materials.push(edges);
             continue;
@@ -1281,11 +1529,14 @@ fn load_terrain(
         alpha: AlphaMode::Opaque,
         double_sided: false,
         uv_motion: None,
+        uv_chain: Vec::new(),
+        layer_transforms: None,
         clamp_nearest: false,
         temp_brick_flash: false,
         ignore_texture_alpha: false,
         untinted: false,
         baked_lightmap: None,
+        baked_exact: false,
         tint_mask: false,
         parameters: Some(parameters),
     });
@@ -1412,9 +1663,107 @@ mod tests {
         assert_eq!(leaf.alpha, AlphaMode::Opaque);
         assert!(leaf.ignore_texture_alpha);
     }
+    /// A bundle's scatter table loads each layer's model about its own origin and reads its placements.
+    #[test]
+    fn a_scatter_layer_loads_its_model_and_its_placements() -> Result<()> {
+        use bri_content::scatter::{Instance, Record, encode};
+        use bri_content::testing::{plain, png, rigid_shape, write_file};
+        let dir = tempfile::tempdir()?;
+        let root = dir.path().canonicalize()?;
+        let shape = rigid_shape(
+            "grass",
+            &[("root", None, [0.0; 3])],
+            &[(0, [0.0; 3], [1.0; 3], plain(0))],
+            vec![bri_content::testing::material("grass", "opaque")],
+        );
+        write_file(&root, "grass.json", &serde_json::to_vec(&shape)?)?;
+        write_file(&root, "grass.png", &png(1, 1, |_, _| [0, 200, 0, 255])?)?;
+        let placed = Instance {
+            position: [4.0, 0.0, 9.0],
+            rotation: [0.0, 0.0, 0.0, 1.0],
+            scale: [1.0; 3],
+            tint: [255; 4],
+        };
+        write_file(&root, "grass.scatter", &encode(&[placed, placed])?)?;
+        let record = Record {
+            name: "grass".into(),
+            asset: "grass".into(),
+            file: "grass.scatter".into(),
+            fade: Some([10.0, 40.0]),
+            order: bri_content::scatter::Order::FarToNear,
+            modulate_2x: true,
+            detail: 1,
+        };
+        let bundle = serde_json::json!({
+            "assets": { "grass": "grass.json" },
+            "scatter": { "m": [record] },
+        });
+        let bindings = vec![serde_json::json!(
+            { "asset": "grass", "shape_material": 0, "skin": "", "texture": "grass.png" }
+        )];
+        let scene = Scene {
+            schema_version: 1,
+            id: "m".into(),
+            name: "m".into(),
+            nodes: Vec::new(),
+            pending_scripts: Vec::new(),
+        };
+        let layers = load_scatter(&root, &bundle, &bindings, &scene, false)?;
+        assert_eq!(layers.len(), 1);
+        assert_eq!(layers[0].instances.len(), 2);
+        assert_eq!(layers[0].fade, Some([10.0, 40.0]));
+        assert_eq!(layers[0].order, bri_content::scatter::Order::FarToNear);
+        assert!(layers[0].modulate_2x);
+        assert_eq!(layers[0].detail, 1);
+        assert!(!layers[0].scene.indices.is_empty(), "the model is drawn");
+        // A map with no table has no layers; a damaged placements file is refused.
+        assert!(load_scatter(&root, &serde_json::json!({}), &bindings, &scene, false)?.is_empty());
+        write_file(&root, "grass.scatter", b"nonsense")?;
+        assert!(load_scatter(&root, &bundle, &bindings, &scene, false).is_err());
+        Ok(())
+    }
+    /// A bundle's backdrop loads its model about its own origin, with the eye the table names.
+    #[test]
+    fn a_backdrop_loads_its_model_and_its_eye() -> Result<()> {
+        use bri_content::testing::{plain, png, rigid_shape, write_file};
+        let dir = tempfile::tempdir()?;
+        let root = dir.path().canonicalize()?;
+        let shape = rigid_shape(
+            "sky",
+            &[("root", None, [0.0; 3])],
+            &[(0, [0.0; 3], [1.0; 3], plain(0))],
+            vec![bri_content::testing::material("sky", "opaque")],
+        );
+        write_file(&root, "sky.json", &serde_json::to_vec(&shape)?)?;
+        write_file(&root, "sky.png", &png(1, 1, |_, _| [90, 140, 220, 255])?)?;
+        let bundle = serde_json::json!({
+            "assets": { "sky": "sky.json" },
+            "backdrops": { "m": { "asset": "sky", "eye": [1.0, 2.0, 3.0] } },
+        });
+        let bindings = vec![serde_json::json!(
+            { "asset": "sky", "shape_material": 0, "skin": "", "texture": "sky.png" }
+        )];
+        let scene = Scene {
+            schema_version: 1,
+            id: "m".into(),
+            name: "m".into(),
+            nodes: Vec::new(),
+            pending_scripts: Vec::new(),
+        };
+        let backdrop = load_backdrop(&root, &bundle, &bindings, &scene, false)?.unwrap();
+        assert_eq!(backdrop.eye, [1.0, 2.0, 3.0]);
+        assert!(!backdrop.scene.indices.is_empty(), "the model is drawn");
+        let none = serde_json::json!({ "backdrops": { "m": null } });
+        assert!(load_backdrop(&root, &none, &bindings, &scene, false)?.is_none());
+        assert!(load_backdrop(&root, &serde_json::json!({}), &bindings, &scene, false)?.is_none());
+        Ok(())
+    }
     #[test]
     fn a_map_model_blend_the_loader_cannot_honour_is_refused() {
-        let error = load_leaf(leaf_material("multiply", None)).unwrap_err();
-        assert!(error.to_string().contains("multiply"), "{error}");
+        // The Unreal Engine 2 frame-buffer blends are honoured for map models; a name
+        // nothing maps is still refused.
+        assert!(load_leaf(leaf_material("multiply", None)).is_ok());
+        let error = load_leaf(leaf_material("sepia", None)).unwrap_err();
+        assert!(error.to_string().contains("sepia"), "{error}");
     }
 }

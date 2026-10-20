@@ -736,6 +736,358 @@ fn import_room(col_floor: bool) -> (tempfile::TempDir, Report) {
     (root, report)
 }
 
+/// A scatter layer's glTF: one box with the scene's `bri_scatter` naming its placements file.
+fn scatter_layer(dir: &std::path::Path, fade: Option<[f32; 2]>) -> PathBuf {
+    use super::testing::{Gltf, cuboid};
+    use bri_content::scatter::{Instance, encode};
+    let mut g = Gltf::new();
+    let (p, n, uv, i) = cuboid(Vec3::ZERO, Vec3::splat(1.0));
+    let flat = |v: &[Vec3]| v.iter().flat_map(|v| v.to_array()).collect::<Vec<f32>>();
+    let (a, b, c, d) = (
+        g.floats(&flat(&p), 3),
+        g.floats(&flat(&n), 3),
+        g.floats(&uv.concat(), 2),
+        g.uints(&i, 1),
+    );
+    let leaf = g.material(
+        "Leaf",
+        [1.0; 4],
+        Some((1, 1, vec![40, 200, 40, 255])),
+        json!({}),
+    );
+    let mesh = g.mesh(
+        "Leaf",
+        vec![json!({ "attributes": { "POSITION": a, "NORMAL": b, "TEXCOORD_0": c }, "indices": d, "material": leaf })],
+    );
+    g.node(json!({ "name": "Leaf", "mesh": mesh }), None);
+    let mut extras = json!({ "instances": "grass.bin" });
+    if let Some(fade) = fade {
+        extras["fade"] = json!(fade);
+    }
+    g.json["scenes"][0]["extras"] = json!({ "bri_scatter": extras });
+    let placed = |x: f32| Instance {
+        position: [x, 1.0, 2.0],
+        rotation: [0.0, 0.0, 0.0, 1.0],
+        scale: [1.0, 2.0, 3.0],
+        tint: [10, 20, 30, 255],
+    };
+    std::fs::write(
+        dir.join("grass.bin"),
+        encode(&[placed(1.0), placed(-5.0)]).unwrap(),
+    )
+    .unwrap();
+    let path = dir.join("grass.glb");
+    std::fs::write(&path, g.glb()).unwrap();
+    path
+}
+
+#[test]
+fn a_scatter_layer_becomes_a_shape_and_placements_in_the_native_frame() {
+    let root = tempfile::tempdir().unwrap();
+    let input = root.path().join("Test Room.glb");
+    std::fs::write(&input, room(false)).unwrap();
+    let layer = scatter_layer(root.path(), Some([10.0, 30.0]));
+    let mut opts = Options::new(&input, root.path().join("test_room"), Kind::Map);
+    opts.scale = Some(2.0);
+    opts.scatter.push(layer);
+    let report = import(&opts).unwrap();
+    let dir = root.path().join("test_room");
+    let bundle: Value =
+        serde_json::from_slice(&std::fs::read(dir.join("map/bundle.json")).unwrap()).unwrap();
+    let records = &bundle["scatter"]["test_room:map/test_room"];
+    assert_eq!(records.as_array().unwrap().len(), 1, "{bundle}");
+    let record: bri_content::scatter::Record = serde_json::from_value(records[0].clone()).unwrap();
+    assert_eq!(record.name, "grass");
+    assert_eq!(
+        record.fade,
+        Some([20.0, 60.0]),
+        "fade distances scale with the import"
+    );
+    assert!(
+        bundle["assets"][&record.asset].is_string(),
+        "the model is an asset"
+    );
+    assert!(
+        bundle["bindings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|b| b["asset"] == record.asset.as_str()),
+        "its materials are bound to textures"
+    );
+    let placed =
+        bri_content::scatter::decode(&std::fs::read(dir.join("map").join(&record.file)).unwrap())
+            .unwrap();
+    assert_eq!(placed.len(), 2);
+    // glTF to native is half a turn about Y, then the import's scale of 2.
+    assert!(near(
+        Vec3::from(placed[0].position),
+        Vec3::new(-2.0, 2.0, -4.0)
+    ));
+    assert!(near(
+        Vec3::from(placed[1].position),
+        Vec3::new(10.0, 2.0, -4.0)
+    ));
+    assert_eq!(placed[0].scale, [1.0, 2.0, 3.0]);
+    assert_eq!(placed[0].tint, [10, 20, 30, 255]);
+    let check = bri_package_runtime::check::check(&dir);
+    assert!(check.ok, "{check} {:?}", report.warnings);
+}
+
+#[test]
+fn a_scatter_layer_without_placements_or_with_a_bad_fade_is_refused() {
+    let root = tempfile::tempdir().unwrap();
+    let input = root.path().join("Test Room.glb");
+    std::fs::write(&input, room(false)).unwrap();
+    let layer = scatter_layer(root.path(), Some([30.0, 10.0]));
+    let mut opts = Options::new(&input, root.path().join("a"), Kind::Map);
+    opts.scatter.push(layer.clone());
+    assert!(import(&opts).is_err(), "near past far");
+    let layer = scatter_layer(root.path(), None);
+    std::fs::remove_file(root.path().join("grass.bin")).unwrap();
+    let mut opts = Options::new(&input, root.path().join("b"), Kind::Map);
+    opts.scatter.push(layer);
+    assert!(import(&opts).is_err(), "no placements file");
+}
+
+/// A backdrop's glTF: one box with the scene's `bri_backdrop` naming the eye it is viewed from.
+fn backdrop_model(dir: &std::path::Path, eye: Option<[f32; 3]>) -> PathBuf {
+    use super::testing::{Gltf, cuboid};
+    let mut g = Gltf::new();
+    let (p, n, uv, i) = cuboid(Vec3::ZERO, Vec3::splat(1.0));
+    let flat = |v: &[Vec3]| v.iter().flat_map(|v| v.to_array()).collect::<Vec<f32>>();
+    let (a, b, c, d) = (
+        g.floats(&flat(&p), 3),
+        g.floats(&flat(&n), 3),
+        g.floats(&uv.concat(), 2),
+        g.uints(&i, 1),
+    );
+    let sky = g.material(
+        "Sky",
+        [1.0; 4],
+        Some((1, 1, vec![90, 140, 220, 255])),
+        json!({}),
+    );
+    let mesh = g.mesh(
+        "Sky",
+        vec![json!({ "attributes": { "POSITION": a, "NORMAL": b, "TEXCOORD_0": c }, "indices": d, "material": sky })],
+    );
+    g.node(json!({ "name": "Sky", "mesh": mesh }), None);
+    if let Some(eye) = eye {
+        g.json["scenes"][0]["extras"] = json!({ "bri_backdrop": { "eye": eye } });
+    }
+    let path = dir.join("sky.glb");
+    std::fs::write(&path, g.glb()).unwrap();
+    path
+}
+
+#[test]
+fn a_backdrop_becomes_a_shape_and_an_eye_in_the_native_frame() {
+    let root = tempfile::tempdir().unwrap();
+    let input = root.path().join("Test Room.glb");
+    std::fs::write(&input, room(false)).unwrap();
+    let mut opts = Options::new(&input, root.path().join("test_room"), Kind::Map);
+    opts.scale = Some(2.0);
+    opts.backdrop = Some(backdrop_model(root.path(), Some([1.0, 2.0, 3.0])));
+    let report = import(&opts).unwrap();
+    let dir = root.path().join("test_room");
+    let bundle: Value =
+        serde_json::from_slice(&std::fs::read(dir.join("map/bundle.json")).unwrap()).unwrap();
+    let record: bri_content::backdrop::Record =
+        serde_json::from_value(bundle["backdrops"]["test_room:map/test_room"].clone()).unwrap();
+    assert!(
+        bundle["assets"][&record.asset].is_string(),
+        "the model is an asset"
+    );
+    // glTF to native is half a turn about Y, then the import's scale of 2.
+    assert!(near(Vec3::from(record.eye), Vec3::new(-2.0, 4.0, -6.0)));
+    let check = bri_package_runtime::check::check(&dir);
+    assert!(check.ok, "{check} {:?}", report.warnings);
+}
+
+#[test]
+fn a_backdrop_without_an_eye_is_refused() {
+    let root = tempfile::tempdir().unwrap();
+    let input = root.path().join("Test Room.glb");
+    std::fs::write(&input, room(false)).unwrap();
+    let mut opts = Options::new(&input, root.path().join("a"), Kind::Map);
+    opts.backdrop = Some(backdrop_model(root.path(), None));
+    assert!(import(&opts).is_err());
+}
+
+#[test]
+fn regions_move_into_the_native_frame_and_the_import_scale() {
+    use bri_content::regions::{Fog, Region, RegionMap};
+    let root = tempfile::tempdir().unwrap();
+    let input = root.path().join("Test Room.glb");
+    std::fs::write(&input, room(false)).unwrap();
+    let fog = Fog {
+        color: [128, 128, 160],
+        start: 10.0,
+        end: 30.0,
+        blend_time: 0.0,
+        clear_to_fog: true,
+    };
+    let map = RegionMap {
+        planes: vec![[1.0, 0.0, 0.0, 5.0]],
+        front: vec![-1],
+        back: vec![-1],
+        front_region: vec![1],
+        back_region: vec![0],
+        regions: vec![
+            Region::default(),
+            Region {
+                fog: Some(fog),
+                ambient: None,
+            },
+        ],
+    };
+    let file = root.path().join("regions.json");
+    std::fs::write(&file, serde_json::to_vec(&map).unwrap()).unwrap();
+    let mut opts = Options::new(&input, root.path().join("test_room"), Kind::Map);
+    opts.scale = Some(2.0);
+    opts.regions = Some(file);
+    let report = import(&opts).unwrap();
+    let dir = root.path().join("test_room");
+    let bundle: Value =
+        serde_json::from_slice(&std::fs::read(dir.join("map/bundle.json")).unwrap()).unwrap();
+    let name = bundle["regions"]["test_room:map/test_room"]
+        .as_str()
+        .unwrap();
+    let back: RegionMap =
+        serde_json::from_slice(&std::fs::read(dir.join("map").join(name)).unwrap()).unwrap();
+    // glTF to native flips x and z; lengths take the scale of 2.
+    assert_eq!(back.planes[0], [-1.0, 0.0, 0.0, 10.0]);
+    assert_eq!(back.regions[1].fog.unwrap().end, 60.0);
+    // The same point, 7 glTF units along +x, is in front in both frames.
+    assert_eq!(map.locate([7.0, 0.0, 0.0]), back.locate([-14.0, 0.0, 0.0]));
+    let check = bri_package_runtime::check::check(&dir);
+    assert!(check.ok, "{check} {:?}", report.warnings);
+}
+
+#[test]
+fn decals_copy_their_pictures_and_list_the_set_in_the_bundle() {
+    use bri_content::decals::{Blend, Decal, DecalSet, Receivers};
+    let root = tempfile::tempdir().unwrap();
+    let input = root.path().join("Test Room.glb");
+    std::fs::write(&input, room(false)).unwrap();
+    let receivers = Receivers {
+        enabled: true,
+        facing_limit: 0.0,
+        fade_by_facing: false,
+    };
+    let set = DecalSet {
+        decals: vec![Decal {
+            picture: "spot.png".into(),
+            world_to_texture: glam::Mat4::IDENTITY.to_cols_array(),
+            perspective: false,
+            planes: [[0.0, 1.0, 0.0, 0.0]; 6],
+            forward: [0.0, -1.0, 0.0],
+            blend: Blend::Alpha,
+            wrap: [false, true],
+            two_sided: false,
+            spin_degrees_per_second: 0.0,
+            surfaces: receivers,
+            ground: receivers,
+        }],
+        notes: vec!["a note".into()],
+    };
+    let dir = root.path().join("decals");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("decals.json"), serde_json::to_vec(&set).unwrap()).unwrap();
+    std::fs::write(
+        dir.join("spot.png"),
+        bri_content::testing::png(2, 2, |_, _| [10, 20, 30, 255]).unwrap(),
+    )
+    .unwrap();
+    let mut opts = Options::new(&input, root.path().join("test_room"), Kind::Map);
+    opts.decals = Some(dir.join("decals.json"));
+    let report = import(&opts).unwrap();
+    let out = root.path().join("test_room");
+    let bundle: Value =
+        serde_json::from_slice(&std::fs::read(out.join("map/bundle.json")).unwrap()).unwrap();
+    let file = bundle["decals"]["test_room:map/test_room"]
+        .as_str()
+        .unwrap();
+    let back: DecalSet =
+        serde_json::from_slice(&std::fs::read(out.join("map").join(file)).unwrap()).unwrap();
+    assert!(out.join("map").join(&back.decals[0].picture).is_file());
+    assert!(report.warnings.iter().any(|w| w.contains("a note")));
+    let check = bri_package_runtime::check::check(&out);
+    assert!(check.ok, "{check} {:?}", report.warnings);
+}
+
+/// A one-layer lit-by-vertex mesh whose node names its lights (`mask` is the visibility mask of its one light).
+fn vertex_lit_import(mask: &str) -> Vec<[f32; 4]> {
+    let mut g = super::testing::Gltf::new();
+    g.material(
+        "sand",
+        [1.0; 4],
+        Some((2, 2, [200, 180, 120, 255].repeat(4))),
+        json!({}),
+    );
+    g.material(
+        "weights",
+        [1.0; 4],
+        Some((2, 2, [255, 0, 0, 255].repeat(4))),
+        json!({}),
+    );
+    let base = g.material(
+        "pass0",
+        [1.0; 4],
+        None,
+        json!({ "extras": { "bri_layer_blend": {
+            "layers": [{ "index": 0, "transform": [1.0, 0.0, 0.0, 1.0, 0.0, 0.0] }],
+            "weights": { "index": 1 },
+        } } }),
+    );
+    let (p, n, uv, i) = super::testing::cuboid(Vec3::ZERO, Vec3::new(4.0, 1.0, 4.0));
+    let flat = |v: &[Vec3]| v.iter().flat_map(|v| v.to_array()).collect::<Vec<f32>>();
+    let (a, b, c, d) = (
+        g.floats(&flat(&p), 3),
+        g.floats(&flat(&n), 3),
+        g.floats(&uv.concat(), 2),
+        g.uints(&i, 1),
+    );
+    let mesh = g.mesh(
+        "Mesh",
+        vec![json!({ "attributes": { "POSITION": a, "NORMAL": b, "TEXCOORD_0": c, "TEXCOORD_1": c }, "indices": d, "material": base })],
+    );
+    let bytes = p.len().div_ceil(8);
+    let mask = mask.repeat(bytes);
+    g.node(
+        json!({ "name": "Mesh", "mesh": mesh, "extras": { "bri_vertex_lights": {
+            "ambient": [0.0, 0.0, 0.0],
+            "lights": [{ "position": [0.0, 2.0, 0.0], "color": [1.0, 0.0, 0.0], "radius": 10.0, "effect": { "kind": "point" } }],
+            "visible": [mask],
+        } } }),
+        None,
+    );
+    g.node(
+        json!({ "name": "spawn", "translation": [0.0, 2.0, 0.0] }),
+        None,
+    );
+    let root = tempfile::tempdir().unwrap();
+    let input = root.path().join("lit.glb");
+    std::fs::write(&input, g.glb()).unwrap();
+    let report = import(&Options::new(&input, root.path().join("lit"), Kind::Map)).unwrap();
+    let dir = root.path().join("lit");
+    let drawn =
+        bri_render::scene_loader::load_map_bundle_dynamic(&dir.join("map"), &report.model).unwrap();
+    drawn.scene.vertices.iter().map(|v| v.color).collect()
+}
+
+#[test]
+fn a_node_that_names_its_lights_is_lit_by_them_per_vertex() {
+    let lit = vertex_lit_import("ff");
+    assert!(lit.iter().any(|c| c[0] > 0.2 && c[1] == 0.0), "{lit:?}");
+    let dark = vertex_lit_import("00");
+    assert!(
+        !dark.iter().any(|c| c[0] > 0.0 && c[1] == 0.0),
+        "no light reaches any vertex: {dark:?}"
+    );
+}
+
 #[test]
 fn a_map_imports_as_an_add_on_the_game_loads() {
     let (root, report) = import_room(false);
@@ -1079,6 +1431,139 @@ fn a_collider_triangle_reports_the_identity_of_its_material() {
     assert!(all.contains(&"T-WOOD.misc.floor") && all.contains(&"T-METAL.misc.plate"));
     assert_eq!(native.surfaces.kinds, vec!["metal".to_string()]);
 }
+
+#[test]
+fn a_layer_blend_material_becomes_a_weighted_layer_pass_the_renderer_draws() {
+    use bri_render::scene::{AlphaMode, MaterialKind};
+    // A terrain slab drawn in two passes: three layers weighted by one map, then one more layer blended over by its own map.
+    let mut g = super::testing::Gltf::new();
+    let tile = |rgb: [u8; 3]| {
+        (
+            2u32,
+            2u32,
+            rgb.iter()
+                .copied()
+                .chain([255])
+                .cycle()
+                .take(16)
+                .collect::<Vec<u8>>(),
+        )
+    };
+    let texture_of = |g: &mut super::testing::Gltf, name: &str, rgb| {
+        g.material(name, [1.0; 4], Some(tile(rgb)), json!({}));
+        g.json["textures"].as_array().unwrap().len() - 1
+    };
+    let (sand, rock, snow, weights_a, weights_b) = (
+        texture_of(&mut g, "sand", [200, 180, 120]),
+        texture_of(&mut g, "rock", [90, 90, 90]),
+        texture_of(&mut g, "snow", [240, 240, 250]),
+        texture_of(&mut g, "weights_a", [255, 0, 0]),
+        texture_of(&mut g, "weights_b", [128, 0, 0]),
+    );
+    let base = g.material(
+        "pass0",
+        [1.0; 4],
+        None,
+        json!({ "extras": { "bri_layer_blend": {
+            "layers": [
+                { "index": sand, "transform": [0.5, 0.0, 0.0, 0.5, 0.0, 0.0] },
+                { "index": rock, "transform": [0.25, 0.0, 0.0, 0.25, 0.5, 0.25] },
+                { "index": snow, "transform": [1.0, 0.0, 0.0, 1.0, 0.0, 0.0] },
+            ],
+            "weights": { "index": weights_a },
+        } } }),
+    );
+    let over = g.material(
+        "pass1",
+        [1.0; 4],
+        None,
+        json!({ "alphaMode": "BLEND", "extras": { "bri_layer_blend": {
+            "layers": [{ "index": snow, "transform": [1.0, 0.0, 0.0, 1.0, 0.0, 0.0] }],
+            "weights": { "index": weights_b },
+        } } }),
+    );
+    let (p, n, uv, i) = super::testing::cuboid(Vec3::ZERO, Vec3::new(4.0, 1.0, 4.0));
+    let flat = |v: &[Vec3]| v.iter().flat_map(|v| v.to_array()).collect::<Vec<f32>>();
+    let (a, b, c, d) = (
+        g.floats(&flat(&p), 3),
+        g.floats(&flat(&n), 3),
+        g.floats(&uv.concat(), 2),
+        g.uints(&i, 1),
+    );
+    // The first pass carries baked vertex light (0.2); the second gives none.
+    let light = g.floats(&[0.2, 0.2, 0.2, 1.0].repeat(p.len()), 4);
+    let mesh = g.mesh(
+        "Terrain",
+        vec![
+            json!({ "attributes": { "POSITION": a, "NORMAL": b, "TEXCOORD_0": c, "TEXCOORD_1": c, "COLOR_0": light }, "indices": d, "material": base }),
+            json!({ "attributes": { "POSITION": a, "NORMAL": b, "TEXCOORD_0": c, "TEXCOORD_1": c }, "indices": d, "material": over }),
+        ],
+    );
+    g.node(json!({ "name": "Terrain", "mesh": mesh }), None);
+    g.node(
+        json!({ "name": "spawn", "translation": [0.0, 2.0, 0.0] }),
+        None,
+    );
+    let root = tempfile::tempdir().unwrap();
+    let input = root.path().join("terrain.glb");
+    std::fs::write(&input, g.glb()).unwrap();
+    let report = import(&Options::new(
+        &input,
+        root.path().join("terrain"),
+        Kind::Map,
+    ))
+    .unwrap();
+    let dir = root.path().join("terrain");
+    let shape: Shape =
+        serde_json::from_slice(&std::fs::read(dir.join("map/terrain.shape.json")).unwrap())
+            .unwrap();
+    let blends: Vec<_> = shape
+        .materials
+        .iter()
+        .filter_map(|m| m.layers.as_ref())
+        .collect();
+    assert_eq!(blends.len(), 2, "both passes keep their layer lists");
+    assert_eq!(blends[0].layers.len(), 3);
+    assert_eq!(blends[0].transforms[1], [0.25, 0.0, 0.0, 0.25, 0.5, 0.25]);
+    assert_eq!(blends[1].layers.len(), 1);
+    // The renderer draws them as LayerBlend materials: the second blends over the first, and a layer-blended surface's vertex light starts neutral (0.5).
+    let drawn =
+        bri_render::scene_loader::load_map_bundle_dynamic(&dir.join("map"), &report.model).unwrap();
+    let layered: Vec<_> = drawn
+        .scene
+        .materials
+        .iter()
+        .filter(|m| m.kind == MaterialKind::LayerBlend)
+        .collect();
+    assert_eq!(layered.len(), 2);
+    assert_eq!(
+        layered[0].layer_transforms.unwrap()[1],
+        [0.25, 0.0, 0.0, 0.25, 0.5, 0.25]
+    );
+    assert_eq!(layered[0].alpha, AlphaMode::Opaque);
+    assert_eq!(layered[1].alpha, AlphaMode::Blend);
+    assert_ne!(
+        layered[0].images[9], layered[1].images[9],
+        "each pass has its own weight map"
+    );
+    // The first pass's vertices carry the file's light (0.2, to a byte); the second pass, which gave none, the neutral 0.5.
+    let near = |a: f32, b: f32| (a - b).abs() < 0.005;
+    assert!(
+        drawn
+            .scene
+            .vertices
+            .iter()
+            .any(|v| near(v.color[0], 0.2) && v.color[3] == 1.0)
+    );
+    assert!(
+        drawn
+            .scene
+            .vertices
+            .iter()
+            .any(|v| near(v.color[0], 0.5) && v.color[3] == 1.0)
+    );
+}
+
 #[test]
 fn a_map_without_a_spawn_or_with_col_meshes_says_what_it_did() {
     let (root, report) = import_room(true);
@@ -1282,6 +1767,7 @@ fn metal_and_glow_come_from_the_material() {
                 { "name": "Ember", "emissiveFactor": [0.2, 0.0, 0.0] },
                 {"name":"Panel","extras":{"bri_uv_motion":{"center":[0.5,0.5],"rotation_rate_degrees":180.0}}},
                 {"name":"Invalid motion","extras":{"bri_uv_motion":{"rotation_rate_degrees":1e9}}},
+                {"name":"Chained","extras":{"bri_uv_chain":[{"scale":[0.5,0.5]},{"offset":[0.1,0.2],"rotator":{"base_degrees":[0,90,0]}}]}},
             ]
         }))
         .unwrap()
@@ -1297,7 +1783,7 @@ fn metal_and_glow_come_from_the_material() {
             .0
     };
     let (steel, paint, lamp, ember) = (get(0), get(1), get(2), get(3));
-    let panel = get(4);
+    let (panel, chained) = (get(4), get(6));
     let motion = panel
         .uv_motion
         .expect("authored texture motion survives import");
@@ -1306,6 +1792,13 @@ fn metal_and_glow_come_from_the_material() {
     assert!(
         super::make_material(&doc, None, Some(5), "", &mut taken, &mut report).is_err(),
         "invalid motion must be reported, never silently ignored"
+    );
+    // A chain of modifiers, outermost first, survives import in order.
+    assert_eq!(chained.uv_chain.len(), 2);
+    assert_eq!(chained.uv_chain[0].scale, [0.5, 0.5]);
+    assert_eq!(
+        chained.uv_chain[1].rotator.unwrap().base_degrees,
+        [0., 90., 0.]
     );
     let metal = steel.metal.expect("steel is metal");
     assert_eq!((metal.color, metal.roughness), ([1.0; 3], 0.3));

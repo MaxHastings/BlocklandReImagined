@@ -644,6 +644,8 @@ fn mesh(
         billboard: mesh_flags & 0x80000000 != 0,
         billboard_y: mesh_flags & 0x20000000 != 0,
         uv1: Vec::new(),
+        colors: Vec::new(),
+        vertex_rig: None,
     }))
 }
 
@@ -882,9 +884,12 @@ pub fn read_dts(data: &[u8], id: String) -> Result<(Shape, Provenance)> {
             alpha_cutoff: None,
             double_sided: false,
             uv_motion: None,
+            uv_chain: Vec::new(),
             metal: None,
             surface: None,
             tint: None,
+            layers: None,
+            vertex_light: false,
         });
     }
     for (material, f) in materials.iter().zip(&flags) {

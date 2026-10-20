@@ -126,6 +126,13 @@ pub struct Mesh {
     /// ([`Surface::lightmap`]) is read (glTF `TEXCOORD_1`).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub uv1: Vec<[f32; 2]>,
+    /// Per-vertex colours (RGBA, glTF `COLOR_0`) of a surface lit by its vertices alone (a layer-blended terrain's baked light), one
+    /// per vertex or none. Models and other surfaces ignore them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub colors: Vec<[u8; 4]>,
+    /// The baked light of a mesh of static meshes among fixed lights, worked out when it loads: times `colors` where both are given.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vertex_rig: Option<crate::vertex_lighting::Rig>,
     pub primitives: Vec<Primitive>,
     pub skin: Option<Skin>,
     pub billboard: bool,
@@ -162,6 +169,10 @@ pub struct Material {
     pub double_sided: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub uv_motion: Option<UvMotion>,
+    /// Several texture modifiers around one picture, outermost first, multiplied into one map
+    /// each frame (`crate::uv_affine::chain_affine`). When present it replaces `uv_motion`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub uv_chain: Vec<UvMotion>,
     pub unlit: bool,
     pub environment: bool,
     pub mipmaps: bool,
@@ -187,6 +198,26 @@ pub struct Material {
     /// the change-colour mask of a team-coloured armour plate ([`TintMask`]).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tint: Option<TintMask>,
+    /// Up to four diffuse layers blended by the channels of one weight map, each with its own texture-coordinate
+    /// transform, lit by the vertex light only (a terrain's layers). See [`LayerBlend`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub layers: Option<LayerBlend>,
+    /// Lit by the mesh's vertex colours alone: the picture times twice the vertex colour (0.5 is neutral), fogged, with no other
+    /// light. A static mesh whose light was baked into its vertices (`bri_vertex_lights`).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub vertex_light: bool,
+}
+/// A material that is a weighted sum of up to four texture layers, as a terrain's are: the weight map's red, green, blue and
+/// alpha weight layers 0 to 3, read with the mesh's second UV set; each layer's own UVs go through its affine first.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LayerBlend {
+    /// The materials (by index) whose textures are the layers, in weight-channel order (1 to 4).
+    pub layers: Vec<usize>,
+    /// The material whose texture holds the weights (red, green, blue, alpha).
+    pub weights: usize,
+    /// Per layer `[a, b, c, d, tx, ty]`, with `uv' = (a u + c v + tx, b u + d v + ty)`.
+    pub transforms: Vec<[f32; 6]>,
 }
 /// Texture coordinates in UV space: scale, rotate about center, then offset
 /// and scroll. Angles are degrees, rates per second. Geometry and lighting UVs stay put.
@@ -199,6 +230,66 @@ pub struct UvMotion {
     pub center: [f32; 2],
     pub rotation_degrees: f32,
     pub rotation_rate_degrees: f32,
+    /// A periodic wave on each texture axis (u, then v), on top of the rest.
+    pub waves: [UvWave; 2],
+    /// A three-axis rotation (pitch, yaw, roll) in place of the flat `rotation_*` pair,
+    /// with each axis able to spin or swing; the picture is turned by the upper-left
+    /// two-by-two of the rotation matrix, about `center`.
+    pub rotator: Option<UvRotator>,
+}
+/// Three-axis texture rotation (an Unreal `TexRotator`): per axis (pitch, yaw, roll) the
+/// angle is `base + rate x time + amplitude x sin(2 pi (fract(wave_rate x time) +
+/// wave_phase))`, in degrees.
+#[derive(Debug, Clone, Copy, PartialEq, Default, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct UvRotator {
+    pub base_degrees: [f32; 3],
+    /// Degrees a second of constant rotation.
+    pub rate_degrees: [f32; 3],
+    pub wave_amplitude_degrees: [f32; 3],
+    /// Cycles a second of the swing.
+    pub wave_rate: [f32; 3],
+    /// A fraction of a cycle.
+    pub wave_phase: [f32; 3],
+}
+/// The shape of a [`UvWave`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum UvWaveKind {
+    /// No motion on this axis.
+    #[default]
+    None,
+    /// Slides the texture back and forth: offset = sin(2pi(cycle + phase)) x amplitude.
+    Pan,
+    /// Stretches the texture about `center`: scale = 1 + sin(2pi(cycle + phase)) x amplitude.
+    Stretch,
+    /// Like `Stretch`, but the sine runs a quarter turn per cycle and then restarts:
+    /// scale = 1 + sin(pi/2 x cycle + 2pi x phase) x amplitude.
+    StretchRepeat,
+    /// Shakes the texture by a random offset in [0, amplitude), redrawn every frame
+    /// (60 a second) during the part of each cycle after `phase` and held at the
+    /// value the previous cycle ended with before it.
+    Jitter,
+}
+/// One axis of a [`UvMotion`] wave. `rate` is cycles a second and `phase` a
+/// fraction of a cycle.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct UvWave {
+    pub kind: UvWaveKind,
+    pub rate: f32,
+    pub phase: f32,
+    pub amplitude: f32,
+}
+impl Default for UvWave {
+    fn default() -> Self {
+        Self {
+            kind: UvWaveKind::None,
+            rate: 0.,
+            phase: 0.,
+            amplitude: 0.,
+        }
+    }
 }
 impl Default for UvMotion {
     fn default() -> Self {
@@ -209,6 +300,8 @@ impl Default for UvMotion {
             center: [0.; 2],
             rotation_degrees: 0.,
             rotation_rate_degrees: 0.,
+            waves: [UvWave::default(); 2],
+            rotator: None,
         }
     }
 }
@@ -224,6 +317,23 @@ impl UvMotion {
             && self.rotation_degrees.abs() <= 36000.
             && self.rotation_rate_degrees.is_finite()
             && self.rotation_rate_degrees.abs() <= 36000.
+            && self.waves.iter().all(|w| {
+                [w.rate, w.phase, w.amplitude]
+                    .iter()
+                    .all(|v| v.is_finite() && v.abs() <= 10000.)
+            })
+            && self.rotator.is_none_or(|r| {
+                [
+                    r.base_degrees,
+                    r.rate_degrees,
+                    r.wave_amplitude_degrees,
+                    r.wave_rate,
+                    r.wave_phase,
+                ]
+                .iter()
+                .flatten()
+                .all(|v| v.is_finite() && v.abs() <= 100000.)
+            })
     }
 }
 /// Physically based maps for a [`Material`], each naming another material
@@ -261,6 +371,10 @@ pub struct Surface {
     pub lightmap: Option<usize>,
     #[serde(default = "Metal::one")]
     pub lightmap_strength: f32,
+    /// Lit by the lightmap alone: the picture times the lightmap times `lightmap_strength`, then fog, whatever the live sun, ambient
+    /// or lights are. How the original engine draws a surface it baked (`lighting-zone-lights.md` 1.3).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub lightmap_exact: bool,
     /// Glow colour map (sRGB), multiplying `emissive`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub emissive_map: Option<usize>,

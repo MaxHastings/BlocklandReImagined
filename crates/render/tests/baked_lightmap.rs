@@ -45,6 +45,7 @@ fn floor(baked: Option<f32>) -> SceneData {
         reflection: None,
         lightmap: None,
         lightmap_strength: 1.0,
+        lightmap_exact: false,
     };
     let mut maps = [0; 7];
     for (k, map) in SurfaceMap::ALL.into_iter().enumerate() {

@@ -137,6 +137,14 @@ struct Prepared {
     /// The map's keyed movers (doors) and their scenes.
     map_movers: Vec<bri_sim::map::MapMover>,
     mover_scenes: Vec<(u32, SceneData)>,
+    /// The map's scatter layers.
+    scatter: Vec<bri_render::scene_loader::ScatterScene>,
+    /// The map's backdrop, drawn before the map from its own eye.
+    backdrop: Option<bri_render::scene_loader::BackdropScene>,
+    /// The map's regions with their own fog.
+    regions: Option<bri_content::regions::RegionMap>,
+    /// The map's decals with the triangles they draw on.
+    decals: Option<bri_render::decals::LoadedDecals>,
     light_volume: LightVolumeState,
 }
 /// A background chunk update: the replica revision it reached, and the
@@ -387,11 +395,17 @@ fn load_visual_map(
     id: &str,
     lighting: u8,
 ) -> Result<bri_render::scene_loader::MapScene> {
-    if lighting == 3 {
+    let map = if lighting == 3 {
         bri_render::scene_loader::load_map_bundle_dynamic(root, id)
     } else {
         load_map_bundle(root, id)
+    }?;
+    // Once per load: how each kind of surface in the map is lit, against the original engine's path for it.
+    for line in bri_render::lighting_report::lines(&bri_render::lighting_report::report(&map.scene))
+    {
+        bri_console::echo(line);
     }
+    Ok(map)
 }
 fn prepare_map(
     paths: &crate::content::ContentPaths,
@@ -470,6 +484,10 @@ fn prepare_map(
         shape_indices: visual.shape_indices,
         map_movers: native_map.movers,
         mover_scenes: visual.movers,
+        scatter: visual.scatter,
+        backdrop: visual.backdrop,
+        regions: visual.regions,
+        decals: visual.decals,
         light_volume,
     })
 }
@@ -1707,6 +1725,7 @@ impl PlatformApp for App {
         self.fx.body_shells.gpu_stopped();
         self.fx.tutorial_targets.gpu_stopped();
         self.fx.map_movers.gpu_stopped();
+        self.fx.map_scatter.gpu_stopped();
         self.gpu.shell_gpu = None;
         for avatar in self.avatar.avatars.values_mut() {
             avatar.gpu = None;
@@ -1715,10 +1734,16 @@ impl PlatformApp for App {
         self.avatar.body_textures.clear();
         // The avatar preview and the world compile their pipelines on
         // worker threads; the menus draw meanwhile (see gpu_build).
+        // The world's pipelines come first: the preview waits for them, so the map never queues behind the avatar's.
         let preview_device = device.clone();
+        let scene_first = crate::gpu_build::Gate::default();
+        let scene_done = scene_first.opener();
         self.avatar.avatar_preview = Some(crate::gpu_build::Building::spawn(
             "avatar preview pipelines",
-            move || crate::avatar::Preview::new(&preview_device),
+            move || {
+                scene_first.wait();
+                crate::avatar::Preview::new(&preview_device)
+            },
         ));
         self.avatar.preview_dirty = self.avatar.preview_request.is_some();
         bri_render::color::set_color_vision(bri_ui::screens::options::color_vision(
@@ -1734,12 +1759,16 @@ impl PlatformApp for App {
         let modern = self.graphics.lighting != 0;
         let soft_shading = modern && self.graphics.soft_shading;
         let occlusion = modern && self.graphics.ambient_occlusion;
+        self.gpu.pipelines_requested = None;
         self.gpu.renderer = Some(crate::gpu_build::Building::spawn(
             "scene pipelines",
             move || {
+                let _opens_the_gate = scene_done;
                 let mut renderer =
                     SceneRenderer::with_settings(&scene_device, format, samples, shadows);
                 renderer.prepare_lighting_pipelines(soft_shading, occlusion);
+                // From here a game never waits on a compile: what a scene needs later builds on workers.
+                renderer.set_background_pipelines(true);
                 renderer
             },
         ));
@@ -1870,6 +1899,7 @@ impl PlatformApp for App {
         self.fx.body_shells.gpu_stopped();
         self.fx.tutorial_targets.gpu_stopped();
         self.fx.map_movers.gpu_stopped();
+        self.fx.map_scatter.gpu_stopped();
         self.gpu.shell_gpu = None;
         self.avatar.gpu_stopped();
         self.gpu.renderer = None;

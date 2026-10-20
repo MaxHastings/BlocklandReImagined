@@ -2533,6 +2533,8 @@ fn placeholder() -> bri_content::shape::Shape {
             billboard: false,
             billboard_y: false,
             uv1: Vec::new(),
+            colors: Vec::new(),
+            vertex_rig: None,
         })],
         materials: vec![Material {
             name: "white".into(),
@@ -2551,9 +2553,12 @@ fn placeholder() -> bri_content::shape::Shape {
             alpha_cutoff: None,
             double_sided: false,
             uv_motion: None,
+            uv_chain: Vec::new(),
             metal: None,
             surface: None,
             tint: None,
+            layers: None,
+            vertex_light: false,
         }],
         animations: vec![],
     }

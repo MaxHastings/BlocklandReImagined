@@ -45,12 +45,20 @@ impl App {
             return true;
         }
         // A map change rebuilds the renderers before its next frame.
-        !self.gpu.gpu_restart
-            && self
-                .gpu
-                .renderer
-                .as_mut()
-                .is_some_and(|r| r.ready().is_some())
+        if self.gpu.gpu_restart {
+            return false;
+        }
+        let Some(renderer) = self.gpu.renderer.as_mut().and_then(|r| r.ready()) else {
+            return false;
+        };
+        // The pipelines the map's materials draw with compile behind the loading screen, on workers.
+        if let Some(scene) = &self.scene.cpu_scene
+            && self.gpu.pipelines_requested.as_deref() != Some(scene.id.as_str())
+        {
+            renderer.request_materials(&scene.materials);
+            self.gpu.pipelines_requested = Some(scene.id.clone());
+        }
+        renderer.pipelines_pending() == 0
     }
     pub fn work_counters(&self) -> crate::perf::WorkCounters {
         crate::perf::WorkCounters {
@@ -239,6 +247,10 @@ impl App {
             .world_node(&self.avatar.avatar_assets, name)
     }
     /// The camera the last rendered frame was drawn from: eye, yaw, pitch.
+    /// Set the run-time multiplier of baked lightmaps for the views that follow (1: none; a game mode doubles it for night vision).
+    pub fn set_lightmap_scale(&mut self, scale: f32) {
+        self.lighting.lightmap_scale = scale;
+    }
     pub fn rendered_camera(&self) -> Option<(Vec3, f32, f32)> {
         self.view.rendered_camera
     }

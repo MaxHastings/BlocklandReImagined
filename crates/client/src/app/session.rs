@@ -119,6 +119,7 @@ impl App {
         self.fx.body_shells.clear();
         self.fx.tutorial_targets.update(&[], 0.0);
         self.fx.map_movers.set_map(Vec::new(), Vec::new());
+        self.fx.map_scatter.set_map(Vec::new());
         self.fx.explosion_debris.reset(0);
         self.fx.weapon_shells.clear();
         self.fx.weapon_cues.clear();
@@ -166,6 +167,12 @@ impl App {
         self.avatar.avatar_action_images.clear();
         self.controls = Controls::default();
         self.scene.cpu_scene = None;
+        self.scene.backdrop = None;
+        self.scene.regions = None;
+        self.scene.decals = None;
+        self.gpu.decal_layer = None;
+        self.scene.fog_blend = Default::default();
+        self.gpu.gpu_backdrop = None;
         self.lighting.light_volume = LightVolumeState::default();
         self.scene.cpu_terrain.clear();
         self.scene.cpu_water.clear();
@@ -612,6 +619,10 @@ impl App {
                         shape_indices: visual.shape_indices,
                         map_movers: movers,
                         mover_scenes: visual.movers,
+                        scatter: visual.scatter,
+                        backdrop: visual.backdrop,
+                        regions: visual.regions,
+                        decals: visual.decals,
                         light_volume,
                     },
                     identity,

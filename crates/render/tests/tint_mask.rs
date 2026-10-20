@@ -35,6 +35,7 @@ fn plane(mask: u8, tint: [f32; 4], masked: bool, kind: MaterialKind) -> SceneDat
                 reflection: None,
                 lightmap: None,
                 lightmap_strength: 1.0,
+                lightmap_exact: false,
             },
         );
     }

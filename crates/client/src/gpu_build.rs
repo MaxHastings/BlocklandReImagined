@@ -10,6 +10,35 @@
 //! ([`Building::ready`]).
 use std::thread::JoinHandle;
 
+/// Opens when the thread holding its [`GateOpener`] finishes, however it ends; a thread that should wait its turn waits on it.
+#[derive(Clone, Default)]
+pub struct Gate(std::sync::Arc<(std::sync::Mutex<bool>, std::sync::Condvar)>);
+
+/// Opens its [`Gate`] when dropped.
+pub struct GateOpener(Gate);
+
+impl Gate {
+    pub fn opener(&self) -> GateOpener {
+        GateOpener(self.clone())
+    }
+    /// Blocks until the gate has opened.
+    pub fn wait(&self) {
+        let (lock, condition) = &*self.0;
+        let mut open = lock.lock().unwrap_or_else(|e| e.into_inner());
+        while !*open {
+            open = condition.wait(open).unwrap_or_else(|e| e.into_inner());
+        }
+    }
+}
+
+impl Drop for GateOpener {
+    fn drop(&mut self) {
+        let (lock, condition) = &*self.0.0;
+        *lock.lock().unwrap_or_else(|e| e.into_inner()) = true;
+        condition.notify_all();
+    }
+}
+
 pub struct Building<T: Send + 'static> {
     working: Option<JoinHandle<T>>,
     done: Option<T>,

@@ -35,6 +35,12 @@ pub(super) struct GpuState {
     pub(super) hidden_outlines: crate::hidden_outlines::HiddenOutlines,
     pub(super) effects_renderer: Option<bri_fx_runtime::gpu::EffectsRenderer>,
     pub(super) gpu_scene: Option<GpuScene>,
+    /// The backdrop uploaded with the map.
+    pub(super) gpu_backdrop: Option<GpuScene>,
+    /// The map's decals uploaded with the map.
+    pub(super) decal_layer: Option<bri_render::decals::DecalLayer>,
+    /// The map whose materials' pipelines the renderer was asked to compile (behind the loading screen).
+    pub(super) pipelines_requested: Option<String>,
     pub(super) gpu_broken: BTreeSet<u32>,
     pub(super) gpu_terrain: Vec<bri_render::terrain_scene::GpuTerrain>,
     pub(super) gpu_water: Vec<bri_render::water_scene::GpuWater>,

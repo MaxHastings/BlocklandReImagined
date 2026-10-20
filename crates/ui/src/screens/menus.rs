@@ -209,7 +209,7 @@ impl NativeScreen {
                 "BlockButtonProfile",
                 Rect::new(10, 75, 200, 38),
                 "base/client/ui/button1",
-                "Rule Workshop",
+                "Make a Game",
                 "ruleworkshop",
             );
             b.name = Some("EM_RuleWorkshop".into());

@@ -109,6 +109,28 @@ impl App {
             crate::frame_trace::note("uploaded the map");
             self.gpu.gpu_broken.clear();
             self.gpu.gpu_scene = Some(renderer.upload(frame.device, frame.queue, scene)?);
+            self.gpu.decal_layer = self.scene.decals.as_ref().map(|loaded| {
+                let layer = bri_render::decals::DecalLayer::new(
+                    frame.device,
+                    frame.queue,
+                    frame.format,
+                    bri_render::scene::DEPTH_FORMAT,
+                    renderer.samples(),
+                    loaded,
+                );
+                crate::frame_trace::note(format!(
+                    "uploaded {} decals ({} triangles)",
+                    loaded.set.decals.len(),
+                    layer.triangle_counts().iter().sum::<usize>()
+                ));
+                layer
+            });
+            self.gpu.gpu_backdrop = match &self.scene.backdrop {
+                Some(backdrop) => {
+                    Some(renderer.upload(frame.device, frame.queue, &backdrop.scene)?)
+                }
+                None => None,
+            };
             self.lighting.light_volume.uploaded = false;
             self.gpu.gpu_terrain = self
                 .scene
@@ -767,6 +789,30 @@ impl App {
             FAR_PLANE,
         );
         apply_environment(&mut camera);
+        // The region the eye is in sets the fog (linear, the colour and distances the region names).
+        let mut region_clear = None;
+        if let Some(regions) = &self.scene.regions {
+            let now = self.avatar.animation_time;
+            let dt = (now - self.scene.fog_time).clamped(0.0, 1.0) as f32;
+            self.scene.fog_time = now;
+            let zone = regions.locate(eye.to_array());
+            // The zone's ambient is what lit models take; lightmaps carry it already.
+            if let Some(ambient) = regions.ambient(zone) {
+                camera.ambient[..3].copy_from_slice(&ambient);
+            }
+            let fog = self.scene.fog_blend.step(regions, zone, dt);
+            if fog.enabled {
+                let [r, g, b] = fog.color.map(|c| f32::from(c) / 255.0);
+                camera.fog_color = [r, g, b, 0.0];
+                camera.atmosphere[0] = fog.start;
+                camera.atmosphere[1] = fog.end;
+                camera.atmosphere[3] = 1.0;
+                camera.haze = [bri_content::environment::FOG_HEIGHT, 1.0, 0.0, 1.0];
+            } else {
+                camera.atmosphere[3] = 0.0;
+            }
+            region_clear = fog.clear;
+        }
         if let Some(vignette) = &mut self.gpu.vignette {
             vignette.update(
                 frame.queue,
@@ -801,6 +847,7 @@ impl App {
         // Classic stays exactly v20's flat shade.
         let modern = camera.ambient[3] >= 0.5;
         camera.set_sky_ambient(self.graphics.soft_shading && modern);
+        camera.set_lightmap_scale(self.lighting.lightmap_scale);
         let occlusion_on = self.graphics.ambient_occlusion && modern;
         camera.atmosphere[2] = (self.avatar.animation_time % 86400.0) as f32;
         // `$pref::visibleDistanceMax` caps the map's visible distance; the
@@ -1119,6 +1166,17 @@ impl App {
             for (index, local) in local_views.iter().enumerate() {
                 renderer.update_view(frame.queue, LOCAL_IMAGE_FIRST_VIEW + index, &local.camera);
             }
+        }
+
+        // The map's backdrop looks from its own eye with the player's rotation and projection.
+        let backdrop_view = LOCAL_IMAGE_FIRST_VIEW + local_views.len();
+        if let (Some(backdrop), Some(_)) = (&self.scene.backdrop, &self.gpu.gpu_backdrop) {
+            renderer.set_view_count(frame.device, backdrop_view + 1);
+            renderer.update_view(
+                frame.queue,
+                backdrop_view,
+                &backdrop_camera(&camera, backdrop.eye),
+            );
         }
 
         let rgb = |v: [f32; 4]| [v[0], v[1], v[2]];
@@ -1493,6 +1551,15 @@ impl App {
             }
             _ => scene.clear_color,
         };
+        let clear_color = match region_clear {
+            Some(c) => [
+                f32::from(c[0]) / 255.0,
+                f32::from(c[1]) / 255.0,
+                f32::from(c[2]) / 255.0,
+                1.0,
+            ],
+            None => clear_color,
+        };
         let [r, g, b, a] = clear_color.map(f64::from);
         if let (Some(gpu), Some(view)) = (
             self.gpu.gpu_scene.as_mut(),
@@ -1540,6 +1607,9 @@ impl App {
             .collect();
         scenes.extend(self.fx.fade_models.scenes());
         scenes.extend(self.fx.weapon_effects.contrail_scenes());
+        self.fx
+            .map_scatter
+            .upload(renderer, frame.device, frame.queue, eye)?;
         // Models every view draws; the player's own body and held items
         // differ between the player's view and a mirror's.
         let mut shared_draws = Vec::new();
@@ -1554,6 +1624,7 @@ impl App {
         shared_draws.extend(self.fx.decals.draws());
         shared_draws.extend(self.fx.tutorial_targets.draws());
         shared_draws.extend(self.fx.map_movers.draws());
+        shared_draws.extend(self.fx.map_scatter.draws());
         if let Some((scene, instances)) = &self.gpu.shell_gpu
             && self.fx.weapon_shells.active_count() > 0
         {
@@ -1787,6 +1858,49 @@ impl App {
                 &late,
             );
         }
+        // The backdrop first, then depth starts over under the map; where the map draws nothing the backdrop shows.
+        let backdrop_drawn = match &self.gpu.gpu_backdrop {
+            Some(gpu) if self.scene.backdrop.is_some() => {
+                renderer.render_world(
+                    frame.encoder,
+                    bri_render::scene::WorldPass {
+                        view: backdrop_view,
+                        color: world_target,
+                        resolve: None,
+                        depth: &depth,
+                        viewport: None,
+                        clear: Some(clear),
+                        after_opaque: None,
+                        after_all: None,
+                    },
+                    &[gpu],
+                    &[],
+                );
+                drop(
+                    frame
+                        .encoder
+                        .begin_render_pass(&wgpu::RenderPassDescriptor {
+                            label: Some("backdrop fresh depth"),
+                            color_attachments: &[],
+                            depth_stencil_attachment: Some(
+                                wgpu::RenderPassDepthStencilAttachment {
+                                    view: &depth,
+                                    depth_ops: Some(wgpu::Operations {
+                                        load: wgpu::LoadOp::Clear(bri_render::scene::DEPTH_CLEAR),
+                                        store: wgpu::StoreOp::Store,
+                                    }),
+                                    stencil_ops: None,
+                                },
+                            ),
+                            timestamp_writes: None,
+                            occlusion_query_set: None,
+                            multiview_mask: None,
+                        }),
+                );
+                true
+            }
+            _ => false,
+        };
         let surfaces = |pass: &mut wgpu::RenderPass<'_>| reflections.draw_surfaces(pass, 0);
         let world_pass = bri_render::scene::WorldPass {
             view: 0,
@@ -1794,7 +1908,7 @@ impl App {
             resolve: None,
             depth: &depth,
             viewport: None,
-            clear: Some(clear),
+            clear: (!backdrop_drawn).then_some(clear),
             after_opaque: (!mirrors.is_empty()).then_some(&surfaces as _),
             after_all: None,
         };
@@ -1833,6 +1947,15 @@ impl App {
                 renderer.mark(frame.encoder, "world");
             }
         }
+        if let Some(layer) = &mut self.gpu.decal_layer {
+            layer.prepare(
+                frame.device,
+                frame.queue,
+                glam::Mat4::from_cols_array(&camera.view_projection),
+                glam::Vec3::new(camera.eye[0], camera.eye[1], camera.eye[2]),
+                (self.avatar.animation_time % 86400.0) as f32,
+            );
+        }
         let mut pass = frame
             .encoder
             .begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -1865,6 +1988,9 @@ impl App {
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
+        if let Some(layer) = &self.gpu.decal_layer {
+            layer.render(&mut pass);
+        }
         self.foliage.render(&mut pass);
         effects_renderer.render(&mut pass);
         weather_renderer.render(&mut pass);
@@ -1974,11 +2100,15 @@ impl App {
             self.lighting.light_volume.spots = visual.light_spots;
             self.lighting.light_volume.overflow = visual.overflow_lights;
             self.scene.cpu_scene = Some(visual.scene);
+            self.scene.backdrop = visual.backdrop;
+            self.scene.regions = visual.regions;
+            self.scene.decals = visual.decals;
             self.scene.cpu_terrain = visual.terrain.into_iter().map(Arc::new).collect();
             self.scene.cpu_water = visual.repeated_water.into_iter().map(Arc::new).collect();
             self.scene.scenery.reset();
             self.scene.shape_indices = visual.shape_indices;
             self.fx.map_movers.replace_scenes(visual.movers);
+            self.fx.map_scatter.replace_scenes(visual.scatter);
             crate::frame_trace::note("the map's lighting source changed");
             self.gpu.gpu_scene = None;
             self.lighting.reflections = None;
@@ -2229,6 +2359,18 @@ impl WholeUploads {
 }
 
 const LOCAL_IMAGE_FIRST_VIEW: usize = bri_render::environment_probe::FIRST_VIEW + 6;
+/// The player's camera as the map's backdrop sees it: the same rotation and projection from `eye` (no fog).
+fn backdrop_camera(camera: &Camera, eye: [f32; 3]) -> Camera {
+    let from = glam::Vec3::new(camera.eye[0], camera.eye[1], camera.eye[2]);
+    let shift = glam::Mat4::from_translation(from - glam::Vec3::from(eye));
+    let mut out = *camera;
+    out.view_projection =
+        (glam::Mat4::from_cols_array(&camera.view_projection) * shift).to_cols_array();
+    out.eye = [eye[0], eye[1], eye[2], camera.eye[3]];
+    out.atmosphere[3] = 0.0;
+    out.shading = [0.0; 4];
+    out
+}
 struct LocalImagePass {
     affinity: std::sync::Arc<bri_fx_runtime::LocalViewAffinity>,
     policy: bri_weapons::FirstPersonView,

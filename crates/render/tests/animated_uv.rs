@@ -84,3 +84,256 @@ fn authored_texture_rotation_uses_the_render_clock_and_declared_center() -> Resu
     }
     Ok(())
 }
+
+/// Which quadrant of the 2x2 test image a panel shows at the centre pixel: 0 red, 1 green.
+fn wave_quadrants(wave: bri_content::shape::UvWave, times: &[f32]) -> Result<Vec<u8>> {
+    use bri_content::shape::{UvMotion, UvWave};
+    motion_quadrants(
+        UvMotion {
+            waves: [wave, UvWave::default()],
+            ..Default::default()
+        },
+        times,
+    )
+}
+
+fn motion_quadrants(motion: bri_content::shape::UvMotion, times: &[f32]) -> Result<Vec<u8>> {
+    let (device, queue) = common::gpu()?;
+    let format = wgpu::TextureFormat::Rgba8Unorm;
+    let mut renderer = SceneRenderer::new(&device, format);
+    let target = common::color_target(&device, format, 64, 64);
+    let mut material = Material::surface("wave panel", 0, 0);
+    material.kind = MaterialKind::Unlit;
+    material.clamp_nearest = true;
+    material.uv_motion = Some(motion);
+    let data = SceneData {
+        images: vec![SceneImage {
+            label: "quadrants".into(),
+            width: 2,
+            height: 2,
+            rgba: vec![
+                255, 0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 255, 255, 255, 255, 255,
+            ],
+            srgb: true,
+        }],
+        materials: vec![material],
+        vertices: [
+            [-10., 0., -10.],
+            [-10., 0., 10.],
+            [10., 0., 10.],
+            [10., 0., -10.],
+        ]
+        .map(|position| SceneVertex {
+            position,
+            normal: [0., 1., 0.],
+            uv: [0.25; 2],
+            lightmap_uv: [0.; 2],
+            color: [1.; 4],
+            fx: [0.; 4],
+        })
+        .to_vec(),
+        indices: vec![0, 1, 2, 0, 2, 3],
+        batches: vec![MeshBatch {
+            indices: 0..6,
+            material: 0,
+            center: [0.; 3],
+        }],
+        ..Default::default()
+    };
+    let gpu = renderer.upload(&device, &queue, &data)?;
+    let mut out = Vec::new();
+    for &seconds in times {
+        let mut camera = Camera::perspective([0., 3., 0.01], [0.; 3], 1., 1., 0.05, 100.);
+        camera.atmosphere[2] = seconds;
+        renderer.update_camera(&queue, &camera);
+        let pixels = common::render(&device, &queue, &mut renderer, &target, &[&gpu], &[], &[])?;
+        let p = &pixels[(32 * 64 + 32) * 4..][..3];
+        assert!(p[0] > 200 && p[1] < 10 || p[1] > 200 && p[0] < 10, "{p:?}");
+        out.push(u8::from(p[1] > 200));
+    }
+    Ok(out)
+}
+
+#[test]
+fn uv_waves_follow_the_engine_formulas() -> Result<()> {
+    use bri_content::shape::{UvWave, UvWaveKind};
+    // Texture u starts at 0.25 (red); a pan of 0.5 reaches 0.75 (green) at a quarter cycle.
+    let pan = UvWave {
+        kind: UvWaveKind::Pan,
+        rate: 1.,
+        phase: 0.,
+        amplitude: 0.5,
+    };
+    assert_eq!(wave_quadrants(pan, &[0., 0.25, 0.5])?, [0, 1, 0]);
+    // Stretch about the origin: u x (1 + 2 sin) = 0.75 at a quarter cycle.
+    let stretch = UvWave {
+        kind: UvWaveKind::Stretch,
+        rate: 1.,
+        phase: 0.,
+        amplitude: 2.,
+    };
+    assert_eq!(wave_quadrants(stretch, &[0., 0.25])?, [0, 1]);
+    // Stretch-repeat: sin(pi/2 x cycle) reaches 1 only at the cycle's end.
+    let repeat = UvWave {
+        kind: UvWaveKind::StretchRepeat,
+        rate: 1.,
+        phase: 0.,
+        amplitude: 2.,
+    };
+    assert_eq!(wave_quadrants(repeat, &[0., 0.99])?, [0, 1]);
+    // Jitter: a random offset in [0, 0.5), so both quadrants appear, and it holds
+    // the previous cycle's last value before `phase`.
+    let jitter = UvWave {
+        kind: UvWaveKind::Jitter,
+        rate: 1.,
+        phase: 0.5,
+        amplitude: 0.5,
+    };
+    let times: Vec<f32> = (0..40).map(|k| 0.5 + 0.01 * k as f32 + 0.0003).collect();
+    let seen = wave_quadrants(jitter, &times)?;
+    let greens = seen.iter().filter(|&&q| q == 1).count();
+    assert!((5..35).contains(&greens), "{seen:?}");
+    let held = wave_quadrants(jitter, &[3.1, 3.4])?;
+    assert_eq!(held[0], held[1], "held through the first half of the cycle");
+    Ok(())
+}
+
+#[test]
+fn a_three_axis_rotator_turns_the_picture_by_the_matrix_it_reads() -> Result<()> {
+    use bri_content::shape::{UvMotion, UvRotator};
+    // Yaw turns the picture in its plane (the upper-left of the rotation matrix): 90 degrees
+    // about the centre takes the red corner texel (0.25, 0.25) to the green one (0.75, 0.25).
+    let yawed = UvMotion {
+        center: [0.5; 2],
+        rotator: Some(UvRotator {
+            base_degrees: [0., 90., 0.],
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+    assert_eq!(motion_quadrants(yawed, &[0.])?, [1]);
+    // A swing of 90 degrees at one cycle a second reads red at rest and green a quarter cycle in.
+    let swinging = UvMotion {
+        center: [0.5; 2],
+        rotator: Some(UvRotator {
+            wave_amplitude_degrees: [0., 90., 0.],
+            wave_rate: [0., 1., 0.],
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+    assert_eq!(motion_quadrants(swinging, &[0., 0.25, 0.5])?, [0, 1, 0]);
+    // A constant spin of 360 degrees a second: green at a quarter second, red after a second.
+    let spinning = UvMotion {
+        center: [0.5; 2],
+        rotator: Some(UvRotator {
+            rate_degrees: [0., 360., 0.],
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+    assert_eq!(motion_quadrants(spinning, &[0., 0.25, 1.])?, [0, 1, 0]);
+    Ok(())
+}
+
+/// The centre pixel of a panel textured with the 2x2 quadrant image whose material carries `chain`.
+fn chain_pixels(chain: Vec<bri_content::shape::UvMotion>, times: &[f32]) -> Result<Vec<[u8; 3]>> {
+    let (device, queue) = common::gpu()?;
+    let format = wgpu::TextureFormat::Rgba8Unorm;
+    let mut renderer = SceneRenderer::new(&device, format);
+    let target = common::color_target(&device, format, 64, 64);
+    let mut material = Material::surface("chained panel", 0, 0);
+    material.kind = MaterialKind::Unlit;
+    material.clamp_nearest = true;
+    material.uv_chain = chain;
+    let data = SceneData {
+        images: vec![SceneImage {
+            label: "quadrants".into(),
+            width: 2,
+            height: 2,
+            rgba: vec![
+                255, 0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 255, 255, 255, 255, 255,
+            ],
+            srgb: true,
+        }],
+        materials: vec![material],
+        vertices: [
+            [-10., 0., -10.],
+            [-10., 0., 10.],
+            [10., 0., 10.],
+            [10., 0., -10.],
+        ]
+        .map(|position| SceneVertex {
+            position,
+            normal: [0., 1., 0.],
+            uv: [0.25; 2],
+            lightmap_uv: [0.; 2],
+            color: [1.; 4],
+            fx: [0.; 4],
+        })
+        .to_vec(),
+        indices: vec![0, 1, 2, 0, 2, 3],
+        batches: vec![MeshBatch {
+            indices: 0..6,
+            material: 0,
+            center: [0.; 3],
+        }],
+        ..Default::default()
+    };
+    let gpu = renderer.upload(&device, &queue, &data)?;
+    let mut out = Vec::new();
+    for &seconds in times {
+        let mut camera = Camera::perspective([0., 3., 0.01], [0.; 3], 1., 1., 0.05, 100.);
+        camera.atmosphere[2] = seconds;
+        renderer.update_camera(&queue, &camera);
+        let pixels = common::render(&device, &queue, &mut renderer, &target, &[&gpu], &[], &[])?;
+        out.push(pixels[(32 * 64 + 32) * 4..][..3].try_into()?);
+    }
+    Ok(out)
+}
+
+#[test]
+fn a_chain_of_modifiers_is_composed_into_one_map_every_frame() -> Result<()> {
+    use bri_content::shape::UvMotion;
+    // Outer: scroll u by 2 a second. Inner: move v by half. The texture is
+    // red | green over blue | white, read at (0.25, 0.25) before the chain.
+    let chain = vec![
+        UvMotion {
+            scroll: [2., 0.],
+            ..Default::default()
+        },
+        UvMotion {
+            offset: [0., 0.5],
+            ..Default::default()
+        },
+    ];
+    let seen = chain_pixels(chain, &[0., 0.25])?;
+    // t = 0: (0.25, 0.75) is the blue texel; a quarter second later u is 0.75, the white one.
+    assert!(
+        seen[0][2] > 200 && seen[0][0] < 10 && seen[0][1] < 10,
+        "{seen:?}"
+    );
+    assert!(seen[1].iter().all(|c| *c > 200), "{seen:?}");
+    // Outermost first: a scale outside an offset does not scale the offset. u' = 0.5 u + 0.5 would
+    // read 0.625 (the right column); the reversed order u' = 0.5 (u + 0.5) reads 0.375 (left).
+    let scale = UvMotion {
+        scale: [0.5, 1.],
+        ..Default::default()
+    };
+    let offset = UvMotion {
+        offset: [0.5, 0.],
+        ..Default::default()
+    };
+    let outer_scale = chain_pixels(vec![scale, offset], &[0.])?;
+    let outer_offset = chain_pixels(vec![offset, scale], &[0.])?;
+    // v stays 0.25 (top row): the right column is green, the left red.
+    assert!(
+        outer_scale[0][1] > 200 && outer_scale[0][0] < 10,
+        "{outer_scale:?}"
+    );
+    assert!(
+        outer_offset[0][0] > 200 && outer_offset[0][1] < 10,
+        "{outer_offset:?}"
+    );
+    Ok(())
+}
