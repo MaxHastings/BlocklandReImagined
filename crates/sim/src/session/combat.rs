@@ -958,6 +958,7 @@ pub(super) fn mode_settings(
         spawn_protection_ms: ms(m.spawn_protection_seconds),
         vehicle_return_ms: m.vehicle_return_seconds.map(ms),
         death_view_ms: ms(m.death_view_seconds),
+        hold_join_spawn: m.hold_first_spawn,
     }
 }
 
@@ -1674,7 +1675,6 @@ impl Session {
     /// death line is printed and no rules hear of a death. The member waits
     /// as the dead do, and the corpse is cleared at once.
     pub(super) fn remove_body(&mut self, owner: OwnerId) -> Result<()> {
-        let tick = self.simulation.state().tick;
         let Some(peer) = self.peers.get(&owner) else {
             return Ok(());
         };
@@ -1691,6 +1691,14 @@ impl Session {
             .minigames
             .removed(player, life)
             .map_err(|e| anyhow::anyhow!("Body removal rejected: {e}"))?;
+        self.clear_body(owner)?;
+        self.apply_minigame_effects(effects)
+    }
+
+    /// The body of a member the rules already count as dead goes at once, with no death: the rider and weapon state with it, the
+    /// corpse cleared on the next step.
+    fn clear_body(&mut self, owner: OwnerId) -> Result<()> {
+        let tick = self.simulation.state().tick;
         self.eject(owner);
         self.release_riders(owner);
         {
@@ -1709,7 +1717,7 @@ impl Session {
         let _ = self.weapons.drop_ball(ActorId(owner));
         let _ = self.weapons.equip(ActorId(owner), None);
         self.weapons.clear_worn(ActorId(owner));
-        self.apply_minigame_effects(effects)
+        Ok(())
     }
 
     /// A chat line an Add-On's rules wrote: to `to`, or everyone.
@@ -2279,6 +2287,12 @@ impl Session {
                 } => {
                     if let Some(owner) = self.owner_of(player) {
                         self.respawn(owner, equipment)?;
+                    }
+                }
+                mg::Effect::Held { player } => {
+                    if let Some(owner) = self.owner_of(player) {
+                        self.clear_body(owner)?;
+                        self.peers.get_mut(&owner).unwrap().combat.respawn_tick = tick;
                     }
                 }
                 mg::Effect::RestoreOwner { player, .. } => {

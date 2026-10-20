@@ -70,6 +70,7 @@ pub fn settings(rules: &MiniGameRules) -> Result<Settings> {
         spawn_protection_ms: bri_minigames::DEFAULT_SPAWN_PROTECTION_MS,
         vehicle_return_ms: None,
         death_view_ms: 0,
+        hold_join_spawn: false,
     })
 }
 
