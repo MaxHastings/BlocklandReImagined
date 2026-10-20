@@ -3470,6 +3470,12 @@ fn register_presentation(engine: &mut Engine) {
             scale: float(&scale)?,
         }))
     });
+    engine.register_fn("set_walking", |player: Dynamic, walking: bool| {
+        push(Op::SetWalking(ops::SetWalking {
+            player: id(&player)?,
+            walking,
+        }))
+    });
     engine.register_fn(
         "set_speed_modifier",
         |player: Dynamic, key: &str, scale: Dynamic| {

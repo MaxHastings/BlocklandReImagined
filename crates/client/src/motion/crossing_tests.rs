@@ -285,6 +285,7 @@ fn camera_test_player(feet: Vec3) -> PlayerState {
         archetype: Default::default(),
         scale: 1.0,
         speed_scale: 1.0,
+        walking: false,
         energy: 100.0,
         tick: Default::default(),
         tether: None,
