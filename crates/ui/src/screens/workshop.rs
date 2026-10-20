@@ -75,7 +75,7 @@ impl Workshop {
             Rect::new((core.logical.0 - w) / 2, (core.logical.1 - h) / 2, w, h),
         );
         window.name = Some("Workshop_Window".into());
-        window.text = Some("Rule Workshop - Examples".into());
+        window.text = Some("Make a Game".into());
         let mut root = ctrl(
             "GuiControl",
             "GuiDefaultProfile",
@@ -84,12 +84,12 @@ impl Workshop {
         window.children.push(text(
             "GuiDefaultProfile",
             Rect::new(14, 28, w - 28, 20),
-            "Place editable example bricks",
+            "Pick a game. Its bricks appear next to you, ready to play.",
         ));
         window.children.push(text(
             "GuiDefaultProfile",
             Rect::new(14, 49, w - 28, 20),
-            "Placed nearby. Choose a clear area.",
+            "Stand on clear ground, build walls around it, then press Invite a friend.",
         ));
         let mut scroll = ctrl(
             "GuiScrollCtrl",
@@ -140,13 +140,22 @@ impl Workshop {
         window.children.push(close);
         let mut settings = button(
             "BlockButtonProfile",
-            Rect::new(w - 188, h - 45, 174, 30),
+            Rect::new(w - 112, h - 45, 100, 30),
             "base/client/ui/button1",
-            "MiniGame settings",
+            "Settings",
             "workshop.settings",
         );
         settings.name = Some("Workshop_Settings".into());
         window.children.push(settings);
+        let mut invite = button(
+            "BlockButtonProfile",
+            Rect::new(112, h - 45, 130, 30),
+            "base/client/ui/button1",
+            "Invite a friend",
+            "workshop.invite",
+        );
+        invite.name = Some("Workshop_Invite".into());
+        window.children.push(invite);
         let status = self.error.as_deref().unwrap_or(if self.request.is_some() {
             "Placing example..."
         } else if core.in_game() && core.is_admin() {
@@ -207,6 +216,19 @@ impl Screen for Workshop {
             return;
         }
         if ev.kind != EventKind::Click || self.request.is_some() {
+            return;
+        }
+        if command == "workshop.invite" {
+            // Same path as typing /invite: copies the bri:// link.
+            core.request_pending(
+                UiAction::ChatCommand {
+                    name: "invite".into(),
+                    args: vec![],
+                },
+                Pending::Other,
+            );
+            core.pop(self.id());
+            core.pop(ScreenId::EscapeMenu);
             return;
         }
         if command == "workshop.settings" {
