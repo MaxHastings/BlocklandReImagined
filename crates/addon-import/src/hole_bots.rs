@@ -72,8 +72,11 @@ pub(crate) fn kind(
             "action": "activate2",
             "name": "Melee",
         });
-        // A melee bot fights with its body, never a gun: it neither takes
-        // one up from the floor nor draws one the rules gave it.
+    }
+    // Bot_Hole's brain only fires a bot's weapon when `hShoot` is on
+    // (`holes.cs`); a datablock that sets it to 0 (zombie, shark, horse)
+    // fights with its body, so it never takes up or draws a gun either.
+    if fields.contains_key("hshoot") && !on("hshoot") {
         kind["weapons"] = json!(false);
     }
     if on("halertotherbots") {
@@ -127,7 +130,6 @@ mod tests {
         assert_eq!(k["wander_radius"], 10.0);
         assert_eq!(k["chase_radius"], 48.0);
         assert_eq!(k["melee"]["damage"], 12.0);
-        assert_eq!(k["weapons"], false);
         assert_eq!(k["melee"]["action"], "activate2");
         assert_eq!(k["body"], "x:archetype/walkerbot");
         assert_eq!(k["alerts_allies"], true);
