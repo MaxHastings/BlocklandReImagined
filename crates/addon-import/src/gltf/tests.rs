@@ -1023,13 +1023,13 @@ fn vertex_lit_import(mask: &str) -> Vec<[f32; 4]> {
     g.material(
         "sand",
         [1.0; 4],
-        Some((2, 2, vec![200, 180, 120, 255].repeat(4))),
+        Some((2, 2, [200, 180, 120, 255].repeat(4))),
         json!({}),
     );
     g.material(
         "weights",
         [1.0; 4],
-        Some((2, 2, vec![255, 0, 0, 255].repeat(4))),
+        Some((2, 2, [255, 0, 0, 255].repeat(4))),
         json!({}),
     );
     let base = g.material(

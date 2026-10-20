@@ -1345,7 +1345,6 @@ pub fn convert(
         }
     }
 
-    let mut materials = materials;
     // A map brought with the original engine's lighting (`--lighting`) is lit by its lightmaps alone where it has them.
     if opts.original_lighting {
         for (m, source) in material_sources.iter().enumerate() {
