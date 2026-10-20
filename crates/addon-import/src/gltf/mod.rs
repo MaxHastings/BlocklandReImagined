@@ -1383,6 +1383,7 @@ pub fn convert(
             mesh_offset: 0,
             collision,
             blocks,
+            two_sided: false,
         });
         for (mut object, mesh) in group {
             object.meshes = vec![meshes.len()];
