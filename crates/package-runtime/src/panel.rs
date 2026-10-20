@@ -91,7 +91,11 @@ pub struct PanelBackground {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub slice: Option<[u16; 4]>,
     /// RGBA 0..1 the picture is multiplied by (default white).
-    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "rgba")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "rgba"
+    )]
     pub tint: Option<[f32; 4]>,
 }
 
@@ -160,7 +164,11 @@ pub struct PanelItem {
     #[serde(default)]
     pub h: Option<u16>,
     /// An image's RGBA 0..1 multiplier (default white).
-    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "rgba")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "rgba"
+    )]
     pub tint: Option<[f32; 4]>,
 }
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -175,7 +183,11 @@ pub struct PanelButton {
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub hover_texture: String,
     /// RGBA 0..1 of the caption (default: the stock colour).
-    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "rgba")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "rgba"
+    )]
     pub color: Option<[f32; 4]>,
     /// Where the button sits in the panel and how big it is, as an image
     /// does; without them it takes the next place in its row.
