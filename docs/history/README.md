@@ -176,7 +176,6 @@ Branch bundles (the full git history of old branches) are not in git; see `branc
 | [v0.3.0/gltf-authoring.md](v0.3.0/gltf-authoring.md) | 2026-10-13 | 10 KB | Preparing models in Blender for Blockland ReImagined |
 | [v0.3.0/movement-controllers.md](v0.3.0/movement-controllers.md) | 2026-10-12 | 16 KB | Movement controllers |
 | [v0.3.0/overlap-review.md](v0.3.0/overlap-review.md) | 2026-10-14 | 8 KB | v0.3.0 overlap review (HEAD 3a37b4d3) |
-| [v0.3.0/plan.md](v0.3.0/plan.md) | 2026-10-14 | 59 KB | v0.3.0 — Seamless Add-On composition |
 | [v0.3.0/w2-assessment.md](v0.3.0/w2-assessment.md) | 2026-10-12 | 4 KB | W2 assessment: grips, sockets and animation roles |
 | [v0.3.1/release-notes-draft.md](v0.3.1/release-notes-draft.md) | 2026-10-15 | 2 KB | v0.3.1 release notes (draft, collected as PRs merge into v0.3.1-experimental) |
 | [v027/bot-ownership.md](v027/bot-ownership.md) | 2026-10-08 | 13 KB | Bot brain ownership map (main d6161ef, 2026-10-08) |

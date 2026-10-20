@@ -2,39 +2,18 @@
 
 Historical note. Written 2026-10-20 against main `a2c2430` (engine). For every branch head found in the cloud project's git bundles (and every branch still on GitHub) that is not an ancestor of main, this lists how much of the branch's added code is already on main.
 
+Rows for the game-specific branch family are kept in the private addons repo.
 **How to read it.** Many branches were squash-merged, so they are not ancestors of main even though their work landed. `on main` is the share of the branch's added lines (counted against its merge base) that appear, trimmed, in the same file on main today. About 85% or more means it landed (the rest is later edits). Under about 50% means check by hand. This is a screen, not a proof.
 
 Branches that *are* ancestors of main (or whose trial merge leaves main's tree unchanged) are left out. Restore any branch with `git fetch <bundle> refs/remotes/origin/<branch>:refs/heads/<branch>`.
 
 | Bundle | Branch | Tip | Last commit | Added lines | On main | Subject |
 |---|---|---|---|---|---|---|
-| branch-cleanup/engine-unmerged-2026-10-20.bundle | `codex/ue2-natives` | `71a4fb8bc` | 2026-10-19 | 6316 | 0% | ue2-natives: research test that dumps decoded script function bodies (BRI_DUMP) |
-| branch-cleanup/engine-unmerged-2026-10-20.bundle | `claude/project-thread-bz6q94` | `c794989d1` | 2026-10-19 | 13100 | 0% | native lists: WeaponAttachment and Pickup transcribed from the second Engine.dll |
 | (still on GitHub) | `claude/docs-seams-rows` | `a05031d64` | 2026-10-20 | 91 | 0% | Docs: seams.md main-status for the 80 rows that named no code item |
-| branch-cleanup/engine-unmerged-2026-10-20.bundle | `codex/aa-generated-map-engine` | `9360c5249` | 2026-10-19 | 27074 | 9% | Test: a script's one-shot sound is heard in range only |
-| branch-cleanup/engine-unmerged-2026-10-20.bundle | `claude/ue2-natives-world` | `4415877be` | 2026-10-19 | 68033 | 12% | UE2 natives: FinishInterpolation poll, GETPING, FilterAlways, GetLanguageFilter |
-| branch-cleanup/engine-unmerged-2026-10-20.bundle | `codex/aa-cutover` | `ce44d4fd3` | 2026-10-19 | 74534 | 12% | Cargo.lock: aa-mode depends on ue2-net |
-| branch-cleanup/engine-unmerged-2026-10-20.bundle | `codex/aa-sound-natives` | `2b7f3f229` | 2026-10-19 | 70272 | 13% | Merge remote-tracking branch 'origin/codex/aa-cutover' into codex/aa-sound-nativ |
-| branch-cleanup/engine-unmerged-2026-10-20.bundle | `claude/aa-net-on-cutover-346` | `85957ef29` | 2026-10-19 | 73184 | 13% | Protocol note: mode menu input (mode_ui, @ui) |
-| branch-cleanup/engine-unmerged-2026-10-20.bundle | `claude/project-thread-io6rzk-hud` | `999520d01` | 2026-10-19 | 70033 | 13% | Merge codex/aa-cutover (0165f411f) into claude/weapon-live |
-| branch-cleanup/engine-unmerged-2026-10-20.bundle | `codex/ue2-lighting` | `b22b0ed55` | 2026-10-19 | 70151 | 13% | An actor takes the Sunlights of its zone, as the original selects them |
 | (still on GitHub) | `claude/wall-step` | `01f2ab9d3` | 2026-10-20 | 112 | 14% | Revert "Motor: unstick widens its search to the body's height when nothing withi |
-| branch-cleanup/engine-unmerged-2026-10-20.bundle | `codex/ue2-weapon-draw` | `b32a6a032` | 2026-10-19 | 48981 | 15% | Leave other lanes' client files as they were (formatting only) |
-| branch-cleanup/engine-unmerged-2026-10-20.bundle | `codex/ue2-weapon-draw-2` | `bb6b050eb` | 2026-10-19 | 50384 | 16% | Compile each surface family in its own pipeline; add vertex-light material |
-| branch-cleanup/engine-unmerged-2026-10-20.bundle | `codex/ue2-effects-rebased` | `4e38d93c6` | 2026-10-19 | 41747 | 17% | Fix clippy in the vertex light import test |
 | (still on GitHub) | `claude/project-thread-fx51mn` | `51807529c` | 2026-10-20 | 34 | 17% | Fix v0.3.3 log errors: throwing rules unset fields, animation shape paths, Fizze |
 | (still on GitHub) | `claude/bot-office` | `c62e3c265` | 2026-10-20 | 37 | 18% | Test: measure how wide a bot goes round a wall every quarter second, not every s |
 | (still on GitHub) | `claude/hit-bones` | `91cc0ed5d` | 2026-10-20 | 384 | 21% | Merge remote-tracking branch 'origin/main' into claude/hit-bones |
-| branch-cleanup/engine-unmerged-2026-10-20.bundle | `claude/aa-net-on-cutover` | `dbdff90a3` | 2026-10-19 | 44954 | 31% | netsync/ue2-net: link budget from the engine's own saturation (UNetConnection::T |
-| branch-cleanup/engine-unmerged-2026-10-20.bundle | `codex/ue2-effects-on-main` | `530bf9317` | 2026-10-19 | 9994 | 34% | Add the three-axis texture rotator to UV motion |
-| branch-cleanup/engine-unmerged-2026-10-20.bundle | `claude/project-thread-io6rzk` | `07eae0eb3` | 2026-10-19 | 60661 | 39% | Cargo.lock for the HUD crates |
-| branch-cleanup/engine-unmerged-2026-10-20.bundle | `claude/ue2-census` | `58f28d80c` | 2026-10-19 | 48575 | 43% | Add whole-game UE2 native census tools and ranked report |
-| branch-cleanup/engine-unmerged-2026-10-20.bundle | `codex/ue2-ground-pick` | `4049912a9` | 2026-10-19 | 27022 | 51% | Bring the prone unit tests to the binary's MaybeUnProne (falling pawns only) and |
-| branch-cleanup/engine-unmerged-2026-10-20.bundle | `codex/ue2-blend-modes` | `30f961310` | 2026-10-19 | 22888 | 71% | Add the redraw-the-receiving-triangles projection pass and the receiver builders |
-| branch-cleanup/engine-unmerged-2026-10-20.bundle | `codex/aa-terrain-layers` | `09d562925` | 2026-10-19 | 14394 | 98% | Document bri_layer_blend in the map guide |
-| branch-cleanup/engine-unmerged-2026-10-20.bundle | `codex/aa-map-sounds` | `841b4f30c` | 2026-10-19 | 18971 | 98% | Placed map sounds: looping sound sources in a map scene, played by the client |
-| branch-cleanup/engine-unmerged-2026-10-20.bundle | `codex/aa-collision-surfaces` | `481bfeee1` | 2026-10-19 | 18997 | 99% | Per-collider query masks: a col_ node lists the queries it blocks |
-| branch-cleanup/engine-unmerged-2026-10-20.bundle | `claude/project-thread-t3kkxz` | `cfcedabf2` | 2026-10-20 | 466 | 99% | Progress: AA solo match rebased on main |
 | (still on GitHub) | `claude/fifteen-minute-minigame-ki5ju2` | `7b4877487` | 2026-10-20 | 24 | 100% | Make a Game: plain entry name and an Invite a friend button in the workshop pick |
 | (still on GitHub) | `claude/minigame-bots-findable-rkyhh1` | `2545a0710` | 2026-10-20 | 13 | 100% | Show Add-On bot count on the Game page via a new bots setting place |
 | (still on GitHub) | `claude/zombies-no-guns-ujpp0y` | `bdba21de7` | 2026-10-20 | 5 | 100% | Key hole bots' weapons on hShoot, as Bot_Hole does, not hMelee |
