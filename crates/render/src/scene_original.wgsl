@@ -87,6 +87,35 @@ fn vertex_point_illumination(position:vec3<f32>,normal:vec3<f32>)->vec3<f32> {
     }
     return result;
 }
+// A dynamic light on a baked BSP surface, the engine's extra pass (Engine 0x1d2980, 0x1d2590, 0x1d28b0; native-research/specs/dynamic-light-bsp.md):
+// the surface's picture lit by the light's colour times sqrt(1 - (h/R)^2) (h the light's height over the surface plane) and a linear ramp of the
+// in-plane distance over the radius of the circle the light's sphere cuts in the plane (a 64 x 64 radial ramp texture, zero past 30.5 of its 32 texels),
+// doubled twice by the two modulate stages and halved by the ramp, then composed over the frame as `src + dst * (1 - src)`. Placed lights (w > 0) are
+// already in the lightmap; spot lights take no part. Effects 0 and 13 draw with the grey ramp, 21 with the white one.
+fn dynamic_bsp_light(base:vec3<f32>,pigment:vec3<f32>,alpha:f32,brighten:bool,position:vec3<f32>,normal:vec3<f32>)->vec3<f32> {
+    var result=base;
+    let n=normal/max(length(normal),0.0001);
+    let list=light_cell(position);
+    for(var i=0u;i<list.y;i+=1u) {
+        let light=listed_light(list,i);
+        let effect=max(light.cone.w,0.0);
+        if light.color.w>0.5 || dot(light.cone.xyz,light.cone.xyz)!=0.0 || !(effect==0.0 || effect==13.0 || effect==21.0) {continue;}
+        let toward=light.position_radius.xyz-position;
+        let h=dot(n,toward);
+        let radius=light.position_radius.w;
+        if h<=0.0 || h>=radius {continue;}
+        let reach=sqrt(radius*radius-h*h);
+        let ramp=1.0-length(toward-n*h)/reach*(32.0/30.5);
+        if ramp<=0.0 {continue;}
+        // Effect 21 (QuadraticNonIncidence): the white ramp (twice the grey one) and sqrt(1 - |h| / R).
+        let quadratic=effect==21.0;
+        let height=select(sqrt(1.0-h*h/(radius*radius)),sqrt(1.0-h/radius),quadratic);
+        let src=min(pigment*light.color.rgb*(height*ramp*select(2.0,4.0,quadratic)),vec3<f32>(1.0));
+        // FB_Brighten (a surface with an alpha picture): SRCALPHA, ONE with the picture's alpha times the ramp's; else FB_Translucent: ONE, INVSRCCOLOR.
+        if brighten {result=min(result+src*(alpha*ramp),vec3<f32>(1.0));} else {result=src+result*(vec3<f32>(1.0)-src);}
+    }
+    return result;
+}
 @group(1) @binding(0) var layer0:texture_2d<f32>;
 @group(1) @binding(1) var layer1:texture_2d<f32>;
 @group(1) @binding(2) var layer2:texture_2d<f32>;
@@ -1367,7 +1396,8 @@ override SURFACE_GROUP:u32=0u;
         // The original engine's baked surface: the picture times the lightmap times its strength (the lightmap holds half the
         // light), saturated, then fog. Nothing live adds to it.
         let baked=textureSampleLevel(lightmap,clamped_exact,v.lightmap_uv,0.0).rgb*material[7].w*camera.lightmap.x;
-        return vec4<f32>(fogged(min(pigment*baked,vec3<f32>(1.0)),v.world_position),alpha);
+        let lit=dynamic_bsp_light(min(pigment*baked,vec3<f32>(1.0)),pigment,alpha,(u32(material[0].w)&512u)!=0u,v.world_position,v.normal);
+        return vec4<f32>(fogged(lit,v.world_position),alpha);
     }
     var baked_light=vec4<f32>(1.0);
     if lighting_mode()!=3 {baked_light=textureSampleLevel(lightmap,clamped_exact,v.lightmap_uv,0.0);}

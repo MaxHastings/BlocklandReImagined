@@ -111,9 +111,17 @@ POSITIONs. A layer-blended surface is lit by its vertex colours alone, so the im
 
 **Vertex-lit surfaces.** A glTF material with the custom property `bri_vertex_light: true` is drawn as the picture times twice
 the mesh's vertex colour (0.5 is neutral), fogged, lit by nothing else, in every lighting setting: a mesh whose light was baked
-into its vertices. The importer keeps the mesh's `COLOR_0` for such materials. `--lighting DIR` fills those colours for a map's
-world mesh from an asset lane's static-mesh lighting inputs (`*-instances.json`, `*-lights.json`, `*-instances.npz`,
-`*-vertex-map.npz`; with `--regions` for each zone's ambient); see `gltf/static_lighting.rs`.
+into its vertices. The importer keeps the mesh's `COLOR_0` for such materials.
+
+**The original engine's lighting (`--lighting DIR`).** For a map the original engine lit (an asset lane's inputs: `*-instances.json`,
+`*-lights.json`, `*-instances.npz`, `*-vertex-map.npz`; `--regions` for each zone's ambient) the importer does not bake the light. The
+world mesh carries a light rig (`bri_content::vertex_lighting::Rig`: each static mesh's lights and visibility bits, the vertex each
+mesh vertex is within them, and the frame the lights are in) and the colours are worked out when the map loads (`Rig::colors`, which
+takes a per-light scale for a light that changes), then the surfaces of those static meshes are vertex-lit surfaces. A
+terrain the lane gave sector lights for (`*-terrain-lighting.json` and `.npz`: per sector its lights and their per-vertex visibility bits, and the terrain's zone and
+Level.Brightness) is lit as the engine's `UTerrainSector::StaticLight` lights it (the zone's ambient times Level.Brightness, then the sector's lights) from the same rig, and its
+saved `COLOR_0` is not read. Materials with a `bri_lightmap` are drawn by the lightmap alone (`lightmap_exact`: picture times lightmap times strength, fog), in every lighting
+setting, as the original draws a baked surface. See `gltf/static_lighting.rs` and `native-research/specs/render-path-per-kind.md`.
 
 **The sky.** Without anything set, the sky is a plain daytime blue. Set
 these as custom properties on the Blender *scene* (**Scene Properties >

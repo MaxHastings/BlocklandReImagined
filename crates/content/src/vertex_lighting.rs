@@ -38,6 +38,10 @@ pub struct Light {
     /// The light darkens instead.
     #[serde(default)]
     pub negative: bool,
+    /// The light actor's number in the map (0 when unknown): how a game names the light when it dims or goes out, so
+    /// [`Rig::colors`] can scale it.
+    #[serde(default)]
+    pub id: u32,
 }
 
 fn one() -> f32 {
@@ -228,6 +232,7 @@ mod tests {
             glow: 1.0,
             effect: Effect::Point,
             negative: false,
+            id: 0,
         }
     }
 

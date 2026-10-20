@@ -3788,7 +3788,7 @@ impl SceneRenderer {
                 // Flags: 1 temp-brick flash, 2 ignore texture alpha, 4 untinted,
                 // 8 unlit frame blend (multiply and `Frame`), 16 baked lightmap,
                 // 32 masked tint, 64 neutral output 0.5 (Modulate), 128 colour times
-                // alpha output (Darken, Screen, Premultiplied; Invisible draws none), 256 lit by the baked lightmap alone.
+                // alpha output (Darken, Screen, Premultiplied; Invisible draws none), 256 lit by the baked lightmap alone, 512 and an alpha picture (FB_Brighten for dynamic lights).
                 f32::from(
                     u16::from(material.temp_brick_flash)
                         | u16::from(material.ignore_texture_alpha) << 1
@@ -3810,7 +3810,9 @@ impl SceneRenderer {
                                     | FrameBlend::TrueAdditive
                             )
                         )) << 7
-                        | u16::from(material.baked_exact) << 8,
+                        | u16::from(material.baked_exact) << 8
+                        | u16::from(material.baked_exact && material.alpha == AlphaMode::Blend)
+                            << 9,
                 ),
             ]);
             if let Some(groups) = material.parameters {
