@@ -13,6 +13,8 @@ struct Camera {
     baked_sun_direction:vec4<f32>, baked_sun_color:vec4<f32>, baked_ambient:vec4<f32>,
     sky_bands:array<vec4<f32>,128>,
     shading:vec4<f32>, haze:vec4<f32>,
+    enclosed:vec4<f32>,
+    lightmap:vec4<f32>,
 };
 @group(0) @binding(0) var<uniform> camera:Camera;
 struct PointLight { position_radius:vec4<f32>, color:vec4<f32>, cone:vec4<f32> };
