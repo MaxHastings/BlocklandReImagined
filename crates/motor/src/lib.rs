@@ -4,6 +4,7 @@ pub mod archetype;
 pub mod climb;
 pub mod controller;
 pub mod crouch;
+pub mod momentum;
 pub mod player;
 pub mod player_types;
 pub mod torque;

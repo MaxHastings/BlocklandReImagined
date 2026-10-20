@@ -769,6 +769,9 @@ pub struct PlayerTuning {
     pub lean: Option<Lean>,
     /// Climbing ladders, when the body can: none for v20's bodies.
     pub climb: Option<crate::climb::Climb>,
+    /// Keeping speed (a held move accelerates the body, the floor's friction slows it, the air steers it less), when the body
+    /// has it: none for v20's bodies, which are steered straight to the move's speed.
+    pub momentum: Option<crate::momentum::Momentum>,
     /// The archetype's movement controller, bound from its module by the
     /// side that runs it (`Archetypes::bind_controllers`). Never data: the
     /// archetype carries the module, and a table read from data has none
@@ -842,6 +845,7 @@ impl Default for PlayerTuning {
             prone: None,
             lean: None,
             climb: None,
+            momentum: None,
             controller: None,
         }
     }
@@ -1079,6 +1083,9 @@ impl PlayerTuning {
         }
         if let Some(c) = &self.climb {
             c.validate()?;
+        }
+        if let Some(m) = &self.momentum {
+            m.validate()?;
         }
         Ok(())
     }
@@ -2149,8 +2156,18 @@ impl Player {
             if pvl > 0.0 {
                 pv *= move_speed / pvl;
             }
-            let run = pv - (velocity + acc);
-            acc += run.clamp_length_max(t.acceleration * dt);
+            if let Some(momentum) = &t.momentum {
+                let base = velocity + acc;
+                let next = if pv == Vec3::ZERO {
+                    momentum.brake(base, dt)
+                } else {
+                    momentum.drive(base, pv, dt)
+                };
+                acc += next - base;
+            } else {
+                let run = pv - (velocity + acc);
+                acc += run.clamp_length_max(t.acceleration * dt);
+            }
             // `updatePos` leaves every hit moving `NORMAL_ELASTICITY` away
             // from the surface, which v20's run force takes off again on
             // the next tick. A body whose controller owns its running
@@ -2173,6 +2190,11 @@ impl Player {
         } else if liquid.is_some() {
             // Swimming pushes along the move direction; water drag sets the speed.
             acc += move_vec.normalize_or_zero() * t.swim_acceleration * dt;
+        } else if !input.jet
+            && let Some(momentum) = &t.momentum
+        {
+            let horizontal = Vec3::new(velocity.x, 0.0, velocity.z);
+            acc += momentum.air_push(horizontal, move_vec, dt);
         } else if !input.jet {
             // Jets replace air control: they steer through the thrust vector.
             let horizontal = Vec3::new(velocity.x, 0.0, velocity.z);
