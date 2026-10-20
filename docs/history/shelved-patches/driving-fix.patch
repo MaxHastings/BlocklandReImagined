@@ -1,0 +1,13 @@
+diff --git a/crates/sim/src/nav.rs b/crates/sim/src/nav.rs
+index 3abff9c..5350b06 100644
+--- a/crates/sim/src/nav.rs
++++ b/crates/sim/src/nav.rs
+@@ -1224,7 +1224,7 @@ fn sample(ground: &Ground, body: &Body, x: i32, z: i32, from: f32) -> Floors {
+         // A floor faces up and is not too steep; anything else (a steep
+         // face) is passed, and so is where a ray that started inside
+         // something (the plate it just stood on) leaves it underneath.
+-        if normal.y >= body.floor_cos && !ground.inside(origin) {
++        if normal.y >= body.floor_cos && !(distance > 0.0 && ground.inside(origin)) {
+             let centre = Vec3::new(px, hit + 0.01, pz);
+             // Upright, or else crouched; at the centre, or else wherever in
+             // the cell the body fits.

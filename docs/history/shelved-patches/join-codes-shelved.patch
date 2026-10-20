@@ -1,0 +1,2232 @@
+From 8b7bfe10ef3af74f9be3443ea08fcb4e060e964d Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Mon, 28 Sep 2026 03:19:35 +0000
+Subject: [PATCH 1/2] Add join codes: a self-hostable rendezvous and relay
+ service
+
+bri-rendezvous gives each host a short code (K7Q-4MZ), tells a player
+where the host is, has the host send a packet from its game port to the
+player so both routers open (hole punching over QUIC), and relays the
+still end-to-end encrypted game traffic when routers do not allow that.
+It keeps nothing but its certificate, limits codes per IP, lookups per
+minute and relay bandwidth, and prints the address players configure.
+
+bri-net: JoinCodes is the provider boundary (ours is Rendezvous); hosts
+hold a code from the game port's own endpoint; Client::connect_code races
+every direct route against the relay (tried after 1.5 s) from one socket.
+natsim simulates home routers (RFC 4787 mapping and filtering) behind
+quinn's AsyncUdpSocket, so the loopback tests prove direct joins through
+two port-restricted routers, relay joins through symmetric ones, and a
+plain failure without a relay.
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_019NRG2Q7ppFvtSNB11KcodS
+---
+ Cargo.lock                                  |  15 +
+ Cargo.toml                                  |   2 +-
+ crates/net/Cargo.toml                       |   1 +
+ crates/net/src/client.rs                    |  80 ++++-
+ crates/net/src/codes.rs                     | 245 ++++++++++++++
+ crates/net/src/invite.rs                    |  49 +--
+ crates/net/src/lib.rs                       |   1 +
+ crates/net/src/server.rs                    |  81 ++++-
+ crates/net/tests/loopback.rs                | 108 ++++++
+ crates/rendezvous/Cargo.toml                |  16 +
+ crates/rendezvous/src/bin/bri-rendezvous.rs |  72 ++++
+ crates/rendezvous/src/lib.rs                |   8 +
+ crates/rendezvous/src/natsim.rs             | 325 ++++++++++++++++++
+ crates/rendezvous/src/proto.rs              | 248 ++++++++++++++
+ crates/rendezvous/src/relay.rs              | 216 ++++++++++++
+ crates/rendezvous/src/service.rs            | 347 ++++++++++++++++++++
+ 16 files changed, 1751 insertions(+), 63 deletions(-)
+ create mode 100644 crates/net/src/codes.rs
+ create mode 100644 crates/rendezvous/Cargo.toml
+ create mode 100644 crates/rendezvous/src/bin/bri-rendezvous.rs
+ create mode 100644 crates/rendezvous/src/lib.rs
+ create mode 100644 crates/rendezvous/src/natsim.rs
+ create mode 100644 crates/rendezvous/src/proto.rs
+ create mode 100644 crates/rendezvous/src/relay.rs
+ create mode 100644 crates/rendezvous/src/service.rs
+
+diff --git a/Cargo.lock b/Cargo.lock
+index 166fc9c..ff58ed8 100644
+--- a/Cargo.lock
++++ b/Cargo.lock
+@@ -565,6 +565,7 @@ dependencies = [
+  "bri-package-runtime",
+  "bri-physics",
+  "bri-progress",
++ "bri-rendezvous",
+  "bri-sim",
+  "bri-vehicles",
+  "bri-weapons",
+@@ -641,6 +642,20 @@ dependencies = [
+  "wgpu",
+ ]
+ 
++[[package]]
++name = "bri-rendezvous"
++version = "0.1.0"
++dependencies = [
++ "anyhow",
++ "getrandom 0.4.3",
++ "quinn",
++ "rcgen",
++ "serde",
++ "serde_json",
++ "sha2",
++ "tokio",
++]
++
+ [[package]]
+ name = "bri-sim"
+ version = "0.1.0"
+diff --git a/Cargo.toml b/Cargo.toml
+index 2e510f2..f3a28f2 100644
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -1,5 +1,5 @@
+ [workspace]
+-members = ["crates/files", "crates/crash", "crates/render", "crates/physics", "crates/content", "crates/convert", "crates/world", "crates/progress", "crates/admin", "crates/identity", "crates/sim", "crates/motor", "crates/net", "crates/ui", "crates/ui-import", "crates/client", "crates/weapons", "crates/minigames", "crates/events", "crates/weapons-import", "crates/fx-runtime", "crates/fx-import", "crates/vehicles", "crates/vehicles-import", "crates/audio", "crates/audio-import", "crates/weather", "crates/weather-import", "crates/foliage", "crates/foliage-import", "crates/console", "crates/package", "crates/package-runtime", "crates/addon-import", "crates/stresslab"]
++members = ["crates/files", "crates/crash", "crates/render", "crates/physics", "crates/content", "crates/convert", "crates/world", "crates/progress", "crates/admin", "crates/identity", "crates/sim", "crates/motor", "crates/net", "crates/ui", "crates/ui-import", "crates/client", "crates/weapons", "crates/minigames", "crates/events", "crates/weapons-import", "crates/fx-runtime", "crates/fx-import", "crates/vehicles", "crates/vehicles-import", "crates/audio", "crates/audio-import", "crates/weather", "crates/weather-import", "crates/foliage", "crates/foliage-import", "crates/console", "crates/package", "crates/package-runtime", "crates/addon-import", "crates/stresslab", "crates/rendezvous"]
+ resolver = "2"
+ 
+ [workspace.package]
+diff --git a/crates/net/Cargo.toml b/crates/net/Cargo.toml
+index 7ce0f14..88b9485 100644
+--- a/crates/net/Cargo.toml
++++ b/crates/net/Cargo.toml
+@@ -19,6 +19,7 @@ bri-identity = { path = "../identity" }
+ bri-vehicles = { path = "../vehicles" }
+ bri-events = { path = "../events" }
+ bri-package = { path = "../package" }
++bri-rendezvous = { path = "../rendezvous" }
+ glam = "0.33"
+ quinn = { version = "0.11", default-features = false, features = ["runtime-tokio", "rustls-ring"] }
+ rcgen = { version = "0.14", default-features = false, features = ["crypto", "ring"] }
+diff --git a/crates/net/src/client.rs b/crates/net/src/client.rs
+index 160f70f..3fc9e2d 100644
+--- a/crates/net/src/client.rs
++++ b/crates/net/src/client.rs
+@@ -57,6 +57,8 @@ pub struct Client {
+     pub certificate: Vec<u8>,
+     /// The host's listing from the handshake (its name for saved servers).
+     pub listing: Listing,
++    /// Joined through the join code service's relay.
++    pub relayed: bool,
+     pub replica: Replica,
+     /// A changed map whose bricks are still streaming in.
+     changing_map: Option<WorldAssembly>,
+@@ -179,6 +181,42 @@ impl Client {
+         progress: Progress,
+     ) -> Result<Self> {
+         progress.begin(Stage::Connecting, Unit::Steps, None);
++        let opened = open(address, &pin, Duration::from_secs(10)).await?;
++        Self::joined(opened, name, packages, resume, host, identity, progress).await
++    }
++    /// Join the host with a code: ask `codes` where it is, try every route
++    /// at once from one socket (so both routers open for each other), fall
++    /// back to the relay, and join over whichever answers first. `socket`
++    /// replaces the OS socket (tests behind simulated routers).
++    #[allow(clippy::too_many_arguments)]
++    pub async fn connect_code(
++        codes: &dyn crate::codes::JoinCodes,
++        code: &str,
++        name: String,
++        packages: Vec<bri_package::environment::PackageRef>,
++        identity: &ClientIdentity,
++        progress: Progress,
++        socket: Option<Arc<dyn quinn::AsyncUdpSocket>>,
++    ) -> Result<Self> {
++        progress.begin(Stage::Connecting, Unit::Steps, None);
++        let endpoint = crate::codes::endpoint(socket, None)?;
++        let found = codes.find(&endpoint, code).await?;
++        let pin = HostPin::Key(found.key);
++        let (connection, relayed) = crate::codes::race(&endpoint, &found, &pin).await?;
++        let mut opened = begin(endpoint, connection, Duration::from_secs(10)).await?;
++        opened.relayed = relayed;
++        Self::joined(opened, name, packages, None, None, Some(identity), progress).await
++    }
++    #[allow(clippy::too_many_arguments)]
++    async fn joined(
++        opened: Opened,
++        name: String,
++        packages: Vec<bri_package::environment::PackageRef>,
++        resume: Option<ResumeToken>,
++        host: Option<ResumeToken>,
++        identity: Option<&ClientIdentity>,
++        progress: Progress,
++    ) -> Result<Self> {
+         let Opened {
+             endpoint,
+             connection,
+@@ -187,7 +225,8 @@ impl Client {
+             mut receive,
+             nonce: challenge,
+             listing,
+-        } = open(address, &pin, Duration::from_secs(10)).await?;
++            relayed,
++        } = opened;
+         let mut hello = Hello {
+             version: VERSION,
+             name,
+@@ -303,6 +342,7 @@ impl Client {
+             resume,
+             certificate,
+             listing,
++            relayed,
+             replica,
+             changing_map: None,
+             progress,
+@@ -599,25 +639,38 @@ struct Opened {
+     receive: quinn::RecvStream,
+     nonce: [u8; 32],
+     listing: Listing,
++    relayed: bool,
+ }
+ 
+ async fn open(address: SocketAddr, pin: &HostPin, wait: Duration) -> Result<Opened> {
+-    let mut config = quinn::ClientConfig::new(Arc::new(pinned_config(pin.clone())?));
+-    config.transport_config(Arc::new(transport()));
+     let ip = if address.is_ipv4() {
+         IpAddr::V4(Ipv4Addr::UNSPECIFIED)
+     } else {
+         IpAddr::V6(Ipv6Addr::UNSPECIFIED)
+     };
+-    let mut endpoint = quinn::Endpoint::client(SocketAddr::new(ip, 0))?;
+-    endpoint.set_default_client_config(config);
+-    let connection = match tokio::time::timeout(wait, endpoint.connect(address, "blockland.local")?)
+-        .await
+-    {
+-        Ok(Ok(connection)) => connection,
+-        Ok(Err(error)) => return Err(JoinError::from_connection(address, error).into()),
+-        Err(_) => return Err(JoinError::NoAnswer(address).into()),
+-    };
++    let endpoint = quinn::Endpoint::client(SocketAddr::new(ip, 0))?;
++    let connection = handshake(&endpoint, address, pin, wait).await?;
++    begin(endpoint, connection, wait).await
++}
++
++/// A QUIC handshake with the pinned host at `address` from `endpoint`.
++pub(crate) async fn handshake(
++    endpoint: &quinn::Endpoint,
++    address: SocketAddr,
++    pin: &HostPin,
++    wait: Duration,
++) -> Result<quinn::Connection> {
++    let mut config = quinn::ClientConfig::new(Arc::new(pinned_config(pin.clone())?));
++    config.transport_config(Arc::new(transport()));
++    match tokio::time::timeout(wait, endpoint.connect_with(config, address, "blockland.local")?).await {
++        Ok(Ok(connection)) => Ok(connection),
++        Ok(Err(error)) => Err(JoinError::from_connection(address, error).into()),
++        Err(_) => Err(JoinError::NoAnswer(address).into()),
++    }
++}
++
++/// Send `JoinBegin` and read the host's challenge and listing.
++async fn begin(endpoint: quinn::Endpoint, connection: quinn::Connection, wait: Duration) -> Result<Opened> {
+     let certificate = connection
+         .peer_identity()
+         .and_then(|identity| {
+@@ -645,12 +698,13 @@ async fn open(address: SocketAddr, pin: &HostPin, wait: Duration) -> Result<Open
+         receive,
+         nonce,
+         listing,
++        relayed: false,
+     })
+ }
+ 
+ /// TLS configuration that accepts the pinned host (or, for first use, any
+ /// host); the caller pins what it saw from `Client::certificate`.
+-fn pinned_config(pin: HostPin) -> Result<quinn::crypto::rustls::QuicClientConfig> {
++pub(crate) fn pinned_config(pin: HostPin) -> Result<quinn::crypto::rustls::QuicClientConfig> {
+     use quinn::rustls;
+     let provider = Arc::new(rustls::crypto::ring::default_provider());
+     let crypto = rustls::ClientConfig::builder_with_provider(provider.clone())
+diff --git a/crates/net/src/codes.rs b/crates/net/src/codes.rs
+new file mode 100644
+index 0000000..18ca2e1
+--- /dev/null
++++ b/crates/net/src/codes.rs
+@@ -0,0 +1,245 @@
++//! Join codes. A provider gives a host a short code and tells a player how
++//! to reach the host behind it. [`Rendezvous`] is ours (`bri-rendezvous`,
++//! self-hostable); another provider (Steam, Epic Online Services) slots in
++//! by implementing [`JoinCodes`], and a provider with its own transport
++//! does so through quinn's `AsyncUdpSocket`, the seam the router simulator
++//! uses in tests.
++use crate::{client::HostPin, invite::HostKey};
++use anyhow::{Context, Result, bail};
++use bri_rendezvous::proto::{self, Answer, Request, ServiceAddress};
++use std::{future::Future, net::SocketAddr, pin::Pin, sync::Arc, time::Duration};
++
++pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
++
++/// Where a code's host can be tried.
++#[derive(Debug, Clone)]
++pub struct Found {
++    pub key: HostKey,
++    pub name: String,
++    /// Direct addresses, most likely first.
++    pub candidates: Vec<SocketAddr>,
++    /// A relay to fall back on.
++    pub relay: Option<SocketAddr>,
++}
++
++/// A code held for a running host. Dropping it gives the code up.
++pub struct HostCode {
++    pub code: String,
++    /// The game port's address as the provider saw it.
++    pub observed: Option<SocketAddr>,
++    task: tokio::task::JoinHandle<()>,
++}
++impl Drop for HostCode {
++    fn drop(&mut self) {
++        self.task.abort();
++    }
++}
++
++pub trait JoinCodes: Send + Sync {
++    /// Get a code for the host listening on `endpoint` (the game port) and
++    /// open the host's router for each player who looks it up.
++    fn host(
++        &self,
++        endpoint: quinn::Endpoint,
++        key: HostKey,
++        locals: Vec<SocketAddr>,
++        name: String,
++    ) -> BoxFuture<'_, Result<HostCode>>;
++    /// Where to reach the host with `code`, asked from the player's
++    /// `endpoint` (the provider may use it to open the way).
++    fn find<'a>(&'a self, endpoint: &'a quinn::Endpoint, code: &'a str) -> BoxFuture<'a, Result<Found>>;
++}
++
++/// The join code service at a configured address.
++pub struct Rendezvous {
++    pub service: ServiceAddress,
++}
++
++impl Rendezvous {
++    pub fn new(service: ServiceAddress) -> Self {
++        Self { service }
++    }
++    async fn connect(&self, endpoint: &quinn::Endpoint) -> Result<quinn::Connection> {
++        let address = tokio::net::lookup_host((self.service.host.as_str(), self.service.port))
++            .await
++            .ok()
++            .and_then(|mut found| found.find(SocketAddr::is_ipv4))
++            .with_context(|| format!("Could not find the join code service {}", self.service.host))?;
++        let mut config = quinn::ClientConfig::new(Arc::new(crate::client::pinned_config(
++            HostPin::Key(self.service.key),
++        )?));
++        config.transport_config(Arc::new(bri_rendezvous::service::transport()));
++        tokio::time::timeout(
++            Duration::from_secs(5),
++            endpoint.connect_with(config, address, "rendezvous.blockland.local")?,
++        )
++        .await
++        .map_err(|_| anyhow::anyhow!("The join code service did not answer. Try again, or share your address instead."))?
++        .context("Could not reach the join code service")
++    }
++}
++
++impl JoinCodes for Rendezvous {
++    fn host(
++        &self,
++        endpoint: quinn::Endpoint,
++        key: HostKey,
++        locals: Vec<SocketAddr>,
++        name: String,
++    ) -> BoxFuture<'_, Result<HostCode>> {
++        Box::pin(async move {
++            // From the game port itself, so the service sees (and the router
++            // keeps open) the mapping players will use.
++            let connection = self.connect(&endpoint).await?;
++            let (mut send, mut receive) = connection.open_bi().await?;
++            let locals = locals.into_iter().take(proto::MAX_LOCALS).collect();
++            proto::write(
++                &mut send,
++                &Request::Host {
++                    version: proto::VERSION,
++                    key,
++                    locals,
++                    name,
++                },
++            )
++            .await?;
++            let (code, observed) = match proto::read(&mut receive).await? {
++                Some(Answer::Hosting { code, observed }) => (code, observed),
++                Some(Answer::Refused(reason)) => bail!("{reason}"),
++                _ => bail!("The join code service gave no code"),
++            };
++            let task = tokio::spawn(async move {
++                // `send` stays open: finishing it gives the code up.
++                let _send = send;
++                let _connection = connection;
++                while let Ok(Some(answer)) = proto::read::<Answer>(&mut receive).await {
++                    if let Answer::Joiner {
++                        observed,
++                        locals,
++                        relay,
++                    } = answer
++                    {
++                        for target in std::iter::once(observed).chain(locals).chain(relay) {
++                            punch(&endpoint, target);
++                        }
++                    }
++                }
++            });
++            Ok(HostCode {
++                code,
++                observed: Some(observed),
++                task,
++            })
++        })
++    }
++    fn find<'a>(&'a self, endpoint: &'a quinn::Endpoint, code: &'a str) -> BoxFuture<'a, Result<Found>> {
++        Box::pin(async move {
++            let code = proto::parse_code(code).context("A join code looks like K7Q-4MZ")?;
++            let connection = self.connect(endpoint).await?;
++            let (mut send, mut receive) = connection.open_bi().await?;
++            proto::write(
++                &mut send,
++                &Request::Join {
++                    version: proto::VERSION,
++                    code,
++                    locals: crate::reach::local_ip()
++                        .map(|ip| SocketAddr::new(ip, endpoint.local_addr().map_or(0, |a| a.port())))
++                        .into_iter()
++                        .filter(|a| a.port() != 0)
++                        .collect(),
++                },
++            )
++            .await?;
++            send.finish()?;
++            let answer = tokio::time::timeout(Duration::from_secs(5), proto::read(&mut receive)).await??;
++            connection.close(0u32.into(), b"Found");
++            match answer {
++                Some(Answer::Found {
++                    key,
++                    name,
++                    candidates,
++                    relay,
++                    ..
++                }) => Ok(Found {
++                    key,
++                    name,
++                    candidates,
++                    relay,
++                }),
++                Some(Answer::Refused(reason)) => bail!("{reason}"),
++                _ => bail!("The join code service did not answer"),
++            }
++        })
++    }
++}
++
++/// Send one QUIC packet from the game port to `target`, so this router
++/// lets `target`'s packets in. Nothing listens for an answer; the attempt
++/// is dropped after a few seconds.
++pub fn punch(endpoint: &quinn::Endpoint, target: SocketAddr) {
++    let Ok(crypto) = crate::client::pinned_config(HostPin::FirstUse) else {
++        return;
++    };
++    let config = quinn::ClientConfig::new(Arc::new(crypto));
++    if let Ok(connecting) = endpoint.connect_with(config, target, "punch") {
++        tokio::spawn(async move {
++            let _ = tokio::time::timeout(Duration::from_secs(3), connecting).await;
++        });
++    }
++}
++
++/// How long direct routes get before the relay is tried as well.
++pub const RELAY_AFTER: Duration = Duration::from_millis(1500);
++/// How long a code join may take before giving up.
++pub const JOIN_WAIT: Duration = Duration::from_secs(10);
++
++/// Try every route at once (the relay after [`RELAY_AFTER`]) and keep the
++/// first handshake that completes. Returns the connection and whether it
++/// runs through the relay.
++pub async fn race(endpoint: &quinn::Endpoint, found: &Found, pin: &HostPin) -> Result<(quinn::Connection, bool)> {
++    let mut attempts = tokio::task::JoinSet::new();
++    let routes = found
++        .candidates
++        .iter()
++        .map(|&a| (a, Duration::ZERO, false))
++        .chain(found.relay.map(|a| (a, RELAY_AFTER, true)));
++    for (address, delay, relayed) in routes {
++        let (endpoint, pin) = (endpoint.clone(), pin.clone());
++        attempts.spawn(async move {
++            tokio::time::sleep(delay).await;
++            crate::client::handshake(&endpoint, address, &pin, JOIN_WAIT - delay)
++                .await
++                .map(|connection| (connection, relayed))
++        });
++    }
++    let mut last = None;
++    while let Some(done) = attempts.join_next().await {
++        match done {
++            Ok(Ok(won)) => {
++                attempts.abort_all();
++                return Ok(won);
++            }
++            Ok(Err(error)) => last = Some(error),
++            Err(_) => {}
++        }
++    }
++    Err(last.unwrap_or_else(|| anyhow::anyhow!("The join code gave no way to reach the host")))
++        .context("Could not reach the host behind that code")
++}
++
++/// A client endpoint on `socket` (a simulated router in tests) or a fresh
++/// OS socket, optionally at a fixed local address.
++pub fn endpoint(
++    socket: Option<Arc<dyn quinn::AsyncUdpSocket>>,
++    bind: Option<SocketAddr>,
++) -> Result<quinn::Endpoint> {
++    Ok(match socket {
++        Some(socket) => quinn::Endpoint::new_with_abstract_socket(
++            quinn::EndpointConfig::default(),
++            None,
++            socket,
++            Arc::new(quinn::TokioRuntime),
++        )?,
++        None => quinn::Endpoint::client(bind.unwrap_or(SocketAddr::from(([0, 0, 0, 0], 0))))?,
++    })
++}
+diff --git a/crates/net/src/invite.rs b/crates/net/src/invite.rs
+index 654a113..278a2f9 100644
+--- a/crates/net/src/invite.rs
++++ b/crates/net/src/invite.rs
+@@ -12,7 +12,6 @@
+ //! [`JoinTarget`] variant resolving to the same [`Route`]s
+ //! (`docs/architecture/hosting.md`).
+ use anyhow::{Context, Result, ensure};
+-use sha2::Digest;
+ use std::net::{IpAddr, SocketAddr};
+ 
+ /// The game's UDP port when an address leaves it out, as Torque's was.
+@@ -28,11 +27,9 @@ const HINT: &str = "Enter a server address, like 203.0.113.10, play.example.com:
+ 
+ /// The key that identifies a host: the start of its certificate's SHA-256.
+ pub fn host_key(certificate: &[u8]) -> HostKey {
+-    let digest = sha2::Sha256::digest(certificate);
+-    let mut key = [0; KEY_BYTES];
+-    key.copy_from_slice(&digest[..KEY_BYTES]);
+-    key
++    bri_rendezvous::proto::key_of(certificate)
+ }
++use bri_rendezvous::proto::{decode_key, encode_key};
+ 
+ /// Something a player asked to join.
+ #[derive(Debug, Clone, PartialEq, Eq)]
+@@ -173,48 +170,6 @@ fn parse_address(text: &str) -> Result<(String, u16)> {
+     Ok((host.to_ascii_lowercase(), port))
+ }
+ 
+-/// RFC 4648 base32, lower case, unpadded: no characters that URLs, chat or
+-/// fonts mangle, and case-insensitive when typed.
+-const ALPHABET: &[u8; 32] = b"abcdefghijklmnopqrstuvwxyz234567";
+-
+-fn encode_key(key: &HostKey) -> String {
+-    let mut out = String::new();
+-    let (mut buffer, mut bits) = (0u32, 0);
+-    for &byte in key {
+-        buffer = (buffer << 8) | byte as u32;
+-        bits += 8;
+-        while bits >= 5 {
+-            bits -= 5;
+-            out.push(ALPHABET[((buffer >> bits) & 31) as usize] as char);
+-        }
+-    }
+-    if bits > 0 {
+-        out.push(ALPHABET[((buffer << (5 - bits)) & 31) as usize] as char);
+-    }
+-    out
+-}
+-
+-fn decode_key(text: &str) -> Option<HostKey> {
+-    (text.len() == (KEY_BYTES * 8).div_ceil(5)).then_some(())?;
+-    let mut bytes = Vec::with_capacity(KEY_BYTES);
+-    let (mut buffer, mut bits) = (0u32, 0);
+-    for c in text.bytes() {
+-        let value = ALPHABET
+-            .iter()
+-            .position(|&a| a == c.to_ascii_lowercase())? as u32;
+-        buffer = (buffer << 5) | value;
+-        bits += 5;
+-        if bits >= 8 {
+-            bits -= 8;
+-            bytes.push((buffer >> bits) as u8);
+-            buffer &= (1 << bits) - 1;
+-        }
+-    }
+-    // Exactly the key, with no stray trailing bits.
+-    (buffer == 0).then_some(())?;
+-    bytes.try_into().ok()
+-}
+-
+ #[cfg(test)]
+ mod tests {
+     use super::*;
+diff --git a/crates/net/src/lib.rs b/crates/net/src/lib.rs
+index e944d99..8e87fde 100644
+--- a/crates/net/src/lib.rs
++++ b/crates/net/src/lib.rs
+@@ -1,5 +1,6 @@
+ //! QUIC transport and bounded replication for native game sessions.
+ pub mod client;
++pub mod codes;
+ mod admin_store;
+ pub mod codec;
+ pub mod content_identity;
+diff --git a/crates/net/src/server.rs b/crates/net/src/server.rs
+index 78bca17..38e49db 100644
+--- a/crates/net/src/server.rs
++++ b/crates/net/src/server.rs
+@@ -122,6 +122,11 @@ pub struct ServerHandle {
+     listing: Arc<std::sync::Mutex<Listing>>,
+     discovery: Option<tokio::task::JoinHandle<()>>,
+     router: Option<RouterPorts>,
++    /// The game port's endpoint, for join codes (outgoing connections to
++    /// the service and hole punching share the port players reach).
++    endpoint: Endpoint,
++    /// The join code held while this host runs.
++    code: Option<CodeSlot>,
+     stop: Option<oneshot::Sender<()>>,
+     task: tokio::task::JoinHandle<Result<ServerReport>>,
+ }
+@@ -213,8 +218,39 @@ impl ServerHandle {
+         });
+         self.router = Some(RouterPorts { task, slot });
+     }
++    /// Ask `codes` for a join code for this host; `notify` gets the code or
++    /// why there is none. The code is held until the host stops.
++    pub fn host_code(
++        &mut self,
++        codes: Arc<dyn crate::codes::JoinCodes>,
++        name: String,
++        locals: Vec<SocketAddr>,
++        notify: impl FnOnce(Result<String>) + Send + 'static,
++    ) {
++        if let Ok(mut listing) = self.listing.lock() {
++            listing.name = name.clone();
++        }
++        let endpoint = self.endpoint.clone();
++        let key = crate::invite::host_key(&self.certificate);
++        let slot = Arc::new(std::sync::Mutex::new(None::<crate::codes::HostCode>));
++        let held = slot.clone();
++        let task = tokio::spawn(async move {
++            match codes.host(endpoint, key, locals, name).await {
++                Ok(code) => {
++                    let text = code.code.clone();
++                    if let Ok(mut guard) = held.lock() {
++                        *guard = Some(code);
++                    }
++                    notify(Ok(text));
++                }
++                Err(error) => notify(Err(error)),
++            }
++        });
++        self.code = Some(CodeSlot { task, slot });
++    }
+     pub async fn stop(mut self) -> Result<ServerReport> {
+         self.router.take();
++        self.code.take();
+         if let Some(discovery) = self.discovery.take() {
+             discovery.abort();
+         }
+@@ -246,6 +282,18 @@ impl Drop for RouterPorts {
+         std::thread::spawn(move || drop(slot.lock().ok().and_then(|mut m| m.take())));
+     }
+ }
++struct CodeSlot {
++    task: tokio::task::JoinHandle<()>,
++    slot: Arc<std::sync::Mutex<Option<crate::codes::HostCode>>>,
++}
++impl Drop for CodeSlot {
++    fn drop(&mut self) {
++        self.task.abort();
++        if let Ok(mut code) = self.slot.lock() {
++            code.take();
++        }
++    }
++}
+ /// A world transfer's encoded frames, or why encoding failed.
+ type EncodedTransfer = Option<Result<Arc<[Vec<u8>]>, String>>;
+ /// One entry in a peer's ordered reliable stream.
+@@ -384,12 +432,31 @@ pub fn start_with_admin_store_and_limit(
+     session.restore_admin_state(&bytes)?;
+     start_configured(session, options, max_players, Some(store), true)
+ }
++/// Start on `socket` instead of binding `options.bind` (tests behind a
++/// simulated router).
++pub fn start_on_socket(
++    session: Session,
++    options: ServerOptions,
++    socket: Arc<dyn quinn::AsyncUdpSocket>,
++) -> Result<ServerHandle> {
++    start_on(session, options, 64, None, false, Some(socket))
++}
+ fn start_configured(
+     session: Session,
+     options: ServerOptions,
+     max_players: usize,
+     admin_store: Option<AdminStore>,
+     require_identity: bool,
++) -> Result<ServerHandle> {
++    start_on(session, options, max_players, admin_store, require_identity, None)
++}
++fn start_on(
++    session: Session,
++    options: ServerOptions,
++    max_players: usize,
++    admin_store: Option<AdminStore>,
++    require_identity: bool,
++    socket: Option<Arc<dyn quinn::AsyncUdpSocket>>,
+ ) -> Result<ServerHandle> {
+     ensure!((1..=64).contains(&max_players), "Invalid player limit");
+     ensure!(
+@@ -408,7 +475,15 @@ fn start_configured(
+     let mut config =
+         quinn::ServerConfig::with_single_cert(vec![certificate.clone().into()], key.into())?;
+     config.transport_config(Arc::new(transport()));
+-    let endpoint = Endpoint::server(config, options.bind)?;
++    let endpoint = match socket {
++        Some(socket) => Endpoint::new_with_abstract_socket(
++            quinn::EndpointConfig::default(),
++            Some(config),
++            socket,
++            Arc::new(quinn::TokioRuntime),
++        )?,
++        None => Endpoint::server(config, options.bind)?,
++    };
+     let address = endpoint.local_addr()?;
+     let (stop_tx, stop_rx) = oneshot::channel();
+     let mut bytes = [0; 32];
+@@ -425,7 +500,7 @@ fn start_configured(
+     let task = tokio::spawn(run(
+         players.clone(),
+         listing.clone(),
+-        endpoint,
++        endpoint.clone(),
+         session,
+         options,
+         max_players,
+@@ -443,6 +518,8 @@ fn start_configured(
+         listing,
+         discovery: None,
+         router: None,
++        endpoint,
++        code: None,
+         stop: Some(stop_tx),
+         task,
+     })
+diff --git a/crates/net/tests/loopback.rs b/crates/net/tests/loopback.rs
+index 62c187d..d9d7f0e 100644
+--- a/crates/net/tests/loopback.rs
++++ b/crates/net/tests/loopback.rs
+@@ -2253,3 +2253,111 @@ async fn unread_pose_datagrams_never_block_reliable_delivery() -> Result<()> {
+     server.stop().await?;
+     Ok(())
+ }
++
++/// A host and a player behind simulated home routers find each other with a
++/// join code: directly when the routers allow hole punching, through the
++/// service's relay when they do not.
++async fn join_by_code(
++    host_nat: bri_rendezvous::natsim::Behaviour,
++    player_nat: bri_rendezvous::natsim::Behaviour,
++    relay: bool,
++) -> Result<Client> {
++    use bri_rendezvous::{
++        natsim::Nat,
++        proto::ServiceAddress,
++        service::{Config, Identity, Service},
++    };
++    let service = Service::start(
++        Config {
++            relay,
++            ..Config::new("127.0.0.1:0".parse()?)
++        },
++        Identity::generate()?,
++    )?;
++    let codes: std::sync::Arc<dyn bri_net::codes::JoinCodes> =
++        std::sync::Arc::new(bri_net::codes::Rendezvous::new(ServiceAddress {
++            host: "127.0.0.1".into(),
++            port: service.address.port(),
++            key: service.key,
++        }));
++    let host_router = Nat::new("127.0.0.2".parse()?, host_nat);
++    let mut host = server::start_on_socket(session(), options(), host_router.socket())?;
++    let (tx, rx) = tokio::sync::oneshot::channel();
++    host.host_code(codes.clone(), "Max's Server".into(), Vec::new(), move |code| {
++        let _ = tx.send(code);
++    });
++    let code = rx.await??;
++    assert!(bri_rendezvous::proto::parse_code(&code).is_some(), "{code}");
++    let player_router = Nat::new("127.0.0.3".parse()?, player_nat);
++    let dir = tempfile::tempdir()?;
++    let identity = ClientIdentity::load_or_create(dir.path().join("client.identity"))?;
++    let joined = Client::connect_code(
++        codes.as_ref(),
++        &code.to_ascii_lowercase(),
++        "Friend".into(),
++        Vec::new(),
++        &identity,
++        Default::default(),
++        Some(player_router.socket()),
++    )
++    .await;
++    // The session keeps the host, service and routers alive while checked.
++    let client = joined?;
++    assert_eq!(client.listing.name, "Max's Server");
++    assert_eq!(client.certificate, host.certificate);
++    std::mem::forget(host);
++    std::mem::forget(service);
++    Ok(client)
++}
++
++#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
++async fn join_codes_punch_through_ordinary_home_routers() -> Result<()> {
++    use bri_rendezvous::natsim::Behaviour;
++    let client = join_by_code(Behaviour::PORT_RESTRICTED, Behaviour::PORT_RESTRICTED, true).await?;
++    assert!(!client.relayed, "two ordinary routers connect directly");
++    let client = join_by_code(Behaviour::FULL_CONE, Behaviour::SYMMETRIC, false).await?;
++    assert!(!client.relayed);
++    Ok(())
++}
++
++#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
++async fn join_codes_fall_back_to_the_relay_behind_strict_routers() -> Result<()> {
++    use bri_rendezvous::natsim::Behaviour;
++    let client = join_by_code(Behaviour::SYMMETRIC, Behaviour::SYMMETRIC, true).await?;
++    assert!(client.relayed, "two symmetric routers need the relay");
++    let client = join_by_code(Behaviour::SYMMETRIC, Behaviour::PORT_RESTRICTED, true).await?;
++    assert!(client.relayed);
++    // Without a relay the player is told plainly that the host is unreachable.
++    let error = join_by_code(Behaviour::SYMMETRIC, Behaviour::SYMMETRIC, false)
++        .await
++        .err()
++        .context("joined without a path")?;
++    assert!(format!("{error:#}").contains("Could not reach the host"), "{error:#}");
++    Ok(())
++}
++
++#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
++async fn unknown_join_codes_are_refused_in_plain_words() -> Result<()> {
++    use bri_rendezvous::{
++        proto::ServiceAddress,
++        service::{Config, Identity, Service},
++    };
++    let service = Service::start(Config::new("127.0.0.1:0".parse()?), Identity::generate()?)?;
++    let codes = bri_net::codes::Rendezvous::new(ServiceAddress {
++        host: "127.0.0.1".into(),
++        port: service.address.port(),
++        key: service.key,
++    });
++    let endpoint = bri_net::codes::endpoint(None, None)?;
++    use bri_net::codes::JoinCodes;
++    let error = codes.find(&endpoint, "AAA-AAA").await.err().context("found")?;
++    assert!(error.to_string().contains("No game has that code"), "{error}");
++    // A service presenting another key is not trusted.
++    let impostor = bri_net::codes::Rendezvous::new(ServiceAddress {
++        key: [7; 16],
++        ..codes.service.clone()
++    });
++    assert!(impostor.find(&endpoint, "AAA-AAA").await.is_err());
++    service.stop().await;
++    Ok(())
++}
+diff --git a/crates/rendezvous/Cargo.toml b/crates/rendezvous/Cargo.toml
+new file mode 100644
+index 0000000..b0a5b9c
+--- /dev/null
++++ b/crates/rendezvous/Cargo.toml
+@@ -0,0 +1,16 @@
++[package]
++name = "bri-rendezvous"
++version.workspace = true
++edition.workspace = true
++publish.workspace = true
++description = "Join codes, NAT hole punching and relay for Blockland ReImagined hosts (self-hostable service)"
++
++[dependencies]
++anyhow.workspace = true
++serde.workspace = true
++serde_json.workspace = true
++quinn = { version = "0.11", default-features = false, features = ["runtime-tokio", "rustls-ring"] }
++rcgen = { version = "0.14", default-features = false, features = ["crypto", "ring"] }
++tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "net", "signal"] }
++getrandom = "0.4"
++sha2 = "0.10"
+diff --git a/crates/rendezvous/src/bin/bri-rendezvous.rs b/crates/rendezvous/src/bin/bri-rendezvous.rs
+new file mode 100644
+index 0000000..b457263
+--- /dev/null
++++ b/crates/rendezvous/src/bin/bri-rendezvous.rs
+@@ -0,0 +1,72 @@
++//! `bri-rendezvous`: the join code service. Run it on any machine players
++//! can reach over UDP; set the printed address in the game's
++//! `$pref::Net::JoinCodeService`.
++use anyhow::{Context, Result, ensure};
++use bri_rendezvous::{
++    proto::{DEFAULT_PORT, ServiceAddress},
++    service::{Config, Identity, Service},
++};
++use std::{net::SocketAddr, path::PathBuf, sync::atomic::Ordering, time::Duration};
++
++const USAGE: &str = "Usage: bri-rendezvous <state-dir> [--listen 0.0.0.0:28100] [--public-host HOST] [--relay-ports 28200-28999] [--no-relay]
++
++Gives hosts short join codes, introduces players to hosts so both routers open
++(hole punching), and relays the encrypted game traffic when that fails.
++<state-dir> keeps the service's certificate; keep it across restarts, or every
++player's configured service address stops working.
++Open UDP --listen's port and the relay port range in the firewall.";
++
++#[tokio::main]
++async fn main() -> Result<()> {
++    let mut args = std::env::args().skip(1);
++    let state = args.next().filter(|a| !a.starts_with("--")).context(USAGE)?;
++    let mut config = Config::new(SocketAddr::from(([0, 0, 0, 0], DEFAULT_PORT)));
++    let mut public_host = None;
++    while let Some(flag) = args.next() {
++        let mut value = || args.next().with_context(|| format!("{flag} needs a value\n\n{USAGE}"));
++        match flag.as_str() {
++            "--listen" => config.listen = value()?.parse().context("Invalid --listen address")?,
++            "--public-host" => public_host = Some(value()?),
++            "--relay-ports" => {
++                let text = value()?;
++                let (low, high) = text.split_once('-').context("--relay-ports looks like 28200-28999")?;
++                let (low, high): (u16, u16) = (low.parse()?, high.parse()?);
++                ensure!(low > 0 && low <= high, "Invalid --relay-ports range");
++                config.relay_limits.ports = Some((low, high));
++            }
++            "--no-relay" => config.relay = false,
++            _ => anyhow::bail!("Unknown option {flag}\n\n{USAGE}"),
++        }
++    }
++    if let Some(host) = &public_host
++        && let Ok(ip) = host.parse()
++    {
++        config.public_ip = Some(ip);
++    }
++    let identity = Identity::load_or_create(&PathBuf::from(&state))?;
++    let service = Service::start(config.clone(), identity)?;
++    let shown = ServiceAddress {
++        host: public_host.unwrap_or_else(|| service.address.ip().to_string()),
++        port: service.address.port(),
++        key: service.key,
++    };
++    println!("Join code service listening on {}", service.address);
++    println!("Players set: {shown}");
++    println!("Relay: {}", if config.relay { "on" } else { "off" });
++    let stats = service.relay_stats.clone();
++    let log = tokio::spawn(async move {
++        loop {
++            tokio::time::sleep(Duration::from_secs(300)).await;
++            println!(
++                "Relays active {}, forwarded {} MiB, dropped {} over budget",
++                stats.active.load(Ordering::Relaxed),
++                stats.forwarded_bytes.load(Ordering::Relaxed) >> 20,
++                stats.dropped.load(Ordering::Relaxed),
++            );
++        }
++    });
++    tokio::signal::ctrl_c().await?;
++    log.abort();
++    service.stop().await;
++    Ok(())
++}
+diff --git a/crates/rendezvous/src/lib.rs b/crates/rendezvous/src/lib.rs
+new file mode 100644
+index 0000000..fa32ea0
+--- /dev/null
++++ b/crates/rendezvous/src/lib.rs
+@@ -0,0 +1,8 @@
++//! Join codes for Blockland ReImagined: a small, self-hostable service that
++//! gives each host a short code, introduces players to hosts so both routers
++//! open for each other (UDP hole punching over QUIC), and relays the
++//! encrypted game traffic when that fails. See `docs/architecture/hosting.md`.
++pub mod natsim;
++pub mod proto;
++pub mod relay;
++pub mod service;
+diff --git a/crates/rendezvous/src/natsim.rs b/crates/rendezvous/src/natsim.rs
+new file mode 100644
+index 0000000..4e97f50
+--- /dev/null
++++ b/crates/rendezvous/src/natsim.rs
+@@ -0,0 +1,325 @@
++//! Simulated home routers for headless tests of hole punching and relay.
++//!
++//! A [`NatSocket`] is a UDP socket "behind" a [`Nat`]: a QUIC endpoint uses
++//! it through quinn's `AsyncUdpSocket`, and every datagram it sends leaves
++//! from a real loopback socket on the NAT's public address (a mapping), as
++//! a router would rewrite it. Replies are let back in only as the NAT's
++//! filtering rule allows (RFC 4787 behaviours). Public addresses are
++//! loopback addresses such as 127.0.0.2, so no privileges or network
++//! namespaces are needed.
++use std::{
++    collections::{HashSet, VecDeque},
++    fmt,
++    io,
++    net::{IpAddr, Ipv4Addr, SocketAddr},
++    pin::Pin,
++    sync::{
++        Arc, Mutex,
++        atomic::{AtomicU16, AtomicU64, Ordering},
++    },
++    task::{Context, Poll, Waker},
++};
++
++/// How a NAT picks the outside port for a new destination (RFC 4787 4.1).
++#[derive(Debug, Clone, Copy, PartialEq, Eq)]
++pub enum Mapping {
++    /// One outside port per inside socket, whatever the destination (most
++    /// home routers).
++    EndpointIndependent,
++    /// A new outside port per destination ("symmetric" NAT, some carrier
++    /// and corporate NATs).
++    AddressAndPortDependent,
++}
++
++/// Which outside senders a mapping lets in (RFC 4787 5).
++#[derive(Debug, Clone, Copy, PartialEq, Eq)]
++pub enum Filtering {
++    /// Anyone ("full cone").
++    EndpointIndependent,
++    /// Only IPs the inside socket has sent to.
++    AddressDependent,
++    /// Only exact addresses the inside socket has sent to.
++    AddressAndPortDependent,
++}
++
++#[derive(Debug, Clone, Copy, PartialEq, Eq)]
++pub struct Behaviour {
++    pub mapping: Mapping,
++    pub filtering: Filtering,
++}
++impl Behaviour {
++    pub const FULL_CONE: Self = Self {
++        mapping: Mapping::EndpointIndependent,
++        filtering: Filtering::EndpointIndependent,
++    };
++    /// The common home router.
++    pub const PORT_RESTRICTED: Self = Self {
++        mapping: Mapping::EndpointIndependent,
++        filtering: Filtering::AddressAndPortDependent,
++    };
++    pub const SYMMETRIC: Self = Self {
++        mapping: Mapping::AddressAndPortDependent,
++        filtering: Filtering::AddressAndPortDependent,
++    };
++}
++
++/// A router with one public address.
++#[derive(Debug)]
++pub struct Nat {
++    pub public_ip: IpAddr,
++    pub behaviour: Behaviour,
++    next_inside: AtomicU16,
++    /// Datagrams from outside that the filter refused.
++    pub filtered: AtomicU64,
++}
++impl Nat {
++    pub fn new(public_ip: IpAddr, behaviour: Behaviour) -> Arc<Self> {
++        Arc::new(Self {
++            public_ip,
++            behaviour,
++            next_inside: AtomicU16::new(40000),
++            filtered: AtomicU64::new(0),
++        })
++    }
++    /// A new socket inside this NAT.
++    pub fn socket(self: &Arc<Self>) -> Arc<NatSocket> {
++        let port = self.next_inside.fetch_add(1, Ordering::Relaxed);
++        Arc::new(NatSocket {
++            nat: self.clone(),
++            inside: SocketAddr::new(IpAddr::V4(Ipv4Addr::new(192, 168, 1, 10)), port),
++            mappings: Mutex::new(Vec::new()),
++            inbox: Arc::new(Mutex::new(Inbox::default())),
++        })
++    }
++}
++
++#[derive(Default)]
++struct Inbox {
++    queue: VecDeque<(SocketAddr, Vec<u8>)>,
++    waker: Option<Waker>,
++}
++
++struct MappingEntry {
++    /// The destination this mapping is for, or None when shared by all.
++    destination: Option<SocketAddr>,
++    /// Sends go straight through the OS socket: a tokio socket reports
++    /// WouldBlock until its reactor has seen the socket writable once.
++    sender: Arc<std::net::UdpSocket>,
++    /// Addresses the inside socket has sent to through this mapping.
++    sent_to: Arc<Mutex<HashSet<SocketAddr>>>,
++    task: tokio::task::JoinHandle<()>,
++}
++impl Drop for MappingEntry {
++    fn drop(&mut self) {
++        self.task.abort();
++    }
++}
++
++/// A UDP socket behind a simulated NAT, for `quinn::Endpoint::new_with_abstract_socket`.
++pub struct NatSocket {
++    nat: Arc<Nat>,
++    inside: SocketAddr,
++    mappings: Mutex<Vec<MappingEntry>>,
++    inbox: Arc<Mutex<Inbox>>,
++}
++impl fmt::Debug for NatSocket {
++    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
++        write!(f, "NatSocket({} behind {})", self.inside, self.nat.public_ip)
++    }
++}
++
++impl NatSocket {
++    /// Outside addresses this socket has been given so far.
++    pub fn public_addresses(&self) -> Vec<SocketAddr> {
++        self.mappings
++            .lock()
++            .unwrap()
++            .iter()
++            .filter_map(|m| m.sender.local_addr().ok())
++            .collect()
++    }
++    fn mapping_for(&self, destination: SocketAddr) -> io::Result<(Arc<std::net::UdpSocket>, Arc<Mutex<HashSet<SocketAddr>>>)> {
++        let key = match self.nat.behaviour.mapping {
++            Mapping::EndpointIndependent => None,
++            Mapping::AddressAndPortDependent => Some(destination),
++        };
++        let mut mappings = self.mappings.lock().unwrap();
++        if let Some(entry) = mappings.iter().find(|m| m.destination == key) {
++            return Ok((entry.sender.clone(), entry.sent_to.clone()));
++        }
++        let std = std::net::UdpSocket::bind((self.nat.public_ip, 0))?;
++        std.set_nonblocking(true)?;
++        let sender = Arc::new(std.try_clone()?);
++        let socket = Arc::new(tokio::net::UdpSocket::from_std(std)?);
++        let sent_to = Arc::new(Mutex::new(HashSet::new()));
++        let task = tokio::spawn(receive(
++            socket.clone(),
++            sent_to.clone(),
++            self.nat.clone(),
++            self.inbox.clone(),
++        ));
++        mappings.push(MappingEntry {
++            destination: key,
++            sender: sender.clone(),
++            sent_to: sent_to.clone(),
++            task,
++        });
++        Ok((sender, sent_to))
++    }
++}
++
++/// Datagrams arriving at one mapping, let in by the NAT's filter.
++async fn receive(
++    socket: Arc<tokio::net::UdpSocket>,
++    sent_to: Arc<Mutex<HashSet<SocketAddr>>>,
++    nat: Arc<Nat>,
++    inbox: Arc<Mutex<Inbox>>,
++) {
++    let mut buffer = vec![0u8; 65536];
++    loop {
++        let (len, from) = match socket.recv_from(&mut buffer).await {
++            Ok(received) => received,
++            // An ICMP error from an earlier send; never spin on it.
++            Err(_) => {
++                tokio::time::sleep(std::time::Duration::from_millis(1)).await;
++                continue;
++            }
++        };
++        let allowed = {
++            let sent = sent_to.lock().unwrap();
++            match nat.behaviour.filtering {
++                Filtering::EndpointIndependent => true,
++                Filtering::AddressDependent => sent.iter().any(|a| a.ip() == from.ip()),
++                Filtering::AddressAndPortDependent => sent.contains(&from),
++            }
++        };
++        if !allowed {
++            nat.filtered.fetch_add(1, Ordering::Relaxed);
++            continue;
++        }
++        let mut inbox = inbox.lock().unwrap();
++        inbox.queue.push_back((from, buffer[..len].to_vec()));
++        if let Some(waker) = inbox.waker.take() {
++            waker.wake();
++        }
++    }
++}
++
++#[derive(Debug)]
++struct Writable;
++impl quinn::UdpPoller for Writable {
++    fn poll_writable(self: Pin<&mut Self>, _cx: &mut Context) -> Poll<io::Result<()>> {
++        Poll::Ready(Ok(()))
++    }
++}
++
++impl quinn::AsyncUdpSocket for NatSocket {
++    fn create_io_poller(self: Arc<Self>) -> Pin<Box<dyn quinn::UdpPoller>> {
++        Box::pin(Writable)
++    }
++    fn try_send(&self, transmit: &quinn::udp::Transmit) -> io::Result<()> {
++        let (socket, sent_to) = self.mapping_for(transmit.destination)?;
++        sent_to.lock().unwrap().insert(transmit.destination);
++        let segment = transmit.segment_size.unwrap_or(transmit.contents.len()).max(1);
++        for datagram in transmit.contents.chunks(segment) {
++            match socket.send_to(datagram, transmit.destination) {
++                Ok(_) => {}
++                // A full loopback buffer drops the datagram, like a network.
++                Err(error) if error.kind() == io::ErrorKind::WouldBlock => {}
++                Err(error) => return Err(error),
++            }
++        }
++        Ok(())
++    }
++    fn poll_recv(
++        &self,
++        cx: &mut Context,
++        bufs: &mut [io::IoSliceMut<'_>],
++        meta: &mut [quinn::udp::RecvMeta],
++    ) -> Poll<io::Result<usize>> {
++        let mut inbox = self.inbox.lock().unwrap();
++        let mut count = 0;
++        while count < bufs.len().min(meta.len()) {
++            let Some((from, datagram)) = inbox.queue.pop_front() else {
++                break;
++            };
++            let len = datagram.len().min(bufs[count].len());
++            bufs[count][..len].copy_from_slice(&datagram[..len]);
++            meta[count] = quinn::udp::RecvMeta {
++                addr: from,
++                len,
++                stride: len,
++                ecn: None,
++                dst_ip: None,
++            };
++            count += 1;
++        }
++        if count > 0 {
++            return Poll::Ready(Ok(count));
++        }
++        inbox.waker = Some(cx.waker().clone());
++        Poll::Pending
++    }
++    fn local_addr(&self) -> io::Result<SocketAddr> {
++        Ok(self.inside)
++    }
++    fn may_fragment(&self) -> bool {
++        false
++    }
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++    use quinn::AsyncUdpSocket;
++    fn transmit(to: SocketAddr, contents: &[u8]) -> quinn::udp::Transmit<'_> {
++        quinn::udp::Transmit {
++            destination: to,
++            ecn: None,
++            contents,
++            segment_size: None,
++            src_ip: None,
++        }
++    }
++    async fn next(socket: &NatSocket) -> Option<(SocketAddr, Vec<u8>)> {
++        for _ in 0..40 {
++            if let Some(item) = socket.inbox.lock().unwrap().queue.pop_front() {
++                return Some(item);
++            }
++            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
++        }
++        None
++    }
++    #[tokio::test]
++    async fn port_restricted_nats_admit_only_addresses_sent_to() {
++        let nat = Nat::new("127.0.0.2".parse().unwrap(), Behaviour::PORT_RESTRICTED);
++        let inside = nat.socket();
++        let friend = tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap();
++        let stranger = tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap();
++        let friend_at = friend.local_addr().unwrap();
++        inside.try_send(&transmit(friend_at, b"hi")).unwrap();
++        let mut buffer = [0u8; 16];
++        let (len, public) = friend.recv_from(&mut buffer).await.unwrap();
++        assert_eq!(&buffer[..len], b"hi");
++        assert_eq!(public.ip(), nat.public_ip, "the source is rewritten");
++        friend.send_to(b"back", public).await.unwrap();
++        stranger.send_to(b"sneak", public).await.unwrap();
++        assert_eq!(next(&inside).await, Some((friend_at, b"back".to_vec())));
++        assert_eq!(next(&inside).await, None);
++        assert_eq!(nat.filtered.load(Ordering::Relaxed), 1);
++    }
++    #[tokio::test]
++    async fn symmetric_nats_use_a_new_port_per_destination() {
++        let nat = Nat::new("127.0.0.3".parse().unwrap(), Behaviour::SYMMETRIC);
++        let inside = nat.socket();
++        let a = tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap();
++        let b = tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap();
++        inside.try_send(&transmit(a.local_addr().unwrap(), b"x")).unwrap();
++        inside.try_send(&transmit(b.local_addr().unwrap(), b"x")).unwrap();
++        let mut buffer = [0u8; 4];
++        let (_, via_a) = a.recv_from(&mut buffer).await.unwrap();
++        let (_, via_b) = b.recv_from(&mut buffer).await.unwrap();
++        assert_ne!(via_a.port(), via_b.port());
++        assert_eq!(inside.public_addresses().len(), 2);
++    }
++}
+diff --git a/crates/rendezvous/src/proto.rs b/crates/rendezvous/src/proto.rs
+new file mode 100644
+index 0000000..a080616
+--- /dev/null
++++ b/crates/rendezvous/src/proto.rs
+@@ -0,0 +1,248 @@
++//! What game clients and the rendezvous service say to each other, over one
++//! bidirectional QUIC stream per request. Frames are a little-endian `u32`
++//! length followed by that many bytes of JSON, at most [`MAX_FRAME`].
++use anyhow::{Context, Result, ensure};
++use serde::{Deserialize, Serialize, de::DeserializeOwned};
++use std::net::SocketAddr;
++
++/// Rendezvous protocol version, independent of the game protocol.
++pub const VERSION: u32 = 1;
++/// Default UDP port of the service.
++pub const DEFAULT_PORT: u16 = 28100;
++pub const MAX_FRAME: usize = 16 * 1024;
++/// Local addresses a peer may publish.
++pub const MAX_LOCALS: usize = 8;
++/// A host key: the first 16 bytes of the SHA-256 of its certificate.
++pub type Key = [u8; 16];
++
++#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
++#[serde(deny_unknown_fields)]
++pub enum Request {
++    /// A host asks for a code. The stream stays open for as long as the host
++    /// wants the code; the service sends [`Answer::Joiner`] on it.
++    Host {
++        version: u32,
++        key: Key,
++        /// The host's addresses on its own network (same-network joiners).
++        locals: Vec<SocketAddr>,
++        name: String,
++    },
++    /// A player asks how to reach the host with this code.
++    Join {
++        version: u32,
++        code: String,
++        locals: Vec<SocketAddr>,
++    },
++}
++
++#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
++#[serde(deny_unknown_fields)]
++pub enum Answer {
++    /// The host's code, and its game port's address as the service saw it.
++    Hosting { code: String, observed: SocketAddr },
++    /// Sent to the host: a player is about to connect. Send a packet to each
++    /// address from the game port so the router lets the player in.
++    Joiner {
++        observed: SocketAddr,
++        locals: Vec<SocketAddr>,
++        /// The relay port assigned to the host for this player.
++        relay: Option<SocketAddr>,
++    },
++    /// Sent to the player: where to try, in order, and whose key to expect.
++    Found {
++        key: Key,
++        name: String,
++        /// The host's public (observed) address, then its local ones.
++        candidates: Vec<SocketAddr>,
++        /// The relay port assigned to the player, if the service relays.
++        relay: Option<SocketAddr>,
++        observed: SocketAddr,
++    },
++    /// The request was refused; the text is for the player.
++    Refused(String),
++}
++
++pub async fn write<T: Serialize>(send: &mut quinn::SendStream, value: &T) -> Result<()> {
++    let bytes = serde_json::to_vec(value)?;
++    ensure!(bytes.len() <= MAX_FRAME, "Rendezvous frame too large");
++    send.write_all(&(bytes.len() as u32).to_le_bytes()).await?;
++    send.write_all(&bytes).await?;
++    Ok(())
++}
++
++/// Read one frame; `None` when the peer finished the stream.
++pub async fn read<T: DeserializeOwned>(receive: &mut quinn::RecvStream) -> Result<Option<T>> {
++    let mut length = [0u8; 4];
++    match receive.read_exact(&mut length).await {
++        Ok(()) => {}
++        Err(quinn::ReadExactError::FinishedEarly(0)) => return Ok(None),
++        Err(error) => return Err(error.into()),
++    }
++    let length = u32::from_le_bytes(length) as usize;
++    ensure!(length <= MAX_FRAME, "Rendezvous frame too large");
++    let mut bytes = vec![0; length];
++    receive.read_exact(&mut bytes).await?;
++    Ok(Some(serde_json::from_slice(&bytes).context("Malformed rendezvous frame")?))
++}
++
++/// Crockford base32: no I, L, O or U, so codes read aloud and type cleanly.
++const ALPHABET: &[u8; 32] = b"0123456789ABCDEFGHJKMNPQRSTVWXYZ";
++/// Characters in a code (30 bits); shown as `ABC-DEF`.
++pub const CODE_LEN: usize = 6;
++
++/// A fresh random code, formatted for display.
++pub fn new_code() -> Result<String> {
++    let mut bytes = [0u8; CODE_LEN];
++    getrandom::fill(&mut bytes).map_err(|e| anyhow::anyhow!("OS randomness failed: {e}"))?;
++    let raw: String = bytes.iter().map(|b| ALPHABET[(b & 31) as usize] as char).collect();
++    Ok(format!("{}-{}", &raw[..3], &raw[3..]))
++}
++
++/// A typed code in display form (`ABC-DEF`), or None when `text` is not a
++/// code. Case, a space instead of the dash, and the look-alikes O/I/L are
++/// forgiven. The dash (or space) is required, so a six-letter host name is
++/// never taken for a code.
++pub fn parse_code(text: &str) -> Option<String> {
++    let text = text.trim();
++    let bytes = text.as_bytes();
++    if bytes.len() != CODE_LEN + 1 || !matches!(bytes[3], b'-' | b' ') {
++        return None;
++    }
++    let mut code = String::with_capacity(CODE_LEN + 1);
++    for (i, &b) in bytes.iter().enumerate() {
++        if i == 3 {
++            code.push('-');
++            continue;
++        }
++        let c = match b.to_ascii_uppercase() {
++            b'O' => b'0',
++            b'I' | b'L' => b'1',
++            other => other,
++        };
++        if !ALPHABET.contains(&c) {
++            return None;
++        }
++        code.push(c as char);
++    }
++    Some(code)
++}
++
++/// The key of a certificate: the first 16 bytes of its SHA-256.
++pub fn key_of(certificate: &[u8]) -> Key {
++    use sha2::Digest;
++    let digest = sha2::Sha256::digest(certificate);
++    let mut key = [0; 16];
++    key.copy_from_slice(&digest[..16]);
++    key
++}
++
++/// RFC 4648 base32, lower case, unpadded: no characters that URLs, chat or
++/// fonts mangle, and case-insensitive when typed.
++const KEY_ALPHABET: &[u8; 32] = b"abcdefghijklmnopqrstuvwxyz234567";
++
++pub fn encode_key(key: &Key) -> String {
++    let mut out = String::new();
++    let (mut buffer, mut bits) = (0u32, 0);
++    for &byte in key {
++        buffer = (buffer << 8) | byte as u32;
++        bits += 8;
++        while bits >= 5 {
++            bits -= 5;
++            out.push(KEY_ALPHABET[((buffer >> bits) & 31) as usize] as char);
++        }
++    }
++    if bits > 0 {
++        out.push(KEY_ALPHABET[((buffer << (5 - bits)) & 31) as usize] as char);
++    }
++    out
++}
++
++pub fn decode_key(text: &str) -> Option<Key> {
++    (text.len() == 26).then_some(())?;
++    let mut bytes = Vec::with_capacity(16);
++    let (mut buffer, mut bits) = (0u32, 0);
++    for c in text.bytes() {
++        let value = KEY_ALPHABET
++            .iter()
++            .position(|&a| a == c.to_ascii_lowercase())? as u32;
++        buffer = (buffer << 5) | value;
++        bits += 5;
++        if bits >= 8 {
++            bits -= 8;
++            bytes.push((buffer >> bits) as u8);
++            buffer &= (1 << bits) - 1;
++        }
++    }
++    // Exactly the key, with no stray trailing bits.
++    (buffer == 0).then_some(())?;
++    bytes.try_into().ok()
++}
++
++/// Where a game finds the service and the key it must present:
++/// `host[:port]/key`, as printed by `bri-rendezvous` and set in the game's
++/// `$pref::Net::JoinCodeService`.
++#[derive(Debug, Clone, PartialEq, Eq)]
++pub struct ServiceAddress {
++    pub host: String,
++    pub port: u16,
++    pub key: Key,
++}
++impl ServiceAddress {
++    pub fn parse(text: &str) -> Result<Self> {
++        let text = text.trim();
++        let (address, key) = text
++            .rsplit_once('/')
++            .context("A join code service address looks like host:28100/key")?;
++        let key = decode_key(key).context("The join code service key is not valid")?;
++        let (host, port) = match address.rsplit_once(':') {
++            Some((host, port)) if !host.ends_with(':') => {
++                (host, port.parse().context("Invalid join code service port")?)
++            }
++            _ => (address, DEFAULT_PORT),
++        };
++        let host = host.trim_start_matches('[').trim_end_matches(']');
++        ensure!(!host.is_empty(), "A join code service address needs a host");
++        Ok(Self {
++            host: host.to_ascii_lowercase(),
++            port,
++            key,
++        })
++    }
++}
++impl std::fmt::Display for ServiceAddress {
++    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
++        if self.host.contains(':') {
++            write!(f, "[{}]:{}/{}", self.host, self.port, encode_key(&self.key))
++        } else {
++            write!(f, "{}:{}/{}", self.host, self.port, encode_key(&self.key))
++        }
++    }
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++    #[test]
++    fn service_addresses_round_trip() {
++        let key = key_of(b"cert");
++        let text = format!("Codes.Example.com:28100/{}", encode_key(&key));
++        let address = ServiceAddress::parse(&text).unwrap();
++        assert_eq!((address.host.as_str(), address.port, address.key), ("codes.example.com", 28100, key));
++        assert_eq!(ServiceAddress::parse(&address.to_string()).unwrap(), address);
++        let bare = ServiceAddress::parse(&format!("203.0.113.5/{}", encode_key(&key))).unwrap();
++        assert_eq!(bare.port, DEFAULT_PORT);
++        assert!(ServiceAddress::parse("codes.example.com:28100").is_err());
++        assert!(ServiceAddress::parse("codes.example.com:28100/short").is_err());
++    }
++    #[test]
++    fn codes_are_forgiving_to_type_and_never_host_names() {
++        let code = new_code().unwrap();
++        assert_eq!(code.len(), 7);
++        assert_eq!(parse_code(&code.to_ascii_lowercase()), Some(code.clone()));
++        assert_eq!(parse_code(" k7q 4mz "), Some("K7Q-4MZ".into()));
++        assert_eq!(parse_code("oil-abc"), Some("011-ABC".into()));
++        for not_a_code in ["k7q4mz", "server", "k7q-4m", "k7q-4mzz", "k7q-4mu", "play.example.com", "k7q_4mz"] {
++            assert_eq!(parse_code(not_a_code), None, "{not_a_code}");
++        }
++    }
++}
+diff --git a/crates/rendezvous/src/relay.rs b/crates/rendezvous/src/relay.rs
+new file mode 100644
+index 0000000..598cb46
+--- /dev/null
++++ b/crates/rendezvous/src/relay.rs
+@@ -0,0 +1,216 @@
++//! Relay for one host and one player whose routers would not let a direct
++//! connection through. Each side gets its own UDP port on the service; every
++//! datagram arriving on one port is sent out of the other, unchanged. The
++//! game session inside stays end-to-end encrypted and pinned to the host's
++//! key, so the relay can neither read nor alter it.
++use std::{
++    net::{IpAddr, SocketAddr},
++    sync::{
++        Arc,
++        atomic::{AtomicU64, AtomicUsize, Ordering},
++    },
++    time::{Duration, Instant},
++};
++use tokio::net::UdpSocket;
++
++#[derive(Debug, Clone, Copy)]
++pub struct Limits {
++    /// Bytes per second forwarded in each direction; more is dropped.
++    pub bytes_per_second: u64,
++    /// A relay with no traffic for this long is closed.
++    pub idle: Duration,
++    /// Ports relays may use (inclusive); None lets the OS pick.
++    pub ports: Option<(u16, u16)>,
++}
++impl Default for Limits {
++    fn default() -> Self {
++        Self {
++            // A game session is tens of kilobits per second; world downloads
++            // burst higher. 1 MiB/s each way leaves room without letting one
++            // relay starve the rest.
++            bytes_per_second: 1 << 20,
++            idle: Duration::from_secs(60),
++            ports: None,
++        }
++    }
++}
++
++/// Totals across all relays, for the service's log line.
++#[derive(Debug, Default)]
++pub struct Stats {
++    pub active: AtomicUsize,
++    pub forwarded_bytes: AtomicU64,
++    pub dropped: AtomicU64,
++}
++
++/// Open a relay: returns the (host-side, player-side) ports. Only datagrams
++/// from `host_ip` are accepted on the host side and from `joiner_ip` on the
++/// player side; the first such datagram fixes the exact address (routers may
++/// pick a new port for each destination).
++pub async fn open(
++    bind: IpAddr,
++    host_ip: IpAddr,
++    joiner_ip: IpAddr,
++    limits: Limits,
++    stats: Arc<Stats>,
++) -> std::io::Result<(u16, u16)> {
++    let host_side = bind_in(bind, limits.ports).await?;
++    let joiner_side = bind_in(bind, limits.ports).await?;
++    let ports = (host_side.local_addr()?.port(), joiner_side.local_addr()?.port());
++    stats.active.fetch_add(1, Ordering::Relaxed);
++    tokio::spawn(async move {
++        run(host_side, joiner_side, host_ip, joiner_ip, limits, &stats).await;
++        stats.active.fetch_sub(1, Ordering::Relaxed);
++    });
++    Ok(ports)
++}
++
++async fn bind_in(ip: IpAddr, ports: Option<(u16, u16)>) -> std::io::Result<UdpSocket> {
++    let Some((low, high)) = ports else {
++        return UdpSocket::bind((ip, 0)).await;
++    };
++    let span = u32::from(high.saturating_sub(low)) + 1;
++    let mut start = [0u8; 4];
++    let _ = getrandom::fill(&mut start);
++    let start = u32::from_le_bytes(start) % span;
++    for i in 0..span {
++        let port = low + ((start + i) % span) as u16;
++        if let Ok(socket) = UdpSocket::bind((ip, port)).await {
++            return Ok(socket);
++        }
++    }
++    Err(std::io::Error::new(
++        std::io::ErrorKind::AddrInUse,
++        "Every relay port is in use",
++    ))
++}
++
++/// Token bucket over one second.
++struct Budget {
++    left: u64,
++    refilled: Instant,
++    rate: u64,
++}
++impl Budget {
++    fn new(rate: u64) -> Self {
++        Self {
++            left: rate,
++            refilled: Instant::now(),
++            rate,
++        }
++    }
++    fn take(&mut self, bytes: usize) -> bool {
++        let now = Instant::now();
++        let earned = (now - self.refilled).as_secs_f64() * self.rate as f64;
++        if earned >= 1.0 {
++            self.left = (self.left + earned as u64).min(self.rate);
++            self.refilled = now;
++        }
++        match self.left.checked_sub(bytes as u64) {
++            Some(left) => {
++                self.left = left;
++                true
++            }
++            None => false,
++        }
++    }
++}
++
++async fn run(
++    host_side: UdpSocket,
++    joiner_side: UdpSocket,
++    host_ip: IpAddr,
++    joiner_ip: IpAddr,
++    limits: Limits,
++    stats: &Stats,
++) {
++    let (mut host, mut joiner) = (None::<SocketAddr>, None::<SocketAddr>);
++    let (mut to_host, mut to_joiner) = (
++        Budget::new(limits.bytes_per_second),
++        Budget::new(limits.bytes_per_second),
++    );
++    let mut from_host = vec![0u8; 2048];
++    let mut from_joiner = vec![0u8; 2048];
++    loop {
++        tokio::select! {
++            received = host_side.recv_from(&mut from_host) => {
++                let Ok((len, from)) = received else { continue };
++                if from.ip() != host_ip || host.is_some_and(|h| h != from) {
++                    continue;
++                }
++                host = Some(from);
++                if let Some(joiner) = joiner {
++                    if to_joiner.take(len) {
++                        let _ = joiner_side.send_to(&from_host[..len], joiner).await;
++                        stats.forwarded_bytes.fetch_add(len as u64, Ordering::Relaxed);
++                    } else {
++                        stats.dropped.fetch_add(1, Ordering::Relaxed);
++                    }
++                }
++            }
++            received = joiner_side.recv_from(&mut from_joiner) => {
++                let Ok((len, from)) = received else { continue };
++                if from.ip() != joiner_ip || joiner.is_some_and(|j| j != from) {
++                    continue;
++                }
++                joiner = Some(from);
++                // Before the host has opened its side, the player's packets
++                // are dropped; QUIC sends them again.
++                if let Some(host) = host {
++                    if to_host.take(len) {
++                        let _ = host_side.send_to(&from_joiner[..len], host).await;
++                        stats.forwarded_bytes.fetch_add(len as u64, Ordering::Relaxed);
++                    } else {
++                        stats.dropped.fetch_add(1, Ordering::Relaxed);
++                    }
++                }
++            }
++            _ = tokio::time::sleep(limits.idle) => return,
++        }
++    }
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++    #[tokio::test]
++    async fn relays_both_ways_only_between_the_two_peers() {
++        let local: IpAddr = "127.0.0.1".parse().unwrap();
++        let stats = Arc::new(Stats::default());
++        let (host_port, joiner_port) = open(local, local, local, Limits::default(), stats.clone())
++            .await
++            .unwrap();
++        let host = UdpSocket::bind("127.0.0.1:0").await.unwrap();
++        let joiner = UdpSocket::bind("127.0.0.1:0").await.unwrap();
++        let stranger = UdpSocket::bind("127.0.0.1:0").await.unwrap();
++        let host_relay = SocketAddr::new(local, host_port);
++        let joiner_relay = SocketAddr::new(local, joiner_port);
++        // The host opens its side first, then the player talks.
++        host.send_to(b"open", host_relay).await.unwrap();
++        tokio::time::sleep(Duration::from_millis(50)).await;
++        joiner.send_to(b"hello host", joiner_relay).await.unwrap();
++        let mut buffer = [0u8; 64];
++        let (len, from) = host.recv_from(&mut buffer).await.unwrap();
++        assert_eq!((&buffer[..len], from), (&b"hello host"[..], host_relay));
++        host.send_to(b"hello player", host_relay).await.unwrap();
++        let (len, from) = joiner.recv_from(&mut buffer).await.unwrap();
++        assert_eq!((&buffer[..len], from), (&b"hello player"[..], joiner_relay));
++        // A third socket cannot hijack either side once it is fixed.
++        stranger.send_to(b"sneak", joiner_relay).await.unwrap();
++        let quiet = tokio::time::timeout(Duration::from_millis(200), host.recv_from(&mut buffer)).await;
++        assert!(quiet.is_err(), "the stranger's datagram was forwarded");
++        assert_eq!(stats.active.load(Ordering::Relaxed), 1);
++    }
++    #[test]
++    fn the_budget_caps_bytes_per_second() {
++        let mut budget = Budget::new(1000);
++        assert!(budget.take(600));
++        assert!(!budget.take(600));
++        assert!(budget.take(400));
++    }
++    #[tokio::test]
++    async fn relay_ports_come_from_the_configured_range() {
++        let socket = bind_in("127.0.0.1".parse().unwrap(), Some((42310, 42319))).await.unwrap();
++        assert!((42310..=42319).contains(&socket.local_addr().unwrap().port()));
++    }
++}
+diff --git a/crates/rendezvous/src/service.rs b/crates/rendezvous/src/service.rs
+new file mode 100644
+index 0000000..973de58
+--- /dev/null
++++ b/crates/rendezvous/src/service.rs
+@@ -0,0 +1,347 @@
++//! The rendezvous service: hands out join codes, introduces players to
++//! hosts so both routers open for each other (hole punching), and relays
++//! when that fails. It keeps nothing on disk but its own certificate; a code
++//! lives only while its host stays connected.
++use crate::{
++    proto::{self, Answer, Key, Request},
++    relay,
++};
++use anyhow::{Context, Result, bail, ensure};
++use std::{
++    collections::HashMap,
++    net::{IpAddr, SocketAddr},
++    sync::{Arc, Mutex},
++    time::{Duration, Instant},
++};
++use tokio::sync::{mpsc, oneshot};
++
++#[derive(Debug, Clone)]
++pub struct Config {
++    pub listen: SocketAddr,
++    /// The address players and hosts reach this service at, for relay
++    /// ports. None uses the address each client connected to.
++    pub public_ip: Option<IpAddr>,
++    /// Relay traffic when direct connection fails. Off makes this a
++    /// rendezvous-only service.
++    pub relay: bool,
++    pub relay_limits: relay::Limits,
++    pub max_hosts: usize,
++    pub max_relays: usize,
++    /// Codes one IP address may hold at once.
++    pub hosts_per_ip: usize,
++    /// Code lookups one IP address may make per minute (guessing codes).
++    pub joins_per_minute: u32,
++}
++impl Config {
++    pub fn new(listen: SocketAddr) -> Self {
++        Self {
++            listen,
++            public_ip: None,
++            relay: true,
++            relay_limits: relay::Limits::default(),
++            max_hosts: 5000,
++            max_relays: 500,
++            hosts_per_ip: 4,
++            joins_per_minute: 20,
++        }
++    }
++}
++
++/// The service's own certificate, kept across restarts so the address
++/// players have configured (with its key) stays valid.
++#[derive(Clone)]
++pub struct Identity {
++    pub der: Vec<u8>,
++    pub key: Vec<u8>,
++}
++impl Identity {
++    pub fn generate() -> Result<Self> {
++        let cert = rcgen::generate_simple_self_signed(vec!["rendezvous.blockland.local".into()])?;
++        Ok(Self {
++            der: cert.cert.der().to_vec(),
++            key: cert.signing_key.serialize_der(),
++        })
++    }
++    /// `rendezvous-cert.der` and `rendezvous-key.der` in `dir`, created on
++    /// first use.
++    pub fn load_or_create(dir: &std::path::Path) -> Result<Self> {
++        let (cert, key) = (dir.join("rendezvous-cert.der"), dir.join("rendezvous-key.der"));
++        match (std::fs::read(&cert), std::fs::read(&key)) {
++            (Ok(der), Ok(key)) => Ok(Self { der, key }),
++            (Err(_), Err(_)) => {
++                let identity = Self::generate()?;
++                std::fs::create_dir_all(dir)?;
++                std::fs::write(&key, &identity.key)?;
++                std::fs::write(&cert, &identity.der)?;
++                Ok(identity)
++            }
++            _ => bail!("Only one of {} and {} exists; restore both", cert.display(), key.display()),
++        }
++    }
++}
++
++struct HostEntry {
++    key: Key,
++    name: String,
++    observed: SocketAddr,
++    locals: Vec<SocketAddr>,
++    notify: mpsc::Sender<Answer>,
++}
++
++#[derive(Default)]
++struct State {
++    hosts: HashMap<String, HostEntry>,
++    hosts_by_ip: HashMap<IpAddr, usize>,
++    joins: HashMap<IpAddr, (Instant, u32)>,
++}
++
++pub struct Service {
++    pub address: SocketAddr,
++    /// The key players pin, published with the address.
++    pub key: Key,
++    pub relay_stats: Arc<relay::Stats>,
++    stop: Option<oneshot::Sender<()>>,
++    task: tokio::task::JoinHandle<()>,
++}
++
++impl Service {
++    pub fn start(config: Config, identity: Identity) -> Result<Self> {
++        let key = proto::key_of(&identity.der);
++        let private = quinn::rustls::pki_types::PrivatePkcs8KeyDer::from(identity.key.clone());
++        let mut server =
++            quinn::ServerConfig::with_single_cert(vec![identity.der.clone().into()], private.into())?;
++        server.transport_config(Arc::new(transport()));
++        let endpoint = quinn::Endpoint::server(server, config.listen)?;
++        let address = endpoint.local_addr()?;
++        let relay_stats = Arc::new(relay::Stats::default());
++        let (stop, stopped) = oneshot::channel();
++        let state = Arc::new(Mutex::new(State::default()));
++        let stats = relay_stats.clone();
++        let task = tokio::spawn(async move {
++            let mut stopped = stopped;
++            loop {
++                tokio::select! {
++                    _ = &mut stopped => break,
++                    incoming = endpoint.accept() => {
++                        let Some(incoming) = incoming else { break };
++                        let (state, config, stats) = (state.clone(), config.clone(), stats.clone());
++                        tokio::spawn(async move {
++                            if let Ok(Ok(connection)) = tokio::time::timeout(Duration::from_secs(10), incoming).await {
++                                serve(connection, state, config, stats).await;
++                            }
++                        });
++                    }
++                }
++            }
++            endpoint.close(0u32.into(), b"Service stopped");
++        });
++        Ok(Self {
++            address,
++            key,
++            relay_stats,
++            stop: Some(stop),
++            task,
++        })
++    }
++    pub async fn stop(mut self) {
++        if let Some(stop) = self.stop.take() {
++            let _ = stop.send(());
++        }
++        let _ = (&mut self.task).await;
++    }
++}
++
++/// Service connections: kept alive so the host's router keeps the game
++/// port's mapping to the service open.
++pub fn transport() -> quinn::TransportConfig {
++    let mut t = quinn::TransportConfig::default();
++    t.max_concurrent_bidi_streams(4_u32.into())
++        .max_concurrent_uni_streams(0_u32.into())
++        .keep_alive_interval(Some(Duration::from_secs(10)))
++        .max_idle_timeout(Some(Duration::from_secs(40).try_into().unwrap()));
++    t
++}
++
++async fn serve(
++    connection: quinn::Connection,
++    state: Arc<Mutex<State>>,
++    config: Config,
++    stats: Arc<relay::Stats>,
++) {
++    while let Ok((send, receive)) = connection.accept_bi().await {
++        let (connection, state, config, stats) =
++            (connection.clone(), state.clone(), config.clone(), stats.clone());
++        tokio::spawn(async move {
++            let _ = stream(connection, send, receive, state, config, stats).await;
++        });
++    }
++}
++
++async fn stream(
++    connection: quinn::Connection,
++    mut send: quinn::SendStream,
++    mut receive: quinn::RecvStream,
++    state: Arc<Mutex<State>>,
++    config: Config,
++    stats: Arc<relay::Stats>,
++) -> Result<()> {
++    let observed = connection.remote_address();
++    let request: Request = tokio::time::timeout(Duration::from_secs(10), proto::read(&mut receive))
++        .await??
++        .context("Empty request")?;
++    let refuse = |text: &str| Answer::Refused(text.to_string());
++    match request {
++        Request::Host {
++            version,
++            key,
++            locals,
++            name,
++        } => {
++            let checked = (|| {
++                ensure!(version == proto::VERSION, "This game is too old or too new for this join code service.");
++                ensure!(locals.len() <= proto::MAX_LOCALS && name.len() <= 128, "Invalid request");
++                Ok(())
++            })();
++            if let Err(error) = checked {
++                proto::write(&mut send, &refuse(&error.to_string())).await?;
++                return Ok(());
++            }
++            let (notify, mut events) = mpsc::channel(16);
++            let code = {
++                let mut state = state.lock().unwrap();
++                let held = state.hosts_by_ip.get(&observed.ip()).copied().unwrap_or(0);
++                if state.hosts.len() >= config.max_hosts || held >= config.hosts_per_ip {
++                    None
++                } else {
++                    let mut code = proto::new_code()?;
++                    while state.hosts.contains_key(&code) {
++                        code = proto::new_code()?;
++                    }
++                    state.hosts.insert(
++                        code.clone(),
++                        HostEntry {
++                            key,
++                            name,
++                            observed,
++                            locals,
++                            notify,
++                        },
++                    );
++                    *state.hosts_by_ip.entry(observed.ip()).or_default() += 1;
++                    Some(code)
++                }
++            };
++            let Some(code) = code else {
++                proto::write(&mut send, &refuse("The join code service is full right now. Try again later, or share your address instead.")).await?;
++                return Ok(());
++            };
++            let result = async {
++                proto::write(&mut send, &Answer::Hosting { code: code.clone(), observed }).await?;
++                let mut probe = [0u8; 1];
++                loop {
++                    tokio::select! {
++                        event = events.recv() => match event {
++                            Some(event) => proto::write(&mut send, &event).await?,
++                            None => break,
++                        },
++                        // The host finishing or dropping the stream ends the code.
++                        _ = receive.read(&mut probe) => break,
++                    }
++                }
++                anyhow::Ok(())
++            }
++            .await;
++            let mut state = state.lock().unwrap();
++            state.hosts.remove(&code);
++            if let Some(held) = state.hosts_by_ip.get_mut(&observed.ip()) {
++                *held -= 1;
++                if *held == 0 {
++                    state.hosts_by_ip.remove(&observed.ip());
++                }
++            }
++            result
++        }
++        Request::Join {
++            version,
++            code,
++            locals,
++        } => {
++            ensure!(locals.len() <= proto::MAX_LOCALS, "Invalid request");
++            if version != proto::VERSION {
++                proto::write(&mut send, &refuse("This game is too old or too new for this join code service.")).await?;
++                return Ok(());
++            }
++            let found = {
++                let mut state = state.lock().unwrap();
++                let now = Instant::now();
++                if state.joins.len() > 100_000 {
++                    state.joins.retain(|_, (at, _)| now.duration_since(*at) < Duration::from_secs(60));
++                }
++                let attempts = state.joins.entry(observed.ip()).or_insert((now, 0));
++                if now.duration_since(attempts.0) > Duration::from_secs(60) {
++                    *attempts = (now, 0);
++                }
++                attempts.1 += 1;
++                if attempts.1 > config.joins_per_minute {
++                    Err("Too many join attempts. Wait a minute and try again.")
++                } else {
++                    let code = proto::parse_code(&code).unwrap_or_default();
++                    state
++                        .hosts
++                        .get(&code)
++                        .map(|h| (h.key, h.name.clone(), h.observed, h.locals.clone(), h.notify.clone()))
++                        .ok_or("No game has that code. Check it, or ask the host for the code again.")
++                }
++            };
++            let (key, name, host_observed, host_locals, notify) = match found {
++                Ok(found) => found,
++                Err(text) => {
++                    proto::write(&mut send, &refuse(text)).await?;
++                    return Ok(());
++                }
++            };
++            let public_ip = config
++                .public_ip
++                .or_else(|| connection.local_ip())
++                .unwrap_or(config.listen.ip());
++            let relay = if config.relay
++                && stats.active.load(std::sync::atomic::Ordering::Relaxed) < config.max_relays
++            {
++                relay::open(
++                    config.listen.ip(),
++                    host_observed.ip(),
++                    observed.ip(),
++                    config.relay_limits,
++                    stats.clone(),
++                )
++                .await
++                .ok()
++            } else {
++                None
++            };
++            let _ = notify
++                .send(Answer::Joiner {
++                    observed,
++                    locals,
++                    relay: relay.map(|(host_port, _)| SocketAddr::new(public_ip, host_port)),
++                })
++                .await;
++            let mut candidates = vec![host_observed];
++            candidates.extend(host_locals);
++            proto::write(
++                &mut send,
++                &Answer::Found {
++                    key,
++                    name,
++                    candidates,
++                    relay: relay.map(|(_, joiner_port)| SocketAddr::new(public_ip, joiner_port)),
++                    observed,
++                },
++            )
++            .await?;
++            send.finish()?;
++            let _ = tokio::time::timeout(Duration::from_secs(2), send.stopped()).await;
++            Ok(())
++        }
++    }
++}
+-- 
+2.43.0
+
+
+From 36b206bf4c7247458e6eae522729b5cf19a6502f Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Mon, 28 Sep 2026 03:21:41 +0000
+Subject: [PATCH 2/2] WIP join codes wiring (shelved)
+
+---
+ crates/net/src/codes.rs  | 15 +++++++++++++++
+ crates/net/src/invite.rs | 17 +++++++++++++----
+ 2 files changed, 28 insertions(+), 4 deletions(-)
+
+diff --git a/crates/net/src/codes.rs b/crates/net/src/codes.rs
+index 18ca2e1..785e70b 100644
+--- a/crates/net/src/codes.rs
++++ b/crates/net/src/codes.rs
+@@ -9,6 +9,21 @@ use anyhow::{Context, Result, bail};
+ use bri_rendezvous::proto::{self, Answer, Request, ServiceAddress};
+ use std::{future::Future, net::SocketAddr, pin::Pin, sync::Arc, time::Duration};
+ 
++/// The join code service a fresh install uses (`$pref::Net::JoinCodeService`
++/// overrides it). None until a service is deployed: the game then offers
++/// addresses and invites only.
++pub const DEFAULT_SERVICE: Option<&str> = None;
++
++/// The configured provider: the preference when set, else the default.
++pub fn configured(preference: &str) -> Option<Result<Rendezvous>> {
++    let text = if preference.trim().is_empty() {
++        DEFAULT_SERVICE?
++    } else {
++        preference
++    };
++    Some(ServiceAddress::parse(text).map(Rendezvous::new))
++}
++
+ pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
+ 
+ /// Where a code's host can be tried.
+diff --git a/crates/net/src/invite.rs b/crates/net/src/invite.rs
+index 278a2f9..18aabaa 100644
+--- a/crates/net/src/invite.rs
++++ b/crates/net/src/invite.rs
+@@ -8,9 +8,8 @@
+ //!   host's key (the start of its certificate's SHA-256), so the first join
+ //!   is already verified and a changed pin is replaced by the invite.
+ //!
+-//! Join codes resolved through a rendezvous service would be another
+-//! [`JoinTarget`] variant resolving to the same [`Route`]s
+-//! (`docs/architecture/hosting.md`).
++//! - a join code (`K7Q-4MZ`), resolved by a join code provider
++//!   ([`crate::codes`]) rather than [`JoinTarget::resolve`].
+ use anyhow::{Context, Result, ensure};
+ use std::net::{IpAddr, SocketAddr};
+ 
+@@ -41,6 +40,8 @@ pub enum JoinTarget {
+         port: u16,
+         key: Option<HostKey>,
+     },
++    /// A join code, in display form (`K7Q-4MZ`).
++    Code(String),
+ }
+ 
+ /// A resolved way to reach a host.
+@@ -53,6 +54,9 @@ pub struct Route {
+ impl JoinTarget {
+     pub fn parse(text: &str) -> Result<Self> {
+         let text = text.trim();
++        if let Some(code) = bri_rendezvous::proto::parse_code(text) {
++            return Ok(Self::Code(code));
++        }
+         if let Some(rest) = strip_scheme(text) {
+             let (address, key) = rest.trim_end_matches('/').rsplit_once('/').context(HINT)?;
+             let key = decode_key(key).context(
+@@ -77,11 +81,13 @@ impl JoinTarget {
+     pub fn address(&self) -> String {
+         match self {
+             Self::Direct { host, port, .. } => join_host_port(host, *port),
++            Self::Code(code) => code.clone(),
+         }
+     }
+     pub fn key(&self) -> Option<HostKey> {
+         match self {
+             Self::Direct { key, .. } => *key,
++            Self::Code(_) => None,
+         }
+     }
+     /// Look up how to reach the host (DNS for host names).
+@@ -101,6 +107,7 @@ impl JoinTarget {
+                 };
+                 Ok(Route { address, key: *key })
+             }
++            Self::Code(_) => anyhow::bail!("A join code is looked up through the join code service"),
+         }
+     }
+ }
+@@ -112,7 +119,7 @@ impl std::fmt::Display for JoinTarget {
+             Self::Direct { key: Some(key), .. } => {
+                 write!(f, "{SCHEME}{}/{}", self.address(), encode_key(key))
+             }
+-            Self::Direct { .. } => f.write_str(&self.address()),
++            Self::Direct { .. } | Self::Code(_) => f.write_str(&self.address()),
+         }
+     }
+ }
+@@ -190,6 +197,8 @@ mod tests {
+         assert_eq!(parsed("Play.Example.com"), direct("play.example.com", 28000));
+         assert_eq!(parsed("play.example.com:28001"), direct("play.example.com", 28001));
+         assert_eq!(parsed("localhost"), direct("localhost", 28000));
++        assert_eq!(parsed("k7q-4mz"), JoinTarget::Code("K7Q-4MZ".into()));
++        assert_eq!(parsed("k7q4mz"), direct("k7q4mz", 28000), "codes need their dash");
+         assert_eq!(parsed("[2001:db8::1]:28005").address(), "[2001:db8::1]:28005");
+         for bad in ["", "play example.com", "host:notaport", "host:0", "-bad.com", "a..b", "1.2.3.4:0"] {
+             let error = JoinTarget::parse(bad).unwrap_err().to_string();
+-- 
+2.43.0
+

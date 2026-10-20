@@ -1,0 +1,272 @@
+diff --git a/crates/render/src/kept_shadows.rs b/crates/render/src/kept_shadows.rs
+index 08fbed8..95af700 100644
+--- a/crates/render/src/kept_shadows.rs
++++ b/crates/render/src/kept_shadows.rs
+@@ -17,8 +17,13 @@
+ //! redrawn into a layer until the sun holds still. A brick
+ //! placed or removed redraws only its part of each kept layer, the same
+ //! frame; a large change (a build streaming in) redraws the layer.
++//!
++//! A mirror or window plane's own cascades are the player's frustum moved
++//! by the plane, so they come out the same size: where one lies inside the
++//! player's kept layer of its index, it copies from it too (`reuse`), and
++//! only a plane showing a place past the layers draws its bricks.
+ use crate::scene::GpuScene;
+-use crate::shadow::{CASTER_REACH, Cascade, SHADOW_FORMAT};
++use crate::shadow::{CASTER_REACH, Cascade, FITTED_VIEWS, SHADOW_FORMAT};
+ use glam::{Mat4, Vec3};
+ use std::cell::RefCell;
+ use std::collections::HashMap;
+@@ -132,6 +137,8 @@ pub(crate) struct KeptShadows {
+     pub size: u32,
+     views: Vec<wgpu::TextureView>,
+     uniform: wgpu::Buffer,
++    /// Per view that can fit cascades (`FITTED_VIEWS`), then per cascade:
++    /// the layer and that view's blit uniform for it.
+     groups: Vec<wgpu::BindGroup>,
+     pipeline: wgpu::RenderPipeline,
+     state: RefCell<State>,
+@@ -181,7 +188,7 @@ impl KeptShadows {
+             .collect();
+         let uniform = device.create_buffer(&wgpu::BufferDescriptor {
+             label: Some("kept sun shadow blit"),
+-            size: BLIT_STRIDE * u64::from(cascades),
++            size: BLIT_STRIDE * u64::from(cascades) * FITTED_VIEWS as u64,
+             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+             mapped_at_creation: false,
+         });
+@@ -210,10 +217,14 @@ impl KeptShadows {
+                 },
+             ],
+         });
+-        let groups = views
+-            .iter()
+-            .enumerate()
+-            .map(|(cascade, view)| {
++        let groups = (0..FITTED_VIEWS)
++            .flat_map(|fitted| {
++                views
++                    .iter()
++                    .enumerate()
++                    .map(move |(cascade, view)| (fitted, cascade, view))
++            })
++            .map(|(fitted, cascade, view)| {
+                 device.create_bind_group(&wgpu::BindGroupDescriptor {
+                     label: Some("kept sun shadow blit"),
+                     layout: &layout,
+@@ -226,7 +237,8 @@ impl KeptShadows {
+                             binding: 1,
+                             resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                                 buffer: &uniform,
+-                                offset: cascade as u64 * BLIT_STRIDE,
++                                offset: blit_slot(fitted, cascade, cascades as usize) as u64
++                                    * BLIT_STRIDE,
+                                 size: wgpu::BufferSize::new(16),
+                             }),
+                         },
+@@ -287,13 +299,43 @@ impl KeptShadows {
+     pub fn view(&self, cascade: usize) -> &wgpu::TextureView {
+         &self.views[cascade]
+     }
+-    /// Copies cascade `cascade` from its kept layer into the bound pass's
+-    /// attachment; the caller binds its own group 0 again afterwards.
+-    pub fn blit(&self, pass: &mut wgpu::RenderPass<'_>, cascade: usize) {
++    /// Copies `view`'s cascade `cascade` from its kept layer into the
++    /// bound pass's attachment; the caller binds its own group 0 again
++    /// afterwards.
++    pub fn blit(&self, pass: &mut wgpu::RenderPass<'_>, view: usize, cascade: usize) {
+         pass.set_pipeline(&self.pipeline);
+-        pass.set_bind_group(0, &self.groups[cascade], &[]);
++        let slot = blit_slot(view, cascade, self.views.len());
++        pass.set_bind_group(0, &self.groups[slot], &[]);
+         pass.draw(0..3, 0..1);
+     }
++    /// Whether `view`'s (a plane's) cascade `index` can copy its bricks
++    /// from the player's kept layer of that index, as planned this frame
++    /// (after `plan`): it lies inside it, on its grid. Writes its blit.
++    pub fn reuse(
++        &self,
++        queue: &wgpu::Queue,
++        view: usize,
++        index: usize,
++        cascade: &Cascade,
++        sun: Vec3,
++    ) -> bool {
++        let state = self.state.borrow();
++        let Some(placement) = state
++            .placements
++            .get(index)
++            .copied()
++            .flatten()
++            .filter(|p| p.holds(sun, cascade))
++        else {
++            return false;
++        };
++        queue.write_buffer(
++            &self.uniform,
++            blit_slot(view, index, self.views.len()) as u64 * BLIT_STRIDE,
++            bytemuck::cast_slice(&placement.blit(cascade)),
++        );
++        true
++    }
+     /// This frame's use of each cascade's kept layer, given the static
+     /// casters (`statics`, chunks with bounds) and the eye. Writes the blit
+     /// uniforms and, through `set_matrix`, each redrawn layer's matrix.
+@@ -411,7 +453,7 @@ impl KeptShadows {
+                     }
+                     queue.write_buffer(
+                         &self.uniform,
+-                        index as u64 * BLIT_STRIDE,
++                        blit_slot(0, index, self.views.len()) as u64 * BLIT_STRIDE,
+                         bytemuck::cast_slice(&placement.blit(cascade)),
+                     );
+                     uses.push(Use::Kept { redraw });
+@@ -423,6 +465,12 @@ impl KeptShadows {
+     }
+ }
+ 
++/// `view`'s blit uniform (and bind group) for its cascade `cascade` of
++/// `cascades`.
++fn blit_slot(view: usize, cascade: usize, cascades: usize) -> usize {
++    view * cascades + cascade
++}
++
+ /// A static caster's identity: the scene and where its geometry lies (a
+ /// chunk rebuilt in place gets new geometry).
+ fn caster_identity(scene: &GpuScene) -> u64 {
+diff --git a/crates/render/src/scene.rs b/crates/render/src/scene.rs
+index 3cddf49..d58102d 100644
+--- a/crates/render/src/scene.rs
++++ b/crates/render/src/scene.rs
+@@ -1462,13 +1462,12 @@ pub fn translucent_order(eye: Vec3, draws: &[(Vec3, Option<f32>)]) -> Vec<usize>
+ /// their indices start and how many), which a rebuilt chunk never keeps.
+ /// Shadow targets' extras (the sun's targets only): where the casters fall
+ /// in an occluder layer, the texels a kept layer's changed region may
+-/// change, and the cascade whose kept brick layer a caster layer starts
+-/// from.
++
+ #[derive(Default)]
+ struct TargetExtra {
+     footprint: Option<Footprints>,
+     scissor: Option<[u32; 4]>,
+-    blit: Option<usize>,
++    blit: Option<(usize, usize)>,
+ }
+ /// Where a cascade's casters fall in its clip space: each caster's xy
+ /// rectangle (min x, min y, max x, max y), widened by a few texels for the
+@@ -2339,6 +2338,10 @@ pub struct SceneRenderer {
+     /// Each sun cascade's kept brick layer, while bricks cast sun shadows
+     /// (`crate::kept_shadows`).
+     kept: std::cell::RefCell<Option<crate::kept_shadows::KeptShadows>>,
++    /// Which of the player's cascades copy from their kept layer this
++    /// frame, once a plane's shadows planned them (the player's, drawn
++    /// last, take it).
++    kept_planned: std::cell::RefCell<Option<Vec<bool>>>,
+     /// Whether bricks keep their sun shadow depth (on unless
+     /// `BRI_KEPT_SHADOWS=0`, for comparing frame times).
+     keep_brick_shadows: std::cell::Cell<bool>,
+@@ -2638,6 +2641,7 @@ impl SceneRenderer {
+             stats: Default::default(),
+             timer: Default::default(),
+             kept: Default::default(),
++            kept_planned: Default::default(),
+             keep_brick_shadows: std::cell::Cell::new(
+                 std::env::var("BRI_KEPT_SHADOWS").map_or(true, |v| v != "0"),
+             ),
+@@ -3513,10 +3517,18 @@ impl SceneRenderer {
+         // layer it starts from (see `TargetExtra`).
+         let mut extras: Vec<TargetExtra> = Vec::new();
+         // Bricks casting (Brick Shadows on) keep their depth per cascade
+-        // around the player: what each cascade does with its kept layer
+-        // this frame. A view's own cascades draw them directly.
+-        if player {
+-            if static_scenes.is_empty() || cascades.is_empty() || !self.keep_brick_shadows.get() {
++        // around the player: what each of the player's cascades does with
++        // its kept layer this frame. The first view to draw its shadows
++        // plans them and redraws what changed, so planes, which draw theirs
++        // before the player's, copy from layers as current as the player's.
++        let player_cascades = &self.shadows.cascades;
++        let planned = self.kept_planned.borrow_mut().take();
++        let planning = planned.is_none();
++        if planning {
++            if static_scenes.is_empty()
++                || player_cascades.is_empty()
++                || !self.keep_brick_shadows.get()
++            {
+                 *self.kept.borrow_mut() = None;
+             } else if self.kept.borrow().is_none()
+                 && let Some(settings) = self.shadows.settings
+@@ -3534,9 +3546,9 @@ impl SceneRenderer {
+         }
+         let uses: Vec<crate::kept_shadows::Use<'_>> =
+             match (kept.as_ref(), self.queue.borrow().as_ref()) {
+-                (Some(kept), Some(queue)) if player && !static_scenes.is_empty() => kept.plan(
++                (Some(kept), Some(queue)) if planning && !static_scenes.is_empty() => kept.plan(
+                     queue,
+-                    cascades,
++                    player_cascades,
+                     self.shadows.sun,
+                     self.views[0].eye,
+                     &static_scenes,
+@@ -3575,11 +3587,37 @@ impl SceneRenderer {
+                 });
+             }
+         }
++        let kept_layers: Vec<bool> = planned.unwrap_or_else(|| {
++            uses.iter()
++                .map(|u| matches!(u, crate::kept_shadows::Use::Kept { .. }))
++                .collect()
++        });
++        // This view's cascades that copy their bricks from a kept layer:
++        // the player's as planned, a plane's where it lies inside the
++        // player's layer of its index.
++        let copied: Vec<bool> = cascades
++            .iter()
++            .enumerate()
++            .map(|(index, cascade)| {
++                kept_layers.get(index).copied().unwrap_or(false)
++                    && (player
++                        || match (kept.as_ref(), self.queue.borrow().as_ref()) {
++                            (Some(kept), Some(queue)) => {
++                                kept.reuse(queue, view, index, cascade, self.shadows.sun)
++                            }
++                            _ => false,
++                        })
++            })
++            .collect();
++        // The player's shadows draw last each frame; the next frame plans
++        // again.
++        if !player {
++            *self.kept_planned.borrow_mut() = Some(kept_layers);
++        }
+         let sun_casters = casters;
+         for (group, casters) in [casters, occluders].iter().enumerate() {
+             for (index, cascade) in cascades.iter().enumerate() {
+-                let from_kept = group == 0
+-                    && matches!(uses.get(index), Some(crate::kept_shadows::Use::Kept { .. }));
++                let from_kept = group == 0 && copied[index];
+                 kept_cascades += u32::from(from_kept);
+                 extras.push(TargetExtra {
+                     footprint: if group == 1 {
+@@ -3592,7 +3630,7 @@ impl SceneRenderer {
+                         None
+                     },
+                     scissor: None,
+-                    blit: from_kept.then_some(index),
++                    blit: from_kept.then_some((view, index)),
+                 });
+                 // Copied from the kept layer: only moving casters draw.
+                 let casters = if from_kept {
+@@ -3863,8 +3901,10 @@ impl SceneRenderer {
+                     pass.set_pipeline(&self.shadows.clear_pipeline);
+                     pass.draw(0..3, 0..1);
+                 }
+-                if let (Some(cascade), Some(kept)) = (extra.and_then(|e| e.blit), kept.as_ref()) {
+-                    kept.blit(&mut pass, cascade);
++                if let (Some((view, cascade)), Some(kept)) =
++                    (extra.and_then(|e| e.blit), kept.as_ref())
++                {
++                    kept.blit(&mut pass, view, cascade);
+                     pass.set_bind_group(0, bind_group, &[offset]);
+                 }
+                 if let Some(footprint) = footprint {
