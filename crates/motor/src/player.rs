@@ -779,6 +779,9 @@ pub struct PlayerTuning {
     /// Getting out of geometry that has closed around the body, when it can:
     /// none for v20's bodies.
     pub unstick: Option<Unstick>,
+    /// Refusing to step off an edge while walking (`walking`), when the body can: none for v20's bodies, which walk off every
+    /// edge.
+    pub ledge_guard: Option<LedgeGuard>,
     /// Keeping speed (a held move accelerates the body, the floor's friction slows it, the air steers it less), when the body
     /// has it: none for v20's bodies, which are steered straight to the move's speed.
     pub momentum: Option<crate::momentum::Momentum>,
@@ -857,9 +860,28 @@ impl Default for PlayerTuning {
             lean: None,
             climb: None,
             unstick: None,
+            ledge_guard: None,
             momentum: None,
             controller: None,
         }
+    }
+}
+/// [`PlayerTuning::ledge_guard`]: a walking body that would leave the ground for a drop deeper than `drop` stays where it was
+/// (and loses the speed it had), so walking never takes it off a ledge; a lower step down is still walked. Running, falling and
+/// jumping are not walking and are not held back.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LedgeGuard {
+    /// The deepest drop that still counts as ground, above zero.
+    pub drop: f32,
+}
+impl LedgeGuard {
+    pub fn validate(&self) -> Result<()> {
+        ensure!(
+            self.drop.is_finite() && self.drop > 0.0,
+            "Ledge guard drop must be above zero"
+        );
+        Ok(())
     }
 }
 /// [`PlayerTuning::unstick`]: a body that stays inside solid geometry (a
@@ -1147,6 +1169,9 @@ impl PlayerTuning {
         }
         if let Some(m) = &self.momentum {
             m.validate()?;
+        }
+        if let Some(g) = &self.ledge_guard {
+            g.validate()?;
         }
         Ok(())
     }
@@ -2668,6 +2693,31 @@ impl Player {
             self.state.velocity[1] = 0.0;
             self.state.grounded = true;
             self.state.jump.since_contact = 0;
+        }
+        // A walking body does not step off a ledge: with no floor within the guard's drop below where it came to, it stays where it
+        // was this tick.
+        if let Some(guard) = t.ledge_guard
+            && was_grounded
+            && !self.state.grounded
+            && !jumped
+            && self.state.walking
+            && !self.state.posture.climbing
+            && physics
+                .query_pipeline_with_filter(filter)
+                .cast_shape(
+                    &t.pose(Vec3::from(self.state.feet), self.state.crouched),
+                    Vector::new(0.0, -1.0, 0.0),
+                    t.shape(self.state.crouched).as_ref(),
+                    ShapeCastOptions {
+                        max_time_of_impact: guard.drop,
+                        ..Default::default()
+                    },
+                )
+                .is_none_or(|(_, hit)| hit.normal1.y < run_cos)
+        {
+            self.state.feet = feet.to_array();
+            self.state.velocity = [0.0; 3];
+            self.state.grounded = true;
         }
         // Animation provenance belongs to the simulation: presentation can
         // skip all the jetting ticks, and pose datagrams can lose them too.

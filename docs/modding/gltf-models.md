@@ -177,6 +177,12 @@ with it; they do not follow the body's animation. A splash is not multiplied.
 An archetype with none is hit as one box and its region read from the height
 of the hit, as before.
 
+**Ledges (optional).** `movement.ledge_guard` (`{ "drop": 1.0 }`) keeps a
+walking body (`set_walking` in rules) from stepping off an edge: a step
+that would leave the ground for a drop deeper than `drop` is refused, the
+body stays where it was and loses its speed. Steps down of less than
+`drop`, running, jumping and falling are not held back.
+
 **Prone and lean (optional).** `movement.prone` lets the body lie down
 (`set_prone` in rules): `{ "height": 0.5, "eye": 0.35, "seconds": 0.7, "forward": 1,
 "backward": 0.5, "sideways": 0.5 }`, its box height (at most the crouch's),
