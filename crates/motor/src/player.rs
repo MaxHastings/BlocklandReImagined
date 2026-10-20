@@ -901,8 +901,7 @@ impl WallStep {
 /// around it (each a thin slice of half the body's radius, `probe` of the
 /// radius away: at most two free ones count, and the body moves by the sum
 /// of their offsets, twice as far with just one), then the nearest free
-/// spot within `reach` (or, failing that, the body's height), searched every
-/// `step` outward and upward. Other
+/// spot within `reach`, searched every `step` outward and upward. Other
 /// players never count: they move aside.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -2038,35 +2037,22 @@ impl Player {
             }
         }
         const DIRECTIONS: u32 = 8;
-        // The nearest free spot within `reach`; failing that, within the
-        // body's own height, since what it is embedded in (a chair wider than
-        // the body) can take more than `reach` to climb out of or walk round.
-        let reaches = [
-            unstick.reach,
-            unstick.reach.max(self.tuning.height(self.state.crouched)),
-        ];
-        for reach in reaches {
-            let steps = (reach / unstick.step).floor() as u32;
-            let mut spots: Vec<Vec3> = Vec::new();
-            for up in 0..=steps {
-                for out in 1..=steps {
-                    for k in 0..DIRECTIONS {
-                        let angle = k as f32 / DIRECTIONS as f32 * std::f32::consts::TAU;
-                        let away =
-                            Vec3::new(angle.cos(), 0.0, angle.sin()) * (out as f32 * unstick.step);
-                        spots.push(rise(up) + away);
-                    }
+        let mut spots: Vec<Vec3> = Vec::new();
+        for up in 0..=lifts {
+            for out in 1..=lifts {
+                for k in 0..DIRECTIONS {
+                    let angle = k as f32 / DIRECTIONS as f32 * std::f32::consts::TAU;
+                    let away =
+                        Vec3::new(angle.cos(), 0.0, angle.sin()) * (out as f32 * unstick.step);
+                    spots.push(rise(up) + away);
                 }
             }
-            spots.sort_by(|a, b| {
-                a.distance_squared(feet)
-                    .total_cmp(&b.distance_squared(feet))
-            });
-            if let Some(spot) = spots.into_iter().find(|spot| free(*spot)) {
-                return Some(spot);
-            }
         }
-        None
+        spots.sort_by(|a, b| {
+            a.distance_squared(feet)
+                .total_cmp(&b.distance_squared(feet))
+        });
+        spots.into_iter().find(|spot| free(*spot))
     }
     fn torque_tick_among(
         &mut self,
