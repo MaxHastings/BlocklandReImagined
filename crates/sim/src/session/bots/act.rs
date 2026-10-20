@@ -35,6 +35,8 @@ pub(super) enum Mover {
     Jet,
     /// A leap of its route: to the takeoff, still, jump, steer onto it.
     Leap,
+    /// A ladder of its route: on at the foot, up the rungs, off at the top.
+    Climb,
     /// Afloat, or a swimmer rising and diving.
     Swim,
     /// A goof's walk (a circle, a detour, up to someone).
@@ -59,6 +61,7 @@ impl Mover {
             Mover::Stance => "stance",
             Mover::Jet => "jet",
             Mover::Leap => "leap",
+            Mover::Climb => "climb",
             Mover::Swim => "swim",
             Mover::Goof => "goof",
             Mover::Dodge => "dodge",

@@ -602,6 +602,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "bri-effects-render"
+version = "0.1.0"
+dependencies = [
+ "bri-content",
+ "bri-emitters",
+ "bri-render",
+ "glam 0.33.10",
+ "wgpu",
+]
+
+[[package]]
+name = "bri-emitters"
+version = "0.1.0"
+dependencies = [
+ "glam 0.33.10",
+]
+
+[[package]]
 name = "bri-events"
 version = "0.1.0"
 dependencies = [
@@ -877,22 +895,14 @@ dependencies = [
 ]
 
 [[package]]
-name = "bri-ue2-emitters"
-version = "0.1.0"
-dependencies = [
- "glam 0.33.10",
-]
-
-[[package]]
-name = "bri-ue2-render"
+name = "bri-ue2-import"
 version = "0.1.0"
 dependencies = [
  "bri-content",
- "bri-render",
- "bri-ue2-emitters",
+ "bri-effects-render",
+ "bri-emitters",
  "glam 0.33.10",
  "serde_json",
- "wgpu",
 ]
 
 [[package]]

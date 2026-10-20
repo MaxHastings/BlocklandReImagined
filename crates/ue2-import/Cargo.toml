@@ -1,0 +1,14 @@
+[package]
+name = "bri-ue2-import"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.93"
+publish = false
+description = "Turns Unreal Engine 2 effect data (a map's Projector actors) into the engine's own neutral projector and decal types"
+
+[dependencies]
+bri-content = { path = "../content" }
+bri-effects-render = { path = "../effects-render" }
+bri-emitters = { path = "../emitters" }
+glam.workspace = true
+serde_json.workspace = true

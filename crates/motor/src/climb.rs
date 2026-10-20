@@ -99,6 +99,9 @@ pub struct Volume {
     pub center: Vec3,
     /// Half its extent along the way a climber faces.
     pub depth: f32,
+    /// Half its extent along its own axes: across the rungs, up the rungs, and
+    /// toward the wall.
+    pub half: Vec3,
 }
 impl Volume {
     /// The unit vector a climber faces, as [`crate::player::PlayerState::forward`].
@@ -150,7 +153,20 @@ fn read(collider: &Collider) -> Volume {
             .shape()
             .as_cuboid()
             .map_or(0.0, |cuboid| cuboid.half_extents.z),
+        half: collider.shape().as_cuboid().map_or(Vec3::ZERO, |cuboid| {
+            Vec3::from_array(cuboid.half_extents.to_array())
+        }),
     }
+}
+
+/// Every climb volume of the world, for a planner that routes over ladders.
+pub fn all(physics: &PhysicsWorld) -> Vec<Volume> {
+    physics
+        .colliders
+        .iter()
+        .filter(|(_, collider)| is_climb(collider.user_data))
+        .map(|(_, collider)| read(collider))
+        .collect()
 }
 
 #[cfg(test)]
