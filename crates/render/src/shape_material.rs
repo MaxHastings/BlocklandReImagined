@@ -19,13 +19,40 @@ pub fn apply(
     subject: &str,
     plain: impl FnOnce(&str) -> Result<AlphaMode>,
 ) -> Result<()> {
+    apply_with(material, source, subject, false, plain)
+}
+
+/// The frame-buffer blends of map materials (docs/modding/materials.md): true modulate,
+/// modulate (2x), darken, screen, premultiplied, invisible, true additive and multiply.
+/// Only a loader that maps every one of them may accept them.
+pub const FRAME_BLENDS: [&str; 7] = [
+    "multiply",
+    "modulate",
+    "darken",
+    "screen",
+    "premultiplied",
+    "invisible",
+    "true_additive",
+];
+
+/// [`apply`], for a loader that also honours the frame-buffer blends in [`FRAME_BLENDS`]
+/// (`frame_blends`): `plain` receives them like the other names, and a cutout on one of them
+/// is refused like one on an additive material.
+pub fn apply_with(
+    material: &mut Material,
+    source: &ShapeMaterial,
+    subject: &str,
+    frame_blends: bool,
+    plain: impl FnOnce(&str) -> Result<AlphaMode>,
+) -> Result<()> {
     let blend = source.blend.as_str();
-    if !matches!(blend, "opaque" | "alpha" | "additive") {
+    let frame = frame_blends && FRAME_BLENDS.contains(&blend);
+    if !frame && !matches!(blend, "opaque" | "alpha" | "additive") {
         bail!("Unsupported {subject} blend {blend}");
     }
     material.double_sided = source.double_sided;
     match source.alpha_cutoff {
-        Some(_) if blend == "additive" => {
+        Some(_) if blend == "additive" || frame => {
             bail!(
                 "{subject}/{}: an alpha cutoff on an additive material has no meaning here",
                 source.name
@@ -83,6 +110,22 @@ mod tests {
         let mut material = Material::vertex_lit("odd", 0);
         let error = apply(&mut material, &source, "tree", |_| Ok(AlphaMode::Opaque)).unwrap_err();
         assert!(error.to_string().contains("multiply"));
+        // A loader that maps the frame-buffer blends may accept them; a cutout on one is refused.
+        let mut seen = String::new();
+        apply_with(&mut material, &source, "map", true, |blend| {
+            seen = blend.into();
+            Ok(AlphaMode::Opaque)
+        })
+        .unwrap();
+        assert_eq!(seen, "multiply");
+        source.alpha_cutoff = Some(0.5);
+        assert!(
+            apply_with(&mut material, &source, "map", true, |_| Ok(
+                AlphaMode::Opaque
+            ))
+            .is_err()
+        );
+        source.alpha_cutoff = None;
         source.blend = "additive".into();
         source.alpha_cutoff = Some(0.5);
         assert!(apply(&mut material, &source, "tree", |_| Ok(AlphaMode::Opaque)).is_err());

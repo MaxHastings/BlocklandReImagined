@@ -61,6 +61,7 @@ pub(super) fn backdrop(
     let mut backdrop_opts = Options::new(path.clone(), opts.out.clone(), Kind::Prop);
     backdrop_opts.scale = opts.scale;
     backdrop_opts.fps = opts.fps;
+    backdrop_opts.original_lighting = opts.lighting.is_some();
     let prefix = format!("{id}_{name}_");
     let converted = convert(&doc, path.parent(), &backdrop_opts, &name, &prefix)
         .context("Converting the backdrop")?;

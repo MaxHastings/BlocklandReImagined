@@ -8,6 +8,8 @@ pub(super) struct Lighting {
     pub(super) reflections: Option<bri_render::reflection::Reflections>,
     /// The cube metal surfaces reflect, drawn around the nearest one.
     pub(super) environment_probe: Option<bri_render::environment_probe::EnvironmentProbe>,
+    /// The run-time multiplier of baked lightmaps ([`bri_render::scene::Camera::lightmap`]); 1 unless a game mode raises it (night vision).
+    pub(super) lightmap_scale: f32,
 }
 
 /// Compatibility preparation runs only for a compatibility scene: Classic's
@@ -553,6 +555,7 @@ mod tests {
             scatter: Vec::new(),
             backdrop: None,
             regions: None,
+            decals: None,
             modern_lights: Some(Vec::new()),
             light_animations: Vec::new(),
             light_spots: Vec::new(),

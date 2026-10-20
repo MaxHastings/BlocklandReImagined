@@ -16,9 +16,11 @@ struct Camera {
     haze:vec4<f32>,
     // Ambient inside spaces the sky cannot see (SceneData::enclosed_ambient); w 1 when set.
     enclosed:vec4<f32>,
+    // x: the run-time multiplier of baked lightmaps on physical materials (Camera::lightmap).
+    lightmap:vec4<f32>,
 };
 @group(0) @binding(0) var<uniform> camera:Camera;
-// color.w 1 marks a map light drawn with the shaded lights' linear falloff.
+// color.w 1 marks a map light drawn with the shaded lights' linear falloff; 2 the cubic curve 2 (1 - 3 t^2 + 2 t^3) of t = distance / radius.
 struct PointLight { position_radius:vec4<f32>, color:vec4<f32>, cone:vec4<f32> };
 // count.x lights; the grid (crate::light_grid) has its origin and inverse
 // cell size in grid_origin, its dimensions and 1 when built in grid_dims.
@@ -58,7 +60,9 @@ fn point_illumination(position:vec3<f32>,normal:vec3<f32>)->vec3<f32> {
         let falloff=max(1.0-distance/max(light.position_radius.w,0.0001),0.0);
         // color.w 1: a map light past the shaded budget, linear like the
         // shaded ones (light_given); effect and vehicle lights stay smooth.
-        let shaped=select(falloff*falloff,falloff,light.color.w>0.5);
+        var shaped=select(falloff*falloff,falloff,light.color.w>0.5);
+        // color.w 2: the cubic curve 2 (1 - 3 t^2 + 2 t^3), t the distance over the radius.
+        if light.color.w>1.5 {let t=min(distance/max(light.position_radius.w,0.0001),1.0); shaped=2.0*(1.0-3.0*t*t+2.0*t*t*t);}
         result+=light.color.rgb*shaped*max(dot(n,delta/max(distance,0.0001)),0.0)*point_cone(light,-delta/max(distance,0.0001));
     }
     return result;
@@ -81,7 +85,9 @@ fn vertex_point_illumination(position:vec3<f32>,normal:vec3<f32>)->vec3<f32> {
         let radius=light.position_radius.w;
         if d2>=radius*radius {continue;}
         let facing=max(dot(n,delta*inverseSqrt(max(d2,0.00000001))),0.0);
-        result+=light.color.rgb*facing*point_cone(light,-delta*inverseSqrt(max(d2,0.00000001)))/(1.0+GL_QUADRATIC_ATTENUATION*d2);
+        var reach=1.0/(1.0+GL_QUADRATIC_ATTENUATION*d2);
+        if light.color.w>1.5 {let t=sqrt(d2)/max(radius,0.0001); reach=2.0*(1.0-3.0*t*t+2.0*t*t*t);}
+        result+=light.color.rgb*facing*point_cone(light,-delta*inverseSqrt(max(d2,0.00000001)))*reach;
     }
     return result;
 }
@@ -913,7 +919,47 @@ fn map_light_sum(position:vec3<f32>,normal:vec3<f32>,visibility:MapVisibility,la
     }
     return out;
 }
-@group(1) @binding(15) var<uniform> material:array<vec4<f32>,8>;
+@group(1) @binding(15) var<uniform> material:array<vec4<f32>,20>;
+fn uv_hash(i:f32)->f32 {
+    var h=u32(abs(i)) *747796405u+2891336453u;
+    h=((h>>((h>>28u)+4u))^h)*277803737u;
+    return f32(((h>>22u)^h)&32767u)/32768.0;
+}
+// A UvMotion rotator (material[16..20]): the upper-left two-by-two of the rotation matrix of
+// angles base + rate t + amplitude sin(tau (fract(swing rate t) + phase)) about pitch, yaw, roll.
+fn uv_rotator(time:f32)->mat2x2<f32> {
+    let tau=6.283185307;
+    let base=material[16].yzw;
+    let rate=material[17].yzw;
+    let amplitude=material[18].yzw;
+    let swing=vec3<f32>(material[19].x,material[19].y,material[19].z);
+    let phase=vec3<f32>(material[17].x,material[18].x,material[19].w);
+    let cycles=time*swing;
+    let angle=base+rate*time+amplitude*sin(tau*((cycles-floor(cycles))+phase));
+    let cp=cos(angle.x);let sp=sin(angle.x);
+    let cy=cos(angle.y);let sy=sin(angle.y);
+    let cr=cos(angle.z);let sr=sin(angle.z);
+    // (u, v) . M: out.x = M00 u + M10 v, out.y = M01 u + M11 v with M00 = cp cy, M01 = cp sy,
+    // M10 = sr sp cy - cr sy, M11 = sr sp sy + cr cy; so the columns are (M00, M01), (M10, M11).
+    return mat2x2<f32>(
+        vec2<f32>(cp*cy,cp*sy),
+        vec2<f32>(sr*sp*cy-cr*sy,sr*sp*sy+cr*cy));
+}
+// A UvMotion wave (material[8] u, material[9] v): x the offset, y the scale.
+fn uv_wave(w:vec4<f32>,time:f32)->vec2<f32> {
+    let kind=u32(w.x+0.5);
+    let cycles=time*w.y;
+    let f=cycles-floor(cycles);
+    let tau=6.283185307;
+    if kind==1u { return vec2(sin(tau*(f+w.z))*w.w,1.0); }
+    if kind==2u { return vec2(0.0,1.0+sin(tau*(f+w.z))*w.w); }
+    if kind==3u { return vec2(0.0,1.0+sin(f*1.5707963+tau*w.z)*w.w); }
+    if kind==4u {
+        let held=select(floor(cycles)/max(abs(w.y),1e-6),time,f>w.z);
+        return vec2(uv_hash(floor(held*60.0))*w.w,1.0);
+    }
+    return vec2(0.0,1.0);
+}
 // v20 brick FX (blocklandv20.exe quad emitter 0x52ed70, docs/audits/bricks.md).
 // fx.w packs 1 + color + 8*shape + 32*corner + 128*depthStuds; fx.xyz is the
 // brick centre. Only brick materials read it.
@@ -954,11 +1000,19 @@ struct VertexOut {
     let color=local_color*tint;
     var out:VertexOut;out.position=camera.view_projection*vec4<f32>(position,1.0);
     out.uv=uv;
-    if material[5].x>0.5 {
+    if material[5].x>1.5 {
+        // A chain of modifiers composed on the CPU: u' = a u + c v + tx, v' = b u + d v + ty.
+        out.uv=vec2(material[5].y*uv.x+material[5].w*uv.y+material[6].y,material[5].z*uv.x+material[6].x*uv.y+material[6].z);
+    } else if material[5].x>0.5 {
         let angle=material[5].w+camera.atmosphere.z*material[7].z;
         let c=cos(angle);let s=sin(angle);
-        let local=uv*material[5].yz-material[7].xy;
-        out.uv=vec2(local.x*c-local.y*s,local.x*s+local.y*c)+material[7].xy+material[6].xy+camera.atmosphere.z*material[6].zw;
+        let wu=uv_wave(material[8],camera.atmosphere.z);
+        let wv=uv_wave(material[9],camera.atmosphere.z);
+        let stretched=(uv-material[7].xy)*vec2(wu.y,wv.y)+material[7].xy;
+        let local=stretched*material[5].yz-material[7].xy;
+        var turned=vec2(local.x*c-local.y*s,local.x*s+local.y*c);
+        if material[16].x>0.5 { turned=uv_rotator(camera.atmosphere.z)*local; }
+        out.uv=turned+material[7].xy+material[6].xy+camera.atmosphere.z*material[6].zw+vec2(wu.x,wv.x);
     }
     out.lightmap_uv=lightmap_uv;out.color=color;out.normal=normal;out.world_position=position;
     out.clip=dot(clip.xyz,position)+clip.w;
@@ -1171,8 +1225,8 @@ fn shade_surface(v:VertexOut)->vec4<f32> {
     // everything else fades out into it toward the visible distance.
     if material[0].x!=4.0 && material[0].x!=5.0
         && faded_out(v.position.xy,v.world_position-camera.eye.xyz,camera.atmosphere,camera.haze) {discard;}
-    if material[0].x==12.0 {return plasma_surface(v);}
-    if material[0].x==6.0 {
+    if SURFACE_GROUP==4u {return plasma_surface(v);}
+    if SURFACE_GROUP==1u {
         let time=camera.atmosphere.z;
         // Fluid space: Torque x/y plus the terrain's 1024 offset.
         let fluid=vec2<f32>(v.world_position.x+1024.0,1024.0-v.world_position.z);
@@ -1232,8 +1286,8 @@ fn shade_surface(v:VertexOut)->vec4<f32> {
         }
         return vec4<f32>(fogged(rgb,v.world_position),alpha);
     }
-    if material[0].x==10.0 {return metal_surface(v);}
-    if material[0].x==11.0 {return physical_surface(v);}
+    if SURFACE_GROUP==2u {return metal_surface(v);}
+    if SURFACE_GROUP==3u {return physical_surface(v);}
     if (material[0].x==4.0 || material[0].x==5.0) {
         // material[1].x: 0 a sky face or cloud (tinted by the sky colour),
         // 1 the fog backdrop (the live fog colour). Faces and clouds take the
@@ -1333,8 +1387,25 @@ fn shade_surface(v:VertexOut)->vec4<f32> {
         alpha=offset+range*min(t,period-t)/(period*0.5);
     }
     if alpha<=material[0].y {discard;}
+    if material[0].x==13.0 {
+        // LayerBlend: layers weighted by one RGBA map, times twice the vertex light.
+        // Alpha is the weights' total, so a one-layer pass whose map is that layer's alpha blends over what is behind it.
+        let w=textureSample(weights0,clamped,v.lightmap_uv);
+        return vec4<f32>(fogged(layer_blend_rgb(v),v.world_position),v.color.a*clamp(w.x+w.y+w.z+w.w,0.0,1.0));
+    }
+    if material[0].x==14.0 {
+        // Light baked into the vertices: the picture times twice the vertex colour, lit by nothing else.
+        let lit=min(display_color(textureSample(layer0,tiled,v.uv).rgb)*v.color.rgb*2.0,vec3<f32>(1.0));
+        return vec4<f32>(fogged(lit,v.world_position),alpha);
+    }
     if material[0].x==7.0 || material[0].x==8.0 {
         return vec4<f32>(fogged(pigment,v.world_position),alpha);
+    }
+    if (u32(material[0].w)&256u)!=0u {
+        // The original engine's baked surface: the picture times the lightmap times its strength (the lightmap holds half the
+        // light), saturated, then fog. Nothing live adds to it.
+        let baked=textureSampleLevel(lightmap,clamped_exact,v.lightmap_uv,0.0).rgb*material[7].w*camera.lightmap.x;
+        return vec4<f32>(fogged(min(pigment*baked,vec3<f32>(1.0)),v.world_position),alpha);
     }
     var baked_light=vec4<f32>(1.0);
     if lighting_mode()!=3 {baked_light=textureSampleLevel(lightmap,clamped_exact,v.lightmap_uv,0.0);}
@@ -1411,16 +1482,48 @@ fn shade_surface(v:VertexOut)->vec4<f32> {
     return vec4<f32>(fogged(display,v.world_position),alpha);
 }
 
+// LayerBlend: layers weighted by one RGBA map, times twice the vertex light.
+fn layer_blend_rgb(v:VertexOut)->vec3<f32> {
+    let w=textureSample(weights0,clamped,v.lightmap_uv);
+    var sum=vec3<f32>(0.0);
+    for (var i=0u;i<4u;i++) {
+        let m=material[10u+i];
+        let t=material[14u+i/2u];
+        let off=select(t.xy,t.zw,(i&1u)==1u);
+        let luv=vec2<f32>(m.x*v.uv.x+m.z*v.uv.y,m.y*v.uv.x+m.w*v.uv.y)+off;
+        var texel:vec3<f32>;
+        switch i {
+            case 0u: {texel=textureSample(layer0,tiled,luv).rgb;}
+            case 1u: {texel=textureSample(layer1,tiled,luv).rgb;}
+            case 2u: {texel=textureSample(layer2,tiled,luv).rgb;}
+            default: {texel=textureSample(layer3,tiled,luv).rgb;}
+        }
+        sum+=display_color(texel)*w[i];
+    }
+    return min(sum*v.color.rgb*2.0,vec3<f32>(1.0));
+}
 fn multiplicative_surface(v:VertexOut)->vec4<f32> {
     if v.clip<0.0 {discard;}
     if faded_out(v.position.xy,v.world_position-camera.eye.xyz,camera.atmosphere,camera.haze) {discard;}
     let texel=textureSample(layer0,tiled,v.uv);
-    let alpha=clamp(texel.a*v.color.a,0.0,1.0)*(1.0-fog_amount(v.world_position));
-    let multiplier=display_color(texel.rgb)*v.color.rgb;
-    return vec4<f32>(output_color(mix(vec3<f32>(1.0),multiplier,alpha)),0.0);
+    // A LayerBlend pass drawn through a frame blend (extra terrain passes add): its own colour, vertex alpha.
+    let layered=material[0].x==13.0;
+    let alpha=select(clamp(texel.a*v.color.a,0.0,1.0),v.color.a,layered)*(1.0-fog_amount(v.world_position));
+    let multiplier=select(display_color(texel.rgb)*v.color.rgb,layer_blend_rgb(v),layered);
+    let flags=u32(material[0].w);
+    // Frame blends fed by colour times alpha (Darken, Screen, Premultiplied),
+    // and Invisible, which blends (zero, one) and so adds nothing.
+    if (flags&128u)!=0u {return vec4<f32>(output_color(multiplier*alpha),alpha);}
+    // Multiply fades toward 1; Modulate (2 x source x destination) toward 0.5 in linear light.
+    let neutral=select(vec3<f32>(1.0),display_color(vec3<f32>(0.5)),(flags&64u)!=0u);
+    return vec4<f32>(output_color(mix(neutral,multiplier,alpha)),0.0);
 }
+// Which family of surface this pipeline draws, so the others are not compiled into it (the shader is
+// large and a compile costs seconds per pipeline): 0 ordinary, 1 water, 2 metal, 3 physical, 4 plasma,
+// 5 multiplicative (unlit frame blends). `WorldPipelines::group_of` picks it from the material.
+override SURFACE_GROUP:u32=0u;
 @fragment fn fs_main(v:VertexOut)->@location(0) vec4<f32> {
-    if (u32(material[0].w)&8u)!=0u {return multiplicative_surface(v);}
+    if SURFACE_GROUP==5u {return multiplicative_surface(v);}
     return shade_surface(v);
 }
 // Reuse the surface's cut-out, clip and far-fade rules. Only visible opaque
@@ -1618,7 +1721,7 @@ fn physical_diffuse(v:VertexOut,n:vec3<f32>)->vec3<f32> {
 fn physical_light(v:VertexOut,n:vec3<f32>)->vec3<f32> {
     if (u32(material[0].w)&16u)==0u {return physical_diffuse(v,n);}
     let p=v.world_position;
-    let baked=textureSample(lightmap,clamped,v.lightmap_uv).rgb*material[7].w;
+    let baked=textureSample(lightmap,clamped,v.lightmap_uv).rgb*material[7].w*camera.lightmap.x;
     var light=shadowed_lightmap(baked*sky_follow(),p,n);
     if lighting_mode()==3 {
         light+=dynamic_light_sum(p,n,SPECULAR_POWER).diffuse+point_illumination(p,n);

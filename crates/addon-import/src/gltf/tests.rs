@@ -966,6 +966,129 @@ fn regions_move_into_the_native_frame_and_the_import_scale() {
 }
 
 #[test]
+fn decals_copy_their_pictures_and_list_the_set_in_the_bundle() {
+    use bri_content::decals::{Blend, Decal, DecalSet, Receivers};
+    let root = tempfile::tempdir().unwrap();
+    let input = root.path().join("Test Room.glb");
+    std::fs::write(&input, room(false)).unwrap();
+    let receivers = Receivers {
+        enabled: true,
+        facing_limit: 0.0,
+        fade_by_facing: false,
+    };
+    let set = DecalSet {
+        decals: vec![Decal {
+            picture: "spot.png".into(),
+            world_to_texture: glam::Mat4::IDENTITY.to_cols_array(),
+            perspective: false,
+            planes: [[0.0, 1.0, 0.0, 0.0]; 6],
+            forward: [0.0, -1.0, 0.0],
+            blend: Blend::Alpha,
+            wrap: [false, true],
+            two_sided: false,
+            spin_degrees_per_second: 0.0,
+            surfaces: receivers,
+            ground: receivers,
+        }],
+        notes: vec!["a note".into()],
+    };
+    let dir = root.path().join("decals");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("decals.json"), serde_json::to_vec(&set).unwrap()).unwrap();
+    std::fs::write(
+        dir.join("spot.png"),
+        bri_content::testing::png(2, 2, |_, _| [10, 20, 30, 255]).unwrap(),
+    )
+    .unwrap();
+    let mut opts = Options::new(&input, root.path().join("test_room"), Kind::Map);
+    opts.decals = Some(dir.join("decals.json"));
+    let report = import(&opts).unwrap();
+    let out = root.path().join("test_room");
+    let bundle: Value =
+        serde_json::from_slice(&std::fs::read(out.join("map/bundle.json")).unwrap()).unwrap();
+    let file = bundle["decals"]["test_room:map/test_room"]
+        .as_str()
+        .unwrap();
+    let back: DecalSet =
+        serde_json::from_slice(&std::fs::read(out.join("map").join(file)).unwrap()).unwrap();
+    assert!(out.join("map").join(&back.decals[0].picture).is_file());
+    assert!(report.warnings.iter().any(|w| w.contains("a note")));
+    let check = bri_package_runtime::check::check(&out);
+    assert!(check.ok, "{check} {:?}", report.warnings);
+}
+
+/// A one-layer lit-by-vertex mesh whose node names its lights (`mask` is the visibility mask of its one light).
+fn vertex_lit_import(mask: &str) -> Vec<[f32; 4]> {
+    let mut g = super::testing::Gltf::new();
+    g.material(
+        "sand",
+        [1.0; 4],
+        Some((2, 2, [200, 180, 120, 255].repeat(4))),
+        json!({}),
+    );
+    g.material(
+        "weights",
+        [1.0; 4],
+        Some((2, 2, [255, 0, 0, 255].repeat(4))),
+        json!({}),
+    );
+    let base = g.material(
+        "pass0",
+        [1.0; 4],
+        None,
+        json!({ "extras": { "bri_layer_blend": {
+            "layers": [{ "index": 0, "transform": [1.0, 0.0, 0.0, 1.0, 0.0, 0.0] }],
+            "weights": { "index": 1 },
+        } } }),
+    );
+    let (p, n, uv, i) = super::testing::cuboid(Vec3::ZERO, Vec3::new(4.0, 1.0, 4.0));
+    let flat = |v: &[Vec3]| v.iter().flat_map(|v| v.to_array()).collect::<Vec<f32>>();
+    let (a, b, c, d) = (
+        g.floats(&flat(&p), 3),
+        g.floats(&flat(&n), 3),
+        g.floats(&uv.concat(), 2),
+        g.uints(&i, 1),
+    );
+    let mesh = g.mesh(
+        "Mesh",
+        vec![json!({ "attributes": { "POSITION": a, "NORMAL": b, "TEXCOORD_0": c, "TEXCOORD_1": c }, "indices": d, "material": base })],
+    );
+    let bytes = p.len().div_ceil(8);
+    let mask = mask.repeat(bytes);
+    g.node(
+        json!({ "name": "Mesh", "mesh": mesh, "extras": { "bri_vertex_lights": {
+            "ambient": [0.0, 0.0, 0.0],
+            "lights": [{ "position": [0.0, 2.0, 0.0], "color": [1.0, 0.0, 0.0], "radius": 10.0, "effect": { "kind": "point" } }],
+            "visible": [mask],
+        } } }),
+        None,
+    );
+    g.node(
+        json!({ "name": "spawn", "translation": [0.0, 2.0, 0.0] }),
+        None,
+    );
+    let root = tempfile::tempdir().unwrap();
+    let input = root.path().join("lit.glb");
+    std::fs::write(&input, g.glb()).unwrap();
+    let report = import(&Options::new(&input, root.path().join("lit"), Kind::Map)).unwrap();
+    let dir = root.path().join("lit");
+    let drawn =
+        bri_render::scene_loader::load_map_bundle_dynamic(&dir.join("map"), &report.model).unwrap();
+    drawn.scene.vertices.iter().map(|v| v.color).collect()
+}
+
+#[test]
+fn a_node_that_names_its_lights_is_lit_by_them_per_vertex() {
+    let lit = vertex_lit_import("ff");
+    assert!(lit.iter().any(|c| c[0] > 0.2 && c[1] == 0.0), "{lit:?}");
+    let dark = vertex_lit_import("00");
+    assert!(
+        !dark.iter().any(|c| c[0] > 0.0 && c[1] == 0.0),
+        "no light reaches any vertex: {dark:?}"
+    );
+}
+
+#[test]
 fn a_map_imports_as_an_add_on_the_game_loads() {
     let (root, report) = import_room(false);
     let dir = root.path().join("test_room");
@@ -1150,6 +1273,138 @@ fn a_map_imports_as_an_add_on_the_game_loads() {
     assert!(md.contains("(map)"), "{md}");
     // The spot light shines down its cone.
     assert_eq!(drawn.light_spots.len(), 1);
+}
+
+#[test]
+fn a_layer_blend_material_becomes_a_weighted_layer_pass_the_renderer_draws() {
+    use bri_render::scene::{AlphaMode, MaterialKind};
+    // A terrain slab drawn in two passes: three layers weighted by one map, then one more layer blended over by its own map.
+    let mut g = super::testing::Gltf::new();
+    let tile = |rgb: [u8; 3]| {
+        (
+            2u32,
+            2u32,
+            rgb.iter()
+                .copied()
+                .chain([255])
+                .cycle()
+                .take(16)
+                .collect::<Vec<u8>>(),
+        )
+    };
+    let texture_of = |g: &mut super::testing::Gltf, name: &str, rgb| {
+        g.material(name, [1.0; 4], Some(tile(rgb)), json!({}));
+        g.json["textures"].as_array().unwrap().len() - 1
+    };
+    let (sand, rock, snow, weights_a, weights_b) = (
+        texture_of(&mut g, "sand", [200, 180, 120]),
+        texture_of(&mut g, "rock", [90, 90, 90]),
+        texture_of(&mut g, "snow", [240, 240, 250]),
+        texture_of(&mut g, "weights_a", [255, 0, 0]),
+        texture_of(&mut g, "weights_b", [128, 0, 0]),
+    );
+    let base = g.material(
+        "pass0",
+        [1.0; 4],
+        None,
+        json!({ "extras": { "bri_layer_blend": {
+            "layers": [
+                { "index": sand, "transform": [0.5, 0.0, 0.0, 0.5, 0.0, 0.0] },
+                { "index": rock, "transform": [0.25, 0.0, 0.0, 0.25, 0.5, 0.25] },
+                { "index": snow, "transform": [1.0, 0.0, 0.0, 1.0, 0.0, 0.0] },
+            ],
+            "weights": { "index": weights_a },
+        } } }),
+    );
+    let over = g.material(
+        "pass1",
+        [1.0; 4],
+        None,
+        json!({ "alphaMode": "BLEND", "extras": { "bri_layer_blend": {
+            "layers": [{ "index": snow, "transform": [1.0, 0.0, 0.0, 1.0, 0.0, 0.0] }],
+            "weights": { "index": weights_b },
+        } } }),
+    );
+    let (p, n, uv, i) = super::testing::cuboid(Vec3::ZERO, Vec3::new(4.0, 1.0, 4.0));
+    let flat = |v: &[Vec3]| v.iter().flat_map(|v| v.to_array()).collect::<Vec<f32>>();
+    let (a, b, c, d) = (
+        g.floats(&flat(&p), 3),
+        g.floats(&flat(&n), 3),
+        g.floats(&uv.concat(), 2),
+        g.uints(&i, 1),
+    );
+    // The first pass carries baked vertex light (0.2); the second gives none.
+    let light = g.floats(&[0.2, 0.2, 0.2, 1.0].repeat(p.len()), 4);
+    let mesh = g.mesh(
+        "Terrain",
+        vec![
+            json!({ "attributes": { "POSITION": a, "NORMAL": b, "TEXCOORD_0": c, "TEXCOORD_1": c, "COLOR_0": light }, "indices": d, "material": base }),
+            json!({ "attributes": { "POSITION": a, "NORMAL": b, "TEXCOORD_0": c, "TEXCOORD_1": c }, "indices": d, "material": over }),
+        ],
+    );
+    g.node(json!({ "name": "Terrain", "mesh": mesh }), None);
+    g.node(
+        json!({ "name": "spawn", "translation": [0.0, 2.0, 0.0] }),
+        None,
+    );
+    let root = tempfile::tempdir().unwrap();
+    let input = root.path().join("terrain.glb");
+    std::fs::write(&input, g.glb()).unwrap();
+    let report = import(&Options::new(
+        &input,
+        root.path().join("terrain"),
+        Kind::Map,
+    ))
+    .unwrap();
+    let dir = root.path().join("terrain");
+    let shape: Shape =
+        serde_json::from_slice(&std::fs::read(dir.join("map/terrain.shape.json")).unwrap())
+            .unwrap();
+    let blends: Vec<_> = shape
+        .materials
+        .iter()
+        .filter_map(|m| m.layers.as_ref())
+        .collect();
+    assert_eq!(blends.len(), 2, "both passes keep their layer lists");
+    assert_eq!(blends[0].layers.len(), 3);
+    assert_eq!(blends[0].transforms[1], [0.25, 0.0, 0.0, 0.25, 0.5, 0.25]);
+    assert_eq!(blends[1].layers.len(), 1);
+    // The renderer draws them as LayerBlend materials: the second blends over the first, and a layer-blended surface's vertex light starts neutral (0.5).
+    let drawn =
+        bri_render::scene_loader::load_map_bundle_dynamic(&dir.join("map"), &report.model).unwrap();
+    let layered: Vec<_> = drawn
+        .scene
+        .materials
+        .iter()
+        .filter(|m| m.kind == MaterialKind::LayerBlend)
+        .collect();
+    assert_eq!(layered.len(), 2);
+    assert_eq!(
+        layered[0].layer_transforms.unwrap()[1],
+        [0.25, 0.0, 0.0, 0.25, 0.5, 0.25]
+    );
+    assert_eq!(layered[0].alpha, AlphaMode::Opaque);
+    assert_eq!(layered[1].alpha, AlphaMode::Blend);
+    assert_ne!(
+        layered[0].images[9], layered[1].images[9],
+        "each pass has its own weight map"
+    );
+    // The first pass's vertices carry the file's light (0.2, to a byte); the second pass, which gave none, the neutral 0.5.
+    let near = |a: f32, b: f32| (a - b).abs() < 0.005;
+    assert!(
+        drawn
+            .scene
+            .vertices
+            .iter()
+            .any(|v| near(v.color[0], 0.2) && v.color[3] == 1.0)
+    );
+    assert!(
+        drawn
+            .scene
+            .vertices
+            .iter()
+            .any(|v| near(v.color[0], 0.5) && v.color[3] == 1.0)
+    );
 }
 
 #[test]
@@ -1355,6 +1610,7 @@ fn metal_and_glow_come_from_the_material() {
                 { "name": "Ember", "emissiveFactor": [0.2, 0.0, 0.0] },
                 {"name":"Panel","extras":{"bri_uv_motion":{"center":[0.5,0.5],"rotation_rate_degrees":180.0}}},
                 {"name":"Invalid motion","extras":{"bri_uv_motion":{"rotation_rate_degrees":1e9}}},
+                {"name":"Chained","extras":{"bri_uv_chain":[{"scale":[0.5,0.5]},{"offset":[0.1,0.2],"rotator":{"base_degrees":[0,90,0]}}]}},
             ]
         }))
         .unwrap()
@@ -1370,7 +1626,7 @@ fn metal_and_glow_come_from_the_material() {
             .0
     };
     let (steel, paint, lamp, ember) = (get(0), get(1), get(2), get(3));
-    let panel = get(4);
+    let (panel, chained) = (get(4), get(6));
     let motion = panel
         .uv_motion
         .expect("authored texture motion survives import");
@@ -1379,6 +1635,13 @@ fn metal_and_glow_come_from_the_material() {
     assert!(
         super::make_material(&doc, None, Some(5), "", &mut taken, &mut report).is_err(),
         "invalid motion must be reported, never silently ignored"
+    );
+    // A chain of modifiers, outermost first, survives import in order.
+    assert_eq!(chained.uv_chain.len(), 2);
+    assert_eq!(chained.uv_chain[0].scale, [0.5, 0.5]);
+    assert_eq!(
+        chained.uv_chain[1].rotator.unwrap().base_degrees,
+        [0., 90., 0.]
     );
     let metal = steel.metal.expect("steel is metal");
     assert_eq!((metal.color, metal.roughness), ([1.0; 3], 0.3));

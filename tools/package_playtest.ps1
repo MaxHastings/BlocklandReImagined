@@ -157,9 +157,8 @@ function New-ModPackage([string]$Directory, [string]$Prefix) {
 # (tools/shader-compiler.json). With dxcompiler.dll there, wgpu compiles the
 # world's shaders with DXC instead of the system's FXC: 3 s instead of about
 # 20 s on an RTX 4070 SUPER, and minutes on a busy CPU. Without it the game
-# still runs on FXC. Only dxcompiler.dll (LLVM and MIT licences) ships, with
-# its licences; dxil.dll, under Microsoft's own terms, does not, and DXC
-# hashes the shaders itself without it.
+# still runs on FXC. dxcompiler.dll and dxil.dll ship with their licences
+# (LLVM, MIT and Microsoft's, in tools/shader-compiler.json).
 function Get-ShaderCompilerPin {
     $path = Join-Path $RepoRoot 'tools/shader-compiler.json'
     if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { throw "Missing shader compiler pin: $path" }

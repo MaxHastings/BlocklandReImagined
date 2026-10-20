@@ -14,11 +14,14 @@ mod export;
 mod lod;
 mod map;
 mod map_backdrop;
+mod map_decals;
 mod map_environment;
 mod map_regions;
 mod map_scatter;
 mod map_terrain;
 mod read;
+mod static_lighting;
+mod vertex_lights;
 mod write;
 pub use export::{ExportReport, export_map, find_map};
 #[doc(hidden)]
@@ -27,8 +30,8 @@ pub mod testing;
 use anyhow::{Context, Result, bail, ensure};
 use bri_console::Clamp;
 use bri_content::shape::{
-    Animation, Detail, Influence, Material, Mesh, Metal, Node, NodeTrack, Object, Primitive, Shape,
-    Skin, Surface,
+    Animation, Detail, Influence, LayerBlend, Material, Mesh, Metal, Node, NodeTrack, Object,
+    Primitive, Shape, Skin, Surface,
 };
 use glam::{Mat4, Quat, Vec3};
 pub use read::Document;
@@ -119,6 +122,13 @@ pub struct Options {
     pub backdrop: Option<PathBuf>,
     /// A map's regions: a JSON file in the glTF's frame (`map_regions.rs`).
     pub regions: Option<PathBuf>,
+    /// A map's decals: a JSON file in the native frame with its pictures beside it (`map_decals.rs`).
+    pub decals: Option<PathBuf>,
+    /// The asset lane's static-mesh lighting inputs (`static_lighting.rs`).
+    pub lighting: Option<PathBuf>,
+    /// The model is lit as the original engine lights a baked level (set for a map's backdrop when the map has `lighting`): a
+    /// surface with a lightmap is lit by it alone, one without is drawn as its picture.
+    pub original_lighting: bool,
 }
 impl Options {
     pub fn new(input: impl Into<PathBuf>, out: impl Into<PathBuf>, kind: Kind) -> Self {
@@ -145,6 +155,9 @@ impl Options {
             scatter: Vec::new(),
             backdrop: None,
             regions: None,
+            decals: None,
+            lighting: None,
+            original_lighting: false,
         }
     }
 }
@@ -370,6 +383,9 @@ struct GNode {
     skin: Option<usize>,
 }
 
+/// A layer-blended surface's vertex colour where the file gives none: the light the shader doubles back to 1.
+const NEUTRAL_LIGHT: [u8; 4] = [128, 128, 128, 255];
+
 /// A node's uniform scale and whether its scale was uniform.
 fn uniform(s: Vec3) -> (f32, bool) {
     let u = (s.x * s.y * s.z).abs().cbrt();
@@ -588,6 +604,27 @@ pub fn convert(
         ..Report::default()
     };
     let json = &doc.json;
+    // The lane's static-mesh lighting inputs, with each zone's ambient from the regions file.
+    let static_lighting = match &opts.lighting {
+        Some(dir) => {
+            let ambient = match &opts.regions {
+                Some(path) => {
+                    let map: bri_content::regions::RegionMap = serde_json::from_slice(
+                        &std::fs::read(path)
+                            .with_context(|| format!("Reading regions {}", path.display()))?,
+                    )
+                    .context("Reading the map's regions")?;
+                    map.regions
+                        .iter()
+                        .map(|r| r.ambient.unwrap_or([0.0; 3]))
+                        .collect()
+                }
+                None => Vec::new(),
+            };
+            Some(static_lighting::StaticLighting::load(dir, ambient)?)
+        }
+        None => None,
+    };
     // Nodes, their parents and rest transforms.
     let mut nodes: Vec<GNode> = Vec::new();
     for (i, n) in array(json, "nodes").iter().enumerate() {
@@ -750,6 +787,8 @@ pub fn convert(
     let mut textures: BTreeMap<String, Vec<u8>> = BTreeMap::new();
     let mut material_index: BTreeMap<Option<usize>, usize> = BTreeMap::new();
     let mut material_sources: Vec<Option<usize>> = Vec::new();
+    // Materials the world mesh's static meshes use: lit by their vertices.
+    let mut lit_materials: BTreeSet<usize> = BTreeSet::new();
     let mut material_names = BTreeSet::new();
     let mut material = |index: Option<usize>, report: &mut Report| -> Result<usize> {
         if let Some(i) = material_index.get(&index) {
@@ -765,6 +804,7 @@ pub fn convert(
         material_sources.push(index);
         material_index.insert(index, at);
         // Each surface map is a material of its own, which the surface names.
+        let transforms = maps.layer_transforms.clone();
         for (suffix, png) in maps.named() {
             let mut helper = materials[at].clone();
             helper.name = format!("{name}_{suffix}");
@@ -774,10 +814,25 @@ pub fn convert(
             helper.blend = "opaque".into();
             helper.metal = None;
             helper.surface = None;
+            helper.layers = None;
             textures.insert(helper.name.clone(), png);
             materials.push(helper);
             material_sources.push(None);
             let k = Some(materials.len() - 1);
+            // A terrain's layers and weight map name their materials in a `LayerBlend` instead.
+            if suffix == "weights" || suffix.starts_with("layer") {
+                let blend = materials[at].layers.get_or_insert_with(|| LayerBlend {
+                    layers: Vec::new(),
+                    weights: 0,
+                    transforms: transforms.clone(),
+                });
+                match k {
+                    Some(k) if suffix == "weights" => blend.weights = k,
+                    Some(k) => blend.layers.push(k),
+                    None => {}
+                }
+                continue;
+            }
             let surface = materials[at]
                 .surface
                 .as_mut()
@@ -845,7 +900,31 @@ pub fn convert(
             billboard: false,
             billboard_y: false,
             uv1: Vec::new(),
+            colors: Vec::new(),
+            vertex_rig: None,
         };
+        // Baked static-mesh light for the world node's vertices (the lane's inputs).
+        let world_lighting = if names[k] == static_lighting::WORLD_NODE {
+            static_lighting.as_ref()
+        } else {
+            None
+        };
+        // Baked light for this node's vertices, counted across its primitives.
+        let node_vertices: usize = array(gmesh, "primitives")
+            .iter()
+            .filter_map(|p| p["attributes"]["POSITION"].as_u64())
+            .map(|a| {
+                array(json, "accessors")
+                    .get(a as usize)
+                    .and_then(|a| a["count"].as_u64())
+                    .unwrap_or(0) as usize
+            })
+            .sum();
+        let vertex_lights =
+            vertex_lights::read(&json["nodes"][n]["extras"], own_scale, node_vertices)
+                .with_context(|| format!("`{}`'s bri_vertex_lights", names[k]))?;
+        let mut node_vertex = 0usize;
+        let mut rig = world_lighting.map(|_| static_lighting::RigBuilder::default());
         let mut influences: Vec<Influence> = Vec::new();
         let mut unweighted = 0;
         let mut dropped_weights = 0;
@@ -888,7 +967,21 @@ pub fn convert(
                 .as_u64()
                 .map(|a| doc.floats(a as usize))
                 .transpose()?;
-            if attr.get("COLOR_0").is_some() && warned.insert("color") {
+            // A layer-blended surface (a terrain) is lit by its vertex colours: they are its baked light and are kept.
+            let mapped = world_lighting.is_some_and(|l| l.maps(pi));
+            let layered = mapped
+                || p["material"].as_u64().is_some_and(|m| {
+                    array(json, "materials").get(m as usize).is_some_and(|g| {
+                        g["extras"]["bri_layer_blend"].is_object()
+                            || g["extras"]["bri_vertex_light"].as_bool() == Some(true)
+                    })
+                });
+            let colors = attr["COLOR_0"]
+                .as_u64()
+                .filter(|_| layered)
+                .map(|a| doc.floats(a as usize))
+                .transpose()?;
+            if attr.get("COLOR_0").is_some() && !layered && warned.insert("color") {
                 report.warnings.push(
                     "vertex colours are ignored; bake them into the Base Color texture".into(),
                 );
@@ -977,6 +1070,69 @@ pub fn convert(
                     None => mesh.uv1.extend(std::iter::repeat_n([0.0, 0.0], count)),
                 }
             }
+            // The world mesh's static meshes keep their own colour (white without one) for the light the rig works out when the map loads.
+            let colors = match (&colors, mapped) {
+                (None, true) => Some(vec![vec![1.0, 1.0, 1.0, 1.0]; count]),
+                _ => colors,
+            };
+            if let (Some(builder), Some(lighting)) = (rig.as_mut(), world_lighting) {
+                builder.extend(lighting, pi, count);
+            }
+            // A node that names its lights has its layer-blended surfaces lit by them, times any colours they already have.
+            let colors = match (&vertex_lights, layered) {
+                (Some(set), true) => Some(
+                    (0..count)
+                        .map(|i| {
+                            let light = set.at(
+                                node_vertex + i,
+                                Vec3::from(mesh.positions[base as usize + i]),
+                                Vec3::from(mesh.normals[base as usize + i]),
+                            );
+                            let own = colors.as_ref().map_or([1.0; 4], |rows| {
+                                [
+                                    rows[i][0],
+                                    rows[i][1],
+                                    rows[i][2],
+                                    rows[i].get(3).copied().unwrap_or(1.0),
+                                ]
+                            });
+                            vec![
+                                light[0] * own[0],
+                                light[1] * own[1],
+                                light[2] * own[2],
+                                own[3],
+                            ]
+                        })
+                        .collect::<Vec<_>>(),
+                ),
+                (Some(_), false) if warned.insert("vertex lights") => {
+                    report.warnings.push(
+                        "bri_vertex_lights lights a layer-blended surface; others keep their lightmap or texture".into(),
+                    );
+                    colors
+                }
+                _ => colors,
+            };
+            node_vertex += count;
+            // Vertex colours ride along once a primitive has them; the vertices before it, and later ones without, get the neutral light (128).
+            if colors.is_some() || !mesh.colors.is_empty() {
+                let filled = mesh.positions.len() - count;
+                mesh.colors.resize(filled, NEUTRAL_LIGHT);
+                match &colors {
+                    Some(rows) => mesh.colors.extend(rows.iter().map(|c| {
+                        let byte = |v: f32| (v.clamped(0.0, 1.0) * 255.0).round() as u8;
+                        [
+                            byte(c[0]),
+                            byte(c[1]),
+                            byte(c[2]),
+                            c.get(3).map_or(255, |a| byte(*a)),
+                        ]
+                    })),
+                    None => mesh
+                        .colors
+                        .extend(std::iter::repeat_n(NEUTRAL_LIGHT, count)),
+                }
+            }
             if skinned {
                 let joint_rows =
                     doc.uints(attr["JOINTS_0"].as_u64().unwrap_or(u64::MAX) as usize)?;
@@ -1040,6 +1196,9 @@ pub fn convert(
                     &mut report,
                 )?)
             };
+            if mapped && let Some(m) = material {
+                lit_materials.insert(m);
+            }
             mesh.primitives.push(Primitive {
                 material,
                 triangles: triangles
@@ -1090,6 +1249,11 @@ pub fn convert(
             }
             skin_out.influences = influences;
             report.bones = report.bones.max(joints.len());
+        }
+        if let Some(builder) = rig.take() {
+            let built = builder.finish(own_scale);
+            built.validate(mesh.positions.len())?;
+            mesh.vertex_rig = Some(built);
         }
         report.triangles += mesh
             .primitives
@@ -1181,6 +1345,41 @@ pub fn convert(
         }
     }
 
+    // A map brought with the original engine's lighting (`--lighting`) is lit by its lightmaps alone where it has them.
+    if opts.original_lighting {
+        for (m, source) in material_sources.iter().enumerate() {
+            let baked = source
+                .is_some_and(|g| array(json, "materials")[g]["extras"]["bri_lightmap"].is_object());
+            let layered = materials[m].layers.is_some();
+            match (baked, materials[m].surface.as_mut()) {
+                (true, Some(surface)) => surface.lightmap_exact = true,
+                (false, _) if !layered => {
+                    materials[m].unlit = true;
+                    materials[m].vertex_light = true;
+                }
+                _ => {}
+            }
+        }
+    }
+    if opts.lighting.is_some() {
+        for (m, source) in material_sources.iter().enumerate() {
+            let baked = source
+                .is_some_and(|g| array(json, "materials")[g]["extras"]["bri_lightmap"].is_object());
+            if let (true, Some(surface)) = (baked, materials[m].surface.as_mut()) {
+                surface.lightmap_exact = true;
+            }
+        }
+    }
+    for &m in &lit_materials {
+        if materials[m].layers.is_none()
+            && materials[m]
+                .surface
+                .as_ref()
+                .is_none_or(|s| s.lightmap.is_none())
+        {
+            materials[m].vertex_light = true;
+        }
+    }
     let mut shape = Shape {
         schema_version: 1,
         id: format!("gltf:{id}"),
@@ -1496,6 +1695,12 @@ fn rescale(shape: &mut Shape, k: f32) {
     for mesh in shape.meshes.iter_mut().flatten() {
         for p in &mut mesh.positions {
             *p = (Vec3::from(*p) * k).to_array();
+        }
+        if let Some(rig) = &mut mesh.vertex_rig {
+            // Mesh positions grew by k, so the matrix that maps them to the lights' frame shrinks by it.
+            for v in &mut rig.to_lights[..9] {
+                *v /= k;
+            }
         }
         if let Some(skin) = &mut mesh.skin {
             for m in &mut skin.inverse_bind {
@@ -2146,6 +2351,45 @@ fn make_material(
             maps.lightmap = Some(png_of(&m["extras"]["bri_lightmap"], report)?);
         }
     }
+    // `extras.bri_layer_blend`: `layers`, up to four {texture reference (`index`), `transform` [a, b, c, d, tx, ty]}, and `weights`, a
+    // texture reference whose red, green, blue and alpha weight them, read with the second UV set. The material is then a weighted sum
+    // of the layers (a terrain's), lit by the vertex light only.
+    if let Some(spec) = m["extras"].get("bri_layer_blend").filter(|v| v.is_object()) {
+        let layers = spec["layers"].as_array().map(Vec::as_slice).unwrap_or(&[]);
+        ensure!(
+            (1..=4).contains(&layers.len()),
+            "material `{source}`'s bri_layer_blend needs 1 to 4 layers"
+        );
+        for layer in layers {
+            let transform: Vec<f32> = layer["transform"]
+                .as_array()
+                .map(|a| {
+                    a.iter()
+                        .filter_map(|v| v.as_f64())
+                        .map(|v| v as f32)
+                        .collect()
+                })
+                .unwrap_or_default();
+            ensure!(
+                transform.len() == 6 && transform.iter().all(|v| v.is_finite() && v.abs() <= 1.0e6),
+                "material `{source}`'s bri_layer_blend layer needs a `transform` of six numbers"
+            );
+            maps.layer_transforms.push([
+                transform[0],
+                transform[1],
+                transform[2],
+                transform[3],
+                transform[4],
+                transform[5],
+            ]);
+            maps.layers.push(png_of(layer, report)?);
+        }
+        ensure!(
+            spec["weights"].is_object(),
+            "material `{source}`'s bri_layer_blend needs `weights`"
+        );
+        maps.weights = Some(png_of(&spec["weights"], report)?);
+    }
     let textured = maps.normal.is_some()
         || maps.metallic_roughness.is_some()
         || maps.occlusion.is_some()
@@ -2182,6 +2426,9 @@ fn make_material(
         detail_scale: (m["extras"]["bri_detail"]["scale"].as_f64().unwrap_or(1.0) as f32)
             .clamped(0.01, 4096.0),
         lightmap: None,
+        lightmap_exact: m["extras"]["bri_lightmap"]["exact"]
+            .as_bool()
+            .unwrap_or(false),
         lightmap_strength: (m["extras"]["bri_lightmap"]["strength"]
             .as_f64()
             .unwrap_or(1.0) as f32)
@@ -2206,6 +2453,15 @@ fn make_material(
         ensure!(motion.valid(), "Invalid material UV motion");
         Some(motion)
     };
+    let uv_chain: Vec<bri_content::shape::UvMotion> = if m["extras"]["bri_uv_chain"].is_null() {
+        Vec::new()
+    } else {
+        let chain: Vec<bri_content::shape::UvMotion> =
+            serde_json::from_value(m["extras"]["bri_uv_chain"].clone())
+                .context("Material bri_uv_chain")?;
+        ensure!(chain.iter().all(|c| c.valid()), "Invalid material UV chain");
+        chain
+    };
     let mut png = Vec::new();
     image::DynamicImage::ImageRgba8(pixels)
         .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)?;
@@ -2228,9 +2484,12 @@ fn make_material(
                 .then(|| m["alphaCutoff"].as_f64().unwrap_or(0.5) as f32),
             double_sided: m["doubleSided"].as_bool().unwrap_or(false),
             uv_motion,
+            uv_chain,
             metal,
             surface,
             tint: None,
+            layers: None,
+            vertex_light: m["extras"]["bri_vertex_light"].as_bool().unwrap_or(false),
         },
         png,
         maps,
@@ -2306,11 +2565,16 @@ pub(crate) struct SurfaceMaps {
     pub emissive: Option<Vec<u8>>,
     pub detail: Option<Vec<u8>>,
     pub lightmap: Option<Vec<u8>>,
+    /// `bri_layer_blend`: up to four layer textures, each layer's transform, and the weight map.
+    pub layers: Vec<Vec<u8>>,
+    pub layer_transforms: Vec<[f32; 6]>,
+    pub weights: Option<Vec<u8>>,
 }
 impl SurfaceMaps {
     /// Each map with the suffix its material takes.
     pub fn named(self) -> Vec<(&'static str, Vec<u8>)> {
-        [
+        const LAYERS: [&str; 4] = ["layer0", "layer1", "layer2", "layer3"];
+        let mut named: Vec<(&'static str, Vec<u8>)> = [
             ("normal", self.normal),
             ("metal_rough", self.metallic_roughness),
             ("occlusion", self.occlusion),
@@ -2320,7 +2584,16 @@ impl SurfaceMaps {
         ]
         .into_iter()
         .filter_map(|(k, png)| Some((k, png?)))
-        .collect()
+        .collect();
+        named.extend(
+            self.layers
+                .into_iter()
+                .take(4)
+                .enumerate()
+                .map(|(i, png)| (LAYERS[i], png)),
+        );
+        named.extend(self.weights.map(|png| ("weights", png)));
+        named
     }
 }
 

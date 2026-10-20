@@ -12,6 +12,7 @@ pub mod brick;
 pub mod camera;
 pub mod collision;
 pub mod controls;
+pub mod decals;
 pub mod effects;
 pub mod hold;
 pub mod hud;
@@ -29,6 +30,8 @@ pub mod terrain_field;
 pub mod terrain_mesh;
 pub mod testing;
 pub mod tutorial;
+pub mod uv_affine;
+pub mod vertex_lighting;
 pub mod water;
 
 pub const TERRAIN_SCHEMA: u32 = 1;

@@ -298,6 +298,9 @@ pub enum MaterialKind {
     /// strength; `parameters[1]`: glow (linear RGB); `parameters[2]`:
     /// detail repeats, detail strength.
     Physical,
+    /// The picture times twice the vertex colour (0.5 neutral), fogged, lit by nothing else: a mesh whose light was baked into its
+    /// vertices. Slot 0 is the picture.
+    VertexLight,
     /// A glow whose colour runs from `parameters[0].rgb` where the surface faces
     /// the eye to `parameters[1].rgb` where it turns edge on (brightness
     /// already multiplied in), patterned by the product of two scrolling noise
@@ -309,6 +312,13 @@ pub enum MaterialKind {
     /// `parameters[1].w` (the second) volumes per scroll. Unlit; use with
     /// `AlphaMode::Additive`.
     Plasma,
+    /// Up to four diffuse layers (slots 0..=3, sRGB) blended by the red, green,
+    /// blue and alpha of one weight map (slot 9, read with `lightmap_uv`), each
+    /// layer's `uv` first moved by its own affine matrix
+    /// ([`Material::layer_transforms`]); the sum is multiplied by twice the
+    /// vertex colour (the vertex colour carries the baked light, 0.5 being
+    /// neutral), fogged, and drawn without other scene lighting.
+    LayerBlend,
 }
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum AlphaMode {
@@ -319,6 +329,31 @@ pub enum AlphaMode {
     Additive,
     /// Unlit modulation of the existing surface, fading toward a neutral multiplier.
     Multiply,
+    /// One of Unreal Engine 2's frame-buffer blends the other modes lack
+    /// ([`FrameBlend`]); unlit, like `Multiply`.
+    Frame(FrameBlend),
+}
+/// Unreal Engine 2 `FinalBlend.FrameBufferBlending` modes with their own
+/// (source, destination) blend factors, read from D3DDrv.dll's switch at RVA
+/// 0x9e6f (see `docs/modding/materials.md`). `Multiply` stands for
+/// TrueModulated (zero, source colour) and `Additive` for Brighten (source
+/// alpha, one); the rest are here. Each draws the texture times the vertex
+/// colour, fading with its alpha toward the mode's neutral output.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FrameBlend {
+    /// Modulate: (destination colour, source colour) = 2 x source x destination;
+    /// neutral output is 0.5.
+    Modulate,
+    /// Darken: (zero, 1 - source colour); neutral output is 0.
+    Darken,
+    /// Translucent and BrightenSmooth: (one, 1 - source colour); neutral 0.
+    Screen,
+    /// AlphaModulate: (one, 1 - source alpha) on colour times alpha.
+    Premultiplied,
+    /// Invisible: (zero, one); draws nothing.
+    Invisible,
+    /// TrueAdditive: (one, one) on colour times alpha.
+    TrueAdditive,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -336,6 +371,12 @@ pub struct Material {
     pub alpha: AlphaMode,
     pub double_sided: bool,
     pub uv_motion: Option<bri_content::shape::UvMotion>,
+    /// A chain of texture modifiers, outermost first, composed on the CPU every frame into one
+    /// map (`bri_content::uv_affine`); it replaces `uv_motion`.
+    pub uv_chain: Vec<bri_content::shape::UvMotion>,
+    /// [`MaterialKind::LayerBlend`]: per layer `[a, b, c, d, tx, ty]` with
+    /// `uv' = (a u + c v + tx, b u + d v + ty)`.
+    pub layer_transforms: Option<[[f32; 6]; 4]>,
     /// v20 `fxBrickBatcher` loads brickSIDE with `GL_CLAMP` and nearest
     /// magnification; every other brick surface repeats with linear filtering.
     pub clamp_nearest: bool,
@@ -357,6 +398,9 @@ pub struct Material {
     /// it is multiplied by. It stands for the sun and ambient light, shadows
     /// included; lights, moving shadows and highlights still add to it.
     pub baked_lightmap: Option<f32>,
+    /// The baked lightmap is the surface's only light: texture times lightmap times its strength, then fog (see
+    /// `bri_content::shape::Surface::lightmap_exact`).
+    pub baked_exact: bool,
     /// The vertex colour tints only where image slot 10's red channel says
     /// (`bri_content::shape::TintMask`): texel * ((1 - mask) + mask * colour).
     /// Lit model materials (`VertexLit`, `Physical`) only.
@@ -447,11 +491,14 @@ impl Material {
             alpha: AlphaMode::Opaque,
             double_sided: false,
             uv_motion: None,
+            uv_chain: Vec::new(),
+            layer_transforms: None,
             clamp_nearest: false,
             temp_brick_flash: false,
             ignore_texture_alpha: false,
             untinted: false,
             baked_lightmap: None,
+            baked_exact: false,
             tint_mask: false,
             parameters: None,
         }
@@ -807,7 +854,7 @@ impl SceneData {
                 self.indices[batch.indices.start as usize..batch.indices.end as usize].to_vec();
             if matches!(
                 self.materials[batch.material].alpha,
-                AlphaMode::Blend | AlphaMode::Additive | AlphaMode::Multiply
+                AlphaMode::Blend | AlphaMode::Additive | AlphaMode::Multiply | AlphaMode::Frame(_)
             ) {
                 translucent.push((batch.material, batch.center, indices));
             } else {
@@ -992,8 +1039,19 @@ pub struct Camera {
     /// The ambient light in spaces the sky cannot see
     /// ([`SceneData::enclosed_ambient`]); w 1 when the map sets one.
     pub enclosed: [f32; 4],
+    /// x: the run-time multiplier of every baked lightmap on a physical material (1: as the material's own strength gives it). The level's own factor
+    /// is each material's `baked_lightmap` strength; a game raises this one for a view that brightens lightmaps (night vision doubles them again).
+    pub lightmap: [f32; 4],
 }
 impl Camera {
+    /// Set the run-time lightmap multiplier ([`Camera::lightmap`]); a non-finite or negative value is 1.
+    pub fn set_lightmap_scale(&mut self, scale: f32) {
+        self.lightmap[0] = if scale.is_finite() && scale >= 0.0 {
+            scale.min(16.0)
+        } else {
+            1.0
+        };
+    }
     /// Native world uses Y up, right-handed coordinates and reversed 0..1
     /// depth ([`perspective`]).
     pub fn perspective(
@@ -1191,7 +1249,23 @@ impl Default for Camera {
             shading: [0.0; 4],
             haze: bri_content::environment::Fog::default().haze_uniform(),
             enclosed: [0.0; 4],
+            lightmap: [1.0, 0.0, 0.0, 0.0],
             sky_bands: Default::default(),
+        }
+    }
+}
+
+/// The material buffers of a scene whose texture coordinates follow a chain of modifiers.
+pub(crate) struct DynamicUv {
+    entries: Vec<(wgpu::Buffer, Vec<bri_content::shape::UvMotion>)>,
+}
+
+impl DynamicUv {
+    /// Write the map each chain makes at `time` seconds into its buffer (floats 21 to 26).
+    fn write(&self, queue: &wgpu::Queue, time: f64) {
+        for (buffer, chain) in &self.entries {
+            let map = bri_content::uv_affine::chain_affine(chain, time).to_array();
+            queue.write_buffer(buffer, 21 * 4, bytemuck::cast_slice(&map));
         }
     }
 }
@@ -1208,10 +1282,13 @@ pub struct GpuScene {
     vertices: wgpu::Buffer,
     indices: wgpu::Buffer,
     materials: Vec<wgpu::BindGroup>,
+    /// Material buffers whose texture map is rewritten every frame (UV chains).
+    #[allow(dead_code)] // held so the renderer registry keeps seeing it
+    dynamic_uv: Option<Arc<DynamicUv>>,
     batches: Vec<MeshBatch>,
     /// Opaque/alpha/additive, double sided, background, alpha-masked.
     /// (blend, double sided, sky/cloud background, alpha mask, water plane)
-    material_modes: Vec<(usize, bool, bool, bool, bool)>,
+    material_modes: Vec<MaterialMode>,
     /// Whether any of its surfaces can be emissive (unlit materials, or a
     /// brick with the Glow colour FX): only those scenes draw into the
     /// ambient occlusion exclusion mask, so the mask pass skips the rest
@@ -1663,6 +1740,7 @@ impl GpuScene {
             .context("Scene batch view out of range")?
             .clone();
         Ok(GpuScene {
+            dynamic_uv: None,
             sky_revision: self.sky_revision.clone(),
             unique: next_unique(),
             material_descriptors: self.material_descriptors.clone(),
@@ -2384,7 +2462,7 @@ impl VolumeBinding {
             parameters: device.buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: Some("light volume placement"),
                 contents: bytemuck::cast_slice(&parameters),
-                usage: wgpu::BufferUsages::UNIFORM,
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             }),
         }
     }
@@ -2713,6 +2791,8 @@ impl MapLightBinding {
 #[derive(Clone, Copy, Debug, Default, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct PointLight {
     pub position_radius: [f32; 4],
+    /// RGB, then the falloff curve: 0 the smooth native one (squared linear), 1 a map light's linear one, 2 the cubic
+    /// `2 (1 - 3 t^2 + 2 t^3)` of `t` = distance over radius (on objects it replaces v20's `1 / (1 + 0.1 d^2)`).
     pub color: [f32; 4],
     /// A cone: the unit direction scaled by `1 / (cos inner - cos outer)`
     /// and `cos outer` times that scale ([`spot_words`] without its all-round
@@ -2866,7 +2946,232 @@ pub struct WorldPass<'a> {
     pub after_all: Option<&'a dyn Fn(&mut wgpu::RenderPass<'_>)>,
 }
 
+/// Blend variants a pipeline is built for: opaque, alpha, additive,
+/// multiply, then one per [`FrameBlend`] (see `world_pipelines`).
+const BLEND_VARIANTS: usize = 10;
+/// Families of surface the fragment shader is specialised for (`SURFACE_GROUP` in the shaders): ordinary, water, metal, physical,
+/// plasma and the unlit frame blends. Each pipeline compiles only its own family; the whole shader costs several times as much.
+const SURFACE_GROUPS: usize = 6;
+/// Slots for a group's background, blend and sidedness variants.
+const GROUP_SLOTS: usize = 2 * BLEND_VARIANTS * 2;
+
+/// The world's pipelines for one shader: a slot for each background, blend and sidedness that is built the first time something
+/// needs it. Most scenes use a few of the forty combinations, and each one costs seconds to compile.
+struct WorldPipelines {
+    device: wgpu::Device,
+    color_format: wgpu::TextureFormat,
+    samples: u32,
+    layout: wgpu::PipelineLayout,
+    shader: wgpu::ShaderModule,
+    constants: Vec<(&'static str, f64)>,
+    slots: Vec<std::sync::OnceLock<wgpu::RenderPipeline>>,
+    /// Slots a worker has been asked to build (or has).
+    requested: Vec<std::sync::atomic::AtomicBool>,
+    /// Workers still compiling.
+    outstanding: std::sync::atomic::AtomicUsize,
+}
+
+impl WorldPipelines {
+    fn new(
+        device: &wgpu::Device,
+        color_format: wgpu::TextureFormat,
+        samples: u32,
+        layout: wgpu::PipelineLayout,
+        shader: wgpu::ShaderModule,
+        modern: bool,
+    ) -> Self {
+        let mut constants = crate::color::output_constants(color_format).to_vec();
+        if modern {
+            constants.push(("MODERN_SKY_SHADING", 1.0));
+        }
+        Self {
+            device: device.clone(),
+            color_format,
+            samples,
+            layout,
+            shader,
+            constants,
+            slots: (0..SURFACE_GROUPS * GROUP_SLOTS)
+                .map(|_| std::sync::OnceLock::new())
+                .collect(),
+            requested: (0..SURFACE_GROUPS * GROUP_SLOTS)
+                .map(|_| std::sync::atomic::AtomicBool::new(false))
+                .collect(),
+            outstanding: std::sync::atomic::AtomicUsize::new(0),
+        }
+    }
+
+    /// The slot for a surface `group` drawn with `blend`; the unlit frame blends (3 and up) are one family whatever the material.
+    fn index(group: usize, background: bool, blend: usize, double_sided: bool) -> usize {
+        let group = if blend >= 3 { 5 } else { group };
+        group * GROUP_SLOTS
+            + usize::from(background) * BLEND_VARIANTS * 2
+            + blend * 2
+            + usize::from(double_sided)
+    }
+
+    /// The pipeline in slot `index`, built now if no one has needed it yet.
+    fn get(&self, index: usize) -> &wgpu::RenderPipeline {
+        self.slots[index].get_or_init(|| self.create(index))
+    }
+
+    /// The pipeline if it is built; never waits.
+    fn ready(&self, index: usize) -> Option<&wgpu::RenderPipeline> {
+        self.slots[index].get()
+    }
+
+    /// Start building slot `index` on a worker, if nobody has: a draw that needs it is skipped until it is built.
+    fn request(self: &Arc<Self>, index: usize) {
+        use std::sync::atomic::Ordering;
+        if self.slots[index].get().is_some() || self.requested[index].swap(true, Ordering::AcqRel) {
+            return;
+        }
+        self.outstanding.fetch_add(1, Ordering::AcqRel);
+        let me = Arc::clone(self);
+        let started = std::thread::Builder::new()
+            .name("scene pipeline".into())
+            .spawn(move || {
+                let start = std::time::Instant::now();
+                me.slots[index].get_or_init(|| me.create(index));
+                bri_console::echo(format!(
+                    "Compiled scene pipeline {index} in {} ms",
+                    start.elapsed().as_millis()
+                ));
+                me.outstanding.fetch_sub(1, Ordering::AcqRel);
+            });
+        if started.is_err() {
+            // No thread to compile on: build it here rather than never.
+            self.outstanding.fetch_sub(1, Ordering::AcqRel);
+            self.get(index);
+        }
+    }
+
+    /// Ask for the pipelines these materials draw with (`material_modes`) without waiting.
+    fn request_modes(self: &Arc<Self>, modes: &[MaterialMode]) {
+        for &(blend, double_sided, background, _, group) in modes {
+            self.request(Self::index(group, background, blend, double_sided));
+        }
+    }
+
+    /// Build the pipelines in `indices` that are not built. One at a time: measured on this machine, compiling them side by side
+    /// is no faster with DXC and several times slower with FXC, which serialises them and fights for the cores.
+    fn warm_indices(&self, indices: impl IntoIterator<Item = usize>) {
+        for index in indices {
+            self.get(index);
+        }
+    }
+
+    /// The pipelines a scene with these materials draws with (`material_modes`).
+    fn warm(&self, modes: &[MaterialMode]) {
+        self.warm_indices(
+            modes
+                .iter()
+                .map(|&(blend, double_sided, background, _, group)| {
+                    Self::index(group, background, blend, double_sided)
+                }),
+        );
+    }
+
+    /// What every renderer needs at once: opaque and alpha, either side.
+    fn warm_basics(&self) {
+        self.warm_indices([0, 1].into_iter().flat_map(|blend| {
+            [false, true].map(|double_sided| Self::index(0, false, blend, double_sided))
+        }));
+    }
+
+    fn create(&self, index: usize) -> wgpu::RenderPipeline {
+        let group = index / GROUP_SLOTS;
+        let index = index % GROUP_SLOTS;
+        let double_sided = index % 2 == 1;
+        let blend = (index / 2) % BLEND_VARIANTS;
+        let background = index / (BLEND_VARIANTS * 2) == 1;
+        let mut constants = self.constants.clone();
+        constants.push(("SURFACE_GROUP", group as f64));
+        let device = &self.device;
+        use wgpu::BlendFactor::{Dst, One, OneMinusSrc, OneMinusSrcAlpha, Src, SrcAlpha, Zero};
+        // (source, destination) colour factors; the alpha channel keeps
+        // the target's alpha.
+        let factors = match blend {
+            0 => None,
+            1 => Some((SrcAlpha, OneMinusSrcAlpha)),
+            3 => Some((Dst, Zero)),
+            4 => Some((Dst, Src)),
+            5 => Some((Zero, OneMinusSrc)),
+            6 => Some((One, OneMinusSrc)),
+            7 => Some((One, OneMinusSrcAlpha)),
+            8 => Some((Zero, One)),
+            9 => Some((One, One)),
+            _ => Some((SrcAlpha, One)),
+        };
+        let blend_state = factors.map(|(src_factor, dst_factor)| wgpu::BlendState {
+            color: wgpu::BlendComponent {
+                src_factor,
+                dst_factor,
+                operation: wgpu::BlendOperation::Add,
+            },
+            alpha: if blend == 1 {
+                wgpu::BlendState::ALPHA_BLENDING.alpha
+            } else {
+                wgpu::BlendComponent {
+                    src_factor: Zero,
+                    dst_factor: One,
+                    operation: wgpu::BlendOperation::Add,
+                }
+            },
+        });
+        device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("persistent scene"),
+            layout: Some(&self.layout),
+            vertex: wgpu::VertexState {
+                module: &self.shader,
+                entry_point: Some("vs_main"),
+                compilation_options: Default::default(),
+                buffers: &vertex_layouts(),
+            },
+            primitive: wgpu::PrimitiveState {
+                cull_mode: if double_sided {
+                    None
+                } else {
+                    Some(wgpu::Face::Back)
+                },
+                ..Default::default()
+            },
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: DEPTH_FORMAT,
+                depth_write_enabled: Some(blend == 0 && !background),
+                depth_compare: Some(DEPTH_NEARER),
+                stencil: Default::default(),
+                bias: Default::default(),
+            }),
+            multisample: wgpu::MultisampleState {
+                count: self.samples,
+                ..Default::default()
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &self.shader,
+                entry_point: Some("fs_main"),
+                compilation_options: wgpu::PipelineCompilationOptions {
+                    constants: &constants,
+                    ..Default::default()
+                },
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: self.color_format,
+                    blend: blend_state,
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            multiview_mask: None,
+            cache: None,
+        })
+    }
+}
+
+/// A material's (blend, double sided, background, masked, surface group), which choose its pipeline.
+type MaterialMode = (usize, bool, bool, bool, usize);
+
 pub struct SceneRenderer {
+    /// Scenes with UV chains, rewritten each frame from the camera's clock.
+    dynamic_uv: std::cell::RefCell<Vec<std::sync::Weak<DynamicUv>>>,
     identity_instance: wgpu::Buffer,
     light_buffer: wgpu::Buffer,
     /// The lights' grid: cell table and per-cell lists (`light_grid`).
@@ -2879,8 +3184,12 @@ pub struct SceneRenderer {
     camera_layout: wgpu::BindGroupLayout,
     views: Vec<View>,
     material_layout: wgpu::BindGroupLayout,
-    pipelines: Vec<wgpu::RenderPipeline>,
-    modern_pipelines: Vec<wgpu::RenderPipeline>,
+    pipelines: Arc<WorldPipelines>,
+    modern_pipelines: Option<Arc<WorldPipelines>>,
+    /// Every (background, blend, sidedness) a scene uploaded here draws with, so a set made later is warmed for them.
+    used_modes: std::cell::RefCell<std::collections::BTreeSet<MaterialMode>>,
+    /// Compile what a scene needs on workers and skip its draws until it is built (a game), rather than wait for it (tests, tools).
+    background_pipelines: std::cell::Cell<bool>,
     color_format: wgpu::TextureFormat,
     occlusion_mask_pipelines: std::cell::RefCell<Vec<wgpu::RenderPipeline>>,
     filtering: TextureFiltering,
@@ -3113,8 +3422,15 @@ impl SceneRenderer {
                 crate::color::shader_source(include_str!("scene_original.wgsl")).into(),
             ),
         });
-        let pipelines =
-            Self::world_pipelines(device, color_format, samples, &layout, &shader, false);
+        let pipelines = Arc::new(WorldPipelines::new(
+            device,
+            color_format,
+            samples,
+            layout,
+            shader,
+            false,
+        ));
+        pipelines.warm_basics();
         let light_buffer = device.buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("native point lights"),
             contents: &vec![
@@ -3135,6 +3451,7 @@ impl SceneRenderer {
         let volume = VolumeBinding::new(device, None);
         let map_lights = MapLightBinding::new(device, None, None);
         let mut renderer = Self {
+            dynamic_uv: Default::default(),
             identity_instance: device.buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: Some("identity scene instance"),
                 contents: bytemuck::bytes_of(&SceneTransform::default().record(KEEP_ALL)),
@@ -3151,7 +3468,9 @@ impl SceneRenderer {
             views: Vec::new(),
             material_layout,
             pipelines,
-            modern_pipelines: Vec::new(),
+            modern_pipelines: None,
+            used_modes: Default::default(),
+            background_pipelines: std::cell::Cell::new(false),
             color_format,
             occlusion_mask_pipelines: std::cell::RefCell::new(Vec::new()),
             filtering,
@@ -3280,7 +3599,10 @@ impl SceneRenderer {
             for batch in &chunk.batches {
                 let clear = matches!(
                     chunk.materials[batch.material].alpha,
-                    AlphaMode::Blend | AlphaMode::Additive | AlphaMode::Multiply
+                    AlphaMode::Blend
+                        | AlphaMode::Additive
+                        | AlphaMode::Multiply
+                        | AlphaMode::Frame(_)
                 );
                 let count = u64::from(batch.indices.end - batch.indices.start);
                 // Quads: four vertices for six indices.
@@ -3327,101 +3649,6 @@ impl SceneRenderer {
         queue.write_buffer(&buffer, offset, &bytes);
         *cursor = (offset + bytes.len() as u64).next_multiple_of(wgpu::COPY_BUFFER_ALIGNMENT);
         Some((buffer, offset))
-    }
-    fn world_pipelines(
-        device: &wgpu::Device,
-        color_format: wgpu::TextureFormat,
-        samples: u32,
-        layout: &wgpu::PipelineLayout,
-        shader: &wgpu::ShaderModule,
-        modern: bool,
-    ) -> Vec<wgpu::RenderPipeline> {
-        let mut constants = crate::color::output_constants(color_format).to_vec();
-        if modern {
-            constants.push(("MODERN_SKY_SHADING", 1.0));
-        }
-        let mut pipelines = vec![];
-        for background in [false, true] {
-            for blend in 0..4 {
-                let blend_state = match blend {
-                    0 => None,
-                    1 => Some(wgpu::BlendState::ALPHA_BLENDING),
-                    3 => Some(wgpu::BlendState {
-                        color: wgpu::BlendComponent {
-                            src_factor: wgpu::BlendFactor::Dst,
-                            dst_factor: wgpu::BlendFactor::Zero,
-                            operation: wgpu::BlendOperation::Add,
-                        },
-                        alpha: wgpu::BlendComponent {
-                            src_factor: wgpu::BlendFactor::Zero,
-                            dst_factor: wgpu::BlendFactor::One,
-                            operation: wgpu::BlendOperation::Add,
-                        },
-                    }),
-                    _ => Some(wgpu::BlendState {
-                        color: wgpu::BlendComponent {
-                            src_factor: wgpu::BlendFactor::SrcAlpha,
-                            dst_factor: wgpu::BlendFactor::One,
-                            operation: wgpu::BlendOperation::Add,
-                        },
-                        alpha: wgpu::BlendComponent {
-                            src_factor: wgpu::BlendFactor::Zero,
-                            dst_factor: wgpu::BlendFactor::One,
-                            operation: wgpu::BlendOperation::Add,
-                        },
-                    }),
-                };
-                for double_sided in [false, true] {
-                    pipelines.push(device.create_render_pipeline(
-                        &wgpu::RenderPipelineDescriptor {
-                            label: Some("persistent scene"),
-                            layout: Some(layout),
-                            vertex: wgpu::VertexState {
-                                module: shader,
-                                entry_point: Some("vs_main"),
-                                compilation_options: Default::default(),
-                                buffers: &vertex_layouts(),
-                            },
-                            primitive: wgpu::PrimitiveState {
-                                cull_mode: if double_sided {
-                                    None
-                                } else {
-                                    Some(wgpu::Face::Back)
-                                },
-                                ..Default::default()
-                            },
-                            depth_stencil: Some(wgpu::DepthStencilState {
-                                format: DEPTH_FORMAT,
-                                depth_write_enabled: Some(blend == 0 && !background),
-                                depth_compare: Some(DEPTH_NEARER),
-                                stencil: Default::default(),
-                                bias: Default::default(),
-                            }),
-                            multisample: wgpu::MultisampleState {
-                                count: samples,
-                                ..Default::default()
-                            },
-                            fragment: Some(wgpu::FragmentState {
-                                module: shader,
-                                entry_point: Some("fs_main"),
-                                compilation_options: wgpu::PipelineCompilationOptions {
-                                    constants: &constants,
-                                    ..Default::default()
-                                },
-                                targets: &[Some(wgpu::ColorTargetState {
-                                    format: color_format,
-                                    blend: blend_state,
-                                    write_mask: wgpu::ColorWrites::ALL,
-                                })],
-                            }),
-                            multiview_mask: None,
-                            cache: None,
-                        },
-                    ));
-                }
-            }
-        }
-        pipelines
     }
     /// Counts from the passes recorded since the last `update_camera`.
     pub fn stats(&self) -> RenderStats {
@@ -3532,8 +3759,9 @@ impl SceneRenderer {
             c.textures += made;
         });
         let mut materials = vec![];
+        let mut chains = Vec::new();
         for material in &data.materials {
-            let mut parameters: [f32; 32] = [0.0; 32];
+            let mut parameters: [f32; 80] = [0.0; 80];
             parameters[..4].copy_from_slice(&[
                 match material.kind {
                     MaterialKind::Surface => 0.0,
@@ -3549,6 +3777,8 @@ impl SceneRenderer {
                     MaterialKind::Metal => 10.0,
                     MaterialKind::Physical => 11.0,
                     MaterialKind::Plasma => 12.0,
+                    MaterialKind::LayerBlend => 13.0,
+                    MaterialKind::VertexLight => 14.0,
                 },
                 match material.alpha {
                     AlphaMode::Mask(c) => c,
@@ -3556,14 +3786,31 @@ impl SceneRenderer {
                 },
                 if material.clamp_nearest { 1.0 } else { 0.0 },
                 // Flags: 1 temp-brick flash, 2 ignore texture alpha, 4 untinted,
-                // 8 multiply, 16 baked lightmap, 32 masked tint.
+                // 8 unlit frame blend (multiply and `Frame`), 16 baked lightmap,
+                // 32 masked tint, 64 neutral output 0.5 (Modulate), 128 colour times
+                // alpha output (Darken, Screen, Premultiplied; Invisible draws none), 256 lit by the baked lightmap alone.
                 f32::from(
-                    u8::from(material.temp_brick_flash)
-                        | u8::from(material.ignore_texture_alpha) << 1
-                        | u8::from(material.untinted) << 2
-                        | u8::from(material.alpha == AlphaMode::Multiply) << 3
-                        | u8::from(material.baked_lightmap.is_some()) << 4
-                        | u8::from(material.tint_mask) << 5,
+                    u16::from(material.temp_brick_flash)
+                        | u16::from(material.ignore_texture_alpha) << 1
+                        | u16::from(material.untinted) << 2
+                        | u16::from(matches!(
+                            material.alpha,
+                            AlphaMode::Multiply | AlphaMode::Frame(_)
+                        )) << 3
+                        | u16::from(material.baked_lightmap.is_some()) << 4
+                        | u16::from(material.tint_mask) << 5
+                        | u16::from(material.alpha == AlphaMode::Frame(FrameBlend::Modulate)) << 6
+                        | u16::from(matches!(
+                            material.alpha,
+                            AlphaMode::Frame(
+                                FrameBlend::Darken
+                                    | FrameBlend::Screen
+                                    | FrameBlend::Premultiplied
+                                    | FrameBlend::Invisible
+                                    | FrameBlend::TrueAdditive
+                            )
+                        )) << 7
+                        | u16::from(material.baked_exact) << 8,
                 ),
             ]);
             if let Some(groups) = material.parameters {
@@ -3571,7 +3818,7 @@ impl SceneRenderer {
                     parameters[(i + 1) * 4..(i + 2) * 4].copy_from_slice(group);
                 }
             }
-            if let Some(uv) = material.uv_motion {
+            if let Some(uv) = material.uv_motion.filter(|_| material.uv_chain.is_empty()) {
                 ensure!(uv.valid(), "Invalid UV motion on {}", material.name);
                 parameters[20..24].copy_from_slice(&[
                     1.,
@@ -3591,6 +3838,59 @@ impl SceneRenderer {
                     uv.rotation_rate_degrees.to_radians(),
                     0.,
                 ]);
+                for (axis, wave) in uv.waves.iter().enumerate() {
+                    parameters[32 + axis * 4..36 + axis * 4].copy_from_slice(&[
+                        wave.kind as u32 as f32,
+                        wave.rate,
+                        wave.phase,
+                        wave.amplitude,
+                    ]);
+                }
+            }
+            let chained = !material.uv_chain.is_empty();
+            if chained {
+                ensure!(
+                    material.uv_chain.iter().all(|m| m.valid()),
+                    "Invalid UV motion chain on {}",
+                    material.name
+                );
+                // material[5].x = 2 selects the map in floats 21 to 26, written every frame.
+                parameters[20] = 2.;
+                let map = bri_content::uv_affine::chain_affine(&material.uv_chain, 0.).to_array();
+                parameters[21..27].copy_from_slice(&map);
+            }
+            if let Some(r) = material
+                .uv_motion
+                .and_then(|uv| uv.rotator)
+                .filter(|_| !chained)
+            {
+                // material[16..20]: flag and base angles, constant rates, swing amplitudes
+                // and swing rates and phases, in radians and cycles.
+                let rad = |v: [f32; 3]| v.map(f32::to_radians);
+                let (base, rate, amplitude) = (
+                    rad(r.base_degrees),
+                    rad(r.rate_degrees),
+                    rad(r.wave_amplitude_degrees),
+                );
+                parameters[64..68].copy_from_slice(&[1., base[0], base[1], base[2]]);
+                parameters[68..72].copy_from_slice(&[0., rate[0], rate[1], rate[2]]);
+                parameters[72..76].copy_from_slice(&[0., amplitude[0], amplitude[1], amplitude[2]]);
+                parameters[76..80].copy_from_slice(&[
+                    r.wave_rate[0],
+                    r.wave_rate[1],
+                    r.wave_rate[2],
+                    0.,
+                ]);
+                // The three phases ride in the unused w of the first three groups.
+                parameters[68] = r.wave_phase[0];
+                parameters[72] = r.wave_phase[1];
+                parameters[79] = r.wave_phase[2];
+            }
+            if let Some(layers) = material.layer_transforms {
+                for (i, m) in layers.iter().enumerate() {
+                    parameters[40 + i * 4..44 + i * 4].copy_from_slice(&[m[0], m[1], m[2], m[3]]);
+                    parameters[56 + i * 2..58 + i * 2].copy_from_slice(&[m[4], m[5]]);
+                }
             }
             if let Some(strength) = material.baked_lightmap {
                 // material[7].w, which no uv motion reads.
@@ -3599,7 +3899,7 @@ impl SceneRenderer {
             let buffer = device.buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: Some(&material.name),
                 contents: bytemuck::cast_slice(&parameters),
-                usage: wgpu::BufferUsages::UNIFORM,
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             });
             let mut entries: Vec<_> = material
                 .images
@@ -3625,13 +3925,22 @@ impl SceneRenderer {
                 binding: 15,
                 resource: buffer.as_entire_binding(),
             });
+            if chained {
+                chains.push((buffer.clone(), material.uv_chain.clone()));
+            }
             materials.push(device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some(&material.name),
                 layout: &self.material_layout,
                 entries: &entries,
             }));
         }
+        let dynamic_uv = (!chains.is_empty()).then(|| {
+            let set = Arc::new(DynamicUv { entries: chains });
+            self.dynamic_uv.borrow_mut().push(Arc::downgrade(&set));
+            set
+        });
         Ok(GpuScene {
+            dynamic_uv,
             sky_revision: fresh_revision(),
             unique: next_unique(),
             material_descriptors: data.materials.clone(),
@@ -3641,24 +3950,7 @@ impl SceneRenderer {
             indices,
             materials,
             batches: data.batches.clone(),
-            material_modes: data
-                .materials
-                .iter()
-                .map(|m| {
-                    (
-                        match m.alpha {
-                            AlphaMode::Blend => 1,
-                            AlphaMode::Additive => 2,
-                            AlphaMode::Multiply => 3,
-                            _ => 0,
-                        },
-                        m.double_sided,
-                        matches!(m.kind, MaterialKind::Sky | MaterialKind::Cloud),
-                        matches!(m.alpha, AlphaMode::Mask(_)),
-                        m.kind == MaterialKind::Water,
-                    )
-                })
-                .collect(),
+            material_modes: self.noted_modes(&data.materials),
             emissive: emissive_geometry(&data.materials, &data.vertices),
             bounds: None,
             extent: vertex_extent(&data.vertices),
@@ -3766,6 +4058,7 @@ impl SceneRenderer {
         emissive: bool,
     ) -> GpuScene {
         GpuScene {
+            dynamic_uv: None,
             emissive,
             sky_revision: fresh_revision(),
             unique: next_unique(),
@@ -3828,6 +4121,7 @@ impl SceneRenderer {
         // does, because wgpu panics on slicing an empty buffer.
         let (vertices, indices) = geometry_buffers(device, "shared-material posed vertices", data);
         Ok(GpuScene {
+            dynamic_uv: None,
             sky_revision: fresh_revision(),
             unique: next_unique(),
             vertices,
@@ -3850,6 +4144,89 @@ impl SceneRenderer {
             index_count: data.indices.len(),
             image_count: base.image_count,
         })
+    }
+    /// A scene's materials as (blend, double sided, background, masked, water), with the pipelines they draw with built now (while the
+    /// map loads) and remembered for a lighting set built later.
+    fn noted_modes(&self, materials: &[Material]) -> Vec<MaterialMode> {
+        let modes: Vec<_> = materials
+            .iter()
+            .map(|m| {
+                (
+                    match m.alpha {
+                        AlphaMode::Blend => 1,
+                        AlphaMode::Additive => 2,
+                        AlphaMode::Multiply => 3,
+                        AlphaMode::Frame(f) => 4 + f as usize,
+                        _ => 0,
+                    },
+                    m.double_sided,
+                    matches!(m.kind, MaterialKind::Sky | MaterialKind::Cloud),
+                    matches!(m.alpha, AlphaMode::Mask(_)),
+                    match m.kind {
+                        MaterialKind::Water => 1,
+                        MaterialKind::Metal => 2,
+                        MaterialKind::Physical => 3,
+                        MaterialKind::Plasma => 4,
+                        _ => 0,
+                    },
+                )
+            })
+            .collect();
+        if self.background_pipelines.get() {
+            self.pipelines.request_modes(&modes);
+            if let Some(modern) = &self.modern_pipelines {
+                modern.request_modes(&modes);
+            }
+        } else {
+            self.pipelines.warm(&modes);
+            if let Some(modern) = &self.modern_pipelines {
+                modern.warm(&modes);
+            }
+        }
+        self.used_modes.borrow_mut().extend(modes.iter().copied());
+        modes
+    }
+
+    /// A game compiles pipelines on workers and skips draws that wait for one; the default waits for them where they are needed.
+    pub fn set_background_pipelines(&self, on: bool) {
+        self.background_pipelines.set(on);
+    }
+
+    /// Start compiling the pipelines these materials draw with, behind a loading screen; poll [`Self::pipelines_pending`].
+    pub fn request_materials(&self, materials: &[Material]) {
+        self.noted_modes(materials);
+    }
+
+    /// Pipelines still compiling on workers; a draw that needs one is skipped until it is built.
+    pub fn pipelines_pending(&self) -> usize {
+        use std::sync::atomic::Ordering;
+        self.pipelines.outstanding.load(Ordering::Acquire)
+            + self
+                .modern_pipelines
+                .as_ref()
+                .map_or(0, |m| m.outstanding.load(Ordering::Acquire))
+    }
+
+    /// The pipeline slot `index` for a modern or classic view, if built; asks for it otherwise. A modern view falls back to the
+    /// classic one while its own is compiling.
+    fn ready_pipeline(&self, modern: bool, index: usize) -> Option<&wgpu::RenderPipeline> {
+        if !self.background_pipelines.get() {
+            return Some(match (&self.modern_pipelines, modern) {
+                (Some(set), true) => set.get(index),
+                _ => self.pipelines.get(index),
+            });
+        }
+        if modern && let Some(set) = &self.modern_pipelines {
+            if let Some(p) = set.ready(index) {
+                return Some(p);
+            }
+            set.request(index);
+        }
+        let classic = self.pipelines.ready(index);
+        if classic.is_none() {
+            self.pipelines.request(index);
+        }
+        classic
     }
     pub fn samples(&self) -> u32 {
         self.samples
@@ -3995,14 +4372,16 @@ impl SceneRenderer {
     /// absorb it. Building them again is a no-op.
     pub fn prepare_lighting_pipelines(&mut self, soft_shading: bool, occlusion: bool) {
         if soft_shading {
-            self.build_modern_pipelines();
+            self.build_modern_pipelines(true);
         }
         if occlusion {
             self.build_occlusion_mask_pipelines();
         }
     }
-    fn build_modern_pipelines(&mut self) {
-        if !self.modern_pipelines.is_empty() {
+    /// The modern set. `block`: build its basics now (the worker that prepares lighting); otherwise ask for them, and a view that
+    /// is modern draws with the classic pipelines until they are built.
+    fn build_modern_pipelines(&mut self, block: bool) {
+        if self.modern_pipelines.is_some() {
             return;
         }
         let layout = self
@@ -4020,14 +4399,27 @@ impl SceneRenderer {
                     crate::color::shader_source(include_str!("scene.wgsl")).into(),
                 ),
             });
-        self.modern_pipelines = Self::world_pipelines(
+        let modern = Arc::new(WorldPipelines::new(
             &self.device,
             self.color_format,
             self.samples,
-            &layout,
-            &shader,
+            layout,
+            shader,
             true,
-        );
+        ));
+        let used: Vec<_> = self.used_modes.borrow().iter().copied().collect();
+        if block {
+            modern.warm_basics();
+            modern.warm(&used);
+        } else {
+            for blend in [0, 1] {
+                for double_sided in [false, true] {
+                    modern.request(WorldPipelines::index(0, false, blend, double_sided));
+                }
+            }
+            modern.request_modes(&used);
+        }
+        self.modern_pipelines = Some(modern);
     }
     /// Call once before encoding/submitting a frame. Multiple writes before a
     /// single submission would intentionally use the latest camera everywhere.
@@ -4037,6 +4429,14 @@ impl SceneRenderer {
         *self.queue.borrow_mut() = Some(queue.clone());
         self.indirect.borrow_mut().1 = 0;
         self.update_view(queue, 0, camera);
+        {
+            let mut scenes = self.dynamic_uv.borrow_mut();
+            scenes.retain(|w| w.strong_count() > 0);
+            let time = f64::from(camera.atmosphere[2]);
+            for scene in scenes.iter().filter_map(std::sync::Weak::upgrade) {
+                scene.write(queue, time);
+            }
+        }
         // Lamps cast only in the Unified modes (Classic keeps v20's look).
         let lamps: &[crate::shadow::LampLight] = if camera.ambient[3] >= 0.5 {
             &self.map_lights.lamps
@@ -4068,7 +4468,7 @@ impl SceneRenderer {
         let modern = camera.shading[0] > 0.0 && camera.ambient[3] >= 0.5;
         // Keep main's original shader and uniform prefix when the effects are off.
         if modern {
-            self.build_modern_pipelines();
+            self.build_modern_pipelines(!self.background_pipelines.get());
         }
         let sky_on = camera.shading[0] > 0.0 && camera.ambient[3] >= 0.5;
         if sky_on && !self.views[view].sky.enabled {
@@ -5412,8 +5812,8 @@ impl SceneRenderer {
             blend: usize,
         }
         fn pipeline_of(d: &Draw<'_>) -> usize {
-            let (_, double_sided, background, _, _) = d.scene.material_modes[d.batch.material];
-            usize::from(background) * 8 + d.blend * 2 + usize::from(double_sided)
+            let (_, double_sided, background, _, group) = d.scene.material_modes[d.batch.material];
+            WorldPipelines::index(group, background, d.blend, double_sided)
         }
         /// What a pooled chunk batch binds; None for everything else.
         #[allow(clippy::type_complexity)]
@@ -5538,9 +5938,7 @@ impl SceneRenderer {
             .map(|d| {
                 (
                     d.center,
-                    d.scene.material_modes[d.batch.material]
-                        .4
-                        .then_some(d.center.y),
+                    (d.scene.material_modes[d.batch.material].4 == 1).then_some(d.center.y),
                 )
             })
             .collect();
@@ -5680,16 +6078,18 @@ impl SceneRenderer {
             }
             let draw = &order[start];
             let (scene, batch) = (draw.scene, draw.batch);
-            bound.pipeline(
-                &mut pass,
-                if mask_only {
-                    &mask_pipelines.as_ref().expect("mask pass")[pipeline_of(draw) % 2]
-                } else if view.modern {
-                    &self.modern_pipelines[pipeline_of(draw)]
-                } else {
-                    &self.pipelines[pipeline_of(draw)]
-                },
-            );
+            let pipeline = if mask_only {
+                &mask_pipelines.as_ref().expect("mask pass")[pipeline_of(draw) % 2]
+            } else if let Some(pipeline) = self.ready_pipeline(view.modern, pipeline_of(draw)) {
+                pipeline
+            } else {
+                // Still compiling on a worker: nothing is drawn with it until it is.
+                if end - start > 1 {
+                    next_args += (end - start) as u64;
+                }
+                continue;
+            };
+            bound.pipeline(&mut pass, pipeline);
             bound.material(&mut pass, &scene.materials[batch.material]);
             bound.geometry(&mut pass, &scene.vertices, draw.buffer, &scene.indices);
             for d in &order[start..end] {
@@ -5821,6 +6221,20 @@ mod tests {
             &[Material::surface("wall", 0, 0)],
             &[plain]
         ));
+    }
+
+    #[test]
+    fn the_lightmap_scale_is_one_until_set_and_refuses_nonsense() {
+        let mut camera = Camera::default();
+        assert_eq!(camera.lightmap[0], 1.0);
+        camera.set_lightmap_scale(2.0);
+        assert_eq!(camera.lightmap[0], 2.0);
+        camera.set_lightmap_scale(f32::NAN);
+        assert_eq!(camera.lightmap[0], 1.0);
+        camera.set_lightmap_scale(-3.0);
+        assert_eq!(camera.lightmap[0], 1.0);
+        camera.set_lightmap_scale(1.0e6);
+        assert_eq!(camera.lightmap[0], 16.0);
     }
 
     #[test]

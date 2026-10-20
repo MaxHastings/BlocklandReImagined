@@ -19,6 +19,9 @@
       "texture": "sample-map_paint.png"
     }
   ],
+  "decals": {
+    "sample-map:map/sample-map": null
+  },
   "environments": {
     "sample-map:map/sample-map": {
       "bottom": false,

@@ -23,6 +23,9 @@ Put the floor near Z = 0 in Blender; the game's up is Blender's up.
 base colour texture with its colour factor baked in, or a plain colour when
 it has no texture. Keep textures in PNG or JPEG.
 
+**Lightmap brightness.** A baked lightmap holds half the light it stands for and a material's `bri_lightmap` `strength` brings it back (2 for the original game's maps; 1 for a level that
+turned overbright off). A game can raise the brightness of every baked lightmap while a view needs it (night vision) with `App::set_lightmap_scale`; the lightmaps of physical materials follow it.
+
 **Detail textures.** Ground stretched under one big texture blurs up
 close. A material can also carry a small texture repeated many times over
 it for close-up grain, as Torque terrain and Halo do: mid-grey leaves the
@@ -91,6 +94,26 @@ wherever the map draws nothing (an opening cut into it). The eye does not move w
 distance fog (`bri_content::regions::RegionMap`: a plane tree, the region on each side of each plane, and per region a `fog`
 of `color` bytes, `start`, `end`, `blend_time` and `clear_to_fog`), written in the glTF's own frame and unit. The fog that
 applies is the one of the region the eye is in; entering a region blends over its `blend_time`.
+
+**Decals.** `--decals FILE.json` lists projected pictures (`bri_content::decals::DecalSet`) in the native frame, each picture a PNG
+beside the file: a blob shadow, a stain, a light pattern. A decal is a world-to-picture matrix (orthographic, or perspective with a
+divide), six planes that choose the map's triangles inside its volume, a blend (`modulate2x`, `alpha`, `add`), whether the picture
+wraps, a `facing_limit` and fade for the flat surfaces and the ground (the terrain materials), and optionally a spin in degrees a
+second. The renderer finds each decal's triangles when the map loads and draws them again with the picture on them, a little in
+front of themselves, every frame.
+
+**Light baked into a mesh.** A node's custom property `bri_vertex_lights` names the fixed lights that reach its mesh
+(`bri_content::vertex_lighting`: `lights` with `position`, `color`, `radius`, optional `glow` and `negative`, and an `effect`
+of `{"kind": "point"}` or `{"kind": "directional", "direction": [x, y, z]}`; `ambient`; and `visible`, one hex mask per light with
+a bit per vertex of the node's mesh, least significant bit first). Positions and radii are in the node's own frame, like its
+POSITIONs. A layer-blended surface is lit by its vertex colours alone, so the importer writes the sum
+`clamp(0.5 * ambient + sum colour * glow * (1 - 3t^2 + 2t^3) * max(n.l, 0))`, times any COLOR_0 the mesh already has, as that colour.
+
+**Vertex-lit surfaces.** A glTF material with the custom property `bri_vertex_light: true` is drawn as the picture times twice
+the mesh's vertex colour (0.5 is neutral), fogged, lit by nothing else, in every lighting setting: a mesh whose light was baked
+into its vertices. The importer keeps the mesh's `COLOR_0` for such materials. `--lighting DIR` fills those colours for a map's
+world mesh from an asset lane's static-mesh lighting inputs (`*-instances.json`, `*-lights.json`, `*-instances.npz`,
+`*-vertex-map.npz`; with `--regions` for each zone's ambient); see `gltf/static_lighting.rs`.
 
 **The sky.** Without anything set, the sky is a plain daytime blue. Set
 these as custom properties on the Blender *scene* (**Scene Properties >

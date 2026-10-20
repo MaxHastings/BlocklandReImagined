@@ -169,6 +169,8 @@ impl App {
         self.scene.cpu_scene = None;
         self.scene.backdrop = None;
         self.scene.regions = None;
+        self.scene.decals = None;
+        self.gpu.decal_layer = None;
         self.scene.fog_blend = Default::default();
         self.gpu.gpu_backdrop = None;
         self.lighting.light_volume = LightVolumeState::default();
@@ -620,6 +622,7 @@ impl App {
                         scatter: visual.scatter,
                         backdrop: visual.backdrop,
                         regions: visual.regions,
+                        decals: visual.decals,
                         light_volume,
                     },
                     identity,

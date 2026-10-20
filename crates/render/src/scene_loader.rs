@@ -36,6 +36,8 @@ pub struct MapScene {
     pub backdrop: Option<BackdropScene>,
     /// The map's regions with their own fog, when it has them.
     pub regions: Option<bri_content::regions::RegionMap>,
+    /// The map's decals and their pictures (in order), when it has them.
+    pub decals: Option<crate::decals::LoadedDecals>,
     /// Set only by the modern loader, which never decodes illumination images.
     pub modern_lights: Option<Vec<crate::map_lighting::MapLight>>,
     /// Animated map lights: an index into `modern_lights` and how it
@@ -101,6 +103,39 @@ fn load_backdrop(
     Ok(Some(BackdropScene {
         scene: alone,
         eye: record.eye,
+    }))
+}
+
+/// The decals `bundle` lists for `scene` ([`bri_content::decals`]) with their pictures decoded.
+fn load_decals(
+    root: &Path,
+    bundle: &Value,
+    scene: &Scene,
+    world: &SceneData,
+) -> Result<Option<crate::decals::LoadedDecals>> {
+    let Some(name) = bundle
+        .get("decals")
+        .and_then(|s| s.get(&scene.id))
+        .and_then(Value::as_str)
+    else {
+        return Ok(None);
+    };
+    let set: bri_content::decals::DecalSet =
+        serde_json::from_slice(&read(root, name)?).context("Reading the map's decals")?;
+    set.validate()?;
+    let mut pictures = Vec::with_capacity(set.decals.len());
+    for decal in &set.decals {
+        pictures.push(decode(&read(root, &decal.picture)?, &decal.picture, true)?);
+    }
+    let receivers = set
+        .decals
+        .iter()
+        .map(|decal| crate::decals::gather(world, decal))
+        .collect();
+    Ok(Some(crate::decals::LoadedDecals {
+        set,
+        pictures,
+        receivers,
     }))
 }
 
@@ -696,6 +731,7 @@ fn load_bundle_unscoped(root: &Path, map_id: &str, legacy: bool) -> Result<MapSc
     let scatter = load_scatter(&root, &bundle, bindings, &scene, legacy)?;
     let backdrop = load_backdrop(&root, &bundle, bindings, &scene, legacy)?;
     let regions = load_regions(&root, &bundle, &scene)?;
+    let decals = load_decals(&root, &bundle, &scene, &out)?;
     Ok(MapScene {
         scene: out,
         terrain,
@@ -705,6 +741,7 @@ fn load_bundle_unscoped(root: &Path, map_id: &str, legacy: bool) -> Result<MapSc
         scatter,
         backdrop,
         regions,
+        decals,
         modern_lights,
         light_animations,
         light_spots,
@@ -986,6 +1023,7 @@ fn load_static_shape(
             } else {
                 material.images[8] = lightmap;
                 material.baked_lightmap = Some(surface.lightmap_strength);
+                material.baked_exact = surface.lightmap_exact;
             }
         }
         // Bare metal on an Add-On map: its texture tints the reflectance and
@@ -1011,20 +1049,76 @@ fn load_static_shape(
                 [0.0; 4],
             ]);
         }
+        if authored.vertex_light && authored.layers.is_none() {
+            material.kind = MaterialKind::VertexLight;
+        }
+        // A terrain's layers: up to four textures weighted by one map's channels (its materials name them), lit by the vertex
+        // light only. Layers the material does not have repeat the first and carry no weight.
+        if let Some(blend) = authored.layers.as_ref() {
+            let image_of =
+                |index: usize, srgb: bool, out: &mut SceneData, cache: &mut _| -> Result<usize> {
+                    let file = bindings
+                        .iter()
+                        .find(|b| {
+                            b["asset"].as_str() == Some(id)
+                                && b["shape_material"].as_u64() == Some(index as u64)
+                                && b["skin"].as_str().unwrap_or("") == skin
+                        })
+                        .and_then(|b| b["texture"].as_str())
+                        .with_context(|| format!("Missing layer texture {id}/{index}"))?;
+                    texture(root, file, srgb, out, cache)
+                };
+            ensure!(
+                (1..=4).contains(&blend.layers.len())
+                    && blend.transforms.len() == blend.layers.len(),
+                "Static material {id}/{} needs one to four layers with a transform each",
+                authored.name
+            );
+            let first = image_of(blend.layers[0], true, out, cache)?;
+            material.kind = MaterialKind::LayerBlend;
+            material.images[0] = first;
+            let mut transforms = [[1.0, 0.0, 0.0, 1.0, 0.0, 0.0]; 4];
+            for (i, layer) in blend.layers.iter().enumerate() {
+                material.images[i] = if i == 0 {
+                    first
+                } else {
+                    image_of(*layer, true, out, cache)?
+                };
+                transforms[i] = blend.transforms[i];
+            }
+            for i in blend.layers.len()..4 {
+                material.images[i] = first;
+            }
+            material.images[9] = image_of(blend.weights, false, out, cache)?;
+            material.layer_transforms = Some(transforms);
+        }
         // Torque culls DTS back faces and blends only Translucent materials;
         // opaque ones ignore texture alpha entirely (TSMesh::initMaterials,
         // TSMesh::setMaterial). Palm frond stems sit on alpha-0 texels. A
         // cutout (glTF MASK) is the exception: its cutoff is the material's
         // own alpha test, applied by the shared shape-material mapping.
         material.ignore_texture_alpha = authored.blend == "opaque";
-        crate::shape_material::apply(
+        crate::shape_material::apply_with(
             &mut material,
             authored,
             &format!("static material {id}"),
+            true,
             |blend| {
                 Ok(match blend {
                     "opaque" => AlphaMode::Opaque,
+                    // A layer pass blended over the one before (a terrain's alpha-map layers) blends by its weights, whatever its stand-in colour image says.
+                    "alpha" if authored.layers.is_some() => AlphaMode::Blend,
                     "alpha" => alpha(&out.images[diffuse]),
+                    // Unreal Engine 2's frame-buffer blends (docs/modding/materials.md):
+                    // true modulate, modulate (2x), darken, translucent/brighten
+                    // smooth, alpha modulate and invisible, drawn unlit.
+                    "multiply" => AlphaMode::Multiply,
+                    "modulate" => AlphaMode::Frame(FrameBlend::Modulate),
+                    "darken" => AlphaMode::Frame(FrameBlend::Darken),
+                    "screen" => AlphaMode::Frame(FrameBlend::Screen),
+                    "premultiplied" => AlphaMode::Frame(FrameBlend::Premultiplied),
+                    "invisible" => AlphaMode::Frame(FrameBlend::Invisible),
+                    "true_additive" => AlphaMode::Frame(FrameBlend::TrueAdditive),
                     // Torque's additive DTS materials (glass, glows).
                     _ => AlphaMode::Additive,
                 })
@@ -1050,6 +1144,7 @@ fn load_static_shape(
             soft_edges.insert(out.materials.len(), out.materials.len() + 1);
             materials.push(out.materials.len());
             material.uv_motion = authored.uv_motion;
+            material.uv_chain.clone_from(&authored.uv_chain);
             out.materials.push(material);
             out.materials.push(edges);
             continue;
@@ -1434,11 +1529,14 @@ fn load_terrain(
         alpha: AlphaMode::Opaque,
         double_sided: false,
         uv_motion: None,
+        uv_chain: Vec::new(),
+        layer_transforms: None,
         clamp_nearest: false,
         temp_brick_flash: false,
         ignore_texture_alpha: false,
         untinted: false,
         baked_lightmap: None,
+        baked_exact: false,
         tint_mask: false,
         parameters: Some(parameters),
     });
@@ -1662,7 +1760,10 @@ mod tests {
     }
     #[test]
     fn a_map_model_blend_the_loader_cannot_honour_is_refused() {
-        let error = load_leaf(leaf_material("multiply", None)).unwrap_err();
-        assert!(error.to_string().contains("multiply"), "{error}");
+        // The Unreal Engine 2 frame-buffer blends are honoured for map models; a name
+        // nothing maps is still refused.
+        assert!(load_leaf(leaf_material("multiply", None)).is_ok());
+        let error = load_leaf(leaf_material("sepia", None)).unwrap_err();
+        assert!(error.to_string().contains("sepia"), "{error}");
     }
 }
