@@ -1,0 +1,572 @@
+diff --git a/crates/addon-import/src/lib.rs b/crates/addon-import/src/lib.rs
+index 0a60617..1e9e5ff 100644
+--- a/crates/addon-import/src/lib.rs
++++ b/crates/addon-import/src/lib.rs
+@@ -94,6 +94,167 @@ const VEHICLE_CLASSES: &[(&str, bri_vehicles::schema::Family)] = &[
+     ("WheeledVehicleData", bri_vehicles::schema::Family::Wheeled),
+     ("FlyingVehicleData", bri_vehicles::schema::Family::Flying),
+ ];
++/// v20 applies thrust, lift and wing forces to every WheeledVehicle
++/// (`WheeledVehicle::updateForces` 0x5746a0); natively only `FlyingWheeled`
++/// runs them, so a wheeled Add-On that authors any of them flies.
++fn wheeled_flight_family(
++    family: bri_vehicles::schema::Family,
++    fields: &BTreeMap<String, String>,
++) -> bri_vehicles::schema::Family {
++    use bri_vehicles::schema::Family;
++    let flies = [
++        "forwardthrust",
++        "reversethrust",
++        "lift",
++        "horizontalsurfaceforce",
++        "verticalsurfaceforce",
++    ]
++    .iter()
++    .any(|k| {
++        fields
++            .get(*k)
++            .and_then(|v| literal(v).trim().parse::<f32>().ok())
++            .is_some_and(|v| v != 0.)
++    });
++    if family == Family::Wheeled && flies {
++        Family::FlyingWheeled
++    } else {
++        family
++    }
++}
++/// `WheeledVehicleData::onAdd` in the recovered v20 core scripts: which wheels
++/// steer and which are powered, by wheel count (7+ repeats the 6 case).
++fn v20_default_wheels(wheels: &mut [bri_vehicles::schema::Wheel]) {
++    let (steer, first_powered) = match wheels.len() {
++        0 => return,
++        1 => (1, 0),
++        2 => (2, 0),
++        3 | 5 => (1, 1),
++        _ => (2, 2),
++    };
++    let last_powered = wheels.len().min(6);
++    for (i, w) in wheels.iter_mut().enumerate() {
++        w.steering = if i < steer { 1. } else { 0. };
++        w.powered = (first_powered..last_powered).contains(&i);
++    }
++}
++
++/// The chassis threads a vehicle's `onAdd` (and the helpers it calls) plays:
++/// `if (%speed < 5) playThread(0, slow); else playThread(0, fast);` with
++/// `%speed = vectorLen(%obj.getVelocity())` becomes slow from 0 and fast from
++/// 5; without such a choice, `onAdd`'s own `playThread` plays at any speed.
++fn speed_threads(
++    scripts: &[Script],
++    on_add: &tscript::Function,
++) -> Vec<bri_vehicles::schema::SpeedThread> {
++    use bri_vehicles::schema::SpeedThread;
++    fn compact(body: &str) -> String {
++        body.lines()
++            .map(|l| l.split("//").next().unwrap_or(""))
++            .flat_map(str::chars)
++            .filter(|c| !c.is_whitespace())
++            .flat_map(char::to_lowercase)
++            .collect()
++    }
++    // The `{...}` block or single statement starting at `at`, and where it ends.
++    fn segment(s: &str, at: usize) -> Option<(&str, usize)> {
++        if s[at..].starts_with('{') {
++            let mut depth = 0;
++            for (i, c) in s[at..].char_indices() {
++                match c {
++                    '{' => depth += 1,
++                    '}' => {
++                        depth -= 1;
++                        if depth == 0 {
++                            return Some((&s[at + 1..at + i], at + i + 1));
++                        }
++                    }
++                    _ => {}
++                }
++            }
++            None
++        } else {
++            let end = at + s[at..].find(';')? + 1;
++            Some((&s[at..end], end))
++        }
++    }
++    fn sequences(s: &str) -> Vec<String> {
++        s.match_indices("playthread(")
++            .filter_map(|(i, m)| {
++                let args = &s[i + m.len()..];
++                let args = &args[..args.find(')')?];
++                let seq = args.split(',').nth(1)?.trim_matches('"');
++                (!seq.is_empty() && !seq.starts_with('%')).then(|| seq.to_owned())
++            })
++            .collect()
++    }
++    let direct = compact(&on_add.body);
++    let mut bodies = vec![direct.clone()];
++    for helper in scripts.iter().flat_map(|s| &s.functions).filter(|f| {
++        f.namespace.is_none()
++            && on_add
++                .calls
++                .iter()
++                .any(|c| c.receiver.is_none() && c.callee.eq_ignore_ascii_case(&f.name))
++    }) {
++        bodies.push(compact(&helper.body));
++    }
++    let mut threads: Vec<SpeedThread> = vec![];
++    fn add(threads: &mut Vec<SpeedThread>, sequence: String, min_speed: f32) {
++        if !threads.iter().any(|t| t.sequence == sequence) {
++            threads.push(SpeedThread { sequence, min_speed });
++        }
++    }
++    for body in &bodies {
++        let vars: Vec<&str> = body
++            .match_indices("=vectorlen(%obj.getvelocity());")
++            .filter_map(|(i, _)| body[..i].rsplit([';', '{', '}']).next())
++            .filter(|v| v.starts_with('%'))
++            .collect();
++        for var in vars {
++            let head = format!("if({var}");
++            for (i, _) in body.match_indices(&head) {
++                let rest = &body[i + head.len()..];
++                let Some((op, rest)) = ["<=", ">=", "<", ">"]
++                    .iter()
++                    .find_map(|op| rest.strip_prefix(op).map(|r| (*op, r)))
++                else {
++                    continue;
++                };
++                let Some(close) = rest.find(')') else { continue };
++                let Ok(limit) = rest[..close].parse::<f32>() else {
++                    continue;
++                };
++                let at = body.len() - rest.len() + close + 1;
++                let Some((then, end)) = segment(body, at) else {
++                    continue;
++                };
++                let otherwise = body[end..]
++                    .strip_prefix("else")
++                    .and_then(|_| segment(body, end + 4))
++                    .map_or("", |(s, _)| s);
++                let (below, above) = if op.starts_with('<') {
++                    (then, otherwise)
++                } else {
++                    (otherwise, then)
++                };
++                for s in sequences(below) {
++                    add(&mut threads, s, 0.);
++                }
++                for s in sequences(above) {
++                    add(&mut threads, s, limit);
++                }
++            }
++        }
++    }
++    if threads.is_empty() {
++        for s in sequences(&direct) {
++            add(&mut threads, s, 0.);
++        }
++    }
++    threads.sort_by(|a, b| a.min_speed.total_cmp(&b.min_speed));
++    threads
++}
+ /// Fields that name another datablock. Keys are lower-case, without `[n]`.
+ const REFERENCE_FIELDS: &[&str] = &[
+     "image",
+@@ -310,7 +471,7 @@ pub fn import(opts: &Options) -> Result<Report> {
+     references(&mut cx);
+     convert_files(&mut cx)?;
+     weapons(&mut cx, &scripts)?;
+-    vehicles(&mut cx)?;
++    vehicles(&mut cx, &scripts)?;
+     bricks(&mut cx, &scripts)?;
+     sounds_and_rest(&mut cx);
+     behaviours(&mut cx, &scripts);
+@@ -1032,6 +1193,24 @@ fn weapons(cx: &mut Ctx, scripts: &[Script]) -> Result<()> {
+             defs.push(d);
+         }
+     }
++    // One image outside the native state limits (300 s, `bri_weapons` pack
++    // validation) must not drop every other weapon, projectile and explosion.
++    let too_long = |d: &bri_weapons::Definition| {
++        d.class.eq_ignore_ascii_case("ShapeBaseImageData")
++            && d.fields.iter().any(|(k, v)| {
++                (k.starts_with("statetimeoutvalue[") || k.starts_with("stateemittertime["))
++                    && literal(v).trim().parse::<f32>().is_ok_and(|s| s > 300.)
++            })
++    };
++    for d in defs.iter().filter(|d| too_long(d)) {
++        cx.report.unsupported.push(Finding {
++            what: format!("image {}", d.name),
++            source: Some(Location::new(&d.source.path, d.source.line)),
++            detail: "a state lasts over 300 s, beyond the native image state limit".into(),
++            resolution: None,
++        });
++    }
++    defs.retain(|d| !too_long(d));
+     let mut pack = match bri_weapons_import::lower(defs) {
+         Ok(p) => p,
+         Err(e) => {
+@@ -1528,7 +1707,7 @@ fn placeholder() -> (bri_content::shape::Shape, Vec<u8>) {
+     (shape, png)
+ }
+ 
+-fn vehicles(cx: &mut Ctx) -> Result<()> {
++fn vehicles(cx: &mut Ctx, scripts: &[Script]) -> Result<()> {
+     use bri_vehicles::schema::{Asset, Evidence, Pack, SCHEMA_VERSION};
+     use bri_vehicles_import::Block;
+     let wanted: Vec<(String, bri_vehicles::schema::Family)> = cx
+@@ -1538,7 +1717,7 @@ fn vehicles(cx: &mut Ctx) -> Result<()> {
+             VEHICLE_CLASSES
+                 .iter()
+                 .find(|(c, _)| c.eq_ignore_ascii_case(&o.d.class))
+-                .map(|(_, f)| (o.d.name.clone(), *f))
++                .map(|(_, f)| (o.d.name.clone(), wheeled_flight_family(*f, &o.fields)))
+         })
+         .collect();
+     for o in cx
+@@ -1625,17 +1804,60 @@ fn vehicles(cx: &mut Ctx) -> Result<()> {
+             .collect();
+         match bri_vehicles_import::lower(name, *family, &blocks, &cx.shapes, &files, &id) {
+             Ok(mut d) => {
+-                d.adaptations.push(
+-                    "Wheel steering and power follow the vanilla Jeep convention (front two steer, the rest drive); Torque sets both from script (setWheelSteering/setWheelPowered), which this Add-On does not call".into(),
+-                );
++                let on_add = scripts.iter().flat_map(|s| &s.functions).find(|f| {
++                    f.qualified()
++                        .eq_ignore_ascii_case(&format!("{name}::onAdd"))
++                });
++                let calls = |callee: &str| {
++                    on_add.is_some_and(|f| f.calls.iter().any(|c| c.callee.eq_ignore_ascii_case(callee)))
++                };
++                let sets_wheels = calls("setWheelSteering") || calls("setWheelPowered");
++                let default_runs = on_add.is_none() || calls("Parent::onAdd");
++                if matches!(family, bri_vehicles::schema::Family::Wheeled | bri_vehicles::schema::Family::FlyingWheeled)
++                    && default_runs
++                    && !sets_wheels
++                {
++                    v20_default_wheels(&mut d.wheels);
++                    d.adaptations.push(
++                        "Wheel steering and power follow v20's WheeledVehicleData::onAdd table for this wheel count".into(),
++                    );
++                } else {
++                    d.adaptations.push(
++                        "Wheel steering and power follow the vanilla Jeep convention (front two steer, the rest drive); Torque sets both from script (setWheelSteering/setWheelPowered), which this Add-On does not call".into(),
++                    );
++                    cx.ambiguous(
++                        format!("vehicle {name} wheel steering and power"),
++                        Some(at),
++                        "its onAdd replaces v20's default wheel setup; the vanilla front-steer rear-drive convention was applied".into(),
++                        Some("front two wheels steer, the rest are powered".into()),
++                    );
++                }
+                 let vid = cx.id("vehicle", name, name, "assets/vehicles.json");
+                 d.id = vid.clone();
+-                cx.ambiguous(
+-                    format!("vehicle {name} wheel steering and power"),
+-                    Some(at),
+-                    "no script sets them; the vanilla front-steer rear-drive convention was applied".into(),
+-                    Some("front two wheels steer, the rest are powered".into()),
+-                );
++                if let Some(f) = on_add {
++                    let shape = cx.shapes.values().find(|(p, _)| *p == d.model).map(|(_, s)| s);
++                    d.speed_threads = speed_threads(scripts, f)
++                        .into_iter()
++                        .filter(|t| {
++                            shape.is_some_and(|s| {
++                                s.animations
++                                    .iter()
++                                    .any(|a| a.looping && a.name.eq_ignore_ascii_case(&t.sequence))
++                            })
++                        })
++                        .collect();
++                    if !d.speed_threads.is_empty() {
++                        d.adaptations.push(format!(
++                            "{} plays {} by speed as soon as it crosses; the script re-checked on a schedule",
++                            f.qualified(),
++                            d.speed_threads
++                                .iter()
++                                .map(|t| format!("{} from {}", t.sequence, t.min_speed))
++                                .collect::<Vec<_>>()
++                                .join(", ")
++                        ));
++                    }
++                }
+                 for p in [&d.initial_explosion, &d.final_explosion]
+                     .into_iter()
+                     .flatten()
+diff --git a/crates/client/src/vehicles.rs b/crates/client/src/vehicles.rs
+index b4a9d1f..41d0eda 100644
+--- a/crates/client/src/vehicles.rs
++++ b/crates/client/src/vehicles.rs
+@@ -37,10 +37,21 @@ pub struct VehicleAssets {
+     /// Gunner models with a `look` clip (tank turret, pirate cannon), keyed
+     /// by the model's asset path.
+     looks: BTreeMap<String, LookRig>,
++    /// Chassis models with speed-selected looping threads (`speed_threads`).
++    spins: BTreeMap<String, SpinRig>,
+     /// Model asset paths by lower-case source path (`add-ons/vehicle_jeep/jeeptire.dts`).
+     sources: BTreeMap<String, String>,
+ }
+ 
++/// A chassis split into its fixed part and the parts its speed threads move
++/// (a propeller), posed each frame by the clip the speed selects.
++struct SpinRig {
++    shape: Shape,
++    /// Rising minimum speed and its looping clip.
++    clips: Vec<(f32, Animation)>,
++    parts: Vec<(String, usize, Mat4)>,
++}
++
+ /// A gunner model split into its fixed part and the parts its `look` clip
+ /// moves (the barrel), so the barrel can follow any pitch exactly.
+ struct LookRig {
+@@ -120,6 +131,7 @@ impl VehicleAssets {
+             .collect();
+         let mut models = BTreeMap::new();
+         let mut looks = BTreeMap::new();
++        let mut spins = BTreeMap::new();
+         for asset in pack.assets.iter().filter(|a| a.kind == "model") {
+             let bytes = crate::items::checked_read(
+                 &bri_vehicles::asset_root(&root, asset),
+@@ -157,6 +169,19 @@ impl VehicleAssets {
+                 .contains(&asset.path)
+                 .then(|| bri_vehicles::muzzle::look_clip(&look_clips, &shape))
+                 .flatten();
++            let speed_clips: Vec<(f32, Animation)> = pack
++                .definitions
++                .iter()
++                .filter(|d| d.model == asset.path)
++                .flat_map(|d| &d.speed_threads)
++                .filter_map(|t| {
++                    let clip = shape
++                        .animations
++                        .iter()
++                        .find(|a| a.name.eq_ignore_ascii_case(&t.sequence))?;
++                    Some((t.min_speed, clip.clone()))
++                })
++                .collect();
+             let mut insert = |key: String, pose: &bri_content::animation::Pose| -> Result<()> {
+                 let data =
+                     native_shape_scene(&key, &shape, &refs, [1.0; 4], false, Mat4::IDENTITY, pose)?;
+@@ -171,7 +196,11 @@ impl VehicleAssets {
+                 );
+                 Ok(())
+             };
+-            let Some(look) = look else {
++            let clips: Vec<&Animation> = match look {
++                Some(look) => vec![look],
++                None => speed_clips.iter().map(|(_, a)| a).collect(),
++            };
++            let Some(&rest) = clips.first() else {
+                 insert(
+                     asset.path.clone(),
+                     &bri_content::animation::sample(&shape, None, 0.0)?,
+@@ -179,30 +208,35 @@ impl VehicleAssets {
+                 continue;
+             };
+             // Objects on nodes the clip moves are drawn apart and posed each
+-            // frame; everything else is baked once.
+-            let pose = bri_content::animation::sample(&shape, Some(look), 0.0)?;
++            // frame; everything else is baked once. A full-turn loop is back
++            // at its start at 1.0, so spins are sampled inside the loop.
++            let pose = bri_content::animation::sample(&shape, Some(rest), 0.0)?;
++            let times: &[f32] = if look.is_some() { &[0.5, 1.0] } else { &[0.25, 0.5, 0.75] };
+             let mut moving = std::collections::BTreeSet::new();
+-            for t in [0.5, 1.0] {
+-                let other = bri_content::animation::sample(&shape, Some(look), t * look.duration)?;
+-                for (i, object) in shape.objects.iter().enumerate() {
+-                    if let Some(node) = object.node
+-                        && !other.nodes[node].abs_diff_eq(pose.nodes[node], 1e-5)
+-                    {
+-                        ensure!(
+-                            object.meshes.iter().all(|m| shape
+-                                .meshes
+-                                .get(*m)
+-                                .and_then(Option::as_ref)
+-                                .is_none_or(|m| m.skin.is_none())),
+-                            "Vehicle look clip moves a skinned mesh: {}",
+-                            asset.path
+-                        );
+-                        moving.insert((node, i));
++            for clip in &clips {
++                for t in times {
++                    let other =
++                        bri_content::animation::sample(&shape, Some(clip), t * clip.duration)?;
++                    for (i, object) in shape.objects.iter().enumerate() {
++                        if let Some(node) = object.node
++                            && !other.nodes[node].abs_diff_eq(pose.nodes[node], 1e-5)
++                        {
++                            ensure!(
++                                object.meshes.iter().all(|m| shape
++                                    .meshes
++                                    .get(*m)
++                                    .and_then(Option::as_ref)
++                                    .is_none_or(|m| m.skin.is_none())),
++                                "Vehicle clip moves a skinned mesh: {}",
++                                asset.path
++                            );
++                            moving.insert((node, i));
++                        }
+                     }
+                 }
+             }
+             let only = |keep: &dyn Fn(usize) -> bool| {
+-                let mut part = bri_content::animation::sample(&shape, Some(look), 0.0)?;
++                let mut part = bri_content::animation::sample(&shape, Some(rest), 0.0)?;
+                 for (i, v) in part.visibility.iter_mut().enumerate() {
+                     if !keep(i) {
+                         *v = 0.0;
+@@ -216,22 +250,34 @@ impl VehicleAssets {
+             )?;
+             let mut parts = Vec::new();
+             let nodes: std::collections::BTreeSet<usize> = moving.iter().map(|(n, _)| *n).collect();
++            let tag = if look.is_some() { "look" } else { "spin" };
+             for node in nodes {
+-                let key = format!("{}#look{node}", asset.path);
++                let key = format!("{}#{tag}{node}", asset.path);
+                 insert(
+                     key.clone(),
+                     &only(&|i| shape.objects[i].node == Some(node))?,
+                 )?;
+                 parts.push((key, node, pose.nodes[node].inverse()));
+             }
+-            looks.insert(
+-                asset.path.clone(),
+-                LookRig {
+-                    shape: shape.clone(),
+-                    clip: look.clone(),
+-                    parts,
+-                },
+-            );
++            if let Some(look) = look {
++                looks.insert(
++                    asset.path.clone(),
++                    LookRig {
++                        shape: shape.clone(),
++                        clip: look.clone(),
++                        parts,
++                    },
++                );
++            } else {
++                spins.insert(
++                    asset.path.clone(),
++                    SpinRig {
++                        shape: shape.clone(),
++                        clips: speed_clips,
++                        parts,
++                    },
++                );
++            }
+         }
+         for d in &pack.definitions {
+             ensure!(
+@@ -250,6 +296,7 @@ impl VehicleAssets {
+             pack,
+             models,
+             looks,
++            spins,
+             sources,
+         })
+     }
+@@ -308,6 +355,8 @@ pub struct ClientVehicles {
+     history: BTreeMap<u64, VecDeque<VehiclePose>>,
+     frames: BTreeMap<u64, VehicleFrame>,
+     driven: Option<Warp>,
++    /// Server seconds this frame, for looping chassis threads.
++    clock: f64,
+ }
+ /// How far the driven vehicle is drawn from its extrapolated newest pose:
+ /// a disagreeing pose shifts the path, and the difference decays instead of
+@@ -350,6 +399,9 @@ impl ClientVehicles {
+             }
+         }
+         self.frames.clear();
++        if let Some(now) = server_tick {
++            self.clock = now / TICK_RATE;
++        }
+         if self.driven.as_ref().is_some_and(|w| Some(w.vehicle) != driven) {
+             self.driven = None;
+         }
+@@ -497,6 +549,24 @@ impl ClientVehicles {
+                 }
+             };
+             push(&d.model, body, tint);
++            if let Some(rig) = assets.spins.get(&d.model) {
++                let speed = frame.velocity.length();
++                let clip = rig
++                    .clips
++                    .iter()
++                    .rev()
++                    .find(|(min, _)| speed >= *min)
++                    .or(rig.clips.first())
++                    .map(|(_, clip)| clip);
++                if let Some(clip) = clip {
++                    let time = (self.clock % f64::from(clip.duration.max(1e-3))) as f32;
++                    if let Ok(pose) = bri_content::animation::sample(&rig.shape, Some(clip), time) {
++                        for (key, node, inverse) in &rig.parts {
++                            push(key, body * pose.nodes[*node] * *inverse, tint);
++                        }
++                    }
++                }
++            }
+             for (i, wheel) in d.wheels.iter().enumerate() {
+                 let suspension = frame
+                     .wheel_suspension
+diff --git a/crates/convert/src/shape.rs b/crates/convert/src/shape.rs
+index dc34a3a..3c535b1 100644
+--- a/crates/convert/src/shape.rs
++++ b/crates/convert/src/shape.rs
+@@ -33,6 +33,10 @@ fn collect<T>(count: usize, mut read: impl FnMut() -> Result<T>) -> Result<Vec<T
+     (0..count).map(|_| read()).collect()
+ }
+ fn subset<T: Clone>(data: &[T], start: usize, count: usize) -> Result<Vec<T>> {
++    // Exporters leave stale starts on empty ranges; Torque never reads them.
++    if count == 0 {
++        return Ok(vec![]);
++    }
+     let end = start.checked_add(count).context("Range overflow")?;
+     Ok(data
+         .get(start..end)
+@@ -772,7 +776,11 @@ pub fn read_dts(data: &[u8], id: String) -> Result<(Shape, Provenance)> {
+         .collect::<Vec<_>>();
+     let mut animations = Vec::new();
+     for s in sequences {
+-        animations.push(lower_sequence(s, &node_names, &pools, &mut provenance)?);
++        let label = s.name.clone();
++        animations.push(
++            lower_sequence(s, &node_names, &pools, &mut provenance)
++                .with_context(|| format!("Sequence {label}"))?,
++        );
+     }
+     let shape = Shape {
+         schema_version: 1,
+diff --git a/crates/vehicles-import/src/lib.rs b/crates/vehicles-import/src/lib.rs
+index 28a88c5..d84724a 100644
+--- a/crates/vehicles-import/src/lib.rs
++++ b/crates/vehicles-import/src/lib.rs
+@@ -546,6 +546,7 @@ pub fn lower(
+         protect_burn: truth(b, "protectPassengersBurn"),
+         authored: b.fields.clone(),
+         adaptations,
++        speed_threads: vec![],
+     })
+ }
+ 
+diff --git a/crates/vehicles/src/schema.rs b/crates/vehicles/src/schema.rs
+index 650b31d..36859b6 100644
+--- a/crates/vehicles/src/schema.rs
++++ b/crates/vehicles/src/schema.rs
+@@ -214,6 +214,15 @@ pub struct Definition {
+     /// Authored fields retained as metadata only. Runtime reads typed native fields above.
+     pub authored: BTreeMap<String, String>,
+     pub adaptations: Vec<String>,
++    /// Looping chassis sequences a script plays by speed (`playThread`), in
++    /// rising `min_speed` order: the last one the speed reaches plays.
++    #[serde(default, skip_serializing_if = "Vec::is_empty")]
++    pub speed_threads: Vec<SpeedThread>,
++}
++#[derive(Clone, Debug, Serialize, Deserialize)]
++pub struct SpeedThread {
++    pub sequence: String,
++    pub min_speed: f32,
+ }
+ /// How a seat's occupant controls things. Host input mapping, rider facing
+ /// and the client camera all follow it.

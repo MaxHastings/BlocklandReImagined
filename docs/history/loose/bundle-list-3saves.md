@@ -1,0 +1,676 @@
+> **Historical note. Written 2026-10-02 (the file's date in the cloud project folder, `bundle-list-3saves.md`); copied here unchanged on 2026-10-20 so it is kept in git. It describes the project as of that date and may no longer match the code.**
+
+# Shared brick packs across three saves
+
+Read-only rescan. Saves: Halloween Block Party 2026, Jazz City RPG, 2023 XMas (Steam saves folder).
+Zip sources, first copy wins: C:\Users\Maxwell\Desktop\Games\BlocklandReImagined\content\Add-Ons; S:\SteamLibrary\steamapps\common\Blockland\Add-Ons; C:\Users\Maxwell\Documents\_Blockland_Maxwell_1588_Archive\Addons.
+A pack counts for a save when the save uses at least one brick it defines that the stock catalog lacks.
+
+## Packs used by the saves
+
+| Pack | Saves (kinds/bricks) | In 2+ saves | Bundled now | sha256 | Source |
+|---|---|---|---|---|---|
+| Brick_1RandomPack.zip | Halloween 53/1083, Jazz 51/1343, XMas 82/7135 | yes | yes | `4b6d8c1f1437dfd79a6271369a7db18f97096d51527b3ce0b8091bbd68eeb60c` | C:\Users\Maxwell\Desktop\Games\BlocklandReImagined\content\Add-Ons\Brick_1RandomPack.zip |
+| Brick_BlackDragonIV.zip | Halloween 81/4254, Jazz 88/6354, XMas 79/19080 | yes | yes | `75bbab44467a5610cc013413ee6b222b4335549e8d4160e91f1213a5412ab7be` | C:\Users\Maxwell\Desktop\Games\BlocklandReImagined\content\Add-Ons\Brick_BlackDragonIV.zip |
+| Brick_BlackDragonIV_Filler.zip | Halloween 100/961, Jazz 128/2744, XMas 98/2876 | yes | yes | `39aae6b9fde39a6f01cac512ab11262f0bbbd64c3f140c56bc0271c0c97f4266` | C:\Users\Maxwell\Desktop\Games\BlocklandReImagined\content\Add-Ons\Brick_BlackDragonIV_Filler.zip |
+| Brick_Christmas_Tree.zip | Halloween 1/1, Jazz 1/2, XMas 1/41 | yes | yes | `e72df75d8be02e84d45c50b24bfb5d713c880e83f054a8aad59338d4475e14c1` | C:\Users\Maxwell\Desktop\Games\BlocklandReImagined\content\Add-Ons\Brick_Christmas_Tree.zip |
+| Brick_DemiansBP_1x.zip | Halloween 14/378, Jazz 18/1639, XMas 20/1445 | yes | yes | `4393069becd4ebc6a1047aa267ee859c022622154f5172cc6b7f2aa22d4d0c62` | C:\Users\Maxwell\Desktop\Games\BlocklandReImagined\content\Add-Ons\Brick_DemiansBP_1x.zip |
+| Brick_Doors.zip | Halloween 4/36, Jazz 5/138, XMas 4/56 | yes | yes | `0df1cdd215dbe4dca0f57924ed752204b58fab106d0fc36d72dbc1fee1c19de2` | C:\Users\Maxwell\Desktop\Games\BlocklandReImagined\content\Add-Ons\Brick_Doors.zip |
+| Brick_Fence.zip | Halloween 1/12, Jazz 5/147, XMas 4/49 | yes | no | `96dc232d9b6986255740240679f6f61b880d91da07af83d04783b1f29ff29991` | C:\Users\Maxwell\Desktop\Games\BlocklandReImagined\content\Add-Ons\Brick_Fence.zip |
+| Brick_GIANTBrickpackv2.zip | Halloween 152/4296, Jazz 279/11249, XMas 174/16506 | yes | yes | `061cd736143cfe282a750c6df296780680c32f7d4d8bd6e0001118e9264f1c70` | C:\Users\Maxwell\Desktop\Games\BlocklandReImagined\content\Add-Ons\Brick_GIANTBrickpackv2.zip |
+| Brick_Halloween.zip | Halloween 10/244, Jazz 3/3, XMas 7/101 | yes | yes | `e1c311c54e885d20ccc49ed4a07aa8b86cb96def0cade04920750d04d47b30ce` | C:\Users\Maxwell\Desktop\Games\BlocklandReImagined\content\Add-Ons\Brick_Halloween.zip |
+| Brick_TilePlates.zip | Halloween 13/679, Jazz 14/4219, XMas 15/11282 | yes | yes | `553cddf38c8f9102da5987b3080e830c851332ccec9185d0e79f2cb99ad75abb` | C:\Users\Maxwell\Desktop\Games\BlocklandReImagined\content\Add-Ons\Brick_TilePlates.zip |
+| Brick_Tiles.zip | Halloween 7/454, Jazz 7/1500, XMas 7/5551 | yes | yes | `3b130a03eca30e2ccf84bd0391f1c50621c35cee87457d2564e3433b0d13b3b8` | C:\Users\Maxwell\Desktop\Games\BlocklandReImagined\content\Add-Ons\Brick_Tiles.zip |
+| Brick_Wedge.zip | Halloween 1/11, Jazz 1/27, XMas 2/76 | yes | no | `b6106566846edc5e71ebb2160507b7d029a9b2ac202a5a47250e826b06a69fcc` | C:\Users\Maxwell\Desktop\Games\BlocklandReImagined\content\Add-Ons\Brick_Wedge.zip |
+| Brick_WedgePlus.zip | Halloween 3/141, Jazz 4/703, XMas 4/1195 | yes | yes | `2fc158303dee0f85118092f775b9013c38c436e685167503a20e6d314eabc484` | C:\Users\Maxwell\Desktop\Games\BlocklandReImagined\content\Add-Ons\Brick_WedgePlus.zip |
+| Brick_Window.zip | Halloween 6/53, Jazz 4/92, XMas 8/518 | yes | yes | `b4a95ae4f40baa1a5af8f0d8eeb05fb5b609cd8e531933af657e289aac30f3b8` | C:\Users\Maxwell\Desktop\Games\BlocklandReImagined\content\Add-Ons\Brick_Window.zip |
+| Brick_ExtraPrints.zip | Halloween 2/39, Jazz 2/122 | yes | yes | `8cc62a4d69acbbdb90972833d9db215df1d41ea11cf7584268d822ad02ed57d9` | C:\Users\Maxwell\Desktop\Games\BlocklandReImagined\content\Add-Ons\Brick_ExtraPrints.zip |
+| Brick_InvertedCorners.zip | Halloween 2/19, XMas 2/281 | yes | no | `41861e2cde07afd6ea03fb064d0486f2c5895edeb3e72d559db093d5515b48a3` | C:\Users\Maxwell\Desktop\Games\BlocklandReImagined\content\Add-Ons\Brick_InvertedCorners.zip |
+| Brick_MoreRounds.zip | Halloween 2/255, Jazz 2/161 | yes | yes | `9307886f532d2ac678c2b5a313c5e26c429f7b613af8d7d8ce63c8c42e7d0be0` | C:\Users\Maxwell\Desktop\Games\BlocklandReImagined\content\Add-Ons\Brick_MoreRounds.zip |
+| Brick_Plant.zip | Halloween 10/293, Jazz 10/79 | yes | yes | `b68468c491520780ceca5babdf5b9019dc17fb27cfa1562ea244ef1258bd5602` | C:\Users\Maxwell\Desktop\Games\BlocklandReImagined\content\Add-Ons\Brick_Plant.zip |
+| Brick_Pole.zip | Halloween 3/548, XMas 3/1217 | yes | no | `30fa2dec2b26f00f406a1c2933a458d3124645da230a668c37c837c27a3cf418` | C:\Users\Maxwell\Desktop\Games\BlocklandReImagined\content\Add-Ons\Brick_Pole.zip |
+| Brick_Round_Corners.zip | Jazz 7/134, XMas 7/142 | yes | no | `d56b6fa90b5bd6d54d34b17b162b0a6895385fa02e3b40cedb008fa88b3cb0b9` | C:\Users\Maxwell\Desktop\Games\BlocklandReImagined\content\Add-Ons\Brick_Round_Corners.zip |
+| Brick_SmallOcto.zip | Halloween 4/14, Jazz 5/408 | yes | yes | `f43a7ec5d234344c26c23b693cc957b0ecd99062fba93546bcb34aa30bfb7082` | C:\Users\Maxwell\Desktop\Games\BlocklandReImagined\content\Add-Ons\Brick_SmallOcto.zip |
+| Brick_ToplessRamps.zip | Halloween 10/635, Jazz 5/216 | yes | yes | `367e18f06d6f2d001127db7b8a8e2855ef1f0e4eaf88aa4b6e197430f3890d91` | C:\Users\Maxwell\Desktop\Games\BlocklandReImagined\content\Add-Ons\Brick_ToplessRamps.zip |
+| Brick_18Degree.zip | Jazz 5/208 | no | no | `e9bba46c9dbd221d7a904e54e72fa31302ffed3825f8065dc138333f1f452151` | C:\Users\Maxwell\Desktop\Games\BlocklandReImagined\content\Add-Ons\Brick_18Degree.zip |
+| Brick_4x4fPrintPlateC.zip | XMas 1/24 | no | no | `4a6c2c4b03dd02a4c1809c1825914bb7e1f8688a928f403042a8a40b3820ec80` | S:\SteamLibrary\steamapps\common\Blockland\Add-Ons\Brick_4x4fPrintPlateC.zip |
+| Brick_4x4Round.zip | XMas 1/31 | no | no | `2f11579bd5fe34cd515caa4cbc373acc2e3402f62a2c15b15deae992bb88a390` | S:\SteamLibrary\steamapps\common\Blockland\Add-Ons\Brick_4x4Round.zip |
+| Brick_ExtraRamps.zip | Jazz 5/386 | no | no | `36b4056f767fdd90c5f58930945f53bd99ea5747a2beee676b736bd39bf43e16` | C:\Users\Maxwell\Desktop\Games\BlocklandReImagined\content\Add-Ons\Brick_ExtraRamps.zip |
+| Brick_ModTer_4xPack.zip | XMas 3/208 | no | no | `2b02971a072b45e718bb2d6aa928bd1fa3b25afe7d498fbe974a4e81ff611d4d` | S:\SteamLibrary\steamapps\common\Blockland\Add-Ons\Brick_ModTer_4xPack.zip |
+| Brick_ModTer_BasicPack.zip | XMas 29/1223 | no | no | `1e9d96e1ca92db4842518985ae553ced96cf766b23f58604dc74f552f4959ef4` | S:\SteamLibrary\steamapps\common\Blockland\Add-Ons\Brick_ModTer_BasicPack.zip |
+| Brick_Poster_8x.zip | Jazz 1/9 | no | no | `ffca1f56e8a76cd8db333500e975896848ac9b73a2f033e538b382ee64cac90b` | C:\Users\Maxwell\Desktop\Games\BlocklandReImagined\content\Add-Ons\Brick_Poster_8x.zip |
+| Brick_Print_Icons.zip | Jazz 1/127 | no | no | `81e1055d38796c7fa91e68a16fc905d5269ce1f937762e35be23724a917f0cfe` | C:\Users\Maxwell\Desktop\Games\BlocklandReImagined\content\Add-Ons\Brick_Print_Icons.zip |
+| Brick_Zones.zip | XMas 3/1166 | no | no | `9b31e882ebc0a34422a1621ee2b6b9b7dfcdab470f4af95a3f7fb790c842b9e5` | S:\SteamLibrary\steamapps\common\Blockland\Add-Ons\Brick_Zones.zip |
+
+## 2023 XMas kinds no zip on this PC supplies (624 kinds / 87225 bricks)
+
+These need a pack Max must download (or are not brick-pack bricks). Name and brick count:
+
+- 0.5x0.5F: 4191
+- 0.75x1F: 4186
+- 0.5x2F: 3553
+- 0.25x2F: 3056
+- [N] 0.5x0.5F: 2932
+- 1F 2x2F Vertical Print: 1941
+- 0.25x1F: 1782
+- 1x2F Beveled: 1765
+- 0.5x1F: 1763
+- 0.5x2: 1708
+- 1x2FF Beveled: 1480
+- 1x1f Centered Octo: 1401
+- 1x1F Beveled: 1385
+- 0.25x0.25F: 1357
+- 0.5x Cent. End Short: 1279
+- 1F 1x2F Vertical Print: 1240
+- 1x2 Thin Bottom: 1207
+- 2x2F Vertical Double Print: 1207
+- Mason: 1150
+- 0.5x Centered: 1143
+- 0.5x Neg. End Long Full: 1095
+- 0.25x1: 996
+- 0.25x0.25 Edge: 991
+- 0.5x Cent. Straight: 954
+- 0.75x2F: 951
+- 1x1FF Beveled: 950
+- 1x1 Vertical TOP Ramp: 911
+- 0.5x1: 833
+- 0.25x0.25f Edge Orientation 3 A: 826
+- 1x1 Small Ramp: 809
+- [N] 0.25x0.25F: 808
+- 1F 1x1F Vertical Print: 720
+- 1x1 Thin Bottom: 698
+- 1x2 Beveled: 669
+- 0.5x0.5 Edge: 635
+- 2x2 Inner Corner Downside: 594
+- 1x1 Plate Ramp: 593
+- 1x1 Inverted Ramp: 590
+- 0.5x Neg. L Adapter Part: 573
+- 1x1f Thick Pole: 560
+- Block Pole 1x1: 559
+- 1x 1x2F Vertical Print: 552
+- 0.75x1: 545
+- 0.5x Neg. R Adapter Part: 532
+- 4x8x10: 511
+- 1x1 Beveled: 501
+- 0.25x2: 489
+- 0.5x0.5F Corner: 464
+- 1x2 Vertical BOTTOM Ramp: 443
+- 2x1 Inverted Ramp: 439
+- 0.5x Neg. End Long Cap: 438
+- 1x1x1 Centered Octo: 422
+- 0.25x0.25F Corner: 411
+- [N] 0.5x0.5 Edge: 403
+- 0.75x0.75 Corner: 396
+- 8x8x10: 384
+- 2x1 Small Ramp: 373
+- 0.5x Neg. Centered: 367
+- 1x2x2 Upside Down Fence: 364
+- 2x2F Ceiling Print Plate: 364
+- 2x3 Wedge Left: 352
+- 1x1F Pole X Vert: 345
+- [N] 0.25x2: 342
+- 0.5x Neg. Cross Edge: 340
+- 0.75x2: 338
+- [N] 0.75x2: 316
+- 1x1F Vertical Edge Print: 309
+- 1x1 Half Round Adapter: 308
+- 1x4 Thin Bottom: 306
+- [N] 0.25x1F: 284
+- 2x1 Vertical BOTTOM Ramp: 271
+- 1F 1x1F Vertical Corner Print: 265
+- Christmas Light Down: 248
+- 1x2 Vert Round A: 242
+- 6x6x1: 238
+- [N] 0.25x0.25F Corner: 237
+- [N] 0.75x0.75 Corner: 233
+- 2x2F Vertical Print: 231
+- 1x1 Vertical BOTTOM Ramp: 231
+- [N] 0.5x1F: 229
+- 1x4L Small Ramp: 226
+- 0.25x0.25f Edge Orientation 3 B: 216
+- 0.5x Cent. End Long: 215
+- 1x2x1 Chopped H Arch: 212
+- [N] 0.25x2F: 209
+- [N] 0.25x1: 208
+- 2x2 Vertical BOTTOM Ramp: 206
+- Double Straight Track: 198
+- 1x2 Inverted Ramp: 195
+- 0.75x0.75F: 188
+- 1x2 Vertical TOP Ramp: 188
+- 0.5x Cent. T: 187
+- [N] 0.5x2F: 178
+- 1x2F Vertical Print: 177
+- 2x2 Thin Bottom: 173
+- 1x 2x2F Vertical Print: 171
+- Half Ramped Track: 171
+- [N] 1x1f Horiz. Diag.: 164
+- 1x4x9 Vertical Fence: 156
+- 0.25x0.25 Corner: 155
+- 2x2 Small Ramp: 155
+- 0.25x0.25f Side: 153
+- 0.75x0.75F Corner: 152
+- 2x1 Vertical TOP Ramp: 148
+- 0.25x1f Ramp Inv: 148
+- 0.25x0.25f Edge Orientation 2: 147
+- 1x1 Slanted: 144
+- 1x 1x1F Vertical Corner Print: 141
+- 0.5x Neg. Cross Diag: 140
+- 1x1f Round Tile: 139
+- 0.75x0.75f Side: 135
+- 0.25x1f Orientation 1: 134
+- Christmas Present: 131
+- Block Pole 1x1F: 124
+- 8x1 Plate Ramp: 118
+- 1x1 Vert Round A: 116
+- 1x1 Chopped H Arch: 113
+- Vertical Fence: 111
+- 2x4 Thin Bottom: 111
+- 1x1 Thick Pole: 110
+- [N] 0.75x0.75F: 106
+- 0.5x Neg. Straight: 105
+- 1x 1x1F Vertical Edge Print: 103
+- 0.5x0.5f Side: 103
+- [N] 0.75x1F: 100
+- 0.25x0.25f Edge Orientation 1: 97
+- Block Pole Horiz: 97
+- 1x4 Slanted: 96
+- [N] 1F 1x2F Vertical Print: 94
+- Christmas Light Up: 94
+- [N] 0.25x0.25 Corner: 93
+- 2x2x2 Beveled: 92
+- 0.25x0.25 Edge Orientation 1: 91
+- Half R. 1x1 Extended No Smooth: 90
+- Horizontal Fence: 90
+- 1x2 Slanted: 89
+- 1x2x2 Verticle Fence: 88
+- 0.5x Cent. Turn: 88
+- 2x2F Beveled: 88
+- 1x3 Small Ramp: 88
+- 0.5x Cent. Cross: 87
+- 1x3 Thin Bottom: 84
+- [N] 0.75x2F: 83
+- 1x1 Thin Top: 83
+- [N] 0.75x1: 83
+- 1x2 Small Ramp: 82
+- 1x1 Vert Round B: 79
+- 0.5x Neg. End Short Part: 79
+- .25 WF Cap BR: 78
+- 1x1F Pole Corner down: 76
+- 1x2x2 Chopped H Arch: 75
+- [N] 0.5x0.5f Side: 75
+- [N] 1F 1x1F Vertical Print: 74
+- 1x3 Thick Pole: 73
+- 16x16x10: 73
+- 1x2x2 Fence: 73
+- 2x4x2 Beveled: 72
+- 1x2F Ceiling Print Plate: 72
+- 0.75x0.75 Edge: 72
+- 2x4 Thin Top: 72
+- Half R. 1x1f: 71
+- [N] 0.5x2: 70
+- [N] 1x1F Pole Corner: 69
+- 1x2 Thick Pole: 68
+- 1x1F Pole X: 68
+- [N] 0.75x0.75 Edge: 66
+- 1x8 Thin Bottom: 66
+- 8x8x10 Ramp: 66
+- [N] 1x1 Pole Side: 64
+- 1x32H: 63
+- 0.5x0.5 Corner: 60
+- [N] 1x1f Horizontal Pole Offset: 57
+- Wood Plank Door: 56
+- 4x24F: 56
+- 1x1F Pole Corner: 55
+- 1x6 Slanted: 55
+- 1x1F Pole Side: 54
+- 0.5x Neg. Cross All: 54
+- 2x2 Thin Top: 54
+- 1x4 Thin Top: 53
+- 1x1f Horizontal pole: 53
+- 0.5x Neg. End Short Cap: 53
+- 64x64x10 Ext: 52
+- 2x16x1: 52
+- 1x1 Pole Corner: 51
+- 1x6 Thin Bottom: 51
+- 2x2 Wedge R: 51
+- [N] 1x 1x2F Vertical Print: 51
+- Wine Bottle: 50
+- 1x1x5 Centered Octo: 50
+- 2x2 Wedge L: 49
+- [N] 1x1 Pole Corner: 48
+- 1x1x2 Centered Octo: 48
+- 1x2 Thin Top: 48
+- 1x3 Vert Round B: 48
+- [N] 0.5x1: 47
+- 2x3F Wedge Left: 47
+- 1x3 Vert Thick Pole: 47
+- 1x2 Plate Ramp: 47
+- 1x1 Vert. Diag. A: 47
+- 1x24H: 47
+- Block Pole C: 47
+- 1x3x1 Half Arch: 47
+- 1x2 Half-Arch Curved: 46
+- 0.25x0.25f Wedge Ramp Inv: 45
+- 0.5x Cent. RAdapter: 44
+- [N] 1F 1x1F Vertical Corner Print: 44
+- [N] 0.5x0.5f Ramp Side Inv: 44
+- 0.5x Cent. LAdapter: 43
+- 1x1 Outer Corner: 43
+- Christmas Ribbon: 42
+- 0.5x Neg. End Short Full: 41
+- Bomber: 40
+- 3x4x1: 40
+- Ext. Half-round 1x1f: 40
+- 2x2 Inverted Ramp: 39
+- 0.75x1f Ramp Inv: 39
+- 1x3x5 Verticle Fence: 38
+- Quarter-round 1x1f right: 38
+- 0.25x0.25f Wedge Ramp: 38
+- 0.25x0.25 Edge Orientation 3 A: 38
+- Whiskey: 37
+- 1x1f Horiz. Diag.: 37
+- 1x1F Pole T down: 37
+- [N] 0.25x0.25 Edge: 36
+- 1x1F Pole Corner up: 36
+- 1x2 Half Arch: 36
+- 1x3f Horizontal pole: 35
+- [N] 1x1F Vertical Edge Print: 35
+- 2x5x1: 35
+- 1x1f Horizontal Pole Offset: 34
+- 2x4FF Beveled: 34
+- 1x1 Vert Thick Pole: 34
+- [N] 0.75x0.75F Corner: 34
+- 1x1f Round Corner Tile: 34
+- 2x12x1: 33
+- 1x8f Horizontal pole: 33
+- 1x3 Arabian Arch: 32
+- 1x3 Small Ramp Inv: 32
+- Straight Track: 31
+- Half R. 1x1f No Smooth: 31
+- Wine Glass: 31
+- 0.5x Cent. LTurn Adapter: 30
+- Christmas Snowman: 30
+- 1x1F Vertical Corner Print: 30
+- Tumbler: 30
+- 5x4 Glass Pane: 30
+- 8x64x10: 30
+- 2x2x3 Dome Nubless: 29
+- 2x32x1: 29
+- Half R. 1x1f Extended No Smooth: 29
+- 1x1 C Slanted: 28
+- 3x3 Round: 28
+- 2x8 Thin Top: 28
+- 0.5x Cent. RTurn Adapter: 27
+- [N] 1x1F Pole: 27
+- 3x3F Round: 27
+- Double Ramped Track: 27
+- Half Straight Track: 27
+- 2x1 Plate Ramp: 26
+- Cocktail Glass: 26
+- [N] 1F 2x2F Vertical Print: 26
+- 1x1 Glass Pane: 26
+- Whiskey - White: 25
+- [N] 1x1F Pole Corner down: 25
+- 8x8F Round: 25
+- Beer Tankard: 24
+- Half R. 1x1f Extended: 24
+- [N] 0.25x1f Ramp Inv: 24
+- 1x1F Left Side Ramp: 24
+- Block Pole T: 24
+- 8x32x10: 24
+- [N] 0.5x0.5f Ramp Left: 23
+- [N] 1x1F Pole Side: 22
+- Block Pole Horiz C: 22
+- 2x2F Wedge L: 21
+- 2x2F Wedge R: 21
+- 1x1 Vert Round Cone: 21
+- 6x20F: 21
+- 1x2x2 Beveled: 21
+- Christmas Ornament: 21
+- 1x30H: 21
+- Half R. 1x1 Extended: 20
+- [N] 0.5x0.5f Ramp Right Inv: 20
+- 1x8 Slanted: 20
+- .25 WF Filler B 1x1f: 19
+- 1x2f Horizontal pole: 19
+- Right Turn Track: 19
+- Plain Door Frameless: 19
+- 1x4x2 Arch Cap: 19
+- 0.5x0.5f Ramp Right: 19
+- Ext. Quarter-round 1x1f: 19
+- 0.5x1f Ramp Inv: 19
+- 4x1 Plate Ramp: 19
+- 2x2 Vert. Diag. A: 19
+- 6x6 Round: 19
+- Half R. 1x1: 18
+- Ext. Quarter-round 1x1: 18
+- Quarter-round 1x1f: 18
+- 2x3 Thin Bottom: 18
+- Ramped Track: 18
+- Upside Down Fence: 17
+- 0.5x0.5f Ramp Left Inv: 17
+- Locker Door: 17
+- Blockhead Hole: 17
+- 2x2 Vertical TOP Ramp: 17
+- 6x26F: 17
+- [N] 0.5x0.5f Ramp Right: 17
+- [N] 0.25x0.25f Side: 17
+- 3x4 Glass Pane: 17
+- [N] 1x 2x2F Vertical Print: 16
+- 0.5x0.5f Ramp Right Inv: 16
+- [N] 0.5x0.5f Ramp Left Inv: 16
+- .25 WF Cap TR: 16
+- 1x1F Right Side Ramp: 16
+- 0.25x0.25 Edge Orientation 3 B: 16
+- 4x4 R Edge: 16
+- Soda Bottle: 16
+- 0.25x1 Orientation 2: 16
+- 2x24F: 16
+- 2x3 Thin Top: 16
+- 1x3 Vert Round A: 16
+- Vert Thick Pole Corner Top: 16
+- Curtain Door: 15
+- 1x2 Vert Thick Pole: 15
+- 0.25x0.25f Edge Orientation 6 B: 15
+- 1x1 Vert. Diag. B: 15
+- 2x2f Round Tile: 15
+- 1x1f Glass Pane: 15
+- 1x1 Pole Side: 15
+- 2x4F Wedge Right: 15
+- 32x32x10: 15
+- [N] 1x1f Wedge Ramp: 14
+- Vert Thick Pole T Side: 14
+- Vert Thick Pole Corner Down: 14
+- Right Turnoff Track: 14
+- 6x30F: 14
+- Beer4: 14
+- 2x14x1: 14
+- 2x6 Thin Top: 14
+- Music (Half Range): 13
+- 2x3F Wedge Right: 13
+- 2x4F Beveled: 13
+- 1x1 Chopped H Arch U: 13
+- Glass 8x: 13
+- English Teacup: 13
+- Block Pole HorizT: 13
+- Wine3: 13
+- 3x32F: 13
+- 2x2x5 Wedge L: 12
+- [N] 1x1 Vert. Diag. A : 12
+- 2x2x5 Wedge R: 12
+- 1x3x2 Half Arch: 12
+- 0.5x0.5f Wedge Ramp: 12
+- 8x8 Plate Ramp: 12
+- 3x3f Round Tile: 12
+- 1x1F Pole plus: 12
+- Vert Thick Pole Corner Up: 12
+- 2x24x1: 12
+- Half-round 1x1: 12
+- 1x8 Plate Ramp: 12
+- 1x2x1 Arch Cap: 12
+- Quarter-round 1x1f left: 11
+- 1x4x3 Half Arch: 11
+- [N] 0.25x0.25f Wedge Ramp Inv: 11
+- 1x1x2 Beveled: 11
+- 8x16x10: 11
+- 2x4F Wedge Left: 11
+- Left Turn Track: 11
+- [N] 1x1F Pole T down: 10
+- [N] 0.5x0.5 Corner: 10
+- Double Curtains Door: 10
+- 1x3 Thin Top: 10
+- 1x4 Glass Pane: 10
+- 1x3 Plate Ramp: 10
+- 0.5x Neg. R Adapter Full: 10
+- 4x4 Vert. Diag. A: 10
+- 1x1x3 Pole Side: 10
+- [N] 0.5x1f Ramp Inv: 10
+- 0.5x0.5f Ramp Left: 10
+- Coffee Mug: 10
+- Coffee Mug3: 10
+- .25 WF Cap TL: 10
+- 1x1x3 Pole Corner: 10
+- Vent Door Frameless: 9
+- 1x2 Vert Round B: 9
+- 3x3x1: 9
+- 1x2x4 Shutter Right: 9
+- 1x2x4 Shutter Left: 9
+- 5x3 Glass Pane: 9
+- 8x8x10 Ext: 9
+- 1x3x2 Arch Cap: 9
+- .25 WF Filler T 1x1f: 8
+- .25 WF Corner TL: 8
+- 1x1F Ceiling Print Plate: 8
+- 6x6f Horiz. Diag.: 8
+- 1x4x18 Vertical Fence Pointed: 8
+- 1x2x3 Shutter Right: 8
+- 0.5x0.5f Wedge Ramp Inv: 8
+- .25 WF Filler V 1x1: 8
+- 4x4f Round Tile: 8
+- 1x3x2 Half Arch Up: 8
+- 1x1 Outer Side-Corner Downside: 8
+- [N] 0.5x0.5f Ramp Side: 8
+- 0.25x0.25f Edge Orientation 5 B: 8
+- 0.25x1f Orientation 2: 8
+- 8x48x10: 8
+- Diagonal Track: 8
+- Fountain Drink: 8
+- 2x2 Outer Side-Corner: 8
+- [N] 1x1x3 Pole: 8
+- BomberEmpty: 8
+- 8x4 Plate Ramp: 8
+- Quarter-round 1x1: 8
+- Left Turnoff Track: 8
+- 1x8 Thin Top: 7
+- [N] 1x1F Pole X: 7
+- 2x2 Outer Corner: 7
+- 1x2x3 Shutter Left: 7
+- 1x6 Thin Top: 7
+- 1x4x18 Vertical Fence: 7
+- Cocktail Mixer: 7
+- 5x2 Glass Pane: 7
+- 3x8x1: 7
+- 1x5x2 Double H Arch: 7
+- [N] 1x1F Pole Corner up: 6
+- 1x1x3 Beveled: 6
+- Half-round 1x1f: 6
+- Music (Quarter Range): 6
+- [N] 5x5 Vert. Diag. A : 6
+- 1x4x10 Fence: 6
+- 1x1 Inner Corner: 6
+- [N] 1x3f Wedge Left: 6
+- 1x3f Wedge Left: 6
+- [N] 1x1F Pole T up: 6
+- 0.25x0.25f Edge Orientation 7 A: 6
+- French Screen Door: 6
+- 1x2x2 Verticle Fence Pointed: 6
+- 1x3 Wedge Left: 6
+- 1x3 Wedge Right: 6
+- Ext. Half-round 1x1: 6
+- Half-round 1x1x3: 6
+- 0.25x0.25f Edge Orientation 6 A: 6
+- [N] 2x2F Vertical Print: 6
+- 5x1 Glass Pane: 6
+- Diagonal Left Turnoff Track: 6
+- 0.5x0.5f Ramp Side Inv: 5
+- 1x4f Horizontal pole: 5
+- 1x6f Horizontal pole: 5
+- English Teapot: 5
+- 8x8x10 Ramp Ext: 5
+- Vertical Fence Rounded: 5
+- 4x32x1: 5
+- 1x3 Half-Arch Curved: 5
+- 3x3 Tapered Wedge: 5
+- Glass Pane Door: 5
+- Block Pole HorizX: 5
+- [N] 0.25x0.25f Wedge Ramp: 5
+- Coffee Pot: 5
+- BlueSodaCrushed: 5
+- 1x4 Plate Ramp: 5
+- House Door Frameless: 5
+- 4x4 Thin Bottom: 5
+- Red Soda: 5
+- 8x24x10: 5
+- 64x64x10: 5
+- Half R. 1x1 No Smooth: 4
+- Window Door Frameless: 4
+- Ext. Quarter-round 1x1x3: 4
+- .25 WF Corner TR: 4
+- 1x2 Half Arch Up: 4
+- 0.5x Neg. L Adapter Full: 4
+- 1x2 Right Side Ramp: 4
+- [N] 1x1 Vert. Diag. B : 4
+- 8x3 Plate Ramp: 4
+- 8x2 Plate Ramp: 4
+- 1x5 Half-Arch: 4
+- 0.25x0.25f Edge Orientation 7 B: 4
+- [N] 1x1f Wedge Ramp Inv: 4
+- Block Pole C Inv: 4
+- Vert Thick Pole Corner: 4
+- 4x4F R Edge: 4
+- Beer3: 4
+- 2x2 Vert. Diag. B: 4
+- Tumbler1: 4
+- 8x6 Plate Ramp: 4
+- 1x6 Plate Ramp: 4
+- 2x8 Plate Ramp: 4
+- 4x24x1: 4
+- Half R. 1x1x5 Extended: 4
+- .25 WF Filler V 1x1x2: 4
+- 2x6 Thin Bottom: 4
+- Quarter-round 1x1x5: 4
+- Ext. Quarter-round 1x1x5: 4
+- Vert Thick Pole T Flat Top: 4
+- 1x4x3 Beveled: 4
+- 3x3 Vert. Diag. A: 4
+- 2x2 R Edge: 4
+- Castle Door: 4
+- Vert Thick Pole X Top: 4
+- 2x2 Inner Side-Corner Downside: 4
+- 4x4 Vert. Diag. B: 4
+- 1x4x10 Fence Upside Down: 3
+- 6x6 Vert. Diag. A: 3
+- 1x4x2 Beveled: 3
+- Vertical Fence Pointed: 3
+- 1x24x5: 3
+- 2x1F Right Side Ramp: 3
+- 1x2 Left Side Ramp: 3
+- [N] 1x2F Vertical Print: 3
+- Glass 1x4x5: 3
+- 16x16x10 Ext: 3
+- 32x32x10 Ext: 3
+- 2x2 V-Sideways Outer LL: 3
+- 2x2 V-Sideways Outer LR: 3
+- Coffee Mug2: 3
+- 1x24x4: 3
+- 1x4 Small Ramp Inv: 3
+- 4x30F: 3
+- EnglishTeacup 2: 3
+- RedSodaCrushed: 3
+- Shoji Double Door: 3
+- 2x8 Thin Bottom: 3
+- 2x32H: 3
+- 8x8 Round: 3
+- [N] 1x1 Pole: 3
+- 8x12x10: 3
+- Castle Door 2: 3
+- 1x1 V-Sideways Outer UR: 3
+- 1x1 V-Sideways Outer UL: 3
+- 5x5x2 Dome Inv: 3
+- EnglishTeacup 3: 3
+- 48x48x10: 2
+- 4x4 Plate Ramp: 2
+- Half Glass Door: 2
+- Half-round 1x1x5: 2
+- 6x6 Vert. Diag. B: 2
+- 6x8 Thin Top: 2
+- 6x8 Thin Bottom: 2
+- 1x1f Wedge Ramp Inv: 2
+- [N] 2x2F Vertical Double Print: 2
+- 1x2x18 Vertical Fence: 2
+- 2x2 Outer Side-Corner Downside: 2
+- [N] 1x1F Pole X Vert: 2
+- 5x12 Glass Pane: 2
+- 2x24H: 2
+- 2x30x1: 2
+- 6x3 Plate Ramp: 2
+- [N] 5x5x2 Dome Inv: 2
+- 2x6 Plate Ramp: 2
+- Ramune: 2
+- Beer Pitcher: 2
+- .25 WF Corner BL: 2
+- .25 WF Corner BR: 2
+- 1x3x3 Chopped H Arch: 2
+- 0.25x0.25f Edge Orientation 4 B: 2
+- 6x24x1: 2
+- 4x4 Thin Top: 2
+- 1x5x1 Double H Arch U: 2
+- Half Paneled Door: 2
+- 1x12 Arch: 2
+- Right Turnoff Switch: 2
+- 1x1 Outer Corner Downside: 2
+- 3x24F: 2
+- Straight Y Track: 2
+- 1x6x22f BDF No Corner: 2
+- Coffee Mug1: 2
+- FountainCovered3: 2
+- 4x8x10 Ext: 2
+- 1x4x18 Vertical Fence Rounded: 2
+- 1x3 Double H Arch: 1
+- 1x1F Pole T: 1
+- 2x1F Left Side Ramp: 1
+- 1x2x5 Shutter Left: 1
+- 1x2x5 Shutter Right: 1
+- .25 WF Filler B 1x2f: 1
+- 1x1 Left Side Ramp: 1
+- 1x1 Right Side Ramp: 1
+- 2x2 Plate Ramp: 1
+- Sliding Double Door: 1
+- [N] 1x1F Vertical Corner Print: 1
+- 0.5x Neg. Turn: 1
+- 2x2 V-Sideways Outer UL: 1
+- 2x2 V-Sideways Outer UR: 1
+- Vert Thick Pole T Up: 1
+- Shark Hole: 1
+- Bomber3: 1
+- 8x16x10 Ext: 1
+- .25 WF Cap BL: 1
+- 0.25x1 Orientation 1: 1
+- Blue Soda: 1
+- 1x24x2: 1
+- 1x10x23f BDF No Corner: 1
+- Clean Room Door: 1
+- 1x1 V-Sideways Outer LR: 1
+- 1x1 V-Sideways Outer LL: 1
+- 3x24x1: 1
+- 3x3 Vert. Diag. B: 1
+- [N] 2x2 Vert. Diag. A : 1
+- 0.75x0.75f Wedge Ramp Inv: 1
+- 4x5x1: 1
+- 5x6 Glass Pane: 1
+- [N] 1x3 Small Ramp: 1
+- Beer2: 1
+- [N] 2x2x3 Dome Nubless: 1
+- Vert Thick Pole T Down: 1
+- 1x2 Glass Pane: 1
+- 1x3 Double H Arch U: 1
+- 0.5x0.5f Ramp Side: 1
+- FountainCovered2: 1
+- Global Spawn: 1
+- Lab Door 2: 1
+- Diagonal Y Track: 1
+- RamuneEmpty: 1
+- Diagonal Right Turnoff Track: 1
+- Castle Door 3: 1
+- Half Diagonal Track: 1
+- 6x32x1: 1
+- EnglishTeacup 1: 1
+- Left Slash Crossing: 1
+- 3 Pane Glass Door: 1
+- FountainCovered1: 1
+- Straight Split Track: 1
+- 6x6 Thin Bottom: 1
+
+## Max must download
+
+No zip on this PC defines the kinds above. Which packs supply them, and their links, need the brick lane's name index (b4v21-index.json / links.py), which this read-only pass did not query.

@@ -1,0 +1,404 @@
+<!-- Historical note. Written 2026-10-06 (the file's date in the cloud project folder, `bots/npc-behaviour-review.html`); copied here unchanged on 2026-10-20 so it is kept in git. It describes the project as of that date and may no longer match the code. -->
+<title>Blockland Bot Behaviour</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;700;800&family=Atkinson+Hyperlegible:ital,wght@0,400;0,700;1,400&family=JetBrains+Mono:wght@400;600&display=swap">
+<style>
+/* Layout: one reading column with a sticky contents rail on wide screens; behaviour cards in a two-up grid that stacks on phones. */
+:root{
+  --bg:#f5f6f8; --surface:#ffffff; --fg:#1b2230; --muted:#5a6475; --line:#d9dee6;
+  --accent:#1f6f8b; --accent-soft:#e3f0f5;
+  --ctx:#1d7a46; --ctx-bg:#e2f3e9;
+  --drift:#3557b7; --drift-bg:#e6ebfa;
+  --dice:#a3600a; --dice-bg:#fbefdc;
+  --timer:#6a5a8c; --timer-bg:#eee9f6;
+  --display:"Archivo",system-ui,sans-serif;
+  --body:"Atkinson Hyperlegible",system-ui,sans-serif;
+  --mono:"JetBrains Mono",ui-monospace,Menlo,Consolas,monospace;
+}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){
+  --bg:#12161d; --surface:#1a2029; --fg:#e4e8ef; --muted:#9aa4b5; --line:#2c3440;
+  --accent:#5fb6d3; --accent-soft:#1b313b;
+  --ctx:#6fd09a; --ctx-bg:#173326; --drift:#8fa8f0; --drift-bg:#1d2747;
+  --dice:#f0b45c; --dice-bg:#3a2a12; --timer:#b9a6e3; --timer-bg:#2a2340; color-scheme:dark}}
+:root[data-theme="dark"]{
+  --bg:#12161d; --surface:#1a2029; --fg:#e4e8ef; --muted:#9aa4b5; --line:#2c3440;
+  --accent:#5fb6d3; --accent-soft:#1b313b;
+  --ctx:#6fd09a; --ctx-bg:#173326; --drift:#8fa8f0; --drift-bg:#1d2747;
+  --dice:#f0b45c; --dice-bg:#3a2a12; --timer:#b9a6e3; --timer-bg:#2a2340; color-scheme:dark}
+*{box-sizing:border-box}
+body{background:var(--bg);color:var(--fg);font-family:var(--body);font-size:16.5px;line-height:1.6;margin:0}
+.wrap{max-width:1180px;margin:0 auto;padding-inline:20px;padding-block:28px 64px;display:grid;grid-template-columns:220px minmax(0,1fr);gap:40px}
+@media (max-width:900px){.wrap{grid-template-columns:minmax(0,1fr)}nav.toc{position:static!important}}
+nav.toc{position:sticky;top:env(safe-area-inset-top,0px);align-self:start;padding-top:8px;font-size:14px}
+nav.toc h2{font-family:var(--display);font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);margin:0 0 8px}
+nav.toc a{display:block;color:var(--fg);text-decoration:none;padding:3px 0;border-left:2px solid transparent;padding-left:10px}
+nav.toc a:hover,nav.toc a:focus-visible{border-left-color:var(--accent);color:var(--accent);outline:none}
+main{min-width:0}
+h1,h2,h3{font-family:var(--display);text-wrap:balance;line-height:1.2}
+h1{font-size:clamp(28px,4vw,40px);font-weight:800;margin:0 0 6px}
+.sub{color:var(--muted);margin:0 0 22px;max-width:70ch}
+h2{font-size:24px;font-weight:700;margin:52px 0 12px;padding-top:12px;border-top:1px solid var(--line)}
+h3{font-size:18px;font-weight:700;margin:0 0 6px}
+p,li{max-width:72ch}
+code,.ref{font-family:var(--mono);font-size:.82em}
+.ref{color:var(--muted);white-space:nowrap}
+.lede{background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:18px 20px;display:grid;gap:10px}
+.lede p{margin:0}
+.legend{display:flex;flex-wrap:wrap;gap:8px 16px;margin:14px 0 4px;font-size:14px;color:var(--muted)}
+.b{display:inline-block;font-family:var(--mono);font-size:11.5px;font-weight:600;letter-spacing:.03em;padding:2px 8px;border-radius:999px;white-space:nowrap;vertical-align:1px}
+.b.ctx{background:var(--ctx-bg);color:var(--ctx)} .b.drift{background:var(--drift-bg);color:var(--drift)}
+.b.dice{background:var(--dice-bg);color:var(--dice)} .b.timer{background:var(--timer-bg);color:var(--timer)}
+/* pipeline */
+.pipe{display:grid;gap:0;margin:18px 0;counter-reset:s}
+.stage{display:grid;grid-template-columns:44px minmax(0,1fr);gap:14px;padding:14px 0;border-bottom:1px dashed var(--line)}
+.stage:last-child{border-bottom:0}
+.num{font-family:var(--display);font-weight:800;font-size:15px;width:34px;height:34px;border-radius:50%;display:grid;place-items:center;background:var(--accent-soft);color:var(--accent)}
+.stage h3{margin-top:4px}
+.stage p{margin:4px 0}
+/* behaviours */
+.grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}
+@media (max-width:760px){.grid{grid-template-columns:minmax(0,1fr)}}
+.card{background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:16px 18px;min-width:0}
+.card .tags{display:flex;flex-wrap:wrap;gap:6px;margin:2px 0 10px}
+.card dl{margin:0;display:grid;gap:8px}
+.card dt{font-family:var(--display);font-size:11.5px;letter-spacing:.07em;text-transform:uppercase;color:var(--muted)}
+.card dd{margin:0}
+.group{font-family:var(--display);font-size:13px;letter-spacing:.08em;text-transform:uppercase;color:var(--accent);margin:30px 0 10px}
+table{border-collapse:collapse;width:100%;font-size:15px}
+.tbl{overflow-x:auto;border:1px solid var(--line);border-radius:10px;background:var(--surface)}
+th,td{text-align:left;padding:10px 12px;border-bottom:1px solid var(--line);vertical-align:top}
+th{font-family:var(--display);font-size:12px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted)}
+tr:last-child td{border-bottom:0}
+.prio{font-family:var(--mono);font-size:12px;font-weight:600;color:var(--accent)}
+footer{margin-top:48px;color:var(--muted);font-size:14px}
+@media (prefers-reduced-motion:no-preference){nav.toc a{transition:color .15s,border-color .15s}}
+</style>
+
+<div class="wrap">
+<nav class="toc" aria-label="Contents">
+  <h2>Contents</h2>
+  <a href="#summary">In short</a>
+  <a href="#pipeline">How a bot thinks</a>
+  <a href="#fighting">Fighting</a>
+  <a href="#finding">Finding the fight</a>
+  <a href="#objectives">Objectives and ball games</a>
+  <a href="#items">Items, vehicles, things</a>
+  <a href="#idle">Idle life and goofing</a>
+  <a href="#team">Team play</a>
+  <a href="#body">Body, kind and safety</a>
+  <a href="#honest">What's still thin</a>
+  <a href="#progress">In progress now</a>
+  <a href="#next">Cheap human wins</a>
+</nav>
+
+<main>
+<h1>How the bots behave</h1>
+<p class="sub">A full review of the v0.2.5 bots for Max: what makes them human, varied and surprising in play, and how each part works underneath. Read from branch <code>claude/v0.2.5-s4s5bn</code> at <code>2d45224</code> ("go explore"). Code references are under <code>crates/sim/src/session/</code>. I read the code only; nothing was run for this page.</p>
+
+<section id="summary">
+<div class="lede">
+  <p><strong>The core idea.</strong> Every tick a bot looks at what it can see, hear and remember. It gives each thing it could do a score, picks the best or a near-best one, and sticks with it for a moment so it doesn't flicker. A single act step then turns that choice into the walk, the look and the buttons a player would press.</p>
+  <p><strong>Where the human feel comes from.</strong> Mostly from what the bot knows: how alert it is, how long it has tracked you, what keeps failing, what bored it, what teammates are doing. A smaller part is a slow personal "mood" drift, and a remaining part is plain dice, mostly in idle play.</p>
+  <p><strong>Where it's still thin.</strong> Which goof it does is still a dice roll. Dodges, weapon hand-offs and door clicks run on their own timers. Brick bots stroll to random spots. Searching spins like a turret. Stuck spots appear on big maps now that bots cross them. Most of this is already queued on the bot thread.</p>
+</div>
+<div class="legend" aria-label="Legend">
+  <span><span class="b ctx">context</span> shaped by what the bot sees, hears or remembers</span>
+  <span><span class="b drift">drift</span> slow per-bot mood that wanders over time</span>
+  <span><span class="b timer">timer</span> a fixed or seeded rhythm, not a reaction</span>
+  <span><span class="b dice">dice</span> a plain random pick</span>
+</div>
+</section>
+
+<section id="pipeline">
+<h2>How a bot thinks, step by step</h2>
+<p>This runs every tick (120 times a second) for every bot, in <code>step_bot</code> (<span class="ref">bots.rs:1623</span>).</p>
+<div class="pipe">
+  <div class="stage"><div class="num">1</div><div>
+    <h3>Perceive</h3>
+    <p>It sees enemies within its sight distance and line of sight, through portals too (<span class="ref">bots/sight.rs:85</span>). There is no blind spot: its view cone only makes it react slower to someone outside it. It hears weapon fire up to 128 units away and roughly where (<span class="ref">bots/hearing.rs:110</span>), hears allies' warnings after a short delay (<span class="ref">hearing.rs:68</span>), and feels hits, knowing only roughly where an unseen shooter is.</p>
+  </div></div>
+  <div class="stage"><div class="num">2</div><div>
+    <h3>Remember</h3>
+    <p>What it learned is kept as dated evidence: who, where, when, and until when (<code>Knowledge</code>, <span class="ref">bots.rs:277</span>). It never peeks at where an unseen enemy is now. Search memory works through spots to check from that evidence (<span class="ref">bots/search_memory.rs</span>). Explore remembers which areas it has visited lately (<span class="ref">bots/explore.rs:55</span>).</p>
+  </div></div>
+  <div class="stage"><div class="num">3</div><div>
+    <h3>Score every option</h3>
+    <p>It has ten things it can be doing: Carry, Interact, Fight, Arm, Chase, Search, Return, Objective, Explore, Wander. Each gets a score from what's true now (<span class="ref">bots/behaviour.rs</span>, <code>score</code>). For example, Fight scores 0.8 inside its weapon's range and fades past it, Chase 0.6, an objective 0.65 (0.92 when carrying), Search 0.4, Explore 0.2 and Wander 0.1. An enemy's score is scaled by how much it threatens the bot or its play (<code>bot_menace</code>, <span class="ref">bots/contest.rs:37</span>). The kind's weights in <code>bots.json</code> can turn options up, down or off.</p>
+  </div></div>
+  <div class="stage"><div class="num">4</div><div>
+    <h3>Team terms</h3>
+    <p>Each bot posts what it's doing (where, at whom, which seat, its line of fire) as an "intent" (<span class="ref">bots/claims.rs</span>, <span class="ref">bots/team.rs:300</span>). Before choosing, each bot adjusts its scores from its allies' intents. Doubling up on the same target or spot costs a little, and taking a seat an ally offers scores more. Standing in an ally's line of fire costs more. Its objective is worth more the further its side is behind (<code>pressed</code>, <span class="ref">team.rs:168</span>).</p>
+  </div></div>
+  <div class="stage"><div class="num">5</div><div>
+    <h3>Mood: drift, boredom, effectiveness, copying</h3>
+    <p>Before the pick, each score is nudged by four things (<code>Mind::pick</code>, <span class="ref">bots/surprise.rs:485</span>):</p>
+    <ul>
+      <li><strong>Drift:</strong> each bot's slow, wandering liking for each option. Each bot starts at a different point, and it changes over about 90 s.</li>
+      <li><strong>Boredom:</strong> whatever it's doing grows dull, and the boredom fades over about 20 s once it stops.</li>
+      <li><strong>Effectiveness:</strong> options that failed (shots dodged, no damage, stuck) lose value and recover over about 30 s.</li>
+      <li><strong>Copy:</strong> a bonus for what it saw work for a teammate.</li>
+    </ul>
+    <p>Drift and boredom together can move a score at most 15 %, so only nearly tied options swap. None of this applies when it's urgent (low health, or just hit up close) or carrying the objective (<code>Gate</code>, <span class="ref">surprise.rs:203</span>).</p>
+  </div></div>
+  <div class="stage"><div class="num">6</div><div>
+    <h3>Choose, and hold the choice</h3>
+    <p>One rule decides for every choice point: behaviour, weapon, aim point, flank route, goof-or-play, move and dodge (<code>Hold::choose</code>, <span class="ref">bots/behaviour.rs:297</span>). A new choice is held for at least 0.5 s. After that, a rival must beat it by 10 % to take over. Some things cut in at once: an urgent hit, an objective appearing or being dropped, a new target, the target dying, or the held option becoming impossible.</p>
+  </div></div>
+  <div class="stage"><div class="num">7</div><div>
+    <h3>Plan the way</h3>
+    <p>The route planner finds a path on the walk grid, including swimming, jetting, portals and driving (<code>bot_path</code>, <span class="ref">bots.rs:1402</span>). The objective planner works out what the game's own rules ask and how to do it (<span class="ref">bots/objectives/turn.rs</span>, <span class="ref">bots/planning.rs</span>). It reads the authored event rows and package rules; it never matches map or mode names.</p>
+  </div></div>
+  <div class="stage"><div class="num">8</div><div>
+    <h3>Act: one place turns choices into controls</h3>
+    <p>Everything that wants to move the bot proposes. In order: route, push, fight stance, jet, swim, team, goof, dodge, stand. One fixed priority decides, and safety goes last and can only take away: no stumbling into portals, a step round vehicles, and never off a ledge that hurts (<span class="ref">bots/act.rs</span>). Aim and the trigger are still set in <code>step_bot</code> and <code>bot_act</code> (<span class="ref">bots.rs:1191</span>); moving them into the act step is in progress.</p>
+  </div></div>
+  <div class="stage"><div class="num">9</div><div>
+    <h3>Execute like a player</h3>
+    <p>It sends the same move input a player sends: forward, strafe, yaw, pitch, jump, crouch, jet, trigger. Every game rule applies to it unchanged. If it's getting nowhere, one stuck judge hops once, then replans, then gives up on the goal (<span class="ref">bots.rs:3001</span>).</p>
+  </div></div>
+</div>
+</section>
+
+<section id="fighting">
+<h2>Every behaviour a player can see</h2>
+<p>For each one: what sets it off, what makes it vary, and whether that variation follows the situation or is dice.</p>
+
+<div class="group">Fighting</div>
+<div class="grid">
+  <div class="card"><h3>Spotting and reacting</h3><div class="tags"><span class="b ctx">context</span><span class="b dice">small jitter</span></div><dl>
+    <dt>Trigger</dt><dd>An enemy comes into sight or hits it.</dd>
+    <dt>Varies by</dt><dd>How alert it was: quick when fighting, slower when strolling or goofing. Slower again from outside its view cone, where it also turns toward you more slowly. Hit from behind, its look freezes until it reacts. The delay has ±30 % jitter. <span class="ref">perception.rs:284-311, 489-560</span></dd>
+  </dl></div>
+  <div class="card"><h3>Aim and turning</h3><div class="tags"><span class="b ctx">context</span><span class="b drift">smooth wobble</span></div><dl>
+    <dt>Trigger</dt><dd>An enemy in sight.</dd>
+    <dt>Varies by</dt><dd>Turning speeds up into big turns, eases out and overshoots slightly on a fast flick. Its miss size is wide when it first sees you and tightens as it keeps tracking. It is wider after a slow reaction, and stays wider for a target crossing fast or far away. The miss direction is a smooth wobble that never settles. Lead on moving targets is roughly right and drifts ±15 %. <span class="ref">bots.rs:802-816, 2630; perception.rs:476, 570</span></dd>
+  </dl></div>
+  <div class="card"><h3>Where it aims</h3><div class="tags"><span class="b ctx">context</span><span class="b drift">drift</span></div><dl>
+    <dt>Trigger</dt><dd>Firing.</dd>
+    <dt>Varies by</dt><dd>Torso, feet or a nearby surface is a real choice. Splash weapons aim at the feet. An aim point that keeps missing loses value, and drift and boredom can switch between close options. <span class="ref">surprise.rs:170; combat.rs:778; surprise.rs:1092</span></dd>
+  </dl></div>
+  <div class="card"><h3>Firing rhythm</h3><div class="tags"><span class="b timer">timer</span></div><dl>
+    <dt>Trigger</dt><dd>Aim on target, path clear, no ally in the way.</dd>
+    <dt>Varies by</dt><dd>Each bot taps on its own beat and fires in bursts with pauses on its own seeded cycle, so bots never fire in unison. The rhythm doesn't react to hits or misses yet. <span class="ref">cadence.rs:82; bots.rs:1191</span></dd>
+  </dl></div>
+  <div class="card"><h3>Picking a weapon</h3><div class="tags"><span class="b ctx">context</span><span class="b drift">drift</span></div><dl>
+    <dt>Trigger</dt><dd>A fight starts, or the situation changes: range, allies in the line, blast too close.</dd>
+    <dt>Varies by</dt><dd>Each weapon is rated for the shot from its item data (range, splash, speed, damage), then goes through the same hold rule. A weapon that isn't landing hits loses value. <span class="ref">combat.rs:734-765; tactics.rs; surprise.rs:1082</span></dd>
+  </dl></div>
+  <div class="card"><h3>Stance: strafing and footwork</h3><div class="tags"><span class="b timer">seeded rhythm</span><span class="b dice">coin flip</span></div><dl>
+    <dt>Trigger</dt><dd>Fighting within weapon range.</dd>
+    <dt>Varies by</dt><dd>Ranged bots strafe one way for 1.75 to 5.25 s, then turn back 70 % of the time. They turn early at a wall, a ledge or an ally, and lean in slowly. Melee bots step in, back and aside, then plant, on their own cycle. Strafe length and turning are dice; they don't respond to being shot. <span class="ref">bots.rs:560-584, 840</span></dd>
+  </dl></div>
+  <div class="card"><h3>Chasing and flanking</h3><div class="tags"><span class="b ctx">context</span><span class="b drift">drift</span></div><dl>
+    <dt>Trigger</dt><dd>An enemy in sight but out of range.</dd>
+    <dt>Varies by</dt><dd>Straight at them, or wide round the left or right. This is a real choice with effectiveness: a route that got stuck loses value. It gives up on enemies it can't reach. <span class="ref">surprise.rs:895, 1039; bots.rs:3001</span></dd>
+  </dl></div>
+  <div class="card"><h3>Dodge and crouch</h3><div class="tags"><span class="b ctx">context</span><span class="b timer">own timers</span></div><dl>
+    <dt>Trigger</dt><dd>A projectile whose predicted path (speed, fall, blast radius) meets its body, or being hit from range.</dd>
+    <dt>Varies by</dt><dd>It can hop, strafe off the line (where there's floor) or jet up if it has the fuel, chosen with boredom so the same dodge gets stale. A crouch is also possible. It's held by private timers, not the hold rule; moving it under the hold rule is in progress. <span class="ref">extras.rs:322-440</span></dd>
+  </dl></div>
+  <div class="card"><h3>Fight or keep playing?</h3><div class="tags"><span class="b ctx">context</span></div><dl>
+    <dt>Trigger</dt><dd>An enemy in sight while it has an objective, like a ball.</dd>
+    <dt>Varies by</dt><dd>An enemy counts in full if it hit the bot, the play names it, or it's at or contesting the ball. It counts 0.75 if armed and elsewhere, and 0.25 if unarmed. So a bot shoulders someone off the ball but doesn't drop a delivery for a passer-by. <span class="ref">contest.rs:37</span></dd>
+  </dl></div>
+</div>
+
+<div class="group" id="finding">Finding the fight</div>
+<div class="grid">
+  <div class="card"><h3>Searching</h3><div class="tags"><span class="b ctx">context</span><span class="b timer">spin</span></div><dl>
+    <dt>Trigger</dt><dd>It lost sight of an enemy, or was hit by someone unseen.</dd>
+    <dt>Varies by</dt><dd>It goes where they were last seen, then through nearby spots they could have gone, and skips spots it can't reach. At each spot it spins its view at a steady rate, which reads robotic. <span class="ref">search_memory.rs:72; bots.rs:2678</span></dd>
+  </dl></div>
+  <div class="card"><h3>Following gunfire</h3><div class="tags"><span class="b ctx">context</span></div><dl>
+    <dt>Trigger</dt><dd>A rules bot with nothing to do hears a weapon up to 128 units away, scaled by loudness.</dd>
+    <dt>Varies by</dt><dd>It knows the spot less exactly the farther the sound, and keeps it in mind for as long as the walk there takes. Melee weapons make no sound that carries. <span class="ref">hearing.rs:110</span></dd>
+  </dl></div>
+  <div class="card"><h3>Exploring (new)</h3><div class="tags"><span class="b ctx">context</span><span class="b dice">small variety</span></div><dl>
+    <dt>Trigger</dt><dd>A rules bot with nothing in sight, nothing remembered and no objective, while enemies are playing.</dd>
+    <dt>Varies by</dt><dd>It looks a way off in each open direction and picks the place most worth checking: not visited lately (90 s), near where enemies were last known, and not where a teammate is already heading, plus a little seeded variety. Reported on Max's saves: wander dropped from 79-89 % to 4-6 %. <span class="ref">explore.rs:112</span></dd>
+  </dl></div>
+  <div class="card"><h3>Ally warnings</h3><div class="tags"><span class="b ctx">context</span></div><dl>
+    <dt>Trigger</dt><dd>An ally sees an enemy or is hit, and the kind warns allies.</dd>
+    <dt>Varies by</dt><dd>Allies within the warner's sight hear it after 0.25 to 1 s, scaled by how alert they are, and the spot they get is a little off. So a squad doesn't snap round as one. <span class="ref">perception.rs:520-545; hearing.rs:68</span></dd>
+  </dl></div>
+</div>
+
+<div class="group" id="objectives">Objectives and ball games</div>
+<div class="grid">
+  <div class="card"><h3>Playing the game's objective</h3><div class="tags"><span class="b ctx">context</span></div><dl>
+    <dt>Trigger</dt><dd>The game's own rules (event rows, package rules) say what wins, and the planner finds a grounded way to do it: walk somewhere, press something, push or carry a body there, beat someone.</dd>
+    <dt>Varies by</dt><dd>The planner ranks routes by cost. Steps that fail cool down and get replanned. The objective is worth more as its side falls behind. No map or mode names are used. <span class="ref">objectives/turn.rs; planning.rs; team.rs:168</span></dd>
+  </dl></div>
+  <div class="card"><h3>Pushing a ball (soccer)</h3><div class="tags"><span class="b ctx">context</span></div><dl>
+    <dt>Trigger</dt><dd>An objective to get a body (the ball) into a goal area.</dd>
+    <dt>Varies by</dt><dd>It comes round behind the ball on the line to the goal and steers around its own goal from the game's sensors. If the ball is moving and an opponent contests it, it meets the ball ahead along its real motion. <span class="ref">physical_objectives.rs:840-858; contest.rs:83-146</span></dd>
+  </dl></div>
+  <div class="card"><h3>Headers and chesting the ball</h3><div class="tags"><span class="b ctx">context</span></div><dl>
+    <dt>Trigger</dt><dd>The body it's pushing is up off the ground, higher than a step and lower than its head, right in front of it.</dd>
+    <dt>Varies by</dt><dd>It jumps into it. The jump is only used where it would land on floor. <span class="ref">physical_objectives.rs:850-858</span></dd>
+  </dl></div>
+  <div class="card"><h3>Clearing and covering</h3><div class="tags"><span class="b ctx">context</span></div><dl>
+    <dt>Trigger</dt><dd>A teammate has the ball and an opponent stands at it.</dd>
+    <dt>Varies by</dt><dd>With a pushing tool (its item data says it shoves), it knocks the opponent aside and calls "I got him, go!". Otherwise it covers, standing behind and to the side of the play, ready to take over. Today this swaps the bot's choice after it's made; folding it into the scoring is in progress. <span class="ref">contest.rs:185, 281; bots.rs ~2270</span></dd>
+  </dl></div>
+  <div class="card"><h3>Hammering a body along</h3><div class="tags"><span class="b ctx">context</span></div><dl>
+    <dt>Trigger</dt><dd>It holds the engine's built-in hammer and the body is one the hammer may hit.</dd>
+    <dt>Varies by</dt><dd>It hits the body toward the goal on the push approach. This one is keyed to the built-in hammer, which is under review. <span class="ref">physical_objectives.rs:506, 860-885</span></dd>
+  </dl></div>
+</div>
+
+<div class="group" id="items">Items, vehicles and things in the world</div>
+<div class="grid">
+  <div class="card"><h3>Arming and upgrading</h3><div class="tags"><span class="b ctx">context</span><span class="b drift">drift</span></div><dl>
+    <dt>Trigger</dt><dd>Empty-handed with an enemy about, or a better weapon in sight.</dd>
+    <dt>Varies by</dt><dd>Empty-handed, it goes for any weapon at once. Armed, it weighs an upgrade by how much better it is, minus the walk there and the risk of turning from a nearby enemy. Weapons it can't reach are passed over for a while. <span class="ref">arming.rs:74, 178</span></dd>
+  </dl></div>
+  <div class="card"><h3>Grab, carry and throw</h3><div class="tags"><span class="b ctx">context</span><span class="b timer">timer</span></div><dl>
+    <dt>Trigger</dt><dd>Its tool holds something, like the Gravity Gun.</dd>
+    <dt>Varies by</dt><dd>It carries it to open sky, keeping it off the floor and under the roof, then flings it with a swing. If it can't find open space within 6 s, it throws anyway. <span class="ref">bots.rs:186-205, carry section</span></dd>
+  </dl></div>
+  <div class="card"><h3>Driving and crewing vehicles</h3><div class="tags"><span class="b ctx">context</span><span class="b timer">timer</span></div><dl>
+    <dt>Trigger</dt><dd>The route or objective needs a vehicle, or a teammate offers a seat.</dd>
+    <dt>Varies by</dt><dd>Drivers follow route legs with gears, wait a moment for crew, and keep a chase within 96 units of where they boarded. Gunners fight from their seat only with a weapon that reaches. Passengers without one get out. Dismounts happen on each bot's own beat. <span class="ref">interactions.rs:1164-1300; CREW_WAIT 18</span></dd>
+  </dl></div>
+  <div class="card"><h3>Ride-alongs and idle pushing</h3><div class="tags"><span class="b ctx">context</span></div><dl>
+    <dt>Trigger</dt><dd>No enemy about. A teammate's vehicle has a free seat, or a loose body is near a player.</dd>
+    <dt>Varies by</dt><dd>These are low-priority "Interact" options, so anything with a purpose outranks them. Seats an ally offers score higher. <span class="ref">interactions.rs:503; extras.rs header</span></dd>
+  </dl></div>
+  <div class="card"><h3>Doors</h3><div class="tags"><span class="b ctx">on the way</span><span class="b timer">for fun</span></div><dl>
+    <dt>Trigger</dt><dd>A door (a brick that opens and closes on click) is in the way to its goal. Or, at a pause, a door in sight.</dd>
+    <dt>Varies by</dt><dd>It clicks doors in its way when needed. Clicking one for fun runs on a beat and rest timer, not through the chooser. It never presses a builder's buttons (win, reset, teleport). <span class="ref">extras.rs:181-214, 521-541, 609-620</span></dd>
+  </dl></div>
+  <div class="card"><h3>Handing a weapon to a teammate</h3><div class="tags"><span class="b ctx">context</span><span class="b timer">timer</span></div><dl>
+    <dt>Trigger</dt><dd>It has a spare weapon and sees an unarmed teammate.</dd>
+    <dt>Varies by</dt><dd>It walks up, faces them and drops the spare their way. It runs on a beat with a 20 s rest, and is switched on and off by the teamwork dial. Moving it into the chooser is in progress. <span class="ref">extras.rs:670-747</span></dd>
+  </dl></div>
+</div>
+
+<div class="group" id="idle">Idle life and goofing</div>
+<div class="grid">
+  <div class="card"><h3>Whether to goof</h3><div class="tags"><span class="b ctx">context</span></div><dl>
+    <dt>Trigger</dt><dd>No enemy in sight, on its feet, and not carrying the objective.</dd>
+    <dt>Varies by</dt><dd>Playing grows boring, twice as fast with nothing to do. A goof is worth most in a lull and little with action close by. Bots nearby goofing make it likelier (social pull). Doing a goof relieves the boredom. <span class="ref">surprise.rs:674-787; team.rs:428-546</span></dd>
+  </dl></div>
+  <div class="card"><h3>Which goof, and how</h3><div class="tags"><span class="b dice">dice</span></div><dl>
+    <dt>Trigger</dt><dd>Goofing wins.</dd>
+    <dt>Varies by</dt><dd>The goofs are: stare, emote, hop, circle, detour, look round, crouch, spray paint, another tool, drop its weapon, light, door. Which one is a roulette over fixed weights, filtered by what's possible, plus a bonus for goofs it saw others do. The details are coin flips too: which emote, how long, walk up close or not, gait. This is the biggest "reads random" gap; making it a scored choice is in progress. <span class="ref">surprise.rs:754-778</span></dd>
+  </dl></div>
+  <div class="card"><h3>Emotes</h3><div class="tags"><span class="b dice">dice</span></div><dl>
+    <dt>Trigger</dt><dd>An emote goof, or the kind's own once-per-life pose (zombie arms).</dd>
+    <dt>Varies by</dt><dd>One of love, hate, confusion or alarm, at random. Nothing ties an emote to a moment yet. The bot thread has been asked to tie emotes to signals the bot already has: surprise, frustration from failing, confusion when stuck, playfulness. <span class="ref">surprise.rs:328; bots.rs:1156</span></dd>
+  </dl></div>
+  <div class="card"><h3>Glances</h3><div class="tags"><span class="b ctx">context</span></div><dl>
+    <dt>Trigger</dt><dd>While idle: a blast, a loud sound, something fast, someone staring at it, or someone nearby while it strolls.</dd>
+    <dt>Varies by</dt><dd>Chance and reach come from how big, loud, fast or close it is. Glances are short and cool down. <span class="ref">perception.rs:1-30, 694</span></dd>
+  </dl></div>
+  <div class="card"><h3>Strolling</h3><div class="tags"><span class="b dice">dice</span><span class="b timer">timer</span></div><dl>
+    <dt>Trigger</dt><dd>Nothing else to do.</dd>
+    <dt>Varies by</dt><dd>Brick bots walk to a random point within 12 units of their brick every 2 to 6 s, with the look drifting a few degrees as they walk. Rules bots explore instead (above). Reusing explore for brick bots is in progress. <span class="ref">bots.rs:667; perception.rs:593</span></dd>
+  </dl></div>
+  <div class="card"><h3>Walking home</h3><div class="tags"><span class="b ctx">context</span></div><dl>
+    <dt>Trigger</dt><dd>A brick bot strays past its stroll area.</dd>
+    <dt>Varies by</dt><dd>The urge grows over 4 units past the edge, and the hold rule stops it flickering at the edge. It doesn't head home while an objective it's working on is cooling down. <span class="ref">behaviour.rs, Return</span></dd>
+  </dl></div>
+</div>
+
+<div class="group" id="team">Team play</div>
+<div class="grid">
+  <div class="card"><h3>Spreading out and taking roles</h3><div class="tags"><span class="b ctx">context</span></div><dl>
+    <dt>Trigger</dt><dd>Allies' posted intents.</dd>
+    <dt>Varies by</dt><dd>Going after the same target or spot as an ally costs a little more for each extra ally. Taking a seat an ally offers scores more. Standing in an ally's line of fire costs more. A fighter steps out of where a teammate's weapon will hit. <span class="ref">team.rs side_terms; bots.rs, Team mover</span></dd>
+  </dl></div>
+  <div class="card"><h3>Callouts</h3><div class="tags"><span class="b ctx">context</span></div><dl>
+    <dt>Trigger</dt><dd>A teammate's intent changed its choice, or it's clearing an opponent.</dd>
+    <dt>Varies by</dt><dd>At most one callout every 30 s. Each reason has one fixed line ("Coming!", "Moving!", "I got him, go!"), so lines repeat word for word. <span class="ref">team.rs:603; bots.json</span></dd>
+  </dl></div>
+  <div class="card"><h3>Mood and copying</h3><div class="tags"><span class="b ctx">context</span></div><dl>
+    <dt>Trigger</dt><dd>It sees nearby players (either side) goofing, or an option working for a teammate.</dd>
+    <dt>Varies by</dt><dd>Goofs get likelier, and the same goof more so. It reads what players visibly do, never chat. Options it saw work get a fading bonus. <span class="ref">team.rs:428-580; surprise.rs:621-655</span></dd>
+  </dl></div>
+  <div class="card"><h3>Pressure</h3><div class="tags"><span class="b ctx">context</span></div><dl>
+    <dt>Trigger</dt><dd>Its side is behind in the round.</dd>
+    <dt>Varies by</dt><dd>The objective is worth more the further behind it is. <span class="ref">team.rs:168</span></dd>
+  </dl></div>
+</div>
+
+<div class="group" id="body">Body, kind and safety</div>
+<div class="grid">
+  <div class="card"><h3>Looks and names</h3><div class="tags"><span class="b dice">seeded</span></div><dl>
+    <dt>Trigger</dt><dd>Spawning.</dd>
+    <dt>Varies by</dt><dd>Each bot gets its own seeded colours, face and decal from the server's avatar pack, and a first name from its kind's list that nobody else has. <span class="ref">looks.rs; lifecycle.rs:172, 411</span></dd>
+  </dl></div>
+  <div class="card"><h3>Respawning</h3><div class="tags"><span class="b dice">seeded</span></div><dl>
+    <dt>Trigger</dt><dd>Death.</dd>
+    <dt>Varies by</dt><dd>A seeded wait after the game allows a respawn (0.3-1.5 s for rules bots, 0.75-1.75 s for brick bots), so bots killed together don't come back together. Choices reset each life; its liking for options carries over. <span class="ref">bots.rs:1066</span></dd>
+  </dl></div>
+  <div class="card"><h3>Kinds: sharks, zombies</h3><div class="tags"><span class="b ctx">context</span></div><dl>
+    <dt>Trigger</dt><dd>The kind's data.</dd>
+    <dt>Varies by</dt><dd>A swimmer stays in its water and suffocates out of it. A biter's hit can turn its victim into its kind for a life. All of this comes from the Add-On's data, not code per creature. <span class="ref">bots.rs:1156; fire.rs:325-361</span></dd>
+  </dl></div>
+  <div class="card"><h3>Ledges, portals and getting stuck</h3><div class="tags"><span class="b ctx">context</span></div><dl>
+    <dt>Trigger</dt><dd>Every step.</dd>
+    <dt>Varies by</dt><dd>It never walks off a fall that would hurt, judged from its body's fall-damage data, and the safety step has the last word. It never stumbles into a portal off its route. If it's stuck, it hops, then replans, then drops the goal. <span class="ref">act.rs:150; interactions.rs:928; bots.rs:3001</span></dd>
+  </dl></div>
+</div>
+</section>
+
+<section id="honest">
+<h2>What's still robotic or thin</h2>
+<div class="tbl"><table>
+<thead><tr><th>What a player might notice</th><th>Why</th><th>Kind of issue</th></tr></thead>
+<tbody>
+<tr><td>Goofs feel random: the bot doesn't stare back at you, or emote at a moment that means something</td><td>Which goof and its details are dice (<span class="ref">surprise.rs:754-778</span>)</td><td>Foundation, in progress</td></tr>
+<tr><td>Dodges, weapon hand-offs and door clicks are slightly mechanical</td><td>Own timers, outside the one chooser and hold rule (<span class="ref">extras.rs:408, 521, 670</span>)</td><td>Foundation, in progress</td></tr>
+<tr><td>Searching bot spins in place like a turret</td><td>Steady view sweep (<span class="ref">bots.rs:2678</span>)</td><td>Cheap fix</td></tr>
+<tr><td>Brick bots wander aimlessly</td><td>Random point every 2 to 6 s (<span class="ref">bots.rs:667</span>)</td><td>In progress (reuse explore)</td></tr>
+<tr><td>Strafing doesn't react to being shot at</td><td>70 % coin flip and random leg length (<span class="ref">bots.rs:560-584</span>)</td><td>Cheap fix</td></tr>
+<tr><td>Firing rhythm ignores hits and misses</td><td>Fixed seeded burst cycle (<span class="ref">cadence.rs:82</span>)</td><td>In progress</td></tr>
+<tr><td>Bots see behind them</td><td>Sight has no blind spot; only reactions are slower (<span class="ref">sight.rs:85</span>)</td><td>Later, a design change</td></tr>
+<tr><td>Same callout line every time</td><td>One line per reason in <code>bots.json</code></td><td>Later</td></tr>
+<tr><td>Bots get stuck more on Afghanistan</td><td>Explore now takes them to existing stuck spots: 6 % to 23 % stuck, as reported in its commit</td><td>Must fix before ship, in progress</td></tr>
+<tr><td>CTF bots don't run the flag</td><td>The CTF flag test is still a known failure</td><td>Open</td></tr>
+<tr><td>Bots never get sloppy under pressure</td><td>Variation switches off when urgent, so they play their plain best</td><td>Design choice, optional later</td></tr>
+</tbody></table></div>
+</section>
+
+<section id="progress">
+<h2>In progress on the bot thread right now</h2>
+<p>From the bot thread's status and the coordinator's latest notes to it (as of 19:35 UTC):</p>
+<ul>
+  <li><strong>Act step:</strong> moving aim and the trigger in, so every control comes from one place. This includes the stuck hop, the goof spray trigger and better hop checks.</li>
+  <li><strong>Clearing and covering:</strong> folding them into the scored choice, so there's one way to go after an opponent at the ball.</li>
+  <li><strong>Goofs:</strong> each goof becomes a scored option driven by what the bot perceives. Emotes express signals the bot already has (surprise, frustration, confusion, playfulness) through a small data table, with boredom as the cooldown.</li>
+  <li><strong>Dodges, hand-offs and door clicks:</strong> moving them through the one chooser and the act step.</li>
+  <li><strong>Strolling:</strong> brick bots use the explore scorer.</li>
+  <li><strong>Firing:</strong> bursts respond to hits and misses through the existing effectiveness signal.</li>
+  <li><strong>Stuck spots:</strong> one root fix for Close Quarters and Afghanistan.</li>
+  <li><strong>Spray can and hammer:</strong> make each name check general, or give a one-line reason why not.</li>
+  <li><strong>Before handing over:</strong> merge latest main, rerun quick matches on Max's saves, send the tip.</li>
+</ul>
+</section>
+
+<section id="next">
+<h2>Cheap human wins from what bots already know</h2>
+<p>These come from <code>/mnt/project-files/bots/human-variation-candidates.md</code>. Each reuses an existing signal, with no new memory or special cases.</p>
+<div class="tbl"><table>
+<thead><tr><th>#</th><th>What you'd notice</th><th>Driven by</th><th>Size</th></tr></thead>
+<tbody>
+<tr><td class="prio">1</td><td>Searching looks one way, then back, favouring where you went, instead of spinning</td><td>Smooth seeded signal and its memory of you</td><td>Tiny, v0.2.5</td></tr>
+<tr><td class="prio">2</td><td>Hit mid-strafe, it switches direction</td><td>The "hurt this tick" signal</td><td>Tiny, v0.2.5</td></tr>
+<tr><td class="prio">3</td><td>Stares back at someone staring at it</td><td>Perception's watcher tracking</td><td>Small, v0.2.5</td></tr>
+<tr><td class="prio">4</td><td>Lazy head when relaxed, snappy in a fight</td><td>Alertness (already slows reactions)</td><td>Tiny, v0.2.5</td></tr>
+<tr><td class="prio">5</td><td>A bored bot fidgets more</td><td>Boredom</td><td>Tiny</td></tr>
+<tr><td class="prio">6</td><td>Hurt, it keeps more distance</td><td>Health</td><td>Tiny; changes balance</td></tr>
+<tr><td class="prio">7</td><td>Social goofs near people, solo goofs alone</td><td>Who's nearby</td><td>Small; part of the goof fix</td></tr>
+<tr><td class="prio">8</td><td>Missing, it pauses longer between bursts</td><td>Effectiveness</td><td>Small; part of the burst work</td></tr>
+<tr><td class="prio">9</td><td>Shakier aim when badly hurt</td><td>Health, recent hit</td><td>Tiny; changes difficulty</td></tr>
+<tr><td class="prio">10</td><td>Brick bots stroll somewhere worth looking at</td><td>Explore scorer</td><td>Small to medium; in progress</td></tr>
+</tbody></table></div>
+</section>
+
+<footer>Read-only review of <code>claude/v0.2.5-s4s5bn</code> at <code>2d45224</code>. Line references can shift as the bot thread pushes. Companion notes: <code>foundation-check-2026-10-06.md</code>, <code>review-2026-10-06-act-stage.md</code>, <code>human-feel-2026-10-06.md</code>, <code>human-variation-candidates.md</code>, all in <code>/mnt/project-files/bots/</code>.</footer>
+</main>
+</div>

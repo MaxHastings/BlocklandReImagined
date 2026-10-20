@@ -1,0 +1,14 @@
+Branch deletions approved by Max in the "Get It All Into Main" thread (2026-10-20, "I approve all").
+Cloud sessions are refused on remote deletes, so run these on the PC. Each branch is verified:
+ancestor of main, or a trial merge leaves main's tree unchanged. History is also in tags/bundles.
+
+Engine repo (MaxHastings/BlocklandReImagined):
+  git push origin --delete codex/playtest-engine          (ancestor of main; tag playtest-7 keeps it)
+  git push origin --delete claude/zombies-no-guns-ujpp0y  (trial merge = main's tree; landed as #192)
+  git push origin --delete claude/project-thread-m50vum   (ancestor of main; after the thread ends)
+  After PRs #193 and #194 merge:
+  git push origin --delete claude/minigame-bots-findable-rkyhh1
+  git push origin --delete claude/fifteen-minute-minigame-ki5ju2
+
+Addons repo (MaxHastings/BlocklandReImagined-addons):
+  git push origin --delete codex/playtest-latest          (same commit as main, af73b7d)
