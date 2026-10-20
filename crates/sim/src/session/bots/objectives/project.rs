@@ -281,6 +281,8 @@ impl Session {
                 | Op::Print(_)
                 | Op::PrintMinigame(_)
                 | Op::Broadcast(_)
+                | Op::Log(_)
+                | Op::Warn(_)
                 | Op::Sound(_)
                 | Op::Music(_)
                 | Op::Ambient(_) => {}

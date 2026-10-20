@@ -19,6 +19,7 @@ mod effects;
 mod entity;
 mod environment;
 mod lighting;
+mod log;
 mod minigame;
 mod movers;
 mod physics;
