@@ -130,6 +130,10 @@ fn load_decals(
     for decal in &set.decals {
         pictures.push(decode(&read(root, &decal.picture)?, &decal.picture, true)?);
     }
+    let mut named = Vec::with_capacity(set.pictures.len());
+    for picture in &set.pictures {
+        named.push(decode(&read(root, &picture.file)?, &picture.file, true)?);
+    }
     let receivers = set
         .decals
         .iter()
@@ -138,6 +142,7 @@ fn load_decals(
     Ok(Some(crate::decals::LoadedDecals {
         set,
         pictures,
+        named,
         receivers,
     }))
 }

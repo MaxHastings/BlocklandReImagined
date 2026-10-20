@@ -8,7 +8,7 @@ const USAGE: &str = "Usage:
   bri-import-addon check-port WORK_DIR
   bri-import-addon gltf MODEL(.glb|.gltf) FRESH_OUTPUT_DIR [--kind body|item|prop|map|brick] [--id NAME] [--name MENU_NAME]
       [--height UNITS | --scale FACTOR] [--fps 30] [--right-hand NODE] [--left-hand NODE] [--eye NODE] [--loop CLIP]...
-      [--lod TRIANGLES] [--lod-pixels 100] [--box-width UNITS] [--box-height UNITS] [--sky DIR] [--terrain DIR] [--scatter MODEL.glb]... [--backdrop MODEL.gltf] [--regions FILE.json] [--decals FILE.json] [--lighting DIR] [--json]
+      [--lod TRIANGLES] [--lod-pixels 100] [--box-width UNITS] [--box-height UNITS] [--sky DIR] [--terrain DIR] [--scatter MODEL.glb]... [--backdrop MODEL.gltf] [--regions FILE.json] [--projector-pictures FILE.json] [--lighting DIR] [--json]
   bri-import-addon export-map CONTENT_OR_BUNDLE_DIR MAP OUTPUT.glb
   bri-import-addon map MAP_ADDON(.zip|folder) FRESH_OUTPUT_DIR [--v20 V20_ROOT] [--mission NAME] [--id NAME] [--name MENU_NAME] [--version 1.0.0]
 
@@ -184,7 +184,7 @@ fn gltf(mut args: impl Iterator<Item = String>) -> Result<()> {
             "--scatter" => opts.scatter.push(PathBuf::from(value()?)),
             "--backdrop" => opts.backdrop = Some(PathBuf::from(value()?)),
             "--regions" => opts.regions = Some(PathBuf::from(value()?)),
-            "--decals" => opts.decals = Some(PathBuf::from(value()?)),
+            "--projector-pictures" => opts.projector_pictures = Some(PathBuf::from(value()?)),
             "--lighting" => opts.lighting = Some(PathBuf::from(value()?)),
             "--version" => opts.version = value()?,
             "--json" => json = true,
