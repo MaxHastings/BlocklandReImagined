@@ -27,7 +27,7 @@ use bri_world::MAX_BRICKS;
 use std::sync::Arc;
 
 mod addon_events;
-mod bot_objectives;
+pub(in crate::session) mod bot_objectives;
 mod brick_events;
 mod brick_fields;
 mod brick_hooks;

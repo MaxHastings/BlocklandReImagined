@@ -33,8 +33,23 @@ pub struct MoverView {
     pub params: BTreeMap<String, String>,
 }
 
+/// How near a bot's body must be to a shut door it may open (units).
+const BOT_DOOR_REACH: f32 = 0.6;
+/// Ticks before a bot asks again for a door that is still shut.
+const BOT_DOOR_RETRY: u64 = 120 * 2;
+
+/// The rules command a mover's `bots_open` names (`package:command`), if it
+/// does. `"1"` alone only makes the door passable to a bot's route search.
+fn bot_door_command(value: &str) -> Option<(&str, &str)> {
+    value
+        .split_once(':')
+        .filter(|(package, command)| !package.is_empty() && !command.is_empty())
+}
+
 #[derive(Default)]
 pub(super) struct MapMovers {
+    /// When each bot last asked for each door, by mover index.
+    asked: BTreeMap<(OwnerId, usize), u64>,
     movers: Vec<MapMover>,
     states: Vec<MoverState>,
     /// The transform each mover's colliders were last put at.
@@ -66,16 +81,80 @@ impl Session {
         for mover in &movers {
             self.simulation.set_bot_passable(
                 mover.colliders.clone(),
-                mover.def.params.get("bots_open").is_some_and(|v| v == "1"),
+                mover
+                    .def
+                    .params
+                    .get("bots_open")
+                    .is_some_and(|v| v == "1" || bot_door_command(v).is_some()),
             );
         }
         let count = movers.len();
         self.map_movers = MapMovers {
+            asked: BTreeMap::new(),
             movers,
             states: vec![MoverState::default(); count],
             placed: vec![None; count],
         };
         Ok(())
+    }
+    /// A bot at a shut door whose `bots_open` names a rules command sends it,
+    /// as the player's Use key would, once and again every few seconds while
+    /// the door stays shut. Whether it opens is the rules' own policy.
+    pub(super) fn bot_opens_door(&mut self, bot: OwnerId, tick: u64) {
+        if self.map_movers.movers.iter().all(|m| {
+            m.def
+                .params
+                .get("bots_open")
+                .and_then(|v| bot_door_command(v))
+                .is_none()
+        }) {
+            return;
+        }
+        // Few bots at a time are within a door's reach: look every few ticks.
+        if tick % 8 != bot % 8 {
+            return;
+        }
+        let mut asks = Vec::new();
+        for id in self.movers_near_player(bot, BOT_DOOR_REACH) {
+            let Some(index) = self.mover_index(&id) else {
+                continue;
+            };
+            let mover = &self.map_movers.movers[index];
+            let Some((package, command)) = mover
+                .def
+                .params
+                .get("bots_open")
+                .and_then(|v| bot_door_command(v))
+            else {
+                continue;
+            };
+            if self.map_movers.states[index].resting_key(tick) != Some(0) {
+                continue;
+            }
+            if self
+                .map_movers
+                .asked
+                .get(&(bot, index))
+                .is_some_and(|at| tick < at + BOT_DOOR_RETRY)
+            {
+                continue;
+            }
+            asks.push((index, package.to_string(), command.to_string()));
+        }
+        for (index, package, command) in asks {
+            self.map_movers.asked.insert((bot, index), tick);
+            let sequence = self.peers[&bot].last_sequence.saturating_add(1);
+            // The rules may refuse (a door they keep locked): that is theirs.
+            let _ = self.command(
+                bot,
+                sequence,
+                Command::Package(PackageCommand {
+                    package,
+                    command,
+                    args: Vec::new(),
+                }),
+            );
+        }
     }
     /// Every mover's state, in map order, for replication.
     pub fn map_mover_states(&self) -> Vec<MoverState> {

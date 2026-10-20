@@ -109,6 +109,48 @@ its spawner's respawn, and `false` declines native pickup. A callback that store
 worn carriage and removes its own source must avoid also granting an unintended
 inventory copy. See the [pickup hook contract](rules.md).
 
+## Work a place, or guard it
+
+A team game's objective is often to stand at a place and hold a control until
+the rules say it is done: a valve, a control panel, a capture point, a
+terminal. Offer it as `work`; the side that does not progress it offers
+`guard`. Nothing in the host knows what the place is.
+
+```rhai
+#{ kind: "work", id: "valve:primary",
+   at: [x, y, z],            // where to stand (feet)
+   radius: 1.5,              // how close counts as at it (0.25 to 16)
+   command: #{ package: "your-id", name: "use", hold: true },
+   seconds: 10.0,            // how long the rules need it held (0.1 to 600)
+   open: #{ scope: "global", key: "valve_on", path: [] },   // optional
+   completion: #{ scope: "player", key: "done", path: [] },
+   claimants: 1,             // most bots working it at once (1 to 8)
+   weight: 1.0 }             // the rules' priority (above 0, up to 100)
+#{ kind: "guard", id: "valve:guard", at: [x, y, z], radius: 6.0,
+   claimants: 2, weight: 1.0 }
+```
+
+The bot walks there by the ordinary routes (ladders and doors included),
+then sends `command` as a player's key does: with `hold: true` the command
+takes one `bool` and is sent `true` on arrival and `false` when the bot lets
+go (it is released when it leaves, when a fight takes over, when the
+offer ends or is done); with `hold: false` it takes no arguments and is sent
+once. `package` is yours or a dependency's, and must declare the command
+(not `admin`, not `tool_only`). `open`, when given, is a declared on/off
+state (a `bool`, or an integer, nonzero is on): the offer is workable only
+while it is on, and ends when it falls. `completion` is a declared counter
+that must rise above its value when the bot started for the offer to count
+as done; a job past 80% of `seconds` is not left for a fight. A hold that
+moves nothing is given up on after `seconds` plus ten.
+
+Bots choose among offers by `weight`, falling with the distance and, for
+work, with `seconds`; a guard post is worth a quarter of work of the same
+weight, and gives way to work offered since. At most `claimants` bots hold
+an offer, so soldiers sharing an objective are spread over the offers
+instead of crowding one; a bot that is refused takes the next offer or a
+guard post. Give each offer an `id` unique to the query and stable across
+calls. Offers count toward the same limit of eight as `carry_return`.
+
 ## What each binding means
 
 | Field | Current meaning |
