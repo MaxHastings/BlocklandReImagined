@@ -15,6 +15,7 @@ pub mod collision;
 pub mod controls;
 pub mod decals;
 pub mod effects;
+pub mod hit_bones;
 pub mod hold;
 pub mod hud;
 pub mod interior;
