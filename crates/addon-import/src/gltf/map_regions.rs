@@ -30,6 +30,11 @@ pub(super) fn regions(
             fog.start *= scale;
             fog.end *= scale;
         }
+        for sun in &mut region.suns {
+            let d = point(glam::Vec3::from(sun.direction));
+            sun.direction = d.to_array();
+            sun.position = (point(glam::Vec3::from(sun.position)) * scale).to_array();
+        }
     }
     map.validate()?;
     let file = format!("{id}.regions.json");

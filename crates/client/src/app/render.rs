@@ -795,6 +795,15 @@ impl App {
             let now = self.avatar.animation_time;
             let dt = (now - self.scene.fog_time).clamped(0.0, 1.0) as f32;
             self.scene.fog_time = now;
+            let (suns, _) = regions.sun_table();
+            let suns: Vec<_> = suns
+                .iter()
+                .map(|s| bri_render::scene::ActorSun {
+                    direction: s.direction,
+                    color: s.color,
+                })
+                .collect();
+            camera.set_actor_suns(&suns);
             let zone = regions.locate(eye.to_array());
             // The zone's ambient is what lit models take; lightmaps carry it already.
             if let Some(ambient) = regions.ambient(zone) {
@@ -993,6 +1002,16 @@ impl App {
             }
             let started = full.then(std::time::Instant::now);
             avatar.build_pending(&self.avatar.avatar_assets)?;
+            // Where it stands decides the ambient and suns a lit body takes.
+            avatar.light = self.scene.regions.as_ref().map(|regions| {
+                let (low, high) = avatar.render_box();
+                let (ambient, suns) = regions.actor_light(low.to_array(), high.to_array(), 0.0);
+                bri_render::scene::ActorLight {
+                    ambient,
+                    sun_first: suns.map_or(0, |s| s.0),
+                    sun_count: suns.map_or(0, |s| s.1),
+                }
+            });
             let textures = self
                 .avatar
                 .body_textures

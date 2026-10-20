@@ -94,6 +94,9 @@ wherever the map draws nothing (an opening cut into it). The eye does not move w
 distance fog (`bri_content::regions::RegionMap`: a plane tree, the region on each side of each plane, and per region a `fog`
 of `color` bytes, `start`, `end`, `blend_time` and `clear_to_fog`), written in the glTF's own frame and unit. The fog that
 applies is the one of the region the eye is in; entering a region blends over its `blend_time`.
+A region may also list `suns` (up to 8; 64 per map), each a `direction`, `color` and `position` in the same frame: a lit moving body
+(see "Lit moving bodies") takes its region's `ambient` and the suns of the region it stands in, the one standing nearest its centre
+first.
 
 **Decals.** `--decals FILE.json` lists projected pictures (`bri_content::decals::DecalSet`) in the native frame, each picture a PNG
 beside the file: a blob shadow, a stain, a light pattern. A decal is a world-to-picture matrix (orthographic, or perspective with a
