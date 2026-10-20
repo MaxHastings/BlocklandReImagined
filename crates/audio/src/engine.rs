@@ -359,10 +359,7 @@ impl Engine {
         let (att, pan) = match (pb.spatial, position) {
             (Some(sp), Some(pos)) => {
                 let (ear, d) = crate::spatial::heard(&self.listener, &self.windows, pos);
-                (
-                    attenuation(&sp, d),
-                    pan_gains(ear, pos),
-                )
+                (attenuation(&sp, d), pan_gains(ear, pos))
             }
             _ => (1.0, (SQRT_HALF, SQRT_HALF)),
         };
