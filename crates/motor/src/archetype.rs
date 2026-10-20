@@ -46,6 +46,10 @@ pub struct Archetype {
     /// in seat order. A rideable archetype with none cannot be mounted.
     #[serde(default)]
     pub mount_points: Vec<MountPoint>,
+    /// What a shot can meet of the body, one cylinder per bone with its
+    /// damage multiplier ([`crate::bones`]). None: it is hit as one box.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub hit_bones: Vec<bri_content::hit_bones::HitBone>,
     pub look: Look,
     /// It fires, switches and uses items (`PlayerData::onTrigger` and
     /// `serverCmdUseTool` running as usual). A frozen pre-round body
@@ -322,6 +326,7 @@ impl Archetype {
                 && self.look.action_blend.is_finite()
                 && (0.0..=2.0).contains(&self.look.action_blend)
                 && self.sounds.valid()
+                && self.hit_bones.len() <= bri_content::hit_bones::MAX_HIT_BONES
                 && self.mount_points.len() <= MAX_MOUNT_POINTS
                 && self.mount_points.iter().all(|m| {
                     !m.node.is_empty()
@@ -334,6 +339,9 @@ impl Archetype {
             self.id
         );
         self.sockets.validate()?;
+        for bone in &self.hit_bones {
+            bone.validate()?;
+        }
         bri_content::body::validate_animations(&self.look.animations)?;
         self.look.deaths.validate()?;
         if !self.look.deaths.is_empty() {
@@ -363,6 +371,7 @@ impl Archetype {
             rideable: kind.rideable(),
             can_ride: kind.can_ride(),
             mount_points: kind.mount_points(),
+            hit_bones: Vec::new(),
             look: Look {
                 crouch_composition: Default::default(),
                 model: if kind == PlayerType::Horse {

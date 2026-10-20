@@ -51,6 +51,11 @@ impl ShapeTarget {
     }
 }
 
+/// How many bodies, one behind another, a ray that misses their bones goes on through.
+const MAX_BODY_PASSES: usize = 8;
+/// How far past a body's face a ray goes on from, clear of the box.
+const PAST_BODY: f32 = 0.001;
+
 fn target(tag: u128) -> Option<TargetId> {
     if tag == u128::MAX {
         Some(TargetId::Map(0))
@@ -90,89 +95,19 @@ fn ray_hits(simulation: &Simulation, collider: &Collider, target: TargetId) -> b
 }
 
 impl WeaponQuery<'_> {
-    /// Line of sight to a radius target through the map and bricks.
-    pub fn visible(&mut self, from: Vec3, nearby: &Nearby) -> bool {
-        let delta = nearby.center - from;
-        let distance = delta.length();
-        if !from.is_finite() || !nearby.center.is_finite() || !distance.is_finite() {
-            return false;
-        }
-        if distance < 0.000001 {
-            return true;
-        }
-        let simulation = self.simulation;
-        // Bricks by their own collision (`brick_ray`); the map here.
-        let predicate = |_: ColliderHandle, collider: &Collider| {
-            matches!(
-                target(collider.user_data),
-                Some(t @ TargetId::Map(_)) if ray_hits(simulation, collider, t)
-            )
-        };
-        let direction = delta / distance;
-        let advance = 0.001_f32.min(distance * 0.5);
-        let ray = Ray::new(
-            Vector::from_array((from + direction * advance).to_array()),
-            Vector::from_array(direction.to_array()),
-        );
-        let reach = (distance - advance - 0.001).max(0.);
-        self.simulation
-            .terrain_ray(from + direction * advance, direction, reach)
-            .is_none()
-            && self
-                .simulation
-                .physics
-                .query_pipeline_with_filter(
-                    QueryFilter::default()
-                        .groups(bri_physics::blocks::query_groups(bri_physics::blocks::RAY))
-                        .predicate(&predicate),
-                )
-                .cast_ray(&ray, reach, true)
-                .is_none()
-            && self
-                .simulation
-                .brick_ray(
-                    from + direction * advance,
-                    direction,
-                    reach,
-                    |_, brick, d| brick_ray_hits(brick, d),
-                )
-                .is_ok_and(|hit| hit.is_none())
+    /// The shift of `actor`'s body for a shooter who saw it elsewhere (lag
+    /// compensation), or none.
+    fn rewound_offset(&self, filter: Filter, actor: ActorId) -> Vec3 {
+        self.rewound
+            .filter(|_| {
+                filter.players && !filter.world_only && filter.projectile_age_ticks.is_none()
+            })
+            .and_then(|r| r.for_shooter(filter.source.0))
+            .and_then(|moved| moved.iter().find(|m| m.owner == actor.0))
+            .map_or(Vec3::ZERO, |m| m.offset)
     }
-}
-
-impl Query for WeaponQuery<'_> {
-    fn surface_kind(&mut self, target: TargetId, position: Vec3, normal: Vec3) -> Option<&str> {
-        match target {
-            TargetId::Map(_) => self.simulation.map_surface_at(position, normal),
-            TargetId::Brick(_) => Some(crate::map::BRICK_SURFACE),
-            _ => None,
-        }
-    }
-    fn passage(&mut self, start: Vec3, end: Vec3) -> Option<(f32, glam::Affine3A)> {
-        self.simulation
-            .passages()
-            .first(start, end)
-            .map(|(passage, t)| (t, passage.carry))
-    }
-    fn liquid(&mut self, bottom: Vec3, height: f32) -> Option<Liquid> {
-        let (water, coverage) = self.simulation.liquid_at(bottom.to_array(), height)?;
-        Some(Liquid {
-            coverage,
-            density: water.density,
-            viscosity: water.viscosity,
-        })
-    }
-    fn on_contact(&mut self, contact: &ProjectileContact) -> ContactResponse {
-        match contact.target {
-            TargetId::Brick(brick) => self
-                .responses
-                .get(&brick)
-                .copied()
-                .unwrap_or(ContactResponse::Continue),
-            _ => ContactResponse::Continue,
-        }
-    }
-    fn sweep(&mut self, start: Vec3, end: Vec3, filter: Filter) -> Option<Hit> {
+    /// The first thing a ray meets, bodies as boxes.
+    fn sweep_boxes(&mut self, start: Vec3, end: Vec3, filter: Filter) -> Option<Hit> {
         let delta = end - start;
         let distance = delta.length();
         if !start.is_finite() || !end.is_finite() || !(0.000001..=10000.).contains(&distance) {
@@ -341,6 +276,130 @@ impl Query for WeaponQuery<'_> {
             .into_iter()
             .flatten()
             .min_by(|a, b| a.fraction.total_cmp(&b.fraction))
+    }
+
+    /// Line of sight to a radius target through the map and bricks.
+    pub fn visible(&mut self, from: Vec3, nearby: &Nearby) -> bool {
+        let delta = nearby.center - from;
+        let distance = delta.length();
+        if !from.is_finite() || !nearby.center.is_finite() || !distance.is_finite() {
+            return false;
+        }
+        if distance < 0.000001 {
+            return true;
+        }
+        let simulation = self.simulation;
+        // Bricks by their own collision (`brick_ray`); the map here.
+        let predicate = |_: ColliderHandle, collider: &Collider| {
+            matches!(
+                target(collider.user_data),
+                Some(t @ TargetId::Map(_)) if ray_hits(simulation, collider, t)
+            )
+        };
+        let direction = delta / distance;
+        let advance = 0.001_f32.min(distance * 0.5);
+        let ray = Ray::new(
+            Vector::from_array((from + direction * advance).to_array()),
+            Vector::from_array(direction.to_array()),
+        );
+        let reach = (distance - advance - 0.001).max(0.);
+        self.simulation
+            .terrain_ray(from + direction * advance, direction, reach)
+            .is_none()
+            && self
+                .simulation
+                .physics
+                .query_pipeline_with_filter(
+                    QueryFilter::default()
+                        .groups(bri_physics::blocks::query_groups(bri_physics::blocks::RAY))
+                        .predicate(&predicate),
+                )
+                .cast_ray(&ray, reach, true)
+                .is_none()
+            && self
+                .simulation
+                .brick_ray(
+                    from + direction * advance,
+                    direction,
+                    reach,
+                    |_, brick, d| brick_ray_hits(brick, d),
+                )
+                .is_ok_and(|hit| hit.is_none())
+    }
+}
+
+impl Query for WeaponQuery<'_> {
+    fn surface_kind(&mut self, target: TargetId, position: Vec3, normal: Vec3) -> Option<&str> {
+        match target {
+            TargetId::Map(_) => self.simulation.map_surface_at(position, normal),
+            TargetId::Brick(_) => Some(crate::map::BRICK_SURFACE),
+            _ => None,
+        }
+    }
+    fn passage(&mut self, start: Vec3, end: Vec3) -> Option<(f32, glam::Affine3A)> {
+        self.simulation
+            .passages()
+            .first(start, end)
+            .map(|(passage, t)| (t, passage.carry))
+    }
+    fn liquid(&mut self, bottom: Vec3, height: f32) -> Option<Liquid> {
+        let (water, coverage) = self.simulation.liquid_at(bottom.to_array(), height)?;
+        Some(Liquid {
+            coverage,
+            density: water.density,
+            viscosity: water.viscosity,
+        })
+    }
+    fn on_contact(&mut self, contact: &ProjectileContact) -> ContactResponse {
+        match contact.target {
+            TargetId::Brick(brick) => self
+                .responses
+                .get(&brick)
+                .copied()
+                .unwrap_or(ContactResponse::Continue),
+            _ => ContactResponse::Continue,
+        }
+    }
+    fn sweep(&mut self, start: Vec3, end: Vec3, filter: Filter) -> Option<Hit> {
+        let total = (end - start).length();
+        let mut from = start;
+        // A body that declares hit bones is met at its bones, not its box:
+        // a ray through the box that misses every bone goes on past it.
+        for _ in 0..MAX_BODY_PASSES {
+            let hit = self.sweep_boxes(from, end, filter)?;
+            let measured = |hit: Hit| Hit {
+                fraction: if total > 0.0 {
+                    (hit.position - start).length() / total
+                } else {
+                    0.0
+                },
+                ..hit
+            };
+            let TargetId::Actor(actor) = hit.target else {
+                return Some(measured(hit));
+            };
+            let Some(body) = self.simulation.body_bones(actor.0) else {
+                return Some(measured(hit));
+            };
+            let body = body.shifted(self.rewound_offset(filter, actor));
+            let direction = (end - from).normalize_or_zero();
+            if let Some((_, time, normal)) = body.first_hit(from, direction, (end - from).length())
+            {
+                return Some(measured(Hit {
+                    position: from + direction * time,
+                    normal: hit_normal(normal, direction),
+                    ..hit
+                }));
+            }
+            // Past the box: on from where the ray leaves it.
+            let inside = hit.position + direction * PAST_BODY;
+            let out = body.leave(inside, direction)?;
+            from = inside + direction * (out + PAST_BODY);
+            if (from - start).length() >= total {
+                return None;
+            }
+        }
+        None
     }
 
     fn sweep_box(

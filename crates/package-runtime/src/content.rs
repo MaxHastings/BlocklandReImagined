@@ -1741,6 +1741,10 @@ pub struct ArchetypeDef {
     /// the base's. A rideable archetype needs at least one to be mounted.
     #[serde(default)]
     pub mount_points: Option<Vec<MountPointDef>>,
+    /// What a shot can meet of the body, one cylinder per bone with its
+    /// damage multiplier, replacing the base's. Left out, the base's.
+    #[serde(default)]
+    pub hit_bones: Option<Vec<bri_content::hit_bones::HitBone>>,
     /// Model id the clients draw: a package model (`namespace:model/name`)
     /// or one of v20's shapes (`v20.shape.m` is the Blockhead).
     #[serde(default)]
@@ -1890,6 +1894,16 @@ impl ArchetypeDef {
             self.model.as_ref().is_none_or(|m| text(m, 160)),
             "model must be a model id"
         );
+        if let Some(bones) = &self.hit_bones {
+            ensure!(
+                bones.len() <= bri_content::hit_bones::MAX_HIT_BONES,
+                "hit_bones names up to {} bones",
+                bri_content::hit_bones::MAX_HIT_BONES
+            );
+            for bone in bones {
+                bone.validate()?;
+            }
+        }
         if let Some(sockets) = &self.sockets {
             sockets.validate()?;
         }

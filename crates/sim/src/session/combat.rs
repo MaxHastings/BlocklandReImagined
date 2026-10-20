@@ -1337,11 +1337,26 @@ impl Session {
         if peer.player.state().crouched {
             amount *= if kind.direct() { 2.1 } else { 0.75 };
         }
-        // Where it struck, measured before any hook moves the body.
+        // Where it struck, measured before any hook moves the body. A body
+        // with hit bones is struck at the bone nearest the point: its part
+        // is the bone's, and a direct hit hurts by the bone's multiplier.
+        let bone = at.and_then(|point| {
+            self.simulation
+                .body_bones(target)
+                .and_then(|body| body.nearest(point))
+        });
+        if let Some(bone) = bone
+            && kind.direct()
+        {
+            amount *= bone.modifier;
+        }
         let hit = at.map(|point| {
             (
                 point,
-                crate::player::hit_region(&peer.player, point.to_array()),
+                bone.map_or_else(
+                    || crate::player::hit_region(&peer.player, point.to_array()),
+                    |bone| bone.region.name(),
+                ),
             )
         });
         // Add-Ons have the last word on how much it hurts.
