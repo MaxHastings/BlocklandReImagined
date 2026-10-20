@@ -73,6 +73,12 @@ pub(crate) fn kind(
             "name": "Melee",
         });
     }
+    // Bot_Hole's brain only fires a bot's weapon when `hShoot` is on
+    // (`holes.cs`); a datablock that sets it to 0 (zombie, shark, horse)
+    // fights with its body, so it never takes up or draws a gun either.
+    if fields.contains_key("hshoot") && !on("hshoot") {
+        kind["weapons"] = json!(false);
+    }
     if on("halertotherbots") {
         kind["alerts_allies"] = json!(true);
     }
