@@ -177,6 +177,10 @@ body tilt (radians, up to 0.6) and how long a full lean takes. An optional
 `body_angle` tilts the drawn body by that much instead (0 leaves it upright
 while the view still rolls). v20's bodies have neither.
 
+**Walking down stairs (optional).** `movement.follow_floor: true` keeps a walking body on the floor when it falls away under it
+by no more than `step_height` (down a stair, along a slope): it is lowered onto the floor below at once instead of dropping step by
+step, so it keeps its speed and its grip. A jump or a rise still leaves the floor. v20's bodies fall off every edge.
+
 **Distant detail (optional, off by default).** Classic-era models are light
 enough to skip this. For a heavy model, `--lod TRIANGLES` adds a lighter
 copy with that many triangles that the body draws when it is small on
