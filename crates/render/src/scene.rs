@@ -968,7 +968,15 @@ impl SceneData {
                         .parameters
                         .as_ref()
                         .is_none_or(|p| p.iter().flatten().all(|x| x.is_finite())),
-                "Invalid water/terrain/metal material uniforms"
+                "Invalid material uniforms on `{}` ({:?}, uniforms {}, wanted {})",
+                material.name,
+                material.kind,
+                if material.parameters.is_some() {
+                    "set"
+                } else {
+                    "unset"
+                },
+                if wants { "set" } else { "unset" },
             );
             if let AlphaMode::Mask(cutoff) = material.alpha {
                 ensure!(

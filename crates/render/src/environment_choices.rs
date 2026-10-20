@@ -406,7 +406,7 @@ pub(crate) fn append_sky(
 
 /// Stop drawing `scene`'s sky box and clouds. Their pictures, which nothing
 /// else draws, shrink to one pixel; the indices of everything else stay.
-fn strip_sky(scene: &mut SceneData) {
+pub(crate) fn strip_sky(scene: &mut SceneData) {
     let sky = |kind: MaterialKind| matches!(kind, MaterialKind::Sky | MaterialKind::Cloud);
     let materials = &scene.materials;
     scene.batches.retain(|b| !sky(materials[b.material].kind));
