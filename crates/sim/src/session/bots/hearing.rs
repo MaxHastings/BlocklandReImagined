@@ -23,9 +23,15 @@ impl Session {
         {
             brain.memory = Some(k);
         }
-        let hurt_by = self.bots.hurt.remove(&bot).filter(|k| {
+        let hurt = self.bots.hurt.remove(&bot);
+        let hurt_by = hurt.filter(|k| {
             tick < k.expires && self.bot_enemy(bot, &self.bots.brains[&bot].kind, k.subject)
         });
+        if hurt.is_some() && hurt_by.is_none() {
+            self.bots
+                .unnoticed_hits
+                .insert(bot, ("hit by one it takes for no enemy", tick));
+        }
         // Out of sight, a hit gives only a rough idea where from.
         let hurt_by = hurt_by.map(|k| match target {
             Some(seen) if seen.owner == k.subject => k,

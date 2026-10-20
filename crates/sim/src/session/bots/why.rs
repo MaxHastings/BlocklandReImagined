@@ -104,6 +104,12 @@ impl Session {
                     .lock()
                     .unwrap_or_else(|e| e.into_inner())
                     .starved(*bot, tick, SIGHT_STARVED_TICKS),
+                unnoticed_hit: self
+                    .bots
+                    .unnoticed_hits
+                    .get(bot)
+                    .filter(|(_, at)| tick.saturating_sub(*at) <= SIGHT_STARVED_TICKS)
+                    .map(|(why, _)| *why),
                 behaviour: b.behaviour.name(),
                 leg: if self.bot_vehicle_body(*bot).is_some() && !b.plan.is_empty() {
                     "drive"
@@ -225,6 +231,7 @@ mod tests {
         let mut t = BotThought {
             bot: 7,
             sight_starved: false,
+            unnoticed_hit: None,
             behaviour: "chase",
             leg: "walk",
             visible: None,
