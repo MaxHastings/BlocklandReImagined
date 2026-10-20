@@ -250,6 +250,9 @@ pub struct Simulation {
     holding: bool,
     /// Map colliders in `NativeMap::colliders` order.
     map_handles: Vec<ColliderHandle>,
+    /// Map colliders (doors) a bot's route search walks through: it opens
+    /// them when it comes to them ([`Self::set_bot_passable`]).
+    bot_passable: rustc_hash::FxHashSet<ColliderHandle>,
     map_surfaces: crate::map::MapSurfaces,
     /// The map colliders of static shapes (trees, props), which a plant
     /// never asks about ([`Ground::interior`]).
@@ -562,6 +565,7 @@ impl Simulation {
             parked: Default::default(),
             holding: false,
             map_handles,
+            bot_passable: Default::default(),
             map_surfaces: Default::default(),
             map_statics,
             terrain: None,
@@ -805,6 +809,21 @@ impl Simulation {
             .intersect_shape(*pose, mover.shape())
             .next()
             .is_some()
+    }
+    /// Colliders of the map a bot's route search treats as open, or solid
+    /// again: a door the rules open for whoever comes to it.
+    pub fn set_bot_passable(&mut self, colliders: std::ops::Range<usize>, passable: bool) {
+        for handle in self.map_handles.get(colliders).unwrap_or_default() {
+            if passable {
+                self.bot_passable.insert(*handle);
+            } else {
+                self.bot_passable.remove(handle);
+            }
+        }
+    }
+    /// The map colliders a bot walks through ([`Self::set_bot_passable`]).
+    pub fn bot_passable(&self) -> &rustc_hash::FxHashSet<ColliderHandle> {
+        &self.bot_passable
     }
     /// Make map colliders (a hidden static shape) intangible to every body
     /// and query, or solid again.

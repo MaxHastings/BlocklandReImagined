@@ -74,6 +74,7 @@ impl Session {
             waters: &waters,
             bodies: &[],
             motions: &[],
+            solid: &crate::nav::all_solid,
         };
         let shoved = crate::reach::shove_landing(
             &tuning,
@@ -200,6 +201,7 @@ mod tests {
             waters: &waters,
             bodies: &[],
             motions: &[],
+            solid: &crate::nav::all_solid,
         };
         let mut allowance = 4096;
         let flown = crate::reach::shove_landing(
