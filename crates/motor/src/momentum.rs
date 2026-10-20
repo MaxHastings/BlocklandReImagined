@@ -22,15 +22,26 @@ pub struct Momentum {
     pub stop_speed: f32,
     /// The share of `acceleration` a held move adds while airborne, 0 to 1. A body already at its move's speed cannot gain more.
     pub air_control: f32,
+    /// The share of `acceleration` a held move adds while crouched or lying, 0 to 1 (1: the same as standing).
+    #[serde(default = "Momentum::whole")]
+    pub crouched_share: f32,
 }
 impl Momentum {
+    fn whole() -> f32 {
+        1.0
+    }
+    /// Air steering is cancelled for a body whose way one step ahead is blocked, once its share of the acceleration is above
+    /// this.
+    pub const BLOCKABLE_ABOVE: f32 = 0.05;
+
     pub fn validate(&self) -> Result<()> {
         ensure!(
             [self.acceleration, self.friction, self.stop_speed]
                 .iter()
                 .all(|n| n.is_finite() && (0.0..=1000.0).contains(n))
-                && self.air_control.is_finite()
-                && (0.0..=1.0).contains(&self.air_control),
+                && [self.air_control, self.crouched_share]
+                    .iter()
+                    .all(|n| n.is_finite() && (0.0..=1.0).contains(n)),
             "Invalid momentum: acceleration, friction and stop speed 0 to 1000, air control 0 to 1"
         );
         Ok(())
@@ -59,12 +70,17 @@ impl Momentum {
 
     /// `velocity` after `dt` seconds on the floor with a move held: the velocity turns toward `wish`'s direction, the move adds
     /// `acceleration` along it, and the speed is capped at the move's own (`wish`'s length).
-    pub fn drive(&self, velocity: Vec3, wish: Vec3, dt: f32) -> Vec3 {
+    pub fn drive(&self, velocity: Vec3, wish: Vec3, dt: f32, share: f32) -> Vec3 {
         let toward = wish.normalize_or_zero();
         let mut v =
             velocity - (velocity - toward * velocity.length()) * (dt * self.friction).min(1.0);
-        v += toward * (self.acceleration * dt);
+        v += toward * (self.acceleration * share * dt);
         v.clamp_length_max(wish.length())
+    }
+
+    /// How far a body in the air looks ahead for something in its way: where it would be a step on, pushed by the full air steering.
+    pub fn air_reach(&self, velocity: Vec3, wish: Vec3, dt: f32) -> Vec3 {
+        (velocity + wish.normalize_or_zero() * (self.air_control * self.acceleration)) * dt
     }
 
     /// The push a held move gives a body in the air whose horizontal velocity is `velocity`: at most

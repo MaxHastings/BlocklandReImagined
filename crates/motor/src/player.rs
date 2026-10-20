@@ -2161,7 +2161,16 @@ impl Player {
                 let next = if pv == Vec3::ZERO {
                     momentum.brake(base, dt)
                 } else {
-                    momentum.drive(base, pv, dt)
+                    momentum.drive(
+                        base,
+                        pv,
+                        dt,
+                        if self.state.crouched {
+                            momentum.crouched_share
+                        } else {
+                            1.0
+                        },
+                    )
                 };
                 acc += next - base;
             } else {
@@ -2194,7 +2203,25 @@ impl Player {
             && let Some(momentum) = &t.momentum
         {
             let horizontal = Vec3::new(velocity.x, 0.0, velocity.z);
-            acc += momentum.air_push(horizontal, move_vec, dt);
+            // A body whose way one step on is blocked cannot steer against it.
+            let ahead = momentum.air_reach(horizontal, move_vec, dt);
+            let blocked = momentum.air_control > crate::momentum::Momentum::BLOCKABLE_ABOVE
+                && ahead.try_normalize().is_some_and(|direction| {
+                    query
+                        .cast_shape(
+                            &t.pose(feet, self.state.crouched),
+                            Vector::from_array(direction.to_array()),
+                            t.shape(self.state.crouched).as_ref(),
+                            ShapeCastOptions {
+                                max_time_of_impact: ahead.length(),
+                                ..Default::default()
+                            },
+                        )
+                        .is_some()
+                });
+            if !blocked {
+                acc += momentum.air_push(horizontal, move_vec, dt);
+            }
         } else if !input.jet {
             // Jets replace air control: they steer through the thrust vector.
             let horizontal = Vec3::new(velocity.x, 0.0, velocity.z);
