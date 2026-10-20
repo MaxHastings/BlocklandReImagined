@@ -1132,7 +1132,7 @@ pub fn convert(
                 mesh.colors.resize(filled, NEUTRAL_LIGHT);
                 match &colors {
                     Some(rows) => mesh.colors.extend(rows.iter().map(|c| {
-                        let byte = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
+                        let byte = |v: f32| (v.clamped(0.0, 1.0) * 255.0).round() as u8;
                         [
                             byte(c[0]),
                             byte(c[1]),
