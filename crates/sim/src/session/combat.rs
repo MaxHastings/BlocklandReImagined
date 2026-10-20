@@ -2591,6 +2591,7 @@ impl Session {
             peer.combat.speed_mods.clear();
             peer.combat.gun_slow = None;
             peer.player.set_speed_scale(1.0)?;
+            peer.player.set_walking(false);
             peer.player.set_solid(&mut self.simulation.physics, true);
             peer.player.set_corpse(&mut self.simulation.physics, false);
             peer.combat.health = kind.max_health;

@@ -185,6 +185,9 @@ pub struct PlayerState {
     /// heavy gun). 1 leaves the body as its archetype made it.
     #[serde(default = "unit")]
     pub speed_scale: f32,
+    /// The player is walking (an Add-On's `set_walking`): a body with momentum adds its `walking_share` of the acceleration.
+    #[serde(default)]
+    pub walking: bool,
     /// Where the motor is between v20's 32 ms ticks.
     #[serde(default)]
     pub tick: TorqueTick,
@@ -1248,6 +1251,7 @@ impl Player {
                 scale: 1.0,
                 energy: tuning.max_energy,
                 speed_scale: 1.0,
+                walking: false,
                 tick: TorqueTick::default(),
                 tether: None,
                 controller: None,
@@ -1298,6 +1302,7 @@ impl Player {
                 scale: 1.0,
                 energy: tuning.max_energy,
                 speed_scale: 1.0,
+                walking: false,
                 tick: TorqueTick::default(),
                 tether: None,
                 controller: None,
@@ -1401,6 +1406,10 @@ impl Player {
         );
         self.state.speed_scale = scale;
         Ok(())
+    }
+    /// Whether the body walks ([`PlayerState::walking`]).
+    pub fn set_walking(&mut self, walking: bool) {
+        self.state.walking = walking;
     }
     /// `setDataBlock`/`setScale`: new motor constants and body. Growing the
     /// body may overlap geometry; like Torque, the motor resolves it by moving.
@@ -2167,7 +2176,7 @@ impl Player {
                         dt,
                         if self.state.crouched {
                             momentum.crouched_share
-                        } else if self.state.speed_scale < 1.0 {
+                        } else if self.state.walking {
                             momentum.walking_share
                         } else {
                             1.0

@@ -365,6 +365,18 @@ impl Perform for ops::SetFov {
         Ok(())
     }
 }
+impl Perform for ops::SetWalking {
+    fn perform(self, session: &mut Session, _cx: OpCall<'_>) -> Result<()> {
+        let ops::SetWalking { player, walking } = self;
+        session
+            .peers
+            .get_mut(&player)
+            .context("No such player")?
+            .player
+            .set_walking(walking);
+        Ok(())
+    }
+}
 impl Perform for ops::SetSpeedScale {
     fn perform(self, session: &mut Session, _cx: OpCall<'_>) -> Result<()> {
         let ops::SetSpeedScale { player, scale } = self;

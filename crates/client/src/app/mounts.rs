@@ -205,6 +205,7 @@ impl App {
                 scale: info.scale,
                 energy: 0.0,
                 speed_scale: 1.0,
+                walking: false,
                 tick: Default::default(),
                 tether: None,
                 controller: None,

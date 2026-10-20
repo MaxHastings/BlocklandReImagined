@@ -25,7 +25,7 @@ pub struct Momentum {
     /// The share of `acceleration` a held move adds while crouched or lying, 0 to 1 (1: the same as standing).
     #[serde(default = "Momentum::whole")]
     pub crouched_share: f32,
-    /// The same while the body's speed scale is under 1 (an Add-On walks a body by scaling its speed), 0 to 1.
+    /// The same while the body is walking (`PlayerState::walking`, an Add-On's `set_walking`), 0 to 1.
     #[serde(default = "Momentum::whole")]
     pub walking_share: f32,
 }
