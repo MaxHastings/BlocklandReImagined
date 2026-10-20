@@ -783,7 +783,7 @@ pub struct PlayerTuning {
     /// (UE2's `moveSmooth` and `stepUp`: lift, move on, lower again, and
     /// failing that slide along the wall's face), when it moves that way:
     /// none for v20's bodies, which step only off a surface they stand on.
-    pub wall_step: Option<f32>,
+    pub wall_step: Option<WallStep>,
     /// Keeping speed (a held move accelerates the body, the floor's friction slows it, the air steers it less), when the body
     /// has it: none for v20's bodies, which are steered straight to the move's speed.
     pub momentum: Option<crate::momentum::Momentum>,
@@ -866,6 +866,32 @@ impl Default for PlayerTuning {
             momentum: None,
             controller: None,
         }
+    }
+}
+/// [`PlayerTuning::wall_step`]: a body that runs into a near-vertical wall
+/// lifts by up to `lift`, makes the rest of its move and lowers again onto
+/// what it stands on; if another wall stops that lifted move after more
+/// than `retry` of travel, it steps again for what is left. Otherwise it
+/// slides along the wall's face.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WallStep {
+    /// How far the body is lifted, above zero.
+    pub lift: f32,
+    /// The least travel a stopped lifted move needs to count, 0 or more.
+    pub retry: f32,
+}
+impl WallStep {
+    pub fn validate(&self) -> Result<()> {
+        ensure!(
+            self.lift.is_finite() && self.lift > 0.0,
+            "wall_step lift must be above zero"
+        );
+        ensure!(
+            self.retry.is_finite() && self.retry >= 0.0,
+            "wall_step retry must be 0 or more"
+        );
+        Ok(())
     }
 }
 /// [`PlayerTuning::unstick`]: a body that stays inside solid geometry (a
@@ -1151,11 +1177,8 @@ impl PlayerTuning {
         if let Some(u) = &self.unstick {
             u.validate()?;
         }
-        if let Some(lift) = self.wall_step {
-            ensure!(
-                lift.is_finite() && lift > 0.0,
-                "wall_step must be above zero"
-            );
+        if let Some(w) = &self.wall_step {
+            w.validate()?;
         }
         if let Some(m) = &self.momentum {
             m.validate()?;
@@ -2623,7 +2646,10 @@ impl Player {
                 elasticity: torque::NORMAL_ELASTICITY,
                 back_off: torque::BACK_OFF * torque_ticks,
                 epsilon: torque::Epsilon::at(torque_ticks),
-                wall_step: t.wall_step,
+                wall_step: t.wall_step.map(|w| torque::WallStep {
+                    lift: w.lift,
+                    retry: w.retry,
+                }),
             },
             feet,
             &mut velocity,

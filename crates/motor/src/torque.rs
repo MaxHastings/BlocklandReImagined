@@ -909,25 +909,35 @@ fn travel(soup: &Soup, m: &Mover, from: Vec3, distance: Vec3) -> (Vec3, bool) {
     (from + distance * list.t - back, true)
 }
 
-/// UE2 `stepUp`: lift the box by up to `lift`, make the rest of the move
-/// (`remaining`), and lower it again onto what it stands on. None when the
-/// lifted box is still stopped, or the lowering finds no floor within the
-/// lift (the move was not onto ground).
-fn lift_over(soup: &Soup, m: &Mover, from: Vec3, remaining: Vec3, lift: f32) -> Option<Vec3> {
-    if remaining.length_squared() == 0.0 {
+/// UE2 `stepUp`: lift the box by up to `step.lift`, make the rest of the
+/// move (`remaining`), and lower it again onto what it stands on. The
+/// share of the move made comes with where the box ends: all of it, or
+/// (stopped by another wall) the part past `step.retry`. None when the
+/// lifted box makes less than that, or the lowering finds no floor within
+/// the lift (the move was not onto ground).
+fn lift_over(
+    soup: &Soup,
+    m: &Mover,
+    from: Vec3,
+    remaining: Vec3,
+    step: WallStep,
+) -> Option<(Vec3, f32)> {
+    let length = remaining.length();
+    if length == 0.0 {
         return None;
     }
-    let (up, _) = travel(soup, m, from, Vec3::Y * lift);
+    let (up, _) = travel(soup, m, from, Vec3::Y * step.lift);
     let raised = up.y - from.y;
     if raised <= m.back_off {
         return None;
     }
     let (across, stopped) = travel(soup, m, up, remaining);
-    if stopped {
+    let made = (across - up).length();
+    if stopped && made <= step.retry {
         return None;
     }
     let (down, landed) = travel(soup, m, across, Vec3::NEG_Y * raised);
-    landed.then_some(down)
+    landed.then_some((down, if stopped { made / length } else { 1.0 }))
 }
 
 /// `EarlyOutPolyList`: whether any polygon reaches into `bounds`.
@@ -951,9 +961,20 @@ pub struct Mover {
     /// The 0.01 back-off after each hit, per 32 ms tick.
     pub back_off: f32,
     pub epsilon: Epsilon,
-    /// How far a move lifts the box to cross a wall's lip, when the body
-    /// resolves a wall that way (see [`WALL_NORMAL_Y`]); None for v20's.
-    pub wall_step: Option<f32>,
+    /// How the body crosses a wall's lip, when it resolves a wall that way
+    /// (see [`WALL_NORMAL_Y`]); None for v20's.
+    pub wall_step: Option<WallStep>,
+}
+
+/// UE2 `stepUp`'s numbers, in world units.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct WallStep {
+    /// How far the box is lifted to cross a wall's lip.
+    pub lift: f32,
+    /// The farthest a lifted move may be stopped by a second wall and still
+    /// count: past this much travel, the step is retried for the rest of the
+    /// move from where the box came down.
+    pub retry: f32,
 }
 
 /// A hit whose normal's up part is under this is a wall for a body with a
@@ -1090,12 +1111,20 @@ fn update_local(soup: &Soup, m: &Mover, feet: Vec3, velocity: &mut Vec3, time: f
         // over its lip, move on, and lower again; failing that, slide along
         // the wall's face rather than the hit triangle's slant.
         let mut hit = hit;
-        if let Some(lift) = m.wall_step
+        if let Some(step) = m.wall_step
             && hit.normal.y.abs() < WALL_NORMAL_Y
         {
-            if let Some(over) = lift_over(soup, m, start, *velocity * time, lift) {
+            let remaining = *velocity * time;
+            if let Some((over, share)) = lift_over(soup, m, start, remaining, step) {
                 start = over;
-                break;
+                if share >= 1.0 {
+                    break;
+                }
+                // Stopped by another wall after enough travel: step again
+                // for what is left.
+                time *= 1.0 - share;
+                count += 1;
+                continue;
             }
             let flat = Vec3::new(hit.normal.x, 0.0, hit.normal.z);
             if flat.length_squared() > 0.0 {

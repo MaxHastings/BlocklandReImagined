@@ -201,10 +201,10 @@ to the move's speed by `movement.acceleration`.
 by no more than `step_height` (down a stair, along a slope): it is lowered onto the floor below at once instead of dropping step by
 step, so it keeps its speed and its grip. A jump or a rise still leaves the floor. v20's bodies fall off every edge.
 
-**Crossing a wall's lip (optional).** `movement.wall_step: 0.6` (units) makes a body that runs into a near-vertical
+**Crossing a wall's lip (optional).** `movement.wall_step: { "lift": 0.6, "retry": 0.23 }` (units) makes a body that runs into a near-vertical
 wall (its normal's up part under 0.2) try Unreal's way first: lift by up to that much, make the rest of the move,
 and lower again onto what it stands on, so a chair leg's foot, a kerb or a fence rail under the lift is crossed
-instead of catching. If the lifted move is stopped too, or there is no floor to come down on, it slides along the
+instead of catching. If a second wall stops the lifted move after more than `retry` of travel, it steps again for the rest of the move from where it came down. If the lifted move is stopped sooner, or there is no floor to come down on, it slides along the
 wall's own face (the hit normal flattened level), not the slant of the triangle it struck. Stairs and ramps
 still use the ordinary step first. v20's bodies have none: they step only from a surface they stand on.
 
