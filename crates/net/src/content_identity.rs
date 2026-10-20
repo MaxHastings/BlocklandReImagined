@@ -166,7 +166,7 @@ pub fn body_pose_assets(
                 {
                     continue;
                 }
-                match read_shape(&native, file, id, false) {
+                match read_shape(&dir, file, id, false) {
                     Ok(Some(asset)) => {
                         admit_animation_asset(&mut assets, asset);
                     }
