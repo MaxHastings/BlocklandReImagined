@@ -252,6 +252,8 @@ impl App {
                 backdrop: None,
                 regions: None,
                 decals: None,
+                receiver_index: None,
+                decal_feed: Default::default(),
                 fog_blend: Default::default(),
                 fog_time: 0.0,
                 cpu_terrain: Vec::new(),
