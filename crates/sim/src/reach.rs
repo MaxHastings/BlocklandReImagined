@@ -783,6 +783,7 @@ mod tests {
             waters: &[],
             bodies: &[],
             motions: &[],
+            solid: &crate::nav::all_solid,
         };
         // Two seconds of flight.
         let mut allowance = TICKS as u32 * 2;

@@ -103,6 +103,8 @@ pub struct Body {
     pub bottom: f32,
     /// Floats and swims in deep water (a player body); a chassis does not.
     pub swims: bool,
+    /// Takes hold of ladders (climb volumes) and climbs them.
+    pub climbs: bool,
     /// How long its moves take: every move costs the seconds its own
     /// speeds, jump and gravity take ([`Search`]).
     pub motion: crate::route::Motion,
@@ -130,6 +132,7 @@ impl Body {
             conservative: false,
             bottom: 0.0,
             swims: true,
+            climbs: tuning.climb.is_some(),
             motion: crate::route::Motion::of(tuning),
             leaps: reach.leaps.clone(),
         }
@@ -188,6 +191,15 @@ pub struct Ground<'a> {
     /// Each body's velocity, in `bodies`' order (none: all standing): a
     /// pulled walk also keeps clear of where one is going ([`MOTION_AHEAD`]).
     pub motions: &'a [Vec3],
+    /// Whether a fixed collider is solid to the route search: one that is
+    /// not (a door a body opens as it comes to it) is walked through, and
+    /// a body that finds it shut opens it ([`all_solid`] where none is
+    /// such).
+    pub solid: &'a dyn Fn(ColliderHandle, &Collider) -> bool,
+}
+/// Every fixed collider is solid.
+pub fn all_solid(_: ColliderHandle, _: &Collider) -> bool {
+    true
 }
 /// How far ahead (seconds) a moving body's path counts as taken for a
 /// pulled walk ([`Ground::crowds`]): two walkers heading into each other
@@ -196,9 +208,12 @@ pub const MOTION_AHEAD: f32 = 1.0;
 /// Share of a standing body under water from which it floats: the walk
 /// grid's floor there is out of reach of its feet, and it swims.
 const FLOATS: f32 = 0.6;
-impl Ground<'_> {
-    fn filter() -> QueryFilter<'static> {
-        QueryFilter::only_fixed().exclude_sensors()
+impl<'a> Ground<'a> {
+    fn filter(&self) -> QueryFilter<'a> {
+        QueryFilter {
+            predicate: Some(self.solid),
+            ..QueryFilter::only_fixed().exclude_sensors()
+        }
     }
     /// The surface of water that floats a body standing at `feet`, if any.
     pub fn floats(&self, body: &Body, feet: Vec3) -> Option<f32> {
@@ -255,7 +270,7 @@ impl Ground<'_> {
         let shape = Cuboid::new(half);
         let start = from + Vec3::Y * (height * 0.5 + 0.1);
         let pose = Pose::translation(start.x, start.y, start.z);
-        let query = self.physics.query_pipeline_with_filter(Self::filter());
+        let query = self.physics.query_pipeline_with_filter(self.filter());
         if query.intersect_shape(pose, &shape).next().is_some() {
             return false;
         }
@@ -291,9 +306,10 @@ impl Ground<'_> {
         // Loose bodies (a ball, a parked vehicle) count too: the grid
         // leaves them out, so a straight line must not cut through one.
         // Only players, who move out of the way, are left out.
-        let query = self
-            .physics
-            .query_pipeline_with_filter(QueryFilter::exclude_kinematic().exclude_sensors());
+        let query = self.physics.query_pipeline_with_filter(QueryFilter {
+            predicate: Some(self.solid),
+            ..QueryFilter::exclude_kinematic().exclude_sensors()
+        });
         if query.intersect_shape(pose, &shape).next().is_some()
             || query
                 .cast_shape(
@@ -345,7 +361,7 @@ impl Ground<'_> {
         feet: Vec3,
     ) -> Option<Vec3> {
         let shape = SharedShape::cuboid(half_width, tall * 0.5, half_width);
-        let query = self.physics.query_pipeline_with_filter(Self::filter());
+        let query = self.physics.query_pipeline_with_filter(self.filter());
         // Each push spends some of the half cell on each axis; when that
         // runs out, it fits nowhere near enough. Every push is at least
         // `SETTLE_GAP`, so this ends.
@@ -407,7 +423,7 @@ impl Ground<'_> {
         let ray = Ray::new(Vector::from_array(origin.to_array()), Vector::Y);
         let hit = self
             .physics
-            .query_pipeline_with_filter(Self::filter())
+            .query_pipeline_with_filter(self.filter())
             .cast_ray(&ray, reach, true)
             .map(|(_, distance)| distance);
         if hit.is_some_and(|d| d <= 0.0) {
@@ -422,7 +438,7 @@ impl Ground<'_> {
     /// Whether `at` is inside fixed collision.
     fn inside(&self, at: Vec3) -> bool {
         self.physics
-            .query_pipeline_with_filter(Self::filter())
+            .query_pipeline_with_filter(self.filter())
             .intersect_point(Vector::from_array(at.to_array()))
             .next()
             .is_some()
@@ -435,7 +451,7 @@ impl Ground<'_> {
         );
         let mut best = self
             .physics
-            .query_pipeline_with_filter(Self::filter())
+            .query_pipeline_with_filter(self.filter())
             .cast_ray_and_get_normal(&ray, reach, false)
             .map(|(_, hit)| (hit.time_of_impact, Vec3::from(hit.normal.to_array())));
         if let Some((distance, normal)) = (self.terrain)(origin, direction, reach)
@@ -473,7 +489,7 @@ impl Ground<'_> {
         let shape = SharedShape::cuboid(half_width, tall * 0.5, half_width);
         let pose = Pose::translation(feet.x, feet.y + lift + tall * 0.5, feet.z);
         self.physics
-            .query_pipeline_with_filter(Self::filter())
+            .query_pipeline_with_filter(self.filter())
             .intersect_shape(pose, shape.as_ref())
             .next()
             .is_none()
@@ -569,7 +585,35 @@ pub enum Mode {
     /// air onto this one, from a standstill, measured to take `seconds`
     /// ([`crate::reach::Leaps`]).
     Leap { from: Vec3, seconds: f32 },
+    /// Climbing a ladder from the waypoint before (`from`, its foot) up to
+    /// this one, facing `yaw` (the way the volume faces), in about
+    /// `seconds`.
+    Climb { from: Vec3, yaw: f32, seconds: f32 },
 }
+
+/// A ladder of the fixed world: where a body steps on at its foot, where it
+/// steps off at its top, and how fast it climbs ([`Nav::ladders`]).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Ladder {
+    /// Where the body takes hold: on the floor at the volume's foot.
+    pub foot: Vec3,
+    /// The floor it steps off onto, past the volume's top.
+    pub top: Vec3,
+    /// The way a climber faces, as a player's yaw.
+    pub yaw: f32,
+    /// Units a second along the rungs.
+    pub speed: f32,
+}
+/// How far past a volume's wall face a body steps off at the top.
+const LADDER_STEP_OFF: f32 = 0.7;
+/// How far from a ladder's foot a node still counts as standing at it, in
+/// cells' worth of units.
+const LADDER_FOOT_NEAR: f32 = 1.0;
+/// How far from the floor at a ladder's top a node still counts as standing
+/// there: a body backs off the edge onto the rungs along a line.
+const LADDER_TOP_NEAR: f32 = 0.6;
+/// Highest a floor found at a ladder's ends may sit off the volume's end.
+const LADDER_END_SLACK: f32 = 1.5;
 
 /// The detour, in units walked, a route takes to keep the whole body off
 /// what it would brush against (`Floor::snug`).
@@ -705,6 +749,8 @@ pub struct Nav {
     edges: FxHashMap<(Node, Node), bool>,
     /// The leaps off each node ([`Nav::leaps`]), once searched.
     leapt: FxHashMap<Node, Leapt>,
+    /// The world's ladders ([`Nav::ladders`]), found once.
+    ladders: Option<std::sync::Arc<Vec<Ladder>>>,
     arc_budget: u32,
     /// Arcs swept so far, for tests and probes.
     pub swept: u64,
@@ -1118,6 +1164,41 @@ impl Nav {
         self.settled += found.iter().filter(|f| f.spot != (0, 0)).count() as u64;
         self.floors.insert((x, z, band), found.clone());
         Some(found)
+    }
+    /// The ladders of the fixed world: each climb volume with the floor at
+    /// its foot and the floor past its top, found once. A volume with no
+    /// floor at either end is no ladder for a route.
+    pub fn ladders(&mut self, ground: &Ground) -> std::sync::Arc<Vec<Ladder>> {
+        if let Some(found) = &self.ladders {
+            return found.clone();
+        }
+        let floor_near = |at: Vec3, end: f32| -> Option<f32> {
+            let from = end + LADDER_END_SLACK;
+            let (distance, _) = ground.ray(
+                Vec3::new(at.x, from, at.z),
+                Vec3::NEG_Y,
+                2.0 * LADDER_END_SLACK,
+            )?;
+            let y = from - distance;
+            ((y - end).abs() <= LADDER_END_SLACK).then_some(y)
+        };
+        let found: Vec<Ladder> = bri_motor::climb::all(ground.physics)
+            .into_iter()
+            .filter_map(|volume| {
+                let foot = floor_near(volume.center, volume.center.y - volume.half.y)?;
+                let off = volume.center + volume.facing() * (volume.depth + LADDER_STEP_OFF);
+                let top = floor_near(off, volume.center.y + volume.half.y)?;
+                Some(Ladder {
+                    foot: Vec3::new(volume.center.x, foot, volume.center.z),
+                    top: Vec3::new(off.x, top, off.z),
+                    yaw: volume.yaw,
+                    speed: volume.speed,
+                })
+            })
+            .collect();
+        let found = std::sync::Arc::new(found);
+        self.ladders = Some(found.clone());
+        found
     }
     /// The node a body standing at `feet` occupies, if the ground there is
     /// walkable (`None` inside `Some` when it is not; `None` when out of
@@ -1747,6 +1828,50 @@ impl Search {
             )
         })
     }
+    /// The ladders `node` stands at the foot of, with the node each one
+    /// steps off onto and the seconds the climb takes; none for a swimmer
+    /// or a body that does not climb. `None` when the tick's samples ran
+    /// out.
+    fn climbs(
+        &self,
+        nav: &mut Nav,
+        ground: &Ground,
+        body: &Body,
+        node: Node,
+    ) -> Option<Vec<(Node, f32, Ladder)>> {
+        let swum = self.came.get(&node).is_none_or(|c| c.mode == Mode::Swim);
+        if !body.climbs || swum {
+            return Some(Vec::new());
+        }
+        let feet = node.feet();
+        let mut out = Vec::new();
+        for ladder in nav.ladders(ground).iter() {
+            let rise = ladder.top.y - ladder.foot.y;
+            if rise <= body.step {
+                continue;
+            }
+            // Up from its foot, or down from the floor at its top.
+            let near = |at: Vec3, tolerance: f32| {
+                Vec3::new(at.x - feet.x, 0.0, at.z - feet.z).length() <= tolerance
+                    && (at.y - feet.y).abs() <= body.step + 0.3
+            };
+            let to = if near(ladder.foot, LADDER_FOOT_NEAR) {
+                ladder.top
+            } else if near(ladder.top, LADDER_TOP_NEAR) {
+                ladder.foot
+            } else {
+                continue;
+            };
+            let Some(arrival) = nav.node_at(ground, body, to)? else {
+                continue;
+            };
+            if nav.avoided(node, arrival.x, arrival.z, arrival.feet().y, body) {
+                continue;
+            }
+            out.push((arrival, rise / ladder.speed.max(0.1) + 1.0, *ladder));
+        }
+        Some(out)
+    }
     /// The leaps from `node` ([`Nav::leaps`]) but those avoided; none
     /// for a swimmer. `None` when the tick's samples or arcs ran out.
     fn leaps(
@@ -1891,6 +2016,10 @@ impl Search {
                 self.pending = Some(node);
                 return None;
             };
+            let Some(climbs) = self.climbs(nav, ground, body, node) else {
+                self.pending = Some(node);
+                return None;
+            };
             nav.expansions -= 1;
             self.expanded += 1;
             let here = self.came[&node];
@@ -1972,6 +2101,27 @@ impl Search {
                     },
                 );
             }
+            for (to, seconds, ladder) in climbs {
+                let offset = to.feet() - start.feet();
+                if Vec3::new(offset.x, 0.0, offset.z).length() > self.bound {
+                    continue;
+                }
+                self.relax(
+                    to,
+                    Came {
+                        parent: node,
+                        jump: false,
+                        cost: here.cost + seconds,
+                        through: None,
+                        crouch: false,
+                        mode: Mode::Climb {
+                            from: node.feet(),
+                            yaw: ladder.yaw,
+                            seconds,
+                        },
+                    },
+                );
+            }
             if let Some((landing, came)) = self.jet_edge(ground, body, node) {
                 self.relax(landing, came);
             }
@@ -2003,11 +2153,19 @@ impl Search {
             node = came.parent;
         }
         steps.reverse();
-        // A leap takes off from where the waypoint before stands.
+        // A leap takes off, and a climb starts, from where the waypoint
+        // before stands.
         for i in 1..steps.len() {
             if let Mode::Leap { seconds, .. } = steps[i].mode {
                 steps[i].mode = Mode::Leap {
                     from: steps[i - 1].feet,
+                    seconds,
+                };
+            }
+            if let Mode::Climb { yaw, seconds, .. } = steps[i].mode {
+                steps[i].mode = Mode::Climb {
+                    from: steps[i - 1].feet,
+                    yaw,
                     seconds,
                 };
             }
@@ -2030,7 +2188,10 @@ fn simplify(steps: Vec<Waypoint>) -> Vec<Waypoint> {
             w.jump
                 || w.through.is_some()
                 || w.crouch
-                || matches!(w.mode, Mode::Jet { .. } | Mode::Leap { .. })
+                || matches!(
+                    w.mode,
+                    Mode::Jet { .. } | Mode::Leap { .. } | Mode::Climb { .. }
+                )
         };
         let keep = i == 0 || i + 1 == steps.len() || special(step) || special(&steps[i + 1]) || {
             let a = step.feet - steps[i - 1].feet;
@@ -2088,6 +2249,7 @@ mod tests {
             waters: &[],
             bodies: &[],
             motions: &[],
+            solid: &all_solid,
         };
         let body = body();
         let mut nav = Nav::default();
@@ -2124,6 +2286,7 @@ mod tests {
             waters: &[],
             bodies: &[],
             motions: &[],
+            solid: &all_solid,
         };
         let mut nav = Nav::default();
         nav.begin_tick();
@@ -2155,6 +2318,7 @@ mod tests {
             waters: &[],
             bodies: &[],
             motions: &[],
+            solid: &all_solid,
         };
         let mut chassis = body();
         chassis.width = 3.0;
@@ -2201,6 +2365,7 @@ mod tests {
             waters: &[],
             bodies: &[],
             motions: &[],
+            solid: &all_solid,
         };
         let mut chassis = body();
         chassis.width = 4.0;
@@ -2237,6 +2402,7 @@ mod tests {
                     waters: &[],
                     bodies: &[],
                     motions: &[],
+                    solid: &all_solid,
                 };
                 nav.clear();
                 nav.begin_tick();
@@ -2348,6 +2514,7 @@ mod tests {
             waters: &[],
             bodies: &[],
             motions: &[],
+            solid: &all_solid,
         };
         let mut search = Search::new(Vec3::ZERO, Vec3::new(10.0, 0.0, 0.0), 60.0);
         let found = loop {
@@ -2425,6 +2592,7 @@ mod tests {
                     waters: &[],
                     bodies: &[],
                     motions: &[],
+                    solid: &all_solid,
                 };
                 for x in -4..16 {
                     for z in -10..10 {
@@ -2543,6 +2711,7 @@ mod tests {
             waters: &[],
             bodies: &[],
             motions: &[],
+            solid: &all_solid,
         };
         let body = body();
         let mut nav = Nav::default();
@@ -2620,6 +2789,7 @@ mod tests {
             waters: &[],
             bodies: &[],
             motions: &[],
+            solid: &all_solid,
         };
         let body = body();
         // Searches between corners and across the middle, as a crowd
@@ -2695,6 +2865,7 @@ mod tests {
             waters: &[],
             bodies: &[],
             motions: &[],
+            solid: &all_solid,
         };
         let mut nav = Nav::default();
         let mut search = Search::new(from, to, 60.0);
@@ -2747,6 +2918,7 @@ mod tests {
             waters: &[],
             bodies: &[],
             motions: &[],
+            solid: &all_solid,
         };
         let jetter = Body {
             drop: 32.0,
@@ -2776,6 +2948,7 @@ mod tests {
             waters: &[],
             bodies: &[],
             motions: &[],
+            solid: &all_solid,
         };
         let side = |veer: u64| {
             let costs = crate::route::Costs {
@@ -2874,6 +3047,7 @@ mod tests {
                 waters: &[],
                 bodies: &[],
                 motions: &[],
+                solid: &all_solid,
             };
             for w in &p {
                 assert!(
@@ -2921,6 +3095,7 @@ mod tests {
             waters: &[],
             bodies: &[],
             motions: &[],
+            solid: &all_solid,
         };
         let (x, z) = cell_of(Vec3::new(3.0, 0.0, 0.0));
         let floors = sample(&ground, &body, x, z, 0.0);
@@ -2950,6 +3125,7 @@ mod tests {
             waters: &[],
             bodies: &[],
             motions: &[],
+            solid: &all_solid,
         };
         let body = body();
         let mut nav = Nav::default();
@@ -3010,6 +3186,7 @@ mod tests {
             waters: &[],
             bodies: &bodies,
             motions: &[],
+            solid: &all_solid,
         };
         let costs = crate::route::Costs {
             jets: crate::route::Jets::of(&t, t.max_energy, 1.0),
@@ -3068,6 +3245,7 @@ mod tests {
             waters: &[],
             bodies: &[],
             motions: &[],
+            solid: &all_solid,
         };
         let goal = Vec3::new(16.0, 0.0, 3.0);
         let mut nav = Nav::default();
@@ -3101,6 +3279,7 @@ mod tests {
             waters: &[],
             bodies: &[],
             motions: &[],
+            solid: &all_solid,
         }
     }
     fn walked(from: Vec3, p: &[Waypoint]) -> f32 {
@@ -3380,6 +3559,7 @@ mod tests {
             waters: &[],
             bodies: &[],
             motions: &[],
+            solid: &all_solid,
         };
         let (from, to) = (Vec3::new(-3.0, 0.0, 0.0), Vec3::new(5.0, 0.0, 0.0));
         let mut nav = Nav::default();
@@ -3476,6 +3656,7 @@ mod tests {
             waters: &[],
             bodies: &[],
             motions: &[],
+            solid: &all_solid,
         };
         let body = body();
         let mut nav = Nav::default();
@@ -3510,6 +3691,7 @@ mod tests {
             waters: &[],
             bodies: &[],
             motions: &[],
+            solid: &all_solid,
         };
         let body = body();
         let mut nav = Nav::default();
