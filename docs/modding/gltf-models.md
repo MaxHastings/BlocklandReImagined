@@ -183,7 +183,7 @@ A held move adds `acceleration` a second on the floor and turns the velocity tow
 move at `friction` a second; the move's own speed still caps it. Let go and the floor
 takes `2 x friction` of the speed each second until the body is under `stop_speed` (then it
 stops dead). In the air a held move adds `air_control` of the acceleration, and a body already
-at the move's speed cannot gain more, and a body whose way one step ahead is blocked cannot steer at all (above 0.05). `crouched_share` (default 1) scales the floor acceleration while crouched or lying, and `walking_share` (default 1) while the body is walking (rules call `set_walking`). v20's bodies have none: they are steered straight
+at the move's speed cannot gain more, and a body whose way one step ahead is blocked cannot steer at all (above 0.05). `crouched_share` (default 1) scales only the floor acceleration (never the speed cap, which is the move's own speed, so a crouch speed is set in `crouch_forward` and the others, not here) while crouched or lying, and `walking_share` (default 1) while the body is walking (rules call `set_walking`). v20's bodies have none: they are steered straight
 to the move's speed by `movement.acceleration`.
 
 **Distant detail (optional, off by default).** Classic-era models are light
