@@ -110,7 +110,9 @@ impl App {
             self.gpu.gpu_broken.clear();
             self.gpu.gpu_scene = Some(renderer.upload(frame.device, frame.queue, scene)?);
             self.gpu.gpu_backdrop = match &self.scene.backdrop {
-                Some(backdrop) => Some(renderer.upload(frame.device, frame.queue, &backdrop.scene)?),
+                Some(backdrop) => {
+                    Some(renderer.upload(frame.device, frame.queue, &backdrop.scene)?)
+                }
                 None => None,
             };
             self.lighting.light_volume.uploaded = false;
