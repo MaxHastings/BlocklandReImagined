@@ -293,8 +293,8 @@ impl<'a> Ground<'a> {
             )
             .is_none()
     }
-    /// Whether the standing body, a [`CLEARANCE`] wider each side, walks
-    /// straight from `from` to `to` (feet): its box sweeps clear of fixed collision a step up, and
+    /// Whether the full-width standing body walks straight from `from` to
+    /// `to` (feet): its box sweeps clear of fixed collision a step up, and
     /// all the way along a floor it can stand on lies within a step of the
     /// line, with no water deep enough to float it. What the grid's own
     /// steps check cell by cell, along one line.
@@ -305,8 +305,7 @@ impl<'a> Ground<'a> {
             return across < 1e-3 && rise.abs() <= body.step;
         }
         let (_, lift, tall) = body.clearance(false);
-        let wide = body.width * 0.5 + CLEARANCE;
-        let half = Vector::new(wide, tall * 0.5, wide);
+        let half = Vector::new(body.width * 0.5, tall * 0.5, body.width * 0.5);
         let shape = Cuboid::new(half);
         let start = from + Vec3::Y * (lift + tall * 0.5);
         let pose = Pose::translation(start.x, start.y, start.z);
@@ -501,10 +500,11 @@ impl<'a> Ground<'a> {
         let (half_width, lift, tall) = body.clearance(crouched);
         self.empty(feet, half_width, lift, tall)
     }
-    /// Whether the full-width body, `margin` wider on every side, stands (or crouches) at `feet` touching nothing.
-    fn fits_around(&self, body: &Body, feet: Vec3, crouched: bool, margin: f32) -> bool {
+    /// Whether the full-width body stands (or crouches) at `feet` touching
+    /// nothing.
+    fn fits(&self, body: &Body, feet: Vec3, crouched: bool) -> bool {
         let (_, lift, tall) = body.clearance(crouched);
-        self.empty(feet, body.width * 0.5 + margin, lift, tall)
+        self.empty(feet, body.width * 0.5, lift, tall)
     }
     fn empty(&self, feet: Vec3, half_width: f32, lift: f32, tall: f32) -> bool {
         let shape = SharedShape::cuboid(half_width, tall * 0.5, half_width);
@@ -643,12 +643,6 @@ const SNUG: f32 = 0.6;
 /// body stands at or is walking to: bodies sent along one route by the same
 /// search fan out across a gap's width rather than all aiming at one corner.
 const CROWDED: f32 = 3.0;
-/// How far past its own width a route keeps a body off what it would brush
-/// against: a floor with something this close to the body is `snug`, and a
-/// straight walk is pulled only where the body, this much wider, passes. A
-/// body steers by pursuit and swings wide at a corner by about a cell, so a
-/// route that only just clears a wall end is a route that catches on it.
-const CLEARANCE: f32 = CELL;
 /// Most grid steps a pulled straight walk passes over at once.
 const PULL_REACH: usize = 16;
 /// How far past touching [`Ground::settle`] pushes a body out of what it
@@ -1549,7 +1543,7 @@ fn sample(ground: &Ground, body: &Body, x: i32, z: i32, from: f32) -> Floors {
                 floors.push(Floor {
                     y: hit,
                     spot: (offset(feet.x - px), offset(feet.z - pz)),
-                    snug: !ground.fits_around(body, feet, low, CLEARANCE),
+                    snug: !ground.fits(body, feet, low),
                     low,
                     wet: ground.floats(body, feet).is_some(),
                 });
@@ -1561,10 +1555,10 @@ fn sample(ground: &Ground, body: &Body, x: i32, z: i32, from: f32) -> Floors {
 }
 
 /// How far across from its column's centre a [`sample`] looks: the full
-/// body's half width and its clearance (`Ground::fits_around`), off a centre pushed by up to half a
+/// body's half width (`Ground::fits`), off a centre pushed by up to half a
 /// cell (`Ground::place`), past touching by `SETTLE_GAP`, and a margin.
 fn sample_reach(body: &Body) -> f32 {
-    CELL * 0.5 + body.width * 0.5 + CLEARANCE + SETTLE_GAP + 0.05
+    CELL * 0.5 + body.width * 0.5 + SETTLE_GAP + 0.05
 }
 
 /// Surfaces one column's sample looks through, top to bottom.
