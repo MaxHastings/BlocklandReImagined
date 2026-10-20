@@ -1417,6 +1417,9 @@ pub struct ModeMiniGame {
     /// Seconds a dead player's view holds still on their body before they
     /// may look around it (0: at once, as v20).
     pub death_view_seconds: f32,
+    /// A player who joins gets no body until the mode's rules release their
+    /// spawn (`respawn(p)`); they wait as the dead do.
+    pub hold_first_spawn: bool,
 }
 impl Default for ModeMiniGame {
     fn default() -> Self {
@@ -1445,6 +1448,7 @@ impl Default for ModeMiniGame {
             spawn_protection_seconds: 2.5,
             vehicle_return_seconds: None,
             death_view_seconds: 0.0,
+            hold_first_spawn: false,
         }
     }
 }

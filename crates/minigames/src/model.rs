@@ -193,6 +193,10 @@ pub struct Settings {
     /// may look around it (0, v20's: at once).
     #[serde(default)]
     pub death_view_ms: u32,
+    /// A member who joins gets no body until a rule releases their spawn
+    /// (`respawn`): they wait as the dead do, with the respawn held.
+    #[serde(default)]
+    pub hold_join_spawn: bool,
 }
 /// v20's `$Game::PlayerInvulnerabilityTime`.
 pub const DEFAULT_SPAWN_PROTECTION_MS: u32 = 2500;
@@ -246,6 +250,7 @@ impl Default for Settings {
             spawn_protection_ms: DEFAULT_SPAWN_PROTECTION_MS,
             vehicle_return_ms: None,
             death_view_ms: 0,
+            hold_join_spawn: false,
         }
     }
 }
@@ -694,6 +699,11 @@ pub enum Effect {
         life: LifeId,
         reason: SpawnReason,
         equipment: Option<Equipment>,
+    },
+    /// A member joined a game that holds the first spawn: they have no body
+    /// until a rule releases it.
+    Held {
+        player: PlayerId,
     },
     /// Living owner remains in place when ending; host heals and restores outside gear.
     RestoreOwner {

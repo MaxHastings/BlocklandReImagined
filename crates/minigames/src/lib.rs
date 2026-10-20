@@ -267,7 +267,16 @@ impl MinigamesWorld {
         });
         self.score(player, 0, out);
         self.cleanup(player, false, out);
-        self.spawn(player, SpawnReason::Join, out);
+        if self.games[&id].settings.hold_join_spawn {
+            let life = self.alloc_life();
+            let ready_at = self.tick;
+            let p = self.players.get_mut(&player).expect("validated player");
+            p.life = LifeState::Dead { life, ready_at };
+            p.respawn_held = true;
+            out.push(Effect::Held { player });
+        } else {
+            self.spawn(player, SpawnReason::Join, out);
+        }
         if eject {
             out.push(Effect::EjectVehicles {
                 brick_owner: player.account,
@@ -359,6 +368,7 @@ impl MinigamesWorld {
             settings.spawn_protection_ms = old.spawn_protection_ms;
             settings.vehicle_return_ms = old.vehicle_return_ms;
             settings.death_view_ms = old.death_view_ms;
+            settings.hold_join_spawn = old.hold_join_spawn;
         }
     }
     pub(crate) fn configure(
