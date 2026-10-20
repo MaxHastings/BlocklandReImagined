@@ -3113,7 +3113,20 @@ impl WorldPipelines {
 
     /// The pipeline in slot `index`, built now if no one has needed it yet.
     fn get(&self, index: usize) -> &wgpu::RenderPipeline {
-        self.slots[index].get_or_init(|| self.create(index))
+        self.slots[index].get_or_init(|| {
+            let start = std::time::Instant::now();
+            let pipeline = self.create(index);
+            bri_console::echo(format!(
+                "Compiled scene pipeline {index} in {} ms",
+                start.elapsed().as_millis()
+            ));
+            pipeline
+        })
+    }
+
+    /// Whether slot `index` draws a sky or cloud background.
+    fn is_background(index: usize) -> bool {
+        index % GROUP_SLOTS / (BLEND_VARIANTS * 2) == 1
     }
 
     /// The pipeline if it is built; never waits.
@@ -4301,6 +4314,31 @@ impl SceneRenderer {
         self.noted_modes(materials);
     }
 
+    /// Start compiling the pipelines of the surfaces an environment adds to a map after it loads (a picked sky and its
+    /// clouds, the ground plane, the sea): a map without a sky of its own would otherwise draw none, a blank sky, until
+    /// they compiled once the host's environment arrived.
+    pub fn request_environment_pipelines(&self) {
+        let surface = |kind, alpha, double_sided| {
+            let mut material = Material::surface("environment", 0, 0);
+            material.kind = kind;
+            material.alpha = alpha;
+            material.double_sided = double_sided;
+            material
+        };
+        let materials: Vec<_> = [AlphaMode::Opaque, AlphaMode::Blend]
+            .into_iter()
+            .flat_map(|alpha| {
+                [
+                    surface(MaterialKind::Sky, alpha, true),
+                    surface(MaterialKind::Cloud, alpha, true),
+                    surface(MaterialKind::VertexLit, alpha, true),
+                    surface(MaterialKind::UnlitOverlay, alpha, false),
+                ]
+            })
+            .collect();
+        self.noted_modes(&materials);
+    }
+
     /// Pipelines still compiling on workers; a draw that needs one is skipped until it is built.
     pub fn pipelines_pending(&self) -> usize {
         use std::sync::atomic::Ordering;
@@ -4314,7 +4352,9 @@ impl SceneRenderer {
     /// The pipeline slot `index` for a modern or classic view, if built; asks for it otherwise. A modern view falls back to the
     /// classic one while its own is compiling.
     fn ready_pipeline(&self, modern: bool, index: usize) -> Option<&wgpu::RenderPipeline> {
-        if !self.background_pipelines.get() {
+        // The sky is the first thing in view and nothing else covers it: a frame without it is a blank one, so it is built where
+        // it is needed (a short stall, once) rather than skipped until a worker is done.
+        if !self.background_pipelines.get() || WorldPipelines::is_background(index) {
             return Some(match (&self.modern_pipelines, modern) {
                 (Some(set), true) => set.get(index),
                 _ => self.pipelines.get(index),

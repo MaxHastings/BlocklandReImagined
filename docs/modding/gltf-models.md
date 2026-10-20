@@ -192,6 +192,17 @@ body tilt (radians, up to 0.6) and how long a full lean takes. An optional
 `body_angle` tilts the drawn body by that much instead (0 leaves it upright
 while the view still rolls). v20's bodies have neither.
 
+**Getting out of geometry (optional).** `movement.unstick` frees a body that
+a door, a lift, a prop or a placed brick has closed around:
+`{ "seconds": 0, "probe": 0.55, "reach": 1, "step": 0.5 }`. A body inside
+solid geometry for `seconds` (0: at once) is moved, each way tried only if
+the body then fits: straight up (sunk into a floor), then by a vote of four
+probes around it (thin slices at the middle, `probe` of the body's radius
+away, default 0.55; at most two free ones count, the body moves by the sum of
+their offsets and twice as far with just one), then to the nearest free spot
+within `reach` (tried every `step`, sideways and upward). It falls from there.
+Other players never count, as they move aside. v20's bodies have none.
+
 **Momentum (optional).** `movement.momentum` makes the body keep its speed:
 `{ "acceleration": 81.92, "friction": 8, "stop_speed": 0.4, "air_control": 0.35, "crouched_share": 0.5, "walking_share": 0.5 }`.
 A held move adds `acceleration` a second on the floor and turns the velocity toward the
@@ -200,6 +211,10 @@ takes `2 x friction` of the speed each second until the body is under `stop_spee
 stops dead). In the air a held move adds `air_control` of the acceleration, and a body already
 at the move's speed cannot gain more, and a body whose way one step ahead is blocked cannot steer at all (above 0.05). `crouched_share` (default 1) scales only the floor acceleration (never the speed cap, which is the move's own speed, so a crouch speed is set in `crouch_forward` and the others, not here) while crouched or lying, and `walking_share` (default 1) while the body is walking (rules call `set_walking`). v20's bodies have none: they are steered straight
 to the move's speed by `movement.acceleration`.
+
+**Walking down stairs (optional).** `movement.follow_floor: true` keeps a walking body on the floor when it falls away under it
+by no more than `step_height` (down a stair, along a slope): it is lowered onto the floor below at once instead of dropping step by
+step, so it keeps its speed and its grip. A jump or a rise still leaves the floor. v20's bodies fall off every edge.
 
 **Distant detail (optional, off by default).** Classic-era models are light
 enough to skip this. For a heavy model, `--lod TRIANGLES` adds a lighter
