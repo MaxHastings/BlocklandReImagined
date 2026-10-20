@@ -262,7 +262,18 @@ fn play(
             pump(app)?;
         } else if step.get("bots").is_some() {
             // Every bot's F3 "why" readout (behaviour, route, stalls, replans), printed one line each.
-            for (name, why) in app.bot_readouts() {
+            // The host only keeps the readout fresh while the performance overlay is up (the app switches it off each frame otherwise).
+            let shown = app.ui.core.perf.visible();
+            if !shown {
+                app.ui.core.perf.cycle();
+            }
+            run_for(app, 1.0)?;
+            let readouts = app.bot_readouts();
+            if !shown {
+                app.ui.core.perf.cycle();
+                app.ui.core.perf.cycle();
+            }
+            for (name, why) in readouts {
                 println!("CAPTURE bot {name:?}: {}", why.join(" | "));
             }
         } else if let Some(goto) = step.get("goto").and_then(|v| v.as_array()) {
