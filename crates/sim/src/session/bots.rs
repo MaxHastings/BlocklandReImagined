@@ -209,6 +209,8 @@ const PORTAL_REACH: f32 = 0.8;
 const LOOK_DOWN: f32 = -0.3;
 /// How long the grid avoids a place a bot got nowhere walking into.
 const AVOID_TICKS: u64 = 120 * 30;
+/// How close, past touching, another body counts as holding a stalled bot up.
+const CLEARANCE_BODIES: f32 = 0.5;
 /// Plans in a row that got stuck before a bot drops its goal.
 const MAX_REPLANS: u32 = 3;
 /// The mean seconds of one weave leg at an objective or in water.
@@ -3912,6 +3914,13 @@ impl Session {
         input.right = direction.dot(right).clamp(-1.0, 1.0);
         input.jump = jump;
         let mut forget = false;
+        // Held up by other bodies: one stands within a body's width.
+        let jammed = self.peers.iter().any(|(other, p)| {
+            *other != bot
+                && p.combat.alive
+                && flat(Vec3::from(p.player.state().feet) - feet).length()
+                    < (body.width + p.player.tuning().width) * 0.5 + CLEARANCE_BODIES
+        });
         if stalled && brain.progress.stalls() > 1 && wanted.is_some() {
             brain.replans += 1;
             // Stuck: what it was doing is not working.
@@ -3932,8 +3941,10 @@ impl Session {
             brain.plan.clear();
             brain.search = None;
             brain.settled = false;
-            // What blocked it may be newer than the grid: look again.
-            forget = true;
+            // What blocked it may be newer than the grid: look again. Not
+            // when other bodies hold it up (a crowd in a gap): that way is
+            // open, and the search keeps off where they stand.
+            forget = !jammed;
             if brain.replans > MAX_REPLANS {
                 brain.goal = None;
                 brain.explore.to = None;

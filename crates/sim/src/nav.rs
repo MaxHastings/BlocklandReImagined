@@ -423,6 +423,21 @@ impl<'a> Ground<'a> {
             segment_gap(from, to, centre, going) < reach
         })
     }
+    /// Whether another moving body (`bodies`) stands within reach of `at`,
+    /// or will within [`MOTION_AHEAD`] seconds (`motions`): the body's half
+    /// width plus the other's.
+    pub fn crowded(&self, body: &Body, at: Vec3) -> bool {
+        self.bodies.iter().enumerate().any(|(i, (min, max))| {
+            let centre = (*min + *max) * 0.5;
+            if max.y < at.y || min.y > at.y + body.height {
+                return false;
+            }
+            let motion = self.motions.get(i).copied().unwrap_or(Vec3::ZERO);
+            let going = centre + Vec3::new(motion.x, 0.0, motion.z) * MOTION_AHEAD;
+            let reach = body.width * 0.5 + (max.x - min.x).max(max.z - min.z) * 0.5;
+            segment_gap(at, at, centre, going) < reach
+        })
+    }
     /// How far above `origin` the underside over it is, within `reach`:
     /// `None` when there is none, or when `origin` is inside something (a
     /// wall the column rises through), which is no roof over it.
@@ -624,6 +639,10 @@ const LADDER_END_SLACK: f32 = 1.5;
 /// The detour, in units walked, a route takes to keep the whole body off
 /// what it would brush against (`Floor::snug`).
 const SNUG: f32 = 0.6;
+/// The detour, in units walked, a route takes to keep off a spot another
+/// body stands at or is walking to: bodies sent along one route by the same
+/// search fan out across a gap's width rather than all aiming at one corner.
+const CROWDED: f32 = 3.0;
 /// How far past its own width a route keeps a body off what it would brush
 /// against: a floor with something this close to the body is `snug`, and a
 /// straight walk is pulled only where the body, this much wider, passes. A
@@ -2088,7 +2107,9 @@ impl Search {
                 let cost = here.cost
                     + seconds * self.veer(to)
                     // Keeps paths off walls, through the middle of doors.
-                    + if floor.snug { body.seconds(SNUG) } else { 0.0 };
+                    + if floor.snug { body.seconds(SNUG) } else { 0.0 }
+                    // Keeps bodies on one route spread across a gap.
+                    + if ground.crowded(body, to.feet()) { body.seconds(CROWDED) } else { 0.0 };
                 self.relax(
                     to,
                     Came {
