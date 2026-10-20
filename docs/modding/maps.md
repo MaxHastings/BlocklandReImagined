@@ -95,6 +95,16 @@ distance fog (`bri_content::regions::RegionMap`: a plane tree, the region on eac
 of `color` bytes, `start`, `end`, `blend_time` and `clear_to_fog`), written in the glTF's own frame and unit. The fog that
 applies is the one of the region the eye is in; entering a region blends over its `blend_time`.
 
+**How sound carries.** A regions file can also say how the map's sounds reach the listener. Top level `sound` is
+`{ "zone_decay": 0..1, "blocked_reference": 0..1 }`; per region, `connects` lists the regions sound passes into from it (a
+doorway, a window left open) and `reverb` is `{ "wet": 0..1, "decay_seconds": seconds }`, the room effects ring in while the
+listener is in that region. With `sound` set, a sound placed in the world is heard as authored when nothing solid stands on the
+line to the listener. When something does, the distance it is heard at is cut by `zone_decay` raised to the square of the steps
+between the two regions (`ZoneSteps`: the first round of `connects` is one step, and each later round doubles how far the reach
+runs, so a long row of rooms costs little more than two; regions the map does not join are never heard; a map with no `connects`
+at all is cut by the wall alone), and the part heard at full volume falls to `blocked_reference` of that. Without `sound` every
+sound carries as authored; `reverb` works without it. Music and interface sounds are never cut and stay dry.
+
 **Decals.** `--decals FILE.json` lists projected pictures (`bri_content::decals::DecalSet`) in the native frame, each picture a PNG
 beside the file: a blob shadow, a stain, a light pattern. A decal is a world-to-picture matrix (orthographic, or perspective with a
 divide), six planes that choose the map's triangles inside its volume, a blend (`modulate2x`, `alpha`, `add`), whether the picture

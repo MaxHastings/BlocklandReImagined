@@ -311,6 +311,23 @@ impl AudioRuntime {
         })
     }
 
+    /// Cut a placed sound's range for the way to the listener
+    /// ([`crate::spatial::Hearing`]): a wall between them, rooms apart. Send
+    /// when it changes; a sound with no placement is unaffected.
+    pub fn set_voice_hearing(
+        &mut self,
+        handle: SoundHandle,
+        hearing: crate::spatial::Hearing,
+    ) -> Result<(), AudioError> {
+        self.send(Command::SetVoiceHearing { handle, hearing })
+    }
+
+    /// The room sound effects ring in: how much reverb returns and how long
+    /// the tail lasts. The engine glides to a new room; [`Room::DRY`] ends it.
+    pub fn set_reverb(&mut self, room: crate::reverb::Room) -> Result<(), AudioError> {
+        self.send(Command::SetReverb(room))
+    }
+
     /// Update the listener (normally the camera) once per frame.
     pub fn set_listener(&mut self, listener: Listener) -> Result<(), AudioError> {
         self.send(Command::SetListener(listener))

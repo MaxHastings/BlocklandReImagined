@@ -114,6 +114,8 @@ struct Voice {
     /// Multiplies the asset's pitch (`Command::SetVoiceParams`): an
     /// engine loop rising with speed.
     pitch_scale: f32,
+    /// How much of its range reaches the listener (`Command::SetVoiceHearing`).
+    hearing: crate::spatial::Hearing,
     real: bool,
     /// Music disabled: not mixed, restarts from the top when re-enabled.
     suspended: bool,
@@ -154,6 +156,10 @@ pub(crate) struct Engine {
     frames_rendered: u64,
     step_scale: f64,
     declick_frames: u32,
+    /// The room sound effects ring in (`Command::SetReverb`).
+    reverb: crate::reverb::Reverb,
+    /// The effects mix of this block while the reverb is on, kept apart from music to feed it.
+    effects: Vec<f32>,
 }
 
 impl Engine {
@@ -172,6 +178,8 @@ impl Engine {
         Self {
             step_scale: 1.0 / f64::from(sample_rate),
             declick_frames,
+            reverb: crate::reverb::Reverb::new(sample_rate),
+            effects: Vec::new(),
             voices: Vec::with_capacity(capacity),
             listener: Listener::default(),
             windows: Vec::with_capacity(crate::spatial::MAX_WINDOWS),
@@ -203,6 +211,7 @@ impl Engine {
         }
         self.frames_rendered = self.frames_rendered * u64::from(rate) / u64::from(old);
         self.cfg.sample_rate = rate;
+        self.reverb.set_rate(rate);
         self.step_scale = 1.0 / f64::from(rate);
         self.declick_frames = ((self.cfg.declick_ms.max(0.0) / 1000.0) * rate as f32) as u32;
     }
@@ -247,16 +256,33 @@ impl Engine {
         }
         self.revive_virtual();
 
+        let ringing = self.reverb.active();
+        if ringing {
+            self.effects.clear();
+            self.effects.resize(out.len(), 0.0);
+        }
         for i in 0..self.voices.len() {
             let v = &mut self.voices[i];
             if v.done.is_some() || v.suspended {
                 continue;
             }
             if v.real {
-                mix_voice(v, out, frames, ch, self.cfg.sample_rate, self.step_scale);
+                // Effects go through the reverb when a room is set; music and the rest stay dry.
+                let bus = if ringing && v.asset.playback.bus == Bus::Effects {
+                    &mut self.effects[..]
+                } else {
+                    &mut *out
+                };
+                mix_voice(v, bus, frames, ch, self.cfg.sample_rate, self.step_scale);
             } else {
                 advance_virtual(v, frames, self.cfg.sample_rate);
             }
+        }
+        if ringing {
+            for (o, e) in out.iter_mut().zip(&self.effects) {
+                *o += e;
+            }
+            self.reverb.add_to(&self.effects, out, ch);
         }
 
         // Retire voices; order of events follows voice order (deterministic).
@@ -340,6 +366,7 @@ impl Engine {
         asset: &SoundAsset,
         position: Option<Vec3>,
         gain_scale: f32,
+        hearing: crate::spatial::Hearing,
     ) -> (f32, [f32; 2]) {
         let pb = &asset.playback;
         let channel = self
@@ -359,7 +386,7 @@ impl Engine {
         let (att, pan) = match (pb.spatial, position) {
             (Some(sp), Some(pos)) => {
                 let (ear, d) = crate::spatial::heard(&self.listener, &self.windows, pos);
-                (attenuation(&sp, d), pan_gains(ear, pos))
+                (attenuation(&hearing.apply(sp), d), pan_gains(ear, pos))
             }
             _ => (1.0, (SQRT_HALF, SQRT_HALF)),
         };
@@ -376,7 +403,7 @@ impl Engine {
     fn update_targets(&mut self, i: usize) {
         let (score, g) = {
             let v = &self.voices[i];
-            self.gains(&v.asset, v.position, v.gain_scale)
+            self.gains(&v.asset, v.position, v.gain_scale, v.hearing)
         };
         let v = &mut self.voices[i];
         v.score = score;
@@ -542,6 +569,12 @@ impl Engine {
                     v.pitch_scale = sanitize_pitch(pitch_scale);
                 }
             }
+            Command::SetReverb(room) => self.reverb.set_room(room),
+            Command::SetVoiceHearing { handle, hearing } => {
+                if let Some(v) = self.voices.iter_mut().find(|v| v.handle == handle) {
+                    v.hearing = hearing.sanitized();
+                }
+            }
             Command::SetListener(l) => {
                 if l.is_valid() {
                     self.listener = l;
@@ -658,7 +691,8 @@ impl Engine {
             }
         }
 
-        let (score, target) = self.gains(&asset, position, gain_scale);
+        let (score, target) =
+            self.gains(&asset, position, gain_scale, crate::spatial::Hearing::CLEAR);
         let suspended = is_music && !self.music_enabled;
         if suspended && !looping {
             return self.reject(handle, CullReason::MusicDisabled);
@@ -713,6 +747,7 @@ impl Engine {
             position,
             gain_scale,
             pitch_scale: 1.0,
+            hearing: crate::spatial::Hearing::CLEAR,
             real,
             suspended,
             cursor: 0.0,

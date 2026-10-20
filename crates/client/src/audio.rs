@@ -384,6 +384,10 @@ pub struct ClientAudio {
     rule_ambient: BTreeMap<String, RuleMusic>,
     /// The looping positional sources a game mode asked for, by key ([`ClientAudio::sync_positional_sources`]).
     positional: BTreeMap<u64, PlayingSource>,
+    /// Sounds placed in the world that have not yet had their way to the listener judged ([`ClientAudio::hear_world`]).
+    fresh_world: Vec<(SoundHandle, [f32; 3])>,
+    /// The reverb room last set, to send only changes.
+    room: Room,
 }
 /// A looping sound a game mode places in the world and keeps current ([`ClientAudio::sync_positional_sources`]). Distances are in world
 /// units; the sound fades by inverse distance, full inside `reference_distance` and silent beyond `max_distance`.
@@ -423,6 +427,8 @@ struct RuleMusic {
 }
 /// How near an Add-On weapon sound plays at full volume, and how far it
 /// carries, in world units: v20's `AudioClose3d`/`AudioDefault3d` range.
+/// Most world sounds waiting to have their way to the listener judged; past it they play as authored.
+const FRESH_WORLD_LIMIT: usize = 256;
 const PACK_SOUND_RANGE: (f32, f32) = (10.0, 60.0);
 /// v20's client schedules a `BrickBreakSoundEvent` for a dying brick only
 /// when its death time is at least 80 ms from the last one scheduled, for
@@ -499,6 +505,8 @@ impl ClientAudio {
             rule_music: None,
             rule_ambient: BTreeMap::new(),
             positional: BTreeMap::new(),
+            fresh_world: Vec::new(),
+            room: Room::DRY,
             projectiles: BTreeSet::new(),
             image_loops: BTreeMap::new(),
             engines: BTreeMap::new(),
@@ -975,9 +983,40 @@ impl ClientAudio {
     }
     /// Start `profile`: an Add-On pack's own sound, else the bank's.
     fn start(&mut self, profile: &str, placement: Placement) -> Result<SoundHandle, AudioError> {
-        match self.pack_asset(profile) {
+        let handle = match self.pack_asset(profile) {
             Some((asset, volume)) => self.runtime.play_asset(asset, placement, volume),
             None => self.runtime.play(profile, placement),
+        }?;
+        if let Placement::World(at) = placement
+            && self.fresh_world.len() < FRESH_WORLD_LIMIT
+        {
+            self.fresh_world.push((handle, at));
+        }
+        Ok(handle)
+    }
+    /// Judge the way each world sound takes to the listener ([`bri_audio::Hearing`]) and cut its range to match: every looping
+    /// source, and a sound just started once, where it began. `hearing_at` is asked for a point in the world. `room` is the
+    /// reverb of the space the listener is in.
+    pub fn hear_world(
+        &mut self,
+        mut hearing_at: impl FnMut([f32; 3]) -> bri_audio::Hearing,
+        room: Room,
+    ) {
+        if room != self.room {
+            self.room = room;
+            let result = self.runtime.set_reverb(room);
+            self.record(result);
+        }
+        let judged: Vec<(SoundHandle, bri_audio::Hearing)> = self
+            .positional
+            .values()
+            .map(|playing| (playing.handle, playing.source.position))
+            .chain(self.fresh_world.drain(..))
+            .map(|(handle, at)| (handle, hearing_at(at)))
+            .collect();
+        for (handle, hearing) in judged {
+            let result = self.runtime.set_voice_hearing(handle, hearing);
+            self.record(result);
         }
     }
     fn pack_asset(&mut self, profile: &str) -> Option<(Arc<SoundAsset>, f32)> {
@@ -1172,11 +1211,13 @@ impl ClientAudio {
                 })
                 .filter(|(asset, _)| !asset.playback.looping);
             if let Some((asset, volume)) = asset {
-                let result = self
+                match self
                     .runtime
                     .play_asset(asset, Placement::World(point), volume)
-                    .map(|_| ());
-                self.record(result);
+                {
+                    Ok(handle) => self.fresh_world.push((handle, point)),
+                    Err(error) => self.record(Err(error)),
+                }
             } else {
                 self.dropped = self.dropped.saturating_add(1);
             }
@@ -1614,6 +1655,48 @@ mod tests {
         // A source no longer listed stops.
         audio.sync_positional_sources(&[]);
         assert!(audio.positional.is_empty());
+        Ok(())
+    }
+
+    /// A wall between a placed sound and the listener cuts the distance it is heard at; with the way clear it is heard as authored.
+    #[test]
+    fn a_blocked_way_cuts_a_placed_sound_and_a_clear_one_restores_it() -> Result<()> {
+        let fx = Pack::synthetic()?;
+        let mut audio = ClientAudio::load(&fx.root, &mut Settings::default(), OutputKind::Offline)?;
+        audio.sync_positional_sources(&[PositionalSource {
+            key: 1,
+            sound: fx.note.clone(),
+            position: [1030., 1., 0.],
+            volume: 1.0,
+            pitch: 1.0,
+            reference_distance: 5.0,
+            max_distance: 40.0,
+        }]);
+        let listener = Listener {
+            position: [1000., 1., 0.],
+            ..Default::default()
+        };
+        let loud = |audio: &mut ClientAudio| {
+            audio.tick(0.3, listener);
+            audio.tick(0.3, listener);
+            audio
+                .take_capture()
+                .iter()
+                .rev()
+                .take(2048)
+                .any(|v| v.abs() > 0.00001)
+        };
+        audio.hear_world(|_| bri_audio::Hearing::CLEAR, Room::DRY);
+        assert!(loud(&mut audio), "30 away is inside 40");
+        // Behind a wall the way carries a third as far: 30 is now beyond it.
+        let wall = bri_audio::Hearing {
+            reach: 0.3,
+            reference: 0.35,
+        };
+        audio.hear_world(|_| wall, Room::DRY);
+        assert!(!loud(&mut audio), "cut to 12");
+        audio.hear_world(|_| bri_audio::Hearing::CLEAR, Room::DRY);
+        assert!(loud(&mut audio));
         Ok(())
     }
 

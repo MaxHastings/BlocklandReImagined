@@ -35,6 +35,109 @@ pub struct Region {
     /// The light actors in the region take from everywhere (linear RGB, as lit models add it).
     #[serde(default)]
     pub ambient: Option<[f32; 3]>,
+    /// The regions sound passes into from this one (a doorway, a window left open), by number. Rooms joined this way hear each
+    /// other; see [`ZoneSteps`].
+    #[serde(default)]
+    pub connects: Vec<u16>,
+    /// The room sound effects ring in while the listener is in this region.
+    #[serde(default)]
+    pub reverb: Option<RegionReverb>,
+}
+
+/// A region's reverb: the level of the tail and how long it lasts.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct RegionReverb {
+    /// Linear level of the reverb added to the effects (0 is dry, 1 is as loud as the sound).
+    pub wet: f32,
+    /// Seconds for the tail to fall 60 dB.
+    pub decay_seconds: f32,
+}
+
+/// How a map's sounds carry, written once for the map. Without it every sound carries as authored.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct SoundCarry {
+    /// What a wall or rooms in the way do to a sound: the distance it is heard at is cut by `zone_decay` raised to the square of
+    /// the steps between the two regions ([`ZoneSteps`]); a sound with no region data is cut by the wall alone.
+    pub zone_decay: f32,
+    /// Share of the cut distance still heard at full volume when something is in the way.
+    pub blocked_reference: f32,
+}
+
+/// The most regions a [`ZoneSteps`] table is built for.
+pub const MAX_STEP_REGIONS: usize = 256;
+
+/// Steps of sound between every pair of regions. The reach of a region starts as the regions it connects to; round `d` gives step
+/// `d` to every region the reach now holds that has none, then the reach widens to the regions reachable from each region in it. So
+/// a step counts doublings of the path, not single doorways: a few rooms in a row cost little more than two. A pair never reached
+/// has no steps.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ZoneSteps {
+    count: usize,
+    steps: Vec<Option<u8>>,
+}
+
+impl ZoneSteps {
+    pub fn new(map: &RegionMap) -> Option<Self> {
+        let count = map.regions.len();
+        if count == 0
+            || count > MAX_STEP_REGIONS
+            || map.regions.iter().all(|r| r.connects.is_empty())
+        {
+            return None;
+        }
+        let mut reach: Vec<Vec<bool>> = map
+            .regions
+            .iter()
+            .map(|r| {
+                let mut row = vec![false; count];
+                for c in &r.connects {
+                    row[usize::from(*c)] = true;
+                }
+                row
+            })
+            .collect();
+        let mut steps = vec![None; count * count];
+        for i in 0..count {
+            steps[i * count + i] = Some(0);
+        }
+        for round in 1..=count.min(usize::from(u8::MAX)) {
+            for (i, row) in reach.iter().enumerate() {
+                for (j, held) in row.iter().enumerate() {
+                    if *held && steps[i * count + j].is_none() {
+                        steps[i * count + j] = Some(round as u8);
+                    }
+                }
+            }
+            let next: Vec<Vec<bool>> = reach
+                .iter()
+                .map(|row| {
+                    let mut wider = row.clone();
+                    for (j, held) in row.iter().enumerate() {
+                        if *held {
+                            for (k, far) in reach[j].iter().enumerate() {
+                                wider[k] |= far;
+                            }
+                        }
+                    }
+                    wider
+                })
+                .collect();
+            if next == reach {
+                break;
+            }
+            reach = next;
+        }
+        Some(Self { count, steps })
+    }
+
+    /// Steps from region `a` to region `b`, or `None` when sound never gets there.
+    pub fn between(&self, a: u16, b: u16) -> Option<u8> {
+        let (a, b) = (usize::from(a), usize::from(b));
+        if a >= self.count || b >= self.count {
+            return None;
+        }
+        self.steps[a * self.count + b]
+    }
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -49,6 +152,9 @@ pub struct RegionMap {
     pub back_region: Vec<u16>,
     /// By region number.
     pub regions: Vec<Region>,
+    /// How the map's sounds carry, when it says.
+    #[serde(default)]
+    pub sound: Option<SoundCarry>,
 }
 
 impl RegionMap {
@@ -87,7 +193,29 @@ impl RegionMap {
                 "A region node names a missing region"
             );
         }
+        if let Some(carry) = &self.sound {
+            ensure!(
+                (0.0..=1.0).contains(&carry.zone_decay)
+                    && (0.0..=1.0).contains(&carry.blocked_reference),
+                "A map's sound carry is outside 0 to 1"
+            );
+        }
         for r in &self.regions {
+            ensure!(
+                r.connects
+                    .iter()
+                    .all(|c| usize::from(*c) < self.regions.len()),
+                "A region connects to a missing region"
+            );
+            if let Some(reverb) = &r.reverb {
+                ensure!(
+                    reverb.wet.is_finite()
+                        && reverb.decay_seconds.is_finite()
+                        && reverb.wet >= 0.0
+                        && reverb.decay_seconds >= 0.0,
+                    "A region's reverb is not a level and a time"
+                );
+            }
             if let Some(f) = &r.fog {
                 ensure!(
                     f.start.is_finite() && f.end.is_finite() && f.blend_time.is_finite(),
@@ -96,6 +224,12 @@ impl RegionMap {
             }
         }
         Ok(())
+    }
+
+    /// How many steps sound takes between two regions, when this map's regions connect ([`ZoneSteps`]). `None` when the map has
+    /// no connections or more regions than the table holds.
+    pub fn zone_steps(&self) -> Option<ZoneSteps> {
+        ZoneSteps::new(self)
     }
 
     /// The region a point is in.
@@ -309,12 +443,15 @@ mod tests {
                 Region {
                     fog: a,
                     ambient: None,
+                    ..Region::default()
                 },
                 Region {
                     fog: b,
                     ambient: None,
+                    ..Region::default()
                 },
             ],
+            sound: None,
         }
     }
 
@@ -337,6 +474,7 @@ mod tests {
             front_region: vec![1, 2],
             back_region: vec![3, 4],
             regions: vec![Region::default(); 5],
+            sound: None,
         };
         map.validate().unwrap();
         assert_eq!(map.locate([1.0, 1.0, 0.0]), 2);
@@ -378,5 +516,53 @@ mod tests {
         assert!(half.start > 1000.0 && half.start < FAR, "{half:?}");
         let done = state.step(&map, 1, 6.0);
         assert_eq!((done.start, done.end), (1000.0, 2000.0));
+    }
+
+    #[test]
+    fn sound_steps_count_doublings_and_never_reach_a_closed_off_region() {
+        let room = |connects: &[u16]| Region {
+            connects: connects.to_vec(),
+            ..Region::default()
+        };
+        // 0 - 1 - 2 - 3 - 4 in a row, and 5 shut away.
+        let map = RegionMap {
+            regions: vec![
+                room(&[1]),
+                room(&[0, 2]),
+                room(&[1, 3]),
+                room(&[2, 4]),
+                room(&[3]),
+                room(&[]),
+            ],
+            ..RegionMap::default()
+        };
+        map.validate().unwrap();
+        let steps = map.zone_steps().unwrap();
+        assert_eq!(steps.between(2, 2), Some(0));
+        assert_eq!(steps.between(0, 1), Some(1));
+        // Two doorways away is the second round; four away, the third (the reach doubles).
+        assert_eq!(steps.between(0, 2), Some(2));
+        assert_eq!(steps.between(0, 4), Some(3));
+        assert_eq!(steps.between(0, 5), None);
+        assert_eq!(steps.between(0, 99), None);
+        assert!(RegionMap::default().zone_steps().is_none());
+    }
+
+    #[test]
+    fn a_connection_to_a_missing_region_or_a_bad_carry_is_refused() {
+        let mut map = RegionMap {
+            regions: vec![Region {
+                connects: vec![3],
+                ..Region::default()
+            }],
+            ..RegionMap::default()
+        };
+        assert!(map.validate().is_err());
+        map.regions[0].connects.clear();
+        map.sound = Some(SoundCarry {
+            zone_decay: 1.5,
+            blocked_reference: 0.3,
+        });
+        assert!(map.validate().is_err());
     }
 }

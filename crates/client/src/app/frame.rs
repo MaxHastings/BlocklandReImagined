@@ -203,6 +203,7 @@ impl App {
         drop(span);
         self.end_session_on_fault(presented);
         let span = crate::frame_trace::span("audio");
+        self.hear_world(&listener);
         self.audio.tick(elapsed.as_secs_f32(), listener);
         drop(span);
         self.view.drawn_controls = Some(self.controls.clone());
@@ -1969,6 +1970,47 @@ fn seat_ready_matches(
         .collect();
     seat.ready_matches(&images)
 }
+
+impl App {
+    /// Judge how the sounds placed in the world reach the listener, and ring the listener's room: a wall between them cuts a
+    /// sound's range, as do rooms the map does not join ([`crate::sound_carry`]).
+    fn hear_world(&mut self, listener: &bri_audio::Listener) {
+        let (Some(regions), Some(model)) = (&self.scene.regions, &self.scene.sound_carry) else {
+            let room = self
+                .scene
+                .regions
+                .as_ref()
+                .map_or(bri_audio::Room::DRY, |regions| {
+                    crate::sound_carry::room(regions, listener.position)
+                });
+            self.audio.hear_world(|_| bri_audio::Hearing::CLEAR, room);
+            return;
+        };
+        let room = crate::sound_carry::room(regions, listener.position);
+        let ear = Vec3::from(listener.position);
+        let building = self.build.building.as_ref();
+        self.audio.hear_world(
+            |source| {
+                let to = Vec3::from(source);
+                let length = ear.distance(to);
+                // A line too short to trace is clear; so is one the world does not stop before the source.
+                let clear = length < 0.001
+                    || building.is_none_or(|building| {
+                        building
+                            .solid_segment(ear, to)
+                            .ok()
+                            .flatten()
+                            .is_none_or(|hit| hit.distance >= length - SOUND_LINE_SLACK)
+                    });
+                model.hearing(regions, listener.position, source, clear)
+            },
+            room,
+        );
+    }
+}
+
+/// How near its source a sound's line may be stopped and still count as clear: the surface the source stands in or on.
+const SOUND_LINE_SLACK: f32 = 0.5;
 
 #[cfg(test)]
 mod seat_ready_wiring_tests {
