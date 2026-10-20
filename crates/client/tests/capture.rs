@@ -202,7 +202,7 @@ fn control(name: &str) -> Result<HeldControl> {
 
 /// The steps of a spec, one JSON object each: {"command": name, "args": [..]}, {"wait": seconds}, {"until": "landed"},
 /// {"hold": control, "down": bool}, {"look": {"yaw": radians, "pitch": radians}}, {"third_person": true}, {"use_tool": slot},
-/// {"shot": name}, {"burst": {"name": n, "count": c, "every_ms": ms}} (steps the game `every_ms` and captures `count` times).
+/// {"panel": {"control": id, "lists": {id: row}}} (a press or pick in the open Add-On panel), {"report": true} (prints every body's place and health), {"shot": name}, {"burst": {"name": n, "count": c, "every_ms": ms}} (steps the game `every_ms` and captures `count` times).
 fn play(
     app: &mut App,
     gpu: &Headless,
@@ -279,6 +279,50 @@ fn play(
                 let path = out.join(format!("{name}-{n:02}.png"));
                 save(&path, &capture(app, gpu, renderer, size)?, size)?;
                 written.push(path.display().to_string());
+            }
+        } else if let Some(panel) = step.get("panel") {
+            // What a player does in the open Add-On panel: {"panel": {"control": "deploy", "lists": {"team": 1}}}.
+            let open = app
+                .ui
+                .core
+                .panel
+                .clone()
+                .context("a panel step with no panel open")?;
+            let lists = panel
+                .get("lists")
+                .and_then(|l| l.as_object())
+                .map(|l| {
+                    l.iter()
+                        .map(|(k, v)| (k.clone(), v.as_u64().map(|n| n as u16)))
+                        .collect()
+                })
+                .unwrap_or_default();
+            app.ui.core.request(UiAction::PanelEvent {
+                package: open.package,
+                panel: open.id,
+                control: panel
+                    .get("control")
+                    .and_then(|c| c.as_str())
+                    .unwrap_or("close")
+                    .into(),
+                fields: Vec::new(),
+                lists,
+                drop: None,
+            });
+            pump(app)?;
+        } else if step.get("report").is_some() {
+            if let Some(view) = app.network_view() {
+                for (id, pose) in &view.poses {
+                    let name = view.names.get(id).cloned().unwrap_or_default();
+                    let vitals = view.vitals.get(id);
+                    println!(
+                        "CAPTURE report tick {} {name:?} feet {:.2?} alive {:?} health {:?}",
+                        view.tick,
+                        pose.player.feet,
+                        vitals.map(|v| v.alive),
+                        vitals.map(|v| v.health),
+                    );
+                }
             }
         } else {
             anyhow::bail!("unknown {what}");
