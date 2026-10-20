@@ -404,7 +404,7 @@ global it stands for (`"global": "$Pref::Server::TT::Ammo"`). One with
 needsRestart): it keeps the value it had then, and a host's change waits
 for the next start, marked in the window.
 `place` puts a game or team setting beside v20's own rules in the
-Mini-Game window: `basics`, `loadout`, `win` (How to Win) and `rounds` on
+Mini-Game window: `basics`, `loadout`, `win` (How to Win), `rounds` and `bots` on
 its Game page, `teams` on its Teams page (a team setting on each team),
 and `scoring`, `respawn`, `damage` and `bricks` on its Rules page. Every
 setting also shows on More Settings, by Add-On and `category`, and one

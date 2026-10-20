@@ -1483,6 +1483,7 @@ pub enum MiniGameSettingPlace {
     Respawn,
     Damage,
     Bricks,
+    Bots,
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MiniGameTeam {

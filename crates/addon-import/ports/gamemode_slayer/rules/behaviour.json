@@ -645,6 +645,7 @@
     {
       "key": "ffa_bots",
       "title": "Bots (free-for-all)",
+      "place": "bots",
       "category": "Bots",
       "type": "int",
       "default": 0,
