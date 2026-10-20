@@ -14,6 +14,8 @@ pub mod entity;
 pub use entity::*;
 pub mod chat;
 pub use chat::*;
+pub mod log;
+pub use log::*;
 pub mod build;
 pub use build::*;
 pub mod effects;
@@ -61,6 +63,8 @@ macro_rules! for_each_op {
             Label = entity,
             Tell = chat,
             Broadcast = chat,
+            Log = log,
+            Warn = log,
             TellMinigame = chat,
             TellPlayers = chat,
             PrintMinigame = chat,

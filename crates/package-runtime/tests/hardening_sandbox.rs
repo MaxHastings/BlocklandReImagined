@@ -788,6 +788,14 @@ fn every_operation_needs_its_declared_capability() {
             text: "hi".into(),
         }),
         Op::Broadcast(ops::Broadcast { text: "hi".into() }),
+        Op::Log(ops::Log {
+            name: "probe".into(),
+            text: "hi".into(),
+        }),
+        Op::Warn(ops::Warn {
+            name: "probe".into(),
+            text: "hi".into(),
+        }),
         Op::Fire(ops::Fire {
             projectile: "probe:projectile/x".into(),
             position: [0.0; 3],

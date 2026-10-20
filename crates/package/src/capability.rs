@@ -9,6 +9,7 @@ pub const CAPABILITIES: &[&str] = &[
     "damage",
     "entity",
     "chat",
+    "log",
     "player",
     "build",
     "physics",
@@ -34,6 +35,9 @@ pub fn describe(name: &str) -> Option<&'static str> {
         "entity" => "spawn and move its own creatures and objects",
         // Send chat lines to players, and print text on their screens.
         "chat" => "send chat messages and put text on players' screens",
+        // Named lines in the host's game log, and warnings that also show
+        // in the Add-On problems list.
+        "log" => "write to the game log and report problems to the host",
         // Move players, respawn them, change their body, hand them an
         // entity to drive, give them an item or ammo, change what they hold
         // or how wide they see.

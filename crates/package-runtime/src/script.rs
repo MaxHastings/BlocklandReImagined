@@ -1964,6 +1964,20 @@ fn register_api(engine: &mut Engine) {
     engine.register_fn("broadcast", |text: &str| {
         push(Op::Broadcast(ops::Broadcast { text: text.into() }))
     });
+    // log("name", "text") writes a named line to the host's game log;
+    // warn("name", "text") also lists it among the Add-On's problems.
+    engine.register_fn("log", |name: &str, text: &str| {
+        push(Op::Log(ops::Log {
+            name: name.into(),
+            text: text.into(),
+        }))
+    });
+    engine.register_fn("warn", |name: &str, text: &str| {
+        push(Op::Warn(ops::Warn {
+            name: name.into(),
+            text: text.into(),
+        }))
+    });
     // copy_build(player, brick, limit, "up" | "down", tool[, options]),
     // copy_box(player, min, max, limit, tool[, options]); options are
     // `copy_rule`'s.

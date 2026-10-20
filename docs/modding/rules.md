@@ -112,7 +112,7 @@ run are left out. Your rules remove a game's entry when it ends.
 
 | Read | Change state | Act on the world (needs capability) |
 |---|---|---|
-| `tick()`, `seed()`, `caller()`, `game_version()` (the host's, as the main menu shows it), `map_id()` (the map being played: `package:map/name` for an Add-On's map, so a rule can start a map's own ambience or lights) | `get(key)`, `set(key, value)` | `tell(player, text)`, `broadcast(text)`: `chat` |
+| `tick()`, `seed()`, `caller()`, `game_version()` (the host's, as the main menu shows it), `map_id()` (the map being played: `package:map/name` for an Add-On's map, so a rule can start a map's own ambience or lights) | `get(key)`, `set(key, value)` | `tell(player, text)`, `broadcast(text)`: `chat`; `log(name, text)` (a line in the host's game log, headed by the Add-On and `name`), `warn(name, text)` (the same, and listed among the Add-On's problems, told to admins once a minute per `name`): `log` (`name` is 1 to 32 letters, digits, `.`, `_` or `-`; text as a chat line; 64 a second per Add-On) |
 | `players()`, `bots()`, `player(id)` | `get_player(p, key)`, `set_player(p, key, v)` | `remove_brick`, `place_brick`, `set_block_state(brick, state)`: `world.edit` |
 | `aim()`, `me()`, `entities()` | `add_player(p, key, amount)` | `damage(target, amount[, by[, type]])`, `explode(...)`: `damage` |
 | `movers()` (every map mover), `mover(id)` (one, with its `params`), `movers_near(p, reach)` (the ids of the movers a player's body is within `reach` units of, 0 to 64: the doors in the Use key's reach) | | `mover_goto(id, key, seconds)` (send a mover to key 0 to 15 over up to 600 seconds), `mover_stop(id)` (hold it where it is): `movers` ([Map movers](#map-movers)) |
