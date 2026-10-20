@@ -779,6 +779,11 @@ pub struct PlayerTuning {
     /// Getting out of geometry that has closed around the body, when it can:
     /// none for v20's bodies.
     pub unstick: Option<Unstick>,
+    /// How far the body lifts to cross the lip of a wall it walks into
+    /// (UE2's `moveSmooth` and `stepUp`: lift, move on, lower again, and
+    /// failing that slide along the wall's face), when it moves that way:
+    /// none for v20's bodies, which step only off a surface they stand on.
+    pub wall_step: Option<f32>,
     /// Keeping speed (a held move accelerates the body, the floor's friction slows it, the air steers it less), when the body
     /// has it: none for v20's bodies, which are steered straight to the move's speed.
     pub momentum: Option<crate::momentum::Momentum>,
@@ -857,6 +862,7 @@ impl Default for PlayerTuning {
             lean: None,
             climb: None,
             unstick: None,
+            wall_step: None,
             momentum: None,
             controller: None,
         }
@@ -1144,6 +1150,12 @@ impl PlayerTuning {
         }
         if let Some(u) = &self.unstick {
             u.validate()?;
+        }
+        if let Some(lift) = self.wall_step {
+            ensure!(
+                lift.is_finite() && lift > 0.0,
+                "wall_step must be above zero"
+            );
         }
         if let Some(m) = &self.momentum {
             m.validate()?;
@@ -2611,6 +2623,7 @@ impl Player {
                 elasticity: torque::NORMAL_ELASTICITY,
                 back_off: torque::BACK_OFF * torque_ticks,
                 epsilon: torque::Epsilon::at(torque_ticks),
+                wall_step: t.wall_step,
             },
             feet,
             &mut velocity,
