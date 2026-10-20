@@ -60,6 +60,15 @@ impl Session {
         for mover in &movers {
             mover.def.validate()?;
         }
+        // A mover whose package says `bots_open` is a door a bot's route
+        // search goes through: the package's rules open it for the bot
+        // that comes to it.
+        for mover in &movers {
+            self.simulation.set_bot_passable(
+                mover.colliders.clone(),
+                mover.def.params.get("bots_open").is_some_and(|v| v == "1"),
+            );
+        }
         let count = movers.len();
         self.map_movers = MapMovers {
             movers,

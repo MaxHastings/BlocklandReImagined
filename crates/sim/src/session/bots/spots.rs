@@ -316,6 +316,7 @@ impl Session {
             waters: &waters,
             bodies: &[],
             motions: &[],
+            solid: &crate::nav::all_solid,
         };
         let at = match self.bots.navs.iter().position(|(b, _)| b == body) {
             Some(at) => at,
