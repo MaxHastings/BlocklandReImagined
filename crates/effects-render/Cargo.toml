@@ -1,0 +1,13 @@
+[package]
+name = "bri-effects-render"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.93"
+publish = false
+
+[dependencies]
+bri-render = { path = "../render" }
+bri-emitters = { path = "../emitters" }
+glam.workspace = true
+wgpu.workspace = true
+bri-content = { path = "../content" }
