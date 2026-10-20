@@ -171,9 +171,11 @@ TorqueScript functions they used map to [torque-equivalents.md](torque-equivalen
 
 ## Still being built
 
-This guide changes in the same change as these land. Everything a total
-conversion can and cannot change yet, area by area, is in
-[total-conversion.md](../audits/total-conversion.md).
+This guide changes in the same change as these land. What a new game can
+build on today, by goal, is in [ENGINE-CAPABILITIES.md](ENGINE-CAPABILITIES.md),
+and the status of each seam is in [seams.md](../architecture/seams.md).
+[total-conversion.md](../audits/total-conversion.md) is a dated audit
+(2026-09-29), not a current list.
 
 - **Hand-authored native brick files**: there is no step-by-step guide for
   writing the converted format directly. Blender/glTF brick import already

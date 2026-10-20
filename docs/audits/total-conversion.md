@@ -1,5 +1,14 @@
 # Total conversion audit
 
+> **Historical, from 2026-09-29.** This audit records what the engine had on
+> that date. Several seams it lists as missing or "next" have been built
+> since (recoil and view kick, movement controllers, chat and tool-bar HUD
+> claims, scripted cameras and input capture, music and ambient loops).
+> **For what exists now, read
+> [ENGINE-CAPABILITIES.md](../modding/ENGINE-CAPABILITIES.md); for the status
+> of each seam, [seams.md](../architecture/seams.md).** The text below is
+> kept unchanged as evidence.
+
 Date: 2026-09-29. Branch `claude/total-conversion-addons-jw91uo`, from main
 570ae86.
 

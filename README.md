@@ -92,9 +92,12 @@ and `bri-addon-run`; editing and checking native Add-Ons needs no Rust.
 Get samples from this repository (GitHub's **Code → Download ZIP** works).
 Building the engine or the tools from source needs Rust; importing some old
 maps also needs a v20 install for borrowed resources. The Commando sample shows a small total
-conversion built only from those hooks, and
-[total-conversion.md](docs/audits/total-conversion.md) records the implemented
-hooks and remaining seams.
+conversion built only from those hooks.
+[ENGINE-CAPABILITIES.md](docs/modding/ENGINE-CAPABILITIES.md) lists what the
+engine offers by what you want to build, and
+[seams.md](docs/architecture/seams.md) holds the status of every seam. The
+older [total-conversion.md](docs/audits/total-conversion.md) is a dated audit
+(2026-09-29), not a current list of gaps.
 
 ## Develop
 
