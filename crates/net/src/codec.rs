@@ -473,6 +473,7 @@ mod tests {
                 scale: f32::MAX,
                 energy: f32::MAX,
                 speed_scale: f32::MAX,
+                walking: true,
                 tick: bri_sim::player::TorqueTick {
                     feet: [f32::MAX; 3],
                     from: [f32::MAX; 3],

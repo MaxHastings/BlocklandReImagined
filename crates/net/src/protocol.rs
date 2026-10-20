@@ -672,6 +672,7 @@ impl RemotePose {
                 scale: self.scale.unwrap_or(1.0),
                 energy: bri_sim::player::PlayerTuning::default().max_energy,
                 speed_scale: 1.0,
+                walking: false,
                 tick: Default::default(),
                 tether: None,
                 controller: self

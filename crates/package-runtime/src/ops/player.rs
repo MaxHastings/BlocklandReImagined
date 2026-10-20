@@ -378,6 +378,21 @@ impl ScriptOp for SetSpeedScale {
     }
 }
 
+/// Whether a player is walking: a body with momentum accelerates by its `walking_share` while it is. Until changed or they
+/// respawn.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SetWalking {
+    pub player: u64,
+    pub walking: bool,
+}
+impl ScriptOp for SetWalking {
+    const CAPABILITY: &str = "player";
+    const NAME: &str = "set_walking";
+    fn bounded(&self) -> bool {
+        true
+    }
+}
+
 /// A named share of a player's speeds, for one Add-On system to own: the
 /// shares of every key (and of `set_speed_scale`, which is the key "") are
 /// multiplied, so a lock another system writes (0, as a posture change

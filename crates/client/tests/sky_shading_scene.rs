@@ -117,6 +117,7 @@ fn mixed_scene(avatar: AvatarFixture, car: VehicleFixture) -> Result<()> {
         scale: 1.,
         energy: 100.,
         speed_scale: 1.,
+        walking: false,
         tick: Default::default(),
         tether: None,
         controller: None,
