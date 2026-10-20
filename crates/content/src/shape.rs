@@ -115,6 +115,11 @@ pub struct Detail {
     /// For a collision detail: the query types it blocks ([`crate::blocks`]); None blocks every one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub blocks: Option<Vec<String>>,
+    /// For a collision detail: its triangles block from both faces. Left
+    /// out, only a face a move runs into blocks, as in v20 (a mesh wound
+    /// inward lets a body walk through it from outside).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub two_sided: bool,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Mesh {

@@ -2599,6 +2599,14 @@ impl Session {
                 kind.movement.clone(),
                 1.0,
             )?;
+            // A spot the body does not fit moves to the nearest that it does
+            // (a body with no `unstick` keeps it, as v20 does).
+            if let Some(spot) = peer.player.spot_near(&self.simulation.physics, feet)
+                && spot != feet
+            {
+                peer.player
+                    .teleport(&mut self.simulation.physics, spot, yaw)?;
+            }
             peer.player.refill_energy();
             peer.overlays = None;
             peer.combat.speed_rule = 1.0;
@@ -2686,6 +2694,13 @@ impl Session {
             peer.player
                 .teleport(&mut self.simulation.physics, at, yaw)?;
             feet = at;
+            if let Some(spot) = peer.player.spot_near(&self.simulation.physics, at)
+                && spot != at
+            {
+                peer.player
+                    .teleport(&mut self.simulation.physics, spot, yaw)?;
+                feet = spot;
+            }
         }
         let center = feet + Vec3::Y * self.peers[&owner].player.tuning().stand_height * 0.5;
         let _ = self

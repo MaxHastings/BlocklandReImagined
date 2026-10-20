@@ -183,6 +183,7 @@ impl<'a> Datablocks<'a> {
         let text = self.field(name, field)?;
         let mut e = Expression {
             blocks: self,
+            two_sided: false,
             text: text.as_bytes(),
             at: 0,
             depth,

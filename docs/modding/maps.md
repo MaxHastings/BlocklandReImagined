@@ -258,6 +258,10 @@ sight or pointer ray), `sweep` (a projectile or other trace with width) and
 `["ray", "shot"]`; an invisible wall that stops only players lists
 `["move", "sweep"]`. The meshes with the same list share one collider.
 
+A collision detail of a converted shape can set `two_sided`: its triangles then
+block from both faces. By default only a face a move runs into blocks, as in
+v20, so a mesh wound inward lets a body walk into it from outside.
+
 ## 2. Export
 
 **File > Export > glTF 2.0**, format **glTF Binary (.glb)**, and under

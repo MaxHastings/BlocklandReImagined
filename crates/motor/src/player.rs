@@ -869,7 +869,8 @@ impl Default for PlayerTuning {
 /// around it (each a thin slice of half the body's radius, `probe` of the
 /// radius away: at most two free ones count, and the body moves by the sum
 /// of their offsets, twice as far with just one), then the nearest free
-/// spot within `reach`, searched every `step` outward and upward. Other
+/// spot within `reach`, searched every `step` outward and upward. A body
+/// set down on a spawn it does not fit moves the same way ([`Player::spot_near`]). Other
 /// players never count: they move aside.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -1969,6 +1970,30 @@ impl Player {
         }
         // Tried again after another `seconds` when nothing nearby is free.
         self.embedded_for = 0.0;
+        self.search_free(physics, filter, unstick, feet)
+    }
+    /// The nearest spot to `feet` where the body fits, by the [`Unstick`]
+    /// search: straight up, the vote of four probes, then rings outward and
+    /// upward.
+    fn search_free(
+        &self,
+        physics: &PhysicsWorld,
+        filter: QueryFilter<'_>,
+        unstick: Unstick,
+        feet: Vec3,
+    ) -> Option<Vec3> {
+        let solid = |_: ColliderHandle, c: &Collider| c.user_data >> 64 != 1;
+        let query = physics.query_pipeline_with_filter(filter.predicate(&solid));
+        let free = |at: Vec3| {
+            query
+                .intersect_shape(
+                    self.tuning
+                        .pose(at + Vec3::Y * ROOM_LIFT, self.state.crouched),
+                    self.tuning.shape(self.state.crouched).as_ref(),
+                )
+                .next()
+                .is_none()
+        };
         let lifts = (unstick.reach / unstick.step).floor() as u32;
         let rise = |k: u32| feet + Vec3::Y * (k as f32 * unstick.step);
         if let Some(spot) = (1..=lifts).map(rise).find(|spot| free(*spot)) {
@@ -2018,6 +2043,34 @@ impl Player {
                 .total_cmp(&b.distance_squared(feet))
         });
         spots.into_iter().find(|spot| free(*spot))
+    }
+    /// Where a body set down at `feet` (a spawn) fits: `feet` itself when
+    /// it is clear, else the nearest free spot by the [`Unstick`] search; a
+    /// body with no `unstick` keeps `feet` whatever is there, as v20's
+    /// `spawnPlayer` does. None when nothing near is free.
+    pub fn spot_near(&self, physics: &PhysicsWorld, feet: Vec3) -> Option<Vec3> {
+        let Some(unstick) = self.tuning.unstick else {
+            return Some(feet);
+        };
+        let filter = QueryFilter::default()
+            .exclude_sensors()
+            .exclude_rigid_body(self.body)
+            .groups(moves_against(self.state.pass_group));
+        let solid = |_: ColliderHandle, c: &Collider| c.user_data >> 64 != 1;
+        let blocked = physics
+            .query_pipeline_with_filter(filter.predicate(&solid))
+            .intersect_shape(
+                self.tuning
+                    .pose(feet + Vec3::Y * ROOM_LIFT, self.state.crouched),
+                self.tuning.shape(self.state.crouched).as_ref(),
+            )
+            .next()
+            .is_some();
+        if blocked {
+            self.search_free(physics, filter, unstick, feet)
+        } else {
+            Some(feet)
+        }
     }
     fn torque_tick_among(
         &mut self,

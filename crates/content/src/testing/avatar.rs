@@ -681,6 +681,7 @@ pub fn rig() -> Rig {
             mesh_offset: 0,
             collision: false,
             blocks: None,
+            two_sided: false,
         }],
         objects,
         meshes,
