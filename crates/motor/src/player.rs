@@ -862,6 +862,26 @@ impl Default for PlayerTuning {
         }
     }
 }
+/// What overlaps a body set down on a spawn spot ([`Player::spot_near`]).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Blocker {
+    /// The collider's index in the physics world.
+    pub collider: u32,
+    /// Its `user_data` tag.
+    pub tag: u128,
+    /// The middle of its bounding box.
+    pub centre: Vec3,
+}
+/// Where [`Player::spot_near`] puts a body.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Placement {
+    /// The spot is free (or the body has no `unstick` and keeps it).
+    Clear(Vec3),
+    /// The spot overlaps `blocker`; the body fits at `to`.
+    Moved { to: Vec3, blocker: Blocker },
+    /// The spot overlaps `blocker` and nothing near is free.
+    Stuck { blocker: Blocker },
+}
 /// [`PlayerTuning::unstick`]: a body that stays inside solid geometry (a
 /// door or lift closed on it, a prop or a brick landed on it) is moved out
 /// after `seconds` (0: at once). Tried in order, each only if the body then
@@ -2047,17 +2067,17 @@ impl Player {
     /// Where a body set down at `feet` (a spawn) fits: `feet` itself when
     /// it is clear, else the nearest free spot by the [`Unstick`] search; a
     /// body with no `unstick` keeps `feet` whatever is there, as v20's
-    /// `spawnPlayer` does. None when nothing near is free.
-    pub fn spot_near(&self, physics: &PhysicsWorld, feet: Vec3) -> Option<Vec3> {
+    /// `spawnPlayer` does.
+    pub fn spot_near(&self, physics: &PhysicsWorld, feet: Vec3) -> Placement {
         let Some(unstick) = self.tuning.unstick else {
-            return Some(feet);
+            return Placement::Clear(feet);
         };
         let filter = QueryFilter::default()
             .exclude_sensors()
             .exclude_rigid_body(self.body)
             .groups(moves_against(self.state.pass_group));
         let solid = |_: ColliderHandle, c: &Collider| c.user_data >> 64 != 1;
-        let blocked = physics
+        let blocker = physics
             .query_pipeline_with_filter(filter.predicate(&solid))
             .intersect_shape(
                 self.tuning
@@ -2065,11 +2085,20 @@ impl Player {
                 self.tuning.shape(self.state.crouched).as_ref(),
             )
             .next()
-            .is_some();
-        if blocked {
-            self.search_free(physics, filter, unstick, feet)
-        } else {
-            Some(feet)
+            .map(|(handle, c)| {
+                let aabb = c.compute_aabb();
+                Blocker {
+                    collider: handle.into_raw_parts().0,
+                    tag: c.user_data,
+                    centre: Vec3::from_array((aabb.mins + aabb.maxs).to_array()) * 0.5,
+                }
+            });
+        let Some(blocker) = blocker else {
+            return Placement::Clear(feet);
+        };
+        match self.search_free(physics, filter, unstick, feet) {
+            Some(to) => Placement::Moved { to, blocker },
+            None => Placement::Stuck { blocker },
         }
     }
     fn torque_tick_among(

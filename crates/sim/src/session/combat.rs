@@ -10,6 +10,7 @@ use crate::player_types::PlayerType;
 use bri_minigames::{
     self as mg, DamageSource, Decision, EnvironmentDamage, GameId, LifeState, MinigamesWorld,
 };
+use bri_motor::player::{Blocker, Placement};
 use bri_weapons::{ActorId, CORE_TOOLS};
 
 /// Who may hurt whom, over only the state those rules read: players and
@@ -2602,13 +2603,13 @@ impl Session {
             // A spot the body does not fit moves to the nearest that it does
             // (a body with no `unstick` keeps it, as v20 does).
             match peer.player.spot_near(&self.simulation.physics, feet) {
-                Some(spot) if spot != feet => {
-                    report_relocation(owner, feet, Some(spot));
+                Placement::Moved { to, blocker } => {
+                    report_relocation(owner, feet, Some(to), blocker);
                     peer.player
-                        .teleport(&mut self.simulation.physics, spot, yaw)?;
+                        .teleport(&mut self.simulation.physics, to, yaw)?;
                 }
-                None => report_relocation(owner, feet, None),
-                _ => {}
+                Placement::Stuck { blocker } => report_relocation(owner, feet, None, blocker),
+                Placement::Clear(_) => {}
             }
             peer.player.refill_energy();
             peer.overlays = None;
@@ -2698,14 +2699,14 @@ impl Session {
                 .teleport(&mut self.simulation.physics, at, yaw)?;
             feet = at;
             match peer.player.spot_near(&self.simulation.physics, at) {
-                Some(spot) if spot != at => {
-                    report_relocation(owner, at, Some(spot));
+                Placement::Moved { to, blocker } => {
+                    report_relocation(owner, at, Some(to), blocker);
                     peer.player
-                        .teleport(&mut self.simulation.physics, spot, yaw)?;
-                    feet = spot;
+                        .teleport(&mut self.simulation.physics, to, yaw)?;
+                    feet = to;
                 }
-                None => report_relocation(owner, at, None),
-                _ => {}
+                Placement::Stuck { blocker } => report_relocation(owner, at, None, blocker),
+                Placement::Clear(_) => {}
             }
         }
         let center = feet + Vec3::Y * self.peers[&owner].player.tuning().stand_height * 0.5;
@@ -3173,6 +3174,22 @@ impl Session {
     }
 }
 
+/// A spawn spot the body did not fit, said where it is logged: the spot,
+/// what overlaps it and how far the body was moved, or that nothing near
+/// was free and it stays (a relocation is never silent).
+fn report_relocation(owner: OwnerId, spawn: Vec3, moved: Option<Vec3>, blocker: Blocker) {
+    let (at, c) = (spawn, blocker.centre);
+    let what = format!(
+        "player {owner}'s spawn spot ({:.2}, {:.2}, {:.2}) overlaps collider {} (tag {}, centred ({:.2}, {:.2}, {:.2}))",
+        at.x, at.y, at.z, blocker.collider, blocker.tag, c.x, c.y, c.z
+    );
+    let instead = match moved {
+        Some(spot) => format!("the nearest spot it fits, {:.2} away", spot.distance(spawn)),
+        None => "the spot as it is (nothing near is free)".to_owned(),
+    };
+    bri_console::fallback::report(bri_console::fallback::kind::OTHER, "", &what, &instead);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3338,22 +3355,4 @@ mod tests {
         assert!(s.minigame_views().is_empty());
         Ok(())
     }
-}
-
-/// A spawn spot the body did not fit, said where it is logged: the spot
-/// and how far the body was moved, or that nothing near was free and it
-/// stays (a relocation is never silent).
-fn report_relocation(owner: OwnerId, spawn: Vec3, moved: Option<Vec3>) {
-    let at = format!("({:.2}, {:.2}, {:.2})", spawn.x, spawn.y, spawn.z);
-    let (what, instead) = match moved {
-        Some(spot) => (
-            format!("player {owner}'s spawn spot {at} overlaps geometry"),
-            format!("the nearest spot it fits, {:.2} away", spot.distance(spawn)),
-        ),
-        None => (
-            format!("player {owner}'s spawn spot {at} overlaps geometry and nothing near is free"),
-            "the spot as it is".to_owned(),
-        ),
-    };
-    bri_console::fallback::report(bri_console::fallback::kind::OTHER, "", &what, &instead);
 }
