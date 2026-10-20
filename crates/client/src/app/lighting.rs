@@ -556,6 +556,9 @@ mod tests {
             backdrop: None,
             regions: None,
             decals: None,
+            receiver_index: std::sync::Arc::new(bri_render::decals::ReceiverIndex::build(
+                &SceneData::default(),
+            )),
             modern_lights: Some(Vec::new()),
             light_animations: Vec::new(),
             light_spots: Vec::new(),

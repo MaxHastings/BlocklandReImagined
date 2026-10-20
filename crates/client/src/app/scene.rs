@@ -10,6 +10,9 @@ pub(super) struct SceneState {
     pub(super) regions: Option<bri_content::regions::RegionMap>,
     /// The map's decals and the triangles they draw on.
     pub(super) decals: Option<bri_render::decals::LoadedDecals>,
+    pub(super) receiver_index: Option<Arc<bri_render::decals::ReceiverIndex>>,
+    /// Decals a game attaches while it runs (pictures and edits), applied before the next draw.
+    pub(crate) decal_feed: bri_render::decals::DecalFeed,
     pub(super) fog_blend: bri_content::regions::FogBlend,
     /// Game time of the last fog step.
     pub(super) fog_time: f64,

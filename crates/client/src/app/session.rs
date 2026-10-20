@@ -170,6 +170,8 @@ impl App {
         self.scene.backdrop = None;
         self.scene.regions = None;
         self.scene.decals = None;
+        self.scene.receiver_index = None;
+        self.scene.decal_feed = Default::default();
         self.gpu.decal_layer = None;
         self.scene.fog_blend = Default::default();
         self.gpu.gpu_backdrop = None;
@@ -623,6 +625,7 @@ impl App {
                         backdrop: visual.backdrop,
                         regions: visual.regions,
                         decals: visual.decals,
+                        receiver_index: visual.receiver_index,
                         light_volume,
                     },
                     identity,

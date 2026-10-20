@@ -1068,6 +1068,7 @@ impl App {
             self.scene.backdrop = prepared.backdrop;
             self.scene.regions = prepared.regions;
             self.scene.decals = prepared.decals;
+            self.scene.receiver_index = Some(prepared.receiver_index);
             self.scene.fog_blend = Default::default();
             self.scene.shape_indices = prepared.shape_indices;
             self.fx

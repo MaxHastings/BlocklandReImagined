@@ -983,6 +983,7 @@ fn decals_copy_their_pictures_and_list_the_set_in_the_bundle() {
             perspective: false,
             planes: [[0.0, 1.0, 0.0, 0.0]; 6],
             forward: [0.0, -1.0, 0.0],
+            bounds: None,
             blend: Blend::Alpha,
             wrap: [false, true],
             two_sided: false,

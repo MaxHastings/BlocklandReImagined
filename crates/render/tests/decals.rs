@@ -51,6 +51,7 @@ fn decal(limit: f32) -> Decal {
             [0.0, 1.0, 0.0, -20.0],
         ],
         forward: [0.0, -1.0, 0.0],
+        bounds: None,
         blend: Blend::Modulate2x,
         wrap: [false, false],
         two_sided: false,
@@ -106,4 +107,18 @@ fn a_quarter_turn_moves_the_picture_corner_about_its_centre() {
         "{corner}"
     );
     assert_eq!(spun(m, false, 0.0), m);
+}
+
+#[test]
+fn the_index_finds_what_a_full_read_finds() {
+    use bri_render::decals::{ReceiverIndex, gather_indexed};
+    let scene = scene();
+    let index = ReceiverIndex::build(&scene);
+    let mut d = decal(-0.0001);
+    d.bounds = Some([[-10.0, -1.0, -10.0], [10.0, 5.0, 10.0]]);
+    let indexed = gather_indexed(&scene, &index, &d);
+    assert_eq!(indexed.1.len(), gather(&scene, &d).1.len());
+    // A box away from both triangles reads none.
+    d.bounds = Some([[500.0, 0.0, 500.0], [510.0, 5.0, 510.0]]);
+    assert!(gather_indexed(&scene, &index, &d).1.is_empty());
 }

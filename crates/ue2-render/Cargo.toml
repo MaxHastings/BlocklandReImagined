@@ -1,0 +1,14 @@
+[package]
+name = "bri-ue2-render"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.93"
+publish = false
+
+[dependencies]
+bri-render = { path = "../render" }
+bri-ue2-emitters = { path = "../ue2-emitters" }
+glam.workspace = true
+wgpu.workspace = true
+bri-content = { path = "../content" }
+serde_json.workspace = true
