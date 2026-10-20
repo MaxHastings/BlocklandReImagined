@@ -462,14 +462,9 @@ fn each_body_plans_with_its_own_reach() {
         let mut widest = 0.0f32;
         let mut arrived = None;
         for second in 0..60 {
-            // The widest point is measured every quarter second: a path
-            // that rounds the wall's end between whole seconds is still
-            // seen to have gone round it.
-            for _ in 0..4 {
-                g.steps(30);
-                widest = widest.max(g.feet(bot).z.abs());
-            }
+            g.steps(120);
             let feet = g.feet(bot);
+            widest = widest.max(feet.z.abs());
             if flat(feet - post) < 2.5 {
                 arrived = Some(second);
                 break;
