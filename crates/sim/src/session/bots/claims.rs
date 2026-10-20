@@ -10,6 +10,8 @@ const MAX_AGE: u64 = 1800;
 /// Ticks a bot leaves alone what it gave up on: a claim, a vehicle.
 pub(super) const GIVE_UP_TICKS: u64 = 240;
 const PROGRESS: f32 = 0.25;
+/// Ticks a bot's hold on a place to work lasts unless renewed.
+const PLACE_LEASE: u64 = 360;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub(super) enum Resource {
@@ -133,6 +135,10 @@ pub(super) struct Claims {
     active: BTreeMap<OwnerId, Claim>,
     failures: super::cooldown::Cooldowns<(OwnerId, Resource), MAX_FAILURES>,
     intents: BTreeMap<OwnerId, Intent>,
+    /// The place each bot works or guards (an offer's key) and until when.
+    /// Apart from `active`: an offer's `claimants` is how many may share
+    /// it, and a game with many bots has more than `MAX_CLAIMS`.
+    places: BTreeMap<OwnerId, (u64, u64)>,
 }
 
 fn valid_distance(distance: f32) -> bool {
@@ -332,7 +338,35 @@ impl Claims {
 
     /// Preemption/success releases without punishing an otherwise useful task.
     pub(super) fn release_owner(&mut self, owner: OwnerId) -> Option<Claim> {
+        self.places.remove(&owner);
         self.active.remove(&owner)
+    }
+
+    /// Whether `claimants` bots other than `bot` already hold the place.
+    pub(super) fn place_full(&self, place: u64, claimants: u8, bot: OwnerId, tick: u64) -> bool {
+        self.places
+            .iter()
+            .filter(|(owner, (key, until))| **owner != bot && *key == place && tick < *until)
+            .count()
+            >= usize::from(claimants)
+    }
+
+    /// `bot` holds `place`, for a while longer.
+    pub(super) fn hold_place(&mut self, bot: OwnerId, place: u64, tick: u64) {
+        self.places
+            .insert(bot, (place, tick.saturating_add(PLACE_LEASE)));
+    }
+
+    /// The place `bot` holds, if it still does.
+    pub(super) fn held_place(&self, bot: OwnerId, tick: u64) -> Option<u64> {
+        self.places
+            .get(&bot)
+            .filter(|(_, until)| tick < *until)
+            .map(|(key, _)| *key)
+    }
+
+    pub(super) fn release_place(&mut self, bot: OwnerId) {
+        self.places.remove(&bot);
     }
 
     /// An occupied, removed or invalidated resource releases its claimant.

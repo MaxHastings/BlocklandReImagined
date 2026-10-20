@@ -808,6 +808,7 @@ impl AvatarAssets {
             instanced: false,
             screen_height: None,
             straddle: None,
+            light: None,
             instance: None,
             drawn_pose: None,
             vertices_dirty: true,
@@ -905,6 +906,9 @@ pub struct AvatarMesh {
     pub instanced: bool,
     /// The drawn body's transform, for `instanced` meshes.
     pub instance: Option<GpuInstances>,
+    /// The light a lit body ([`bri_render::scene::MaterialKind::ActorLit`]) takes where it stands, set each frame
+    /// ([`Self::render_box`]); none takes the scene's.
+    pub light: Option<bri_render::scene::ActorLight>,
     /// The opening an `instanced` body is part way through: it draws cut
     /// there, with the part through drawn at the partner.
     pub straddle: Option<crate::portal_view::Straddle>,
@@ -1666,6 +1670,28 @@ impl AvatarMesh {
         } else {
             Mat4::IDENTITY
         }
+    }
+    /// The box the body fills, which decides the zones it stands in: the standing body's width and height, or the box about the nodes
+    /// of one posed from outside.
+    pub fn render_box(&self) -> (Vec3, Vec3) {
+        let scale = self.model_transform.x_axis.truncate().length();
+        let feet = self.model_transform.w_axis.truncate();
+        if !self.posed_externally() {
+            let reach = Vec3::new(0.5, 0.0, 0.5) * scale;
+            return (feet - reach, feet + reach + Vec3::Y * (1.8 * scale));
+        }
+        let mut low = Vec3::splat(f32::MAX);
+        let mut high = Vec3::splat(f32::MIN);
+        for node in &self.posed_nodes {
+            let p = (self.model_transform * *node).w_axis.truncate();
+            low = low.min(p);
+            high = high.max(p);
+        }
+        if low.x > high.x {
+            return (feet, feet);
+        }
+        let pad = Vec3::splat(0.3 * scale);
+        (low - pad, high + pad)
     }
     pub fn bounding_sphere(&self) -> (Vec3, f32) {
         let scale = self.model_transform.x_axis.truncate().length();
@@ -2783,9 +2809,13 @@ impl AvatarMesh {
                         transform: s.carried(self.model_transform),
                         ..body
                     };
-                    instance.update_clipped(queue, &[body, through], &[s.near, s.far])?
+                    let lights: Vec<_> = self.light.into_iter().chain(self.light).collect();
+                    instance.update_lit(queue, &[body, through], &[s.near, s.far], &lights)?
                 }
-                None => instance.update(queue, &[body])?,
+                None => {
+                    let lights: Vec<_> = self.light.into_iter().collect();
+                    instance.update_lit(queue, &[body], &[], &lights)?
+                }
             };
         }
         Ok(())

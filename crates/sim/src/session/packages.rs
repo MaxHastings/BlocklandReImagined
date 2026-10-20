@@ -27,7 +27,7 @@ use bri_world::MAX_BRICKS;
 use std::sync::Arc;
 
 mod addon_events;
-mod bot_objectives;
+pub(in crate::session) mod bot_objectives;
 mod brick_events;
 mod brick_fields;
 mod brick_hooks;
@@ -434,6 +434,9 @@ const PACKAGE_REPLY_LINES: i64 = 64;
 /// Prints and sounds per package in a burst; refills every second. A print
 /// to everyone counts once.
 const PACKAGE_CUES: i64 = 64;
+/// Log lines and warnings per package in a burst (`log`, `warn`); refills
+/// every second.
+const PACKAGE_LOG_LINES: i64 = 64;
 /// Projectiles per package in a burst (`fire`); refills every second.
 const PACKAGE_SHOTS: i64 = 240;
 /// Environment changes per package in a burst (`set_environment`); refills
@@ -520,6 +523,8 @@ struct Shares {
     replies: Allowance<(String, PlayerKey)>,
     /// Prints and sounds, per package.
     cues: Allowance<String>,
+    /// Log lines and warnings, per package.
+    logs: Allowance<String>,
     /// Projectiles, per package.
     shots: Allowance<String>,
     /// Environment changes, per package.
@@ -535,6 +540,7 @@ impl Shares {
             chat: Allowance::new(PACKAGE_CHAT_BURST, PACKAGE_CHAT_LINES, SECOND),
             replies: Allowance::new(PACKAGE_REPLY_LINES, PACKAGE_REPLY_LINES, SECOND),
             cues: Allowance::new(PACKAGE_CUES, PACKAGE_CUES, SECOND),
+            logs: Allowance::new(PACKAGE_LOG_LINES, PACKAGE_LOG_LINES, SECOND),
             shots: Allowance::new(PACKAGE_SHOTS, PACKAGE_SHOTS, SECOND),
             environment: Allowance::new(
                 PACKAGE_ENVIRONMENT_CHANGES,
@@ -1857,6 +1863,18 @@ impl Session {
             "Dropped: more than {PACKAGE_CUES} prints and sounds a second"
         );
         host.shares.cues.spend(&origin, tick, 1);
+        Ok(())
+    }
+    /// One log line or warning from `package`, within its share.
+    fn take_log_line(&mut self, package: &str) -> Result<()> {
+        let tick = self.simulation.state().tick;
+        let host = self.packages.as_mut().context("No packages are enabled")?;
+        let origin = package.to_string();
+        ensure!(
+            host.shares.logs.available(&origin, tick) >= 1,
+            "Dropped: more than {PACKAGE_LOG_LINES} log lines a second"
+        );
+        host.shares.logs.spend(&origin, tick, 1);
         Ok(())
     }
     /// One chat line from `package` on behalf of `caller`, within their share.

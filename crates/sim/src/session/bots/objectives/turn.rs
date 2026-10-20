@@ -11,6 +11,7 @@ impl Session {
         if self.bots.brains[&bot].kind.weight("objective") <= 0.0 {
             return None;
         }
+        self.settle_places(bot, tick);
         let mut state = std::mem::take(&mut self.bots.brains.get_mut(&bot)?.objective);
         // Previous control ticks spent fighting, resting or ridden are not
         // evidence that approach failed. Waiting event due times remain real.
@@ -63,6 +64,13 @@ impl Session {
             {
                 step.deadline = tick.saturating_add(APPROACH_TIMEOUT);
             }
+            // At its place, a job has its own time and a guard post none.
+            if step.waiting.is_none()
+                && let Executor::Place(action) = &step.executor
+                && let Some(deadline) = action.deadline(tick)
+            {
+                step.deadline = deadline;
+            }
             // Getting closer to the step's point is progress too, whatever
             // provides the step: a long route keeps its deadline while it
             // advances, and only a stalled approach times out.
@@ -91,6 +99,7 @@ impl Session {
         {
             let diagnostic = match &state.desired.as_ref()?.completion {
                 Completion::PackageCounter(_) => "objective completed: declared package state",
+                Completion::Place(_) => "objective completed: declared place worked",
                 Completion::RoundWin { .. } if outcome => "objective completed: canonical winner",
                 Completion::RoundWin { .. } => "objective ended without requested winner",
                 Completion::ScoreRise { .. } if outcome => "objective completed: score rose",
@@ -190,6 +199,15 @@ impl Session {
                         .prune(tick, |d| desireds.iter().any(|offered| offered == d));
                     if state.desired.as_ref().is_some_and(|d| match &d.completion {
                         Completion::PackageCounter(stamp) => !stamp.validate(self, bot),
+                        // A guard post gives way to work offered since; work
+                        // stays while the Add-On still lets it be worked.
+                        Completion::Place(stamp) => {
+                            !stamp.validate(self, bot)
+                                || stamp.is_guard()
+                                    && desireds.iter().any(|d| {
+                                        matches!(&d.completion, Completion::Place(p) if !p.is_guard())
+                                    })
+                        }
                         Completion::RoundWin { .. } | Completion::ScoreRise { .. } => {
                             !desireds.iter().any(|offered| offered == d)
                         }
@@ -273,6 +291,11 @@ impl Session {
             };
             match result {
                 Ok(step) => {
+                    // The place is held from the moment it is chosen, so the
+                    // next bot to plan sees it taken.
+                    if let Executor::Place(action) = &step.executor {
+                        self.bots.claims.hold_place(bot, action.stamp.key(), tick);
+                    }
                     state.step = Some(step);
                     state.diagnostic = None;
                 }

@@ -60,6 +60,7 @@ mod looks;
 mod objectives;
 mod package_objectives;
 mod perception;
+mod work_objectives;
 pub use perception::BotNotice;
 pub(super) use perception::Stimulus;
 mod physical_objectives;
@@ -1743,6 +1744,7 @@ impl Session {
         self.bots.brains.get_mut(&bot).unwrap().pressed = input;
         let input = self.bot_seated_input(bot, input, wanted, behaviour, tick)?;
         self.movement(bot, sequence, input)?;
+        self.bot_opens_door(bot, tick);
         if let Some(line) = callout {
             self.team_say(bot, line, tick)?;
         }

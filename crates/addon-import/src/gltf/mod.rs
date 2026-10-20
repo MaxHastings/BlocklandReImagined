@@ -2539,6 +2539,17 @@ fn make_material(
         ensure!(chain.iter().all(|c| c.valid()), "Invalid material UV chain");
         chain
     };
+    // `bri_actor_lit`: true, or `{ "sun_gain": n, "light_gain": n }` (each 0 to 8, 1 by default).
+    let actor_lit = match &m["extras"]["bri_actor_lit"] {
+        serde_json::Value::Null | serde_json::Value::Bool(false) => None,
+        serde_json::Value::Bool(true) => Some(bri_content::shape::ActorLit::default()),
+        spec => {
+            let lit: bri_content::shape::ActorLit =
+                serde_json::from_value(spec.clone()).context("Material bri_actor_lit")?;
+            ensure!(lit.valid(), "Invalid material bri_actor_lit gains");
+            Some(lit)
+        }
+    };
     let mut png = Vec::new();
     image::DynamicImage::ImageRgba8(pixels)
         .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)?;
@@ -2567,6 +2578,7 @@ fn make_material(
             tint: None,
             layers: None,
             vertex_light: m["extras"]["bri_vertex_light"].as_bool().unwrap_or(false),
+            actor_lit,
         },
         png,
         maps,

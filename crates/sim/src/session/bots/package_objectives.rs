@@ -438,8 +438,15 @@ impl Session {
             ));
         }
         result.sort_by(|a, b| a.0.total_cmp(&b.0));
+        let mut desired: Vec<DesiredState> = result.into_iter().map(|(_, d)| d).collect();
+        desired.extend(self.place_desired_states(
+            bot,
+            discovered.works,
+            discovered.guards,
+            (game, round, team, spawn_tick, feet),
+        ));
         Ok(Discovery {
-            desired: result.into_iter().map(|(_, d)| d).collect(),
+            desired,
             unsupported: discovered.unsupported,
         })
     }

@@ -301,6 +301,10 @@ pub enum MaterialKind {
     /// The picture times twice the vertex colour (0.5 neutral), fogged, lit by nothing else: a mesh whose light was baked into its
     /// vertices. Slot 0 is the picture.
     VertexLight,
+    /// A moving body lit when it is drawn, per vertex: the scene's ambient plus the
+    /// sun and the best four lights that reach it (see `actor_light` in the shaders), times the picture and twice. `parameters[0].x` scales
+    /// the sun and `.y` the lights. Slot 0 is the picture.
+    ActorLit,
     /// A glow whose colour runs from `parameters[0].rgb` where the surface faces
     /// the eye to `parameters[1].rgb` where it turns edge on (brightness
     /// already multiplied in), patterned by the product of two scrolling noise
@@ -954,6 +958,7 @@ impl SceneData {
                     | MaterialKind::Metal
                     | MaterialKind::Physical
                     | MaterialKind::Plasma
+                    | MaterialKind::ActorLit
             );
             let decomposed =
                 material.kind == MaterialKind::Surface && decomposed_lightmap(material.parameters);
@@ -1042,8 +1047,55 @@ pub struct Camera {
     /// x: the run-time multiplier of every baked lightmap on a physical material (1: as the material's own strength gives it). The level's own factor
     /// is each material's `baked_lightmap` strength; a game raises this one for a view that brightens lightmaps (night vision doubles them again).
     pub lightmap: [f32; 4],
+    /// How many of `actor_suns` are set, in x.
+    pub actor_sun_count: [f32; 4],
+    /// The suns a lit moving body may take ([`ActorLight::suns`]): for sun `i`, entry `2i` is the direction its light travels and
+    /// `2i + 1` its colour ([`Camera::set_actor_suns`]).
+    pub actor_suns: [[f32; 4]; 2 * MAX_ACTOR_SUNS],
+}
+/// Most suns a lit moving body can be offered.
+pub const MAX_ACTOR_SUNS: usize = 64;
+/// Most of them one body can take.
+pub const MAX_BODY_SUNS: u8 = 8;
+/// One sun a lit moving body can take: the direction its light travels and its colour (brightness included).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ActorSun {
+    pub direction: [f32; 3],
+    pub color: [f32; 3],
+}
+/// The light one lit moving body ([`MaterialKind::ActorLit`]) takes in place of the scene's: an ambient colour and the run of the camera's
+/// [`ActorSun`]s that reach it (`sun_count` of them from `sun_first`, at most [`MAX_BODY_SUNS`]).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ActorLight {
+    pub ambient: [f32; 3],
+    pub sun_first: u8,
+    pub sun_count: u8,
+}
+impl ActorLight {
+    fn valid(&self) -> bool {
+        self.ambient
+            .iter()
+            .all(|v| v.is_finite() && (0.0..=MAX_TINT).contains(v))
+            && self.sun_count <= MAX_BODY_SUNS
+            && usize::from(self.sun_first) + usize::from(self.sun_count) <= MAX_ACTOR_SUNS
+    }
 }
 impl Camera {
+    /// Offer lit moving bodies these suns (at most [`MAX_ACTOR_SUNS`]; extra ones are ignored).
+    pub fn set_actor_suns(&mut self, suns: &[ActorSun]) {
+        self.actor_sun_count = [0.0; 4];
+        self.actor_suns = [[0.0; 4]; 2 * MAX_ACTOR_SUNS];
+        for (i, sun) in suns.iter().take(MAX_ACTOR_SUNS).enumerate() {
+            let d = sun.direction;
+            let c = sun.color;
+            if d.iter().chain(&c).any(|v| !v.is_finite()) {
+                continue;
+            }
+            self.actor_suns[2 * i] = [d[0], d[1], d[2], 0.0];
+            self.actor_suns[2 * i + 1] = [c[0], c[1], c[2], 0.0];
+            self.actor_sun_count[0] = (i + 1) as f32;
+        }
+    }
     /// Set the run-time lightmap multiplier ([`Camera::lightmap`]); a non-finite or negative value is 1.
     pub fn set_lightmap_scale(&mut self, scale: f32) {
         self.lightmap[0] = if scale.is_finite() && scale >= 0.0 {
@@ -1250,6 +1302,8 @@ impl Default for Camera {
             haze: bri_content::environment::Fog::default().haze_uniform(),
             enclosed: [0.0; 4],
             lightmap: [1.0, 0.0, 0.0, 0.0],
+            actor_sun_count: [0.0; 4],
+            actor_suns: [[0.0; 4]; 2 * MAX_ACTOR_SUNS],
             sky_bands: Default::default(),
         }
     }
@@ -1476,11 +1530,20 @@ impl SceneTransform {
         );
         Ok(())
     }
-    fn record(&self, clip: ClipPlane) -> InstanceRecord {
+    fn record(&self, clip: ClipPlane, light: Option<ActorLight>) -> InstanceRecord {
         InstanceRecord {
             transform: self.transform.to_cols_array_2d(),
             tint: self.tint,
             clip,
+            // w below zero: the scene's own light.
+            light: light.map_or([0.0, 0.0, 0.0, -1.0], |l| {
+                [
+                    l.ambient[0],
+                    l.ambient[1],
+                    l.ambient[2],
+                    f32::from(l.sun_first) + 256.0 * f32::from(l.sun_count),
+                ]
+            }),
         }
     }
 }
@@ -1496,6 +1559,8 @@ struct InstanceRecord {
     transform: [[f32; 4]; 4],
     tint: [f32; 4],
     clip: ClipPlane,
+    /// A lit moving body's own light: ambient rgb and its suns (first + 256 * count), or w -1 for the scene's.
+    light: [f32; 4],
 }
 
 /// One bounded persistent instance buffer per shared model group. Update at most
@@ -1505,6 +1570,8 @@ pub struct GpuInstances {
     transforms: Vec<SceneTransform>,
     /// Per instance, or empty when none is cut.
     clips: Vec<ClipPlane>,
+    /// Per instance, or empty when every instance takes the scene's light.
+    lights: Vec<ActorLight>,
     capacity: usize,
     /// Unique to these contents: a new value at creation and at every
     /// change, so a shadow layer can tell them apart without rereading them.
@@ -1530,6 +1597,7 @@ impl GpuInstances {
             }),
             transforms: Vec::new(),
             clips: Vec::new(),
+            lights: Vec::new(),
             capacity,
             revision: next_unique(),
         })
@@ -1556,6 +1624,25 @@ impl GpuInstances {
         transforms: &[SceneTransform],
         clips: &[ClipPlane],
     ) -> Result<bool> {
+        self.update_lit(queue, transforms, clips, &[])
+    }
+    /// [`Self::update_clipped`], with each instance of a lit moving body ([`MaterialKind::ActorLit`]) taking its own
+    /// light from `lights` (one per transform, or none for the scene's).
+    pub fn update_lit(
+        &mut self,
+        queue: &wgpu::Queue,
+        transforms: &[SceneTransform],
+        clips: &[ClipPlane],
+        lights: &[ActorLight],
+    ) -> Result<bool> {
+        ensure!(
+            lights.is_empty() || lights.len() == transforms.len(),
+            "One light per scene instance"
+        );
+        ensure!(
+            lights.iter().all(ActorLight::valid),
+            "Invalid scene instance light"
+        );
         ensure!(
             transforms.len() <= self.capacity,
             "Scene instance capacity exceeded"
@@ -1576,19 +1663,25 @@ impl GpuInstances {
         } else {
             clips
         };
-        if self.transforms == transforms && self.clips == clips {
+        if self.transforms == transforms && self.clips == clips && self.lights == lights {
             return Ok(false);
         }
         if !transforms.is_empty() {
             let records: Vec<_> = transforms
                 .iter()
                 .enumerate()
-                .map(|(i, t)| t.record(clips.get(i).copied().unwrap_or(KEEP_ALL)))
+                .map(|(i, t)| {
+                    t.record(
+                        clips.get(i).copied().unwrap_or(KEEP_ALL),
+                        lights.get(i).copied(),
+                    )
+                })
                 .collect();
             queue.write_buffer(&self.buffer, 0, bytemuck::cast_slice(&records));
         }
         self.transforms = transforms.to_vec();
         self.clips = clips.to_vec();
+        self.lights = lights.to_vec();
         self.revision = next_unique();
         Ok(true)
     }
@@ -2246,8 +2339,8 @@ impl TextureFiltering {
     }
 }
 const VERTEX_ATTRIBUTES: [wgpu::VertexAttribute; 6] = wgpu::vertex_attr_array![0=>Float32x3,1=>Float32x3,2=>Float32x2,3=>Float32x2,4=>Float32x4,10=>Float32x4];
-const INSTANCE_ATTRIBUTES: [wgpu::VertexAttribute; 6] = wgpu::vertex_attr_array![
-    5=>Float32x4,6=>Float32x4,7=>Float32x4,8=>Float32x4,9=>Float32x4,11=>Float32x4
+const INSTANCE_ATTRIBUTES: [wgpu::VertexAttribute; 7] = wgpu::vertex_attr_array![
+    5=>Float32x4,6=>Float32x4,7=>Float32x4,8=>Float32x4,9=>Float32x4,11=>Float32x4,12=>Float32x4
 ];
 /// Scene vertices plus per-instance model matrix, tint and clip plane.
 fn vertex_layouts() -> [Option<wgpu::VertexBufferLayout<'static>>; 2] {
@@ -3454,7 +3547,7 @@ impl SceneRenderer {
             dynamic_uv: Default::default(),
             identity_instance: device.buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: Some("identity scene instance"),
-                contents: bytemuck::bytes_of(&SceneTransform::default().record(KEEP_ALL)),
+                contents: bytemuck::bytes_of(&SceneTransform::default().record(KEEP_ALL, None)),
                 usage: wgpu::BufferUsages::VERTEX,
             }),
             light_buffer,
@@ -3779,6 +3872,7 @@ impl SceneRenderer {
                     MaterialKind::Plasma => 12.0,
                     MaterialKind::LayerBlend => 13.0,
                     MaterialKind::VertexLight => 14.0,
+                    MaterialKind::ActorLit => 15.0,
                 },
                 match material.alpha {
                     AlphaMode::Mask(c) => c,

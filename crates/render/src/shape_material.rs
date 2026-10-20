@@ -3,7 +3,7 @@
 //! avatars, debris) calls [`apply`], so a property honoured for one cannot be
 //! lost on another, and a blend nobody can honour is refused, never drawn opaque.
 use crate::scene::{AlphaMode, Material};
-use anyhow::{Result, bail};
+use anyhow::{Result, bail, ensure};
 use bri_content::shape::Material as ShapeMaterial;
 
 /// Sets `material`'s alpha mode, texture-alpha use and sidedness from `source`.
@@ -51,6 +51,20 @@ pub fn apply_with(
         bail!("Unsupported {subject} blend {blend}");
     }
     material.double_sided = source.double_sided;
+    if let Some(lit) = source.actor_lit {
+        ensure!(
+            lit.valid(),
+            "{subject}/{}: an actor-lit gain is out of bounds",
+            source.name
+        );
+        material.kind = crate::scene::MaterialKind::ActorLit;
+        material.parameters = Some([
+            [lit.sun_gain, lit.light_gain, 0.0, 0.0],
+            [0.0; 4],
+            [0.0; 4],
+            [0.0; 4],
+        ]);
+    }
     match source.alpha_cutoff {
         Some(_) if blend == "additive" || frame => {
             bail!(

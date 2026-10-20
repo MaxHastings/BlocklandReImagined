@@ -206,6 +206,39 @@ pub struct Material {
     /// light. A static mesh whose light was baked into its vertices (`bri_vertex_lights`).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub vertex_light: bool,
+    /// Lit when drawn, by the scene's ambient, sun and nearest lights: a moving body (a character) whose light cannot be baked
+    /// (`bri_actor_lit`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub actor_lit: Option<ActorLit>,
+}
+/// How a moving body takes the scene's light (`MaterialKind::ActorLit`): the sun and the lights each scaled by an authored gain.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ActorLit {
+    #[serde(default = "ActorLit::unit")]
+    pub sun_gain: f32,
+    #[serde(default = "ActorLit::unit")]
+    pub light_gain: f32,
+}
+impl ActorLit {
+    /// Largest gain an author may set.
+    pub const MAX_GAIN: f32 = 8.0;
+    fn unit() -> f32 {
+        1.0
+    }
+    pub fn valid(&self) -> bool {
+        [self.sun_gain, self.light_gain]
+            .iter()
+            .all(|g| g.is_finite() && (0.0..=Self::MAX_GAIN).contains(g))
+    }
+}
+impl Default for ActorLit {
+    fn default() -> Self {
+        Self {
+            sun_gain: 1.0,
+            light_gain: 1.0,
+        }
+    }
 }
 /// A material that is a weighted sum of up to four texture layers, as a terrain's are: the weight map's red, green, blue and
 /// alpha weight layers 0 to 3, read with the mesh's second UV set; each layer's own UVs go through its affine first.

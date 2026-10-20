@@ -456,6 +456,20 @@ impl Session {
                 }
             }
         }
+        for candidate in desireds {
+            if let Completion::Place(stamp) = &candidate.completion {
+                for grounded in self.append_place_actions(bot, stamp, &mut facts, budget)? {
+                    if failed.iter().any(|f| f.action_id == grounded.model.id) {
+                        continue;
+                    }
+                    if grounded_actions.len() >= ACTIONS {
+                        budget.truncated = true;
+                        break;
+                    }
+                    grounded_actions.push(grounded);
+                }
+            }
+        }
         // A retained goal may no longer be offered after its successful pickup.
         // Its validated owner binding remains the authoritative return journey.
         if !desireds.iter().any(|d| d == &desired)

@@ -94,6 +94,9 @@ wherever the map draws nothing (an opening cut into it). The eye does not move w
 distance fog (`bri_content::regions::RegionMap`: a plane tree, the region on each side of each plane, and per region a `fog`
 of `color` bytes, `start`, `end`, `blend_time` and `clear_to_fog`), written in the glTF's own frame and unit. The fog that
 applies is the one of the region the eye is in; entering a region blends over its `blend_time`.
+A region may also list `suns` (up to 8; 64 per map), each a `direction`, `color` and `position` in the same frame: a lit moving body
+(see "Lit moving bodies") takes its region's `ambient` and the suns of the region it stands in, the one standing nearest its centre
+first.
 
 **How sound carries.** A regions file can also say how the map's sounds reach the listener. Top level `sound` is
 `{ "zone_decay": 0..1, "blocked_reference": 0..1 }`; per region, `connects` lists the regions sound passes into from it (a
@@ -124,6 +127,12 @@ POSITIONs. A layer-blended surface is lit by its vertex colours alone, so the im
 **Vertex-lit surfaces.** A glTF material with the custom property `bri_vertex_light: true` is drawn as the picture times twice
 the mesh's vertex colour (0.5 is neutral), fogged, lit by nothing else, in every lighting setting: a mesh whose light was baked
 into its vertices. The importer keeps the mesh's `COLOR_0` for such materials.
+
+**Lit moving bodies.** A glTF material with the custom property `bri_actor_lit: true` (or `{ "sun_gain": 1.0, "light_gain": 1.0 }`,
+each 0 to 8) is drawn as a body lit when it is drawn, vertex by vertex: the scene's ambient plus the sun and the best four lights
+that reach the vertex, times the picture and twice. The gains scale the sun and the lights. For a character or any body that moves, whose light cannot be
+baked into its vertices; it works on a body, an item or a map's own models. Lighting is the scene's ambient, sun and lights, so a body
+in a dim room is dim; there are no visibility traces.
 
 **The original engine's lighting (`--lighting DIR`).** For a map the original engine lit (an asset lane's inputs: `*-instances.json`,
 `*-lights.json`, `*-instances.npz`, `*-vertex-map.npz`; `--regions` for each zone's ambient) the importer does not bake the light. The

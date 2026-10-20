@@ -27,7 +27,7 @@ const FAILED_GOALS: usize = 9;
 /// Ticks after an objective completes before it looks for the next one:
 /// the completing event's own effects (a flag put back) land first.
 const COMPLETION_SETTLE: u64 = 12;
-const APPROACH_TIMEOUT: u64 = 120 * 30;
+pub(super) const APPROACH_TIMEOUT: u64 = 120 * 30;
 /// Closer than this to the step's point since the best so far counts as
 /// approach progress, which extends the approach deadline.
 const APPROACH_PROGRESS: f32 = 0.5;
@@ -43,6 +43,8 @@ pub(super) struct DesiredState {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) enum Completion {
     PackageCounter(Box<super::package_objectives::Stamp>),
+    /// A package's `work` or `guard` offer (`work_objectives`).
+    Place(Box<super::work_objectives::PlaceStamp>),
     RoundWin {
         game: bri_minigames::GameId,
         round: u64,
@@ -88,6 +90,9 @@ impl DesiredState {
             Completion::PackageCounter(stamp) => stamp
                 .completion(session, stamp.actor)
                 .filter(|complete| *complete),
+            Completion::Place(stamp) => stamp
+                .completion(session, stamp.actor)
+                .filter(|complete| *complete),
             Completion::ScoreRise {
                 game,
                 round,
@@ -129,6 +134,7 @@ pub(super) enum Cause {
     Rule(CausalInput),
     Rules(Vec<CausalInput>),
     Package(super::package_objectives::Stamp),
+    Place(super::work_objectives::PlaceStamp),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -143,17 +149,21 @@ impl Cause {
         match self {
             Self::Rule(cause) => Some(std::slice::from_ref(cause)),
             Self::Rules(causes) => Some(causes),
-            Self::Package(_) => None,
+            Self::Package(_) | Self::Place(_) => None,
         }
     }
     fn source(&self) -> Option<BrickId> {
         match self {
             Self::Package(stamp) => stamp.source(),
+            Self::Place(_) => None,
             _ => self.rules()?.first().map(|c| c.source.brick),
         }
     }
     fn validate(&self, session: &Session, bot: OwnerId, full: bool) -> bool {
         if let Self::Package(stamp) = self {
+            return stamp.validate(session, bot);
+        }
+        if let Self::Place(stamp) = self {
             return stamp.validate(session, bot);
         }
         self.rules().is_some_and(|causes| {
@@ -293,6 +303,7 @@ pub(super) struct BrickAction {
 pub(super) enum Executor {
     Brick(BrickAction),
     Package(super::package_objectives::Action),
+    Place(super::work_objectives::Action),
     Physical(super::physical_objectives::Choice),
     Enemy(super::combat_objectives::Action),
 }
@@ -461,6 +472,7 @@ impl Step {
         let view = self.view(session, bot)?;
         let committed = match &self.executor {
             Executor::Package(action) => action.carrying(session, bot),
+            Executor::Place(action) => action.committed(session),
             _ => view
                 .held
                 .is_some_and(|held| session.held_by(bot) == Some(held)),
@@ -470,6 +482,10 @@ impl Step {
     fn progress(&self, session: &Session, bot: OwnerId, tick: u64) -> Option<Progress> {
         match &self.executor {
             Executor::Package(action) => match action.observe(session, bot) {
+                Progress::Pending => None,
+                progress => Some(progress),
+            },
+            Executor::Place(action) => match action.observe(session, bot) {
                 Progress::Pending => None,
                 progress => Some(progress),
             },
@@ -656,6 +672,8 @@ pub(super) struct State {
     /// In a game, round or team it has not had a planning turn for yet:
     /// it does not know yet what that game asks of it.
     unplanned: bool,
+    /// The held command it has pressed for a place and not let go of.
+    held: Option<super::work_objectives::Held>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -683,6 +701,15 @@ pub(super) fn next_turn(
     first
 }
 impl State {
+    pub(super) fn held(&self) -> Option<&super::work_objectives::Held> {
+        self.held.as_ref()
+    }
+    pub(super) fn hold(&mut self, held: super::work_objectives::Held) {
+        self.held = Some(held);
+    }
+    pub(super) fn let_go(&mut self) -> Option<super::work_objectives::Held> {
+        self.held.take()
+    }
     pub(super) fn source(&self) -> Option<BrickId> {
         self.step.as_ref().and_then(Step::source)
     }
@@ -885,6 +912,7 @@ impl Executor {
         match self {
             Self::Brick(action) => Some(View::locomotion(action.point, action.aim)),
             Self::Package(action) => action.view(_session, _bot),
+            Self::Place(action) => action.view(_session, _bot),
             Self::Enemy(action) => action.view(_session, _bot),
             Self::Physical(action) => action.directive(_session, _bot).ok().map(|d| View {
                 point: d.point,
@@ -915,6 +943,7 @@ impl Executor {
         let action = match self {
             Self::Brick(action) => action,
             Self::Package(action) => return action.validate(session, bot),
+            Self::Place(action) => return action.validate(session, bot),
             Self::Physical(action) => return action.directive(session, bot).is_ok(),
             Self::Enemy(action) => {
                 return action.admitted(session, bot).is_some() || action.validate(session, bot);
@@ -934,6 +963,7 @@ impl Executor {
         match self {
             Self::Brick(_) => "native brick input",
             Self::Package(_) => "declared package pickup/zone",
+            Self::Place(_) => "declared package place",
             Self::Enemy(_) => "native combat/death rules",
             Self::Physical(action) => match action.method {
                 super::physical_objectives::Method::Push => "native physical contact",
@@ -951,6 +981,10 @@ impl Executor {
                 return;
             }
             Self::Physical(action) => {
+                action.advance(session, bot);
+                return;
+            }
+            Self::Place(action) => {
                 action.advance(session, bot);
                 return;
             }
@@ -986,6 +1020,9 @@ impl Executor {
     }
 
     fn execute(&self, session: &mut Session, bot: OwnerId) -> Result<&'static str> {
+        if let Self::Place(action) = self {
+            return action.execute(session, bot);
+        }
         if let Self::Physical(action) = self {
             let phase = action.execute(session, bot)?;
             // Rearm still uses the selected method's ordinary controls. Keep
