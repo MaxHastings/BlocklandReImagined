@@ -384,6 +384,7 @@ pub fn with_addon_settings(
                 SettingPlace::Respawn => MiniGameSettingPlace::Respawn,
                 SettingPlace::Damage => MiniGameSettingPlace::Damage,
                 SettingPlace::Bricks => MiniGameSettingPlace::Bricks,
+                SettingPlace::Bots => MiniGameSettingPlace::Bots,
             }),
             unit: s.def.unit.clone(),
             shown_when: s.def.shown_when.as_ref().map(|w| {

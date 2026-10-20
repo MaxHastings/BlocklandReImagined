@@ -847,7 +847,8 @@ impl MiniGameWindow {
                 MiniGameSettingPlace::Basics
                 | MiniGameSettingPlace::Loadout
                 | MiniGameSettingPlace::Win
-                | MiniGameSettingPlace::Rounds,
+                | MiniGameSettingPlace::Rounds
+                | MiniGameSettingPlace::Bots,
             ) => "the Game page",
             Some(MiniGameSettingPlace::Teams) => "the Teams page",
             Some(
@@ -1584,6 +1585,15 @@ impl MiniGameWindow {
         self.setting_rows(&mut sec, &basics, true, editable, core);
         self.vanilla_checks(&mut sec, &["$MiniGame::InviteOnly"], editable);
         self.close(sec, y);
+
+        // Computer players sit beside the mode that decides their count,
+        // on the page a new game has (the Players page waits for a game).
+        let bots = self.placed(core, MiniGameSettingPlace::Bots);
+        if !bots.is_empty() {
+            let mut sec = self.open(y, "Bots", None);
+            self.setting_rows(&mut sec, &bots, true, editable, core);
+            self.close(sec, y);
+        }
 
         let mut sec = self.open(y, "Everyone Starts With", None);
         self.vanilla_pick(&mut sec, PLAYER_TYPE, "Player Type", editable);

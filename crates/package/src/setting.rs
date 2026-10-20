@@ -272,6 +272,8 @@ pub enum SettingPlace {
     Damage,
     /// Rules page, Bricks.
     Bricks,
+    /// Game page, Bots: how many computer players join.
+    Bots,
 }
 
 /// Longest [`SettingDef::unit`].
