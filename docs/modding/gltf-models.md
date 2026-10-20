@@ -178,12 +178,12 @@ body tilt (radians, up to 0.6) and how long a full lean takes. An optional
 while the view still rolls). v20's bodies have neither.
 
 **Momentum (optional).** `movement.momentum` makes the body keep its speed:
-`{ "acceleration": 81.92, "friction": 8, "stop_speed": 0.4, "air_control": 0.35, "crouched_share": 0.5 }`.
+`{ "acceleration": 81.92, "friction": 8, "stop_speed": 0.4, "air_control": 0.35, "crouched_share": 0.5, "walking_share": 0.5 }`.
 A held move adds `acceleration` a second on the floor and turns the velocity toward the
 move at `friction` a second; the move's own speed still caps it. Let go and the floor
 takes `2 x friction` of the speed each second until the body is under `stop_speed` (then it
 stops dead). In the air a held move adds `air_control` of the acceleration, and a body already
-at the move's speed cannot gain more, and a body whose way one step ahead is blocked cannot steer at all (above 0.05). `crouched_share` (default 1) scales the floor acceleration while crouched or lying. v20's bodies have none: they are steered straight
+at the move's speed cannot gain more, and a body whose way one step ahead is blocked cannot steer at all (above 0.05). `crouched_share` (default 1) scales the floor acceleration while crouched or lying, and `walking_share` (default 1) while the body's speed scale is under 1 (how an Add-On walks a body). v20's bodies have none: they are steered straight
 to the move's speed by `movement.acceleration`.
 
 **Distant detail (optional, off by default).** Classic-era models are light

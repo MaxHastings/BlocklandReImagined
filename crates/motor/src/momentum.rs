@@ -25,6 +25,9 @@ pub struct Momentum {
     /// The share of `acceleration` a held move adds while crouched or lying, 0 to 1 (1: the same as standing).
     #[serde(default = "Momentum::whole")]
     pub crouched_share: f32,
+    /// The same while the body's speed scale is under 1 (an Add-On walks a body by scaling its speed), 0 to 1.
+    #[serde(default = "Momentum::whole")]
+    pub walking_share: f32,
 }
 impl Momentum {
     fn whole() -> f32 {
@@ -39,7 +42,7 @@ impl Momentum {
             [self.acceleration, self.friction, self.stop_speed]
                 .iter()
                 .all(|n| n.is_finite() && (0.0..=1000.0).contains(n))
-                && [self.air_control, self.crouched_share]
+                && [self.air_control, self.crouched_share, self.walking_share]
                     .iter()
                     .all(|n| n.is_finite() && (0.0..=1.0).contains(n)),
             "Invalid momentum: acceleration, friction and stop speed 0 to 1000, air control 0 to 1"

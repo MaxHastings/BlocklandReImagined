@@ -2167,6 +2167,8 @@ impl Player {
                         dt,
                         if self.state.crouched {
                             momentum.crouched_share
+                        } else if self.state.speed_scale < 1.0 {
+                            momentum.walking_share
                         } else {
                             1.0
                         },
