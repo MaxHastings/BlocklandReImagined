@@ -106,7 +106,7 @@ mini-game its saver runs (its settings, Add-On settings, teams and these
 entries), and loading the build sets that up again in the game its loader
 runs, or a new one of theirs, under that game's id, then sends
 `on_minigame` a `loaded` event. Settings of Add-Ons the server does not
-run are left out. Your rules remove a game's entry when it ends.
+run are left out. A new mini-game always starts with the default for every such key, whatever `persist` says: an entry left under its id by an earlier run is cleared when the game is created (a loaded build then restores its own). `persist` covers `player` and other `global` state, which outlives mini-games. Your rules remove a game's entry when it ends.
 
 **Script functions:**
 

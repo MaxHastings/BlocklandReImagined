@@ -151,7 +151,7 @@ world's own bricks, so its brick damage reaches them.
 | `spawn_protection_seconds` | 2.5 | 0 to 60: how long a new body takes no harm; 0 turns it off |
 | `vehicle_return_seconds` | each vehicle's own | 0 to 3600: how long a brick-spawned vehicle may sit empty away from its brick before it goes back as a fresh one; 0 never |
 | `death_view_seconds` | 0 | 0 to 30: how long the dead keep the camera on their body, looking where it fell, before they can look around |
-| `hold_first_spawn` | `false` | a player who joins has no body until the rules release their spawn with `respawn(p)`; they wait as the dead do (a menu to pick a team or role first) |
+| `hold_first_spawn` | `false` | a player who joins has no body until the rules release their spawn with `respawn(p)`, or a game reset spawns every member; they wait as the dead do (a menu to pick a team or role first). `hold_respawn(p, false)` only lifts the click block and spawns nobody |
 | `keep_chosen_body` | `true` | a player who picked a body (a brick's ChangeDatablock, `/body`), before joining or in the game, respawns as it rather than as `player_type` or their team's body; `false` spawns everyone as the game says |
 
 Teams are not a mini-game setting (v20 had none): a rule keeps each
