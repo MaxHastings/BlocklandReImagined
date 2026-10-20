@@ -345,7 +345,7 @@ impl Session {
     /// Replace the chosen game's declared `per_minigame` entries. Absence
     /// clears an entry; a rejected value retains it with a diagnostic.
     /// Other games and ordinary state stay as they are.
-    fn restore_per_minigame(
+    pub(in crate::session) fn restore_per_minigame(
         &mut self,
         game: mg::GameId,
         packages: BTreeMap<String, BTreeMap<String, serde_json::Value>>,

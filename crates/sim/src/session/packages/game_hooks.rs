@@ -82,6 +82,12 @@ impl Session {
         {
             host.reports.forget_game(game.0);
         }
+        // A new mini-game starts with its Add-Ons' per-mini-game state at the defaults: an entry left under its id by an earlier
+        // run (a server closed while the game was live, restored with the saved state) is not its own. A build loaded into the
+        // game restores its entries after this.
+        if let mg::Effect::Created { game } = effect {
+            self.restore_per_minigame(*game, Default::default());
+        }
         let Some(host) = self.packages.as_ref() else {
             return;
         };
