@@ -502,6 +502,29 @@ pub(super) fn write(
             )),
         }
     }
+    // A material's `bri_material` is the identity a hit on a collider made of it reports back (a name the map's author gives it,
+    // 1 to 128 characters), so the game can find the material it struck.
+    let mut identities = serde_json::Map::new();
+    for (m, source) in shape.materials.iter().zip(&material_sources) {
+        let Some(identity) = source
+            .and_then(|i| doc.json["materials"].get(i))
+            .and_then(|g| g["extras"].get("bri_material"))
+        else {
+            continue;
+        };
+        match identity
+            .as_str()
+            .filter(|k| !k.is_empty() && k.len() <= 128 && !k.chars().any(char::is_control))
+        {
+            Some(identity) => {
+                identities.insert(m.name.clone(), identity.into());
+            }
+            None => report.warnings.push(format!(
+                "material `{}`'s bri_material must be 1 to 128 characters; left out",
+                m.name
+            )),
+        }
+    }
     let mut assets = json!({ model.clone(): model_file });
     for (asset, file) in &scattered.assets {
         assets[asset] = json!(file);
@@ -530,6 +553,7 @@ pub(super) fn write(
         "schema_version": 1,
         "maps": [{ "id": map_id, "name": name, "file": scene_file }],
         "surfaces": { map_id.clone(): surfaces },
+        "identities": { map_id.clone(): identities },
         "assets": assets,
         "textures": texture_files,
         "bindings": bindings,

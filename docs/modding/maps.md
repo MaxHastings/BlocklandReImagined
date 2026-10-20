@@ -225,6 +225,18 @@ Give a material the custom property `bri_surface` (a short word such as
 impacts look it up by the triangle that is hit. Put it on the `col_`
 meshes' materials when they are separate.
 
+Give a material the custom property `bri_material` (any name, 1 to 128 characters) and
+a hit on a `col_` mesh made of it reports that name back (`NativeMap::surfaces.identity`),
+so a game can find the material it struck, not only its `bri_surface` kind.
+
+A `col_` mesh blocks every kind of query unless its node says otherwise.
+Give the node the custom property `bri_blocks`, a list of the query types
+it blocks: `move` (a player or mover walking into it), `ray` (a line of
+sight or pointer ray), `sweep` (a projectile or other trace with width) and
+`shot` (a bullet). A glass pane that stops bullets but not bodies lists
+`["ray", "shot"]`; an invisible wall that stops only players lists
+`["move", "sweep"]`. The meshes with the same list share one collider.
+
 ## 2. Export
 
 **File > Export > glTF 2.0**, format **glTF Binary (.glb)**, and under

@@ -1396,6 +1396,7 @@ fn playback_of(d: Option<&DescValues>, is_music: bool) -> Playback {
         spatial: d.is_3d.then_some(Spatial {
             reference_distance: d.reference_distance,
             max_distance: d.max_distance,
+            falloff: Falloff::Linear,
         }),
         channel: d.channel,
         bus,

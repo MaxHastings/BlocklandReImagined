@@ -112,6 +112,9 @@ pub struct Detail {
     pub object_count: usize,
     pub mesh_offset: usize,
     pub collision: bool,
+    /// For a collision detail: the query types it blocks ([`crate::blocks`]); None blocks every one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub blocks: Option<Vec<String>>,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Mesh {

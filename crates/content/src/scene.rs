@@ -360,7 +360,6 @@ pub struct Teleporter {
 }
 /// Most climb volumes a scene may hold.
 pub const MAX_CLIMBS: usize = 256;
-
 impl Scene {
     /// Every static model with a `mover` property, read and checked:
     /// the node's index and its keyed motion ([`crate::mover`]).

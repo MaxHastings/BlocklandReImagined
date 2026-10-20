@@ -680,6 +680,7 @@ pub fn rig() -> Rig {
             object_count: objects.len(),
             mesh_offset: 0,
             collision: false,
+            blocks: None,
         }],
         objects,
         meshes,

@@ -167,11 +167,37 @@ impl SoundAsset {
     /// looping or not; the clip is shared, not copied.
     /// This sound as a looping ambient bed on the effects bus: at the ears,
     /// or placed in the world heard out to `range` units.
+    /// This sound as a looping source placed in the world: at full volume within `reference_distance`, fading by `falloff` out to
+    /// `max_distance`, played at `pitch`, on the effects bus. Long sounds stream; the clip is shared, not copied.
+    pub fn placed(
+        &self,
+        reference_distance: f32,
+        max_distance: f32,
+        pitch: f32,
+        falloff: crate::schema::Falloff,
+    ) -> Self {
+        let mut playback = self.playback.clone();
+        playback.spatial = Some(crate::schema::Spatial {
+            reference_distance: reference_distance.max(0.01),
+            max_distance: max_distance.max(reference_distance.max(0.01)),
+            falloff,
+        });
+        playback.bus = Bus::Effects;
+        playback.looping = true;
+        playback.pitch = pitch;
+        Self {
+            id: self.id.clone(),
+            name: self.name.clone(),
+            playback,
+            data: self.data.clone(),
+        }
+    }
     pub fn as_ambient(&self, range: Option<f32>) -> Self {
         let mut playback = self.playback.clone();
         playback.spatial = range.map(|range| crate::schema::Spatial {
             reference_distance: (range * 0.25).max(1.0),
             max_distance: range.max(1.0),
+            falloff: crate::schema::Falloff::Linear,
         });
         playback.bus = Bus::Effects;
         playback.looping = true;
@@ -207,6 +233,7 @@ impl SoundAsset {
                 spatial: Some(crate::schema::Spatial {
                     reference_distance,
                     max_distance,
+                    falloff: crate::schema::Falloff::Linear,
                 }),
                 channel: 2,
                 bus: crate::schema::Bus::Effects,

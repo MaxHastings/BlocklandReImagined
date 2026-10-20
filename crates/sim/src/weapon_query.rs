@@ -121,7 +121,11 @@ impl WeaponQuery<'_> {
             && self
                 .simulation
                 .physics
-                .query_pipeline_with_filter(QueryFilter::default().predicate(&predicate))
+                .query_pipeline_with_filter(
+                    QueryFilter::default()
+                        .groups(bri_physics::blocks::query_groups(bri_physics::blocks::RAY))
+                        .predicate(&predicate),
+                )
                 .cast_ray(&ray, reach, true)
                 .is_none()
             && self
@@ -271,7 +275,18 @@ impl Query for WeaponQuery<'_> {
         let physical = self
             .simulation
             .physics
-            .query_pipeline_with_filter(QueryFilter::default().predicate(&predicate))
+            .query_pipeline_with_filter(
+                QueryFilter::default()
+                    // A bullet meets what lists shots; a projectile in flight, what lists sweeps.
+                    .groups(bri_physics::blocks::query_groups(
+                        if filter.projectile_age_ticks.is_none() {
+                            bri_physics::blocks::SHOT
+                        } else {
+                            bri_physics::blocks::SWEEP
+                        },
+                    ))
+                    .predicate(&predicate),
+            )
             .cast_ray_and_get_normal(&ray, near, true)
             .and_then(|(handle, hit)| {
                 let target = target(self.simulation.physics.colliders[handle].user_data)?;
@@ -364,6 +379,9 @@ impl Query for WeaponQuery<'_> {
             .query_pipeline_with_filter(
                 QueryFilter::default()
                     .exclude_sensors()
+                    .groups(bri_physics::blocks::query_groups(
+                        bri_physics::blocks::SWEEP,
+                    ))
                     .predicate(&predicate),
             )
             .cast_shape(

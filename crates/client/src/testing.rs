@@ -498,6 +498,7 @@ pub mod audio {
                 spatial: spatial.map(|(reference_distance, max_distance)| Spatial {
                     reference_distance,
                     max_distance,
+                    falloff: bri_audio::schema::Falloff::Linear,
                 }),
                 channel,
                 bus,

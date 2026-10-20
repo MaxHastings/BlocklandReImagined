@@ -848,6 +848,8 @@ pub fn convert(
     // Meshes: one native object per node with a mesh.
     let mut visible: Vec<(Object, Mesh)> = Vec::new();
     let mut collision: Vec<(Object, Mesh)> = Vec::new();
+    // What each collision mesh blocks (`bri_blocks` on its node), parallel to `collision`; None blocks every query type.
+    let mut collision_blocks: Vec<Option<Vec<String>>> = Vec::new();
     let mut waters: Vec<WaterMesh> = Vec::new();
     let mut warned = BTreeSet::new();
     for (k, &n) in order.iter().enumerate() {
@@ -1199,8 +1201,17 @@ pub fn convert(
                     names[k]
                 );
             }
-            // Collision is never drawn, so it needs no texture.
-            let material = if is_collision || is_water {
+            // Collision is never drawn, so it needs no texture; it keeps its
+            // material only when that names what the surface is made of
+            // (`bri_surface`), which a hit on the collider looks up.
+            let names_surface = is_collision
+                && p["material"].as_u64().is_some_and(|m| {
+                    array(json, "materials").get(m as usize).is_some_and(|g| {
+                        g["extras"]["bri_surface"].is_string()
+                            || g["extras"]["bri_material"].is_string()
+                    })
+                });
+            let material = if is_water || (is_collision && !names_surface) {
                 None
             } else {
                 Some(material(
@@ -1298,6 +1309,35 @@ pub fn convert(
                     .map(|m| m as usize),
             });
         } else if is_collision {
+            collision_blocks.push(
+                match array(json, "nodes")
+                    .get(n)
+                    .map(|g| &g["extras"]["bri_blocks"])
+                    .filter(|v| !v.is_null())
+                {
+                    None => None,
+                    Some(list) => {
+                        let listed: Vec<String> = list
+                            .as_array()
+                            .map(|a| {
+                                a.iter()
+                                    .filter_map(|v| v.as_str().map(str::to_owned))
+                                    .collect()
+                            })
+                            .unwrap_or_default();
+                        if !list.is_array() || !bri_content::blocks::valid(&listed) {
+                            report.warnings.push(format!(
+                                "`{}`'s bri_blocks must list some of {}; it blocks every query",
+                                names[k],
+                                bri_content::blocks::ALL.join(", ")
+                            ));
+                            None
+                        } else {
+                            Some(listed)
+                        }
+                    }
+                },
+            );
             collision.push((object, mesh));
         } else {
             visible.push((object, mesh));
@@ -1307,24 +1347,42 @@ pub fn convert(
     if opts.kind == Kind::Map && collision.is_empty() {
         // A map with no `col_` meshes is solid where it is drawn.
         collision = visible.clone();
+        collision_blocks = vec![None; collision.len()];
     }
     let mut objects = Vec::new();
     let mut meshes = Vec::new();
     let mut details = Vec::new();
-    for (name, group, collision) in [
-        ("detail32", visible, false),
-        ("collision-1", collision, true),
-    ] {
+    // One collision detail per distinct mask, in order of first use (no mask first), so each becomes a collider of its own.
+    let mut masks: Vec<Option<Vec<String>>> = Vec::new();
+    for blocks in &collision_blocks {
+        if !masks.contains(blocks) {
+            masks.push(blocks.clone());
+        }
+    }
+    masks.sort_by_key(|m| m.is_some());
+    type Group = (String, Vec<(Object, Mesh)>, bool, Option<Vec<String>>);
+    let mut groups: Vec<Group> = vec![("detail32".into(), visible, false, None)];
+    for (i, mask) in masks.iter().enumerate() {
+        let group: Vec<(Object, Mesh)> = collision
+            .iter()
+            .zip(&collision_blocks)
+            .filter(|(_, b)| *b == mask)
+            .map(|(c, _)| c.clone())
+            .collect();
+        groups.push((format!("collision-{}", i + 1), group, true, mask.clone()));
+    }
+    for (name, group, collision, blocks) in groups {
         if group.is_empty() {
             continue;
         }
         details.push(Detail {
-            name: name.into(),
+            name,
             pixel_threshold: if collision { -1.0 } else { 32.0 },
             object_start: objects.len(),
             object_count: group.len(),
             mesh_offset: 0,
             collision,
+            blocks,
         });
         for (mut object, mesh) in group {
             object.meshes = vec![meshes.len()];
@@ -1642,6 +1700,7 @@ fn distant_detail(shape: &mut Shape, opts: &Options, report: &mut Report) -> Res
                 object_count: count,
                 mesh_offset: 0,
                 collision: false,
+                blocks: None,
             });
             details.push(Detail {
                 name: "detail0".into(),
@@ -1650,6 +1709,7 @@ fn distant_detail(shape: &mut Shape, opts: &Options, report: &mut Report) -> Res
                 object_count: count,
                 mesh_offset: 1,
                 collision: false,
+                blocks: None,
             });
         } else {
             details.push(Detail {

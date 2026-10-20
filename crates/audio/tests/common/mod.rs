@@ -66,6 +66,7 @@ fn sound(
             spatial: spatial.map(|(r, m)| Spatial {
                 reference_distance: r,
                 max_distance: m,
+                falloff: bri_audio::schema::Falloff::Linear,
             }),
             channel,
             bus,

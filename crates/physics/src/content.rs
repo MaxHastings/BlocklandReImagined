@@ -98,7 +98,11 @@ pub fn static_shape_collider_materials(
             .map(|i| [i * 3, i * 3 + 1, i * 3 + 2])
             .collect();
         colliders.push((
-            ColliderBuilder::trimesh_with_flags(points, indices, TriMeshFlags::FIX_INTERNAL_EDGES)?,
+            ColliderBuilder::trimesh_with_flags(points, indices, TriMeshFlags::FIX_INTERNAL_EDGES)?
+                // What the detail blocks ([`crate::blocks`]); a detail with no mask blocks every query.
+                .collision_groups(crate::blocks::collider_groups(
+                    shape.details[detail].blocks.as_deref(),
+                )),
             triangles.iter().map(|t| t.material).collect(),
         ));
     }
@@ -230,6 +234,7 @@ mod tests {
                     object_count: 1,
                     mesh_offset: 0,
                     collision: false,
+                    blocks: None,
                 },
                 Detail {
                     name: "collision".into(),
@@ -238,6 +243,7 @@ mod tests {
                     object_count: 1,
                     mesh_offset: 1,
                     collision: true,
+                    blocks: None,
                 },
             ],
             meshes: vec![Some(mesh(20.0, 0.0)), Some(mesh(0.2, 1.0))],

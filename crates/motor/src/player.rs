@@ -41,10 +41,11 @@ const TICK_PARTS: u8 = 96;
 /// through it (no player is blocked by a corpse, nor a corpse by another),
 /// while weapons, vehicles and grabs still find it.
 const CORPSE: Group = Group::GROUP_1;
-/// What a player body's motion collides with: everything but corpses.
+/// What a player body's motion collides with: everything but corpses, and map collision that does not list moves
+/// ([`bri_physics::blocks`]).
 const MOVES_AGAINST: InteractionGroups = InteractionGroups::new(
     Group::ALL,
-    Group::ALL.difference(CORPSE),
+    bri_physics::blocks::query_filter_bits(bri_physics::blocks::MOVE).difference(CORPSE),
     InteractionTestMode::And,
 );
 /// Highest pass group ([`PlayerState::pass_group`]).
@@ -73,7 +74,9 @@ pub fn moves_against(group: u8) -> InteractionGroups {
         let bit = pass_bit(group);
         InteractionGroups::new(
             bit,
-            Group::ALL.difference(CORPSE).difference(bit),
+            bri_physics::blocks::query_filter_bits(bri_physics::blocks::MOVE)
+                .difference(CORPSE)
+                .difference(bit),
             InteractionTestMode::And,
         )
     }

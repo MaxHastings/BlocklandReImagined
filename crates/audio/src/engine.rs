@@ -11,7 +11,7 @@ use crate::bank::{ClipData, SoundAsset};
 use crate::command::{AudioEvent, Command, CullReason, EntityKey, Placement, SoundHandle};
 use crate::decode::StreamDecoder;
 use crate::schema::Bus;
-use crate::spatial::{GainCurve, Listener, Vec3, finite3, pan_gains, torque_attenuation};
+use crate::spatial::{GainCurve, Listener, Vec3, attenuation, finite3, pan_gains};
 
 const SQRT_HALF: f32 = std::f32::consts::FRAC_1_SQRT_2;
 
@@ -359,10 +359,7 @@ impl Engine {
         let (att, pan) = match (pb.spatial, position) {
             (Some(sp), Some(pos)) => {
                 let (ear, d) = crate::spatial::heard(&self.listener, &self.windows, pos);
-                (
-                    torque_attenuation(d, sp.reference_distance, sp.max_distance),
-                    pan_gains(ear, pos),
-                )
+                (attenuation(&sp, d), pan_gains(ear, pos))
             }
             _ => (1.0, (SQRT_HALF, SQRT_HALF)),
         };
