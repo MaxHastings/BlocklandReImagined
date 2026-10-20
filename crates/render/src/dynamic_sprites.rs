@@ -65,6 +65,10 @@ pub enum Combine {
     Texture,
     /// The vertex alone.
     Vertex,
+    /// texel x a + vertex x (1 - a), a being the vertex colour's own alpha
+    /// (when a constant replaces the vertex colour, the constant is what
+    /// the texel fades toward).
+    BlendByVertexAlpha,
 }
 impl Combine {
     fn code(self) -> f32 {
@@ -74,6 +78,7 @@ impl Combine {
             Combine::Modulate4X => 2.0,
             Combine::Texture => 3.0,
             Combine::Vertex => 4.0,
+            Combine::BlendByVertexAlpha => 5.0,
         }
     }
 }
@@ -100,6 +105,24 @@ pub struct Fog {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct ImageId(pub usize);
 
+/// How a batch's indices join into primitives.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum Topology {
+    /// Three indices per triangle.
+    #[default]
+    Triangles,
+    /// Two indices per independent line segment.
+    Lines,
+}
+impl Topology {
+    fn wgpu(self) -> wgpu::PrimitiveTopology {
+        match self {
+            Topology::Triangles => wgpu::PrimitiveTopology::TriangleList,
+            Topology::Lines => wgpu::PrimitiveTopology::LineList,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct State {
     pub image: ImageId,
@@ -118,6 +141,7 @@ pub struct State {
     pub clamp_v: bool,
     pub two_sided: bool,
     pub fog: Option<Fog>,
+    pub topology: Topology,
 }
 impl State {
     pub fn new(image: ImageId) -> Self {
@@ -135,6 +159,7 @@ impl State {
             clamp_v: false,
             two_sided: true,
             fog: None,
+            topology: Topology::Triangles,
         }
     }
 }
@@ -168,6 +193,7 @@ struct PipelineKey {
     depth_test: bool,
     depth_write: bool,
     two_sided: bool,
+    topology: Topology,
 }
 
 struct Image {
@@ -395,6 +421,7 @@ impl DynamicSprites {
                 })],
             },
             primitive: wgpu::PrimitiveState {
+                topology: key.topology.wgpu(),
                 cull_mode: if key.two_sided {
                     None
                 } else {
@@ -488,6 +515,7 @@ impl DynamicSprites {
                 depth_test: state.depth_test,
                 depth_write: state.depth_write,
                 two_sided: state.two_sided,
+                topology: state.topology,
             };
             self.pipeline(device, &key);
             let fog = state.fog;

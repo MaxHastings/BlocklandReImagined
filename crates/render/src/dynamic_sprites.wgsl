@@ -24,12 +24,13 @@ fn vs_main(@location(0) position:vec3<f32>,@location(1) color:vec4<f32>,@locatio
     out.depth=out.position.w;
     return out;
 }
-fn combine(code:f32,texel:vec4<f32>,vertex:vec4<f32>)->vec4<f32> {
+fn combine(code:f32,texel:vec4<f32>,vertex:vec4<f32>,share:f32)->vec4<f32> {
     if code<0.5 { return texel*vertex; }
     if code<1.5 { return texel*vertex*2.0; }
     if code<2.5 { return texel*vertex*4.0; }
     if code<3.5 { return texel; }
-    return vertex;
+    if code<4.5 { return vertex; }
+    return texel*share+vertex*(1.0-share);
 }
 @fragment
 fn fs_main(in:VertexOut)->@location(0) vec4<f32> {
@@ -43,8 +44,8 @@ fn fs_main(in:VertexOut)->@location(0) vec4<f32> {
         texel=mix(other,texel,clamp(in.color.a,0.0,1.0));
         vertex=vec4<f32>(vertex.rgb,1.0);
     }
-    var rgb=combine(batch.modes.x,texel,vertex).rgb;
-    let alpha=combine(batch.modes.y,texel,vertex).a;
+    var rgb=combine(batch.modes.x,texel,vertex,in.color.a).rgb;
+    let alpha=combine(batch.modes.y,texel,vertex,in.color.a).a;
     if batch.modes.w>=0.0 && alpha<batch.modes.w { discard; }
     if batch.fog.w>0.5 {
         let share=clamp((batch.fog.z-in.depth)/max(batch.fog.z-batch.fog.y,0.0001),0.0,1.0);

@@ -31,6 +31,11 @@ fn quad(z: f32, color: [f32; 4]) -> (Vec<SpriteVertex>, Vec<u32>) {
 
 /// Draw the quads (each: z, vertex colour, state builder) in order; the centre pixel.
 fn centre(texel: [u8; 4], quads: &[Quad]) -> Result<[u8; 3]> {
+    pixel(texel, quads, 16, 16)
+}
+
+/// The same, reading the pixel at column `x`, row `y`.
+fn pixel(texel: [u8; 4], quads: &[Quad], x: usize, y: usize) -> Result<[u8; 3]> {
     let (device, queue) = common::gpu()?;
     let format = wgpu::TextureFormat::Rgba8Unorm;
     let target = common::color_target(&device, format, 32, 32);
@@ -130,7 +135,7 @@ fn centre(texel: [u8; 4], quads: &[Quad]) -> Result<[u8; 3]> {
     buffer.slice(..).map_async(wgpu::MapMode::Read, |_| {});
     device.poll(wgpu::PollType::wait_indefinitely())?;
     let data = buffer.slice(..).get_mapped_range()?;
-    let at = 16 * 256 + 16 * 4;
+    let at = y * 256 + x * 4;
     Ok([data[at], data[at + 1], data[at + 2]])
 }
 
@@ -199,6 +204,16 @@ fn texel_vertex_blend_alpha_test_and_fog_combine_like_a_fixed_function_pipeline(
         )?,
         [0, 0, 255],
     );
+    // Blend by the vertex alpha toward the vertex colour: red texel, vertex (0,1,0) alpha 0.5.
+    near(
+        centre(
+            [255, 0, 0, 255],
+            &[(-5., [0., 1., 0., 0.5], |s| {
+                s.color = Combine::BlendByVertexAlpha;
+            })],
+        )?,
+        [128, 128, 0],
+    );
     // A constant colour replaces the vertex colour.
     near(
         centre(
@@ -253,6 +268,28 @@ fn texel_vertex_blend_alpha_test_and_fog_combine_like_a_fixed_function_pipeline(
             ],
         )?,
         [0, 0, 0],
+    );
+    Ok(())
+}
+
+#[test]
+fn line_batches_draw_the_indices_as_segments() -> Result<()> {
+    // The quad's indices (0,1) (2,0) (2,3) read as a line list: the 2-0 segment is the
+    // diagonal through the middle of the screen, and the quad is not filled.
+    let white = [1., 1., 1., 1.];
+    let lines: Edit = |s| s.topology = Topology::Lines;
+    near(
+        pixel([255, 0, 0, 255], &[(-5., white, lines)], 16, 15)?,
+        [255, 0, 0],
+    );
+    near(
+        pixel([255, 0, 0, 255], &[(-5., white, lines)], 16, 19)?,
+        BACKDROP,
+    );
+    // As triangles the same indices fill that pixel.
+    near(
+        pixel([255, 0, 0, 255], &[(-5., white, |_| {})], 16, 19)?,
+        [255, 0, 0],
     );
     Ok(())
 }
