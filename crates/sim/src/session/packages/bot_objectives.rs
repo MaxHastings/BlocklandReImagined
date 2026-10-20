@@ -2,7 +2,7 @@
 //! script outcome or performs its operations; ordinary pickup/zone hooks write.
 use super::*;
 use bri_package_runtime::bot_objectives::{
-    self as description, CarryReturn, CounterBinding, CounterScope,
+    self as description, CarryReturn, CounterBinding, CounterScope, Guard, Work,
 };
 
 #[derive(Clone, Debug)]
@@ -13,9 +13,27 @@ pub(in crate::session) struct Offer {
     pub baseline: i64,
 }
 
+/// A place to work (hold a rules command), with its completion counter
+/// as the bot found it.
+#[derive(Clone, Debug)]
+pub(in crate::session) struct WorkOffer {
+    pub package: String,
+    pub goal: Work,
+    pub baseline: i64,
+}
+
+/// A place to stand and fight from.
+#[derive(Clone, Debug)]
+pub(in crate::session) struct GuardOffer {
+    pub package: String,
+    pub goal: Guard,
+}
+
 #[derive(Default)]
 pub(in crate::session) struct Discovery {
     pub offers: Vec<Offer>,
+    pub works: Vec<WorkOffer>,
+    pub guards: Vec<GuardOffer>,
     pub unsupported: bool,
     pub budget_exhausted: bool,
 }
@@ -101,7 +119,8 @@ impl Session {
                     continue;
                 }
             };
-            if found.offers.len() + descriptors.len() > description::MAX_OBJECTIVES {
+            let offered = found.offers.len() + found.works.len() + found.guards.len();
+            if offered + descriptors.len() > description::MAX_OBJECTIVES {
                 found.budget_exhausted = true;
                 continue;
             }
@@ -112,7 +131,33 @@ impl Session {
                     found.budget_exhausted = true;
                     break;
                 }
-                let description::DesiredState::CarryReturn(goal) = described;
+                let goal = match described {
+                    description::DesiredState::CarryReturn(goal) => goal,
+                    description::DesiredState::Work(goal) => {
+                        match self.admit_work(bot, &package, &goal) {
+                            Ok(baseline) => found.works.push(WorkOffer {
+                                package: package.clone(),
+                                goal,
+                                baseline,
+                            }),
+                            Err(reason) => {
+                                self.package_objective_note(
+                                    &package,
+                                    &format!("{} admission: {reason}", goal.id),
+                                );
+                                found.unsupported = true;
+                            }
+                        }
+                        continue;
+                    }
+                    description::DesiredState::Guard(goal) => {
+                        found.guards.push(GuardOffer {
+                            package: package.clone(),
+                            goal,
+                        });
+                        continue;
+                    }
+                };
                 let admitted = self.package_objective_binding_declared(&package, &goal.epoch)
                     && self.package_objective_binding_declared(&package, &goal.completion)
                     && self.packages.as_ref().is_some_and(|h| {
@@ -152,6 +197,54 @@ impl Session {
             }
         }
         found
+    }
+
+    /// Whether a `work` offer rests on what its Add-On declared: its
+    /// counters, and a command it (or a dependency) declares that a bot may
+    /// send as a player's key would. The completion counter's value now.
+    fn admit_work(&self, bot: OwnerId, package: &str, goal: &Work) -> Result<i64, String> {
+        if !self.package_objective_binding_declared(package, &goal.completion) {
+            return Err("completion is not declared state".into());
+        }
+        if let Some(open) = &goal.open
+            && !self.package_objective_binding_declared(package, open)
+        {
+            return Err("open is not declared state".into());
+        }
+        let host = self.packages.as_ref().ok_or("no Add-Ons")?;
+        let owner = goal.command.package.as_deref().unwrap_or(package);
+        if !host.catalog.uses(package, owner) {
+            return Err(format!("{owner} is not a dependency"));
+        }
+        let command = host
+            .catalog
+            .packages
+            .get(owner)
+            .and_then(|p| p.behaviour.as_ref())
+            .and_then(|b| {
+                b.commands
+                    .iter()
+                    .find(|c| c.name.eq_ignore_ascii_case(&goal.command.name))
+            })
+            .ok_or_else(|| format!("{owner} declares no command {}", goal.command.name))?;
+        if command.admin || command.tool_only {
+            return Err("the command is not one a player's key may send".into());
+        }
+        let shape: &[bri_package_runtime::content::ArgType] = if goal.command.hold {
+            &[bri_package_runtime::content::ArgType::Bool]
+        } else {
+            &[]
+        };
+        if command.args != shape {
+            return Err(if goal.command.hold {
+                "a held command takes one bool".into()
+            } else {
+                "a command sent once takes no arguments".into()
+            });
+        }
+        let _ = bot;
+        self.package_objective_counter(bot, package, &goal.completion, false)
+            .ok_or_else(|| "completion counter is unavailable".into())
     }
 
     fn package_objective_note(&mut self, package: &str, reason: &str) {
@@ -199,6 +292,20 @@ impl Session {
         } else {
             binding.read(ns, &player)
         }
+    }
+
+    /// Whether a declared on/off state is on now (`None` when unavailable).
+    pub(in crate::session) fn package_objective_truthy(
+        &self,
+        bot: OwnerId,
+        package: &str,
+        binding: &CounterBinding,
+    ) -> Option<bool> {
+        if !self.package_objective_binding_declared(package, binding) {
+            return None;
+        }
+        let ns = self.packages.as_ref()?.store.namespace(package)?;
+        binding.read_truthy(ns, &self.player_key(bot))
     }
 
     pub(in crate::session) fn package_objective_carriage(

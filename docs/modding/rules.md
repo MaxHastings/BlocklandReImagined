@@ -883,7 +883,7 @@ body), `progress` (0 to 1), `keys`, `position`, `rest`, and `params`, the
 package's own facts about it (`movers()` leaves `params` out; `mover(id)` has
 them). `mover_goto` does not redirect a mover that is already on its way to
 another key; stop it or let it finish. Needs the `movers` capability.
-A mover whose `params` hold `bots_open` set to `"1"` is a door bots go through: the bots' route search treats it as open, a bot that reaches it shut stops against it, and your rules open it for that bot (the same function a player's Use key runs) once `movers_near(bot, reach)` finds it.
+A mover whose `params` hold `bots_open` is a door bots go through: the bots' route search treats it as open. Set `bots_open` to `"your-id:command"` and a bot that reaches the door shut sends that rules command (no arguments, as a player's Use key sends it, from within a hair of the door) and again every two seconds while the door stays shut; your command opens the door for the caller (the same function a player's Use key runs, `movers_near(caller(), reach)`). Set it to `"1"` instead and the host sends nothing: your rules must notice the bot (`movers_near(bot, reach)`) and open the door themselves.
 
 #### Ambient sound
 
