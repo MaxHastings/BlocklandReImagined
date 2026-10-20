@@ -193,6 +193,10 @@ stops dead). In the air a held move adds `air_control` of the acceleration, and 
 at the move's speed cannot gain more, and a body whose way one step ahead is blocked cannot steer at all (above 0.05). `crouched_share` (default 1) scales only the floor acceleration (never the speed cap, which is the move's own speed, so a crouch speed is set in `crouch_forward` and the others, not here) while crouched or lying, and `walking_share` (default 1) while the body is walking (rules call `set_walking`). v20's bodies have none: they are steered straight
 to the move's speed by `movement.acceleration`.
 
+**Walking down stairs (optional).** `movement.follow_floor: true` keeps a walking body on the floor when it falls away under it
+by no more than `step_height` (down a stair, along a slope): it is lowered onto the floor below at once instead of dropping step by
+step, so it keeps its speed and its grip. A jump or a rise still leaves the floor. v20's bodies fall off every edge.
+
 **Distant detail (optional, off by default).** Classic-era models are light
 enough to skip this. For a heavy model, `--lod TRIANGLES` adds a lighter
 copy with that many triangles that the body draws when it is small on

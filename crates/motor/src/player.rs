@@ -746,6 +746,10 @@ pub struct PlayerTuning {
     pub up_resist_speed: f32,
     pub up_resist_factor: f32,
     pub step_height: f32,
+    /// A body standing on a floor stays on it down steps and slopes: when the ground falls away under a walking (not jumping)
+    /// body by no more than its `step_height`, it is lowered to the floor below instead of falling. False for v20's bodies, which
+    /// fall off every edge.
+    pub follow_floor: bool,
     pub slope_degrees: f32,
     pub jump_surface_degrees: f32,
     /// `jumpDelay`, in 120 Hz ticks.
@@ -838,6 +842,7 @@ impl Default for PlayerTuning {
             up_resist_speed: 25.0,
             up_resist_factor: 0.3,
             step_height: 1.0,
+            follow_floor: false,
             slope_degrees: 70.0,
             jump_surface_degrees: 80.0,
             jump_delay_ticks: JUMP_DELAY_TICKS,
@@ -2598,6 +2603,31 @@ impl Player {
             && end_contact
                 .normal
                 .is_some_and(|n| velocity.dot(n) > -LANDING_SPEED);
+        // Down a stair or a slope: the floor that fell away under a walking body within a step's height is walked down onto, so
+        // the body keeps its grip and its speed instead of falling the stair a step at a time.
+        if t.follow_floor
+            && was_grounded
+            && !self.state.grounded
+            && !jumped
+            && velocity.y <= 0.0
+            && !self.state.posture.climbing
+            && let Some((_, hit)) = physics.query_pipeline_with_filter(filter).cast_shape(
+                &t.pose(Vec3::from(self.state.feet), self.state.crouched),
+                Vector::new(0.0, -1.0, 0.0),
+                t.shape(self.state.crouched).as_ref(),
+                ShapeCastOptions {
+                    max_time_of_impact: step_reach,
+                    ..Default::default()
+                },
+            )
+            && hit.time_of_impact > 0.0
+            && hit.normal1.y >= run_cos
+        {
+            self.state.feet[1] -= hit.time_of_impact;
+            self.state.velocity[1] = 0.0;
+            self.state.grounded = true;
+            self.state.jump.since_contact = 0;
+        }
         // Animation provenance belongs to the simulation: presentation can
         // skip all the jetting ticks, and pose datagrams can lose them too.
         // A real jump after release starts new motion, even if no rendered
