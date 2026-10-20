@@ -301,6 +301,10 @@ pub enum MaterialKind {
     /// The picture times twice the vertex colour (0.5 neutral), fogged, lit by nothing else: a mesh whose light was baked into its
     /// vertices. Slot 0 is the picture.
     VertexLight,
+    /// A moving body lit when it is drawn, per vertex: the scene's ambient plus the
+    /// sun and the best four lights that reach it (see `actor_light` in the shaders), times the picture and twice. `parameters[0].x` scales
+    /// the sun and `.y` the lights. Slot 0 is the picture.
+    ActorLit,
     /// A glow whose colour runs from `parameters[0].rgb` where the surface faces
     /// the eye to `parameters[1].rgb` where it turns edge on (brightness
     /// already multiplied in), patterned by the product of two scrolling noise
@@ -954,6 +958,7 @@ impl SceneData {
                     | MaterialKind::Metal
                     | MaterialKind::Physical
                     | MaterialKind::Plasma
+                    | MaterialKind::ActorLit
             );
             let decomposed =
                 material.kind == MaterialKind::Surface && decomposed_lightmap(material.parameters);
@@ -3779,6 +3784,7 @@ impl SceneRenderer {
                     MaterialKind::Plasma => 12.0,
                     MaterialKind::LayerBlend => 13.0,
                     MaterialKind::VertexLight => 14.0,
+                    MaterialKind::ActorLit => 15.0,
                 },
                 match material.alpha {
                     AlphaMode::Mask(c) => c,

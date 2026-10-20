@@ -113,6 +113,12 @@ POSITIONs. A layer-blended surface is lit by its vertex colours alone, so the im
 the mesh's vertex colour (0.5 is neutral), fogged, lit by nothing else, in every lighting setting: a mesh whose light was baked
 into its vertices. The importer keeps the mesh's `COLOR_0` for such materials.
 
+**Lit moving bodies.** A glTF material with the custom property `bri_actor_lit: true` (or `{ "sun_gain": 1.0, "light_gain": 1.0 }`,
+each 0 to 8) is drawn as a body lit when it is drawn, vertex by vertex: the scene's ambient plus the sun and the best four lights
+that reach the vertex, times the picture and twice. The gains scale the sun and the lights. For a character or any body that moves, whose light cannot be
+baked into its vertices; it works on a body, an item or a map's own models. Lighting is the scene's ambient, sun and lights, so a body
+in a dim room is dim; there are no visibility traces.
+
 **The original engine's lighting (`--lighting DIR`).** For a map the original engine lit (an asset lane's inputs: `*-instances.json`,
 `*-lights.json`, `*-instances.npz`, `*-vertex-map.npz`; `--regions` for each zone's ambient) the importer does not bake the light. The
 world mesh carries a light rig (`bri_content::vertex_lighting::Rig`: each static mesh's lights and visibility bits, the vertex each

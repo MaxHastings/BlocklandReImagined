@@ -890,6 +890,7 @@ pub fn read_dts(data: &[u8], id: String) -> Result<(Shape, Provenance)> {
             tint: None,
             layers: None,
             vertex_light: false,
+            actor_lit: None,
         });
     }
     for (material, f) in materials.iter().zip(&flags) {
