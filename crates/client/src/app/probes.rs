@@ -325,10 +325,14 @@ impl App {
             .as_ref()
             .and_then(|a| a.worker.probes.get())
             .and_then(|p| p.host.clone());
-        let Some(host) = host else { return Vec::new() };
+        let Some(host) = host else {
+            println!("CAPTURE bots: this game has no host handle");
+            return Vec::new();
+        };
         let held = {
             let mut held = host.lock().unwrap_or_else(|e| e.into_inner());
             held.bots_wanted = true;
+            println!("CAPTURE bots: asked, {} readouts held", held.bots.len());
             held.bots.clone()
         };
         let names = self.network_view().map(|v| v.names.clone());
