@@ -454,6 +454,28 @@ pub enum Element {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         show: Option<Show>,
     },
+    /// A picture drawn on a heading strip ([`Element::Strip`]) at the bearing
+    /// of a point in the world, as AA's objective letters on its compass.
+    /// `rect`, `heading` and `span` are the strip's own; `x` and `z` are
+    /// sources (a rule's state) giving the point's world position, and the
+    /// picture is `size` units wide and high, centred on the strip's height.
+    /// Nothing is drawn while the point lies outside the `span` degrees shown
+    /// or while either source has no value.
+    StripMarker {
+        texture: String,
+        /// The strip's x, y, width, height in units from the region's corner.
+        rect: [f32; 4],
+        heading: String,
+        span: Amount,
+        x: String,
+        z: String,
+        /// The picture's width and height in units.
+        size: [f32; 2],
+        #[serde(default = "white")]
+        tint: [f32; 4],
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        show: Option<Show>,
+    },
     /// The latest kills, one line each, oldest at the top: the killer, the
     /// weapon (an icon or its name) and the victim, in their teams'
     /// colours. While a layout with one is drawn, kills stay out of chat.
@@ -665,6 +687,8 @@ pub struct Live<'a> {
     /// The viewer's level facing as a unit (x, z) in the world; (0, 0)
     /// when unknown (edge arrows then read "ahead" as -z).
     pub facing: [f32; 2],
+    /// The viewer's position (x, z) in the world, for [`Element::StripMarker`].
+    pub position: [f32; 2],
 }
 
 /// A strip of equal frames in one texture, left to right then down. The
@@ -1143,6 +1167,34 @@ impl Layout {
                     ensure!(color_ok(tint), "tint must be 0..1 RGBA");
                     show_ok(show)?;
                 }
+                Element::StripMarker {
+                    texture,
+                    rect,
+                    heading,
+                    span,
+                    x,
+                    z,
+                    size,
+                    tint,
+                    show,
+                } => {
+                    texture_ok(texture)?;
+                    ensure!(
+                        rect_ok(rect),
+                        "strip marker rect must be finite with no negative size"
+                    );
+                    for s in [heading, x, z] {
+                        source_ok(s)?;
+                    }
+                    amount_ok(span)?;
+                    ensure!(
+                        size.iter()
+                            .all(|v| v.is_finite() && *v >= 0.0 && *v <= 4096.0),
+                        "strip marker size must be finite with no negative size"
+                    );
+                    ensure!(color_ok(tint), "tint must be 0..1 RGBA");
+                    show_ok(show)?;
+                }
                 Element::EdgeArrow {
                     texture,
                     rect,
@@ -1250,7 +1302,9 @@ impl Layout {
         let mut out = Vec::new();
         for e in &self.elements {
             match e {
-                Element::Image { texture, .. } | Element::EdgeArrow { texture, .. } => {
+                Element::Image { texture, .. }
+                | Element::EdgeArrow { texture, .. }
+                | Element::StripMarker { texture, .. } => {
                     out.push(texture.as_str());
                 }
                 Element::Strip { textures, .. } => out.extend(textures.iter().map(String::as_str)),
@@ -1329,6 +1383,20 @@ impl Layout {
                     ..
                 } => {
                     names.push(heading);
+                    if let Amount::Source(s) = span {
+                        names.push(s.as_str());
+                    }
+                    names.extend(show.as_ref().map(|s| s.value.as_str()));
+                }
+                Element::StripMarker {
+                    heading,
+                    span,
+                    x,
+                    z,
+                    show,
+                    ..
+                } => {
+                    names.extend([heading.as_str(), x.as_str(), z.as_str()]);
                     if let Amount::Source(s) = span {
                         names.push(s.as_str());
                     }
@@ -1693,6 +1761,50 @@ pub fn resolve_live(
                     });
                     at = stop;
                 }
+            }
+            Element::StripMarker {
+                texture: id,
+                rect,
+                heading,
+                span,
+                x,
+                z,
+                size,
+                tint,
+                show,
+            } => {
+                let Some((key, _)) = texture(id).filter(|_| shown(show)) else {
+                    continue;
+                };
+                let (Some(heading), Some(span), Some(px), Some(pz)) =
+                    (number(heading), amount(span), number(x), number(z))
+                else {
+                    continue;
+                };
+                let span = span.clamped(1.0, 360.0);
+                let (dx, dz) = (px - live.position[0], pz - live.position[1]);
+                if dx.hypot(dz) < 1e-4 {
+                    continue;
+                }
+                // Degrees clockwise from -z, as the heading is, so the
+                // offset from the heading wraps to -180..180.
+                let bearing = dx.atan2(-dz).to_degrees();
+                let offset = (bearing - heading + 540.0).rem_euclid(360.0) - 180.0;
+                if offset.abs() > span / 2.0 {
+                    continue;
+                }
+                let centre = rect[0] + rect[2] * (0.5 + offset / span);
+                out.push(Item::Image {
+                    texture: key,
+                    uv: [0.0, 0.0, 1.0, 1.0],
+                    rect: [
+                        centre - size[0] / 2.0,
+                        rect[1] + (rect[3] - size[1]) / 2.0,
+                        size[0],
+                        size[1],
+                    ],
+                    tint: *tint,
+                });
             }
             Element::EdgeArrow {
                 texture: id,
@@ -2404,6 +2516,57 @@ mod strip_tests {
             "the pieces fill the rect"
         );
         assert!((wrap[1].2[0] - wrap[0].2[2]).abs() < 1e-3, "side by side");
+    }
+
+    #[test]
+    fn a_marker_sits_on_the_strip_at_the_bearing_of_its_world_point() {
+        let layout: Layout = serde_json::from_value(serde_json::json!({
+            "schema_version": 1, "region": "top_center",
+            "elements": [{
+                "type": "strip_marker", "texture": "t:texture/mark",
+                "rect": [0.0, 0.0, 100.0, 10.0], "heading": "heading", "span": 90.0,
+                "x": "t:global/x", "z": "t:global/z", "size": [10.0, 8.0]
+            }]
+        }))
+        .expect("layout");
+        layout.validate().expect("valid");
+        let drawn = |heading: f32, point: Option<[f32; 2]>| {
+            let value = move |s: &Source| match s {
+                Source::Heading => Some(Value::Number(heading)),
+                Source::State(k) if k == "t:global/x" => point.map(|p| Value::Number(p[0])),
+                Source::State(k) if k == "t:global/z" => point.map(|p| Value::Number(p[1])),
+                _ => None,
+            };
+            let live = Live {
+                position: [10.0, 10.0],
+                ..Live::default()
+            };
+            pieces(&resolve_live(
+                &layout,
+                &value,
+                &|_| Some((7, [16, 16])),
+                &live,
+            ))
+        };
+        // Facing north (-z) with the point straight ahead: centred.
+        let ahead = drawn(0.0, Some([10.0, -40.0]));
+        assert_eq!(ahead.len(), 1, "{ahead:?}");
+        assert!((ahead[0].2[0] - 45.0).abs() < 1e-3 && (ahead[0].2[1] - 1.0).abs() < 1e-3);
+        // A point due east is 90 degrees clockwise: off a 90 degree strip facing north,
+        // and at its middle once the viewer faces east.
+        assert!(drawn(0.0, Some([60.0, 10.0])).is_empty());
+        let east = drawn(90.0, Some([60.0, 10.0]));
+        assert!((east[0].2[0] - 45.0).abs() < 1e-3, "{east:?}");
+        // 22.5 degrees right of the heading is a quarter of the way from the middle to the right edge.
+        let bearing = 112.5f32.to_radians();
+        let right = drawn(
+            90.0,
+            Some([10.0 + 50.0 * bearing.sin(), 10.0 - 50.0 * bearing.cos()]),
+        );
+        assert!((right[0].2[0] - 70.0).abs() < 1e-2, "{right:?}");
+        // A point with no value, or the viewer standing on it, draws nothing.
+        assert!(drawn(0.0, None).is_empty());
+        assert!(drawn(0.0, Some([10.0, 10.0])).is_empty());
     }
 
     #[test]
