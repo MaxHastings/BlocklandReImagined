@@ -32,6 +32,10 @@ pub struct MapScene {
     pub movers: Vec<(u32, SceneData)>,
     /// The map's scatter layers: one model each, repeated at many placements ([`bri_content::scatter`]).
     pub scatter: Vec<ScatterScene>,
+    /// The map's backdrop, when it has one.
+    pub backdrop: Option<BackdropScene>,
+    /// The map's regions with their own fog, when it has them.
+    pub regions: Option<bri_content::regions::RegionMap>,
     /// Set only by the modern loader, which never decodes illumination images.
     pub modern_lights: Option<Vec<crate::map_lighting::MapLight>>,
     /// Animated map lights: an index into `modern_lights` and how it
@@ -44,6 +48,79 @@ pub struct MapScene {
     /// they draw as unshadowed point lights with the same linear falloff, the
     /// nearest ones each frame (`SceneRenderer::update_lights`, colour w 1).
     pub overflow_lights: Vec<crate::map_lighting::MapLight>,
+}
+
+/// A map's backdrop ([`bri_content::backdrop`]): a model drawn before the map from `eye`, with only the viewer's rotation.
+pub struct BackdropScene {
+    pub scene: SceneData,
+    pub eye: [f32; 3],
+}
+
+/// The backdrop `bundle` lists for `scene`, its model loaded as a shape about the origin.
+fn load_backdrop(
+    root: &Path,
+    bundle: &Value,
+    bindings: &[Value],
+    scene: &Scene,
+    legacy: bool,
+) -> Result<Option<BackdropScene>> {
+    let Some(record) = bundle
+        .get("backdrops")
+        .and_then(|s| s.get(&scene.id))
+        .filter(|v| !v.is_null())
+    else {
+        return Ok(None);
+    };
+    let record: bri_content::backdrop::Record =
+        serde_json::from_value(record.clone()).context("Reading the map's backdrop")?;
+    record.validate()?;
+    let mut alone = SceneData {
+        id: format!("{}#backdrop", scene.id),
+        name: "backdrop".into(),
+        ..Default::default()
+    };
+    let at_origin = Node {
+        name: "backdrop".into(),
+        parent: None,
+        kind: Kind::StaticModel,
+        transform: Mat4::IDENTITY.to_cols_array(),
+        asset: Some(record.asset.clone()),
+        properties: BTreeMap::new(),
+    };
+    load_static_shape(
+        root,
+        bundle,
+        bindings,
+        &at_origin,
+        &mut alone,
+        &mut BTreeMap::new(),
+        legacy,
+    )
+    .context("The map's backdrop")?;
+    alone.validate()?;
+    Ok(Some(BackdropScene {
+        scene: alone,
+        eye: record.eye,
+    }))
+}
+
+/// The regions `bundle` lists for `scene` ([`bri_content::regions`]).
+fn load_regions(
+    root: &Path,
+    bundle: &Value,
+    scene: &Scene,
+) -> Result<Option<bri_content::regions::RegionMap>> {
+    let Some(name) = bundle
+        .get("regions")
+        .and_then(|s| s.get(&scene.id))
+        .and_then(Value::as_str)
+    else {
+        return Ok(None);
+    };
+    let map: bri_content::regions::RegionMap =
+        serde_json::from_slice(&read(root, name)?).context("Reading the map's regions")?;
+    map.validate()?;
+    Ok(Some(map))
 }
 
 /// One scatter layer: the model about its own origin and where it is placed.
@@ -617,6 +694,8 @@ fn load_bundle_unscoped(root: &Path, map_id: &str, legacy: bool) -> Result<MapSc
     };
     out.validate()?;
     let scatter = load_scatter(&root, &bundle, bindings, &scene, legacy)?;
+    let backdrop = load_backdrop(&root, &bundle, bindings, &scene, legacy)?;
+    let regions = load_regions(&root, &bundle, &scene)?;
     Ok(MapScene {
         scene: out,
         terrain,
@@ -624,6 +703,8 @@ fn load_bundle_unscoped(root: &Path, map_id: &str, legacy: bool) -> Result<MapSc
         shape_indices,
         movers,
         scatter,
+        backdrop,
+        regions,
         modern_lights,
         light_animations,
         light_spots,
@@ -1541,6 +1622,42 @@ mod tests {
         assert!(load_scatter(&root, &serde_json::json!({}), &bindings, &scene, false)?.is_empty());
         write_file(&root, "grass.scatter", b"nonsense")?;
         assert!(load_scatter(&root, &bundle, &bindings, &scene, false).is_err());
+        Ok(())
+    }
+    /// A bundle's backdrop loads its model about its own origin, with the eye the table names.
+    #[test]
+    fn a_backdrop_loads_its_model_and_its_eye() -> Result<()> {
+        use bri_content::testing::{plain, png, rigid_shape, write_file};
+        let dir = tempfile::tempdir()?;
+        let root = dir.path().canonicalize()?;
+        let shape = rigid_shape(
+            "sky",
+            &[("root", None, [0.0; 3])],
+            &[(0, [0.0; 3], [1.0; 3], plain(0))],
+            vec![bri_content::testing::material("sky", "opaque")],
+        );
+        write_file(&root, "sky.json", &serde_json::to_vec(&shape)?)?;
+        write_file(&root, "sky.png", &png(1, 1, |_, _| [90, 140, 220, 255])?)?;
+        let bundle = serde_json::json!({
+            "assets": { "sky": "sky.json" },
+            "backdrops": { "m": { "asset": "sky", "eye": [1.0, 2.0, 3.0] } },
+        });
+        let bindings = vec![serde_json::json!(
+            { "asset": "sky", "shape_material": 0, "skin": "", "texture": "sky.png" }
+        )];
+        let scene = Scene {
+            schema_version: 1,
+            id: "m".into(),
+            name: "m".into(),
+            nodes: Vec::new(),
+            pending_scripts: Vec::new(),
+        };
+        let backdrop = load_backdrop(&root, &bundle, &bindings, &scene, false)?.unwrap();
+        assert_eq!(backdrop.eye, [1.0, 2.0, 3.0]);
+        assert!(!backdrop.scene.indices.is_empty(), "the model is drawn");
+        let none = serde_json::json!({ "backdrops": { "m": null } });
+        assert!(load_backdrop(&root, &none, &bindings, &scene, false)?.is_none());
+        assert!(load_backdrop(&root, &serde_json::json!({}), &bindings, &scene, false)?.is_none());
         Ok(())
     }
     #[test]

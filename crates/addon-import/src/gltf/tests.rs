@@ -850,6 +850,121 @@ fn a_scatter_layer_without_placements_or_with_a_bad_fade_is_refused() {
     assert!(import(&opts).is_err(), "no placements file");
 }
 
+/// A backdrop's glTF: one box with the scene's `bri_backdrop` naming the eye it is viewed from.
+fn backdrop_model(dir: &std::path::Path, eye: Option<[f32; 3]>) -> PathBuf {
+    use super::testing::{Gltf, cuboid};
+    let mut g = Gltf::new();
+    let (p, n, uv, i) = cuboid(Vec3::ZERO, Vec3::splat(1.0));
+    let flat = |v: &[Vec3]| v.iter().flat_map(|v| v.to_array()).collect::<Vec<f32>>();
+    let (a, b, c, d) = (
+        g.floats(&flat(&p), 3),
+        g.floats(&flat(&n), 3),
+        g.floats(&uv.concat(), 2),
+        g.uints(&i, 1),
+    );
+    let sky = g.material(
+        "Sky",
+        [1.0; 4],
+        Some((1, 1, vec![90, 140, 220, 255])),
+        json!({}),
+    );
+    let mesh = g.mesh(
+        "Sky",
+        vec![json!({ "attributes": { "POSITION": a, "NORMAL": b, "TEXCOORD_0": c }, "indices": d, "material": sky })],
+    );
+    g.node(json!({ "name": "Sky", "mesh": mesh }), None);
+    if let Some(eye) = eye {
+        g.json["scenes"][0]["extras"] = json!({ "bri_backdrop": { "eye": eye } });
+    }
+    let path = dir.join("sky.glb");
+    std::fs::write(&path, g.glb()).unwrap();
+    path
+}
+
+#[test]
+fn a_backdrop_becomes_a_shape_and_an_eye_in_the_native_frame() {
+    let root = tempfile::tempdir().unwrap();
+    let input = root.path().join("Test Room.glb");
+    std::fs::write(&input, room(false)).unwrap();
+    let mut opts = Options::new(&input, root.path().join("test_room"), Kind::Map);
+    opts.scale = Some(2.0);
+    opts.backdrop = Some(backdrop_model(root.path(), Some([1.0, 2.0, 3.0])));
+    let report = import(&opts).unwrap();
+    let dir = root.path().join("test_room");
+    let bundle: Value =
+        serde_json::from_slice(&std::fs::read(dir.join("map/bundle.json")).unwrap()).unwrap();
+    let record: bri_content::backdrop::Record =
+        serde_json::from_value(bundle["backdrops"]["test_room:map/test_room"].clone()).unwrap();
+    assert!(
+        bundle["assets"][&record.asset].is_string(),
+        "the model is an asset"
+    );
+    // glTF to native is half a turn about Y, then the import's scale of 2.
+    assert!(near(Vec3::from(record.eye), Vec3::new(-2.0, 4.0, -6.0)));
+    let check = bri_package_runtime::check::check(&dir);
+    assert!(check.ok, "{check} {:?}", report.warnings);
+}
+
+#[test]
+fn a_backdrop_without_an_eye_is_refused() {
+    let root = tempfile::tempdir().unwrap();
+    let input = root.path().join("Test Room.glb");
+    std::fs::write(&input, room(false)).unwrap();
+    let mut opts = Options::new(&input, root.path().join("a"), Kind::Map);
+    opts.backdrop = Some(backdrop_model(root.path(), None));
+    assert!(import(&opts).is_err());
+}
+
+#[test]
+fn regions_move_into_the_native_frame_and_the_import_scale() {
+    use bri_content::regions::{Fog, Region, RegionMap};
+    let root = tempfile::tempdir().unwrap();
+    let input = root.path().join("Test Room.glb");
+    std::fs::write(&input, room(false)).unwrap();
+    let fog = Fog {
+        color: [128, 128, 160],
+        start: 10.0,
+        end: 30.0,
+        blend_time: 0.0,
+        clear_to_fog: true,
+    };
+    let map = RegionMap {
+        planes: vec![[1.0, 0.0, 0.0, 5.0]],
+        front: vec![-1],
+        back: vec![-1],
+        front_region: vec![1],
+        back_region: vec![0],
+        regions: vec![
+            Region::default(),
+            Region {
+                fog: Some(fog),
+                ambient: None,
+            },
+        ],
+    };
+    let file = root.path().join("regions.json");
+    std::fs::write(&file, serde_json::to_vec(&map).unwrap()).unwrap();
+    let mut opts = Options::new(&input, root.path().join("test_room"), Kind::Map);
+    opts.scale = Some(2.0);
+    opts.regions = Some(file);
+    let report = import(&opts).unwrap();
+    let dir = root.path().join("test_room");
+    let bundle: Value =
+        serde_json::from_slice(&std::fs::read(dir.join("map/bundle.json")).unwrap()).unwrap();
+    let name = bundle["regions"]["test_room:map/test_room"]
+        .as_str()
+        .unwrap();
+    let back: RegionMap =
+        serde_json::from_slice(&std::fs::read(dir.join("map").join(name)).unwrap()).unwrap();
+    // glTF to native flips x and z; lengths take the scale of 2.
+    assert_eq!(back.planes[0], [-1.0, 0.0, 0.0, 10.0]);
+    assert_eq!(back.regions[1].fog.unwrap().end, 60.0);
+    // The same point, 7 glTF units along +x, is in front in both frames.
+    assert_eq!(map.locate([7.0, 0.0, 0.0]), back.locate([-14.0, 0.0, 0.0]));
+    let check = bri_package_runtime::check::check(&dir);
+    assert!(check.ok, "{check} {:?}", report.warnings);
+}
+
 #[test]
 fn a_map_imports_as_an_add_on_the_game_loads() {
     let (root, report) = import_room(false);
