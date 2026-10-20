@@ -244,6 +244,67 @@ fn play(
                 down,
             }));
             pump(app)?;
+        } else if let Some(name) = step.get("key").and_then(|v| v.as_str()) {
+            // A key press through the interface's own input path (the profile's binds, the panels, the chat box), held `seconds` (default 0.1).
+            let key = bri_ui::input::Key::from_torque(name)
+                .with_context(|| format!("unknown key {name:?} (Torque ActionMap names: r, f, 2, lshift, f3 ...)"))?;
+            let hold = step.get("seconds").and_then(|v| v.as_f64()).unwrap_or(0.1) as f32;
+            let mods = bri_ui::input::Modifiers::default();
+            app.ui.handle_input(bri_ui::input::InputEvent::KeyDown {
+                key,
+                mods,
+                repeat: false,
+            });
+            pump(app)?;
+            run_for(app, hold)?;
+            app.ui
+                .handle_input(bri_ui::input::InputEvent::KeyUp { key, mods });
+            pump(app)?;
+        } else if let Some(goto) = step.get("goto").and_then(|v| v.as_array()) {
+            // Walk to a point by the controls alone: turn toward it (the look action) and hold forward until within `within`
+            // (default 0.8), or `timeout` seconds (default 30) pass. Reports where it ended.
+            let (tx, tz) = (
+                goto.first().and_then(|v| v.as_f64()).context("goto x")? as f32,
+                goto.get(1).and_then(|v| v.as_f64()).context("goto z")? as f32,
+            );
+            let within = step.get("within").and_then(|v| v.as_f64()).unwrap_or(0.8) as f32;
+            let timeout = step.get("timeout").and_then(|v| v.as_f64()).unwrap_or(30.0) as f32;
+            app.ui.core.request(UiAction::Game(GameAction::Held {
+                control: HeldControl::Forward,
+                down: true,
+            }));
+            let mut spent = 0.0f32;
+            let mut arrived = false;
+            while spent < timeout {
+                let Some((p, _)) = app.local_motion() else { break };
+                let (dx, dz) = (tx - p.feet[0], tz - p.feet[2]);
+                if (dx * dx + dz * dz).sqrt() <= within {
+                    arrived = true;
+                    break;
+                }
+                let want = dx.atan2(-dz);
+                let mut delta = want - p.yaw;
+                while delta > std::f32::consts::PI {
+                    delta -= std::f32::consts::TAU;
+                }
+                while delta < -std::f32::consts::PI {
+                    delta += std::f32::consts::TAU;
+                }
+                app.ui.core.request(UiAction::Game(GameAction::Look {
+                    yaw: delta,
+                    pitch: 0.0,
+                }));
+                pump(app)?;
+                run_for(app, 0.05)?;
+                spent += 0.05;
+            }
+            app.ui.core.request(UiAction::Game(GameAction::Held {
+                control: HeldControl::Forward,
+                down: false,
+            }));
+            pump(app)?;
+            let at = app.local_motion().map(|(p, _)| p.feet);
+            println!("CAPTURE goto {tx} {tz}: {} after {spent:.2}s at {at:.2?}", if arrived { "arrived" } else { "did not arrive" });
         } else if let Some(look) = step.get("look") {
             let f = |k: &str| look.get(k).and_then(|v| v.as_f64()).unwrap_or(0.0) as f32;
             app.ui.core.request(UiAction::Game(GameAction::Look {
@@ -373,6 +434,11 @@ fn capture_frames() -> Result<()> {
             state.join("add-on-choices.json"),
         )
         .context("state_from: its add-on-choices.json")?;
+        // and their saved settings (key binds, options), when the folder has them
+        let settings = Path::new(from).join("settings.json");
+        if settings.is_file() {
+            std::fs::copy(&settings, state.join("settings.json"))?;
+        }
     }
     let mut app = App::load(&content, &state, size)?;
     app.ui.core.pop(bri_ui::screens::ScreenId::DefaultControls);
