@@ -28,6 +28,21 @@ pub struct Fog {
     pub clear_to_fog: bool,
 }
 
+/// A sun that lights the moving bodies in a region (a directional light with its own colour), at a place that says which region's suns a
+/// body that reaches several should take.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct RegionSun {
+    /// The way its light travels.
+    pub direction: [f32; 3],
+    /// Linear RGB, brightness included.
+    pub color: [f32; 3],
+    /// Where the sun stands in the map.
+    pub position: [f32; 3],
+}
+/// Most suns one region may have, and one map in all.
+pub const MAX_REGION_SUNS: usize = 8;
+pub const MAX_MAP_SUNS: usize = 64;
+
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct Region {
     #[serde(default)]
@@ -35,6 +50,9 @@ pub struct Region {
     /// The light actors in the region take from everywhere (linear RGB, as lit models add it).
     #[serde(default)]
     pub ambient: Option<[f32; 3]>,
+    /// The suns lit moving bodies in the region take ([`RegionMap::actor_light`]).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub suns: Vec<RegionSun>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -87,7 +105,22 @@ impl RegionMap {
                 "A region node names a missing region"
             );
         }
+        ensure!(
+            self.regions.iter().map(|r| r.suns.len()).sum::<usize>() <= MAX_MAP_SUNS
+                && self.regions.iter().all(|r| r.suns.len() <= MAX_REGION_SUNS),
+            "A region map has too many suns"
+        );
         for r in &self.regions {
+            ensure!(
+                r.suns.iter().all(|s| s
+                    .direction
+                    .iter()
+                    .chain(&s.color)
+                    .chain(&s.position)
+                    .all(|v| v.is_finite())
+                    && s.direction.iter().any(|v| *v != 0.0)),
+                "A region's sun is not finite or has no direction"
+            );
             if let Some(f) = &r.fog {
                 ensure!(
                     f.start.is_finite() && f.end.is_finite() && f.blend_time.is_finite(),
@@ -180,6 +213,70 @@ impl RegionMap {
             return [0.13 + glow, 0.125 + glow, 0.12 + glow];
         }
         sum.map(|s| s / count + glow)
+    }
+
+    /// Every sun of the map in region order, and for each region the run of them (`first`, `count`) that are its own: the table a
+    /// renderer offers lit bodies.
+    pub fn sun_table(&self) -> (Vec<RegionSun>, Vec<(u8, u8)>) {
+        let runs = self.sun_runs();
+        let table = self
+            .regions
+            .iter()
+            .zip(&runs)
+            .flat_map(|(region, run)| region.suns.iter().take(usize::from(run.1)).copied())
+            .collect();
+        (table, runs)
+    }
+    fn sun_runs(&self) -> Vec<(u8, u8)> {
+        let mut used = 0usize;
+        self.regions
+            .iter()
+            .map(|region| {
+                let first = used.min(usize::from(u8::MAX)) as u8;
+                let take = region
+                    .suns
+                    .len()
+                    .min(MAX_REGION_SUNS)
+                    .min(MAX_MAP_SUNS - used.min(MAX_MAP_SUNS));
+                used += take;
+                (first, take as u8)
+            })
+            .collect()
+    }
+
+    /// The light a moving body with this render box takes: the mean ambient of the regions its box reaches ([`Self::actor_ambient`]),
+    /// and the suns of the one region, among those it reaches, whose sun stands nearest the box's centre. Regions without suns take
+    /// no part in the choice; a body reaching none gets no suns (`None`).
+    pub fn actor_light(
+        &self,
+        min: [f32; 3],
+        max: [f32; 3],
+        glow: f32,
+    ) -> ([f32; 3], Option<(u8, u8)>) {
+        let ambient = self.actor_ambient(min, max, glow);
+        let centre = [0, 1, 2].map(|a| (min[a] + max[a]) * 0.5);
+        let runs = self.sun_runs();
+        let nearest = self
+            .regions_in_box(min, max)
+            .into_iter()
+            .filter_map(|zone| {
+                let region = self.regions.get(usize::from(zone))?;
+                let run = *runs.get(usize::from(zone))?;
+                let distance = region
+                    .suns
+                    .iter()
+                    .take(usize::from(run.1))
+                    .map(|s| {
+                        (0..3)
+                            .map(|a| (s.position[a] - centre[a]).powi(2))
+                            .sum::<f32>()
+                    })
+                    .min_by(f32::total_cmp)?;
+                Some((distance, run))
+            })
+            .min_by(|a, b| a.0.total_cmp(&b.0))
+            .map(|(_, run)| run);
+        (ambient, nearest)
     }
 
     pub fn ambient(&self, region: u16) -> Option<[f32; 3]> {
@@ -309,10 +406,12 @@ mod tests {
                 Region {
                     fog: a,
                     ambient: None,
+                    suns: Vec::new(),
                 },
                 Region {
                     fog: b,
                     ambient: None,
+                    suns: Vec::new(),
                 },
             ],
         }

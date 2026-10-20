@@ -2559,6 +2559,7 @@ fn placeholder() -> bri_content::shape::Shape {
             tint: None,
             layers: None,
             vertex_light: false,
+            actor_lit: None,
         }],
         animations: vec![],
     }

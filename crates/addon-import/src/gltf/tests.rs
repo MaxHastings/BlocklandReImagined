@@ -939,6 +939,7 @@ fn regions_move_into_the_native_frame_and_the_import_scale() {
             Region {
                 fog: Some(fog),
                 ambient: None,
+                suns: Vec::new(),
             },
         ],
     };

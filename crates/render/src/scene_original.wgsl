@@ -15,6 +15,9 @@ struct Camera {
     shading:vec4<f32>, haze:vec4<f32>,
     enclosed:vec4<f32>,
     lightmap:vec4<f32>,
+    // The suns a lit moving body may take (Camera::set_actor_suns): count in x; per sun a direction then a colour.
+    actor_sun_count:vec4<f32>,
+    actor_suns:array<vec4<f32>,128>,
 };
 @group(0) @binding(0) var<uniform> camera:Camera;
 struct PointLight { position_radius:vec4<f32>, color:vec4<f32>, cone:vec4<f32> };
@@ -115,6 +118,58 @@ fn dynamic_bsp_light(base:vec3<f32>,pigment:vec3<f32>,alpha:f32,brighten:bool,po
         if brighten {result=min(result+src*(alpha*ramp),vec3<f32>(1.0));} else {result=src+result*(vec3<f32>(1.0)-src);}
     }
     return result;
+}
+// A moving body lit at draw time (`MaterialKind::ActorLit`): its ambient plus the sun and the best four lights that reach each vertex,
+// ranked by `(1 - d^2/R^2) * brightness`, each light `Colour * reach(d/R) * N.L` with the smooth radial reach used for effect lights.
+// `material[1].x` scales the sun and `material[1].y` the lights (the body's authored gains). Returns the multiplier before the
+// stage's doubling. No visibility traces are made.
+fn actor_light(position:vec3<f32>,normal:vec3<f32>,own:vec4<f32>)->vec3<f32> {
+    let n=normal/max(length(normal),0.0001);
+    var chosen=array<u32,4>(0u,0u,0u,0u);
+    var score=array<f32,4>(0.0,0.0,0.0,0.0);
+    let list=light_cell(position);
+    for(var i=0u;i<list.y;i+=1u) {
+        let light=listed_light(list,i);
+        let delta=light.position_radius.xyz-position;
+        let d2=dot(delta,delta);
+        let radius=light.position_radius.w;
+        if d2>=radius*radius {continue;}
+        let s=(1.0-d2/(radius*radius))*max(light.color.r,max(light.color.g,light.color.b));
+        if s<=score[3] {continue;}
+        var k=3u;
+        loop {
+            if k==0u || s<=score[k-1u] {break;}
+            score[k]=score[k-1u];chosen[k]=chosen[k-1u];
+            k-=1u;
+        }
+        score[k]=s;chosen[k]=i;
+    }
+    var sum=select(camera.ambient.rgb,own.rgb,own.w>=0.0);
+    for(var k=0u;k<4u;k+=1u) {
+        if score[k]<=0.0 {continue;}
+        let light=listed_light(list,chosen[k]);
+        let delta=light.position_radius.xyz-position;
+        let d=length(delta);
+        let t=min(d/max(light.position_radius.w,0.0001),1.0);
+        let reach=2.0*(1.0-3.0*t*t+2.0*t*t*t);
+        sum+=material[1].y*light.color.rgb*reach*max(dot(n,delta/max(d,0.0001)),0.0)*point_cone(light,-delta/max(d,0.0001));
+    }
+    if own.w<0.0 {
+        let toward_sun=-camera.sun_direction.xyz/max(length(camera.sun_direction.xyz),0.0001);
+        sum+=material[1].x*camera.sun_color.rgb*max(dot(n,toward_sun),0.0);
+    } else {
+        // The suns of the body's own zone: a run of the camera's table (first + 256 * count).
+        let packed=u32(own.w+0.5);
+        let first=packed&255u;
+        let count=min(packed>>8u,8u);
+        for(var i=0u;i<count;i+=1u) {
+            let s=first+i;
+            if s>=u32(camera.actor_sun_count.x+0.5) {break;}
+            let toward=-camera.actor_suns[2u*s].xyz/max(length(camera.actor_suns[2u*s].xyz),0.0001);
+            sum+=material[1].x*camera.actor_suns[2u*s+1u].rgb*max(dot(n,toward),0.0);
+        }
+    }
+    return sum;
 }
 @group(1) @binding(0) var layer0:texture_2d<f32>;
 @group(1) @binding(1) var layer1:texture_2d<f32>;
@@ -943,7 +998,7 @@ struct VertexOut {
 };
 @vertex fn vs_main(@location(0) local_position:vec3<f32>,@location(1) local_normal:vec3<f32>,@location(2) uv:vec2<f32>,@location(3) lightmap_uv:vec2<f32>,@location(4) local_color:vec4<f32>,
     @location(5) m0:vec4<f32>,@location(6) m1:vec4<f32>,@location(7) m2:vec4<f32>,@location(8) m3:vec4<f32>,@location(9) tint:vec4<f32>,
-    @location(10) fx_data:vec4<f32>,@location(11) clip:vec4<f32>)->VertexOut {
+    @location(10) fx_data:vec4<f32>,@location(11) clip:vec4<f32>,@location(12) own_light:vec4<f32>)->VertexOut {
     let model=mat4x4<f32>(m0,m1,m2,m3);
     let position=(model*vec4<f32>(local_position,1.0)).xyz;
     // Cofactor matrix is det(M)*inverse-transpose(M). Positive affine
@@ -1023,6 +1078,11 @@ struct VertexOut {
     if fx.shape!=0u {
         out.world_position=world;
         out.position=camera.view_projection*vec4<f32>(world,1.0);
+    }
+    if material[0].x==15.0 {
+        // A moving body lit by the scene: its zone's ambient and suns when it has them, else the scene's, and the nearest lights.
+        let lit=actor_light(out.world_position,out.normal,own_light);
+        out.color=vec4<f32>(clamp(lit*0.5,vec3<f32>(0.0),vec3<f32>(1.0))*color.rgb,color.a);
     }
     out.point_light=vec3<f32>(0.0);
     if material[0].x==2.0 || material[0].x==3.0 || material[0].x==9.0 || material[0].x==11.0 {
@@ -1384,7 +1444,7 @@ override SURFACE_GROUP:u32=0u;
         let w=textureSample(weights0,clamped,v.lightmap_uv);
         return vec4<f32>(fogged(layer_blend_rgb(v),v.world_position),v.color.a*clamp(w.x+w.y+w.z+w.w,0.0,1.0));
     }
-    if material[0].x==14.0 {
+    if material[0].x==14.0 || material[0].x==15.0 {
         // Light baked into the vertices: the picture times twice the vertex colour, lit by nothing else.
         let lit=min(display_color(textureSample(layer0,tiled,v.uv).rgb)*v.color.rgb*2.0,vec3<f32>(1.0));
         return vec4<f32>(fogged(lit,v.world_position),alpha);
