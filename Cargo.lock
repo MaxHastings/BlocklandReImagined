@@ -877,6 +877,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "bri-ue2-emitters"
+version = "0.1.0"
+dependencies = [
+ "glam 0.33.10",
+]
+
+[[package]]
+name = "bri-ue2-render"
+version = "0.1.0"
+dependencies = [
+ "bri-content",
+ "bri-render",
+ "bri-ue2-emitters",
+ "glam 0.33.10",
+ "serde_json",
+ "wgpu",
+]
+
+[[package]]
 name = "bri-ue2-rules"
 version = "0.1.0"
 

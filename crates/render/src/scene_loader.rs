@@ -38,6 +38,8 @@ pub struct MapScene {
     pub regions: Option<bri_content::regions::RegionMap>,
     /// The map's decals and their pictures (in order), when it has them.
     pub decals: Option<crate::decals::LoadedDecals>,
+    /// The map's triangles by place, for decals added while the game runs.
+    pub receiver_index: std::sync::Arc<crate::decals::ReceiverIndex>,
     /// Set only by the modern loader, which never decodes illumination images.
     pub modern_lights: Option<Vec<crate::map_lighting::MapLight>>,
     /// Animated map lights: an index into `modern_lights` and how it
@@ -112,6 +114,7 @@ fn load_decals(
     bundle: &Value,
     scene: &Scene,
     world: &SceneData,
+    index: &crate::decals::ReceiverIndex,
 ) -> Result<Option<crate::decals::LoadedDecals>> {
     let Some(name) = bundle
         .get("decals")
@@ -130,7 +133,7 @@ fn load_decals(
     let receivers = set
         .decals
         .iter()
-        .map(|decal| crate::decals::gather(world, decal))
+        .map(|decal| crate::decals::gather_indexed(world, index, decal))
         .collect();
     Ok(Some(crate::decals::LoadedDecals {
         set,
@@ -731,7 +734,8 @@ fn load_bundle_unscoped(root: &Path, map_id: &str, legacy: bool) -> Result<MapSc
     let scatter = load_scatter(&root, &bundle, bindings, &scene, legacy)?;
     let backdrop = load_backdrop(&root, &bundle, bindings, &scene, legacy)?;
     let regions = load_regions(&root, &bundle, &scene)?;
-    let decals = load_decals(&root, &bundle, &scene, &out)?;
+    let receiver_index = std::sync::Arc::new(crate::decals::ReceiverIndex::build(&out));
+    let decals = load_decals(&root, &bundle, &scene, &out, &receiver_index)?;
     Ok(MapScene {
         scene: out,
         terrain,
@@ -742,6 +746,7 @@ fn load_bundle_unscoped(root: &Path, map_id: &str, legacy: bool) -> Result<MapSc
         backdrop,
         regions,
         decals,
+        receiver_index,
         modern_lights,
         light_animations,
         light_spots,

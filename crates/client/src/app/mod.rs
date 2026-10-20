@@ -145,6 +145,7 @@ struct Prepared {
     regions: Option<bri_content::regions::RegionMap>,
     /// The map's decals with the triangles they draw on.
     decals: Option<bri_render::decals::LoadedDecals>,
+    receiver_index: Arc<bri_render::decals::ReceiverIndex>,
     light_volume: LightVolumeState,
 }
 /// A background chunk update: the replica revision it reached, and the
@@ -488,6 +489,7 @@ fn prepare_map(
         backdrop: visual.backdrop,
         regions: visual.regions,
         decals: visual.decals,
+        receiver_index: visual.receiver_index,
         light_volume,
     })
 }

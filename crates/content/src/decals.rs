@@ -45,6 +45,9 @@ pub struct Decal {
     pub planes: [[f32; 4]; 6],
     /// The direction the volume looks along.
     pub forward: [f32; 3],
+    /// The volume's box (`[min, max]`), so the renderer reads only the triangles near it; none reads them all.
+    #[serde(default)]
+    pub bounds: Option<[[f32; 3]; 2]>,
     pub blend: Blend,
     /// Repeat the picture past its edge on `s` and `t` (otherwise the edge is extended).
     pub wrap: [bool; 2],
