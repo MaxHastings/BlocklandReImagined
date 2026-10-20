@@ -2,6 +2,9 @@
   "assets": {
     "sample-map:map/sample-map/model": "sample-map.shape.json"
   },
+  "backdrops": {
+    "sample-map:map/sample-map": null
+  },
   "bindings": [
     {
       "asset": "sample-map:map/sample-map/model",
@@ -52,6 +55,9 @@
       "name": "Sample Map"
     }
   ],
+  "regions": {
+    "sample-map:map/sample-map": null
+  },
   "scatter": {
     "sample-map:map/sample-map": []
   },
