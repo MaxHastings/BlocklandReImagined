@@ -738,6 +738,11 @@ fn load_bundle_unscoped(root: &Path, map_id: &str, legacy: bool) -> Result<MapSc
     out.validate()?;
     let scatter = load_scatter(&root, &bundle, bindings, &scene, legacy)?;
     let backdrop = load_backdrop(&root, &bundle, bindings, &scene, legacy)?;
+    // The backdrop is what lies behind the map: the map's own sky box and fog backdrop would be drawn over it. The fog's colour
+    // and distances stay.
+    if backdrop.is_some() {
+        crate::environment_choices::strip_sky(&mut out);
+    }
     let regions = load_regions(&root, &bundle, &scene)?;
     let receiver_index = std::sync::Arc::new(crate::decals::ReceiverIndex::build(&out));
     let decals = load_decals(&root, &bundle, &scene, &out, &receiver_index)?;
@@ -1061,6 +1066,8 @@ fn load_static_shape(
         }
         if authored.vertex_light && authored.layers.is_none() {
             material.kind = MaterialKind::VertexLight;
+            // A metal detail set above took the kind's uniforms with it.
+            material.parameters = None;
         }
         // A terrain's layers: up to four textures weighted by one map's channels (its materials name them), lit by the vertex
         // light only. Layers the material does not have repeat the first and carry no weight.

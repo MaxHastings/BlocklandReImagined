@@ -406,6 +406,29 @@ fn load_visual_map(
     {
         bri_console::echo(line);
     }
+    if let Some(backdrop) = &map.backdrop {
+        let (min, max) =
+            backdrop
+                .scene
+                .vertices
+                .iter()
+                .fold(([f32::MAX; 3], [f32::MIN; 3]), |(min, max), v| {
+                    (
+                        std::array::from_fn(|i| min[i].min(v.position[i])),
+                        std::array::from_fn(|i| max[i].max(v.position[i])),
+                    )
+                });
+        bri_console::echo(format!(
+            "Backdrop from eye {:?}, its model spans {min:?} to {max:?}, {} vertices; lit as:",
+            backdrop.eye,
+            backdrop.scene.vertices.len()
+        ));
+        for line in bri_render::lighting_report::lines(&bri_render::lighting_report::report(
+            &backdrop.scene,
+        )) {
+            bri_console::echo(line);
+        }
+    }
     Ok(map)
 }
 fn prepare_map(
