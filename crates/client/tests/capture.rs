@@ -260,6 +260,11 @@ fn play(
             app.ui
                 .handle_input(bri_ui::input::InputEvent::KeyUp { key, mods });
             pump(app)?;
+        } else if step.get("bots").is_some() {
+            // Every bot's F3 "why" readout (behaviour, route, stalls, replans), printed one line each.
+            for (name, why) in app.bot_readouts() {
+                println!("CAPTURE bot {name:?}: {}", why.join(" | "));
+            }
         } else if let Some(goto) = step.get("goto").and_then(|v| v.as_array()) {
             // Walk to a point by the controls alone: turn toward it (the look action) and hold forward until within `within`
             // (default 0.8), or `timeout` seconds (default 30) pass. Reports where it ended.

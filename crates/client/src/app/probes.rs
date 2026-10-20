@@ -317,6 +317,33 @@ impl App {
             self.gpu.gpu_scene.is_some()
         )
     }
+    /// For tools: each bot's name and its "why" readout lines (what F3 shows), asking this game's own host to keep them fresh.
+    pub fn bot_readouts(&mut self) -> Vec<(String, Vec<String>)> {
+        let host = self
+            .net
+            .attempt
+            .as_ref()
+            .and_then(|a| a.worker.probes.get())
+            .and_then(|p| p.host.clone());
+        let Some(host) = host else { return Vec::new() };
+        let held = {
+            let mut held = host.lock().unwrap_or_else(|e| e.into_inner());
+            held.bots_wanted = true;
+            held.bots.clone()
+        };
+        let names = self.network_view().map(|v| v.names.clone());
+        held.into_iter()
+            .map(|(id, why)| {
+                (
+                    names
+                        .as_ref()
+                        .and_then(|n| n.get(&id).cloned())
+                        .unwrap_or_else(|| id.to_string()),
+                    why,
+                )
+            })
+            .collect()
+    }
     /// Presented (predicted and interpolated) local state and camera eye.
     pub fn local_motion(&self) -> Option<(bri_sim::player::PlayerState, Option<Vec3>)> {
         let view = self.network_view()?;
