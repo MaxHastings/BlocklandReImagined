@@ -1132,7 +1132,7 @@ fn multiplicative_surface(v:VertexOut)->vec4<f32> {
     if faded_out(v.position.xy,v.world_position-camera.eye.xyz,camera.atmosphere,camera.haze) {discard;}
     let texel=textureSample(layer0,tiled,v.uv);
     // A LayerBlend pass drawn through a frame blend (extra terrain passes add): its own colour, vertex alpha.
-    let layered=material[0].x==12.0;
+    let layered=material[0].x==13.0;
     let alpha=select(clamp(texel.a*v.color.a,0.0,1.0),v.color.a,layered)*(1.0-fog_amount(v.world_position));
     let multiplier=select(display_color(texel.rgb)*v.color.rgb,layer_blend_rgb(v),layered);
     let flags=u32(material[0].w);
