@@ -1216,7 +1216,8 @@ impl View {
                         .hover_texture
                         .filter(|_| hovered && n.state.active)
                         .unwrap_or(host);
-                    let tint = n.state.tint.or(n.ctrl.color).unwrap_or(WHITE);
+                    // The control's colour is the caption's on a host picture (a panel button's `color`), not a tint.
+                    let tint = n.state.tint.unwrap_or(WHITE);
                     Self::draw_external(dl, id, None, None, r, tint);
                 } else if let Some(b) = base {
                     let st = if !n.state.active {
@@ -1239,7 +1240,13 @@ impl View {
                 if !text.trim().is_empty()
                     && let Some(s) = style
                 {
-                    let color = text::style_color(s, hovered && n.state.active, !n.state.active);
+                    let color = n
+                        .ctrl
+                        .color
+                        .filter(|_| n.state.external_texture.is_some())
+                        .unwrap_or_else(|| {
+                            text::style_color(s, hovered && n.state.active, !n.state.active)
+                        });
                     self.draw_text_in(pack, dl, id, r, &text, Some(Justify::Center), Some(color));
                 }
             }
