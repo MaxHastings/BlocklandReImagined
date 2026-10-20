@@ -26,8 +26,10 @@ pub const MAX_PANEL_FIELD: u16 = 256;
 /// Longest panel, item or button id.
 pub const MAX_PANEL_ID: usize = 32;
 /// The panel's size bounds, in the game's 640x480 screen units.
-pub const PANEL_WIDTH: std::ops::RangeInclusive<u16> = 160..=600;
-pub const PANEL_HEIGHT: std::ops::RangeInclusive<u16> = 100..=440;
+pub const PANEL_WIDTH: std::ops::RangeInclusive<u16> = 160..=640;
+pub const PANEL_HEIGHT: std::ops::RangeInclusive<u16> = 100..=480;
+/// Longest texture id.
+pub const MAX_PANEL_TEXTURE: usize = 160;
 
 /// A window the rules show a player.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -46,12 +48,45 @@ pub struct Panel {
     /// Top to bottom.
     #[serde(default)]
     pub items: Vec<PanelItem>,
+    /// The window's frame and title bar. Off, the panel is only its
+    /// `background` and items, and the title is not shown.
+    #[serde(default = "yes", skip_serializing_if = "is_true")]
+    pub border: bool,
+    /// A picture behind the items, filling the panel.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub background: Option<PanelBackground>,
+    /// Whether the panel takes all the player's input until it is closed
+    /// (the default). Off, the game goes on behind it and only the panel's
+    /// own area takes the pointer.
+    #[serde(default = "yes", skip_serializing_if = "is_true")]
+    pub modal: bool,
+}
+fn yes() -> bool {
+    true
+}
+fn is_true(b: &bool) -> bool {
+    *b
 }
 fn default_width() -> u16 {
     320
 }
 fn default_height() -> u16 {
     260
+}
+
+/// A panel's background picture: an Add-On texture (`package:texture/name`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PanelBackground {
+    pub texture: String,
+    /// Texels of the picture kept at its left, top, right and bottom edges
+    /// at their own size while the middle stretches (nine-slice). Without
+    /// it the whole picture stretches to fill the panel.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub slice: Option<[u16; 4]>,
+    /// RGBA 0..1 the picture is multiplied by (default white).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tint: Option<[f32; 4]>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -68,6 +103,9 @@ pub enum PanelKind {
     Field,
     /// A row of buttons (`buttons`); pressing one is an event.
     Buttons,
+    /// An Add-On picture (`texture`) at `x`, `y`, `w`, `h` inside the panel,
+    /// out of the top-to-bottom flow and drawn in item order (`tint`).
+    Image,
 }
 
 /// One item of a panel. Which fields mean anything depends on its `kind`;
@@ -102,12 +140,47 @@ pub struct PanelItem {
     pub drag: bool,
     #[serde(default)]
     pub buttons: Vec<PanelButton>,
+    /// An image's Add-On texture (`package:texture/name`).
+    #[serde(default)]
+    pub texture: String,
+    /// An image's place and size in the panel, in the panel's units from
+    /// its top-left corner.
+    #[serde(default)]
+    pub x: Option<i16>,
+    #[serde(default)]
+    pub y: Option<i16>,
+    #[serde(default)]
+    pub w: Option<u16>,
+    #[serde(default)]
+    pub h: Option<u16>,
+    /// An image's RGBA 0..1 multiplier (default white).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tint: Option<[f32; 4]>,
 }
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PanelButton {
     pub id: String,
     pub label: String,
+    /// A picture for the button in place of the stock one.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub texture: String,
+    /// The picture while the pointer is over it (default: `texture`).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub hover_texture: String,
+    /// RGBA 0..1 of the caption (default: the stock colour).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color: Option<[f32; 4]>,
+    /// Where the button sits in the panel and how big it is, as an image
+    /// does; without them it takes the next place in its row.
+    #[serde(default)]
+    pub x: Option<i16>,
+    #[serde(default)]
+    pub y: Option<i16>,
+    #[serde(default)]
+    pub w: Option<u16>,
+    #[serde(default)]
+    pub h: Option<u16>,
 }
 
 /// What the player did in a panel, sent back to its rules: the control
@@ -152,6 +225,42 @@ fn line(text: &str, max: usize) -> bool {
     text.chars().count() <= max && !text.chars().any(char::is_control)
 }
 
+/// An Add-On texture id: `package:texture/name`.
+pub fn is_texture_id(id: &str) -> bool {
+    (1..=MAX_PANEL_TEXTURE).contains(&id.len())
+        && id.contains(":texture/")
+        && !id.chars().any(char::is_control)
+}
+
+fn colour(c: &[f32; 4]) -> bool {
+    c.iter().all(|v| (0.0..=1.0).contains(v))
+}
+
+/// A place inside the panel: both corner numbers or neither, both sizes
+/// or neither, and the rectangle within the largest panel.
+fn place_problem(x: Option<i16>, y: Option<i16>, w: Option<u16>, h: Option<u16>) -> Option<String> {
+    if x.is_some() != y.is_some() || w.is_some() != h.is_some() {
+        return Some("x goes with y and w with h".into());
+    }
+    let (right, bottom) = (
+        i32::from(x.unwrap_or(0)) + i32::from(w.unwrap_or(0)),
+        i32::from(y.unwrap_or(0)) + i32::from(h.unwrap_or(0)),
+    );
+    (x.is_some_and(|x| x < 0)
+        || y.is_some_and(|y| y < 0)
+        || w.is_some_and(|w| w == 0)
+        || h.is_some_and(|h| h == 0)
+        || right > i32::from(*PANEL_WIDTH.end())
+        || bottom > i32::from(*PANEL_HEIGHT.end()))
+    .then(|| {
+        format!(
+            "a place is inside the largest panel ({}x{}), with a size of at least 1",
+            PANEL_WIDTH.end(),
+            PANEL_HEIGHT.end()
+        )
+    })
+}
+
 impl PanelItem {
     /// A field's most characters.
     pub fn max_chars(&self) -> u16 {
@@ -159,6 +268,19 @@ impl PanelItem {
     }
     /// What is wrong with this item, if anything.
     fn problem(&self) -> Option<String> {
+        let image = self.kind == PanelKind::Image;
+        let extras = !self.texture.is_empty()
+            || self.x.is_some()
+            || self.y.is_some()
+            || self.w.is_some()
+            || self.h.is_some()
+            || self.tint.is_some();
+        if !image && extras {
+            return Some(format!(
+                "a {:?} item has no texture, place or tint",
+                self.kind
+            ));
+        }
         let unused =
             |what: &str, set: bool| set.then(|| format!("a {:?} item has no {what}", self.kind));
         let no_id = || (!self.id.is_empty()).then(|| format!("a {:?} item has no id", self.kind));
@@ -206,6 +328,26 @@ impl PanelItem {
                         || !line(&self.text, usize::from(self.max_chars())))
                     .then(|| "a field's label and text are single lines within its size".into())
                 }),
+            PanelKind::Image => no_id()
+                .or_else(|| unused("drag", self.drag))
+                .or_else(|| unused("text", !self.text.is_empty()))
+                .or_else(|| unused("label", !self.label.is_empty()))
+                .or_else(|| unused("rows", !self.rows.is_empty()))
+                .or_else(|| unused("buttons", !self.buttons.is_empty()))
+                .or_else(|| {
+                    (!is_texture_id(&self.texture))
+                        .then(|| "an image's texture is an Add-On texture id (package:texture/name)".into())
+                })
+                .or_else(|| {
+                    (self.x.is_none() || self.w.is_none())
+                        .then(|| "an image has x, y, w and h".into())
+                })
+                .or_else(|| place_problem(self.x, self.y, self.w, self.h))
+                .or_else(|| {
+                    self.tint
+                        .is_some_and(|t| !colour(&t))
+                        .then(|| "a tint is RGBA 0..1".into())
+                }),
             PanelKind::Buttons => no_id()
                 .or_else(|| unused("drag", self.drag))
                 .or_else(|| unused("rows", !self.rows.is_empty()))
@@ -219,6 +361,24 @@ impl PanelItem {
                         .iter()
                         .find(|b| !is_panel_id(&b.id) || b.id == "close" || !line(&b.label, MAX_PANEL_LINE))
                         .map(|b| format!("button {:?}: an id of a-z, 0-9 and _ (not `close`), a one-line label", b.id))
+                })
+                .or_else(|| {
+                    self.buttons.iter().find_map(|b| {
+                        let textures = [&b.texture, &b.hover_texture];
+                        let problem = if textures.iter().any(|t| !t.is_empty() && !is_texture_id(t)) {
+                            Some("textures are Add-On texture ids (package:texture/name)")
+                        } else if b.texture.is_empty() && !b.hover_texture.is_empty() {
+                            Some("a hover texture needs a texture")
+                        } else if b.color.is_some_and(|c| !colour(&c)) {
+                            Some("a caption colour is RGBA 0..1")
+                        } else {
+                            None
+                        };
+                        problem
+                            .map(str::to_owned)
+                            .or_else(|| place_problem(b.x, b.y, b.w, b.h))
+                            .map(|p| format!("button {:?}: {p}", b.id))
+                    })
                 }),
         }
     }
@@ -245,6 +405,19 @@ impl Panel {
                 PANEL_HEIGHT.start(),
                 PANEL_HEIGHT.end()
             ));
+        }
+        if let Some(bg) = &self.background {
+            if !is_texture_id(&bg.texture) {
+                return Some(
+                    "a background texture is an Add-On texture id (package:texture/name)".into(),
+                );
+            }
+            if bg.tint.is_some_and(|t| !colour(&t)) {
+                return Some("a background tint is RGBA 0..1".into());
+            }
+            if bg.slice.is_some_and(|s| s.iter().any(|v| *v > 4096)) {
+                return Some("a background slice is at most 4096 texels a side".into());
+            }
         }
         if self.items.len() > MAX_PANEL_ITEMS {
             return Some(format!("a panel has at most {MAX_PANEL_ITEMS} items"));
@@ -407,6 +580,43 @@ mod tests {
         let mut p = shop();
         p.items[0].drag = true;
         assert!(p.problem().unwrap().contains("no drag"));
+    }
+
+    #[test]
+    fn a_menu_panel_has_pictures_a_background_and_textured_buttons() {
+        let mut panel: Panel = serde_json::from_value(serde_json::json!({
+            "id": "teams", "width": 640, "height": 480, "border": false, "modal": false,
+            "background": { "texture": "aa:texture/menu", "slice": [8, 8, 8, 8], "tint": [1, 1, 1, 0.9] },
+            "items": [
+                { "kind": "image", "texture": "aa:texture/logo", "x": 20, "y": 10, "w": 200, "h": 60 },
+                { "kind": "buttons", "buttons": [{
+                    "id": "join", "label": "Join", "texture": "aa:texture/btn",
+                    "hover_texture": "aa:texture/btn_hot", "color": [1, 1, 0, 1],
+                    "x": 30, "y": 100, "w": 120, "h": 30 }] }
+            ]
+        }))
+        .unwrap();
+        assert_eq!(panel.problem(), None);
+        assert!(!panel.border && !panel.modal);
+        // The stock panel is bordered and modal, and says so by default.
+        assert!(shop().border && shop().modal);
+        panel.items[0].w = Some(641);
+        assert!(panel.problem().unwrap().contains("largest panel"));
+        panel.items[0].w = Some(200);
+        panel.items[0].texture = "logo".into();
+        assert!(panel.problem().unwrap().contains("texture id"));
+        panel.items[0].texture = "aa:texture/logo".into();
+        panel.items[1].buttons[0].texture.clear();
+        assert!(panel.problem().unwrap().contains("hover texture needs"));
+        panel.items[1].buttons[0].texture = "aa:texture/btn".into();
+        panel.items[1].buttons[0].w = None;
+        assert!(panel.problem().unwrap().contains("w with h"));
+        panel.items[1].buttons[0].w = Some(120);
+        panel.background.as_mut().unwrap().tint = Some([2.0, 0.0, 0.0, 1.0]);
+        assert!(panel.problem().unwrap().contains("background tint"));
+        let mut p = shop();
+        p.items[0].texture = "aa:texture/x".into();
+        assert!(p.problem().unwrap().contains("no texture"));
     }
 
     fn backpack_and_chest() -> Panel {

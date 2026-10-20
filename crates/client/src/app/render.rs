@@ -2209,6 +2209,7 @@ impl App {
         }
         self.item_ui.register_icons(frame);
         self.addons.hud_regions.register_textures(frame);
+        self.addons.panel_textures.register_textures(frame);
         // Until its pipelines finish compiling, the preview stays due.
         if (self.avatar.preview_dirty
             || self.ui.stack().contains(&bri_ui::screens::ScreenId::Avatar))

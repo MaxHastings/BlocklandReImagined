@@ -58,6 +58,14 @@ pub struct NodeState {
     pub bitmap: Option<String>,
     /// Host texture, sampled over its complete normalized UV rectangle.
     pub external_texture: Option<u64>,
+    /// The host texture's size in texels, which [`NodeState::slice`] and a
+    /// button's hover picture need.
+    pub external_size: Option<[u32; 2]>,
+    /// Texels kept at the left, top, right and bottom edges of the external
+    /// texture at their own size while the middle stretches (nine-slice).
+    pub slice: Option<[i32; 4]>,
+    /// A bitmap button's host texture while the pointer is over it.
+    pub hover_texture: Option<u64>,
     /// mColor for bitmap buttons, colour for swatches, setColor tint for bitmaps.
     pub tint: Option<Rgba>,
     pub value: Value,
@@ -439,6 +447,9 @@ impl View {
                 text: None,
                 bitmap: None,
                 external_texture: None,
+                external_size: None,
+                slice: None,
+                hover_texture: None,
                 tint: None,
                 value: initial_value(c),
                 items: Vec::new(),
@@ -1097,6 +1108,66 @@ impl View {
         ml::draw(pack, dl, &layout, (r.x, r.y), style.font_outline);
     }
 
+    /// A host texture over `r`: stretched, or as nine slices when `slice`
+    /// (left, top, right, bottom texels) and the texture's size are known.
+    fn draw_external(
+        dl: &mut DrawList,
+        id: u64,
+        size: Option<[u32; 2]>,
+        slice: Option<[i32; 4]>,
+        r: Rect,
+        tint: Rgba,
+    ) {
+        let whole = [r.x as f32, r.y as f32, r.w as f32, r.h as f32];
+        let (Some([tw, th]), Some([l, t, rt, b])) = (size, slice) else {
+            dl.image(
+                TexKey::External(id),
+                [0.0, 0.0, 1.0, 1.0],
+                whole,
+                tint,
+                Filter::Linear,
+            );
+            return;
+        };
+        let (tw, th) = (tw.max(1) as f32, th.max(1) as f32);
+        // Edges shrink together when the rectangle is smaller than their sum.
+        let fit = |a: i32, c: i32, span: i32| {
+            let (a, c) = (a.max(0), c.max(0));
+            if a + c > span && a + c > 0 {
+                let k = span as f32 / (a + c) as f32;
+                ((a as f32 * k) as i32, (c as f32 * k) as i32)
+            } else {
+                (a, c)
+            }
+        };
+        let (dl_, dr) = fit(l, rt, r.w);
+        let (dt, db) = fit(t, b, r.h);
+        let xs = [0, dl_, r.w - dr, r.w];
+        let ys = [0, dt, r.h - db, r.h];
+        let us = [0.0, l as f32 / tw, 1.0 - rt as f32 / tw, 1.0];
+        let vs = [0.0, t as f32 / th, 1.0 - b as f32 / th, 1.0];
+        for row in 0..3 {
+            for col in 0..3 {
+                let (w, h) = (xs[col + 1] - xs[col], ys[row + 1] - ys[row]);
+                if w <= 0 || h <= 0 {
+                    continue;
+                }
+                dl.image(
+                    TexKey::External(id),
+                    [us[col], vs[row], us[col + 1], vs[row + 1]],
+                    [
+                        (r.x + xs[col]) as f32,
+                        (r.y + ys[row]) as f32,
+                        w as f32,
+                        h as f32,
+                    ],
+                    tint,
+                    Filter::Linear,
+                );
+            }
+        }
+    }
+
     fn draw_self(&self, pack: &Pack, dl: &mut DrawList, id: NodeId) {
         let n = &self.nodes[id];
         let r = n.rect;
@@ -1112,12 +1183,13 @@ impl View {
             | "GuiCrossHairHud" => {
                 let bmp = n.state.bitmap.clone().or_else(|| n.ctrl.bitmap.clone());
                 if let Some(id) = n.state.external_texture {
-                    dl.image(
-                        TexKey::External(id),
-                        [0.0, 0.0, 1.0, 1.0],
-                        [r.x as f32, r.y as f32, r.w as f32, r.h as f32],
+                    Self::draw_external(
+                        dl,
+                        id,
+                        n.state.external_size,
+                        n.state.slice,
+                        r,
                         n.state.tint.unwrap_or(WHITE),
-                        Filter::Linear,
                     );
                 } else if let Some(b) = bmp {
                     let tint = n.state.tint.unwrap_or(WHITE);
@@ -1137,7 +1209,16 @@ impl View {
             }
             "GuiBitmapButtonCtrl" => {
                 let base = n.state.bitmap.clone().or_else(|| n.ctrl.bitmap.clone());
-                if let Some(b) = base {
+                if let Some(host) = n.state.external_texture {
+                    // The host's picture for this button, and its own for the pointer over it.
+                    let id = n
+                        .state
+                        .hover_texture
+                        .filter(|_| hovered && n.state.active)
+                        .unwrap_or(host);
+                    let tint = n.state.tint.or(n.ctrl.color).unwrap_or(WHITE);
+                    Self::draw_external(dl, id, None, None, r, tint);
+                } else if let Some(b) = base {
                     let st = if !n.state.active {
                         "_i"
                     } else if down {

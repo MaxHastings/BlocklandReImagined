@@ -343,6 +343,7 @@ impl App {
                 left_out_add_ons: None,
                 add_on_health: Default::default(),
                 hud_regions: Default::default(),
+                panel_textures: Default::default(),
                 edits: Default::default(),
             },
             world_shapes: None,

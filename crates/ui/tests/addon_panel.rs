@@ -28,6 +28,17 @@ fn ui() -> Ui {
     )
 }
 
+fn button(id: &str, label: &str) -> PanelButtonView {
+    PanelButtonView {
+        id: id.into(),
+        label: label.into(),
+        picture: None,
+        hover_picture: None,
+        color: None,
+        rect: None,
+    }
+}
+
 fn shop() -> PanelView {
     PanelView {
         package: "rp".into(),
@@ -50,11 +61,11 @@ fn shop() -> PanelView {
                 text: "Max".into(),
                 max: 12,
             },
-            PanelItemView::Buttons(vec![
-                ("buy".into(), "Buy".into()),
-                ("sell".into(), "Sell".into()),
-            ]),
+            PanelItemView::Buttons(vec![button("buy", "Buy"), button("sell", "Sell")]),
         ],
+        border: true,
+        modal: true,
+        background: None,
     }
 }
 
@@ -187,6 +198,9 @@ fn backpack_and_chest() -> PanelView {
                 drag: false,
             },
         ],
+        border: true,
+        modal: true,
+        background: None,
     }
 }
 
@@ -273,4 +287,61 @@ fn a_row_dragged_from_the_backpack_to_the_chest_goes_to_the_rules() {
             .iter()
             .all(|a| matches!(a, UiAction::PanelEvent { drop: None, .. })),
     );
+}
+
+#[test]
+fn a_menu_panel_draws_its_pictures_with_no_frame_and_steps_aside_when_not_modal() {
+    let picture = |key: u64| PanelPicture {
+        key,
+        size: [64, 64],
+    };
+    let mut menu = shop();
+    menu.width = 640;
+    menu.height = 480;
+    menu.border = false;
+    menu.modal = false;
+    menu.background = Some(PanelBackgroundView {
+        picture: Some(picture(1)),
+        slice: Some([8, 8, 8, 8]),
+        tint: [1.0; 4],
+    });
+    menu.items = vec![
+        PanelItemView::Image {
+            picture: Some(picture(2)),
+            rect: [20, 10, 200, 60],
+            tint: [1.0, 1.0, 1.0, 0.5],
+        },
+        PanelItemView::Buttons(vec![PanelButtonView {
+            picture: Some(picture(3)),
+            hover_picture: Some(picture(4)),
+            color: Some([1.0, 1.0, 0.0, 1.0]),
+            rect: Some([30, 100, 120, 30]),
+            ..button("buy", "Buy")
+        }]),
+    ];
+    let mut ui = ui();
+    ui.apply(UiUpdate::Panel(Some(menu)));
+    ui.update(0);
+    let v = view(&ui);
+    assert!(
+        v.walk().all(|n| v.node(n).ctrl.class != "GuiWindowCtrl"),
+        "no frame"
+    );
+    let background = v.node(v.id("Panel_Background").unwrap());
+    assert_eq!(background.state.external_texture, Some(1));
+    assert_eq!(background.state.slice, Some([8, 8, 8, 8]));
+    assert_eq!(background.rect.w, 640);
+    let image = v.node(v.id("Panel_Image_0").unwrap());
+    assert_eq!(image.state.external_texture, Some(2));
+    assert_eq!((image.rect.w, image.rect.h), (200, 60));
+    let buy = v.node(v.id("Panel_Button_buy").unwrap());
+    assert_eq!(
+        (buy.state.external_texture, buy.state.hover_texture),
+        (Some(3), Some(4))
+    );
+    assert_eq!((buy.rect.w, buy.rect.h), (120, 30));
+    let panel = ui.screen(ScreenId::AddOnPanel).unwrap();
+    assert!(!panel.modal() && panel.wants_mouse());
+    event(&mut ui, "Panel_Button_buy", EventKind::Click);
+    assert_eq!(actions(&mut ui).len(), 1);
 }

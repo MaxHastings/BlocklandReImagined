@@ -8,7 +8,7 @@
 //! reorders its own: the drop goes to the rules too, which move the row
 //! (or refuse) by showing the panel again.
 use super::*;
-use crate::api::{PanelDropView, PanelItemView, PanelView, UiAction};
+use crate::api::{PanelDropView, PanelItemView, PanelPicture, PanelView, UiAction};
 use crate::view::EventKind;
 
 const MARGIN: i32 = 12;
@@ -19,6 +19,8 @@ const LABEL_WIDTH: i32 = 110;
 const LIST: &str = "Panel_List_";
 const FIELD: &str = "Panel_Field_";
 const BUTTON_NAME: &str = "Panel_Button_";
+const BACKGROUND: &str = "Panel_Background";
+const IMAGE: &str = "Panel_Image_";
 
 fn named(mut c: Control, name: String) -> Control {
     c.name = Some(name);
@@ -42,6 +44,8 @@ fn plain_lines(text: &str) -> String {
         .join("<br>")
 }
 
+/// A node by name, its picture, its hover picture and its tint.
+type Pictured = (String, PanelPicture, Option<PanelPicture>, Option<[f32; 4]>);
 /// Every field's text, by id.
 type Fields = Vec<(String, String)>;
 /// Every list's picked row, by id.
@@ -57,25 +61,37 @@ impl AddOnPanel {
     pub fn new(core: &Core) -> Self {
         let shown = core.panel.clone().unwrap_or_default();
         let (w, h) = (
-            i32::from(shown.width).clamp(160, 600),
-            i32::from(shown.height).clamp(100, 440),
+            i32::from(shown.width).clamp(160, 640),
+            i32::from(shown.height).clamp(100, 480),
         );
         let mut root = ctrl("GuiControl", "GuiDefaultProfile", Rect::new(0, 0, 640, 480));
-        let mut win = ctrl(
-            "GuiWindowCtrl",
-            "BlockWindowProfile",
-            Rect::new((640 - w) / 2, (480 - h) / 2, w, h),
-        );
-        win.text = Some(if shown.title.is_empty() {
-            "Panel".into()
+        let place = Rect::new((640 - w) / 2, (480 - h) / 2, w, h);
+        let mut win = if shown.border {
+            ctrl("GuiWindowCtrl", "BlockWindowProfile", place)
         } else {
-            shown.title.clone()
-        });
+            ctrl("GuiControl", "GuiDefaultProfile", place)
+        };
+        if shown.border {
+            win.text = Some(if shown.title.is_empty() {
+                "Panel".into()
+            } else {
+                shown.title.clone()
+            });
+        }
         win.h_sizing = HSizing::Center;
         win.v_sizing = VSizing::Center;
+        if shown.background.is_some() {
+            win.children.push(named(
+                ctrl("GuiBitmapCtrl", "HUDBitmapProfile", Rect::new(0, 0, w, h)),
+                BACKGROUND.into(),
+            ));
+        }
         let inner = w - 2 * MARGIN;
-        let mut y = 34;
-        for item in &shown.items {
+        let mut y = if shown.border { 34 } else { MARGIN };
+        // Pictures to set once the view exists: node name, picture, and the
+        // hover picture and tint of a button.
+        let mut pictures: Vec<Pictured> = Vec::new();
+        for (n, item) in shown.items.iter().enumerate() {
             match item {
                 PanelItemView::Text(t) => {
                     let markup = plain_lines(t);
@@ -137,27 +153,83 @@ impl AddOnPanel {
                     y += LINE + GAP;
                 }
                 PanelItemView::Buttons(buttons) => {
-                    for (i, (id, label)) in buttons.iter().enumerate() {
-                        let x = MARGIN + i as i32 * (BUTTON.0 + GAP);
-                        let name = format!("{BUTTON_NAME}{id}");
-                        win.children.push(named(
+                    let mut flowed = false;
+                    for (i, b) in buttons.iter().enumerate() {
+                        let name = format!("{BUTTON_NAME}{}", b.id);
+                        let rect = match b.rect {
+                            Some([bx, by, bw, bh]) => Rect::new(bx, by, bw, bh),
+                            None => {
+                                flowed = true;
+                                let x = MARGIN + i as i32 * (BUTTON.0 + GAP);
+                                Rect::new(x, y, BUTTON.0, BUTTON.1)
+                            }
+                        };
+                        let mut c = named(
                             button(
                                 "BlockButtonProfile",
-                                Rect::new(x, y, BUTTON.0, BUTTON.1),
+                                rect,
                                 "base/client/ui/button1",
-                                label,
+                                &b.label,
                                 &name,
                             ),
                             name.clone(),
-                        ));
+                        );
+                        if let Some(colour) = b.color {
+                            c.color = Some(crate::screens::rgba(colour));
+                        }
+                        win.children.push(c);
+                        if let Some(p) = b.picture {
+                            pictures.push((name, p, b.hover_picture, None));
+                        }
                     }
-                    y += BUTTON.1 + GAP;
+                    if flowed {
+                        y += BUTTON.1 + GAP;
+                    }
+                }
+                PanelItemView::Image {
+                    picture,
+                    rect: [ix, iy, iw, ih],
+                    tint,
+                } => {
+                    let name = format!("{IMAGE}{n}");
+                    win.children.push(named(
+                        ctrl(
+                            "GuiBitmapCtrl",
+                            "HUDBitmapProfile",
+                            Rect::new(*ix, *iy, *iw, *ih),
+                        ),
+                        name.clone(),
+                    ));
+                    if let Some(p) = picture {
+                        pictures.push((name, *p, None, Some(*tint)));
+                    }
                 }
             }
         }
         root.children.push(win);
         let mut view = View::new(&root);
         view.measure(&core.pack);
+        if let Some(background) = &shown.background
+            && let Some(p) = background.picture
+            && let Some(n) = view.id(BACKGROUND)
+        {
+            let state = view.state(n);
+            state.external_texture = Some(p.key);
+            state.external_size = Some(p.size);
+            state.slice = background.slice.map(|s| s.map(i32::from));
+            state.tint = Some(crate::screens::rgba(background.tint));
+        }
+        for (name, picture, hover, tint) in &pictures {
+            if let Some(n) = view.id(name) {
+                let state = view.state(n);
+                state.external_texture = Some(picture.key);
+                state.external_size = Some(picture.size);
+                state.hover_texture = hover.map(|h| h.key);
+                if let Some(t) = tint {
+                    state.tint = Some(crate::screens::rgba(*t));
+                }
+            }
+        }
         for item in &shown.items {
             if let PanelItemView::List {
                 id, rows, selected, ..
@@ -253,6 +325,12 @@ impl Screen for AddOnPanel {
     }
     fn view_mut(&mut self) -> &mut View {
         &mut self.view
+    }
+    fn modal(&self) -> bool {
+        self.shown.modal
+    }
+    fn wants_mouse(&self) -> bool {
+        !self.shown.modal
     }
     fn on_key(&mut self, key: Key, _mods: Modifiers, core: &mut Core) -> bool {
         if key == Key::Escape {

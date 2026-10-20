@@ -570,15 +570,26 @@ else from whatever made them. A game without the hook never pays for it.
 built from the game's own widgets, and replaces any panel they have open;
 `close_panel(p, id)` closes it. A shop, a bank, a job board or a gate editor
 needs no client code. `panel` is `#{ id, title, width, height, items }`,
-160 to 600 wide and 100 to 440 tall in the 640 by 480 screen, with up to
-24 items top to bottom:
+160 to 640 wide and 100 to 480 tall in the 640 by 480 screen, with up to
+24 items top to bottom (and the options below):
 
 | `kind` | Fields |
 |---|---|
 | `"text"` | `text`: lines of plain text (no markup), up to 1024 characters |
 | `"list"` | `id`, `rows` (up to 256 lines of 96 characters), `selected` (a row or `()`), `height` (40 to 400, default 120), `drag` (`true`: rows can be dragged to another list with `drag`, or to another place in this one) |
 | `"field"` | `id`, `label`, `text` to start with, `max` characters (1 to 256, default 64) |
-| `"buttons"` | `buttons`: up to 6 `#{ id, label }` |
+| `"buttons"` | `buttons`: up to 6 `#{ id, label }`, each optionally with `texture` (an Add-On picture `package:texture/name` in place of the stock button), `hover_texture` (while the pointer is over it, default `texture`), `color` (the caption's RGBA 0..1) and `x`, `y`, `w`, `h` (its own place in the panel; without them it takes the next place in its row) |
+| `"image"` | `texture` (`package:texture/name`), `x`, `y`, `w`, `h` (its place and size inside the panel, from its top-left corner; it takes no room in the top-to-bottom flow and draws in item order), optional `tint` (RGBA 0..1) |
+
+Textures are images of the Add-On that shows the panel; one that cannot be
+read is reported in the Add-On's health and left out. Beside `items`, a panel
+takes `background` `#{ texture, slice, tint }` (a picture behind everything,
+stretched over the panel, or as nine slices when `slice` `[left, top, right,
+bottom]` gives the texels kept at each edge at their own size), `border`
+(`false` leaves out the window's frame and title bar, so the panel is only
+its background and items; default `true`) and `modal` (default `true`: the
+panel takes all the player's input until closed; `false` keeps the game
+running behind it and only its own area takes the pointer).
 
 Ids are 1 to 32 of a-z, 0-9 and `_`, each used once; `close` is the close
 box's. What the player does comes to `on_panel(player, event)`: a button
