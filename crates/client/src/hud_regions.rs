@@ -40,6 +40,8 @@ pub struct GameValues {
     pub contacts: Vec<Contact>,
     /// The viewer's level facing (x, z), for edge arrows.
     pub facing: [f32; 2],
+    /// The viewer's position (x, z) in the world.
+    pub position: [f32; 2],
     /// The way the viewer's body faces in degrees (clockwise from -z), the
     /// camera's field of view, and whether they aim down sights.
     pub heading: f32,
@@ -263,6 +265,7 @@ impl HudRegions {
             kills: &game.kills,
             contacts: &game.contacts,
             facing: game.facing,
+            position: game.position,
         };
         let mut texts = BTreeMap::new();
         let mut kill_feed = false;
