@@ -85,6 +85,9 @@ pub use team::BotTeamView;
 #[derive(Clone, Debug)]
 pub struct BotThought {
     pub bot: OwnerId,
+    /// It was refused sight rays lately (the tick's share was spent), so
+    /// an enemy may have gone unseen for that, not for being hidden.
+    pub sight_starved: bool,
     pub behaviour: &'static str,
     /// The leg of its route it is on: walk, swim, jet or drive (none: no
     /// route).

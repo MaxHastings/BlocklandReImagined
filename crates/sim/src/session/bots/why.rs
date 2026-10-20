@@ -6,6 +6,8 @@ use super::*;
 
 /// Lines in a readout.
 pub const WHY_LINES: usize = 5;
+/// How recently a refusal of sight rays still counts, in ticks (a second).
+const SIGHT_STARVED_TICKS: u64 = 120;
 
 impl BotThought {
     /// The readout at `tick`, at most [`WHY_LINES`] lines.
@@ -72,6 +74,9 @@ impl BotThought {
                 e.position[1],
                 e.position[2]
             ),
+            (None, None) if self.sight_starved => {
+                "Noticed nothing (sight rays ran out)".to_string()
+            }
             (None, None) => "Noticed nothing".to_string(),
         };
         // A glance or reaction still under way (`perception`).
@@ -93,6 +98,12 @@ impl Session {
             .iter()
             .map(|(bot, b)| BotThought {
                 bot: *bot,
+                sight_starved: self
+                    .bots
+                    .sightlines
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .starved(*bot, tick, SIGHT_STARVED_TICKS),
                 behaviour: b.behaviour.name(),
                 leg: if self.bot_vehicle_body(*bot).is_some() && !b.plan.is_empty() {
                     "drive"
@@ -213,6 +224,7 @@ mod tests {
     fn the_readout_names_the_choice_its_rivals_terms_and_what_it_noticed() {
         let mut t = BotThought {
             bot: 7,
+            sight_starved: false,
             behaviour: "chase",
             leg: "walk",
             visible: None,
