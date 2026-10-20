@@ -32,7 +32,11 @@ impl PanelTextures {
     ) -> Option<PanelPicture> {
         // A texture id names its own Add-On (`package:texture/name`): a rules Add-On runs on the host only, so
         // its pictures live in a client Add-On the id points at; an id with no owner falls back to the shower.
-        let package = texture.split(':').next().filter(|p| !p.is_empty()).unwrap_or(package);
+        let package = texture
+            .split(':')
+            .next()
+            .filter(|p| !p.is_empty())
+            .unwrap_or(package);
         let name = (package.to_owned(), texture.to_owned());
         if let Some(picture) = self.keys.get(&name) {
             return Some(*picture);
