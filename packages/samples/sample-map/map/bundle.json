@@ -44,6 +44,9 @@
       "warnings": []
     }
   },
+  "identities": {
+    "sample-map:map/sample-map": {}
+  },
   "lighting": {},
   "maps": [
     {
