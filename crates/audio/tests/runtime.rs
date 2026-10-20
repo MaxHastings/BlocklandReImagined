@@ -614,3 +614,56 @@ fn a_playing_loop_changes_volume_and_pitch_in_place() {
             .any(|e| matches!(e, AudioEvent::Finished { .. }))
     );
 }
+
+#[test]
+fn a_cut_hearing_range_silences_a_sound_beyond_it_and_restores() {
+    let mut rt = offline(linear);
+    let clip = bri_audio::wav::encode_pcm16(22050, 1, &sine(22050, 1, 1.0, 220.0, 0.5));
+    let mut asset = SoundAsset::decoded("hum", &clip, "wav", 10.0, 60.0).unwrap();
+    asset.playback.looping = true;
+    let h = rt
+        .play_asset(
+            std::sync::Arc::new(asset),
+            Placement::World([0.0, 0.0, -30.0]),
+            1.0,
+        )
+        .unwrap();
+    seconds(&mut rt, 0.05);
+    let open = rms(&seconds(&mut rt, 0.3));
+    assert!(open > 0.01, "heard {open}");
+    // A wall: the way carries 40% as far, so 30 units is beyond it.
+    rt.set_voice_hearing(
+        h,
+        Hearing {
+            reach: 0.4,
+            reference: 0.35,
+        },
+    )
+    .unwrap();
+    seconds(&mut rt, 0.1);
+    assert_eq!(rms(&seconds(&mut rt, 0.3)), 0.0);
+    rt.set_voice_hearing(h, Hearing::CLEAR).unwrap();
+    seconds(&mut rt, 0.1);
+    assert!((rms(&seconds(&mut rt, 0.3)) / open - 1.0).abs() < 0.05);
+}
+
+#[test]
+fn a_room_gives_effects_a_tail_and_a_dry_room_none() {
+    let tail_after = |room: Room| {
+        let mut rt = offline(linear);
+        rt.set_reverb(room).unwrap();
+        // The room glides in.
+        seconds(&mut rt, 1.0);
+        rt.play("BoomSound", Placement::Listener).unwrap();
+        seconds(&mut rt, 0.3);
+        let tail = seconds(&mut rt, 0.5);
+        assert_finite(&tail);
+        rms(&tail)
+    };
+    assert_eq!(tail_after(Room::DRY), 0.0);
+    let wet = tail_after(Room {
+        wet: 0.8,
+        decay_seconds: 2.0,
+    });
+    assert!(wet > 0.001, "tail {wet}");
+}

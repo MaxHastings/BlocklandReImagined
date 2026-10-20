@@ -1066,7 +1066,7 @@ impl App {
             self.lighting.light_volume = prepared.light_volume;
             self.scene.cpu_scene = Some(prepared.scene);
             self.scene.backdrop = prepared.backdrop;
-            self.scene.regions = prepared.regions;
+            self.scene.set_regions(prepared.regions);
             self.scene.decals = prepared.decals;
             self.scene.receiver_index = Some(prepared.receiver_index);
             self.scene.fog_blend = Default::default();

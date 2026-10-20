@@ -8,6 +8,8 @@ pub(super) struct SceneState {
     pub(super) backdrop: Option<bri_render::scene_loader::BackdropScene>,
     /// The map's regions with their own fog, and the viewer's fog across them.
     pub(super) regions: Option<bri_content::regions::RegionMap>,
+    /// How the map's sounds carry, when its regions say ([`Self::set_regions`]).
+    pub(super) sound_carry: Option<crate::sound_carry::SoundCarryModel>,
     /// The map's decals and the triangles they draw on.
     pub(super) decals: Option<bri_render::decals::LoadedDecals>,
     pub(super) receiver_index: Option<Arc<bri_render::decals::ReceiverIndex>>,
@@ -57,4 +59,14 @@ pub(super) struct SceneState {
     /// Chunk rebuild jobs started and chunks they rebuilt, since load.
     pub(super) chunk_jobs: u64,
     pub(super) chunks_rebuilt: u64,
+}
+
+impl SceneState {
+    /// The map's regions, with the way its sounds carry worked out from them.
+    pub(super) fn set_regions(&mut self, regions: Option<bri_content::regions::RegionMap>) {
+        self.sound_carry = regions
+            .as_ref()
+            .and_then(crate::sound_carry::SoundCarryModel::new);
+        self.regions = regions;
+    }
 }

@@ -99,6 +99,47 @@ pub fn inverse_clamped_attenuation(distance: f32, reference: f32, max: f32) -> f
     reference / distance.max(reference)
 }
 
+/// How much of a placed sound's range reaches the listener along the way between them: a wall in the line, or rooms between.
+/// `reach` scales the distance beyond which it is not heard and `reference` the share of that cut distance still at full
+/// volume (1 each when nothing is in the way).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Hearing {
+    pub reach: f32,
+    pub reference: f32,
+}
+
+impl Hearing {
+    /// Nothing in the way: the sound carries as authored.
+    pub const CLEAR: Self = Self {
+        reach: 1.0,
+        reference: 1.0,
+    };
+
+    pub fn sanitized(self) -> Self {
+        let unit = |v: f32, fallback: f32| {
+            if v.is_finite() {
+                v.clamped(0.0, 1.0)
+            } else {
+                fallback
+            }
+        };
+        Self {
+            reach: unit(self.reach, 1.0),
+            reference: unit(self.reference, 1.0),
+        }
+    }
+
+    /// `spatial` with its range cut: the maximum distance by `reach`, the full-volume distance by `reach` and then `reference`
+    /// (so a sound whose way is blocked is quieter near as well as far).
+    pub fn apply(&self, spatial: crate::schema::Spatial) -> crate::schema::Spatial {
+        crate::schema::Spatial {
+            reference_distance: spatial.reference_distance * self.reach * self.reference,
+            max_distance: spatial.max_distance * self.reach,
+            ..spatial
+        }
+    }
+}
+
 /// The gain a positional sound's falloff gives at `distance`.
 pub fn attenuation(spatial: &crate::schema::Spatial, distance: f32) -> f32 {
     match spatial.falloff {
@@ -246,6 +287,33 @@ pub fn heard<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_cut_range_brings_the_edge_and_the_loud_part_in() {
+        let spatial = crate::schema::Spatial {
+            reference_distance: 10.0,
+            max_distance: 100.0,
+            falloff: crate::schema::Falloff::InverseClamped,
+        };
+        assert_eq!(Hearing::CLEAR.apply(spatial), spatial);
+        let blocked = Hearing {
+            reach: 0.5,
+            reference: 0.4,
+        }
+        .apply(spatial);
+        assert_eq!(blocked.max_distance, 50.0);
+        assert_eq!(blocked.reference_distance, 2.0);
+        assert!(attenuation(&blocked, 20.0) < attenuation(&spatial, 20.0));
+        assert_eq!(attenuation(&blocked, 51.0), 0.0);
+        assert!(
+            Hearing {
+                reach: f32::NAN,
+                reference: 7.0
+            }
+            .sanitized()
+                == Hearing::CLEAR
+        );
+    }
 
     #[test]
     fn a_source_beyond_a_window_is_heard_as_near_as_it_shows() {

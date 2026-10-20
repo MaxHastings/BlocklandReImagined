@@ -84,6 +84,13 @@ pub(crate) enum Command {
         gain_scale: f32,
         pitch_scale: f32,
     },
+    /// How much of a placed voice's range reaches the listener.
+    SetVoiceHearing {
+        handle: SoundHandle,
+        hearing: crate::spatial::Hearing,
+    },
+    /// The room sound effects ring in.
+    SetReverb(crate::reverb::Room),
     SetListener(Listener),
     /// At most `spatial::MAX_WINDOWS`.
     SetWindows(Box<[crate::spatial::Window]>),

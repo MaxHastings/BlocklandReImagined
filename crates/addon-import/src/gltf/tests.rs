@@ -939,9 +939,10 @@ fn regions_move_into_the_native_frame_and_the_import_scale() {
             Region {
                 fog: Some(fog),
                 ambient: None,
-                suns: Vec::new(),
+                ..Region::default()
             },
         ],
+        sound: None,
     };
     let file = root.path().join("regions.json");
     std::fs::write(&file, serde_json::to_vec(&map).unwrap()).unwrap();

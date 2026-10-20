@@ -2130,7 +2130,7 @@ impl App {
             self.lighting.light_volume.overflow = visual.overflow_lights;
             self.scene.cpu_scene = Some(visual.scene);
             self.scene.backdrop = visual.backdrop;
-            self.scene.regions = visual.regions;
+            self.scene.set_regions(visual.regions);
             self.scene.decals = visual.decals;
             self.scene.receiver_index = Some(visual.receiver_index);
             self.scene.cpu_terrain = visual.terrain.into_iter().map(Arc::new).collect();

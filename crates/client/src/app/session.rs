@@ -168,7 +168,7 @@ impl App {
         self.controls = Controls::default();
         self.scene.cpu_scene = None;
         self.scene.backdrop = None;
-        self.scene.regions = None;
+        self.scene.set_regions(None);
         self.scene.decals = None;
         self.scene.receiver_index = None;
         self.scene.decal_feed = Default::default();

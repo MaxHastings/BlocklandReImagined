@@ -251,6 +251,7 @@ impl App {
                 cpu_scene: None,
                 backdrop: None,
                 regions: None,
+                sound_carry: None,
                 decals: None,
                 receiver_index: None,
                 decal_feed: Default::default(),

@@ -75,6 +75,7 @@ pub mod saves;
 pub mod servers;
 pub mod settings;
 pub mod shot_origins;
+pub mod sound_carry;
 pub mod splash;
 #[cfg(target_os = "linux")]
 pub mod system_libraries;
