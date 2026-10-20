@@ -79,9 +79,22 @@ impl Decal {
     }
 }
 
+/// A picture a game's projectors attach by name while it runs (a map's Projector actors, a bullet hole), held by the decal layer
+/// whether or not the map has a decal of it.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct PictureRef {
+    /// What the game's scripts call it (a `ProjTexture` path).
+    pub name: String,
+    /// The picture's PNG, relative to the decals file.
+    pub file: String,
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct DecalSet {
     pub decals: Vec<Decal>,
+    /// Pictures for projectors that attach as the game runs.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub pictures: Vec<PictureRef>,
     /// What the baker could not honour (receiver classes it cannot tell apart, ...), for the log.
     #[serde(default)]
     pub notes: Vec<String>,
@@ -92,6 +105,16 @@ impl DecalSet {
         ensure!(self.decals.len() <= 4096, "A map names at most 4096 decals");
         for d in &self.decals {
             d.validate()?;
+        }
+        ensure!(
+            self.pictures.len() <= 4096,
+            "A map names at most 4096 pictures"
+        );
+        for p in &self.pictures {
+            ensure!(
+                !p.name.is_empty() && !p.file.is_empty() && !p.file.contains(['/', '\\']),
+                "A decal picture needs a name and a file name"
+            );
         }
         Ok(())
     }

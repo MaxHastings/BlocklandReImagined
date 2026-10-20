@@ -1,4 +1,4 @@
-//! A map Add-On's decals from `--decals FILE.json` (docs/modding/maps.md): a [`bri_content::decals::DecalSet`] already in the native frame,
+//! A map Add-On's projector pictures from `--projector-pictures FILE.json` (docs/modding/maps.md): a [`bri_content::decals::DecalSet`] already in the native frame,
 //! with each decal's `picture` a PNG beside the file. The pictures and the set are copied into the map's bundle and listed in its `decals`
 //! table.
 use super::map_scatter::Put;
@@ -18,12 +18,16 @@ pub(super) fn decals(opts: &Options, id: &str, put: Put<'_>, report: &mut Report
         file: None,
         textures: BTreeMap::new(),
     };
-    let Some(path) = &opts.decals else {
+    let Some(path) = &opts.projector_pictures else {
         return Ok(built);
     };
     let text = std::fs::read(path).with_context(|| format!("Reading decals {}", path.display()))?;
     let set: DecalSet = serde_json::from_slice(&text).context("Reading the map's decals")?;
     set.validate()?;
+    ensure!(
+        set.decals.is_empty(),
+        "--projector-pictures carries pictures only; a game's projectors attach at run time and are not baked into the map"
+    );
     let dir = path.parent().unwrap_or(std::path::Path::new("."));
     let mut copied = BTreeMap::new();
     for decal in &set.decals {
@@ -45,6 +49,26 @@ pub(super) fn decals(opts: &Options, id: &str, put: Put<'_>, report: &mut Report
     let mut set = set;
     for decal in &mut set.decals {
         decal.picture = copied[&decal.picture].clone();
+    }
+    for picture in &mut set.pictures {
+        let name = match copied.get(&picture.file) {
+            Some(name) => name.clone(),
+            None => {
+                let bytes = std::fs::read(dir.join(&picture.file))
+                    .with_context(|| format!("Reading decal picture {}", picture.file))?;
+                ensure!(
+                    bytes.starts_with(b"\x89PNG"),
+                    "Decal picture {} is not a PNG",
+                    picture.file
+                );
+                let name = format!("{id}_decal_{}", picture.file);
+                put(&format!("map/{name}"), &bytes, report)?;
+                built.textures.insert(name.clone(), name.clone());
+                copied.insert(picture.file.clone(), name.clone());
+                name
+            }
+        };
+        picture.file = name;
     }
     report
         .warnings
