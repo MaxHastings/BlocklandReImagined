@@ -432,7 +432,13 @@ impl<'a> Ground<'a> {
                 return false;
             }
             let motion = self.motions.get(i).copied().unwrap_or(Vec3::ZERO);
-            let going = centre + Vec3::new(motion.x, 0.0, motion.z) * MOTION_AHEAD;
+            let motion = Vec3::new(motion.x, 0.0, motion.z);
+            // A body standing still is walked round or moves aside; only
+            // one on the move funnels bodies into the same gap.
+            if motion.length() < MOVING {
+                return false;
+            }
+            let going = centre + motion * MOTION_AHEAD;
             let reach = body.width * 0.5 + (max.x - min.x).max(max.z - min.z) * 0.5;
             segment_gap(at, at, centre, going) < reach
         })
@@ -643,6 +649,9 @@ const SNUG: f32 = 0.6;
 /// body stands at or is walking to: bodies sent along one route by the same
 /// search fan out across a gap's width rather than all aiming at one corner.
 const CROWDED: f32 = 3.0;
+/// The speed, in units a second, from which another body counts as on the
+/// move for [`CROWDED`].
+const MOVING: f32 = 0.5;
 /// Most grid steps a pulled straight walk passes over at once.
 const PULL_REACH: usize = 16;
 /// How far past touching [`Ground::settle`] pushes a body out of what it
