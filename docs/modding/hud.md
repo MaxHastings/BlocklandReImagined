@@ -192,6 +192,18 @@ back to the stock HUD when nothing claims a region.
   the camera. Claim `top_center`, `bottom_center`, `left` and `right` with one
   arrow each. Flashing a meter needs nothing more than `show` on a value the
   rule flips.
+- `strip`: a picture strip scrolled by the way the viewer faces, as a
+  compass. `textures` (one to eight, equal width) are laid end to end to make
+  one whole turn, and `rect` shows `span` degrees (a number, or a value such
+  as `fov`) centred on `heading` (the value `heading`, degrees clockwise from
+  north, which is straight ahead along the world's -z), wrapping round.
+- `strip_marker`: a picture on a `strip` at the bearing of a point in the
+  world, for objective letters on a compass. Give it the strip's own `rect`,
+  `heading` and `span`, the picture as `texture` with its `size` [w, h], and
+  `x` and `z`, rule values giving the point's world position. It draws
+  nothing while either value is missing, while the viewer stands on the point,
+  or while the point lies outside the `span` degrees the strip shows. Use one
+  per point.
 - Any element takes `show` `{ "value", "above", "below" }` to appear only
   while a value is in range: a low-health flash, a reload prompt.
 
