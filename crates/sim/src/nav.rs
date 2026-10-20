@@ -127,7 +127,13 @@ impl Body {
             jump: reach.ledge.max(tuning.step_height),
             crawl_jump: reach.crawl_ledge.max(tuning.step_height),
             crawl_step: reach.crawl_step,
-            drop: 4.0,
+            // The deepest drop it lands from unhurt, when its body has a fall
+            // law (the landing speed of the fall stays under the harm
+            // threshold); one that takes no harm walks off four.
+            drop: tuning.fall.map_or(4.0, |fall| {
+                let safe = (fall.threshold * scale).powi(2) / (2.0 * tuning.gravity.max(1.0));
+                (safe * 0.95).max(4.0)
+            }),
             floor_cos: tuning.slope_degrees.to_radians().cos(),
             conservative: false,
             bottom: 0.0,
@@ -770,6 +776,13 @@ pub struct Nav {
     now: u64,
 }
 impl Nav {
+    /// No budget on samples, expansions or arcs, for tools that plan
+    /// offline.
+    pub fn unmetered(&mut self) {
+        self.budget = u32::MAX;
+        self.expansions = u32::MAX;
+        self.arc_budget = u32::MAX;
+    }
     /// Start a tick's sampling budget.
     pub fn begin_tick(&mut self) {
         self.begin_tick_for(1);
@@ -1644,6 +1657,12 @@ impl Search {
             jet_tests: 0,
             walk_speed: 1.0,
         }
+    }
+    /// This search with no limit on its expansions, for tools that plan
+    /// offline (a bot's own search settles for the closest it reached).
+    pub fn unlimited(mut self) -> Self {
+        self.limit = u32::MAX;
+        self
     }
     /// This search settling for the closest it reached after `limit`
     /// expansions instead of [`MAX_EXPANSIONS`].
