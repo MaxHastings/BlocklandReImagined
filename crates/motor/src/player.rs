@@ -863,24 +863,39 @@ impl Default for PlayerTuning {
     }
 }
 /// [`PlayerTuning::unstick`]: a body that stays inside solid geometry (a
-/// door or lift closed on it, a prop or a brick landed on it) for `seconds`
-/// is moved to the nearest free spot within `reach`, searched every `step`
-/// outward and upward. Other players never count: they move aside.
+/// door or lift closed on it, a prop or a brick landed on it) is moved out
+/// after `seconds` (0: at once). Tried in order, each only if the body then
+/// fits: straight up (a body sunk into a floor), then a vote of four probes
+/// around it (each a thin slice of half the body's radius, `probe` of the
+/// radius away: at most two free ones count, and the body moves by the sum
+/// of their offsets, twice as far with just one), then the nearest free
+/// spot within `reach`, searched every `step` outward and upward. Other
+/// players never count: they move aside.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Unstick {
-    /// How long the body may stay embedded before it is moved, above zero.
+    /// How long the body may stay embedded before it is moved, 0 or more.
     pub seconds: f32,
+    /// How far from the body, in radii, each vote probe sits, above zero.
+    #[serde(default = "Unstick::default_probe")]
+    pub probe: f32,
     /// The farthest the body is moved, above zero.
     pub reach: f32,
     /// The spacing of the spots tried, above zero and at most `reach`.
     pub step: f32,
 }
 impl Unstick {
+    fn default_probe() -> f32 {
+        0.55
+    }
     pub fn validate(&self) -> Result<()> {
         ensure!(
-            self.seconds.is_finite() && self.seconds > 0.0,
-            "Unstick seconds must be above zero"
+            self.seconds.is_finite() && self.seconds >= 0.0,
+            "Unstick seconds must be 0 or more"
+        );
+        ensure!(
+            self.probe.is_finite() && self.probe > 0.0,
+            "Unstick probe must be above zero"
         );
         ensure!(
             self.reach.is_finite() && self.reach > 0.0,
@@ -1954,21 +1969,47 @@ impl Player {
         }
         // Tried again after another `seconds` when nothing nearby is free.
         self.embedded_for = 0.0;
+        let lifts = (unstick.reach / unstick.step).floor() as u32;
+        let rise = |k: u32| feet + Vec3::Y * (k as f32 * unstick.step);
+        if let Some(spot) = (1..=lifts).map(rise).find(|spot| free(*spot)) {
+            return Some(spot);
+        }
+        // The vote: thin slices around the body at its middle.
+        let radius = self.tuning.width * 0.5;
+        let slice = SharedShape::cuboid(radius * 0.5, ROOM_LIFT, radius * 0.5);
+        let middle = Vec3::Y * (self.tuning.height(self.state.crouched) * 0.5);
+        let mut moved = Vec3::ZERO;
+        let mut votes = 0;
+        for (x, z) in [(-1.0, -1.0), (-1.0, 1.0), (1.0, -1.0), (1.0, 1.0)] {
+            if votes >= 2 {
+                break;
+            }
+            let offset = Vec3::new(x, 0.0, z) * (radius * unstick.probe);
+            let at = feet + middle + offset;
+            if query
+                .intersect_shape(Pose::translation(at.x, at.y, at.z), slice.as_ref())
+                .next()
+                .is_none()
+            {
+                votes += 1;
+                moved += offset;
+            }
+        }
+        if votes > 0 {
+            let spot = feet + moved * if votes == 1 { 2.0 } else { 1.0 };
+            if free(spot) {
+                return Some(spot);
+            }
+        }
         const DIRECTIONS: u32 = 8;
-        let rings = (unstick.reach / unstick.step).floor() as u32;
         let mut spots: Vec<Vec3> = Vec::new();
-        for up in 0..=rings {
-            for out in 0..=rings {
-                let lift = Vec3::Y * (up as f32 * unstick.step);
-                if out == 0 {
-                    spots.push(feet + lift);
-                    continue;
-                }
+        for up in 0..=lifts {
+            for out in 1..=lifts {
                 for k in 0..DIRECTIONS {
                     let angle = k as f32 / DIRECTIONS as f32 * std::f32::consts::TAU;
                     let away =
                         Vec3::new(angle.cos(), 0.0, angle.sin()) * (out as f32 * unstick.step);
-                    spots.push(feet + lift + away);
+                    spots.push(rise(up) + away);
                 }
             }
         }

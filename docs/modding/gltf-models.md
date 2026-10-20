@@ -179,9 +179,13 @@ while the view still rolls). v20's bodies have neither.
 
 **Getting out of geometry (optional).** `movement.unstick` frees a body that
 a door, a lift, a prop or a placed brick has closed around:
-`{ "seconds": 1.0, "reach": 8.0, "step": 1.0 }`. A body that stays inside
-solid geometry for `seconds` is moved to the nearest free spot within
-`reach` (tried every `step`, sideways and upward) and falls from there.
+`{ "seconds": 0, "probe": 0.55, "reach": 1, "step": 0.5 }`. A body inside
+solid geometry for `seconds` (0: at once) is moved, each way tried only if
+the body then fits: straight up (sunk into a floor), then by a vote of four
+probes around it (thin slices at the middle, `probe` of the body's radius
+away, default 0.55; at most two free ones count, the body moves by the sum of
+their offsets and twice as far with just one), then to the nearest free spot
+within `reach` (tried every `step`, sideways and upward). It falls from there.
 Other players never count, as they move aside. v20's bodies have none.
 
 **Momentum (optional).** `movement.momentum` makes the body keep its speed:
