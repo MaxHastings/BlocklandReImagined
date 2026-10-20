@@ -111,8 +111,9 @@ Don't reopen these without Max.
 - **Default Add-Ons.** The Stunt Plane and the Duplicator ship turned on
   as Add-Ons, not base content.
 - **Add-Ons can change the game completely**, through generic hooks only;
-  no genre code in the engine. Seams still to build are in
-  [audits/total-conversion.md](audits/total-conversion.md), "Future work".
+  no genre code in the engine. What exists is in
+  [modding/ENGINE-CAPABILITIES.md](modding/ENGINE-CAPABILITIES.md); each
+  seam's status is in [architecture/seams.md](architecture/seams.md).
 - **Performance is the headline:** a million bricks at 60 fps.
 - **Event limits** follow the alpha contract (1024 rows per brick, 300 s
   delays), not v20's 100 rows and 30 s.
@@ -210,8 +211,9 @@ IP.
   so far and how to avoid each; read before fixing a bug.
 - [audits/v20-behaviour.md](audits/v20-behaviour.md): v20 behaviour checked
   against the decompiled scripts.
-- [audits/total-conversion.md](audits/total-conversion.md): the Add-On
-  seams a total conversion uses, and the ones still to come.
+- [audits/total-conversion.md](audits/total-conversion.md): the 2026-09-29
+  audit of the seams a total conversion uses (historical; see
+  [modding/ENGINE-CAPABILITIES.md](modding/ENGINE-CAPABILITIES.md)).
 - [audits/first-impressions.md](audits/first-impressions.md),
   [audits/platform-door-closers.md](audits/platform-door-closers.md),
   [audits/engine-foundations.md](audits/engine-foundations.md),

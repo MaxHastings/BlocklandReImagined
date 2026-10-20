@@ -35,6 +35,12 @@ The workflow runs the same recipe as a release built by hand
    The `.pdb` debug symbols are kept as a workflow artifact
    (`...-symbols`, 90 days), not shipped to players.
 
+Before tagging, update [architecture/seams.md](architecture/seams.md): re-run
+the "On main" check on every row (search the source for the code items each row
+names), correct any recorded state that has gone stale, and note in
+`docs/releases/<version>.md` the seams that are new since the last release.
+That page is where a modder learns whether their download has a seam.
+
 The loopback-join release smoke needs an original v20 Add-On archive and a GPU,
 so it stays on the PC. Tag a commit that passed `tools/gate.py`, which already
 ran every content test on it.

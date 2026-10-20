@@ -50,9 +50,12 @@ filenames.
 
 - [modding/README.md](modding/README.md): the guide. Making an Add-On,
   importing and porting v20 Add-Ons, and what players are asked to trust.
-- [audits/total-conversion.md](audits/total-conversion.md): the hooks a
-  whole new game on top uses (the Commando sample), and the seams still to
-  come.
+- [modding/ENGINE-CAPABILITIES.md](modding/ENGINE-CAPABILITIES.md): what
+  the engine offers a new game, by what you want to build;
+  [architecture/seams.md](architecture/seams.md) holds each seam's status.
+- [audits/total-conversion.md](audits/total-conversion.md): the 2026-09-29
+  audit behind the Commando sample. Historical; its "next" items are not a
+  current list.
 - [architecture/packages.md](architecture/packages.md): the Add-On format
   (`package.json`, `provides`, content kinds, client code).
 - [architecture/package-runtime.md](architecture/package-runtime.md):
