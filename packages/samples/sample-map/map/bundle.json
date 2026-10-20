@@ -52,6 +52,9 @@
       "name": "Sample Map"
     }
   ],
+  "scatter": {
+    "sample-map:map/sample-map": []
+  },
   "schema_version": 1,
   "surfaces": {
     "sample-map:map/sample-map": {

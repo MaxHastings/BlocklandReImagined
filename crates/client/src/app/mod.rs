@@ -137,6 +137,8 @@ struct Prepared {
     /// The map's keyed movers (doors) and their scenes.
     map_movers: Vec<bri_sim::map::MapMover>,
     mover_scenes: Vec<(u32, SceneData)>,
+    /// The map's scatter layers.
+    scatter: Vec<bri_render::scene_loader::ScatterScene>,
     light_volume: LightVolumeState,
 }
 /// A background chunk update: the replica revision it reached, and the
@@ -470,6 +472,7 @@ fn prepare_map(
         shape_indices: visual.shape_indices,
         map_movers: native_map.movers,
         mover_scenes: visual.movers,
+        scatter: visual.scatter,
         light_volume,
     })
 }
@@ -1707,6 +1710,7 @@ impl PlatformApp for App {
         self.fx.body_shells.gpu_stopped();
         self.fx.tutorial_targets.gpu_stopped();
         self.fx.map_movers.gpu_stopped();
+        self.fx.map_scatter.gpu_stopped();
         self.gpu.shell_gpu = None;
         for avatar in self.avatar.avatars.values_mut() {
             avatar.gpu = None;
@@ -1870,6 +1874,7 @@ impl PlatformApp for App {
         self.fx.body_shells.gpu_stopped();
         self.fx.tutorial_targets.gpu_stopped();
         self.fx.map_movers.gpu_stopped();
+        self.fx.map_scatter.gpu_stopped();
         self.gpu.shell_gpu = None;
         self.avatar.gpu_stopped();
         self.gpu.renderer = None;

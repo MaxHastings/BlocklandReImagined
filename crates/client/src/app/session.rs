@@ -119,6 +119,7 @@ impl App {
         self.fx.body_shells.clear();
         self.fx.tutorial_targets.update(&[], 0.0);
         self.fx.map_movers.set_map(Vec::new(), Vec::new());
+        self.fx.map_scatter.set_map(Vec::new());
         self.fx.explosion_debris.reset(0);
         self.fx.weapon_shells.clear();
         self.fx.weapon_cues.clear();
@@ -612,6 +613,7 @@ impl App {
                         shape_indices: visual.shape_indices,
                         map_movers: movers,
                         mover_scenes: visual.movers,
+                        scatter: visual.scatter,
                         light_volume,
                     },
                     identity,

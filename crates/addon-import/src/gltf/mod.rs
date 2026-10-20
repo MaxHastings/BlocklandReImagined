@@ -14,6 +14,7 @@ mod export;
 mod lod;
 mod map;
 mod map_environment;
+mod map_scatter;
 mod map_terrain;
 mod read;
 mod write;
@@ -110,6 +111,8 @@ pub struct Options {
     /// textures `layer0`..`layer7` with masks `weight0`..`weight7`, and an
     /// optional `detail` texture.
     pub terrain: Option<PathBuf>,
+    /// A map's scatter layers: glTF files each holding the one model a layer repeats (`map_scatter.rs`).
+    pub scatter: Vec<PathBuf>,
 }
 impl Options {
     pub fn new(input: impl Into<PathBuf>, out: impl Into<PathBuf>, kind: Kind) -> Self {
@@ -133,6 +136,7 @@ impl Options {
             box_height: None,
             sky: None,
             terrain: None,
+            scatter: Vec::new(),
         }
     }
 }

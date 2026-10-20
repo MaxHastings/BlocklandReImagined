@@ -30,6 +30,8 @@ pub struct MapScene {
     /// own origin, by scene node: drawn instanced where the session's
     /// mover states put them rather than baked into the map.
     pub movers: Vec<(u32, SceneData)>,
+    /// The map's scatter layers: one model each, repeated at many placements ([`bri_content::scatter`]).
+    pub scatter: Vec<ScatterScene>,
     /// Set only by the modern loader, which never decodes illumination images.
     pub modern_lights: Option<Vec<crate::map_lighting::MapLight>>,
     /// Animated map lights: an index into `modern_lights` and how it
@@ -42,6 +44,74 @@ pub struct MapScene {
     /// they draw as unshadowed point lights with the same linear falloff, the
     /// nearest ones each frame (`SceneRenderer::update_lights`, colour w 1).
     pub overflow_lights: Vec<crate::map_lighting::MapLight>,
+}
+
+/// One scatter layer: the model about its own origin and where it is placed.
+pub struct ScatterScene {
+    pub name: String,
+    pub scene: SceneData,
+    pub instances: Arc<[bri_content::scatter::Instance]>,
+    /// Near and far fade distances, in world units; None draws every instance at any distance.
+    pub fade: Option<[f32; 2]>,
+    pub order: bri_content::scatter::Order,
+    pub modulate_2x: bool,
+    pub detail: u8,
+}
+
+/// The scatter layers `bundle` lists for `scene`: each model loaded as a shape about the origin, with its placements read and checked.
+fn load_scatter(
+    root: &Path,
+    bundle: &Value,
+    bindings: &[Value],
+    scene: &Scene,
+    legacy: bool,
+) -> Result<Vec<ScatterScene>> {
+    let Some(records) = bundle.get("scatter").and_then(|s| s.get(&scene.id)) else {
+        return Ok(Vec::new());
+    };
+    let records: Vec<bri_content::scatter::Record> =
+        serde_json::from_value(records.clone()).context("Reading the map's scatter layers")?;
+    ensure!(records.len() <= 64, "A map names at most 64 scatter layers");
+    let mut out = Vec::with_capacity(records.len());
+    for record in records {
+        record.validate()?;
+        let mut alone = SceneData {
+            id: format!("{}#scatter-{}", scene.id, record.name),
+            name: record.name.clone(),
+            ..Default::default()
+        };
+        let at_origin = Node {
+            name: record.name.clone(),
+            parent: None,
+            kind: Kind::StaticModel,
+            transform: Mat4::IDENTITY.to_cols_array(),
+            asset: Some(record.asset.clone()),
+            properties: BTreeMap::new(),
+        };
+        load_static_shape(
+            root,
+            bundle,
+            bindings,
+            &at_origin,
+            &mut alone,
+            &mut BTreeMap::new(),
+            legacy,
+        )
+        .with_context(|| format!("Scatter layer {}", record.name))?;
+        alone.validate()?;
+        let instances = bri_content::scatter::decode(&read(root, &record.file)?)
+            .with_context(|| format!("Scatter layer {}'s placements", record.name))?;
+        out.push(ScatterScene {
+            name: record.name,
+            scene: alone,
+            instances: instances.into(),
+            fade: record.fade,
+            order: record.order,
+            modulate_2x: record.modulate_2x,
+            detail: record.detail,
+        });
+    }
+    Ok(out)
 }
 
 pub(crate) fn file(root: &Path, name: &str) -> Result<PathBuf> {
@@ -546,12 +616,14 @@ fn load_bundle_unscoped(root: &Path, map_id: &str, legacy: bool) -> Result<MapSc
         Some(lights)
     };
     out.validate()?;
+    let scatter = load_scatter(&root, &bundle, bindings, &scene, legacy)?;
     Ok(MapScene {
         scene: out,
         terrain,
         repeated_water,
         shape_indices,
         movers,
+        scatter,
         modern_lights,
         light_animations,
         light_spots,
@@ -1411,6 +1483,65 @@ mod tests {
             .unwrap();
         assert_eq!(leaf.alpha, AlphaMode::Opaque);
         assert!(leaf.ignore_texture_alpha);
+    }
+    /// A bundle's scatter table loads each layer's model about its own origin and reads its placements.
+    #[test]
+    fn a_scatter_layer_loads_its_model_and_its_placements() -> Result<()> {
+        use bri_content::scatter::{Instance, Record, encode};
+        use bri_content::testing::{plain, png, rigid_shape, write_file};
+        let dir = tempfile::tempdir()?;
+        let root = dir.path().canonicalize()?;
+        let shape = rigid_shape(
+            "grass",
+            &[("root", None, [0.0; 3])],
+            &[(0, [0.0; 3], [1.0; 3], plain(0))],
+            vec![bri_content::testing::material("grass", "opaque")],
+        );
+        write_file(&root, "grass.json", &serde_json::to_vec(&shape)?)?;
+        write_file(&root, "grass.png", &png(1, 1, |_, _| [0, 200, 0, 255])?)?;
+        let placed = Instance {
+            position: [4.0, 0.0, 9.0],
+            rotation: [0.0, 0.0, 0.0, 1.0],
+            scale: [1.0; 3],
+            tint: [255; 4],
+        };
+        write_file(&root, "grass.scatter", &encode(&[placed, placed])?)?;
+        let record = Record {
+            name: "grass".into(),
+            asset: "grass".into(),
+            file: "grass.scatter".into(),
+            fade: Some([10.0, 40.0]),
+            order: bri_content::scatter::Order::FarToNear,
+            modulate_2x: true,
+            detail: 1,
+        };
+        let bundle = serde_json::json!({
+            "assets": { "grass": "grass.json" },
+            "scatter": { "m": [record] },
+        });
+        let bindings = vec![serde_json::json!(
+            { "asset": "grass", "shape_material": 0, "skin": "", "texture": "grass.png" }
+        )];
+        let scene = Scene {
+            schema_version: 1,
+            id: "m".into(),
+            name: "m".into(),
+            nodes: Vec::new(),
+            pending_scripts: Vec::new(),
+        };
+        let layers = load_scatter(&root, &bundle, &bindings, &scene, false)?;
+        assert_eq!(layers.len(), 1);
+        assert_eq!(layers[0].instances.len(), 2);
+        assert_eq!(layers[0].fade, Some([10.0, 40.0]));
+        assert_eq!(layers[0].order, bri_content::scatter::Order::FarToNear);
+        assert!(layers[0].modulate_2x);
+        assert_eq!(layers[0].detail, 1);
+        assert!(!layers[0].scene.indices.is_empty(), "the model is drawn");
+        // A map with no table has no layers; a damaged placements file is refused.
+        assert!(load_scatter(&root, &serde_json::json!({}), &bindings, &scene, false)?.is_empty());
+        write_file(&root, "grass.scatter", b"nonsense")?;
+        assert!(load_scatter(&root, &bundle, &bindings, &scene, false).is_err());
+        Ok(())
     }
     #[test]
     fn a_map_model_blend_the_loader_cannot_honour_is_refused() {

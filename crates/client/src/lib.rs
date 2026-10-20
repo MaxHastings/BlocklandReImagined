@@ -52,6 +52,7 @@ pub mod item_ui;
 pub mod items;
 pub mod local_physics;
 pub mod map_movers;
+pub mod map_scatter;
 pub mod match_hud;
 pub mod materials;
 pub mod minigame_ui;

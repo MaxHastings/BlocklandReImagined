@@ -299,6 +299,7 @@ impl App {
                 body_shells: Default::default(),
                 tutorial_targets,
                 map_movers: Default::default(),
+                map_scatter: Default::default(),
                 explosion_debris,
                 weapon_shells,
                 weapon_cues: VecDeque::new(),

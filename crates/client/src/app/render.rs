@@ -1540,6 +1540,9 @@ impl App {
             .collect();
         scenes.extend(self.fx.fade_models.scenes());
         scenes.extend(self.fx.weapon_effects.contrail_scenes());
+        self.fx
+            .map_scatter
+            .upload(renderer, frame.device, frame.queue, eye)?;
         // Models every view draws; the player's own body and held items
         // differ between the player's view and a mirror's.
         let mut shared_draws = Vec::new();
@@ -1554,6 +1557,7 @@ impl App {
         shared_draws.extend(self.fx.decals.draws());
         shared_draws.extend(self.fx.tutorial_targets.draws());
         shared_draws.extend(self.fx.map_movers.draws());
+        shared_draws.extend(self.fx.map_scatter.draws());
         if let Some((scene, instances)) = &self.gpu.shell_gpu
             && self.fx.weapon_shells.active_count() > 0
         {
@@ -1979,6 +1983,7 @@ impl App {
             self.scene.scenery.reset();
             self.scene.shape_indices = visual.shape_indices;
             self.fx.map_movers.replace_scenes(visual.movers);
+            self.fx.map_scatter.replace_scenes(visual.scatter);
             crate::frame_trace::note("the map's lighting source changed");
             self.gpu.gpu_scene = None;
             self.lighting.reflections = None;

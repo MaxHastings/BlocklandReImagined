@@ -736,6 +736,120 @@ fn import_room(col_floor: bool) -> (tempfile::TempDir, Report) {
     (root, report)
 }
 
+/// A scatter layer's glTF: one box with the scene's `bri_scatter` naming its placements file.
+fn scatter_layer(dir: &std::path::Path, fade: Option<[f32; 2]>) -> PathBuf {
+    use super::testing::{Gltf, cuboid};
+    use bri_content::scatter::{Instance, encode};
+    let mut g = Gltf::new();
+    let (p, n, uv, i) = cuboid(Vec3::ZERO, Vec3::splat(1.0));
+    let flat = |v: &[Vec3]| v.iter().flat_map(|v| v.to_array()).collect::<Vec<f32>>();
+    let (a, b, c, d) = (
+        g.floats(&flat(&p), 3),
+        g.floats(&flat(&n), 3),
+        g.floats(&uv.concat(), 2),
+        g.uints(&i, 1),
+    );
+    let leaf = g.material(
+        "Leaf",
+        [1.0; 4],
+        Some((1, 1, vec![40, 200, 40, 255])),
+        json!({}),
+    );
+    let mesh = g.mesh(
+        "Leaf",
+        vec![json!({ "attributes": { "POSITION": a, "NORMAL": b, "TEXCOORD_0": c }, "indices": d, "material": leaf })],
+    );
+    g.node(json!({ "name": "Leaf", "mesh": mesh }), None);
+    let mut extras = json!({ "instances": "grass.bin" });
+    if let Some(fade) = fade {
+        extras["fade"] = json!(fade);
+    }
+    g.json["scenes"][0]["extras"] = json!({ "bri_scatter": extras });
+    let placed = |x: f32| Instance {
+        position: [x, 1.0, 2.0],
+        rotation: [0.0, 0.0, 0.0, 1.0],
+        scale: [1.0, 2.0, 3.0],
+        tint: [10, 20, 30, 255],
+    };
+    std::fs::write(
+        dir.join("grass.bin"),
+        encode(&[placed(1.0), placed(-5.0)]).unwrap(),
+    )
+    .unwrap();
+    let path = dir.join("grass.glb");
+    std::fs::write(&path, g.glb()).unwrap();
+    path
+}
+
+#[test]
+fn a_scatter_layer_becomes_a_shape_and_placements_in_the_native_frame() {
+    let root = tempfile::tempdir().unwrap();
+    let input = root.path().join("Test Room.glb");
+    std::fs::write(&input, room(false)).unwrap();
+    let layer = scatter_layer(root.path(), Some([10.0, 30.0]));
+    let mut opts = Options::new(&input, root.path().join("test_room"), Kind::Map);
+    opts.scale = Some(2.0);
+    opts.scatter.push(layer);
+    let report = import(&opts).unwrap();
+    let dir = root.path().join("test_room");
+    let bundle: Value =
+        serde_json::from_slice(&std::fs::read(dir.join("map/bundle.json")).unwrap()).unwrap();
+    let records = &bundle["scatter"]["test_room:map/test_room"];
+    assert_eq!(records.as_array().unwrap().len(), 1, "{bundle}");
+    let record: bri_content::scatter::Record = serde_json::from_value(records[0].clone()).unwrap();
+    assert_eq!(record.name, "grass");
+    assert_eq!(
+        record.fade,
+        Some([20.0, 60.0]),
+        "fade distances scale with the import"
+    );
+    assert!(
+        bundle["assets"][&record.asset].is_string(),
+        "the model is an asset"
+    );
+    assert!(
+        bundle["bindings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|b| b["asset"] == record.asset.as_str()),
+        "its materials are bound to textures"
+    );
+    let placed =
+        bri_content::scatter::decode(&std::fs::read(dir.join("map").join(&record.file)).unwrap())
+            .unwrap();
+    assert_eq!(placed.len(), 2);
+    // glTF to native is half a turn about Y, then the import's scale of 2.
+    assert!(near(
+        Vec3::from(placed[0].position),
+        Vec3::new(-2.0, 2.0, -4.0)
+    ));
+    assert!(near(
+        Vec3::from(placed[1].position),
+        Vec3::new(10.0, 2.0, -4.0)
+    ));
+    assert_eq!(placed[0].scale, [1.0, 2.0, 3.0]);
+    assert_eq!(placed[0].tint, [10, 20, 30, 255]);
+    let check = bri_package_runtime::check::check(&dir);
+    assert!(check.ok, "{check} {:?}", report.warnings);
+}
+
+#[test]
+fn a_scatter_layer_without_placements_or_with_a_bad_fade_is_refused() {
+    let root = tempfile::tempdir().unwrap();
+    let input = root.path().join("Test Room.glb");
+    std::fs::write(&input, room(false)).unwrap();
+    let layer = scatter_layer(root.path(), Some([30.0, 10.0]));
+    let mut opts = Options::new(&input, root.path().join("a"), Kind::Map);
+    opts.scatter.push(layer.clone());
+    assert!(import(&opts).is_err(), "near past far");
+    let layer = scatter_layer(root.path(), None);
+    std::fs::remove_file(root.path().join("grass.bin")).unwrap();
+    let mut opts = Options::new(&input, root.path().join("b"), Kind::Map);
+    opts.scatter.push(layer);
+    assert!(import(&opts).is_err(), "no placements file");
+}
+
 #[test]
 fn a_map_imports_as_an_add_on_the_game_loads() {
     let (root, report) = import_room(false);
