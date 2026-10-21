@@ -6,6 +6,8 @@ use super::*;
 
 /// Lines in a readout.
 pub const WHY_LINES: usize = 5;
+/// How recently a refusal of sight rays still counts, in ticks (a second).
+const SIGHT_STARVED_TICKS: u64 = 120;
 
 impl BotThought {
     /// The readout at `tick`, at most [`WHY_LINES`] lines.
@@ -24,6 +26,11 @@ impl BotThought {
                 choice.push_str(&format!(" over plain {}", d.plain));
             }
             choice.push_str(&format!(" [{}]", d.reason));
+        }
+        if let Some([across, above]) = self.route_short {
+            choice.push_str(&format!(
+                "; route stops {across:.1} short, goal {above:+.1} up"
+            ));
         }
         let mut out = vec![choice];
         let mut candidates: Vec<&BotCandidate> =
@@ -72,6 +79,9 @@ impl BotThought {
                 e.position[1],
                 e.position[2]
             ),
+            (None, None) if self.sight_starved => {
+                "Noticed nothing (sight rays ran out)".to_string()
+            }
             (None, None) => "Noticed nothing".to_string(),
         };
         // A glance or reaction still under way (`perception`).
@@ -93,6 +103,25 @@ impl Session {
             .iter()
             .map(|(bot, b)| BotThought {
                 bot: *bot,
+                sight_starved: self
+                    .bots
+                    .sightlines
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .starved(*bot, tick, SIGHT_STARVED_TICKS),
+                route_short: b
+                    .partial_route
+                    .then(|| {
+                        let (goal, end) = (b.goal?.point(b.leash), b.plan.last()?.feet);
+                        Some([flat(goal - end).length(), goal.y - end.y])
+                    })
+                    .flatten(),
+                unnoticed_hit: self
+                    .bots
+                    .unnoticed_hits
+                    .get(bot)
+                    .filter(|(_, at)| tick.saturating_sub(*at) <= SIGHT_STARVED_TICKS)
+                    .map(|(why, _)| *why),
                 behaviour: b.behaviour.name(),
                 leg: if self.bot_vehicle_body(*bot).is_some() && !b.plan.is_empty() {
                     "drive"
@@ -213,6 +242,9 @@ mod tests {
     fn the_readout_names_the_choice_its_rivals_terms_and_what_it_noticed() {
         let mut t = BotThought {
             bot: 7,
+            sight_starved: false,
+            unnoticed_hit: None,
+            route_short: None,
             behaviour: "chase",
             leg: "walk",
             visible: None,

@@ -79,8 +79,17 @@ pub(in crate::session) struct Sightlines {
     /// Each viewer's target rays this tick.
     targeted: BTreeMap<OwnerId, usize>,
     cache: BTreeMap<(OwnerId, Subject), Cached>,
+    /// The last tick each viewer was refused rays because the share was
+    /// spent: a bot that sees nothing may be seeing nothing for that.
+    refused: BTreeMap<OwnerId, u64>,
 }
 impl Sightlines {
+    /// Whether `viewer` was refused rays within `ticks` before `tick`.
+    pub(super) fn starved(&self, viewer: OwnerId, tick: u64, ticks: u64) -> bool {
+        self.refused
+            .get(&viewer)
+            .is_some_and(|at| tick.saturating_sub(*at) <= ticks)
+    }
     fn begin(&mut self, tick: u64) {
         if tick != self.tick {
             self.tick = tick;
@@ -124,6 +133,8 @@ impl Sightlines {
         let ok = self.ordinary + rays <= ORDINARY_RAYS;
         if ok {
             self.ordinary += rays;
+        } else {
+            self.refused.insert(viewer, self.tick);
         }
         debug_assert!(self.cast() <= SIGHT_RAYS);
         ok

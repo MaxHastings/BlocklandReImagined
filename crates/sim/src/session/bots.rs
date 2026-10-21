@@ -85,6 +85,14 @@ pub use team::BotTeamView;
 #[derive(Clone, Debug)]
 pub struct BotThought {
     pub bot: OwnerId,
+    /// It was refused sight rays lately (the tick's share was spent), so
+    /// an enemy may have gone unseen for that, not for being hidden.
+    pub sight_starved: bool,
+    /// A hit lately that named no attacker it could act on, and why.
+    pub unnoticed_hit: Option<&'static str>,
+    /// Its route could not reach the goal and ends this far short: across (level) and above (the goal over the route's end, below
+    /// zero when under it).
+    pub route_short: Option<[f32; 2]>,
     pub behaviour: &'static str,
     /// The leg of its route it is on: walk, swim, jet or drive (none: no
     /// route).
@@ -338,6 +346,9 @@ pub(super) struct Bots {
     navs: Vec<(Body, Nav)>,
     /// Who last hurt each bot, and when.
     hurt: BTreeMap<OwnerId, Knowledge>,
+    /// The last hit on each bot that gave it nothing to go on, and why
+    /// (the readout's "noticed nothing").
+    unnoticed_hits: BTreeMap<OwnerId, (&'static str, u64)>,
     /// Warnings bots gave this tick (`BotKind::alerts_allies`), heard by
     /// their side once every bot has stepped.
     alerts: Vec<Alert>,
@@ -1076,6 +1087,9 @@ impl Bots {
     }
     /// A bot was hurt: it turns on whoever did it.
     pub(super) fn note_hurt(&mut self, bot: OwnerId, source: Option<(OwnerId, Vec3)>, tick: u64) {
+        if source.is_none() && self.brains.contains_key(&bot) {
+            self.unnoticed_hits.insert(bot, ("hit by no one", tick));
+        }
         if let Some(source) = source.filter(|(s, _)| *s != bot)
             && self.brains.contains_key(&bot)
         {
