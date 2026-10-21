@@ -162,6 +162,21 @@ socket. Set it yourself with `--box-width UNITS` and `--box-height UNITS`
 The box, not the mesh, is what bullets, explosions, other players and
 vehicles hit.
 
+**Hit bones (optional).** An archetype's `hit_bones` list what a shot can
+meet of the body, one cylinder per bone, in place of its box:
+`{ "bone": "Bip01 Head", "from": [0, 2.3, 0], "to": [0, 2.55, 0], "radius": 0.18,
+"ends": "round", "modifier": 3.5, "region": "head" }`. The two ends of the axis
+are from the feet, facing -Z, at scale 1 (the frame of a mount point), the
+`radius` is the cylinder's, `ends` is `round` (half spheres, a limb; the
+default) or `flat` (a torso, a foot), and `region` is `head`, `torso` or
+`legs` (what `info.region` reads in rules). A direct hit's damage is
+multiplied by the bone's `modifier`; with 0 a shot passes through the bone, and
+a shot that meets no bone goes on past the body. Bones follow the body's
+facing and scale, and a crouched or lying body's lower box squeezes them down
+with it; they do not follow the body's animation. A splash is not multiplied.
+An archetype with none is hit as one box and its region read from the height
+of the hit, as before.
+
 **Prone and lean (optional).** `movement.prone` lets the body lie down
 (`set_prone` in rules): `{ "height": 0.5, "eye": 0.35, "seconds": 0.7, "forward": 1,
 "backward": 0.5, "sideways": 0.5 }`, its box height (at most the crouch's),
@@ -200,6 +215,13 @@ to the move's speed by `movement.acceleration`.
 **Walking down stairs (optional).** `movement.follow_floor: true` keeps a walking body on the floor when it falls away under it
 by no more than `step_height` (down a stair, along a slope): it is lowered onto the floor below at once instead of dropping step by
 step, so it keeps its speed and its grip. A jump or a rise still leaves the floor. v20's bodies fall off every edge.
+
+**Crossing a wall's lip (optional).** `movement.wall_step: { "lift": 0.6, "retry": 0.23 }` (units) makes a body that runs into a near-vertical
+wall (its normal's up part under 0.2) try Unreal's way first: lift by up to that much, make the rest of the move,
+and lower again onto what it stands on, so a chair leg's foot, a kerb or a fence rail under the lift is crossed
+instead of catching. If a second wall stops the lifted move after more than `retry` of travel, it steps again for the rest of the move from where it came down. If the lifted move is stopped sooner, or there is no floor to come down on, it slides along the
+wall's own face (the hit normal flattened level), not the slant of the triangle it struck. Stairs and ramps
+still use the ordinary step first. v20's bodies have none: they step only from a surface they stand on.
 
 **Distant detail (optional, off by default).** Classic-era models are light
 enough to skip this. For a heavy model, `--lod TRIANGLES` adds a lighter

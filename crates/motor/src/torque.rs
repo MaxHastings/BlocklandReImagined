@@ -892,6 +892,54 @@ fn step(
     }
 }
 
+/// Moves the box from `from` by `distance`, stopping at the first hit and
+/// backing off from it; where it ends, and whether it was stopped.
+fn travel(soup: &Soup, m: &Mover, from: Vec3, distance: Vec3) -> (Vec3, bool) {
+    let half = m.half_width;
+    let body = Box3 {
+        min: Vec3::new(from.x - half, from.y, from.z - half),
+        max: Vec3::new(from.x + half, from.y + m.height, from.z + half),
+    };
+    let list = collide(soup, body, distance, m.epsilon, |_| true);
+    if list.hits.is_empty() || list.t >= 1.0 {
+        return (from + distance, false);
+    }
+    let length = distance.length();
+    let back = distance * (m.back_off / length).min(list.t);
+    (from + distance * list.t - back, true)
+}
+
+/// UE2 `stepUp`: lift the box by up to `step.lift`, make the rest of the
+/// move (`remaining`), and lower it again onto what it stands on. The
+/// share of the move made comes with where the box ends: all of it, or
+/// (stopped by another wall) the part past `step.retry`. None when the
+/// lifted box makes less than that, or the lowering finds no floor within
+/// the lift (the move was not onto ground).
+fn lift_over(
+    soup: &Soup,
+    m: &Mover,
+    from: Vec3,
+    remaining: Vec3,
+    step: WallStep,
+) -> Option<(Vec3, f32)> {
+    let length = remaining.length();
+    if length == 0.0 {
+        return None;
+    }
+    let (up, _) = travel(soup, m, from, Vec3::Y * step.lift);
+    let raised = up.y - from.y;
+    if raised <= m.back_off {
+        return None;
+    }
+    let (across, stopped) = travel(soup, m, up, remaining);
+    let made = (across - up).length();
+    if stopped && made <= step.retry {
+        return None;
+    }
+    let (down, landed) = travel(soup, m, across, Vec3::NEG_Y * raised);
+    landed.then_some((down, if stopped { made / length } else { 1.0 }))
+}
+
 /// `EarlyOutPolyList`: whether any polygon reaches into `bounds`.
 fn any_in(soup: &Soup, bounds: Box3) -> bool {
     soup.clipped(bounds, |_| true).next().is_some()
@@ -913,7 +961,25 @@ pub struct Mover {
     /// The 0.01 back-off after each hit, per 32 ms tick.
     pub back_off: f32,
     pub epsilon: Epsilon,
+    /// How the body crosses a wall's lip, when it resolves a wall that way
+    /// (see [`WALL_NORMAL_Y`]); None for v20's.
+    pub wall_step: Option<WallStep>,
 }
+
+/// UE2 `stepUp`'s numbers, in world units.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct WallStep {
+    /// How far the box is lifted to cross a wall's lip.
+    pub lift: f32,
+    /// The farthest a lifted move may be stopped by a second wall and still
+    /// count: past this much travel, the step is retried for the rest of the
+    /// move from where the box came down.
+    pub retry: f32,
+}
+
+/// A hit whose normal's up part is under this is a wall for a body with a
+/// `wall_step`: UE2's `|Normal.Z| < 0.2` test in `moveSmooth`.
+pub const WALL_NORMAL_Y: f32 = 0.2;
 
 /// Momentum stopped at a swept contact, before the motor resolves it.
 /// Point, normal and velocity are in the owning collider's world frame,
@@ -1041,6 +1107,30 @@ fn update_local(soup: &Soup, m: &Mover, feet: Vec3, velocity: &mut Vec3, time: f
         let hit = list.hits.iter().fold(list.hits[0], |best, c| {
             if c.face_dot > best.face_dot { *c } else { best }
         });
+        // A body with a `wall_step` meets a wall as moveSmooth does: lift
+        // over its lip, move on, and lower again; failing that, slide along
+        // the wall's face rather than the hit triangle's slant.
+        let mut hit = hit;
+        if let Some(step) = m.wall_step
+            && hit.normal.y.abs() < WALL_NORMAL_Y
+        {
+            let remaining = *velocity * time;
+            if let Some((over, share)) = lift_over(soup, m, start, remaining, step) {
+                start = over;
+                if share >= 1.0 {
+                    break;
+                }
+                // Stopped by another wall after enough travel: step again
+                // for what is left.
+                time *= 1.0 - share;
+                count += 1;
+                continue;
+            }
+            let flat = Vec3::new(hit.normal.x, 0.0, hit.normal.z);
+            if flat.length_squared() > 0.0 {
+                hit.normal = flat.normalize();
+            }
+        }
         floor |= hit.normal.y > FLOOR_DOT;
         touched.extend(list.hits.iter().map(|c| c.tag));
         let into = -velocity.dot(hit.normal);

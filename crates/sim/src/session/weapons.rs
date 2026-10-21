@@ -300,7 +300,44 @@ impl Session {
         }
         Ok(())
     }
+    /// Where every living body's hit bones stand now, for the shots this
+    /// tick (`Simulation::set_body_bones`).
+    fn place_hit_bones(&mut self) {
+        let placed: Vec<_> = self
+            .peers
+            .iter()
+            .map(|(owner, peer)| {
+                let state = peer.player.state();
+                let bones = &self.archetypes.resolve(state.archetype).hit_bones;
+                let stand = peer.player.tuning().stand_height;
+                let bones = (peer.combat.alive && !bones.is_empty()).then(|| {
+                    let (min, max) = peer.player.world_bounds();
+                    let squash = if stand > 0.0 {
+                        (max[1] - min[1]) / stand
+                    } else {
+                        1.0
+                    };
+                    std::sync::Arc::new(bri_motor::bones::Body {
+                        bones: bri_motor::bones::place(
+                            bones,
+                            Vec3::from(state.feet),
+                            state.yaw,
+                            state.scale,
+                            squash,
+                        ),
+                        min: Vec3::from(min),
+                        max: Vec3::from(max),
+                    })
+                });
+                (*owner, bones)
+            })
+            .collect();
+        for (owner, bones) in placed {
+            self.simulation.set_body_bones(owner, bones);
+        }
+    }
     pub(super) fn step_weapons(&mut self) -> Result<()> {
+        self.place_hit_bones();
         self.end_gun_slows()?;
         self.step_quick_uses()?;
         let tick = self.simulation.state().tick;

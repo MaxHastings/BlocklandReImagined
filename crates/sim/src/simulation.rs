@@ -253,6 +253,10 @@ pub struct Simulation {
     /// Map colliders (doors) a bot's route search walks through: it opens
     /// them when it comes to them ([`Self::set_bot_passable`]).
     bot_passable: rustc_hash::FxHashSet<ColliderHandle>,
+    /// The hit bones of every living body whose archetype declares them,
+    /// where they stand now ([`Self::set_body_bones`]): shots meet these
+    /// in place of the body's box.
+    body_bones: BTreeMap<bri_world::OwnerId, std::sync::Arc<bri_motor::bones::Body>>,
     map_surfaces: crate::map::MapSurfaces,
     /// The map colliders of static shapes (trees, props), which a plant
     /// never asks about ([`Ground::interior`]).
@@ -566,6 +570,7 @@ impl Simulation {
             holding: false,
             map_handles,
             bot_passable: Default::default(),
+            body_bones: Default::default(),
             map_surfaces: Default::default(),
             map_statics,
             terrain: None,
@@ -820,6 +825,26 @@ impl Simulation {
                 self.bot_passable.remove(handle);
             }
         }
+    }
+    /// Set where `owner`'s hit bones stand now, or none for a body shots
+    /// meet as one box.
+    pub fn set_body_bones(
+        &mut self,
+        owner: bri_world::OwnerId,
+        bones: Option<std::sync::Arc<bri_motor::bones::Body>>,
+    ) {
+        match bones {
+            Some(bones) => {
+                self.body_bones.insert(owner, bones);
+            }
+            None => {
+                self.body_bones.remove(&owner);
+            }
+        }
+    }
+    /// `owner`'s hit bones, when its archetype declares any.
+    pub fn body_bones(&self, owner: bri_world::OwnerId) -> Option<&bri_motor::bones::Body> {
+        self.body_bones.get(&owner).map(|b| &**b)
     }
     /// The map colliders a bot walks through ([`Self::set_bot_passable`]).
     pub fn bot_passable(&self) -> &rustc_hash::FxHashSet<ColliderHandle> {
