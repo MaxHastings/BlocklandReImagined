@@ -2417,7 +2417,9 @@ pub struct Hitscan {
 /// `loss` of its strength, or goes through (the surface's `penetration`
 /// of its strength, straight on), or stops. It also stops when its
 /// strength falls under `floor`, after `max_landings` landings, or at the
-/// end of its range. Landing on a player stops it.
+/// end of its range. Landing on a player stops it, after its damage. What
+/// range is left after a landing is multiplied by the strength then, and
+/// the seeded draws make a shot repeatable.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct TraceStrength {
@@ -2429,6 +2431,12 @@ pub struct TraceStrength {
     /// The strength under which it stops, 0 to 1.
     #[serde(default = "TraceStrength::default_floor")]
     pub floor: f32,
+    /// How far a ray strays, 0 to 1: a glancing ray's turn is eased off
+    /// the normal and bent toward a random direction by this times the
+    /// cosine it struck at, and a ray going through strays by this times
+    /// what it has lost.
+    #[serde(default = "TraceStrength::default_scatter")]
+    pub scatter: f32,
     /// How each kind of surface treats it, by the surface's name as map
     /// materials and `surface_kind` give it; up to 32.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
@@ -2444,10 +2452,14 @@ impl TraceStrength {
     fn default_floor() -> f32 {
         0.1
     }
+    fn default_scatter() -> f32 {
+        0.5
+    }
     fn valid(&self) -> bool {
         (1..=16).contains(&self.max_landings)
             && (0.0..=1.0).contains(&self.loss)
             && (0.0..=1.0).contains(&self.floor)
+            && (0.0..=1.0).contains(&self.scatter)
             && self.surfaces.len() <= 32
             && self
                 .surfaces
@@ -2540,7 +2552,7 @@ impl Hitscan {
                 && (self.trace.is_none() || self.ricochet.is_none()),
             "Invalid hitscan of {what}: range 1 to 8192, eye_within 0.1 to 50, damage -100 \
              to 100, tracer colour 0 to 1, width to 1, seconds to 2, ricochet 1 to 8 times, \
-             damage -100 to 100, shooter 0 to 1, trace 1 to 16 landings with loss, floor, \
+             damage -100 to 100, shooter 0 to 1, trace 1 to 16 landings with loss, floor, scatter, \
              ricochet and penetration 0 to 1, at most 32 surfaces, not with ricochet"
         );
         Ok(())

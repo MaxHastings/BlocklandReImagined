@@ -332,13 +332,19 @@ tracer's look, and `on_damage`'s `info.bounces` says how many turns came
 before the hit.
 `trace` (not with `ricochet`) gives the ray a strength that starts at 1 and
 that each landing on something other than a player spends, as Army Ops'
-bullets do: `{ "max_landings": 4, "loss": 0.9, "floor": 0.1, "surfaces": { "wood":
+bullets do: `{ "max_landings": 4, "loss": 0.9, "floor": 0.1, "scatter": 0.5, "surfaces": { "wood":
 { "ricochet": 0.5, "penetration": 0.6 } }, "other": {} }`. At a landing the ray
 glances off, mirrored about the face, when the cosine of the angle it struck
 at is under the surface's `ricochet` times a draw between 0 and 1 (so shallow
-hits glance more often and 0 never does), keeping `loss` of its strength;
-otherwise it goes straight on through with the surface's `penetration` of its
-strength (0 stops it); otherwise it stops. A landing on a player stops it, and
+hits glance more often and 0 never does), keeping `loss` of its strength; it
+leaves mirrored about the face, less `scatter` times that cosine along the
+normal, plus the same along a random direction. Otherwise it goes on through
+with the surface's `penetration` of its strength (0 stops it), strayed by
+`scatter` times the strength it has lost; otherwise it stops. The range left
+after a landing is multiplied by the strength then. The draws are seeded by
+the tick and the shooter, so a shot repeats. Which shapes glance or let a ray
+through, and a ray that starts inside a shape, are not told apart yet: the
+surface name decides. A landing on a player stops it, and
 so does a strength under `floor` or `max_landings` (1 to 16) landings.
 `surfaces` names kinds as map materials and `surface_kind` give them (up to
 32); `other` is any kind not named, which stops the ray by default. Each

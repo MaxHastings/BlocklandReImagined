@@ -5096,8 +5096,8 @@ impl WeaponsWorld {
         let base = d.damage;
         let ricochet = ray.hitscan.ricochet;
         let trace = ray.hitscan.trace.as_ref();
-        let turns = ricochet.map_or(0, |r| r.times)
-            + trace.map_or(0, |t| t.max_landings.saturating_sub(1));
+        let turns =
+            ricochet.map_or(0, |r| r.times) + trace.map_or(0, |t| t.max_landings.saturating_sub(1));
         let mut strength = 1.0f32;
         let mut from = ray.from;
         let mut direction = ray.direction.normalize_or(Vec3::NEG_Z);
@@ -5200,14 +5200,24 @@ impl WeaponsWorld {
                     .copied()
                     .unwrap_or(t.other);
                 let across = (-direction.dot(normal)).clamped(0.0, 1.0);
-                let draw = unit_random(self.tick, id.0, TRACE_DRAW + u64::from(landing));
-                if across < surface.ricochet * draw {
+                let salt = TRACE_DRAW + u64::from(landing) * 4;
+                let draw = unit_random(self.tick, id.0, salt);
+                if surface.ricochet > 0.0 && across < surface.ricochet * draw {
+                    // Mirrored, less `scatter` of the angle along the
+                    // normal, plus the same along a random direction.
                     strength *= t.loss;
-                    direction =
-                        (direction - normal * 2.0 * direction.dot(normal)).normalize_or(normal);
+                    let mirror = direction - normal * 2.0 * direction.dot(normal);
+                    let wander = random_unit(self.tick, id.0, salt + 1, normal);
+                    direction = (mirror - normal * (t.scatter * across)
+                        + wander * (t.scatter * across))
+                        .normalize_or(normal);
                     from = hit.position + normal * 0.01;
                 } else if surface.penetration > 0.0 {
                     strength *= surface.penetration;
+                    // The less strength is left, the more it strays.
+                    let wander = random_unit(self.tick, id.0, salt + 1, direction);
+                    direction = (direction + wander * (t.scatter * (1.0 - strength)))
+                        .normalize_or(direction);
                     from = hit.position + direction * 0.01;
                 } else {
                     return;
@@ -5215,6 +5225,8 @@ impl WeaponsWorld {
                 if strength < t.floor {
                     return;
                 }
+                // What range is left is worn by the strength too.
+                reach *= strength;
                 continue;
             }
             // Mirrored about the face it met, from just off it.
@@ -5720,8 +5732,15 @@ fn response_velocity(current: Vec3, normal: Vec3, response: ContactResponse) -> 
 /// [`unit_random`]'s `n` for a hitscan shot's landing sounds, apart from
 /// its rays' spreads (`3 * ray + axis`).
 const HIT_SOUND_DRAW: u64 = u64::MAX;
-/// The first salt of the draws a trace's glancing takes, one a landing.
-const TRACE_DRAW: u64 = u64::MAX - 64;
+/// The first salt of the draws a trace's glancing takes, four a landing.
+const TRACE_DRAW: u64 = u64::MAX - 128;
+
+/// A direction drawn from the seeded stream, any way round; `fallback` if
+/// the draw came out null.
+fn random_unit(tick: u64, id: u64, salt: u64, fallback: Vec3) -> Vec3 {
+    let axis = |k: u64| unit_random(tick, id, salt.wrapping_mul(3).wrapping_add(k)) * 2.0 - 1.0;
+    Vec3::new(axis(0), axis(1), axis(2)).normalize_or(fallback)
+}
 /// [`unit_random`]'s draw of a stopped projectile's guard sound.
 const GUARD_SOUND_DRAW: u64 = u64::MAX - 1;
 /// How long a projectile a guard sent back cannot be sent back again: Kai's
