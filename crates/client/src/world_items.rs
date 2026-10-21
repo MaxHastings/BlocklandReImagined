@@ -772,7 +772,11 @@ impl WorldItems {
                     });
                 }
             }
-            if local_first && (self.hide_own_first_person || self.scoped) {
+            // A worn image (a helmet, goggles, a vest) sits on the body the camera is
+            // inside; the holder sees only what is in the hands. Mirrors, metal and
+            // shadows still show it (the reflected copy above).
+            let worn = usize::from(hand) >= bri_weapons::HAND_SLOTS;
+            if local_first && (self.hide_own_first_person || self.scoped || worn) {
                 continue;
             }
             // A sequence that leaves the drawn detail still (most fire
@@ -1393,7 +1397,8 @@ impl WorldItems {
         self.mounted
             .iter()
             .filter_map(|(&(actor, hand), m)| {
-                if actor != owner || !m.first_person {
+                if actor != owner || !m.first_person || usize::from(hand) >= bri_weapons::HAND_SLOTS
+                {
                     return None;
                 }
                 let policy = self.weapons.images.get(&m.image)?.first_person_view?;
