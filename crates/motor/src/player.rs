@@ -2028,7 +2028,70 @@ impl Player {
         }
         // Tried again after another `seconds` when nothing nearby is free.
         self.embedded_for = 0.0;
-        self.search_free(physics, filter, unstick, feet)
+        let found = self.search_free(physics, filter, unstick, feet);
+        // A body moved mid-play is never silent: where it was, what it
+        // overlapped, and where it went.
+        let what = match self.blocker_at(physics, filter, feet) {
+            Some(b) => format!(
+                "the body at ({:.2}, {:.2}, {:.2}) stayed {}s inside collider {} (tag {}, centred ({:.2}, {:.2}, {:.2}), {:.2} x {:.2} x {:.2} across)",
+                feet.x,
+                feet.y,
+                feet.z,
+                unstick.seconds,
+                b.collider,
+                b.tag,
+                b.centre.x,
+                b.centre.y,
+                b.centre.z,
+                b.size.x,
+                b.size.y,
+                b.size.z
+            ),
+            None => format!(
+                "the body at ({:.2}, {:.2}, {:.2}) stayed {}s inside solid geometry",
+                feet.x, feet.y, feet.z, unstick.seconds
+            ),
+        };
+        let instead = match found {
+            Some(spot) => format!(
+                "moved it ({:.2}, {:.2}, {:.2}) to ({:.2}, {:.2}, {:.2})",
+                spot.x - feet.x,
+                spot.y - feet.y,
+                spot.z - feet.z,
+                spot.x,
+                spot.y,
+                spot.z
+            ),
+            None => "left it where it is (nothing near is free)".to_owned(),
+        };
+        bri_console::fallback::report(bri_console::fallback::kind::OTHER, "", &what, &instead);
+        found
+    }
+    /// The solid collider the body overlaps with its feet at `feet`, if any.
+    fn blocker_at(
+        &self,
+        physics: &PhysicsWorld,
+        filter: QueryFilter<'_>,
+        feet: Vec3,
+    ) -> Option<Blocker> {
+        let solid = |_: ColliderHandle, c: &Collider| c.user_data >> 64 != 1;
+        physics
+            .query_pipeline_with_filter(filter.predicate(&solid))
+            .intersect_shape(
+                self.tuning
+                    .pose(feet + Vec3::Y * ROOM_LIFT, self.state.crouched),
+                self.tuning.shape(self.state.crouched).as_ref(),
+            )
+            .next()
+            .map(|(handle, c)| {
+                let aabb = c.compute_aabb();
+                Blocker {
+                    collider: handle.into_raw_parts().0,
+                    tag: c.user_data,
+                    centre: Vec3::from_array((aabb.mins + aabb.maxs).to_array()) * 0.5,
+                    size: Vec3::from_array((aabb.maxs - aabb.mins).to_array()),
+                }
+            })
     }
     /// The nearest spot to `feet` where the body fits, by the [`Unstick`]
     /// search: straight up, the vote of four probes, then rings outward and
@@ -2114,24 +2177,7 @@ impl Player {
             .exclude_sensors()
             .exclude_rigid_body(self.body)
             .groups(moves_against(self.state.pass_group));
-        let solid = |_: ColliderHandle, c: &Collider| c.user_data >> 64 != 1;
-        let blocker = physics
-            .query_pipeline_with_filter(filter.predicate(&solid))
-            .intersect_shape(
-                self.tuning
-                    .pose(feet + Vec3::Y * ROOM_LIFT, self.state.crouched),
-                self.tuning.shape(self.state.crouched).as_ref(),
-            )
-            .next()
-            .map(|(handle, c)| {
-                let aabb = c.compute_aabb();
-                Blocker {
-                    collider: handle.into_raw_parts().0,
-                    tag: c.user_data,
-                    centre: Vec3::from_array((aabb.mins + aabb.maxs).to_array()) * 0.5,
-                    size: Vec3::from_array((aabb.maxs - aabb.mins).to_array()),
-                }
-            });
+        let blocker = self.blocker_at(physics, filter, feet);
         let Some(blocker) = blocker else {
             return Placement::Clear(feet);
         };
