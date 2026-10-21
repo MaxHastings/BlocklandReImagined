@@ -175,6 +175,12 @@ pub enum CueKind {
         projectile: String,
         scale: f32,
     },
+    /// `WeaponSound` at `volume` times the profile's own (an Add-On's
+    /// `sound_at` with a volume): a shout carries, a whisper does not.
+    SoundScaled {
+        profile: String,
+        volume: f32,
+    },
 }
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Cue {
@@ -393,12 +399,19 @@ impl Cue {
             }
             _ => {}
         }
-        if let CueKind::WeaponSound { profile } = &self.kind {
+        if let CueKind::WeaponSound { profile } | CueKind::SoundScaled { profile, .. } = &self.kind
+        {
             ensure!(
                 !profile.is_empty()
                     && profile.len() <= 128
                     && !profile.chars().any(char::is_control),
                 "Invalid weapon sound profile"
+            );
+        }
+        if let CueKind::SoundScaled { volume, .. } = &self.kind {
+            ensure!(
+                (0.0..=bri_package_runtime::ops::MAX_SOUND_VOLUME).contains(volume),
+                "Invalid sound volume"
             );
         }
         ensure!(
@@ -477,6 +490,26 @@ pub fn pain_image(level: f32) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn a_scaled_sound_cue_keeps_its_volume_in_range() {
+        let cue = |volume| Cue {
+            id: 1,
+            tick: 1,
+            position: [0.; 3],
+            kind: CueKind::SoundScaled {
+                profile: "radioBlip".into(),
+                volume,
+            },
+        };
+        assert!(cue(0.25).validate().is_ok());
+        assert!(
+            cue(bri_package_runtime::ops::MAX_SOUND_VOLUME + 0.1)
+                .validate()
+                .is_err()
+        );
+        assert!(cue(-1.0).validate().is_err());
+        assert!(cue(f32::NAN).validate().is_err());
+    }
     #[test]
     fn weapon_effect_pose_metadata_rejects_partial_or_invalid_identity() {
         let mut cue = Cue {

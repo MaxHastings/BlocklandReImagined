@@ -344,7 +344,7 @@ impl MusicBricks {
 
 pub struct ClientAudio {
     runtime: AudioRuntime,
-    pending: VecDeque<(String, Placement)>,
+    pending: VecDeque<(String, Placement, f32)>,
     contact_pending: VecDeque<(String, [f32; 3], u64)>,
     pub warnings: BTreeSet<String>,
     pub dropped: u64,
@@ -599,7 +599,7 @@ impl ClientAudio {
             return;
         }
         if let Some(id) = self.runtime.bank().trigger(key).map(str::to_string) {
-            self.enqueue(id, placement, key);
+            self.enqueue(id, placement, key, 1.0);
         } else if self.warnings.len() < 64 {
             self.warnings
                 .insert(format!("Unbound audio trigger: {key}"));
@@ -617,7 +617,11 @@ impl ClientAudio {
         }
     }
     pub fn profile(&mut self, profile: &str, placement: Placement) {
-        self.enqueue(profile.into(), placement, profile);
+        self.enqueue(profile.into(), placement, profile, 1.0);
+    }
+    /// `profile` at `volume` times its own, an Add-On's choice.
+    pub fn profile_scaled(&mut self, profile: &str, placement: Placement, volume: f32) {
+        self.enqueue(profile.into(), placement, profile, volume);
     }
     /// Bounded local cosmetic starts. No backlog survives a tick or session reset.
     /// Unknown profiles are silent; this path never guesses a bank fallback.
@@ -633,7 +637,7 @@ impl ClientAudio {
         self.contact_pending
             .push_back((profile.to_owned(), point, seed));
     }
-    fn enqueue(&mut self, id: String, placement: Placement, label: &str) {
+    fn enqueue(&mut self, id: String, placement: Placement, label: &str, volume: f32) {
         if self.pending.len() == bri_sim::presentation::MAX_CUES {
             self.dropped = self.dropped.saturating_add(1);
             return;
@@ -642,7 +646,7 @@ impl ClientAudio {
         if self.requested.len() < 512 || self.requested.contains_key(label) {
             *self.requested.entry(label.into()).or_default() += 1;
         }
-        self.pending.push_back((id, placement));
+        self.pending.push_back((id, placement, volume));
     }
     pub fn cue(&mut self, cue: &Cue) {
         let key = match &cue.kind {
@@ -654,6 +658,10 @@ impl ClientAudio {
             | CueKind::Decal { .. }
             | CueKind::BodyFlash { .. }
             | CueKind::BodyShell { .. } => return,
+            CueKind::SoundScaled { profile, volume } => {
+                self.profile_scaled(profile, Placement::World(cue.position), *volume);
+                return;
+            }
             CueKind::WeaponSound { profile } => {
                 // A looping state sound belongs to the state, not to its
                 // entry; `sync_image_loops` owns it.
@@ -982,10 +990,15 @@ impl ClientAudio {
         );
     }
     /// Start `profile`: an Add-On pack's own sound, else the bank's.
-    fn start(&mut self, profile: &str, placement: Placement) -> Result<SoundHandle, AudioError> {
+    fn start(
+        &mut self,
+        profile: &str,
+        placement: Placement,
+        scale: f32,
+    ) -> Result<SoundHandle, AudioError> {
         let handle = match self.pack_asset(profile) {
-            Some((asset, volume)) => self.runtime.play_asset(asset, placement, volume),
-            None => self.runtime.play(profile, placement),
+            Some((asset, volume)) => self.runtime.play_asset(asset, placement, volume * scale),
+            None => self.runtime.play_scaled(profile, placement, scale),
         }?;
         if let Placement::World(at) = placement
             && self.fresh_world.len() < FRESH_WORLD_LIMIT
@@ -1059,7 +1072,7 @@ impl ClientAudio {
                 let result = self.runtime.set_source_position(*handle, *position);
                 self.record(result);
             } else if self.image_loops.len() < 64 {
-                match self.start(sound, Placement::World(*position)) {
+                match self.start(sound, Placement::World(*position), 1.0) {
                     Ok(handle) => {
                         self.image_loops.insert(*key, (sound.clone(), handle));
                     }
@@ -1098,7 +1111,7 @@ impl ClientAudio {
                     handle
                 }
                 None if self.engines.len() < 64 => {
-                    match self.start(&engine.sound, Placement::World(engine.position)) {
+                    match self.start(&engine.sound, Placement::World(engine.position), 1.0) {
                         Ok(handle) => {
                             self.engines.insert(*id, (engine.sound.clone(), handle));
                             handle
@@ -1158,7 +1171,7 @@ impl ClientAudio {
                 entity: projectile_entity(p.id),
                 position,
             };
-            let result = self.start(sound, placement).map(|_| ());
+            let result = self.start(sound, placement, 1.0).map(|_| ());
             self.record(result);
         }
     }
@@ -1195,8 +1208,8 @@ impl ClientAudio {
         let result = self.runtime.set_listener(listener);
         self.record(result);
         // Listener precedes starts so distance culling cannot use last session's pose.
-        while let Some((id, placement)) = self.pending.pop_front() {
-            let result = self.start(&id, placement).map(|_| ());
+        while let Some((id, placement, scale)) = self.pending.pop_front() {
+            let result = self.start(&id, placement, scale).map(|_| ());
             self.record(result);
         }
         while let Some((id, point, seed)) = self.contact_pending.pop_front() {
@@ -1593,7 +1606,7 @@ mod tests {
         }
         assert_eq!(breaks(&audio), Some(1));
         assert_eq!(
-            audio.pending.back().map(|(_, p)| *p),
+            audio.pending.back().map(|(_, p, _)| *p),
             Some(Placement::World([1000., 1., 1.]))
         );
         // 80 ms is 9.6 ticks at 120 Hz: a death 9 ticks on is silent, the
