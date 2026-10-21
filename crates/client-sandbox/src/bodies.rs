@@ -84,6 +84,10 @@ pub struct BodySpec {
     pub angular_damping: f32,
     /// Other Add-Ons' code may find, push and hold it.
     pub shared: bool,
+    /// Passes through every other Add-On body (outside its own group); only
+    /// the world, players and vehicles are solid to it. Bodies are solid to
+    /// each other by default.
+    pub ghost: bool,
 }
 
 /// The handle of an Add-On's `n`th body (from 1), the Add-On running in
@@ -109,6 +113,13 @@ pub struct JointSpec {
     /// where it was when joined (radians, 0 to pi).
     pub swing: f32,
     pub twist: f32,
+    /// The limit for the second swing direction (a cone with two half
+    /// angles, as a shoulder has); `swing` again when the record leaves it 0.
+    pub swing_second: f32,
+    /// A hinge: no swing, only a turn about `axis` between `hinge_low` and
+    /// `twist` (an elbow or a knee).
+    pub hinge: bool,
+    pub hinge_low: f32,
     /// How stiffly the joint resists moving: 0 swings freely.
     pub friction: f32,
 }
@@ -134,6 +145,19 @@ pub enum PhysicsCommand {
         body: u32,
         velocity: [f32; 3],
     },
+    /// Adds this velocity change to the body as if struck at a world point:
+    /// off its centre it also spins it (a shot to the shoulder).
+    PushAt {
+        body: u32,
+        velocity: [f32; 3],
+        point: [f32; 3],
+    },
+    /// Stops the body and everything jointed to it where they lie: no more
+    /// simulation, nothing moves them (a settled corpse). Its own Add-On's
+    /// bodies only.
+    Freeze {
+        body: u32,
+    },
     /// For the next frame only, pull a point of the body (in its own frame)
     /// toward a place moving at a velocity, like a spring with a damper,
     /// accelerating it at most `max_accel` (units/s^2). Sent every frame to
@@ -153,6 +177,8 @@ impl PhysicsCommand {
             Self::Create { body, .. }
             | Self::Remove { body }
             | Self::Push { body, .. }
+            | Self::PushAt { body, .. }
+            | Self::Freeze { body }
             | Self::Hold { body, .. } => Some(body),
             Self::Joint { .. } => None,
         }
@@ -279,11 +305,13 @@ pub fn body_spec(r: &[f32]) -> Result<BodySpec, String> {
         linear_damping: r[24].clamped(0.0, 100.0),
         angular_damping: r[25].clamped(0.0, 100.0),
         shared: r[26] == 1.0,
+        ghost: r[27] == 1.0,
     })
 }
 
 /// Read and check a `rigid_joint` record: anchor, axis, swing, twist,
-/// friction, then padding.
+/// friction, second swing (0 for the same as the first), hinge (1) and the
+/// hinge's low limit (radians, at most the twist).
 pub fn joint_spec(r: &[f32]) -> Result<JointSpec, String> {
     if r.len() != JOINT_RECORD || !finite(r) {
         return Err("a joint that is not finite numbers".into());
@@ -294,11 +322,19 @@ pub fn joint_spec(r: &[f32]) -> Result<JointSpec, String> {
     }
     let axis = glam::Vec3::new(r[3], r[4], r[5]).normalize_or(glam::Vec3::Y);
     let pi = std::f32::consts::PI;
+    let twist = r[7].clamped(0.0, pi);
     Ok(JointSpec {
         anchor,
         axis: axis.to_array(),
         swing: r[6].clamped(0.0, pi),
-        twist: r[7].clamped(0.0, pi),
+        twist,
+        swing_second: if r[9] == 0.0 {
+            r[6].clamped(0.0, pi)
+        } else {
+            r[9].clamped(0.0, pi)
+        },
+        hinge: r[10] == 1.0,
+        hinge_low: r[11].clamped(-pi, twist),
         friction: r[8].clamped(0.0, 100.0),
     })
 }
@@ -336,6 +372,28 @@ mod tests {
         r[13] = 1.0;
         r[20] = 1.0;
         r
+    }
+
+    #[test]
+    fn joint_records_carry_a_cone_and_a_hinge() {
+        let mut r = [0.0; JOINT_RECORD];
+        r[4] = 1.0;
+        r[6] = 0.5;
+        r[7] = 0.25;
+        let ball = joint_spec(&r).unwrap();
+        assert_eq!((ball.swing, ball.swing_second), (0.5, 0.5), "one angle");
+        assert!(!ball.hinge);
+        r[9] = 0.9;
+        r[10] = 1.0;
+        r[11] = -1.0e3;
+        let hinge = joint_spec(&r).unwrap();
+        assert_eq!(hinge.swing_second, 0.9, "a second half angle");
+        assert!(hinge.hinge);
+        assert_eq!(hinge.hinge_low, -std::f32::consts::PI, "clamped");
+        let mut b = body();
+        b[27] = 1.0;
+        assert!(body_spec(&b).unwrap().ghost);
+        assert!(!body_spec(&body()).unwrap().ghost);
     }
 
     #[test]

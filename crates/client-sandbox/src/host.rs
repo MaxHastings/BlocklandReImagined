@@ -1792,6 +1792,43 @@ fn link_physics(linker: &mut Linker<HostState>) -> wasmtime::Result<()> {
     )?;
     linker.func_wrap(
         m,
+        "rigid_push_at",
+        |mut caller: Host<'_>,
+         body: i32,
+         x: f32,
+         y: f32,
+         z: f32,
+         px: f32,
+         py: f32,
+         pz: f32|
+         -> wasmtime::Result<()> {
+            let body = reachable_body(&mut caller, body)?;
+            if ![x, y, z, px, py, pz].iter().all(|v| v.is_finite()) {
+                return Err(misuse(&mut caller, "a push that is not a finite number"));
+            }
+            let velocity = glam::Vec3::new(x, y, z)
+                .clamp_length_max(bodies::MAX_SPEED)
+                .to_array();
+            physics_call(
+                &mut caller,
+                PhysicsCommand::PushAt {
+                    body,
+                    velocity,
+                    point: [px, py, pz],
+                },
+            )
+        },
+    )?;
+    linker.func_wrap(
+        m,
+        "rigid_freeze",
+        |mut caller: Host<'_>, body: i32| -> wasmtime::Result<()> {
+            let body = live_body(&mut caller, body)?;
+            physics_call(&mut caller, PhysicsCommand::Freeze { body })
+        },
+    )?;
+    linker.func_wrap(
+        m,
         "rigid_get",
         |mut caller: Host<'_>, body: i32, ptr: i32| -> wasmtime::Result<i32> {
             let id = body as u32;

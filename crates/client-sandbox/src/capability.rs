@@ -178,8 +178,10 @@ pub fn function_capability(name: &str) -> Result<Option<Capability>, UnknownFunc
         | "state_num" | "local_player" | "life" | "held" | "image_mesh" | "sight" => {
             Some(Capability::WorldRead)
         }
-        "rigid_create" | "rigid_joint" | "rigid_remove" | "rigid_push" | "rigid_get"
-        | "rigid_find" | "rigid_hold" => Some(Capability::PhysicsLocal),
+        "rigid_create" | "rigid_joint" | "rigid_remove" | "rigid_push" | "rigid_push_at"
+        | "rigid_freeze" | "rigid_get" | "rigid_find" | "rigid_hold" => {
+            Some(Capability::PhysicsLocal)
+        }
         "skeleton" | "skeleton_node" | "skeleton_part" | "pose" => Some(Capability::AvatarPose),
         _ => return Err(UnknownFunction),
     })
