@@ -177,11 +177,16 @@ with it; they do not follow the body's animation. A splash is not multiplied.
 An archetype with none is hit as one box and its region read from the height
 of the hit, as before.
 
-**Ledges (optional).** `movement.ledge_guard` (`{ "drop": 1.0 }`) keeps a
-walking body (`set_walking` in rules) from stepping off an edge: a step
-that would leave the ground for a drop deeper than `drop` is refused, the
-body stays where it was and loses its speed. Steps down of less than
-`drop`, running, jumping and falling are not held back.
+**Ledges (optional).** `movement.ledge_guard` (`{ "drop": 1.28, "walkable": 0.7 }`,
+Army Ops' `physWalking` stop and `CheckForLedges`) keeps a body that can jump
+from stepping off an edge while it is crouched or walking (`set_walking` in
+rules): a step that leaves the ground with no floor (a surface normal at least
+`walkable` high) within `drop` below where it came to is refused, and the body
+stays where it was and loses its speed. Running, jumping and falling are not
+held back. Add `"look": { "reach": 1.2, "margin": 0.16, "side_drop": 1.36 }`
+and a body whose rules call `set_avoid_ledges(p, true)` (a bot's controller)
+also looks ahead before each step: a step that would end with no ground below
+goes to whichever side of its way has ground instead.
 
 **Prone and lean (optional).** `movement.prone` lets the body lie down
 (`set_prone` in rules): `{ "height": 0.5, "eye": 0.35, "seconds": 0.7, "forward": 1,

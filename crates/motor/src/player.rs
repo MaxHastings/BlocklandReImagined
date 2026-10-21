@@ -866,14 +866,78 @@ impl Default for PlayerTuning {
         }
     }
 }
-/// [`PlayerTuning::ledge_guard`]: a walking body that would leave the ground for a drop deeper than `drop` stays where it was
-/// (and loses the speed it had), so walking never takes it off a ledge; a lower step down is still walked. Running, falling and
-/// jumping are not walking and are not held back.
+/// The ground under `point`, within `depth`: the height of the surface normal of the first thing a ray down meets.
+fn ground_under(query: &QueryPipeline<'_>, point: Vec3, depth: f32) -> Option<f32> {
+    let ray = Ray::new(
+        Vector::from_array(point.to_array()),
+        Vector::new(0.0, -1.0, 0.0),
+    );
+    query
+        .cast_ray_and_get_normal(&ray, depth, true)
+        .map(|(_, hit)| hit.normal.y)
+}
+/// `CheckForLedges`: where a level `step` from `feet` should go instead, when it would end over no ground. None leaves the step as
+/// it is (ground ahead, a wall ahead, or no way round).
+fn ledge_step(
+    query: &QueryPipeline<'_>,
+    guard: &LedgeGuard,
+    look: &LedgeLook,
+    feet: Vec3,
+    step: Vec3,
+    radius: f32,
+    height: f32,
+) -> Option<Vec3> {
+    let length = step.length();
+    let dir = step.try_normalize()?;
+    let target = feet + step + dir * radius;
+    let walkable = |normal: Option<f32>| normal.is_some_and(|y| y >= guard.walkable);
+    // Open air to the target; a wall in the way is the sweep's to meet.
+    let middle = feet + Vec3::Y * (height * 0.5);
+    let ahead = Ray::new(
+        Vector::from_array(middle.to_array()),
+        Vector::from_array(dir.to_array()),
+    );
+    if query.cast_ray(&ahead, length + radius, true).is_some() {
+        return None;
+    }
+    let up = Vec3::Y * (height * 0.5);
+    let depth = look.reach.max(length + radius) + height + look.margin;
+    if walkable(ground_under(query, target + up, depth)) {
+        return None;
+    }
+    let across = Vec3::new(-dir.z, 0.0, dir.x) * length;
+    [across, -across].into_iter().find_map(|side| {
+        let to = target + side;
+        walkable(ground_under(query, to + up, look.side_drop + height * 0.5))
+            .then(|| (to - feet).with_y(0.0).normalize_or_zero() * length)
+    })
+}
+/// [`PlayerTuning::ledge_guard`], from `APawn::physWalking` and `CheckForLedges`. A body that can jump and is crouched or walking
+/// (`set_walking`) and whose step leaves the ground, with no walkable floor (normal at least `walkable`) within `drop` below where
+/// it came to, stays where it was this tick and loses its speed; any other body walks off. A body whose rules call
+/// `set_avoid_ledges` (a bot's controller) also looks ahead before each step, and a step that would find no floor goes to
+/// whichever side of its way has one instead.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct LedgeGuard {
     /// The deepest drop that still counts as ground, above zero.
     pub drop: f32,
+    /// The least floor normal height (0 to 1) that is ground to stand on.
+    pub walkable: f32,
+    /// The look-ahead of a body that avoids ledges, when it has one.
+    #[serde(default)]
+    pub look: Option<LedgeLook>,
+}
+/// How a body that avoids ledges looks for ground ahead ([`LedgeGuard::look`]).
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LedgeLook {
+    /// The least distance ahead to look, above zero: the step plus the body's radius when that is more.
+    pub reach: f32,
+    /// How far below the body's feet, past its height and the look, ground still counts, 0 or more.
+    pub margin: f32,
+    /// How far below a sidestep ground is looked for, above zero.
+    pub side_drop: f32,
 }
 impl LedgeGuard {
     pub fn validate(&self) -> Result<()> {
@@ -881,6 +945,21 @@ impl LedgeGuard {
             self.drop.is_finite() && self.drop > 0.0,
             "Ledge guard drop must be above zero"
         );
+        ensure!(
+            self.walkable.is_finite() && (0.0..=1.0).contains(&self.walkable),
+            "Ledge guard walkable must be 0 to 1"
+        );
+        if let Some(look) = &self.look {
+            ensure!(
+                look.reach.is_finite()
+                    && look.reach > 0.0
+                    && look.margin.is_finite()
+                    && look.margin >= 0.0
+                    && look.side_drop.is_finite()
+                    && look.side_drop > 0.0,
+                "Ledge look reach and side_drop must be above zero, margin 0 or more"
+            );
+        }
         Ok(())
     }
 }
@@ -1202,6 +1281,9 @@ pub struct Player {
     corpse: bool,
     /// Seconds the body has been inside solid geometry ([`Unstick`]).
     embedded_for: f32,
+    /// The body avoids ledges (an Add-On's `set_avoid_ledges`, a bot's controller): see [`LedgeGuard::look`]. The host's alone: it
+    /// steers bots, which no client predicts.
+    avoid_ledges: bool,
 }
 pub struct MotionEvents {
     /// A 32 ms Torque tick ran this step; the other events come only with one.
@@ -1355,6 +1437,7 @@ impl Player {
             relocations: 0,
             corpse: false,
             embedded_for: 0.0,
+            avoid_ledges: false,
         })
     }
     /// Drive a player-type mount (horse, rowboat, cannon, turret) with the
@@ -1407,6 +1490,7 @@ impl Player {
             relocations: 0,
             corpse: false,
             embedded_for: 0.0,
+            avoid_ledges: false,
         })
     }
     /// Restored or scripted motion (`setVelocity`, checkpoints).
@@ -1470,6 +1554,7 @@ impl Player {
             relocations: 0,
             corpse: false,
             embedded_for: 0.0,
+            avoid_ledges: false,
         };
         player.restore(physics, state, tuning)?;
         player.apply_groups(physics);
@@ -1498,6 +1583,10 @@ impl Player {
     /// Whether the body walks ([`PlayerState::walking`]).
     pub fn set_walking(&mut self, walking: bool) {
         self.state.walking = walking;
+    }
+    /// Whether the body avoids ledges ([`LedgeGuard::look`]).
+    pub fn set_avoid_ledges(&mut self, avoid: bool) {
+        self.avoid_ledges = avoid;
     }
     /// `setDataBlock`/`setScale`: new motor constants and body. Growing the
     /// body may overlap geometry; like Torque, the motor resolves it by moving.
@@ -2622,6 +2711,19 @@ impl Player {
                 velocity += normal * (into - gap * 0.5) / dt;
             }
         }
+        // A body that avoids ledges looks where its step would take it and goes round a drop to a side with ground.
+        if let Some(guard) = t.ledge_guard
+            && let Some(look) = guard.look
+            && self.avoid_ledges
+            && was_grounded
+            && !jumped
+        {
+            let level = Vec3::new(velocity.x, 0.0, velocity.z);
+            if let Some(step) = ledge_step(&query, &guard, &look, feet, level * dt, half, height) {
+                velocity.x = step.x / dt;
+                velocity.z = step.z / dt;
+            }
+        }
         let before_collision = velocity;
         // v20 Player::updatePos: sweep, slide and step through the polygons.
         let moved = torque::update_pos(
@@ -2694,13 +2796,14 @@ impl Player {
             self.state.grounded = true;
             self.state.jump.since_contact = 0;
         }
-        // A walking body does not step off a ledge: with no floor within the guard's drop below where it came to, it stays where it
+        // A crouched or walking body does not step off a ledge: with no floor within the guard's drop below where it came to, it stays where it
         // was this tick.
         if let Some(guard) = t.ledge_guard
             && was_grounded
             && !self.state.grounded
             && !jumped
-            && self.state.walking
+            && t.jump_speed > 0.0
+            && (self.state.walking || self.state.crouched)
             && !self.state.posture.climbing
             && physics
                 .query_pipeline_with_filter(filter)
@@ -2713,7 +2816,7 @@ impl Player {
                         ..Default::default()
                     },
                 )
-                .is_none_or(|(_, hit)| hit.normal1.y < run_cos)
+                .is_none_or(|(_, hit)| hit.normal1.y < guard.walkable)
         {
             self.state.feet = feet.to_array();
             self.state.velocity = [0.0; 3];

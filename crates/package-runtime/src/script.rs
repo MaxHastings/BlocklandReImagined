@@ -3476,6 +3476,12 @@ fn register_presentation(engine: &mut Engine) {
             walking,
         }))
     });
+    engine.register_fn("set_avoid_ledges", |player: Dynamic, avoid: bool| {
+        push(Op::SetAvoidLedges(ops::SetAvoidLedges {
+            player: id(&player)?,
+            avoid,
+        }))
+    });
     engine.register_fn(
         "set_speed_modifier",
         |player: Dynamic, key: &str, scale: Dynamic| {

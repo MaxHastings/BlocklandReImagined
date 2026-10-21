@@ -393,6 +393,21 @@ impl ScriptOp for SetWalking {
     }
 }
 
+/// Whether a player avoids ledges (a bot's controller): a body with `movement.ledge_guard.look` goes round a drop its step would
+/// walk off. Until changed or they respawn.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SetAvoidLedges {
+    pub player: u64,
+    pub avoid: bool,
+}
+impl ScriptOp for SetAvoidLedges {
+    const CAPABILITY: &str = "player";
+    const NAME: &str = "set_avoid_ledges";
+    fn bounded(&self) -> bool {
+        true
+    }
+}
+
 /// A named share of a player's speeds, for one Add-On system to own: the
 /// shares of every key (and of `set_speed_scale`, which is the key "") are
 /// multiplied, so a lock another system writes (0, as a posture change

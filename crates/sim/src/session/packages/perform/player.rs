@@ -377,6 +377,18 @@ impl Perform for ops::SetWalking {
         Ok(())
     }
 }
+impl Perform for ops::SetAvoidLedges {
+    fn perform(self, session: &mut Session, _cx: OpCall<'_>) -> Result<()> {
+        let ops::SetAvoidLedges { player, avoid } = self;
+        session
+            .peers
+            .get_mut(&player)
+            .context("No such player")?
+            .player
+            .set_avoid_ledges(avoid);
+        Ok(())
+    }
+}
 impl Perform for ops::SetSpeedScale {
     fn perform(self, session: &mut Session, _cx: OpCall<'_>) -> Result<()> {
         let ops::SetSpeedScale { player, scale } = self;

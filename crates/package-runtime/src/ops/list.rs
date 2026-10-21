@@ -147,6 +147,7 @@ macro_rules! for_each_op {
             SetSpeedScale = player,
             SetSpeedModifier = player,
             SetWalking = player,
+            SetAvoidLedges = player,
             SetProne = player,
             SetLean = player,
             GiveAmmo = player,
