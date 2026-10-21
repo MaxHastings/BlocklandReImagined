@@ -67,6 +67,13 @@ impl ClientMovers {
             model.transform.transform = model.mover.transform_at(&state, tick);
         }
     }
+    /// Where the mover called `id` is drawn now.
+    pub fn transform_by_id(&self, id: &str) -> Option<glam::Mat4> {
+        self.models
+            .iter()
+            .find(|m| m.mover.def.id == id)
+            .map(|m| m.transform.transform)
+    }
     /// Where the mover at scene node `node` is drawn now.
     pub fn transform_of(&self, node: u32) -> Option<glam::Mat4> {
         self.models

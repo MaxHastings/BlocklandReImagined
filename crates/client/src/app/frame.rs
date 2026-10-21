@@ -1652,9 +1652,12 @@ impl App {
                 .advance_contrails(game_elapsed.as_secs_f32(), eye);
             self.fx.body_flashes.advance(game_elapsed.as_secs_f32());
             self.fx.body_shells.advance(game_elapsed.as_secs_f32());
-            self.fx.decals.advance(game_elapsed.as_secs_f32(), |brick| {
-                building.brick_stands(brick)
-            });
+            let movers = &self.fx.map_movers;
+            self.fx.decals.advance_following(
+                game_elapsed.as_secs_f32(),
+                |brick| building.brick_stands(brick),
+                |id| movers.transform_by_id(id),
+            );
             // Bodies with their own footfalls step and land where they are
             // drawn; riders and sitters do neither.
             let walking = presented

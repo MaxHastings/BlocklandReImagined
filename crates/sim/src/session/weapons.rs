@@ -138,6 +138,36 @@ pub(super) struct Triggers {
 }
 
 impl Session {
+    /// The cue for a mark left at `position` on a brick, or the map: a mark
+    /// on a map mover's collision (a door) names the mover, so clients keep
+    /// it in the mover's frame.
+    fn decal_cue(
+        &self,
+        brick: Option<u64>,
+        position: Vec3,
+        normal: Vec3,
+        projectile: String,
+        scale: f32,
+    ) -> crate::presentation::CueKind {
+        match brick {
+            None => self.mover_at(position).map(str::to_owned),
+            Some(_) => None,
+        }
+        .map_or(
+            crate::presentation::CueKind::Decal {
+                brick,
+                normal: normal.to_array(),
+                projectile: projectile.clone(),
+                scale,
+            },
+            |mover| crate::presentation::CueKind::MoverDecal {
+                mover,
+                normal: normal.to_array(),
+                projectile,
+                scale,
+            },
+        )
+    }
     pub fn weapon_view(&self) -> WeaponView {
         WeaponView {
             static_items: self.item_spawners.items.values().cloned().collect(),
@@ -692,16 +722,8 @@ impl Session {
                         _ => None,
                     };
                     if let Some(brick) = brick {
-                        self.cues.emit(
-                            tick,
-                            crate::presentation::CueKind::Decal {
-                                brick,
-                                normal: normal.to_array(),
-                                projectile,
-                                scale,
-                            },
-                            position.to_array(),
-                        );
+                        let kind = self.decal_cue(brick, position, normal, projectile, scale);
+                        self.cues.emit(tick, kind, position.to_array());
                     }
                 }
                 WeaponEvent::Contact { impact } => {
@@ -724,16 +746,14 @@ impl Session {
                             .is_some_and(|d| d.decal.is_some())
                         && impact.normal.is_normalized()
                     {
-                        self.cues.emit(
-                            tick,
-                            crate::presentation::CueKind::Decal {
-                                brick,
-                                normal: impact.normal.to_array(),
-                                projectile: impact.definition.clone(),
-                                scale: impact.scale,
-                            },
-                            impact.position.to_array(),
+                        let kind = self.decal_cue(
+                            brick,
+                            impact.position,
+                            impact.normal,
+                            impact.definition.clone(),
+                            impact.scale,
                         );
+                        self.cues.emit(tick, kind, impact.position.to_array());
                     }
                     if let TargetId::Brick(brick) = impact.target {
                         self.paint_contact(&impact)?;
