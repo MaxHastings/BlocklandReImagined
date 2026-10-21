@@ -48,8 +48,11 @@ fn point_cone(light:PointLight,toward:vec3<f32>)->f32 {
 }
 // Map surfaces and terrain: smooth finite-radius native falloff per pixel.
 // Vertex-lit objects use vertex_point_illumination below.
-fn point_illumination(position:vec3<f32>,normal:vec3<f32>)->vec3<f32> {
-    var result=vec3<f32>(0.0);
+// The light of the point lights at a surface, the map's unshadowed overflow
+// lights (color.w 1) apart from effect and vehicle lights.
+struct PointSums { overflow:vec3<f32>, others:vec3<f32> };
+fn point_sums(position:vec3<f32>,normal:vec3<f32>)->PointSums {
+    var sums=PointSums(vec3<f32>(0.0),vec3<f32>(0.0));
     let list=light_cell(position);
     let n=normal/max(length(normal),0.0001);
     for(var i=0u;i<list.y;i+=1u) {
@@ -62,9 +65,26 @@ fn point_illumination(position:vec3<f32>,normal:vec3<f32>)->vec3<f32> {
         var shaped=select(falloff*falloff,falloff,light.color.w>0.5);
         // color.w 2: the cubic curve 2 (1 - 3 t^2 + 2 t^3), t the distance over the radius.
         if light.color.w>1.5 {let t=min(distance/max(light.position_radius.w,0.0001),1.0); shaped=2.0*(1.0-3.0*t*t+2.0*t*t*t);}
-        result+=light.color.rgb*shaped*max(dot(n,delta/max(distance,0.0001)),0.0)*point_cone(light,-delta/max(distance,0.0001));
+        let given=light.color.rgb*shaped*max(dot(n,delta/max(distance,0.0001)),0.0)*point_cone(light,-delta/max(distance,0.0001));
+        if light.color.w>0.5 && light.color.w<1.5 {sums.overflow+=given;} else {sums.others+=given;}
     }
-    return result;
+    return sums;
+}
+fn point_illumination(position:vec3<f32>,normal:vec3<f32>)->vec3<f32> {
+    let sums=point_sums(position,normal);
+    return sums.others+sums.overflow;
+}
+// The point lights on a map surface in Dynamic, which reads no lightmap. The
+// overflow lights are drawn unshadowed, so in a hall of many lamps their sum
+// shines through every wall and whites the surfaces out. Where the map's baked
+// room light (`volume`, which has the map's own shadows) covers the surface,
+// they add only what that light holds beyond the light already summed
+// (`lit`); without it they add as they are.
+fn map_surface_point_light(position:vec3<f32>,normal:vec3<f32>,lit:vec3<f32>)->vec3<f32> {
+    let sums=point_sums(position,normal);
+    let room=room_light(position,normal);
+    if room.w<0.5 {return sums.others+sums.overflow;}
+    return sums.others+min(sums.overflow,max(room.rgb-(lit+sums.others),vec3<f32>(0.0)));
 }
 // Vertex-lit objects (bricks, players, items, vehicles) take point lights
 // as v20's fixed-function GL did (brick batcher 0x531860, see
@@ -236,6 +256,17 @@ fn baked_surroundings(position:vec3<f32>,normal:vec3<f32>)->vec3<f32> {
     let n=normal/max(length(normal),0.0001);
     let form=0.7+0.3*max(dot(n,vec3<f32>(-0.57735,0.57735,0.57735)),0.0);
     return s.rgb*(min(s.a*2.0,1.0)/s.a)*form;
+}
+// The baked room light a little off the surface, and 1 in w where the volume
+// covers it (0 where it holds nothing, or none is bound).
+fn room_light(position:vec3<f32>,normal:vec3<f32>)->vec4<f32> {
+    if volume.dims.w==0.0 {return vec4<f32>(0.0);}
+    let n=normal/max(length(normal),0.0001);
+    let t=(position+n*volume.origin_cell.w*0.5-volume.origin_cell.xyz)/(volume.origin_cell.w*volume.dims.xyz);
+    if any(t<vec3<f32>(0.0)) || any(t>vec3<f32>(1.0)) {return vec4<f32>(0.0);}
+    let s=textureSampleLevel(light_volume,clamped_exact,t,0.0);
+    if s.a<0.01 {return vec4<f32>(0.0);}
+    return vec4<f32>(s.rgb*(min(s.a*2.0,1.0)/s.a),1.0);
 }
 // A receiver in one cascade's map: map coordinates, depth along the sun,
 // and whether it lies inside that map (with room for the filter footprint).
@@ -1376,7 +1407,9 @@ override SURFACE_GROUP:u32=0u;
         var terrain_lit:vec3<f32>;
         if lighting_mode()==3 {terrain_lit=dynamic_illumination(v.world_position,v.normal).diffuse;}
         else {terrain_lit=terrain_light(textureSampleLevel(lightmap,tiled_exact,light_uv,0.0).rgb,v.world_position,v.normal);}
-        return vec4<f32>(terrain_passes(diffuse*v.color.rgb*(terrain_lit+point_illumination(v.world_position,v.normal)),v.world_position),v.color.a);
+        var point_lit=point_illumination(v.world_position,v.normal);
+        if lighting_mode()==3 {point_lit=map_surface_point_light(v.world_position,v.normal,terrain_lit);}
+        return vec4<f32>(terrain_passes(diffuse*v.color.rgb*(terrain_lit+point_lit),v.world_position),v.color.a);
     }
     let fx=v.fx;let time=camera.atmosphere.z;
     // Brick surfaces in one material behave as the surface material their
@@ -1484,7 +1517,7 @@ override SURFACE_GROUP:u32=0u;
                 +v.point_light*strength;
         } else if lighting_mode()==3 {
             let live=dynamic_illumination(v.world_position,v.normal);
-            illumination=live.diffuse+point_illumination(v.world_position,v.normal)*strength;
+            illumination=live.diffuse+map_surface_point_light(v.world_position,v.normal,live.diffuse)*strength;
             specular=live.specular;
         } else {
             // Unified: the map's own model. Sun where the map's geometry and
@@ -1511,7 +1544,7 @@ override SURFACE_GROUP:u32=0u;
         }
     } else if lighting_mode()==3 {
         let live=dynamic_illumination(v.world_position,v.normal);
-        illumination=live.diffuse+point_illumination(v.world_position,v.normal);
+        illumination=live.diffuse+map_surface_point_light(v.world_position,v.normal,live.diffuse);
         specular=live.specular;
     } else if material[1].x==1.0 {
         illumination=decomposed_lightmap(baked_light.rgb,textureSample(weights0,clamped_exact,v.lightmap_uv),v.lightmap_uv,v.world_position,v.normal)
@@ -1698,7 +1731,8 @@ fn physical_diffuse(v:VertexOut,n:vec3<f32>)->vec3<f32> {
         return max(ambient_at(reach)+camera.sun_color.rgb*facing*reach,baked_surroundings(p,v.normal))+v.point_light;
     }
     if lighting_mode()==3 {
-        return dynamic_illumination(p,n).diffuse+point_illumination(p,n);
+        let live=dynamic_illumination(p,n).diffuse;
+        return live+map_surface_point_light(p,n,live);
     }
     let vis=map_visibility(p,n);
     var share=0.0;
@@ -1717,7 +1751,8 @@ fn physical_light(v:VertexOut,n:vec3<f32>)->vec3<f32> {
     let baked=textureSample(lightmap,clamped,v.lightmap_uv).rgb*material[7].w;
     var light=shadowed_lightmap(baked*sky_follow(),p,n);
     if lighting_mode()==3 {
-        light+=dynamic_light_sum(p,n,SPECULAR_POWER).diffuse+point_illumination(p,n);
+        let live=dynamic_light_sum(p,n,SPECULAR_POWER).diffuse;
+        light+=live+map_surface_point_light(p,n,light+live);
     } else {
         light+=v.point_light;
     }
