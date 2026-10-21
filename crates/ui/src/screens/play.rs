@@ -363,12 +363,14 @@ fn hud_regions(pack: &Pack, dl: &mut DrawList, core: &Core) {
                     uv,
                     rect,
                     tint,
+                    turn,
                 } => {
                     let (x, y) = px(rect[0], rect[1]);
-                    dl.image(
+                    dl.image_turned(
                         crate::pack::TexKey::External(*texture),
                         [uv[0], uv[1], uv[2] - uv[0], uv[3] - uv[1]],
                         [x, y, rect[2] * unit, rect[3] * unit],
+                        *turn,
                         rgba(*tint),
                         filter,
                     );

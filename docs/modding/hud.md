@@ -148,6 +148,9 @@ back to the stock HUD when nothing claims a region.
 **Elements**, drawn back to front, at most 64:
 
 - `image`: `texture`, `rect` [x, y, w, h], optional `tint` (RGBA 0..1).
+  With `turn` `{ "value", "scale" }` it is turned about the middle of its
+  `rect` by the value times `scale`, in degrees clockwise: a compass rose
+  that swings as the viewer turns is `"turn": { "value": "heading", "scale": -1 }`.
   With `frames` `{ "count", "columns", "value", "max" }` it shows one frame
   of a strip (left to right, then down), picked by the value's share of its
   maximum: the first frame at 0, the last when full.
@@ -217,6 +220,16 @@ back to the stock HUD when nothing claims a region.
   nothing while either value is missing, while the viewer stands on the point,
   or while the point lies outside the `span` degrees the strip shows. Use one
   per point.
+- `dial_marker`: a picture on a dial at the place of a point in the world,
+  for teammates and objective letters on a round compass or radar. Give it
+  the dial's `rect`, the `range` in units from the middle to the edge, the
+  picture as `texture` with its `size` [w, h], and `x` and `z`, rule values
+  giving the point's world position. With `heading` (the value `heading`) the
+  viewer's facing is up, as a rotating radar; without it north is up (turn the
+  dial's own `image` against the heading to match). A point beyond `range`
+  stays on the edge, or is left out when `edge` is false. It draws nothing
+  while either value is missing or the viewer stands on the point. Use one
+  per point; put a ring or disc `image` under or over the dial for its look.
 - Any element takes `show` `{ "value", "above", "below" }` to appear only
   while a value is in range: a low-health flash, a reload prompt.
 
