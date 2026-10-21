@@ -136,13 +136,27 @@ const MAX_VOLUME_BYTES: u64 = 4_000_128;
 /// The file a map's baked light volume is kept in, beside the light
 /// descriptors. Dynamic loads no lightmaps, so the room light that bodies
 /// take (`LightVolume`) is baked offline by `prepare_lighting` and read from
-/// here. None for an id that is not a plain file name part.
+/// here. A map id may hold any character (an Add-On map's is
+/// `package:map/name`), so every byte outside letters, digits, `-` and `_`
+/// is written as `~` and its two hex digits (which keeps ids apart: a `~`
+/// is itself written so), and an id too long for a file name is named by its
+/// hash. None for an empty id.
 pub fn volume_file(map_id: &str) -> Option<String> {
-    let plain = !map_id.is_empty()
-        && map_id
-            .bytes()
-            .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_');
-    plain.then(|| format!("lighting-volume-{map_id}.bin"))
+    if map_id.is_empty() {
+        return None;
+    }
+    let mut name = String::new();
+    for b in map_id.bytes() {
+        if b.is_ascii_alphanumeric() || b == b'-' || b == b'_' {
+            name.push(char::from(b));
+        } else {
+            name.push_str(&format!("~{b:02x}"));
+        }
+    }
+    if name.len() > 160 {
+        name = format!("h-{:x}", Sha256::digest(map_id.as_bytes()));
+    }
+    Some(format!("lighting-volume-{name}.bin"))
 }
 /// Keep `volume` as map `map_id`'s room light for this bundle: the bundle's
 /// fingerprint, then the volume's own bytes.
@@ -151,7 +165,7 @@ pub fn write_volume(
     map_id: &str,
     volume: &crate::light_volume::LightVolume,
 ) -> Result<()> {
-    let name = volume_file(map_id).context("Map id is not a plain file name part")?;
+    let name = volume_file(map_id).context("Map id is empty")?;
     let mut bytes = fingerprint(root)?.into_bytes();
     bytes.extend(volume.to_bytes());
     ensure!(
@@ -255,22 +269,16 @@ mod tests {
             rays: 0,
         };
         write_volume(&root, "map-1", &volume)?;
-        assert_eq!(read_volume(&root, "map-1"), Some(volume));
+        assert_eq!(read_volume(&root, "map-1"), Some(volume.clone()));
         assert_eq!(read_volume(&root, "map-2"), None);
-        assert!(
-            write_volume(
-                &root,
-                "../x",
-                &crate::light_volume::LightVolume {
-                    origin: [0.0; 3],
-                    cell: 1.0,
-                    dims: [1; 3],
-                    texels: vec![[0; 4]],
-                    rays: 0,
-                }
-            )
-            .is_err()
-        );
+        // An Add-On map's id holds ':' and '/', and still gets its own file.
+        let addon = "aa25-pipeline-generated:map/aa25-pipeline-generated";
+        write_volume(&root, addon, &volume)?;
+        assert_eq!(read_volume(&root, addon), Some(volume.clone()));
+        assert!(!volume_file(addon).unwrap().contains(['/', ':']));
+        assert_ne!(volume_file("a/b"), volume_file("a~2fb"));
+        assert!(volume_file(&"x/".repeat(300)).unwrap().len() < 100);
+        assert_eq!(volume_file(""), None);
         // A rebuilt bundle makes it stale.
         std::fs::write(root.join("bundle.json"), b"{\"changed\":1}")?;
         assert_eq!(read_volume(&root, "map-1"), None);

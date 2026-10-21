@@ -69,6 +69,8 @@ fn main() -> Result<()> {
                     volume.dims,
                     start.elapsed().as_secs_f64()
                 );
+            } else {
+                println!("{id}: no lightmapped geometry, so no light volume");
             }
         }
         Ok(missing)
