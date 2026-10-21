@@ -1072,6 +1072,8 @@ struct VertexOut {
     @location(6) point_light:vec3<f32>,
     // Signed distance past the instance's clip plane; cut below zero.
     @location(7) clip:f32,
+    // The room light the instance stands in, a floor under a vertex-lit material's light.
+    @location(8) room_floor:vec3<f32>,
 };
 @vertex fn vs_main(@location(0) local_position:vec3<f32>,@location(1) local_normal:vec3<f32>,@location(2) uv:vec2<f32>,@location(3) lightmap_uv:vec2<f32>,@location(4) local_color:vec4<f32>,
     @location(5) m0:vec4<f32>,@location(6) m1:vec4<f32>,@location(7) m2:vec4<f32>,@location(8) m3:vec4<f32>,@location(9) tint:vec4<f32>,
@@ -1162,6 +1164,7 @@ struct VertexOut {
         out.color=vec4<f32>(clamp(lit*0.5,vec3<f32>(0.0),vec3<f32>(1.0))*color.rgb,color.a);
     }
     out.point_light=vec3<f32>(0.0);
+    out.room_floor=own_light.rgb;
     if material[0].x==2.0 || material[0].x==3.0 || material[0].x==9.0 || material[0].x==11.0 {
         out.point_light=vertex_point_illumination(out.world_position,out.normal);
     }
@@ -1566,6 +1569,8 @@ fn shade_surface(v:VertexOut)->vec4<f32> {
         // changes with the live environment.
         if relit() {illumination=max(illumination*sky_follow()+(camera.ambient.rgb-baked_ambient())*(1.0-sky_share()),vec3<f32>(0.0));}
     }
+    // A vertex-lit item or body in a lit room reads as lit by it (`ActorLight`), under whatever the map's lights and sun gave.
+    if material[0].x==2.0 {illumination=max(illumination,v.room_floor);}
     var display=pigment*illumination;
     // Fixed-function lighting clamps the vertex colour before texturing.
     if decal {display=mix(min(display,vec3<f32>(1.)),albedo.rgb,albedo.a);}
