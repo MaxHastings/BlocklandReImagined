@@ -3193,10 +3193,10 @@ impl Session {
 /// what overlaps it and how far the body was moved, or that nothing near
 /// was free and it stays (a relocation is never silent).
 fn report_relocation(owner: OwnerId, spawn: Vec3, moved: Option<Vec3>, blocker: Blocker) {
-    let (at, c) = (spawn, blocker.centre);
+    let (at, c, z) = (spawn, blocker.centre, blocker.size);
     let what = format!(
-        "player {owner}'s spawn spot ({:.2}, {:.2}, {:.2}) overlaps collider {} (tag {}, centred ({:.2}, {:.2}, {:.2}))",
-        at.x, at.y, at.z, blocker.collider, blocker.tag, c.x, c.y, c.z
+        "player {owner}'s spawn spot ({:.2}, {:.2}, {:.2}) overlaps collider {} (tag {}, centred ({:.2}, {:.2}, {:.2}), {:.2} x {:.2} x {:.2} across)",
+        at.x, at.y, at.z, blocker.collider, blocker.tag, c.x, c.y, c.z, z.x, z.y, z.z
     );
     let instead = match moved {
         Some(spot) => format!("the nearest spot it fits, {:.2} away", spot.distance(spawn)),

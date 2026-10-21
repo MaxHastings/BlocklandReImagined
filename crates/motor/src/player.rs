@@ -877,6 +877,9 @@ pub struct Blocker {
     pub tag: u128,
     /// The middle of its bounding box.
     pub centre: Vec3,
+    /// The size of its bounding box: told apart a thin wall from a collider
+    /// that spans the map.
+    pub size: Vec3,
 }
 /// Where [`Player::spot_near`] puts a body.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -2126,6 +2129,7 @@ impl Player {
                     collider: handle.into_raw_parts().0,
                     tag: c.user_data,
                     centre: Vec3::from_array((aabb.mins + aabb.maxs).to_array()) * 0.5,
+                    size: Vec3::from_array((aabb.maxs - aabb.mins).to_array()),
                 }
             });
         let Some(blocker) = blocker else {
