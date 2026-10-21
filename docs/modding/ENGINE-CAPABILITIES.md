@@ -140,6 +140,33 @@ Generated worlds players dig into, creatures, an economy, and inventories.
 - **Trust:** what a player is asked before joining a server with client code:
   [trust.md](trust.md).
 
+## Opt-in seams added in October 2026
+
+Each is off unless an Add-On sets it, so v20's behaviour is unchanged. Each
+entry names the guide that has the fields; [seams.md](../architecture/seams.md)
+holds status.
+
+| You want | Use | Guide |
+|---|---|---|
+| Bullets that glance off, pass through or stop by surface | a weapon's `trace` (strength, `max_landings`, `loss`, `floor`, `scatter`, per-surface `ricochet` and `penetration`), a collision detail's `shot`, and `exit_lands` for the far face of what a ray went through | [weapons.md](weapons.md) |
+| A shot or script ray that reports a map mover | `raycast` hits of kind `"mover"`, whose `ref` is the mover's id (`mover(id)` takes it) | [rules.md](rules.md) |
+| A radio menu or any mode with its own keys | a controls layer whose `when` is `rule:<package>:player/<key>`, and binds with `layer` that win over the profile while it is on | [content-kinds.md](content-kinds.md) |
+| A quiet or loud sound from a rule | `play_sound(p, sound[, volume])`, `sound_at(sound, x, y, z[, volume])` | [rules.md](rules.md) |
+| A ragdoll from client code | `physics.local` joints with two swing limits or a hinge, ghost bodies, `rigid_freeze`, `rigid_push_at` | [../architecture/client-sandbox.md](../architecture/client-sandbox.md) |
+| A body that turns aside at a wall end or door frame | an archetype's collision `cylinder` | [content-kinds.md](content-kinds.md) |
+| Level geometry that blocks from both faces | a collision detail's `two_sided` | [maps.md](maps.md) |
+| Bodies that fit at a spawn, and getting out of geometry | `movement.unstick`, used for spawns too | [gltf-models.md](gltf-models.md) |
+| A join code a friend types, with no service | the host's public address as `XXXX-XXXX-XXX` | [../architecture/hosting.md](../architecture/hosting.md) |
+
+Two things happen without an Add-On setting anything, so a mode's author
+should know them. Every unstick or spawn relocation is logged in the
+fallback report with where the body was, what it overlapped and how far it
+moved (nothing is moved silently). And a bot weighs the harm of crossing a
+covered opening against its objective, so a lone bot waits at a door the
+enemy watches and bots together cross it; a bot shot from out of sight
+searches for the shooter. See [bots.md](../architecture/bots.md) ("Crossing
+a covered opening").
+
 ## When something you need is not here
 
 Look in [seams.md](../architecture/seams.md) first: it lists every seam, who
