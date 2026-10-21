@@ -279,6 +279,7 @@ impl Session {
                 | Op::TellMinigame(_)
                 | Op::TellPlayers(_)
                 | Op::Print(_)
+                | Op::HudLine(_)
                 | Op::PrintMinigame(_)
                 | Op::Broadcast(_)
                 | Op::Log(_)

@@ -199,6 +199,40 @@ impl Perform for ops::Print {
         Ok(())
     }
 }
+impl Perform for ops::HudLine {
+    fn perform(self, session: &mut Session, cx: OpCall<'_>) -> Result<()> {
+        let OpCall { package, .. } = cx;
+        let ops::HudLine {
+            player,
+            feed,
+            text,
+            seconds,
+            color,
+            icon,
+        } = self;
+        session.take_cue(package)?;
+        let notice = Notice::Line {
+            feed,
+            text,
+            seconds,
+            color,
+            icon,
+        };
+        match player {
+            Some(player) => {
+                ensure!(session.peers.contains_key(&player), "No such player");
+                session.notify(player, notice);
+            }
+            None => {
+                let everyone: Vec<OwnerId> = session.peers.keys().copied().collect();
+                for owner in everyone {
+                    session.notify(owner, notice.clone());
+                }
+            }
+        }
+        Ok(())
+    }
+}
 impl Perform for ops::ScreenFlash {
     fn perform(self, session: &mut Session, cx: OpCall<'_>) -> Result<()> {
         let OpCall { package, .. } = cx;

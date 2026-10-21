@@ -634,6 +634,15 @@ pub enum Notice {
         profile: String,
         volume: f32,
     },
+    /// A line for a HUD `message_feed` (rules' `hud_line`): shown for
+    /// `seconds`, in `color` when given, with one of the feed's `icons`.
+    Line {
+        feed: String,
+        text: String,
+        seconds: f32,
+        color: Option<[f32; 4]>,
+        icon: Option<String>,
+    },
 }
 
 /// Minigame requests. The actor is always the authenticated connection.

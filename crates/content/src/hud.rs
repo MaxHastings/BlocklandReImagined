@@ -520,6 +520,35 @@ pub enum Element {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         show: Option<Show>,
     },
+    /// Lines a rule posts with `hud_line` to a feed of this name, one each,
+    /// oldest at the top: radio calls, countdown words, match notices.
+    /// Each line stays for the seconds its rule gave it and fades out over
+    /// the last half second.
+    MessageFeed {
+        /// The feed a rule's `hud_line` names.
+        feed: String,
+        /// Where the first line starts (or centres, or ends, by `align`).
+        at: [f32; 2],
+        #[serde(default)]
+        align: Align,
+        /// Most lines shown, 1 to 16.
+        #[serde(default = "feed_lines")]
+        lines: u8,
+        /// Units from one line to the next; negative stacks upward.
+        #[serde(default = "feed_spacing")]
+        spacing: f32,
+        /// A line's colour when its rule gave none.
+        #[serde(default = "white")]
+        color: [f32; 4],
+        /// A picture a line may name (`icon`), drawn before its text.
+        #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+        icons: BTreeMap<String, String>,
+        /// An icon's drawn size, units.
+        #[serde(default = "feed_icon")]
+        icon_size: [f32; 2],
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        show: Option<Show>,
+    },
     /// A motion tracker: a blip for each player within `range` units who
     /// moves faster than `min_speed` or fired within `fired_within`
     /// seconds, placed by range and bearing from the middle of `rect`
@@ -635,6 +664,20 @@ pub struct FeedKill {
     pub weapon: String,
 }
 
+/// A line a rule posted to a message feed ([`Element::MessageFeed`]).
+#[derive(Debug, Clone, PartialEq)]
+pub struct FeedLine {
+    /// The feed it was posted to.
+    pub feed: String,
+    /// Seconds since it was posted, and how long it stays.
+    pub age: f32,
+    pub seconds: f32,
+    pub text: String,
+    pub color: Option<[f32; 4]>,
+    /// The name of one of the feed's `icons`.
+    pub icon: Option<String>,
+}
+
 /// Which side another player is on, from the viewer's.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum Relation {
@@ -683,6 +726,7 @@ impl Contact {
 #[derive(Debug, Clone, Copy, Default)]
 pub struct Live<'a> {
     pub kills: &'a [FeedKill],
+    pub lines: &'a [FeedLine],
     pub contacts: &'a [Contact],
     /// The viewer's level facing as a unit (x, z) in the world; (0, 0)
     /// when unknown (edge arrows then read "ahead" as -z).
@@ -1143,6 +1187,54 @@ impl Layout {
                     );
                     show_ok(show)?;
                 }
+                Element::MessageFeed {
+                    feed,
+                    at,
+                    lines,
+                    spacing,
+                    color,
+                    icons,
+                    icon_size,
+                    show,
+                    ..
+                } => {
+                    ensure!(
+                        !feed.is_empty()
+                            && feed.len() <= 32
+                            && feed
+                                .chars()
+                                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-')),
+                        "a message feed is named by 1 to 32 letters, digits, `_` or `-`"
+                    );
+                    ensure!(
+                        at.iter()
+                            .chain([spacing])
+                            .all(|v| v.is_finite() && v.abs() <= 4096.0),
+                        "message feed position and spacing must be finite"
+                    );
+                    ensure!(
+                        (1..=16).contains(lines),
+                        "a message feed shows 1 to 16 lines"
+                    );
+                    ensure!(color_ok(color), "message feed color must be 0..1 RGBA");
+                    ensure!(icons.len() <= 32, "a message feed names at most 32 icons");
+                    for (name, icon) in icons {
+                        ensure!(
+                            !name.is_empty()
+                                && name.len() <= 32
+                                && !name.chars().any(char::is_control),
+                            "a message feed icon is named by 1 to 32 printable characters"
+                        );
+                        texture_ok(icon)?;
+                    }
+                    ensure!(
+                        icon_size
+                            .iter()
+                            .all(|v| v.is_finite() && *v > 0.0 && *v <= 480.0),
+                        "a message feed icon size must be positive"
+                    );
+                    show_ok(show)?;
+                }
                 Element::Strip {
                     textures,
                     rect,
@@ -1316,7 +1408,9 @@ impl Layout {
                 Element::Text { glyphs, .. } => {
                     out.extend(glyphs.as_ref().map(|g| g.texture.as_str()));
                 }
-                Element::KillFeed { icons, .. } => out.extend(icons.values().map(String::as_str)),
+                Element::KillFeed { icons, .. } | Element::MessageFeed { icons, .. } => {
+                    out.extend(icons.values().map(String::as_str));
+                }
                 Element::Tracker {
                     blip,
                     blip_above,
@@ -1402,7 +1496,9 @@ impl Layout {
                     }
                     names.extend(show.as_ref().map(|s| s.value.as_str()));
                 }
-                Element::KillFeed { show, .. } | Element::Tracker { show, .. } => {
+                Element::KillFeed { show, .. }
+                | Element::MessageFeed { show, .. }
+                | Element::Tracker { show, .. } => {
                     names.extend(show.as_ref().map(|s| s.value.as_str()));
                 }
             }
@@ -1708,6 +1804,56 @@ pub fn resolve_live(
                         }
                         rest = &rest[start + tag.len()..];
                     }
+                    out.push(Item::Line {
+                        at: [at[0], at[1] + row as f32 * spacing],
+                        align: *align,
+                        spans,
+                    });
+                }
+            }
+            Element::MessageFeed {
+                feed,
+                at,
+                align,
+                lines,
+                spacing,
+                color,
+                icons,
+                icon_size,
+                show,
+            } => {
+                if !shown(show) {
+                    continue;
+                }
+                let recent: Vec<&FeedLine> = live
+                    .lines
+                    .iter()
+                    .filter(|l| {
+                        l.feed == *feed && l.age.is_finite() && l.age >= 0.0 && l.age < l.seconds
+                    })
+                    .collect();
+                let first = recent.len().saturating_sub(usize::from(*lines));
+                for (row, line) in recent[first..].iter().enumerate() {
+                    // Fades over its last half second.
+                    let fade = ((line.seconds - line.age) / 0.5).clamped(0.0, 1.0);
+                    let faded = |c: [f32; 4]| [c[0], c[1], c[2], c[3] * fade];
+                    let mut spans = Vec::new();
+                    if let Some((key, _)) = line
+                        .icon
+                        .as_ref()
+                        .and_then(|name| icons.get(name))
+                        .and_then(|t| texture(t))
+                    {
+                        spans.push(Span::Image {
+                            texture: key,
+                            size: *icon_size,
+                            tint: faded([1.0; 4]),
+                        });
+                    }
+                    spans.push(Span::Text {
+                        text: line.text.clone(),
+                        color: faded(line.color.unwrap_or(*color)),
+                    });
                     out.push(Item::Line {
                         at: [at[0], at[1] + row as f32 * spacing],
                         align: *align,
@@ -2292,6 +2438,66 @@ mod tests {
         assert_eq!(at[1], 26.0);
         // Fading in its last half second.
         assert!(matches!(spans[3], Span::Text { color, .. } if (color[3] - 0.2).abs() < 1e-4));
+    }
+
+    fn feed_line(feed: &str, age: f32, seconds: f32, text: &str, icon: Option<&str>) -> FeedLine {
+        FeedLine {
+            feed: feed.into(),
+            age,
+            seconds,
+            text: text.into(),
+            color: None,
+            icon: icon.map(String::from),
+        }
+    }
+
+    #[test]
+    fn a_message_feed_shows_its_own_lines_for_the_seconds_each_was_given() {
+        let l = layout(serde_json::json!({
+            "schema_version": 1, "region": "top_left",
+            "elements": [{ "type": "message_feed", "feed": "radio", "at": [8, 8],
+                "lines": 2, "spacing": 12, "color": [0, 1, 0, 1],
+                "icons": { "radio": "pack:texture/bar" } }]
+        }));
+        let lines = [
+            feed_line("radio", 1.0, 3.0, "old", None),
+            feed_line("radio", 4.0, 3.0, "expired", None),
+            feed_line("other", 0.5, 3.0, "elsewhere", None),
+            feed_line("radio", 0.5, 3.0, "Moving out", Some("radio")),
+            feed_line("radio", 2.75, 3.0, "Clear", None),
+        ];
+        let live = Live {
+            lines: &lines,
+            ..Live::default()
+        };
+        let items = resolve_live(&l, &values, &textures, &live);
+        // The newest two of this feed's unexpired lines, a row apart.
+        assert_eq!(items.len(), 2);
+        assert_eq!(spans_text(&items[0]), "#3Moving out");
+        assert_eq!(spans_text(&items[1]), "Clear");
+        let Item::Line { at, spans, .. } = &items[1] else {
+            panic!()
+        };
+        assert_eq!(*at, [8.0, 20.0]);
+        // Its own colour is the element's, faded over the last half second.
+        assert!(matches!(spans[0], Span::Text { color, .. }
+            if color[1] == 1.0 && (color[3] - 0.5).abs() < 1e-4));
+    }
+
+    #[test]
+    fn a_message_feed_is_named_and_bounded() {
+        for bad in [
+            serde_json::json!({ "type": "message_feed", "feed": "", "at": [0, 0] }),
+            serde_json::json!({ "type": "message_feed", "feed": "a b", "at": [0, 0] }),
+            serde_json::json!({ "type": "message_feed", "feed": "radio", "at": [0, 0], "lines": 17 }),
+            serde_json::json!({ "type": "message_feed", "feed": "radio", "at": [0, 0],
+                "icons": { "x": "not a texture" } }),
+        ] {
+            let doc = serde_json::json!({ "schema_version": 1, "region": "top_left",
+                "elements": [bad] });
+            let parsed: Result<Layout, _> = serde_json::from_value(doc);
+            assert!(parsed.map_or(true, |l| l.validate().is_err()));
+        }
     }
 
     fn contact(id: u64, right: f32, ahead: f32, speed: f32, relation: Relation) -> Contact {

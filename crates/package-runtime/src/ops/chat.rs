@@ -109,6 +109,52 @@ impl ScriptOp for Print {
     }
 }
 
+/// A line on a HUD message feed (`hud_line`) for `seconds`: one player's,
+/// or everyone's when `player` is `None`. A layout's `message_feed` element
+/// of the same `feed` name draws it, with the optional `color` and one of its
+/// `icons` by name.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct HudLine {
+    pub player: Option<u64>,
+    pub feed: String,
+    pub text: String,
+    pub seconds: f32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color: Option<[f32; 4]>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub icon: Option<String>,
+}
+impl ScriptOp for HudLine {
+    const CAPABILITY: &str = "chat";
+    const NAME: &str = "hud_line";
+    fn bounded(&self) -> bool {
+        let HudLine {
+            feed,
+            text,
+            seconds,
+            color,
+            icon,
+            ..
+        } = self;
+        let name = |n: &str| {
+            !n.is_empty() && n.len() <= 32 && !n.chars().any(|c| c.is_control())
+        };
+        feed.len() <= 32
+            && feed
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-'))
+            && !feed.is_empty()
+            && text.chars().count() <= MAX_PRINT_CHARS
+            && !text.chars().any(char::is_control)
+            && seconds.is_finite()
+            && (0.5..=60.0).contains(seconds)
+            && color
+                .iter()
+                .all(|c| c.iter().all(|v| v.is_finite() && (0.0..=1.0).contains(v)))
+            && icon.as_deref().is_none_or(name)
+    }
+}
+
 /// The screen tinted `color` (RGBA 0..1) for one player, or everyone with
 /// no player, fading to nothing over `seconds`: a shield breaking, a hit
 /// taken, a power-up.
