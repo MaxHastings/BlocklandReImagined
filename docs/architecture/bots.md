@@ -703,7 +703,11 @@ lose crossing the next opening on its route (`Situation::exposed`,
 `spots::bot_exposure`): the enemies it knows of (the one in sight, the one
 that hurt it, the one it is wary of) that see the opening, each at its
 weapon's rate (`tactics::rate`, the unit `Where to stand` uses), over the
-walk to the opening and the step past it. A covered door that would take
+walk to the opening and the step past it, divided among the bot and the
+allies on foot within a crowd's distance of it (a defender's fire is split
+between the bodies it must cover, so a lone bot at a covered door waits for
+company and bots together cross; a threat it stops knowing of, its memory
+lapsed, stops costing it). A covered door that would take
 half its health makes the objective worth half, so a fight or a search
 outscores it and the bot stops to deal with the defender rather than walk
 in; with no opening ahead, no threat in sight of it, or an objective it

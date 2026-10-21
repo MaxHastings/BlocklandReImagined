@@ -170,7 +170,21 @@ impl Session {
             health,
             reach,
         );
-        (rate * seconds / health).min(1.0)
+        // Crossing together splits a defender's fire between the bodies in
+        // its lane, so each takes its share: the allies on foot beside it
+        // cross with it, and a bot alone at a covered door waits for them.
+        let beside = self
+            .peers
+            .iter()
+            .filter(|(o, p)| {
+                **o != bot
+                    && p.combat.alive
+                    && !self.seated(**o)
+                    && self.bot_allies(bot, **o)
+                    && flat(Vec3::from(p.player.state().feet) - feet).length() < team::CROWD
+            })
+            .count();
+        (rate * seconds / health / (1 + beside) as f32).min(1.0)
     }
 }
 
