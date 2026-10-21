@@ -79,10 +79,6 @@ impl BotThought {
                 e.position[1],
                 e.position[2]
             ),
-            (None, None) if self.unnoticed_hit.is_some() => format!(
-                "Noticed nothing, though it was hit ({})",
-                self.unnoticed_hit.unwrap_or_default()
-            ),
             (None, None) if self.sight_starved => {
                 "Noticed nothing (sight rays ran out)".to_string()
             }
@@ -326,14 +322,5 @@ mod tests {
         );
         // Once over, it is not shown.
         assert_eq!(t.why(1300)[2], "Sees player 3");
-        // A hit it could not place is said, ahead of the sight rays.
-        t.visible = None;
-        t.remembered = None;
-        t.sight_starved = true;
-        t.unnoticed_hit = Some("hit by no one");
-        assert_eq!(
-            t.why(1300)[2],
-            "Noticed nothing, though it was hit (hit by no one)"
-        );
     }
 }
