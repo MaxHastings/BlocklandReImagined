@@ -152,8 +152,6 @@ impl Geometry {
         std::mem::swap(&mut self.batches, &mut mesh.data.batches);
     }
 }
-/// How many uploads apart the first-person items' light is reported.
-const LIGHT_REPORT_EVERY: u64 = 300;
 struct Slot {
     pose: PoseKey,
     geometry: Geometry,
@@ -288,6 +286,8 @@ pub struct WorldItems {
     skinned: Vec<SkinnedCopy>,
     /// Frames prepared, for the idle models' recency.
     prepares: u64,
+    /// The models whose first light was reported (see `upload`).
+    reported: BTreeSet<ModelKey>,
     pub diagnostics: WorldItemDiagnostics,
 }
 /// Most loose models drawn at once.
@@ -338,6 +338,7 @@ impl WorldItems {
             wearer_colors: Vec::new(),
             headings: BTreeMap::new(),
             prepares: 0,
+            reported: BTreeSet::new(),
             diagnostics: Default::default(),
         })
     }
@@ -1316,7 +1317,6 @@ impl WorldItems {
         queue: &wgpu::Queue,
         light_at: &dyn Fn([f32; 3]) -> Option<ActorLight>,
     ) -> Result<()> {
-        let report = self.prepares.is_multiple_of(LIGHT_REPORT_EVERY);
         for (key, model) in self.models.iter_mut() {
             if model.gpu.is_none() && model.slots.iter().any(|s| !s.transforms.is_empty()) {
                 model.gpu = Some(renderer.upload(device, queue, &model.mesh.data)?);
@@ -1368,15 +1368,16 @@ impl WorldItems {
                         })
                     })
                     .collect();
-                if report && key.first_person {
-                    // What the first-person image's light was worked out from.
+                if self.reported.insert(key.clone()) {
+                    // The first time a model is drawn: what its light was worked out from.
                     let mut kinds = BTreeMap::new();
                     for material in &model.mesh.data.materials {
                         *kinds.entry(format!("{:?}", material.kind)).or_insert(0) += 1;
                     }
                     eprintln!(
-                        "Item light: {} (first person, local view {:?}) at {:?}: light {:?}, materials {:?}",
+                        "Item light: {} (first person {}, local view {:?}) at {:?}: light {:?}, materials {:?}",
                         key.model,
+                        key.first_person,
                         key.local_view,
                         slot.transforms
                             .first()
