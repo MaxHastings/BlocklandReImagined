@@ -1072,12 +1072,14 @@ pub struct ActorSun {
     pub color: [f32; 3],
 }
 /// The light one lit moving body ([`MaterialKind::ActorLit`]) takes in place of the scene's: an ambient colour and the run of the camera's
-/// [`ActorSun`]s that reach it (`sun_count` of them from `sun_first`, at most [`MAX_BODY_SUNS`]).
+/// [`ActorSun`]s that reach it (`sun_count` of them from `sun_first`, at most [`MAX_BODY_SUNS`]). A body with `scene_sun` keeps the scene's
+/// own sun and takes `ambient` only as a floor under the scene's ambient (the light of the room it stands in).
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ActorLight {
     pub ambient: [f32; 3],
     pub sun_first: u8,
     pub sun_count: u8,
+    pub scene_sun: bool,
 }
 impl ActorLight {
     fn valid(&self) -> bool {
@@ -1543,13 +1545,17 @@ impl SceneTransform {
             transform: self.transform.to_cols_array_2d(),
             tint: self.tint,
             clip,
-            // w below zero: the scene's own light.
+            // w below zero: the scene's own sun, under an ambient floor (zero when none).
             light: light.map_or([0.0, 0.0, 0.0, -1.0], |l| {
                 [
                     l.ambient[0],
                     l.ambient[1],
                     l.ambient[2],
-                    f32::from(l.sun_first) + 256.0 * f32::from(l.sun_count),
+                    if l.scene_sun {
+                        -1.0
+                    } else {
+                        f32::from(l.sun_first) + 256.0 * f32::from(l.sun_count)
+                    },
                 ]
             }),
         }
@@ -1567,7 +1573,7 @@ struct InstanceRecord {
     transform: [[f32; 4]; 4],
     tint: [f32; 4],
     clip: ClipPlane,
-    /// A lit moving body's own light: ambient rgb and its suns (first + 256 * count), or w -1 for the scene's.
+    /// A lit moving body's own light: ambient rgb and its suns (first + 256 * count), or w -1 for the scene's sun (ambient then a floor).
     light: [f32; 4],
 }
 
@@ -6341,6 +6347,29 @@ pub fn create_depth_samples(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_body_keeps_the_scene_sun_under_its_room_light_or_takes_a_zones_suns() {
+        let at = SceneTransform::default();
+        let room = ActorLight {
+            ambient: [0.3, 0.2, 0.1],
+            sun_first: 0,
+            sun_count: 0,
+            scene_sun: true,
+        };
+        assert_eq!(at.record(KEEP_ALL, Some(room)).light, [0.3, 0.2, 0.1, -1.0]);
+        let zone = ActorLight {
+            scene_sun: false,
+            sun_first: 2,
+            sun_count: 3,
+            ..room
+        };
+        assert_eq!(
+            at.record(KEEP_ALL, Some(zone)).light,
+            [0.3, 0.2, 0.1, 2.0 + 256.0 * 3.0]
+        );
+        assert_eq!(at.record(KEEP_ALL, None).light, [0.0, 0.0, 0.0, -1.0]);
+    }
 
     #[test]
     fn only_glow_bricks_and_unlit_materials_count_as_emissive() {

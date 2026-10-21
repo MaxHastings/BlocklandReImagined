@@ -144,7 +144,8 @@ fn actor_light(position:vec3<f32>,normal:vec3<f32>,own:vec4<f32>)->vec3<f32> {
         }
         score[k]=s;chosen[k]=i;
     }
-    var sum=select(camera.ambient.rgb,own.rgb,own.w>=0.0);
+    // A zone's own ambient, or the scene's with the room's light as a floor under it.
+    var sum=select(max(camera.ambient.rgb,own.rgb),own.rgb,own.w>=0.0);
     for(var k=0u;k<4u;k+=1u) {
         if score[k]<=0.0 {continue;}
         let light=listed_light(list,chosen[k]);

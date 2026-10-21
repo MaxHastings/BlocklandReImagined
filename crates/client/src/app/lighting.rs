@@ -200,6 +200,28 @@ pub(super) fn store_bake(cache: &std::path::Path, file: &std::path::Path, bytes:
         .and_then(|_| std::fs::rename(&partial, file));
 }
 impl LightVolumeState {
+    /// The light of the room a lit moving body stands in, from the map's
+    /// baked volume (the full lightmap light, which every lighting mode
+    /// keeps on the CPU): the brightest of the volume's light at three
+    /// heights through the body's box, so a cell in a wall or under a bench
+    /// does not darken a body standing in a lit room. Zero without a volume.
+    pub(super) fn room_light(&self, low: [f32; 3], high: [f32; 3]) -> [f32; 3] {
+        let Some(volume) = &self.volume else {
+            return [0.0; 3];
+        };
+        let mut room = [0.0f32; 3];
+        for at in [0.25, 0.5, 0.75] {
+            let point = [0, 1, 2].map(|a| low[a] + (high[a] - low[a]) * at);
+            for (best, light) in room.iter_mut().zip(volume.light(point, ROOM_NORMAL)) {
+                *best = best.max(light);
+            }
+        }
+        room
+    }
+}
+/// Which way the room's light is read for a body: up, as the volume's form shading reads a roof-lit surface.
+const ROOM_NORMAL: [f32; 3] = [0.0, 1.0, 0.0];
+impl LightVolumeState {
     /// Cells of at least 2 units, at most a million (4 MB): about 4.7 units
     /// across the whole Bedroom.
     const MIN_CELL: f32 = 2.0;
@@ -637,6 +659,32 @@ mod tests {
             texels: vec![[3, 4, 5, 255]],
             rays: 0,
         }
+    }
+
+    #[test]
+    fn a_body_takes_the_light_of_the_room_it_stands_in() {
+        let lit = bri_render::light_volume::LightVolume {
+            origin: [0.0; 3],
+            cell: 4.0,
+            dims: [1; 3],
+            texels: vec![[200, 160, 120, 255]],
+            rays: 0,
+        };
+        let state = LightVolumeState {
+            volume: Some(lit),
+            ..Default::default()
+        };
+        let room = state.room_light([1.0, 0.0, 1.0], [2.0, 3.6, 2.0]);
+        assert!(room[0] > room[1] && room[1] > room[2] && room[2] > 0.35);
+        // Outside the volume, or with none, a body takes nothing from it.
+        assert_eq!(
+            state.room_light([9.0, 0.0, 9.0], [10.0, 3.6, 10.0]),
+            [0.0; 3]
+        );
+        assert_eq!(
+            LightVolumeState::default().room_light([1.0; 3], [2.0; 3]),
+            [0.0; 3]
+        );
     }
 
     #[test]

@@ -1002,16 +1002,33 @@ impl App {
             }
             let started = full.then(std::time::Instant::now);
             avatar.build_pending(&self.avatar.avatar_assets)?;
-            // Where it stands decides the ambient and suns a lit body takes.
-            avatar.light = self.scene.regions.as_ref().map(|regions| {
-                let (low, high) = avatar.render_box();
-                let (ambient, suns) = regions.actor_light(low.to_array(), high.to_array(), 0.0);
-                bri_render::scene::ActorLight {
-                    ambient,
-                    sun_first: suns.map_or(0, |s| s.0),
-                    sun_count: suns.map_or(0, |s| s.1),
+            // Where it stands decides the ambient and suns a lit body takes:
+            // its zone's, and the light of the room it stands in (the map's
+            // baked volume) as a floor under the ambient, so a body in a lit
+            // room reads as lit by it.
+            let (low, high) = avatar.render_box();
+            let room = self
+                .lighting
+                .light_volume
+                .room_light(low.to_array(), high.to_array());
+            let lit_room = room.iter().any(|c| *c > 0.0);
+            avatar.light = match self.scene.regions.as_ref() {
+                Some(regions) => {
+                    let (ambient, suns) = regions.actor_light(low.to_array(), high.to_array(), 0.0);
+                    Some(bri_render::scene::ActorLight {
+                        ambient: [0, 1, 2].map(|c| ambient[c].max(room[c])),
+                        sun_first: suns.map_or(0, |s| s.0),
+                        sun_count: suns.map_or(0, |s| s.1),
+                        scene_sun: false,
+                    })
                 }
-            });
+                None => lit_room.then_some(bri_render::scene::ActorLight {
+                    ambient: room,
+                    sun_first: 0,
+                    sun_count: 0,
+                    scene_sun: true,
+                }),
+            };
             let textures = self
                 .avatar
                 .body_textures
