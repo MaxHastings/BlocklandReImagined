@@ -49,6 +49,8 @@ pub struct GameValues {
     pub heading: f32,
     pub fov: f32,
     pub aiming: bool,
+    /// 0 standing, 1 crouching, 2 prone, 3 on a ladder.
+    pub stance: u8,
     /// The scope's zoom step while aiming (1 is the first, 2 the next wheel level), 0 when not.
     pub zoom_level: u32,
 }
@@ -233,6 +235,7 @@ impl HudRegions {
                 Source::Heading => Value::Number(game.heading),
                 Source::Fov => Value::Number(game.fov),
                 Source::Aiming => Value::Number(f32::from(u8::from(game.aiming))),
+                Source::Stance => Value::Number(f32::from(game.stance)),
                 Source::ZoomLevel => Value::Number(game.zoom_level as f32),
                 Source::ItemAmmo { item, field } => {
                     use bri_content::hud::AmmoField;
