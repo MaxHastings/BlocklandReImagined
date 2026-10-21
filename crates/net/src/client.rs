@@ -112,6 +112,8 @@ pub struct Client {
     pub certificate: Vec<u8>,
     /// The host's listing from the handshake (its name for saved servers).
     pub listing: Listing,
+    /// Joined through the join code service's relay.
+    pub relayed: bool,
     /// Shared packages the server runs that this client joined without:
     /// never offered (base game content), or their download or load failed.
     pub unavailable: Vec<bri_package::environment::PackageRef>,
@@ -579,6 +581,76 @@ impl Client {
         arrival: Option<ResumeToken>,
     ) -> Result<Self> {
         progress.begin(Stage::Connecting, Unit::Steps, None);
+        let opened = open(address, &pin, Duration::from_secs(10)).await?;
+        Self::joined(
+            opened,
+            name,
+            packages,
+            resume,
+            host,
+            identity,
+            kept,
+            progress,
+            accept_differences,
+            arrival,
+        )
+        .await
+    }
+    /// Join the host with a code: ask `codes` where it is, try every route
+    /// at once from one socket (so both routers open for each other), fall
+    /// back to the relay, and join over whichever answers first. `socket`
+    /// replaces the OS socket (tests behind simulated routers).
+    #[allow(clippy::too_many_arguments)]
+    pub async fn connect_code(
+        codes: &dyn crate::codes::JoinCodes,
+        code: &str,
+        name: JoinName,
+        packages: Vec<bri_package::environment::PackageRef>,
+        identity: &ClientIdentity,
+        progress: Progress,
+        socket: Option<Arc<dyn quinn::AsyncUdpSocket>>,
+    ) -> Result<Self> {
+        progress.begin(Stage::Connecting, Unit::Steps, None);
+        let endpoint = crate::codes::endpoint(socket, None)?;
+        let found = codes.find(&endpoint, code).await?;
+        let pin = HostPin::Key(found.key);
+        let (connection, relayed) = crate::codes::race(&endpoint, &found, &pin).await?;
+        let mut opened = begin(
+            endpoint,
+            connection,
+            Duration::from_secs(10),
+            JoinBegin::join(),
+        )
+        .await?;
+        opened.relayed = relayed;
+        Self::joined(
+            opened,
+            name,
+            packages,
+            None,
+            None,
+            Some(identity),
+            None,
+            progress,
+            false,
+            None,
+        )
+        .await
+    }
+    #[allow(clippy::too_many_arguments)]
+    async fn joined(
+        opened: Opened,
+        name: JoinName,
+        packages: Vec<bri_package::environment::PackageRef>,
+        resume: Option<ResumeToken>,
+        host: Option<ResumeToken>,
+        identity: Option<&ClientIdentity>,
+        kept: Option<KeptBricks>,
+        progress: Progress,
+        accept_differences: bool,
+        arrival: Option<ResumeToken>,
+    ) -> Result<Self> {
+        let address = opened.connection.remote_address();
         let Opened {
             endpoint,
             connection,
@@ -587,7 +659,8 @@ impl Client {
             mut receive,
             nonce: challenge,
             listing,
-        } = open(address, &pin, Duration::from_secs(10)).await?;
+            relayed,
+        } = opened;
         let JoinName { name, clan } = name;
         // Kept bricks mean nothing without the ticket that names the game
         // they came from.
@@ -793,6 +866,7 @@ impl Client {
             resume,
             certificate,
             listing,
+            relayed,
             unavailable: Vec::new(),
             replica,
             changing_map: None,
@@ -1252,6 +1326,7 @@ impl Arrival {
             mut receive,
             nonce: challenge,
             listing,
+            ..
         } = open_for(
             address,
             pin,
@@ -1425,6 +1500,7 @@ struct Opened {
     receive: quinn::RecvStream,
     nonce: [u8; 32],
     listing: Listing,
+    relayed: bool,
 }
 
 async fn open(address: SocketAddr, pin: &HostPin, wait: Duration) -> Result<Opened> {
@@ -1434,9 +1510,21 @@ async fn open_for(
     address: SocketAddr,
     pin: &HostPin,
     wait: Duration,
+    begin_message: JoinBegin,
+) -> Result<Opened> {
+    let (endpoint, connection, _) = connect_quic(address, pin, wait).await?;
+    begin(endpoint, connection, wait, begin_message).await
+}
+/// Send `begin` on a connected QUIC connection and read the host's
+/// challenge and listing.
+async fn begin(
+    endpoint: quinn::Endpoint,
+    connection: quinn::Connection,
+    wait: Duration,
     begin: JoinBegin,
 ) -> Result<Opened> {
-    let (endpoint, connection, certificate) = connect_quic(address, pin, wait).await?;
+    let address = connection.remote_address();
+    let certificate = peer_certificate(&connection)?;
     // Every step after the handshake shares the caller's wait: a host that
     // allows no streams, grants no flow control or never answers would
     // otherwise hold the join forever.
@@ -1464,6 +1552,7 @@ async fn open_for(
         receive,
         nonce,
         listing,
+        relayed: false,
     })
 }
 
@@ -1474,22 +1563,40 @@ pub(crate) async fn connect_quic(
     pin: &HostPin,
     wait: Duration,
 ) -> Result<(quinn::Endpoint, quinn::Connection, Vec<u8>)> {
-    let mut config = quinn::ClientConfig::new(Arc::new(pinned_config(pin.clone())?));
-    config.transport_config(Arc::new(transport()));
     let ip = if address.is_ipv4() {
         IpAddr::V4(Ipv4Addr::UNSPECIFIED)
     } else {
         IpAddr::V6(Ipv6Addr::UNSPECIFIED)
     };
-    let mut endpoint = quinn::Endpoint::client(SocketAddr::new(ip, 0))?;
-    endpoint.set_default_client_config(config);
-    let connection =
-        match tokio::time::timeout(wait, endpoint.connect(address, "blockland.local")?).await {
-            Ok(Ok(connection)) => connection,
-            Ok(Err(error)) => return Err(JoinError::from_connection(address, error).into()),
-            Err(_) => return Err(JoinError::NoAnswer(address).into()),
-        };
-    let certificate = connection
+    let endpoint = quinn::Endpoint::client(SocketAddr::new(ip, 0))?;
+    let connection = handshake(&endpoint, address, pin, wait).await?;
+    let certificate = peer_certificate(&connection)?;
+    Ok((endpoint, connection, certificate))
+}
+
+/// A QUIC handshake with the pinned host at `address` from `endpoint`.
+pub(crate) async fn handshake(
+    endpoint: &quinn::Endpoint,
+    address: SocketAddr,
+    pin: &HostPin,
+    wait: Duration,
+) -> Result<quinn::Connection> {
+    let mut config = quinn::ClientConfig::new(Arc::new(pinned_config(pin.clone())?));
+    config.transport_config(Arc::new(transport()));
+    match tokio::time::timeout(
+        wait,
+        endpoint.connect_with(config, address, "blockland.local")?,
+    )
+    .await
+    {
+        Ok(Ok(connection)) => Ok(connection),
+        Ok(Err(error)) => Err(JoinError::from_connection(address, error).into()),
+        Err(_) => Err(JoinError::NoAnswer(address).into()),
+    }
+}
+
+fn peer_certificate(connection: &quinn::Connection) -> Result<Vec<u8>> {
+    connection
         .peer_identity()
         .and_then(|identity| {
             identity
@@ -1497,13 +1604,12 @@ pub(crate) async fn connect_quic(
                 .ok()
         })
         .and_then(|chain| chain.first().map(|c| c.to_vec()))
-        .context("The server presented no certificate")?;
-    Ok((endpoint, connection, certificate))
+        .context("The server presented no certificate")
 }
 
 /// TLS configuration that accepts the pinned host (or, for first use, any
 /// host); the caller pins what it saw from `Client::certificate`.
-fn pinned_config(pin: HostPin) -> Result<quinn::crypto::rustls::QuicClientConfig> {
+pub(crate) fn pinned_config(pin: HostPin) -> Result<quinn::crypto::rustls::QuicClientConfig> {
     use quinn::rustls;
     let provider = Arc::new(rustls::crypto::ring::default_provider());
     let crypto = rustls::ClientConfig::builder_with_provider(provider.clone())

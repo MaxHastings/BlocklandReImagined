@@ -181,6 +181,11 @@ pub struct ServerHandle {
     pub traffic: Arc<Traffic>,
     discovery: Option<tokio::task::JoinHandle<()>>,
     router: Option<RouterPorts>,
+    /// The game port's endpoint, for join codes (outgoing connections to
+    /// the service and hole punching share the port players reach).
+    endpoint: Endpoint,
+    /// The join code held while this host runs.
+    code: Option<CodeSlot>,
     stop: Option<oneshot::Sender<()>>,
     recovery: mpsc::Sender<crate::recovery::Recovery>,
     task: tokio::task::JoinHandle<ServerReport>,
@@ -361,12 +366,22 @@ impl ServerHandle {
     /// report is handed to `notify` once. LAN discovery (UDP 28050) is never
     /// forwarded: joining over the internet needs only the game port.
     pub fn open_to_internet(&mut self, notify: impl FnOnce(crate::reach::Report) + Send + 'static) {
+        self.open_to_internet_with(None, notify);
+    }
+    /// [`ServerHandle::open_to_internet`], asking the STUN server `stun`
+    /// (`host:port`) for the public address when the router reports none.
+    pub fn open_to_internet_with(
+        &mut self,
+        stun: Option<String>,
+        notify: impl FnOnce(crate::reach::Report) + Send + 'static,
+    ) {
         let port = self.address.port();
         let certificate = self.certificate.clone();
         let slot = Arc::new(std::sync::Mutex::new(None::<crate::reach::Forward>));
         let held = slot.clone();
         let task = tokio::spawn(async move {
-            let (report, forward) = crate::reach::open_and_check(port, certificate).await;
+            let (report, forward) =
+                crate::reach::open_and_check_with(port, certificate, stun.as_deref()).await;
             notify(report);
             let Some(forward) = forward else { return };
             if let Ok(mut guard) = held.lock() {
@@ -387,6 +402,36 @@ impl ServerHandle {
         });
         self.router = Some(RouterPorts { task, slot });
     }
+    /// Ask `codes` for a join code for this host; `notify` gets the code or
+    /// why there is none. The code is held until the host stops.
+    pub fn host_code(
+        &mut self,
+        codes: Arc<dyn crate::codes::JoinCodes>,
+        name: String,
+        locals: Vec<SocketAddr>,
+        notify: impl FnOnce(Result<String>) + Send + 'static,
+    ) {
+        if let Ok(mut listing) = self.listing.lock() {
+            listing.name = name.clone();
+        }
+        let endpoint = self.endpoint.clone();
+        let key = crate::invite::host_key(&self.certificate);
+        let slot = Arc::new(std::sync::Mutex::new(None::<crate::codes::HostCode>));
+        let held = slot.clone();
+        let task = tokio::spawn(async move {
+            match codes.host(endpoint, key, locals, name).await {
+                Ok(code) => {
+                    let text = code.code.clone();
+                    if let Ok(mut guard) = held.lock() {
+                        *guard = Some(code);
+                    }
+                    notify(Ok(text));
+                }
+                Err(error) => notify(Err(error)),
+            }
+        });
+        self.code = Some(CodeSlot { task, slot });
+    }
     /// Whether the host has stopped (by itself, when not asked to).
     pub fn is_finished(&self) -> bool {
         self.task.is_finished()
@@ -405,6 +450,7 @@ impl ServerHandle {
     /// or by itself after an error ([`ServerReport::failure`]).
     pub async fn finish(mut self) -> Result<ServerReport> {
         self.router.take();
+        self.code.take();
         if let Some(discovery) = self.discovery.take() {
             discovery.abort();
         }
@@ -434,6 +480,18 @@ impl Drop for RouterPorts {
         self.task.abort();
         let slot = self.slot.clone();
         std::thread::spawn(move || drop(slot.lock().ok().and_then(|mut m| m.take())));
+    }
+}
+struct CodeSlot {
+    task: tokio::task::JoinHandle<()>,
+    slot: Arc<std::sync::Mutex<Option<crate::codes::HostCode>>>,
+}
+impl Drop for CodeSlot {
+    fn drop(&mut self) {
+        self.task.abort();
+        if let Ok(mut code) = self.slot.lock() {
+            code.take();
+        }
     }
 }
 /// A world transfer's frames encoded so far, whether it is done, or why
@@ -685,7 +743,16 @@ pub fn start_with_limit(
     options: ServerOptions,
     max_players: usize,
 ) -> Result<ServerHandle> {
-    start_configured(session, options, max_players, None, false, None)
+    start_configured(session, options, max_players, None, false, None, None)
+}
+/// Start on `socket` instead of binding `options.bind` (tests behind a
+/// simulated router).
+pub fn start_on_socket(
+    session: Session,
+    options: ServerOptions,
+    socket: Arc<dyn quinn::AsyncUdpSocket>,
+) -> Result<ServerHandle> {
+    start_configured(session, options, 64, None, false, None, Some(socket))
 }
 /// Persistent administration variant preserving the host-selected player cap.
 pub fn start_with_admin_store_and_limit(
@@ -710,7 +777,15 @@ pub fn start_with_admin_store_limit_and_recording(
     let mut bytes = Vec::new();
     state.write(&mut bytes)?;
     session.restore_admin_state(&bytes)?;
-    start_configured(session, options, max_players, Some(store), true, recording)
+    start_configured(
+        session,
+        options,
+        max_players,
+        Some(store),
+        true,
+        recording,
+        None,
+    )
 }
 fn start_configured(
     session: Session,
@@ -719,6 +794,7 @@ fn start_configured(
     admin_store: Option<AdminStore>,
     require_identity: bool,
     recording: Option<crate::replay::Recording>,
+    socket: Option<Arc<dyn quinn::AsyncUdpSocket>>,
 ) -> Result<ServerHandle> {
     start_stepping(
         session,
@@ -728,9 +804,11 @@ fn start_configured(
         require_identity,
         Session::step,
         recording,
+        socket,
     )
 }
 /// [`start_configured`] with what one simulation step is (tests make it fail).
+#[allow(clippy::too_many_arguments)]
 fn start_stepping(
     mut session: Session,
     options: ServerOptions,
@@ -739,6 +817,7 @@ fn start_stepping(
     require_identity: bool,
     step: fn(&mut Session) -> Result<()>,
     recording: Option<crate::replay::Recording>,
+    socket: Option<Arc<dyn quinn::AsyncUdpSocket>>,
 ) -> Result<ServerHandle> {
     ensure!((1..=64).contains(&max_players), "Invalid player limit");
     ensure!(
@@ -757,7 +836,15 @@ fn start_stepping(
     let mut config =
         quinn::ServerConfig::with_single_cert(vec![certificate.clone().into()], key.into())?;
     config.transport_config(Arc::new(transport()));
-    let endpoint = Endpoint::server(config, options.bind)?;
+    let endpoint = match socket {
+        Some(socket) => Endpoint::new_with_abstract_socket(
+            quinn::EndpointConfig::default(),
+            Some(config),
+            socket,
+            Arc::new(quinn::TokioRuntime),
+        )?,
+        None => Endpoint::server(config, options.bind)?,
+    };
     let address = endpoint.local_addr()?;
     let (stop_tx, stop_rx) = oneshot::channel();
     let (recovery, recovery_rx) = mpsc::channel(1);
@@ -803,7 +890,7 @@ fn start_stepping(
         package_problems.clone(),
         traffic.clone(),
         listing.clone(),
-        endpoint,
+        endpoint.clone(),
         session,
         options,
         max_players,
@@ -827,6 +914,8 @@ fn start_stepping(
         traffic,
         discovery: None,
         router: None,
+        endpoint,
+        code: None,
         stop: Some(stop_tx),
         recovery,
         task,
@@ -1981,6 +2070,7 @@ mod tests {
             None,
             false,
             |_| panic!("a bug in every tick"),
+            None,
             None,
         )?;
         let slot = tempfile::tempdir()?;

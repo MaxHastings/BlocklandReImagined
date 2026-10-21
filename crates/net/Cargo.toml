@@ -15,6 +15,7 @@ serde.workspace = true
 serde_json.workspace = true
 serde_bytes.workspace = true
 bri-package = { path = "../package" }
+bri-rendezvous = { path = "../rendezvous" }
 bri-content = { path = "../content" }
 bri-world = { path = "../world" }
 bri-progress = { path = "../progress" }
@@ -28,7 +29,7 @@ glam.workspace = true
 rapier3d.workspace = true
 quinn = { version = "0.11", default-features = false, features = ["runtime-tokio", "rustls-ring"] }
 rcgen = { version = "0.14", default-features = false, features = ["crypto", "ring"] }
-tokio = { workspace = true, features = ["rt-multi-thread", "macros", "sync", "time", "io-util", "signal"] }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "sync", "time", "io-util", "signal", "net"] }
 getrandom = "0.4"
 sha2.workspace = true
 ring.workspace = true

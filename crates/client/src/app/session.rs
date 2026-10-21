@@ -455,6 +455,17 @@ impl App {
             .filter(|p| *p != 0)
             .unwrap_or(bri_net::invite::DEFAULT_PORT);
         let port = if self.host_any_port { 0 } else { port };
+        // A STUN server the player names finds the public address when the
+        // router reports none; empty (the default) asks no one.
+        let stun = Some(
+            self.ui
+                .core
+                .prefs
+                .str_or("$Pref::Server::StunServer", "")
+                .trim()
+                .to_string(),
+        )
+        .filter(|s| !s.is_empty());
         self.disconnect();
         self.ui.apply_session(
             id,
@@ -786,7 +797,7 @@ impl App {
             }
             if internet {
                 let reach = router_tx.clone();
-                host.open_to_internet(move |report| {
+                host.open_to_internet_with(stun, move |report| {
                     let _ = reach.send(HostNotice::Reach(report));
                 });
             } else if !single && let Some(ip) = bri_net::reach::local_ip() {

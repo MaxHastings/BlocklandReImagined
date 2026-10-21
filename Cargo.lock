@@ -751,6 +751,7 @@ dependencies = [
  "bri-package-runtime",
  "bri-physics",
  "bri-progress",
+ "bri-rendezvous",
  "bri-sim",
  "bri-vehicles",
  "bri-weapons",
@@ -842,6 +843,20 @@ dependencies = [
  "sha2",
  "tempfile",
  "wgpu",
+]
+
+[[package]]
+name = "bri-rendezvous"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "getrandom 0.4.3",
+ "quinn",
+ "rcgen",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tokio",
 ]
 
 [[package]]
