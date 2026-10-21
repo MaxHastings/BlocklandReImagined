@@ -2428,6 +2428,13 @@ pub struct TraceStrength {
     /// The share of its strength a glancing ray keeps, 0 to 1.
     #[serde(default = "TraceStrength::default_loss")]
     pub loss: f32,
+    /// The far face of what it went through is a landing like any other: a
+    /// fresh glance draw against that face and the surface's `penetration`
+    /// share again (so a wall costs that share twice), as when the engine
+    /// traces on from inside and meets the shape again. Off, the far face
+    /// is only the way out.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub exit_lands: bool,
     /// The strength under which it stops, 0 to 1.
     #[serde(default = "TraceStrength::default_floor")]
     pub floor: f32,

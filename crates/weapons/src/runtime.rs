@@ -5174,7 +5174,9 @@ impl WeaponsWorld {
             let Some(hit) = hit.filter(|h| h.position.is_finite() && h.normal.is_finite()) else {
                 return;
             };
-            if inside.take() == Some(hit.target) {
+            let exit_lands = trace.is_some_and(|t| t.exit_lands);
+            let came_through = inside.take() == Some(hit.target);
+            if came_through && !exit_lands {
                 // Out the far side of what it went through: that took
                 // range, and is no landing.
                 reach -= hit.position.distance(from);
@@ -5196,7 +5198,12 @@ impl WeaponsWorld {
             if trace.is_some() {
                 d.damage = (base * strength).clamped(-100.0, 100.0);
             }
-            let normal = hit.normal.normalize_or(-direction);
+            let mut normal = hit.normal.normalize_or(-direction);
+            // The far face of what it came through faces away from it:
+            // it meets that face from inside.
+            if came_through && direction.dot(normal) > 0.0 {
+                normal = -normal;
+            }
             if !self.hitscan_land(
                 id,
                 a,
