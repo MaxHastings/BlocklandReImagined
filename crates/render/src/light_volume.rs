@@ -19,6 +19,11 @@ use crate::scene::{AlphaMode, MaterialKind, SceneData, SceneImage};
 use bri_console::Clamp;
 use glam::Vec3;
 
+/// Cells of at least this many units, at most `BAKE_MAX_CELLS` (4 MB): about
+/// 4.7 units across the whole Bedroom. What every bake of a map's room light uses.
+pub const BAKE_MIN_CELL: f32 = 2.0;
+/// Most cells a map's room light holds.
+pub const BAKE_MAX_CELLS: usize = 1_000_000;
 /// Directions per cell. A Fibonacci sphere; enough to find a lamp shade.
 const RAYS: usize = 24;
 /// Rays a baked cell casts: every direction and the one down.

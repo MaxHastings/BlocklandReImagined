@@ -447,6 +447,7 @@ fn prepare_map(
     light_volume.animations = visual.light_animations.clone();
     light_volume.spots = visual.light_spots.clone();
     light_volume.overflow = visual.overflow_lights.clone();
+    light_volume.use_prepared_volume(visual.light_volume.clone());
     // The same definitions the host's session loads, Add-On bricks included.
     let definitions = paths.map_content()?.definitions()?;
     let meshes = Arc::new(

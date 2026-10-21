@@ -201,6 +201,14 @@ CI content archive. Packaged startup validation rejects missing or stale
 parameters. Interactive Dynamic rendering announces a live sun/ambient fallback
 if the sidecar is unavailable; it never silently reuses baked shadows.
 
+`prepare_lighting` also bakes each map's room light (`lighting-volume-<map id>.bin`,
+the bundle's fingerprint then a `LightVolume`), because Dynamic reads no
+lightmaps and bodies standing in a lit room take their ambient from it. A
+bundle prepared before this keeps its valid sidecar and gets only the volumes
+baked on the next run; `--check` lists the missing ones without failing. In
+Dynamic a missing or stale volume leaves bodies on the zone or scene ambient
+and is announced when the map loads.
+
 ## Reproducibility
 
 On 2026-09-27 a run from an empty checkout against the reference install
