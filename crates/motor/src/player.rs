@@ -868,6 +868,26 @@ impl Default for PlayerTuning {
         }
     }
 }
+/// What overlaps a body set down on a spawn spot ([`Player::spot_near`]).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Blocker {
+    /// The collider's index in the physics world.
+    pub collider: u32,
+    /// Its `user_data` tag.
+    pub tag: u128,
+    /// The middle of its bounding box.
+    pub centre: Vec3,
+}
+/// Where [`Player::spot_near`] puts a body.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Placement {
+    /// The spot is free (or the body has no `unstick` and keeps it).
+    Clear(Vec3),
+    /// The spot overlaps `blocker`; the body fits at `to`.
+    Moved { to: Vec3, blocker: Blocker },
+    /// The spot overlaps `blocker` and nothing near is free.
+    Stuck { blocker: Blocker },
+}
 /// [`PlayerTuning::wall_step`]: a body that runs into a near-vertical wall
 /// lifts by up to `lift`, makes the rest of its move and lowers again onto
 /// what it stands on; if another wall stops that lifted move after more
@@ -901,7 +921,8 @@ impl WallStep {
 /// around it (each a thin slice of half the body's radius, `probe` of the
 /// radius away: at most two free ones count, and the body moves by the sum
 /// of their offsets, twice as far with just one), then the nearest free
-/// spot within `reach`, searched every `step` outward and upward. Other
+/// spot within `reach`, searched every `step` outward and upward. A body
+/// set down on a spawn it does not fit moves the same way ([`Player::spot_near`]). Other
 /// players never count: they move aside.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -2004,6 +2025,30 @@ impl Player {
         }
         // Tried again after another `seconds` when nothing nearby is free.
         self.embedded_for = 0.0;
+        self.search_free(physics, filter, unstick, feet)
+    }
+    /// The nearest spot to `feet` where the body fits, by the [`Unstick`]
+    /// search: straight up, the vote of four probes, then rings outward and
+    /// upward.
+    fn search_free(
+        &self,
+        physics: &PhysicsWorld,
+        filter: QueryFilter<'_>,
+        unstick: Unstick,
+        feet: Vec3,
+    ) -> Option<Vec3> {
+        let solid = |_: ColliderHandle, c: &Collider| c.user_data >> 64 != 1;
+        let query = physics.query_pipeline_with_filter(filter.predicate(&solid));
+        let free = |at: Vec3| {
+            query
+                .intersect_shape(
+                    self.tuning
+                        .pose(at + Vec3::Y * ROOM_LIFT, self.state.crouched),
+                    self.tuning.shape(self.state.crouched).as_ref(),
+                )
+                .next()
+                .is_none()
+        };
         let lifts = (unstick.reach / unstick.step).floor() as u32;
         let rise = |k: u32| feet + Vec3::Y * (k as f32 * unstick.step);
         if let Some(spot) = (1..=lifts).map(rise).find(|spot| free(*spot)) {
@@ -2053,6 +2098,43 @@ impl Player {
                 .total_cmp(&b.distance_squared(feet))
         });
         spots.into_iter().find(|spot| free(*spot))
+    }
+    /// Where a body set down at `feet` (a spawn) fits: `feet` itself when
+    /// it is clear, else the nearest free spot by the [`Unstick`] search; a
+    /// body with no `unstick` keeps `feet` whatever is there, as v20's
+    /// `spawnPlayer` does.
+    pub fn spot_near(&self, physics: &PhysicsWorld, feet: Vec3) -> Placement {
+        let Some(unstick) = self.tuning.unstick else {
+            return Placement::Clear(feet);
+        };
+        let filter = QueryFilter::default()
+            .exclude_sensors()
+            .exclude_rigid_body(self.body)
+            .groups(moves_against(self.state.pass_group));
+        let solid = |_: ColliderHandle, c: &Collider| c.user_data >> 64 != 1;
+        let blocker = physics
+            .query_pipeline_with_filter(filter.predicate(&solid))
+            .intersect_shape(
+                self.tuning
+                    .pose(feet + Vec3::Y * ROOM_LIFT, self.state.crouched),
+                self.tuning.shape(self.state.crouched).as_ref(),
+            )
+            .next()
+            .map(|(handle, c)| {
+                let aabb = c.compute_aabb();
+                Blocker {
+                    collider: handle.into_raw_parts().0,
+                    tag: c.user_data,
+                    centre: Vec3::from_array((aabb.mins + aabb.maxs).to_array()) * 0.5,
+                }
+            });
+        let Some(blocker) = blocker else {
+            return Placement::Clear(feet);
+        };
+        match self.search_free(physics, filter, unstick, feet) {
+            Some(to) => Placement::Moved { to, blocker },
+            None => Placement::Stuck { blocker },
+        }
     }
     fn torque_tick_among(
         &mut self,

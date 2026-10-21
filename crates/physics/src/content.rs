@@ -94,16 +94,24 @@ pub fn static_shape_collider_materials(
                     .map(|v| Vector::from_array(transform.transform_point3(v.position).to_array()))
             })
             .collect();
-        let indices = (0..triangles.len() as u32)
-            .map(|i| [i * 3, i * 3 + 1, i * 3 + 2])
-            .collect();
+        let count = triangles.len() as u32;
+        let mut indices: Vec<[u32; 3]> =
+            (0..count).map(|i| [i * 3, i * 3 + 1, i * 3 + 2]).collect();
+        let mut materials: Vec<Option<usize>> = triangles.iter().map(|t| t.material).collect();
+        if shape.details[detail].two_sided {
+            // The same triangles wound the other way, so a move meets a face
+            // whichever side it comes from; a hit on triangle `count + i`
+            // struck the material of triangle `i`.
+            indices.extend((0..count).map(|i| [i * 3, i * 3 + 2, i * 3 + 1]));
+            materials.extend_from_within(..);
+        }
         colliders.push((
             ColliderBuilder::trimesh_with_flags(points, indices, TriMeshFlags::FIX_INTERNAL_EDGES)?
                 // What the detail blocks ([`crate::blocks`]); a detail with no mask blocks every query.
                 .collision_groups(crate::blocks::collider_groups(
                     shape.details[detail].blocks.as_deref(),
                 )),
-            triangles.iter().map(|t| t.material).collect(),
+            materials,
         ));
     }
     Ok(colliders)
@@ -235,6 +243,7 @@ mod tests {
                     mesh_offset: 0,
                     collision: false,
                     blocks: None,
+                    two_sided: false,
                 },
                 Detail {
                     name: "collision".into(),
@@ -244,6 +253,7 @@ mod tests {
                     mesh_offset: 1,
                     collision: true,
                     blocks: None,
+                    two_sided: false,
                 },
             ],
             meshes: vec![Some(mesh(20.0, 0.0)), Some(mesh(0.2, 1.0))],

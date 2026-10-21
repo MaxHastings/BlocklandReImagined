@@ -10,6 +10,7 @@ use crate::player_types::PlayerType;
 use bri_minigames::{
     self as mg, DamageSource, Decision, EnvironmentDamage, GameId, LifeState, MinigamesWorld,
 };
+use bri_motor::player::{Blocker, Placement};
 use bri_weapons::{ActorId, CORE_TOOLS};
 
 /// Who may hurt whom, over only the state those rules read: players and
@@ -2614,6 +2615,17 @@ impl Session {
                 kind.movement.clone(),
                 1.0,
             )?;
+            // A spot the body does not fit moves to the nearest that it does
+            // (a body with no `unstick` keeps it, as v20 does).
+            match peer.player.spot_near(&self.simulation.physics, feet) {
+                Placement::Moved { to, blocker } => {
+                    report_relocation(owner, feet, Some(to), blocker);
+                    peer.player
+                        .teleport(&mut self.simulation.physics, to, yaw)?;
+                }
+                Placement::Stuck { blocker } => report_relocation(owner, feet, None, blocker),
+                Placement::Clear(_) => {}
+            }
             peer.player.refill_energy();
             peer.overlays = None;
             peer.combat.speed_rule = 1.0;
@@ -2701,6 +2713,16 @@ impl Session {
             peer.player
                 .teleport(&mut self.simulation.physics, at, yaw)?;
             feet = at;
+            match peer.player.spot_near(&self.simulation.physics, at) {
+                Placement::Moved { to, blocker } => {
+                    report_relocation(owner, at, Some(to), blocker);
+                    peer.player
+                        .teleport(&mut self.simulation.physics, to, yaw)?;
+                    feet = to;
+                }
+                Placement::Stuck { blocker } => report_relocation(owner, at, None, blocker),
+                Placement::Clear(_) => {}
+            }
         }
         let center = feet + Vec3::Y * self.peers[&owner].player.tuning().stand_height * 0.5;
         let _ = self
@@ -3165,6 +3187,22 @@ impl Session {
     pub fn is_alive(&self, owner: OwnerId) -> bool {
         self.peers.get(&owner).is_some_and(|p| p.combat.alive)
     }
+}
+
+/// A spawn spot the body did not fit, said where it is logged: the spot,
+/// what overlaps it and how far the body was moved, or that nothing near
+/// was free and it stays (a relocation is never silent).
+fn report_relocation(owner: OwnerId, spawn: Vec3, moved: Option<Vec3>, blocker: Blocker) {
+    let (at, c) = (spawn, blocker.centre);
+    let what = format!(
+        "player {owner}'s spawn spot ({:.2}, {:.2}, {:.2}) overlaps collider {} (tag {}, centred ({:.2}, {:.2}, {:.2}))",
+        at.x, at.y, at.z, blocker.collider, blocker.tag, c.x, c.y, c.z
+    );
+    let instead = match moved {
+        Some(spot) => format!("the nearest spot it fits, {:.2} away", spot.distance(spawn)),
+        None => "the spot as it is (nothing near is free)".to_owned(),
+    };
+    bri_console::fallback::report(bri_console::fallback::kind::OTHER, "", &what, &instead);
 }
 
 #[cfg(test)]

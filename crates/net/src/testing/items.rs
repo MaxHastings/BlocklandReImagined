@@ -133,6 +133,7 @@ fn held_tool(id: &str, handle: f32, head: [f32; 3]) -> Shape {
             mesh_offset: 0,
             collision: false,
             blocks: None,
+            two_sided: false,
         },
         Detail {
             name: HELD_DETAIL.into(),
@@ -142,6 +143,7 @@ fn held_tool(id: &str, handle: f32, head: [f32; 3]) -> Shape {
             mesh_offset: 0,
             collision: false,
             blocks: None,
+            two_sided: false,
         },
     ];
     let turn = |a: f32| Quat::from_rotation_x(a).to_array();
