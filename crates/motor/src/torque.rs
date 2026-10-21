@@ -612,7 +612,7 @@ fn collide(
     epsilon: Epsilon,
     accept: impl Fn(&Poly) -> bool,
 ) -> CollisionList {
-    let mut list = CollisionList {
+    let list = CollisionList {
         t: 2.0,
         max_height: f32::MIN,
         hits: Vec::new(),
@@ -668,10 +668,20 @@ fn collide(
             ));
         }
     }
-    // Every hit within the tie of the earliest counts as simultaneous. Torque
-    // compares each hit against the running earliest, so which near-ties
-    // survive depends on polygon order; keeping all of them is its exact-
-    // arithmetic result, and lets the most parallel face win as intended.
+    settle(found, epsilon)
+}
+
+/// The hits of a sweep as a list: every one within the tie of the earliest
+/// counts as simultaneous. Torque compares each hit against the running
+/// earliest, so which near-ties survive depends on polygon order; keeping
+/// all of them is its exact-arithmetic result, and lets the most parallel
+/// face win as intended.
+fn settle(found: Vec<(f32, f32, Collision)>, epsilon: Epsilon) -> CollisionList {
+    let mut list = CollisionList {
+        t: 2.0,
+        max_height: f32::MIN,
+        hits: Vec::new(),
+    };
     if let Some(first) = found.iter().map(|(t, ..)| *t).min_by(f32::total_cmp) {
         list.t = first;
         for (time, height, hit) in found {
@@ -682,6 +692,103 @@ fn collide(
         }
     }
     list
+}
+
+/// [`collide`] for a round body: a vertical cylinder `radius` round `feet`
+/// and `height` tall. Each polygon is cast as its triangles, and the hit's
+/// normal is the cylinder's own at the point of contact, so a wall's end or
+/// a door frame turns the body aside as a round one is, where a box would
+/// stop dead against the face. A wall's normal stays level; a floor's or a
+/// ceiling's is the polygon's.
+fn collide_cylinder(
+    soup: &Soup,
+    feet: Vec3,
+    radius: f32,
+    height: f32,
+    vector: Vec3,
+    epsilon: Epsilon,
+) -> CollisionList {
+    use rapier3d::parry::query::{ShapeCastOptions, cast_shapes};
+    use rapier3d::parry::shape::{Cylinder, Triangle};
+    let Some(heading) = vector.try_normalize() else {
+        return settle(Vec::new(), epsilon);
+    };
+    let shape = Cylinder::new(height * 0.5, radius);
+    let pose = Pose::translation(feet.x, feet.y + height * 0.5, feet.z);
+    let options = ShapeCastOptions {
+        max_time_of_impact: 1.0,
+        ..Default::default()
+    };
+    let round = Vec3::new(radius, 0.0, radius);
+    let lo = feet.min(feet + vector) - round;
+    let hi = feet.max(feet + vector) + round + Vec3::Y * height;
+    let swept = Box3 { min: lo, max: hi };
+    let mut found = Vec::new();
+    for poly in &soup.polys {
+        if !swept.overlaps(poly.min, poly.max) || poly.normal.dot(heading) > 0.0 {
+            continue;
+        }
+        let verts = soup.verts(poly);
+        let mut best: Option<(f32, Vec3, Vec3)> = None;
+        for i in 1..verts.len().saturating_sub(1) {
+            let tri = Triangle::new(rv(verts[0]), rv(verts[i]), rv(verts[i + 1]));
+            let Ok(Some(hit)) = cast_shapes(
+                &pose,
+                rv(vector),
+                &shape,
+                &Pose::IDENTITY,
+                Vector::ZERO,
+                &tri,
+                options,
+            ) else {
+                continue;
+            };
+            if best.is_none_or(|(t, ..)| hit.time_of_impact < t) {
+                best = Some((hit.time_of_impact, -v3(hit.normal1), v3(hit.witness2)));
+            }
+        }
+        let Some((time, mut normal, point)) = best else {
+            continue;
+        };
+        if poly.normal.y.abs() < WALL_NORMAL_Y {
+            let flat = Vec3::new(normal.x, 0.0, normal.z);
+            normal = flat.try_normalize().unwrap_or(poly.normal);
+        } else {
+            normal = poly.normal;
+        }
+        if normal.dot(heading) > 0.0 {
+            normal = poly.normal;
+        }
+        found.push((
+            time,
+            verts.iter().map(|v| v.y).fold(f32::MIN, f32::max),
+            Collision {
+                frame: poly.frame,
+                normal,
+                face_dot: (-heading.dot(normal)).max(0.0),
+                point,
+                kind: poly.kind,
+                tag: poly.tag,
+                collider: poly.collider,
+            },
+        ));
+    }
+    found.retain(|(t, ..)| *t < 1.0);
+    settle(found, epsilon)
+}
+
+/// Sweeps the player's body (`m`'s box or cylinder, its feet at `feet`).
+fn sweep_body(soup: &Soup, m: &Mover, feet: Vec3, vector: Vec3) -> CollisionList {
+    if m.round {
+        collide_cylinder(soup, feet, m.half_width, m.height, vector, m.epsilon)
+    } else {
+        let half = m.half_width;
+        let body = Box3 {
+            min: Vec3::new(feet.x - half, feet.y, feet.z - half),
+            max: Vec3::new(feet.x + half, feet.y + m.height, feet.z + half),
+        };
+        collide(soup, body, vector, m.epsilon, |_| true)
+    }
 }
 
 /// A box `half_width` either side of `feet` and `height` tall, moved by
@@ -895,12 +1002,7 @@ fn step(
 /// Moves the box from `from` by `distance`, stopping at the first hit and
 /// backing off from it; where it ends, and whether it was stopped.
 fn travel(soup: &Soup, m: &Mover, from: Vec3, distance: Vec3) -> (Vec3, bool) {
-    let half = m.half_width;
-    let body = Box3 {
-        min: Vec3::new(from.x - half, from.y, from.z - half),
-        max: Vec3::new(from.x + half, from.y + m.height, from.z + half),
-    };
-    let list = collide(soup, body, distance, m.epsilon, |_| true);
+    let list = sweep_body(soup, m, from, distance);
     if list.hits.is_empty() || list.t >= 1.0 {
         return (from + distance, false);
     }
@@ -947,7 +1049,12 @@ fn any_in(soup: &Soup, bounds: Box3) -> bool {
 
 /// The player's collision constants for one `update_pos`.
 pub struct Mover {
+    /// Half the width of the box, or the radius of the cylinder when
+    /// `round`.
     pub half_width: f32,
+    /// A vertical cylinder rather than v20's box: walls and corners meet it
+    /// at its round side.
+    pub round: bool,
     pub height: f32,
     pub run_cos: f32,
     pub jump_cos: f32,
@@ -1057,7 +1164,7 @@ fn update_local(soup: &Soup, m: &Mover, feet: Vec3, velocity: &mut Vec3, time: f
             start = end;
             break;
         }
-        let list = collide(soup, body(start), distance, m.epsilon, |_| true);
+        let list = sweep_body(soup, m, start, distance);
         if list.hits.is_empty() || list.t >= 1.0 {
             start = end;
             break;
