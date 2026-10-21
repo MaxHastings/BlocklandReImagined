@@ -2864,8 +2864,10 @@ mod view_shake_tests {
 
     #[test]
     fn a_view_shake_across_the_seam_still_sends_a_look_the_host_accepts() {
-        let mut c = Controls::default();
-        c.yaw = std::f32::consts::PI - 0.001;
+        let mut c = Controls {
+            yaw: std::f32::consts::PI - 0.001,
+            ..Controls::default()
+        };
         c.start_view_shake(std::f32::consts::FRAC_PI_2, 0.0, 0.2, 4.0);
         let mut steps = 0;
         while c.view_shake.is_some() && steps < 10_000 {
