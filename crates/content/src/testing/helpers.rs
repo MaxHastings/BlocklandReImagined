@@ -208,6 +208,7 @@ pub fn rigid_shape(
             collision: false,
             blocks: None,
             two_sided: false,
+            shot: None,
         }],
         meshes: parts
             .iter()

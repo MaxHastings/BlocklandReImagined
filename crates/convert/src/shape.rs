@@ -848,6 +848,7 @@ pub fn read_dts(data: &[u8], id: String) -> Result<(Shape, Provenance)> {
             collision: size < 0.0,
             blocks: None,
             two_sided: false,
+            shot: None,
         });
     }
     let count = file.count(100_000)?;

@@ -723,8 +723,9 @@ impl Simulation {
     pub fn set_map_surfaces(&mut self, surfaces: crate::map::MapSurfaces) {
         self.map_surfaces = surfaces;
     }
-    /// Read the same authored triangle kinds footsteps use, at a shot contact.
-    pub fn map_surface_at(&self, position: Vec3, normal: Vec3) -> Option<&str> {
+    /// The map collider (None for terrain) and triangle a shot contact at
+    /// `position` on a face turned to `normal` struck.
+    fn map_contact(&self, position: Vec3, normal: Vec3) -> Option<(Option<usize>, u32)> {
         let normal = normal.try_normalize()?;
         let ray = Ray::new(
             Vector::from_array((position + normal * 0.02).to_array()),
@@ -745,13 +746,28 @@ impl Simulation {
                     .predicate(&predicate),
             )
             .cast_ray_and_get_normal(&ray, 0.04, true)?;
-        Some(if let Some(index) = self.map_collider_index(handle) {
+        Some((self.map_collider_index(handle), hit.subshape))
+    }
+    /// Read the same authored triangle kinds footsteps use, at a shot contact.
+    pub fn map_surface_at(&self, position: Vec3, normal: Vec3) -> Option<&str> {
+        let (collider, triangle) = self.map_contact(position, normal)?;
+        Some(if let Some(index) = collider {
             self.map_surfaces
-                .kind(index, hit.subshape)
+                .kind(index, triangle)
                 .unwrap_or(crate::map::DEFAULT_SURFACE)
         } else {
             crate::map::TERRAIN_SURFACE
         })
+    }
+    /// What a traced shot may do at the map shape it struck, when its
+    /// detail says.
+    pub fn map_shot_at(
+        &self,
+        position: Vec3,
+        normal: Vec3,
+    ) -> Option<bri_content::shape::ShotShape> {
+        let (collider, _) = self.map_contact(position, normal)?;
+        self.map_surfaces.shots.get(&collider?).copied()
     }
     /// Put map colliders at `pose`, which moves them as a mover (a door)
     /// swings. Bodies resting on them wake, and queries see the change at

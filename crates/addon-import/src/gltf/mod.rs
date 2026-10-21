@@ -1384,6 +1384,7 @@ pub fn convert(
             collision,
             blocks,
             two_sided: false,
+            shot: None,
         });
         for (mut object, mesh) in group {
             object.meshes = vec![meshes.len()];
@@ -1703,6 +1704,7 @@ fn distant_detail(shape: &mut Shape, opts: &Options, report: &mut Report) -> Res
                 collision: false,
                 blocks: None,
                 two_sided: false,
+                shot: None,
             });
             details.push(Detail {
                 name: "detail0".into(),
@@ -1713,6 +1715,7 @@ fn distant_detail(shape: &mut Shape, opts: &Options, report: &mut Report) -> Res
                 collision: false,
                 blocks: None,
                 two_sided: false,
+                shot: None,
             });
         } else {
             details.push(Detail {

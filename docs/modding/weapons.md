@@ -330,6 +330,33 @@ and once turned it can come back into its shooter, who takes `shooter`
 (0 to 1, default 1) of its damage. Every turn is drawn as a streak in the
 tracer's look, and `on_damage`'s `info.bounces` says how many turns came
 before the hit.
+`trace` (not with `ricochet`) gives the ray a strength that starts at 1 and
+that each landing on something other than a player spends, as Army Ops'
+bullets do: `{ "max_landings": 4, "loss": 0.9, "floor": 0.1, "scatter": 0.5, "surfaces": { "wood":
+{ "ricochet": 0.5, "penetration": 0.6 } }, "other": {} }`. At a landing the ray
+glances off, mirrored about the face, when the cosine of the angle it struck
+at is under the surface's `ricochet` times a draw between 0 and 1 (so shallow
+hits glance more often and 0 never does), keeping `loss` of its strength; it
+leaves mirrored about the face, less `scatter` times that cosine along the
+normal, plus the same along a random direction. Otherwise it goes on through
+with the surface's `penetration` of its strength (0 stops it), strayed by
+`scatter` times the strength it has lost; otherwise it stops. The range left
+after a landing is multiplied by the strength then. The draws are seeded by
+the tick and the shooter, so a shot repeats. Which shapes glance or let a ray
+through, and a ray that starts inside a shape, are told apart by the shape: a
+collision detail of a shape model may carry `"shot": { "ricochet_ok": true,
+"penetrable": false, "ricochet": 0.4, "thickness": 8 }`. `ricochet_ok` (default
+true) lets a ray glance off it, `penetrable` (default false) lets one go
+through it (still only at the surface's `penetration` share), `ricochet` takes
+the place of the surface's, 0 to 1, and `thickness` (0 to 64 units) is how far
+a ray is taken to travel inside it, in place of the way it measures to the
+far face. A ray that goes through a shape without a `thickness` meets the
+shape's far face as no landing: it spends the range and goes on. A detail
+with no `shot` leaves everything to the surface name. A landing on a player stops it, and
+so does a strength under `floor` or `max_landings` (1 to 16) landings.
+`surfaces` names kinds as map materials and `surface_kind` give them (up to
+32); `other` is any kind not named, which stops the ray by default. Each
+landing deals the ray's `damage` times its strength then.
 `moving_spread` and `moving_projectile` replace the spread and the
 projectile while the shooter moves faster than `moving_speed`; `rested`
 (`after_ticks`, `spread`, and optionally `still` and `projectile`) is

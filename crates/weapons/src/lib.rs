@@ -2403,6 +2403,86 @@ pub struct Hitscan {
     /// `raycastRicochets`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ricochet: Option<Ricochet>,
+    /// The ray carries a strength that the surfaces it meets wear down;
+    /// a landing deals the shot's damage times that strength. Not with
+    /// `ricochet`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trace: Option<TraceStrength>,
+}
+/// [`Hitscan::trace`]: the ray starts with strength 1. At each landing on
+/// something other than a player it either glances off (when the angle it
+/// struck at, measured from the surface's normal as the cosine, is under
+/// the surface's `ricochet` times a draw between 0 and 1, so shallower
+/// angles glance more often and a `ricochet` of 0 never does), keeping
+/// `loss` of its strength, or goes through (the surface's `penetration`
+/// of its strength, straight on), or stops. It also stops when its
+/// strength falls under `floor`, after `max_landings` landings, or at the
+/// end of its range. Landing on a player stops it, after its damage. What
+/// range is left after a landing is multiplied by the strength then, and
+/// the seeded draws make a shot repeatable.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TraceStrength {
+    /// Most landings, including the first, 1 to 16.
+    pub max_landings: u32,
+    /// The share of its strength a glancing ray keeps, 0 to 1.
+    #[serde(default = "TraceStrength::default_loss")]
+    pub loss: f32,
+    /// The strength under which it stops, 0 to 1.
+    #[serde(default = "TraceStrength::default_floor")]
+    pub floor: f32,
+    /// How far a ray strays, 0 to 1: a glancing ray's turn is eased off
+    /// the normal and bent toward a random direction by this times the
+    /// cosine it struck at, and a ray going through strays by this times
+    /// what it has lost.
+    #[serde(default = "TraceStrength::default_scatter")]
+    pub scatter: f32,
+    /// How each kind of surface treats it, by the surface's name as map
+    /// materials and `surface_kind` give it; up to 32.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub surfaces: BTreeMap<String, TraceSurface>,
+    /// Any surface not named above: by default it stops the ray.
+    #[serde(default)]
+    pub other: TraceSurface,
+}
+impl TraceStrength {
+    fn default_loss() -> f32 {
+        0.9
+    }
+    fn default_floor() -> f32 {
+        0.1
+    }
+    fn default_scatter() -> f32 {
+        0.5
+    }
+    fn valid(&self) -> bool {
+        (1..=16).contains(&self.max_landings)
+            && (0.0..=1.0).contains(&self.loss)
+            && (0.0..=1.0).contains(&self.floor)
+            && (0.0..=1.0).contains(&self.scatter)
+            && self.surfaces.len() <= 32
+            && self
+                .surfaces
+                .iter()
+                .all(|(k, v)| !k.is_empty() && k.len() <= 128 && v.valid())
+            && self.other.valid()
+    }
+}
+/// What one kind of surface does to a [`TraceStrength`] ray.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct TraceSurface {
+    /// Glances the ray when the cosine of its angle to the normal is under
+    /// this times a draw, 0 to 1.
+    pub ricochet: f32,
+    /// The share of its strength the ray keeps going through, 0 to 1; 0
+    /// stops it.
+    pub penetration: f32,
+}
+impl TraceSurface {
+    fn valid(&self) -> bool {
+        (0.0..=1.0).contains(&self.ricochet) && (0.0..=1.0).contains(&self.penetration)
+    }
 }
 /// [`Hitscan::ricochet`]: after each landing the ray turns off the surface
 /// it met, mirrored about its face, and goes on with the range it has left
@@ -2467,10 +2547,13 @@ impl Hitscan {
                     (1..=8).contains(&r.times)
                         && (-100.0..=100.0).contains(&r.damage)
                         && (0.0..=1.0).contains(&r.shooter)
-                }),
+                })
+                && self.trace.as_ref().is_none_or(|t| t.valid())
+                && (self.trace.is_none() || self.ricochet.is_none()),
             "Invalid hitscan of {what}: range 1 to 8192, eye_within 0.1 to 50, damage -100 \
              to 100, tracer colour 0 to 1, width to 1, seconds to 2, ricochet 1 to 8 times, \
-             damage -100 to 100, shooter 0 to 1"
+             damage -100 to 100, shooter 0 to 1, trace 1 to 16 landings with loss, floor, scatter, \
+             ricochet and penetration 0 to 1, at most 32 surfaces, not with ricochet"
         );
         Ok(())
     }

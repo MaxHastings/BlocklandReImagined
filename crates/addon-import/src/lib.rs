@@ -2520,6 +2520,7 @@ fn placeholder() -> bri_content::shape::Shape {
             collision: false,
             blocks: None,
             two_sided: false,
+            shot: None,
         }],
         meshes: vec![Some(Mesh {
             frame_vertices: positions.len(),
