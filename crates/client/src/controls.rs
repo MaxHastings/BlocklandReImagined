@@ -1049,8 +1049,8 @@ impl Controls {
             }) => (yaw, pitch),
             Some(_) => {
                 return MoveInput {
-                    yaw: self.yaw,
-                    pitch: self.pitch,
+                    yaw: wrap(self.yaw),
+                    pitch: self.pitch.clamped(-FRAC_PI_2, FRAC_PI_2),
                     ..Default::default()
                 };
             }
@@ -1068,6 +1068,9 @@ impl Controls {
                 _ => (self.yaw, self.pitch),
             },
         };
+        // The host drops a client whose look is past half a turn or a quarter
+        // turn up or down, so whatever turned the view, what it sends is in range.
+        let (yaw, pitch) = (wrap(yaw), pitch.clamped(-FRAC_PI_2, FRAC_PI_2));
         let walk = if self.held(HeldControl::Walk) {
             0.4
         } else {
@@ -1226,7 +1229,7 @@ impl Controls {
         match shake.advance(seconds.min(0.1)) {
             Some((pitch, yaw)) => {
                 self.pitch = (self.pitch + pitch).clamped(-FRAC_PI_2, FRAC_PI_2);
-                self.yaw += yaw;
+                self.yaw = wrap(self.yaw + yaw);
             }
             None => self.view_shake = None,
         }
@@ -2857,6 +2860,26 @@ mod view_shake_tests {
             c.pitch
         );
         assert!(c.yaw.abs() < 1e-6, "direction 0 turns pitch only");
+    }
+
+    #[test]
+    fn a_view_shake_across_the_seam_still_sends_a_look_the_host_accepts() {
+        let mut c = Controls {
+            yaw: std::f32::consts::PI - 0.001,
+            ..Controls::default()
+        };
+        c.start_view_shake(std::f32::consts::FRAC_PI_2, 0.0, 0.2, 4.0);
+        let mut steps = 0;
+        while c.view_shake.is_some() && steps < 10_000 {
+            c.advance_view_shake(1.0 / 120.0);
+            assert!(
+                c.movement().validate().is_ok(),
+                "the look sent stays in range at yaw {}",
+                c.yaw
+            );
+            steps += 1;
+        }
+        assert!(c.yaw.abs() <= std::f32::consts::PI);
     }
 
     #[test]
