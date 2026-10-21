@@ -53,7 +53,7 @@ impl CombatPresentation {
                 feed,
                 age: 0.0,
                 seconds: if seconds.is_finite() {
-                    seconds.clamp(0.5, LINE_SECONDS)
+                    seconds.clamped(0.5, LINE_SECONDS)
                 } else {
                     0.5
                 },
