@@ -152,6 +152,8 @@ impl Geometry {
         std::mem::swap(&mut self.batches, &mut mesh.data.batches);
     }
 }
+/// How many uploads apart the first-person items' light is reported.
+const LIGHT_REPORT_EVERY: u64 = 300;
 struct Slot {
     pose: PoseKey,
     geometry: Geometry,
@@ -1314,7 +1316,8 @@ impl WorldItems {
         queue: &wgpu::Queue,
         light_at: &dyn Fn([f32; 3]) -> Option<ActorLight>,
     ) -> Result<()> {
-        for model in self.models.values_mut() {
+        let report = self.prepares.is_multiple_of(LIGHT_REPORT_EVERY);
+        for (key, model) in self.models.iter_mut() {
             if model.gpu.is_none() && model.slots.iter().any(|s| !s.transforms.is_empty()) {
                 model.gpu = Some(renderer.upload(device, queue, &model.mesh.data)?);
                 self.diagnostics.model_uploads += 1;
@@ -1365,6 +1368,23 @@ impl WorldItems {
                         })
                     })
                     .collect();
+                if report && key.first_person {
+                    // What the first-person image's light was worked out from.
+                    let mut kinds = BTreeMap::new();
+                    for material in &model.mesh.data.materials {
+                        *kinds.entry(format!("{:?}", material.kind)).or_insert(0) += 1;
+                    }
+                    eprintln!(
+                        "Item light: {} (first person, local view {:?}) at {:?}: light {:?}, materials {:?}",
+                        key.model,
+                        key.local_view,
+                        slot.transforms
+                            .first()
+                            .map(|t| t.transform.w_axis.truncate().to_array()),
+                        lights.first(),
+                        kinds
+                    );
+                }
                 if slot.instances.as_mut().unwrap().update_lit(
                     queue,
                     &slot.transforms,
