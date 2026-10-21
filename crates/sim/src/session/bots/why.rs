@@ -27,6 +27,11 @@ impl BotThought {
             }
             choice.push_str(&format!(" [{}]", d.reason));
         }
+        if let Some([across, above]) = self.route_short {
+            choice.push_str(&format!(
+                "; route stops {across:.1} short, goal {above:+.1} up"
+            ));
+        }
         let mut out = vec![choice];
         let mut candidates: Vec<&BotCandidate> =
             decision.map_or(Vec::new(), |d| d.candidates.iter().collect());
@@ -104,6 +109,13 @@ impl Session {
                     .lock()
                     .unwrap_or_else(|e| e.into_inner())
                     .starved(*bot, tick, SIGHT_STARVED_TICKS),
+                route_short: b
+                    .partial_route
+                    .then(|| {
+                        let (goal, end) = (b.goal?.point(b.leash), b.plan.last()?.feet);
+                        Some([flat(goal - end).length(), goal.y - end.y])
+                    })
+                    .flatten(),
                 unnoticed_hit: self
                     .bots
                     .unnoticed_hits
@@ -232,6 +244,7 @@ mod tests {
             bot: 7,
             sight_starved: false,
             unnoticed_hit: None,
+            route_short: None,
             behaviour: "chase",
             leg: "walk",
             visible: None,

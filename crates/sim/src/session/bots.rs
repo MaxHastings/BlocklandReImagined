@@ -90,6 +90,9 @@ pub struct BotThought {
     pub sight_starved: bool,
     /// A hit lately that named no attacker it could act on, and why.
     pub unnoticed_hit: Option<&'static str>,
+    /// Its route could not reach the goal and ends this far short: across (level) and above (the goal over the route's end, below
+    /// zero when under it).
+    pub route_short: Option<[f32; 2]>,
     pub behaviour: &'static str,
     /// The leg of its route it is on: walk, swim, jet or drive (none: no
     /// route).
