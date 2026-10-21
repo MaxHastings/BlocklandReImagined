@@ -14,7 +14,7 @@ use super::*;
 use crate::bot_kind::{BotTeam, FLAVOURS};
 
 /// Two places this close (a few body widths) are one spot to crowd.
-const CROWD: f32 = 4.0;
+pub(super) const CROWD: f32 = 4.0;
 /// At most one callout this often, in seconds, as a person would.
 const CALLOUT_SECONDS: f32 = 30.0;
 /// About how often, in ticks, a bot looks round for the mood: a second,

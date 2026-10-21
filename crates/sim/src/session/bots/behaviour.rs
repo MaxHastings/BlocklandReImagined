@@ -77,6 +77,10 @@ pub(crate) struct Situation {
     /// spares it, 0 (none) to 1: one that threatens neither the bot nor its
     /// play is worth less than the play (`Session::bot_menace`).
     pub spared: f32,
+    /// The share of its health the enemies it knows of would take getting
+    /// through the next opening on its route, 0 to 1 (`bot_exposure`): a
+    /// planned objective is worth that much less.
+    pub exposed: f32,
     /// How long it has tried to get somewhere and got nowhere, past
     /// what its own unsticking (a hop, a new plan, a new goal) can mend,
     /// 0 to 1 (`Session::bot_trapped`); 0 with an enemy in sight, hurt, or
@@ -196,7 +200,14 @@ impl Behaviour {
                 },
             ),
             Behaviour::Return => fits(!s.pursuing, 0.3 * s.strayed.clamp(0.0, 1.0)),
-            Behaviour::Objective => fits(s.objective, if s.committed { 0.92 } else { 0.65 }),
+            Behaviour::Objective => fits(
+                s.objective,
+                if s.committed {
+                    0.92
+                } else {
+                    0.65 * (1.0 - s.exposed.clamp(0.0, 1.0))
+                },
+            ),
             // Above strolling, below every purpose.
             Behaviour::Explore => fits(s.explore, EXPLORE),
             // The last resort, rising the longer it stays trapped: above
@@ -420,6 +431,53 @@ mod tests {
             step: 0.6,
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn a_covered_opening_costs_the_objective_what_it_would_take_to_cross() {
+        let play = Situation {
+            objective: true,
+            spared: 0.0,
+            ..enemy(3.0)
+        };
+        assert_eq!(
+            plain(&play, |_| 1.0),
+            Fight,
+            "a fight outscores a play it spares"
+        );
+        let spared = Situation {
+            spared: 1.0,
+            ..play
+        };
+        assert_eq!(
+            plain(&spared, |_| 1.0),
+            Objective,
+            "an enemy that threatens nothing"
+        );
+        let covered = Situation {
+            enemy: None,
+            exposed: 0.0,
+            ..spared
+        };
+        assert_eq!(plain(&covered, |_| 1.0), Objective);
+        let exposed = Situation {
+            exposed: 1.0,
+            ..covered
+        };
+        assert!(
+            scores(&exposed, |_| 1.0)[Objective as usize]
+                < scores(&covered, |_| 1.0)[Objective as usize] * 0.01,
+            "crossing under fire that would take all its health is worth nothing"
+        );
+        let half = Situation {
+            exposed: 0.5,
+            ..covered
+        };
+        let scored = scores(&half, |_| 1.0)[Objective as usize];
+        assert!(
+            (scored - 0.325).abs() < 1e-6,
+            "half the health, half the worth: {scored}"
+        );
     }
 
     #[test]

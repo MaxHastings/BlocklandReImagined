@@ -2561,6 +2561,19 @@ impl Session {
                     .target
                     .is_some_and(|seen| self.bot_runs_over_near(bot, seen.owner, *near))
             });
+        // What getting through the next opening on its route would cost it
+        // in health, to the enemies it knows of that cover it.
+        let exposed = if objective.is_some() && !objective.is_some_and(|view| view.committed) {
+            let mut threats: Vec<OwnerId> = sight.target.iter().map(|seen| seen.owner).collect();
+            for k in [threat, hurt_by].into_iter().flatten() {
+                if !threats.contains(&k.subject) {
+                    threats.push(k.subject);
+                }
+            }
+            self.bot_exposure(bot, &threats, feet)
+        } else {
+            0.0
+        };
         let brain = self.bots.brains.get_mut(&bot).unwrap();
         if std::mem::take(&mut brain.rehome) {
             brain.home = feet;
@@ -2644,6 +2657,7 @@ impl Session {
             // A swimmer reaches any depth, and a swing reaches round it
             // alike: only how far counts.
             spared: 1.0 - menace,
+            exposed,
             enemy: enemy
                 // Where it was out of reach, not across from there: one
                 // that came down off a jump or a roof is in reach again.

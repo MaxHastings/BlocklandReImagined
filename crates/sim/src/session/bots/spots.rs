@@ -93,6 +93,102 @@ pub(super) fn scores(terms: &[Option<Terms>; SPOTS.len()]) -> Vec<(u32, f32)> {
 }
 
 impl Session {
+    /// What the `threats` that see `to` deal a body with `health` left
+    /// each second it stays there: each one's weapon rate (`tactics::rate`)
+    /// where it is in range and has the line. `subject` names the place
+    /// for the sight cache.
+    pub(super) fn threat_rate(
+        &self,
+        threats: &[OwnerId],
+        subject: sightlines::Subject,
+        to: Vec3,
+        health: f32,
+        reach: f32,
+    ) -> f32 {
+        let mut rate = 0.0;
+        for &threat in threats {
+            let Some(from) = self
+                .peers
+                .get(&threat)
+                .filter(|p| p.combat.alive)
+                .map(|p| p.player.eye())
+            else {
+                continue;
+            };
+            let shoots = self
+                .bot_capability(threat, false)
+                .filter(|cap| (cap.near..=cap.reach).contains(&from.distance(to)));
+            if let Some(cap) = shoots
+                && self
+                    .bot_sees(
+                        threat,
+                        Some(subject),
+                        from,
+                        to,
+                        reach,
+                        sightlines::Urgency::Ordinary,
+                    )
+                    .is_some()
+            {
+                rate += tactics::rate(cap, health);
+            }
+        }
+        rate
+    }
+
+    /// The share of its health `bot` would lose to the `threats` it knows
+    /// of getting through the next opening on its route and just past it
+    /// (spots' `taken`, for a leg of a route rather than a place to stand):
+    /// 0 with no opening ahead or none in a threat's sight. An objective is
+    /// worth that much less by it, so a covered door costs what it does.
+    pub(super) fn bot_exposure(&self, bot: OwnerId, threats: &[OwnerId], feet: Vec3) -> f32 {
+        let (Some(brain), Some(peer)) = (self.bots.brains.get(&bot), self.peers.get(&bot)) else {
+            return 0.0;
+        };
+        let Some(open) = brain.plan.iter().take(6).position(|w| w.through.is_some()) else {
+            return 0.0;
+        };
+        let health = peer.combat.health;
+        if threats.is_empty() || health <= 0.0 {
+            return 0.0;
+        }
+        let waypoint = brain.plan[open];
+        let place = waypoint.through.unwrap_or(waypoint.feet) + (peer.player.eye() - feet);
+        // The walk to the opening and the one step past it.
+        let mut length = 0.0;
+        let mut from = feet;
+        for w in brain.plan.iter().take(open + 2) {
+            length += flat(w.feet - from).length();
+            from = w.feet;
+        }
+        let seconds = length / peer.player.tuning().forward.max(1.0);
+        let reach = self.bot_sight_reach(&brain.kind);
+        let rate = self.threat_rate(
+            threats,
+            sightlines::Subject::Route(bot),
+            place,
+            health,
+            reach,
+        );
+        // Crossing together splits a defender's fire between the bodies in
+        // its lane, so each takes its share: the allies on foot beside it
+        // cross with it, and a bot alone at a covered door waits for them.
+        let beside = self
+            .peers
+            .iter()
+            .filter(|(o, p)| {
+                **o != bot
+                    && p.combat.alive
+                    && !self.seated(**o)
+                    && self.bot_allies(bot, **o)
+                    && flat(Vec3::from(p.player.state().feet) - feet).length() < team::CROWD
+            })
+            .count();
+        (rate * seconds / health / (1 + beside) as f32).min(1.0)
+    }
+}
+
+impl Session {
     /// Where `bot`, fighting `seen` with a ranged weapon, heads to stand:
     /// `None` where it stands. Weighed on its planning turn (the shot
     /// chooser's, `combat::Budget`); in between, the place it heads for
@@ -180,35 +276,13 @@ impl Session {
             };
             // Each threat that sees the place, and each ally whose line of
             // fire crosses it, costs what its weapon deals a second.
-            let mut rate = 0.0;
-            for &threat in threats {
-                let Some(from) = self
-                    .peers
-                    .get(&threat)
-                    .filter(|p| p.combat.alive)
-                    .map(|p| p.player.eye())
-                else {
-                    continue;
-                };
-                let to = at + eye;
-                let shoots = self
-                    .bot_capability(threat, false)
-                    .filter(|cap| (cap.near..=cap.reach).contains(&from.distance(to)));
-                if let Some(cap) = shoots
-                    && self
-                        .bot_sees(
-                            threat,
-                            Some(sightlines::Subject::Spot(bot, option as u32)),
-                            from,
-                            to,
-                            reach,
-                            sightlines::Urgency::Ordinary,
-                        )
-                        .is_some()
-                {
-                    rate += tactics::rate(cap, health);
-                }
-            }
+            let mut rate = self.threat_rate(
+                threats,
+                sightlines::Subject::Spot(bot, option as u32),
+                at + eye,
+                health,
+                reach,
+            );
             for (ally, intent) in &intents {
                 if intent
                     .harm
