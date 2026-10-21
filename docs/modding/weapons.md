@@ -343,8 +343,16 @@ with the surface's `penetration` of its strength (0 stops it), strayed by
 `scatter` times the strength it has lost; otherwise it stops. The range left
 after a landing is multiplied by the strength then. The draws are seeded by
 the tick and the shooter, so a shot repeats. Which shapes glance or let a ray
-through, and a ray that starts inside a shape, are not told apart yet: the
-surface name decides. A landing on a player stops it, and
+through, and a ray that starts inside a shape, are told apart by the shape: a
+collision detail of a shape model may carry `"shot": { "ricochet_ok": true,
+"penetrable": false, "ricochet": 0.4, "thickness": 8 }`. `ricochet_ok` (default
+true) lets a ray glance off it, `penetrable` (default false) lets one go
+through it (still only at the surface's `penetration` share), `ricochet` takes
+the place of the surface's, 0 to 1, and `thickness` (0 to 64 units) is how far
+a ray is taken to travel inside it, in place of the way it measures to the
+far face. A ray that goes through a shape without a `thickness` meets the
+shape's far face as no landing: it spends the range and goes on. A detail
+with no `shot` leaves everything to the surface name. A landing on a player stops it, and
 so does a strength under `floor` or `max_landings` (1 to 16) landings.
 `surfaces` names kinds as map materials and `surface_kind` give them (up to
 32); `other` is any kind not named, which stops the ray by default. Each

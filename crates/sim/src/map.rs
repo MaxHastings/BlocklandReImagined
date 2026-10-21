@@ -119,6 +119,9 @@ pub struct MapSurfaces {
     /// For each of [`NativeMap::colliders`] in order, each triangle's identity (an index into `identities`, [`NO_IDENTITY`] for none), or None
     /// when none of its triangles has one.
     pub identity_triangles: Vec<Option<Arc<[u32]>>>,
+    /// What a traced shot may do at the colliders whose detail says
+    /// (`bri_content::shape::Detail::shot`), by collider.
+    pub shots: BTreeMap<usize, bri_content::shape::ShotShape>,
 }
 /// A triangle whose material has no identity.
 pub const NO_IDENTITY: u32 = u32::MAX;
@@ -207,7 +210,11 @@ impl MapSurfaces {
         identity_table: &BTreeMap<String, String>,
         shape: &bri_content::shape::Shape,
         materials: Option<&[Option<usize>]>,
+        shot: Option<bri_content::shape::ShotShape>,
     ) -> Result<()> {
+        if let Some(shot) = shot {
+            self.shots.insert(self.triangles.len(), shot);
+        }
         let identity_ids = materials
             .filter(|_| !identity_table.is_empty())
             .map(|materials| {
@@ -493,7 +500,7 @@ impl NativeMap {
                         bri_content::strict::from_slice(&std::fs::read(path)?)?;
                     let first = colliders.len();
                     if def.collide {
-                        for (collider, materials) in
+                        for (collider, materials, shot) in
                             bri_physics::content::static_shape_collider_materials(
                                 &shape,
                                 glam::Mat4::IDENTITY,
@@ -517,6 +524,7 @@ impl NativeMap {
                                 &identity_table,
                                 &shape,
                                 kept.then_some(&materials[..]),
+                                shot,
                             )?;
                             colliders.push(
                                 collider
@@ -553,7 +561,7 @@ impl NativeMap {
                         } else {
                             MapSurface::Static
                         };
-                    for (collider, materials) in
+                    for (collider, materials, shot) in
                         bri_physics::content::static_shape_collider_materials(&shape, transform)?
                     {
                         // Each triangle stays where it was built, so a hit's
@@ -576,6 +584,7 @@ impl NativeMap {
                             &identity_table,
                             &shape,
                             kept.then_some(&materials[..]),
+                            shot,
                         )?;
                         colliders.push(collider.user_data(surface as u128));
                     }

@@ -120,6 +120,39 @@ pub struct Detail {
     /// inward lets a body walk through it from outside).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub two_sided: bool,
+    /// For a collision detail: how a traced shot treats it
+    /// (`Hitscan::trace`). Left out, the surface the shot struck decides.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shot: Option<ShotShape>,
+}
+/// What a traced shot may do at one collision detail, whatever its surface
+/// says: glance off it, go through it, and how.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ShotShape {
+    /// A shot may glance off it (default yes).
+    #[serde(default = "ShotShape::yes")]
+    pub ricochet_ok: bool,
+    /// A shot may go through it, keeping the surface's share of its
+    /// strength (default no).
+    #[serde(default)]
+    pub penetrable: bool,
+    /// In place of the surface's `ricochet`, 0 to 1.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ricochet: Option<f32>,
+    /// How far a shot is taken to travel inside it when it goes through,
+    /// 0 to 64 units, in place of the way measured to the far face.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thickness: Option<f32>,
+}
+impl ShotShape {
+    fn yes() -> bool {
+        true
+    }
+    fn valid(&self) -> bool {
+        self.ricochet.is_none_or(|r| (0.0..=1.0).contains(&r))
+            && self.thickness.is_none_or(|t| (0.0..=64.0).contains(&t))
+    }
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Mesh {
@@ -760,6 +793,11 @@ impl Shape {
                     .checked_add(detail.object_count)
                     .is_some_and(|n| n <= self.objects.len()),
                 "Invalid detail object range"
+            );
+            ensure!(
+                detail.shot.is_none_or(|s| s.valid()),
+                "Invalid shot settings of detail {}",
+                detail.name
             );
         }
         for animation in &self.animations {

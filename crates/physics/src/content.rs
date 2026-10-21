@@ -57,17 +57,26 @@ pub fn static_shape_colliders(
 ) -> Result<Vec<ColliderBuilder>> {
     Ok(static_shape_collider_materials(shape, transform)?
         .into_iter()
-        .map(|(collider, _)| collider)
+        .map(|(collider, _, _)| collider)
         .collect())
 }
 
+/// A collider of a static shape with its triangles' materials in order and
+/// what a traced shot may do at its detail.
+pub type ShapeCollider = (
+    ColliderBuilder,
+    Vec<Option<usize>>,
+    Option<bri_content::shape::ShotShape>,
+);
+
 /// [`static_shape_colliders`], each with its triangles' materials in order
 /// (an index into `shape.materials`): a ray's hit on triangle `i` of the
-/// collider (its `subshape`) struck that material.
+/// collider (its `subshape`) struck that material, and what a traced shot
+/// may do at its detail.
 pub fn static_shape_collider_materials(
     shape: &bri_content::shape::Shape,
     transform: glam::Mat4,
-) -> Result<Vec<(ColliderBuilder, Vec<Option<usize>>)>> {
+) -> Result<Vec<ShapeCollider>> {
     anyhow::ensure!(
         transform.is_finite() && transform.determinant().abs() > 1e-8,
         "Invalid static shape placement"
@@ -112,6 +121,7 @@ pub fn static_shape_collider_materials(
                     shape.details[detail].blocks.as_deref(),
                 )),
             materials,
+            shape.details[detail].shot,
         ));
     }
     Ok(colliders)
@@ -244,6 +254,7 @@ mod tests {
                     collision: false,
                     blocks: None,
                     two_sided: false,
+                    shot: None,
                 },
                 Detail {
                     name: "collision".into(),
@@ -254,6 +265,7 @@ mod tests {
                     collision: true,
                     blocks: None,
                     two_sided: false,
+                    shot: None,
                 },
             ],
             meshes: vec![Some(mesh(20.0, 0.0)), Some(mesh(0.2, 1.0))],

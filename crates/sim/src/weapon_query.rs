@@ -336,6 +336,17 @@ impl Query for WeaponQuery<'_> {
             _ => None,
         }
     }
+    fn shot_shape(
+        &mut self,
+        target: TargetId,
+        position: Vec3,
+        normal: Vec3,
+    ) -> Option<bri_content::shape::ShotShape> {
+        match target {
+            TargetId::Map(_) => self.simulation.map_shot_at(position, normal),
+            _ => None,
+        }
+    }
     fn passage(&mut self, start: Vec3, end: Vec3) -> Option<(f32, glam::Affine3A)> {
         self.simulation
             .passages()

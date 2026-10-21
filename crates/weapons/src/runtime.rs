@@ -338,6 +338,16 @@ pub trait Query {
     fn surface_kind(&mut self, _target: TargetId, _position: Vec3, _normal: Vec3) -> Option<&str> {
         None
     }
+    /// What a traced shot may do at the shape it struck, when its authored
+    /// detail says; None leaves the surface to decide.
+    fn shot_shape(
+        &mut self,
+        _target: TargetId,
+        _position: Vec3,
+        _normal: Vec3,
+    ) -> Option<bri_content::shape::ShotShape> {
+        None
+    }
     /// Execute authorized zero-delay projectile brick outputs before default collision.
     fn on_contact(&mut self, _: &ProjectileContact) -> ContactResponse {
         ContactResponse::Continue
@@ -5104,7 +5114,14 @@ impl WeaponsWorld {
         let mut reach = ray.range * a.frame.scale;
         // One draw a shot: its every ray and landing plays the same pair.
         let draw = unit_random(self.tick, id.0, HIT_SOUND_DRAW);
-        for landing in 0..=turns {
+        // The shape a traced shot has gone into: its next landing, on the
+        // same shape, is only where it comes out.
+        let mut inside: Option<TargetId> = None;
+        let mut landing = 0;
+        for _ in 0..=turns * 2 + 1 {
+            if landing > turns {
+                return;
+            }
             let hit = q.sweep(
                 from,
                 from + direction * reach,
@@ -5146,7 +5163,7 @@ impl WeaponsWorld {
                         });
                     }
                 }
-            } else {
+            } else if inside.is_none() {
                 self.events.push(Event::Ricochet {
                     actor: id,
                     image: ray.image.into(),
@@ -5157,6 +5174,16 @@ impl WeaponsWorld {
             let Some(hit) = hit.filter(|h| h.position.is_finite() && h.normal.is_finite()) else {
                 return;
             };
+            if inside.take() == Some(hit.target) {
+                // Out the far side of what it went through: that took
+                // range, and is no landing.
+                reach -= hit.position.distance(from);
+                if reach <= 0.0 {
+                    return;
+                }
+                from = hit.position + direction * 0.01;
+                continue;
+            }
             // ShortRifleKai's `onRaycastDamage`: more for each landing
             // before, its own share on the shooter.
             if let Some(r) = ricochet {
@@ -5199,10 +5226,17 @@ impl WeaponsWorld {
                     .and_then(|kind| t.surfaces.get(kind))
                     .copied()
                     .unwrap_or(t.other);
+                // A shape whose detail says what a shot may do decides;
+                // any other leaves it to the surface.
+                let shape = q.shot_shape(hit.target, hit.position, normal);
+                let glances = shape.is_none_or(|s| s.ricochet_ok);
+                let threshold = shape.and_then(|s| s.ricochet).unwrap_or(surface.ricochet);
+                let passes = shape.is_none_or(|s| s.penetrable) && surface.penetration > 0.0;
                 let across = (-direction.dot(normal)).clamped(0.0, 1.0);
                 let salt = TRACE_DRAW + u64::from(landing) * 4;
                 let draw = unit_random(self.tick, id.0, salt);
-                if surface.ricochet > 0.0 && across < surface.ricochet * draw {
+                landing += 1;
+                if glances && threshold > 0.0 && across < threshold * draw {
                     // Mirrored, less `scatter` of the angle along the
                     // normal, plus the same along a random direction.
                     strength *= t.loss;
@@ -5212,13 +5246,24 @@ impl WeaponsWorld {
                         + wander * (t.scatter * across))
                         .normalize_or(normal);
                     from = hit.position + normal * 0.01;
-                } else if surface.penetration > 0.0 {
+                } else if passes {
                     strength *= surface.penetration;
                     // The less strength is left, the more it strays.
                     let wander = random_unit(self.tick, id.0, salt + 1, direction);
                     direction = (direction + wander * (t.scatter * (1.0 - strength)))
                         .normalize_or(direction);
-                    from = hit.position + direction * 0.01;
+                    match shape.and_then(|s| s.thickness) {
+                        // Taken to come out that far on.
+                        Some(thickness) => {
+                            reach -= thickness;
+                            from = hit.position + direction * thickness;
+                        }
+                        // Its next landing on the shape is where it leaves.
+                        None => {
+                            inside = Some(hit.target);
+                            from = hit.position + direction * 0.01;
+                        }
+                    }
                 } else {
                     return;
                 }
@@ -5227,8 +5272,12 @@ impl WeaponsWorld {
                 }
                 // What range is left is worn by the strength too.
                 reach *= strength;
+                if reach <= 0.0 {
+                    return;
+                }
                 continue;
             }
+            landing += 1;
             // Mirrored about the face it met, from just off it.
             direction = (direction - normal * 2.0 * direction.dot(normal)).normalize_or(normal);
             from = hit.position + normal * 0.01;
