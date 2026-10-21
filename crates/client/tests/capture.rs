@@ -276,6 +276,21 @@ fn play(
             for (name, why) in readouts {
                 println!("CAPTURE bot {name:?}: {}", why.join(" | "));
             }
+        } else if let Some(name) = step.get("mouse").and_then(|v| v.as_str()) {
+            // A mouse button press through the interface's own input path (the profile's mouse binds), held `seconds` (default 0.1).
+            let button = match name {
+                "left" => bri_ui::input::MouseButton::Left,
+                "middle" => bri_ui::input::MouseButton::Middle,
+                "right" => bri_ui::input::MouseButton::Right,
+                other => anyhow::bail!("unknown mouse button {other:?} (left, middle, right)"),
+            };
+            let hold = step.get("seconds").and_then(|v| v.as_f64()).unwrap_or(0.1) as f32;
+            let (x, y) = (0.0, 0.0);
+            app.ui.handle_input(bri_ui::input::InputEvent::MouseDown { button, x, y });
+            pump(app)?;
+            run_for(app, hold)?;
+            app.ui.handle_input(bri_ui::input::InputEvent::MouseUp { button, x, y });
+            pump(app)?;
         } else if let Some(aim) = step.get("aim").and_then(|v| v.as_array()) {
             // Turn to face a point (the look action, repeated until within a hair of it); nothing is held. Prints the yaw it ended at.
             let (tx, tz) = (
