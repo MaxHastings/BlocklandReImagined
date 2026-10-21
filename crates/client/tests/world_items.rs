@@ -54,6 +54,7 @@ synthetic_and_release_content!(
     a_picked_up_brick_item_stays_as_a_ghost_until_it_respawns,
     bounded_cache_reclaims_absent_models_and_prioritizes_held_items,
     mirrors_show_the_local_players_held_item_as_everyone_else_sees_it,
+    a_worn_image_is_not_drawn_in_its_wearers_first_person_view,
     actual_item_instances_match_independently_baked_world_geometry,
     a_held_swing_plays_again_on_every_fire_entry,
     a_thrown_image_hides_without_crashing_the_renderer,
@@ -466,6 +467,64 @@ fn mirrors_show_the_local_players_held_item_as_everyone_else_sees_it(
         held[&ItemIdentity::Mounted(7, 0)]
     );
     assert!(both[&ItemIdentity::Reflected(7, 0)].abs_diff_eq(others_see, 1e-5));
+    Ok(())
+}
+
+/// A worn image (a helmet, goggles) sits on the body the camera is inside:
+/// the holder's first-person view shows only what is in their hands, and
+/// mirrors, metal and shadows still show it.
+fn a_worn_image_is_not_drawn_in_its_wearers_first_person_view(f: &ItemFixture) -> Result<()> {
+    let (assets, weapons) = packs(f)?;
+    let mut adapter = WorldItems::new(assets, weapons, WorldItemLimits::default())?;
+    let worn = bri_sim::session::MountedImage {
+        hand: bri_weapons::HAND_SLOTS as u8,
+        ..mounted(&f.right_image, "Ready")
+    };
+    let view = WeaponView {
+        images: BTreeMap::from([(7, vec![mounted(&f.right_image, "Ready"), worn])]),
+        ..Default::default()
+    };
+    let pose = |_| {
+        Some(MountPose {
+            eye: Mat4::from_translation(Vec3::new(0.0, 2.3, 0.0)),
+            mounts: BTreeMap::from([(0, Mat4::from_translation(Vec3::new(0.4, 1.2, 0.2)))]),
+            actions: BTreeMap::new(),
+            velocity: Vec3::ZERO,
+            straddle: None,
+        })
+    };
+    let drawn = |adapter: &WorldItems| -> Vec<ItemIdentity> {
+        adapter.instances().map(|(id, _)| id).collect()
+    };
+    let hand = ItemIdentity::Mounted(7, 0);
+    let hat = ItemIdentity::Mounted(7, bri_weapons::HAND_SLOTS as u8);
+    let first = WorldItemFrame {
+        local_owner: Some(7),
+        first_person: true,
+        ..frame()
+    };
+    adapter.sync(&view, first, pose)?;
+    assert_eq!(drawn(&adapter), vec![hand]);
+    // Everyone else, and the wearer in third person, see it.
+    adapter.sync(
+        &view,
+        WorldItemFrame {
+            first_person: false,
+            ..first
+        },
+        pose,
+    )?;
+    assert!(drawn(&adapter).contains(&hat));
+    // A mirror shows the wearer's own copy.
+    adapter.sync(
+        &view,
+        WorldItemFrame {
+            reflected_self: true,
+            ..first
+        },
+        pose,
+    )?;
+    assert!(drawn(&adapter).contains(&ItemIdentity::Reflected(7, bri_weapons::HAND_SLOTS as u8)));
     Ok(())
 }
 
