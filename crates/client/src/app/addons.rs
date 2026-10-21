@@ -757,6 +757,15 @@ impl App {
             heading: presented.map_or(0.0, |me| me.yaw.to_degrees().rem_euclid(360.0)),
             fov: self.controls.fov(),
             aiming: self.controls.aiming(),
+            stance: presented.map_or(0, |me| {
+                if me.posture.climbing {
+                    3
+                } else if me.posture.prone {
+                    2
+                } else {
+                    u8::from(me.crouched)
+                }
+            }),
             zoom_level: self.controls.zoom_level(),
         };
         let mut game = game;

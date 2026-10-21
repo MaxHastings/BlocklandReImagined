@@ -218,7 +218,7 @@ missing with no gun that has a magazine, and `ammo` and `ammo_reserve` are
 missing when they never run out. A missing value reads as `-` in text and
 0 in a bar or `show`, so `"show": { "value": "ammo_max", "above": 0 }`
 shows an element only with such a gun out. A `max` left out is the value's
-own (`health_max` for `health`, `ammo_max` for `ammo`, else 1). `aiming` is 1 while the viewer aims down a gun's sights, and `zoom_level` is the scope's step while they do (1 for the gun's
+own (`health_max` for `health`, `ammo_max` for `ammo`, else 1). `stance` is the viewer's posture: 0 standing, 1 crouching, 2 lying prone, 3 holding a ladder (`frames` with `"max": 3` and four frames shows one picture each). `aiming` is 1 while the viewer aims down a gun's sights, and `zoom_level` is the scope's step while they do (1 for the gun's
 own field of view, 2 and up for each wheel level of `Zoom::levels`, 0 when not aiming), so a level marker can show with `show` ranges.
 A layout reading a rule's
 state is not drawn on a server that does not run that rule.
