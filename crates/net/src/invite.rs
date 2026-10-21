@@ -8,11 +8,9 @@
 //!   host's key (the start of its certificate's SHA-256), so the first join
 //!   is already verified and a changed pin is replaced by the invite.
 //!
-//! Join codes resolved through a rendezvous service would be another
-//! [`JoinTarget`] variant resolving to the same [`Route`]s
-//! (`docs/architecture/hosting.md`).
+//! - a join code (`K7Q-4MZ`), resolved by a join code provider
+//!   ([`crate::codes`]) rather than [`JoinTarget::resolve`].
 use anyhow::{Context, Result, ensure};
-use sha2::Digest;
 use std::net::{IpAddr, SocketAddr};
 
 /// The game's UDP port when an address leaves it out, as Torque's was.
@@ -28,11 +26,9 @@ const HINT: &str = "Enter a server address, like 203.0.113.10, play.example.com:
 
 /// The key that identifies a host: the start of its certificate's SHA-256.
 pub fn host_key(certificate: &[u8]) -> HostKey {
-    let digest = sha2::Sha256::digest(certificate);
-    let mut key = [0; KEY_BYTES];
-    key.copy_from_slice(&digest[..KEY_BYTES]);
-    key
+    bri_rendezvous::proto::key_of(certificate)
 }
+use bri_rendezvous::proto::{decode_key, encode_key};
 
 /// Something a player asked to join.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -44,6 +40,8 @@ pub enum JoinTarget {
         port: u16,
         key: Option<HostKey>,
     },
+    /// A join code, in display form (`K7Q-4MZ`).
+    Code(String),
 }
 
 /// A resolved way to reach a host.
@@ -56,6 +54,9 @@ pub struct Route {
 impl JoinTarget {
     pub fn parse(text: &str) -> Result<Self> {
         let text = text.trim();
+        if let Some(code) = bri_rendezvous::proto::parse_code(text) {
+            return Ok(Self::Code(code));
+        }
         if let Some(rest) = strip_scheme(text) {
             let (address, key) = rest.trim_end_matches('/').rsplit_once('/').context(HINT)?;
             let key = decode_key(key).context(
@@ -80,11 +81,13 @@ impl JoinTarget {
     pub fn address(&self) -> String {
         match self {
             Self::Direct { host, port, .. } => join_host_port(host, *port),
+            Self::Code(code) => code.clone(),
         }
     }
     pub fn key(&self) -> Option<HostKey> {
         match self {
             Self::Direct { key, .. } => *key,
+            Self::Code(_) => None,
         }
     }
     /// Look up how to reach the host (DNS for host names).
@@ -104,6 +107,7 @@ impl JoinTarget {
                 };
                 Ok(Route { address, key: *key })
             }
+            Self::Code(_) => anyhow::bail!("A join code is looked up through the join code service"),
         }
     }
 }
@@ -115,7 +119,7 @@ impl std::fmt::Display for JoinTarget {
             Self::Direct { key: Some(key), .. } => {
                 write!(f, "{SCHEME}{}/{}", self.address(), encode_key(key))
             }
-            Self::Direct { .. } => f.write_str(&self.address()),
+            Self::Direct { .. } | Self::Code(_) => f.write_str(&self.address()),
         }
     }
 }
@@ -174,46 +178,6 @@ fn parse_address(text: &str) -> Result<(String, u16)> {
     Ok((host.to_ascii_lowercase(), port))
 }
 
-/// RFC 4648 base32, lower case, unpadded: no characters that URLs, chat or
-/// fonts mangle, and case-insensitive when typed.
-const ALPHABET: &[u8; 32] = b"abcdefghijklmnopqrstuvwxyz234567";
-
-fn encode_key(key: &HostKey) -> String {
-    let mut out = String::new();
-    let (mut buffer, mut bits) = (0u32, 0);
-    for &byte in key {
-        buffer = (buffer << 8) | byte as u32;
-        bits += 8;
-        while bits >= 5 {
-            bits -= 5;
-            out.push(ALPHABET[((buffer >> bits) & 31) as usize] as char);
-        }
-    }
-    if bits > 0 {
-        out.push(ALPHABET[((buffer << (5 - bits)) & 31) as usize] as char);
-    }
-    out
-}
-
-fn decode_key(text: &str) -> Option<HostKey> {
-    (text.len() == (KEY_BYTES * 8).div_ceil(5)).then_some(())?;
-    let mut bytes = Vec::with_capacity(KEY_BYTES);
-    let (mut buffer, mut bits) = (0u32, 0);
-    for c in text.bytes() {
-        let value = ALPHABET.iter().position(|&a| a == c.to_ascii_lowercase())? as u32;
-        buffer = (buffer << 5) | value;
-        bits += 5;
-        if bits >= 8 {
-            bits -= 8;
-            bytes.push((buffer >> bits) as u8);
-            buffer &= (1 << bits) - 1;
-        }
-    }
-    // Exactly the key, with no stray trailing bits.
-    (buffer == 0).then_some(())?;
-    bytes.try_into().ok()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -243,6 +207,8 @@ mod tests {
             direct("play.example.com", 28001)
         );
         assert_eq!(parsed("localhost"), direct("localhost", 28000));
+        assert_eq!(parsed("k7q-4mz"), JoinTarget::Code("K7Q-4MZ".into()));
+        assert_eq!(parsed("k7q4mz"), direct("k7q4mz", 28000), "codes need their dash");
         assert_eq!(
             parsed("[2001:db8::1]:28005").address(),
             "[2001:db8::1]:28005"

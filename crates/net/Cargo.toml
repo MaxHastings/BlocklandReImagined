@@ -15,6 +15,7 @@ serde.workspace = true
 serde_json.workspace = true
 serde_bytes.workspace = true
 bri-package = { path = "../package" }
+bri-rendezvous = { path = "../rendezvous" }
 bri-content = { path = "../content" }
 bri-world = { path = "../world" }
 bri-progress = { path = "../progress" }

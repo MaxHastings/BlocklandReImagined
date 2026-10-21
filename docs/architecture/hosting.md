@@ -123,13 +123,27 @@ query, is now Favorite/Unfavorite for the selected server. Favourites are
 listed first and marked `*`. A saved server that does not answer shows why in
 the Map column: no answer, host changed, other version, unknown name.
 
-## Not planned: join codes and a relay
+## Join codes and a relay
 
-Short join codes, hole punching and a relay fallback would need a service
-that someone runs (ours, Steam or Epic). Max decided against any such service
-on 2026-09-28, so none is planned. A built and tested version was shelved
-outside the repository; everything that joins still goes through
-`JoinTarget::parse` and `resolve`, which is where one would plug in.
+A host that runs the join code service (`bri-rendezvous`, a binary you run
+yourself; nothing is hosted for you) registers and gets a short code like
+`K7Q-4MZ`. A player gives the code to `Client::connect_code`, which asks the
+service where the host is, then sends packets from the game port so both
+routers open for each other (hole punching over QUIC). Every route is tried
+at once from one socket; after 1.5 seconds the service's relay is tried too,
+and the join takes whichever answers first. The relay forwards QUIC packets it
+cannot read, so the join stays end to end encrypted and pinned to the host's
+key. The service stores nothing but its own certificate and limits codes per
+address, lookups per minute and relay bandwidth.
+
+`JoinTarget::Code` is the code as typed; `JoinTarget::resolve` refuses it,
+because a code needs the socket the join then uses (`crate::codes`). The
+transport is proven by `bri_rendezvous::natsim`, a home router simulator (RFC
+4787 mapping and filtering) behind quinn's socket: direct joins through two
+port-restricted routers, relay joins through symmetric ones, and a plain
+failure with no relay (`join_codes_*` in `crates/net/tests/loopback.rs`).
+What is not wired yet: the Join screen taking a code, the Host screen showing
+one, and a setting for the service address.
 
 ## Later
 

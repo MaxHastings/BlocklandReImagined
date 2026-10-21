@@ -4,6 +4,7 @@ mod admin_store;
 pub mod allocator;
 pub mod backlog;
 pub mod client;
+pub mod codes;
 pub mod codec;
 pub mod content_identity;
 pub mod dedicated;

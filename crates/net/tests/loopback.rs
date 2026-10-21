@@ -3273,3 +3273,111 @@ async fn a_resume_over_kept_bricks_downloads_only_the_changes() -> Result<()> {
     );
     Ok(())
 }
+
+/// A host and a player behind simulated home routers find each other with a
+/// join code: directly when the routers allow hole punching, through the
+/// service's relay when they do not.
+async fn join_by_code(
+    host_nat: bri_rendezvous::natsim::Behaviour,
+    player_nat: bri_rendezvous::natsim::Behaviour,
+    relay: bool,
+) -> Result<Client> {
+    use bri_rendezvous::{
+        natsim::Nat,
+        proto::ServiceAddress,
+        service::{Config, Identity, Service},
+    };
+    let service = Service::start(
+        Config {
+            relay,
+            ..Config::new("127.0.0.1:0".parse()?)
+        },
+        Identity::generate()?,
+    )?;
+    let codes: std::sync::Arc<dyn bri_net::codes::JoinCodes> =
+        std::sync::Arc::new(bri_net::codes::Rendezvous::new(ServiceAddress {
+            host: "127.0.0.1".into(),
+            port: service.address.port(),
+            key: service.key,
+        }));
+    let host_router = Nat::new("127.0.0.2".parse()?, host_nat);
+    let mut host = server::start_on_socket(session(), options(), host_router.socket())?;
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    host.host_code(codes.clone(), "Max's Server".into(), Vec::new(), move |code| {
+        let _ = tx.send(code);
+    });
+    let code = rx.await??;
+    assert!(bri_rendezvous::proto::parse_code(&code).is_some(), "{code}");
+    let player_router = Nat::new("127.0.0.3".parse()?, player_nat);
+    let dir = tempfile::tempdir()?;
+    let identity = ClientIdentity::load_or_create(dir.path().join("client.identity"))?;
+    let joined = Client::connect_code(
+        codes.as_ref(),
+        &code.to_ascii_lowercase(),
+        "Friend".into(),
+        Vec::new(),
+        &identity,
+        Default::default(),
+        Some(player_router.socket()),
+    )
+    .await;
+    // The session keeps the host, service and routers alive while checked.
+    let client = joined?;
+    assert_eq!(client.listing.name, "Max's Server");
+    assert_eq!(client.certificate, host.certificate);
+    std::mem::forget(host);
+    std::mem::forget(service);
+    Ok(client)
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn join_codes_punch_through_ordinary_home_routers() -> Result<()> {
+    use bri_rendezvous::natsim::Behaviour;
+    let client = join_by_code(Behaviour::PORT_RESTRICTED, Behaviour::PORT_RESTRICTED, true).await?;
+    assert!(!client.relayed, "two ordinary routers connect directly");
+    let client = join_by_code(Behaviour::FULL_CONE, Behaviour::SYMMETRIC, false).await?;
+    assert!(!client.relayed);
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn join_codes_fall_back_to_the_relay_behind_strict_routers() -> Result<()> {
+    use bri_rendezvous::natsim::Behaviour;
+    let client = join_by_code(Behaviour::SYMMETRIC, Behaviour::SYMMETRIC, true).await?;
+    assert!(client.relayed, "two symmetric routers need the relay");
+    let client = join_by_code(Behaviour::SYMMETRIC, Behaviour::PORT_RESTRICTED, true).await?;
+    assert!(client.relayed);
+    // Without a relay the player is told plainly that the host is unreachable.
+    let error = join_by_code(Behaviour::SYMMETRIC, Behaviour::SYMMETRIC, false)
+        .await
+        .err()
+        .context("joined without a path")?;
+    assert!(format!("{error:#}").contains("Could not reach the host"), "{error:#}");
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn unknown_join_codes_are_refused_in_plain_words() -> Result<()> {
+    use bri_rendezvous::{
+        proto::ServiceAddress,
+        service::{Config, Identity, Service},
+    };
+    let service = Service::start(Config::new("127.0.0.1:0".parse()?), Identity::generate()?)?;
+    let codes = bri_net::codes::Rendezvous::new(ServiceAddress {
+        host: "127.0.0.1".into(),
+        port: service.address.port(),
+        key: service.key,
+    });
+    let endpoint = bri_net::codes::endpoint(None, None)?;
+    use bri_net::codes::JoinCodes;
+    let error = codes.find(&endpoint, "AAA-AAA").await.err().context("found")?;
+    assert!(error.to_string().contains("No game has that code"), "{error}");
+    // A service presenting another key is not trusted.
+    let impostor = bri_net::codes::Rendezvous::new(ServiceAddress {
+        key: [7; 16],
+        ..codes.service.clone()
+    });
+    assert!(impostor.find(&endpoint, "AAA-AAA").await.is_err());
+    service.stop().await;
+    Ok(())
+}
