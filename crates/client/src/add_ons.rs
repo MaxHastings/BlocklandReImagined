@@ -403,16 +403,22 @@ pub fn importer() -> Result<std::path::PathBuf> {
     Ok(path)
 }
 
-/// The pack schemas this game reads, recorded with each Add-On it
-/// converts: one converted for others (an older game's) is converted again
-/// ([`classic::plan`]).
+/// What the importer in this game reads and writes, recorded with each
+/// Add-On it converts: one converted by a game with other pack schemas, or
+/// an earlier importer revision, is converted again ([`classic::plan`]).
 fn reads() -> String {
     format!(
-        "weapons {}, vehicles {}",
+        "weapons {}, vehicles {}, importer {IMPORTER_REVISION}",
         bri_weapons::SCHEMA,
         bri_vehicles::schema::SCHEMA_VERSION
     )
 }
+
+/// Counts the importer's changes to what it makes from the same Add-On
+/// (not to the schemas): a conversion made before one is out of date. Bump
+/// it with any such fix, or players keep the old conversion (a zombie
+/// converted before it stopped using guns kept its gun).
+const IMPORTER_REVISION: u32 = 1;
 
 /// Progress of [`start_sync`]: a notice for the Add-Ons screen, the last
 /// one with `finished`.

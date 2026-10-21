@@ -134,4 +134,19 @@ mod tests {
         assert_eq!(k["body"], "x:archetype/walkerbot");
         assert_eq!(k["alerts_allies"], true);
     }
+
+    #[test]
+    fn a_bot_that_does_not_shoot_takes_up_no_gun() {
+        let kind_of = |fields: &[(&str, &str)]| {
+            let fields: BTreeMap<String, String> = fields
+                .iter()
+                .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
+                .collect();
+            kind("x:bot/z", "Z", "x:archetype/z", &fields)
+        };
+        let zombie = kind_of(&[("hmelee", "1"), ("hshoot", "0")]);
+        assert_eq!(zombie["weapons"], false);
+        let gunner = kind_of(&[("hshoot", "1")]);
+        assert!(gunner.get("weapons").is_none());
+    }
 }
