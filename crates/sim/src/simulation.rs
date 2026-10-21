@@ -807,6 +807,19 @@ impl Simulation {
             .flatten()
             .map(|contact| contact.dist)
     }
+    /// How far `point` is from map collider `collider`'s surface (zero
+    /// on it or inside it).
+    pub fn map_collider_gap(&self, collider: usize, point: Vec3) -> Option<f32> {
+        let mover = self
+            .physics
+            .colliders
+            .get(*self.map_handles.get(collider)?)?;
+        Some(mover.shape().distance_to_point(
+            mover.position(),
+            rapier3d::prelude::Vector::from_array(point.to_array()),
+            true,
+        ))
+    }
     /// Whether a player's body overlaps the shape of map collider
     /// `collider` placed at `pose` (a mover's next step).
     pub fn map_collider_meets_player(

@@ -40,18 +40,32 @@ impl ScriptOp for ShowShapes {
 }
 
 /// Play a sound profile (an Add-On weapons pack's `sounds`, or v20's):
-/// at `position` for everyone near, or at one player's ears.
+/// at `position` for everyone near, or at one player's ears. `volume` scales
+/// the profile's own (1.0 plays it as authored, 0 is silent).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Sound {
     pub profile: String,
     pub at: SoundAt,
+    #[serde(default = "full_volume")]
+    pub volume: f32,
+}
+
+/// The loudest an Add-On may ask for: twice as authored.
+pub const MAX_SOUND_VOLUME: f32 = 2.0;
+fn full_volume() -> f32 {
+    1.0
 }
 impl ScriptOp for Sound {
     const CAPABILITY: &str = "effects";
     const NAME: &str = "play_sound";
     fn bounded(&self) -> bool {
-        let Sound { profile, at } = self;
-        !profile.is_empty()
+        let Sound {
+            profile,
+            at,
+            volume,
+        } = self;
+        (0.0..=MAX_SOUND_VOLUME).contains(volume)
+            && !profile.is_empty()
             && profile.len() <= 128
             && !profile.chars().any(char::is_control)
             && match at {

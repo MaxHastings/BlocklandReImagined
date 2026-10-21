@@ -156,16 +156,33 @@ impl Perform for ops::PlayThread {
 impl Perform for ops::Sound {
     fn perform(self, session: &mut Session, cx: OpCall<'_>) -> Result<()> {
         let OpCall { package, tick, .. } = cx;
-        let ops::Sound { profile, at } = self;
+        let ops::Sound {
+            profile,
+            at,
+            volume,
+        } = self;
         session.take_cue(package)?;
+        // Full volume keeps the plain messages every client already knows.
+        let scaled = volume != 1.0;
         match at {
             bri_package_runtime::ops::SoundAt::Player(player) => {
                 ensure!(session.peers.contains_key(&player), "No such player");
-                session.notify(player, Notice::Sound(profile));
+                session.notify(
+                    player,
+                    if scaled {
+                        Notice::SoundScaled { profile, volume }
+                    } else {
+                        Notice::Sound(profile)
+                    },
+                );
             }
             bri_package_runtime::ops::SoundAt::Position(position) => session.cues.emit(
                 tick,
-                crate::presentation::CueKind::WeaponSound { profile },
+                if scaled {
+                    crate::presentation::CueKind::SoundScaled { profile, volume }
+                } else {
+                    crate::presentation::CueKind::WeaponSound { profile }
+                },
                 position,
             ),
         }

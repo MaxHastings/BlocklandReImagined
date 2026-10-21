@@ -55,6 +55,8 @@ pub(in crate::session) enum Subject {
     Drop(u64),
     /// A place a bot weighs standing on (`spots`): the bot and the option.
     Spot(OwnerId, u32),
+    /// The next opening on a bot's route (`spots::bot_exposure`).
+    Route(OwnerId),
 }
 /// Whether a query may dip into the target reserve.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

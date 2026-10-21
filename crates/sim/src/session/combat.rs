@@ -629,6 +629,11 @@ pub enum Notice {
         pitch: f32,
         yaw: f32,
     },
+    /// `Sound` at `volume` times its own: an Add-On's radio line, a whisper.
+    SoundScaled {
+        profile: String,
+        volume: f32,
+    },
 }
 
 /// Minigame requests. The actor is always the authenticated connection.

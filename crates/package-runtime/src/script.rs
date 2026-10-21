@@ -416,14 +416,17 @@ pub struct BrickInfo {
 /// Most bricks one `bricks_in` returns.
 pub const MAX_BRICKS_IN: usize = 1024;
 /// What a ray met.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum RayTarget {
     Object(ObjectRef),
     Brick(u64),
+    /// A map mover's collision (a door, a lift), by the id `mover(id)`
+    /// takes.
+    Mover(String),
     /// The map, its terrain or a map shape.
     Map,
 }
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct RayHit {
     pub target: RayTarget,
     pub position: [f32; 3],
@@ -1410,13 +1413,14 @@ fn player_or_none(value: &Dynamic) -> Fallible<Option<u64>> {
 }
 fn ray_map(hit: &RayHit) -> Dynamic {
     let [x, y, z] = position(hit.position);
-    let (kind, id, reference) = match hit.target {
+    let (kind, id, reference) = match &hit.target {
         RayTarget::Object(o) => (
             o.kind(),
             Dynamic::from_int(o.id() as i64),
             Dynamic::from(o.to_string()),
         ),
-        RayTarget::Brick(b) => ("brick", Dynamic::from_int(b as i64), Dynamic::UNIT),
+        RayTarget::Brick(b) => ("brick", Dynamic::from_int(*b as i64), Dynamic::UNIT),
+        RayTarget::Mover(id) => ("mover", Dynamic::UNIT, Dynamic::from(id.clone())),
         RayTarget::Map => ("map", Dynamic::UNIT, Dynamic::UNIT),
     };
     let mut entries = vec![
@@ -2733,14 +2737,36 @@ fn register_api(engine: &mut Engine) {
         push(Op::Sound(ops::Sound {
             profile: profile.into(),
             at: SoundAt::Player(id(&player)?),
+            volume: 1.0,
         }))
     });
+    engine.register_fn(
+        "play_sound",
+        |player: Dynamic, profile: &str, volume: Dynamic| {
+            push(Op::Sound(ops::Sound {
+                profile: profile.into(),
+                at: SoundAt::Player(id(&player)?),
+                volume: float(&volume)?,
+            }))
+        },
+    );
     engine.register_fn(
         "sound_at",
         |profile: &str, x: Dynamic, y: Dynamic, z: Dynamic| {
             push(Op::Sound(ops::Sound {
                 profile: profile.into(),
                 at: SoundAt::Position([float(&x)?, float(&y)?, float(&z)?]),
+                volume: 1.0,
+            }))
+        },
+    );
+    engine.register_fn(
+        "sound_at",
+        |profile: &str, x: Dynamic, y: Dynamic, z: Dynamic, volume: Dynamic| {
+            push(Op::Sound(ops::Sound {
+                profile: profile.into(),
+                at: SoundAt::Position([float(&x)?, float(&y)?, float(&z)?]),
+                volume: float(&volume)?,
             }))
         },
     );

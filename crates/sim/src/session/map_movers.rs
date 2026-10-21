@@ -64,6 +64,10 @@ fn pose(transform: glam::Mat4) -> rapier3d::prelude::Pose {
     )
 }
 
+/// How far from a mover's collision a ray's landing may be to count as on
+/// it, in units: the ray ends on the surface, so only rounding is allowed.
+const MOVER_HIT_GAP: f32 = 0.02;
+
 impl Session {
     /// Install the map's movers (from `NativeMap::movers`), all at rest at
     /// key 0.
@@ -228,6 +232,23 @@ impl Session {
     }
     /// Start mover `id` toward key `key` over `seconds`. False when it
     /// cannot go there now (see [`MoverState::go_to`]).
+    /// The id of the mover whose collision `point` lies on (within a hair),
+    /// the nearest when several are: what a ray that hit the map struck.
+    pub fn mover_at(&self, point: Vec3) -> Option<&str> {
+        self.map_movers
+            .movers
+            .iter()
+            .filter_map(|mover| {
+                let gap = mover
+                    .colliders
+                    .clone()
+                    .filter_map(|c| self.simulation.map_collider_gap(c, point))
+                    .min_by(f32::total_cmp)?;
+                (gap <= MOVER_HIT_GAP).then_some((gap, mover.def.id.as_str()))
+            })
+            .min_by(|a, b| a.0.total_cmp(&b.0))
+            .map(|(_, id)| id)
+    }
     pub fn mover_goto(&mut self, id: &str, key: u8, seconds: f32) -> Result<bool> {
         let index = self
             .mover_index(id)

@@ -68,14 +68,27 @@ const JOINT_PASSES: usize = 4;
 /// damped, so a held body swings to the target without ringing.
 const HOLD_FREQUENCY: f32 = 18.0;
 
+/// What an Add-On body's collider keeps in its user data: its group in the
+/// low bits, then these flags. Colliders of anything else (the map, bricks)
+/// have neither flag.
+const BODY: u128 = 1 << 64;
+const GHOST: u128 = 1 << 65;
+const GROUP_MASK: u128 = u32::MAX as u128;
+fn is_body(data: u128) -> bool {
+    data >> 66 == 0 && data & BODY != 0
+}
+
 /// Bodies of the same nonzero group (kept in each collider's user data)
-/// never touch.
+/// never touch, and a ghost body touches no other body.
 struct Groups;
 impl PhysicsHooks for Groups {
     fn filter_contact_pair(&self, context: &PairFilterContext) -> Option<SolverFlags> {
-        let group = |c: ColliderHandle| context.colliders.get(c).map_or(0, |c| c.user_data);
-        let (a, b) = (group(context.collider1), group(context.collider2));
-        if a != 0 && a == b {
+        let data = |c: ColliderHandle| context.colliders.get(c).map_or(0, |c| c.user_data);
+        let (da, db) = (data(context.collider1), data(context.collider2));
+        let (a, b) = (da & GROUP_MASK, db & GROUP_MASK);
+        let ghost = |d: u128| is_body(d) && d & GHOST != 0;
+        let apart = (ghost(da) && is_body(db)) || (ghost(db) && is_body(da));
+        if apart || (is_body(da) && is_body(db) && a != 0 && a == b) {
             None
         } else {
             Some(SolverFlags::COMPUTE_RIGID_IMPULSES)
@@ -164,6 +177,22 @@ impl AddOnPhysics {
                         });
                     }
                 }
+                PhysicsCommand::PushAt {
+                    body,
+                    velocity,
+                    point,
+                } => {
+                    if let Some(b) = self.bodies.get_mut(&body) {
+                        let rb = &self.world.bodies[b.handle];
+                        let change = Vec3::from(velocity)
+                            .clamp_length_max(bri_client_sandbox::bodies::MAX_SPEED);
+                        b.kicks.push(Kick {
+                            impulse: change * rb.mass(),
+                            point: Some(Vec3::from(point)),
+                        });
+                    }
+                }
+                PhysicsCommand::Freeze { body } => self.freeze(body),
                 PhysicsCommand::Hold {
                     body,
                     point,
@@ -182,6 +211,19 @@ impl AddOnPhysics {
                     }
                 }
             }
+        }
+    }
+    /// Hold `id` and everything jointed to it where it lies: fixed, so
+    /// nothing moves it and it costs no simulation.
+    fn freeze(&mut self, id: u32) {
+        let Some(handle) = self.bodies.get(&id).map(|b| b.handle) else {
+            return;
+        };
+        for h in Self::jointed(&self.world, handle) {
+            let rb = &mut self.world.bodies[h];
+            rb.set_linvel(vector(Vec3::ZERO), false);
+            rb.set_angvel(vector(Vec3::ZERO), false);
+            rb.set_body_type(RigidBodyType::Fixed, true);
         }
     }
     /// Take body `id` out of the world, with its joints and everything
@@ -326,8 +368,8 @@ impl AddOnPhysics {
             .density(spec.density)
             .friction(spec.friction)
             .restitution(spec.bounce)
-            .user_data(u128::from(spec.group));
-        if spec.group != 0 {
+            .user_data(u128::from(spec.group) | BODY | if spec.ghost { GHOST } else { 0 });
+        if spec.group != 0 || spec.ghost {
             collider = collider.active_hooks(ActiveHooks::FILTER_CONTACT_PAIRS);
         }
         let body = RigidBodyBuilder::dynamic()
@@ -372,13 +414,21 @@ impl AddOnPhysics {
         );
         let local = |h: RigidBodyHandle| self.world.bodies[h].position().inv_mul(&frame);
         let (frame1, frame2) = (local(first.handle), local(second.handle));
+        // A hinge turns about the axis alone, between its low and high
+        // limits; a ball also swings, by one half angle across and another
+        // along (the cone of a shoulder).
+        let (twist, swing, swing_second) = if spec.hinge {
+            ([spec.hinge_low, spec.twist], 0.0, 0.0)
+        } else {
+            ([-spec.twist, spec.twist], spec.swing, spec.swing_second)
+        };
         let joint = SphericalJointBuilder::new()
             .local_frame1(frame1)
             .local_frame2(frame2)
             .contacts_enabled(false)
-            .limits(JointAxis::AngX, [-spec.twist, spec.twist])
-            .limits(JointAxis::AngY, [-spec.swing, spec.swing])
-            .limits(JointAxis::AngZ, [-spec.swing, spec.swing])
+            .limits(JointAxis::AngX, twist)
+            .limits(JointAxis::AngY, [-swing, swing])
+            .limits(JointAxis::AngZ, [-swing_second, swing_second])
             .motor_velocity(JointAxis::AngX, 0.0, spec.friction)
             .motor_velocity(JointAxis::AngY, 0.0, spec.friction)
             .motor_velocity(JointAxis::AngZ, 0.0, spec.friction);
@@ -763,6 +813,103 @@ mod tests {
     }
 
     #[test]
+    fn a_ghost_body_falls_through_other_bodies_but_not_the_world() {
+        let building = floor();
+        let ghosted = |ghost: bool| {
+            let mut physics = AddOnPhysics::default();
+            let mut low = spec(Vec3::new(0.0, 0.6, 0.0), 0);
+            low.ghost = ghost;
+            // Drops onto the lower box from just above it.
+            let high = spec(Vec3::new(0.0, 3.0, 0.0), 0);
+            physics.apply(&[
+                PhysicsCommand::Create { body: 1, spec: low },
+                PhysicsCommand::Create {
+                    body: 2,
+                    spec: high,
+                },
+            ]);
+            run(&mut physics, &building, 2.0);
+            physics.snapshot()
+        };
+        let solid = ghosted(false);
+        assert!(solid[&2].position[1] > 0.6, "rests on the other body");
+        let ghost = ghosted(true);
+        assert!(
+            ghost[&2].position[1] < 0.5 && ghost[&1].position[1] < 0.5,
+            "both reach the world: {ghost:?}"
+        );
+    }
+
+    #[test]
+    fn a_frozen_ragdoll_stays_where_it_lies_and_is_not_moved() {
+        let building = floor();
+        let mut physics = AddOnPhysics::default();
+        physics.apply(&[
+            PhysicsCommand::Create {
+                body: 1,
+                spec: spec(Vec3::new(0.0, 4.0, 0.0), 3),
+            },
+            PhysicsCommand::Create {
+                body: 2,
+                spec: spec(Vec3::new(0.0, 4.6, 0.0), 3),
+            },
+            PhysicsCommand::Joint {
+                a: 1,
+                b: 2,
+                spec: JointSpec {
+                    anchor: [0.0, 4.3, 0.0],
+                    axis: [0.0, 1.0, 0.0],
+                    swing: 0.5,
+                    twist: 0.2,
+                    swing_second: 0.5,
+                    hinge: false,
+                    hinge_low: 0.0,
+                    friction: 0.0,
+                },
+            },
+        ]);
+        run(&mut physics, &building, 0.3);
+        physics.apply(&[PhysicsCommand::Freeze { body: 1 }]);
+        run(&mut physics, &building, 0.1);
+        let frozen = physics.snapshot();
+        physics.apply(&[PhysicsCommand::Push {
+            body: 2,
+            velocity: [5.0, 5.0, 0.0],
+        }]);
+        run(&mut physics, &building, 2.0);
+        let later = physics.snapshot();
+        for body in [1, 2] {
+            assert_eq!(
+                frozen[&body].position, later[&body].position,
+                "body {body} stays put"
+            );
+        }
+        assert!(frozen[&1].position[1] < 4.0, "it had begun to fall");
+    }
+
+    #[test]
+    fn a_push_at_a_point_off_the_centre_spins_the_body() {
+        let building = floor();
+        let mut physics = AddOnPhysics::default();
+        physics.apply(&[PhysicsCommand::Create {
+            body: 1,
+            spec: spec(Vec3::new(0.0, 6.0, 0.0), 0),
+        }]);
+        physics.apply(&[PhysicsCommand::PushAt {
+            body: 1,
+            velocity: [4.0, 0.0, 0.0],
+            point: [0.0, 6.2, 0.0],
+        }]);
+        physics.advance(1.0 / 60.0, &building, &[], &[]).unwrap();
+        let state = physics.snapshot()[&1];
+        assert!(state.velocity[0] > 1.0, "moved: {state:?}");
+        assert!(
+            Vec3::from(state.spin).length() > 0.5,
+            "and turned: {state:?}"
+        );
+    }
+
+    #[test]
     fn a_joint_holds_two_bodies_together_and_a_group_lets_them_overlap() {
         let building = floor();
         let mut physics = AddOnPhysics::default();
@@ -784,6 +931,9 @@ mod tests {
                     axis: [1.0, 0.0, 0.0],
                     swing: 0.5,
                     twist: 0.2,
+                    swing_second: 0.5,
+                    hinge: false,
+                    hinge_low: 0.0,
                     friction: 0.0,
                 },
             },
@@ -890,6 +1040,9 @@ mod tests {
                     axis: [1.0, 0.0, 0.0],
                     swing: 1.0,
                     twist: 1.0,
+                    swing_second: 1.0,
+                    hinge: false,
+                    hinge_low: 0.0,
                     friction: 0.0,
                 },
             });
@@ -991,6 +1144,9 @@ mod tests {
                     axis: [1.0, 0.0, 0.0],
                     swing: 1.0,
                     twist: 1.0,
+                    swing_second: 1.0,
+                    hinge: false,
+                    hinge_low: 0.0,
                     friction: 0.0,
                 },
             });
@@ -1506,6 +1662,9 @@ mod tests {
                     axis: [1.0, 0.0, 0.0],
                     swing: 1.0,
                     twist: 1.0,
+                    swing_second: 1.0,
+                    hinge: false,
+                    hinge_low: 0.0,
                     friction: 0.0,
                 },
             });
