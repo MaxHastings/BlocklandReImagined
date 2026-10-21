@@ -52,6 +52,10 @@ pub struct MapScene {
     /// they draw as unshadowed point lights with the same linear falloff, the
     /// nearest ones each frame (`SceneRenderer::update_lights`, colour w 1).
     pub overflow_lights: Vec<crate::map_lighting::MapLight>,
+    /// Set only by the modern loader, which reads no lightmaps: the map's
+    /// room light, baked offline by `prepare_lighting`, for the bodies
+    /// standing in it (`crate::light_volume::LightVolume`).
+    pub light_volume: Option<crate::light_volume::LightVolume>,
 }
 
 /// A map's backdrop ([`bri_content::backdrop`]): a model drawn before the map from `eye`, with only the viewer's rotation.
@@ -673,6 +677,20 @@ fn load_bundle_unscoped(root: &Path, map_id: &str, legacy: bool) -> Result<MapSc
     let mut light_animations = Vec::new();
     let mut light_spots = Vec::new();
     let mut overflow_lights = Vec::new();
+    let light_volume = if legacy {
+        None
+    } else {
+        let volume = crate::lighting_parameters::read_volume(&root, map_id);
+        if volume.is_none() {
+            let warning = format!(
+                "Bodies take no room light in Dynamic: no baked light volume for {map_id}. Prepare it with prepare_lighting {}",
+                root.display()
+            );
+            eprintln!("{warning}");
+            out.omissions.push(warning);
+        }
+        volume
+    };
     let modern_lights = if legacy {
         None
     } else {
@@ -761,6 +779,7 @@ fn load_bundle_unscoped(root: &Path, map_id: &str, legacy: bool) -> Result<MapSc
         light_animations,
         light_spots,
         overflow_lights,
+        light_volume,
     })
 }
 

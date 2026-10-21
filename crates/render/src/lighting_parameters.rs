@@ -131,6 +131,58 @@ impl Parameters {
     }
 }
 
+/// Largest baked volume file read: a million cells of four bytes, its fingerprint and header.
+const MAX_VOLUME_BYTES: u64 = 4_000_128;
+/// The file a map's baked light volume is kept in, beside the light
+/// descriptors. Dynamic loads no lightmaps, so the room light that bodies
+/// take (`LightVolume`) is baked offline by `prepare_lighting` and read from
+/// here. None for an id that is not a plain file name part.
+pub fn volume_file(map_id: &str) -> Option<String> {
+    let plain = !map_id.is_empty()
+        && map_id
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_');
+    plain.then(|| format!("lighting-volume-{map_id}.bin"))
+}
+/// Keep `volume` as map `map_id`'s room light for this bundle: the bundle's
+/// fingerprint, then the volume's own bytes.
+pub fn write_volume(
+    root: &Path,
+    map_id: &str,
+    volume: &crate::light_volume::LightVolume,
+) -> Result<()> {
+    let name = volume_file(map_id).context("Map id is not a plain file name part")?;
+    let mut bytes = fingerprint(root)?.into_bytes();
+    bytes.extend(volume.to_bytes());
+    ensure!(
+        bytes.len() as u64 <= MAX_VOLUME_BYTES,
+        "Light volume exceeds its size limit"
+    );
+    let output = root.join(name);
+    let partial = output.with_extension(format!("{}.partial", std::process::id()));
+    let result = std::fs::write(&partial, bytes).and_then(|_| std::fs::rename(&partial, &output));
+    if result.is_err() {
+        let _ = std::fs::remove_file(&partial);
+    }
+    result.context("Replacing the prepared light volume")
+}
+/// The room light kept for map `map_id`, or None when there is none or it was
+/// prepared for another version of the bundle.
+pub fn read_volume(root: &Path, map_id: &str) -> Option<crate::light_volume::LightVolume> {
+    let mut bytes = Vec::new();
+    std::fs::File::open(root.join(volume_file(map_id)?))
+        .ok()?
+        .take(MAX_VOLUME_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .ok()?;
+    if bytes.len() as u64 > MAX_VOLUME_BYTES {
+        return None;
+    }
+    let fingerprint = fingerprint(root).ok()?;
+    let rest = bytes.strip_prefix(fingerprint.as_bytes())?;
+    crate::light_volume::LightVolume::from_bytes(rest)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -186,6 +238,42 @@ mod tests {
         assert!(parameters.write_atomic(&root, &output).is_err());
         assert_eq!(std::fs::read(&output)?, original);
         assert!(Parameters::read(&root).is_ok());
+        std::fs::remove_dir_all(root)?;
+        Ok(())
+    }
+
+    #[test]
+    fn a_light_volume_is_kept_for_its_bundle_and_ignored_for_another() -> Result<()> {
+        let root = std::env::temp_dir().join(format!("bri-light-volume-{}", std::process::id()));
+        std::fs::create_dir_all(&root)?;
+        std::fs::write(root.join("bundle.json"), b"{}")?;
+        let volume = crate::light_volume::LightVolume {
+            origin: [1.0, 2.0, 3.0],
+            cell: 2.0,
+            dims: [1, 1, 2],
+            texels: vec![[1, 2, 3, 255], [4, 5, 6, 255]],
+            rays: 0,
+        };
+        write_volume(&root, "map-1", &volume)?;
+        assert_eq!(read_volume(&root, "map-1"), Some(volume));
+        assert_eq!(read_volume(&root, "map-2"), None);
+        assert!(
+            write_volume(
+                &root,
+                "../x",
+                &crate::light_volume::LightVolume {
+                    origin: [0.0; 3],
+                    cell: 1.0,
+                    dims: [1; 3],
+                    texels: vec![[0; 4]],
+                    rays: 0,
+                }
+            )
+            .is_err()
+        );
+        // A rebuilt bundle makes it stale.
+        std::fs::write(root.join("bundle.json"), b"{\"changed\":1}")?;
+        assert_eq!(read_volume(&root, "map-1"), None);
         std::fs::remove_dir_all(root)?;
         Ok(())
     }

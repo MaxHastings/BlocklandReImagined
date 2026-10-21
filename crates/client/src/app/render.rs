@@ -2145,6 +2145,9 @@ impl App {
             self.lighting.light_volume.animations = visual.light_animations;
             self.lighting.light_volume.spots = visual.light_spots;
             self.lighting.light_volume.overflow = visual.overflow_lights;
+            self.lighting
+                .light_volume
+                .use_prepared_volume(visual.light_volume);
             self.scene.cpu_scene = Some(visual.scene);
             self.scene.backdrop = visual.backdrop;
             self.scene.set_regions(visual.regions);

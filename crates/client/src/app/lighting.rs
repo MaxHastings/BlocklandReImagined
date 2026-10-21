@@ -222,10 +222,20 @@ impl LightVolumeState {
 /// Which way the room's light is read for a body: up, as the volume's form shading reads a roof-lit surface.
 const ROOM_NORMAL: [f32; 3] = [0.0, 1.0, 0.0];
 impl LightVolumeState {
+    /// A map's prepared room light (Dynamic reads no lightmaps to bake one
+    /// from), kept until a bake of the lightmaps replaces it.
+    pub(super) fn use_prepared_volume(
+        &mut self,
+        volume: Option<bri_render::light_volume::LightVolume>,
+    ) {
+        if volume.is_some() {
+            self.volume = volume;
+        }
+    }
     /// Cells of at least 2 units, at most a million (4 MB): about 4.7 units
     /// across the whole Bedroom.
-    const MIN_CELL: f32 = 2.0;
-    const MAX_CELLS: usize = 1_000_000;
+    const MIN_CELL: f32 = bri_render::light_volume::BAKE_MIN_CELL;
+    const MAX_CELLS: usize = bri_render::light_volume::BAKE_MAX_CELLS;
     /// Map light visibility: cells of at least 2 units, at most 2 million
     /// (16 MB, two RGBA layers per cell): 3.6 units across Bedroom. Finer
     /// grids cost frame time where many surfaces overlap on screen.
@@ -585,6 +595,7 @@ mod tests {
             light_animations: Vec::new(),
             light_spots: Vec::new(),
             overflow_lights: Vec::new(),
+            light_volume: None,
         }
     }
 

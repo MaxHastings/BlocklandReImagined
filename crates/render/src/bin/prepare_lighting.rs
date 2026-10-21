@@ -1,7 +1,10 @@
 //! Offline native map light recovery. No GPU or original installation access.
 use anyhow::{Context, Result, ensure};
 use bri_render::{
-    lighting_parameters::{FILE, Parameters, SourceLight, fingerprint},
+    light_volume::{BAKE_MAX_CELLS, BAKE_MIN_CELL, Baker},
+    lighting_parameters::{
+        FILE, Parameters, SourceLight, fingerprint, read_volume, volume_file, write_volume,
+    },
     map_lighting::Bake,
     scene_loader::load_map_bundle,
 };
@@ -39,12 +42,51 @@ fn main() -> Result<()> {
         }
         Ok(p)
     });
-    if check || (!force && output == root.join(FILE) && prepared.is_ok()) {
+    let prepared_lights = !force && output == root.join(FILE) && prepared.is_ok();
+    // Each map's room light: what bodies standing in it take in Dynamic.
+    let volumes = |root: &PathBuf, bake: bool| -> Result<usize> {
+        let mut missing = 0;
+        for record in records {
+            let id = record["id"].as_str().context("Map ID missing")?;
+            if !force && read_volume(root, id).is_some() {
+                continue;
+            }
+            if !bake {
+                println!(
+                    "{id}: no current light volume ({}); run prepare_lighting without --check",
+                    volume_file(id).unwrap_or_default()
+                );
+                missing += 1;
+                continue;
+            }
+            let start = Instant::now();
+            let scene = load_map_bundle(root, id)?.scene;
+            if let Some(baker) = Baker::new(&scene) {
+                let volume = baker.bake(BAKE_MIN_CELL, BAKE_MAX_CELLS);
+                write_volume(root, id, &volume)?;
+                println!(
+                    "{id}: light volume {:?} cells, {:.3}s",
+                    volume.dims,
+                    start.elapsed().as_secs_f64()
+                );
+            }
+        }
+        Ok(missing)
+    };
+    if check || prepared_lights {
         let prepared = prepared?;
+        // A bundle prepared before room lights existed is not invalid: --check
+        // only says what is missing.
+        let missing = volumes(&root, !check)?;
         println!(
-            "Validated {} prepared maps: {}",
+            "Validated {} prepared maps: {}{}",
             prepared.maps.len(),
-            output.display()
+            output.display(),
+            if missing > 0 {
+                format!(" ({missing} without a light volume)")
+            } else {
+                String::new()
+            }
         );
         return Ok(());
     }
@@ -73,6 +115,9 @@ fn main() -> Result<()> {
         maps,
     };
     data.write_atomic(&root, &output)?;
+    if output == root.join(FILE) {
+        volumes(&root, true)?;
+    }
     println!("Prepared {} maps: {}", data.maps.len(), output.display());
     Ok(())
 }

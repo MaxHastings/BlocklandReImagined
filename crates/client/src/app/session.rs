@@ -560,6 +560,7 @@ impl App {
                 light_volume.animations = visual.light_animations.clone();
                 light_volume.spots = visual.light_spots.clone();
                 light_volume.overflow = visual.overflow_lights.clone();
+                light_volume.use_prepared_volume(visual.light_volume.clone());
                 light_volume.set_light_shapes(&loaded.breakables);
                 // Every package this host loaded, hashed: what joiners must match.
                 let identity = paths.environment()?;
