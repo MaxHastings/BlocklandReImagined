@@ -276,6 +276,31 @@ fn play(
             for (name, why) in readouts {
                 println!("CAPTURE bot {name:?}: {}", why.join(" | "));
             }
+        } else if let Some(aim) = step.get("aim").and_then(|v| v.as_array()) {
+            // Turn to face a point (the look action, repeated until within a hair of it); nothing is held. Prints the yaw it ended at.
+            let (tx, tz) = (
+                aim.first().and_then(|v| v.as_f64()).context("aim x")? as f32,
+                aim.get(1).and_then(|v| v.as_f64()).context("aim z")? as f32,
+            );
+            for _ in 0..20 {
+                let Some((p, _)) = app.local_motion() else { break };
+                let want = (tx - p.feet[0]).atan2(-(tz - p.feet[2]));
+                let mut delta = want - p.yaw;
+                while delta > std::f32::consts::PI {
+                    delta -= std::f32::consts::TAU;
+                }
+                while delta < -std::f32::consts::PI {
+                    delta += std::f32::consts::TAU;
+                }
+                if delta.abs() < 0.005 {
+                    break;
+                }
+                app.ui.core.request(UiAction::Game(GameAction::Look { yaw: delta, pitch: 0.0 }));
+                pump(app)?;
+                run_for(app, 0.05)?;
+            }
+            let at = app.local_motion().map(|(p, _)| (p.feet, p.yaw));
+            println!("CAPTURE aim {tx} {tz}: at {at:.3?}");
         } else if let Some(goto) = step.get("goto").and_then(|v| v.as_array()) {
             // Walk to a point by the controls alone: turn toward it (the look action) and hold forward until within `within`
             // (default 0.8), or `timeout` seconds (default 30) pass. Reports where it ended.
