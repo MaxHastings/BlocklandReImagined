@@ -13,7 +13,7 @@ use crate::input::{Key, Modifiers};
 use crate::prefs::Prefs;
 use crate::schema::RemapEntry;
 use bri_content::controls::{DEFAULT_PROFILE, LayerDef, LayerWhen, ProfileDef};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 /// What the local player is riding, for matching layers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -24,12 +24,13 @@ pub struct RideContext {
 }
 
 impl RideContext {
-    fn matches(self, when: LayerWhen) -> bool {
+    fn matches(self, when: &LayerWhen) -> bool {
         match when {
             LayerWhen::Vehicle => true,
             LayerWhen::Driver => self.driver,
             LayerWhen::MouseDriver => self.mouse_driver,
             LayerWhen::Passenger => !self.driver,
+            LayerWhen::Rule(_) => false,
         }
     }
 }
@@ -118,6 +119,12 @@ pub struct ProfileState {
     remaps: BTreeMap<String, (Vec<RemapEntry>, Vec<String>, usize)>,
     active: String,
     ride: Option<RideContext>,
+    /// The rule flags that are on for the local player (the keys of
+    /// [`LayerWhen::Rule`] layers).
+    flags: BTreeSet<String>,
+    /// The binds of each profile layer, by (profile, layer). Fixed to the
+    /// Add-On's keys: a layer is a mode (a menu open), not a setting.
+    layer_maps: BTreeMap<(String, String), BindMap>,
     /// The tab Options → Controls shows.
     pub viewed: String,
 }
@@ -134,6 +141,8 @@ impl Default for ProfileState {
             remaps: BTreeMap::new(),
             active: DEFAULT_PROFILE.into(),
             ride: None,
+            flags: BTreeSet::new(),
+            layer_maps: BTreeMap::new(),
             viewed: DEFAULT_PROFILE.into(),
         }
     }
@@ -323,22 +332,75 @@ impl ProfileState {
     pub fn set_ride(&mut self, ride: Option<RideContext>) {
         self.ride = ride;
     }
+    /// The rule flags the active profile's layers wait on (the keys of its
+    /// [`LayerWhen::Rule`] layers), for the game to look up.
+    pub fn rule_flags_wanted(&self) -> Vec<String> {
+        self.def(&self.active)
+            .map(|d| {
+                d.layers
+                    .iter()
+                    .filter_map(|l| match &l.when {
+                        LayerWhen::Rule(key) => Some(key.clone()),
+                        _ => None,
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+    /// Which of those flags are on now.
+    pub fn set_rule_flags(&mut self, flags: BTreeSet<String>) {
+        self.flags = flags;
+    }
+    /// The binds the Add-On gives its layers: `(profile, layer)` to
+    /// actions, bound at their default inputs.
+    pub fn declare_layers(&mut self, actions: BTreeMap<(String, String), Vec<ProfileAction>>) {
+        self.layer_maps = actions
+            .into_iter()
+            .map(|(key, list)| {
+                let mut map = BindMap::default();
+                for a in list {
+                    if let Some(input) = a.default
+                        && map.command_for(&input).is_none()
+                    {
+                        map.bind(input, &a.entry.command);
+                    }
+                }
+                (key, map)
+            })
+            .collect();
+    }
+    fn layer_on(&self, when: &LayerWhen) -> bool {
+        match when {
+            LayerWhen::Rule(key) => self.flags.contains(key),
+            other => self.ride.is_some_and(|r| r.matches(other)),
+        }
+    }
+    /// The binds of the layers of the active profile that are on now, the
+    /// first declared first.
+    fn layer_binds(&self) -> impl Iterator<Item = &BindMap> {
+        self.def(&self.active)
+            .into_iter()
+            .flat_map(|d| d.layers.iter())
+            .filter(|l| matches!(l.when, LayerWhen::Rule(_)) && self.layer_on(&l.when))
+            .filter_map(|l| self.layer_maps.get(&(self.active.clone(), l.id.clone())))
+    }
     pub fn active(&self) -> &str {
         &self.active
     }
     /// The layer on top of the active profile, if the rider matches one.
     pub fn layer(&self) -> Option<&LayerDef> {
-        let ride = self.ride?;
         self.def(&self.active)?
             .layers
             .iter()
-            .find(|l| ride.matches(l.when))
+            .find(|l| self.layer_on(&l.when))
     }
 
     /// Command for an input in gameplay: the active profile's own bindings
     /// first, then the default profile's when the profile inherits.
     pub fn command_for<'a>(&'a self, base: &'a BindMap, input: &BindInput) -> Option<&'a str> {
-        self.own(|m| m.command_for(input))
+        self.layer_binds()
+            .find_map(|m| m.command_for(input))
+            .or_else(|| self.own(|m| m.command_for(input)))
             .or_else(|| self.inherits().then(|| base.command_for(input)).flatten())
     }
     pub fn command_for_key<'a>(
@@ -347,11 +409,14 @@ impl ProfileState {
         key: Key,
         mods: Modifiers,
     ) -> Option<&'a str> {
-        self.own(|m| m.command_for_key(key, mods)).or_else(|| {
-            self.inherits()
-                .then(|| base.command_for_key(key, mods))
-                .flatten()
-        })
+        self.layer_binds()
+            .find_map(|m| m.command_for_key(key, mods))
+            .or_else(|| self.own(|m| m.command_for_key(key, mods)))
+            .or_else(|| {
+                self.inherits()
+                    .then(|| base.command_for_key(key, mods))
+                    .flatten()
+            })
     }
     fn inherits(&self) -> bool {
         self.def(&self.active).is_none_or(|d| d.inherit)

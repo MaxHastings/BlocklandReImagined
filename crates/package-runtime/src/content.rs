@@ -2337,6 +2337,28 @@ impl Binds {
                     STOCK_COMMANDS.join(", ")
                 );
             }
+            if let Some(layer) = &bind.layer {
+                let rule_layer = self
+                    .profile
+                    .as_deref()
+                    .and_then(|profile| self.profiles.iter().find(|p| p.id == profile))
+                    .is_some_and(|p| {
+                        p.layers.iter().any(|l| {
+                            l.id == *layer
+                                && matches!(l.when, bri_content::controls::LayerWhen::Rule(_))
+                        })
+                    });
+                ensure!(
+                    rule_layer
+                        && bind.key.is_some()
+                        && bind.stock.is_none()
+                        && bind.mouse.is_none()
+                        && bind.screen.is_none()
+                        && !bind.hold,
+                    "bind `{}` names layer `{layer}`, which must be a rule layer of this file's profile; it needs a key, and is no hold, stock, mouse or screen bind",
+                    bind.name
+                );
+            }
             ensure!(text(&bind.name, 64), "bind names are 1 to 64 characters");
             ensure!(
                 !self.binds[..i].iter().any(|b| b.name == bind.name),
@@ -2564,6 +2586,13 @@ pub struct BindDef {
     /// a command with no arguments.
     #[serde(default)]
     pub hold: bool,
+    /// One of the file's profile's layers whose `when` is a rule flag: the
+    /// bind works only while the flag is on, and then over the profile's
+    /// own binds on the same key. Needs a `key`; a layer's binds are fixed
+    /// to its keys (not in Controls), send a command once, and cannot be a
+    /// `hold`, `stock`, `mouse` or `screen` bind.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub layer: Option<String>,
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -2761,6 +2790,42 @@ mod tests {
         .unwrap();
         old.validate().unwrap();
         assert!(old.profile.is_none() && old.profiles.is_empty());
+    }
+
+    #[test]
+    fn a_layer_a_rule_switches_takes_fixed_press_binds() {
+        let file = |when: &str, bind: serde_json::Value| {
+            let binds: Binds = serde_json::from_value(serde_json::json!({
+                "schema_version": 1, "division": "D", "profile": "aa",
+                "profiles": [{ "id": "aa", "name": "AA", "layers": [
+                    { "id": "radio", "when": when } ] }],
+                "binds": [bind]
+            }))
+            .unwrap();
+            binds.validate()
+        };
+        let radio = |extra: serde_json::Value| {
+            let mut bind = serde_json::json!({ "name": "Radio 1", "package": "aa",
+                "command": "radio1", "key": "1", "layer": "radio" });
+            bind.as_object_mut()
+                .unwrap()
+                .extend(extra.as_object().unwrap().clone());
+            bind
+        };
+        let on = "rule:aa:player/radio";
+        assert!(file(on, radio(serde_json::json!({}))).is_ok());
+        // Not a rule layer, no such layer, or a bind a layer cannot take.
+        assert!(file("driver", radio(serde_json::json!({}))).is_err());
+        assert!(file(on, radio(serde_json::json!({ "layer": "other" }))).is_err());
+        assert!(file(on, radio(serde_json::json!({ "hold": true }))).is_err());
+        assert!(file(on, radio(serde_json::json!({ "key": null }))).is_err());
+        // The flag is a rule's player value.
+        assert!(
+            serde_json::from_value::<bri_content::controls::LayerWhen>(serde_json::json!(
+                "rule:aa:global/radio"
+            ))
+            .is_err()
+        );
     }
 
     #[test]

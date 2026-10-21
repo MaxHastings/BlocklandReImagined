@@ -2971,6 +2971,8 @@ impl Ui {
         let mut remap = crate::binds::remap_entries(&c.pack.data.data);
         let mut division: Option<&str> = None;
         let mut actions: BTreeMap<String, Vec<crate::profiles::ProfileAction>> = BTreeMap::new();
+        let mut layer_actions: BTreeMap<(String, String), Vec<crate::profiles::ProfileAction>> =
+            BTreeMap::new();
         let mut last_division: BTreeMap<String, String> = BTreeMap::new();
         for bind in &binds {
             let command = bind.bind_command();
@@ -2994,7 +2996,15 @@ impl Ui {
             if !bind.profile.is_empty() {
                 // A declared profile's action; one naming a profile no
                 // running Add-On declares is not offered.
-                if c.profile_defs.iter().any(|d| d.id == bind.profile) {
+                if !bind.layer.is_empty() {
+                    // A layer's bind: fixed to its key, never in Controls.
+                    if c.profile_defs.iter().any(|d| d.id == bind.profile) {
+                        layer_actions
+                            .entry((bind.profile.clone(), bind.layer.clone()))
+                            .or_default()
+                            .push(crate::profiles::ProfileAction { entry, default });
+                    }
+                } else if c.profile_defs.iter().any(|d| d.id == bind.profile) {
                     let last = last_division.insert(bind.profile.clone(), bind.division.clone());
                     actions.entry(bind.profile.clone()).or_default().push(
                         crate::profiles::ProfileAction {
@@ -3023,6 +3033,7 @@ impl Ui {
         }
         let stock = remap.clone();
         c.profiles.declare(c.profile_defs.clone(), actions, stock);
+        c.profiles.declare_layers(layer_actions);
         c.remap_commands = remap.iter().map(|r| r.command.clone()).collect();
         c.remap = remap;
         c.package_binds = binds;
@@ -3053,6 +3064,18 @@ impl Ui {
     ) {
         self.core.profiles.select_for(player_type);
         self.core.profiles.set_ride(ride);
+    }
+
+    /// The rule flags (`rule:package:player/key`) the local player's
+    /// control profile has layers for; ask the game for each, then say
+    /// which are on with [`Ui::set_rule_flags`].
+    pub fn rule_flags_wanted(&self) -> Vec<String> {
+        self.core.profiles.rule_flags_wanted()
+    }
+
+    /// The wanted rule flags that are on.
+    pub fn set_rule_flags(&mut self, flags: std::collections::BTreeSet<String>) {
+        self.core.profiles.set_rule_flags(flags);
     }
 
     /// Build the frame's draw list (logical pixels).

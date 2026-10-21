@@ -692,6 +692,24 @@ impl App {
                 }
             }),
         );
+        // A layer a rule switches (a radio menu open) follows the rule's
+        // value on the viewer.
+        let flags = self
+            .ui
+            .rule_flags_wanted()
+            .into_iter()
+            .filter(|key| {
+                bri_package_runtime::content::Binding::parse(key)
+                    .and_then(|binding| view.package_state.get(&binding, view.owner))
+                    .is_some_and(|value| match value {
+                        serde_json::Value::Bool(on) => *on,
+                        serde_json::Value::Number(n) => n.as_f64().is_some_and(|n| n != 0.0),
+                        serde_json::Value::String(s) => !s.is_empty(),
+                        _ => false,
+                    })
+            })
+            .collect();
+        self.ui.set_rule_flags(flags);
         let vitals = view.vitals.get(&view.owner);
         let vehicle = vitals
             .and_then(|v| v.mounted)

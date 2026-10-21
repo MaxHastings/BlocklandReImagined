@@ -90,6 +90,15 @@ more in the same file and puts its binds in one with `"profile"`:
   (`vehicle`, `driver`, `mouse_driver`, `passenger`) and is removed when they
   leave. Its `invert_mouse` (in vehicles) and `mouse_sensitivity` replace
   the profile's for as long as it is on.
+  A layer's `when` may instead be `"rule:your-id:player/key"`: it is on
+  while that rule value on the player is on (a number other than 0, `true`
+  or a non-empty string), as a radio menu a rule has open. Binds with
+  `"layer": "<layer id>"` (a rule layer of the file's profile, with a `key`)
+  work only while it is on, and then win over the profile's own binds on the
+  same key, so `1` to `9` can send radio lines while the menu is open and go
+  back to weapon keys when it shuts. A layer's binds are press-only, fixed to
+  their keys and not in Controls (it is a mode, not a setting); no `hold`,
+  `stock`, `mouse` or `screen`.
 - **Inheritance.** Inputs a profile does not bind fall through to
   Blockland's (movement, chat, menus), so a profile lists only its own
   actions; its binds win over the same input there. `"inherit": false`
