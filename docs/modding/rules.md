@@ -235,9 +235,10 @@ Settings, 1 to 32, default 16).
 
 **Rays and damage.** `raycast([x, y, z], [dx, dy, dz], range)` returns the
 first thing a ray meets, now, as the script runs: a map with `kind`
-(`"player"`, `"vehicle"`, `"entity"`, `"brick"` or `"map"`), `id` (`()` for
-the map), `ref` (an object like `"player:3"`, for players, vehicles and
-entities), `x`, `y`, `z`, the surface normal `nx`, `ny`, `nz`, and
+(`"player"`, `"vehicle"`, `"entity"`, `"brick"`, `"mover"` or `"map"`), `id`
+(`()` for the map and for a mover), `ref` (an object like `"player:3"`, for
+players, vehicles and entities; for a map mover's collision, the mover's id,
+which `mover(id)` takes), `x`, `y`, `z`, the surface normal `nx`, `ny`, `nz`, and
 `distance`, and for a player `region` (`"head"`, `"torso"` or `"legs"`);
 or `()` when it meets nothing. Rays reach up to 2000 units and
 a call casts at most 64. A fourth argument names a player whose body the

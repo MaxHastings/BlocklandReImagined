@@ -72,7 +72,12 @@ impl World for ScriptWorld<'_> {
             TargetId::Vehicle(vehicle) => RayTarget::Object(ObjectRef::Vehicle(vehicle)),
             TargetId::Entity(entity) => RayTarget::Object(ObjectRef::Entity(entity)),
             TargetId::Brick(brick) => RayTarget::Brick(brick),
-            TargetId::Map(_) | TargetId::Shape(_) => RayTarget::Map,
+            // A mover's collision is the map's to a shot; to a script it is
+            // the mover.
+            TargetId::Map(_) => session
+                .mover_at(hit.position)
+                .map_or(RayTarget::Map, |id| RayTarget::Mover(id.to_owned())),
+            TargetId::Shape(_) => RayTarget::Map,
         };
         let region = match hit.target {
             TargetId::Actor(actor) => session.region_of(actor.0, hit.position),

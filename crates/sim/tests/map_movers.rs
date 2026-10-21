@@ -197,3 +197,18 @@ fn a_clients_copy_of_the_world_puts_the_door_where_the_hosts_states_do() {
         }
     );
 }
+
+#[test]
+fn a_point_on_a_movers_collision_names_the_mover_and_one_off_it_does_not() {
+    let mut s = session();
+    // The shut door's face (it is 0.2 thick across z, lying along +X).
+    assert_eq!(s.mover_at(Vec3::new(1.5, 1.0, 0.1)), Some("door"));
+    assert_eq!(s.mover_at(Vec3::new(1.5, 1.0, 2.0)), None);
+    // Swung open it lies along +Z, and the old place is bare.
+    s.mover_goto("door", 1, 0.1).unwrap();
+    for _ in 0..30 {
+        s.step().unwrap();
+    }
+    assert_eq!(s.mover_at(Vec3::new(1.5, 1.0, 0.1)), None);
+    assert_eq!(s.mover_at(Vec3::new(0.1, 1.0, 1.5)), Some("door"));
+}
