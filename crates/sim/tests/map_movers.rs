@@ -39,6 +39,7 @@ fn door() -> MapMover {
             spin: None,
             collide: true,
             params: BTreeMap::from([("kind".to_string(), "door".to_string())]),
+            sounds: None,
         },
         placement: Mat4::IDENTITY,
         colliders: 1..2,

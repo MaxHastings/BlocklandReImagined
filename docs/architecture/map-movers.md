@@ -21,6 +21,15 @@ the world frame about the node's origin, which holds more than one turn.
 The model is built about its own origin (a door's hinge). `params` are the
 package's facts about it; the engine keeps them and tells scripts.
 
+**Sounds.** A mover may carry `"sounds":{"opening":"door.open","opened":..,
+"closing":..,"closed":..,"moving":..,"volume":1.0}`, each a sound profile
+name and all optional. A motion toward key 0 is closing, one away from it
+is opening, so doors, gates and valve wheels read alike. Each client works
+this out from the states it already receives: the one-shots play at the
+mover when it starts or turns back, and when it comes to rest; `moving`
+loops while it travels. A client that joins mid-swing hears nothing of the
+start. `volume` (0 to 2) multiplies the sounds' own.
+
 **A climb volume** is a `climb` scene node: a box (`half` in the node's axes),
 a climbing `speed` and `strafe`, facing the node's local +Z. It becomes a
 sensor collider that carries its facing and speed in its tag, so the host and

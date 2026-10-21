@@ -363,10 +363,19 @@ impl App {
                     driven,
                     &self.motion.passages(),
                 );
-                self.fx.map_movers.update(
+                let mover_sounds = self.fx.map_movers.update(
                     &view.map_movers,
                     self.motion.server_tick().unwrap_or(view.tick as f64),
                 );
+                for sound in mover_sounds {
+                    self.audio.profile_scaled(
+                        &sound.profile,
+                        bri_audio::Placement::World(sound.position),
+                        sound.volume,
+                    );
+                }
+                self.audio
+                    .sync_positional_sources(&self.fx.map_movers.loops());
                 self.fx.tutorial_targets.update(
                     &view.targets,
                     self.motion.server_tick().unwrap_or(view.tick as f64),
