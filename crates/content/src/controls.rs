@@ -17,9 +17,9 @@ pub const DEFAULT_PROFILE: &str = "blockland";
 pub const MAX_PROFILES: usize = 8;
 pub const MAX_LAYERS: usize = 8;
 
-/// When a layer is on, taken from what the local player is riding.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
+/// When a layer is on: from what the local player is riding, or from a
+/// rule's flag on the player.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum LayerWhen {
     /// Seated in any vehicle.
     Vehicle,
@@ -29,6 +29,64 @@ pub enum LayerWhen {
     MouseDriver,
     /// Seated in a vehicle without driving it.
     Passenger,
+    /// While a rule's player value is on (`"rule:package:player/key"`, a
+    /// HUD `bind`'s form): a menu a rule has open, say. A number other than
+    /// 0, `true` or a non-empty string is on.
+    Rule(String),
+}
+
+impl LayerWhen {
+    fn parse(text: &str) -> Result<Self, String> {
+        Ok(match text {
+            "vehicle" => Self::Vehicle,
+            "driver" => Self::Driver,
+            "mouse_driver" => Self::MouseDriver,
+            "passenger" => Self::Passenger,
+            other => match other.strip_prefix("rule:") {
+                Some(key) if rule_key_ok(key) => Self::Rule(key.to_owned()),
+                Some(_) => {
+                    return Err(format!(
+                        "`{other}` is not a rule flag: rule:package:player/key"
+                    ));
+                }
+                None => {
+                    return Err(format!(
+                        "`{other}` is not a layer condition: vehicle, driver, mouse_driver, passenger or rule:package:player/key"
+                    ));
+                }
+            },
+        })
+    }
+}
+impl std::fmt::Display for LayerWhen {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Vehicle => f.write_str("vehicle"),
+            Self::Driver => f.write_str("driver"),
+            Self::MouseDriver => f.write_str("mouse_driver"),
+            Self::Passenger => f.write_str("passenger"),
+            Self::Rule(key) => write!(f, "rule:{key}"),
+        }
+    }
+}
+impl Serialize for LayerWhen {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        s.collect_str(self)
+    }
+}
+impl<'de> Deserialize<'de> for LayerWhen {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        let text = String::deserialize(d)?;
+        Self::parse(&text).map_err(serde::de::Error::custom)
+    }
+}
+/// `package:player/key`, as a HUD `bind` writes the viewer's own value.
+fn rule_key_ok(key: &str) -> bool {
+    key.len() <= 128
+        && key
+            .split_once(":player/")
+            .is_some_and(|(package, name)| !package.is_empty() && !name.is_empty())
+        && key.chars().all(|c| c.is_ascii_graphic())
 }
 
 /// A context stacked on a profile while it holds, removed on exit. The

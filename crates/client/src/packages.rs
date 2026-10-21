@@ -140,7 +140,11 @@ pub fn binds(catalog: &Catalog, state: &PackageStateView, mac: bool) -> Vec<Pack
                 .stock
                 .clone()
                 .unwrap_or_else(|| format!("package:{}:{}", bind.package, name));
-            if out.iter().any(|b| b.bind_command() == command) {
+            let layer = bind.layer.clone().unwrap_or_default();
+            if out
+                .iter()
+                .any(|b| b.bind_command() == command && b.layer == layer)
+            {
                 continue;
             }
             out.push(PackageBind {
@@ -156,6 +160,7 @@ pub fn binds(catalog: &Catalog, state: &PackageStateView, mac: bool) -> Vec<Pack
                 },
                 hold: bind.hold,
                 mouse: bind.mouse.clone(),
+                layer,
                 stock: bind.stock.clone(),
                 profile: binds
                     .profile

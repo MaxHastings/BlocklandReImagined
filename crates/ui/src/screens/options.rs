@@ -3185,6 +3185,7 @@ mod tests {
             stock: None,
             hold: false,
             screen: Some("options".into()),
+            layer: String::new(),
         }]);
         assert!(ui.core.run_command("package:slayer:", true));
         ui.update(0);
@@ -4582,6 +4583,7 @@ mod tests {
             stock: None,
             hold: true,
             screen: None,
+            layer: String::new(),
         }]);
         let blockland = ui.core.binds.clone();
         let mut s = Options::new(&ui.core);

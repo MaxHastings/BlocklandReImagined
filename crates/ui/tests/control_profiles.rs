@@ -69,6 +69,7 @@ fn bind(name: &str, command: &str, key: &str) -> PackageBind {
         stock: None,
         hold: true,
         screen: None,
+        layer: String::new(),
     }
 }
 
@@ -330,4 +331,50 @@ fn a_profile_can_move_a_stock_action_off_a_key_it_takes() {
     // As a Blockhead, Shift crouches again and Ctrl does not.
     u.set_control_context("blockhead", None);
     assert_eq!(press(&mut u, Key::LShift), vec![held(true), held(false)]);
+}
+
+#[test]
+fn a_rule_layer_binds_over_the_profile_only_while_its_flag_is_on() {
+    let mut u = ui(Settings {
+        binds: Some(vec![]),
+        ..Default::default()
+    });
+    let mut def = profile();
+    def.layers.push(LayerDef {
+        id: "radio".into(),
+        name: None,
+        when: LayerWhen::Rule("aa:player/radio".into()),
+        invert_mouse: None,
+        mouse_sensitivity: None,
+    });
+    u.set_profile_defs(vec![def]);
+    let mut radio = bind("Radio One", "radio1", "v");
+    radio.layer = "radio".into();
+    radio.hold = false;
+    u.set_package_binds(vec![bind("Fire Mode", "firemode", "v"), radio]);
+    u.set_control_context("aa-soldier", None);
+    assert_eq!(u.rule_flags_wanted(), ["aa:player/radio"]);
+    // With the menu shut, V is the profile's Fire Mode.
+    assert_eq!(
+        press(&mut u, Key::Letter('v')),
+        vec![
+            package("firemode", Some(true)),
+            package("firemode", Some(false))
+        ]
+    );
+    // With it open, V sends the radio line and nothing else.
+    u.set_rule_flags(["aa:player/radio".to_string()].into());
+    assert_eq!(
+        press(&mut u, Key::Letter('v')),
+        vec![package("radio1", None)]
+    );
+    // Shut again: back to Fire Mode.
+    u.set_rule_flags(Default::default());
+    assert_eq!(
+        press(&mut u, Key::Letter('v')),
+        vec![
+            package("firemode", Some(true)),
+            package("firemode", Some(false))
+        ]
+    );
 }

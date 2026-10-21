@@ -29,6 +29,7 @@ fn bind(name: &str, command: &str, key: Option<&str>, mouse: Option<&str>) -> Pa
         stock: None,
         hold: false,
         screen: None,
+        layer: String::new(),
     }
 }
 

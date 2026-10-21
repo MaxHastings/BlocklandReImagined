@@ -661,6 +661,9 @@ pub struct PackageBind {
     /// or `help`.
     #[serde(default)]
     pub screen: Option<String>,
+    /// The layer of its profile it belongs to; empty: the profile itself.
+    #[serde(default)]
+    pub layer: String,
 }
 impl PackageBind {
     /// The bind's command in the key map and saved controls.
