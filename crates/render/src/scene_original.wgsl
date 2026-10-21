@@ -54,6 +54,7 @@ fn point_illumination(position:vec3<f32>,normal:vec3<f32>)->vec3<f32> {
     let n=normal/max(length(normal),0.0001);
     for(var i=0u;i<list.y;i+=1u) {
         let light=listed_light(list,i);
+        if light.color.w>2.5 {continue;}
         let delta=light.position_radius.xyz-position;
         let distance=length(delta);
         let falloff=max(1.0-distance/max(light.position_radius.w,0.0001),0.0);
@@ -79,6 +80,7 @@ fn vertex_point_illumination(position:vec3<f32>,normal:vec3<f32>)->vec3<f32> {
     let n=normal/max(length(normal),0.0001);
     for(var i=0u;i<list.y;i+=1u) {
         let light=listed_light(list,i);
+        if light.color.w>2.5 {continue;}
         let delta=light.position_radius.xyz-position;
         let d2=dot(delta,delta);
         let radius=light.position_radius.w;
@@ -1670,6 +1672,7 @@ fn metal_surface(v:VertexOut)->vec4<f32> {
     let list=light_cell(v.world_position);
     for(var i=0u;i<list.y;i+=1u) {
         let light=listed_light(list,i);
+        if light.color.w>2.5 {continue;}
         let delta=light.position_radius.xyz-v.world_position;
         let d2=dot(delta,delta);
         let radius=light.position_radius.w;
@@ -1786,6 +1789,7 @@ fn physical_surface(v:VertexOut)->vec4<f32> {
     let list=light_cell(v.world_position);
     for(var i=0u;i<list.y;i+=1u) {
         let light=listed_light(list,i);
+        if light.color.w>2.5 {continue;}
         let delta=light.position_radius.xyz-v.world_position;
         let d2=dot(delta,delta);
         let radius=light.position_radius.w;

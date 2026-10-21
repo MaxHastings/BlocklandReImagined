@@ -2893,13 +2893,16 @@ impl MapLightBinding {
         reached.iter().map(|&n| n as f32 / cells as f32).collect()
     }
 }
+/// The colour `w` of a map lamp that only lit moving bodies take (`actor_light`); the map's surfaces have its light already.
+pub const ACTOR_LAMP: f32 = 3.0;
 /// Native unshadowed point illumination. Radius and RGB come from the effect clock.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct PointLight {
     pub position_radius: [f32; 4],
     /// RGB, then the falloff curve: 0 the smooth native one (squared linear), 1 a map light's linear one, 2 the cubic
-    /// `2 (1 - 3 t^2 + 2 t^3)` of `t` = distance over radius (on objects it replaces v20's `1 / (1 + 0.1 d^2)`).
+    /// `2 (1 - 3 t^2 + 2 t^3)` of `t` = distance over radius (on objects it replaces v20's `1 / (1 + 0.1 d^2)`); 3 a map lamp only
+    /// lit moving bodies take (`ACTOR_LAMP`): surfaces and bricks already have it from the map's own lighting.
     pub color: [f32; 4],
     /// A cone: the unit direction scaled by `1 / (cos inner - cos outer)`
     /// and `cos outer` times that scale ([`spot_words`] without its all-round

@@ -1415,7 +1415,13 @@ impl App {
             lights.extend(self.vehicle_assets.lamp_lights(infos));
         }
         lights.truncate(bri_render::scene::MAX_POINT_LIGHTS);
-        // Map lights past the shaded budget fill what the effects leave.
+        // The map's own lamps, for the bodies they light, then the lights
+        // past the shaded budget, fill what the effects leave.
+        let lamps = self.lighting.light_volume.actor_lamps(
+            eye,
+            bri_render::scene::MAX_POINT_LIGHTS.saturating_sub(lights.len()),
+        );
+        lights.extend(lamps);
         let overflow = super::lighting::overflow_point_lights(
             &self.lighting.light_volume.overflow,
             eye,
