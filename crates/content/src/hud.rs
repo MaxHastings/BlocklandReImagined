@@ -376,6 +376,10 @@ pub enum Element {
         frames: Option<Frames>,
         #[serde(default = "white")]
         tint: [f32; 4],
+        /// Turned about its middle by a value, degrees clockwise: a
+        /// compass rose that swings as the viewer turns.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        turn: Option<Turn>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         show: Option<Show>,
     },
@@ -471,6 +475,32 @@ pub enum Element {
         z: String,
         /// The picture's width and height in units.
         size: [f32; 2],
+        #[serde(default = "white")]
+        tint: [f32; 4],
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        show: Option<Show>,
+    },
+    /// A picture on a round or square dial at the place of a point in the
+    /// world: the point's offset from the viewer, over `range` units to the
+    /// dial's edge. With `heading` (a value such as `heading`) the viewer's
+    /// facing is up, as a rotating radar; without, north is up. A point
+    /// beyond `range` stays on the edge, or is not drawn when `edge` is
+    /// false. `x` and `z` are rule values giving the point's world position;
+    /// nothing is drawn while either is missing or the viewer stands on it.
+    DialMarker {
+        texture: String,
+        /// The dial's box; the point's place is within it.
+        rect: [f32; 4],
+        /// Units from the middle of `rect` to its edge.
+        range: f32,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        heading: Option<String>,
+        x: String,
+        z: String,
+        /// The picture's width and height in units.
+        size: [f32; 2],
+        #[serde(default = "yes")]
+        edge: bool,
         #[serde(default = "white")]
         tint: [f32; 4],
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -704,6 +734,19 @@ pub struct Frames {
     pub value: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max: Option<Amount>,
+}
+
+/// A value, times `scale`, as degrees clockwise ([`Element::Image`]'s `turn`).
+/// `heading` with a `scale` of -1 keeps north fixed as the viewer turns.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Turn {
+    pub value: String,
+    #[serde(default = "turn_scale")]
+    pub scale: f32,
+}
+fn turn_scale() -> f32 {
+    1.0
 }
 
 /// A number, or a source to read one from.
@@ -998,8 +1041,16 @@ impl Layout {
                     rect,
                     frames,
                     tint,
+                    turn,
                     show,
                 } => {
+                    if let Some(turn) = turn {
+                        source_ok(&turn.value)?;
+                        ensure!(
+                            turn.scale.is_finite() && turn.scale.abs() <= 64.0,
+                            "turn scale must be a finite number"
+                        );
+                    }
                     texture_ok(texture)?;
                     ensure!(
                         rect_ok(rect),
@@ -1195,6 +1246,38 @@ impl Layout {
                     ensure!(color_ok(tint), "tint must be 0..1 RGBA");
                     show_ok(show)?;
                 }
+                Element::DialMarker {
+                    texture,
+                    rect,
+                    range,
+                    heading,
+                    x,
+                    z,
+                    size,
+                    tint,
+                    show,
+                    ..
+                } => {
+                    texture_ok(texture)?;
+                    ensure!(
+                        rect_ok(rect),
+                        "dial marker rect must be finite with no negative size"
+                    );
+                    ensure!(
+                        range.is_finite() && *range > 0.0 && *range <= 100_000.0,
+                        "dial marker range must be positive"
+                    );
+                    for s in heading.iter().chain([x, z]) {
+                        source_ok(s)?;
+                    }
+                    ensure!(
+                        size.iter()
+                            .all(|v| v.is_finite() && *v >= 0.0 && *v <= 4096.0),
+                        "dial marker size must be finite with no negative size"
+                    );
+                    ensure!(color_ok(tint), "tint must be 0..1 RGBA");
+                    show_ok(show)?;
+                }
                 Element::EdgeArrow {
                     texture,
                     rect,
@@ -1304,7 +1387,8 @@ impl Layout {
             match e {
                 Element::Image { texture, .. }
                 | Element::EdgeArrow { texture, .. }
-                | Element::StripMarker { texture, .. } => {
+                | Element::StripMarker { texture, .. }
+                | Element::DialMarker { texture, .. } => {
                     out.push(texture.as_str());
                 }
                 Element::Strip { textures, .. } => out.extend(textures.iter().map(String::as_str)),
@@ -1348,11 +1432,14 @@ impl Layout {
         let mut names: Vec<&str> = Vec::new();
         for e in &self.elements {
             match e {
-                Element::Image { frames, show, .. } => {
+                Element::Image {
+                    frames, turn, show, ..
+                } => {
                     if let Some(f) = frames {
                         names.push(&f.value);
                         amount(&f.max, &mut names);
                     }
+                    names.extend(turn.as_ref().map(|t| t.value.as_str()));
                     names.extend(show.as_ref().map(|s| s.value.as_str()));
                 }
                 Element::Bar {
@@ -1402,6 +1489,17 @@ impl Layout {
                     }
                     names.extend(show.as_ref().map(|s| s.value.as_str()));
                 }
+                Element::DialMarker {
+                    heading,
+                    x,
+                    z,
+                    show,
+                    ..
+                } => {
+                    names.extend(heading.as_deref());
+                    names.extend([x.as_str(), z.as_str()]);
+                    names.extend(show.as_ref().map(|s| s.value.as_str()));
+                }
                 Element::KillFeed { show, .. } | Element::Tracker { show, .. } => {
                     names.extend(show.as_ref().map(|s| s.value.as_str()));
                 }
@@ -1424,6 +1522,8 @@ pub enum Item {
         uv: [f32; 4],
         rect: [f32; 4],
         tint: [f32; 4],
+        /// Turned about the middle of `rect`, radians clockwise.
+        turn: f32,
     },
     Fill {
         rect: [f32; 4],
@@ -1515,6 +1615,7 @@ pub fn resolve_live(
                 rect,
                 frames,
                 tint,
+                turn,
                 show,
             } => {
                 let Some((key, _)) = texture(id).filter(|_| shown(show)) else {
@@ -1533,6 +1634,10 @@ pub fn resolve_live(
                     uv,
                     rect: *rect,
                     tint: *tint,
+                    turn: turn
+                        .as_ref()
+                        .and_then(|t| number(&t.value).map(|v| v * t.scale))
+                        .map_or(0.0, f32::to_radians),
                 });
             }
             Element::Bar {
@@ -1619,6 +1724,7 @@ pub fn resolve_live(
                         for c in line.chars() {
                             if let Some(i) = chars.iter().position(|g| *g == c) {
                                 out.push(Item::Image {
+                                    turn: 0.0,
                                     texture: key,
                                     uv: cell(i as u16, count, g.columns),
                                     rect: [x, at[1], g.size[0], g.size[1]],
@@ -1749,6 +1855,7 @@ pub fn resolve_live(
                     let u0 = wrapped * n - cell as f32;
                     let u1 = (wrapped + (stop - at)) * n - cell as f32;
                     out.push(Item::Image {
+                        turn: 0.0,
                         texture: keys[cell],
                         uv: [u0, 0.0, u1, 1.0],
                         rect: [
@@ -1795,6 +1902,7 @@ pub fn resolve_live(
                 }
                 let centre = rect[0] + rect[2] * (0.5 + offset / span);
                 out.push(Item::Image {
+                    turn: 0.0,
                     texture: key,
                     uv: [0.0, 0.0, 1.0, 1.0],
                     rect: [
@@ -1804,6 +1912,57 @@ pub fn resolve_live(
                         size[1],
                     ],
                     tint: *tint,
+                });
+            }
+            Element::DialMarker {
+                texture: id,
+                rect,
+                range,
+                heading,
+                x,
+                z,
+                size,
+                edge,
+                tint,
+                show,
+            } => {
+                let Some((key, _)) = texture(id).filter(|_| shown(show)) else {
+                    continue;
+                };
+                let (Some(px), Some(pz)) = (number(x), number(z)) else {
+                    continue;
+                };
+                let (dx, dz) = (px - live.position[0], pz - live.position[1]);
+                let distance = dx.hypot(dz);
+                if distance < 1e-4 {
+                    continue;
+                }
+                // Facing up with a heading, north up without: right and
+                // up are the offset's parts along them.
+                let (right, up) = match heading.as_deref().and_then(&number) {
+                    Some(h) => {
+                        let h = h.to_radians();
+                        let ahead = (h.sin(), -h.cos());
+                        (-dx * ahead.1 + dz * ahead.0, dx * ahead.0 + dz * ahead.1)
+                    }
+                    None if heading.is_some() => continue,
+                    None => (dx, -dz),
+                };
+                let reach = (distance / range).max(1.0);
+                if reach > 1.0 && !*edge {
+                    continue;
+                }
+                let (cx, cy) = (rect[0] + rect[2] / 2.0, rect[1] + rect[3] / 2.0);
+                let (mx, my) = (
+                    cx + right / distance * distance.min(*range) / range * rect[2] / 2.0,
+                    cy - up / distance * distance.min(*range) / range * rect[3] / 2.0,
+                );
+                out.push(Item::Image {
+                    texture: key,
+                    uv: [0.0, 0.0, 1.0, 1.0],
+                    rect: [mx - size[0] / 2.0, my - size[1] / 2.0, size[0], size[1]],
+                    tint: *tint,
+                    turn: 0.0,
                 });
             }
             Element::EdgeArrow {
@@ -1845,6 +2004,7 @@ pub fn resolve_live(
                 };
                 if nearest == *edge {
                     out.push(Item::Image {
+                        turn: 0.0,
                         texture: key,
                         uv: [0.0, 0.0, 1.0, 1.0],
                         rect: *rect,
@@ -1904,6 +2064,7 @@ pub fn resolve_live(
                     let px = cx + c.right / range * w / 2.0;
                     let py = cy - c.ahead / range * h / 2.0;
                     out.push(Item::Image {
+                        turn: 0.0,
                         texture: key,
                         uv: [0.0, 0.0, 1.0, 1.0],
                         rect: [
@@ -1942,6 +2103,7 @@ fn paint(
 ) -> Option<Item> {
     match &paint.texture {
         Some(id) => texture(id).map(|(key, _)| Item::Image {
+            turn: 0.0,
             texture: key,
             uv,
             rect,
@@ -2094,6 +2256,7 @@ mod tests {
         assert_eq!(
             items[1],
             Item::Image {
+                turn: 0.0,
                 texture: 3,
                 uv: [0.5, 0.0, 1.0, 1.0],
                 rect: [60.0, 10.0, 50.0, 8.0],
@@ -2292,6 +2455,59 @@ mod tests {
         assert_eq!(at[1], 26.0);
         // Fading in its last half second.
         assert!(matches!(spans[3], Span::Text { color, .. } if (color[3] - 0.2).abs() < 1e-4));
+    }
+
+    #[test]
+    fn a_dial_turns_by_a_value_and_places_markers_by_bearing_and_range() {
+        let l = layout(serde_json::json!({
+            "schema_version": 1, "region": "bottom_left",
+            "elements": [
+                { "type": "image", "texture": "pack:texture/bar", "rect": [0, 0, 100, 100],
+                  "turn": { "value": "health", "scale": -1 } },
+                { "type": "dial_marker", "texture": "pack:texture/bar", "rect": [0, 0, 100, 100],
+                  "range": 50, "heading": "health", "x": "p:global/x", "z": "p:global/z",
+                  "size": [10, 10] }
+            ]
+        }));
+        let at = |x: f32, z: f32| {
+            move |source: &Source| match source {
+                Source::Health => Some(Value::Number(0.0)),
+                Source::State(s) if s == "p:global/x" => Some(Value::Number(x)),
+                Source::State(s) if s == "p:global/z" => Some(Value::Number(z)),
+                _ => None,
+            }
+        };
+        let live = Live {
+            position: [0.0, 0.0],
+            ..Live::default()
+        };
+        // Heading 0 faces -z: a point 25 units ahead is halfway up the dial.
+        let items = resolve_live(&l, &at(0.0, -25.0), &textures, &live);
+        assert_eq!(items.len(), 2);
+        assert!(matches!(items[0], Item::Image { turn, .. } if turn == 0.0));
+        let Item::Image { rect, .. } = items[1] else {
+            panic!()
+        };
+        assert_eq!(rect, [45.0, 20.0, 10.0, 10.0]);
+        // The dial turns against the value: health 75 is -75 degrees.
+        let turned = resolve_live(&l, &values, &textures, &live);
+        assert!(matches!(turned[0], Item::Image { turn, .. }
+            if (turn + 75f32.to_radians()).abs() < 1e-5));
+        // A point to the right, past the range, stays on the edge.
+        let items = resolve_live(&l, &at(200.0, 0.0), &textures, &live);
+        let Item::Image { rect, .. } = items[1] else {
+            panic!()
+        };
+        assert_eq!(rect, [95.0, 45.0, 10.0, 10.0]);
+        // `edge: false` drops it instead; a missing value draws nothing.
+        let far = layout(serde_json::json!({
+            "schema_version": 1, "region": "bottom_left",
+            "elements": [{ "type": "dial_marker", "texture": "pack:texture/bar",
+                "rect": [0, 0, 100, 100], "range": 50, "x": "p:global/x", "z": "p:global/z",
+                "size": [10, 10], "edge": false }]
+        }));
+        assert!(resolve_live(&far, &at(200.0, 0.0), &textures, &live).is_empty());
+        assert!(resolve_live(&far, &values, &textures, &live).is_empty());
     }
 
     fn contact(id: u64, right: f32, ahead: f32, speed: f32, relation: Relation) -> Contact {

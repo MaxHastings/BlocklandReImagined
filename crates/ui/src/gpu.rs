@@ -649,6 +649,7 @@ impl UiRenderer {
             [x0, y0, x1.saturating_sub(x0), y1.saturating_sub(y0)]
         };
         for cmd in &dl.cmds {
+            let mut turned = 0.0;
             let (tex, filter, clip, dst, uv, color) = match cmd {
                 DrawCmd::Fill { dst, color, clip } => (
                     None,
@@ -665,7 +666,9 @@ impl UiRenderer {
                     tint,
                     filter,
                     clip,
+                    turn,
                 } => {
+                    turned = *turn;
                     if !self.ensure_texture(device, queue, pack, tex) {
                         continue;
                     }
@@ -698,14 +701,27 @@ impl UiRenderer {
                 sharp,
             };
             let first = verts.len() as u32;
-            verts.extend_from_slice(&[
-                v(x0, y0, uv[0], uv[1]),
-                v(x1, y0, uv[2], uv[1]),
-                v(x1, y1, uv[2], uv[3]),
-                v(x0, y0, uv[0], uv[1]),
-                v(x1, y1, uv[2], uv[3]),
-                v(x0, y1, uv[0], uv[3]),
-            ]);
+            if turned == 0.0 {
+                verts.extend_from_slice(&[
+                    v(x0, y0, uv[0], uv[1]),
+                    v(x1, y0, uv[2], uv[1]),
+                    v(x1, y1, uv[2], uv[3]),
+                    v(x0, y0, uv[0], uv[1]),
+                    v(x1, y1, uv[2], uv[3]),
+                    v(x0, y1, uv[0], uv[3]),
+                ]);
+            } else {
+                let [a, b, c, d] =
+                    crate::draw::corners(dst, turned).map(|[x, y]| (x * scale, y * scale));
+                verts.extend_from_slice(&[
+                    v(a.0, a.1, uv[0], uv[1]),
+                    v(b.0, b.1, uv[2], uv[1]),
+                    v(c.0, c.1, uv[2], uv[3]),
+                    v(a.0, a.1, uv[0], uv[1]),
+                    v(c.0, c.1, uv[2], uv[3]),
+                    v(d.0, d.1, uv[0], uv[3]),
+                ]);
+            }
             match batches.last_mut() {
                 Some(b) if b.tex == tex && b.filter == filter && b.scissor == sc => b.count += 6,
                 _ => batches.push(Batch {

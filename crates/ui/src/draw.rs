@@ -23,9 +23,22 @@ pub enum DrawCmd {
         tint: Rgba,
         filter: Filter,
         clip: Rect,
+        /// Turned about the middle of `dst`, radians clockwise.
+        turn: f32,
     },
     /// Solid rectangle (alpha blended).
     Fill { dst: Rect, color: Rgba, clip: Rect },
+}
+
+/// The corners (top left, top right, bottom right, bottom left) of `dst`
+/// turned `turn` radians clockwise about its middle.
+pub fn corners(dst: [f32; 4], turn: f32) -> [[f32; 2]; 4] {
+    let (cx, cy) = (dst[0] + dst[2] / 2.0, dst[1] + dst[3] / 2.0);
+    let (hw, hh) = (dst[2] / 2.0, dst[3] / 2.0);
+    let (sin, cos) = turn.sin_cos();
+    // Screen y points down, so a clockwise turn is the plain rotation.
+    [[-hw, -hh], [hw, -hh], [hw, hh], [-hw, hh]]
+        .map(|[x, y]| [cx + x * cos - y * sin, cy + x * sin + y * cos])
 }
 
 #[derive(Debug, Default, Clone)]
@@ -73,15 +86,40 @@ impl DrawList {
         }
     }
     pub fn image(&mut self, tex: TexKey, src: [f32; 4], dst: [f32; 4], tint: Rgba, filter: Filter) {
-        if tint[3] == 0 || dst[2] <= 0.0 || dst[3] <= 0.0 {
+        self.image_turned(tex, src, dst, 0.0, tint, filter);
+    }
+    /// [`image`](Self::image) turned about the middle of `dst`, radians
+    /// clockwise.
+    pub fn image_turned(
+        &mut self,
+        tex: TexKey,
+        src: [f32; 4],
+        dst: [f32; 4],
+        turn: f32,
+        tint: Rgba,
+        filter: Filter,
+    ) {
+        if tint[3] == 0 || dst[2] <= 0.0 || dst[3] <= 0.0 || !turn.is_finite() {
             return;
         }
         let clip = self.clip();
+        // The box that holds the picture however it is turned.
+        let reach = if turn == 0.0 {
+            0.0
+        } else {
+            dst[2].hypot(dst[3])
+        };
+        let bound = if turn == 0.0 {
+            dst
+        } else {
+            let (cx, cy) = (dst[0] + dst[2] / 2.0, dst[1] + dst[3] / 2.0);
+            [cx - reach / 2.0, cy - reach / 2.0, reach, reach]
+        };
         let d = Rect::new(
-            dst[0].floor() as i32,
-            dst[1].floor() as i32,
-            dst[2].ceil() as i32 + 1,
-            dst[3].ceil() as i32 + 1,
+            bound[0].floor() as i32,
+            bound[1].floor() as i32,
+            bound[2].ceil() as i32 + 1,
+            bound[3].ceil() as i32 + 1,
         );
         if clip.intersect(&d).is_some() {
             self.cmds.push(DrawCmd::Image {
@@ -91,6 +129,7 @@ impl DrawList {
                 tint,
                 filter,
                 clip,
+                turn,
             });
         }
     }
@@ -115,5 +154,31 @@ impl DrawList {
                 )
             })
             .count()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::corners;
+    use std::f32::consts::FRAC_PI_2;
+
+    fn near(a: [[f32; 2]; 4], b: [[f32; 2]; 4]) -> bool {
+        a.iter()
+            .zip(&b)
+            .all(|(p, q)| (p[0] - q[0]).abs() < 1e-4 && (p[1] - q[1]).abs() < 1e-4)
+    }
+
+    #[test]
+    fn a_clockwise_quarter_turn_takes_each_corner_to_the_next() {
+        let square = [10.0, 20.0, 4.0, 4.0];
+        assert!(near(
+            corners(square, 0.0),
+            [[10.0, 20.0], [14.0, 20.0], [14.0, 24.0], [10.0, 24.0]]
+        ));
+        // Top left goes to top right, and so round.
+        assert!(near(
+            corners(square, FRAC_PI_2),
+            [[14.0, 20.0], [14.0, 24.0], [10.0, 24.0], [10.0, 20.0]]
+        ));
     }
 }
