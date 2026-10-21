@@ -44,6 +44,7 @@ fn sweep(world: &PhysicsWorld, openings: &Passages, feet: Vec3, velocity: Vec3) 
             elasticity: torque::NORMAL_ELASTICITY,
             back_off: torque::BACK_OFF,
             epsilon: Epsilon::at(1.0),
+            wall_step: None,
         },
         feet,
         &mut velocity,
