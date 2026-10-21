@@ -696,6 +696,20 @@ is "here" again, held from then. Around it the strafe goes on. A melee
 fighter, a swimmer and a rider keep their stance where they are. F3 shows
 each place's three quantities.
 
+## Crossing a covered opening
+
+A planned objective is worth less by the share of its health a bot would
+lose crossing the next opening on its route (`Situation::exposed`,
+`spots::bot_exposure`): the enemies it knows of (the one in sight, the one
+that hurt it, the one it is wary of) that see the opening, each at its
+weapon's rate (`tactics::rate`, the unit `Where to stand` uses), over the
+walk to the opening and the step past it. A covered door that would take
+half its health makes the objective worth half, so a fight or a search
+outscores it and the bot stops to deal with the defender rather than walk
+in; with no opening ahead, no threat in sight of it, or an objective it
+already carries home, nothing changes. Soft like every term: the hold rule
+still decides, and an uncovered door costs nothing.
+
 ## Ball games: own goals
 
 A pushed body is never aimed at another sensor: the regions of bricks
