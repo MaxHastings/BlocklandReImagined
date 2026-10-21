@@ -687,6 +687,10 @@ pub enum Body {
     Box,
     /// A sphere `width` across; both heights must equal the width.
     Ball,
+    /// An upright cylinder `width` across and as tall as the box would be
+    /// (an Unreal pawn): a wall's end or a door frame turns it aside where
+    /// the box stops dead against the face.
+    Cylinder,
 }
 /// How move input steers the body.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -1092,6 +1096,7 @@ impl PlayerTuning {
                 self.width * 0.5,
             ),
             Body::Ball => SharedShape::ball(self.width * 0.5),
+            Body::Cylinder => SharedShape::cylinder(self.height(crouched) * 0.5, self.width * 0.5),
         }
     }
     fn pose(&self, feet: Vec3, crouched: bool) -> Pose {
@@ -1161,13 +1166,13 @@ impl PlayerTuning {
                     .all(|n| n.is_finite() && n.abs() <= 1000.0)
                 && self.turn_rate.is_finite()
                 && (0.0..=20.0).contains(&self.turn_rate)
-                && (self.body == Body::Box
+                && (self.body != Body::Ball
                     || (self.stand_height == self.width && self.crouch_height == self.width)),
             "Invalid player tuning"
         );
         if let Some(p) = &self.prone {
             ensure!(
-                self.body == Body::Box
+                self.body != Body::Ball
                     && p.height.is_finite()
                     && p.height > 0.0
                     && p.height <= self.crouch_height
@@ -2724,6 +2729,7 @@ impl Player {
             &soup,
             &torque::Mover {
                 half_width: half,
+                round: t.body == Body::Cylinder,
                 height,
                 run_cos,
                 jump_cos,

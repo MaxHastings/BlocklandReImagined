@@ -36,6 +36,7 @@ fn sweep(world: &PhysicsWorld, openings: &Passages, feet: Vec3, velocity: Vec3) 
         &soup,
         &Mover {
             half_width: 0.4,
+            round: false,
             height: 2.0,
             run_cos: 0.7,
             jump_cos: 0.7,

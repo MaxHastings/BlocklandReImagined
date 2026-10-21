@@ -11,7 +11,7 @@ visuals depending on the rules. `bri-addon-check` tells you which it is.
 | `behaviour`, `script` | host | a game rule ([Game rules](rules.md)) | `packages/samples/sample-survival-points` |
 | `world` | host | a generated chunk world: materials, a `generate(cx, cz)` function | `packages/stresslab/stresslab-world` |
 | `entity` | host | a scripted creature: model, `think` function, speed, health | `packages/stresslab/stresslab-creeper` |
-| `archetype` | host | a playable body: movement, collision `box` or `ball`, steering, health, riding, model, camera distance, `camera` profile and `sounds` | `crates/sim/tests/unlike_modes.rs` |
+| `archetype` | host | a playable body: movement, collision `box`, `ball` or `cylinder` (a round body turns aside at a wall end or door frame where the box stops dead), steering, health, riding, model, camera distance, `camera` profile and `sounds` | `crates/sim/tests/unlike_modes.rs` |
 | `controller` | host | a movement controller: a WebAssembly module an archetype names as its `controller`; clients receive it with the archetype table ([Movement controllers](../architecture/movement-controllers.md)) | `packages/samples/sample-wall-kick`, `packages/samples/sample-dive`, `packages/samples/sample-trooper` |
 | `mode` | host | a Start Game game mode: name, the Add-Ons it runs, a map, and its own mini-game | `packages/stresslab/stresslab-mode`, `crates/sim/tests/mode_and_voxels.rs` |
 | `model` | each player | a box model for an entity | `packages/stresslab/stresslab-creeper-model` |
