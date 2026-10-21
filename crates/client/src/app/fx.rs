@@ -212,12 +212,22 @@ impl App {
         }
         // A projectile's mark on the brick it hit, as this client's copy
         // of the projectile draws it.
-        if let bri_sim::presentation::CueKind::Decal {
-            brick,
-            normal,
-            projectile,
-            scale,
-        } = &cue.kind
+        let mark = match &cue.kind {
+            bri_sim::presentation::CueKind::Decal {
+                brick,
+                normal,
+                projectile,
+                scale,
+            } => Some((*brick, None, normal, projectile, *scale)),
+            bri_sim::presentation::CueKind::MoverDecal {
+                mover,
+                normal,
+                projectile,
+                scale,
+            } => Some((None, Some(mover.as_str()), normal, projectile, *scale)),
+            _ => None,
+        };
+        if let Some((brick, mover, normal, projectile, scale)) = mark
             && let Some(decal) = self
                 .content
                 .weapons
@@ -240,7 +250,16 @@ impl App {
                 if texture.is_none() || image.is_some() {
                     self.fx
                         .decals
-                        .add_textured(*brick, at, normal, &decal, *scale, image);
+                        .add_textured(brick, at, normal, &decal, scale, image);
+                    // A mark on a door is kept in the door's frame.
+                    if let Some(placed) = mover.and_then(|id| {
+                        self.fx
+                            .map_movers
+                            .transform_by_id(id)
+                            .map(|placed| (id, placed))
+                    }) {
+                        self.fx.decals.attach_latest(placed.0, placed.1.inverse());
+                    }
                 }
             }
         }

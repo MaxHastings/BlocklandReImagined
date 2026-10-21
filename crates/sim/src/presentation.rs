@@ -175,6 +175,14 @@ pub enum CueKind {
         projectile: String,
         scale: f32,
     },
+    /// [`CueKind::Decal`] on a map mover's collision (a door): the mark is
+    /// kept in the mover's frame and goes where the mover goes.
+    MoverDecal {
+        mover: String,
+        normal: [f32; 3],
+        projectile: String,
+        scale: f32,
+    },
     /// `WeaponSound` at `volume` times the profile's own (an Add-On's
     /// `sound_at` with a volume): a shout carries, a whisper does not.
     SoundScaled {
@@ -341,6 +349,23 @@ impl Cue {
                     && (0.05..=60.0).contains(seconds),
                 "Invalid body flash cue"
             ),
+            CueKind::MoverDecal {
+                mover,
+                normal,
+                projectile,
+                scale,
+            } => ensure!(
+                !mover.is_empty()
+                    && mover.len() <= 128
+                    && !mover.chars().any(char::is_control)
+                    && normal.iter().all(|v| v.is_finite())
+                    && (normal.iter().map(|v| v * v).sum::<f32>() - 1.).abs() < 0.01
+                    && !projectile.is_empty()
+                    && text(projectile)
+                    && scale.is_finite()
+                    && (0.01..=100.).contains(scale),
+                "Invalid mover decal cue"
+            ),
             CueKind::Decal {
                 brick,
                 normal,
@@ -490,6 +515,24 @@ pub fn pain_image(level: f32) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn a_mover_decal_cue_names_a_mover_and_a_unit_normal() {
+        let cue = |mover: &str, normal: [f32; 3]| Cue {
+            id: 1,
+            tick: 1,
+            position: [0.; 3],
+            kind: CueKind::MoverDecal {
+                mover: mover.into(),
+                normal,
+                projectile: "bullet".into(),
+                scale: 1.0,
+            },
+        };
+        assert!(cue("door", [0., 1., 0.]).validate().is_ok());
+        assert!(cue("", [0., 1., 0.]).validate().is_err());
+        assert!(cue("door", [0., 2., 0.]).validate().is_err());
+        assert!(cue("door", [f32::NAN, 0., 0.]).validate().is_err());
+    }
     #[test]
     fn a_scaled_sound_cue_keeps_its_volume_in_range() {
         let cue = |volume| Cue {

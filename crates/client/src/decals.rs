@@ -26,6 +26,9 @@ struct Mark {
     seconds: f32,
     fade_seconds: f32,
     age: f32,
+    /// On a map mover (a door): its id and the mark's place in the mover's
+    /// own frame, so the mark goes where the mover goes.
+    mover: Option<(String, Mat4)>,
 }
 
 #[derive(Default)]
@@ -158,8 +161,22 @@ impl Decals {
                 .unwrap_or(FADE_SECONDS)
                 .min(decal.seconds),
             age: 0.0,
+            mover: None,
         });
         self.next_order = self.next_order.saturating_add(1);
+    }
+    /// Fix the mark added last to the map mover `mover`, whose placement
+    /// now is the inverse of `inverse`: it then follows the mover.
+    pub fn attach_latest(&mut self, mover: &str, inverse: Mat4) {
+        self.attach_order(self.next_order.wrapping_sub(1), mover, inverse);
+    }
+    fn attach_order(&mut self, order: u64, mover: &str, inverse: Mat4) {
+        for layer in self.textured.values_mut() {
+            layer.attach_order(order, mover, inverse);
+        }
+        for mark in self.live.iter_mut().filter(|m| m.order == order) {
+            mark.mover = Some((mover.to_owned(), inverse * mark.transform));
+        }
     }
     pub fn live_count(&self) -> usize {
         self.live.len()
@@ -177,11 +194,26 @@ impl Decals {
     /// Age the marks, drop those whose brick is gone (`exists` says which
     /// remain), and rebuild this frame's instances.
     pub fn advance(&mut self, dt: f32, exists: impl Fn(u64) -> bool) {
-        self.advance_inner(dt, &exists);
+        self.advance_following(dt, exists, |_| None);
     }
-    fn advance_inner(&mut self, dt: f32, exists: &dyn Fn(u64) -> bool) {
+    /// [`advance`](Self::advance), with marks on map movers placed by
+    /// `mover` (an id's transform now); one whose mover is gone goes too.
+    pub fn advance_following(
+        &mut self,
+        dt: f32,
+        exists: impl Fn(u64) -> bool,
+        mover: impl Fn(&str) -> Option<Mat4>,
+    ) {
+        self.advance_inner(dt, &exists, &mover);
+    }
+    fn advance_inner(
+        &mut self,
+        dt: f32,
+        exists: &dyn Fn(u64) -> bool,
+        mover: &dyn Fn(&str) -> Option<Mat4>,
+    ) {
         for layer in self.textured.values_mut() {
-            layer.advance_inner(dt, exists);
+            layer.advance_inner(dt, exists, mover);
         }
         self.textured.retain(|_, layer| !layer.live.is_empty());
         let dt = if dt.is_finite() {
@@ -195,6 +227,12 @@ impl Decals {
             mark.age += dt;
             if mark.age >= mark.seconds || mark.brick.is_some_and(|b| !exists(b)) {
                 return false;
+            }
+            if let Some((id, local)) = &mark.mover {
+                let Some(placed) = mover(id) else {
+                    return false;
+                };
+                mark.transform = placed * *local;
             }
             let fade = if mark.fade_seconds > 0. {
                 ((mark.seconds - mark.age) / mark.fade_seconds).min(1.0)
@@ -384,6 +422,32 @@ mod tests {
                 .iter()
                 .all(|&i| (i as usize) < data.vertices.len())
         );
+    }
+
+    #[test]
+    fn a_mark_on_a_mover_goes_where_the_mover_goes() {
+        let mut decals = Decals::default();
+        let at_rest = Mat4::from_translation(Vec3::new(10.0, 0.0, 0.0));
+        decals.add(None, Vec3::new(10.5, 1.0, 0.0), Vec3::X, &hole(), 1.0);
+        decals.attach_latest("door", at_rest.inverse());
+        decals.advance_following(0.0, |_| true, |_| Some(at_rest));
+        let first = decals.transforms[0].transform.transform_point3(Vec3::ZERO);
+        assert!(
+            first.distance(Vec3::new(10.5, 1.0, 0.0)) < 0.01,
+            "where it landed"
+        );
+        // The door swings: it is turned a quarter about the up axis and moved.
+        let moved = Mat4::from_translation(Vec3::new(10.0, 0.0, 4.0))
+            * Mat4::from_rotation_y(std::f32::consts::FRAC_PI_2);
+        decals.advance_following(0.0, |_| true, |id| (id == "door").then_some(moved));
+        let now = decals.transforms[0].transform.transform_point3(Vec3::ZERO);
+        assert!(
+            now.distance(moved.transform_point3(Vec3::new(0.5, 1.0, 0.0))) < 0.01,
+            "the mark kept its place on the door: {now}"
+        );
+        // A mover that is gone takes its marks.
+        decals.advance_following(0.0, |_| true, |_| None);
+        assert_eq!(decals.live_count(), 0);
     }
 
     #[test]

@@ -656,6 +656,7 @@ impl ClientAudio {
             | CueKind::Beam { .. }
             | CueKind::Tracer { .. }
             | CueKind::Decal { .. }
+            | CueKind::MoverDecal { .. }
             | CueKind::BodyFlash { .. }
             | CueKind::BodyShell { .. } => return,
             CueKind::SoundScaled { profile, volume } => {
