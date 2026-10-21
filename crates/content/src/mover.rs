@@ -72,6 +72,76 @@ pub struct Spin {
     pub rate: f32,
 }
 
+/// Loudest a mover sound may be, times the sound's own volume.
+pub const MAX_SOUND_VOLUME: f32 = 2.0;
+
+/// A mover's sounds, each a sound profile name. A motion toward key 0 is
+/// closing and one away from it is opening, so a door, a gate and a
+/// valve wheel all read the same. Every field is optional: a mover
+/// without sounds is silent.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MoverSounds {
+    /// Once, as it starts moving away from key 0.
+    #[serde(default)]
+    pub opening: Option<String>,
+    /// Once, as it comes to rest away from key 0.
+    #[serde(default)]
+    pub opened: Option<String>,
+    /// Once, as it starts moving toward key 0.
+    #[serde(default)]
+    pub closing: Option<String>,
+    /// Once, as it comes to rest at key 0.
+    #[serde(default)]
+    pub closed: Option<String>,
+    /// Looped for as long as it moves.
+    #[serde(default)]
+    pub moving: Option<String>,
+    /// Times each sound's own volume, 0 to [`MAX_SOUND_VOLUME`].
+    #[serde(default = "full_volume")]
+    pub volume: f32,
+}
+fn full_volume() -> f32 {
+    1.0
+}
+
+impl MoverSounds {
+    pub fn validate(&self, mover: &str) -> Result<()> {
+        ensure!(
+            self.volume.is_finite() && (0.0..=MAX_SOUND_VOLUME).contains(&self.volume),
+            "Mover {mover}: sound volume must be 0 to {MAX_SOUND_VOLUME}"
+        );
+        ensure!(
+            [
+                &self.opening,
+                &self.opened,
+                &self.closing,
+                &self.closed,
+                &self.moving
+            ]
+            .into_iter()
+            .flatten()
+            .all(|name| !name.is_empty() && name.len() <= 128),
+            "Mover {mover}: a sound name is empty or over 128 bytes"
+        );
+        Ok(())
+    }
+    /// The one-shot for a motion that begins toward `to`.
+    pub fn start(&self, to: u8) -> Option<&str> {
+        let name = if to == 0 {
+            &self.closing
+        } else {
+            &self.opening
+        };
+        name.as_deref()
+    }
+    /// The one-shot for a mover that comes to rest at `key`.
+    pub fn rest(&self, key: u8) -> Option<&str> {
+        let name = if key == 0 { &self.closed } else { &self.opened };
+        name.as_deref()
+    }
+}
+
 /// What a scene node's `mover` property says.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -95,6 +165,9 @@ pub struct MoverDef {
     /// style, which side it opens from). The engine keeps them as written.
     #[serde(default)]
     pub params: BTreeMap<String, String>,
+    /// What it sounds like when it moves.
+    #[serde(default)]
+    pub sounds: Option<MoverSounds>,
 }
 fn yes() -> bool {
     true
@@ -131,6 +204,9 @@ impl MoverDef {
                 "Mover {}: spin needs a finite axis and rate",
                 self.id
             );
+        }
+        if let Some(sounds) = &self.sounds {
+            sounds.validate(&self.id)?;
         }
         ensure!(
             self.params.len() <= 64
@@ -364,6 +440,7 @@ mod tests {
             spin: None,
             collide: true,
             params: BTreeMap::new(),
+            sounds: None,
         }
     }
 
@@ -470,6 +547,24 @@ mod tests {
         assert!(def.validate().is_err());
         def.keys[0] = MoverKey::default();
         def.keys[1].rotation[0] = f32::NAN;
+        assert!(def.validate().is_err());
+    }
+
+    #[test]
+    fn sounds_read_a_motion_toward_key_zero_as_closing() {
+        let sounds: MoverSounds = serde_json::from_str(
+            r#"{"opening": "door.open", "closed": "door.shut", "moving": "door.creak"}"#,
+        )
+        .unwrap();
+        assert_eq!(sounds.volume, 1.0);
+        assert_eq!(sounds.start(1), Some("door.open"));
+        assert_eq!(sounds.start(0), None);
+        assert_eq!(sounds.rest(0), Some("door.shut"));
+        assert_eq!(sounds.rest(2), None);
+        let mut def = door();
+        def.sounds = Some(sounds);
+        assert!(def.validate().is_ok());
+        def.sounds.as_mut().unwrap().volume = MAX_SOUND_VOLUME + 0.5;
         assert!(def.validate().is_err());
     }
 }
