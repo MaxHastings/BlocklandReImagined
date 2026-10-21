@@ -555,6 +555,8 @@ impl LightVolumeState {
         }
         if mode == 3 {
             renderer.set_dynamic_lights(device, queue, &self.recovered)?;
+            // The map's baked room light, which keeps the overflow lights to what it holds.
+            renderer.set_light_volume(device, queue, self.volume.as_ref())?;
             renderer.set_map_light_spots(queue, &self.spots);
         } else {
             let unified = mode > 0;
