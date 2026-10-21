@@ -47,6 +47,9 @@ pub struct Behaviour {
     pub mapping: Mapping,
     pub filtering: Filtering,
 }
+/// A router mapping's outside socket and the peers it has sent to.
+type Mapped = (Arc<std::net::UdpSocket>, Arc<Mutex<HashSet<SocketAddr>>>);
+
 impl Behaviour {
     pub const FULL_CONE: Self = Self {
         mapping: Mapping::EndpointIndependent,
@@ -138,7 +141,7 @@ impl NatSocket {
             .filter_map(|m| m.sender.local_addr().ok())
             .collect()
     }
-    fn mapping_for(&self, destination: SocketAddr) -> io::Result<(Arc<std::net::UdpSocket>, Arc<Mutex<HashSet<SocketAddr>>>)> {
+    fn mapping_for(&self, destination: SocketAddr) -> io::Result<Mapped> {
         let key = match self.nat.behaviour.mapping {
             Mapping::EndpointIndependent => None,
             Mapping::AddressAndPortDependent => Some(destination),

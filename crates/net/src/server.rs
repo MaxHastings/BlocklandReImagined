@@ -790,6 +790,7 @@ fn start_configured(
     )
 }
 /// [`start_configured`] with what one simulation step is (tests make it fail).
+#[allow(clippy::too_many_arguments)]
 fn start_stepping(
     mut session: Session,
     options: ServerOptions,
