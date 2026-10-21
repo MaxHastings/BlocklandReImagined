@@ -791,6 +791,16 @@ impl App {
                         bri_sim::session::Notice::Flash { color, seconds } => {
                             UiUpdate::Flash { color, seconds }
                         }
+                        bri_sim::session::Notice::Line {
+                            feed,
+                            text,
+                            seconds,
+                            color,
+                            icon,
+                        } => {
+                            self.combat.note_line(feed, text, seconds, color, icon);
+                            continue;
+                        }
                         bri_sim::session::Notice::ViewShake {
                             direction,
                             min,

@@ -21,10 +21,63 @@ pub(super) struct CombatPresentation {
     pub(super) energy: Option<u8>,
     /// The latest deaths, for HUD kill feeds.
     pub(super) kills: std::collections::VecDeque<(std::time::Instant, bri_sim::session::KillLine)>,
+    /// The lines rules posted to HUD message feeds, with when each came.
+    pub(super) lines: std::collections::VecDeque<(std::time::Instant, bri_content::hud::FeedLine)>,
 }
 /// Most deaths kept for kill feeds.
 const KEPT_KILLS: usize = 16;
+/// Most message feed lines kept, and the longest one and the longest it stays
+/// (a host may send any; a layout shows at most 16 a feed).
+const KEPT_LINES: usize = 64;
+const LINE_CHARS: usize = 200;
+const LINE_SECONDS: f32 = 60.0;
 impl CombatPresentation {
+    /// A rule's `hud_line`, kept until its seconds pass.
+    pub(super) fn note_line(
+        &mut self,
+        feed: String,
+        text: String,
+        seconds: f32,
+        color: Option<[f32; 4]>,
+        icon: Option<String>,
+    ) {
+        if self.lines.len() == KEPT_LINES {
+            self.lines.pop_front();
+        }
+        let now = std::time::Instant::now();
+        self.lines
+            .retain(|(at, l)| now.duration_since(*at).as_secs_f32() < l.seconds);
+        self.lines.push_back((
+            now,
+            bri_content::hud::FeedLine {
+                feed,
+                age: 0.0,
+                seconds: if seconds.is_finite() {
+                    seconds.clamp(0.5, LINE_SECONDS)
+                } else {
+                    0.5
+                },
+                text: text
+                    .chars()
+                    .filter(|c| !c.is_control())
+                    .take(LINE_CHARS)
+                    .collect(),
+                color,
+                icon,
+            },
+        ));
+    }
+    /// The kept lines with their ages now.
+    pub(super) fn feed_lines(&self) -> Vec<bri_content::hud::FeedLine> {
+        let now = std::time::Instant::now();
+        self.lines
+            .iter()
+            .map(|(at, l)| bri_content::hud::FeedLine {
+                age: now.duration_since(*at).as_secs_f32(),
+                ..l.clone()
+            })
+            .collect()
+    }
     pub(super) fn note_kill(&mut self, kill: bri_sim::session::KillLine) {
         if self.kills.len() == KEPT_KILLS {
             self.kills.pop_front();
