@@ -173,6 +173,19 @@ back to the stock HUD when nothing claims a region.
   your textures drawn for `{weapon}`, at `icon_size` [24, 12]) and `names`
   (a damage type's name to the word written for it). While a layout with a
   kill feed is drawn, deaths stay out of chat.
+- `message_feed`: lines a rule posts with `hud_line`, one each from `at`
+  (`align` as for text), the newest at the bottom: `feed` (the name the rule
+  posts to: 1 to 32 letters, digits, `_` or `-`), `lines` (most shown, 4),
+  `spacing` (units between lines, 16; negative stacks upward), `color` (a
+  line's colour when its rule gave none) and `icons` (names to your
+  textures, drawn before a line's text at `icon_size` [24, 12]). Each line
+  stays for the seconds its rule gave it and fades out over its last half
+  second. This is the radio's lines, a countdown's words or a match notice,
+  and a layout may draw several feeds. A rule posts with
+  `hud_line(player, feed, text, seconds[, options])` (`()` for everyone;
+  `seconds` 0.5 to 60; options `color` [r, g, b] or [r, g, b, a] and `icon`,
+  one of the element's icon names; the `chat` capability), and a feed no
+  layout draws shows nothing.
 - `tracker`: a motion tracker. A blip for each other player within `range`
   units, placed by bearing and distance from the middle of `rect` (straight
   ahead is up, `range` at its edge). `blip` is the texture, with optional
@@ -279,7 +292,7 @@ does ([client sandbox](../architecture/client-sandbox.md)).
 region names.
 
 Tests: `crates/content/src/hud.rs` (validation, conflict ranking, frames,
-sprite fonts, kill feeds, trackers, stock texts), `crates/client/src/match_hud.rs`, `crates/client/src/hud_regions.rs`, and the render check
+sprite fonts, kill feeds, message feeds, trackers, stock texts), `crates/client/src/match_hud.rs`, `crates/client/src/hud_regions.rs`, and the render check
 `crates/client/tests/hud_regions_render.rs` (including the Runner's ammo
 counter), and `crates/sim/tests/script_api.rs`
 `a_held_guns_ammo_reaches_its_holder_for_hud_counters`.

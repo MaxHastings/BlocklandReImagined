@@ -36,6 +36,8 @@ pub struct GameValues {
     pub respawn: Option<f32>,
     /// The latest deaths, oldest first, for kill feeds.
     pub kills: Vec<FeedKill>,
+    /// The lines rules posted to message feeds, with their ages.
+    pub lines: Vec<bri_content::hud::FeedLine>,
     /// Other players as trackers see them.
     pub contacts: Vec<Contact>,
     /// The viewer's level facing (x, z), for edge arrows.
@@ -263,6 +265,7 @@ impl HudRegions {
         let texture = |id: &str| keys.get(id).copied();
         let live = Live {
             kills: &game.kills,
+            lines: &game.lines,
             contacts: &game.contacts,
             facing: game.facing,
             position: game.position,
