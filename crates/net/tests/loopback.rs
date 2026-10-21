@@ -3311,21 +3311,29 @@ async fn join_by_code(
             let _ = tx.send(code);
         },
     );
-    let code = rx.await??;
+    // A stage that never answers fails by name (and the gate retries that
+    // test alone) rather than holding the whole binary until its timeout.
+    let code = tokio::time::timeout(Duration::from_secs(60), rx)
+        .await
+        .context("the host never got a join code")???;
     assert!(bri_rendezvous::proto::parse_code(&code).is_some(), "{code}");
     let player_router = Nat::new("127.0.0.3".parse()?, player_nat);
     let dir = tempfile::tempdir()?;
     let identity = ClientIdentity::load_or_create(dir.path().join("client.identity"))?;
-    let joined = Client::connect_code(
-        codes.as_ref(),
-        &code.to_ascii_lowercase(),
-        "Friend".into(),
-        Vec::new(),
-        &identity,
-        Default::default(),
-        Some(player_router.socket()),
+    let joined = tokio::time::timeout(
+        Duration::from_secs(60),
+        Client::connect_code(
+            codes.as_ref(),
+            &code.to_ascii_lowercase(),
+            "Friend".into(),
+            Vec::new(),
+            &identity,
+            Default::default(),
+            Some(player_router.socket()),
+        ),
     )
-    .await;
+    .await
+    .context("joining by code never finished")?;
     // The session keeps the host, service and routers alive while checked.
     let client = joined?;
     assert_eq!(client.listing.name, "Max's Server");

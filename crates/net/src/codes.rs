@@ -128,7 +128,10 @@ impl JoinCodes for Rendezvous {
                 },
             )
             .await?;
-            let (code, observed) = match proto::read(&mut receive).await? {
+            let answer = tokio::time::timeout(Duration::from_secs(5), proto::read(&mut receive))
+                .await
+                .map_err(|_| anyhow::anyhow!("The join code service did not give a code"))??;
+            let (code, observed) = match answer {
                 Some(Answer::Hosting { code, observed }) => (code, observed),
                 Some(Answer::Refused(reason)) => bail!("{reason}"),
                 _ => bail!("The join code service gave no code"),
