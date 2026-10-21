@@ -2659,6 +2659,63 @@ fn register_api(engine: &mut Engine) {
             }))
         },
     );
+    // hud_line(player, feed, text, seconds[, options]): a line on a HUD
+    // message feed; `()` as the player posts it for everyone. Options:
+    // `color` ([r, g, b] or [r, g, b, a]) and `icon` (one of the element's
+    // icon names).
+    fn hud_line(
+        player: Dynamic,
+        feed: &str,
+        text: &str,
+        seconds: Dynamic,
+        options: Map,
+    ) -> Fallible<INT> {
+        let (mut color, mut icon) = (None, None);
+        for (key, value) in options {
+            match key.as_str() {
+                "color" => {
+                    let c = value
+                        .into_typed_array::<Dynamic>()
+                        .map_err(|_| "color is [r, g, b] or [r, g, b, a]")?;
+                    let c = c.iter().map(float).collect::<Fallible<Vec<f32>>>()?;
+                    color = Some(match c[..] {
+                        [r, g, b] => [r, g, b, 1.0],
+                        [r, g, b, a] => [r, g, b, a],
+                        _ => return fail("color is [r, g, b] or [r, g, b, a]"),
+                    });
+                }
+                "icon" => {
+                    icon = Some(
+                        value
+                            .into_string()
+                            .map_err(|_| "icon is the name of one of the feed's icons")?,
+                    );
+                }
+                other => {
+                    return fail(format!("hud_line has no option `{other}` (color, icon)"));
+                }
+            }
+        }
+        push(Op::HudLine(ops::HudLine {
+            player: if player.is_unit() {
+                None
+            } else {
+                Some(id(&player)?)
+            },
+            feed: feed.into(),
+            text: text.into(),
+            seconds: float(&seconds)?,
+            color,
+            icon,
+        }))
+    }
+    engine.register_fn(
+        "hud_line",
+        |player: Dynamic, feed: &str, text: &str, seconds: Dynamic| {
+            hud_line(player, feed, text, seconds, Map::new())
+        },
+    );
+    engine.register_fn("hud_line", hud_line);
     // `()` as the player flashes everyone's screen.
     engine.register_fn(
         "screen_flash",

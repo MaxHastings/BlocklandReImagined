@@ -751,6 +751,7 @@ impl App {
             inventory_ammo: self.net.inventory_ammo.clone(),
             respawn: None,
             kills: Vec::new(),
+            lines: self.combat.feed_lines(),
             contacts: Vec::new(),
             facing: presented.map_or([0.0, 0.0], |me| [me.yaw.sin(), -me.yaw.cos()]),
             position: presented.map_or([0.0, 0.0], |me| [me.feet[0], me.feet[2]]),
