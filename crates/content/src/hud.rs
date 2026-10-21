@@ -852,6 +852,9 @@ pub enum Source {
     Fov,
     /// 1 while the viewer aims down a gun's sights, else 0.
     Aiming,
+    /// The viewer's posture: 0 standing, 1 crouching, 2 lying prone, 3
+    /// holding a ladder.
+    Stance,
     /// The scope's zoom step while the viewer aims: 1 for the gun's own field of view, 2 and up for each
     /// wheel level (`Zoom::levels`), 0 when not aiming.
     ZoomLevel,
@@ -908,6 +911,7 @@ impl Source {
             "heading" => Source::Heading,
             "fov" => Source::Fov,
             "aiming" => Source::Aiming,
+            "stance" => Source::Stance,
             "zoom_level" => Source::ZoomLevel,
             state => {
                 let (package, rest) = state.split_once(':')?;
@@ -2438,6 +2442,28 @@ mod tests {
         assert_eq!(at[1], 26.0);
         // Fading in its last half second.
         assert!(matches!(spans[3], Span::Text { color, .. } if (color[3] - 0.2).abs() < 1e-4));
+    }
+
+    #[test]
+    fn a_stance_value_picks_one_frame_of_four() {
+        assert_eq!(Source::parse("stance"), Some(Source::Stance));
+        let l = layout(serde_json::json!({
+            "schema_version": 1, "region": "bottom_left",
+            "elements": [{ "type": "image", "texture": "pack:texture/bar", "rect": [0, 0, 10, 10],
+                "frames": { "count": 4, "columns": 4, "value": "stance", "max": 3 } }]
+        }));
+        let at = |stance: f32| {
+            move |source: &Source| (*source == Source::Stance).then_some(Value::Number(stance))
+        };
+        let frame = |stance| {
+            let items = resolve_live(&l, &at(stance), &textures, &Live::default());
+            let Item::Image { uv, .. } = items[0] else {
+                panic!()
+            };
+            uv[0]
+        };
+        // Standing, crouching, prone and on a ladder: the four frames in turn.
+        assert_eq!([0.0, 1.0, 2.0, 3.0].map(frame), [0.0, 0.25, 0.5, 0.75]);
     }
 
     fn feed_line(feed: &str, age: f32, seconds: f32, text: &str, icon: Option<&str>) -> FeedLine {
