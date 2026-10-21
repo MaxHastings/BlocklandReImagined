@@ -10,6 +10,13 @@ use rapier3d::prelude::*;
 /// A floor, a wall 3 units ahead (-Z) rising 20 units, and a ladder
 /// volume in front of it from the floor to 12 units up, facing the wall.
 fn world() -> PhysicsWorld {
+    world_with(0.8, false)
+}
+
+/// [`world`] with a volume `half_depth` deep each side of z -1.8 (the body is
+/// 1.76 wide, so a volume it hangs inside must be deeper than that), that lets
+/// the climber strafe when `strafe`.
+fn world_with(half_depth: f32, strafe: bool) -> PhysicsWorld {
     let mut world = bri_physics::new_world();
     world.insert(
         RigidBodyBuilder::fixed(),
@@ -22,10 +29,10 @@ fn world() -> PhysicsWorld {
     world.insert_collider(
         climb::collider(
             Vec3::new(0.0, 6.0, -1.8),
-            Vec3::new(1.5, 6.0, 0.8),
+            Vec3::new(1.5, 6.0, half_depth),
             0.0,
             8.0,
-            false,
+            strafe,
         ),
         None,
     );
@@ -167,9 +174,9 @@ fn a_climber_with_a_wall_pull_hangs_against_the_wall_it_faces() {
         }),
         ..Default::default()
     };
-    // Held in front of the volume (z -1.0 is its near edge), it ends against
-    // the wall face at z -3.0, half a body width out.
-    let mut w = world();
+    // Held in front of the volume (z -0.6 is its near edge, z -3.0 its far
+    // side), it ends against the wall face at z -3.0, half a body width out.
+    let mut w = world_with(1.2, false);
     let mut p = Player::spawn(&mut w, 1, Vec3::new(0.0, 0.05, 1.5), tuning.clone()).unwrap();
     run(&mut w, &mut p, push(1.0), 120);
     assert!(p.state().posture.climbing);
@@ -178,8 +185,54 @@ fn a_climber_with_a_wall_pull_hangs_against_the_wall_it_faces() {
     let against = -3.0 + tuning.width * 0.5;
     assert!((z - against).abs() < 0.15, "z {z}, wall at {against}");
     // Without a pull it stays where it took hold.
-    let mut w = world();
+    let mut w = world_with(1.2, false);
     let mut p = Player::spawn(&mut w, 1, Vec3::new(0.0, 0.05, 1.5), climber()).unwrap();
     run(&mut w, &mut p, push(1.0), 240);
     assert!(p.state().feet[2] > against + 1.0, "{}", p.state().feet[2]);
+}
+
+#[test]
+fn a_wall_pull_stops_with_the_far_side_of_the_body_at_the_far_side_of_the_volume() {
+    // A volume no deeper than the body would have its middle drawn to the
+    // far plane and its disc hanging over whatever lies behind: the pull ends
+    // a body width short of it instead, so the climber hangs inside.
+    let tuning = PlayerTuning {
+        climb: Some(Climb {
+            wall_pull: 4.0,
+            ..Climb::default()
+        }),
+        ..Default::default()
+    };
+    let mut w = world_with(0.8, false);
+    let mut p = Player::spawn(&mut w, 1, Vec3::new(0.0, 0.05, 1.5), tuning.clone()).unwrap();
+    run(&mut w, &mut p, push(1.0), 120);
+    run(&mut w, &mut p, push(1.0), 120);
+    let far = -1.8 - 0.8;
+    let z = p.state().feet[2];
+    assert!(
+        z > far + tuning.width * 0.5 - 0.1,
+        "z {z}: its far side is past the volume's at {far}"
+    );
+}
+
+#[test]
+fn a_diagonal_on_the_rungs_is_no_faster_than_straight_up() {
+    let straight = |input: MoveInput| {
+        let mut w = world_with(1.2, true);
+        let mut p = Player::spawn(&mut w, 1, Vec3::new(0.0, 0.05, 1.5), climber()).unwrap();
+        run(&mut w, &mut p, push(1.0), 120);
+        assert!(p.state().posture.climbing);
+        let before = Vec3::from(p.state().feet);
+        run(&mut w, &mut p, input, 20);
+        assert!(p.state().posture.climbing);
+        (Vec3::from(p.state().feet) - before).length()
+    };
+    let up = straight(push(1.0));
+    let diagonal = straight(MoveInput {
+        forward: 1.0,
+        right: 1.0,
+        ..Default::default()
+    });
+    assert!(up > 0.1, "{up}");
+    assert!(diagonal <= up * 1.05, "diagonal {diagonal}, straight {up}");
 }
