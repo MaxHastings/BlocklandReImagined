@@ -286,8 +286,6 @@ pub struct WorldItems {
     skinned: Vec<SkinnedCopy>,
     /// Frames prepared, for the idle models' recency.
     prepares: u64,
-    /// The models whose first light was reported (see `upload`).
-    reported: BTreeSet<ModelKey>,
     pub diagnostics: WorldItemDiagnostics,
 }
 /// Most loose models drawn at once.
@@ -338,7 +336,6 @@ impl WorldItems {
             wearer_colors: Vec::new(),
             headings: BTreeMap::new(),
             prepares: 0,
-            reported: BTreeSet::new(),
             diagnostics: Default::default(),
         })
     }
@@ -1317,7 +1314,7 @@ impl WorldItems {
         queue: &wgpu::Queue,
         light_at: &dyn Fn([f32; 3]) -> Option<ActorLight>,
     ) -> Result<()> {
-        for (key, model) in self.models.iter_mut() {
+        for model in self.models.values_mut() {
             if model.gpu.is_none() && model.slots.iter().any(|s| !s.transforms.is_empty()) {
                 model.gpu = Some(renderer.upload(device, queue, &model.mesh.data)?);
                 self.diagnostics.model_uploads += 1;
@@ -1368,24 +1365,6 @@ impl WorldItems {
                         })
                     })
                     .collect();
-                if self.reported.insert(key.clone()) {
-                    // The first time a model is drawn: what its light was worked out from.
-                    let mut kinds = BTreeMap::new();
-                    for material in &model.mesh.data.materials {
-                        *kinds.entry(format!("{:?}", material.kind)).or_insert(0) += 1;
-                    }
-                    eprintln!(
-                        "Item light: {} (first person {}, local view {:?}) at {:?}: light {:?}, materials {:?}",
-                        key.model,
-                        key.first_person,
-                        key.local_view,
-                        slot.transforms
-                            .first()
-                            .map(|t| t.transform.w_axis.truncate().to_array()),
-                        lights.first(),
-                        kinds
-                    );
-                }
                 if slot.instances.as_mut().unwrap().update_lit(
                     queue,
                     &slot.transforms,
