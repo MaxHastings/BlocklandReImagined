@@ -3303,9 +3303,14 @@ async fn join_by_code(
     let host_router = Nat::new("127.0.0.2".parse()?, host_nat);
     let mut host = server::start_on_socket(session(), options(), host_router.socket())?;
     let (tx, rx) = tokio::sync::oneshot::channel();
-    host.host_code(codes.clone(), "Max's Server".into(), Vec::new(), move |code| {
-        let _ = tx.send(code);
-    });
+    host.host_code(
+        codes.clone(),
+        "Max's Server".into(),
+        Vec::new(),
+        move |code| {
+            let _ = tx.send(code);
+        },
+    );
     let code = rx.await??;
     assert!(bri_rendezvous::proto::parse_code(&code).is_some(), "{code}");
     let player_router = Nat::new("127.0.0.3".parse()?, player_nat);
@@ -3352,7 +3357,10 @@ async fn join_codes_fall_back_to_the_relay_behind_strict_routers() -> Result<()>
         .await
         .err()
         .context("joined without a path")?;
-    assert!(format!("{error:#}").contains("Could not reach the host"), "{error:#}");
+    assert!(
+        format!("{error:#}").contains("Could not reach the host"),
+        "{error:#}"
+    );
     Ok(())
 }
 
@@ -3370,8 +3378,15 @@ async fn unknown_join_codes_are_refused_in_plain_words() -> Result<()> {
     });
     let endpoint = bri_net::codes::endpoint(None, None)?;
     use bri_net::codes::JoinCodes;
-    let error = codes.find(&endpoint, "AAA-AAA").await.err().context("found")?;
-    assert!(error.to_string().contains("No game has that code"), "{error}");
+    let error = codes
+        .find(&endpoint, "AAA-AAA")
+        .await
+        .err()
+        .context("found")?;
+    assert!(
+        error.to_string().contains("No game has that code"),
+        "{error}"
+    );
     // A service presenting another key is not trusted.
     let impostor = bri_net::codes::Rendezvous::new(ServiceAddress {
         key: [7; 16],

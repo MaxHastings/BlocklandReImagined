@@ -65,7 +65,10 @@ impl Identity {
     /// `rendezvous-cert.der` and `rendezvous-key.der` in `dir`, created on
     /// first use.
     pub fn load_or_create(dir: &std::path::Path) -> Result<Self> {
-        let (cert, key) = (dir.join("rendezvous-cert.der"), dir.join("rendezvous-key.der"));
+        let (cert, key) = (
+            dir.join("rendezvous-cert.der"),
+            dir.join("rendezvous-key.der"),
+        );
         match (std::fs::read(&cert), std::fs::read(&key)) {
             (Ok(der), Ok(key)) => Ok(Self { der, key }),
             (Err(_), Err(_)) => {
@@ -75,7 +78,11 @@ impl Identity {
                 std::fs::write(&cert, &identity.der)?;
                 Ok(identity)
             }
-            _ => bail!("Only one of {} and {} exists; restore both", cert.display(), key.display()),
+            _ => bail!(
+                "Only one of {} and {} exists; restore both",
+                cert.display(),
+                key.display()
+            ),
         }
     }
 }
@@ -108,8 +115,10 @@ impl Service {
     pub fn start(config: Config, identity: Identity) -> Result<Self> {
         let key = proto::key_of(&identity.der);
         let private = quinn::rustls::pki_types::PrivatePkcs8KeyDer::from(identity.key.clone());
-        let mut server =
-            quinn::ServerConfig::with_single_cert(vec![identity.der.clone().into()], private.into())?;
+        let mut server = quinn::ServerConfig::with_single_cert(
+            vec![identity.der.clone().into()],
+            private.into(),
+        )?;
         server.transport_config(Arc::new(transport()));
         let endpoint = quinn::Endpoint::server(server, config.listen)?;
         let address = endpoint.local_addr()?;
@@ -169,8 +178,12 @@ async fn serve(
     stats: Arc<relay::Stats>,
 ) {
     while let Ok((send, receive)) = connection.accept_bi().await {
-        let (connection, state, config, stats) =
-            (connection.clone(), state.clone(), config.clone(), stats.clone());
+        let (connection, state, config, stats) = (
+            connection.clone(),
+            state.clone(),
+            config.clone(),
+            stats.clone(),
+        );
         tokio::spawn(async move {
             let _ = stream(connection, send, receive, state, config, stats).await;
         });
@@ -198,8 +211,14 @@ async fn stream(
             name,
         } => {
             let checked = (|| {
-                ensure!(version == proto::VERSION, "This game is too old or too new for this join code service.");
-                ensure!(locals.len() <= proto::MAX_LOCALS && name.len() <= 128, "Invalid request");
+                ensure!(
+                    version == proto::VERSION,
+                    "This game is too old or too new for this join code service."
+                );
+                ensure!(
+                    locals.len() <= proto::MAX_LOCALS && name.len() <= 128,
+                    "Invalid request"
+                );
                 Ok(())
             })();
             if let Err(error) = checked {
@@ -236,7 +255,14 @@ async fn stream(
                 return Ok(());
             };
             let result = async {
-                proto::write(&mut send, &Answer::Hosting { code: code.clone(), observed }).await?;
+                proto::write(
+                    &mut send,
+                    &Answer::Hosting {
+                        code: code.clone(),
+                        observed,
+                    },
+                )
+                .await?;
                 let mut probe = [0u8; 1];
                 loop {
                     tokio::select! {
@@ -268,14 +294,20 @@ async fn stream(
         } => {
             ensure!(locals.len() <= proto::MAX_LOCALS, "Invalid request");
             if version != proto::VERSION {
-                proto::write(&mut send, &refuse("This game is too old or too new for this join code service.")).await?;
+                proto::write(
+                    &mut send,
+                    &refuse("This game is too old or too new for this join code service."),
+                )
+                .await?;
                 return Ok(());
             }
             let found = {
                 let mut state = state.lock().unwrap();
                 let now = Instant::now();
                 if state.joins.len() > 100_000 {
-                    state.joins.retain(|_, (at, _)| now.duration_since(*at) < Duration::from_secs(60));
+                    state
+                        .joins
+                        .retain(|_, (at, _)| now.duration_since(*at) < Duration::from_secs(60));
                 }
                 let attempts = state.joins.entry(observed.ip()).or_insert((now, 0));
                 if now.duration_since(attempts.0) > Duration::from_secs(60) {
@@ -289,8 +321,18 @@ async fn stream(
                     state
                         .hosts
                         .get(&code)
-                        .map(|h| (h.key, h.name.clone(), h.observed, h.locals.clone(), h.notify.clone()))
-                        .ok_or("No game has that code. Check it, or ask the host for the code again.")
+                        .map(|h| {
+                            (
+                                h.key,
+                                h.name.clone(),
+                                h.observed,
+                                h.locals.clone(),
+                                h.notify.clone(),
+                            )
+                        })
+                        .ok_or(
+                            "No game has that code. Check it, or ask the host for the code again.",
+                        )
                 }
             };
             let (key, name, host_observed, host_locals, notify) = match found {

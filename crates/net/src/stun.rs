@@ -65,7 +65,9 @@ fn parse(packet: &[u8], id: &[u8; 12]) -> Result<Ipv4Addr> {
     while at + 4 <= end {
         let kind = u16::from_be_bytes([packet[at], packet[at + 1]]);
         let length = usize::from(u16::from_be_bytes([packet[at + 2], packet[at + 3]]));
-        let value = packet.get(at + 4..at + 4 + length).context("truncated attribute")?;
+        let value = packet
+            .get(at + 4..at + 4 + length)
+            .context("truncated attribute")?;
         if value.len() >= 8 && value[1] == 1 {
             let raw = [value[4], value[5], value[6], value[7]];
             match kind {
@@ -91,7 +93,11 @@ fn parse(packet: &[u8], id: &[u8; 12]) -> Result<Ipv4Addr> {
 mod tests {
     use super::*;
     fn reply(id: &[u8; 12], attribute: u16, ip: Ipv4Addr, xor: bool) -> Vec<u8> {
-        let value = if xor { u32::from(ip) ^ MAGIC } else { u32::from(ip) };
+        let value = if xor {
+            u32::from(ip) ^ MAGIC
+        } else {
+            u32::from(ip)
+        };
         let mut out = Vec::new();
         out.extend(BINDING_SUCCESS.to_be_bytes());
         out.extend(12u16.to_be_bytes());
@@ -107,8 +113,14 @@ mod tests {
     fn a_binding_reply_names_the_public_address() {
         let id = [7u8; 12];
         let ip = Ipv4Addr::new(203, 0, 113, 10);
-        assert_eq!(parse(&reply(&id, XOR_MAPPED_ADDRESS, ip, true), &id).unwrap(), ip);
-        assert_eq!(parse(&reply(&id, MAPPED_ADDRESS, ip, false), &id).unwrap(), ip);
+        assert_eq!(
+            parse(&reply(&id, XOR_MAPPED_ADDRESS, ip, true), &id).unwrap(),
+            ip
+        );
+        assert_eq!(
+            parse(&reply(&id, MAPPED_ADDRESS, ip, false), &id).unwrap(),
+            ip
+        );
         assert!(parse(&reply(&[8; 12], XOR_MAPPED_ADDRESS, ip, true), &id).is_err());
         assert!(parse(&[0; 8], &id).is_err());
     }
@@ -124,10 +136,21 @@ mod tests {
             assert_eq!(length, 20);
             let id: [u8; 12] = buffer[8..20].try_into().unwrap();
             let _ = server
-                .send_to(&reply(&id, XOR_MAPPED_ADDRESS, Ipv4Addr::new(198, 51, 100, 9), true), from)
+                .send_to(
+                    &reply(
+                        &id,
+                        XOR_MAPPED_ADDRESS,
+                        Ipv4Addr::new(198, 51, 100, 9),
+                        true,
+                    ),
+                    from,
+                )
                 .await;
         });
-        assert_eq!(public_ip(&at.to_string()).await?, Ipv4Addr::new(198, 51, 100, 9));
+        assert_eq!(
+            public_ip(&at.to_string()).await?,
+            Ipv4Addr::new(198, 51, 100, 9)
+        );
         Ok(())
     }
 }

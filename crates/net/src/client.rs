@@ -615,7 +615,13 @@ impl Client {
         let found = codes.find(&endpoint, code).await?;
         let pin = HostPin::Key(found.key);
         let (connection, relayed) = crate::codes::race(&endpoint, &found, &pin).await?;
-        let mut opened = begin(endpoint, connection, Duration::from_secs(10), JoinBegin::join()).await?;
+        let mut opened = begin(
+            endpoint,
+            connection,
+            Duration::from_secs(10),
+            JoinBegin::join(),
+        )
+        .await?;
         opened.relayed = relayed;
         Self::joined(
             opened,
@@ -1577,8 +1583,11 @@ pub(crate) async fn handshake(
 ) -> Result<quinn::Connection> {
     let mut config = quinn::ClientConfig::new(Arc::new(pinned_config(pin.clone())?));
     config.transport_config(Arc::new(transport()));
-    match tokio::time::timeout(wait, endpoint.connect_with(config, address, "blockland.local")?)
-        .await
+    match tokio::time::timeout(
+        wait,
+        endpoint.connect_with(config, address, "blockland.local")?,
+    )
+    .await
     {
         Ok(Ok(connection)) => Ok(connection),
         Ok(Err(error)) => Err(JoinError::from_connection(address, error).into()),

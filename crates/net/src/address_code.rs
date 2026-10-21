@@ -31,7 +31,10 @@ pub fn encode(address: SocketAddr) -> Option<String> {
         *digit = ((value >> (5 * (DATA_CHARS - 1 - i))) & 31) as u8;
     }
     digits[DATA_CHARS] = check(&digits[..DATA_CHARS]);
-    let text: String = digits.iter().map(|&d| ALPHABET[d as usize] as char).collect();
+    let text: String = digits
+        .iter()
+        .map(|&d| ALPHABET[d as usize] as char)
+        .collect();
     Some(format!("{}-{}-{}", &text[..4], &text[4..8], &text[8..]))
 }
 
@@ -45,7 +48,10 @@ pub fn decode(text: &str) -> Option<SocketAddr> {
     };
     (a.len() == 4 && b.len() == 4 && c.len() == 3).then_some(())?;
     let mut digits = [0u8; CODE_CHARS];
-    for (slot, ch) in digits.iter_mut().zip(a.chars().chain(b.chars()).chain(c.chars())) {
+    for (slot, ch) in digits
+        .iter_mut()
+        .zip(a.chars().chain(b.chars()).chain(c.chars()))
+    {
         *slot = digit(ch)?;
     }
     (digits[DATA_CHARS] == check(&digits[..DATA_CHARS])).then_some(())?;
@@ -65,7 +71,10 @@ fn digit(ch: char) -> Option<u8> {
         'I' | 'L' => '1',
         other => other,
     };
-    ALPHABET.iter().position(|&a| a as char == ch).map(|p| p as u8)
+    ALPHABET
+        .iter()
+        .position(|&a| a as char == ch)
+        .map(|p| p as u8)
 }
 
 /// A weighted sum with odd weights: a wrong character changes the sum by a
@@ -119,7 +128,13 @@ mod tests {
             assert_eq!(encode(addr(text)), None, "{text}");
         }
         assert_eq!(encode(addr("[2001:db8::1]:28000")), None);
-        for text in ["", "localhost", "play-example-com", "abcd-efgh-ijk", "K7Q-4MZ"] {
+        for text in [
+            "",
+            "localhost",
+            "play-example-com",
+            "abcd-efgh-ijk",
+            "K7Q-4MZ",
+        ] {
             assert_eq!(decode(text), None, "{text}");
         }
     }

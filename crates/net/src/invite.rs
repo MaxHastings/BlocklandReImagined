@@ -114,7 +114,9 @@ impl JoinTarget {
                 };
                 Ok(Route { address, key: *key })
             }
-            Self::Code(_) => anyhow::bail!("This game has no join code service set; use your host's join code or invite instead"),
+            Self::Code(_) => anyhow::bail!(
+                "This game has no join code service set; use your host's join code or invite instead"
+            ),
         }
     }
 }
@@ -215,8 +217,13 @@ mod tests {
         );
         assert_eq!(parsed("localhost"), direct("localhost", 28000));
         assert_eq!(parsed("k7q-4mz"), JoinTarget::Code("K7Q-4MZ".into()));
-        assert_eq!(parsed("k7q4mz"), direct("k7q4mz", 28000), "codes need their dash");
-        let address_code = crate::address_code::encode("203.0.113.10:28001".parse().unwrap()).unwrap();
+        assert_eq!(
+            parsed("k7q4mz"),
+            direct("k7q4mz", 28000),
+            "codes need their dash"
+        );
+        let address_code =
+            crate::address_code::encode("203.0.113.10:28001".parse().unwrap()).unwrap();
         let typed = address_code.to_lowercase();
         assert_eq!(parsed(&typed), direct("203.0.113.10", 28001));
         assert_eq!(

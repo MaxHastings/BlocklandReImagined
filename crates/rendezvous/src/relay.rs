@@ -56,7 +56,10 @@ pub async fn open(
 ) -> std::io::Result<(u16, u16)> {
     let host_side = bind_in(bind, limits.ports).await?;
     let joiner_side = bind_in(bind, limits.ports).await?;
-    let ports = (host_side.local_addr()?.port(), joiner_side.local_addr()?.port());
+    let ports = (
+        host_side.local_addr()?.port(),
+        joiner_side.local_addr()?.port(),
+    );
     stats.active.fetch_add(1, Ordering::Relaxed);
     tokio::spawn(async move {
         run(host_side, joiner_side, host_ip, joiner_ip, limits, &stats).await;
@@ -197,7 +200,8 @@ mod tests {
         assert_eq!((&buffer[..len], from), (&b"hello player"[..], joiner_relay));
         // A third socket cannot hijack either side once it is fixed.
         stranger.send_to(b"sneak", joiner_relay).await.unwrap();
-        let quiet = tokio::time::timeout(Duration::from_millis(200), host.recv_from(&mut buffer)).await;
+        let quiet =
+            tokio::time::timeout(Duration::from_millis(200), host.recv_from(&mut buffer)).await;
         assert!(quiet.is_err(), "the stranger's datagram was forwarded");
         assert_eq!(stats.active.load(Ordering::Relaxed), 1);
     }
@@ -210,7 +214,9 @@ mod tests {
     }
     #[tokio::test]
     async fn relay_ports_come_from_the_configured_range() {
-        let socket = bind_in("127.0.0.1".parse().unwrap(), Some((42310, 42319))).await.unwrap();
+        let socket = bind_in("127.0.0.1".parse().unwrap(), Some((42310, 42319)))
+            .await
+            .unwrap();
         assert!((42310..=42319).contains(&socket.local_addr().unwrap().port()));
     }
 }

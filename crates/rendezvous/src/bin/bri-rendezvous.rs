@@ -19,17 +19,25 @@ Open UDP --listen's port and the relay port range in the firewall.";
 #[tokio::main]
 async fn main() -> Result<()> {
     let mut args = std::env::args().skip(1);
-    let state = args.next().filter(|a| !a.starts_with("--")).context(USAGE)?;
+    let state = args
+        .next()
+        .filter(|a| !a.starts_with("--"))
+        .context(USAGE)?;
     let mut config = Config::new(SocketAddr::from(([0, 0, 0, 0], DEFAULT_PORT)));
     let mut public_host = None;
     while let Some(flag) = args.next() {
-        let mut value = || args.next().with_context(|| format!("{flag} needs a value\n\n{USAGE}"));
+        let mut value = || {
+            args.next()
+                .with_context(|| format!("{flag} needs a value\n\n{USAGE}"))
+        };
         match flag.as_str() {
             "--listen" => config.listen = value()?.parse().context("Invalid --listen address")?,
             "--public-host" => public_host = Some(value()?),
             "--relay-ports" => {
                 let text = value()?;
-                let (low, high) = text.split_once('-').context("--relay-ports looks like 28200-28999")?;
+                let (low, high) = text
+                    .split_once('-')
+                    .context("--relay-ports looks like 28200-28999")?;
                 let (low, high): (u16, u16) = (low.parse()?, high.parse()?);
                 ensure!(low > 0 && low <= high, "Invalid --relay-ports range");
                 config.relay_limits.ports = Some((low, high));

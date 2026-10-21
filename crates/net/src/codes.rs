@@ -62,7 +62,11 @@ pub trait JoinCodes: Send + Sync {
     ) -> BoxFuture<'_, Result<HostCode>>;
     /// Where to reach the host with `code`, asked from the player's
     /// `endpoint` (the provider may use it to open the way).
-    fn find<'a>(&'a self, endpoint: &'a quinn::Endpoint, code: &'a str) -> BoxFuture<'a, Result<Found>>;
+    fn find<'a>(
+        &'a self,
+        endpoint: &'a quinn::Endpoint,
+        code: &'a str,
+    ) -> BoxFuture<'a, Result<Found>>;
 }
 
 /// The join code service at a configured address.
@@ -79,7 +83,9 @@ impl Rendezvous {
             .await
             .ok()
             .and_then(|mut found| found.find(SocketAddr::is_ipv4))
-            .with_context(|| format!("Could not find the join code service {}", self.service.host))?;
+            .with_context(|| {
+                format!("Could not find the join code service {}", self.service.host)
+            })?;
         let mut config = quinn::ClientConfig::new(Arc::new(crate::client::pinned_config(
             HostPin::Key(self.service.key),
         )?));
@@ -89,7 +95,11 @@ impl Rendezvous {
             endpoint.connect_with(config, address, "rendezvous.blockland.local")?,
         )
         .await
-        .map_err(|_| anyhow::anyhow!("The join code service did not answer. Try again, or share your address instead."))?
+        .map_err(|_| {
+            anyhow::anyhow!(
+                "The join code service did not answer. Try again, or share your address instead."
+            )
+        })?
         .context("Could not reach the join code service")
     }
 }
@@ -147,7 +157,11 @@ impl JoinCodes for Rendezvous {
             })
         })
     }
-    fn find<'a>(&'a self, endpoint: &'a quinn::Endpoint, code: &'a str) -> BoxFuture<'a, Result<Found>> {
+    fn find<'a>(
+        &'a self,
+        endpoint: &'a quinn::Endpoint,
+        code: &'a str,
+    ) -> BoxFuture<'a, Result<Found>> {
         Box::pin(async move {
             let code = proto::parse_code(code).context("A join code looks like K7Q-4MZ")?;
             let connection = self.connect(endpoint).await?;
@@ -158,7 +172,9 @@ impl JoinCodes for Rendezvous {
                     version: proto::VERSION,
                     code,
                     locals: crate::reach::local_ip()
-                        .map(|ip| SocketAddr::new(ip, endpoint.local_addr().map_or(0, |a| a.port())))
+                        .map(|ip| {
+                            SocketAddr::new(ip, endpoint.local_addr().map_or(0, |a| a.port()))
+                        })
                         .into_iter()
                         .filter(|a| a.port() != 0)
                         .collect(),
@@ -166,7 +182,8 @@ impl JoinCodes for Rendezvous {
             )
             .await?;
             send.finish()?;
-            let answer = tokio::time::timeout(Duration::from_secs(5), proto::read(&mut receive)).await??;
+            let answer =
+                tokio::time::timeout(Duration::from_secs(5), proto::read(&mut receive)).await??;
             connection.close(0u32.into(), b"Found");
             match answer {
                 Some(Answer::Found {
@@ -211,7 +228,11 @@ pub const JOIN_WAIT: Duration = Duration::from_secs(10);
 /// Try every route at once (the relay after [`RELAY_AFTER`]) and keep the
 /// first handshake that completes. Returns the connection and whether it
 /// runs through the relay.
-pub async fn race(endpoint: &quinn::Endpoint, found: &Found, pin: &HostPin) -> Result<(quinn::Connection, bool)> {
+pub async fn race(
+    endpoint: &quinn::Endpoint,
+    found: &Found,
+    pin: &HostPin,
+) -> Result<(quinn::Connection, bool)> {
     let mut attempts = tokio::task::JoinSet::new();
     let routes = found
         .candidates

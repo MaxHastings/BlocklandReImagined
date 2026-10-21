@@ -380,7 +380,8 @@ impl ServerHandle {
         let slot = Arc::new(std::sync::Mutex::new(None::<crate::reach::Forward>));
         let held = slot.clone();
         let task = tokio::spawn(async move {
-            let (report, forward) = crate::reach::open_and_check_with(port, certificate, stun.as_deref()).await;
+            let (report, forward) =
+                crate::reach::open_and_check_with(port, certificate, stun.as_deref()).await;
             notify(report);
             let Some(forward) = forward else { return };
             if let Ok(mut guard) = held.lock() {
@@ -776,7 +777,15 @@ pub fn start_with_admin_store_limit_and_recording(
     let mut bytes = Vec::new();
     state.write(&mut bytes)?;
     session.restore_admin_state(&bytes)?;
-    start_configured(session, options, max_players, Some(store), true, recording, None)
+    start_configured(
+        session,
+        options,
+        max_players,
+        Some(store),
+        true,
+        recording,
+        None,
+    )
 }
 fn start_configured(
     session: Session,

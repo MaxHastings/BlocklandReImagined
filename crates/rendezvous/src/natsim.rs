@@ -9,8 +9,7 @@
 //! namespaces are needed.
 use std::{
     collections::{HashSet, VecDeque},
-    fmt,
-    io,
+    fmt, io,
     net::{IpAddr, Ipv4Addr, SocketAddr},
     pin::Pin,
     sync::{
@@ -127,7 +126,11 @@ pub struct NatSocket {
 }
 impl fmt::Debug for NatSocket {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "NatSocket({} behind {})", self.inside, self.nat.public_ip)
+        write!(
+            f,
+            "NatSocket({} behind {})",
+            self.inside, self.nat.public_ip
+        )
     }
 }
 
@@ -223,7 +226,10 @@ impl quinn::AsyncUdpSocket for NatSocket {
     fn try_send(&self, transmit: &quinn::udp::Transmit) -> io::Result<()> {
         let (socket, sent_to) = self.mapping_for(transmit.destination)?;
         sent_to.lock().unwrap().insert(transmit.destination);
-        let segment = transmit.segment_size.unwrap_or(transmit.contents.len()).max(1);
+        let segment = transmit
+            .segment_size
+            .unwrap_or(transmit.contents.len())
+            .max(1);
         for datagram in transmit.contents.chunks(segment) {
             match socket.send_to(datagram, transmit.destination) {
                 Ok(_) => {}
@@ -317,8 +323,12 @@ mod tests {
         let inside = nat.socket();
         let a = tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap();
         let b = tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap();
-        inside.try_send(&transmit(a.local_addr().unwrap(), b"x")).unwrap();
-        inside.try_send(&transmit(b.local_addr().unwrap(), b"x")).unwrap();
+        inside
+            .try_send(&transmit(a.local_addr().unwrap(), b"x"))
+            .unwrap();
+        inside
+            .try_send(&transmit(b.local_addr().unwrap(), b"x"))
+            .unwrap();
         let mut buffer = [0u8; 4];
         let (_, via_a) = a.recv_from(&mut buffer).await.unwrap();
         let (_, via_b) = b.recv_from(&mut buffer).await.unwrap();

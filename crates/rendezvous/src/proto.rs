@@ -82,7 +82,9 @@ pub async fn read<T: DeserializeOwned>(receive: &mut quinn::RecvStream) -> Resul
     ensure!(length <= MAX_FRAME, "Rendezvous frame too large");
     let mut bytes = vec![0; length];
     receive.read_exact(&mut bytes).await?;
-    Ok(Some(serde_json::from_slice(&bytes).context("Malformed rendezvous frame")?))
+    Ok(Some(
+        serde_json::from_slice(&bytes).context("Malformed rendezvous frame")?,
+    ))
 }
 
 /// Crockford base32: no I, L, O or U, so codes read aloud and type cleanly.
@@ -94,7 +96,10 @@ pub const CODE_LEN: usize = 6;
 pub fn new_code() -> Result<String> {
     let mut bytes = [0u8; CODE_LEN];
     getrandom::fill(&mut bytes).map_err(|e| anyhow::anyhow!("OS randomness failed: {e}"))?;
-    let raw: String = bytes.iter().map(|b| ALPHABET[(b & 31) as usize] as char).collect();
+    let raw: String = bytes
+        .iter()
+        .map(|b| ALPHABET[(b & 31) as usize] as char)
+        .collect();
     Ok(format!("{}-{}", &raw[..3], &raw[3..]))
 }
 
@@ -195,9 +200,10 @@ impl ServiceAddress {
             .context("A join code service address looks like host:28100/key")?;
         let key = decode_key(key).context("The join code service key is not valid")?;
         let (host, port) = match address.rsplit_once(':') {
-            Some((host, port)) if !host.ends_with(':') => {
-                (host, port.parse().context("Invalid join code service port")?)
-            }
+            Some((host, port)) if !host.ends_with(':') => (
+                host,
+                port.parse().context("Invalid join code service port")?,
+            ),
             _ => (address, DEFAULT_PORT),
         };
         let host = host.trim_start_matches('[').trim_end_matches(']');
@@ -227,8 +233,14 @@ mod tests {
         let key = key_of(b"cert");
         let text = format!("Codes.Example.com:28100/{}", encode_key(&key));
         let address = ServiceAddress::parse(&text).unwrap();
-        assert_eq!((address.host.as_str(), address.port, address.key), ("codes.example.com", 28100, key));
-        assert_eq!(ServiceAddress::parse(&address.to_string()).unwrap(), address);
+        assert_eq!(
+            (address.host.as_str(), address.port, address.key),
+            ("codes.example.com", 28100, key)
+        );
+        assert_eq!(
+            ServiceAddress::parse(&address.to_string()).unwrap(),
+            address
+        );
         let bare = ServiceAddress::parse(&format!("203.0.113.5/{}", encode_key(&key))).unwrap();
         assert_eq!(bare.port, DEFAULT_PORT);
         assert!(ServiceAddress::parse("codes.example.com:28100").is_err());
@@ -241,7 +253,15 @@ mod tests {
         assert_eq!(parse_code(&code.to_ascii_lowercase()), Some(code.clone()));
         assert_eq!(parse_code(" k7q 4mz "), Some("K7Q-4MZ".into()));
         assert_eq!(parse_code("oil-abc"), Some("011-ABC".into()));
-        for not_a_code in ["k7q4mz", "server", "k7q-4m", "k7q-4mzz", "k7q-4mu", "play.example.com", "k7q_4mz"] {
+        for not_a_code in [
+            "k7q4mz",
+            "server",
+            "k7q-4m",
+            "k7q-4mzz",
+            "k7q-4mu",
+            "play.example.com",
+            "k7q_4mz",
+        ] {
             assert_eq!(parse_code(not_a_code), None, "{not_a_code}");
         }
     }

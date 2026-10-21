@@ -414,7 +414,10 @@ mod tests {
     fn a_join_code_is_offered_only_where_friends_can_use_it() {
         for verdict in [Verdict::Reachable, Verdict::Likely, Verdict::NeedsForward] {
             let text = report(verdict).lines().join(" ");
-            assert!(text.contains("join code: SECRET-CODE"), "{verdict:?}: {text}");
+            assert!(
+                text.contains("join code: SECRET-CODE"),
+                "{verdict:?}: {text}"
+            );
         }
         for verdict in [Verdict::SharedAddress, Verdict::Unknown] {
             let text = report(verdict).lines().join(" ");
