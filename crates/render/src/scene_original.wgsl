@@ -1407,7 +1407,9 @@ override SURFACE_GROUP:u32=0u;
         var terrain_lit:vec3<f32>;
         if lighting_mode()==3 {terrain_lit=dynamic_illumination(v.world_position,v.normal).diffuse;}
         else {terrain_lit=terrain_light(textureSampleLevel(lightmap,tiled_exact,light_uv,0.0).rgb,v.world_position,v.normal);}
-        return vec4<f32>(terrain_passes(diffuse*v.color.rgb*(terrain_lit+point_illumination(v.world_position,v.normal)),v.world_position),v.color.a);
+        var point_lit=point_illumination(v.world_position,v.normal);
+        if lighting_mode()==3 {point_lit=map_surface_point_light(v.world_position,v.normal,terrain_lit);}
+        return vec4<f32>(terrain_passes(diffuse*v.color.rgb*(terrain_lit+point_lit),v.world_position),v.color.a);
     }
     let fx=v.fx;let time=camera.atmosphere.z;
     // Brick surfaces in one material behave as the surface material their
@@ -1515,7 +1517,7 @@ override SURFACE_GROUP:u32=0u;
                 +v.point_light*strength;
         } else if lighting_mode()==3 {
             let live=dynamic_illumination(v.world_position,v.normal);
-            illumination=live.diffuse+point_illumination(v.world_position,v.normal)*strength;
+            illumination=live.diffuse+map_surface_point_light(v.world_position,v.normal,live.diffuse)*strength;
             specular=live.specular;
         } else {
             // Unified: the map's own model. Sun where the map's geometry and
@@ -1729,7 +1731,8 @@ fn physical_diffuse(v:VertexOut,n:vec3<f32>)->vec3<f32> {
         return max(ambient_at(reach)+camera.sun_color.rgb*facing*reach,baked_surroundings(p,v.normal))+v.point_light;
     }
     if lighting_mode()==3 {
-        return dynamic_illumination(p,n).diffuse+point_illumination(p,n);
+        let live=dynamic_illumination(p,n).diffuse;
+        return live+map_surface_point_light(p,n,live);
     }
     let vis=map_visibility(p,n);
     var share=0.0;
@@ -1748,7 +1751,8 @@ fn physical_light(v:VertexOut,n:vec3<f32>)->vec3<f32> {
     let baked=textureSample(lightmap,clamped,v.lightmap_uv).rgb*material[7].w;
     var light=shadowed_lightmap(baked*sky_follow(),p,n);
     if lighting_mode()==3 {
-        light+=dynamic_light_sum(p,n,SPECULAR_POWER).diffuse+point_illumination(p,n);
+        let live=dynamic_light_sum(p,n,SPECULAR_POWER).diffuse;
+        light+=live+map_surface_point_light(p,n,light+live);
     } else {
         light+=v.point_light;
     }
