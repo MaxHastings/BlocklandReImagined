@@ -1725,6 +1725,10 @@ async fn run(
         _=&mut stop=>break,
         Some(slot)=recovery.recv()=>keeper=Some(crate::recovery::Keeper::new(slot,&session)),
         accepted=endpoint.accept()=>{
+            // A closed endpoint (its driver dropped with the runtime) answers
+            // `None` at once, every time, and never yields: looping on it held
+            // a worker thread forever and hung the runtime's shutdown.
+            if accepted.is_none(){break;}
             if let Some(accepted)=accepted {
                 // Under load, make a source prove its address (a stateless
                 // Retry round trip) before it may hold a pending slot, so
