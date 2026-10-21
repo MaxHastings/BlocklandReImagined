@@ -48,6 +48,12 @@ pub(crate) enum Behaviour {
     Wander,
 }
 
+/// Searching for what shot it and slipped out of sight: above an objective
+/// it has not taken up (0.65) by more than a held choice's margin, below one
+/// it carries home (0.92), so a bot
+/// that was hit does not walk off its route the moment the shooter is lost.
+const HUNTED_SEARCH: f32 = 0.75;
+
 /// What a bot knows this tick that decides its behaviour.
 #[derive(Clone, Copy, Debug, Default)]
 pub(crate) struct Situation {
@@ -85,6 +91,9 @@ pub(crate) struct Situation {
     pub reach_up: f32,
     /// It remembers where an enemy was.
     pub remembers: bool,
+    /// Something that hurt it, or that its play faces, is out of sight and
+    /// still fresh in memory: it was shot and cannot see from where.
+    pub hunted: bool,
     /// How far past the edge of its stroll it is, 0 inside it to 1 a few
     /// units out (always 0 for a rules bot).
     pub strayed: f32,
@@ -178,7 +187,14 @@ impl Behaviour {
             Behaviour::Arm => s.arm,
             Behaviour::Chase => fits(s.enemy.is_some(), 0.6 * (1.0 - s.spared)),
             // One lost from sight: one in sight is fought or chased.
-            Behaviour::Search => fits(s.remembers && s.enemy.is_none(), 0.4),
+            Behaviour::Search => fits(
+                s.remembers && s.enemy.is_none(),
+                if s.hunted && !s.committed {
+                    HUNTED_SEARCH
+                } else {
+                    0.4
+                },
+            ),
             Behaviour::Return => fits(!s.pursuing, 0.3 * s.strayed.clamp(0.0, 1.0)),
             Behaviour::Objective => fits(s.objective, if s.committed { 0.92 } else { 0.65 }),
             // Above strolling, below every purpose.
@@ -446,6 +462,29 @@ mod tests {
             Return
         );
         assert_eq!(pick(Return, &Situation::default()), Wander);
+    }
+
+    #[test]
+    fn a_bot_shot_from_out_of_sight_looks_for_the_shooter_not_its_route() {
+        let route = Situation {
+            objective: true,
+            remembers: true,
+            ..Default::default()
+        };
+        // Merely remembering an enemy, it carries on with its route.
+        assert_eq!(pick(Objective, &route), Objective);
+        // Shot and unable to see from where, it searches, unless it carries
+        // the play home.
+        let shot = Situation {
+            hunted: true,
+            ..route
+        };
+        assert_eq!(pick(Objective, &shot), Search);
+        let carrying = Situation {
+            committed: true,
+            ..shot
+        };
+        assert_eq!(pick(Search, &carrying), Objective);
     }
 
     #[test]

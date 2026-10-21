@@ -31,6 +31,12 @@ impl BotThought {
             choice.push_str(&format!(
                 "; route stops {across:.1} short, goal {above:+.1} up"
             ));
+            if let Some([x, y, z]) = self.route_end {
+                choice.push_str(&format!(" at ({x:.0}, {y:.0}, {z:.0})"));
+            }
+            if let Some(brick) = self.objective {
+                choice.push_str(&format!(" for objective {brick}"));
+            }
         }
         let mut out = vec![choice];
         let mut candidates: Vec<&BotCandidate> =
@@ -119,6 +125,10 @@ impl Session {
                         let (goal, end) = (b.goal?.point(b.leash), b.plan.last()?.feet);
                         Some([flat(goal - end).length(), goal.y - end.y])
                     })
+                    .flatten(),
+                route_end: b
+                    .partial_route
+                    .then(|| b.plan.last().map(|w| w.feet.to_array()))
                     .flatten(),
                 unnoticed_hit: self
                     .bots
@@ -249,6 +259,7 @@ mod tests {
             sight_starved: false,
             unnoticed_hit: None,
             route_short: None,
+            route_end: None,
             behaviour: "chase",
             leg: "walk",
             visible: None,
@@ -306,6 +317,14 @@ mod tests {
                 "Acts: walk route, look route, trigger none",
             ]
         );
+        t.route_short = Some([12.4, -3.0]);
+        t.route_end = Some([5.0, 2.0, -7.0]);
+        t.objective = Some(41);
+        assert_eq!(
+            t.why(1240)[0],
+            "Doing chase over plain fight [committed]; route stops 12.4 short, goal -3.0 up at (5, 2, -7) for objective 41"
+        );
+        t.route_short = None;
         t.visible = Some(3);
         t.noticed = Some(super::super::BotNotice {
             why: "reacting: relaxed",

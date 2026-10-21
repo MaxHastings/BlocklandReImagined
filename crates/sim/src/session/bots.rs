@@ -93,6 +93,8 @@ pub struct BotThought {
     /// Its route could not reach the goal and ends this far short: across (level) and above (the goal over the route's end, below
     /// zero when under it).
     pub route_short: Option<[f32; 2]>,
+    /// Where that route ends, when it falls short.
+    pub route_end: Option<[f32; 3]>,
     pub behaviour: &'static str,
     /// The leg of its route it is on: walk, swim, jet or drive (none: no
     /// route).
@@ -2668,6 +2670,7 @@ impl Session {
             // Nor once it has looked everywhere that evidence leads: it
             // gets on with something else rather than stand there until
             // the memory fades.
+            hunted: threat.is_some() && sight.target.is_none(),
             remembers: brain.memory.is_some_and(|m| {
                 brain.out_of_reach.is_none_or(|p| p.distance(m.at) > 2.5)
                     && !brain.evidence_search.exhausted_for(m)
