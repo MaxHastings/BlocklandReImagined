@@ -63,7 +63,12 @@ fn cmd_load(p, n) { set_rounds(p, "probe:weapon/rifle", n); }
 fn cmd_reload_gun(p) { reload(p); }
 fn cmd_nade(p) { give_item(p, "probe:weapon/nade", false); }
 fn cmd_quick(p) { quick_use(p, "probe:weapon/nade"); }
-fn cmd_flash(p) { screen_flash(p, [0.3, 0.6, 1.0, 0.5], 0.4); body_flash(p, [0.4, 0.8, 1.0, 0.6], 0.5); }
+fn cmd_flash(p) {
+    screen_flash(p, [0.3, 0.6, 1.0, 0.5], 0.4);
+    body_flash(p, [0.4, 0.8, 1.0, 0.6], 0.5);
+    hud_line(p, "radio", "Moving out", 4.0, #{ color: [0.5, 1.0, 0.5], icon: "radio" });
+    hud_line((), "radio", "Clear", 2.0);
+}
 fn cmd_jolt(p) { camera_shake(p, 0.4, 0.1, 1.5, 2.0); }
 fn cmd_spark(p) {
     effect_at("probe:explosion/spark", [1.0, 2.0, 3.0], [0.0, 2.0, 0.0], 1.5);
@@ -705,17 +710,44 @@ fn view_beams_and_animations_reach_players_as_notices_and_cues() {
             .collect();
     assert_eq!(fovs, [Some(30.0), None]);
     g.run(a, "flash", vec![]);
-    assert!(
-        g.s.take_private_notices()
-            .iter()
-            .any(|(owner, n)| *owner == a
-                && matches!(n, Notice::Flash { color, seconds }
-            if *color == [0.3, 0.6, 1.0, 0.5] && *seconds == 0.4))
-    );
+    let notices = g.s.take_private_notices();
+    assert!(notices.iter().any(|(owner, n)| *owner == a
+        && matches!(n, Notice::Flash { color, seconds }
+            if *color == [0.3, 0.6, 1.0, 0.5] && *seconds == 0.4)));
     assert!(g.s.take_cues().iter().any(|c| matches!(&c.kind,
         CueKind::BodyFlash { owner, color, seconds }
             if *owner == a && *color == [0.4, 0.8, 1.0, 0.6] && *seconds == 0.5)));
-    g.s.take_private_notices();
+    let lines: Vec<_> = notices
+        .into_iter()
+        .filter_map(|(owner, n)| match n {
+            Notice::Line {
+                feed,
+                text,
+                seconds,
+                color,
+                icon,
+            } => Some((owner, feed, text, seconds, color, icon)),
+            _ => None,
+        })
+        .collect();
+    assert!(lines.contains(&(
+        a,
+        "radio".into(),
+        "Moving out".into(),
+        4.0,
+        Some([0.5, 1.0, 0.5, 1.0]),
+        Some("radio".into())
+    )));
+    assert!(
+        lines
+            .iter()
+            .any(|(owner, feed, text, _, color, icon)| *owner == a
+                && feed == "radio"
+                && text == "Clear"
+                && color.is_none()
+                && icon.is_none()),
+        "a line for everyone reaches each player, without options"
+    );
     g.run(a, "jolt", vec![]);
     assert!(
         g.s.take_private_notices()

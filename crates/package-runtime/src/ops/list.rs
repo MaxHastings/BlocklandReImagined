@@ -123,6 +123,7 @@ macro_rules! for_each_op {
             Heal = damage,
             Print = chat,
             ScreenFlash = chat,
+            HudLine = chat,
             PlantError = chat,
             MessageBox = chat,
             Ask = chat,
