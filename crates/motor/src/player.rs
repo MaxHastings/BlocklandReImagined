@@ -2415,17 +2415,22 @@ impl Player {
                         } else {
                             Vec3::ZERO
                         };
-                        // Drawn toward the wall until it touches or the far
-                        // side of the volume is reached.
+                        // Drawn toward the wall until its far side reaches the
+                        // volume's: it hangs inside the volume, not over what
+                        // fills the gap behind it, which it would stand on.
                         let facing = volume.facing();
                         let pull = if climb.wall_pull > 0.0
-                            && (middle - volume.center).dot(facing) < volume.depth - 0.05
+                            && (middle - volume.center).dot(facing)
+                                < volume.depth - t.width * 0.5 - 0.05
                         {
                             facing * climb.wall_pull
                         } else {
                             Vec3::ZERO
                         };
-                        climb_velocity = Some(along + across + pull);
+                        // The rungs' and the strafe's axes sum to at most the
+                        // ladder's speed, so a diagonal is no faster.
+                        let run = (along + across).clamp_length_max(volume.speed);
+                        climb_velocity = Some(run + pull);
                     }
                 }
             }
@@ -2841,7 +2846,11 @@ impl Player {
             && hit.time_of_impact > 0.0
             && hit.normal1.y >= run_cos
         {
-            self.state.feet[1] -= hit.time_of_impact;
+            // Lowered to where a landing rests (the move's back-off above the
+            // floor), not onto it: a body touching the floor exactly meets the
+            // top edge of every back face of a seam between two solids at
+            // t = 0, and the move stalls.
+            self.state.feet[1] -= (hit.time_of_impact - torque::BACK_OFF * torque_ticks).max(0.0);
             self.state.velocity[1] = 0.0;
             self.state.grounded = true;
             self.state.jump.since_contact = 0;

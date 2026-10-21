@@ -53,3 +53,74 @@ fn a_cylinder_slides_round_a_wall_end_the_box_catches_on() {
     let square = walk_past_the_end(Body::Cylinder, -2.0);
     assert!(square.z > -3.0, "a wall's face still stops it: {square}");
 }
+
+/// Eight fixed solids as stairs going down toward -Z: each tread 0.96 long and
+/// 0.64 lower than the last, every face in both windings (as a mesh of
+/// separate brushes with two-sided faces is built), touching its neighbours.
+fn stair_down() -> PhysicsWorld {
+    let mut world = bri_physics::new_world();
+    for i in 0..8 {
+        let top = -0.64 * i as f32;
+        let (z0, z1) = (-0.96 * i as f32 - 0.48, -0.96 * i as f32 + 0.48);
+        let (x0, x1, bottom) = (-4.0, 4.0, top - 10.0);
+        let corners = [
+            [x0, bottom, z0],
+            [x1, bottom, z0],
+            [x1, top, z0],
+            [x0, top, z0],
+            [x0, bottom, z1],
+            [x1, bottom, z1],
+            [x1, top, z1],
+            [x0, top, z1],
+        ]
+        .map(|c| Vector::new(c[0], c[1], c[2]));
+        let quads = [
+            [0, 1, 2, 3],
+            [4, 7, 6, 5],
+            [0, 4, 5, 1],
+            [1, 5, 6, 2],
+            [2, 6, 7, 3],
+            [3, 7, 4, 0],
+        ];
+        let mut triangles: Vec<[u32; 3]> = Vec::new();
+        for q in quads {
+            triangles.push([q[0], q[1], q[2]]);
+            triangles.push([q[0], q[2], q[3]]);
+        }
+        let reversed: Vec<[u32; 3]> = triangles.iter().map(|t| [t[2], t[1], t[0]]).collect();
+        triangles.extend(reversed);
+        world.insert(
+            RigidBodyBuilder::fixed(),
+            ColliderBuilder::trimesh(corners.to_vec(), triangles).unwrap(),
+        );
+    }
+    bri_physics::detect_collisions(&mut world);
+    world
+}
+
+#[test]
+fn a_walking_cylinder_goes_down_a_stair_of_touching_blocks_to_the_end() {
+    let mut w = stair_down();
+    let tuning = PlayerTuning {
+        body: Body::Cylinder,
+        follow_floor: true,
+        step_height: 1.28,
+        ..PlayerTuning::default()
+    };
+    let mut p = Player::spawn(&mut w, 1, Vec3::new(0.0, 0.05, 0.0), tuning).unwrap();
+    for _ in 0..600 {
+        p.step(
+            &mut w,
+            MoveInput {
+                forward: 1.0,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    }
+    let feet = p.state().feet;
+    assert!(
+        feet[2] < -0.96 * 6.0 && feet[1] < -0.64 * 5.0,
+        "stops on the stair: {feet:?}"
+    );
+}
