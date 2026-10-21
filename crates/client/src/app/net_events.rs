@@ -67,6 +67,13 @@ impl App {
                 bri_net::client::ArrivalEvent::Notice(bri_sim::session::Notice::Sound(profile)) => {
                     self.audio.profile(&profile, bri_audio::Placement::Listener);
                 }
+                bri_net::client::ArrivalEvent::Notice(bri_sim::session::Notice::SoundScaled {
+                    profile,
+                    volume,
+                }) => {
+                    self.audio
+                        .profile_scaled(&profile, bri_audio::Placement::Listener, volume);
+                }
                 bri_net::client::ArrivalEvent::Notice(bri_sim::session::Notice::Music(play)) => {
                     self.audio.play_music(&play);
                 }
@@ -771,6 +778,14 @@ impl App {
                         }
                         bri_sim::session::Notice::Sound(profile) => {
                             self.audio.profile(&profile, bri_audio::Placement::Listener);
+                            continue;
+                        }
+                        bri_sim::session::Notice::SoundScaled { profile, volume } => {
+                            self.audio.profile_scaled(
+                                &profile,
+                                bri_audio::Placement::Listener,
+                                volume,
+                            );
                             continue;
                         }
                         bri_sim::session::Notice::Flash { color, seconds } => {

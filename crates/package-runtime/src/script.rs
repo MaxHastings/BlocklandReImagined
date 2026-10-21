@@ -2737,14 +2737,36 @@ fn register_api(engine: &mut Engine) {
         push(Op::Sound(ops::Sound {
             profile: profile.into(),
             at: SoundAt::Player(id(&player)?),
+            volume: 1.0,
         }))
     });
+    engine.register_fn(
+        "play_sound",
+        |player: Dynamic, profile: &str, volume: Dynamic| {
+            push(Op::Sound(ops::Sound {
+                profile: profile.into(),
+                at: SoundAt::Player(id(&player)?),
+                volume: float(&volume)?,
+            }))
+        },
+    );
     engine.register_fn(
         "sound_at",
         |profile: &str, x: Dynamic, y: Dynamic, z: Dynamic| {
             push(Op::Sound(ops::Sound {
                 profile: profile.into(),
                 at: SoundAt::Position([float(&x)?, float(&y)?, float(&z)?]),
+                volume: 1.0,
+            }))
+        },
+    );
+    engine.register_fn(
+        "sound_at",
+        |profile: &str, x: Dynamic, y: Dynamic, z: Dynamic, volume: Dynamic| {
+            push(Op::Sound(ops::Sound {
+                profile: profile.into(),
+                at: SoundAt::Position([float(&x)?, float(&y)?, float(&z)?]),
+                volume: float(&volume)?,
             }))
         },
     );
