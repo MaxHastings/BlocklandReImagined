@@ -351,7 +351,9 @@ through it (still only at the surface's `penetration` share), `ricochet` takes
 the place of the surface's, 0 to 1, and `thickness` (0 to 64 units) is how far
 a ray is taken to travel inside it, in place of the way it measures to the
 far face. A ray that goes through a shape without a `thickness` meets the
-shape's far face as no landing: it spends the range and goes on. A detail
+shape's far face as no landing: it spends the range and goes on, unless the trace sets
+`exit_lands` (default off), which makes that face a landing like any other, with
+its own glance draw and the surface's `penetration` share again. A detail
 with no `shot` leaves everything to the surface name. A landing on a player stops it, and
 so does a strength under `floor` or `max_landings` (1 to 16) landings.
 `surfaces` names kinds as map materials and `surface_kind` give them (up to
