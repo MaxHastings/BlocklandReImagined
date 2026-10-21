@@ -2,7 +2,8 @@
 //! whether friends can reach it.
 //!
 //! Only the host's own router is asked anything; no outside service is
-//! contacted. The router forwards the game port (UPnP IGD, then NAT-PMP) and
+//! contacted, unless the player names a STUN server for the public address
+//! the router did not report. The router forwards the game port (UPnP IGD, then NAT-PMP) and
 //! reports its outside address, and the host then probes that address over
 //! the game port. A router that loops the probe back proves the path works;
 //! one that does not leaves a "should work" verdict. A router whose outside
@@ -74,6 +75,9 @@ pub struct Report {
     pub forward_error: Option<String>,
     /// The invite to share, when there is a public address.
     pub invite: Option<String>,
+    /// The short join code for the public address ([`crate::address_code`]),
+    /// typed by a friend instead of the invite.
+    pub code: Option<String>,
     /// An invite at this PC's home network address, for players on the same
     /// network (and friends once the port is forwarded, with the public
     /// address swapped in).
@@ -95,6 +99,7 @@ impl std::fmt::Debug for Report {
                 &self.forward_error.as_deref().map(redact_addresses),
             )
             .field("invite", &set(self.invite.is_some()))
+            .field("code", &set(self.code.is_some()))
             .field("lan_invite", &set(self.lan_invite.is_some()))
             .finish()
     }
@@ -135,6 +140,13 @@ impl Report {
     /// Plain sentences for the host player, most important first.
     pub fn lines(&self) -> Vec<String> {
         let mut lines = self.verdict_lines();
+        if let Some(code) = &self.code
+            && !matches!(self.verdict, Verdict::SharedAddress | Verdict::Unknown)
+        {
+            lines.push(format!(
+                "Or give friends your join code: {code} (they type it in Join Server)."
+            ));
+        }
         if self.invite.is_none()
             && let Some(lan) = &self.lan_invite
         {
@@ -197,6 +209,16 @@ const SELF_PROBE: Duration = Duration::from_secs(3);
 /// `certificate` on it can be reached. Returns the forward to hold for as
 /// long as the host runs.
 pub async fn open_and_check(port: u16, certificate: Vec<u8>) -> (Report, Option<Forward>) {
+    open_and_check_with(port, certificate, None).await
+}
+
+/// [`open_and_check`], asking the STUN server `stun` (`host:port`) for the
+/// public address when the router reported none.
+pub async fn open_and_check_with(
+    port: u16,
+    certificate: Vec<u8>,
+    stun: Option<&str>,
+) -> (Report, Option<Forward>) {
     let local_ip = local_ip();
     let forward = tokio::task::spawn_blocking(move || open_forward(port, local_ip)).await;
     let (forward, forward_error) = match forward {
@@ -212,6 +234,22 @@ pub async fn open_and_check(port: u16, certificate: Vec<u8>) -> (Report, Option<
         Some(Forward::NatPmp(m)) if m.external_port != 0 => m.external_port,
         _ => port,
     };
+    let mut forward_error = forward_error;
+    let mut router_ip = router_ip;
+    if router_ip.is_none()
+        && let Some(server) = stun.filter(|s| !s.trim().is_empty())
+    {
+        match crate::stun::public_ip(server.trim()).await {
+            Ok(ip) => router_ip = Some(IpAddr::V4(ip)),
+            Err(error) => {
+                let note = format!("STUN: {error:#}");
+                forward_error = Some(match forward_error {
+                    Some(earlier) => format!("{earlier}; {note}"),
+                    None => note,
+                });
+            }
+        }
+    }
     let public = router_ip
         .filter(|ip| is_public(*ip))
         .map(|ip| SocketAddr::new(ip, external_port));
@@ -231,6 +269,7 @@ pub async fn open_and_check(port: u16, certificate: Vec<u8>) -> (Report, Option<
         method: forward.as_ref().map(Forward::method),
         forward_error,
         invite: public.map(|address| invite(address, &certificate)),
+        code: public.and_then(crate::address_code::encode),
         lan_invite: local_ip.map(|ip| invite(SocketAddr::new(ip, port), &certificate)),
     };
     (report, forward)
@@ -325,6 +364,7 @@ mod tests {
                 method: Some("UPnP"),
                 forward_error: None,
                 invite: Some("bri://203.0.113.10:28000/key".into()),
+                code: None,
                 lan_invite: Some("bri://192.168.1.23:28000/key".into()),
             };
             let text = report.lines().join(" ");
@@ -351,6 +391,7 @@ mod tests {
             method: None,
             forward_error: Some("UPnP: no gateway at http://192.168.1.1:5000/rootDesc.xml".into()),
             invite: Some("bri://203.0.113.10:28000/SECRETKEY".into()),
+            code: Some("SECRET-CODE".into()),
             lan_invite: Some("bri://192.168.1.23:28000/SECRETKEY".into()),
         }
     }
@@ -368,6 +409,17 @@ mod tests {
         let ok = report(Verdict::Reachable).lines().join(" ");
         assert!(ok.contains("Friends can join"), "{ok}");
         assert!(!ok.contains("forward UDP"), "{ok}");
+    }
+    #[test]
+    fn a_join_code_is_offered_only_where_friends_can_use_it() {
+        for verdict in [Verdict::Reachable, Verdict::Likely, Verdict::NeedsForward] {
+            let text = report(verdict).lines().join(" ");
+            assert!(text.contains("join code: SECRET-CODE"), "{verdict:?}: {text}");
+        }
+        for verdict in [Verdict::SharedAddress, Verdict::Unknown] {
+            let text = report(verdict).lines().join(" ");
+            assert!(!text.contains("SECRET-CODE"), "{verdict:?}: {text}");
+        }
     }
     /// What goes to the console, logs and bug reports carries no address or
     /// invite key.
@@ -404,6 +456,7 @@ mod tests {
             method: None,
             forward_error: Some("no UPnP router".into()),
             invite: None,
+            code: None,
             lan_invite: Some("bri://192.168.88.254:28000/key".into()),
         };
         let text = report.lines().join(" ");

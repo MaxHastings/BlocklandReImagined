@@ -123,27 +123,43 @@ query, is now Favorite/Unfavorite for the selected server. Favourites are
 listed first and marked `*`. A saved server that does not answer shows why in
 the Map column: no answer, host changed, other version, unknown name.
 
-## Join codes and a relay
+## Join codes
 
-A host that runs the join code service (`bri-rendezvous`, a binary you run
-yourself; nothing is hosted for you) registers and gets a short code like
-`K7Q-4MZ`. A player gives the code to `Client::connect_code`, which asks the
-service where the host is, then sends packets from the game port so both
-routers open for each other (hole punching over QUIC). Every route is tried
-at once from one socket; after 1.5 seconds the service's relay is tried too,
-and the join takes whichever answers first. The relay forwards QUIC packets it
-cannot read, so the join stays end to end encrypted and pinned to the host's
-key. The service stores nothing but its own certificate and limits codes per
-address, lookups per minute and relay bandwidth.
+No service of ours is involved. When a host opens to the internet, the game
+forwards its port (UPnP, then NAT-PMP) and learns the public address from the
+router. If the router reports none and the player has named a STUN server
+(`$Pref::Server::StunServer`, `host:port`; empty by default, nothing is built
+in), the game asks that server for it instead. The host's report then adds a
+join code to the invite: the public IPv4 address and port as eleven
+characters, `XXXX-XXXX-XXX` (`crate::address_code`). The code *is* the
+address, so a friend types it into Join Server and connects directly; there
+is no lookup. The last character is a check, so a single mistyped character
+is refused rather than joining a stranger. A code carries no host key, so
+the first join trusts the certificate and pins it, as typing an address
+does; an invite still pins from the first join.
 
-`JoinTarget::Code` is the code as typed; `JoinTarget::resolve` refuses it,
-because a code needs the socket the join then uses (`crate::codes`). The
-transport is proven by `bri_rendezvous::natsim`, a home router simulator (RFC
-4787 mapping and filtering) behind quinn's socket: direct joins through two
-port-restricted routers, relay joins through symmetric ones, and a plain
-failure with no relay (`join_codes_*` in `crates/net/tests/loopback.rs`).
-What is not wired yet: the Join screen taking a code, the Host screen showing
-one, and a setting for the service address.
+If the router refuses the forward, the host is told so plainly (forward UDP
+port X, or turn on UPnP) and still gets the code to hand out once the port is
+forwarded. A host behind a shared (carrier-grade) address gets no code,
+because no one outside can reach it. IPv6 has no code yet.
+
+### Optional: a rendezvous service and relay
+
+`bri-rendezvous` is a service anyone may run themselves (`bri-rendezvous`
+binary): a host registers and gets a short code (`K7Q-4MZ`), and a player
+looks it up, so neither needs a forwarded port. Both send packets from their
+game ports so their routers open (hole punching over QUIC); if that fails the
+service relays the traffic, still end to end encrypted. It is dormant: no
+service address is shipped (`crate::codes::DEFAULT_SERVICE` is `None`), an
+empty `$pref::Net::JoinCodeService` means off, and the Host and Join screens
+do not call it yet, so the default path never touches one.
+`JoinTarget::Code` is such a code as typed,
+`Client::connect_code` joins with one and `ServerHandle::host_code` takes one,
+for a build or Add-On that supplies a `JoinCodes` provider (`crate::codes`).
+`bri_rendezvous::natsim`, a home router simulator (RFC 4787 mapping and
+filtering) behind quinn's socket, proves it in
+`crates/net/tests/loopback.rs`: direct joins through two port-restricted
+routers, relay joins through symmetric ones, a plain failure with no relay.
 
 ## Later
 

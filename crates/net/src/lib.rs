@@ -1,5 +1,6 @@
 //! QUIC transport and bounded replication for native game sessions.
 pub mod addon_data;
+pub mod address_code;
 mod admin_store;
 pub mod allocator;
 pub mod backlog;
@@ -23,6 +24,7 @@ pub mod replay;
 pub mod replica;
 pub mod server;
 pub mod stream;
+pub mod stun;
 pub mod testing;
 mod tick_clock;
 pub mod timer_resolution;

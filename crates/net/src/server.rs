@@ -366,12 +366,21 @@ impl ServerHandle {
     /// report is handed to `notify` once. LAN discovery (UDP 28050) is never
     /// forwarded: joining over the internet needs only the game port.
     pub fn open_to_internet(&mut self, notify: impl FnOnce(crate::reach::Report) + Send + 'static) {
+        self.open_to_internet_with(None, notify);
+    }
+    /// [`ServerHandle::open_to_internet`], asking the STUN server `stun`
+    /// (`host:port`) for the public address when the router reports none.
+    pub fn open_to_internet_with(
+        &mut self,
+        stun: Option<String>,
+        notify: impl FnOnce(crate::reach::Report) + Send + 'static,
+    ) {
         let port = self.address.port();
         let certificate = self.certificate.clone();
         let slot = Arc::new(std::sync::Mutex::new(None::<crate::reach::Forward>));
         let held = slot.clone();
         let task = tokio::spawn(async move {
-            let (report, forward) = crate::reach::open_and_check(port, certificate).await;
+            let (report, forward) = crate::reach::open_and_check_with(port, certificate, stun.as_deref()).await;
             notify(report);
             let Some(forward) = forward else { return };
             if let Ok(mut guard) = held.lock() {
