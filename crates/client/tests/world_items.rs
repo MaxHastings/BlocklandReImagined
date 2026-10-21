@@ -109,13 +109,13 @@ fn a_model_missing_for_a_frame_is_not_built_again(f: &ItemFixture) -> Result<()>
     }
     let gpu = gpu::turn()?;
     let renderer = SceneRenderer::new(&gpu.device, wgpu::TextureFormat::Rgba8UnormSrgb);
-    adapter.upload(&renderer, &gpu.device, &gpu.queue)?;
+    adapter.upload(&renderer, &gpu.device, &gpu.queue, &|_| None)?;
     let uploads = adapter.diagnostics.model_uploads;
     adapter.sync(&WeaponView::default(), frame(), pose)?;
-    adapter.upload(&renderer, &gpu.device, &gpu.queue)?;
+    adapter.upload(&renderer, &gpu.device, &gpu.queue, &|_| None)?;
     assert!(adapter.draws().is_empty());
     adapter.sync(&held, frame(), pose)?;
-    adapter.upload(&renderer, &gpu.device, &gpu.queue)?;
+    adapter.upload(&renderer, &gpu.device, &gpu.queue, &|_| None)?;
     assert_eq!(adapter.draws().len(), drawn);
     assert_eq!(adapter.diagnostics.model_uploads, uploads, "textures kept");
     drop(gpu);
@@ -277,7 +277,7 @@ fn shared_gpu_geometry_clears_and_recreates_without_cpu_loss(f: &ItemFixture) ->
         ..Default::default()
     };
     adapter.sync(&view, frame(), |_| None)?;
-    adapter.upload(&renderer, &gpu.device, &gpu.queue)?;
+    adapter.upload(&renderer, &gpu.device, &gpu.queue, &|_| None)?;
     assert_eq!(adapter.model_scenes().count(), 1);
     assert_eq!(
         adapter.draws().len(),
@@ -294,7 +294,7 @@ fn shared_gpu_geometry_clears_and_recreates_without_cpu_loss(f: &ItemFixture) ->
         1,
         "device reset should preserve CPU-authored data"
     );
-    adapter.upload(&renderer, &gpu.device, &gpu.queue)?;
+    adapter.upload(&renderer, &gpu.device, &gpu.queue, &|_| None)?;
     assert_eq!(adapter.draws().len(), 1);
     assert_eq!(adapter.diagnostics.model_uploads, 2);
     assert_eq!(adapter.diagnostics.shared_geometry_uploads, 2);
@@ -550,7 +550,7 @@ fn actual_item_instances_match_independently_baked_world_geometry(f: &ItemFixtur
         frame(),
         |_| None,
     )?;
-    adapter.upload(&renderer, &gpu.device, &gpu.queue)?;
+    adapter.upload(&renderer, &gpu.device, &gpu.queue, &|_| None)?;
     // A world item looks like the image it is held as: its model and tint
     // (`Presentation::item_appearance`).
     let look = assets
@@ -596,7 +596,7 @@ fn actual_item_instances_match_independently_baked_world_geometry(f: &ItemFixtur
         "shared item models must match independent CPU world transforms"
     );
     adapter.clear_gpu();
-    adapter.upload(&renderer, &gpu.device, &gpu.queue)?;
+    adapter.upload(&renderer, &gpu.device, &gpu.queue, &|_| None)?;
     assert_eq!(
         actual,
         pixels(&gpu, &mut renderer, &[], &adapter.draws(), &camera)?
@@ -703,7 +703,7 @@ fn a_thrown_image_hides_without_crashing_the_renderer(f: &ItemFixture) -> Result
     // Mid-throw (hidden) and after it (shown again).
     for seconds in [1.0, 1.05, 1.5] {
         adapter.sync(&view, WorldItemFrame { seconds, ..frame() }, pose)?;
-        adapter.upload(&renderer, &gpu.device, &gpu.queue)?;
+        adapter.upload(&renderer, &gpu.device, &gpu.queue, &|_| None)?;
         let draws = adapter.draws();
         let mut encoder = gpu.device.create_command_encoder(&Default::default());
         renderer.render_shadows(

@@ -2,6 +2,9 @@
 use super::*;
 use bri_console::Clamp;
 
+/// Half the size, in units, of the box a held or dropped item takes its zone and room light from.
+const ITEM_LIGHT_REACH: f32 = 0.5;
+
 impl App {
     pub(super) fn render_frame(&mut self, frame: &mut RenderContext<'_>) -> Result<bool> {
         self.fx.weapon_frame_observation = None;
@@ -583,8 +586,17 @@ impl App {
         // With shadows the first-person body is posed too: it casts a
         // shadow without being drawn.
         let casts = renderer.shadow_settings().is_some();
+        // Held and dropped items take the light of where they are, as bodies do.
+        let item_light = |at: [f32; 3]| {
+            let near = |sign: f32| at.map(|v| v + sign * ITEM_LIGHT_REACH);
+            self.lighting.light_volume.actor_light(
+                self.scene.regions.as_ref(),
+                near(-1.0),
+                near(1.0),
+            )
+        };
         self.world_items
-            .upload(renderer, frame.device, frame.queue)?;
+            .upload(renderer, frame.device, frame.queue, &item_light)?;
         crate::vehicles::ClientVehicles::upload(
             &mut self.vehicle_assets,
             renderer,
@@ -1007,28 +1019,11 @@ impl App {
             // baked volume) as a floor under the ambient, so a body in a lit
             // room reads as lit by it.
             let (low, high) = avatar.render_box();
-            let room = self
-                .lighting
-                .light_volume
-                .room_light(low.to_array(), high.to_array());
-            let lit_room = room.iter().any(|c| *c > 0.0);
-            avatar.light = match self.scene.regions.as_ref() {
-                Some(regions) => {
-                    let (ambient, suns) = regions.actor_light(low.to_array(), high.to_array(), 0.0);
-                    Some(bri_render::scene::ActorLight {
-                        ambient: [0, 1, 2].map(|c| ambient[c].max(room[c])),
-                        sun_first: suns.map_or(0, |s| s.0),
-                        sun_count: suns.map_or(0, |s| s.1),
-                        scene_sun: false,
-                    })
-                }
-                None => lit_room.then_some(bri_render::scene::ActorLight {
-                    ambient: room,
-                    sun_first: 0,
-                    sun_count: 0,
-                    scene_sun: true,
-                }),
-            };
+            avatar.light = self.lighting.light_volume.actor_light(
+                self.scene.regions.as_ref(),
+                low.to_array(),
+                high.to_array(),
+            );
             let textures = self
                 .avatar
                 .body_textures

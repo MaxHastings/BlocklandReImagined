@@ -5,8 +5,8 @@ use anyhow::{Context, Result, ensure};
 use bri_console::Clamp;
 use bri_content::shape::LiveValues;
 use bri_render::scene::{
-    ClipPlane, GpuInstances, GpuScene, KEEP_ALL, MeshBatch, SceneRenderer, SceneTransform,
-    SceneVertex,
+    ActorLight, ClipPlane, GpuInstances, GpuScene, KEEP_ALL, MeshBatch, SceneRenderer,
+    SceneTransform, SceneVertex,
 };
 use bri_sim::{
     presentation::{Cue, CueKind},
@@ -1312,6 +1312,7 @@ impl WorldItems {
         renderer: &SceneRenderer,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
+        light_at: &dyn Fn([f32; 3]) -> Option<ActorLight>,
     ) -> Result<()> {
         for model in self.models.values_mut() {
             if model.gpu.is_none() && model.slots.iter().any(|s| !s.transforms.is_empty()) {
@@ -1350,10 +1351,25 @@ impl WorldItems {
                         .min(self.limits.instances);
                     slot.instances = Some(GpuInstances::new(device, slot.instance_capacity)?);
                 }
-                if slot.instances.as_mut().unwrap().update_clipped(
+                // A lit moving thing (`MaterialKind::ActorLit`) takes the light
+                // of where it is; the scene's own where nothing says.
+                let lights: Vec<_> = slot
+                    .transforms
+                    .iter()
+                    .map(|t| {
+                        light_at(t.transform.w_axis.truncate().to_array()).unwrap_or(ActorLight {
+                            ambient: [0.0; 3],
+                            sun_first: 0,
+                            sun_count: 0,
+                            scene_sun: true,
+                        })
+                    })
+                    .collect();
+                if slot.instances.as_mut().unwrap().update_lit(
                     queue,
                     &slot.transforms,
                     &slot.clips,
+                    &lights,
                 )? {
                     self.diagnostics.instance_updates += 1;
                 }
