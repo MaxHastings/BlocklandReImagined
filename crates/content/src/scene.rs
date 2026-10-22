@@ -82,6 +82,11 @@ pub enum Kind {
     /// rungs), `strafe` (1 to let the strafe keys move sideways) and an
     /// `id`. The climber faces the node's local +Z, as at a teleporter exit.
     Climb,
+    /// A named box a rule can ask about ([`Volume`]): `properties` hold
+    /// `half` (half extents "x y z" in the node's axes), an optional `id` and
+    /// `priority` (a whole number, higher wins), and any other text a rule
+    /// reads back (a place's name, what it is for).
+    Volume,
     Unadapted,
 }
 
@@ -360,6 +365,36 @@ pub struct Teleporter {
 }
 /// Most climb volumes a scene may hold.
 pub const MAX_CLIMBS: usize = 256;
+/// Most [`Kind::Volume`] nodes a scene may hold.
+pub const MAX_VOLUMES: usize = 1024;
+/// Most extra properties one volume carries, and the longest key or value.
+pub const MAX_VOLUME_PROPERTIES: usize = 16;
+pub const MAX_VOLUME_TEXT: usize = 128;
+
+/// A [`Kind::Volume`] node read: a box in the map that rules look up by
+/// point (`volume_at`). The engine names no kind of volume; what one means is
+/// the rules' (a voice zone, a place's name, an objective).
+#[derive(Clone, Debug, PartialEq)]
+pub struct Volume {
+    pub node: usize,
+    pub id: String,
+    /// Among volumes holding the same point, the higher comes first.
+    pub priority: i32,
+    pub center: [f32; 3],
+    /// Half extents along the node's own axes.
+    pub half: [f32; 3],
+    /// The node's transform inverted, to put a point in the box's frame.
+    pub to_local: [f32; 16],
+    /// Every property but `half`, `id` and `priority`.
+    pub properties: BTreeMap<String, String>,
+}
+impl Volume {
+    /// Whether the world point `p` is inside the box (its faces count).
+    pub fn contains(&self, p: [f32; 3]) -> bool {
+        let local = Mat4::from_cols_array(&self.to_local).transform_point3(Vec3::from(p));
+        local.abs().cmple(Vec3::from(self.half)).all()
+    }
+}
 impl Scene {
     /// Every static model with a `mover` property, read and checked:
     /// the node's index and its keyed motion ([`crate::mover`]).
@@ -466,6 +501,79 @@ impl Scene {
         );
         Ok(out)
     }
+    /// Every [`Kind::Volume`] node, read and checked, highest `priority`
+    /// first and then in scene order.
+    pub fn volumes(&self) -> anyhow::Result<Vec<Volume>> {
+        use anyhow::{Context, ensure};
+        let mut out = Vec::new();
+        for (index, node) in self.nodes.iter().enumerate() {
+            if !matches!(node.kind, Kind::Volume) {
+                continue;
+            }
+            let half = node
+                .properties
+                .get("half")
+                .map(|v| {
+                    v.split_whitespace()
+                        .map(|w| w.parse::<f32>())
+                        .collect::<Result<Vec<_>, _>>()
+                })
+                .transpose()
+                .with_context(|| format!("Volume {}: half is not numbers", node.name))?
+                .unwrap_or_default();
+            ensure!(
+                half.len() == 3 && half.iter().all(|h| h.is_finite() && *h > 0.0),
+                "Volume {}: half needs three sizes above 0",
+                node.name
+            );
+            let priority = node
+                .properties
+                .get("priority")
+                .map(|v| v.trim().parse::<i32>())
+                .transpose()
+                .with_context(|| format!("Volume {}: priority is not a whole number", node.name))?
+                .unwrap_or(0);
+            let matrix = Mat4::from_cols_array(&node.transform);
+            ensure!(
+                matrix.determinant().is_finite() && matrix.determinant().abs() > 1e-9,
+                "Volume {}: placement cannot be inverted",
+                node.name
+            );
+            let properties: BTreeMap<String, String> = node
+                .properties
+                .iter()
+                .filter(|(k, _)| !matches!(k.as_str(), "half" | "id" | "priority"))
+                .map(|(k, v)| (k.clone(), v.clone()))
+                .collect();
+            ensure!(
+                properties.len() <= MAX_VOLUME_PROPERTIES
+                    && properties
+                        .iter()
+                        .all(|(k, v)| k.len() <= MAX_VOLUME_TEXT && v.len() <= MAX_VOLUME_TEXT),
+                "Volume {}: at most {MAX_VOLUME_PROPERTIES} properties, each up to {MAX_VOLUME_TEXT} bytes",
+                node.name
+            );
+            out.push(Volume {
+                node: index,
+                id: node
+                    .properties
+                    .get("id")
+                    .cloned()
+                    .unwrap_or_else(|| node.name.clone()),
+                priority,
+                center: matrix.w_axis.truncate().to_array(),
+                half: [half[0], half[1], half[2]],
+                to_local: matrix.inverse().to_cols_array(),
+                properties,
+            });
+        }
+        ensure!(
+            out.len() <= MAX_VOLUMES,
+            "A map holds at most {MAX_VOLUMES} volumes"
+        );
+        out.sort_by_key(|v| std::cmp::Reverse(v.priority));
+        Ok(out)
+    }
     /// Every [`Kind::Teleporter`] node, read and checked.
     pub fn teleporters(&self) -> anyhow::Result<Vec<Teleporter>> {
         use anyhow::{Context, ensure};
@@ -562,6 +670,53 @@ mod tests {
             asset: asset.map(str::to_owned),
             properties: BTreeMap::new(),
         }
+    }
+
+    #[test]
+    fn volumes_hold_points_in_their_own_axes_and_come_in_priority_order() {
+        let volume = |name: &str, priority: &str, turn: f32, extra: &[(&str, &str)]| {
+            let mut n = node(Kind::Volume, 0.0, None);
+            n.name = name.into();
+            n.transform = Mat4::from_rotation_translation(
+                glam::Quat::from_rotation_y(turn),
+                Vec3::new(10.0, 0.0, 0.0),
+            )
+            .to_cols_array();
+            n.properties = BTreeMap::from([
+                ("half".into(), "4 2 1".into()),
+                ("priority".into(), priority.into()),
+            ]);
+            n.properties
+                .extend(extra.iter().map(|(k, v)| ((*k).into(), (*v).into())));
+            n
+        };
+        let scene = Scene {
+            schema_version: 1,
+            id: "test".into(),
+            name: "test".into(),
+            nodes: vec![
+                volume("low", "0", 0.0, &[]),
+                volume("high", "5", 0.0, &[("place", "Hall")]),
+                // A quarter turn puts its long side along Z.
+                volume("turned", "0", std::f32::consts::FRAC_PI_2, &[]),
+            ],
+            pending_scripts: vec![],
+        };
+        let found = scene.volumes().unwrap();
+        let names: Vec<&str> = found.iter().map(|v| v.id.as_str()).collect();
+        assert_eq!(names, ["high", "low", "turned"]);
+        assert_eq!(found[0].properties["place"], "Hall");
+        assert!(!found[0].properties.contains_key("half"));
+        assert!(found[0].contains([13.5, 1.0, 0.5]));
+        assert!(!found[0].contains([15.0, 0.0, 0.0]));
+        // Four units along the turned volume's local X is world Z.
+        assert!(found[2].contains([10.0, 0.0, 3.5]));
+        assert!(!found[2].contains([13.5, 0.0, 0.0]));
+        let mut bad = scene;
+        bad.nodes[0]
+            .properties
+            .insert("half".into(), "4 0 1".into());
+        assert!(bad.volumes().is_err());
     }
 
     #[test]
