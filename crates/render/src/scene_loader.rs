@@ -18,6 +18,13 @@ use std::{
     sync::Arc,
 };
 
+/// A map light past the shaded budget: drawn unshadowed, a spot with its cone
+/// (`scene::spot_words`, all zero for a point).
+#[derive(Clone, Copy, Debug)]
+pub struct OverflowLight {
+    pub light: crate::map_lighting::MapLight,
+    pub cone: [f32; 4],
+}
 /// A map's static scene plus its camera-following terrain placements.
 pub struct MapScene {
     pub scene: SceneData,
@@ -48,10 +55,11 @@ pub struct MapScene {
     /// Spot lights: an index into `modern_lights` and its cone words
     /// (`scene::spot_words`), for `SceneRenderer::set_map_light_spots`.
     pub light_spots: Vec<(usize, [f32; 4])>,
-    /// Plain lights past the shadowed budget (`map_lighting::MAX_LIGHTS`):
+    /// Lights past the shadowed budget (`map_lighting::MAX_LIGHTS`):
     /// they draw as unshadowed point lights with the same linear falloff, the
     /// nearest ones each frame (`SceneRenderer::update_lights`, colour w 1).
-    pub overflow_lights: Vec<crate::map_lighting::MapLight>,
+    /// A spot light keeps its cone.
+    pub overflow_lights: Vec<OverflowLight>,
     /// Set only by the modern loader, which reads no lightmaps: the map's
     /// room light, baked offline by `prepare_lighting`, for the bodies
     /// standing in it (`crate::light_volume::LightVolume`).
@@ -676,7 +684,8 @@ fn load_bundle_unscoped(root: &Path, map_id: &str, legacy: bool) -> Result<MapSc
     let authored = scene.lights()?;
     let mut light_animations = Vec::new();
     let mut light_spots = Vec::new();
-    let mut overflow_lights = Vec::new();
+    let mut overflow_lights: Vec<OverflowLight> = Vec::new();
+    let mut left_out = 0usize;
     let light_volume = if legacy {
         None
     } else {
@@ -715,21 +724,31 @@ fn load_bundle_unscoped(root: &Path, map_id: &str, legacy: bool) -> Result<MapSc
                 continue;
             }
             if lights.len() >= crate::map_lighting::MAX_LIGHTS {
-                // Past the shadowed budget only plain lights can draw: a cone
-                // or an animation needs a shaded slot.
-                if light.spot.is_some() || light.animation.is_some() {
+                // Past the shadowed budget a light draws unshadowed, a spot
+                // with its cone; an animation needs a shaded slot.
+                if light.animation.is_some() {
+                    left_out += 1;
                     out.omissions.push(format!(
-                        "Map light at node {} left out: a map shades at most {} lights, and only plain lights draw past them",
+                        "Map light at node {} left out: a map shades at most {} lights, and only static lights draw past them",
                         light.node,
                         crate::map_lighting::MAX_LIGHTS
                     ));
                 } else {
-                    overflow_lights.push(crate::map_lighting::MapLight {
-                        position: light.position,
-                        color: light.color,
-                        inner: light.inner,
-                        outer: light.outer,
-                        channel: None,
+                    overflow_lights.push(OverflowLight {
+                        light: crate::map_lighting::MapLight {
+                            position: light.position,
+                            color: light.color,
+                            inner: light.inner,
+                            outer: light.outer,
+                            channel: None,
+                        },
+                        cone: light.spot.map_or([0.0; 4], |spot| {
+                            crate::scene::spot_words(
+                                Vec3::from(spot.direction),
+                                spot.inner,
+                                spot.outer,
+                            )
+                        }),
                     });
                 }
                 continue;
@@ -750,6 +769,16 @@ fn load_bundle_unscoped(root: &Path, map_id: &str, legacy: bool) -> Result<MapSc
                 outer: light.outer,
                 channel: None,
             });
+        }
+        if !authored.is_empty() {
+            let summary = format!(
+                "Map lights of {map_id}: {} authored, {} shaded, {} unshadowed overflow (the nearest {} draw at once), {left_out} left out",
+                authored.len(),
+                lights.len(),
+                overflow_lights.len(),
+                crate::scene::MAX_POINT_LIGHTS
+            );
+            eprintln!("{summary}");
         }
         Some(lights)
     };
