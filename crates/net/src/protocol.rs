@@ -694,6 +694,7 @@ impl RemotePose {
                             lean,
                             lean_to: lean,
                             climbing: false,
+                            drive: None,
                         }
                     },
                 ),
