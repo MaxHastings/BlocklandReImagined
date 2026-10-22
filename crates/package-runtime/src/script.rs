@@ -3553,6 +3553,12 @@ fn register_presentation(engine: &mut Engine) {
             scale: float(&scale)?,
         }))
     });
+    engine.register_fn("set_can_jump", |player: Dynamic, can: bool| {
+        push(Op::SetCanJump(ops::SetCanJump {
+            player: id(&player)?,
+            can,
+        }))
+    });
     engine.register_fn("set_walking", |player: Dynamic, walking: bool| {
         push(Op::SetWalking(ops::SetWalking {
             player: id(&player)?,
