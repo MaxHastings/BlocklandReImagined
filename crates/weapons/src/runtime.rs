@@ -690,6 +690,8 @@ pub enum Event {
     Blast {
         source: ActorId,
         position: Vec3,
+        /// Outward collision normal, absent for an in-flight/fuse explosion.
+        normal: Option<Vec3>,
         radius: f32,
         /// The exploding projectile's definition id.
         projectile: String,
@@ -5618,6 +5620,7 @@ impl WeaponsWorld {
         self.events.push(Event::Blast {
             source: p.source,
             position: p.position,
+            normal: direction,
             radius,
             projectile: p.definition.clone(),
         });

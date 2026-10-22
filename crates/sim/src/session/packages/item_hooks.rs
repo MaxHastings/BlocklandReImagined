@@ -16,6 +16,14 @@ const MAX_DROP_DATA: usize = 1024;
 /// Items one package may have lying in the world from `drop_item`.
 const MAX_PACKAGE_DROPS: usize = 64;
 
+struct PendingBlast {
+    projectile: String,
+    source: ActorId,
+    position: Vec3,
+    radius: f32,
+    normal: Option<Vec3>,
+}
+
 /// What `on_pickup` decided for an item a player touches.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(in crate::session) enum Pickup {
@@ -33,7 +41,7 @@ pub(in crate::session) struct ItemHooks {
     /// Each with the part of the player it struck, measured as it struck.
     hits: VecDeque<(ProjectileContact, Option<&'static str>)>,
     /// Projectile explosions: the projectile, who fired it, where, how far.
-    blasts: VecDeque<(String, ActorId, Vec3, f32)>,
+    blasts: VecDeque<PendingBlast>,
     /// What `on_drop` returned, by drop id.
     drop_data: BTreeMap<u64, serde_json::Value>,
     /// The package that put each `drop_item` pickup in the world.
@@ -286,6 +294,7 @@ impl Session {
         projectile: String,
         position: Vec3,
         radius: f32,
+        normal: Option<Vec3>,
     ) {
         if self.hooked(|b| b.on_explosion, &projectile).is_empty() {
             return;
@@ -301,19 +310,31 @@ impl Session {
             );
             return;
         }
-        host.item_hooks
-            .blasts
-            .push_back((projectile, source, position, radius));
+        host.item_hooks.blasts.push_back(PendingBlast {
+            projectile,
+            source,
+            position,
+            radius,
+            normal,
+        });
     }
 
     /// `on_explosion(blast)` for each explosion since the last tick, in
-    /// order: `#{ projectile, by, x, y, z, radius }`.
+    /// order: `#{ projectile, by, x, y, z, radius, nx, ny, nz }`.
+    /// Normal components are `()` when there was no collision.
     pub(super) fn deliver_blasts(&mut self) {
         let Some(host) = self.packages.as_mut() else {
             return;
         };
         let blasts = std::mem::take(&mut host.item_hooks.blasts);
-        for (projectile, source, position, radius) in blasts {
+        for PendingBlast {
+            projectile,
+            source,
+            position,
+            radius,
+            normal,
+        } in blasts
+        {
             let by = Some(source.0).filter(|o| self.peers.contains_key(o));
             let mut m = bri_package_runtime::rhai::Map::new();
             m.insert("projectile".into(), projectile.clone().into());
@@ -325,6 +346,12 @@ impl Session {
                 m.insert(key.into(), Dynamic::from_float(f64::from(v)));
             }
             m.insert("radius".into(), Dynamic::from_float(f64::from(radius)));
+            for (axis, key) in ["nx", "ny", "nz"].into_iter().enumerate() {
+                m.insert(
+                    key.into(),
+                    normal.map_or(Dynamic::UNIT, |n| Dynamic::from_float(f64::from(n[axis]))),
+                );
+            }
             let map = Dynamic::from_map(m);
             for package in self.hooked(|b| b.on_explosion, &projectile) {
                 let _ = self.run_package(

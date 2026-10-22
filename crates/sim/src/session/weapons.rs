@@ -1080,12 +1080,13 @@ impl Session {
                 WeaponEvent::Blast {
                     source,
                     position,
+                    normal,
                     radius,
                     projectile,
                 } => {
                     self.bots
                         .notice(super::bots::Stimulus::blast(position, radius));
-                    self.package_blast(source, projectile, position, radius);
+                    self.package_blast(source, projectile, position, radius, normal);
                 }
                 WeaponEvent::Tumble {
                     actor, velocity, ..

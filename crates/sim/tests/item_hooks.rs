@@ -40,8 +40,10 @@ fn on_projectile_hit(hit) {
 }
 fn on_explosion(b) {
     set("boom", `${b.projectile}|${b.by}|${b.radius}|${b.y > 0.0}`);
+    set("blast_normal", [b.nx, b.ny, b.nz]);
 }
 fn cmd_lob(p) { fire("kit:projectile/blast", 30.0, 5.0, 30.0, 0.0, -10.0, 0.0, p); }
+fn cmd_contact_blast(p) { fire("kit:projectile/contact", 30.0, 5.0, 30.0, 0.0, -10.0, 0.0, p); }
 fn cmd_shoot(p) { fire("kit:projectile/round", 30.0, 5.0, 30.0, 0.0, -60.0, 0.0, p); }
 fn cmd_toss(p, item, x, z) { drop_item(item, x, 0.2, z); }
 fn cmd_bag(p, x, z) { drop_item("kit:weapon/ammo", x, 0.2, z, 0.0, 0.0, 0.0, #{ rounds: 25 }); }
@@ -94,6 +96,7 @@ fn behaviour() -> Value {
         "commands": [
             command("shoot", &[]),
             command("lob", &[]),
+            command("contact_blast", &[]),
             command("toss", &["string", "float", "float"]),
             command("bag", &["float", "float"]),
             command("take", &["string"]),
@@ -116,7 +119,8 @@ fn behaviour() -> Value {
                 "bits": counter,
                 "collected_from": { "default": "", "visible": "everyone" },
                 "hit": { "default": "", "visible": "everyone" },
-                "boom": { "default": "", "visible": "everyone" }
+                "boom": { "default": "", "visible": "everyone" },
+                "blast_normal": { "default": [], "visible": "everyone" }
             }
         }
     })
@@ -153,6 +157,11 @@ fn weapons() -> bri_weapons::Pack {
             }
         },
         "projectiles": {
+            "kit:projectile/contact": {
+                "speed": 10.0, "lifetime_ticks": 600, "fade_ticks": 0,
+                "collide_players": false,
+                "explosion": { "damage": 0.0, "radius": 20.0 }
+            },
             "kit:projectile/round": { "speed": 60.0, "lifetime_ticks": 240, "fade_ticks": 240 },
             "kit:projectile/blast": {
                 "speed": 10.0, "lifetime_ticks": 600, "fade_ticks": 0, "ballistic": true,
@@ -382,6 +391,28 @@ fn on_explosion_hears_a_blast_that_hurts_nobody_and_where_it_went_off() {
         json!(format!("kit:projectile/blast|{a}|20.0|true")),
         "{boom}"
     );
+    assert!(g.diagnostics().is_empty(), "{:?}", g.diagnostics());
+    assert_eq!(
+        g.value("blast_normal"),
+        json!([null, null, null]),
+        "a lifetime explosion has no current contact"
+    );
+}
+
+#[test]
+fn on_explosion_receives_the_actual_surface_normal_for_package_damage_rules() {
+    let mut g = Game::new();
+    let a = g.join(Vec3::new(0.0, 0.05, 0.0));
+    g.steps(2);
+    g.run(a, "contact_blast", vec![]).unwrap();
+    g.steps(120);
+    assert!(
+        g.value("boom")
+            .as_str()
+            .unwrap()
+            .starts_with(&format!("kit:projectile/contact|{a}|20.0|"))
+    );
+    assert_eq!(g.value("blast_normal"), json!([0.0, 1.0, 0.0]));
     assert!(g.diagnostics().is_empty(), "{:?}", g.diagnostics());
 }
 
