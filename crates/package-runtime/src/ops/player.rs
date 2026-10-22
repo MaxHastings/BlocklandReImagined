@@ -467,6 +467,52 @@ impl ScriptOp for SetLean {
     }
 }
 
+/// Carry a player up the ledge `ledge_at` found (`start_climb`): the body is
+/// set `back_off` out from the wall, rises straight up (accelerating at
+/// `accel` to at most `speed`) until its feet are `clear` above the ledge,
+/// is set down `land_in` back from the edge, and takes `end` (`"stand"`,
+/// `"crouch"`, `"prone"` or `"keep"`), all within `seconds`. The rules' own
+/// `fits` check and `on_climb_end` go with it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct StartClimb {
+    pub player: u64,
+    pub point: [f32; 3],
+    /// The wall's horizontal normal, toward the player.
+    pub normal: [f32; 2],
+    pub back_off: f32,
+    pub land_in: f32,
+    pub accel: f32,
+    pub speed: f32,
+    pub clear: f32,
+    pub seconds: f32,
+    pub end: String,
+}
+impl ScriptOp for StartClimb {
+    const CAPABILITY: &str = "player";
+    const NAME: &str = "start_climb";
+    fn bounded(&self) -> bool {
+        let StartClimb {
+            point,
+            normal,
+            back_off,
+            land_in,
+            accel,
+            speed,
+            clear,
+            seconds,
+            end,
+            ..
+        } = self;
+        finite(point)
+            && normal.iter().all(|v| v.is_finite())
+            && (normal[0].hypot(normal[1]) - 1.0).abs() < 1e-3
+            && [back_off, land_in, accel, speed, clear, seconds]
+                .iter()
+                .all(|v| v.is_finite() && **v >= 0.0)
+            && ["stand", "crouch", "prone", "keep"].contains(&end.as_str())
+    }
+}
+
 /// Add rounds of `ammo` to a player's reserve (an ammo box), up to the
 /// most its magazines carry.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

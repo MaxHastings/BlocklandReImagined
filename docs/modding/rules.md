@@ -60,6 +60,7 @@ refused. The engine calls:
 | `on_drop_key(player)` | a living player with nothing in their hand presses the Drop Tool key (v20's `serverCmdDropTool` while `currTool` is -1), when `"on_drop_key": true`. Return `true` to take it; Add-Ons are asked in load order. Capture the Flag drops a carried flag this way |
 | `on_contact(info)` | two bodies begin to touch, when `"on_contact": true`: `info` is `#{ kind, by, target, vehicle, target_vehicle, from, speed, velocity }`, `kind` being `"body"` (one player's body meeting another's), `"vehicle"` (a vehicle running into a player) or `"vehicles"` (two vehicles crashing: `vehicle` ran into `target_vehicle`; `by` and `target` are their drivers or `()`). `from` is `"above"`, `"below"` or `"side"`; `velocity` is `by`'s less `target`'s as they met and `speed` its length. A stomp, a run-over or a crash means what the rules make it mean |
 | `on_volume(event)` | a living player's body centre goes into or out of a map volume, when `"on_volume": true` (see **Map volumes**) |
+| `on_climb_end(player)` | a climb the rules started with `start_climb` is over, when `"on_climb_end": true` (see **Ledges and climbing**) |
 | `on_object(event)` | an object comes into the world, leaves it or changes hands, whoever made it, when `"on_object": true` (see **Every object in the world**) |
 | `on_panel(player, event)` | a player does something in a panel your rules showed them, when `"on_panel": true` (see **Panels**) |
 | `on_addon_event(from, name, data)` | an Add-On you listen to sent an event (see **Add-Ons that build on each other**) |
@@ -117,6 +118,7 @@ run are left out. A new mini-game always starts with the default for every such 
 | `players()`, `bots()`, `player(id)` | `get_player(p, key)`, `set_player(p, key, v)` | `remove_brick`, `place_brick`, `set_block_state(brick, state)`: `world.edit` |
 | `aim()`, `me()`, `entities()` | `add_player(p, key, amount)` | `damage(target, amount[, by[, type]])`, `explode(...)`: `damage` |
 | `movers()` (every map mover), `mover(id)` (one, with its `params`; `id` is the string name of the map node), `movers_near(p, reach)` (the ids of the movers a player's body is within `reach` units of, 0 to 64: the doors in the Use key's reach), `volumes_at(x, y, z)` (the map's volumes holding a point, as `#{ id, priority, properties }` maps, highest `priority` first, then in map order), `volume_at(x, y, z)` (the first of them, or `()`; [Map volumes](#map-volumes)) | | `mover_goto(id, key, seconds)` (send a mover to key 0 to 15 over up to 600 seconds), `mover_stop(id)` (hold it where it is): `movers` ([Map movers](#map-movers)) |
+| `ledge_at(p, #{ ... })`, `fits([hx, hy, hz], x, y, z)` (see [Ledges and climbing](#ledges-and-climbing)) | | `start_climb(p, ledge, #{ ... })`: `player` |
 | `aim()`, `me()`, `entities()` | `add_player(p, key, amount)` | `damage(target, amount[, by[, type[, knock]]])` (`knock` is `[vx, vy, vz]` in units a second, at most 200 a part: the hit's Momentum / Mass, which a living player takes whoever may move them), `explode(...)`: `damage` |
 | `noise(seed, x, z)`, `hash3(seed, x, y, z)` | `entity_get(e, key)`, `entity_set(e, key, v)` | `spawn_entity`, `remove_entity`, `steer`, `label`: `entity` |
 | `object(ref)`, `objects()`, `objects_near(x, y, z, r)`, `held(p)`, `tethered(p)` | | `teleport(p, x, y, z[, yaw])` (keeps their facing unless a `yaw` in radians turns them: 0 faces -Z, a quarter turn faces +X), `respawn`, `remove_body(p)` (takes the body away without a death: no score, no death line, no `on_death`; they wait to respawn like the dead), `scroll_mode(p, mode)` (what the mouse wheel and number keys pick: `"none"`, `"bricks"`, `"paint"` or `"tools"`, leaving what is in hand), `set_archetype`, `push_archetype`, `pop_archetype`, `control(p, entity)`, `release(p)`, `give_item(p, item, equip)`, `take_item(p, item)`, `drop_item(item, x, y, z[, vx, vy, vz[, data]])`, `drop_item(item, #{ ... })`, `remove_drop(id)`, `name_drop(id, text, c)`: `player` |
@@ -1394,3 +1396,42 @@ out of a volume: `event` is `#{ kind, player, id, priority, properties }`, `kind
 being `"enter"` or `"leave"` and the rest the volume as `volumes_at` gives it. A
 player who dies or leaves the game leaves every volume they were in. No more
 than 256 changes are told a tick; the rest follow on the next.
+
+## Ledges and climbing
+
+Three seams for climbing up a ledge, with every length and speed the rules'
+own (nothing here knows how high a body reaches or what key starts it).
+
+`ledge_at(p, #{ reach, wall_reach, drop, up, edge_half[, vertical, max_slope, inset] })`
+looks along player `p`'s view from the eye, `reach` units. The hit must be a
+vertical wall of the map (`|ny|` at most `vertical`, default 0.0001; a mover,
+brick or body is not). If the view lands on a ledge's top instead, a second
+trace starts `drop` below that hit and goes horizontally toward it,
+`wall_reach` units. The wall must lie within `wall_reach` of the eye,
+horizontally. Its top is found by looking down onto it from `up` above the
+hit, a hair (`inset`, default 0.05) inside the wall, at the hit and `edge_half`
+either way along the wall; the edge's rise over run must be at most
+`max_slope` (default 0.5). It returns `#{ x, y, z, nx, nz, height, slope,
+edge_a, edge_b }`: the point on the top edge below the hit, the wall's
+horizontal normal (toward the player), the point's height above the feet, the
+edge's slope and two points on the edge. Or `()` for no ledge. The map's
+collision is one body of geometry to this trace: a static model is not told
+from a wall, as it is not in `raycast`. Each call counts as a ray.
+
+`fits([hx, hy, hz], x, y, z)` is whether a box of those half extents centred
+on the point touches nothing that never moves (the map, bricks). A rule tries
+its standing box, then crouched, then prone, at the ledge raised by the body's
+height, to choose how the climb ends.
+
+`start_climb(p, ledge, #{ back_off, land_in, accel, speed, clear, seconds, end })`
+takes the map `ledge_at` returned and carries player `p` up it: the body is set
+`back_off` out from the wall, rises straight up (`accel` units a second
+squared, to at most `speed`) until its feet are `clear` above the ledge, is set
+down `land_in` back from the edge, and takes `end`: `"stand"`, `"crouch"`,
+`"prone"` or `"keep"` (the crouch key decides again from the next tick). It
+takes at most `seconds` (up to 5), and replaces a climb already under way.
+The climb is part of the player's state, so prediction climbs as the host
+does. The rules decide the rest: what starts it, when it is refused (while
+crouched or prone, after a hard fall), how high a body may grab, and what
+animation plays. `on_climb_end(player)` (with `"on_climb_end": true` in the
+behaviour) is told, at the start of the next tick, that the climb is over.

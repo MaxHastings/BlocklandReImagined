@@ -151,6 +151,7 @@ macro_rules! for_each_op {
             SetCanJump = player,
             SetProne = player,
             SetLean = player,
+            StartClimb = player,
             GiveAmmo = player,
             SetReserve = player,
             SetRounds = player,

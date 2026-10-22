@@ -40,6 +40,7 @@ mod host_data;
 pub(super) mod perform;
 pub(in crate::session) use game_hooks::Answer;
 pub use host_data::{AddOnData, MemoryAddOnData};
+mod climb_hooks;
 pub(super) mod copy_hooks;
 mod item_hooks;
 mod object_hooks;
@@ -3095,6 +3096,7 @@ impl Session {
         self.deliver_addon_events();
         self.deliver_object_changes();
         self.deliver_volume_changes();
+        self.deliver_climb_ends();
         self.step_zones();
         self.step_paths();
         self.step_object_cameras();

@@ -482,6 +482,52 @@ impl Perform for ops::SetLean {
         Ok(())
     }
 }
+impl Perform for ops::StartClimb {
+    fn check(&self, session: &Session, _cx: OpCall<'_>) -> Result<()> {
+        let peer = session.peers.get(&self.player).context("No such player")?;
+        ensure!(peer.combat.alive, "Only living players climb");
+        Ok(())
+    }
+    fn perform(self, session: &mut Session, _cx: OpCall<'_>) -> Result<()> {
+        let ops::StartClimb {
+            player,
+            point,
+            normal,
+            back_off,
+            land_in,
+            accel,
+            speed,
+            clear,
+            seconds,
+            end,
+        } = self;
+        let peer = session.peers.get_mut(&player).context("No such player")?;
+        ensure!(peer.combat.alive, "Only living players climb");
+        let end = match end.as_str() {
+            "stand" => bri_motor::player::MantleEnd::Stand,
+            "crouch" => bri_motor::player::MantleEnd::Crouch,
+            "prone" => bri_motor::player::MantleEnd::Prone,
+            _ => bri_motor::player::MantleEnd::Keep,
+        };
+        ensure!(
+            peer.player.set_mantle(Some(bri_motor::player::Mantle {
+                point,
+                normal,
+                back_off,
+                land_in,
+                accel,
+                speed,
+                clear,
+                seconds,
+                end,
+                snapped: false,
+            })),
+            "This body cannot climb that ledge now"
+        );
+        peer.climbing_ledge = true;
+        Ok(())
+    }
+}
 impl Perform for ops::GiveAmmo {
     fn check(&self, session: &Session, _cx: OpCall<'_>) -> Result<()> {
         ensure!(session.peers.contains_key(&self.player), "No such player");

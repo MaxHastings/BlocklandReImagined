@@ -3,7 +3,7 @@
 //! engine's own weapons use.
 use super::*;
 use bri_package_runtime::ops::ObjectRef;
-use bri_package_runtime::script::{RayHit, RayTarget, World};
+use bri_package_runtime::script::{Ledge, LedgeProbe, RayHit, RayTarget, World};
 use bri_weapons::{Filter, Query, TargetId};
 use std::cell::OnceCell;
 
@@ -90,6 +90,98 @@ impl World for ScriptWorld<'_> {
             distance: leg.start + hit.fraction * leg.length,
             region,
         })
+    }
+    fn ledge(&self, player: u64, probe: &LedgeProbe) -> Option<Ledge> {
+        let peer = self.session.peers.get(&player)?;
+        let state = peer.player.state();
+        let eye = peer.player.eye();
+        let look = state.forward();
+        let wall = |hit: &RayHit| {
+            matches!(hit.target, RayTarget::Map) && hit.normal[1].abs() <= probe.vertical
+        };
+        let mut hit = self.raycast(eye.to_array(), look.to_array(), probe.reach, Some(player))?;
+        if !matches!(hit.target, RayTarget::Map) {
+            return None;
+        }
+        // The view met a ledge's top (or a floor): look again toward it from
+        // below, for the wall under it.
+        if hit.normal[1].abs() > probe.vertical {
+            let flat = Vec3::new(look.x, 0.0, look.z).normalize_or_zero();
+            if flat == Vec3::ZERO {
+                return None;
+            }
+            let from = Vec3::from(hit.position) - Vec3::Y * probe.drop;
+            hit = self.raycast(
+                from.to_array(),
+                flat.to_array(),
+                probe.wall_reach,
+                Some(player),
+            )?;
+        }
+        if !wall(&hit) {
+            return None;
+        }
+        let at = Vec3::from(hit.position);
+        if Vec3::new(at.x - eye.x, 0.0, at.z - eye.z).length() > probe.wall_reach {
+            return None;
+        }
+        let normal = glam::Vec2::new(hit.normal[0], hit.normal[2]).normalize_or_zero();
+        if normal == glam::Vec2::ZERO {
+            return None;
+        }
+        // The wall's top, found by looking down onto it a hair inside the
+        // wall, `along` its face from the hit.
+        let tangent = Vec3::new(-normal.y, 0.0, normal.x);
+        let inward = Vec3::new(normal.x, 0.0, normal.y);
+        let top = |along: f32| -> Option<f32> {
+            let from = at + tangent * along - inward * probe.inset + Vec3::Y * probe.up;
+            let down = self.raycast(
+                from.to_array(),
+                [0.0, -1.0, 0.0],
+                probe.up + probe.drop,
+                Some(player),
+            )?;
+            (matches!(down.target, RayTarget::Map) && down.normal[1] > 0.5)
+                .then_some(down.position[1])
+        };
+        let (a, here, b) = (top(-probe.edge_half)?, top(0.0)?, top(probe.edge_half)?);
+        let slope = (b - a).abs() / (2.0 * probe.edge_half);
+        if slope > probe.max_slope {
+            return None;
+        }
+        let edge = |along: f32, y: f32| {
+            let p = at + tangent * along;
+            [p.x, y, p.z]
+        };
+        Some(Ledge {
+            point: [at.x, here, at.z],
+            normal: normal.to_array(),
+            edge: [edge(-probe.edge_half, a), edge(probe.edge_half, b)],
+            height: here - state.feet[1],
+            slope,
+        })
+    }
+    fn fits(&self, half: [f32; 3], at: [f32; 3]) -> bool {
+        use rapier3d::prelude::*;
+        let physics = &self.session.simulation.physics;
+        // Only what never moves: a body standing there moves aside.
+        let fixed = |_: ColliderHandle, c: &Collider| {
+            c.parent()
+                .is_none_or(|b| physics.bodies.get(b).is_some_and(|b| b.is_fixed()))
+        };
+        physics
+            .query_pipeline_with_filter(
+                QueryFilter::default()
+                    .exclude_sensors()
+                    .groups(bri_motor::player::moves_against(0))
+                    .predicate(&fixed),
+            )
+            .intersect_shape(
+                Pose::from_parts(Vector::from_array(at), Rotation::IDENTITY),
+                &Cuboid::new(Vector::from_array(half)),
+            )
+            .next()
+            .is_none()
     }
     fn enabled(&self, id: &str) -> bool {
         self.session
