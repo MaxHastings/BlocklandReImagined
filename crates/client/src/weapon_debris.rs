@@ -109,6 +109,13 @@ struct ShellDefinition {
     /// Spin picked again on every bounce.
     #[serde(default)]
     respin_on_bounce: bool,
+    /// Pitch and yaw spread of the throw, degrees; absent, `exit_variance_degrees`
+    /// turns it about Y.
+    #[serde(default)]
+    exit_spread: Option<[f32; 2]>,
+    /// Most the speed differs from `velocity` either way; absent, 8% of it.
+    #[serde(default)]
+    velocity_variance: Option<f32>,
     /// A bounce leaving it slower than this comes to rest.
     #[serde(default)]
     rest_speed: Option<f32>,
@@ -349,8 +356,10 @@ fn native_shell(mesh: &bri_weapons::ShellMesh) -> ShellDefinition {
         gravity_multiplier: 0.,
         exit_direction: mesh.exit_direction,
         exit_offset: mesh.exit_offset,
-        exit_variance_degrees: mesh.exit_variance,
+        exit_variance_degrees: 0.,
         velocity: mesh.velocity,
+        exit_spread: Some(mesh.exit_variance),
+        velocity_variance: Some(mesh.velocity_variance),
         acceleration: Some(mesh.acceleration),
         damping: mesh.damping,
         axis_spin: Some(mesh.spin),
@@ -389,6 +398,8 @@ fn add_on_shell(model: &str, casing: &bri_weapons::debris::Casing) -> ShellDefin
             .map(|v| finite(v, 0.).clamped(-100., 100.)),
         exit_variance_degrees: finite(casing.exit_variance, 20.).clamped(0., 180.),
         velocity: finite(casing.velocity, 1.).clamped(0., 200.),
+        exit_spread: None,
+        velocity_variance: None,
         acceleration: None,
         damping: [0.; 3],
         axis_spin: None,
@@ -421,6 +432,8 @@ impl WeaponDebrisAssets {
                 exit_offset: [0.; 3],
                 exit_variance_degrees: 15.,
                 velocity: 7.,
+                exit_spread: None,
+                velocity_variance: None,
                 acceleration: None,
                 damping: [0.; 3],
                 axis_spin: None,
@@ -726,12 +739,24 @@ impl WeaponDebris {
         // Engine-family assumption: shellExitVariance is a symmetric azimuthal
         // spread around the authored local ejection vector; Torque source only
         // exposes the scalar parameter, not the proprietary sampling routine.
-        let yaw = (rng.unit() * 2. - 1.) * d.exit_variance_degrees.to_radians();
-        let local = Quat::from_rotation_y(yaw) * dir;
+        let local = match d.exit_spread {
+            Some([pitch, yaw]) => {
+                Quat::from_rotation_y(rng.signed() * yaw.to_radians())
+                    * Quat::from_rotation_x(rng.signed() * pitch.to_radians())
+                    * dir
+            }
+            None => {
+                Quat::from_rotation_y(rng.signed() * d.exit_variance_degrees.to_radians()) * dir
+            }
+        };
         let direction = eject.transform_vector3(local).normalize();
         let position = eject.transform_point3(Vec3::from_array(d.exit_offset));
         let speed = d.velocity;
-        let variation = (rng.unit() * 2. - 1.) * 0.08;
+        let variation = match d.velocity_variance {
+            Some(v) if speed > 0. => rng.signed() * v / speed,
+            Some(_) => 0.,
+            None => rng.signed() * 0.08,
+        };
         let spin = (d.min_spin_degrees_per_second
             + rng.unit() * (d.max_spin_degrees_per_second - d.min_spin_degrees_per_second))
             .to_radians();
@@ -1236,7 +1261,7 @@ mod tests {
             "schema_version": 5, "id": "kit", "items": {},
             "images": { "kit:image/rifle": { "id": "kit:image/rifle", "name": "rifle",
                 "shell_mesh": { "model": "kit/casing", "exit_direction": [0.0, 1.0, 0.0],
-                    "velocity": 2.0, "acceleration": [0.0, -30.0, 0.0],
+                    "velocity": 2.0, "velocity_variance": 0.5, "exit_variance": [5.0, 10.0], "acceleration": [0.0, -30.0, 0.0],
                     "damping": [0.5, 0.0, 0.5], "spin": [1.0, 1.0, 1.0],
                     "respin_on_bounce": true, "bounce": 0.4, "rest_speed": 4.0,
                     "lifetime": 10.0, "sound": "kit:casing" },

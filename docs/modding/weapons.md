@@ -742,7 +742,7 @@ eject point's frame, the rest in the world's:
 ```json
 "shell_mesh": {
   "model": "your-id:model/casing", "exit_direction": [1, 1, 0],
-  "exit_offset": [0, 0, 0], "exit_variance": 15, "velocity": 3,
+  "exit_offset": [0, 0, 0], "exit_variance": [5, 15], "velocity": 3, "velocity_variance": 0.8,
   "acceleration": [0, -30, 0], "damping": [0.45, 0.45, 0.45],
   "spin": [1, 1, 1], "respin_on_bounce": true,
   "bounce": 0.4, "rest_speed": 4, "lifetime": 10,
@@ -750,7 +750,7 @@ eject point's frame, the rest in the world's:
 }
 ```
 
-`damping` is the fraction of each axis's velocity lost per second; `spin` is the
+`exit_variance` is the most each throw turns the direction, in degrees, about the eject point's X (pitch) and Y (yaw) axes, and `velocity_variance` the most the speed differs from `velocity`, either way. `damping` is the fraction of each axis's velocity lost per second; `spin` is the
 most it turns about each axis, in turns per second, either way, picked per throw
 (and again on each bounce with `respin_on_bounce`); `bounce` is the share of the
 speed along the surface normal a bounce keeps; a bounce that leaves it slower than

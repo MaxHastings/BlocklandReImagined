@@ -961,11 +961,15 @@ pub struct ShellMesh {
     pub exit_direction: [f32; 3],
     #[serde(default)]
     pub exit_offset: [f32; 3],
-    /// Spread around `exit_direction`, degrees.
+    /// Most each throw turns `exit_direction` either way, degrees: about the
+    /// eject point's X axis (pitch) and its Y axis (yaw).
     #[serde(default)]
-    pub exit_variance: f32,
+    pub exit_variance: [f32; 2],
     /// Launch speed, native units per second.
     pub velocity: f32,
+    /// Most each throw's speed differs from `velocity` either way.
+    #[serde(default)]
+    pub velocity_variance: f32,
     /// Native units per second squared, world axes.
     pub acceleration: [f32; 3],
     /// Fraction of each world axis's velocity lost per second.
@@ -1011,8 +1015,9 @@ impl ShellMesh {
                 && self.exit_direction.iter().any(|v| *v != 0.)
                 && finite(&self.exit_offset)
                 && self.exit_offset.iter().all(|v| v.abs() <= 100.)
-                && (0. ..=180.).contains(&self.exit_variance)
+                && self.exit_variance.iter().all(|v| (0. ..=180.).contains(v))
                 && (0. ..=200.).contains(&self.velocity)
+                && (0. ..=200.).contains(&self.velocity_variance)
                 && finite(&self.acceleration)
                 && self.acceleration.iter().all(|v| v.abs() <= 1000.)
                 && self.damping.iter().all(|v| (0. ..=1.).contains(v))
