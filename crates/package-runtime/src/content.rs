@@ -2281,7 +2281,7 @@ pub const STOCK_COMMANDS: [&str; 9] = [
     "mousefire",
 ];
 /// Most binds one file may offer.
-pub const MAX_BINDS: usize = 32;
+pub const MAX_BINDS: usize = 128;
 impl Binds {
     pub fn validate(&self) -> Result<()> {
         ensure!(self.schema_version == 1, "binds schema_version must be 1");
@@ -2379,7 +2379,7 @@ impl Binds {
                 bind.name,
                 BIND_SCREENS.join(", ")
             );
-            for key in bind.key.iter().chain(&bind.mac_key) {
+            for key in bind.key.iter().chain(&bind.mac_key).chain(&bind.alt_key) {
                 ensure!(
                     !key.trim().is_empty()
                         && key.len() <= 32
@@ -2571,6 +2571,11 @@ pub struct BindDef {
     /// The default key on a Mac, when it differs (`cmd c`).
     #[serde(default)]
     pub mac_key: Option<String>,
+    /// A second default key for the same action (`ctrl`, as AA fires on
+    /// Ctrl as well as the mouse): it does the same as `key` and is not
+    /// listed apart.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub alt_key: Option<String>,
     /// A stock Blockland action this binds in the file's control profile
     /// ([`STOCK_COMMANDS`]), so a profile can move one (Crouch off Shift
     /// when Shift sprints). Needs a non-default `profile`, and no `command`.

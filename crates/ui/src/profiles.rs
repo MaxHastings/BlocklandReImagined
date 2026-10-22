@@ -40,6 +40,8 @@ impl RideContext {
 pub struct ProfileAction {
     pub entry: RemapEntry,
     pub default: Option<BindInput>,
+    /// A second input bound with the first, to the same action.
+    pub alt_default: Option<BindInput>,
 }
 
 /// The mouse settings in force.
@@ -213,6 +215,13 @@ impl ProfileState {
                     && map.command_for(&input).is_none()
                 {
                     map.bind(input, &a.entry.command);
+                    // Only with a fresh first key: a player who moved or
+                    // cleared it does not get the second one back.
+                    if let Some(alt) = a.alt_default
+                        && map.command_for(&alt).is_none()
+                    {
+                        map.bind(alt, &a.entry.command);
+                    }
                 }
             }
         }
@@ -513,6 +522,7 @@ mod tests {
     }
     fn action(command: &str, default: Option<BindInput>) -> ProfileAction {
         ProfileAction {
+            alt_default: None,
             entry: RemapEntry {
                 division: None,
                 name: command.into(),

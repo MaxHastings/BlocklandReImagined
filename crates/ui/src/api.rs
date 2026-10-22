@@ -657,6 +657,9 @@ pub struct PackageBind {
     pub stock: Option<String>,
     /// Sent as the key goes down and again as it comes up.
     pub hold: bool,
+    /// A second default key for the same action.
+    #[serde(default)]
+    pub alt_key: Option<String>,
     /// A screen it opens instead of sending `command`: `minigame_addons`
     /// or `help`.
     #[serde(default)]

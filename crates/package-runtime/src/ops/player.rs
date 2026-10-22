@@ -396,6 +396,21 @@ impl ScriptOp for SetWalking {
     }
 }
 
+/// Whether a rule holds a player crouched, whatever their crouch key does
+/// (a toggled crouch). Until changed or they respawn.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SetCrouched {
+    pub player: u64,
+    pub crouched: bool,
+}
+impl ScriptOp for SetCrouched {
+    const CAPABILITY: &str = "player";
+    const NAME: &str = "set_crouched";
+    fn bounded(&self) -> bool {
+        true
+    }
+}
+
 /// A named share of a player's speeds, for one Add-On system to own: the
 /// shares of every key (and of `set_speed_scale`, which is the key "") are
 /// multiplied, so a lock another system writes (0, as a posture change

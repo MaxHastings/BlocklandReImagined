@@ -3595,6 +3595,12 @@ fn register_presentation(engine: &mut Engine) {
             scale: float(&scale)?,
         }))
     });
+    engine.register_fn("set_crouched", |player: Dynamic, crouched: bool| {
+        push(Op::SetCrouched(ops::SetCrouched {
+            player: id(&player)?,
+            crouched,
+        }))
+    });
     engine.register_fn("set_walking", |player: Dynamic, walking: bool| {
         push(Op::SetWalking(ops::SetWalking {
             player: id(&player)?,

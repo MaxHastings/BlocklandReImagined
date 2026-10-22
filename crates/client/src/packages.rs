@@ -159,6 +159,7 @@ pub fn binds(catalog: &Catalog, state: &PackageStateView, mac: bool) -> Vec<Pack
                     bind.key.clone()
                 },
                 hold: bind.hold,
+                alt_key: bind.alt_key.clone(),
                 mouse: bind.mouse.clone(),
                 layer,
                 stock: bind.stock.clone(),

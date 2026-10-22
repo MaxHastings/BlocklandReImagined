@@ -68,6 +68,7 @@ fn bind(name: &str, command: &str, key: &str) -> PackageBind {
         profile: "aa".into(),
         stock: None,
         hold: true,
+        alt_key: None,
         screen: None,
         layer: String::new(),
     }

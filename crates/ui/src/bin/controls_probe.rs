@@ -28,6 +28,7 @@ fn bind(name: &str, command: &str, key: Option<&str>, mouse: Option<&str>) -> Pa
         profile: "aa".into(),
         stock: None,
         hold: false,
+        alt_key: None,
         screen: None,
         layer: String::new(),
     }

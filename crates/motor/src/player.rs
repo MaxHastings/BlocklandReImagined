@@ -225,6 +225,11 @@ pub struct Posture {
     /// down.
     #[serde(default)]
     pub climbing: bool,
+    /// A rule holds the body crouched whatever its crouch key does (a
+    /// toggled crouch, `set_crouched`); it stands when the rule lets go and
+    /// there is room.
+    #[serde(default)]
+    pub held_crouch: bool,
 }
 /// Longest a tether's rope may be, units: a bound on state a host or
 /// player sends, past any v20 rope (the Grapple Rope's hook flies 800).
@@ -1692,6 +1697,11 @@ impl Player {
     /// the body crouched; getting up needs room for the crouch box, and
     /// the crouch key or the room above then decides whether it stands.
     /// False when it cannot: no prone for this body, or no room to rise.
+    /// Hold the body crouched (or let it go) whatever its crouch key does:
+    /// a rule's toggled crouch ([`Posture::held_crouch`]).
+    pub fn set_held_crouch(&mut self, held: bool) {
+        self.state.posture.held_crouch = held;
+    }
     pub fn set_prone(&mut self, physics: &mut PhysicsWorld, prone: bool) -> bool {
         if prone == self.state.posture.prone {
             return true;
@@ -2201,6 +2211,10 @@ impl Player {
         passages: &Passages,
     ) -> Result<MotionEvents> {
         input.validate()?;
+        let input = MoveInput {
+            crouch: input.crouch || self.state.posture.held_crouch,
+            ..input
+        };
         let t = &self.tuning;
         // `canJet` and `minJetEnergy` gate the jets; jetting drains energy and
         // `rechargeRate` refills it every tick.
@@ -2220,6 +2234,7 @@ impl Player {
                 *posture = Posture {
                     prone: posture.prone,
                     climbing: posture.climbing,
+                    held_crouch: posture.held_crouch,
                     ..Posture::default()
                 }
             }
