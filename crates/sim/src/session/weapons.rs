@@ -727,6 +727,9 @@ impl Session {
                     }
                 }
                 WeaponEvent::Contact { impact } => {
+                    if matches!(impact.target, TargetId::Map(_)) {
+                        self.shoot_breakable(impact.position, impact.normal);
+                    }
                     self.package_hit(&impact);
                     self.tutorial_contact(&impact);
                     self.spray_player(&impact);
