@@ -4428,6 +4428,9 @@ impl Runtime {
             if behaviour.on_use_object {
                 need("on_use_object".into(), 2, "on_use_object");
             }
+            if behaviour.on_use_release {
+                need("on_use_release".into(), 2, "on_use_release");
+            }
             if behaviour.on_object {
                 need("on_object".into(), 1, "on_object");
             }

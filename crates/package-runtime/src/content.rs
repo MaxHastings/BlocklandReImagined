@@ -386,6 +386,12 @@ pub struct Behaviour {
     /// takes it. Called as it happens, so it must be quick.
     #[serde(default)]
     pub on_use_object: bool,
+    /// `on_use_release(player, target)` as the Use key comes up after a
+    /// click `on_use_object` took, with the same `target` the press was
+    /// given (a hold-to-secure, a held pick-up). Every package that
+    /// declares it is called, even if the player died holding the key.
+    #[serde(default)]
+    pub on_use_release: bool,
     /// `on_event_row(player, brick, row)` for each row of events a player
     /// sends from the wrench, before they are kept: return `false` or a
     /// reason to leave that row out (Slayer's Restrict Output Events, as
