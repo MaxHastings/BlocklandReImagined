@@ -106,6 +106,7 @@ fn map(id: &str) -> MapSession {
         spawn_points: options().spawn_points,
         breakables: Vec::new(),
         teleporters: Vec::new(),
+        volumes: Vec::new(),
         movers: Vec::new(),
         tutorial: None,
     }

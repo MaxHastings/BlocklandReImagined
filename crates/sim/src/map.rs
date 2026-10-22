@@ -64,6 +64,8 @@ pub struct NativeMap {
     pub breakables: Vec<Breakable>,
     /// Teleporter entrances and exits (`Scene::teleporters`).
     pub teleporters: Vec<bri_content::scene::Teleporter>,
+    /// The map's named boxes (`Scene::volumes`), for rules' `volumes_at`.
+    pub volumes: Vec<bri_content::scene::Volume>,
     /// The plate a flat map stands on, where the Environment window's
     /// ground and water go; None on every other map.
     pub plate: Option<bri_content::scene::Plate>,
@@ -669,6 +671,7 @@ impl NativeMap {
             "Native map has no physical geometry"
         );
         let teleporters = scene.teleporters()?;
+        let volumes = scene.volumes()?;
         Ok(Self {
             scene,
             colliders,
@@ -677,6 +680,7 @@ impl NativeMap {
             pending_objects,
             breakables,
             teleporters,
+            volumes,
             plate,
             surfaces,
             movers,
