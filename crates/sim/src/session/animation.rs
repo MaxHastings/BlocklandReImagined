@@ -149,7 +149,7 @@ impl AnimationAssets {
                     !name.is_empty()
                         && name.len() <= 128
                         && clip.duration.is_finite()
-                        && clip.duration > 0.0,
+                        && clip.duration >= 0.0,
                     "Animation library clip bounds"
                 );
                 // The body's own clip of the name wins, as on the client.
