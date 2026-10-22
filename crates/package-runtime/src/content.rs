@@ -576,6 +576,13 @@ pub struct Behaviour {
     /// this many seconds (0.05 to 2) of its last press. Needs the hook.
     #[serde(default)]
     pub double_tap_seconds: Option<f32>,
+    /// `on_volume(event)` as a living player's body centre goes into or out of
+    /// a map volume: `event` is `#{ kind, player, id, priority, properties }`,
+    /// `kind` being `enter` or `leave` and the rest the volume as `volumes_at`
+    /// gives it. A player who dies or leaves the game leaves every volume.
+    /// Delivered at the start of the next tick.
+    #[serde(default)]
+    pub on_volume: bool,
 }
 /// A function an Add-On offers others ([`Behaviour::exports`]).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

@@ -83,8 +83,8 @@ pub fn expires(def: &ProjectileDef, age: u32, fuse: Option<u32>) -> Option<bool>
 /// Whether a projectile `age` ticks old goes off as it hits something: it
 /// is armed, it hit a player and explodes on players, or it is not
 /// ballistic (it never bounces).
-pub fn hit_bursts(def: &ProjectileDef, age: u32, hit_player: bool) -> bool {
-    age >= def.arm_ticks || (def.explode_player && hit_player) || !def.ballistic
+pub fn hit_bursts(def: &ProjectileDef, arm_ticks: u32, age: u32, hit_player: bool) -> bool {
+    age >= arm_ticks || (def.explode_player && hit_player) || !def.ballistic
 }
 
 /// What an unarmed ballistic projectile does after a hit that did not set
@@ -3601,8 +3601,7 @@ impl WeaponsWorld {
                         scale: a.frame.scale,
                     });
                 }
-                if state.eject_shell && (!image.casing.is_empty() || !image.shell_effect.is_empty())
-                {
+                if state.eject_shell && image.throws_shell() {
                     self.events.push(Event::Shell {
                         actor: id,
                         image: image.id.clone(),
@@ -4630,7 +4629,12 @@ impl WeaponsWorld {
             for (set, c) in d.children.iter().enumerate().filter(|(_, c)| c.on_hit) {
                 self.children(p, c, set);
             }
-            if hit_bursts(d, p.age, matches!(hit.target, TargetId::Actor(_))) {
+            if hit_bursts(
+                d,
+                d.arm_ticks_for(p.id),
+                p.age,
+                matches!(hit.target, TargetId::Actor(_)),
+            ) {
                 self.explode(p, d, q, Some(normal), Some(hit.target), contact_geometry);
                 return false;
             }

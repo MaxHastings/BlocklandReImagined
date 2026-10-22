@@ -3612,6 +3612,12 @@ fn register_presentation(engine: &mut Engine) {
             scale: float(&scale)?,
         }))
     });
+    engine.register_fn("set_can_jump", |player: Dynamic, can: bool| {
+        push(Op::SetCanJump(ops::SetCanJump {
+            player: id(&player)?,
+            can,
+        }))
+    });
     engine.register_fn("set_walking", |player: Dynamic, walking: bool| {
         push(Op::SetWalking(ops::SetWalking {
             player: id(&player)?,
@@ -4441,6 +4447,9 @@ impl Runtime {
             }
             if behaviour.double_tap_seconds.is_some() {
                 need("on_double_tap".into(), 2, "double_tap_seconds");
+            }
+            if behaviour.on_volume {
+                need("on_volume".into(), 1, "on_volume");
             }
             if behaviour.tick_interval.is_some() {
                 need("on_tick".into(), 0, "tick_interval");

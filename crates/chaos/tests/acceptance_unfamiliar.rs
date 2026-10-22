@@ -447,6 +447,7 @@ fn weapons(v: Variant, seed: u64) -> Pack {
             fuse: None,
             lifetime_ticks: 600,
             arm_ticks: 600,
+            arm_ticks_max: 0,
             explosion: Explosion {
                 damage: 60.0,
                 radius: BLAST,
