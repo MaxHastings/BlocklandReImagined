@@ -1622,6 +1622,12 @@ impl App {
                 if view.broken_shapes.contains(node)
                     && !self.gpu.gpu_broken_models.contains_key(node)
                 {
+                    bri_console::echo(format!(
+                        "Broken model {} drawn for the first time: {} vertices, {} triangles",
+                        data.name,
+                        data.vertices.len(),
+                        data.indices.len() / 3
+                    ));
                     self.gpu
                         .gpu_broken_models
                         .insert(*node, renderer.upload(frame.device, frame.queue, data)?);

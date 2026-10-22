@@ -627,7 +627,9 @@ fn load_bundle_unscoped(root: &Path, map_id: &str, legacy: bool) -> Result<MapSc
             // breaks (`MapScene::broken_models`).
             let mut alone = SceneData {
                 id: format!("{}#broken{node_index}", scene.id),
-                name: node.name.clone(),
+                // The prop and the model that stands in for it, for the
+                // line printed when it is first drawn.
+                name: format!("{} -> {asset}", node.name),
                 ..Default::default()
             };
             let broken = Node {
