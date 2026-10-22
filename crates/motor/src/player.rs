@@ -188,6 +188,9 @@ pub struct PlayerState {
     /// The player is walking (an Add-On's `set_walking`): a body with momentum adds its `walking_share` of the acceleration.
     #[serde(default)]
     pub walking: bool,
+    /// A rule has barred the body from jumping (an Add-On's `set_can_jump`).
+    #[serde(default)]
+    pub jump_locked: bool,
     /// Where the motor is between v20's 32 ms ticks.
     #[serde(default)]
     pub tick: TorqueTick,
@@ -1381,6 +1384,7 @@ impl Player {
                 energy: tuning.max_energy,
                 speed_scale: 1.0,
                 walking: false,
+                jump_locked: false,
                 tick: TorqueTick::default(),
                 tether: None,
                 controller: None,
@@ -1433,6 +1437,7 @@ impl Player {
                 energy: tuning.max_energy,
                 speed_scale: 1.0,
                 walking: false,
+                jump_locked: false,
                 tick: TorqueTick::default(),
                 tether: None,
                 controller: None,
@@ -1538,6 +1543,10 @@ impl Player {
         );
         self.state.speed_scale = scale;
         Ok(())
+    }
+    /// Whether the body may jump ([`PlayerState::jump_locked`]).
+    pub fn set_can_jump(&mut self, can: bool) {
+        self.state.jump_locked = !can;
     }
     /// Whether the body walks ([`PlayerState::walking`]).
     pub fn set_walking(&mut self, walking: bool) {
@@ -2606,10 +2615,11 @@ impl Player {
         // rising faster than 3 unless moving faster than 4 across the ground.
         // A body lying prone does not jump, nor one a rule has locked
         // (`set_speed_scale` 0: AA's `LockMovement` during a posture change,
-        // whose `CanJump` is false).
+        // whose `CanJump` is false), or one a rule has barred (`set_can_jump`).
         let can_jump = input.jump
             && !self.state.posture.prone
             && self.state.speed_scale > 0.0
+            && !self.state.jump_locked
             && jump.delay == 0
             && jump.since_contact < JUMP_WINDOW_TICKS
             && !jump.ceiling

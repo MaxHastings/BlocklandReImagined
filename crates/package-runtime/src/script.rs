@@ -3601,6 +3601,12 @@ fn register_presentation(engine: &mut Engine) {
             crouched,
         }))
     });
+    engine.register_fn("set_can_jump", |player: Dynamic, can: bool| {
+        push(Op::SetCanJump(ops::SetCanJump {
+            player: id(&player)?,
+            can,
+        }))
+    });
     engine.register_fn("set_walking", |player: Dynamic, walking: bool| {
         push(Op::SetWalking(ops::SetWalking {
             player: id(&player)?,
@@ -4200,7 +4206,7 @@ fn sandbox() -> Engine {
     });
     engine.register_global_module(maps.into());
     engine.set_max_array_size(65_536);
-    engine.set_max_map_size(1024);
+    engine.set_max_map_size(65_536);
     engine.set_max_variables(256);
     // A whole game mode's rules (Slayer's) define a few hundred.
     engine.set_max_functions(512);
@@ -4427,6 +4433,9 @@ impl Runtime {
             }
             if behaviour.on_object {
                 need("on_object".into(), 1, "on_object");
+            }
+            if behaviour.on_volume {
+                need("on_volume".into(), 1, "on_volume");
             }
             if behaviour.tick_interval.is_some() {
                 need("on_tick".into(), 0, "tick_interval");

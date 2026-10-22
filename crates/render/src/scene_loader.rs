@@ -18,6 +18,13 @@ use std::{
     sync::Arc,
 };
 
+/// A map light past the shaded budget: drawn unshadowed, a spot with its cone
+/// (`scene::spot_words`, all zero for a point).
+#[derive(Clone, Copy, Debug)]
+pub struct OverflowLight {
+    pub light: crate::map_lighting::MapLight,
+    pub cone: [f32; 4],
+}
 /// A map's static scene plus its camera-following terrain placements.
 pub struct MapScene {
     pub scene: SceneData,
@@ -48,14 +55,19 @@ pub struct MapScene {
     /// Spot lights: an index into `modern_lights` and its cone words
     /// (`scene::spot_words`), for `SceneRenderer::set_map_light_spots`.
     pub light_spots: Vec<(usize, [f32; 4])>,
-    /// Plain lights past the shadowed budget (`map_lighting::MAX_LIGHTS`):
+    /// Lights past the shadowed budget (`map_lighting::MAX_LIGHTS`):
     /// they draw as unshadowed point lights with the same linear falloff, the
     /// nearest ones each frame (`SceneRenderer::update_lights`, colour w 1).
-    pub overflow_lights: Vec<crate::map_lighting::MapLight>,
+    /// A spot light keeps its cone.
+    pub overflow_lights: Vec<OverflowLight>,
     /// Set only by the modern loader, which reads no lightmaps: the map's
     /// room light, baked offline by `prepare_lighting`, for the bodies
     /// standing in it (`crate::light_volume::LightVolume`).
     pub light_volume: Option<crate::light_volume::LightVolume>,
+    /// The map is lit by its own light nodes: it has some and no lightmap
+    /// anywhere (interior or static model) to bake their light into. The client lights it as Dynamic whatever
+    /// the lighting setting, since the lightmap modes would draw it dark.
+    pub lit_by_nodes: bool,
 }
 
 /// A map's backdrop ([`bri_content::backdrop`]): a model drawn before the map from `eye`, with only the viewer's rotation.
@@ -496,6 +508,10 @@ fn load_bundle_unscoped(root: &Path, map_id: &str, legacy: bool) -> Result<MapSc
             interiors.insert(id.to_owned(), interior);
         }
     }
+    // A map with light nodes and no lightmap is lit by those nodes, whatever
+    // lighting mode asked for the lightmap path.
+    let lit_by_nodes = lit_by_nodes(&root, &bundle, &scene, &interiors)?;
+    let legacy = legacy && !lit_by_nodes;
     // The same lift `NativeMap::load` applies, so collision and view agree.
     let lift = scene.floor_lift(|id| interiors.get(id));
     scene.lift(lift);
@@ -676,7 +692,8 @@ fn load_bundle_unscoped(root: &Path, map_id: &str, legacy: bool) -> Result<MapSc
     let authored = scene.lights()?;
     let mut light_animations = Vec::new();
     let mut light_spots = Vec::new();
-    let mut overflow_lights = Vec::new();
+    let mut overflow_lights: Vec<OverflowLight> = Vec::new();
+    let mut left_out = 0usize;
     let light_volume = if legacy {
         None
     } else {
@@ -715,21 +732,31 @@ fn load_bundle_unscoped(root: &Path, map_id: &str, legacy: bool) -> Result<MapSc
                 continue;
             }
             if lights.len() >= crate::map_lighting::MAX_LIGHTS {
-                // Past the shadowed budget only plain lights can draw: a cone
-                // or an animation needs a shaded slot.
-                if light.spot.is_some() || light.animation.is_some() {
+                // Past the shadowed budget a light draws unshadowed, a spot
+                // with its cone; an animation needs a shaded slot.
+                if light.animation.is_some() {
+                    left_out += 1;
                     out.omissions.push(format!(
-                        "Map light at node {} left out: a map shades at most {} lights, and only plain lights draw past them",
+                        "Map light at node {} left out: a map shades at most {} lights, and only static lights draw past them",
                         light.node,
                         crate::map_lighting::MAX_LIGHTS
                     ));
                 } else {
-                    overflow_lights.push(crate::map_lighting::MapLight {
-                        position: light.position,
-                        color: light.color,
-                        inner: light.inner,
-                        outer: light.outer,
-                        channel: None,
+                    overflow_lights.push(OverflowLight {
+                        light: crate::map_lighting::MapLight {
+                            position: light.position,
+                            color: light.color,
+                            inner: light.inner,
+                            outer: light.outer,
+                            channel: None,
+                        },
+                        cone: light.spot.map_or([0.0; 4], |spot| {
+                            crate::scene::spot_words(
+                                Vec3::from(spot.direction),
+                                spot.inner,
+                                spot.outer,
+                            )
+                        }),
                     });
                 }
                 continue;
@@ -750,6 +777,16 @@ fn load_bundle_unscoped(root: &Path, map_id: &str, legacy: bool) -> Result<MapSc
                 outer: light.outer,
                 channel: None,
             });
+        }
+        if !authored.is_empty() {
+            let summary = format!(
+                "Map lights of {map_id}: {} authored, {} shaded, {} unshadowed overflow (the nearest {} draw at once), {left_out} left out",
+                authored.len(),
+                lights.len(),
+                overflow_lights.len(),
+                crate::scene::MAX_POINT_LIGHTS
+            );
+            eprintln!("{summary}");
         }
         Some(lights)
     };
@@ -780,7 +817,50 @@ fn load_bundle_unscoped(root: &Path, map_id: &str, legacy: bool) -> Result<MapSc
         light_spots,
         overflow_lights,
         light_volume,
+        lit_by_nodes,
     })
+}
+
+/// Whether a map has light nodes and no lightmap anywhere, in an interior or
+/// on a static model's surface ([`MapScene::lit_by_nodes`]).
+fn lit_by_nodes(
+    root: &Path,
+    bundle: &Value,
+    scene: &Scene,
+    interiors: &BTreeMap<String, Interior>,
+) -> Result<bool> {
+    if scene.lights()?.is_empty()
+        || interiors.values().any(|i| {
+            i.details
+                .iter()
+                .chain(&i.subobjects)
+                .any(|d| !d.lightmaps.is_empty() || d.surfaces.iter().any(|s| s.lightmap.is_some()))
+        })
+    {
+        return Ok(false);
+    }
+    let mut seen = std::collections::BTreeSet::new();
+    for node in scene
+        .nodes
+        .iter()
+        .filter(|n| matches!(n.kind, Kind::StaticModel | Kind::DatablockModel))
+    {
+        let Some(id) = node.asset.as_deref().filter(|id| seen.insert(*id)) else {
+            continue;
+        };
+        let Some(file) = bundle["assets"][id].as_str() else {
+            continue;
+        };
+        let shape: bri_content::shape::Shape = bri_content::strict::from_slice(&read(root, file)?)?;
+        if shape
+            .materials
+            .iter()
+            .any(|m| m.surface.as_ref().is_some_and(|s| s.lightmap.is_some()))
+        {
+            return Ok(false);
+        }
+    }
+    Ok(true)
 }
 
 fn terrain_fields(
@@ -1054,6 +1134,9 @@ fn load_static_shape(
             let lightmap = texture(root, file, false, out, cache)?;
             if legacy {
                 material = Material::surface(material.name.clone(), diffuse, lightmap);
+                // The original's baked surface (picture x lightmap x strength) draws the same in every lighting mode.
+                material.baked_lightmap = Some(surface.lightmap_strength);
+                material.baked_exact = surface.lightmap_exact;
             } else {
                 material.images[8] = lightmap;
                 material.baked_lightmap = Some(surface.lightmap_strength);

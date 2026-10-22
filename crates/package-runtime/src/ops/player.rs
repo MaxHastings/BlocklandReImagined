@@ -410,6 +410,20 @@ impl ScriptOp for SetCrouched {
         true
     }
 }
+/// Whether a player may jump, whatever they press: AA's `CanJump` gates (not
+/// while crouched, reloading or landing). Until changed or they respawn.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SetCanJump {
+    pub player: u64,
+    pub can: bool,
+}
+impl ScriptOp for SetCanJump {
+    const CAPABILITY: &str = "player";
+    const NAME: &str = "set_can_jump";
+    fn bounded(&self) -> bool {
+        true
+    }
+}
 
 /// A named share of a player's speeds, for one Add-On system to own: the
 /// shares of every key (and of `set_speed_scale`, which is the key "") are

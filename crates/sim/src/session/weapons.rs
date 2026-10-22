@@ -727,6 +727,9 @@ impl Session {
                     }
                 }
                 WeaponEvent::Contact { impact } => {
+                    if matches!(impact.target, TargetId::Map(_)) {
+                        self.shoot_breakable(impact.position, impact.normal);
+                    }
                     self.package_hit(&impact);
                     self.tutorial_contact(&impact);
                     self.spray_player(&impact);
@@ -876,6 +879,20 @@ impl Session {
                             actor: actor.0,
                             image,
                             hand,
+                        },
+                        position,
+                    );
+                }
+                WeaponEvent::ScreenFlash { actor, image } => {
+                    let position = self
+                        .weapons
+                        .actor(actor)
+                        .map_or([0.; 3], |a| a.frame.muzzle[0].to_array());
+                    self.cues.emit(
+                        tick,
+                        crate::presentation::CueKind::ScreenFlash {
+                            actor: actor.0,
+                            image,
                         },
                         position,
                     );

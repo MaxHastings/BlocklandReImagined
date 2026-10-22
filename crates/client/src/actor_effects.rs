@@ -1046,10 +1046,7 @@ impl ActorEffects {
         };
         playback.state = state;
         // A gun on a vehicle throws its casings as a held one does.
-        if s.eject_shell
-            && (!playback.image.casing.is_empty() || !playback.image.shell_effect.is_empty())
-            && self.ejected.len() < 64
-        {
+        if s.eject_shell && playback.image.throws_shell() && self.ejected.len() < 64 {
             self.ejected.push(Ejected {
                 anchor: playback.anchor,
                 image: playback.image.id.clone(),
@@ -1495,6 +1492,7 @@ fn teleport_image() -> bri_weapons::Image {
     let ticks = |seconds: f32| (seconds * bri_weapons::TICK_HZ as f32).round() as u32;
     bri_weapons::Image {
         shell_effect: String::new(),
+        shell_mesh: None,
         first_person_nodes: BTreeMap::new(),
         first_person_effects: BTreeMap::new(),
         id: bri_weapons::native_id("image", "PlayerTeleportImage"),
@@ -1539,6 +1537,7 @@ fn teleport_image() -> bri_weapons::Image {
         shot: None,
         eye_rotation: [0.0; 3],
         zoom: None,
+        screen_flash: None,
         bot: None,
         crosshair: true,
         follow_arm: false,

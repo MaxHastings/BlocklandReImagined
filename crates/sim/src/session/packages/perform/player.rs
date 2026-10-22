@@ -381,6 +381,18 @@ impl Perform for ops::SetCrouched {
         Ok(())
     }
 }
+impl Perform for ops::SetCanJump {
+    fn perform(self, session: &mut Session, _cx: OpCall<'_>) -> Result<()> {
+        let ops::SetCanJump { player, can } = self;
+        session
+            .peers
+            .get_mut(&player)
+            .context("No such player")?
+            .player
+            .set_can_jump(can);
+        Ok(())
+    }
+}
 impl Perform for ops::SetWalking {
     fn perform(self, session: &mut Session, _cx: OpCall<'_>) -> Result<()> {
         let ops::SetWalking { player, walking } = self;

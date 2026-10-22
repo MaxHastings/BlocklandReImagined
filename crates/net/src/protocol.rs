@@ -673,6 +673,7 @@ impl RemotePose {
                 energy: bri_sim::player::PlayerTuning::default().max_energy,
                 speed_scale: 1.0,
                 walking: false,
+                jump_locked: false,
                 tick: Default::default(),
                 tether: None,
                 controller: self

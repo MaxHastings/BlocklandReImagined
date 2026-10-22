@@ -310,6 +310,11 @@ pub struct Breakable {
     /// position without rotation or scale, as the engine does.
     pub center: Vec3,
     pub indestructable: bool,
+    /// A player striking it fast breaks it (v20's glass does).
+    pub breaks_on_impact: bool,
+    /// A shot or projectile landing on it breaks it (a map prop whose
+    /// `breakable` property lists `shot`; v20's glass never breaks to one).
+    pub breaks_on_shot: bool,
     /// Indices into `NativeMap::colliders`.
     pub colliders: std::ops::Range<usize>,
 }
@@ -605,6 +610,41 @@ impl NativeMap {
                                 .properties
                                 .get("indestructable")
                                 .is_some_and(|v| script_true(v)),
+                            breaks_on_impact: true,
+                            breaks_on_shot: false,
+                            colliders: first..colliders.len(),
+                        });
+                    } else if let Some(causes) = node.properties.get("breakable") {
+                        // A map Add-On's own breakable prop: `breakable` lists
+                        // what breaks it (`impact`, `shot`), and the prop's
+                        // `explosion` and `sound` play where it was.
+                        let causes: Vec<&str> = causes.split(',').map(str::trim).collect();
+                        if let Some(bad) = causes.iter().find(|c| !matches!(**c, "impact" | "shot"))
+                        {
+                            anyhow::bail!(
+                                "{}: breakable `{bad}` is neither impact nor shot",
+                                node.name
+                            );
+                        }
+                        let text = |key: &str| {
+                            node.properties
+                                .get(key)
+                                .filter(|v| !v.trim().is_empty())
+                                .cloned()
+                        };
+                        breakables.push(Breakable {
+                            node: u32::try_from(index)?,
+                            datablock: node.name.clone(),
+                            explosion: text("explosion"),
+                            sound: text("sound"),
+                            position: transform.w_axis.truncate(),
+                            center: transform.w_axis.truncate() + object_box_center(&shape)?,
+                            indestructable: node
+                                .properties
+                                .get("indestructable")
+                                .is_some_and(|v| script_true(v)),
+                            breaks_on_impact: causes.contains(&"impact"),
+                            breaks_on_shot: causes.contains(&"shot"),
                             colliders: first..colliders.len(),
                         });
                     } else if let Some(pending) = node.properties.get("native_behavior_pending") {

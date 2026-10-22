@@ -557,6 +557,7 @@ impl App {
                     &light_cache,
                     visual.modern_lights.as_deref(),
                 );
+                light_volume.nodes_lit = visual.lit_by_nodes;
                 light_volume.animations = visual.light_animations.clone();
                 light_volume.spots = visual.light_spots.clone();
                 light_volume.overflow = visual.overflow_lights.clone();

@@ -769,6 +769,7 @@ pub fn pack() -> Pack {
         fade_ticks: 60,
         // Never armed: it sticks or bounces, and explodes only on players.
         arm_ticks: 600,
+        arm_ticks_max: 0,
         explode_player: true,
         elasticity: 0.5,
         friction: 0.3,
@@ -844,6 +845,7 @@ pub fn pack() -> Pack {
         ballistic: true,
         lifetime_ticks: 720,
         arm_ticks: 720,
+        arm_ticks_max: 0,
         elasticity: 1.0,
         friction: 0.5,
         elasticity_surfaces: Default::default(),
@@ -868,6 +870,7 @@ pub fn pack() -> Pack {
         ballistic: true,
         lifetime_ticks: 240,
         arm_ticks: 240,
+        arm_ticks_max: 0,
         explode_death: true,
         min_stick_speed: 1.0,
         // Sticks however it lands.
@@ -1061,6 +1064,7 @@ pub fn pack() -> Pack {
         ballistic: true,
         lifetime_ticks: 1200,
         arm_ticks: 1200,
+        arm_ticks_max: 0,
         elasticity: 0.6,
         friction: 0.2,
         elasticity_surfaces: Default::default(),

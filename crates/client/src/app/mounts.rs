@@ -206,6 +206,7 @@ impl App {
                 energy: 0.0,
                 speed_scale: 1.0,
                 walking: false,
+                jump_locked: false,
                 tick: Default::default(),
                 tether: None,
                 controller: None,

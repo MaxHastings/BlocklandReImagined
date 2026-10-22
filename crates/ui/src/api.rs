@@ -1768,6 +1768,19 @@ pub struct DisplayModes {
     pub windowed: Vec<(u32, u32)>,
 }
 
+/// A picture added to the screen's light for a moment ([`UiUpdate::ScreenFlash`]).
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct ScreenFlashDraw {
+    /// The host's texture key.
+    pub key: u64,
+    /// Its size in pixels on a screen 640 wide; it grows with the width.
+    pub size: [f32; 2],
+    /// Where its middle lies: offsets from the screen's middle in fractions
+    /// of the screen's width and height.
+    pub center: [f32; 2],
+    /// Turned over left to right, and top to bottom.
+    pub flip: [bool; 2],
+}
 /// Where a scope picture sits on screen (`Zoom::overlay_fit`).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ScopeFit {
@@ -1898,6 +1911,9 @@ pub enum UiUpdate {
     ScopeOverlay(Option<(u64, f32)>),
     /// How the scope picture is laid out (`Zoom::overlay_fit`).
     ScopeFit(ScopeFit),
+    /// A muzzle flash picture added to the screen's light, or `None` once
+    /// it is over (`bri_weapons::ScreenFlash`).
+    ScreenFlash(Option<ScreenFlashDraw>),
     /// A net graph sample (`NetGraph::updateStats`); dropped while hidden.
     NetSample(crate::models::perf::NetSample),
     /// A presented frame's timing; dropped while the overlay is hidden.

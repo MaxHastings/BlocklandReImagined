@@ -478,6 +478,8 @@ pub struct Core {
     pub scope_overlay: Option<(u64, f32)>,
     /// How that picture is laid out.
     pub scope_fit: crate::api::ScopeFit,
+    /// A flash added to the screen's light, if one is showing.
+    pub screen_flash: Option<crate::api::ScreenFlashDraw>,
     pub cursor_forced: bool,
     /// The chat input (newMessageHud) is open under the chat.
     pub chat_input_open: bool,
@@ -629,6 +631,7 @@ impl Core {
         self.aim_wheel = false;
         self.scope_overlay = None;
         self.scope_fit = Default::default();
+        self.screen_flash = None;
         self.cursor_forced = false;
         self.print_aspect = None;
         self.last_print.clear();
@@ -1686,6 +1689,7 @@ impl Ui {
             aim_wheel: false,
             scope_overlay: None,
             scope_fit: Default::default(),
+            screen_flash: None,
             cursor_forced: false,
             chat_input_open: false,
             print_aspect: None,
@@ -2175,6 +2179,12 @@ impl Ui {
                 c.scope_overlay = overlay.filter(|(_, aspect)| aspect.is_finite() && *aspect > 0.0)
             }
             UiUpdate::ScopeFit(fit) => c.scope_fit = fit,
+            UiUpdate::ScreenFlash(flash) => {
+                c.screen_flash = flash.filter(|f| {
+                    f.size.iter().chain(&f.center).all(|v| v.is_finite())
+                        && f.size[0] * f.size[1] > 0.0
+                })
+            }
             UiUpdate::Whiteout(amount) => {
                 if amount.is_finite() {
                     c.whiteout = c.whiteout.max(amount.clamped(0.0, 1.0));
