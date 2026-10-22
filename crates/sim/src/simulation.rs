@@ -748,6 +748,11 @@ impl Simulation {
             .cast_ray_and_get_normal(&ray, 0.04, true)?;
         Some((self.map_collider_index(handle), hit.subshape))
     }
+    /// The map collider (an index into `NativeMap::colliders`) a shot contact
+    /// at `position` on a face turned to `normal` struck; None for terrain.
+    pub fn map_collider_at(&self, position: Vec3, normal: Vec3) -> Option<usize> {
+        self.map_contact(position, normal)?.0
+    }
     /// Read the same authored triangle kinds footsteps use, at a shot contact.
     pub fn map_surface_at(&self, position: Vec3, normal: Vec3) -> Option<&str> {
         let (collider, triangle) = self.map_contact(position, normal)?;

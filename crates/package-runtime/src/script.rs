@@ -29,11 +29,13 @@ mod math;
 mod movers;
 mod physics;
 pub mod view;
+mod volumes;
 pub use bots::BotKindView;
 pub use games::{BrickView, DropView, MAX_BRICKS_LISTED, MinigameView, TeamView, brick_map};
 pub use interop::{Emitted, Nested};
 pub use movers::MoverInfo;
 use view::{Of, view_in};
+pub use volumes::VolumeInfo;
 
 /// Operation budgets per kind of call.
 #[derive(Debug, Clone, Copy)]
@@ -246,6 +248,11 @@ pub trait World {
     /// The movers whose collision lies within `reach` of player `player`'s
     /// body (touching it, for a reach of a hair), nearest first.
     fn movers_near(&self, _player: u64, _reach: f32) -> Vec<String> {
+        Vec::new()
+    }
+    /// The map's volumes holding the world point `at`, highest priority
+    /// first and then in map order.
+    fn volumes_at(&self, _at: [f32; 3]) -> Vec<VolumeInfo> {
         Vec::new()
     }
     /// Whether the minigame and trust rules let player `by` hurt `target`
@@ -1857,6 +1864,18 @@ fn register_api(engine: &mut Engine) {
             push(Op::Teleport(ops::Teleport {
                 player: id(&player)?,
                 position: [float(&x)?, float(&y)?, float(&z)?],
+                yaw: None,
+            }))
+        },
+    );
+    // The same, turned to face `yaw` radians.
+    engine.register_fn(
+        "teleport",
+        |player: Dynamic, x: Dynamic, y: Dynamic, z: Dynamic, yaw: Dynamic| {
+            push(Op::Teleport(ops::Teleport {
+                player: id(&player)?,
+                position: [float(&x)?, float(&y)?, float(&z)?],
+                yaw: Some(float(&yaw)?),
             }))
         },
     );
@@ -3375,6 +3394,29 @@ fn register_presentation(engine: &mut Engine) {
             ))
         })
     });
+    // The map's volumes holding a point, highest priority first.
+    engine.register_fn("volumes_at", |x: Dynamic, y: Dynamic, z: Dynamic| {
+        let at = [float(&x)?, float(&y)?, float(&z)?];
+        with_world(|world, _| {
+            Ok(Dynamic::from_array(
+                world
+                    .volumes_at(at)
+                    .iter()
+                    .map(volumes::volume_map)
+                    .collect(),
+            ))
+        })
+    });
+    // The first of them, or ().
+    engine.register_fn("volume_at", |x: Dynamic, y: Dynamic, z: Dynamic| {
+        let at = [float(&x)?, float(&y)?, float(&z)?];
+        with_world(|world, _| {
+            Ok(world
+                .volumes_at(at)
+                .first()
+                .map_or(Dynamic::UNIT, volumes::volume_map))
+        })
+    });
     // Send a mover to a key over a number of seconds, or hold it.
     engine.register_fn("mover_goto", |name: &str, key: i64, seconds: Dynamic| {
         let key = u8::try_from(key).map_err(|_| "a mover key is 0 to 15")?;
@@ -3551,6 +3593,12 @@ fn register_presentation(engine: &mut Engine) {
         push(Op::SetSpeedScale(ops::SetSpeedScale {
             player: id(&player)?,
             scale: float(&scale)?,
+        }))
+    });
+    engine.register_fn("set_can_jump", |player: Dynamic, can: bool| {
+        push(Op::SetCanJump(ops::SetCanJump {
+            player: id(&player)?,
+            can,
         }))
     });
     engine.register_fn("set_walking", |player: Dynamic, walking: bool| {
@@ -4152,7 +4200,7 @@ fn sandbox() -> Engine {
     });
     engine.register_global_module(maps.into());
     engine.set_max_array_size(65_536);
-    engine.set_max_map_size(1024);
+    engine.set_max_map_size(65_536);
     engine.set_max_variables(256);
     // A whole game mode's rules (Slayer's) define a few hundred.
     engine.set_max_functions(512);
@@ -4379,6 +4427,9 @@ impl Runtime {
             }
             if behaviour.on_object {
                 need("on_object".into(), 1, "on_object");
+            }
+            if behaviour.on_volume {
+                need("on_volume".into(), 1, "on_volume");
             }
             if behaviour.tick_interval.is_some() {
                 need("on_tick".into(), 0, "tick_interval");

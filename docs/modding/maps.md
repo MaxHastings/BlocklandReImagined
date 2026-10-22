@@ -260,6 +260,16 @@ sight or pointer ray), `sweep` (a projectile or other trace with width) and
 `["ray", "shot"]`; an invisible wall that stops only players lists
 `["move", "sweep"]`. The meshes with the same list share one collider.
 
+A static model node in a map's scene can be a **breakable prop**: give it a
+`breakable` property listing what breaks it, `impact` (a player striking it
+fast, as v20's glass breaks), `shot` (a bullet or projectile landing on it), or
+both, such as `"impact,shot"`. It then plays its `explosion` (a weapons effect
+id) and `sound` (a sound profile id), both optional, where it stood; hides; and
+stops colliding a moment later, for everyone, and stays broken until the map
+reloads. Add `indestructable` set to `1` to keep it whole. Without a
+`breakable` property, nothing changes; v20's own glass keeps breaking to
+impacts only.
+
 A collision detail of a converted shape can set `two_sided`: its triangles then
 block from both faces. By default only a face a move runs into blocks, as in
 v20, so a mesh wound inward lets a body walk into it from outside.

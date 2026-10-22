@@ -54,18 +54,21 @@ impl ScriptOp for SetAvatarParts {
     }
 }
 
-/// Move a living player, keeping their facing.
+/// Move a living player, keeping their facing unless a `yaw` (radians, as
+/// the player's own, 0 facing -Z) turns them.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Teleport {
     pub player: u64,
     pub position: [f32; 3],
+    #[serde(default)]
+    pub yaw: Option<f32>,
 }
 impl ScriptOp for Teleport {
     const CAPABILITY: &str = "player";
     const NAME: &str = "teleport";
     fn bounded(&self) -> bool {
-        let Teleport { position, .. } = self;
-        finite(position)
+        let Teleport { position, yaw, .. } = self;
+        finite(position) && yaw.is_none_or(f32::is_finite)
     }
 }
 
@@ -388,6 +391,21 @@ pub struct SetWalking {
 impl ScriptOp for SetWalking {
     const CAPABILITY: &str = "player";
     const NAME: &str = "set_walking";
+    fn bounded(&self) -> bool {
+        true
+    }
+}
+
+/// Whether a player may jump, whatever they press: AA's `CanJump` gates (not
+/// while crouched, reloading or landing). Until changed or they respawn.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SetCanJump {
+    pub player: u64,
+    pub can: bool,
+}
+impl ScriptOp for SetCanJump {
+    const CAPABILITY: &str = "player";
+    const NAME: &str = "set_can_jump";
     fn bounded(&self) -> bool {
         true
     }

@@ -180,4 +180,15 @@ fn a_prone_or_locked_body_does_not_jump_but_a_standing_one_does() {
         rise(&|p, _| p.set_speed_scale(0.0).unwrap()) < 0.01,
         "a locked body (speed scale 0) stays down"
     );
+    assert!(
+        rise(&|p, _| p.set_can_jump(false)) < 0.01,
+        "a body a rule barred from jumping stays down"
+    );
+    assert!(
+        rise(&|p, _| {
+            p.set_can_jump(false);
+            p.set_can_jump(true);
+        }) > 0.3,
+        "and jumps again once allowed"
+    );
 }

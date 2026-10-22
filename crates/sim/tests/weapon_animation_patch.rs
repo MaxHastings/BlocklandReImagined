@@ -116,6 +116,7 @@ impl Fixture {
                 resource: MODEL.into(),
                 digest: bri_package::environment::hash_bytes(&bytes),
                 rig: false,
+                library_clips: Vec::new(),
                 bytes,
             }],
             images: [(

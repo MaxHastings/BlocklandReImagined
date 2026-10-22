@@ -324,6 +324,10 @@ const ROLES: [(&str, &str, Play, &str); 28] = [
     ("head_side", "headside", LEVEL, "its head does not turn in free look"),
     ("head_up", "headup", FIRST, "its head does not tilt under a pack"),
 ];
+/// Most nodes a body, item or prop model may hold, and a map.
+const MAX_NODES: usize = 1024;
+const MAX_MAP_NODES: usize = 16384;
+
 fn role(name: &str) -> Option<&'static (&'static str, &'static str, Play, &'static str)> {
     let lower = name
         .trim()
@@ -708,9 +712,16 @@ pub fn convert(
         order.push(n);
         stack.extend(nodes[n].children.iter().rev());
     }
+    // A map keeps every light and collision mesh as a node; nothing poses a
+    // map's nodes, so it may hold far more than a body or an item.
+    let most = if opts.kind == Kind::Map {
+        MAX_MAP_NODES
+    } else {
+        MAX_NODES
+    };
     ensure!(
-        order.len() <= 1024,
-        "the model has {} nodes; at most 1024",
+        order.len() <= most,
+        "the model has {} nodes; at most {most}",
         order.len()
     );
     let mut new_index = vec![usize::MAX; nodes.len()];

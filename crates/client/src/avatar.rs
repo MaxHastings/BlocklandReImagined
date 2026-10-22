@@ -1315,6 +1315,7 @@ mod posture_tests {
             energy: 0.0,
             speed_scale: 1.0,
             walking: false,
+            jump_locked: false,
             tick: Default::default(),
             tether: None,
             controller: None,
@@ -2925,6 +2926,7 @@ impl Preview {
                 energy: 100.0,
                 speed_scale: 1.0,
                 walking: false,
+                jump_locked: false,
                 tick: Default::default(),
                 tether: None,
                 controller: None,
@@ -3038,52 +3040,10 @@ fn link_animation_libraries(
     dir: &Path,
     model: &str,
 ) -> Result<()> {
-    let mut libraries: Vec<String> = Vec::new();
-    if let Ok(archetypes) = std::fs::read_dir(dir.join("assets/archetypes")) {
-        for entry in archetypes.flatten() {
-            let Some(json) = std::fs::read(entry.path())
-                .ok()
-                .and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok())
-            else {
-                continue;
-            };
-            if json["model"].as_str() != Some(model) {
-                continue;
-            }
-            for library in json["animation_libraries"].as_array().into_iter().flatten() {
-                if let Some(id) = library.as_str()
-                    && !libraries.iter().any(|l| l.eq_ignore_ascii_case(id))
-                {
-                    libraries.push(id.to_owned());
-                }
-            }
-        }
-    }
-    for id in libraries {
-        let (package, _) = id
-            .split_once(':')
-            .context("an animation library is `package:asset/file`")?;
-        let entry = packages
-            .packages
-            .iter()
-            .find(|p| p.id.eq_ignore_ascii_case(package))
-            .with_context(|| format!("animation library {id}: package {package} is not enabled"))?;
-        let lib_dir = bri_package::packages::package_dir(root, entry)?.canonicalize()?;
-        let content: serde_json::Value =
-            serde_json::from_slice(&std::fs::read(lib_dir.join("assets/content.json"))?)?;
-        let file = content["content"]
-            .as_array()
-            .into_iter()
-            .flatten()
-            .find(|c| {
-                c["id"]
-                    .as_str()
-                    .is_some_and(|c| c.eq_ignore_ascii_case(&id))
-            })
-            .and_then(|c| c["file"].as_str())
-            .with_context(|| format!("animation library {id} is not in its package"))?;
+    for id in bri_package::packages::animation_library_ids(dir, model) {
+        let (lib_dir, file) = bri_package::packages::animation_library_file(root, packages, &id)?;
         let shape: bri_content::shape::Shape = serde_json::from_slice(
-            &crate::materials::read_resource(&lib_dir, file, LIBRARY_LIMIT)?,
+            &crate::materials::read_resource(&lib_dir, &file, LIBRARY_LIMIT)?,
         )?;
         let bones: std::collections::BTreeSet<&str> = body
             .rig
@@ -4688,6 +4648,7 @@ mod tests {
             energy: 100.0,
             speed_scale: 1.0,
             walking: false,
+            jump_locked: false,
             tick: Default::default(),
             tether: None,
             controller: None,

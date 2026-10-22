@@ -33,6 +33,39 @@ fn admit_animation_asset(
     true
 }
 
+/// Largest animation library shape file read (the 409 clips of a UE2 soldier
+/// are about 70 MB).
+const LIBRARY_LIMIT: u64 = 256 << 20;
+
+/// The clips the body `model` of the package at `dir` joins from its archetypes'
+/// animation libraries, so the authoritative clock knows the lengths the
+/// client plays (`bri_package::packages::animation_library_ids`).
+fn library_clips(
+    content_root: &Path,
+    packages: &bri_package::packages::PackageSet,
+    dir: &Path,
+    model: &str,
+) -> Result<Vec<bri_sim::session::LibraryClip>> {
+    let mut clips = Vec::new();
+    for id in bri_package::packages::animation_library_ids(dir, model) {
+        let (lib_dir, file) =
+            bri_package::packages::animation_library_file(content_root, packages, &id)?;
+        let shape: bri_content::shape::Shape =
+            serde_json::from_slice(&bounded_bytes(&contained(&lib_dir, &file)?, LIBRARY_LIMIT)?)
+                .with_context(|| format!("animation library {id}"))?;
+        for clip in &shape.animations {
+            clip.validate()
+                .with_context(|| format!("animation library {id}: clip `{}`", clip.name))?;
+            clips.push(bri_sim::session::LibraryClip {
+                name: clip.name.clone(),
+                duration: clip.duration,
+                looping: clip.looping,
+            });
+        }
+    }
+    Ok(clips)
+}
+
 /// The same bounded native playback metadata for local and dedicated hosts.
 /// Only native files selected by existing body/image bindings are inspected.
 pub fn animation_assets(
@@ -93,6 +126,7 @@ pub fn body_pose_assets(
             resource: crate::host_setup::BLOCKHEAD_MODEL.into(),
             digest: avatar.rig_sha256.clone(),
             rig: true,
+            library_clips: Vec::new(),
             bytes,
         },
     );
@@ -111,6 +145,7 @@ pub fn body_pose_assets(
             resource: resource.into(),
             digest: bri_package::environment::hash_bytes(&bytes),
             rig: false,
+            library_clips: Vec::new(),
             bytes,
         };
         let mut checked = AnimationAssets {
@@ -131,11 +166,17 @@ pub fn body_pose_assets(
                 .map_or_else(|| body_pose_file(&dir, &id), Ok)
                 .and_then(|file| read_shape(&dir, &file, &id, entry.role.is_none()));
             match read {
-                Ok(Some(asset)) => {
+                Ok(Some(mut asset)) => {
                     ensure!(
                         !assets.contains_key(&id),
                         "Ambiguous animation body resource"
                     );
+                    match library_clips(content_root, packages, &dir, &id) {
+                        Ok(clips) => asset.library_clips = clips,
+                        Err(error) => bri_console::warn(format!(
+                            "{id}: animation libraries unsupported: {error:#}"
+                        )),
+                    }
                     if admit_animation_asset(&mut assets, asset) && entry.role.is_none() {
                         body_bindings.push(bri_sim::session::BodyPoseBinding {
                             model: id.clone(),

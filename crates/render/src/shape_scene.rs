@@ -6,7 +6,10 @@ use bri_content::{
     shape::Shape,
 };
 use glam::{Mat4, Vec3};
-use std::collections::BTreeMap;
+use std::{
+    collections::{BTreeMap, HashMap},
+    mem::size_of,
+};
 
 pub struct ShapeInstance<'a> {
     pub shape: &'a Shape,
@@ -28,6 +31,25 @@ impl SceneData {
         &mut self,
         instance: ShapeInstance<'_>,
         appearance: impl Fn(&str) -> Option<[f32; 4]>,
+    ) -> Result<()> {
+        self.append_shape_with(instance, appearance, false)
+    }
+    /// As [`Self::append_shape`], but a corner identical to one already kept
+    /// shares its vertex, so a smooth mesh costs a fraction of its corner
+    /// count. For geometry nobody rewrites vertex by vertex (a map's static
+    /// models); posed bodies and items keep one vertex per corner.
+    pub fn append_shape_shared(
+        &mut self,
+        instance: ShapeInstance<'_>,
+        appearance: impl Fn(&str) -> Option<[f32; 4]>,
+    ) -> Result<()> {
+        self.append_shape_with(instance, appearance, true)
+    }
+    fn append_shape_with(
+        &mut self,
+        instance: ShapeInstance<'_>,
+        appearance: impl Fn(&str) -> Option<[f32; 4]>,
+        share: bool,
     ) -> Result<()> {
         let ShapeInstance {
             shape,
@@ -156,9 +178,19 @@ impl SceneData {
                 .map(|v| Vec3::from(v.position))
                 .sum::<Vec3>()
                 / vertices.len() as f32;
+            let mut kept: HashMap<[u8; size_of::<SceneVertex>()], u32> = HashMap::new();
             for vertex in vertices {
-                self.indices.push(self.vertices.len() as u32);
-                self.vertices.push(vertex);
+                let key: [u8; size_of::<SceneVertex>()] = bytemuck::cast(vertex);
+                let index = if share {
+                    *kept.entry(key).or_insert_with(|| {
+                        self.vertices.push(vertex);
+                        self.vertices.len() as u32 - 1
+                    })
+                } else {
+                    self.vertices.push(vertex);
+                    self.vertices.len() as u32 - 1
+                };
+                self.indices.push(index);
             }
             self.batches.push(MeshBatch {
                 indices: start..self.indices.len() as u32,

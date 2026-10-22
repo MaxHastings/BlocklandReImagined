@@ -177,7 +177,7 @@ impl LightVolumeState {
     /// [`bri_render::scene::ACTOR_LAMP`] lights, which `actor_light` ranks
     /// with every other light (the best four reach each vertex), and which
     /// surfaces ignore: their light is in the map's own lighting already.
-    /// Spot lamps are left out (their cone is not carried here).
+    /// A spot lamp carries its cone, so a body is lit only within it.
     pub(super) fn actor_lamps(&self, eye: Vec3, room: usize) -> Vec<bri_render::scene::PointLight> {
         let lamps = if self.bound_mode == 3 {
             Some(self.recovered.as_slice())
@@ -188,22 +188,31 @@ impl LightVolumeState {
             .unwrap_or_default()
             .iter()
             .enumerate()
-            .filter(|(i, _)| !self.spots.iter().any(|(s, _)| s == i))
             .map(|(i, l)| {
                 let tint = self.lamp_tints.get(i).copied().unwrap_or(Vec3::ONE);
-                (Vec3::from(l.position).distance(eye) - l.outer, l, tint)
+                let cone = self
+                    .spots
+                    .iter()
+                    .find(|(s, _)| *s == i)
+                    .map_or([0.0; 4], |(_, words)| *words);
+                (
+                    Vec3::from(l.position).distance(eye) - l.outer,
+                    l,
+                    tint,
+                    cone,
+                )
             })
-            .filter(|(_, _, tint)| tint.max_element() > 0.0)
+            .filter(|(_, _, tint, _)| tint.max_element() > 0.0)
             .collect();
         near.sort_by(|a, b| a.0.total_cmp(&b.0));
         near.truncate(room);
         near.into_iter()
-            .map(|(_, l, tint)| {
+            .map(|(_, l, tint, cone)| {
                 let colour = Vec3::from(l.color) * tint;
                 bri_render::scene::PointLight {
                     position_radius: [l.position[0], l.position[1], l.position[2], l.outer],
                     color: [colour.x, colour.y, colour.z, bri_render::scene::ACTOR_LAMP],
-                    ..Default::default()
+                    cone,
                 }
             })
             .collect()
@@ -817,21 +826,25 @@ mod tests {
             outer: 10.0,
             channel: None,
         };
+        let cone = bri_render::scene::spot_words(Vec3::NEG_Y, 20.0, 40.0);
         let state = LightVolumeState {
             bound_mode: 3,
             recovered: vec![lamp(40.0), lamp(5.0), lamp(20.0), lamp(1.0)],
             // Lamp 1 is out, lamp 3 half bright, lamp 2 a spot.
             lamp_tints: vec![Vec3::ONE, Vec3::ZERO, Vec3::ONE, Vec3::splat(0.5)],
-            spots: vec![(2, [0.0; 4])],
+            spots: vec![(2, cone)],
             ..Default::default()
         };
         let lamps = state.actor_lamps(Vec3::ZERO, 8);
         let at: Vec<_> = lamps.iter().map(|l| l.position_radius[0]).collect();
-        assert_eq!(at, vec![1.0, 40.0]);
+        assert_eq!(at, vec![1.0, 20.0, 40.0]);
         assert_eq!(
             lamps[0].color,
             [0.5, 0.25, 0.125, bri_render::scene::ACTOR_LAMP]
         );
+        // The spot keeps its cone; the plain lamps shine all round.
+        assert_eq!(lamps[1].cone, cone);
+        assert_eq!(lamps[0].cone, [0.0; 4]);
         assert_eq!(state.actor_lamps(Vec3::ZERO, 1).len(), 1);
     }
 

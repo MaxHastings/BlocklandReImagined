@@ -1319,7 +1319,12 @@ fn burst(
                 if normal == Vec3::ZERO {
                     return Some(None);
                 }
-                if hit_bursts(def, hit_age, matches!(hit.target, TargetId::Actor(_))) {
+                if hit_bursts(
+                    def,
+                    def.arm_ticks_mean(),
+                    hit_age,
+                    matches!(hit.target, TargetId::Actor(_)),
+                ) {
                     return Some(Some(Burst {
                         position: hit.position,
                         ticks: hit_age,
