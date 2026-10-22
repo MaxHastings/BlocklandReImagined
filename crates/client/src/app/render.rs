@@ -6,6 +6,21 @@ use bri_console::Clamp;
 const ITEM_LIGHT_REACH: f32 = 0.5;
 
 impl App {
+    /// While the view is in night vision and the map names a glow: the glow
+    /// bodies and other lit moving things take (0 to 1) and how it meets
+    /// their light. Static meshes, terrain and level surfaces have their own
+    /// values in the data and are not drawn with them yet.
+    fn night_glow(
+        night_vision: bool,
+        regions: Option<&bri_content::regions::RegionMap>,
+    ) -> Option<(f32, f32, bri_content::regions::GlowMode)> {
+        if !night_vision {
+            return None;
+        }
+        let night = regions?.night_vision?;
+        let unit = |v: f32| (v / 255.0).clamp(0.0, 1.0);
+        Some((unit(night.pawn), unit(night.actor), night.mode))
+    }
     pub(super) fn render_frame(&mut self, frame: &mut RenderContext<'_>) -> Result<bool> {
         self.fx.weapon_frame_observation = None;
         let span = crate::frame_trace::span("prepare");
@@ -587,12 +602,14 @@ impl App {
         // shadow without being drawn.
         let casts = renderer.shadow_settings().is_some();
         // Held and dropped items take the light of where they are, as bodies do.
+        let night = Self::night_glow(self.view.night_vision, self.scene.regions.as_ref());
         let item_light = |at: [f32; 3]| {
             let near = |sign: f32| at.map(|v| v + sign * ITEM_LIGHT_REACH);
             self.lighting.light_volume.actor_light(
                 self.scene.regions.as_ref(),
                 near(-1.0),
                 near(1.0),
+                night.map(|(_, actor, mode)| (actor, mode)),
             )
         };
         self.world_items
@@ -821,7 +838,19 @@ impl App {
             if let Some(ambient) = regions.ambient(zone) {
                 camera.ambient[..3].copy_from_slice(&ambient);
             }
-            let fog = self.scene.fog_blend.step(regions, zone, dt);
+            let mut fog = self.scene.fog_blend.step(regions, zone, dt);
+            // In night vision the zone's night fog stands in for its own, at once.
+            if self.view.night_vision
+                && let Some(night) = regions.night_fog(zone)
+            {
+                fog = bri_content::regions::ActiveFog {
+                    enabled: true,
+                    color: night.color,
+                    start: night.start,
+                    end: night.end,
+                    clear: night.clear_to_fog.then_some(night.color),
+                };
+            }
             if fog.enabled {
                 let [r, g, b] = fog.color.map(|c| f32::from(c) / 255.0);
                 camera.fog_color = [r, g, b, 0.0];
@@ -986,6 +1015,7 @@ impl App {
         // stop once they have taken BODY_UPLOAD_BUDGET; the rest draw from
         // the next frames. The player's own body goes first.
         let mut whole = WholeUploads::default();
+        let night = Self::night_glow(self.view.night_vision, self.scene.regions.as_ref());
         let mut own_first: Vec<_> = self.avatar.avatars.keys().copied().collect();
         own_first.sort_by_key(|owner| *owner != view.owner);
         for owner in &own_first {
@@ -1023,6 +1053,7 @@ impl App {
                 self.scene.regions.as_ref(),
                 low.to_array(),
                 high.to_array(),
+                night.map(|(pawn, _, mode)| (pawn, mode)),
             );
             let textures = self
                 .avatar

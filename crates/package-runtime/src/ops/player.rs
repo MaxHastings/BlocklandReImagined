@@ -364,19 +364,18 @@ impl ScriptOp for SetFov {
     }
 }
 
-/// Put a player's view in night vision with baked lightmaps at `scale`
-/// times their brightness (1 to 16), or take it off with `None`. Only
-/// their own screen changes.
+/// Put a player's view in night vision, or take it off. Only their own
+/// screen changes; what night vision looks like is the map's data.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SetNightVision {
     pub player: u64,
-    pub scale: Option<f32>,
+    pub on: bool,
 }
 impl ScriptOp for SetNightVision {
     const CAPABILITY: &str = "player";
     const NAME: &str = "set_night_vision";
     fn bounded(&self) -> bool {
-        self.scale.is_none_or(|s| (1.0..=16.0).contains(&s))
+        true
     }
 }
 
