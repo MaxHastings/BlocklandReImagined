@@ -1857,6 +1857,18 @@ fn register_api(engine: &mut Engine) {
             push(Op::Teleport(ops::Teleport {
                 player: id(&player)?,
                 position: [float(&x)?, float(&y)?, float(&z)?],
+                yaw: None,
+            }))
+        },
+    );
+    // The same, turned to face `yaw` radians.
+    engine.register_fn(
+        "teleport",
+        |player: Dynamic, x: Dynamic, y: Dynamic, z: Dynamic, yaw: Dynamic| {
+            push(Op::Teleport(ops::Teleport {
+                player: id(&player)?,
+                position: [float(&x)?, float(&y)?, float(&z)?],
+                yaw: Some(float(&yaw)?),
             }))
         },
     );
