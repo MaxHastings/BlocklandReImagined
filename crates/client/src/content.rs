@@ -26,6 +26,9 @@ use std::{
 
 const INDEX_LIMIT: u64 = 32 * 1024 * 1024;
 const GEOMETRY_LIMIT: u64 = 256 * 1024 * 1024;
+/// A native model of a map bundle (a whole level is one model, 1.6 million
+/// triangles in the largest so far).
+const MAP_GEOMETRY_LIMIT: u64 = 1024 * 1024 * 1024;
 
 pub use bri_sim::map::LOADABLE_MAPS;
 
@@ -966,7 +969,7 @@ fn load_bundle(root: &Path) -> Result<Bundle> {
         file(root, &entry.file, INDEX_LIMIT)?;
     }
     for name in bundle.assets.values() {
-        file(root, name, GEOMETRY_LIMIT)?;
+        file(root, name, MAP_GEOMETRY_LIMIT)?;
     }
     for name in bundle.textures.values() {
         file(root, name, INDEX_LIMIT)?;
