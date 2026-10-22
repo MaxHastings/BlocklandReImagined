@@ -212,6 +212,29 @@ pub struct MountedImageObservation {
     pub live: LiveValues,
 }
 
+/// A held image in first person is drawn by its own camera: the same eye and
+/// facing as the world's, a different field of view. A point on the image
+/// lands on the screen where the world camera would put a point whose
+/// sideways and vertical distances from the view axis are scaled by the ratio
+/// of the two fields (`tan(local / 2) / tan(world / 2)`), at the same depth.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct LocalViewFit {
+    pub eye: Vec3,
+    pub right: Vec3,
+    pub up: Vec3,
+    /// Ratio of the local field of view to the world's, across and up.
+    pub across: f32,
+    pub vertical: f32,
+}
+impl LocalViewFit {
+    /// Where in the world a point of the local view appears to be.
+    pub fn in_world(&self, point: Vec3) -> Vec3 {
+        let d = point - self.eye;
+        let (x, y) = (d.dot(self.right), d.dot(self.up));
+        point + self.right * (x * (self.across - 1.)) + self.up * (y * (self.vertical - 1.))
+    }
+}
+
 #[derive(Clone)]
 struct MountedPose {
     first_person: bool,
@@ -268,6 +291,9 @@ pub struct WorldItems {
     hide_own_first_person: bool,
     scoped: bool,
     first_person_fov: Option<f32>,
+    /// The camera the local view of a held image is drawn from and how far
+    /// its field of view differs from the world's ([`LocalViewFit`]).
+    local_view_fit: Option<LocalViewFit>,
     /// The local avatar's slot colours, for the first-person images' masked
     /// tints ([`Self::set_wearer_colors`]).
     wearer_colors: Vec<(String, [u32; 4])>,
@@ -333,6 +359,7 @@ impl WorldItems {
             hide_own_first_person: false,
             scoped: false,
             first_person_fov: None,
+            local_view_fit: None,
             wearer_colors: Vec::new(),
             headings: BTreeMap::new(),
             prepares: 0,
@@ -404,6 +431,17 @@ impl WorldItems {
     }
     pub fn set_first_person_fov(&mut self, fov: f32) {
         self.first_person_fov = (fov.is_finite() && fov > 0. && fov < 180.).then_some(fov);
+    }
+    /// The local view's camera this frame, or none with no local view drawn.
+    pub fn set_local_view_fit(&mut self, fit: Option<LocalViewFit>) {
+        self.local_view_fit = fit.filter(|f| {
+            [f.across, f.vertical]
+                .iter()
+                .all(|r| r.is_finite() && *r > 0.)
+                && f.eye.is_finite()
+                && f.right.is_finite()
+                && f.up.is_finite()
+        });
     }
     pub fn set_scoped(&mut self, on: bool) {
         self.scoped = on;
@@ -1547,8 +1585,23 @@ impl WorldItems {
         } else {
             node
         };
-        self.assets
-            .node_transform(&mounted.model, &pose, mounted.transform, node)
+        let mut at = self
+            .assets
+            .node_transform(&mounted.model, &pose, mounted.transform, node)?;
+        // A node of an image drawn by the local view (its own field of view)
+        // is where the world sees it appear, so what leaves it (a casing, a
+        // shot's start) leaves the gun on the screen.
+        if mounted.first_person
+            && let Some(fit) = self.local_view_fit
+            && self
+                .weapons
+                .images
+                .get(image)
+                .is_some_and(|i| i.first_person_view.is_some())
+        {
+            at.w_axis = fit.in_world(at.w_axis.truncate()).extend(1.);
+        }
+        Ok(at)
     }
     /// The image `owner` holds in `hand`, as the last sync drew it.
     pub fn held_image(&self, owner: u64, hand: u8) -> Option<&str> {
