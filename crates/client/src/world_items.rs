@@ -1346,10 +1346,42 @@ impl WorldItems {
                         && !self.loose_drawn_logged
                     {
                         self.loose_drawn_logged = true;
+                        let data = &model.mesh.data;
+                        let triangles: u32 = data
+                            .batches
+                            .iter()
+                            .map(|b| (b.indices.end - b.indices.start) / 3)
+                            .sum();
+                        // Per material: its alpha mode, and for a cutout the
+                        // share of its picture's texels that pass the cutoff.
+                        let materials: Vec<String> = data
+                            .materials
+                            .iter()
+                            .map(|m| {
+                                let pass = match (m.alpha, data.images.get(m.images[0])) {
+                                    (bri_render::scene::AlphaMode::Mask(cutoff), Some(image)) => {
+                                        let texels = image.rgba.chunks_exact(4);
+                                        let total = texels.len().max(1);
+                                        let passing = texels
+                                            .filter(|t| f32::from(t[3]) / 255. >= cutoff)
+                                            .count();
+                                        format!(
+                                            " {:.0}% of texels pass",
+                                            100. * passing as f32 / total as f32
+                                        )
+                                    }
+                                    _ => String::new(),
+                                };
+                                format!("{} {:?}{pass}", m.name, m.alpha)
+                            })
+                            .collect();
                         eprintln!(
-                            "Loose model {} drawn for the first time at {:?}",
+                            "Loose model {} drawn for the first time at {:?}: {} vertices, {triangles} triangles in {} batches; {}",
                             key.model,
-                            instance.transform.transform.w_axis.truncate()
+                            instance.transform.transform.w_axis.truncate(),
+                            slot.geometry.vertices.len(),
+                            data.batches.len(),
+                            materials.join("; ")
                         );
                     }
                     slot.identities.push(instance.identity);
