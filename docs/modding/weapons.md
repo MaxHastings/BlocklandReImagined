@@ -758,7 +758,7 @@ most it turns about each axis, in turns per second, either way, picked per throw
 (and again on each bounce with `respin_on_bounce`); `bounce` is the share of the
 speed along the surface normal a bounce keeps; a bounce that leaves it slower than
 `rest_speed` comes to rest; it is gone after `lifetime` seconds; `sound` is a
-sound profile played where it lands. The model must be one the pack loads.
+sound profile played where it lands. `landing_sounds` maps a surface kind (`brick`, `terrain`, a map's own kinds, `default`) to a sound profile that replaces `sound` on that surface. `owner_frame: true` takes `exit_direction` and `exit_offset` in the owner's yaw frame instead of the eject node's; `inherit_velocity` (default 1, up to 2) is the share of the owner's velocity the casing starts with; `clip_start: true` sweeps from the eject point to the start and stops the casing at a wall in between. The model must be one the pack loads.
 
 
 Particle `contact` is optional. A definition can supply `restitution` and
