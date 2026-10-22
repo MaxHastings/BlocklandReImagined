@@ -2342,7 +2342,7 @@ impl Session {
                         && matches!(claim.resource, claims::Resource::Seat { .. }))
             })
         {
-            self.bots.claims.release_owner(bot);
+            self.bots.claims.release_interaction(bot);
         }
         // A live objective reservation is not a combat opportunity. Both use
         // the same advisory leases, occupancy and native action admission.
@@ -2880,7 +2880,7 @@ impl Session {
                     objective_resource != Some(claim.resource) || claim.subject != bot
                 })
         {
-            self.bots.claims.release_owner(bot);
+            self.bots.claims.release_interaction(bot);
         }
         if let Some(resource) = objective_resource {
             if self.bots.claims.acquire(

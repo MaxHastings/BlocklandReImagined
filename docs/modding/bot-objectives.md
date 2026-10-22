@@ -151,6 +151,12 @@ instead of crowding one; a bot that is refused takes the next offer or a
 guard post. Give each offer an `id` unique to the query and stable across
 calls. Offers count toward the same limit of eight as `carry_return`.
 
+Guard offers are rediscovered on the same bounded, fair planning turns used
+to find objectives. Removing a post, changing its declaration or filling its
+claimant capacity releases that assignment; a guard does not wait for death or
+an approach timeout to learn that its post is no longer available. A still-live
+assignment remains useful while the bot fights threats around it.
+
 ## What each binding means
 
 | Field | Current meaning |

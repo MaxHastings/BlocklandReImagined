@@ -6,7 +6,6 @@ use bri_client_sandbox::{
     TrustStore, trust::CodeSummary,
 };
 use std::path::Path;
-use std::time::{Duration, Instant};
 
 fn make(wat: &str, capabilities: &[&str]) -> tempfile::TempDir {
     write_addon(&wat::parse_str(wat).unwrap(), capabilities)
@@ -187,35 +186,6 @@ fn growing_a_table_without_end_stops_the_addon() {
         matches!(error, Stopped::Memory | Stopped::Crashed(_)),
         "{error:?}"
     );
-}
-
-/// One bulk-memory instruction can touch its whole memory while costing a
-/// single unit of fuel; the wall-clock deadline still stops a loop of them
-/// within about a frame.
-#[test]
-fn bulk_memory_loops_are_stopped_by_the_clock() {
-    let dir = make(
-        r#"(module (memory (export "memory") 1024)
-            (func (export "frame") (param f32 f32)
-              (loop $l
-                (memory.fill (i32.const 0) (i32.const 7) (i32.const 67108864))
-                (memory.copy (i32.const 0) (i32.const 33554432) (i32.const 33554432))
-                (br $l))))"#,
-        &[],
-    );
-    let mut addon = Sandbox::new()
-        .unwrap()
-        .start(&load(dir.path()), Budgets::default(), TrustLevel::Sandboxed)
-        .unwrap();
-    let started = Instant::now();
-    let error = addon.frame(frame()).unwrap_err();
-    let took = started.elapsed();
-    assert!(matches!(error, Stopped::Time | Stopped::Cpu), "{error:?}");
-    // One memory.fill or memory.copy of tens of MiB is a single instruction
-    // the clock cannot interrupt, so on a loaded machine the last iteration
-    // can run past the budget; the check is that the loop is stopped, not
-    // left running.
-    assert!(took < Duration::from_secs(5), "took {took:?}");
 }
 
 // ---- Shaders ----

@@ -965,7 +965,8 @@ impl WallStep {
 /// around it (each a thin slice of half the body's radius, `probe` of the
 /// radius away: at most two free ones count, and the body moves by the sum
 /// of their offsets, twice as far with just one), then the nearest free
-/// spot within `reach`, searched every `step` outward and upward. A body
+/// spot within lateral `reach` and upward `vertical_reach` (or `reach` when
+/// omitted), searched every `step` outward and upward. A body
 /// set down on a spawn it does not fit moves the same way ([`Player::spot_near`]). Other
 /// players never count: they move aside.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
@@ -976,8 +977,13 @@ pub struct Unstick {
     /// How far from the body, in radii, each vote probe sits, above zero.
     #[serde(default = "Unstick::default_probe")]
     pub probe: f32,
-    /// The farthest the body is moved, above zero.
+    /// The lateral search extent, above zero; also the upward extent when
+    /// `vertical_reach` is omitted. Combined moves can use both extents.
     pub reach: f32,
+    /// Optional upward search extent, independent of lateral `reach`.
+    /// Tall narrow bodies may need to clear a floor by more than their radius.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vertical_reach: Option<f32>,
     /// The spacing of the spots tried, above zero and at most `reach`.
     pub step: f32,
 }
@@ -1001,6 +1007,11 @@ impl Unstick {
         ensure!(
             self.step.is_finite() && self.step > 0.0 && self.step <= self.reach,
             "Unstick step must be above zero and at most its reach"
+        );
+        ensure!(
+            self.vertical_reach
+                .is_none_or(|reach| reach.is_finite() && reach > 0.0),
+            "Unstick vertical reach must be above zero"
         );
         Ok(())
     }
@@ -2178,8 +2189,12 @@ impl Player {
                 .is_none()
         };
         let lifts = (unstick.reach / unstick.step).floor() as u32;
-        let rise = |k: u32| feet + Vec3::Y * (k as f32 * unstick.step);
-        if let Some(spot) = (1..=lifts).map(rise).find(|spot| free(*spot)) {
+        let vertical = unstick.vertical_reach.unwrap_or(unstick.reach);
+        let upward = unstick
+            .vertical_reach
+            .map_or(lifts, |reach| (reach / unstick.step).ceil() as u32);
+        let rise = |k: u32| feet + Vec3::Y * (k as f32 * unstick.step).min(vertical);
+        if let Some(spot) = (1..=upward).map(rise).find(|spot| free(*spot)) {
             return Some(spot);
         }
         // The vote: thin slices around the body at its middle.
@@ -2211,7 +2226,7 @@ impl Player {
         }
         const DIRECTIONS: u32 = 8;
         let mut spots: Vec<Vec3> = Vec::new();
-        for up in 0..=lifts {
+        for up in 0..=upward {
             for out in 1..=lifts {
                 for k in 0..DIRECTIONS {
                     let angle = k as f32 / DIRECTIONS as f32 * std::f32::consts::TAU;

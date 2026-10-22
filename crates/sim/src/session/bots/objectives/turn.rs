@@ -134,12 +134,21 @@ impl Session {
             } else if tick > step.deadline {
                 state.fail(tick, "objective approach timed out");
             } else if step.progress(self, bot, tick).is_none() {
-                let out = state
-                    .step
-                    .as_ref()
-                    .and_then(|s| s.committed_view(self, bot));
-                self.bots.brains.get_mut(&bot)?.objective = state;
-                return out;
+                // A guard has no completion counter or timeout. Revisit the
+                // provider's live offers on its ordinary fair planning turn,
+                // or it could defend a withdrawn post forever. Work keeps its
+                // admitted hold until its own state changes.
+                let refresh_guard = tick >= state.next
+                    && self.bots.objective_candidate == Some(bot)
+                    && matches!(&step.executor, Executor::Place(action) if action.stamp.is_guard());
+                if !refresh_guard {
+                    let out = state
+                        .step
+                        .as_ref()
+                        .and_then(|s| s.committed_view(self, bot));
+                    self.bots.brains.get_mut(&bot)?.objective = state;
+                    return out;
+                }
             } else {
                 match step.progress(self, bot, tick).unwrap() {
                     Progress::Changed => {
@@ -204,15 +213,23 @@ impl Session {
                         Completion::Place(stamp) => {
                             !stamp.validate(self, bot)
                                 || stamp.is_guard()
-                                    && desireds.iter().any(|d| {
-                                        matches!(&d.completion, Completion::Place(p) if !p.is_guard())
-                                    })
+                                    && (!desireds.iter().any(|offered| offered == d)
+                                        || desireds.iter().any(|d| {
+                                            matches!(&d.completion, Completion::Place(p) if !p.is_guard())
+                                        }))
                         }
                         Completion::RoundWin { .. } | Completion::ScoreRise { .. } => {
                             !desireds.iter().any(|offered| offered == d)
                         }
                     }) {
                         state.desired = None;
+                        if state.step.as_ref().is_some_and(|step| {
+                            matches!(&step.executor, Executor::Place(action) if action.stamp.is_guard())
+                        }) {
+                            state.step = None;
+                            state.route.clear();
+                            self.bots.claims.release_place(bot);
+                        }
                     }
                     let desired = state
                         .desired

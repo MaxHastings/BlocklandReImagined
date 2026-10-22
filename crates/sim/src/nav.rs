@@ -1290,6 +1290,17 @@ impl Nav {
                     .filter_map(|f| Some((*f, link(body, swims, from, afloat, *f)?)))
                     .collect();
             }
+            if steps.is_empty() && afloat.is_none() && !body.conservative {
+                // Beside a small support, the body overhangs the edge before
+                // it falls. The intermediate columns have no place for the
+                // whole body at floor height, even though ordinary walking
+                // carries it off. Join only the nearby lower landing, with
+                // clearance above the edge and all the way down; never a
+                // level gap, an over-step rail or a chassis shortcut.
+                if let Some((next, floor)) = self.walkoff(ground, body, node, dx, dz)? {
+                    out.push((next, false, floor, None));
+                }
+            }
             for (f, jump) in steps {
                 if self.avoided(node, x, z, f.y, body) {
                     continue;
@@ -1364,6 +1375,64 @@ impl Nav {
             }
         }
         Some(out)
+    }
+
+    fn walkoff(
+        &mut self,
+        ground: &Ground,
+        body: &Body,
+        from: Node,
+        dx: i32,
+        dz: i32,
+    ) -> Option<Option<(Node, Floor)>> {
+        if !ground.clear(body, from.feet(), false) {
+            return Some(None);
+        }
+        // At most one footprint beyond an adjacent cell, capped at eight
+        // cells of sampling work. Larger gaps need the measured leap graph.
+        let extent = ((body.width / CELL).ceil() as i32 + 1).min(8);
+        for stride in 2..=extent {
+            let (x, z) = (from.x + dx * stride, from.z + dz * stride);
+            let floors = self.floor(ground, body, x, z, from.feet().y)?;
+            if floors.iter().any(|f| f.y >= from.feet().y - body.step) {
+                break;
+            }
+            for f in entered(&floors, from.feet().y, None, body)
+                .filter(|f| !f.low && !f.wet && f.y >= from.feet().y - body.drop)
+            {
+                let to = Node::on(x, z, &f);
+                if self.line_avoided(from.feet(), to.feet(), body) {
+                    continue;
+                }
+                if self.edge(from, to, || {
+                    let (half, lift, tall) = body.clearance(false);
+                    let high = to.feet().with_y(from.feet().y);
+                    let samples = (from.feet().distance(high) / (CELL * 0.5)).ceil() as usize;
+                    // This bridges missing *standing* samples beside a prop,
+                    // not open air between platforms: a safe floor must lie
+                    // beneath every part of the crossing.
+                    let supported = (1..=samples).all(|i| {
+                        let top = from.feet().lerp(high, i as f32 / samples as f32)
+                            + Vec3::Y * STEP_SLACK;
+                        ground
+                            .ray(top, Vec3::NEG_Y, body.drop + STEP_SLACK)
+                            .is_some_and(|(_, normal)| normal.y >= body.floor_cos)
+                    });
+                    supported
+                        && ground.settle(body, to.feet(), false).is_some()
+                        && ground.sweep_box(
+                            half,
+                            tall,
+                            from.feet() + Vec3::Y * lift,
+                            high + Vec3::Y * lift,
+                        )
+                        && ground.sweep_box(half, body.height, high, to.feet())
+                }) {
+                    return Some(Some((to, f)));
+                }
+            }
+        }
+        Some(None)
     }
 }
 
@@ -2494,6 +2563,91 @@ mod tests {
             1,
             "one jump, onto the tall block: {p:?}"
         );
+    }
+
+    #[test]
+    fn a_body_walks_off_a_small_support_without_a_fictitious_jump() {
+        let tuning = bri_motor::player::PlayerTuning {
+            width: 1.76,
+            stand_height: 4.0,
+            crouch_height: 2.56,
+            step_height: 1.28,
+            jump_speed: 0.0,
+            gravity: 60.0,
+            ..Default::default()
+        };
+        let body = Body::of(&tuning, 1.0);
+        let support = (Vec3::new(-0.4, 0.0, -0.4), Vec3::new(0.4, 1.6, 0.4));
+        for rail in [false, true] {
+            let mut boxes = vec![floor(), support];
+            if rail {
+                // Above the motor's step, all the way round the support.
+                boxes.extend([
+                    (Vec3::new(1.0, 0.0, -2.0), Vec3::new(1.2, 4.0, 2.0)),
+                    (Vec3::new(-1.2, 0.0, -2.0), Vec3::new(-1.0, 4.0, 2.0)),
+                    (Vec3::new(-2.0, 0.0, 1.0), Vec3::new(2.0, 4.0, 1.2)),
+                    (Vec3::new(-2.0, 0.0, -1.2), Vec3::new(2.0, 4.0, -1.0)),
+                ]);
+            }
+            let mut physics = world(&boxes);
+            let ground = Ground {
+                physics: &physics,
+                terrain: &no_terrain,
+                passages: &NO_PASSAGES,
+                waters: &[],
+                bodies: &[],
+                motions: &[],
+                solid: &all_solid,
+            };
+            let mut nav = Nav::default();
+            nav.unmetered();
+            let mut search = Search::new(Vec3::new(0.0, 1.6, 0.0), Vec3::new(8.0, 0.0, 0.0), 16.0);
+            let found = search
+                .step(&mut nav, &ground, &body)
+                .expect("unmetered search");
+            if rail {
+                assert!(
+                    !matches!(found, Found::Path(_)),
+                    "walked through a rail: {found:?}"
+                );
+            } else {
+                let route = path(found);
+                assert!(route.iter().all(|w| !w.jump), "{route:?}");
+                assert!(
+                    route
+                        .last()
+                        .unwrap()
+                        .feet
+                        .distance(Vec3::new(8.0, 0.0, 0.0))
+                        < 1.0
+                );
+                let mut player = bri_motor::player::Player::spawn(
+                    &mut physics,
+                    1,
+                    Vec3::new(0.0, 1.7, 0.0),
+                    tuning.clone(),
+                )
+                .unwrap();
+                for _ in 0..240 {
+                    player
+                        .step(
+                            &mut physics,
+                            bri_motor::player::MoveInput {
+                                forward: 1.0,
+                                yaw: std::f32::consts::FRAC_PI_2,
+                                ..Default::default()
+                            },
+                        )
+                        .unwrap();
+                    physics.step();
+                }
+                let feet = Vec3::from(player.state().feet);
+                assert!(
+                    feet.x > 4.0 && feet.y.abs() < 0.1,
+                    "ordinary walking must actually leave the support: {feet}"
+                );
+            }
+        }
     }
 
     #[test]

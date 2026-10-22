@@ -764,7 +764,11 @@ impl State {
         self.unplanned
     }
     pub(super) fn ready(&self, tick: u64) -> bool {
-        self.step.is_none() && tick >= self.next
+        tick >= self.next
+            && (self.step.is_none()
+                || self.step.as_ref().is_some_and(|step| {
+                    matches!(&step.executor, Executor::Place(action) if action.stamp.is_guard())
+                }))
     }
     pub(super) fn fail(&mut self, tick: u64, reason: &'static str) {
         self.paused = false;

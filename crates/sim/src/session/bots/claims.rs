@@ -339,6 +339,13 @@ impl Claims {
     /// Preemption/success releases without punishing an otherwise useful task.
     pub(super) fn release_owner(&mut self, owner: OwnerId) -> Option<Claim> {
         self.places.remove(&owner);
+        self.release_interaction(owner)
+    }
+
+    /// Give back a seat or loose-body opportunity without discarding an
+    /// independent work/guard assignment. Turning down an interaction does
+    /// not free the objective post the bot is still walking to or guarding.
+    pub(super) fn release_interaction(&mut self, owner: OwnerId) -> Option<Claim> {
         self.active.remove(&owner)
     }
 

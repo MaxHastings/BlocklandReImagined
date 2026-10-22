@@ -312,7 +312,7 @@ impl Session {
             .map(|(o, _)| *o)
             .collect();
         for o in invalid {
-            self.bots.claims.release_owner(o);
+            self.bots.claims.release_interaction(o);
         }
     }
 
@@ -683,7 +683,7 @@ impl Session {
         let brain = &self.bots.brains[&bot];
         if self.seated(bot) || tick < brain.next_interaction || brain.kind.weight("interact") == 0.0
         {
-            self.bots.claims.release_owner(bot);
+            self.bots.claims.release_interaction(bot);
             return None;
         }
         // An enemy known comes first, as it did; else on the way to an
@@ -698,7 +698,7 @@ impl Session {
             (None, None, None) => match self.bot_idle_mark(bot, tick) {
                 Some((mark, at)) => (mark, at, Want::Play),
                 None => {
-                    self.bots.claims.release_owner(bot);
+                    self.bots.claims.release_interaction(bot);
                     return None;
                 }
             },
@@ -711,7 +711,7 @@ impl Session {
             let seat = matches!(claim.resource, Resource::Seat { .. });
             let seat_only = matches!(want, Want::Explore | Want::Objective);
             if claim.subject != subject || seat && !seats || !seat && seat_only {
-                self.bots.claims.release_owner(bot);
+                self.bots.claims.release_interaction(bot);
             }
         }
         if let Some(claim) = self.bots.claims.owner_claim(bot, tick) {
@@ -921,7 +921,7 @@ impl Session {
         match claim.resource {
             Resource::Seat { vehicle, seat } => {
                 if self.try_bot_board(bot, vehicle, seat, tick)? {
-                    self.bots.claims.release_owner(bot);
+                    self.bots.claims.release_interaction(bot);
                 }
                 Ok(None)
             }
