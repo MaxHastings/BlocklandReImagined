@@ -825,6 +825,32 @@ fn every_operation_needs_its_declared_capability() {
 /// Extreme parameters are refused by the shape check before any capability
 /// or engine work: NaN/inf/huge positions, radii, damage and oversize text.
 #[test]
+fn a_large_view_kick_is_admitted_without_removing_angular_bounds() {
+    let mut shake = ops::ViewShake {
+        player: 7,
+        direction: 2.6769485,
+        min: 0.049586467,
+        max: 1.0562757,
+        rate: 5.874804,
+    };
+    let allowed = |shake: &ops::ViewShake| {
+        authorize("probe", &["player".into()], &Op::ViewShake(shake.clone()))
+    };
+    assert!(allowed(&shake).is_ok(), "a finite kick above one radian");
+    shake.max = std::f32::consts::FRAC_PI_2;
+    assert!(allowed(&shake).is_ok(), "quarter-turn peak");
+    for peak in [
+        -0.01,
+        std::f32::consts::FRAC_PI_2 + 0.001,
+        f32::INFINITY,
+        f32::NAN,
+    ] {
+        shake.max = peak;
+        assert_eq!(allowed(&shake).unwrap_err().code, "op.bounds");
+    }
+}
+
+#[test]
 fn extreme_operation_parameters_are_refused() {
     let all: Vec<String> = CAPABILITIES.iter().map(|c| c.to_string()).collect();
     let explode = |p: [f32; 3], r: f32, d: f32, b: f32| {

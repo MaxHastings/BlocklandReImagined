@@ -868,7 +868,8 @@ impl ScriptOp for OrbitCamera {
 /// look turns out along `direction` (radians in the view plane, 0 up and
 /// pi/2 across) up to `max`, bounces back at half the speed and settles
 /// where it has come back to `min`, so a hit leaves the aim a little off.
-/// `rate` is radians a second. Radians throughout; the client runs it.
+/// `rate` is radians a second. Peaks may reach a quarter turn; the client
+/// runs the kick and clamps the resulting pitch to its ordinary look limits.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ViewShake {
     pub player: u64,
@@ -885,7 +886,7 @@ impl ScriptOp for ViewShake {
         [direction, min, max, rate].iter().all(|v| v.is_finite())
             && direction.abs() <= 100.0
             && (-1.0..=1.0).contains(min)
-            && (0.0..=1.0).contains(max)
+            && (0.0..=std::f32::consts::FRAC_PI_2).contains(max)
             && (0.01..=100.0).contains(&rate.abs())
     }
 }
