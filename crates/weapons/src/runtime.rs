@@ -3601,8 +3601,7 @@ impl WeaponsWorld {
                         scale: a.frame.scale,
                     });
                 }
-                if state.eject_shell && (!image.casing.is_empty() || !image.shell_effect.is_empty())
-                {
+                if state.eject_shell && image.throws_shell() {
                     self.events.push(Event::Shell {
                         actor: id,
                         image: image.id.clone(),

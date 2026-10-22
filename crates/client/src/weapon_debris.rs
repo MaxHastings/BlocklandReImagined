@@ -95,6 +95,26 @@ struct ShellDefinition {
     exit_offset: [f32; 3],
     exit_variance_degrees: f32,
     velocity: f32,
+    /// World-axis acceleration, native units per second squared; absent, it
+    /// is `gravity_multiplier` times Torque's debris gravity, downward.
+    #[serde(default)]
+    acceleration: Option<[f32; 3]>,
+    /// Fraction of each world axis's velocity lost per second.
+    #[serde(default)]
+    damping: [f32; 3],
+    /// Most it turns about each axis, turns per second; absent, one random
+    /// axis at the spin range above.
+    #[serde(default)]
+    axis_spin: Option<[f32; 3]>,
+    /// Spin picked again on every bounce.
+    #[serde(default)]
+    respin_on_bounce: bool,
+    /// A bounce leaving it slower than this comes to rest.
+    #[serde(default)]
+    rest_speed: Option<f32>,
+    /// Sound profile played where it lands.
+    #[serde(default)]
+    sound: String,
 }
 fn sha(bytes: &[u8]) -> String {
     format!("{:x}", Sha256::digest(bytes))
@@ -313,6 +333,33 @@ impl WeaponDebrisAssets {
     }
 }
 
+/// A native image's mesh casing's motion, from the numbers its pack authors.
+fn native_shell(mesh: &bri_weapons::ShellMesh) -> ShellDefinition {
+    ShellDefinition {
+        model: mesh.model.clone(),
+        lifetime_seconds: mesh.lifetime,
+        min_spin_degrees_per_second: 0.,
+        max_spin_degrees_per_second: 0.,
+        elasticity: mesh.bounce,
+        friction: 0.,
+        bounces: 32,
+        static_on_max_bounce: false,
+        snap_on_max_bounce: false,
+        fade: false,
+        gravity_multiplier: 0.,
+        exit_direction: mesh.exit_direction,
+        exit_offset: mesh.exit_offset,
+        exit_variance_degrees: mesh.exit_variance,
+        velocity: mesh.velocity,
+        acceleration: Some(mesh.acceleration),
+        damping: mesh.damping,
+        axis_spin: Some(mesh.spin),
+        respin_on_bounce: mesh.respin_on_bounce,
+        rest_speed: Some(mesh.rest_speed),
+        sound: mesh.sound.clone(),
+    }
+}
+
 /// An Add-On casing's motion from its `DebrisData` and its image's shell
 /// fields, held to the ranges the stock shell is.
 fn add_on_shell(model: &str, casing: &bri_weapons::debris::Casing) -> ShellDefinition {
@@ -342,6 +389,12 @@ fn add_on_shell(model: &str, casing: &bri_weapons::debris::Casing) -> ShellDefin
             .map(|v| finite(v, 0.).clamped(-100., 100.)),
         exit_variance_degrees: finite(casing.exit_variance, 20.).clamped(0., 180.),
         velocity: finite(casing.velocity, 1.).clamped(0., 200.),
+        acceleration: None,
+        damping: [0.; 3],
+        axis_spin: None,
+        respin_on_bounce: false,
+        rest_speed: None,
+        sound: String::new(),
     }
 }
 
@@ -368,6 +421,12 @@ impl WeaponDebrisAssets {
                 exit_offset: [0.; 3],
                 exit_variance_degrees: 15.,
                 velocity: 7.,
+                acceleration: None,
+                damping: [0.; 3],
+                axis_spin: None,
+                respin_on_bounce: false,
+                rest_speed: None,
+                sound: String::new(),
             },
         }
     }
@@ -418,6 +477,8 @@ pub struct WeaponDebris {
     cursor: u64,
     /// Casings thrown without a cue (`eject`), for their ids.
     ejected: u64,
+    /// Where casings landed that have a sound, until `take_sounds`.
+    sounds: Vec<(String, [f32; 3])>,
     seconds: f64,
     accumulator: f64,
     pub diagnostics: WeaponDebrisDiagnostics,
@@ -441,6 +502,7 @@ impl WeaponDebris {
             pending: VecDeque::new(),
             cursor: 0,
             ejected: 0,
+            sounds: Vec::new(),
             seconds: 0.,
             accumulator: 0.,
             diagnostics: Default::default(),
@@ -456,6 +518,10 @@ impl WeaponDebris {
     }
     pub fn clear(&mut self) {
         self.reset(0);
+    }
+    /// The landing sounds of casings since the last call: profile and place.
+    pub fn take_sounds(&mut self) -> Vec<(String, [f32; 3])> {
+        std::mem::take(&mut self.sounds)
     }
     pub fn cue_cursor(&self) -> u64 {
         self.cursor
@@ -513,6 +579,29 @@ impl WeaponDebris {
             self.casings.push(add_on_shell(&model, &casing));
             let index = self.casings.len() - 1;
             self.by_image.insert(image, index);
+        }
+        for (image, mesh) in pack
+            .images
+            .iter()
+            .filter_map(|(id, i)| Some((id, i.shell_mesh.as_ref()?)))
+        {
+            if !has_model(&mesh.model) {
+                notes.push(
+                    bri_package::health::Problem::new(
+                        bri_weapons::add_on_of(image).unwrap_or(image),
+                        bri_package::health::Kind::Model,
+                        &mesh.model,
+                        "is not loaded, so it throws the stock shell".to_owned(),
+                    )
+                    .used_by(format!("image {image} casing")),
+                );
+                continue;
+            }
+            if self.casings.len() == MAX_CASINGS {
+                continue;
+            }
+            self.casings.push(native_shell(mesh));
+            self.by_image.insert(image.clone(), self.casings.len() - 1);
         }
         notes
     }
@@ -646,7 +735,13 @@ impl WeaponDebris {
         let spin = (d.min_spin_degrees_per_second
             + rng.unit() * (d.max_spin_degrees_per_second - d.min_spin_degrees_per_second))
             .to_radians();
-        let spin_axis = Vec3::new(rng.signed(), rng.signed(), rng.signed()).normalize_or_zero();
+        let (spin_axis, spin) = match d.axis_spin {
+            Some(turns) => spin_about(&mut rng, turns),
+            None => (
+                Vec3::new(rng.signed(), rng.signed(), rng.signed()).normalize_or_zero(),
+                spin,
+            ),
+        };
         let start = eject.to_scale_rotation_translation().1;
         self.bodies.insert(
             id,
@@ -716,7 +811,11 @@ impl WeaponDebris {
                     continue;
                 }
                 if !body.settled {
-                    body.velocity.y -= 9.81 * d.gravity_multiplier * dt;
+                    body.velocity += match d.acceleration {
+                        Some(a) => Vec3::from_array(a),
+                        None => Vec3::new(0., -9.81 * d.gravity_multiplier, 0.),
+                    } * dt;
+                    body.velocity *= (Vec3::ONE - Vec3::from_array(d.damping) * dt).max(Vec3::ZERO);
                     let from = body.position;
                     let to = from + body.velocity * dt;
                     self.diagnostics.collision_queries += 1;
@@ -750,6 +849,21 @@ impl WeaponDebris {
                         }
                         body.bounces_left = body.bounces_left.saturating_sub(1);
                         self.diagnostics.bounces += 1;
+                        if !d.sound.is_empty() && self.sounds.len() < 16 {
+                            self.sounds
+                                .push((d.sound.clone(), body.position.to_array()));
+                        }
+                        if d.respin_on_bounce
+                            && let Some(turns) = d.axis_spin
+                        {
+                            let mut rng = Deterministic(id ^ u64::from(body.age.to_bits()) << 32);
+                            (body.spin_axis, body.spin) = spin_about(&mut rng, turns);
+                        }
+                        if d.rest_speed.is_some_and(|r| body.velocity.length() < r) {
+                            body.settled = true;
+                            body.velocity = Vec3::ZERO;
+                            self.diagnostics.settled += 1;
+                        }
                         if body.bounces_left == 0 && d.static_on_max_bounce {
                             body.settled = true;
                             body.velocity = Vec3::ZERO;
@@ -766,6 +880,15 @@ impl WeaponDebris {
         }
         Ok(())
     }
+}
+/// A turn rate about each axis, up to `turns` per second either way, as an
+/// axis and a rate in radians per second.
+fn spin_about(rng: &mut Deterministic, turns: [f32; 3]) -> (Vec3, f32) {
+    let rate = Vec3::from_array(turns) * Vec3::new(rng.signed(), rng.signed(), rng.signed());
+    (
+        rate.normalize_or_zero(),
+        rate.length() * std::f32::consts::TAU,
+    )
 }
 struct Deterministic(u64);
 impl Deterministic {
@@ -1102,6 +1225,57 @@ mod tests {
         )?;
         world.set_casings(&kit(), |_| false);
         assert_eq!(world.model_instances().count(), 0);
+        Ok(())
+    }
+    /// A native image's mesh casing falls under its own acceleration, loses
+    /// speed to damping, bounces off a floor with a sound and comes to rest
+    /// once a bounce leaves it slower than its rest speed.
+    #[test]
+    fn a_native_mesh_casing_bounces_sounds_and_rests() -> Result<()> {
+        let json = serde_json::json!({
+            "schema_version": 5, "id": "kit", "items": {},
+            "images": { "kit:image/rifle": { "id": "kit:image/rifle", "name": "rifle",
+                "shell_mesh": { "model": "kit/casing", "exit_direction": [0.0, 1.0, 0.0],
+                    "velocity": 2.0, "acceleration": [0.0, -30.0, 0.0],
+                    "damping": [0.5, 0.0, 0.5], "spin": [1.0, 1.0, 1.0],
+                    "respin_on_bounce": true, "bounce": 0.4, "rest_speed": 4.0,
+                    "lifetime": 10.0, "sound": "kit:casing" },
+                "states": [{ "name": "Ready" }] } }
+        });
+        let pack = bri_weapons::Pack::from_json(&serde_json::to_vec(&json).unwrap()).unwrap();
+        let mut world = WeaponDebris::new(
+            WeaponDebrisAssets::stock_for_test(),
+            WeaponDebrisLimits::default(),
+        )?;
+        assert!(world.set_casings(&pack, |m| m == "kit/casing").is_empty());
+        world.cues(
+            &[shell_cue(1, "kit:image/rifle")],
+            |_, _, _| Some(Mat4::from_translation(Vec3::Y)),
+            |_| Vec3::ZERO,
+        )?;
+        for _ in 0..240 {
+            world.advance(
+                1. / 60.,
+                |_, _, _| None,
+                |a, b| {
+                    (a.y > 0. && b.y <= 0.).then(|| DebrisHit {
+                        fraction: (a.y / (a.y - b.y)).clamped(0., 1.),
+                        normal: Vec3::Y,
+                    })
+                },
+            )?;
+        }
+        let sounds = world.take_sounds();
+        assert!(!sounds.is_empty() && sounds.iter().all(|s| s.0 == "kit:casing"));
+        assert_eq!(world.diagnostics.settled, 1);
+        let (model, at, tint) = world.model_instances().next().unwrap();
+        assert_eq!((model.as_str(), tint[3]), ("kit/casing", 1.));
+        assert!(at.w_axis.y.abs() < 0.05, "rests on the floor");
+        // Rest is final: it neither moves nor sounds again.
+        let before = at.w_axis;
+        world.advance(0.5, |_, _, _| None, |_, _| None)?;
+        assert_eq!(world.model_instances().next().unwrap().1.w_axis, before);
+        assert!(world.take_sounds().is_empty());
         Ok(())
     }
 }
