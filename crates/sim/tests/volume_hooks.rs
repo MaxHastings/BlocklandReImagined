@@ -79,6 +79,11 @@ fn volume(id: &str, centre: [f32; 3]) -> Volume {
         half: [2.0, 5.0, 5.0],
         to_local: Mat4::from_translation(-Vec3::from(centre)).to_cols_array(),
         properties: BTreeMap::from([("place".to_owned(), "roof".to_owned())]),
+        world: (
+            [centre[0] - 2.0, centre[1] - 5.0, centre[2] - 5.0],
+            [centre[0] + 2.0, centre[1] + 5.0, centre[2] + 5.0],
+        ),
+        aabb: false,
     }
 }
 
