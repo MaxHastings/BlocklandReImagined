@@ -364,6 +364,21 @@ impl ScriptOp for SetFov {
     }
 }
 
+/// Put a player's view in night vision, or take it off. Only their own
+/// screen changes; what night vision looks like is the map's data.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SetNightVision {
+    pub player: u64,
+    pub on: bool,
+}
+impl ScriptOp for SetNightVision {
+    const CAPABILITY: &str = "player";
+    const NAME: &str = "set_night_vision";
+    fn bounded(&self) -> bool {
+        true
+    }
+}
+
 /// Move a player's body at this share of its running, crouching and
 /// swimming speeds (0 to 4; 1 is its archetype's own) until changed or
 /// they respawn.

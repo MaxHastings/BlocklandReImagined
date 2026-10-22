@@ -3577,6 +3577,12 @@ fn register_presentation(engine: &mut Engine) {
             },
         }))
     });
+    engine.register_fn("set_night_vision", |player: Dynamic, on: bool| {
+        push(Op::SetNightVision(ops::SetNightVision {
+            player: id(&player)?,
+            on,
+        }))
+    });
     engine.register_fn("set_prone", |player: Dynamic, prone: bool| {
         push(Op::SetProne(ops::SetProne {
             player: id(&player)?,

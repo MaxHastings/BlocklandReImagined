@@ -84,6 +84,7 @@ mod tests {
                 zone_decay: 0.5,
                 blocked_reference: 0.35,
             }),
+            night_vision: None,
         }
     }
 

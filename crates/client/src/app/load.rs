@@ -288,6 +288,7 @@ impl App {
                 camera_wheel: false,
                 aim_wheel: false,
                 scope_overlay: None,
+                night_vision: false,
                 scope_fit: Default::default(),
                 observer_eye: None,
                 rendered_camera: None,

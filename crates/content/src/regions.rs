@@ -28,6 +28,53 @@ pub struct Fog {
     pub clear_to_fog: bool,
 }
 
+/// How a night-vision glow meets the light a thing already takes.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum GlowMode {
+    /// The glow is the least light a channel has: `max(light, glow)`.
+    #[default]
+    Floor,
+    /// The glow is the light, whatever the thing took.
+    Replace,
+    /// The glow is added to the light.
+    Add,
+}
+
+impl GlowMode {
+    /// `light` after a `glow` (0 to 1 per channel) in this mode.
+    pub fn apply(self, light: [f32; 3], glow: f32) -> [f32; 3] {
+        light.map(|c| match self {
+            GlowMode::Floor => c.max(glow),
+            GlowMode::Replace => glow,
+            GlowMode::Add => c + glow,
+        })
+    }
+}
+
+/// What a viewer in night vision sees of a map, as data: the glow each kind of thing takes (bytes, 0 to 255, as the original names
+/// them) and how it meets the light already there.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct NightVision {
+    #[serde(default)]
+    pub mode: GlowMode,
+    /// Moving bodies (pawns).
+    #[serde(default)]
+    pub pawn: f32,
+    /// Other lit moving things: dropped and held items.
+    #[serde(default)]
+    pub actor: f32,
+    /// Static meshes.
+    #[serde(default)]
+    pub mesh: f32,
+    /// The map's terrain.
+    #[serde(default)]
+    pub terrain: f32,
+    /// The level's own surfaces.
+    #[serde(default)]
+    pub level: f32,
+}
+
 /// A sun that lights the moving bodies in a region (a directional light with its own colour), at a place that says which region's suns a
 /// body that reaches several should take.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
@@ -47,6 +94,9 @@ pub const MAX_MAP_SUNS: usize = 64;
 pub struct Region {
     #[serde(default)]
     pub fog: Option<Fog>,
+    /// The fog the region has instead while a viewer is in night vision ([`NightVision`]); none keeps the region's own fog.
+    #[serde(default)]
+    pub night_fog: Option<Fog>,
     /// The light actors in the region take from everywhere (linear RGB, as lit models add it).
     #[serde(default)]
     pub ambient: Option<[f32; 3]>,
@@ -173,6 +223,9 @@ pub struct RegionMap {
     /// How the map's sounds carry, when it says.
     #[serde(default)]
     pub sound: Option<SoundCarry>,
+    /// The glow things take while a viewer is in night vision; none means the map says nothing and only the fogs change.
+    #[serde(default)]
+    pub night_vision: Option<NightVision>,
 }
 
 impl RegionMap {
@@ -422,6 +475,13 @@ impl RegionMap {
     pub fn fog(&self, region: u16) -> Option<Fog> {
         self.regions.get(usize::from(region)).and_then(|r| r.fog)
     }
+
+    /// The region's fog for a viewer in night vision: its night fog, else its own.
+    pub fn night_fog(&self, region: u16) -> Option<Fog> {
+        self.regions
+            .get(usize::from(region))
+            .and_then(|r| r.night_fog.or(r.fog))
+    }
 }
 
 /// The fog to draw with this frame.
@@ -549,6 +609,7 @@ mod tests {
                 },
             ],
             sound: None,
+            night_vision: None,
         }
     }
 
@@ -572,6 +633,7 @@ mod tests {
             back_region: vec![3, 4],
             regions: vec![Region::default(); 5],
             sound: None,
+            night_vision: None,
         };
         map.validate().unwrap();
         assert_eq!(map.locate([1.0, 1.0, 0.0]), 2);

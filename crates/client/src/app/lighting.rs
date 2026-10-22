@@ -293,13 +293,17 @@ impl LightVolumeState {
         regions: Option<&bri_content::regions::RegionMap>,
         low: [f32; 3],
         high: [f32; 3],
+        glow: Option<(f32, bri_content::regions::GlowMode)>,
     ) -> Option<bri_render::scene::ActorLight> {
         let room = self.room_light(low, high);
         match regions {
             Some(regions) => {
                 let (ambient, suns) = regions.actor_light(low, high, 0.0);
+                let ambient = [0, 1, 2].map(|c| ambient[c].max(room[c]));
+                // A night-vision glow meets the light the body already takes as the map says.
+                let ambient = glow.map_or(ambient, |(glow, mode)| mode.apply(ambient, glow));
                 Some(bri_render::scene::ActorLight {
-                    ambient: [0, 1, 2].map(|c| ambient[c].max(room[c])),
+                    ambient,
                     sun_first: suns.map_or(0, |s| s.0),
                     sun_count: suns.map_or(0, |s| s.1),
                     scene_sun: false,
@@ -821,14 +825,14 @@ mod tests {
             ..Default::default()
         };
         let light = state
-            .actor_light(None, [1.0, 1.0, 1.0], [2.0, 2.0, 2.0])
+            .actor_light(None, [1.0, 1.0, 1.0], [2.0, 2.0, 2.0], None)
             .expect("a lit room");
         assert!(light.scene_sun && light.ambient[0] > 0.4);
         // Outside any room light, and with no zones, the scene's own light stands.
-        assert!(state.actor_light(None, [9.0; 3], [10.0; 3]).is_none());
+        assert!(state.actor_light(None, [9.0; 3], [10.0; 3], None).is_none());
         assert!(
             LightVolumeState::default()
-                .actor_light(None, [1.0; 3], [2.0; 3])
+                .actor_light(None, [1.0; 3], [2.0; 3], None)
                 .is_none()
         );
     }

@@ -145,6 +145,7 @@ macro_rules! for_each_op {
             MoverStop = movers,
             SetEnvironment = environment,
             SetFov = player,
+            SetNightVision = player,
             SetSpeedScale = player,
             SetSpeedModifier = player,
             SetWalking = player,

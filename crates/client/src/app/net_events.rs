@@ -846,6 +846,10 @@ impl App {
                             self.controls.set_server_fov(fov);
                             continue;
                         }
+                        bri_sim::session::Notice::NightVision(on) => {
+                            self.view.night_vision = on;
+                            continue;
+                        }
                         bri_sim::session::Notice::PlantError(failure) => {
                             UiUpdate::PlantError(plant_error(failure))
                         }

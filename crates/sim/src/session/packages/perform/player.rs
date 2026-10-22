@@ -369,6 +369,14 @@ impl Perform for ops::SetFov {
         Ok(())
     }
 }
+impl Perform for ops::SetNightVision {
+    fn perform(self, session: &mut Session, _cx: OpCall<'_>) -> Result<()> {
+        let ops::SetNightVision { player, on } = self;
+        ensure!(session.peers.contains_key(&player), "No such player");
+        session.notify(player, Notice::NightVision(on));
+        Ok(())
+    }
+}
 impl Perform for ops::SetCanJump {
     fn perform(self, session: &mut Session, _cx: OpCall<'_>) -> Result<()> {
         let ops::SetCanJump { player, can } = self;
