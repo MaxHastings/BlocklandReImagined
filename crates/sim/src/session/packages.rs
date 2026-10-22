@@ -3449,6 +3449,26 @@ impl Session {
             ],
         )
     }
+    /// `on_double_tap(player, direction)` of every package that sets
+    /// `double_tap_seconds`.
+    pub(super) fn package_double_tap(&mut self, owner: OwnerId, direction: &'static str) {
+        self.package_take(
+            owner,
+            |b| b.double_tap_seconds.is_some(),
+            "on_double_tap",
+            vec![Dynamic::from_int(owner as i64), direction.into()],
+        );
+    }
+    /// The longest window any package gives a double tap, in ticks; none
+    /// when no package sets one.
+    pub(super) fn double_tap_ticks(&self) -> Option<u64> {
+        let host = self.packages.as_ref()?;
+        host.catalog
+            .behaviours()
+            .filter_map(|(_, b)| b.double_tap_seconds)
+            .reduce(f32::max)
+            .map(|s| (f64::from(s) * bri_world::TICKS_PER_SECOND as f64).ceil() as u64)
+    }
     /// `on_drop_key(player)` of every package that declares it, in load
     /// order, until one takes the key (returns `true`).
     pub(super) fn package_drop_key(&mut self, owner: OwnerId) -> bool {

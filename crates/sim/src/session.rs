@@ -811,6 +811,10 @@ struct Arrival {
     last_chat: Option<(String, u64)>,
     talking: bool,
 }
+/// How far a move axis must lean to count as a key press.
+const TAP_AXIS: f32 = 0.5;
+/// The move keys a double tap names, in `Peer::taps` order.
+const TAP_NAMES: [&str; 4] = ["forward", "back", "left", "right"];
 struct Peer {
     player: Player,
     actor: Actor,
@@ -831,6 +835,9 @@ struct Peer {
     /// outer `None`: this client never says (a host-side rider, a test), and
     /// its moves are read by the seat it is in.
     seat_since: Option<(u64, Option<SeatSince>)>,
+    /// The tick each move key (forward, back, left, right) was last pressed,
+    /// for `on_double_tap`.
+    taps: [Option<u64>; 4],
     input_budget: f32,
     last_sequence: u64,
     last_move_sequence: u64,
@@ -976,6 +983,7 @@ impl Peer {
             seated_pace: SeatedPace::default(),
             seat_since: None,
             clan: Clan::default(),
+            taps: [None; 4],
             input_budget: INPUT_BURST,
             last_sequence: 0,
             last_move_sequence: 0,
@@ -3198,6 +3206,8 @@ impl Session {
         let mut crossed = Vec::new();
         let mut driving = Vec::new();
         let mut triggers = Vec::new();
+        let mut double_taps = Vec::new();
+        let tap_window = self.double_tap_ticks();
         // Moves of players driving a package entity, for `step_packages`.
         let mut entity_moves = Vec::new();
         let liquids = self.simulation.liquids();
@@ -3280,6 +3290,30 @@ impl Session {
                     // Corpses fall and camera operators stand, ignoring controls.
                     let previous = peer.input;
                     peer.input = peer.body_input(input);
+                    if let Some(window) = tap_window {
+                        let keys = |i: &MoveInput| {
+                            [
+                                i.forward > TAP_AXIS,
+                                i.forward < -TAP_AXIS,
+                                i.right < -TAP_AXIS,
+                                i.right > TAP_AXIS,
+                            ]
+                        };
+                        for (key, (was, now)) in keys(&previous)
+                            .into_iter()
+                            .zip(keys(&peer.input))
+                            .enumerate()
+                        {
+                            if now && !was {
+                                if peer.taps[key].is_some_and(|t| tick - t <= window) {
+                                    double_taps.push((owner, TAP_NAMES[key]));
+                                    peer.taps[key] = None;
+                                } else {
+                                    peer.taps[key] = Some(tick);
+                                }
+                            }
+                        }
+                    }
                     // `armor::onTrigger` for jump (2), crouch (3) and jet (4).
                     for (trigger, was, now) in [
                         (2, previous.jump, peer.input.jump),
@@ -3398,6 +3432,9 @@ impl Session {
         contain("map teleporters", self.map_teleports());
         for (owner, carry) in crossed {
             self.crossed(bri_package_runtime::ops::ObjectRef::Player(owner), carry);
+        }
+        for (owner, direction) in double_taps {
+            self.package_double_tap(owner, direction);
         }
         for (owner, trigger, down) in triggers {
             // An Add-On tool's jet command (v20 `onTrigger` slot 4).

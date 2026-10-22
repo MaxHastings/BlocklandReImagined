@@ -571,6 +571,11 @@ pub struct Behaviour {
     /// (`drop`). Delivered at the start of the next tick.
     #[serde(default)]
     pub on_object: bool,
+    /// `on_double_tap(player, direction)` when a living player presses a
+    /// move key (`"forward"`, `"back"`, `"left"`, `"right"`) again within
+    /// this many seconds (0.05 to 2) of its last press. Needs the hook.
+    #[serde(default)]
+    pub double_tap_seconds: Option<f32>,
 }
 /// A function an Add-On offers others ([`Behaviour::exports`]).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1336,6 +1341,12 @@ impl Behaviour {
             ensure!(
                 (1..=1_000_000).contains(&over),
                 "undo_confirm_over must be 1 to 1000000"
+            );
+        }
+        if let Some(window) = self.double_tap_seconds {
+            ensure!(
+                (0.05..=2.0).contains(&window),
+                "double_tap_seconds must be 0.05 to 2"
             );
         }
         if let Some(interval) = self.tick_interval {
