@@ -55,9 +55,12 @@ fn main() {
         }
     }
     bri_physics::detect_collisions(&mut physics);
-    let tuning: PlayerTuning =
-        serde_json::from_value(archetype["movement"].clone()).expect("the archetype's movement block");
-    let point: Vec<f32> = args[2].split(',').map(|x| x.trim().parse().unwrap()).collect();
+    let tuning: PlayerTuning = serde_json::from_value(archetype["movement"].clone())
+        .expect("the archetype's movement block");
+    let point: Vec<f32> = args[2]
+        .split(',')
+        .map(|x| x.trim().parse().unwrap())
+        .collect();
     let center = Vec3::new(point[0], point[1], point[2]);
     let radius: f32 = args.get(3).map_or(3.0, |s| s.parse().unwrap());
     let seconds: f32 = args.get(4).map_or(3.0, |s| s.parse().unwrap());
@@ -67,7 +70,11 @@ fn main() {
         // yaw in (-pi, pi]
         let angle = {
             let a = k as f32 * std::f32::consts::TAU / 16.0;
-            if a > std::f32::consts::PI { a - std::f32::consts::TAU } else { a }
+            if a > std::f32::consts::PI {
+                a - std::f32::consts::TAU
+            } else {
+                a
+            }
         };
         // heading (sin a, -cos a) in the motor's yaw: yaw 0 faces -z, yaw pi/2 faces +x. The body starts on the opposite side.
         let heading = Vec3::new(angle.sin(), 0.0, -angle.cos());
@@ -76,7 +83,12 @@ fn main() {
         let aim = center + right * lateral;
         let start = aim - heading * radius;
         let world = &mut physics;
-        let Ok(mut player) = Player::spawn(world, 1, Vec3::new(start.x, center.y + 0.05, start.z), tuning.clone()) else {
+        let Ok(mut player) = Player::spawn(
+            world,
+            1,
+            Vec3::new(start.x, center.y + 0.05, start.z),
+            tuning.clone(),
+        ) else {
             println!("dir {k:2}: start {start:.2?} is inside geometry");
             continue;
         };
@@ -87,7 +99,15 @@ fn main() {
         };
         // settle onto the floor first
         for _ in 0..60 {
-            player.step(world, MoveInput { yaw: angle, ..Default::default() }).unwrap();
+            player
+                .step(
+                    world,
+                    MoveInput {
+                        yaw: angle,
+                        ..Default::default()
+                    },
+                )
+                .unwrap();
         }
         let from = Vec3::from(player.state().feet);
         let mut half = from;

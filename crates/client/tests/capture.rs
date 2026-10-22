@@ -246,8 +246,9 @@ fn play(
             pump(app)?;
         } else if let Some(name) = step.get("key").and_then(|v| v.as_str()) {
             // A key press through the interface's own input path (the profile's binds, the panels, the chat box), held `seconds` (default 0.1).
-            let key = bri_ui::input::Key::from_torque(name)
-                .with_context(|| format!("unknown key {name:?} (Torque ActionMap names: r, f, 2, lshift, f3 ...)"))?;
+            let key = bri_ui::input::Key::from_torque(name).with_context(|| {
+                format!("unknown key {name:?} (Torque ActionMap names: r, f, 2, lshift, f3 ...)")
+            })?;
             let hold = step.get("seconds").and_then(|v| v.as_f64()).unwrap_or(0.1) as f32;
             let mods = bri_ui::input::Modifiers::default();
             app.ui.handle_input(bri_ui::input::InputEvent::KeyDown {
@@ -286,10 +287,12 @@ fn play(
             };
             let hold = step.get("seconds").and_then(|v| v.as_f64()).unwrap_or(0.1) as f32;
             let (x, y) = (0.0, 0.0);
-            app.ui.handle_input(bri_ui::input::InputEvent::MouseDown { button, x, y });
+            app.ui
+                .handle_input(bri_ui::input::InputEvent::MouseDown { button, x, y });
             pump(app)?;
             run_for(app, hold)?;
-            app.ui.handle_input(bri_ui::input::InputEvent::MouseUp { button, x, y });
+            app.ui
+                .handle_input(bri_ui::input::InputEvent::MouseUp { button, x, y });
             pump(app)?;
         } else if let Some(aim) = step.get("aim").and_then(|v| v.as_array()) {
             // Turn to face a point (the look action, repeated until within a hair of it); nothing is held. Prints the yaw it ended at.
@@ -298,7 +301,9 @@ fn play(
                 aim.get(1).and_then(|v| v.as_f64()).context("aim z")? as f32,
             );
             for _ in 0..20 {
-                let Some((p, _)) = app.local_motion() else { break };
+                let Some((p, _)) = app.local_motion() else {
+                    break;
+                };
                 let want = (tx - p.feet[0]).atan2(-(tz - p.feet[2]));
                 let mut delta = want - p.yaw;
                 while delta > std::f32::consts::PI {
@@ -310,7 +315,10 @@ fn play(
                 if delta.abs() < 0.005 {
                     break;
                 }
-                app.ui.core.request(UiAction::Game(GameAction::Look { yaw: delta, pitch: 0.0 }));
+                app.ui.core.request(UiAction::Game(GameAction::Look {
+                    yaw: delta,
+                    pitch: 0.0,
+                }));
                 pump(app)?;
                 run_for(app, 0.05)?;
             }
@@ -332,7 +340,9 @@ fn play(
             let mut spent = 0.0f32;
             let mut arrived = false;
             while spent < timeout {
-                let Some((p, _)) = app.local_motion() else { break };
+                let Some((p, _)) = app.local_motion() else {
+                    break;
+                };
                 let (dx, dz) = (tx - p.feet[0], tz - p.feet[2]);
                 if (dx * dx + dz * dz).sqrt() <= within {
                     arrived = true;
@@ -360,7 +370,10 @@ fn play(
             }));
             pump(app)?;
             let at = app.local_motion().map(|(p, _)| p.feet);
-            println!("CAPTURE goto {tx} {tz}: {} after {spent:.2}s at {at:.2?}", if arrived { "arrived" } else { "did not arrive" });
+            println!(
+                "CAPTURE goto {tx} {tz}: {} after {spent:.2}s at {at:.2?}",
+                if arrived { "arrived" } else { "did not arrive" }
+            );
         } else if let Some(look) = step.get("look") {
             let f = |k: &str| look.get(k).and_then(|v| v.as_f64()).unwrap_or(0.0) as f32;
             app.ui.core.request(UiAction::Game(GameAction::Look {
@@ -495,6 +508,18 @@ fn capture_frames() -> Result<()> {
         if settings.is_file() {
             std::fs::copy(&settings, state.join("settings.json"))?;
         }
+    }
+    // `lighting` (0 Classic, 2 Unified, 3 Dynamic) is the lighting mode the frames draw in, as Options > Graphics saves it
+    // (`$pref::Video::Lighting`), over whatever `state_from` brought.
+    if let Some(mode) = spec.get("lighting").and_then(|l| l.as_u64()) {
+        ensure!([0, 2, 3].contains(&mode), "spec.lighting: 0, 2 or 3");
+        let file = state.join("settings.json");
+        let mut settings: serde_json::Value = match std::fs::read(&file) {
+            Ok(bytes) => serde_json::from_slice(&bytes).context("the copied settings.json")?,
+            Err(_) => serde_json::json!({}),
+        };
+        settings["prefs"][bri_client::graphics::LIGHTING] = mode.to_string().into();
+        std::fs::write(&file, serde_json::to_vec(&settings)?)?;
     }
     let mut app = App::load(&content, &state, size)?;
     app.ui.core.pop(bri_ui::screens::ScreenId::DefaultControls);
