@@ -25,6 +25,8 @@ pub enum DrawCmd {
         clip: Rect,
         /// Turned about the middle of `dst`, radians clockwise.
         turn: f32,
+        /// Its light is added to what is under it, in place of covering it.
+        add: bool,
     },
     /// Solid rectangle (alpha blended).
     Fill { dst: Rect, color: Rgba, clip: Rect },
@@ -99,6 +101,21 @@ impl DrawList {
         tint: Rgba,
         filter: Filter,
     ) {
+        self.image_blended(tex, src, dst, turn, tint, filter, false);
+    }
+    /// [`image_turned`](Self::image_turned), its light added to the screen
+    /// under it when `add`.
+    #[allow(clippy::too_many_arguments)]
+    pub fn image_blended(
+        &mut self,
+        tex: TexKey,
+        src: [f32; 4],
+        dst: [f32; 4],
+        turn: f32,
+        tint: Rgba,
+        filter: Filter,
+        add: bool,
+    ) {
         if tint[3] == 0 || dst[2] <= 0.0 || dst[3] <= 0.0 || !turn.is_finite() {
             return;
         }
@@ -130,6 +147,7 @@ impl DrawList {
                 filter,
                 clip,
                 turn,
+                add,
             });
         }
     }

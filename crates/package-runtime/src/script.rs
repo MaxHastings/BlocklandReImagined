@@ -4296,7 +4296,7 @@ fn sandbox() -> Engine {
     });
     engine.register_global_module(maps.into());
     engine.set_max_array_size(65_536);
-    engine.set_max_map_size(1024);
+    engine.set_max_map_size(65_536);
     engine.set_max_variables(256);
     // A whole game mode's rules (Slayer's) define a few hundred.
     engine.set_max_functions(512);

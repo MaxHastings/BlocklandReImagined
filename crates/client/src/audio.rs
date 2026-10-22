@@ -653,6 +653,7 @@ impl ClientAudio {
             CueKind::WeaponEffect { .. }
             | CueKind::WeaponAnimation { .. }
             | CueKind::WeaponShell { .. }
+            | CueKind::ScreenFlash { .. }
             | CueKind::Beam { .. }
             | CueKind::Tracer { .. }
             | CueKind::Decal { .. }

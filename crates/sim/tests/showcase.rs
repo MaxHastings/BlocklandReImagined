@@ -1833,6 +1833,7 @@ fn add_launcher(
         shot: None,
         eye_rotation: [0.0; 3],
         zoom: None,
+        screen_flash: None,
         bot: None,
         crosshair: true,
         follow_arm: false,

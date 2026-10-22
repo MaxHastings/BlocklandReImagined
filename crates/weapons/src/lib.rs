@@ -208,6 +208,10 @@ pub struct State {
     pub emitter_node: String,
     pub emitter_seconds: f32,
     pub eject_shell: bool,
+    /// Entering the state shows the image's `screen_flash` to its holder,
+    /// in first person.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub screen_flash: bool,
     /// After the image rests in this state for a random while, it goes to
     /// another ([`Fidget`]): a weapon's idle fidget.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -342,6 +346,51 @@ fn is_true(b: &bool) -> bool {
 }
 fn zero3(v: &[f32; 3]) -> bool {
     *v == [0.0; 3]
+}
+/// [`Image::screen_flash`]: a picture added to the screen's light (drawn
+/// additively) where the gun's flash is, for `seconds`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ScreenFlash {
+    /// A PNG named without `.png`, relative to the folder `weapons.json` is
+    /// in (as a scope's `overlay`).
+    pub texture: String,
+    /// Where its middle lies, as offsets from the screen's middle in
+    /// fractions of the screen's width and height (-1 to 1).
+    pub center: [f32; 2],
+    /// Its size as a multiple of its own pixels on a screen 640 wide,
+    /// growing with the screen's width.
+    pub scale: f32,
+    /// How long it shows, seconds.
+    pub seconds: f32,
+    /// Each showing is turned over, left to right and top to bottom, at
+    /// random.
+    #[serde(default)]
+    pub flip: bool,
+}
+impl ScreenFlash {
+    pub fn validate(&self) -> std::result::Result<(), String> {
+        let t = &self.texture;
+        if t.is_empty()
+            || t.len() > 128
+            || t.starts_with('/')
+            || t.contains(':')
+            || t.contains('\\')
+            || t.split('/').any(|part| part == ".." || part.is_empty())
+        {
+            return Err("texture: a PNG path inside the Add-On, without .png".into());
+        }
+        if !self.center.iter().all(|v| v.is_finite() && v.abs() <= 1.) {
+            return Err("center: -1 to 1".into());
+        }
+        if !(self.scale.is_finite() && (0.01..=16.).contains(&self.scale)) {
+            return Err("scale: 0.01 to 16".into());
+        }
+        if !(self.seconds.is_finite() && (0.001..=2.).contains(&self.seconds)) {
+            return Err("seconds: 0.001 to 2".into());
+        }
+        Ok(())
+    }
 }
 /// Where a scope picture sits on screen ([`Zoom::overlay_fit`]).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -1084,6 +1133,11 @@ pub struct Image {
     /// XYZ degrees in the same frame as `source_rotation_degrees`.
     #[serde(skip_serializing_if = "zero3")]
     pub eye_rotation: [f32; 3],
+    /// A flat picture laid over the holder's screen, in first person, for a
+    /// moment each time a state with `screen_flash` is entered: a muzzle
+    /// flash drawn at the screen's edge of the gun. See [`ScreenFlash`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub screen_flash: Option<ScreenFlash>,
     /// Aiming zoom (a scope, or aim down sights).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub zoom: Option<Zoom>,
@@ -4289,6 +4343,11 @@ impl Pack {
             );
             if let Some(view) = image.first_person_view {
                 view.validate().with_context(|| format!("Image {id}"))?;
+            }
+            if let Some(flash) = &image.screen_flash {
+                flash
+                    .validate()
+                    .map_err(|e| anyhow::anyhow!("Invalid image screen_flash {id}: {e}"))?;
             }
             if let Some(zoom) = &image.zoom {
                 zoom.validate()
