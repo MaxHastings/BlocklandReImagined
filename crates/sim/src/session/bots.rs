@@ -2065,6 +2065,15 @@ impl Session {
                             .is_none_or(|at| tick >= at + STALL_TELL_TICKS)
                     {
                         self.bots.dead_end_told.insert(bot, tick);
+                        if explored <= 2 {
+                            bri_console::warn(format!(
+                                "bot {bot} is closed in at ({:.2}, {:.2}, {:.2}): {}",
+                                feet.x,
+                                feet.y,
+                                feet.z,
+                                nav.closed_in(&ground, body, feet)
+                            ));
+                        }
                         bri_console::warn(format!(
                             "bot {bot} ({}) got only part of the way from ({:.2}, {:.2}, {:.2}) toward {:?} at {:?}: {} waypoints, ending {:.2} short of it at {:?}, {explored} grid nodes reached, its body {} fit here",
                             brain.kind.id,
