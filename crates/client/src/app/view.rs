@@ -15,6 +15,9 @@ pub(super) struct ViewState {
     pub(super) aim_wheel: bool,
     /// The scope overlay shown (`ItemUi::scope_overlay`).
     pub(super) scope_overlay: Option<(u64, f32)>,
+    /// The view is in night vision (an Add-On's `set_night_vision`), for
+    /// the emitters' night-vision sets.
+    pub(super) night_vision: bool,
     /// How that picture is laid out (`Zoom::overlay_fit`).
     pub(super) scope_fit: bri_ui::api::ScopeFit,
     /// Where the admin, spy or death camera was last drawn from, reported

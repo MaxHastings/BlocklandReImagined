@@ -364,6 +364,22 @@ impl ScriptOp for SetFov {
     }
 }
 
+/// Put a player's view in night vision with baked lightmaps at `scale`
+/// times their brightness (1 to 16), or take it off with `None`. Only
+/// their own screen changes.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SetNightVision {
+    pub player: u64,
+    pub scale: Option<f32>,
+}
+impl ScriptOp for SetNightVision {
+    const CAPABILITY: &str = "player";
+    const NAME: &str = "set_night_vision";
+    fn bounded(&self) -> bool {
+        self.scale.is_none_or(|s| (1.0..=16.0).contains(&s))
+    }
+}
+
 /// Move a player's body at this share of its running, crouching and
 /// swimming speeds (0 to 4; 1 is its archetype's own) until changed or
 /// they respawn.

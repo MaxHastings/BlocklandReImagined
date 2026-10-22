@@ -607,6 +607,9 @@ pub enum Notice {
     /// `setControlCameraFov`: an Add-On sets this player's field of view,
     /// or hands it back to their own setting with `None`.
     Fov(Option<f32>),
+    /// An Add-On put this player's view in night vision with baked
+    /// lightmaps at this multiple of their brightness, or took it off.
+    NightVision(Option<f32>),
     /// The gun in this player's hand and what it has to shoot, for HUDs
     /// that draw their own ammo counter, or `None` with no such gun. Sent
     /// as it changes, right after the ammo display's bottom print.

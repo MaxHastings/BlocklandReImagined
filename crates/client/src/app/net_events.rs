@@ -846,6 +846,12 @@ impl App {
                             self.controls.set_server_fov(fov);
                             continue;
                         }
+                        bri_sim::session::Notice::NightVision(scale) => {
+                            self.lighting.lightmap_scale =
+                                scale.filter(|s| s.is_finite()).unwrap_or(1.0);
+                            self.view.night_vision = scale.is_some();
+                            continue;
+                        }
                         bri_sim::session::Notice::PlantError(failure) => {
                             UiUpdate::PlantError(plant_error(failure))
                         }
