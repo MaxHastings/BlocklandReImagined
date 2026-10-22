@@ -1450,13 +1450,27 @@ impl ActorEffects {
         let missing: Vec<String> = self
             .placed
             .iter()
-            .filter(|e| !world.pack().library.emitters.iter().any(|x| x.id == e.effect))
+            .filter(|e| {
+                !world
+                    .pack()
+                    .library
+                    .emitters
+                    .iter()
+                    .any(|x| x.id == e.effect)
+            })
             .map(|e| format!("Missing emitter {} for map node {}", e.effect, e.node))
             .collect();
         let missing_nodes: Vec<usize> = self
             .placed
             .iter()
-            .filter(|e| !world.pack().library.emitters.iter().any(|x| x.id == e.effect))
+            .filter(|e| {
+                !world
+                    .pack()
+                    .library
+                    .emitters
+                    .iter()
+                    .any(|x| x.id == e.effect)
+            })
             .map(|e| e.node)
             .collect();
         self.placed.retain(|e| !missing_nodes.contains(&e.node));
