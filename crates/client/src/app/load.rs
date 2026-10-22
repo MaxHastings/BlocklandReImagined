@@ -315,6 +315,8 @@ impl App {
                 weapon_shells,
                 weapon_cues: VecDeque::new(),
                 weapon_cue_drops: 0,
+                flash_cues: Vec::new(),
+                flash_showing: None,
                 brick_debris: Default::default(),
                 debris_models: Default::default(),
                 brick_fades: Default::default(),

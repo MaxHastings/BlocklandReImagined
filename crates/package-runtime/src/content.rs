@@ -586,6 +586,11 @@ pub struct Behaviour {
     /// (`drop`). Delivered at the start of the next tick.
     #[serde(default)]
     pub on_object: bool,
+    /// `on_double_tap(player, direction)` when a living player presses a
+    /// move key (`"forward"`, `"back"`, `"left"`, `"right"`) again within
+    /// this many seconds (0.05 to 2) of its last press. Needs the hook.
+    #[serde(default)]
+    pub double_tap_seconds: Option<f32>,
     /// `on_volume(event)` as a living player's body centre goes into or out of
     /// a map volume: `event` is `#{ kind, player, id, priority, properties }`,
     /// `kind` being `enter` or `leave` and the rest the volume as `volumes_at`
@@ -975,6 +980,8 @@ impl BrickOutputDef {
 }
 /// Most touch zones one behaviour declares, and brick kinds one zone names.
 pub const MAX_ZONES: usize = 16;
+/// Most commands one package declares.
+pub const MAX_COMMANDS: usize = 256;
 pub const MAX_ZONE_KINDS: usize = 16;
 /// A touch zone: the box over every brick of some kinds.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -1148,7 +1155,10 @@ impl Behaviour {
             self.schema_version == 1,
             "behaviour schema_version must be 1"
         );
-        ensure!(self.commands.len() <= 64, "at most 64 commands");
+        ensure!(
+            self.commands.len() <= MAX_COMMANDS,
+            "at most {MAX_COMMANDS} commands"
+        );
         ensure!(self.zones.len() <= MAX_ZONES, "at most {MAX_ZONES} zones");
         for z in &self.zones {
             z.validate()?;
@@ -1358,6 +1368,12 @@ impl Behaviour {
             ensure!(
                 (1..=1_000_000).contains(&over),
                 "undo_confirm_over must be 1 to 1000000"
+            );
+        }
+        if let Some(window) = self.double_tap_seconds {
+            ensure!(
+                (0.05..=2.0).contains(&window),
+                "double_tap_seconds must be 0.05 to 2"
             );
         }
         if let Some(interval) = self.tick_interval {

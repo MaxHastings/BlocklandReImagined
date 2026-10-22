@@ -110,6 +110,7 @@ struct Tex {
 struct Batch {
     tex: Option<TexKey>,
     filter: Filter,
+    add: bool,
     scissor: [u32; 4],
     first: u32,
     count: u32,
@@ -120,7 +121,7 @@ pub struct UiRenderer {
     screen_layout: wgpu::BindGroupLayout,
     pipeline_layout: wgpu::PipelineLayout,
     shader: wgpu::ShaderModule,
-    pipelines: HashMap<wgpu::TextureFormat, wgpu::RenderPipeline>,
+    pipelines: HashMap<(wgpu::TextureFormat, bool), wgpu::RenderPipeline>,
     samplers: [wgpu::Sampler; 2],
     textures: HashMap<TexKey, Tex>,
     missing: std::collections::BTreeSet<TexKey>,
@@ -445,15 +446,18 @@ impl UiRenderer {
         self.missing.iter()
     }
 
+    /// The pipeline that draws alpha blended quads, or with `add` quads
+    /// whose light is added to what is under them.
     fn pipeline(
         &mut self,
         device: &wgpu::Device,
         format: wgpu::TextureFormat,
+        add: bool,
     ) -> &wgpu::RenderPipeline {
         let (layout, shader) = (&self.pipeline_layout, &self.shader);
-        self.pipelines.entry(format).or_insert_with(|| {
+        self.pipelines.entry((format, add)).or_insert_with(|| {
             device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-                label: Some("bri-ui"),
+                label: Some(if add { "bri-ui additive" } else { "bri-ui" }),
                 layout: Some(layout),
                 vertex: wgpu::VertexState {
                     module: shader,
@@ -474,7 +478,23 @@ impl UiRenderer {
                     compilation_options: Default::default(),
                     targets: &[Some(wgpu::ColorTargetState {
                         format,
-                        blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                        blend: Some(if add {
+                            wgpu::BlendState {
+                                color: wgpu::BlendComponent {
+                                    src_factor: wgpu::BlendFactor::SrcAlpha,
+                                    dst_factor: wgpu::BlendFactor::One,
+                                    operation: wgpu::BlendOperation::Add,
+                                },
+                                // The surface keeps the cover it had.
+                                alpha: wgpu::BlendComponent {
+                                    src_factor: wgpu::BlendFactor::Zero,
+                                    dst_factor: wgpu::BlendFactor::One,
+                                    operation: wgpu::BlendOperation::Add,
+                                },
+                            }
+                        } else {
+                            wgpu::BlendState::ALPHA_BLENDING
+                        }),
                         write_mask: wgpu::ColorWrites::ALL,
                     })],
                 }),
@@ -650,6 +670,7 @@ impl UiRenderer {
         };
         for cmd in &dl.cmds {
             let mut turned = 0.0;
+            let mut add = false;
             let (tex, filter, clip, dst, uv, color) = match cmd {
                 DrawCmd::Fill { dst, color, clip } => (
                     None,
@@ -667,8 +688,10 @@ impl UiRenderer {
                     filter,
                     clip,
                     turn,
+                    add: adds,
                 } => {
                     turned = *turn;
+                    add = *adds;
                     if !self.ensure_texture(device, queue, pack, tex) {
                         continue;
                     }
@@ -723,10 +746,15 @@ impl UiRenderer {
                 ]);
             }
             match batches.last_mut() {
-                Some(b) if b.tex == tex && b.filter == filter && b.scissor == sc => b.count += 6,
+                Some(b)
+                    if b.tex == tex && b.filter == filter && b.add == add && b.scissor == sc =>
+                {
+                    b.count += 6
+                }
                 _ => batches.push(Batch {
                     tex,
                     filter,
+                    add,
                     scissor: sc,
                     first,
                     count: 6,
@@ -754,7 +782,11 @@ impl UiRenderer {
             .iter()
             .map(|b| self.group(device, b.tex.as_ref(), b.filter))
             .collect();
-        let pipeline = self.pipeline(device, format).clone();
+        let pipeline = self.pipeline(device, format, false).clone();
+        let additive = batches
+            .iter()
+            .any(|b| b.add)
+            .then(|| self.pipeline(device, format, true).clone());
         let vbuf = self.vbuf.as_ref().expect("allocated").0.clone();
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("bri-ui"),
@@ -775,11 +807,14 @@ impl UiRenderer {
         if batches.is_empty() {
             return;
         }
-        pass.set_pipeline(&pipeline);
         pass.set_bind_group(0, &self.screen_group, &[]);
         pass.set_vertex_buffer(0, vbuf.slice(..));
         for (b, g) in batches.iter().zip(groups) {
             let Some(g) = g else { continue };
+            pass.set_pipeline(match (&additive, b.add) {
+                (Some(additive), true) => additive,
+                _ => &pipeline,
+            });
             pass.set_bind_group(1, &g, &[]);
             pass.set_scissor_rect(b.scissor[0], b.scissor[1], b.scissor[2], b.scissor[3]);
             pass.draw(b.first..b.first + b.count, 0..1);

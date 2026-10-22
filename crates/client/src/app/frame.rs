@@ -181,6 +181,7 @@ impl App {
         }
         let third_person = self.third_person_view();
         self.ui.apply(UiUpdate::FirstPerson(!third_person));
+        self.update_screen_flash(!third_person, game_elapsed.as_secs_f32());
         let weapon_checkpoint = self
             .net
             .attempt
@@ -1753,6 +1754,7 @@ impl App {
                     Some(crate::weapon_debris::DebrisHit {
                         fraction: (hit.distance / length).clamped(0., 1.),
                         normal: hit.normal.normalize_or(Vec3::Y),
+                        surface: None,
                     })
                 });
             let mut shells = Vec::new();
@@ -1817,7 +1819,7 @@ impl App {
             let queued = self.fx.weapon_shells.cues(&model_shells, eject, |actor| {
                 presented
                     .get(&actor)
-                    .map_or(Vec3::ZERO, |p| Vec3::from(p.velocity))
+                    .map_or((Vec3::ZERO, 0.), |p| (Vec3::from(p.velocity), p.yaw))
             });
             self.cosmetic_faults.absorb("gun casings", queued);
             let moved =
@@ -1829,10 +1831,11 @@ impl App {
                         if length < 1e-5 {
                             return None;
                         }
-                        let hit = building.target(from, delta / length, length).ok()??;
+                        let (hit, surface) = building.surface_at(from, to).ok()??;
                         Some(crate::weapon_debris::DebrisHit {
                             fraction: (hit.distance / length).clamped(0., 1.),
                             normal: hit.normal.normalize_or(Vec3::Y),
+                            surface: Some(surface.to_owned()),
                         })
                     });
             self.cosmetic_faults.absorb("gun casings", moved);

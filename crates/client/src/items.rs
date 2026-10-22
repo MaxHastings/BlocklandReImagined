@@ -78,6 +78,11 @@ pub struct ImagePresentation {
     /// weapons.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub overlay: Option<String>,
+    /// The texture key of the picture flashed over the screen when the
+    /// holder's image enters a `screen_flash` state
+    /// (`bri_weapons::ScreenFlash::texture`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub screen_flash: Option<String>,
     /// A skin its Add-On gives it (`looks.json`), drawn over every copy.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub skin: Option<ItemSkin>,
@@ -923,6 +928,14 @@ impl ItemAssets {
                 &mut added,
                 &mut faults,
             );
+            screen_flashes(
+                dir,
+                &abs,
+                &part_pack,
+                &mut manifest,
+                &mut added,
+                &mut faults,
+            );
             read_looks(
                 dir,
                 &abs,
@@ -1104,6 +1117,14 @@ impl ItemAssets {
                 .is_some_and(|o| !textures.contains_key(o) || blanks.contains(o))
             {
                 image.overlay = None;
+            }
+            // A flash picture that did not load shows nothing.
+            if image
+                .screen_flash
+                .as_ref()
+                .is_some_and(|o| !textures.contains_key(o) || blanks.contains(o))
+            {
+                image.screen_flash = None;
             }
             if !valid_tint(image.tint) {
                 image.tint = [1.; 4];
@@ -1736,6 +1757,7 @@ fn present_gaps(
                 evidence: evidence(),
                 follow_arm: image.follow_arm,
                 overlay: None,
+                screen_flash: None,
                 skin: None,
             },
         );
@@ -2093,6 +2115,48 @@ fn scope_overlays(
         }
         if let Some(presented) = manifest.images.get_mut(id) {
             presented.overlay = key;
+        }
+    }
+}
+/// Each of this Add-On's images with a screen flash (`Image::screen_flash`)
+/// gets its picture as a texture of its own; one that does not read is
+/// logged and the image flashes nothing.
+fn screen_flashes(
+    dir: &str,
+    abs: &Path,
+    pack: &bri_weapons::Pack,
+    manifest: &mut Presentation,
+    added: &mut Added,
+    faults: &mut Vec<String>,
+) {
+    for (id, image) in &pack.images {
+        let Some(flash) = &image.screen_flash else {
+            continue;
+        };
+        if !added.images.contains(id) {
+            continue;
+        }
+        let key = own_picture(
+            dir,
+            abs,
+            &flash.texture,
+            ("screen flash", OVERLAY_BYTES, OVERLAY_SIDE),
+            manifest,
+            added,
+            faults,
+        );
+        if key.is_none() && !abs.join(format!("{}.png", flash.texture)).is_file() {
+            faults.push(crate::cosmetic::add_on_fault(
+                dir,
+                "weapons.json",
+                format!(
+                    "screen flash {}.png of {id} is not in the Add-On, so it flashes nothing",
+                    flash.texture
+                ),
+            ));
+        }
+        if let Some(presented) = manifest.images.get_mut(id) {
+            presented.screen_flash = key;
         }
     }
 }
@@ -2639,6 +2703,7 @@ mod add_on_icon_tests {
                 evidence: evidence.clone(),
                 follow_arm: false,
                 overlay: None,
+                screen_flash: None,
                 skin: None,
             },
         );
@@ -3525,6 +3590,7 @@ mod placement_tests {
             },
             follow_arm,
             overlay: None,
+            screen_flash: None,
             skin: None,
         }
     }

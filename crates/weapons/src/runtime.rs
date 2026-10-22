@@ -83,8 +83,8 @@ pub fn expires(def: &ProjectileDef, age: u32, fuse: Option<u32>) -> Option<bool>
 /// Whether a projectile `age` ticks old goes off as it hits something: it
 /// is armed, it hit a player and explodes on players, or it is not
 /// ballistic (it never bounces).
-pub fn hit_bursts(def: &ProjectileDef, age: u32, hit_player: bool) -> bool {
-    age >= def.arm_ticks || (def.explode_player && hit_player) || !def.ballistic
+pub fn hit_bursts(def: &ProjectileDef, arm_ticks: u32, age: u32, hit_player: bool) -> bool {
+    age >= arm_ticks || (def.explode_player && hit_player) || !def.ballistic
 }
 
 /// What an unarmed ballistic projectile does after a hit that did not set
@@ -505,6 +505,12 @@ pub enum Event {
         actor: ActorId,
         image: String,
         hand: u8,
+    },
+    /// An image entered a state with `screen_flash` and has a
+    /// [`crate::ScreenFlash`] to show its holder.
+    ScreenFlash {
+        actor: ActorId,
+        image: String,
     },
     /// A [`crate::Hitscan`] ray of `image` in `hand` ended at `to`: each
     /// player draws its tracer from their own copy of the image.
@@ -3608,6 +3614,12 @@ impl WeaponsWorld {
                         hand: e.hand,
                     });
                 }
+                if state.screen_flash && image.screen_flash.is_some() {
+                    self.events.push(Event::ScreenFlash {
+                        actor: id,
+                        image: image.id.clone(),
+                    });
+                }
                 let use_up = image
                     .scripts
                     .get(&state.script.to_ascii_lowercase())
@@ -4629,7 +4641,12 @@ impl WeaponsWorld {
             for (set, c) in d.children.iter().enumerate().filter(|(_, c)| c.on_hit) {
                 self.children(p, c, set);
             }
-            if hit_bursts(d, p.age, matches!(hit.target, TargetId::Actor(_))) {
+            if hit_bursts(
+                d,
+                d.arm_ticks_for(p.id),
+                p.age,
+                matches!(hit.target, TargetId::Actor(_)),
+            ) {
                 self.explode(p, d, q, Some(normal), Some(hit.target), contact_geometry);
                 return false;
             }

@@ -75,6 +75,8 @@ not physical: set these as custom properties on the light object
 | `bri_brightness` | multiplies the colour | 1 |
 | `bri_light_type` | `omni`, `spot`, `strobe`, `pulse`, `pulse2`, `flicker` or `runway`, map2dif's light types | `spot` for a Spot light, `omni` otherwise |
 
+A map with lights and no baked lightmap anywhere (in an interior, or on a static model's surface) is lit by those lights in every lighting mode (Classic and Unified would draw it dark, having no lightmap to show), as Dynamic lights a map.
+
 Any other `bri_` property is kept with the light for its type (`bri_speed`
 on a strobe, for example). A Spot light's cone angles are kept too.
 

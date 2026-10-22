@@ -113,6 +113,10 @@ struct ModelKey {
     /// Drawn only in mirrors (`ItemIdentity::Reflected`).
     reflected: bool,
     local_view: Option<(u64, u8)>,
+    /// A loose model (casing, debris): a material with no light of its own is
+    /// lit as a moving body is, with the light of where it lies, since a
+    /// vertex-lit one draws near black in a dark room.
+    loose: bool,
     /// The holder's avatar slot colours a first-person image's masked tints
     /// take, as bits, empty for everyone else's images.
     wearer: Vec<(String, [u32; 4])>,
@@ -125,6 +129,7 @@ impl ModelKey {
             first_person: false,
             reflected: false,
             local_view: None,
+            loose: false,
             wearer: Vec::new(),
         }
     }
@@ -212,6 +217,29 @@ pub struct MountedImageObservation {
     pub live: LiveValues,
 }
 
+/// A held image in first person is drawn by its own camera: the same eye and
+/// facing as the world's, a different field of view. A point on the image
+/// lands on the screen where the world camera would put a point whose
+/// sideways and vertical distances from the view axis are scaled by the ratio
+/// of the two fields (`tan(local / 2) / tan(world / 2)`), at the same depth.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct LocalViewFit {
+    pub eye: Vec3,
+    pub right: Vec3,
+    pub up: Vec3,
+    /// Ratio of the local field of view to the world's, across and up.
+    pub across: f32,
+    pub vertical: f32,
+}
+impl LocalViewFit {
+    /// Where in the world a point of the local view appears to be.
+    pub fn in_world(&self, point: Vec3) -> Vec3 {
+        let d = point - self.eye;
+        let (x, y) = (d.dot(self.right), d.dot(self.up));
+        point + self.right * (x * (self.across - 1.)) + self.up * (y * (self.vertical - 1.))
+    }
+}
+
 #[derive(Clone)]
 struct MountedPose {
     first_person: bool,
@@ -268,6 +296,9 @@ pub struct WorldItems {
     hide_own_first_person: bool,
     scoped: bool,
     first_person_fov: Option<f32>,
+    /// The camera the local view of a held image is drawn from and how far
+    /// its field of view differs from the world's ([`LocalViewFit`]).
+    local_view_fit: Option<LocalViewFit>,
     /// The local avatar's slot colours, for the first-person images' masked
     /// tints ([`Self::set_wearer_colors`]).
     wearer_colors: Vec<(String, [u32; 4])>,
@@ -286,6 +317,11 @@ pub struct WorldItems {
     skinned: Vec<SkinnedCopy>,
     /// Frames prepared, for the idle models' recency.
     prepares: u64,
+    /// The one-time lines about loose models (casings, debris) have been
+    /// printed: the first one drawn, and the first frame some were offered
+    /// and none was.
+    loose_drawn_logged: bool,
+    loose_dropped_logged: bool,
     pub diagnostics: WorldItemDiagnostics,
 }
 /// Most loose models drawn at once.
@@ -333,9 +369,12 @@ impl WorldItems {
             hide_own_first_person: false,
             scoped: false,
             first_person_fov: None,
+            local_view_fit: None,
             wearer_colors: Vec::new(),
             headings: BTreeMap::new(),
             prepares: 0,
+            loose_drawn_logged: false,
+            loose_dropped_logged: false,
             diagnostics: Default::default(),
         })
     }
@@ -404,6 +443,17 @@ impl WorldItems {
     }
     pub fn set_first_person_fov(&mut self, fov: f32) {
         self.first_person_fov = (fov.is_finite() && fov > 0. && fov < 180.).then_some(fov);
+    }
+    /// The local view's camera this frame, or none with no local view drawn.
+    pub fn set_local_view_fit(&mut self, fit: Option<LocalViewFit>) {
+        self.local_view_fit = fit.filter(|f| {
+            [f.across, f.vertical]
+                .iter()
+                .all(|r| r.is_finite() && *r > 0.)
+                && f.eye.is_finite()
+                && f.right.is_finite()
+                && f.up.is_finite()
+        });
     }
     pub fn set_scoped(&mut self, on: bool) {
         self.scoped = on;
@@ -533,7 +583,10 @@ impl WorldItems {
         for (i, (model, transform, tint)) in self.loose.iter().enumerate() {
             candidates.push(Candidate {
                 identity: ItemIdentity::Loose(i as u64),
-                model: ModelKey::new(model, [1.; 4]),
+                model: ModelKey {
+                    loose: true,
+                    ..ModelKey::new(model, [1.; 4])
+                },
                 pose: PoseKey::default(),
                 transform: SceneTransform {
                     transform: *transform,
@@ -871,6 +924,19 @@ impl WorldItems {
             })
             .collect();
         self.prepare(candidates)?;
+        // A casing or piece of debris offered and not drawn says why once,
+        // so a missing draw is not silent.
+        if !self.loose_drawn_logged && !self.loose_dropped_logged && !self.loose.is_empty() {
+            self.loose_dropped_logged = true;
+            eprintln!(
+                "{} loose models offered ({}), none drawn: {} deferred, {} missing, {} models cached",
+                self.loose.len(),
+                self.loose[0].0,
+                self.diagnostics.deferred,
+                self.diagnostics.missing_bindings,
+                self.diagnostics.cached_models
+            );
+        }
         Ok(())
     }
 
@@ -1173,6 +1239,15 @@ impl WorldItems {
             } else {
                 let mut mesh = self.assets.mesh(&key.model, key.tint())?;
                 mesh.first_person = key.first_person;
+                if key.loose {
+                    for material in &mut mesh.data.materials {
+                        if material.kind == bri_render::scene::MaterialKind::VertexLit {
+                            material.kind = bri_render::scene::MaterialKind::ActorLit;
+                            material.parameters =
+                                Some([[1., 1., 0., 0.], [0.; 4], [0.; 4], [0.; 4]]);
+                        }
+                    }
+                }
                 if !key.wearer.is_empty() {
                     mesh.set_wearer(Some(bri_content::avatar::Appearance {
                         colors: key
@@ -1267,6 +1342,48 @@ impl WorldItems {
                 total_vertices += slot.geometry.vertices.len();
                 total_slots += 1;
                 for instance in instances {
+                    if matches!(instance.identity, ItemIdentity::Loose(_))
+                        && !self.loose_drawn_logged
+                    {
+                        self.loose_drawn_logged = true;
+                        let data = &model.mesh.data;
+                        let triangles: u32 = data
+                            .batches
+                            .iter()
+                            .map(|b| (b.indices.end - b.indices.start) / 3)
+                            .sum();
+                        // Per material: its alpha mode, and for a cutout the
+                        // share of its picture's texels that pass the cutoff.
+                        let materials: Vec<String> = data
+                            .materials
+                            .iter()
+                            .map(|m| {
+                                let pass = match (m.alpha, data.images.get(m.images[0])) {
+                                    (bri_render::scene::AlphaMode::Mask(cutoff), Some(image)) => {
+                                        let texels = image.rgba.chunks_exact(4);
+                                        let total = texels.len().max(1);
+                                        let passing = texels
+                                            .filter(|t| f32::from(t[3]) / 255. >= cutoff)
+                                            .count();
+                                        format!(
+                                            " {:.0}% of texels pass",
+                                            100. * passing as f32 / total as f32
+                                        )
+                                    }
+                                    _ => String::new(),
+                                };
+                                format!("{} {:?}{pass}", m.name, m.alpha)
+                            })
+                            .collect();
+                        eprintln!(
+                            "Loose model {} drawn for the first time at {:?}: {} vertices, {triangles} triangles in {} batches; {}",
+                            key.model,
+                            instance.transform.transform.w_axis.truncate(),
+                            slot.geometry.vertices.len(),
+                            data.batches.len(),
+                            materials.join("; ")
+                        );
+                    }
                     slot.identities.push(instance.identity);
                     slot.transforms.push(instance.transform);
                     slot.clips.push(instance.clip);
@@ -1547,8 +1664,23 @@ impl WorldItems {
         } else {
             node
         };
-        self.assets
-            .node_transform(&mounted.model, &pose, mounted.transform, node)
+        let mut at = self
+            .assets
+            .node_transform(&mounted.model, &pose, mounted.transform, node)?;
+        // A node of an image drawn by the local view (its own field of view)
+        // is where the world sees it appear, so what leaves it (a casing, a
+        // shot's start) leaves the gun on the screen.
+        if mounted.first_person
+            && let Some(fit) = self.local_view_fit
+            && self
+                .weapons
+                .images
+                .get(image)
+                .is_some_and(|i| i.first_person_view.is_some())
+        {
+            at.w_axis = fit.in_world(at.w_axis.truncate()).extend(1.);
+        }
+        Ok(at)
     }
     /// The image `owner` holds in `hand`, as the last sync drew it.
     pub fn held_image(&self, owner: u64, hand: u8) -> Option<&str> {

@@ -35,6 +35,10 @@ pub(super) struct Effects {
     pub(super) weapon_shells: crate::weapon_debris::WeaponDebris,
     pub(super) weapon_cues: VecDeque<(bri_sim::presentation::Cue, f32)>,
     pub(super) weapon_cue_drops: u64,
+    /// Screen flashes cued for players this frame (actor, image, cue id),
+    /// and the one now showing with the time it has left.
+    pub(super) flash_cues: Vec<(u64, String, u64)>,
+    pub(super) flash_showing: Option<(f32, bri_ui::api::ScreenFlashDraw)>,
     /// Killed-brick debris (v20 brick explosions) and its GPU models.
     pub(super) brick_debris: crate::brick_debris::BrickDebris,
     pub(super) debris_models: crate::brick_debris::DebrisModels,
@@ -95,6 +99,8 @@ pub(super) fn settle_blasted(
     });
 }
 
+/// Most screen flashes kept between two frames.
+const MAX_FLASH_CUES: usize = 16;
 impl App {
     /// Bricks whose kill cues wait for this frame's debris.
     pub(super) fn pending_kills(&self) -> BTreeSet<bri_world::BrickId> {
@@ -288,6 +294,11 @@ impl App {
                         .add(*owner, shell, [a, b], *strength, *seconds);
                 }
             }
+        }
+        if let bri_sim::presentation::CueKind::ScreenFlash { actor, image } = &cue.kind
+            && self.fx.flash_cues.len() < MAX_FLASH_CUES
+        {
+            self.fx.flash_cues.push((*actor, image.clone(), cue.id));
         }
         self.fx.actor_effects.cue(&cue);
         self.fx.explosion_shapes.cue(&cue);
@@ -501,6 +512,48 @@ impl App {
             }
         }
         Ok(())
+    }
+    /// Show the local player's screen flash (`bri_weapons::ScreenFlash`)
+    /// for the time it lasts, in first person only, and take it away after.
+    pub(super) fn update_screen_flash(&mut self, first_person: bool, seconds: f32) {
+        let cues = std::mem::take(&mut self.fx.flash_cues);
+        let owner = self.network_view().map(|v| v.owner);
+        let mut update = None;
+        if let Some((left, _)) = &mut self.fx.flash_showing {
+            *left -= seconds;
+            if *left <= 0.0 || !first_person {
+                self.fx.flash_showing = None;
+                update = Some(None);
+            }
+        }
+        if !first_person {
+            return;
+        }
+        let latest = cues.into_iter().rfind(|(actor, ..)| Some(*actor) == owner);
+        if let Some((_, image, id)) = latest
+            && let Some(flash) = self
+                .content
+                .weapons
+                .pack
+                .images
+                .get(&image)
+                .and_then(|i| i.screen_flash.as_ref())
+            && let Some((key, [width, height])) = self.item_ui.screen_flash(&image)
+        {
+            // Each showing is turned over at random, from the cue's id.
+            let mix = id.wrapping_mul(0x9e37_79b9_7f4a_7c15) >> 62;
+            let draw = bri_ui::api::ScreenFlashDraw {
+                key,
+                size: [width as f32 * flash.scale, height as f32 * flash.scale],
+                center: flash.center,
+                flip: [flash.flip && mix & 1 == 1, flash.flip && mix & 2 == 2],
+            };
+            self.fx.flash_showing = Some((flash.seconds, draw));
+            update = Some(Some(draw));
+        }
+        if let Some(draw) = update {
+            self.ui.apply(UiUpdate::ScreenFlash(draw));
+        }
     }
     pub(super) fn reset_weapon_effect_session(
         &mut self,
