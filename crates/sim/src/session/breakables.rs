@@ -93,15 +93,15 @@ impl Session {
         if self.breakables.shapes.is_empty() {
             return;
         }
-        let Some(collider) = self.simulation.map_collider_at(position, normal) else {
+        // Among the breakables' own colliders: a pane lying on a wall's face
+        // is found though the wall's collider is nearer the ray.
+        let shapes = &self.breakables.shapes;
+        let Some(collider) = self.simulation.map_collider_among(position, normal, |c| {
+            shapes.iter().any(|s| s.colliders.contains(&c))
+        }) else {
             return;
         };
-        let Some(index) = self
-            .breakables
-            .shapes
-            .iter()
-            .position(|s| s.colliders.contains(&collider))
-        else {
+        let Some(index) = shapes.iter().position(|s| s.colliders.contains(&collider)) else {
             return;
         };
         let shape = &self.breakables.shapes[index];

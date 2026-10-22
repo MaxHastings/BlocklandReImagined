@@ -632,6 +632,7 @@ impl App {
                         building,
                         mirror,
                         shape_indices: visual.shape_indices,
+                        broken_models: visual.broken_models,
                         map_movers: movers,
                         mover_scenes: visual.movers,
                         scatter: visual.scatter,

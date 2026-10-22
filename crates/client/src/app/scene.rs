@@ -27,6 +27,9 @@ pub(super) struct SceneState {
     /// Map static shapes' index ranges, and the smashed ones `gpu_scene`
     /// no longer draws.
     pub(super) shape_indices: BTreeMap<u32, std::ops::Range<u32>>,
+    /// The stand-in model of each breakable prop (its scene node), drawn
+    /// once the prop is smashed.
+    pub(super) broken_models: Vec<(u32, SceneData)>,
     pub(super) meshes: Option<Arc<Meshes>>,
     /// Mirror bricks' definitions, and where the world's mirrors are.
     pub(super) mirror_shapes: Arc<crate::mirrors::MirrorShapes>,

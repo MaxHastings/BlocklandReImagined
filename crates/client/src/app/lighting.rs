@@ -688,6 +688,7 @@ mod tests {
             terrain: Vec::new(),
             repeated_water: Vec::new(),
             shape_indices: Default::default(),
+            broken_models: Vec::new(),
             movers: Vec::new(),
             scatter: Vec::new(),
             backdrop: None,

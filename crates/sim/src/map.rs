@@ -626,6 +626,13 @@ impl NativeMap {
                                 node.name
                             );
                         }
+                        if let Some(asset) = node.properties.get("broken_asset") {
+                            ensure!(
+                                bundle["assets"][asset].is_string(),
+                                "{}: broken_asset {asset} is not an asset of this map",
+                                node.name
+                            );
+                        }
                         let text = |key: &str| {
                             node.properties
                                 .get(key)

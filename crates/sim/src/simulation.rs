@@ -726,13 +726,24 @@ impl Simulation {
     /// The map collider (None for terrain) and triangle a shot contact at
     /// `position` on a face turned to `normal` struck.
     fn map_contact(&self, position: Vec3, normal: Vec3) -> Option<(Option<usize>, u32)> {
+        self.map_contact_where(position, normal, |_| true)
+    }
+    /// [`Self::map_contact`] among the map colliders `accept` takes (and
+    /// terrain, which it never asks about): a thin prop lying on a wall's
+    /// face is still found when the wall's own collider is nearer the ray.
+    fn map_contact_where(
+        &self,
+        position: Vec3,
+        normal: Vec3,
+        accept: impl Fn(usize) -> bool,
+    ) -> Option<(Option<usize>, u32)> {
         let normal = normal.try_normalize()?;
         let ray = Ray::new(
             Vector::from_array((position + normal * 0.02).to_array()),
             Vector::from_array((-normal).to_array()),
         );
         let predicate = |handle, _: &Collider| {
-            self.map_collider_index(handle).is_some()
+            self.map_collider_index(handle).is_some_and(&accept)
                 || self
                     .terrain
                     .as_ref()
@@ -752,6 +763,17 @@ impl Simulation {
     /// at `position` on a face turned to `normal` struck; None for terrain.
     pub fn map_collider_at(&self, position: Vec3, normal: Vec3) -> Option<usize> {
         self.map_contact(position, normal)?.0
+    }
+    /// The first of the map colliders `accept` takes that a shot contact at
+    /// `position` on a face turned to `normal` struck, however many others
+    /// lie there too.
+    pub fn map_collider_among(
+        &self,
+        position: Vec3,
+        normal: Vec3,
+        accept: impl Fn(usize) -> bool,
+    ) -> Option<usize> {
+        self.map_contact_where(position, normal, accept)?.0
     }
     /// Read the same authored triangle kinds footsteps use, at a shot contact.
     pub fn map_surface_at(&self, position: Vec3, normal: Vec3) -> Option<&str> {
