@@ -541,6 +541,7 @@ pub fn lower(definitions: Vec<Definition>) -> Result<Pack> {
             id.clone(),
             Image {
                 shell_effect: String::new(),
+                shell_mesh: None,
                 first_person_nodes: BTreeMap::new(),
                 first_person_effects: BTreeMap::new(),
                 id,

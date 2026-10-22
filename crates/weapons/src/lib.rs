@@ -950,6 +950,87 @@ impl FirstPersonView {
         ]
     }
 }
+/// A casing a native image throws: a static mesh, client-only and cosmetic
+/// (no network traffic), in native units (y up) in the eject point's frame.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ShellMesh {
+    /// The model's key, as the image's `model` is.
+    pub model: String,
+    /// Direction, from the eject point, the casing leaves in.
+    pub exit_direction: [f32; 3],
+    #[serde(default)]
+    pub exit_offset: [f32; 3],
+    /// Most each throw turns `exit_direction` either way, degrees: about the
+    /// eject point's X axis (pitch) and its Y axis (yaw).
+    #[serde(default)]
+    pub exit_variance: [f32; 2],
+    /// Launch speed, native units per second.
+    pub velocity: f32,
+    /// Most each throw's speed differs from `velocity` either way.
+    #[serde(default)]
+    pub velocity_variance: f32,
+    /// Native units per second squared, world axes.
+    pub acceleration: [f32; 3],
+    /// Fraction of each world axis's velocity lost per second.
+    #[serde(default)]
+    pub damping: [f32; 3],
+    /// Most the casing turns about each axis, turns per second; each throw
+    /// picks its own between the negative and positive.
+    #[serde(default)]
+    pub spin: [f32; 3],
+    /// Spin picked again on every bounce, so a casing tumbles off a floor.
+    #[serde(default)]
+    pub respin_on_bounce: bool,
+    /// Share of the speed along the surface normal kept by a bounce.
+    pub bounce: f32,
+    /// A bounce leaving it slower than this, native units per second,
+    /// comes to rest.
+    pub rest_speed: f32,
+    /// Seconds before it is gone.
+    pub lifetime: f32,
+    /// Sound profile played where it lands.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub sound: String,
+}
+impl Image {
+    /// Whether a state with `eject_shell` throws something.
+    pub fn throws_shell(&self) -> bool {
+        !self.casing.is_empty() || !self.shell_effect.is_empty() || self.shell_mesh.is_some()
+    }
+}
+impl ShellMesh {
+    pub fn validate(&self) -> anyhow::Result<()> {
+        let finite = |v: &[f32]| v.iter().all(|v| v.is_finite());
+        ensure!(
+            !self.model.is_empty()
+                && self.model.len() <= 256
+                && self.sound.len() <= 160
+                && !self
+                    .model
+                    .chars()
+                    .chain(self.sound.chars())
+                    .any(char::is_control)
+                && finite(&self.exit_direction)
+                && self.exit_direction.iter().any(|v| *v != 0.)
+                && finite(&self.exit_offset)
+                && self.exit_offset.iter().all(|v| v.abs() <= 100.)
+                && self.exit_variance.iter().all(|v| (0. ..=180.).contains(v))
+                && (0. ..=200.).contains(&self.velocity)
+                && (0. ..=200.).contains(&self.velocity_variance)
+                && finite(&self.acceleration)
+                && self.acceleration.iter().all(|v| v.abs() <= 1000.)
+                && self.damping.iter().all(|v| (0. ..=1.).contains(v))
+                && self.spin.iter().all(|v| (0. ..=100.).contains(v))
+                && (0. ..=1.).contains(&self.bounce)
+                && (0. ..=200.).contains(&self.rest_speed)
+                && (0.01..=30.).contains(&self.lifetime),
+            "Invalid shell mesh"
+        );
+        Ok(())
+    }
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Image {
@@ -981,6 +1062,10 @@ pub struct Image {
     /// Authored sprite/composite ejection instead of a debris model.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub shell_effect: String,
+    /// A casing thrown as a mesh from `ejectPoint`, with motion the image
+    /// authors itself (no `DebrisData`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shell_mesh: Option<ShellMesh>,
     pub min_shot_ticks: u32,
     pub states: Vec<State>,
     /// An Add-On tool's image: its `onFire` runs this Add-On command
@@ -3957,6 +4042,14 @@ impl Pack {
                     && !image.shell_effect.chars().any(char::is_control),
                 "Invalid shell effect of image {id}"
             );
+            if let Some(mesh) = &image.shell_mesh {
+                ensure!(
+                    image.shell_effect.is_empty() && image.casing.is_empty(),
+                    "Image {id} names more than one kind of casing"
+                );
+                mesh.validate()
+                    .with_context(|| format!("Invalid shell mesh of image {id}"))?;
+            }
             ensure!(
                 id == &image.id && image.states.len() <= 64,
                 "Invalid image {id}"

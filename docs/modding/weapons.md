@@ -733,6 +733,30 @@ reliable cue arrives before its image pose, it waits up to half a second.
 These sprite casings can opt into the cosmetic point contact/rest and local
 contact audio policies described below.
 
+An image's `shell_mesh` throws a static mesh instead, from the posed `ejectPoint`
+for `eject_shell` states (not with `casing` or `shell_effect`). It is client-only
+and cosmetic: nothing crosses the network, and every client throws its own.
+All numbers are the pack's, in native units (y up); `exit_direction` is in the
+eject point's frame, the rest in the world's:
+
+```json
+"shell_mesh": {
+  "model": "your-id:model/casing", "exit_direction": [1, 1, 0],
+  "exit_offset": [0, 0, 0], "exit_variance": [5, 15], "velocity": 3, "velocity_variance": 0.8,
+  "acceleration": [0, -30, 0], "damping": [0.45, 0.45, 0.45],
+  "spin": [1, 1, 1], "respin_on_bounce": true,
+  "bounce": 0.4, "rest_speed": 4, "lifetime": 10,
+  "sound": "your-id:casing_hit"
+}
+```
+
+`exit_variance` is the most each throw turns the direction, in degrees, about the eject point's X (pitch) and Y (yaw) axes, and `velocity_variance` the most the speed differs from `velocity`, either way. `damping` is the fraction of each axis's velocity lost per second; `spin` is the
+most it turns about each axis, in turns per second, either way, picked per throw
+(and again on each bounce with `respin_on_bounce`); `bounce` is the share of the
+speed along the surface normal a bounce keeps; a bounce that leaves it slower than
+`rest_speed` comes to rest; it is gone after `lifetime` seconds; `sound` is a
+sound profile played where it lands. The model must be one the pack loads.
+
 
 Particle `contact` is optional. A definition can supply `restitution` and
 `friction` in [0,1], `rest_speed` in native units/second, and `die_on_contact` /

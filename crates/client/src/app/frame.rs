@@ -1836,6 +1836,9 @@ impl App {
                         })
                     });
             self.cosmetic_faults.absorb("gun casings", moved);
+            for (sound, at) in self.fx.weapon_shells.take_sounds() {
+                self.audio.profile(&sound, bri_audio::Placement::World(at));
+            }
             self.audio
                 .sync_projectiles(&weapons.projectiles, &self.content.weapons.pack);
             // Physics Quality (or the console's maxdebris) picks the limit.

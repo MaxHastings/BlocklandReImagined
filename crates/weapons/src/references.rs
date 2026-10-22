@@ -57,6 +57,16 @@ impl Pack {
                     used_by: format!("image {id} ejection"),
                 });
             }
+            if let Some(mesh) = &image.shell_mesh
+                && !mesh.sound.is_empty()
+            {
+                out.push(Reference {
+                    add_on,
+                    kind: Kind::Sound,
+                    name: &mesh.sound,
+                    used_by: format!("image {id} casing"),
+                });
+            }
             for state in &image.states {
                 let used_by = || format!("image {id} state {}", state.name);
                 if !state.sound.is_empty() {

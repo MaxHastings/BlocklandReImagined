@@ -70,6 +70,7 @@ fn rocket_pack() -> bri_weapons::Pack {
         arm_ready: true,
         casing: String::new(),
         shell_effect: String::new(),
+        shell_mesh: None,
         min_shot_ticks: 0,
         command: Default::default(),
         commands: Default::default(),
