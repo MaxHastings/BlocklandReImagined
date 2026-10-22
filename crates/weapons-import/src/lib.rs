@@ -347,6 +347,7 @@ pub fn lower(definitions: Vec<Definition>) -> Result<Pack> {
             lifetime_ticks: ticks(num(d, "lifetime", 1000.0) / 1000.0).max(1),
             fade_ticks: ticks(num(d, "fadeDelay", 1000.0) / 1000.0),
             arm_ticks: ticks(num(d, "armingDelay", 0.0) / 1000.0),
+            arm_ticks_max: 0,
             ballistic: flag(d, "isBallistic", false),
             elasticity: num(d, "bounceElasticity", 1.0),
             friction: num(d, "bounceFriction", 0.0),
@@ -541,6 +542,7 @@ pub fn lower(definitions: Vec<Definition>) -> Result<Pack> {
             id.clone(),
             Image {
                 shell_effect: String::new(),
+                shell_mesh: None,
                 first_person_nodes: BTreeMap::new(),
                 first_person_effects: BTreeMap::new(),
                 id,
