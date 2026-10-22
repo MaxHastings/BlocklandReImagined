@@ -3583,6 +3583,23 @@ fn register_presentation(engine: &mut Engine) {
             prone,
         }))
     });
+    engine.register_fn(
+        "set_drive",
+        |player: Dynamic,
+         x: Dynamic,
+         z: Dynamic,
+         accel: Dynamic,
+         max_speed: Dynamic,
+         seconds: Dynamic| {
+            push(Op::SetDrive(ops::SetDrive {
+                player: id(&player)?,
+                direction: [float(&x)?, float(&z)?],
+                accel: float(&accel)?,
+                max_speed: float(&max_speed)?,
+                seconds: float(&seconds)?,
+            }))
+        },
+    );
     engine.register_fn("set_lean", |player: Dynamic, lean: Dynamic| {
         push(Op::SetLean(ops::SetLean {
             player: id(&player)?,
@@ -4200,7 +4217,7 @@ fn sandbox() -> Engine {
     });
     engine.register_global_module(maps.into());
     engine.set_max_array_size(65_536);
-    engine.set_max_map_size(1024);
+    engine.set_max_map_size(65_536);
     engine.set_max_variables(256);
     // A whole game mode's rules (Slayer's) define a few hundred.
     engine.set_max_functions(512);
@@ -4425,8 +4442,14 @@ impl Runtime {
             if !behaviour.listens.is_empty() {
                 need("on_addon_event".into(), 3, "listens");
             }
+            if behaviour.on_use_object {
+                need("on_use_object".into(), 2, "on_use_object");
+            }
             if behaviour.on_object {
                 need("on_object".into(), 1, "on_object");
+            }
+            if behaviour.double_tap_seconds.is_some() {
+                need("on_double_tap".into(), 2, "double_tap_seconds");
             }
             if behaviour.on_volume {
                 need("on_volume".into(), 1, "on_volume");

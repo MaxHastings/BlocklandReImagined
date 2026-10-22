@@ -228,6 +228,35 @@ pub struct Posture {
     /// down.
     #[serde(default)]
     pub climbing: bool,
+    /// A timed push along the ground a rule gave the body (`set_drive`).
+    #[serde(default)]
+    pub drive: Option<Drive>,
+}
+/// [`Posture::drive`]: accelerates a body lying prone on the ground along
+/// `direction` (a unit vector on the ground plane) until it moves
+/// `max_speed` along it, for `seconds`. It ends early when the body leaves
+/// the ground or stands up.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct Drive {
+    pub direction: [f32; 2],
+    /// Units per second squared.
+    pub accel: f32,
+    pub max_speed: f32,
+    pub seconds: f32,
+}
+/// Longest a drive may last, seconds.
+pub const MAX_DRIVE_SECONDS: f32 = 10.0;
+impl Drive {
+    pub fn valid(&self) -> bool {
+        self.direction.iter().all(|v| v.is_finite())
+            && (self.direction[0].hypot(self.direction[1]) - 1.0).abs() < 1e-3
+            && self.accel.is_finite()
+            && (0.0..=MAX_SPEED * 100.0).contains(&self.accel)
+            && self.max_speed.is_finite()
+            && (0.0..=MAX_SPEED).contains(&self.max_speed)
+            && self.seconds.is_finite()
+            && (0.0..=MAX_DRIVE_SECONDS).contains(&self.seconds)
+    }
 }
 /// Longest a tether's rope may be, units: a bound on state a host or
 /// player sends, past any v20 rope (the Grapple Rope's hook flies 800).
@@ -1743,6 +1772,15 @@ impl Player {
         self.state.posture.lean_to = to.clamped(-1.0, 1.0);
         true
     }
+    /// Push the body along the ground (`set_drive`); none ends one. False
+    /// for a drive out of range.
+    pub fn set_drive(&mut self, drive: Option<Drive>) -> bool {
+        if drive.is_some_and(|d| !d.valid()) {
+            return false;
+        }
+        self.state.posture.drive = drive;
+        true
+    }
     /// Whether the body is held in the `sit` pose, which moves the eye.
     pub fn set_seated(&mut self, seated: bool) {
         self.seated = seated;
@@ -2229,6 +2267,7 @@ impl Player {
                 *posture = Posture {
                     prone: posture.prone,
                     climbing: posture.climbing,
+                    drive: posture.drive,
                     ..Posture::default()
                 }
             }
@@ -2588,6 +2627,16 @@ impl Player {
             jump_move = air_control_move(horizontal, move_vec, move_speed);
             acc += air_control_direction(horizontal, move_vec, move_speed)
                 * (move_speed * t.air_control).min(t.acceleration * t.air_control * dt);
+        }
+        // A rule's drive pushes a body lying on the ground along its way.
+        if let Some(mut drive) = self.state.posture.drive.take() {
+            drive.seconds -= dt;
+            if drive.seconds > 0.0 && self.state.posture.prone && contact.run {
+                let way = Vec3::new(drive.direction[0], 0.0, drive.direction[1]);
+                let room = (drive.max_speed - (velocity + acc).dot(way)).max(0.0);
+                acc += way * (drive.accel * dt).min(room);
+                self.state.posture.drive = Some(drive);
+            }
         }
         // v20 jumps while jump is held, from any surface up to jumpSurfaceAngle,
         // shortly after leaving one, and adds the impulse to current velocity.

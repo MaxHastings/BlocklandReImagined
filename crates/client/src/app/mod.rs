@@ -444,6 +444,7 @@ fn prepare_map(
     let visual = load_visual_map(root, &map, lighting)?;
     let mut light_volume =
         LightVolumeState::start(&visual.scene, light_cache, visual.modern_lights.as_deref());
+    light_volume.nodes_lit = visual.lit_by_nodes;
     light_volume.animations = visual.light_animations.clone();
     light_volume.spots = visual.light_spots.clone();
     light_volume.overflow = visual.overflow_lights.clone();

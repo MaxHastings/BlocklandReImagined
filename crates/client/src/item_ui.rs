@@ -8,6 +8,8 @@ use std::collections::BTreeMap;
 const ICON_BASE: u64 = 0x4954_0000;
 /// Scope overlays' texture keys (`bri_weapons::Zoom::overlay`).
 const OVERLAY_BASE: u64 = 0x5343_0000;
+/// Screen flashes' texture keys (`bri_weapons::ScreenFlash`).
+const FLASH_BASE: u64 = 0x464c_0000;
 pub struct ItemUi {
     catalog: BTreeMap<String, ToolInfo>,
     /// HUD icons and scope overlays, by texture key.
@@ -15,6 +17,8 @@ pub struct ItemUi {
     /// Each image with a scope overlay: its texture key and aspect ratio
     /// (width over height).
     overlays: BTreeMap<String, (u64, f32)>,
+    /// Each image with a screen flash: its texture key and size in pixels.
+    flashes: BTreeMap<String, (u64, [u32; 2])>,
     /// Icons still being drawn from their models, shown when they are.
     drawing: Vec<(u64, crate::items::DrawnIcon)>,
     uploaded: bool,
@@ -114,10 +118,25 @@ impl ItemUi {
                 (key, picture.width as f32 / picture.height as f32),
             );
         }
+        let mut flashes = BTreeMap::new();
+        let mut by_texture = BTreeMap::new();
+        for (image, presented) in &assets.presentation.images {
+            let Some(texture) = presented.screen_flash.as_ref() else {
+                continue;
+            };
+            let Some(picture) = assets.texture(texture) else {
+                continue;
+            };
+            let next = FLASH_BASE + by_texture.len() as u64;
+            let key = *by_texture.entry(texture.clone()).or_insert(next);
+            icons.entry(key).or_insert_with(|| picture.clone());
+            flashes.insert(image.clone(), (key, [picture.width, picture.height]));
+        }
         Ok(Self {
             catalog,
             icons,
             overlays,
+            flashes,
             drawing,
             uploaded: false,
         })
@@ -126,6 +145,11 @@ impl ItemUi {
     /// texture key and aspect ratio.
     pub fn scope_overlay(&self, image: &str) -> Option<(u64, f32)> {
         self.overlays.get(image).copied()
+    }
+    /// The picture `image` flashes over its holder's screen, if it has
+    /// one: its texture key and size in pixels.
+    pub fn screen_flash(&self, image: &str) -> Option<(u64, [u32; 2])> {
+        self.flashes.get(image).copied()
     }
     pub fn catalog(&self) -> BTreeMap<String, ToolInfo> {
         self.catalog.clone()
@@ -218,6 +242,7 @@ mod tests {
             icons: BTreeMap::from([(ICON_BASE, blank)]),
             drawing: vec![(ICON_BASE, slot.clone())],
             overlays: BTreeMap::new(),
+            flashes: BTreeMap::new(),
             uploaded: true,
         };
         assert!(!ui.take_drawn(), "not drawn yet");

@@ -20,6 +20,8 @@ use std::{
 const MAX_BODIES: usize = 512;
 const MAX_PENDING: usize = 512;
 const PENDING_SECONDS: f64 = 0.5;
+/// How far a casing stopped at a wall stands off it, native units.
+const CLIP_MARGIN: f32 = 0.02;
 const FIXED_STEP: f64 = 1. / 120.;
 const MAX_FRAME_SECONDS: f64 = 0.25;
 /// Most images with a casing of their own.
@@ -122,6 +124,21 @@ struct ShellDefinition {
     /// Sound profile played where it lands.
     #[serde(default)]
     sound: String,
+    /// Sound profile by surface kind, over `sound`.
+    #[serde(default)]
+    landing_sounds: std::collections::BTreeMap<String, String>,
+    /// Direction and offset are in the owner's yaw frame.
+    #[serde(default)]
+    owner_frame: bool,
+    /// Share of the owner's velocity it starts with.
+    #[serde(default = "full_inherit")]
+    inherit_velocity: f32,
+    /// The start is traced from the eject point and stops at a surface.
+    #[serde(default)]
+    clip_start: bool,
+}
+fn full_inherit() -> f32 {
+    1.
 }
 fn sha(bytes: &[u8]) -> String {
     format!("{:x}", Sha256::digest(bytes))
@@ -366,6 +383,10 @@ fn native_shell(mesh: &bri_weapons::ShellMesh) -> ShellDefinition {
         respin_on_bounce: mesh.respin_on_bounce,
         rest_speed: Some(mesh.rest_speed),
         sound: mesh.sound.clone(),
+        landing_sounds: mesh.landing_sounds.clone(),
+        owner_frame: mesh.owner_frame,
+        inherit_velocity: mesh.inherit_velocity,
+        clip_start: mesh.clip_start,
     }
 }
 
@@ -406,6 +427,10 @@ fn add_on_shell(model: &str, casing: &bri_weapons::debris::Casing) -> ShellDefin
         respin_on_bounce: false,
         rest_speed: None,
         sound: String::new(),
+        landing_sounds: Default::default(),
+        owner_frame: false,
+        inherit_velocity: 1.,
+        clip_start: false,
     }
 }
 
@@ -440,6 +465,10 @@ impl WeaponDebrisAssets {
                 respin_on_bounce: false,
                 rest_speed: None,
                 sound: String::new(),
+                landing_sounds: Default::default(),
+                owner_frame: false,
+                inherit_velocity: 1.,
+                clip_start: false,
             },
         }
     }
@@ -451,11 +480,13 @@ pub struct DebrisInstance {
     pub transform: Mat4,
     pub tint: [f32; 4],
 }
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub struct DebrisHit {
     /// Fraction along the tested segment, in `[0,1]`.
     pub fraction: f32,
     pub normal: Vec3,
+    /// Kind of surface struck, for a per-surface landing sound.
+    pub surface: Option<String>,
 }
 struct Body {
     cue_id: u64,
@@ -470,11 +501,14 @@ struct Body {
     age: f32,
     bounces_left: u32,
     settled: bool,
+    /// Where it left the gun, until its first step has been swept from there.
+    clip_from: Option<Vec3>,
 }
 struct Pending {
     cue: Cue,
     queued_at: f64,
     inherited_velocity: Vec3,
+    owner_yaw: f32,
 }
 
 /// Per-session deterministic shell bodies. The owner must feed ordered reliable
@@ -660,7 +694,7 @@ impl WeaponDebris {
         &mut self,
         cues: &[Cue],
         mut pose: impl FnMut(u64, &str, u8) -> Option<Mat4>,
-        mut velocity: impl FnMut(u64) -> Vec3,
+        mut owner: impl FnMut(u64) -> (Vec3, f32),
     ) -> Result<()> {
         let mut previous = None;
         for cue in cues {
@@ -681,18 +715,19 @@ impl WeaponDebris {
             }
             ensure!(cue.id > 0, "invalid shell cue id");
             self.cursor = cue.id;
-            let inherited = velocity(*actor);
+            let (inherited, owner_yaw) = owner(*actor);
             if !inherited.is_finite() {
                 self.diagnostics.invalid_cues += 1;
                 continue;
             }
             if let Some(transform) = pose(*actor, image, *hand) {
-                self.spawn(cue, transform, inherited)?;
+                self.spawn(cue, transform, inherited, owner_yaw)?;
             } else if self.pending.len() < self.limits.pending {
                 self.pending.push_back(Pending {
                     cue: cue.clone(),
                     queued_at: self.seconds,
                     inherited_velocity: inherited,
+                    owner_yaw,
                 });
             } else {
                 self.diagnostics.pending_capacity_drops += 1;
@@ -701,12 +736,12 @@ impl WeaponDebris {
         }
         Ok(())
     }
-    fn spawn(&mut self, cue: &Cue, eject: Mat4, inherited: Vec3) -> Result<()> {
+    fn spawn(&mut self, cue: &Cue, eject: Mat4, inherited: Vec3, owner_yaw: f32) -> Result<()> {
         let image = match &cue.kind {
             CueKind::WeaponShell { image, .. } => Some(image.as_str()),
             _ => None,
         };
-        self.throw(cue.id, image, eject, inherited)
+        self.throw(cue.id, image, eject, inherited, owner_yaw)
     }
     /// Throw image `image`'s casing from `eject` now, without a cue: a gun
     /// on a vehicle (`ActorEffects::take_ejected`), whose firing is not a
@@ -719,9 +754,16 @@ impl WeaponDebris {
         // Their own ids, above any cue's.
         self.ejected = self.ejected.wrapping_add(1);
         let id = EJECTED_IDS | (self.ejected & !EJECTED_IDS);
-        self.throw(id, Some(image), eject, inherited)
+        self.throw(id, Some(image), eject, inherited, 0.)
     }
-    fn throw(&mut self, id: u64, image: Option<&str>, eject: Mat4, inherited: Vec3) -> Result<()> {
+    fn throw(
+        &mut self,
+        id: u64,
+        image: Option<&str>,
+        eject: Mat4,
+        inherited: Vec3,
+        owner_yaw: f32,
+    ) -> Result<()> {
         ensure!(
             eject.is_finite() && eject.determinant() > 1e-8 && eject.w_axis.w == 1.,
             "invalid shell-eject transform"
@@ -749,8 +791,20 @@ impl WeaponDebris {
                 Quat::from_rotation_y(rng.signed() * d.exit_variance_degrees.to_radians()) * dir
             }
         };
-        let direction = eject.transform_vector3(local).normalize();
-        let position = eject.transform_point3(Vec3::from_array(d.exit_offset));
+        let offset = Vec3::from_array(d.exit_offset);
+        let (direction, position) = if d.owner_frame && owner_yaw.is_finite() {
+            // The owner's yaw turns the throw, not the animated eject node.
+            let frame = Quat::from_rotation_y(-owner_yaw);
+            (
+                (frame * local).normalize(),
+                eject.transform_point3(Vec3::ZERO) + frame * offset,
+            )
+        } else {
+            (
+                eject.transform_vector3(local).normalize(),
+                eject.transform_point3(offset),
+            )
+        };
         let speed = d.velocity;
         let variation = match d.velocity_variance {
             Some(v) if speed > 0. => rng.signed() * v / speed,
@@ -774,13 +828,14 @@ impl WeaponDebris {
                 cue_id: id,
                 casing,
                 position,
-                velocity: direction * (speed * (1. + variation)) + inherited,
+                velocity: direction * (speed * (1. + variation)) + inherited * d.inherit_velocity,
                 rotation: start,
                 spin_axis,
                 spin,
                 age: 0.,
                 bounces_left: d.bounces,
                 settled: false,
+                clip_from: d.clip_start.then(|| eject.transform_point3(Vec3::ZERO)),
             },
         );
         Ok(())
@@ -808,7 +863,12 @@ impl WeaponDebris {
         while let Some(item) = pending.pop_front() {
             if let CueKind::WeaponShell { actor, image, hand } = &item.cue.kind {
                 if let Some(transform) = pose(*actor, image, *hand) {
-                    self.spawn(&item.cue, transform, item.inherited_velocity)?;
+                    self.spawn(
+                        &item.cue,
+                        transform,
+                        item.inherited_velocity,
+                        item.owner_yaw,
+                    )?;
                 } else if self.seconds - item.queued_at >= PENDING_SECONDS {
                     self.diagnostics.missing_pose_expired += 1;
                 } else if self.pending.len() < self.limits.pending {
@@ -841,6 +901,15 @@ impl WeaponDebris {
                         None => Vec3::new(0., -9.81 * d.gravity_multiplier, 0.),
                     } * dt;
                     body.velocity *= (Vec3::ONE - Vec3::from_array(d.damping) * dt).max(Vec3::ZERO);
+                    if let Some(origin) = body.clip_from.take()
+                        && let Some(hit) = sweep(origin, body.position)
+                        && hit.fraction.is_finite()
+                        && hit.normal.is_finite()
+                    {
+                        // The gun's muzzle is behind a wall: stop at the wall.
+                        let at = origin.lerp(body.position, hit.fraction.clamped(0., 1.));
+                        body.position = at + hit.normal.normalize_or_zero() * CLIP_MARGIN;
+                    }
                     let from = body.position;
                     let to = from + body.velocity * dt;
                     self.diagnostics.collision_queries += 1;
@@ -874,9 +943,13 @@ impl WeaponDebris {
                         }
                         body.bounces_left = body.bounces_left.saturating_sub(1);
                         self.diagnostics.bounces += 1;
-                        if !d.sound.is_empty() && self.sounds.len() < 16 {
-                            self.sounds
-                                .push((d.sound.clone(), body.position.to_array()));
+                        let sound = hit
+                            .surface
+                            .as_ref()
+                            .and_then(|kind| d.landing_sounds.get(kind))
+                            .unwrap_or(&d.sound);
+                        if !sound.is_empty() && self.sounds.len() < 16 {
+                            self.sounds.push((sound.clone(), body.position.to_array()));
                         }
                         if d.respin_on_bounce
                             && let Some(turns) = d.axis_spin
@@ -1076,16 +1149,24 @@ mod tests {
         fx: &Debris,
     ) -> Result<()> {
         let mut world = WeaponDebris::new(fx.assets()?, WeaponDebrisLimits::default())?;
-        world.cues(&[cue(1)], |_, _, _| None, |_| Vec3::ZERO)?;
+        world.cues(&[cue(1)], |_, _, _| None, |_| (Vec3::ZERO, 0.))?;
         assert_eq!(world.pending.len(), 1);
         assert_eq!(world.cue_cursor(), 1);
-        world.cues(&[cue(1)], |_, _, _| Some(Mat4::IDENTITY), |_| Vec3::ZERO)?;
+        world.cues(
+            &[cue(1)],
+            |_, _, _| Some(Mat4::IDENTITY),
+            |_| (Vec3::ZERO, 0.),
+        )?;
         assert_eq!(world.diagnostics.duplicate_cues, 1);
         world.advance(1. / 60., |_, _, _| Some(Mat4::IDENTITY), |_, _| None)?;
         assert_eq!(world.instances().count(), 1);
         let before = world.instances().next().unwrap();
         let mut same = WeaponDebris::new(fx.assets()?, WeaponDebrisLimits::default())?;
-        same.cues(&[cue(1)], |_, _, _| Some(Mat4::IDENTITY), |_| Vec3::ZERO)?;
+        same.cues(
+            &[cue(1)],
+            |_, _, _| Some(Mat4::IDENTITY),
+            |_| (Vec3::ZERO, 0.),
+        )?;
         same.advance(1. / 60., |_, _, _| Some(Mat4::IDENTITY), |_, _| None)?;
         let after = same.instances().next().unwrap();
         assert_eq!(
@@ -1103,7 +1184,11 @@ mod tests {
         // whose zero normal normalized to NaN, and advance returned an error
         // that closed the game.
         let mut world = WeaponDebris::new(fx.assets()?, WeaponDebrisLimits::default())?;
-        world.cues(&[cue(1)], |_, _, _| Some(Mat4::IDENTITY), |_| Vec3::ZERO)?;
+        world.cues(
+            &[cue(1)],
+            |_, _, _| Some(Mat4::IDENTITY),
+            |_| (Vec3::ZERO, 0.),
+        )?;
         world.advance(
             1. / 60.,
             |_, _, _| None,
@@ -1111,6 +1196,7 @@ mod tests {
                 Some(DebrisHit {
                     fraction: 0.,
                     normal: Vec3::ZERO.normalize(),
+                    surface: None,
                 })
             },
         )?;
@@ -1121,14 +1207,14 @@ mod tests {
 
     fn unresolved_pose_expires_and_native_bounces_are_bounded(fx: &Debris) -> Result<()> {
         let mut world = WeaponDebris::new(fx.assets()?, WeaponDebrisLimits::default())?;
-        world.cues(&[cue(9)], |_, _, _| None, |_| Vec3::ZERO)?;
+        world.cues(&[cue(9)], |_, _, _| None, |_| (Vec3::ZERO, 0.))?;
         world.advance(0.25, |_, _, _| None, |_, _| None)?;
         world.advance(0.25, |_, _, _| None, |_, _| None)?;
         assert_eq!(world.diagnostics.missing_pose_expired, 1);
         world.cues(
             &[cue(10)],
             |_, _, _| Some(Mat4::from_translation(Vec3::Y)),
-            |_| Vec3::ZERO,
+            |_| (Vec3::ZERO, 0.),
         )?;
         for _ in 0..100 {
             world.advance(
@@ -1139,6 +1225,7 @@ mod tests {
                         Some(DebrisHit {
                             fraction: (a.y / (a.y - b.y)).clamped(0., 1.),
                             normal: Vec3::Y,
+                            surface: None,
                         })
                     } else {
                         None
@@ -1218,7 +1305,7 @@ mod tests {
             shell_cue(2, "kit:image/rifle"),
             shell_cue(3, "kit:image/lost"),
         ];
-        world.cues(&cues, |_, _, _| Some(Mat4::IDENTITY), |_| Vec3::ZERO)?;
+        world.cues(&cues, |_, _, _| Some(Mat4::IDENTITY), |_| (Vec3::ZERO, 0.))?;
         assert_eq!(
             world.instances().count(),
             2,
@@ -1246,7 +1333,7 @@ mod tests {
         world.cues(
             &[shell_cue(4, "kit:image/gun")],
             |_, _, _| Some(Mat4::IDENTITY),
-            |_| Vec3::ZERO,
+            |_| (Vec3::ZERO, 0.),
         )?;
         world.set_casings(&kit(), |_| false);
         assert_eq!(world.model_instances().count(), 0);
@@ -1276,7 +1363,7 @@ mod tests {
         world.cues(
             &[shell_cue(1, "kit:image/rifle")],
             |_, _, _| Some(Mat4::from_translation(Vec3::Y)),
-            |_| Vec3::ZERO,
+            |_| (Vec3::ZERO, 0.),
         )?;
         for _ in 0..240 {
             world.advance(
@@ -1286,6 +1373,7 @@ mod tests {
                     (a.y > 0. && b.y <= 0.).then(|| DebrisHit {
                         fraction: (a.y / (a.y - b.y)).clamped(0., 1.),
                         normal: Vec3::Y,
+                        surface: None,
                     })
                 },
             )?;

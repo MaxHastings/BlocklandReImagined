@@ -1147,6 +1147,20 @@ impl App {
             Vec::new()
         };
         let mut local_views = Vec::with_capacity(local_bindings.len());
+        // Where a held image appears to be in the world, for what leaves it.
+        self.world_items
+            .set_local_view_fit(local_bindings.first().map(|(_, policy)| {
+                let across = (policy.horizontal_fov.to_radians() * 0.5).tan()
+                    / (shown_fov.to_radians() * 0.5).tan();
+                let vertical = (policy.vertical_fov(aspect) * 0.5).tan() / (fov * 0.5).tan();
+                crate::world_items::LocalViewFit {
+                    eye,
+                    right,
+                    up,
+                    across,
+                    vertical,
+                }
+            }));
         for (affinity, policy) in local_bindings {
             let vertical = policy.vertical_fov(aspect);
             let mut local_camera = camera;
@@ -2135,7 +2149,7 @@ impl App {
             && let Some((visual, compatibility_source)) = self.lighting.light_volume.poll_source(
                 root,
                 &current.id,
-                self.graphics.lighting == 3,
+                self.graphics.lighting == 3 || self.lighting.light_volume.nodes_lit,
             )
         {
             self.lighting.light_volume.change_source(
@@ -2143,6 +2157,7 @@ impl App {
                 &self.state_dir.join("light-volumes"),
                 visual.modern_lights.as_deref(),
             );
+            self.lighting.light_volume.nodes_lit = visual.lit_by_nodes;
             self.lighting.light_volume.animations = visual.light_animations;
             self.lighting.light_volume.spots = visual.light_spots;
             self.lighting.light_volume.overflow = visual.overflow_lights;

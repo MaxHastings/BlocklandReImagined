@@ -868,6 +868,7 @@ impl Screen for Play {
     }
     fn draw(&self, pack: &Pack, dl: &mut DrawList, core: &Core) {
         let lens = scope_overlay(dl, core);
+        screen_flash(dl, core);
         self.view.draw(pack, dl);
         // Through a scope, names show only in its lens.
         if core.shape_names && lens.is_none_or(|lens| dl.push_clip(lens)) {
@@ -885,6 +886,45 @@ impl Screen for Play {
     }
 }
 
+/// A gun's flash picture added to the screen's light (`ScreenFlash`): sized
+/// by the screen's width over 640 and placed from the screen's middle.
+fn screen_flash(dl: &mut DrawList, core: &Core) {
+    let Some(flash) = core.screen_flash else {
+        return;
+    };
+    let (w, h) = (core.logical.0 as f32, core.logical.1 as f32);
+    if w <= 0.0 || h <= 0.0 {
+        return;
+    }
+    let grow = w / FLASH_REFERENCE_WIDTH;
+    let size = [flash.size[0] * grow, flash.size[1] * grow];
+    let middle = [w / 2.0 + flash.center[0] * w, h / 2.0 + flash.center[1] * h];
+    let flip = |on: bool, from: f32, span: f32| {
+        if on {
+            (from + span, -span)
+        } else {
+            (from, span)
+        }
+    };
+    let (x, sx) = flip(flash.flip[0], 0.0, 1.0);
+    let (y, sy) = flip(flash.flip[1], 0.0, 1.0);
+    dl.image_blended(
+        crate::pack::TexKey::External(flash.key),
+        [x, y, sx, sy],
+        [
+            middle[0] - size[0] / 2.0,
+            middle[1] - size[1] / 2.0,
+            size[0],
+            size[1],
+        ],
+        0.0,
+        [255; 4],
+        crate::draw::Filter::Linear,
+        true,
+    );
+}
+/// The screen width a flash's pixel size is given for.
+const FLASH_REFERENCE_WIDTH: f32 = 640.0;
 /// A scope's picture over the whole screen while aiming (`Zoom::overlay`),
 /// beneath the HUD: fitted to the screen's height and centred, with the
 /// screen either side of it black. Returns the picture's rectangle.
