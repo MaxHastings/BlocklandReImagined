@@ -4407,6 +4407,9 @@ impl Runtime {
             if !behaviour.listens.is_empty() {
                 need("on_addon_event".into(), 3, "listens");
             }
+            if behaviour.on_use_object {
+                need("on_use_object".into(), 2, "on_use_object");
+            }
             if behaviour.on_object {
                 need("on_object".into(), 1, "on_object");
             }

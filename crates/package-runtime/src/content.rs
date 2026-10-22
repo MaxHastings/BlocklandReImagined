@@ -377,6 +377,15 @@ pub struct Behaviour {
     /// must be quick.
     #[serde(default)]
     pub on_activate: bool,
+    /// `on_use_object(player, target)` as a living player clicks Use (the
+    /// empty-hand click) at a dropped item or an Add-On creature within a
+    /// brick's reach and nearer than any brick: `target` is `#{ kind, id,
+    /// ref, distance }`, `kind` being `drop` (with `item`) or `entity`.
+    /// Return `true` to take the click, so the engine does nothing more.
+    /// Every package that declares it is asked, in load order, until one
+    /// takes it. Called as it happens, so it must be quick.
+    #[serde(default)]
+    pub on_use_object: bool,
     /// `on_event_row(player, brick, row)` for each row of events a player
     /// sends from the wrench, before they are kept: return `false` or a
     /// reason to leave that row out (Slayer's Restrict Output Events, as
