@@ -2057,7 +2057,6 @@ impl Session {
                     let explored = brain.search.as_ref().map_or(0, Search::explored);
                     brain.search = None;
                     if let Found::Partial(path) = &found
-                        && path.len() <= 1
                         && let Some(goal) = brain.goal
                         && self
                             .bots
@@ -2067,13 +2066,17 @@ impl Session {
                     {
                         self.bots.dead_end_told.insert(bot, tick);
                         bri_console::warn(format!(
-                            "bot {bot} ({}) found no way on from ({:.2}, {:.2}, {:.2}) toward {:?} at {:?}: {explored} grid nodes reached, its body {} fit here",
+                            "bot {bot} ({}) got only part of the way from ({:.2}, {:.2}, {:.2}) toward {:?} at {:?}: {} waypoints, ending {:.2} short of it at {:?}, {explored} grid nodes reached, its body {} fit here",
                             brain.kind.id,
                             feet.x,
                             feet.y,
                             feet.z,
                             goal,
                             goal.point(brain.home),
+                            path.len(),
+                            path.last()
+                                .map_or(f32::NAN, |w| w.feet.distance(goal.point(brain.home))),
+                            path.last().map(|w| w.feet),
                             if ground.fits(body, feet, false) {
                                 "does"
                             } else {
