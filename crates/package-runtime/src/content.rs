@@ -578,6 +578,11 @@ pub struct Behaviour {
     /// Delivered at the start of the next tick.
     #[serde(default)]
     pub on_volume: bool,
+    /// `on_climb_end(player)` as a climb a rule started (`start_climb`)
+    /// ends: the body is on the ledge. Delivered at the start of the next
+    /// tick.
+    #[serde(default)]
+    pub on_climb_end: bool,
 }
 /// A function an Add-On offers others ([`Behaviour::exports`]).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

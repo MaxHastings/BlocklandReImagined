@@ -24,6 +24,7 @@ use std::sync::Arc;
 mod bots;
 mod games;
 pub mod interop;
+mod ledges;
 mod lint;
 mod math;
 mod movers;
@@ -33,6 +34,7 @@ mod volumes;
 pub use bots::BotKindView;
 pub use games::{BrickView, DropView, MAX_BRICKS_LISTED, MinigameView, TeamView, brick_map};
 pub use interop::{Emitted, Nested};
+pub use ledges::{Ledge, LedgeProbe};
 pub use movers::MoverInfo;
 use view::{Of, view_in};
 pub use volumes::VolumeInfo;
@@ -254,6 +256,16 @@ pub trait World {
     /// first and then in map order.
     fn volumes_at(&self, _at: [f32; 3]) -> Vec<VolumeInfo> {
         Vec::new()
+    }
+    /// The ledge player `player` faces, looked for as `probe` says
+    /// (`ledge_at`), or `None` when there is none.
+    fn ledge(&self, _player: u64, _probe: &LedgeProbe) -> Option<Ledge> {
+        None
+    }
+    /// Whether a box of half extents `half` centred on `at` touches nothing
+    /// that never moves (the map, bricks): `fits`.
+    fn fits(&self, _half: [f32; 3], _at: [f32; 3]) -> bool {
+        false
     }
     /// Whether the minigame and trust rules let player `by` hurt `target`
     /// (`minigameCanDamage`).
@@ -3417,6 +3429,35 @@ fn register_presentation(engine: &mut Engine) {
                 .map_or(Dynamic::UNIT, volumes::volume_map))
         })
     });
+    // The ledge a player faces: a ledge_at(p, #{ reach, wall_reach, drop,
+    // up, edge_half[, vertical, max_slope] }) map of its x, y, z, nx, nz,
+    // height, slope and edge_a / edge_b, or ().
+    engine.register_fn("ledge_at", |player: Dynamic, options: Map| {
+        let player = id(&player)?;
+        let probe = ledges::probe(&options)?;
+        with_world(|world, i| {
+            if i.rays >= crate::ops::MAX_RAYS_PER_CALL {
+                return fail(format!(
+                    "more than {} rays in one call",
+                    crate::ops::MAX_RAYS_PER_CALL
+                ));
+            }
+            i.rays += 1;
+            Ok(world
+                .ledge(player, &probe)
+                .map_or(Dynamic::UNIT, |l| ledges::ledge_map(&l)))
+        })
+    });
+    // Whether a box of half extents [hx, hy, hz] centred on a point touches
+    // nothing fixed.
+    engine.register_fn("fits", |half: Array, x: Dynamic, y: Dynamic, z: Dynamic| {
+        let half = vector(&half)?;
+        if half.iter().any(|h| !(0.0..=100.0).contains(h)) {
+            return fail("a box's half extents are 0 to 100");
+        }
+        let at = [float(&x)?, float(&y)?, float(&z)?];
+        with_world(|world, _| Ok(world.fits(half, at)))
+    });
     // Send a mover to a key over a number of seconds, or hold it.
     engine.register_fn("mover_goto", |name: &str, key: i64, seconds: Dynamic| {
         let key = u8::try_from(key).map_err(|_| "a mover key is 0 to 15")?;
@@ -3583,6 +3624,61 @@ fn register_presentation(engine: &mut Engine) {
             prone,
         }))
     });
+    // start_climb(p, ledge, #{ back_off, land_in, accel, speed, clear,
+    // seconds, end }): carry a player up a ledge `ledge_at` found.
+    engine.register_fn(
+        "start_climb",
+        |player: Dynamic, ledge: Map, options: Map| {
+            let get = |m: &Map, key: &str| -> Fallible<f32> {
+                match m.get(key) {
+                    Some(v) => float(v),
+                    None => fail(format!("start_climb needs `{key}`")),
+                }
+            };
+            let mut values = [0.0_f32; 6];
+            let mut end = None;
+            for (key, value) in &options {
+                match key.as_str() {
+                    "back_off" => values[0] = float(value)?,
+                    "land_in" => values[1] = float(value)?,
+                    "accel" => values[2] = float(value)?,
+                    "speed" => values[3] = float(value)?,
+                    "clear" => values[4] = float(value)?,
+                    "seconds" => values[5] = float(value)?,
+                    "end" => {
+                        end = Some(
+                            value
+                                .clone()
+                                .into_string()
+                                .map_err(|_| "end is \"stand\", \"crouch\", \"prone\" or \"keep\"")?,
+                        )
+                    }
+                    other => {
+                        return fail(format!(
+                            "start_climb has no option `{other}` (back_off, land_in, accel, speed, clear, seconds, end)"
+                        ));
+                    }
+                }
+            }
+            for key in ["back_off", "land_in", "accel", "speed", "clear", "seconds"] {
+                if !options.contains_key(key) {
+                    return fail(format!("start_climb needs `{key}`"));
+                }
+            }
+            push(Op::StartClimb(ops::StartClimb {
+                player: id(&player)?,
+                point: [get(&ledge, "x")?, get(&ledge, "y")?, get(&ledge, "z")?],
+                normal: [get(&ledge, "nx")?, get(&ledge, "nz")?],
+                back_off: values[0],
+                land_in: values[1],
+                accel: values[2],
+                speed: values[3],
+                clear: values[4],
+                seconds: values[5],
+                end: end.ok_or("start_climb needs `end`")?,
+            }))
+        },
+    );
     engine.register_fn("set_lean", |player: Dynamic, lean: Dynamic| {
         push(Op::SetLean(ops::SetLean {
             player: id(&player)?,
@@ -4430,6 +4526,9 @@ impl Runtime {
             }
             if behaviour.on_volume {
                 need("on_volume".into(), 1, "on_volume");
+            }
+            if behaviour.on_climb_end {
+                need("on_climb_end".into(), 1, "on_climb_end");
             }
             if behaviour.tick_interval.is_some() {
                 need("on_tick".into(), 0, "tick_interval");

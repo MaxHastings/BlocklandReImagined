@@ -831,6 +831,9 @@ struct Peer {
     /// outer `None`: this client never says (a host-side rider, a test), and
     /// its moves are read by the seat it is in.
     seat_since: Option<(u64, Option<SeatSince>)>,
+    /// A rule's `start_climb` is under way: `on_climb_end` is told when the
+    /// motor ends it.
+    climbing_ledge: bool,
     input_budget: f32,
     last_sequence: u64,
     last_move_sequence: u64,
@@ -975,6 +978,7 @@ impl Peer {
             processed_move: 0,
             seated_pace: SeatedPace::default(),
             seat_since: None,
+            climbing_ledge: false,
             clan: Clan::default(),
             input_budget: INPUT_BURST,
             last_sequence: 0,

@@ -1,0 +1,1 @@
+`PlayerState::posture` carries `Posture::mantle` (an Add-On's `start_climb`: the ledge, the wall's normal, the set-back, rise speed, end posture and seconds left), so prediction and the host climb a ledge alike.

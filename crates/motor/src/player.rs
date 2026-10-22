@@ -228,6 +228,63 @@ pub struct Posture {
     /// down.
     #[serde(default)]
     pub climbing: bool,
+    /// A rule's climb up a ledge (`start_climb`), or none.
+    #[serde(default)]
+    pub mantle: Option<Mantle>,
+}
+/// What a body is as a [`Mantle`] ends.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum MantleEnd {
+    /// Upright (a prone body gets up if it has room).
+    Stand,
+    /// Crouched; the crouch key decides from the next tick on.
+    Crouch,
+    /// Lying prone, for an archetype that can.
+    Prone,
+    /// As it is.
+    Keep,
+}
+/// [`Posture::mantle`]: the body is set back from a wall by `back_off`,
+/// accelerates straight up at `accel` to at most `speed`, and, once its feet
+/// are `clear` above the ledge `point` (or `seconds` run out), is set down on
+/// the ledge `land_in` back from its edge and takes `end`. Lengths in world
+/// units.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct Mantle {
+    /// The ledge: the wall's top edge where the climb is aimed.
+    pub point: [f32; 3],
+    /// The wall's horizontal normal, a unit vector pointing out of it toward
+    /// the body.
+    pub normal: [f32; 2],
+    pub back_off: f32,
+    pub land_in: f32,
+    pub accel: f32,
+    pub speed: f32,
+    pub clear: f32,
+    pub seconds: f32,
+    pub end: MantleEnd,
+    /// The body has been set back from the wall.
+    pub snapped: bool,
+}
+/// Longest a mantle may last, seconds.
+pub const MAX_MANTLE_SECONDS: f32 = 5.0;
+impl Mantle {
+    pub fn valid(&self) -> bool {
+        self.point
+            .iter()
+            .all(|v| v.is_finite() && v.abs() <= 1_000_000.0)
+            && self.normal.iter().all(|v| v.is_finite())
+            && (self.normal[0].hypot(self.normal[1]) - 1.0).abs() < 1e-3
+            && [self.back_off, self.land_in, self.clear]
+                .iter()
+                .all(|v| v.is_finite() && (0.0..=100.0).contains(v))
+            && self.accel.is_finite()
+            && (0.0..=MAX_SPEED * 100.0).contains(&self.accel)
+            && self.speed.is_finite()
+            && (0.0..=MAX_SPEED).contains(&self.speed)
+            && self.seconds.is_finite()
+            && (0.0..=MAX_MANTLE_SECONDS).contains(&self.seconds)
+    }
 }
 /// Longest a tether's rope may be, units: a bound on state a host or
 /// player sends, past any v20 rope (the Grapple Rope's hook flies 800).
@@ -1236,6 +1293,8 @@ pub struct Player {
     /// Held in the `sit` pose (`/sit`, or a seat that poses its rider so):
     /// the eye is the sit's. Set by whoever seats the body.
     seated: bool,
+    /// What a mantle that ended this tick leaves the body as, until the step applies it.
+    mantle_end: Option<MantleEnd>,
     mounted_eye_offset: Option<Vec3>,
     /// Jumps the body made without travelling between: server teleports
     /// and openings that carried it to their partner ([`Player::relocations`]).
@@ -1394,6 +1453,7 @@ impl Player {
             mount: false,
             crouch: Default::default(),
             seated: false,
+            mantle_end: None,
             mounted_eye_offset: None,
             relocations: 0,
             corpse: false,
@@ -1447,6 +1507,7 @@ impl Player {
             mount: true,
             crouch: Default::default(),
             seated: false,
+            mantle_end: None,
             mounted_eye_offset: None,
             relocations: 0,
             corpse: false,
@@ -1510,6 +1571,7 @@ impl Player {
             mount: false,
             crouch: Default::default(),
             seated: false,
+            mantle_end: None,
             mounted_eye_offset: None,
             relocations: 0,
             corpse: false,
@@ -1731,6 +1793,16 @@ impl Player {
         self.tuning = self.base.posed(prone);
         physics.colliders[self.collider].set_shape(self.tuning.shape(self.state.crouched));
         self.synchronize_pose(physics);
+        true
+    }
+    /// Start a climb up a ledge (`start_climb`), or end one with none. False
+    /// for a mantle out of range or a body that is seated or mounted.
+    pub fn set_mantle(&mut self, mantle: Option<Mantle>) -> bool {
+        if mantle.is_some_and(|m| !m.valid()) || (mantle.is_some() && (self.seated || self.mount)) {
+            return false;
+        }
+        self.state.posture.mantle = mantle;
+        self.mantle_end = None;
         true
     }
     /// Lean toward `to`, -1 (left) to 1 (right), 0 upright, for an
@@ -1970,6 +2042,22 @@ impl Player {
             let tick = &mut self.state.tick;
             tick.from = before;
             tick.feet = self.state.feet;
+            // A mantle that ended this tick leaves the body as it asked.
+            if let Some(end) = self.mantle_end.take() {
+                match end {
+                    MantleEnd::Stand => {
+                        self.set_prone(physics, false);
+                    }
+                    MantleEnd::Crouch => {
+                        self.set_prone(physics, false);
+                        self.state.crouched = true;
+                    }
+                    MantleEnd::Prone => {
+                        self.set_prone(physics, true);
+                    }
+                    MantleEnd::Keep => {}
+                }
+            }
             events
         } else {
             MotionEvents {
@@ -2229,6 +2317,7 @@ impl Player {
                 *posture = Posture {
                     prone: posture.prone,
                     climbing: posture.climbing,
+                    mantle: posture.mantle,
                     ..Posture::default()
                 }
             }
@@ -2445,6 +2534,32 @@ impl Player {
             }
         } else {
             self.state.posture.climbing = false;
+        }
+        // A rule's climb up a ledge: set back from the wall once, then
+        // carried straight up until the feet clear the ledge, then set down
+        // on it.
+        if let Some(mut mantle) = self.state.posture.mantle.take() {
+            if !mantle.snapped {
+                feet.x = mantle.point[0] + mantle.normal[0] * mantle.back_off;
+                feet.z = mantle.point[2] + mantle.normal[1] * mantle.back_off;
+                self.state.feet = feet.to_array();
+                mantle.snapped = true;
+            }
+            mantle.seconds -= dt;
+            if feet.y >= mantle.point[1] + mantle.clear || mantle.seconds <= 0.0 {
+                feet = Vec3::new(
+                    mantle.point[0] - mantle.normal[0] * mantle.land_in,
+                    feet.y.max(mantle.point[1]),
+                    mantle.point[2] - mantle.normal[1] * mantle.land_in,
+                );
+                self.state.feet = feet.to_array();
+                self.state.velocity = [0.0; 3];
+                self.mantle_end = Some(mantle.end);
+            } else {
+                let rise = (self.state.velocity[1].max(0.0) + mantle.accel * dt).min(mantle.speed);
+                climb_velocity = Some(Vec3::Y * rise);
+                self.state.posture.mantle = Some(mantle);
+            }
         }
         // Torque's convex working list: every solid polygon this tick can reach,
         // including a jump, a step and the contact slab under the feet.
