@@ -77,7 +77,8 @@ impl Session {
                 }) else {
                     continue;
                 };
-                if self.breakables.shapes[index].indestructable {
+                let shape = &self.breakables.shapes[index];
+                if shape.indestructable || !shape.breaks_on_impact {
                     continue;
                 }
                 self.explode_shape(index);
@@ -85,6 +86,28 @@ impl Session {
             }
         }
         Ok(smashers)
+    }
+    /// A shot or projectile landed at `position` on a face turned to
+    /// `normal`: a map prop that breaks to shots breaks.
+    pub fn shoot_breakable(&mut self, position: Vec3, normal: Vec3) {
+        if self.breakables.shapes.is_empty() {
+            return;
+        }
+        let Some(collider) = self.simulation.map_collider_at(position, normal) else {
+            return;
+        };
+        let Some(index) = self
+            .breakables
+            .shapes
+            .iter()
+            .position(|s| s.colliders.contains(&collider))
+        else {
+            return;
+        };
+        let shape = &self.breakables.shapes[index];
+        if shape.breaks_on_shot && !shape.indestructable {
+            self.explode_shape(index);
+        }
     }
     /// `StaticShape::explode`. A second hit before the shape is hidden plays
     /// the sound again, as v20 does; the explosion only plays once.
