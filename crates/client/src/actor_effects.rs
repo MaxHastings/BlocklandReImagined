@@ -585,6 +585,7 @@ impl ActorEffects {
     /// starts again when it ends, until replaced.
     pub fn set_placed(&mut self, placed: Vec<bri_content::scene::PlacedEmitter>) {
         self.placed = placed;
+        self.placed_live.clear();
     }
     pub fn placed(&self) -> &[bri_content::scene::PlacedEmitter] {
         &self.placed
@@ -1446,6 +1447,23 @@ impl ActorEffects {
         sync_sources(world, &mut self.orbs, &wanted, CAMERA_EMITTER, plain)?;
         // The map's own emitters run all the time, whatever is in view: the
         // world draws only what the camera sees.
+        let missing: Vec<String> = self
+            .placed
+            .iter()
+            .filter(|e| !world.pack().library.emitters.iter().any(|x| x.id == e.effect))
+            .map(|e| format!("Missing emitter {} for map node {}", e.effect, e.node))
+            .collect();
+        let missing_nodes: Vec<usize> = self
+            .placed
+            .iter()
+            .filter(|e| !world.pack().library.emitters.iter().any(|x| x.id == e.effect))
+            .map(|e| e.node)
+            .collect();
+        self.placed.retain(|e| !missing_nodes.contains(&e.node));
+        for message in missing {
+            self.note(message);
+        }
+        let world = &mut self.world;
         let wanted: BTreeMap<usize, SourceTransform> = self
             .placed
             .iter()
