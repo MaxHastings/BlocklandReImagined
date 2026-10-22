@@ -111,6 +111,7 @@ impl App {
         self.fx.effects.clear();
         self.fx.weapon_frame_observation = None;
         self.fx.weapon_effects.reset(0);
+        self.fx.actor_effects.set_placed(Vec::new());
         self.fx.actor_effects.reset(0);
         self.fx.explosion_shapes.reset(0);
         self.fx.beams.clear();

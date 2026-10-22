@@ -638,6 +638,47 @@ fn teleports_sparkle_briefly_and_camera_orbs_follow_the_stream() -> Result<()> {
 }
 
 #[test]
+fn replacing_map_emitters_stops_old_sources_and_reset_restarts_only_the_current_map() -> Result<()>
+{
+    let mut fx = ActorEffects::new(effects(), weapons(), Default::default())?;
+    let placed = |effect: &str| bri_content::scene::PlacedEmitter {
+        node: 1,
+        effect: effect.into(),
+        position: [2., 3., 4.],
+        rotation: glam::Quat::IDENTITY.to_array(),
+        half: [0.; 3],
+    };
+    fx.set_placed(vec![placed("v20/emitter/cameraemittera")]);
+    fx.advance(0.1, head, &[], &[], &[])?;
+    assert_eq!(fx.world().source_count(), 1);
+    // Map changes may reuse a node number while selecting a different emitter.
+    fx.set_placed(vec![placed("v20/emitter/playerteleportemittera")]);
+    for _ in 0..10 {
+        fx.advance(0.1, head, &[], &[], &[])?;
+    }
+    assert_eq!(
+        fx.world().source_count(),
+        1,
+        "old looping source must drain"
+    );
+    fx.set_placed(Vec::new());
+    for _ in 0..10 {
+        fx.advance(0.1, head, &[], &[], &[])?;
+    }
+    assert_eq!(fx.world().source_count(), 0, "the next map has no emitters");
+    fx.set_placed(vec![placed("v20/emitter/cameraemittera")]);
+    fx.advance(0.1, head, &[], &[], &[])?;
+    fx.reset(0);
+    fx.advance(0.1, head, &[], &[], &[])?;
+    assert_eq!(
+        fx.world().source_count(),
+        1,
+        "reset restarts the current map once"
+    );
+    Ok(())
+}
+
+#[test]
 fn image_emitters_eject_along_the_image_forward_axis() {
     // `ShapeBase::updateImageState` emits along column 1 (source +Y): a
     // head-slot emote sprays forward (native -Z), and HateImage's

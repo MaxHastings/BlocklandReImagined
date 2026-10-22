@@ -584,8 +584,10 @@ impl ActorEffects {
     /// The emitters the map places: each runs from the next `advance`, and
     /// starts again when it ends, until replaced.
     pub fn set_placed(&mut self, placed: Vec<bri_content::scene::PlacedEmitter>) {
+        for handle in std::mem::take(&mut self.placed_live).into_values() {
+            self.world.stop(handle, StopMode::Drain);
+        }
         self.placed = placed;
-        self.placed_live.clear();
     }
     pub fn placed(&self) -> &[bri_content::scene::PlacedEmitter] {
         &self.placed
