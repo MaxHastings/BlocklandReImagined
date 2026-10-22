@@ -2135,7 +2135,7 @@ impl App {
             && let Some((visual, compatibility_source)) = self.lighting.light_volume.poll_source(
                 root,
                 &current.id,
-                self.graphics.lighting == 3,
+                self.graphics.lighting == 3 || self.lighting.light_volume.nodes_lit,
             )
         {
             self.lighting.light_volume.change_source(
@@ -2143,6 +2143,7 @@ impl App {
                 &self.state_dir.join("light-volumes"),
                 visual.modern_lights.as_deref(),
             );
+            self.lighting.light_volume.nodes_lit = visual.lit_by_nodes;
             self.lighting.light_volume.animations = visual.light_animations;
             self.lighting.light_volume.spots = visual.light_spots;
             self.lighting.light_volume.overflow = visual.overflow_lights;
