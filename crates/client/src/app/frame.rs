@@ -181,6 +181,7 @@ impl App {
         }
         let third_person = self.third_person_view();
         self.ui.apply(UiUpdate::FirstPerson(!third_person));
+        self.update_screen_flash(!third_person, game_elapsed.as_secs_f32());
         let weapon_checkpoint = self
             .net
             .attempt

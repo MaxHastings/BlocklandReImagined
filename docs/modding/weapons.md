@@ -176,6 +176,8 @@ FOV ramp returns toward normal. Holding aim when an allowed state returns aims
 again; the wheel step is kept across this temporary gate. A keyboard Zoom key
 cannot bypass the gate by falling back to generic camera zoom.
 
+**Screen flash.** An image's `"screen_flash": { "texture": "fx/flash", "center": [0.255, 0.32], "scale": 1.4, "seconds": 0.023, "flip": true }` shows a picture over its holder's own screen, in first person, each time a state with `"screen_flash": true` is entered (the firing state). `texture` is a PNG named without `.png`, relative to `assets/`, up to 2048 px a side. It is added to the light of the screen under it (an additive blend, black adds nothing) and drawn under the HUD. `center` is where its middle lies as offsets from the screen's middle, in fractions of the screen's width and height (-1 to 1); `scale` multiplies its pixels on a screen 640 wide and grows with the screen's width (0.01 to 16); `seconds` is how long it shows (0.001 to 2); `flip` turns each showing over left to right and top to bottom at random. Other players do not see it, and in third person it does not show.
+
 The profile stays installed while barred: `"on_jet": true, "jets": false`
 continues to suppress jet input from RMB. State eligibility is presentation only;
 it does not decide whether the host accepts firing, reload or movement. Rules
