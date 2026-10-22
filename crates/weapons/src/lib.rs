@@ -1041,6 +1041,21 @@ pub struct ShellMesh {
     /// Sound profile played where it lands.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub sound: String,
+    /// Sound profile by the kind of surface it lands on (the map's surface
+    /// kinds), instead of `sound` for the kinds listed.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub landing_sounds: BTreeMap<String, String>,
+    /// `exit_direction` and `exit_offset` are measured in the owner's yaw
+    /// frame (their body's heading, level) instead of the eject point's.
+    #[serde(default)]
+    pub owner_frame: bool,
+    /// Share of the owner's velocity the casing starts with, 0 to 2.
+    #[serde(default = "one")]
+    pub inherit_velocity: f32,
+    /// The start is traced from the eject point to the offset position and
+    /// stops at what it meets (a muzzle against a wall).
+    #[serde(default)]
+    pub clip_start: bool,
 }
 impl Image {
     /// Whether a state with `eject_shell` throws something.
@@ -1073,7 +1088,15 @@ impl ShellMesh {
                 && self.spin.iter().all(|v| (0. ..=100.).contains(v))
                 && (0. ..=1.).contains(&self.bounce)
                 && (0. ..=200.).contains(&self.rest_speed)
-                && (0.01..=30.).contains(&self.lifetime),
+                && (0.01..=30.).contains(&self.lifetime)
+                && (0. ..=2.).contains(&self.inherit_velocity)
+                && self.landing_sounds.len() <= 32
+                && self.landing_sounds.iter().all(|(surface, sound)| {
+                    !surface.is_empty()
+                        && surface.len() <= 64
+                        && sound.len() <= 160
+                        && !sound.chars().chain(surface.chars()).any(char::is_control)
+                }),
             "Invalid shell mesh"
         );
         Ok(())

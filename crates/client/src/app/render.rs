@@ -1147,6 +1147,20 @@ impl App {
             Vec::new()
         };
         let mut local_views = Vec::with_capacity(local_bindings.len());
+        // Where a held image appears to be in the world, for what leaves it.
+        self.world_items
+            .set_local_view_fit(local_bindings.first().map(|(_, policy)| {
+                let across = (policy.horizontal_fov.to_radians() * 0.5).tan()
+                    / (shown_fov.to_radians() * 0.5).tan();
+                let vertical = (policy.vertical_fov(aspect) * 0.5).tan() / (fov * 0.5).tan();
+                crate::world_items::LocalViewFit {
+                    eye,
+                    right,
+                    up,
+                    across,
+                    vertical,
+                }
+            }));
         for (affinity, policy) in local_bindings {
             let vertical = policy.vertical_fov(aspect);
             let mut local_camera = camera;

@@ -377,6 +377,7 @@ mod tests {
         (from.y > 0.0 && to.y <= 0.0).then(|| DebrisHit {
             fraction: from.y / (from.y - to.y),
             normal: Vec3::Y,
+            surface: None,
         })
     }
 
