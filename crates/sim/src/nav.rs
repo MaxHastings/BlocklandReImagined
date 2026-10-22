@@ -487,7 +487,7 @@ impl<'a> Ground<'a> {
     }
     /// Whether the full-width body stands (or crouches) at `feet` touching
     /// nothing.
-    fn fits(&self, body: &Body, feet: Vec3, crouched: bool) -> bool {
+    pub fn fits(&self, body: &Body, feet: Vec3, crouched: bool) -> bool {
         let (_, lift, tall) = body.clearance(crouched);
         self.empty(feet, body.width * 0.5, lift, tall)
     }
@@ -1911,6 +1911,10 @@ impl Search {
                 .filter(|(to, _)| !nav.avoided(node, to.x, to.z, to.feet().y, body))
                 .collect(),
         )
+    }
+    /// How many grid nodes the search reached, the start included.
+    pub fn explored(&self) -> usize {
+        self.came.len()
     }
     /// Search on until done or the tick's sampling budget is spent.
     pub fn step(&mut self, nav: &mut Nav, ground: &Ground, body: &Body) -> Option<Found> {

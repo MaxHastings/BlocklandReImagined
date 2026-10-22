@@ -365,6 +365,8 @@ pub(super) struct Bots {
     failed_told: BTreeMap<OwnerId, u64>,
     /// When each bot's stall was last told (`tell_stall`).
     stall_told: BTreeMap<OwnerId, u64>,
+    /// When each bot's dead-end search was last told.
+    dead_end_told: BTreeMap<OwnerId, u64>,
     /// A bot whose every step fails, for tests of that isolation.
     failing: Option<OwnerId>,
     /// Every failed step since the session began, told or not, and the
@@ -1355,6 +1357,9 @@ impl Session {
         self.bots
             .stall_told
             .retain(|b, _| self.bots.brains.contains_key(b));
+        self.bots
+            .dead_end_told
+            .retain(|b, _| self.bots.brains.contains_key(b));
         self.bots.stimuli.clear();
         self.hear_alerts(tick);
         self.hear_fighting(tick);
@@ -2049,7 +2054,33 @@ impl Session {
                 let nav = &mut bots_navs[at].1;
                 let brain = brains.get_mut(&bot).unwrap();
                 if let Some(found) = brain.search.as_mut().unwrap().step(nav, &ground, body) {
+                    let explored = brain.search.as_ref().map_or(0, Search::explored);
                     brain.search = None;
+                    if let Found::Partial(path) = &found
+                        && path.len() <= 1
+                        && let Some(goal) = brain.goal
+                        && self
+                            .bots
+                            .dead_end_told
+                            .get(&bot)
+                            .is_none_or(|at| tick >= at + STALL_TELL_TICKS)
+                    {
+                        self.bots.dead_end_told.insert(bot, tick);
+                        bri_console::warn(format!(
+                            "bot {bot} ({}) found no way on from ({:.2}, {:.2}, {:.2}) toward {:?} at {:?}: {explored} grid nodes reached, its body {} fit here",
+                            brain.kind.id,
+                            feet.x,
+                            feet.y,
+                            feet.z,
+                            goal,
+                            goal.point(brain.home),
+                            if ground.fits(body, feet, false) {
+                                "does"
+                            } else {
+                                "does NOT"
+                            }
+                        ));
+                    }
                     match found {
                         Found::Path(path) if !path.is_empty() => {
                             brain.partial_route = false;
