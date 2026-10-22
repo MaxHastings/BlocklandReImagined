@@ -343,6 +343,10 @@ pub(super) struct PackageHost {
     /// ([`Session::tell_package_problems`]), and since the host last took
     /// them ([`Session::take_package_problems`]).
     unheard: VecDeque<Diagnostic>,
+    /// Operations a package asked for that the engine refused, as printed
+    /// to the console: each distinct refusal once, so a rule that fails
+    /// every tick does not fill the log.
+    refusals_printed: std::collections::BTreeSet<String>,
     untaken: VecDeque<Diagnostic>,
     /// When each Add-On's problem (by package and code) was last told, by
     /// tick: a failing hook is told once a minute, not every tick.
@@ -896,6 +900,7 @@ impl Session {
             cooldowns: BTreeMap::new(),
             diagnostics: VecDeque::new(),
             unheard: VecDeque::new(),
+            refusals_printed: Default::default(),
             untaken: VecDeque::new(),
             told: BTreeMap::new(),
             deaths: VecDeque::new(),
@@ -1683,6 +1688,12 @@ impl Session {
                     if part.required.contains(&index) && refused.is_none() {
                         refused = Some((part.package.clone(), name, format!("{error:#}")));
                     } else {
+                        let line = format!("{}: {name} refused: {error:#}", part.package);
+                        if host.refusals_printed.len() < 256
+                            && host.refusals_printed.insert(line.clone())
+                        {
+                            eprintln!("{line}");
+                        }
                         note(
                             host,
                             Diagnostic::warning("op.failed", format!("{error:#}"))
