@@ -231,6 +231,9 @@ const STALL_DOOR_SIGHT: f32 = 8.0;
 const WEAVE_SECONDS: f32 = 0.75;
 /// A goal that moves less than this keeps its route (`Brain::set_goal_near`).
 const GOAL_SLACK: f32 = 0.2;
+/// How far a bot that stood at the end of a route home that stops short of it
+/// must be moved before it tries that route again.
+const HOME_GIVEN_UP: f32 = 1.5;
 /// An enemy that moves less than this from where a chase heads keeps its
 /// route.
 const CHASE_SLACK: f32 = 2.5;
@@ -454,6 +457,10 @@ struct Brain {
     /// goal changes or the bot gets stuck.
     settled: bool,
     partial_route: bool,
+    /// Where the best route home ended short of home and the bot stood at its
+    /// end: going home from there is no use until it has been moved
+    /// (`HOME_GIVEN_UP`), so `Return` stands instead of searching again.
+    home_given_up: Option<Vec3>,
     /// A chase point whose best route ends beyond its reach (`reach`):
     /// that enemy is not worth chasing while they stay there.
     out_of_reach: Option<Vec3>,
@@ -717,6 +724,7 @@ impl Brain {
             search: None,
             settled: false,
             partial_route: false,
+            home_given_up: None,
             out_of_reach: None,
             reach: (3.0, 2.0),
             chase_feet: None,
@@ -2068,7 +2076,10 @@ impl Session {
                             brain.plan = crate::nav::pull(&ground, nav, body, feet, path);
                         }
                         // Already as close as it gets, or nowhere to stand.
-                        _ => brain.plan.clear(),
+                        other => {
+                            brain.partial_route = matches!(other, Found::Partial(_));
+                            brain.plan.clear();
+                        }
                     }
                 }
             }
@@ -2133,6 +2144,9 @@ impl Session {
                     }
                 } else {
                     brain.settled = true;
+                    if matches!(brain.goal, Some(Goal::Home)) && brain.partial_route {
+                        brain.home_given_up = Some(feet);
+                    }
                 }
                 if matches!(brain.goal, Some(Goal::Wander(_) | Goal::Home)) {
                     brain.goal = None;
@@ -3085,7 +3099,15 @@ impl Session {
                 brain.pursue(enemy, false, near, feet, body.width * 0.5, tick)
             }
             Behaviour::Return => {
-                brain.set_goal(Some(Goal::Home));
+                // Where the way home ended short of it, it stands there.
+                // Searching again from the same spot finds the same end.
+                if brain
+                    .home_given_up
+                    .is_some_and(|at| at.distance(feet) > HOME_GIVEN_UP)
+                {
+                    brain.home_given_up = None;
+                }
+                brain.set_goal(brain.home_given_up.is_none().then_some(Goal::Home));
                 false
             }
             Behaviour::Flee => {
