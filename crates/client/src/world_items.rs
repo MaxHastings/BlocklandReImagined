@@ -321,6 +321,8 @@ pub struct WorldItems {
     /// printed: the first one drawn, and the first frame some were offered
     /// and none was.
     loose_drawn_logged: bool,
+    /// Whether the console has been told a loose model reached the GPU.
+    loose_uploaded_logged: bool,
     loose_dropped_logged: bool,
     pub diagnostics: WorldItemDiagnostics,
 }
@@ -374,6 +376,7 @@ impl WorldItems {
             headings: BTreeMap::new(),
             prepares: 0,
             loose_drawn_logged: false,
+            loose_uploaded_logged: false,
             loose_dropped_logged: false,
             diagnostics: Default::default(),
         })
@@ -1379,7 +1382,13 @@ impl WorldItems {
                                     }
                                     _ => String::new(),
                                 };
-                                format!("{} {:?}{pass}", m.name, m.alpha)
+                                format!(
+                                    "{} {:?} {:?}{}{pass}",
+                                    m.name,
+                                    m.kind,
+                                    m.alpha,
+                                    if m.double_sided { " double-sided" } else { "" }
+                                )
                             })
                             .collect();
                         eprintln!(
@@ -1495,6 +1504,21 @@ impl WorldItems {
                         })
                     })
                     .collect();
+                if !self.loose_uploaded_logged
+                    && slot
+                        .identities
+                        .iter()
+                        .any(|i| matches!(i, ItemIdentity::Loose(_)))
+                {
+                    self.loose_uploaded_logged = true;
+                    eprintln!(
+                        "Loose model uploaded: {} instances of {} room, first at {:?}, {} model batches",
+                        slot.transforms.len(),
+                        slot.instance_capacity,
+                        slot.transforms[0].transform.w_axis.truncate(),
+                        model.mesh.data.batches.len()
+                    );
+                }
                 if slot.instances.as_mut().unwrap().update_lit(
                     queue,
                     &slot.transforms,
