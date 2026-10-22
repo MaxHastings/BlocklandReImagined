@@ -648,7 +648,8 @@ fn load_bundle_unscoped(root: &Path, map_id: &str, legacy: bool) -> Result<MapSc
                 &mut alone,
                 &mut BTreeMap::new(),
                 legacy,
-            )?;
+            )
+            .with_context(|| format!("{}: its broken_asset {asset}", node.name))?;
             broken_models.push((u32::try_from(node_index)?, alone));
         }
         if node.properties.contains_key("mover") && node.asset.is_some() {
