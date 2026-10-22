@@ -385,12 +385,21 @@ pub struct Volume {
     pub half: [f32; 3],
     /// The node's transform inverted, to put a point in the box's frame.
     pub to_local: [f32; 16],
-    /// Every property but `half`, `id` and `priority`.
+    /// Every property but `half`, `id`, `priority` and `bounds`.
     pub properties: BTreeMap<String, String>,
+    /// The box a turned volume fills in the world (lowest corner, highest
+    /// corner), and whether it is tested as that axis-aligned box rather
+    /// than as the turned one (`bounds: aabb`, as UE2 tests a volume).
+    pub world: ([f32; 3], [f32; 3]),
+    pub aabb: bool,
 }
 impl Volume {
     /// Whether the world point `p` is inside the box (its faces count).
     pub fn contains(&self, p: [f32; 3]) -> bool {
+        if self.aabb {
+            let (min, max) = self.world;
+            return (0..3).all(|a| p[a] >= min[a] && p[a] <= max[a]);
+        }
         let local = Mat4::from_cols_array(&self.to_local).transform_point3(Vec3::from(p));
         local.abs().cmple(Vec3::from(self.half)).all()
     }
@@ -542,7 +551,7 @@ impl Scene {
             let properties: BTreeMap<String, String> = node
                 .properties
                 .iter()
-                .filter(|(k, _)| !matches!(k.as_str(), "half" | "id" | "priority"))
+                .filter(|(k, _)| !matches!(k.as_str(), "half" | "id" | "priority" | "bounds"))
                 .map(|(k, v)| (k.clone(), v.clone()))
                 .collect();
             ensure!(
@@ -553,7 +562,28 @@ impl Scene {
                 "Volume {}: at most {MAX_VOLUME_PROPERTIES} properties, each up to {MAX_VOLUME_TEXT} bytes",
                 node.name
             );
+            let aabb = match node.properties.get("bounds").map(|v| v.trim()) {
+                None | Some("oriented") => false,
+                Some("aabb") => true,
+                Some(other) => anyhow::bail!(
+                    "Volume {}: bounds `{other}` is not aabb or oriented",
+                    node.name
+                ),
+            };
+            let (mut low, mut high) = (Vec3::splat(f32::INFINITY), Vec3::splat(f32::NEG_INFINITY));
+            for corner in 0..8 {
+                let c = Vec3::new(
+                    if corner & 1 == 0 { -half[0] } else { half[0] },
+                    if corner & 2 == 0 { -half[1] } else { half[1] },
+                    if corner & 4 == 0 { -half[2] } else { half[2] },
+                );
+                let world = matrix.transform_point3(c);
+                low = low.min(world);
+                high = high.max(world);
+            }
             out.push(Volume {
+                world: (low.to_array(), high.to_array()),
+                aabb,
                 node: index,
                 id: node
                     .properties
@@ -571,7 +601,13 @@ impl Scene {
             out.len() <= MAX_VOLUMES,
             "A map holds at most {MAX_VOLUMES} volumes"
         );
-        out.sort_by_key(|v| std::cmp::Reverse(v.priority));
+        // Of equal priority the smaller floor area comes first, as UE2 picks
+        // the tightest volume; then scene order.
+        // (Areas are compared to a hundredth, so a turn's rounding is no tie-break.)
+        let area = |v: &Volume| {
+            ((v.world.1[0] - v.world.0[0]) * (v.world.1[2] - v.world.0[2]) * 100.0).round() as i64
+        };
+        out.sort_by_key(|v| (std::cmp::Reverse(v.priority), area(v)));
         Ok(out)
     }
     /// Every [`Kind::Teleporter`] node, read and checked.
