@@ -126,6 +126,7 @@ fn rocket_pack() -> bri_weapons::Pack {
         lifetime_ticks: 480,
         fade_ticks: 0,
         arm_ticks: 0,
+        arm_ticks_max: 0,
         ballistic: false,
         elasticity: 0.,
         friction: 0.,

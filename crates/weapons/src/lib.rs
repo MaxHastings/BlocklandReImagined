@@ -2702,6 +2702,10 @@ pub struct ProjectileDef {
     pub lifetime_ticks: u32,
     pub fade_ticks: u32,
     pub arm_ticks: u32,
+    /// Latest an unarmed projectile arms, in ticks: each shot arms at a
+    /// random tick from `arm_ticks` to this (AA's M203 arms between 0.1 and
+    /// 0.7 seconds). 0, or below `arm_ticks`, arms at `arm_ticks` exactly.
+    pub arm_ticks_max: u32,
     pub ballistic: bool,
     pub elasticity: f32,
     pub friction: f32,
@@ -3323,6 +3327,27 @@ pub struct Aura {
     pub ally_damage: Option<f32>,
 }
 /// v20's `ProjectileData` defaults, for fields an Add-On leaves out.
+impl ProjectileDef {
+    /// The tick projectile `id` arms at: `arm_ticks`, or a tick drawn from
+    /// `arm_ticks..=arm_ticks_max` by its id (the same on the host and on
+    /// every machine, and different for every shot).
+    pub fn arm_ticks_for(&self, id: u64) -> u32 {
+        if self.arm_ticks_max <= self.arm_ticks {
+            return self.arm_ticks;
+        }
+        let span = self.arm_ticks_max - self.arm_ticks;
+        let mut z = id.wrapping_mul(0x9E37_79B9_7F4A_7C15) ^ 0xA5A5_5A5A_1234_5678;
+        z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+        z ^= z >> 31;
+        self.arm_ticks + (z % u64::from(span + 1)) as u32
+    }
+    /// The middle of the arming range, for a bot that foresees a shot it
+    /// has no id for.
+    pub fn arm_ticks_mean(&self) -> u32 {
+        self.arm_ticks + self.arm_ticks_max.saturating_sub(self.arm_ticks) / 2
+    }
+}
 impl Default for ProjectileDef {
     fn default() -> Self {
         Self {
@@ -3335,6 +3360,7 @@ impl Default for ProjectileDef {
             lifetime_ticks: 240,
             fade_ticks: 240,
             arm_ticks: 0,
+            arm_ticks_max: 0,
             ballistic: false,
             elasticity: 0.999,
             friction: 0.3,
@@ -4275,7 +4301,10 @@ impl Pack {
         }
         for (id, p) in &self.projectiles {
             ensure!(
-                id == &p.id && p.lifetime_ticks > 0 && p.lifetime_ticks <= 36000,
+                id == &p.id
+                    && p.lifetime_ticks > 0
+                    && p.lifetime_ticks <= 36000
+                    && p.arm_ticks_max <= 36000,
                 "Invalid projectile lifetime"
             );
             ensure!(
