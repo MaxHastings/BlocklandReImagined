@@ -3794,6 +3794,11 @@ pub struct Pack {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub bindings: Vec<Binding>,
 }
+/// Most sounds a (merged) pack defines. A weapon Add-On with its own impact
+/// and fire sounds is a few dozen; a game of many hundreds of weapons is
+/// not rare. Packages should not copy a sound another provides: they name
+/// it (`other:sound/name`) and it resolves once the packs are merged.
+pub const MAX_SOUNDS: usize = 4096;
 impl Pack {
     pub fn from_json(bytes: &[u8]) -> Result<Self> {
         ensure!(
@@ -4472,7 +4477,10 @@ impl Pack {
             }
         }
         self.effects.validate()?;
-        ensure!(self.sounds.len() <= 1024, "Definition budget exceeded");
+        ensure!(
+            self.sounds.len() <= MAX_SOUNDS,
+            "Definition budget exceeded"
+        );
         for (key, sound) in &self.sounds {
             ensure!(
                 sound.variants.len() <= 64

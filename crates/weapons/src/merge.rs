@@ -500,6 +500,45 @@ mod tests {
         );
     }
 
+    /// A package names a sound a package it depends on defines by its full
+    /// id, with no copy of its own, and the merged pack plays that one.
+    #[test]
+    fn a_sound_named_by_full_id_is_shared_and_not_copied() {
+        let sound = |file: &str| SoundDef {
+            variants: Vec::new(),
+            file: file.into(),
+            volume: 1.0,
+            looping: false,
+            local: false,
+            music: false,
+            package: None,
+            stock: false,
+        };
+        let mut impacts = part("impacts", "%2 shot %1");
+        // More than the old limit of 1024 across the two packages.
+        for i in 0..1500 {
+            impacts
+                .sounds
+                .insert(format!("impacts:sound/hit{i}"), sound("hit.wav"));
+        }
+        let mut m203 = part("m203", "%2 shot %1");
+        m203.projectiles
+            .get_mut("m203:projectile/round")
+            .unwrap()
+            .sound = "impacts:sound/hit7".into();
+        let (both, _) = testing::pack().merge(vec![
+            ("impacts/assets".to_owned(), impacts),
+            ("m203/assets".to_owned(), m203),
+        ]);
+        both.validate().unwrap();
+        let used = &both.projectiles["m203:projectile/round"].sound;
+        assert_eq!(used, "impacts:sound/hit7");
+        assert_eq!(
+            both.sound(used).unwrap().package.as_deref(),
+            Some("impacts/assets")
+        );
+    }
+
     /// Two Add-Ons that name a damage type alike each keep theirs, unless
     /// one depends on the other: then the later replaces it, as in v20.
     #[test]
