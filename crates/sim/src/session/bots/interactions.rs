@@ -1028,7 +1028,12 @@ impl Session {
         }
         let own = &self.peers[&bot].player;
         let feet = Vec3::from(own.state().feet);
+        let (own_min, own_max) = own.world_bounds();
         let ahead = |p: &super::Peer| {
+            let (other_min, other_max) = p.player.world_bounds();
+            if other_min[1] >= own_max[1] || other_max[1] <= own_min[1] {
+                return false;
+            }
             let at = Vec3::from(p.player.state().feet);
             let delta = flat(at - feet);
             let along = delta.dot(desired);
@@ -1036,7 +1041,7 @@ impl Session {
             along > 0.0 && along < width + 0.6 && (delta - desired * along).length() < width
         };
         let side = Vec3::new(-desired.z, 0.0, desired.x);
-        let waist = feet + Vec3::Y * own.tuning().stand_height * 0.5;
+        let waist = Vec3::new(feet.x, (own_min[1] + own_max[1]) * 0.5, feet.z);
         // A gap: something solid close on both sides. Only a kind with
         // teamwork files through one behind an ally.
         let teamwork = self
@@ -1044,11 +1049,12 @@ impl Session {
             .brains
             .get(&bot)
             .is_some_and(|b| b.kind.team.teamwork > 0.0);
-        let no_room = teamwork
-            && [side, -side].iter().all(|d| {
-                self.world_ray(waist, *d, own.tuning().width + 0.6)
-                    .is_some()
-            });
+        let sides = [side, -side].map(|d| {
+            teamwork
+                .then(|| self.world_ray(waist, d, own.tuning().width + 0.6))
+                .flatten()
+        });
+        let no_room = sides.iter().all(Option::is_some);
         // The pace of an ally ahead going the same way, as a share of its own.
         let follow = self
             .peers
@@ -1086,12 +1092,37 @@ impl Session {
                 }
                 ahead(p)
             })
-            .map(|(_, p)| flat(Vec3::from(p.player.state().feet) - feet))
-            .min_by(|a, b| a.dot(desired).total_cmp(&b.dot(desired)));
+            .map(|(id, p)| (*id, flat(Vec3::from(p.player.state().feet) - feet)))
+            .min_by(|a, b| a.1.dot(desired).total_cmp(&b.1.dot(desired)));
+        if let Some((other, _)) = blocker
+            && no_room
+            && self.bot_allies(bot, other)
+        {
+            let peer = &self.peers[&other];
+            let pass_width = own.tuning().width + peer.player.tuning().width;
+            if sides[0].unwrap() + sides[1].unwrap() <= pass_width {
+                let at = Vec3::from(peer.player.state().feet);
+                let oncoming = self.bots.brains.get(&other).is_some_and(|brain| {
+                    brain
+                        .plan
+                        .first()
+                        .is_some_and(|next| flat(next.feet - at).dot(desired) < 0.0)
+                });
+                // Neither body can pass laterally. One consistent member of
+                // an oncoming pair advances; the other backs along the file.
+                // A human or stationary ally cannot be assumed to cooperate,
+                // so this bot yields. Safety still checks the backward step.
+                return if oncoming && bot < other {
+                    desired
+                } else {
+                    -desired
+                };
+            }
+        }
         match blocker {
             // One already off to its left is passed on its right, not
             // walked across; one dead ahead on its left.
-            Some(delta) if delta.dot(side) > own.tuning().width * 0.1 => {
+            Some((_, delta)) if delta.dot(side) > own.tuning().width * 0.1 => {
                 (desired * 0.25 - side).normalize_or_zero()
             }
             Some(_) => (desired * 0.25 + side).normalize_or_zero(),
@@ -2226,3 +2257,134 @@ fn backing_up(stuck: u64) -> bool {
 }
 /// Ticks without headway after which the driver gets out.
 const VEHICLE_GIVE_UP: u64 = 720;
+
+#[cfg(test)]
+mod passage_tests {
+    use super::*;
+
+    fn pair(half_width: Option<f32>) -> (Session, [OwnerId; 2]) {
+        let mut solids = vec![
+            ColliderBuilder::cuboid(30.0, 0.5, 30.0)
+                .translation(Vector::new(0.0, -0.5, 0.0))
+                .user_data(u128::MAX),
+        ];
+        if let Some(half) = half_width {
+            for x in [-half - 0.5, half + 0.5] {
+                solids.push(
+                    ColliderBuilder::cuboid(0.5, 4.0, 20.0)
+                        .translation(Vector::new(x, 4.0, 0.0))
+                        .user_data(u128::MAX),
+                );
+            }
+        }
+        let sim = crate::simulation::Simulation::new(
+            bri_world::World::new("Passage".into(), "fixture".into(), vec![[1.0; 4]]),
+            crate::testing::definitions(),
+            solids,
+        )
+        .unwrap();
+        let mut s = Session::new(sim);
+        let a = s.join("First".into(), Vec3::Y * 0.05, true).unwrap();
+        let gap = s.peers[&a].player.tuning().width + 0.2;
+        let b = s
+            .join("Second".into(), Vec3::new(0.0, 0.05, gap), false)
+            .unwrap();
+        super::super::harm::one_game(&mut s, a, b);
+        let gid = s.game_of(a).unwrap();
+        let (teams, _) = s
+            .minigames
+            .set_teams(
+                gid,
+                vec![bri_minigames::TeamSpec {
+                    id: None,
+                    name: "Allies".into(),
+                    color: 0,
+                    player_type: None,
+                }],
+                false,
+                false,
+            )
+            .unwrap();
+        for id in [a, b] {
+            s.minigames
+                .assign_team(s.peers[&id].combat.player, Some(teams[0]))
+                .unwrap();
+            let at = Vec3::from(s.peers[&id].player.state().feet);
+            let mut brain = Brain::new(None, BotKind::default(), at, id, 0);
+            let way = if id == a { Vec3::Z } else { Vec3::NEG_Z };
+            brain.plan.push(Waypoint::walk(at + way * 10.0));
+            s.bots.brains.insert(id, brain);
+        }
+        s.bots.relations.lock().unwrap().clear();
+        assert!(s.bot_allies(a, b));
+        (s, [a, b])
+    }
+
+    #[test]
+    fn oncoming_allies_yield_along_a_narrow_passage_instead_of_into_its_walls() {
+        let (s, [a, b]) = pair(Some(0.96));
+        let first = s.bot_walk_direction(a, Vec3::Z, None, None);
+        let second = s.bot_walk_direction(b, Vec3::NEG_Z, None, None);
+        assert!(
+            first.z > 0.9 && second.z > 0.9,
+            "one advances and the other yields backward along the passage: {first}, {second}"
+        );
+        assert!(
+            first.x.abs() < 0.01 && second.x.abs() < 0.01,
+            "neither requests a pass into a wall: {first}, {second}"
+        );
+    }
+
+    #[test]
+    fn an_open_space_still_allows_oncoming_allies_to_pass_laterally() {
+        let (s, [a, b]) = pair(None);
+        let first = s.bot_walk_direction(a, Vec3::Z, None, None);
+        let second = s.bot_walk_direction(b, Vec3::NEG_Z, None, None);
+        assert!(first.x.abs() > 0.5 && first.z > 0.0);
+        assert!(second.x.abs() > 0.5 && second.z < 0.0);
+    }
+
+    #[test]
+    fn nearby_walls_do_not_force_yielding_when_both_bodies_can_pass() {
+        let (s, [a, b]) = pair(Some(1.7));
+        let first = s.bot_walk_direction(a, Vec3::Z, None, None);
+        let second = s.bot_walk_direction(b, Vec3::NEG_Z, None, None);
+        assert!(first.x.abs() > 0.5 && first.z > 0.0);
+        assert!(second.x.abs() > 0.5 && second.z < 0.0);
+    }
+
+    #[test]
+    fn a_file_follows_a_moving_ally_and_yields_to_a_stationary_one() {
+        let (mut s, [a, b]) = pair(Some(0.96));
+        s.bots.brains.get_mut(&b).unwrap().plan.clear();
+        assert_eq!(
+            s.bot_walk_direction(a, Vec3::Z, None, None),
+            Vec3::NEG_Z,
+            "cannot assume an idle ally will reverse"
+        );
+        let speed = s.peers[&a].player.tuning().forward * 0.5;
+        s.peers
+            .get_mut(&b)
+            .unwrap()
+            .player
+            .set_motion(Vec3::Z * speed, true);
+        assert!(
+            (s.bot_walk_direction(a, Vec3::Z, None, None) - Vec3::Z * 0.5).length() < 0.001,
+            "retain same-direction file pacing"
+        );
+    }
+
+    #[test]
+    fn an_ally_on_another_floor_does_not_block_a_passage() {
+        let (mut s, [a, b]) = pair(Some(0.96));
+        let mut at = Vec3::from(s.peers[&b].player.state().feet);
+        at.y += 10.0;
+        s.peers
+            .get_mut(&b)
+            .unwrap()
+            .player
+            .teleport(&mut s.simulation.physics, at, 0.0)
+            .unwrap();
+        assert_eq!(s.bot_walk_direction(a, Vec3::Z, None, None), Vec3::Z);
+    }
+}
