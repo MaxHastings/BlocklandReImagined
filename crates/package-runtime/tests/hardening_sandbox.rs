@@ -765,6 +765,7 @@ fn every_operation_needs_its_declared_capability() {
         Op::Teleport(ops::Teleport {
             player: 1,
             position: [1.0, 2.0, 3.0],
+            yaw: None,
         }),
         Op::Respawn(ops::Respawn { player: 1 }),
         Op::RemoveBody(ops::RemoveBody { player: 1 }),
@@ -993,6 +994,7 @@ fn extreme_operation_parameters_are_refused() {
         Op::Teleport(ops::Teleport {
             player: 1,
             position: [f32::NAN, 0.0, 0.0],
+            yaw: None,
         }),
         Op::Fire(ops::Fire {
             projectile: "probe:projectile/x".into(),
@@ -1011,6 +1013,7 @@ fn extreme_operation_parameters_are_refused() {
         Op::Teleport(ops::Teleport {
             player: 1,
             position: [0.0, 2e6, 0.0],
+            yaw: None,
         }),
         Op::SpawnEntity(ops::SpawnEntity {
             kind: "probe:entity/x".into(),

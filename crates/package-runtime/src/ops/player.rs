@@ -54,18 +54,21 @@ impl ScriptOp for SetAvatarParts {
     }
 }
 
-/// Move a living player, keeping their facing.
+/// Move a living player, keeping their facing unless a `yaw` (radians, as
+/// the player's own, 0 facing -Z) turns them.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Teleport {
     pub player: u64,
     pub position: [f32; 3],
+    #[serde(default)]
+    pub yaw: Option<f32>,
 }
 impl ScriptOp for Teleport {
     const CAPABILITY: &str = "player";
     const NAME: &str = "teleport";
     fn bounded(&self) -> bool {
-        let Teleport { position, .. } = self;
-        finite(position)
+        let Teleport { position, yaw, .. } = self;
+        finite(position) && yaw.is_none_or(f32::is_finite)
     }
 }
 

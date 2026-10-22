@@ -31,10 +31,14 @@ impl Perform for ops::Teleport {
         Ok(())
     }
     fn perform(self, session: &mut Session, _cx: OpCall<'_>) -> Result<()> {
-        let ops::Teleport { player, position } = self;
+        let ops::Teleport {
+            player,
+            position,
+            yaw,
+        } = self;
         let peer = session.peers.get_mut(&player).context("No such player")?;
         ensure!(peer.combat.alive, "Only living players can be moved");
-        let yaw = peer.player.state().yaw;
+        let yaw = yaw.unwrap_or_else(|| peer.player.state().yaw);
         peer.player
             .teleport(&mut session.simulation.physics, Vec3::from(position), yaw)?;
         peer.discard_inputs();
