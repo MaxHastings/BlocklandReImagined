@@ -42,7 +42,7 @@ client script's `$RemapName` entries did:
 }
 ```
 
-Up to 32 binds go under `division` in Options → Controls, where players
+Up to 128 binds go under `division` in Options → Controls, where players
 can rebind them. A bind sends its package's command as if typed: one with
 no arguments when pressed, or with `"hold": true` a command declared with
 `"args": ["bool"]`, sent `true` as the key goes down and `false` as it
@@ -54,7 +54,9 @@ runs their package.
 
 **Actions and control profiles.** A bind is an *action*: a named command
 with a suggested default input. Add-Ons never read keys; players rebind the
-action in Options → Controls. `key` (and `mac_key`) is the default key, and
+action in Options → Controls. `key` (and `mac_key`) is the default key, `"alt_key"` a second
+default key for the same action (AA fires on Ctrl as well as the mouse; it
+is bound with the first and not listed apart), and
 `"mouse"` a default mouse input instead (`button0` to `button4`, or `zaxis`
 for the wheel; each wheel notch is one press). Mouse movement is not an
 action input.

@@ -369,6 +369,18 @@ impl Perform for ops::SetFov {
         Ok(())
     }
 }
+impl Perform for ops::SetCrouched {
+    fn perform(self, session: &mut Session, _cx: OpCall<'_>) -> Result<()> {
+        let ops::SetCrouched { player, crouched } = self;
+        session
+            .peers
+            .get_mut(&player)
+            .context("No such player")?
+            .player
+            .set_held_crouch(crouched);
+        Ok(())
+    }
+}
 impl Perform for ops::SetCanJump {
     fn perform(self, session: &mut Session, _cx: OpCall<'_>) -> Result<()> {
         let ops::SetCanJump { player, can } = self;

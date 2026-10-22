@@ -396,6 +396,20 @@ impl ScriptOp for SetWalking {
     }
 }
 
+/// Whether a rule holds a player crouched, whatever their crouch key does
+/// (a toggled crouch). Until changed or they respawn.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SetCrouched {
+    pub player: u64,
+    pub crouched: bool,
+}
+impl ScriptOp for SetCrouched {
+    const CAPABILITY: &str = "player";
+    const NAME: &str = "set_crouched";
+    fn bounded(&self) -> bool {
+        true
+    }
+}
 /// Whether a player may jump, whatever they press: AA's `CanJump` gates (not
 /// while crouched, reloading or landing). Until changed or they respawn.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

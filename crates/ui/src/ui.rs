@@ -3000,6 +3000,10 @@ impl Ui {
                         .as_deref()
                         .and_then(|key| BindInput::parse(crate::schema::Device::Keyboard, key))
                 });
+            let alt_default = bind
+                .alt_key
+                .as_deref()
+                .and_then(|key| BindInput::parse(crate::schema::Device::Keyboard, key));
             if bind.stock.is_some() && bind.profile.is_empty() {
                 continue;
             }
@@ -3012,7 +3016,11 @@ impl Ui {
                         layer_actions
                             .entry((bind.profile.clone(), bind.layer.clone()))
                             .or_default()
-                            .push(crate::profiles::ProfileAction { entry, default });
+                            .push(crate::profiles::ProfileAction {
+                                entry,
+                                default,
+                                alt_default,
+                            });
                     }
                 } else if c.profile_defs.iter().any(|d| d.id == bind.profile) {
                     let last = last_division.insert(bind.profile.clone(), bind.division.clone());
@@ -3024,6 +3032,7 @@ impl Ui {
                                 ..entry
                             },
                             default,
+                            alt_default,
                         },
                     );
                 }
@@ -3039,6 +3048,11 @@ impl Ui {
                 && c.binds.command_for(&input).is_none()
             {
                 c.binds.bind(input, &command);
+                if let Some(alt) = alt_default
+                    && c.binds.command_for(&alt).is_none()
+                {
+                    c.binds.bind(alt, &command);
+                }
             }
         }
         let stock = remap.clone();

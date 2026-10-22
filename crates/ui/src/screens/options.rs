@@ -3184,6 +3184,7 @@ mod tests {
             profile: String::new(),
             stock: None,
             hold: false,
+            alt_key: None,
             screen: Some("options".into()),
             layer: String::new(),
         }]);
@@ -4582,6 +4583,7 @@ mod tests {
             profile: "aa".into(),
             stock: None,
             hold: true,
+            alt_key: None,
             screen: None,
             layer: String::new(),
         }]);
