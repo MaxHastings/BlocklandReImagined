@@ -113,6 +113,10 @@ struct ModelKey {
     /// Drawn only in mirrors (`ItemIdentity::Reflected`).
     reflected: bool,
     local_view: Option<(u64, u8)>,
+    /// A loose model (casing, debris): a material with no light of its own is
+    /// lit as a moving body is, with the light of where it lies, since a
+    /// vertex-lit one draws near black in a dark room.
+    loose: bool,
     /// The holder's avatar slot colours a first-person image's masked tints
     /// take, as bits, empty for everyone else's images.
     wearer: Vec<(String, [u32; 4])>,
@@ -125,6 +129,7 @@ impl ModelKey {
             first_person: false,
             reflected: false,
             local_view: None,
+            loose: false,
             wearer: Vec::new(),
         }
     }
@@ -578,7 +583,10 @@ impl WorldItems {
         for (i, (model, transform, tint)) in self.loose.iter().enumerate() {
             candidates.push(Candidate {
                 identity: ItemIdentity::Loose(i as u64),
-                model: ModelKey::new(model, [1.; 4]),
+                model: ModelKey {
+                    loose: true,
+                    ..ModelKey::new(model, [1.; 4])
+                },
                 pose: PoseKey::default(),
                 transform: SceneTransform {
                     transform: *transform,
@@ -1231,6 +1239,15 @@ impl WorldItems {
             } else {
                 let mut mesh = self.assets.mesh(&key.model, key.tint())?;
                 mesh.first_person = key.first_person;
+                if key.loose {
+                    for material in &mut mesh.data.materials {
+                        if material.kind == bri_render::scene::MaterialKind::VertexLit {
+                            material.kind = bri_render::scene::MaterialKind::ActorLit;
+                            material.parameters =
+                                Some([[1., 1., 0., 0.], [0.; 4], [0.; 4], [0.; 4]]);
+                        }
+                    }
+                }
                 if !key.wearer.is_empty() {
                     mesh.set_wearer(Some(bri_content::avatar::Appearance {
                         colors: key
