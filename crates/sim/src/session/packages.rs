@@ -3497,7 +3497,7 @@ impl Session {
     }
     /// Ask a player's input hook of each declaring package, in load order,
     /// until one answers `true`. Bots have no input to take.
-    fn package_take(
+    pub(super) fn package_take(
         &mut self,
         owner: OwnerId,
         declared: fn(&bri_package_runtime::content::Behaviour) -> bool,

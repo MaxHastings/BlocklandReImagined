@@ -63,6 +63,7 @@ mod map_movers;
 mod special;
 mod trust;
 mod tutorial;
+mod use_object;
 mod world_shapes;
 pub use tutorial::{Abilities, BRICK_HAND_IMAGES, BrickHand};
 mod bodies;
@@ -3053,8 +3054,12 @@ impl Session {
                 {
                     return Ok(Reply::Activated(None));
                 }
+                let reach = 5.0 * scale;
+                if self.package_use_object(owner, eye, direction, reach, hit.map(|(_, d)| d)) {
+                    return Ok(Reply::Activated(None));
+                }
                 let hit = hit
-                    .filter(|(_, distance)| *distance <= 5.0 * scale)
+                    .filter(|(_, distance)| *distance <= reach)
                     .map(|(brick, _)| brick);
                 if let Some(brick) = hit
                     && self.special_activate(owner, brick)?
