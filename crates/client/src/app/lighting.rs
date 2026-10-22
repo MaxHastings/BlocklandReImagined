@@ -57,6 +57,8 @@ pub(super) struct LightVolumeState {
     /// Plain map lights past the shaded budget, drawn unshadowed (nearest
     /// first, see `overflow_point_lights`).
     pub(super) overflow: Vec<bri_render::map_lighting::MapLight>,
+    /// Each map light's run-time tint as last uploaded (broken bulbs, Add-On rules, animation), for `actor_lamps`.
+    lamp_tints: Vec<Vec3>,
 }
 type LightingSource = (bri_render::scene_loader::MapScene, Option<Arc<SceneData>>);
 type LightingSourceReceiver =
@@ -168,6 +170,45 @@ pub(super) fn map_light_tints(
         })
         .collect()
 }
+impl LightVolumeState {
+    /// The map's own lamps as lit moving bodies take them: every plain lamp
+    /// the lighting mode is using, at its run-time colour, nearest `eye` first,
+    /// at most `room` of them. They ride the point light grid as
+    /// [`bri_render::scene::ACTOR_LAMP`] lights, which `actor_light` ranks
+    /// with every other light (the best four reach each vertex), and which
+    /// surfaces ignore: their light is in the map's own lighting already.
+    /// Spot lamps are left out (their cone is not carried here).
+    pub(super) fn actor_lamps(&self, eye: Vec3, room: usize) -> Vec<bri_render::scene::PointLight> {
+        let lamps = if self.bound_mode == 3 {
+            Some(self.recovered.as_slice())
+        } else {
+            self.map.as_ref().map(|m| m.lights.as_slice())
+        };
+        let mut near: Vec<_> = lamps
+            .unwrap_or_default()
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| !self.spots.iter().any(|(s, _)| s == i))
+            .map(|(i, l)| {
+                let tint = self.lamp_tints.get(i).copied().unwrap_or(Vec3::ONE);
+                (Vec3::from(l.position).distance(eye) - l.outer, l, tint)
+            })
+            .filter(|(_, _, tint)| tint.max_element() > 0.0)
+            .collect();
+        near.sort_by(|a, b| a.0.total_cmp(&b.0));
+        near.truncate(room);
+        near.into_iter()
+            .map(|(_, l, tint)| {
+                let colour = Vec3::from(l.color) * tint;
+                bri_render::scene::PointLight {
+                    position_radius: [l.position[0], l.position[1], l.position[2], l.outer],
+                    color: [colour.x, colour.y, colour.z, bri_render::scene::ACTOR_LAMP],
+                    ..Default::default()
+                }
+            })
+            .collect()
+    }
+}
 /// The overflow lights that fit beside `taken` point lights, nearest to `eye`
 /// first (by distance to their reach, so a big lamp counts from its edge).
 /// Colour w 1 marks the linear falloff the shaded map lights use.
@@ -222,6 +263,39 @@ impl LightVolumeState {
 /// Which way the room's light is read for a body: up, as the volume's form shading reads a roof-lit surface.
 const ROOM_NORMAL: [f32; 3] = [0.0, 1.0, 0.0];
 impl LightVolumeState {
+    /// The light a lit moving thing in `low..high` takes where it is: its
+    /// zone's ambient and suns, and the light of the room it stands in (the
+    /// map's baked volume) as a floor under the ambient, so a body or a held
+    /// weapon in a lit room reads as lit by it. `None` where the scene's own
+    /// light stands (no zones and no room light).
+    pub(super) fn actor_light(
+        &self,
+        regions: Option<&bri_content::regions::RegionMap>,
+        low: [f32; 3],
+        high: [f32; 3],
+    ) -> Option<bri_render::scene::ActorLight> {
+        let room = self.room_light(low, high);
+        match regions {
+            Some(regions) => {
+                let (ambient, suns) = regions.actor_light(low, high, 0.0);
+                Some(bri_render::scene::ActorLight {
+                    ambient: [0, 1, 2].map(|c| ambient[c].max(room[c])),
+                    sun_first: suns.map_or(0, |s| s.0),
+                    sun_count: suns.map_or(0, |s| s.1),
+                    scene_sun: false,
+                })
+            }
+            None => room
+                .iter()
+                .any(|c| *c > 0.0)
+                .then_some(bri_render::scene::ActorLight {
+                    ambient: room,
+                    sun_first: 0,
+                    sun_count: 0,
+                    scene_sun: true,
+                }),
+        }
+    }
     /// A map's prepared room light (Dynamic reads no lightmaps to bake one
     /// from), kept until a bake of the lightmaps replaces it.
     pub(super) fn use_prepared_volume(
@@ -455,7 +529,7 @@ impl LightVolumeState {
     /// Broken bulbs and Add-On rules onto the bound map lights; uploads
     /// only when a tint changed.
     pub(super) fn tint(
-        &self,
+        &mut self,
         renderer: &mut SceneRenderer,
         queue: &wgpu::Queue,
         broken: &BTreeSet<u32>,
@@ -477,6 +551,7 @@ impl LightVolumeState {
                     }
                 }
             }
+            self.lamp_tints.clone_from(&tints);
             renderer.set_map_light_tints(queue, &tints);
         }
     }
@@ -706,6 +781,58 @@ mod tests {
             LightVolumeState::default().room_light([1.0; 3], [2.0; 3]),
             [0.0; 3]
         );
+    }
+
+    #[test]
+    fn a_held_item_in_a_lit_room_takes_the_room_light_under_the_scene_sun() {
+        let state = LightVolumeState {
+            volume: Some(bri_render::light_volume::LightVolume {
+                origin: [0.0; 3],
+                cell: 4.0,
+                dims: [1; 3],
+                texels: vec![[200, 160, 120, 255]],
+                rays: 0,
+            }),
+            ..Default::default()
+        };
+        let light = state
+            .actor_light(None, [1.0, 1.0, 1.0], [2.0, 2.0, 2.0])
+            .expect("a lit room");
+        assert!(light.scene_sun && light.ambient[0] > 0.4);
+        // Outside any room light, and with no zones, the scene's own light stands.
+        assert!(state.actor_light(None, [9.0; 3], [10.0; 3]).is_none());
+        assert!(
+            LightVolumeState::default()
+                .actor_light(None, [1.0; 3], [2.0; 3])
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn the_maps_lamps_reach_bodies_nearest_first_at_their_run_time_colour() {
+        let lamp = |x: f32| bri_render::map_lighting::MapLight {
+            position: [x, 0.0, 0.0],
+            color: [1.0, 0.5, 0.25],
+            inner: 1.0,
+            outer: 10.0,
+            channel: None,
+        };
+        let state = LightVolumeState {
+            bound_mode: 3,
+            recovered: vec![lamp(40.0), lamp(5.0), lamp(20.0), lamp(1.0)],
+            // Lamp 1 is out, lamp 3 half bright, lamp 2 a spot.
+            lamp_tints: vec![Vec3::ONE, Vec3::ZERO, Vec3::ONE, Vec3::splat(0.5)],
+            spots: vec![(2, [0.0; 4])],
+            ..Default::default()
+        };
+        let lamps = state.actor_lamps(Vec3::ZERO, 8);
+        let at: Vec<_> = lamps.iter().map(|l| l.position_radius[0]).collect();
+        assert_eq!(at, vec![1.0, 40.0]);
+        assert_eq!(
+            lamps[0].color,
+            [0.5, 0.25, 0.125, bri_render::scene::ACTOR_LAMP]
+        );
+        assert_eq!(state.actor_lamps(Vec3::ZERO, 1).len(), 1);
     }
 
     #[test]

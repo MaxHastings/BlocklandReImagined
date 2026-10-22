@@ -609,9 +609,19 @@ pub fn native_shape_scene(
         scene.materials.push(material);
     }
     let fallback = scene.materials.len();
-    scene
+    let mut unassigned = Material::vertex_lit("Unassigned original model face", 0);
+    // Faces no material names follow the model's lighting: a model whose
+    // materials are lit as moving bodies (`bri_actor_lit`) lights them so too,
+    // so a hand or arm without a material is not the one dark part.
+    if let Some(lit) = scene
         .materials
-        .push(Material::vertex_lit("Unassigned original model face", 0));
+        .iter()
+        .find(|m| m.kind == bri_render::scene::MaterialKind::ActorLit)
+    {
+        unassigned.kind = lit.kind;
+        unassigned.parameters = lit.parameters;
+    }
+    scene.materials.push(unassigned);
     if let Some(detail) = shape
         .details
         .iter()
