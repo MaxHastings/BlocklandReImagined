@@ -2350,12 +2350,11 @@ impl Binds {
                     });
                 ensure!(
                     rule_layer
-                        && bind.key.is_some()
+                        && bind.key.is_some() != bind.mouse.is_some()
                         && bind.stock.is_none()
-                        && bind.mouse.is_none()
                         && bind.screen.is_none()
                         && !bind.hold,
-                    "bind `{}` names layer `{layer}`, which must be a rule layer of this file's profile; it needs a key, and is no hold, stock, mouse or screen bind",
+                    "bind `{}` names layer `{layer}`, which must be a rule layer of this file's profile; it needs a key or a mouse input (not both), and is no hold, stock or screen bind",
                     bind.name
                 );
             }
@@ -2588,9 +2587,9 @@ pub struct BindDef {
     pub hold: bool,
     /// One of the file's profile's layers whose `when` is a rule flag: the
     /// bind works only while the flag is on, and then over the profile's
-    /// own binds on the same key. Needs a `key`; a layer's binds are fixed
-    /// to its keys (not in Controls), send a command once, and cannot be a
-    /// `hold`, `stock`, `mouse` or `screen` bind.
+    /// own binds on the same input. Needs a `key` or a `mouse` input, not
+    /// both; a layer's binds are fixed to their inputs (not in Controls),
+    /// send a command once, and cannot be a `hold`, `stock` or `screen` bind.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub layer: Option<String>,
 }
@@ -2819,6 +2818,10 @@ mod tests {
         assert!(file(on, radio(serde_json::json!({ "layer": "other" }))).is_err());
         assert!(file(on, radio(serde_json::json!({ "hold": true }))).is_err());
         assert!(file(on, radio(serde_json::json!({ "key": null }))).is_err());
+        // A mouse button instead of a key; both at once is unclear.
+        let button = serde_json::json!({ "key": null, "mouse": "button0" });
+        assert!(file(on, radio(button)).is_ok());
+        assert!(file(on, radio(serde_json::json!({ "mouse": "button0" }))).is_err());
         // The flag is a rule's player value.
         assert!(
             serde_json::from_value::<bri_content::controls::LayerWhen>(serde_json::json!(

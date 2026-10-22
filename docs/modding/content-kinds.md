@@ -97,8 +97,9 @@ more in the same file and puts its binds in one with `"profile"`:
   work only while it is on, and then win over the profile's own binds on the
   same key, so `1` to `9` can send radio lines while the menu is open and go
   back to weapon keys when it shuts. A layer's binds are press-only, fixed to
-  their keys and not in Controls (it is a mode, not a setting); no `hold`,
-  `stock`, `mouse` or `screen`.
+  their inputs and not in Controls (it is a mode, not a setting). Each takes
+  a `key` or a `mouse` button (`button0` to `button4`, or `zaxis`), not both,
+  so the left button can pick a radio line; no `hold`, `stock` or `screen`.
 - **Inheritance.** Inputs a profile does not bind fall through to
   Blockland's (movement, chat, menus), so a profile lists only its own
   actions; its binds win over the same input there. `"inherit": false`
