@@ -37,6 +37,9 @@ pub struct MapScene {
     /// own origin, by scene node: drawn instanced where the session's
     /// mover states put them rather than baked into the map.
     pub movers: Vec<(u32, SceneData)>,
+    /// Each breakable prop's `broken` stand-in, by the prop's scene node:
+    /// its own scene, in the map's frame, drawn once the prop is smashed.
+    pub broken_models: Vec<(u32, SceneData)>,
     /// The map's scatter layers: one model each, repeated at many placements ([`bri_content::scatter`]).
     pub scatter: Vec<ScatterScene>,
     /// The map's backdrop, when it has one.
@@ -613,8 +616,35 @@ fn load_bundle_unscoped(root: &Path, map_id: &str, legacy: bool) -> Result<MapSc
         .collect::<Result<Vec<_>>>()?;
     let mut shape_indices = BTreeMap::new();
     let mut movers = Vec::new();
+    let mut broken_models = Vec::new();
     for (node_index, node) in scene.nodes.iter().enumerate() {
         let first = out.indices.len() as u32;
+        if node.properties.contains_key("breakable")
+            && let Some(asset) = node.properties.get("broken_asset")
+            && node.asset.is_some()
+        {
+            // The prop's broken model, where the prop stands; drawn once it
+            // breaks (`MapScene::broken_models`).
+            let mut alone = SceneData {
+                id: format!("{}#broken{node_index}", scene.id),
+                name: node.name.clone(),
+                ..Default::default()
+            };
+            let broken = Node {
+                asset: Some(asset.clone()),
+                ..node.clone()
+            };
+            load_static_shape(
+                &root,
+                &bundle,
+                bindings,
+                &broken,
+                &mut alone,
+                &mut BTreeMap::new(),
+                legacy,
+            )?;
+            broken_models.push((u32::try_from(node_index)?, alone));
+        }
         if node.properties.contains_key("mover") && node.asset.is_some() {
             // Its own scene, at the origin: the client places it each frame.
             let mut alone = SceneData {
@@ -807,6 +837,7 @@ fn load_bundle_unscoped(root: &Path, map_id: &str, legacy: bool) -> Result<MapSc
         repeated_water,
         shape_indices,
         movers,
+        broken_models,
         scatter,
         backdrop,
         regions,

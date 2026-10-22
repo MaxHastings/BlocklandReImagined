@@ -42,6 +42,8 @@ pub(super) struct GpuState {
     /// The map whose materials' pipelines the renderer was asked to compile (behind the loading screen).
     pub(super) pipelines_requested: Option<String>,
     pub(super) gpu_broken: BTreeSet<u32>,
+    /// Stand-in models of smashed props, uploaded when they first show.
+    pub(super) gpu_broken_models: BTreeMap<u32, GpuScene>,
     pub(super) gpu_terrain: Vec<bri_render::terrain_scene::GpuTerrain>,
     pub(super) gpu_water: Vec<bri_render::water_scene::GpuWater>,
     /// World-pass depth and, with MSAA, the multisampled color attachment

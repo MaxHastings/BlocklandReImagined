@@ -111,6 +111,7 @@ impl App {
             let _span = crate::frame_trace::span("world upload");
             crate::frame_trace::note("uploaded the map");
             self.gpu.gpu_broken.clear();
+            self.gpu.gpu_broken_models.clear();
             self.gpu.gpu_scene = Some(renderer.upload(frame.device, frame.queue, scene)?);
             let mut layer = bri_render::decals::DecalLayer::new(
                 frame.device,
@@ -1615,7 +1616,19 @@ impl App {
                 .gpu_broken
                 .extend(view.broken_shapes.iter().copied());
         }
+        if let Some(view) = self.net.attempt.as_ref().and_then(|a| a.view.as_ref()) {
+            // A smashed prop's `broken` stand-in takes its place.
+            for (node, data) in &self.scene.broken_models {
+                if view.broken_shapes.contains(node) && !self.gpu.gpu_broken_models.contains_key(node) {
+                    self.gpu.gpu_broken_models.insert(
+                        *node,
+                        renderer.upload(frame.device, frame.queue, data)?,
+                    );
+                }
+            }
+        }
         let mut scenes = vec![self.gpu.gpu_scene.as_ref().unwrap()];
+        scenes.extend(self.gpu.gpu_broken_models.values());
         scenes.extend(self.gpu.gpu_chunks.values());
         scenes.extend(self.gpu.gpu_water.iter().flat_map(|water| water.draws()));
 
@@ -2159,6 +2172,8 @@ impl App {
             self.scene.cpu_water = visual.repeated_water.into_iter().map(Arc::new).collect();
             self.scene.scenery.reset();
             self.scene.shape_indices = visual.shape_indices;
+            self.scene.broken_models = visual.broken_models;
+            self.gpu.gpu_broken_models.clear();
             self.fx.map_movers.replace_scenes(visual.movers);
             self.fx.map_scatter.replace_scenes(visual.scatter);
             crate::frame_trace::note("the map's lighting source changed");

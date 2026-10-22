@@ -268,7 +268,12 @@ fast, as v20's glass breaks), `shot` (a bullet or projectile landing on it), or
 both, such as `"impact,shot"`. It then plays its `explosion` (a weapons effect
 id) and `sound` (a sound profile id), both optional, where it stood; hides; and
 stops colliding a moment later, for everyone, and stays broken until the map
-reloads. Add `indestructable` set to `1` to keep it whole. Without a
+reloads. A bullet that lands on it breaks it as a shot does for every other
+prop. Give it `broken_asset`, the id of another model in the map's bundle, to
+have that model drawn where the prop stood once it breaks (a pane's broken
+frame, a lamp's shattered shell): it replaces the whole prop, takes the
+prop's placement, and has no collision of its own. Add `indestructable` set
+to `1` to keep it whole. Without a
 `breakable` property, nothing changes; v20's own glass keeps breaking to
 impacts only.
 

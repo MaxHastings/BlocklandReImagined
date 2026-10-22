@@ -1096,6 +1096,8 @@ impl App {
             self.scene.receiver_index = Some(prepared.receiver_index);
             self.scene.fog_blend = Default::default();
             self.scene.shape_indices = prepared.shape_indices;
+            self.scene.broken_models = prepared.broken_models;
+            self.gpu.gpu_broken_models.clear();
             self.fx
                 .map_movers
                 .set_map(prepared.map_movers, prepared.mover_scenes);

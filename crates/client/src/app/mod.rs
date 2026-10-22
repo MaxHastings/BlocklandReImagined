@@ -134,6 +134,7 @@ struct Prepared {
     building: crate::building::Building,
     mirror: bri_sim::prediction::CollisionMirror,
     shape_indices: BTreeMap<u32, std::ops::Range<u32>>,
+    broken_models: Vec<(u32, SceneData)>,
     /// The map's keyed movers (doors) and their scenes.
     map_movers: Vec<bri_sim::map::MapMover>,
     mover_scenes: Vec<(u32, SceneData)>,
@@ -508,6 +509,7 @@ fn prepare_map(
         building,
         mirror,
         shape_indices: visual.shape_indices,
+        broken_models: visual.broken_models,
         map_movers: native_map.movers,
         mover_scenes: visual.movers,
         scatter: visual.scatter,
