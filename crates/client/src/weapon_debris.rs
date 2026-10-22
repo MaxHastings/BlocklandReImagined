@@ -503,6 +503,8 @@ struct Body {
     settled: bool,
     /// Where it left the gun, until its first step has been swept from there.
     clip_from: Option<Vec3>,
+    /// One of the first few casings thrown: the console follows it.
+    traced: bool,
 }
 struct Pending {
     cue: Cue,
@@ -528,8 +530,13 @@ pub struct WeaponDebris {
     sounds: Vec<(String, [f32; 3])>,
     seconds: f64,
     accumulator: f64,
+    /// Casings still to be followed in the console (`Body::traced`).
+    traces_left: u8,
     pub diagnostics: WeaponDebrisDiagnostics,
 }
+/// How many casings the console follows, and for how many steps each.
+const TRACED_CASINGS: u8 = 2;
+const TRACED_STEPS: f32 = 8.;
 /// The id bit of casings thrown without a cue (`WeaponDebris::eject`).
 const EJECTED_IDS: u64 = 1 << 63;
 impl WeaponDebris {
@@ -546,6 +553,7 @@ impl WeaponDebris {
             by_image: BTreeMap::new(),
             limits,
             bodies: BTreeMap::new(),
+            traces_left: TRACED_CASINGS,
             pending: VecDeque::new(),
             cursor: 0,
             ejected: 0,
@@ -822,6 +830,23 @@ impl WeaponDebris {
             ),
         };
         let start = eject.to_scale_rotation_translation().1;
+        let traced = casing.is_some() && self.traces_left > 0;
+        if traced {
+            self.traces_left -= 1;
+            eprintln!(
+                "Casing {id} starts at {position:?} going {:?} ({} a second), lifetime {} s, gravity x{}, acceleration {:?}, damping {:?}, elasticity {}, bounces {}, rest speed {:?}, fade {}",
+                direction,
+                speed * (1. + variation),
+                d.lifetime_seconds,
+                d.gravity_multiplier,
+                d.acceleration,
+                d.damping,
+                d.elasticity,
+                d.bounces,
+                d.rest_speed,
+                d.fade
+            );
+        }
         self.bodies.insert(
             id,
             Body {
@@ -836,6 +861,7 @@ impl WeaponDebris {
                 bounces_left: d.bounces,
                 settled: false,
                 clip_from: d.clip_start.then(|| eject.transform_point3(Vec3::ZERO)),
+                traced,
             },
         );
         Ok(())
@@ -891,7 +917,22 @@ impl WeaponDebris {
                 };
                 let d = body.casing.and_then(|i| casings.get(i)).unwrap_or(&stock);
                 body.age += dt;
+                if body.traced && body.age < TRACED_STEPS * dt + 1e-4 {
+                    eprintln!(
+                        "Casing {id} at {:.4}s: {:?}, speed {:.3}, {} left of its life",
+                        body.age,
+                        body.position,
+                        body.velocity.length(),
+                        d.lifetime_seconds - body.age
+                    );
+                }
                 if body.age >= d.lifetime_seconds {
+                    if body.traced {
+                        eprintln!(
+                            "Casing {id} ended after {:.3}s at {:?}: its life is over",
+                            body.age, body.position
+                        );
+                    }
                     self.bodies.remove(&id);
                     continue;
                 }
@@ -930,6 +971,9 @@ impl WeaponDebris {
                                 );
                             }
                             self.diagnostics.invalid_collisions += 1;
+                            if body.traced {
+                                eprintln!("Casing {id} ended at {:?}: invalid collision", from);
+                            }
                             self.bodies.remove(&id);
                             continue;
                         }
@@ -956,6 +1000,12 @@ impl WeaponDebris {
                         {
                             let mut rng = Deterministic(id ^ u64::from(body.age.to_bits()) << 32);
                             (body.spin_axis, body.spin) = spin_about(&mut rng, turns);
+                        }
+                        if body.traced {
+                            eprintln!(
+                                "Casing {id} hit something at {:?} after {:.3}s, normal {normal:?}, now going {:?}",
+                                body.position, body.age, body.velocity
+                            );
                         }
                         if d.rest_speed.is_some_and(|r| body.velocity.length() < r) {
                             body.settled = true;
