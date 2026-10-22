@@ -208,6 +208,10 @@ pub struct State {
     pub emitter_node: String,
     pub emitter_seconds: f32,
     pub eject_shell: bool,
+    /// Entering the state shows the image's `screen_flash` to its holder,
+    /// in first person.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub screen_flash: bool,
     /// After the image rests in this state for a random while, it goes to
     /// another ([`Fidget`]): a weapon's idle fidget.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -342,6 +346,51 @@ fn is_true(b: &bool) -> bool {
 }
 fn zero3(v: &[f32; 3]) -> bool {
     *v == [0.0; 3]
+}
+/// [`Image::screen_flash`]: a picture added to the screen's light (drawn
+/// additively) where the gun's flash is, for `seconds`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ScreenFlash {
+    /// A PNG named without `.png`, relative to the folder `weapons.json` is
+    /// in (as a scope's `overlay`).
+    pub texture: String,
+    /// Where its middle lies, as offsets from the screen's middle in
+    /// fractions of the screen's width and height (-1 to 1).
+    pub center: [f32; 2],
+    /// Its size as a multiple of its own pixels on a screen 640 wide,
+    /// growing with the screen's width.
+    pub scale: f32,
+    /// How long it shows, seconds.
+    pub seconds: f32,
+    /// Each showing is turned over, left to right and top to bottom, at
+    /// random.
+    #[serde(default)]
+    pub flip: bool,
+}
+impl ScreenFlash {
+    pub fn validate(&self) -> std::result::Result<(), String> {
+        let t = &self.texture;
+        if t.is_empty()
+            || t.len() > 128
+            || t.starts_with('/')
+            || t.contains(':')
+            || t.contains('\\')
+            || t.split('/').any(|part| part == ".." || part.is_empty())
+        {
+            return Err("texture: a PNG path inside the Add-On, without .png".into());
+        }
+        if !self.center.iter().all(|v| v.is_finite() && v.abs() <= 1.) {
+            return Err("center: -1 to 1".into());
+        }
+        if !(self.scale.is_finite() && (0.01..=16.).contains(&self.scale)) {
+            return Err("scale: 0.01 to 16".into());
+        }
+        if !(self.seconds.is_finite() && (0.001..=2.).contains(&self.seconds)) {
+            return Err("seconds: 0.001 to 2".into());
+        }
+        Ok(())
+    }
 }
 /// Where a scope picture sits on screen ([`Zoom::overlay_fit`]).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -950,6 +999,87 @@ impl FirstPersonView {
         ]
     }
 }
+/// A casing a native image throws: a static mesh, client-only and cosmetic
+/// (no network traffic), in native units (y up) in the eject point's frame.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ShellMesh {
+    /// The model's key, as the image's `model` is.
+    pub model: String,
+    /// Direction, from the eject point, the casing leaves in.
+    pub exit_direction: [f32; 3],
+    #[serde(default)]
+    pub exit_offset: [f32; 3],
+    /// Most each throw turns `exit_direction` either way, degrees: about the
+    /// eject point's X axis (pitch) and its Y axis (yaw).
+    #[serde(default)]
+    pub exit_variance: [f32; 2],
+    /// Launch speed, native units per second.
+    pub velocity: f32,
+    /// Most each throw's speed differs from `velocity` either way.
+    #[serde(default)]
+    pub velocity_variance: f32,
+    /// Native units per second squared, world axes.
+    pub acceleration: [f32; 3],
+    /// Fraction of each world axis's velocity lost per second.
+    #[serde(default)]
+    pub damping: [f32; 3],
+    /// Most the casing turns about each axis, turns per second; each throw
+    /// picks its own between the negative and positive.
+    #[serde(default)]
+    pub spin: [f32; 3],
+    /// Spin picked again on every bounce, so a casing tumbles off a floor.
+    #[serde(default)]
+    pub respin_on_bounce: bool,
+    /// Share of the speed along the surface normal kept by a bounce.
+    pub bounce: f32,
+    /// A bounce leaving it slower than this, native units per second,
+    /// comes to rest.
+    pub rest_speed: f32,
+    /// Seconds before it is gone.
+    pub lifetime: f32,
+    /// Sound profile played where it lands.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub sound: String,
+}
+impl Image {
+    /// Whether a state with `eject_shell` throws something.
+    pub fn throws_shell(&self) -> bool {
+        !self.casing.is_empty() || !self.shell_effect.is_empty() || self.shell_mesh.is_some()
+    }
+}
+impl ShellMesh {
+    pub fn validate(&self) -> anyhow::Result<()> {
+        let finite = |v: &[f32]| v.iter().all(|v| v.is_finite());
+        ensure!(
+            !self.model.is_empty()
+                && self.model.len() <= 256
+                && self.sound.len() <= 160
+                && !self
+                    .model
+                    .chars()
+                    .chain(self.sound.chars())
+                    .any(char::is_control)
+                && finite(&self.exit_direction)
+                && self.exit_direction.iter().any(|v| *v != 0.)
+                && finite(&self.exit_offset)
+                && self.exit_offset.iter().all(|v| v.abs() <= 100.)
+                && self.exit_variance.iter().all(|v| (0. ..=180.).contains(v))
+                && (0. ..=200.).contains(&self.velocity)
+                && (0. ..=200.).contains(&self.velocity_variance)
+                && finite(&self.acceleration)
+                && self.acceleration.iter().all(|v| v.abs() <= 1000.)
+                && self.damping.iter().all(|v| (0. ..=1.).contains(v))
+                && self.spin.iter().all(|v| (0. ..=100.).contains(v))
+                && (0. ..=1.).contains(&self.bounce)
+                && (0. ..=200.).contains(&self.rest_speed)
+                && (0.01..=30.).contains(&self.lifetime),
+            "Invalid shell mesh"
+        );
+        Ok(())
+    }
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Image {
@@ -981,6 +1111,10 @@ pub struct Image {
     /// Authored sprite/composite ejection instead of a debris model.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub shell_effect: String,
+    /// A casing thrown as a mesh from `ejectPoint`, with motion the image
+    /// authors itself (no `DebrisData`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shell_mesh: Option<ShellMesh>,
     pub min_shot_ticks: u32,
     pub states: Vec<State>,
     /// An Add-On tool's image: its `onFire` runs this Add-On command
@@ -999,6 +1133,11 @@ pub struct Image {
     /// XYZ degrees in the same frame as `source_rotation_degrees`.
     #[serde(skip_serializing_if = "zero3")]
     pub eye_rotation: [f32; 3],
+    /// A flat picture laid over the holder's screen, in first person, for a
+    /// moment each time a state with `screen_flash` is entered: a muzzle
+    /// flash drawn at the screen's edge of the gun. See [`ScreenFlash`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub screen_flash: Option<ScreenFlash>,
     /// Aiming zoom (a scope, or aim down sights).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub zoom: Option<Zoom>,
@@ -2702,6 +2841,10 @@ pub struct ProjectileDef {
     pub lifetime_ticks: u32,
     pub fade_ticks: u32,
     pub arm_ticks: u32,
+    /// Latest an unarmed projectile arms, in ticks: each shot arms at a
+    /// random tick from `arm_ticks` to this (AA's M203 arms between 0.1 and
+    /// 0.7 seconds). 0, or below `arm_ticks`, arms at `arm_ticks` exactly.
+    pub arm_ticks_max: u32,
     pub ballistic: bool,
     pub elasticity: f32,
     pub friction: f32,
@@ -3323,6 +3466,27 @@ pub struct Aura {
     pub ally_damage: Option<f32>,
 }
 /// v20's `ProjectileData` defaults, for fields an Add-On leaves out.
+impl ProjectileDef {
+    /// The tick projectile `id` arms at: `arm_ticks`, or a tick drawn from
+    /// `arm_ticks..=arm_ticks_max` by its id (the same on the host and on
+    /// every machine, and different for every shot).
+    pub fn arm_ticks_for(&self, id: u64) -> u32 {
+        if self.arm_ticks_max <= self.arm_ticks {
+            return self.arm_ticks;
+        }
+        let span = self.arm_ticks_max - self.arm_ticks;
+        let mut z = id.wrapping_mul(0x9E37_79B9_7F4A_7C15) ^ 0xA5A5_5A5A_1234_5678;
+        z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+        z ^= z >> 31;
+        self.arm_ticks + (z % u64::from(span + 1)) as u32
+    }
+    /// The middle of the arming range, for a bot that foresees a shot it
+    /// has no id for.
+    pub fn arm_ticks_mean(&self) -> u32 {
+        self.arm_ticks + self.arm_ticks_max.saturating_sub(self.arm_ticks) / 2
+    }
+}
 impl Default for ProjectileDef {
     fn default() -> Self {
         Self {
@@ -3335,6 +3499,7 @@ impl Default for ProjectileDef {
             lifetime_ticks: 240,
             fade_ticks: 240,
             arm_ticks: 0,
+            arm_ticks_max: 0,
             ballistic: false,
             elasticity: 0.999,
             friction: 0.3,
@@ -3794,6 +3959,11 @@ pub struct Pack {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub bindings: Vec<Binding>,
 }
+/// Most sounds a (merged) pack defines. A weapon Add-On with its own impact
+/// and fire sounds is a few dozen; a game of many hundreds of weapons is
+/// not rare. Packages should not copy a sound another provides: they name
+/// it (`other:sound/name`) and it resolves once the packs are merged.
+pub const MAX_SOUNDS: usize = 4096;
 impl Pack {
     pub fn from_json(bytes: &[u8]) -> Result<Self> {
         ensure!(
@@ -3957,6 +4127,14 @@ impl Pack {
                     && !image.shell_effect.chars().any(char::is_control),
                 "Invalid shell effect of image {id}"
             );
+            if let Some(mesh) = &image.shell_mesh {
+                ensure!(
+                    image.shell_effect.is_empty() && image.casing.is_empty(),
+                    "Image {id} names more than one kind of casing"
+                );
+                mesh.validate()
+                    .with_context(|| format!("Invalid shell mesh of image {id}"))?;
+            }
             ensure!(
                 id == &image.id && image.states.len() <= 64,
                 "Invalid image {id}"
@@ -4166,6 +4344,11 @@ impl Pack {
             if let Some(view) = image.first_person_view {
                 view.validate().with_context(|| format!("Image {id}"))?;
             }
+            if let Some(flash) = &image.screen_flash {
+                flash
+                    .validate()
+                    .map_err(|e| anyhow::anyhow!("Invalid image screen_flash {id}: {e}"))?;
+            }
             if let Some(zoom) = &image.zoom {
                 zoom.validate()
                     .map_err(|e| anyhow::anyhow!("Invalid image zoom {id}: {e}"))?;
@@ -4275,7 +4458,10 @@ impl Pack {
         }
         for (id, p) in &self.projectiles {
             ensure!(
-                id == &p.id && p.lifetime_ticks > 0 && p.lifetime_ticks <= 36000,
+                id == &p.id
+                    && p.lifetime_ticks > 0
+                    && p.lifetime_ticks <= 36000
+                    && p.arm_ticks_max <= 36000,
                 "Invalid projectile lifetime"
             );
             ensure!(
@@ -4472,7 +4658,10 @@ impl Pack {
             }
         }
         self.effects.validate()?;
-        ensure!(self.sounds.len() <= 1024, "Definition budget exceeded");
+        ensure!(
+            self.sounds.len() <= MAX_SOUNDS,
+            "Definition budget exceeded"
+        );
         for (key, sound) in &self.sounds {
             ensure!(
                 sound.variants.len() <= 64

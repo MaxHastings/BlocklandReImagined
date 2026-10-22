@@ -75,6 +75,8 @@ not physical: set these as custom properties on the light object
 | `bri_brightness` | multiplies the colour | 1 |
 | `bri_light_type` | `omni`, `spot`, `strobe`, `pulse`, `pulse2`, `flicker` or `runway`, map2dif's light types | `spot` for a Spot light, `omni` otherwise |
 
+A map with lights and no baked lightmap anywhere (in an interior, or on a static model's surface) is lit by those lights in every lighting mode (Classic and Unified would draw it dark, having no lightmap to show), as Dynamic lights a map.
+
 Any other `bri_` property is kept with the light for its type (`bri_speed`
 on a strobe, for example). A Spot light's cone angles are kept too.
 
@@ -259,6 +261,16 @@ sight or pointer ray), `sweep` (a projectile or other trace with width) and
 `shot` (a bullet). A glass pane that stops bullets but not bodies lists
 `["ray", "shot"]`; an invisible wall that stops only players lists
 `["move", "sweep"]`. The meshes with the same list share one collider.
+
+A static model node in a map's scene can be a **breakable prop**: give it a
+`breakable` property listing what breaks it, `impact` (a player striking it
+fast, as v20's glass breaks), `shot` (a bullet or projectile landing on it), or
+both, such as `"impact,shot"`. It then plays its `explosion` (a weapons effect
+id) and `sound` (a sound profile id), both optional, where it stood; hides; and
+stops colliding a moment later, for everyone, and stays broken until the map
+reloads. Add `indestructable` set to `1` to keep it whole. Without a
+`breakable` property, nothing changes; v20's own glass keeps breaking to
+impacts only.
 
 A collision detail of a converted shape can set `two_sided`: its triangles then
 block from both faces. By default only a face a move runs into blocks, as in
