@@ -59,6 +59,7 @@ refused. The engine calls:
 | `on_trigger(player, trigger, down)` | a living player with nothing in their hand presses (`down` true) or lets go of a trigger (v20's `Armor::onTrigger`), when `"on_trigger": true`. Trigger `0` is fire: the empty-hand click, whose press comes before `on_activate`. Return `true` to take it, anything else to pass it on: Add-Ons are asked in load order, presses and releases alike, and a press nobody takes goes on to `on_activate` and the usual click. A charged throw starts on the press and lets fly on the release |
 | `on_drop_key(player)` | a living player with nothing in their hand presses the Drop Tool key (v20's `serverCmdDropTool` while `currTool` is -1), when `"on_drop_key": true`. Return `true` to take it; Add-Ons are asked in load order. Capture the Flag drops a carried flag this way |
 | `on_contact(info)` | two bodies begin to touch, when `"on_contact": true`: `info` is `#{ kind, by, target, vehicle, target_vehicle, from, speed, velocity }`, `kind` being `"body"` (one player's body meeting another's), `"vehicle"` (a vehicle running into a player) or `"vehicles"` (two vehicles crashing: `vehicle` ran into `target_vehicle`; `by` and `target` are their drivers or `()`). `from` is `"above"`, `"below"` or `"side"`; `velocity` is `by`'s less `target`'s as they met and `speed` its length. A stomp, a run-over or a crash means what the rules make it mean |
+| `on_volume(event)` | a living player's body centre goes into or out of a map volume, when `"on_volume": true` (see **Map volumes**) |
 | `on_object(event)` | an object comes into the world, leaves it or changes hands, whoever made it, when `"on_object": true` (see **Every object in the world**) |
 | `on_panel(player, event)` | a player does something in a panel your rules showed them, when `"on_panel": true` (see **Panels**) |
 | `on_addon_event(from, name, data)` | an Add-On you listen to sent an event (see **Add-Ons that build on each other**) |
@@ -1386,3 +1387,10 @@ text properties (up to 16, each up to 128 bytes), which rules read back as
 highest `priority` first and then in map order; `volume_at(x, y, z)` gives the
 first, or `()` outside them all. Which of overlapping volumes counts is a rule
 for the game to decide from `priority` and `properties`.
+
+`on_volume(event)` (with `"on_volume": true` in the behaviour) is told, at the
+start of the next tick, each time a living player's body centre goes into or
+out of a volume: `event` is `#{ kind, player, id, priority, properties }`, `kind`
+being `"enter"` or `"leave"` and the rest the volume as `volumes_at` gives it. A
+player who dies or leaves the game leaves every volume they were in. No more
+than 256 changes are told a tick; the rest follow on the next.
