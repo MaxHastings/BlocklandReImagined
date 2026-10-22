@@ -19,7 +19,7 @@ pub use animation::{
     ActiveAnimation, AnimationAsset, AnimationAssets, AnimationClip, AnimationImageAsset,
     AnimationOutcome, AnimationPose, AnimationPoseApplicability, AnimationPoseRetention,
     AnimationPoseState, AnimationPoseView, AnimationRecord, AnimationStart, AnimationTarget,
-    AnimationView, EvaluatedActiveAnimation, EvaluatedAnimationView, PlaybackId,
+    AnimationView, EvaluatedActiveAnimation, EvaluatedAnimationView, LibraryClip, PlaybackId,
     PreparedAnimationStart,
 };
 pub use body_pose::{BodyPoseAssetInfo, BodyPoseBinding, BodyPoseBindings};

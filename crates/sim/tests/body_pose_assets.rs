@@ -23,6 +23,7 @@ fn asset(resource: &str, rig: bool, bytes: Vec<u8>) -> AnimationAsset {
         resource: resource.into(),
         digest: bri_package::environment::hash_bytes(&bytes),
         rig,
+        library_clips: Vec::new(),
         bytes,
     }
 }

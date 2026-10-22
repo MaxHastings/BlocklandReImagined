@@ -24,6 +24,19 @@ pub struct AnimationAsset {
     pub digest: String,
     pub rig: bool,
     pub bytes: Vec<u8>,
+    /// Clips of this body's animation libraries (an archetype's
+    /// `animation_libraries`) the body file lacks: the client joins them to the
+    /// body by name, so the clock must know their length too. A clip the body
+    /// has itself wins.
+    #[serde(default)]
+    pub library_clips: Vec<LibraryClip>,
+}
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LibraryClip {
+    pub name: String,
+    pub duration: f32,
+    pub looping: bool,
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -125,6 +138,30 @@ impl AnimationAssets {
                         looping: animation.looping,
                     },
                 );
+            }
+            ensure!(
+                asset.library_clips.len() <= 1024,
+                "Animation library clip count"
+            );
+            for clip in &asset.library_clips {
+                let name = clip.name.to_ascii_lowercase();
+                ensure!(
+                    !name.is_empty()
+                        && name.len() <= 128
+                        && clip.duration.is_finite()
+                        && clip.duration > 0.0,
+                    "Animation library clip bounds"
+                );
+                // The body's own clip of the name wins, as on the client.
+                clips
+                    .entry((asset.resource.clone(), name.clone()))
+                    .or_insert_with(|| AnimationClip {
+                        resource: asset.resource.clone(),
+                        digest: asset.digest.clone(),
+                        sequence: name,
+                        duration: f64::from(clip.duration),
+                        looping: clip.looping,
+                    });
             }
             rigs.insert(
                 asset.resource.clone(),
@@ -1273,6 +1310,7 @@ mod retention_tests {
                 resource: "v20.shape.m".into(),
                 digest: bri_package::environment::hash_bytes(&bytes),
                 rig: true,
+                library_clips: Vec::new(),
                 bytes,
             }],
             images: Default::default(),
