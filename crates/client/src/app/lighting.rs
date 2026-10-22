@@ -39,6 +39,9 @@ pub(super) struct LightVolumeState {
     /// Prepared source descriptors; no recovery runs in the client.
     pub(super) recovered: Vec<bri_render::map_lighting::MapLight>,
     pub(super) source_modern: bool,
+    /// The map is lit by its own light nodes, so it is Dynamic whatever the
+    /// lighting setting (`MapScene::lit_by_nodes`).
+    pub(super) nodes_lit: bool,
     pub(super) source_loading: Option<(bool, std::sync::Mutex<LightingSourceReceiver>)>,
     source_failed: Option<bool>,
     /// The map's images hold the per-texel lightmaps (the scene uploaded
@@ -698,6 +701,7 @@ mod tests {
             light_spots: Vec::new(),
             overflow_lights: Vec::new(),
             light_volume: None,
+            lit_by_nodes: false,
         }
     }
 
@@ -756,6 +760,7 @@ mod tests {
         tx.send(Ok((modern_scene(), None))).unwrap();
         let mut state = LightVolumeState {
             source_modern: false,
+            nodes_lit: false,
             source_loading: Some((true, std::sync::Mutex::new(rx))),
             ..Default::default()
         };

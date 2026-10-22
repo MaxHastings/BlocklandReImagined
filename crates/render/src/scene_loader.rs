@@ -64,6 +64,10 @@ pub struct MapScene {
     /// room light, baked offline by `prepare_lighting`, for the bodies
     /// standing in it (`crate::light_volume::LightVolume`).
     pub light_volume: Option<crate::light_volume::LightVolume>,
+    /// The map is lit by its own light nodes: it has some and no lightmap
+    /// anywhere (interior or static model) to bake their light into. The client lights it as Dynamic whatever
+    /// the lighting setting, since the lightmap modes would draw it dark.
+    pub lit_by_nodes: bool,
 }
 
 /// A map's backdrop ([`bri_content::backdrop`]): a model drawn before the map from `eye`, with only the viewer's rotation.
@@ -504,6 +508,10 @@ fn load_bundle_unscoped(root: &Path, map_id: &str, legacy: bool) -> Result<MapSc
             interiors.insert(id.to_owned(), interior);
         }
     }
+    // A map with light nodes and no lightmap is lit by those nodes, whatever
+    // lighting mode asked for the lightmap path.
+    let lit_by_nodes = lit_by_nodes(&root, &bundle, &scene, &interiors)?;
+    let legacy = legacy && !lit_by_nodes;
     // The same lift `NativeMap::load` applies, so collision and view agree.
     let lift = scene.floor_lift(|id| interiors.get(id));
     scene.lift(lift);
@@ -809,7 +817,50 @@ fn load_bundle_unscoped(root: &Path, map_id: &str, legacy: bool) -> Result<MapSc
         light_spots,
         overflow_lights,
         light_volume,
+        lit_by_nodes,
     })
+}
+
+/// Whether a map has light nodes and no lightmap anywhere, in an interior or
+/// on a static model's surface ([`MapScene::lit_by_nodes`]).
+fn lit_by_nodes(
+    root: &Path,
+    bundle: &Value,
+    scene: &Scene,
+    interiors: &BTreeMap<String, Interior>,
+) -> Result<bool> {
+    if scene.lights()?.is_empty()
+        || interiors.values().any(|i| {
+            i.details
+                .iter()
+                .chain(&i.subobjects)
+                .any(|d| !d.lightmaps.is_empty() || d.surfaces.iter().any(|s| s.lightmap.is_some()))
+        })
+    {
+        return Ok(false);
+    }
+    let mut seen = std::collections::BTreeSet::new();
+    for node in scene
+        .nodes
+        .iter()
+        .filter(|n| matches!(n.kind, Kind::StaticModel | Kind::DatablockModel))
+    {
+        let Some(id) = node.asset.as_deref().filter(|id| seen.insert(*id)) else {
+            continue;
+        };
+        let Some(file) = bundle["assets"][id].as_str() else {
+            continue;
+        };
+        let shape: bri_content::shape::Shape = bri_content::strict::from_slice(&read(root, file)?)?;
+        if shape
+            .materials
+            .iter()
+            .any(|m| m.surface.as_ref().is_some_and(|s| s.lightmap.is_some()))
+        {
+            return Ok(false);
+        }
+    }
+    Ok(true)
 }
 
 fn terrain_fields(
@@ -1083,6 +1134,9 @@ fn load_static_shape(
             let lightmap = texture(root, file, false, out, cache)?;
             if legacy {
                 material = Material::surface(material.name.clone(), diffuse, lightmap);
+                // The original's baked surface (picture x lightmap x strength) draws the same in every lighting mode.
+                material.baked_lightmap = Some(surface.lightmap_strength);
+                material.baked_exact = surface.lightmap_exact;
             } else {
                 material.images[8] = lightmap;
                 material.baked_lightmap = Some(surface.lightmap_strength);
