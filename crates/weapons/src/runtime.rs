@@ -506,6 +506,12 @@ pub enum Event {
         image: String,
         hand: u8,
     },
+    /// An image entered a state with `screen_flash` and has a
+    /// [`crate::ScreenFlash`] to show its holder.
+    ScreenFlash {
+        actor: ActorId,
+        image: String,
+    },
     /// A [`crate::Hitscan`] ray of `image` in `hand` ended at `to`: each
     /// player draws its tracer from their own copy of the image.
     Tracer {
@@ -3607,6 +3613,12 @@ impl WeaponsWorld {
                         actor: id,
                         image: image.id.clone(),
                         hand: e.hand,
+                    });
+                }
+                if state.screen_flash && image.screen_flash.is_some() {
+                    self.events.push(Event::ScreenFlash {
+                        actor: id,
+                        image: image.id.clone(),
                     });
                 }
                 let use_up = image

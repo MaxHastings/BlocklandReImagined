@@ -467,6 +467,7 @@ pub fn lower(definitions: Vec<Definition>) -> Result<Pack> {
                 emitter_seconds: num(d, &format!("stateEmitterTime[{n}]"), 0.0),
                 fidget: None,
                 eject_shell: flag(d, &format!("stateEjectShell[{n}]"), false),
+                screen_flash: false,
                 // v20 swings arms from script by image name, never from state data.
                 arm: String::new(),
                 arm_once: false,
@@ -564,6 +565,7 @@ pub fn lower(definitions: Vec<Definition>) -> Result<Pack> {
                 shot: None,
                 eye_rotation: eye_rotation.unwrap_or([0.0; 3]),
                 zoom: None,
+                screen_flash: None,
                 bot: None,
                 crosshair: true,
                 follow_arm: false,

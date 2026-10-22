@@ -189,6 +189,11 @@ pub enum CueKind {
         profile: String,
         volume: f32,
     },
+    /// `actor`'s holder sees `image`'s `screen_flash` (`State::screen_flash`).
+    ScreenFlash {
+        actor: u64,
+        image: String,
+    },
 }
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Cue {
@@ -249,6 +254,10 @@ impl Cue {
                     && text(sequence)
                     && image_hand.is_none_or(|h| usize::from(h) < bri_weapons::IMAGE_SLOTS),
                 "Invalid weapon animation cue"
+            ),
+            CueKind::ScreenFlash { actor, image } => ensure!(
+                *actor > 0 && !image.is_empty() && text(image),
+                "Invalid screen flash cue"
             ),
             CueKind::WeaponShell { actor, image, hand } => ensure!(
                 *actor > 0 && !image.is_empty() && text(image) && *hand < 2,

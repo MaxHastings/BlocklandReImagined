@@ -880,6 +880,20 @@ impl Session {
                         position,
                     );
                 }
+                WeaponEvent::ScreenFlash { actor, image } => {
+                    let position = self
+                        .weapons
+                        .actor(actor)
+                        .map_or([0.; 3], |a| a.frame.muzzle[0].to_array());
+                    self.cues.emit(
+                        tick,
+                        crate::presentation::CueKind::ScreenFlash {
+                            actor: actor.0,
+                            image,
+                        },
+                        position,
+                    );
+                }
                 WeaponEvent::BrickImpact {
                     source,
                     target,
