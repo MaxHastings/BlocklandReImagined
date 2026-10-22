@@ -18,7 +18,7 @@ impl App {
             return None;
         }
         let night = regions?.night_vision?;
-        let unit = |v: f32| (v / 255.0).clamp(0.0, 1.0);
+        let unit = |v: f32| (v / 255.0).clamped(0.0, 1.0);
         Some((unit(night.pawn), unit(night.actor), night.mode))
     }
     pub(super) fn render_frame(&mut self, frame: &mut RenderContext<'_>) -> Result<bool> {
