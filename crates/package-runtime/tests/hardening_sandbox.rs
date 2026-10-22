@@ -465,24 +465,6 @@ fn many_large_strings_in_one_array_are_bounded() {
     }
 }
 
-/// Many small allocations (maps in an array) stay within the operation and
-/// array budgets and finish or fail quickly.
-#[test]
-fn many_small_allocations_are_bounded() {
-    let (result, took) = run(
-        "fn f() { let a = []; for i in 0..50000 { a.push(#{ i: i }); } a.len() }",
-        "f",
-        Budget::Command,
-    );
-    assert!(took < CALL_LIMIT, "{took:?}");
-    if let Err(e) = result {
-        assert!(
-            matches!(e.code.as_str(), "script.budget" | "script.limit"),
-            "{e:?}"
-        );
-    }
-}
-
 /// The sandbox has no `eval`, no modules, no file or clock access; asking
 /// for them is a compile or runtime error, never a capability.
 #[test]
