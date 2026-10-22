@@ -631,8 +631,12 @@ fn load_bundle_unscoped(root: &Path, map_id: &str, legacy: bool) -> Result<MapSc
                 ..Default::default()
             };
             let broken = Node {
+                name: node.name.clone(),
+                parent: None,
+                kind: Kind::StaticModel,
+                transform: node.transform,
                 asset: Some(asset.clone()),
-                ..node.clone()
+                properties: node.properties.clone(),
             };
             load_static_shape(
                 &root,

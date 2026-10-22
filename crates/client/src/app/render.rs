@@ -1619,11 +1619,12 @@ impl App {
         if let Some(view) = self.net.attempt.as_ref().and_then(|a| a.view.as_ref()) {
             // A smashed prop's `broken` stand-in takes its place.
             for (node, data) in &self.scene.broken_models {
-                if view.broken_shapes.contains(node) && !self.gpu.gpu_broken_models.contains_key(node) {
-                    self.gpu.gpu_broken_models.insert(
-                        *node,
-                        renderer.upload(frame.device, frame.queue, data)?,
-                    );
+                if view.broken_shapes.contains(node)
+                    && !self.gpu.gpu_broken_models.contains_key(node)
+                {
+                    self.gpu
+                        .gpu_broken_models
+                        .insert(*node, renderer.upload(frame.device, frame.queue, data)?);
                 }
             }
         }
