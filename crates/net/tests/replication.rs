@@ -76,6 +76,7 @@ fn pose(tick: u64, x: f32, yaw: f32) -> Pose {
             energy: 100.0,
             speed_scale: 1.0,
             walking: false,
+            jump_locked: false,
             tick: Default::default(),
             tether: None,
             controller: None,

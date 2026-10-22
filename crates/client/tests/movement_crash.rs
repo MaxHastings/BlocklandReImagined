@@ -32,6 +32,7 @@ fn player() -> PlayerState {
         energy: 100.0,
         speed_scale: 1.0,
         walking: false,
+        jump_locked: false,
         tick: Default::default(),
         tether: None,
         controller: None,

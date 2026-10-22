@@ -1334,6 +1334,34 @@ fn player_operations_and_on_death_pass_the_capability_gate() {
     }
 }
 
+/// `teleport(p, x, y, z, yaw)` turns the player; without a yaw they keep
+/// their facing. (A person's client takes the new heading from the
+/// relocation; here nothing sends look input, so it is read as it is set.)
+#[test]
+fn a_teleport_may_turn_the_player() {
+    let mut s = session(vec![Spec::server(
+        "turner",
+        &["player"],
+        json!({ "commands": [{ "name": "face" }, { "name": "hop" }] }),
+        r#"
+        fn cmd_face(p) { teleport(p, 0.0, 50.0, 0.0, 1.0); }
+        fn cmd_hop(p) { teleport(p, 4.0, 50.0, 0.0); }
+        "#,
+    )]);
+    let mut c = Client::new(s.join("P".into(), SPAWN, false).unwrap());
+    let state = |s: &Session| s.motion_states()[0].0.clone();
+    c.run(&mut s, "turner", "face").unwrap();
+    assert!((state(&s).yaw - 1.0).abs() < 1e-3, "{}", state(&s).yaw);
+    c.run(&mut s, "turner", "hop").unwrap();
+    let hopped = state(&s);
+    assert_eq!(hopped.feet[0], 4.0);
+    assert!(
+        (hopped.yaw - 1.0).abs() < 1e-3,
+        "keeps the turn it had: {}",
+        hopped.yaw
+    );
+}
+
 /// Night QA finding C: a guest (not the host) builds on generated ground.
 #[test]
 fn a_guest_plants_on_generated_ground() {

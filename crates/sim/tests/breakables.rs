@@ -10,6 +10,11 @@ use rapier3d::prelude::*;
 
 /// Ground at y = 0 and a horizontal glass pane (collider 1) at y = 10.
 fn session(indestructable: bool) -> Session {
+    pane(indestructable, true, false)
+}
+
+/// The same pane, breaking to the causes given.
+fn pane(indestructable: bool, impact: bool, shot: bool) -> Session {
     let mut s = Session::new(
         Simulation::new(
             World::new("Glass".into(), "test".into(), vec![[1.0; 4]; 2]),
@@ -32,6 +37,8 @@ fn session(indestructable: bool) -> Session {
         position: Vec3::new(0.0, 10.0, 0.0),
         center: Vec3::new(0.0, 10.5, 0.0),
         indestructable,
+        breaks_on_impact: impact,
+        breaks_on_shot: shot,
         colliders: 1..2,
     }])
     .unwrap();
@@ -123,6 +130,8 @@ fn client_mirrors_stop_colliding_with_smashed_shapes() {
         position: Vec3::ZERO,
         center: Vec3::ZERO,
         indestructable: false,
+        breaks_on_impact: true,
+        breaks_on_shot: false,
         colliders: 1..2,
     };
     let mut broken = BrokenShapes::new(handles, &[shape]);
@@ -142,4 +151,39 @@ fn client_mirrors_stop_colliding_with_smashed_shapes() {
     assert!(!broken.apply(&mut physics, &[3].into()).unwrap());
     assert!(broken.apply(&mut physics, &Default::default()).unwrap());
     assert_eq!(down(&physics), Some(4.0));
+}
+
+#[test]
+fn a_prop_that_breaks_to_shots_breaks_when_one_lands_on_it() {
+    let (up, top) = (Vec3::Y, Vec3::new(0.0, 10.1, 0.0));
+    // Glass v20-style, a prop for impacts only, and one marked indestructable
+    // all ignore a shot.
+    for mut s in [
+        session(false),
+        pane(false, true, false),
+        pane(true, false, true),
+    ] {
+        s.shoot_breakable(top, up);
+        assert!(s.broken_shapes().is_empty());
+    }
+    let mut s = pane(false, false, true);
+    // A shot at the ground, which is no breakable, breaks nothing.
+    s.shoot_breakable(Vec3::new(5.0, 0.0, 5.0), up);
+    assert!(s.broken_shapes().is_empty());
+    s.shoot_breakable(top, up);
+    assert_eq!(s.broken_shapes().into_iter().collect::<Vec<_>>(), [7]);
+    let cues: Vec<_> = s.take_cues().into_iter().map(|c| c.kind).collect();
+    assert!(cues.iter().any(|c| matches!(c,
+        CueKind::WeaponEffect { definition, .. } if definition == "glassExplosion")));
+    // It no longer holds a player up once hidden, and a fall does not break
+    // what only a shot breaks.
+    s.join("Faller".into(), Vec3::new(0.0, 80.0, 0.0), true)
+        .unwrap();
+    for _ in 0..600 {
+        s.step().unwrap();
+        if s.snapshot().players[0].grounded {
+            break;
+        }
+    }
+    assert!(feet(&s).y < 0.5, "{}", feet(&s));
 }

@@ -1211,7 +1211,7 @@ fn load_static_shape(
         .transpose()?;
     let pose = bri_content::animation::sample(&shape, initial_sequence, 0.0)?;
     let first_batch = out.batches.len();
-    out.append_shape(
+    out.append_shape_shared(
         crate::shape_scene::ShapeInstance {
             shape: &shape,
             pose: &pose,
@@ -1698,6 +1698,15 @@ mod tests {
             .unwrap();
         assert_eq!(leaf.alpha, AlphaMode::Opaque);
         assert!(leaf.ignore_texture_alpha);
+    }
+    /// A map model's corners that match share a vertex, so a large map stays under the device's buffer limit.
+    #[test]
+    fn a_map_model_shares_the_vertices_of_matching_corners() {
+        let out = load_leaf(leaf_material("opaque", None)).unwrap();
+        // A box is 12 triangles: 36 corners, 24 distinct (4 to a face).
+        assert_eq!(out.indices.len(), 36);
+        assert_eq!(out.vertices.len(), 24);
+        out.validate().unwrap();
     }
     /// A bundle's scatter table loads each layer's model about its own origin and reads its placements.
     #[test]

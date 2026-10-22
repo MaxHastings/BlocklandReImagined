@@ -44,6 +44,7 @@ pub(super) mod copy_hooks;
 mod item_hooks;
 mod object_hooks;
 mod panels;
+mod volume_hooks;
 pub use panels::{PanelCommand, PanelShown};
 mod reports;
 mod saved_games;
@@ -366,6 +367,8 @@ pub(super) struct PackageHost {
     addon_events: addon_events::AddOnEvents,
     /// What stood in the world last tick, for `on_object`.
     object_watch: object_hooks::ObjectWatch,
+    /// Who stood in which map volume last tick, for `on_volume`.
+    volume_watch: volume_hooks::VolumeWatch,
     /// The panel each player has open, and the Add-On that showed it.
     panels: BTreeMap<OwnerId, PanelShown>,
     /// What each Add-On keeps on the host ([`AddOnData`]), by package.
@@ -904,6 +907,7 @@ impl Session {
             contacts: Default::default(),
             addon_events: Default::default(),
             object_watch: Default::default(),
+            volume_watch: Default::default(),
             panels: BTreeMap::new(),
             host_data: BTreeMap::new(),
             brick_fields: Default::default(),
@@ -3090,6 +3094,7 @@ impl Session {
         self.deliver_minigame_events();
         self.deliver_addon_events();
         self.deliver_object_changes();
+        self.deliver_volume_changes();
         self.step_zones();
         self.step_paths();
         self.step_object_cameras();

@@ -152,6 +152,7 @@ fn image(name: &str, states: Vec<State>) -> (String, Image) {
             first_person_nodes: Default::default(),
             first_person_effects: Default::default(),
             shell_effect: String::new(),
+            shell_mesh: None,
             id,
             name: name.into(),
             model: String::new(),

@@ -146,7 +146,7 @@ The fields you are most likely to change:
 | image | `movement` | `{ "reloading": 0.75, "aiming": 0.75 }`: the share of the holder's speeds the image leaves (0.05 to 1 each, 1 slows nothing) while its magazine reloads and while the holder aims it with the right mouse button (`zoom.on_jet`: the host sees the jet button held; a zoom on the zoom key alone is the holder's own view and does not slow them). They multiply with each other, a rule's `set_speed_scale` and a bullet's slowdown. | 0.05 to 1 each |
 | image | `aim_assist` | `{ "angle": 0.05, "range": 120, "slowdown": 0.5 }`: help aiming at a body the holder could hurt (not a teammate, inside its mini-game's rules). A shot turns onto the middle of the nearest such body in sight whose middle is within `angle` radians of the aim and `range` units (at the holder's scale), before spread; the holder's own look slows to `slowdown` while their aim is on one. Bots firing the gun get the same help. Test: `crates/weapons/tests/aim_assist.rs` | angle 0 to 0.35, range 1 to 1000, slowdown 0.1 to 1 (default 1); off by default |
 | image | `rope` | `{ "projectile": "your-id:projectile/chain", "speed": 160 }`: while the holder hangs on a rope (`tether`), every player's game draws it with that projectile's trail, swept from the muzzle to the rope's end as densely as the projectile flying it at `speed` would lay it, as v20 rope tools did by firing a stream of them; nothing is sent for it |
-| pack | `sounds` | `{ "your-id:shot": { "file": "sounds/shot.wav", "volume": 0.8 } }`: your own `.wav`/`.ogg` files, named by a state's `sound` and by rules; `local` for sounds only the holder hears, `looping` for a state-long hum or a vehicle's `engine_sound` ([content-kinds.md](content-kinds.md)), `music` for a track rules play with `play_music` (up to 10 minutes, [rules.md](rules.md#music)). `bri-addon-check` decodes each file as the game does and fails one it cannot play |
+| pack | `sounds` | `{ "your-id:shot": { "file": "sounds/shot.wav", "volume": 0.8 } }`: your own `.wav`/`.ogg` files, named by a state's `sound` and by rules; `local` for sounds only the holder hears, `looping` for a state-long hum or a vehicle's `engine_sound` ([content-kinds.md](content-kinds.md)), `music` for a track rules play with `play_music` (up to 10 minutes, [rules.md](rules.md#music)). A pack may hold 4096 sounds. Do not copy a sound a package you depend on already has: name it by its full id (`other:sound/shot`) in a state, cue, projectile or explosion and it plays that one once the packs are merged. `bri-addon-check` decodes each file as the game does and fails one it cannot play |
 
 **Scopes.** `zoom` takes more for a proper scope:
 
@@ -732,6 +732,30 @@ An image's `shell_effect` names an authored emitter/composite to play for
 reliable cue arrives before its image pose, it waits up to half a second.
 These sprite casings can opt into the cosmetic point contact/rest and local
 contact audio policies described below.
+
+An image's `shell_mesh` throws a static mesh instead, from the posed `ejectPoint`
+for `eject_shell` states (not with `casing` or `shell_effect`). It is client-only
+and cosmetic: nothing crosses the network, and every client throws its own.
+All numbers are the pack's, in native units (y up); `exit_direction` is in the
+eject point's frame, the rest in the world's:
+
+```json
+"shell_mesh": {
+  "model": "your-id:model/casing", "exit_direction": [1, 1, 0],
+  "exit_offset": [0, 0, 0], "exit_variance": [5, 15], "velocity": 3, "velocity_variance": 0.8,
+  "acceleration": [0, -30, 0], "damping": [0.45, 0.45, 0.45],
+  "spin": [1, 1, 1], "respin_on_bounce": true,
+  "bounce": 0.4, "rest_speed": 4, "lifetime": 10,
+  "sound": "your-id:casing_hit"
+}
+```
+
+`exit_variance` is the most each throw turns the direction, in degrees, about the eject point's X (pitch) and Y (yaw) axes, and `velocity_variance` the most the speed differs from `velocity`, either way. `damping` is the fraction of each axis's velocity lost per second; `spin` is the
+most it turns about each axis, in turns per second, either way, picked per throw
+(and again on each bounce with `respin_on_bounce`); `bounce` is the share of the
+speed along the surface normal a bounce keeps; a bounce that leaves it slower than
+`rest_speed` comes to rest; it is gone after `lifetime` seconds; `sound` is a
+sound profile played where it lands. The model must be one the pack loads.
 
 
 Particle `contact` is optional. A definition can supply `restitution` and

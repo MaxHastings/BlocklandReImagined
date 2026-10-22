@@ -1864,6 +1864,18 @@ fn register_api(engine: &mut Engine) {
             push(Op::Teleport(ops::Teleport {
                 player: id(&player)?,
                 position: [float(&x)?, float(&y)?, float(&z)?],
+                yaw: None,
+            }))
+        },
+    );
+    // The same, turned to face `yaw` radians.
+    engine.register_fn(
+        "teleport",
+        |player: Dynamic, x: Dynamic, y: Dynamic, z: Dynamic, yaw: Dynamic| {
+            push(Op::Teleport(ops::Teleport {
+                player: id(&player)?,
+                position: [float(&x)?, float(&y)?, float(&z)?],
+                yaw: Some(float(&yaw)?),
             }))
         },
     );
@@ -3583,6 +3595,12 @@ fn register_presentation(engine: &mut Engine) {
             scale: float(&scale)?,
         }))
     });
+    engine.register_fn("set_can_jump", |player: Dynamic, can: bool| {
+        push(Op::SetCanJump(ops::SetCanJump {
+            player: id(&player)?,
+            can,
+        }))
+    });
     engine.register_fn("set_walking", |player: Dynamic, walking: bool| {
         push(Op::SetWalking(ops::SetWalking {
             player: id(&player)?,
@@ -4412,6 +4430,9 @@ impl Runtime {
             }
             if behaviour.on_object {
                 need("on_object".into(), 1, "on_object");
+            }
+            if behaviour.on_volume {
+                need("on_volume".into(), 1, "on_volume");
             }
             if behaviour.tick_interval.is_some() {
                 need("on_tick".into(), 0, "tick_interval");
