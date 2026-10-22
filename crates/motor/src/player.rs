@@ -2258,6 +2258,7 @@ impl Player {
                 *posture = Posture {
                     prone: posture.prone,
                     climbing: posture.climbing,
+                    drive: posture.drive,
                     ..Posture::default()
                 }
             }
