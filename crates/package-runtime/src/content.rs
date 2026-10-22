@@ -965,6 +965,8 @@ impl BrickOutputDef {
 }
 /// Most touch zones one behaviour declares, and brick kinds one zone names.
 pub const MAX_ZONES: usize = 16;
+/// Most commands one package declares.
+pub const MAX_COMMANDS: usize = 256;
 pub const MAX_ZONE_KINDS: usize = 16;
 /// A touch zone: the box over every brick of some kinds.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -1138,7 +1140,10 @@ impl Behaviour {
             self.schema_version == 1,
             "behaviour schema_version must be 1"
         );
-        ensure!(self.commands.len() <= 64, "at most 64 commands");
+        ensure!(
+            self.commands.len() <= MAX_COMMANDS,
+            "at most {MAX_COMMANDS} commands"
+        );
         ensure!(self.zones.len() <= MAX_ZONES, "at most {MAX_ZONES} zones");
         for z in &self.zones {
             z.validate()?;

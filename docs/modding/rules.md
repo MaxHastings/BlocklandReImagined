@@ -1325,7 +1325,7 @@ anything):
 | `take_item` | the player does not carry it |
 | `remove_brick` | the brick is gone, indestructible, not the caller's to remove, or the package used its world-edit share |
 | `plant_brick`, `place_brick` | the brick kind is not loaded, the colour is not in the palette, the build is not the caller's, the brick is off the grid or does not fit, or no world-edit share is left. An unrequired plant that does not fit is skipped without a report, as v20's `plant()` was; a required one is refused |
-| `drop_item` | the item is not this server's, the package already has its limit lying about, or the data is too big |
+| `drop_item` | the item is not this server's (it takes an item id from `items`, not a model), the package already has its limit lying about, or the data is too big; the package also needs the `player` capability, and a speed over the push limit or a non-finite position is bounded out before it runs |
 | `remove_drop`, `name_drop` | the item is not one this package put in the world and that still lies there |
 | `damage` | the damage type does not exist, or the player, vehicle or entity is gone |
 | `heal`, `teleport` | the player is gone or dead |
@@ -1353,6 +1353,7 @@ carried out drops the call's state changes too (operations already done
 stay done, so put required ones first). Operations you do not `require`
 behave as before: a failure is an `op.failed` warning and the rest of the
 call stands, which is right for a message to a player who just left.
+Each distinct refusal is also printed once to the console, as `<package>: <operation> refused: <why>`, so a rule that asks for something the engine will not do is not silent.
 Read `player(p).tools` first when you want to tell the player before
 they pay.
 
