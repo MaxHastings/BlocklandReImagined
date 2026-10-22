@@ -2166,21 +2166,28 @@ impl Session {
             }
             if brain.plan.is_empty() && brain.search.is_none() {
                 // Walked the whole plan: arrived, or as near as it goes.
-                if matches!(brain.goal, Some(Goal::Objective(_))) && brain.partial_route {
+                if matches!(brain.goal, Some(Goal::Objective(_) | Goal::Home))
+                    && brain.partial_route
+                {
+                    // A search reaches only so far across and expands only so
+                    // many nodes: a goal beyond that is gone for in segments,
+                    // each from where the last ended. A segment that got
+                    // nowhere is the end of the way.
                     brain.partial_route = false;
                     if feet.distance(brain.segment_anchor) > 0.5 {
-                        brain.settled = false; // Continue a bounded, advancing segment.
+                        brain.settled = false;
                     } else {
                         brain.settled = true;
-                        brain
-                            .objective
-                            .fail(tick, "objective navigation made no progress");
+                        if matches!(brain.goal, Some(Goal::Home)) {
+                            brain.home_given_up = Some(feet);
+                        } else {
+                            brain
+                                .objective
+                                .fail(tick, "objective navigation made no progress");
+                        }
                     }
                 } else {
                     brain.settled = true;
-                    if matches!(brain.goal, Some(Goal::Home)) && brain.partial_route {
-                        brain.home_given_up = Some(feet);
-                    }
                 }
                 if matches!(brain.goal, Some(Goal::Wander(_) | Goal::Home)) {
                     brain.goal = None;
