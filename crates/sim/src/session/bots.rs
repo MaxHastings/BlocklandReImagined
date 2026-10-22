@@ -223,6 +223,10 @@ const AVOID_TICKS: u64 = 120 * 30;
 const CLEARANCE_BODIES: f32 = 0.5;
 /// Plans in a row that got stuck before a bot drops its goal.
 const MAX_REPLANS: u32 = 3;
+/// Ticks between two stall lines of one bot.
+const STALL_TELL_TICKS: u64 = 120 * 10;
+/// How far a stall line looks for a map mover, in units.
+const STALL_DOOR_SIGHT: f32 = 8.0;
 /// The mean seconds of one weave leg at an objective or in water.
 const WEAVE_SECONDS: f32 = 0.75;
 /// A goal that moves less than this keeps its route (`Brain::set_goal_near`).
@@ -356,6 +360,8 @@ pub(super) struct Bots {
     alerts: Vec<Alert>,
     /// When each bot's failed step was last told (`step_bots`).
     failed_told: BTreeMap<OwnerId, u64>,
+    /// When each bot's stall was last told (`tell_stall`).
+    stall_told: BTreeMap<OwnerId, u64>,
     /// A bot whose every step fails, for tests of that isolation.
     failing: Option<OwnerId>,
     /// Every failed step since the session began, told or not, and the
@@ -1338,6 +1344,9 @@ impl Session {
         self.bots
             .failed_told
             .retain(|b, _| self.bots.brains.contains_key(b));
+        self.bots
+            .stall_told
+            .retain(|b, _| self.bots.brains.contains_key(b));
         self.bots.stimuli.clear();
         self.hear_alerts(tick);
         self.hear_fighting(tick);
@@ -1382,6 +1391,57 @@ impl Session {
             ),
             None => bri_console::warn(&message),
         }
+    }
+    /// One console line when a bot's second walk window in a row has gone
+    /// nowhere (the point it plans again): where it is, what it was after
+    /// and the nearest map mover with its gap, so a stall at a door can be
+    /// told from one at a wall. At most one line a bot every
+    /// [`STALL_TELL_TICKS`].
+    fn tell_stall(&mut self, bot: OwnerId, feet: Vec3, tick: u64) {
+        if self
+            .bots
+            .stall_told
+            .get(&bot)
+            .is_some_and(|at| tick < at + STALL_TELL_TICKS)
+        {
+            return;
+        }
+        self.bots.stall_told.insert(bot, tick);
+        let Some(brain) = self.bots.brains.get(&bot) else {
+            return;
+        };
+        let door = match self.mover_gaps(bot, STALL_DOOR_SIGHT).first() {
+            Some((gap, id)) => {
+                let opens = self
+                    .map_mover_params(id)
+                    .is_some_and(|p| p.contains_key("bots_open"));
+                format!(
+                    "nearest map mover {id} {gap:.2} away{}",
+                    if opens { " (bots_open)" } else { "" }
+                )
+            }
+            None => format!("no map mover within {STALL_DOOR_SIGHT}"),
+        };
+        bri_console::warn(format!(
+            "bot {bot} ({}) stalled at ({:.2}, {:.2}, {:.2}): goal {:?}, {} waypoints{}, replans {}, walk {}; {door}",
+            brain.kind.id,
+            feet.x,
+            feet.y,
+            feet.z,
+            brain.goal,
+            brain.plan.len(),
+            if brain.partial_route {
+                " (partial route)"
+            } else {
+                ""
+            },
+            brain.replans,
+            if brain.acted.held_back {
+                "held back by a drop or blast"
+            } else {
+                "not held back"
+            },
+        ));
     }
     /// How many bot steps have failed since the session began, and the
     /// first few failures as (bot, tick, error): a bot's step should not
@@ -4007,6 +4067,9 @@ impl Session {
             brain.footing = feet;
         }
         let brain_footing = brain.footing;
+        if brain.acted.stalls == 2 {
+            self.tell_stall(bot, feet, tick);
+        }
         if forget && let Some((_, nav)) = self.bots.navs.iter_mut().find(|(b, _)| *b == body) {
             nav.invalidate(feet - Vec3::splat(1.0), feet + Vec3::splat(1.0), &body);
             // What it walked toward and got nowhere: the grid avoids that

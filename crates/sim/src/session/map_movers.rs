@@ -195,6 +195,14 @@ impl Session {
     /// Movers whose collision lies within `reach` of the body of player
     /// `owner` (touching it, for a reach of a hair), nearest first.
     pub fn movers_near_player(&self, owner: OwnerId, reach: f32) -> Vec<String> {
+        self.mover_gaps(owner, reach)
+            .into_iter()
+            .map(|(_, id)| id)
+            .collect()
+    }
+    /// The same movers with their gaps (a negative one: the body is in it),
+    /// nearest first.
+    pub(super) fn mover_gaps(&self, owner: OwnerId, reach: f32) -> Vec<(f32, String)> {
         let Some(peer) = self.peers.get(&owner) else {
             return Vec::new();
         };
@@ -228,7 +236,12 @@ impl Session {
             }
         }
         found.sort_by(|a, b| a.0.total_cmp(&b.0).then_with(|| a.1.cmp(&b.1)));
-        found.into_iter().map(|(_, id)| id).collect()
+        found
+    }
+    /// The package's own facts of mover `id`.
+    pub(super) fn map_mover_params(&self, id: &str) -> Option<&BTreeMap<String, String>> {
+        let index = self.mover_index(id)?;
+        Some(&self.map_movers.movers[index].def.params)
     }
     /// Start mover `id` toward key `key` over `seconds`. False when it
     /// cannot go there now (see [`MoverState::go_to`]).
