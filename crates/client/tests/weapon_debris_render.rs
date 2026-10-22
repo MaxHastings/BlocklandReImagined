@@ -87,7 +87,7 @@ fn shell_uses_persistent_shared_scene_and_instanced_gpu_draw(f: &DebrisFixture) 
             },
             position: [0.; 3],
         };
-        debris.cues(&[cue], |_, _, _| Some(Mat4::IDENTITY), |_| Vec3::ZERO)?;
+        debris.cues(&[cue], |_, _, _| Some(Mat4::IDENTITY), |_| (Vec3::ZERO, 0.))?;
         let gpu = gpu::turn().context("offscreen weapon casing adapter")?;
         let mut renderer = SceneRenderer::new(&gpu.device, wgpu::TextureFormat::Rgba8UnormSrgb);
         let scene = renderer.upload(&gpu.device, &gpu.queue, &debris.assets().shell_scene)?;
