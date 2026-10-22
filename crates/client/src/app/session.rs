@@ -605,6 +605,7 @@ impl App {
                     )?;
                 }
                 let waters = loaded.simulation.waters.clone();
+                let placed_emitters = loaded.scene.emitters()?;
                 let plate = loaded.plate;
                 let movers = loaded.movers.clone();
                 let foliage = crate::foliage::PreparedFoliage::load_for_map(
@@ -619,6 +620,7 @@ impl App {
                     Prepared {
                         foliage,
                         map_effects: crate::effects::load_map_effects(paths.maps.root(&base_map)?)?,
+                        placed_emitters,
                         map_id: base_map.clone(),
                         waters,
                         plate,

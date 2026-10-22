@@ -260,7 +260,9 @@ impl App {
             Some((requested.clone(), content.paths.packages.clone(), left_out))
         };
         self.fx.weapon_effects = parts.weapon_effects;
+        let placed = self.fx.actor_effects.placed().to_vec();
         self.fx.actor_effects = parts.actor_effects;
+        self.fx.actor_effects.set_placed(placed);
         // Texture indices belong to this exact pack. Even an equally sized
         // replacement can reorder textures or change their pixels.
         self.gpu.effects_renderer = None;

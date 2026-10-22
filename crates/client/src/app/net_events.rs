@@ -1085,6 +1085,7 @@ impl App {
             self.fx
                 .effects
                 .set_map_effects(prepared.map_effects.as_ref())?;
+            self.fx.actor_effects.set_placed(prepared.placed_emitters);
             self.weather
                 .set_map(&prepared.map_id, prepared.waters.clone())?;
             self.scene.scenery.set_map(prepared.plate, prepared.waters);

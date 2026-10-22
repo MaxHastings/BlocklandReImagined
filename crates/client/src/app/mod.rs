@@ -120,6 +120,8 @@ struct Prepared {
     foliage: crate::foliage::PreparedFoliage,
     /// The map's own particle emitters (`map_effects.json`).
     map_effects: Option<bri_content::effects::MapEffects>,
+    /// The emitters the map's scene places (`Scene::emitters`).
+    placed_emitters: Vec<bri_content::scene::PlacedEmitter>,
     map_id: String,
     waters: Vec<bri_content::water::Water>,
     /// The plate a flat map stands on.
@@ -461,6 +463,7 @@ fn prepare_map(
     );
     let mirror_shapes = Arc::new(crate::mirrors::shapes(&definitions));
     let native_map = bri_sim::map::NativeMap::load(root, &map)?;
+    let placed_emitters = native_map.scene.emitters()?;
     let materials = paths.materials()?;
     let palette = Arc::new(crate::world_chunks::BrickPalette::new(&materials)?);
     let mut mirror = bri_sim::prediction::CollisionMirror::new(
@@ -496,6 +499,7 @@ fn prepare_map(
     Ok(Prepared {
         foliage,
         map_effects: crate::effects::load_map_effects(root)?,
+        placed_emitters,
         map_id: map,
         waters: native_map.waters,
         plate: native_map.plate,
