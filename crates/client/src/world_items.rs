@@ -1347,6 +1347,13 @@ impl WorldItems {
                     {
                         self.loose_drawn_logged = true;
                         let data = &model.mesh.data;
+                        let extent = data.vertices.iter().fold(
+                            (Vec3::splat(f32::MAX), Vec3::splat(f32::MIN)),
+                            |(low, high), v| {
+                                let at = Vec3::from(v.position);
+                                (low.min(at), high.max(at))
+                            },
+                        );
                         let triangles: u32 = data
                             .batches
                             .iter()
@@ -1376,11 +1383,13 @@ impl WorldItems {
                             })
                             .collect();
                         eprintln!(
-                            "Loose model {} drawn for the first time at {:?}: {} vertices, {triangles} triangles in {} batches; {}",
+                            "Loose model {} drawn for the first time at {:?}: {} vertices, {triangles} triangles in {} batches, model box {:?} to {:?}; {}",
                             key.model,
                             instance.transform.transform.w_axis.truncate(),
                             slot.geometry.vertices.len(),
                             data.batches.len(),
+                            extent.0,
+                            extent.1,
                             materials.join("; ")
                         );
                     }

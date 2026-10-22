@@ -35,6 +35,8 @@ pub(super) struct Effects {
     pub(super) weapon_shells: crate::weapon_debris::WeaponDebris,
     pub(super) weapon_cues: VecDeque<(bri_sim::presentation::Cue, f32)>,
     pub(super) weapon_cue_drops: u64,
+    /// Casing throws the console has been told of (the first few).
+    pub(super) casings_told: u8,
     /// Screen flashes cued for players this frame (actor, image, cue id),
     /// and the one now showing with the time it has left.
     pub(super) flash_cues: Vec<(u64, String, u64)>,
