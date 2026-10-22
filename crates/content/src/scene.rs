@@ -87,6 +87,10 @@ pub enum Kind {
     /// `priority` (a whole number, higher wins), and any other text a rule
     /// reads back (a place's name, what it is for).
     Volume,
+    /// A looping particle emitter ([`PlacedEmitter`]): `properties` hold
+    /// `effect` (an emitter id) and an optional `half` (the box, "x y z", the
+    /// particles start in). The node's up axis is the way it emits.
+    Emitter,
     Unadapted,
 }
 
@@ -367,6 +371,8 @@ pub struct Teleporter {
 pub const MAX_CLIMBS: usize = 256;
 /// Most [`Kind::Volume`] nodes a scene may hold.
 pub const MAX_VOLUMES: usize = 1024;
+/// Most [`Kind::Emitter`] nodes a scene may hold.
+pub const MAX_EMITTERS: usize = 256;
 /// Most extra properties one volume carries, and the longest key or value.
 pub const MAX_VOLUME_PROPERTIES: usize = 16;
 pub const MAX_VOLUME_TEXT: usize = 128;
@@ -387,6 +393,20 @@ pub struct Volume {
     pub to_local: [f32; 16],
     /// Every property but `half`, `id` and `priority`.
     pub properties: BTreeMap<String, String>,
+}
+/// A [`Kind::Emitter`] node read: a particle emitter the map places and
+/// keeps running, started again when it ends. Seen by the client only.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PlacedEmitter {
+    pub node: usize,
+    /// An emitter of the game's or a package's effects.
+    pub effect: String,
+    pub position: [f32; 3],
+    /// Its local up is the direction it emits along.
+    pub rotation: [f32; 4],
+    /// Half extents of the box, in the node's axes, particles start in; zero
+    /// for a point.
+    pub half: [f32; 3],
 }
 impl Volume {
     /// Whether the world point `p` is inside the box (its faces count).
@@ -498,6 +518,57 @@ impl Scene {
         ensure!(
             out.len() <= MAX_CLIMBS,
             "A map holds at most {MAX_CLIMBS} climb volumes"
+        );
+        Ok(out)
+    }
+    /// Every [`Kind::Emitter`] node, read and checked, in scene order.
+    pub fn emitters(&self) -> anyhow::Result<Vec<PlacedEmitter>> {
+        use anyhow::{Context, ensure};
+        let mut out = Vec::new();
+        for (index, node) in self.nodes.iter().enumerate() {
+            if !matches!(node.kind, Kind::Emitter) {
+                continue;
+            }
+            let effect = node
+                .properties
+                .get("effect")
+                .map(|e| e.trim())
+                .filter(|e| !e.is_empty() && e.len() <= MAX_VOLUME_TEXT)
+                .with_context(|| format!("Emitter {}: effect names no emitter", node.name))?;
+            let half = match node.properties.get("half") {
+                Some(v) => v
+                    .split_whitespace()
+                    .map(|w| w.parse::<f32>())
+                    .collect::<Result<Vec<_>, _>>()
+                    .with_context(|| format!("Emitter {}: half is not numbers", node.name))?,
+                None => vec![0.0; 3],
+            };
+            ensure!(
+                half.len() == 3
+                    && half
+                        .iter()
+                        .all(|h| h.is_finite() && (0.0..=1024.0).contains(h)),
+                "Emitter {}: half needs three sizes from 0 to 1024",
+                node.name
+            );
+            let matrix = Mat4::from_cols_array(&node.transform);
+            let (_, rotation, position) = matrix.to_scale_rotation_translation();
+            ensure!(
+                position.is_finite() && rotation.is_finite(),
+                "Emitter {}: placement is not finite",
+                node.name
+            );
+            out.push(PlacedEmitter {
+                node: index,
+                effect: effect.to_owned(),
+                position: position.to_array(),
+                rotation: rotation.normalize().to_array(),
+                half: [half[0], half[1], half[2]],
+            });
+        }
+        ensure!(
+            out.len() <= MAX_EMITTERS,
+            "A map holds at most {MAX_EMITTERS} emitters"
         );
         Ok(out)
     }

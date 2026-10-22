@@ -272,6 +272,18 @@ reloads. Add `indestructable` set to `1` to keep it whole. Without a
 `breakable` property, nothing changes; v20's own glass keeps breaking to
 impacts only.
 
+A scene node of kind `emitter` keeps a particle emitter running where it
+stands: steam from a vent, smoke from a stack. Its `effect` property is an
+emitter id (one of your weapons pack's `effects.emitters`, or a base game
+`v20/emitter/...`), and the node's up axis is the way it emits. An optional
+`half` ("x y z", 0 to 1024 each, in the node's own axes) is the box the
+particles start in, a point when absent. Whatever the emitter ends, it
+starts again, so a finite one (its `lifetime` above 0) loops and one with no
+end runs for good. How many particles are alive at once follows from the
+emitter's `period` and its particles' `lifetime`. Each player's game runs
+its own emitters; nothing is sent over the network, and nothing is drawn that
+the camera does not see. A map holds at most 256.
+
 A collision detail of a converted shape can set `two_sided`: its triangles then
 block from both faces. By default only a face a move runs into blocks, as in
 v20, so a mesh wound inward lets a body walk into it from outside.

@@ -488,6 +488,10 @@ pub struct ActorEffects {
     /// The liquids' volumes, in the same order.
     waters: std::sync::Arc<[bri_content::water::Water]>,
     orbs: BTreeMap<u64, EffectHandle>,
+    /// The emitters the map places (`Scene::emitters`), and the sources
+    /// keeping them running by scene node.
+    placed: Vec<bri_content::scene::PlacedEmitter>,
+    placed_live: BTreeMap<usize, EffectHandle>,
     /// Other admins' free-camera eyes, set by `set_orbs` for the next advance.
     orb_eyes: Vec<(u64, Vec3)>,
     /// The first-person player whose jets stay out of their own eye but
@@ -535,6 +539,8 @@ impl ActorEffects {
             liquids: std::sync::Arc::from(Vec::new()),
             waters: std::sync::Arc::from(Vec::new()),
             orbs: BTreeMap::new(),
+            placed: Vec::new(),
+            placed_live: BTreeMap::new(),
             orb_eyes: Vec::new(),
             own_eye: None,
             ejected: Vec::new(),
@@ -575,6 +581,14 @@ impl ActorEffects {
     pub fn set_orbs(&mut self, orbs: Vec<(u64, Vec3)>) {
         self.orb_eyes = orbs;
     }
+    /// The emitters the map places: each runs from the next `advance`, and
+    /// starts again when it ends, until replaced.
+    pub fn set_placed(&mut self, placed: Vec<bri_content::scene::PlacedEmitter>) {
+        self.placed = placed;
+    }
+    pub fn placed(&self) -> &[bri_content::scene::PlacedEmitter] {
+        &self.placed
+    }
     /// A new session starts after its checkpoint; earlier one-shots never replay.
     pub fn reset(&mut self, checkpoint_cursor: u64) {
         self.world.teardown();
@@ -591,6 +605,7 @@ impl ActorEffects {
         self.trails.clear();
         self.debris_trails.clear();
         self.orbs.clear();
+        self.placed_live.clear();
         self.orb_eyes.clear();
         self.cursor = checkpoint_cursor;
     }
@@ -1429,6 +1444,33 @@ impl ActorEffects {
             .collect();
         let plain = |_: &_| SourceOptions::default();
         sync_sources(world, &mut self.orbs, &wanted, CAMERA_EMITTER, plain)?;
+        // The map's own emitters run all the time, whatever is in view: the
+        // world draws only what the camera sees.
+        let wanted: BTreeMap<usize, SourceTransform> = self
+            .placed
+            .iter()
+            .map(|e| {
+                let rotation = Quat::from_array(e.rotation);
+                let t = SourceTransform {
+                    position: Vec3::from(e.position),
+                    rotation,
+                    velocity: Vec3::ZERO,
+                };
+                (e.node, t)
+            })
+            .collect();
+        let by_node: BTreeMap<usize, &bri_content::scene::PlacedEmitter> =
+            self.placed.iter().map(|e| (e.node, e)).collect();
+        sync_sources_by(
+            world,
+            &mut self.placed_live,
+            &wanted,
+            |node| by_node[node].effect.as_str(),
+            |node| SourceOptions {
+                half_extents: Vec3::from(by_node[node].half),
+                ..Default::default()
+            },
+        )?;
         world.advance(dt, Vec3::ZERO)?;
         Ok(())
     }
