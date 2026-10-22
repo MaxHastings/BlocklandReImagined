@@ -452,6 +452,36 @@ impl ScriptOp for SetLean {
     }
 }
 
+/// Push a player lying prone on the ground along `direction` (x, z of the
+/// world, any length but 0) at `accel` units per second squared until they
+/// move `max_speed` along it, for `seconds` (up to 10): a combat roll. It
+/// ends early when they leave the ground or stand. All zero ends a drive.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SetDrive {
+    pub player: u64,
+    pub direction: [f32; 2],
+    pub accel: f32,
+    pub max_speed: f32,
+    pub seconds: f32,
+}
+impl ScriptOp for SetDrive {
+    const CAPABILITY: &str = "player";
+    const NAME: &str = "set_drive";
+    fn bounded(&self) -> bool {
+        let SetDrive {
+            direction,
+            accel,
+            max_speed,
+            seconds,
+            ..
+        } = self;
+        direction.iter().all(|v| v.is_finite())
+            && [accel, max_speed, seconds]
+                .iter()
+                .all(|v| v.is_finite() && **v >= 0.0)
+    }
+}
+
 /// Add rounds of `ammo` to a player's reserve (an ammo box), up to the
 /// most its magazines carry.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

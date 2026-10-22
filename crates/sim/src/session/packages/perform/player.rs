@@ -470,6 +470,36 @@ impl Perform for ops::SetLean {
         Ok(())
     }
 }
+impl Perform for ops::SetDrive {
+    fn check(&self, session: &Session, _cx: OpCall<'_>) -> Result<()> {
+        ensure!(session.peers.contains_key(&self.player), "No such player");
+        Ok(())
+    }
+    fn perform(self, session: &mut Session, _cx: OpCall<'_>) -> Result<()> {
+        let ops::SetDrive {
+            player,
+            direction,
+            accel,
+            max_speed,
+            seconds,
+        } = self;
+        let peer = session.peers.get_mut(&player).context("No such player")?;
+        let length = direction[0].hypot(direction[1]);
+        let drive = (seconds > 0.0 && length > 1e-6).then(|| bri_motor::player::Drive {
+            direction: [direction[0] / length, direction[1] / length],
+            accel,
+            max_speed,
+            seconds,
+        });
+        ensure!(
+            peer.player.set_drive(drive),
+            "Invalid drive: speed up to {}, up to {} seconds",
+            bri_motor::player::MAX_SPEED,
+            bri_motor::player::MAX_DRIVE_SECONDS
+        );
+        Ok(())
+    }
+}
 impl Perform for ops::GiveAmmo {
     fn check(&self, session: &Session, _cx: OpCall<'_>) -> Result<()> {
         ensure!(session.peers.contains_key(&self.player), "No such player");
