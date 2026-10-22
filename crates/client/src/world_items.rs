@@ -312,6 +312,11 @@ pub struct WorldItems {
     skinned: Vec<SkinnedCopy>,
     /// Frames prepared, for the idle models' recency.
     prepares: u64,
+    /// The one-time lines about loose models (casings, debris) have been
+    /// printed: the first one drawn, and the first frame some were offered
+    /// and none was.
+    loose_drawn_logged: bool,
+    loose_dropped_logged: bool,
     pub diagnostics: WorldItemDiagnostics,
 }
 /// Most loose models drawn at once.
@@ -363,6 +368,8 @@ impl WorldItems {
             wearer_colors: Vec::new(),
             headings: BTreeMap::new(),
             prepares: 0,
+            loose_drawn_logged: false,
+            loose_dropped_logged: false,
             diagnostics: Default::default(),
         })
     }
@@ -909,6 +916,19 @@ impl WorldItems {
             })
             .collect();
         self.prepare(candidates)?;
+        // A casing or piece of debris offered and not drawn says why once,
+        // so a missing draw is not silent.
+        if !self.loose_drawn_logged && !self.loose_dropped_logged && !self.loose.is_empty() {
+            self.loose_dropped_logged = true;
+            eprintln!(
+                "{} loose models offered ({}), none drawn: {} deferred, {} missing, {} models cached",
+                self.loose.len(),
+                self.loose[0].0,
+                self.diagnostics.deferred,
+                self.diagnostics.missing_bindings,
+                self.diagnostics.cached_models
+            );
+        }
         Ok(())
     }
 
@@ -1305,6 +1325,16 @@ impl WorldItems {
                 total_vertices += slot.geometry.vertices.len();
                 total_slots += 1;
                 for instance in instances {
+                    if matches!(instance.identity, ItemIdentity::Loose(_))
+                        && !self.loose_drawn_logged
+                    {
+                        self.loose_drawn_logged = true;
+                        eprintln!(
+                            "Loose model {} drawn for the first time at {:?}",
+                            key.model,
+                            instance.transform.transform.w_axis.truncate()
+                        );
+                    }
                     slot.identities.push(instance.identity);
                     slot.transforms.push(instance.transform);
                     slot.clips.push(instance.clip);
