@@ -6,7 +6,7 @@ use bri_sim::{
     player::MoveInput,
     session::{
         AnimationAsset, AnimationAssets, AnimationOutcome, AnimationStart, AnimationTarget,
-        PlaybackId, Session,
+        LibraryClip, PlaybackId, Session,
     },
     simulation::Simulation,
 };
@@ -17,6 +17,10 @@ use rapier3d::prelude::*;
 use serde_json::json;
 
 fn fixture() -> Result<(Session, u64)> {
+    fixture_with(Vec::new())
+}
+
+fn fixture_with(library_clips: Vec<LibraryClip>) -> Result<(Session, u64)> {
     let clip = |name, duration, looping| {
         json!({
             "name":name,"frames":2,"duration":duration,"looping":looping,
@@ -50,6 +54,7 @@ fn fixture() -> Result<(Session, u64)> {
             resource: "v20.shape.m".into(),
             digest: bri_package::environment::hash_bytes(&bytes),
             rig: false,
+            library_clips,
             bytes,
         }],
         images: Default::default(),
@@ -408,5 +413,33 @@ fn evaluated_lifecycle_removes_old_identity_and_snapshot_is_owned() -> Result<()
     assert_eq!(records[1].playback.id, old);
     assert_eq!(records[1].phase, before.active[0].evaluated_phase);
     assert_eq!(session.evaluated_animation_view(), resumed);
+    Ok(())
+}
+
+#[test]
+fn a_library_clip_has_a_clock_and_the_body_own_clip_wins() -> Result<()> {
+    let library = |name: &str, duration, looping| LibraryClip {
+        name: name.into(),
+        duration,
+        looping,
+    };
+    let (mut session, owner) = fixture_with(vec![
+        library("Reload", 1.0, false),
+        library("FINITE", 9.0, true),
+    ])?;
+    // Found by name without regard to case, as UE2's `PlayAnim` finds it.
+    let first = request(&session, owner, 1, "reload");
+    let id = start(&mut session, owner, first)?;
+    let view = session.animation_view();
+    close(view.active[0].clip.duration, 1.0);
+    assert!(!view.active[0].clip.looping);
+    assert_eq!(view.active[0].id, id);
+    // The body's own `finite` (0.25 s, not looping) outranks the library's.
+    let second = request(&session, owner, 2, "finite");
+    start(&mut session, owner, second)?;
+    let finite = &session.animation_view().active;
+    let own = finite.iter().find(|a| a.clip.sequence == "finite").unwrap();
+    close(own.clip.duration, 0.25);
+    assert!(!own.clip.looping);
     Ok(())
 }

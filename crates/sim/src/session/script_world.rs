@@ -195,6 +195,17 @@ impl World for ScriptWorld<'_> {
             })
             .collect()
     }
+    fn volumes_at(&self, at: [f32; 3]) -> Vec<bri_package_runtime::script::VolumeInfo> {
+        self.session
+            .volumes_at(at)
+            .into_iter()
+            .map(|v| bri_package_runtime::script::VolumeInfo {
+                id: v.id.clone(),
+                priority: v.priority,
+                properties: v.properties.clone(),
+            })
+            .collect()
+    }
     fn movers_near(&self, player: u64, reach: f32) -> Vec<String> {
         self.session.movers_near_player(player, reach)
     }

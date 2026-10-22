@@ -69,6 +69,8 @@ pub struct LoadedMap {
     pub breakables: Vec<Breakable>,
     /// Teleporter entrances and exits.
     pub teleporters: Vec<bri_content::scene::Teleporter>,
+    /// Named boxes rules look up by point.
+    pub volumes: Vec<bri_content::scene::Volume>,
     /// The map's keyed movers (doors).
     pub movers: Vec<bri_sim::map::MapMover>,
     /// The plate a flat map stands on.
@@ -83,6 +85,7 @@ impl LoadedMap {
             spawn_points: self.spawn_points,
             breakables: self.breakables,
             teleporters: self.teleporters,
+            volumes: self.volumes,
             movers: self.movers,
             tutorial: self.tutorial,
         }
@@ -216,6 +219,7 @@ impl MapContent {
             tutorial,
             breakables: native.breakables,
             teleporters: native.teleporters,
+            volumes: native.volumes,
             movers: native.movers,
             plate: native.plate,
         })

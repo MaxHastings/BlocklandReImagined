@@ -29,11 +29,13 @@ mod math;
 mod movers;
 mod physics;
 pub mod view;
+mod volumes;
 pub use bots::BotKindView;
 pub use games::{BrickView, DropView, MAX_BRICKS_LISTED, MinigameView, TeamView, brick_map};
 pub use interop::{Emitted, Nested};
 pub use movers::MoverInfo;
 use view::{Of, view_in};
+pub use volumes::VolumeInfo;
 
 /// Operation budgets per kind of call.
 #[derive(Debug, Clone, Copy)]
@@ -246,6 +248,11 @@ pub trait World {
     /// The movers whose collision lies within `reach` of player `player`'s
     /// body (touching it, for a reach of a hair), nearest first.
     fn movers_near(&self, _player: u64, _reach: f32) -> Vec<String> {
+        Vec::new()
+    }
+    /// The map's volumes holding the world point `at`, highest priority
+    /// first and then in map order.
+    fn volumes_at(&self, _at: [f32; 3]) -> Vec<VolumeInfo> {
         Vec::new()
     }
     /// Whether the minigame and trust rules let player `by` hurt `target`
@@ -3373,6 +3380,29 @@ fn register_presentation(engine: &mut Engine) {
                     .map(Dynamic::from)
                     .collect(),
             ))
+        })
+    });
+    // The map's volumes holding a point, highest priority first.
+    engine.register_fn("volumes_at", |x: Dynamic, y: Dynamic, z: Dynamic| {
+        let at = [float(&x)?, float(&y)?, float(&z)?];
+        with_world(|world, _| {
+            Ok(Dynamic::from_array(
+                world
+                    .volumes_at(at)
+                    .iter()
+                    .map(volumes::volume_map)
+                    .collect(),
+            ))
+        })
+    });
+    // The first of them, or ().
+    engine.register_fn("volume_at", |x: Dynamic, y: Dynamic, z: Dynamic| {
+        let at = [float(&x)?, float(&y)?, float(&z)?];
+        with_world(|world, _| {
+            Ok(world
+                .volumes_at(at)
+                .first()
+                .map_or(Dynamic::UNIT, volumes::volume_map))
         })
     });
     // Send a mover to a key over a number of seconds, or hold it.

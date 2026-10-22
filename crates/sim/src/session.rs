@@ -19,7 +19,7 @@ pub use animation::{
     ActiveAnimation, AnimationAsset, AnimationAssets, AnimationClip, AnimationImageAsset,
     AnimationOutcome, AnimationPose, AnimationPoseApplicability, AnimationPoseRetention,
     AnimationPoseState, AnimationPoseView, AnimationRecord, AnimationStart, AnimationTarget,
-    AnimationView, EvaluatedActiveAnimation, EvaluatedAnimationView, PlaybackId,
+    AnimationView, EvaluatedActiveAnimation, EvaluatedAnimationView, LibraryClip, PlaybackId,
     PreparedAnimationStart,
 };
 pub use body_pose::{BodyPoseAssetInfo, BodyPoseBinding, BodyPoseBindings};
@@ -31,6 +31,7 @@ pub use bots::{
 mod breakables;
 mod build_load;
 mod teleporters;
+mod volumes;
 pub use build_load::LoadPace;
 mod combat;
 mod death_results;
@@ -1181,6 +1182,8 @@ pub struct Session {
     breakables: breakables::Breakables,
     /// The map's teleporters (`set_teleporters`).
     map_teleporters: teleporters::MapTeleporters,
+    /// The map's named boxes (`set_volumes`).
+    map_volumes: Vec<bri_content::scene::Volume>,
     /// Add-On map light rules (`set_map_lights`), replicated to clients.
     map_lights: Vec<map_lights::MapLightRule>,
     /// The map's keyed movers (doors) and where each is in its motion.
@@ -1231,6 +1234,7 @@ impl Session {
             grips: Default::default(),
             breakables: Default::default(),
             map_teleporters: Default::default(),
+            map_volumes: Vec::new(),
             map_lights: Vec::new(),
             map_movers: Default::default(),
             music: None,

@@ -229,6 +229,66 @@ fn relative_dir(dir: &str) -> std::result::Result<(), String> {
     }
 }
 
+/// The animation libraries the archetypes of the package at `dir` give the
+/// body `model` (`animation_libraries`: asset ids `package:asset/file`, as
+/// UE2 links animation sets to a mesh), each once, in the order read.
+pub fn animation_library_ids(dir: &Path, model: &str) -> Vec<String> {
+    let mut libraries: Vec<String> = Vec::new();
+    let Ok(archetypes) = std::fs::read_dir(dir.join("assets/archetypes")) else {
+        return libraries;
+    };
+    let mut paths: Vec<_> = archetypes.flatten().map(|e| e.path()).collect();
+    paths.sort();
+    for path in paths {
+        let Some(json) = std::fs::read(path)
+            .ok()
+            .and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok())
+        else {
+            continue;
+        };
+        if json["model"].as_str() != Some(model) {
+            continue;
+        }
+        for library in json["animation_libraries"].as_array().into_iter().flatten() {
+            if let Some(id) = library.as_str()
+                && !libraries.iter().any(|l| l.eq_ignore_ascii_case(id))
+            {
+                libraries.push(id.to_owned());
+            }
+        }
+    }
+    libraries
+}
+
+/// Where the animation library `id` (`package:asset/file`) is: its package's
+/// directory and the shape file its `assets/content.json` gives it, relative to
+/// that directory. The package must be enabled.
+pub fn animation_library_file(
+    root: &Path,
+    packages: &PackageSet,
+    id: &str,
+) -> Result<(PathBuf, String)> {
+    let (package, _) = id
+        .split_once(':')
+        .context("an animation library is `package:asset/file`")?;
+    let entry = packages
+        .packages
+        .iter()
+        .find(|p| p.id.eq_ignore_ascii_case(package))
+        .with_context(|| format!("animation library {id}: package {package} is not enabled"))?;
+    let dir = package_dir(root, entry)?.canonicalize()?;
+    let content: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(dir.join("assets/content.json"))?)?;
+    let file = content["content"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .find(|c| c["id"].as_str().is_some_and(|c| c.eq_ignore_ascii_case(id)))
+        .and_then(|c| c["file"].as_str())
+        .with_context(|| format!("animation library {id} is not in its package"))?;
+    Ok((dir, file.to_owned()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
