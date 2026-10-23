@@ -27,6 +27,10 @@ const SEEN: Vec3 = Vec3::new(-40.0, 0.05, 48.0);
 const HIDDEN: Vec3 = Vec3::new(-80.0, 0.05, 90.0);
 
 fn session(memory: f32, hitscan: bool) -> Session {
+    session_with_home_radius(memory, hitscan, 128.0)
+}
+
+fn session_with_home_radius(memory: f32, hitscan: bool, radius: f32) -> Session {
     let mut s = fixture::synthetic().unwrap().session;
     let mut kinds = BotPack::from_json(include_bytes!(
         "../../../packages/blockhead_bot/assets/bots.json"
@@ -35,7 +39,7 @@ fn session(memory: f32, hitscan: bool) -> Session {
     .bots;
     let kind = &mut kinds[0];
     kind.sight = 32.0;
-    kind.chase_radius = 128.0;
+    kind.chase_radius = radius;
     kind.wander_radius = 0.0;
     kind.memory_seconds = memory;
     kind.alerts_allies = false;
@@ -240,6 +244,85 @@ impl Game {
             self.steps(1);
         }
         assert_eq!(thought(&self.s, self.bot).behaviour, "search");
+    }
+}
+
+/// A home is an idle destination, not a wall that deletes direct sight.
+/// Two radii exercise both sides of the old cutoff without tuning movement.
+#[test]
+fn a_hole_bot_pursues_past_home_bounds_then_returns_when_the_fight_is_lost() {
+    for radius in [8.0, 12.0] {
+        let mut s = session_with_home_radius(1.0, false, radius);
+        let mut kinds = BotPack::from_json(include_bytes!(
+            "../../../packages/blockhead_bot/assets/bots.json"
+        ))
+        .unwrap()
+        .bots;
+        let kind = &mut kinds[0];
+        kind.sight = 32.0;
+        kind.chase_radius = radius;
+        kind.wander_radius = 2.0;
+        kind.memory_seconds = 1.0;
+        kind.reaction_seconds = 0.0;
+        kind.alerts_allies = false;
+        kind.weapons = false;
+        kind.behaviours.insert("interact".into(), 0.0);
+        kind.behaviours.insert("explore".into(), 0.0);
+        kind.behaviours.insert("fly".into(), 0.0);
+        kind.melee = Some(BotMelee {
+            damage: 1.0,
+            reach: 2.5,
+            seconds: 0.5,
+            action: None,
+            name: "Test bite".into(),
+            converts_below: None,
+        });
+        s.set_bot_kinds(kinds).unwrap();
+        let mut g = Game::setup_in(s, false, None);
+        let mut crossed = false;
+        for _ in 0..120 * 15 {
+            g.steps(1);
+            let at = feet(&g.s, g.bot);
+            let away = Vec3::new(at.x - HOME.x, 0.0, at.z - HOME.z).length();
+            if away > radius + 1.0 {
+                crossed = true;
+                let now = thought(&g.s, g.bot);
+                assert_eq!(now.visible, Some(g.human), "{now:?}");
+                assert_eq!(now.remembered.unwrap().subject, g.human);
+                assert_ne!(now.behaviour, "return", "{now:?}");
+            }
+            if g.s.vitals()[&g.human].health < 100.0 {
+                break;
+            }
+        }
+        assert!(crossed, "bot stopped at its {radius}-unit home boundary");
+        assert!(
+            g.s.vitals()[&g.human].health < 100.0,
+            "pursuit must land a real bite"
+        );
+        let far = feet(&g.s, g.bot).distance(HOME);
+        g.send(
+            g.human,
+            Command::DropPlayerAtCamera(Some(CameraView {
+                eye: [HIDDEN.x, HIDDEN.y + 1.6, HIDDEN.z],
+                yaw: 0.0,
+                pitch: 0.0,
+            })),
+        );
+        g.steps(1);
+        assert_eq!(thought(&g.s, g.bot).visible, None);
+        let mut returning = false;
+        for _ in 0..120 * 15 {
+            g.steps(1);
+            returning |= thought(&g.s, g.bot).behaviour == "return";
+            if feet(&g.s, g.bot).distance(HOME) < 3.0 {
+                break;
+            }
+        }
+        assert!(returning, "after evidence expires the idle bot heads home");
+        assert!(feet(&g.s, g.bot).distance(HOME) < far - 5.0);
+        assert!(feet(&g.s, g.bot).distance(HOME) < 3.0);
+        assert_eq!(g.s.bot_step_failures().0, 0);
     }
 }
 

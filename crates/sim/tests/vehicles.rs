@@ -758,6 +758,15 @@ fn hole_brick_keeps_its_own_bot(f: &Fixture) -> anyhow::Result<()> {
     let mut s = Session::new(Simulation::new(world, definitions, vec![ground()])?);
     s.set_weapon_pack(f.weapons.clone())?;
     s.set_vehicle_pack(f.vehicles(), vec![zombie])?;
+    // Kill through the ordinary event executor, without injecting guessed
+    // command sequence numbers into a bot controlled by its own brain.
+    let mut catalog = bri_events::testing::catalog_extended();
+    catalog.inputs.push(bri_events::InputDef {
+        id: "fixture/death".into(), class_name: "fxDTSBrick".into(),
+        name: "fixtureDeath".into(), targets: vec![("Bot".into(), "Player".into())],
+        source: "invented fixture".into(), source_line: 0,
+    });
+    s.set_event_catalog(catalog, Vec::new())?;
     s.set_spawn_points(vec![Vec3::new(0.0, 0.05, 6.0)])?;
     let human = s.join("Human".into(), Vec3::new(0.0, 0.05, 6.0), true)?;
     s.step()?;
@@ -782,6 +791,35 @@ fn hole_brick_keeps_its_own_bot(f: &Fixture) -> anyhow::Result<()> {
         .collect();
     assert_eq!(bots, ["Zombie"], "the hole's own bot");
     assert!(s.vehicle_infos().is_empty(), "bots are not vehicles");
+    let bot = *s.names().keys().find(|id| s.is_bot(**id)).unwrap();
+    let brick = *s.simulation().state().bricks.keys().next().unwrap();
+    s.edit_brick(human, brick, bri_world::authority::Edit::Events(vec![bri_world::EventRow {
+        conditions: vec![], preserved: None, enabled: true, input: "fixtureDeath".into(),
+        delay_ms: 0, target: bri_world::EventTarget::Slot(bri_events::Slot::Bot),
+        output: "kill".into(), params: vec![],
+    }]))?;
+    // Player::kill respects the ordinary 2.5-second spawn shield.
+    for _ in 0..310 {
+        s.step()?;
+    }
+    s.fire_brick_input(brick, "fixtureDeath", Some(bot));
+    s.step()?;
+    assert!(!s.is_alive(bot), "death fixture: {:?}", s.take_event_diagnostics());
+    s.command(human, 2, Command::Admin(bri_admin::Request::new(bri_admin::Action::ResetVehicles)))?;
+    assert!(s.is_alive(bot), "reset must also revive a hole's intrinsic bot");
+    assert_eq!(s.names().keys().filter(|id| s.is_bot(**id)).count(), 1);
+    s.command(human, 3, Command::MiniGame(bri_sim::session::MiniGameRequest::Create {
+        color: 0,
+        settings: f.minigame_settings(),
+    }))?;
+    for _ in 0..610 {
+        s.step()?;
+    }
+    s.fire_brick_input(brick, "fixtureDeath", Some(bot));
+    s.step()?;
+    assert!(!s.is_alive(bot), "death fixture: {:?}", s.take_event_diagnostics());
+    s.command(human, 4, Command::MiniGame(bri_sim::session::MiniGameRequest::Reset))?;
+    assert!(s.is_alive(bot), "minigame reset must restore its hole bot");
     Ok(())
 }
 }

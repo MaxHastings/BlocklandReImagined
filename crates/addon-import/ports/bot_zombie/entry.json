@@ -18,7 +18,8 @@
       "hip": "%obj\\.hipColor\\s*=\\s*\"([^\"]+)\"",
       "lleg": "%obj\\.llegColor\\s*=\\s*\"([^\"]+)\"",
       "rleg": "%obj\\.rlegColor\\s*=\\s*\"([^\"]+)\"",
-      "face": "%obj\\.faceName\\s*=\\s*\"([^\"]+)\""
+      "face": "%obj\\.faceName\\s*=\\s*\"([^\"]+)\"",
+      "decal": "%obj\\.decalName\\s*=\\s*\"([^\"]+)\""
     },
     "ZombieHoleBot::onBotLoop": {
       "empty": "^\\s*$"

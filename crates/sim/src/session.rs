@@ -761,22 +761,27 @@ impl UniformParts {
                 avatar.parts.insert(slot.clone(), found);
             }
         }
-        if let Some(face) = self
-            .face
-            .as_deref()
-            .and_then(|f| pick(pack.map(|p| &p.faces), f))
-        {
-            avatar.face = face;
-        }
-        if let Some(decal) = self
-            .decal
-            .as_deref()
-            .and_then(|d| pick(pack.map(|p| &p.decals), d))
-        {
-            avatar.decal = decal;
-        }
+        // Faces and decals also admit unambiguous source short names. Parts
+        // above are direct node names; using their exact picker for images
+        // silently discarded authored choices such as `asciiTerror`.
+        let requested = bri_content::avatar::Appearance {
+            face: self.face.clone().unwrap_or_else(|| avatar.face.clone()),
+            decal: self.decal.clone().unwrap_or_else(|| avatar.decal.clone()),
+            ..avatar.clone()
+        };
         if let Some(pack) = pack {
+            let (resolved, _) = pack.repaired(&requested);
+            // A missing/ambiguous request leaves the player's existing image,
+            // rather than applying the pack default used by repair.
+            if resolved.face.eq_ignore_ascii_case(&requested.face) {
+                avatar.face = resolved.face;
+            }
+            if resolved.decal.eq_ignore_ascii_case(&requested.decal) {
+                avatar.decal = resolved.decal;
+            }
             *avatar = pack.repaired(avatar).0;
+        } else {
+            *avatar = requested;
         }
     }
 }
@@ -3536,6 +3541,62 @@ fn etard_word(text: &str) -> Option<&'static str> {
         .replace("/u/", "")
         .replace(['?', '!', '.', '/'], " ");
     LIST.into_iter().find(|w| lower.contains(w))
+}
+
+#[cfg(test)]
+mod uniform_parts_tests {
+    use super::*;
+
+    #[test]
+    fn authored_avatar_images_resolve_short_names_and_keep_unknown_choices_out() {
+        let scratch = bri_content::testing::ScratchDir::new("uniform-image-aliases").unwrap();
+        bri_content::testing::avatar::write(scratch.path()).unwrap();
+        let mut pack: bri_content::avatar::Package =
+            serde_json::from_slice(&std::fs::read(scratch.path().join("avatar.json")).unwrap())
+                .unwrap();
+        let mut avatar = pack.defaults.clone();
+        UniformParts {
+            parts: BTreeMap::new(),
+            face: Some("FROWN".into()),
+            decal: Some("STRIPES".into()),
+        }
+        .dress(&mut avatar, Some(&pack));
+        let outfit = pack.resolve(&avatar).unwrap();
+        assert_eq!(outfit.face, "faces/frown");
+        assert_eq!(outfit.decal, "decals/stripes");
+
+        let before = avatar.clone();
+        UniformParts {
+            parts: BTreeMap::new(),
+            face: Some("absent".into()),
+            decal: Some("absent".into()),
+        }
+        .dress(&mut avatar, Some(&pack));
+        assert_eq!(
+            avatar, before,
+            "missing authored images leave the current look"
+        );
+
+        avatar.face = "faces/smile".into();
+        pack.faces.push("another/frown".into());
+        UniformParts {
+            parts: BTreeMap::new(),
+            face: Some("frown".into()),
+            decal: None,
+        }
+        .dress(&mut avatar, Some(&pack));
+        assert_eq!(
+            avatar.face, "faces/smile",
+            "ambiguous leaf names are rejected"
+        );
+        UniformParts {
+            parts: BTreeMap::new(),
+            face: Some("faces/frown".into()),
+            decal: None,
+        }
+        .dress(&mut avatar, Some(&pack));
+        assert_eq!(avatar.face, "faces/frown", "the full identity still works");
+    }
 }
 
 #[cfg(test)]

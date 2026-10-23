@@ -372,6 +372,55 @@ fn intents_guard_patrol_and_follow_are_carried_out_by_the_brain() {
     g.steps(120);
 }
 
+/// Explicit guard orders remain a combat boundary, unlike a spawn home.
+#[test]
+fn an_explicit_guard_radius_still_limits_pursuit_and_clearing_it_allows_attack() {
+    let mut g = Game::new(
+        vec![],
+        Vec3::new(0.0, 0.05, 10.0),
+        Vec3::new(0.0, 0.05, 0.0),
+    );
+    // Minigame creation resets members at the configured spawn; establish
+    // the enemy's actual position after that transition.
+    g.send(Command::DropPlayerAtCamera(Some(
+        bri_sim::session::CameraView {
+            eye: [0.0, 1.65, 10.0],
+            yaw: 0.0,
+            pitch: 0.0,
+        },
+    )))
+    .unwrap();
+    let bot = g.add("probe:bot/biter", "Guard");
+    assert!(
+        flat(g.feet(g.me)) > 9.0,
+        "enemy starts outside the guard post"
+    );
+    g.run("guard", vec![int(bot), float(0.0), float(0.0), float(3.0)]);
+    let mut far = 0.0f32;
+    for _ in 0..120 * 8 {
+        g.steps(1);
+        far = far.max(flat(g.feet(bot)));
+    }
+    assert_eq!(
+        g.health(g.me),
+        100.0,
+        "guard must not abandon its post to bite"
+    );
+    assert!(far < 5.0, "guard exceeded its post boundary: {far}");
+    g.run("clear", vec![int(bot)]);
+    for _ in 0..120 * 8 {
+        g.steps(1);
+        if g.health(g.me) < 100.0 {
+            break;
+        }
+    }
+    assert!(
+        g.health(g.me) < 100.0,
+        "clearing the order permits an ordinary chase and bite"
+    );
+    assert_eq!(g.s.bot_step_failures().0, 0);
+}
+
 /// A flee intent sends a bot running from the player it names, and a kind
 /// with `flee_below` runs on its own once hurt that far.
 #[test]

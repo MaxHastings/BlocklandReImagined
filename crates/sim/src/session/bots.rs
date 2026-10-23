@@ -694,15 +694,15 @@ impl Brain {
     fn tethered(&self) -> bool {
         self.brick.is_some() || self.intent.as_ref().is_some_and(intents::Held::anchors)
     }
-    /// Its chase leash. An untethered bot has no bound, on foot or in a
-    /// seat (a leash to where it spawned had it drop a chase at the edge
-    /// and wander back, then see them and chase again). A tethered driver
-    /// keeps within `DRIVE_CHASE_RADIUS` of where it took the controls (a
-    /// mount covers ground a walker does not); on foot it keeps near its
-    /// brick.
+    /// A rules-authored anchor can bound pursuit. A spawn brick only
+    /// supplies the idle home: crossing its radius must not erase a seen
+    /// enemy or a still-valid observation. Sight, evidence expiry and
+    /// reachable routes limit an ordinary chase instead.
     fn leash(&self, driving: bool) -> Leash {
         let (at, radius) = match (driving, self.mount_anchor) {
-            _ if !self.tethered() => (self.leash, f32::INFINITY),
+            _ if !self.intent.as_ref().is_some_and(intents::Held::anchors) => {
+                (self.leash, f32::INFINITY)
+            }
             (true, Some((_, at))) => (at, DRIVE_CHASE_RADIUS),
             (true, None) => (self.leash, DRIVE_CHASE_RADIUS),
             (false, _) => (self.leash, self.chase_radius()),

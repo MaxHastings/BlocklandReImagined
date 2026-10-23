@@ -39,6 +39,7 @@ function ZombieHoleBot::onAdd(%this,%obj)
 	%obj.llegColor = "0.1 0.1 0.3 1";
 	%obj.rlegColor = "0.1 0.1 0.3 1";
 	%obj.faceName = "smileyEvil1";
+	%obj.decalName = "plain";
 	GameConnection::ApplyBodyParts(%obj);
 	GameConnection::ApplyBodyColors(%obj);
 }

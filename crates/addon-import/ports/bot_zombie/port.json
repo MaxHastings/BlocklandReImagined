@@ -18,7 +18,8 @@
               "lleg": "{lleg:rgba}",
               "rleg": "{rleg:rgba}"
             },
-            "face": "{face}"
+            "face": "{face}",
+            "decal": "{decal}"
           },
           "melee": {
             "converts_below": "{turns_hurt_bots}"
@@ -28,7 +29,7 @@
     }
   },
   "handles": {
-    "ZombieHoleBot::onAdd": "the bot kind's look (paint by slot and face, from this copy's script) and emote hug, which holds the arms out ahead as playThread(1, ArmReadyBoth) did",
+    "ZombieHoleBot::onAdd": "the bot kind's look (paint by slot, face and decal, from this copy's script) and emote hug, which holds the arms out ahead as playThread(1, ArmReadyBoth) did",
     "ZombieHoleBot::onBotLoop": "does nothing in the original",
     "ZombieHoleBot::onBotFollow": "only reads positions in the original",
     "ZombieHoleBot::onBotCollision": "does nothing in the original",

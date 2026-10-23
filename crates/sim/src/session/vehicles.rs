@@ -1103,6 +1103,18 @@ impl Session {
             self.vehicles.brick_paint.insert(vehicle, color);
         }
     }
+    /// An explicit spawn choice takes precedence over a catalog's intrinsic
+    /// bot kind. Hole bricks need no authored vehicle property.
+    pub(super) fn brick_spawn_kind(&self, brick: &Brick) -> Option<String> {
+        brick
+            .vehicle
+            .as_ref()
+            .and_then(|v| match &v.vehicle {
+                bri_world::ContentRef::Resolved(id) => Some(id.clone()),
+                _ => None,
+            })
+            .or_else(|| self.simulation.definitions.get(brick).ok()?.bot.clone())
+    }
     /// Keep spawned vehicles in step with their spawn bricks.
     fn reconcile_vehicle_bricks(&mut self) -> Result<()> {
         use super::dirty::Reader;
@@ -1123,18 +1135,10 @@ impl Session {
                 .state()
                 .bricks
                 .get(&brick_id)
-                .and_then(|b| b.vehicle.as_ref())
-                .and_then(|v| match &v.vehicle {
-                    bri_world::ContentRef::Resolved(id) => Some(id.clone()),
-                    _ => None,
-                });
+                .and_then(|b| self.brick_spawn_kind(b));
             // A hole brick keeps its own kind of bot; a spawn brick the one
             // chosen from its list.
-            let bot = wanted.clone().or_else(|| {
-                let brick = self.simulation.state().bricks.get(&brick_id)?;
-                self.simulation.definitions.get(brick).ok()?.bot.clone()
-            });
-            self.reconcile_bot_brick(brick_id, bot.as_deref())?;
+            self.reconcile_bot_brick(brick_id, wanted.as_deref())?;
             // Bot kinds share the spawn brick's list but are not vehicles.
             let wanted = wanted.filter(|id| !self.is_bot_kind(id));
             let current = self.vehicles.by_brick.get(&brick_id).copied();
@@ -1184,13 +1188,13 @@ impl Session {
             .bricks
             .get(&brick_id)
             .context("Unknown brick")?;
-        ensure!(brick.vehicle.is_some(), "This brick has no vehicle");
-        if let Some(kind) = brick.vehicle.as_ref().and_then(|v| match &v.vehicle {
-            bri_world::ContentRef::Resolved(id) if self.is_bot_kind(id) => Some(id.clone()),
-            _ => None,
-        }) {
+        if let Some(kind) = self
+            .brick_spawn_kind(brick)
+            .filter(|id| self.is_bot_kind(id))
+        {
             return self.respawn_brick_bot(brick_id, &kind);
         }
+        ensure!(brick.vehicle.is_some(), "This brick has no vehicle or bot");
         if let Some(id) = self.vehicles.by_brick.get(&brick_id).copied() {
             self.remove_vehicle(id)?;
         } else if let Some(world) = &mut self.vehicles.world {

@@ -79,7 +79,9 @@ checks do not replace your playtest.
   vehicle ejection and full white-Shark aggression/no-strafe behavior remain
   incomplete. Capture completion and its declared death type/icon now have
   actual-import checks. Zombie infection markings/name prefixes also
-  remain incomplete. Visual feel still needs your playtest.
+  remain incomplete. The original v21 Bot_Hole wrench controls and custom bot
+  events are not a complete native port; spawning a Zombie Hole does not
+  establish framework compatibility. Visual feel still needs your playtest.
 - **Colorsets:** only valid UTF-8 text palettes with 1–256 RGBA colors load.
   Removed or invalid selections block a new host instead of silently choosing
   Default. Use **Start Game → Colorsets... → Folder...** for custom `.txt` files

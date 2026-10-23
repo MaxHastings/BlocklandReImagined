@@ -52,7 +52,9 @@ pub struct BotKind {
     pub sight: f32,
     /// How far from its spawn brick it strolls when nothing is going on.
     pub wander_radius: f32,
-    /// How far from its spawn brick it follows a fight before heading back.
+    /// How far idle interactions may take it from home before returning.
+    /// Also the pursuit radius for an explicit follow intent; ordinary
+    /// combat is limited by perception and evidence, not distance to spawn.
     pub chase_radius: f32,
     /// Seconds from first seeing an enemy to its first shot.
     pub reaction_seconds: f32,

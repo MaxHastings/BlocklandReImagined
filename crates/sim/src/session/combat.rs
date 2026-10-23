@@ -2502,7 +2502,12 @@ impl Session {
                         .bricks
                         .iter()
                         .filter(|(_, b)| owners.contains(&mg::AccountId(b.owner)))
-                        .map(|(id, b)| (*id, b.vehicle.is_some()))
+                        .map(|(id, b)| {
+                            (
+                                *id,
+                                b.vehicle.is_some() || self.brick_spawn_kind(b).is_some(),
+                            )
+                        })
                         .collect();
                     for (brick, vehicle) in bricks {
                         // A blocked respawn must not abort the reset.

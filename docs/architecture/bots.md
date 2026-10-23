@@ -92,11 +92,14 @@ bot does through the same code.
    (`interactions::Want::Objective`); the driver pulls up and gets out
    within 6 units past its standoff and walks the rest.
 
-   An on-foot bot's leash is its brick and `chase_radius`; a rules bot on
-   foot has none and plays the whole map, from a seat as well. A brick
-   bot's drive leash is measured from where it took the controls, 96
-   units long. So a bot that boards a vehicle 40 m out keeps pursuing a
-   target 60 m out rather than turning back at its walking leash.
+   A spawn brick supplies an idle home, not a combat boundary. Ordinary
+   walkers and drivers keep pursuing visible enemies and valid remembered
+   evidence outside their home radius. Once the fight is lost and evidence
+   expires or its search is exhausted, a brick bot returns to its idle area.
+   Rules-authored guard/patrol/follow intents retain their pursuit bounds;
+   their driver's bound is measured from boarding and is 96 units long.
+   `wander_radius` controls idle strolling; `chase_radius` controls the home
+   allowance for idle interactions and an explicit follow intent's pursuit.
 
    A seat is a body the bot plays from, not a leg it takes. A driver with
    no fight known explores like a walker, with its chassis as the body: an

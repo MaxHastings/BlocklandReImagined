@@ -55,6 +55,7 @@ fn the_zombie_port_gives_its_bot_a_look_its_arms_out_and_its_bite_turns_bots() {
     assert_eq!(look.colors["head"], [0.5, 0.6, 0.4, 1.0]);
     assert_eq!(look.colors["torso"], [0.3, 0.3, 0.3, 1.0]);
     assert_eq!(look.face.as_deref(), Some("smileyEvil1"));
+    assert_eq!(look.decal.as_deref(), Some("plain"));
 
     // Its body is a player type, and its hole brick keeps one of it.
     let body: serde_json::Value = serde_json::from_slice(
