@@ -47,6 +47,7 @@ fn cmd_contact_blast(p) { fire("kit:projectile/contact", 30.0, 5.0, 30.0, 0.0, -
 fn cmd_shoot(p) { fire("kit:projectile/round", 30.0, 5.0, 30.0, 0.0, -60.0, 0.0, p); }
 fn cmd_toss(p, item, x, z) { drop_item(item, x, 0.2, z); }
 fn cmd_bag(p, x, z) { drop_item("kit:weapon/ammo", x, 0.2, z, 0.0, 0.0, 0.0, #{ rounds: 25 }); }
+fn cmd_renew(p, id, seconds) { require(renew_drop(id, seconds)); }
 fn cmd_take(p, item) { take_item(p, item); }
 fn cmd_give(p, item) { give_item(p, item, true); }
 fn cmd_facts(p) {
@@ -99,6 +100,7 @@ fn behaviour() -> Value {
             command("contact_blast", &[]),
             command("toss", &["string", "float", "float"]),
             command("bag", &["float", "float"]),
+            command("renew", &["int", "int"]),
             command("take", &["string"]),
             command("give", &["string"]),
             command("facts", &[]),
@@ -300,6 +302,123 @@ fn toss(item: &str, x: f32, z: f32) -> Vec<PackageArg> {
         PackageArg::Float(x.into()),
         PackageArg::Float(z.into()),
     ]
+}
+
+#[test]
+fn an_owned_pickup_can_outlive_its_original_deadline_without_being_replaced() {
+    let mut g = Game::new();
+    let a = g.join(Vec3::new(0.0, 0.05, 0.0));
+    g.steps(2);
+    g.run(
+        a,
+        "bag",
+        vec![PackageArg::Float(30.0), PackageArg::Float(30.0)],
+    )
+    .unwrap();
+    g.steps(9 * 120);
+    let before = g.s.weapon_view().drops[0].clone();
+    g.run(
+        a,
+        "renew",
+        vec![PackageArg::Int(before.id as i64), PackageArg::Int(3)],
+    )
+    .unwrap();
+    let renewed = g.s.weapon_view().drops[0].clone();
+    assert_eq!(renewed.id, before.id);
+    assert_eq!(renewed.position, before.position);
+    assert_eq!(renewed.velocity, before.velocity);
+    assert_eq!(renewed.rotation, before.rotation);
+    assert_eq!(renewed.scale, before.scale);
+    assert_eq!(renewed.item, before.item);
+    assert_eq!(renewed.source, before.source);
+    assert!(renewed.expires > before.expires);
+    g.steps(121);
+    assert_eq!(
+        g.s.weapon_view().drops[0].id,
+        before.id,
+        "survived its old deadline"
+    );
+    let at = g.s.weapon_view().drops[0].position;
+    g.join(Vec3::new(at.x, 0.05, at.z));
+    g.steps(4);
+    assert!(g.drops("kit:weapon/ammo").is_empty());
+    assert_eq!(g.value("rounds"), json!(25), "renewal retained pickup data");
+    assert_eq!(g.value("collected"), json!(1));
+
+    g.run(a, "toss", toss("kit:weapon/mine", -30.0, -30.0))
+        .unwrap();
+    let mine = g.s.weapon_view().drops[0].id;
+    g.run(
+        a,
+        "renew",
+        vec![PackageArg::Int(mine as i64), PackageArg::Int(1)],
+    )
+    .unwrap();
+    g.steps(119);
+    assert_eq!(g.s.weapon_view().drops[0].id, mine);
+    g.steps(2);
+    assert!(
+        g.s.weapon_view().drops.is_empty(),
+        "no renewal means ordinary expiry"
+    );
+    assert!(g.diagnostics().is_empty(), "{:?}", g.diagnostics());
+}
+
+#[test]
+fn renewing_a_drop_checks_ownership_and_keeps_the_bounded_lifetime() {
+    let mut g = Game::new();
+    let a = g.join(Vec3::new(0.0, 0.05, 0.0));
+    g.steps(2);
+    g.run(a, "toss", toss("kit:weapon/mine", 30.0, 30.0))
+        .unwrap();
+    let own = g.s.weapon_view().drops[0].clone();
+    for seconds in [-1, 0, 601] {
+        let error = g
+            .run(
+                a,
+                "renew",
+                vec![PackageArg::Int(own.id as i64), PackageArg::Int(seconds)],
+            )
+            .unwrap_err();
+        assert!(error.to_string().contains("1 to 600"), "{error:#}");
+        assert_eq!(g.s.weapon_view().drops[0].expires, own.expires);
+    }
+    g.run(a, "give", vec![text("kit:weapon/gun")]).unwrap();
+    g.steps(2);
+    let slot = g.s.tool_inventories()[&a].selected.unwrap();
+    g.send(a, Command::DropTool { slot }).unwrap();
+    let foreign =
+        g.s.weapon_view()
+            .drops
+            .into_iter()
+            .find(|d| d.item == "kit:weapon/gun")
+            .unwrap();
+    let error = g
+        .run(
+            a,
+            "renew",
+            vec![PackageArg::Int(foreign.id as i64), PackageArg::Int(60)],
+        )
+        .unwrap_err();
+    assert!(error.to_string().contains("not one"), "{error:#}");
+    assert_eq!(
+        g.s.weapon_view()
+            .drops
+            .into_iter()
+            .find(|d| d.id == foreign.id)
+            .unwrap()
+            .expires,
+        foreign.expires,
+        "the item's namespace does not grant ownership of a player's drop"
+    );
+    assert!(
+        g.run(
+            a,
+            "renew",
+            vec![PackageArg::Int(999_999), PackageArg::Int(60)]
+        )
+        .is_err()
+    );
 }
 
 #[test]

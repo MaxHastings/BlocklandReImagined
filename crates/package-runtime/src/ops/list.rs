@@ -105,6 +105,7 @@ macro_rules! for_each_op {
             TakeItem = player,
             DropItem = player,
             RemoveDrop = player,
+            RenewDrop = player,
             NameDrop = player,
             Push = physics,
             SetPassGroup = physics,

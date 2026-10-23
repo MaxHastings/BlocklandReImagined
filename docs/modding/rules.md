@@ -755,6 +755,13 @@ index in `zones`) is checked, as a script setting the trigger datablock's
 seconds })` drops an item at `at` (`[x, y, z]`), thrown with `velocity`,
 tinted with `paint`, carrying `data` (any value, up to 1 KB, handed to
 `on_pickup` as `info.data`) and gone after `seconds` (at most 600).
+Without `seconds`, a world drop expires after ten seconds. To keep an objective
+item while your rules own it, call `renew_drop(id, seconds)` before its deadline:
+this sets its expiry to 1..600 seconds from now, preserving the same pickup,
+position, motion and data. Stop renewing and it expires normally. Only the
+package that created it with `drop_item` may renew it; an item's namespace alone
+does not give ownership of a drop thrown by a player. Renewal uses the existing
+`player` capability and does not increase the live-drop budget.
 `drops()` lists your Add-On's drops still lying in the world (`#{ id, item,
 x, y, z, data }`) and `remove_drop(id)` takes one away. `name_drop(id,
 text, c)` floats `text` (up to 32 characters) over one of them in palette
@@ -1327,7 +1334,7 @@ anything):
 | `remove_brick` | the brick is gone, indestructible, not the caller's to remove, or the package used its world-edit share |
 | `plant_brick`, `place_brick` | the brick kind is not loaded, the colour is not in the palette, the build is not the caller's, the brick is off the grid or does not fit, or no world-edit share is left. An unrequired plant that does not fit is skipped without a report, as v20's `plant()` was; a required one is refused |
 | `drop_item` | the item is not this server's (it takes an item id from `items`, not a model), the package already has its limit lying about, or the data is too big; the package also needs the `player` capability, and a speed over the push limit or a non-finite position is bounded out before it runs |
-| `remove_drop`, `name_drop` | the item is not one this package put in the world and that still lies there |
+| `remove_drop`, `name_drop`, `renew_drop` | the item is not one this package put in the world and that still lies there; renewal also requires 1..600 seconds |
 | `damage` | the damage type does not exist, or the player, vehicle or entity is gone |
 | `heal`, `teleport` | the player is gone or dead |
 | `give_ammo`, `set_reserve` | the player is gone or already carries 64 kinds of ammo |

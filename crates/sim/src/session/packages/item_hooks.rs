@@ -523,6 +523,18 @@ impl Session {
         Ok(())
     }
 
+    /// `renew_drop`: keep one owned item alive without respawning it.
+    pub(super) fn package_renew_drop(
+        &mut self,
+        package: &str,
+        drop: u64,
+        seconds: u32,
+    ) -> Result<()> {
+        self.package_check_drop(package, drop)?;
+        self.weapons
+            .renew_drop(drop, u64::from(seconds) * u64::from(bri_weapons::TICK_HZ))
+    }
+
     /// `name_drop`: text over an item `package` put in the world.
     pub(super) fn package_name_drop(
         &mut self,

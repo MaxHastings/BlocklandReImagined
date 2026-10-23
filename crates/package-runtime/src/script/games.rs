@@ -811,6 +811,18 @@ pub(super) fn register(engine: &mut Engine) {
     engine.register_fn("remove_drop", |drop: Dynamic| {
         push(Op::RemoveDrop(ops::RemoveDrop { drop: id(&drop)? }))
     });
+    engine.register_fn("renew_drop", |drop: Dynamic, seconds: rhai::INT| {
+        let Ok(seconds) = u32::try_from(seconds) else {
+            return fail(format!("renew_drop seconds are 1 to {MAX_DROP_SECONDS}"));
+        };
+        if !(1..=MAX_DROP_SECONDS).contains(&seconds) {
+            return fail(format!("renew_drop seconds are 1 to {MAX_DROP_SECONDS}"));
+        }
+        push(Op::RenewDrop(ops::RenewDrop {
+            drop: id(&drop)?,
+            seconds,
+        }))
+    });
     // Text floating over one of this package's dropped items in a palette
     // colour (`setShapeName`), or () to take it away.
     engine.register_fn(
