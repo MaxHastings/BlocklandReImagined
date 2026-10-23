@@ -6106,6 +6106,26 @@ impl SceneRenderer {
                 && d.scene.index_count != 0
                 && (!mask_only || (d.blend == 0 && !d.scene.material_modes[d.batch.material].2))
         });
+        // Preserve the completed global transparency order, then combine only
+        // adjacent ascending instance ranges of the exact same draw. Faded
+        // scatter can otherwise submit thousands of identical one-instance
+        // draws. An intervening object, different blend or reversed range must
+        // stay separate; another view may require a different order.
+        let mut compacted: Vec<Draw<'_>> = Vec::with_capacity(order.len());
+        for draw in order {
+            if let Some(previous) = compacted.last_mut()
+                && std::ptr::eq(previous.scene, draw.scene)
+                && std::ptr::eq(previous.batch, draw.batch)
+                && previous.buffer == draw.buffer
+                && previous.blend == draw.blend
+                && previous.range.end == draw.range.start
+            {
+                previous.range.end = draw.range.end;
+            } else {
+                compacted.push(draw);
+            }
+        }
+        let order = compacted;
         // Runs of pooled chunk batches that bind the same things become one
         // indirect multi-draw each; their arguments upload together.
         let mut runs: Vec<(usize, usize)> = Vec::new();

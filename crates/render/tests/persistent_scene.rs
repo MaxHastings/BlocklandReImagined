@@ -1131,6 +1131,69 @@ fn shared_instances_match_cpu_geometry_fade_sorting_and_atomic_updates() -> Resu
         "Shared transform/fade/sort differs from independently transformed geometry"
     );
     assert!(actual.chunks_exact(4).any(|p| p[0] > 20 && p[2] > 20));
+    // A source already ordered back-to-front can use one instance range,
+    // preserving every pixel of the independently transformed oracle.
+    let sorted = [transforms[1], transforms[0]];
+    instances.update(&gpu.queue, &sorted)?;
+    let joined = gpu.frame_instances(
+        &mut renderer,
+        &[],
+        &[(&base, &instances)],
+        &camera,
+        (64, 64),
+        wgpu::TextureFormat::Rgba8UnormSrgb,
+    )?;
+    assert_eq!(joined, actual);
+    assert_eq!(renderer.stats().draws, 1, "adjacent blended instance range");
+    assert_eq!(renderer.stats().triangles, 2);
+
+    // Another object between those instances must remain between them. It
+    // cannot be swallowed into a range just because both ends share a model.
+    let middle_transform = SceneTransform {
+        transform: Mat4::from_translation(Vec3::new(0., 0., 0.45)),
+        tint: [0., 1., 0., 0.5],
+    };
+    let middle = renderer.upload(&gpu.device, &gpu.queue, &bake(middle_transform))?;
+    let expected_middle = gpu.frame(&mut renderer, &[&a, &middle, &b], &camera, (64, 64))?;
+    let actual_middle = gpu.frame_instances(
+        &mut renderer,
+        &[&middle],
+        &[(&base, &instances)],
+        &camera,
+        (64, 64),
+        wgpu::TextureFormat::Rgba8UnormSrgb,
+    )?;
+    assert_eq!(renderer.stats().draws, 3);
+    assert!(
+        actual_middle
+            .iter()
+            .zip(&expected_middle)
+            .all(|(a, b)| a.abs_diff(*b) <= 1)
+    );
+
+    // A secondary view can require the opposite order, which cannot use the
+    // ascending range. Preserve its independently sorted result too.
+    let reverse = Camera {
+        eye: [0., 0., 2., 1.],
+        ..Default::default()
+    };
+    let expected_reverse = gpu.frame(&mut renderer, &[&a, &b], &reverse, (64, 64))?;
+    let actual_reverse = gpu.frame_instances(
+        &mut renderer,
+        &[],
+        &[(&base, &instances)],
+        &reverse,
+        (64, 64),
+        wgpu::TextureFormat::Rgba8UnormSrgb,
+    )?;
+    assert_eq!(renderer.stats().draws, 2);
+    assert!(
+        actual_reverse
+            .iter()
+            .zip(&expected_reverse)
+            .all(|(a, b)| a.abs_diff(*b) <= 1)
+    );
+    instances.update(&gpu.queue, &transforms)?;
     let mut invalid = transforms;
     invalid[1].transform = Mat4::ZERO;
     assert!(instances.update(&gpu.queue, &invalid).is_err());
