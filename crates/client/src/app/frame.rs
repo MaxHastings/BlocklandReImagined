@@ -1816,6 +1816,31 @@ impl App {
                     model_shells.push(cue);
                 }
             }
+            // The first casings thrown say where they start against where
+            // their owner stands, so a casing thrown far from its gun shows.
+            for cue in &model_shells {
+                if self.fx.casings_told >= 8 {
+                    break;
+                }
+                if let bri_sim::presentation::CueKind::WeaponShell { actor, image, hand } =
+                    &cue.kind
+                {
+                    self.fx.casings_told += 1;
+                    let owner = presented.get(actor).map(|p| Vec3::from(p.feet));
+                    match eject(*actor, image, *hand) {
+                        Some(at) => {
+                            let start = at.w_axis.truncate();
+                            eprintln!(
+                                "Casing thrown for actor {actor} ({image}): eject node at {start:?}, owner's feet {owner:?}, {:?} apart",
+                                owner.map(|feet| feet.distance(start))
+                            );
+                        }
+                        None => eprintln!(
+                            "Casing thrown for actor {actor} ({image}): no eject or muzzle node to start from yet"
+                        ),
+                    }
+                }
+            }
             let queued = self.fx.weapon_shells.cues(&model_shells, eject, |actor| {
                 presented
                     .get(&actor)

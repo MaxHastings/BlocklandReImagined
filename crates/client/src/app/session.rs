@@ -162,6 +162,7 @@ impl App {
         self.fx.weapon_animation_drops = 0;
         self.fx.weapon_animation_cursor = 0;
         self.fx.weapon_cue_drops = 0;
+        self.fx.casings_told = 0;
         self.fx.brick_debris.clear();
         self.fx.debris_models.clear();
         self.fx.fade_models.clear();
