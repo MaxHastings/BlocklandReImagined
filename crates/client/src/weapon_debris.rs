@@ -933,8 +933,14 @@ impl WeaponDebris {
                             self.bodies.remove(&id);
                             continue;
                         }
-                        body.position = from.lerp(to, hit.fraction.clamped(0., 1.));
                         let normal = hit.normal.normalize();
+                        // A cosmetic sweep stops on the surface. Leaving the
+                        // next ray exactly there makes a two-sided map triangle
+                        // report another hit at distance zero while the casing
+                        // is moving away, reversing it and replaying its sound.
+                        // Use the same contact separation as the initial clip.
+                        body.position =
+                            from.lerp(to, hit.fraction.clamped(0., 1.)) + normal * CLIP_MARGIN;
                         let vn = body.velocity.dot(normal);
                         if vn < 0. {
                             let normal_v = normal * vn;
@@ -1363,21 +1369,54 @@ mod tests {
         world.cues(
             &[shell_cue(1, "kit:image/rifle")],
             |_, _, _| Some(Mat4::from_translation(Vec3::Y)),
-            |_| (Vec3::ZERO, 0.),
+            |_| (Vec3::X * 12., 0.),
         )?;
+        // Use the same solid surface query as the client. Starting exactly
+        // on a real triangle reports a zero-distance contact, unlike a toy
+        // crossing test that requires a.y > 0 and misses repeated impacts.
+        let building = crate::building::Building::new(
+            bri_sim::definitions::Definitions::default(),
+            vec![rapier3d::prelude::ColliderBuilder::trimesh(
+                vec![
+                    Vec3::new(-100., 0., -100.),
+                    Vec3::new(100., 0., -100.),
+                    Vec3::new(100., 0., 100.),
+                    Vec3::new(-100., 0., 100.),
+                ],
+                vec![[0, 2, 1], [0, 3, 2]],
+            )?],
+        )?;
+        let mut rose_after_bounce = false;
         for _ in 0..240 {
             world.advance(
                 1. / 60.,
                 |_, _, _| None,
                 |a, b| {
-                    (a.y > 0. && b.y <= 0.).then(|| DebrisHit {
-                        fraction: (a.y / (a.y - b.y)).clamped(0., 1.),
-                        normal: Vec3::Y,
-                        surface: None,
+                    let length = a.distance(b);
+                    if length < 1e-5 {
+                        return None;
+                    }
+                    let (hit, surface) = building.surface_at(a, b).ok()??;
+                    Some(DebrisHit {
+                        fraction: (hit.distance / length).clamped(0., 1.),
+                        normal: hit.normal.normalize_or(Vec3::Y),
+                        surface: Some(surface.to_owned()),
                     })
                 },
             )?;
+            if world.diagnostics.bounces > 0
+                && world
+                    .model_instances()
+                    .next()
+                    .is_some_and(|(_, at, _)| at.w_axis.y > 0.03)
+            {
+                rose_after_bounce = true;
+            }
         }
+        assert!(
+            rose_after_bounce,
+            "an energetic casing must leave the floor after its first bounce"
+        );
         let sounds = world.take_sounds();
         assert!(!sounds.is_empty() && sounds.iter().all(|s| s.0 == "kit:casing"));
         assert_eq!(world.diagnostics.settled, 1);
