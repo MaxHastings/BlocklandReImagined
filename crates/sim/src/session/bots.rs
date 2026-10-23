@@ -223,10 +223,17 @@ const AVOID_TICKS: u64 = 120 * 30;
 const CLEARANCE_BODIES: f32 = 0.5;
 /// Plans in a row that got stuck before a bot drops its goal.
 const MAX_REPLANS: u32 = 3;
+/// Ticks between two stall lines of one bot.
+const STALL_TELL_TICKS: u64 = 120 * 10;
+/// How far a stall line looks for a map mover, in units.
+const STALL_DOOR_SIGHT: f32 = 8.0;
 /// The mean seconds of one weave leg at an objective or in water.
 const WEAVE_SECONDS: f32 = 0.75;
 /// A goal that moves less than this keeps its route (`Brain::set_goal_near`).
 const GOAL_SLACK: f32 = 0.2;
+/// How far a bot that stood at the end of a route home that stops short of it
+/// must be moved before it tries that route again.
+const HOME_GIVEN_UP: f32 = 1.5;
 /// An enemy that moves less than this from where a chase heads keeps its
 /// route.
 const CHASE_SLACK: f32 = 2.5;
@@ -356,6 +363,10 @@ pub(super) struct Bots {
     alerts: Vec<Alert>,
     /// When each bot's failed step was last told (`step_bots`).
     failed_told: BTreeMap<OwnerId, u64>,
+    /// When each bot's stall was last told (`tell_stall`).
+    stall_told: BTreeMap<OwnerId, u64>,
+    /// When each bot's dead-end search was last told.
+    dead_end_told: BTreeMap<OwnerId, u64>,
     /// A bot whose every step fails, for tests of that isolation.
     failing: Option<OwnerId>,
     /// Every failed step since the session began, told or not, and the
@@ -448,6 +459,10 @@ struct Brain {
     /// goal changes or the bot gets stuck.
     settled: bool,
     partial_route: bool,
+    /// Where the best route home ended short of home and the bot stood at its
+    /// end: going home from there is no use until it has been moved
+    /// (`HOME_GIVEN_UP`), so `Return` stands instead of searching again.
+    home_given_up: Option<Vec3>,
     /// A chase point whose best route ends beyond its reach (`reach`):
     /// that enemy is not worth chasing while they stay there.
     out_of_reach: Option<Vec3>,
@@ -711,6 +726,7 @@ impl Brain {
             search: None,
             settled: false,
             partial_route: false,
+            home_given_up: None,
             out_of_reach: None,
             reach: (3.0, 2.0),
             chase_feet: None,
@@ -1338,6 +1354,12 @@ impl Session {
         self.bots
             .failed_told
             .retain(|b, _| self.bots.brains.contains_key(b));
+        self.bots
+            .stall_told
+            .retain(|b, _| self.bots.brains.contains_key(b));
+        self.bots
+            .dead_end_told
+            .retain(|b, _| self.bots.brains.contains_key(b));
         self.bots.stimuli.clear();
         self.hear_alerts(tick);
         self.hear_fighting(tick);
@@ -1382,6 +1404,57 @@ impl Session {
             ),
             None => bri_console::warn(&message),
         }
+    }
+    /// One console line when a bot's second walk window in a row has gone
+    /// nowhere (the point it plans again): where it is, what it was after
+    /// and the nearest map mover with its gap, so a stall at a door can be
+    /// told from one at a wall. At most one line a bot every
+    /// [`STALL_TELL_TICKS`].
+    fn tell_stall(&mut self, bot: OwnerId, feet: Vec3, tick: u64) {
+        if self
+            .bots
+            .stall_told
+            .get(&bot)
+            .is_some_and(|at| tick < at + STALL_TELL_TICKS)
+        {
+            return;
+        }
+        self.bots.stall_told.insert(bot, tick);
+        let Some(brain) = self.bots.brains.get(&bot) else {
+            return;
+        };
+        let door = match self.mover_gaps(bot, STALL_DOOR_SIGHT).first() {
+            Some((gap, id)) => {
+                let opens = self
+                    .map_mover_params(id)
+                    .is_some_and(|p| p.contains_key("bots_open"));
+                format!(
+                    "nearest map mover {id} {gap:.2} away{}",
+                    if opens { " (bots_open)" } else { "" }
+                )
+            }
+            None => format!("no map mover within {STALL_DOOR_SIGHT}"),
+        };
+        bri_console::warn(format!(
+            "bot {bot} ({}) stalled at ({:.2}, {:.2}, {:.2}): goal {:?}, {} waypoints{}, replans {}, walk {}; {door}",
+            brain.kind.id,
+            feet.x,
+            feet.y,
+            feet.z,
+            brain.goal,
+            brain.plan.len(),
+            if brain.partial_route {
+                " (partial route)"
+            } else {
+                ""
+            },
+            brain.replans,
+            if brain.acted.held_back {
+                "held back by a drop or blast"
+            } else {
+                "not held back"
+            },
+        ));
     }
     /// How many bot steps have failed since the session began, and the
     /// first few failures as (bot, tick, error): a bot's step should not
@@ -1981,7 +2054,45 @@ impl Session {
                 let nav = &mut bots_navs[at].1;
                 let brain = brains.get_mut(&bot).unwrap();
                 if let Some(found) = brain.search.as_mut().unwrap().step(nav, &ground, body) {
+                    let explored = brain.search.as_ref().map_or(0, Search::explored);
                     brain.search = None;
+                    if let Found::Partial(path) = &found
+                        && let Some(goal) = brain.goal
+                        && self
+                            .bots
+                            .dead_end_told
+                            .get(&bot)
+                            .is_none_or(|at| tick >= at + STALL_TELL_TICKS)
+                    {
+                        self.bots.dead_end_told.insert(bot, tick);
+                        if explored <= 2 {
+                            bri_console::warn(format!(
+                                "bot {bot} is closed in at ({:.2}, {:.2}, {:.2}): {}",
+                                feet.x,
+                                feet.y,
+                                feet.z,
+                                nav.closed_in(&ground, body, feet)
+                            ));
+                        }
+                        bri_console::warn(format!(
+                            "bot {bot} ({}) got only part of the way from ({:.2}, {:.2}, {:.2}) toward {:?} at {:?}: {} waypoints, ending {:.2} short of it at {:?}, {explored} grid nodes reached, its body {} fit here",
+                            brain.kind.id,
+                            feet.x,
+                            feet.y,
+                            feet.z,
+                            goal,
+                            goal.point(brain.home),
+                            path.len(),
+                            path.last()
+                                .map_or(f32::NAN, |w| w.feet.distance(goal.point(brain.home))),
+                            path.last().map(|w| w.feet),
+                            if ground.fits(body, feet, false) {
+                                "does"
+                            } else {
+                                "does NOT"
+                            }
+                        ));
+                    }
                     match found {
                         Found::Path(path) if !path.is_empty() => {
                             brain.partial_route = false;
@@ -2008,7 +2119,10 @@ impl Session {
                             brain.plan = crate::nav::pull(&ground, nav, body, feet, path);
                         }
                         // Already as close as it gets, or nowhere to stand.
-                        _ => brain.plan.clear(),
+                        other => {
+                            brain.partial_route = matches!(other, Found::Partial(_));
+                            brain.plan.clear();
+                        }
                     }
                 }
             }
@@ -2061,15 +2175,25 @@ impl Session {
             }
             if brain.plan.is_empty() && brain.search.is_none() {
                 // Walked the whole plan: arrived, or as near as it goes.
-                if matches!(brain.goal, Some(Goal::Objective(_))) && brain.partial_route {
+                if matches!(brain.goal, Some(Goal::Objective(_) | Goal::Home))
+                    && brain.partial_route
+                {
+                    // A search reaches only so far across and expands only so
+                    // many nodes: a goal beyond that is gone for in segments,
+                    // each from where the last ended. A segment that got
+                    // nowhere is the end of the way.
                     brain.partial_route = false;
                     if feet.distance(brain.segment_anchor) > 0.5 {
-                        brain.settled = false; // Continue a bounded, advancing segment.
+                        brain.settled = false;
                     } else {
                         brain.settled = true;
-                        brain
-                            .objective
-                            .fail(tick, "objective navigation made no progress");
+                        if matches!(brain.goal, Some(Goal::Home)) {
+                            brain.home_given_up = Some(feet);
+                        } else {
+                            brain
+                                .objective
+                                .fail(tick, "objective navigation made no progress");
+                        }
                     }
                 } else {
                     brain.settled = true;
@@ -3025,7 +3149,15 @@ impl Session {
                 brain.pursue(enemy, false, near, feet, body.width * 0.5, tick)
             }
             Behaviour::Return => {
-                brain.set_goal(Some(Goal::Home));
+                // Where the way home ended short of it, it stands there.
+                // Searching again from the same spot finds the same end.
+                if brain
+                    .home_given_up
+                    .is_some_and(|at| at.distance(feet) > HOME_GIVEN_UP)
+                {
+                    brain.home_given_up = None;
+                }
+                brain.set_goal(brain.home_given_up.is_none().then_some(Goal::Home));
                 false
             }
             Behaviour::Flee => {
@@ -4007,6 +4139,9 @@ impl Session {
             brain.footing = feet;
         }
         let brain_footing = brain.footing;
+        if brain.acted.stalls == 2 {
+            self.tell_stall(bot, feet, tick);
+        }
         if forget && let Some((_, nav)) = self.bots.navs.iter_mut().find(|(b, _)| *b == body) {
             nav.invalidate(feet - Vec3::splat(1.0), feet + Vec3::splat(1.0), &body);
             // What it walked toward and got nowhere: the grid avoids that

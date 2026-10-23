@@ -487,7 +487,7 @@ impl<'a> Ground<'a> {
     }
     /// Whether the full-width body stands (or crouches) at `feet` touching
     /// nothing.
-    fn fits(&self, body: &Body, feet: Vec3, crouched: bool) -> bool {
+    pub fn fits(&self, body: &Body, feet: Vec3, crouched: bool) -> bool {
         let (_, lift, tall) = body.clearance(crouched);
         self.empty(feet, body.width * 0.5, lift, tall)
     }
@@ -1224,6 +1224,36 @@ impl Nav {
     /// Walkable (or, when it `swims`, swimmable) neighbours of `node` and
     /// whether each takes a jump. `None` when the budget ran out before all
     /// eight were known.
+    /// Why a body at `feet` finds each of its eight neighbouring cells
+    /// closed, for a log line: per direction, the floors sampled there, how
+    /// many of them the body can step to, and whether the grid avoids them.
+    pub fn closed_in(&mut self, ground: &Ground, body: &Body, feet: Vec3) -> String {
+        let Some(Some(node)) = self.node_at(ground, body, feet) else {
+            return "no start node".into();
+        };
+        let from = node.feet().y;
+        let mut out = Vec::new();
+        for (dx, dz) in NEIGHBOURS {
+            let (x, z) = (node.x + dx, node.z + dz);
+            let Some(floors) = self.floor(ground, body, x, z, from) else {
+                out.push(format!("({dx},{dz}) unsampled"));
+                continue;
+            };
+            let steps: Vec<Floor> = entered(&floors, from, None, body)
+                .filter(|f| link(body, false, from, None, *f).is_some())
+                .collect();
+            let avoided = steps
+                .iter()
+                .filter(|f| self.avoided(node, x, z, f.y, body))
+                .count();
+            out.push(format!(
+                "({dx},{dz}) {} floors, {} steppable, {avoided} avoided",
+                floors.len(),
+                steps.len()
+            ));
+        }
+        out.join("; ")
+    }
     fn neighbours(
         &mut self,
         ground: &Ground,
@@ -1980,6 +2010,10 @@ impl Search {
                 .filter(|(to, _)| !nav.avoided(node, to.x, to.z, to.feet().y, body))
                 .collect(),
         )
+    }
+    /// How many grid nodes the search reached, the start included.
+    pub fn explored(&self) -> usize {
+        self.came.len()
     }
     /// Search on until done or the tick's sampling budget is spent.
     pub fn step(&mut self, nav: &mut Nav, ground: &Ground, body: &Body) -> Option<Found> {

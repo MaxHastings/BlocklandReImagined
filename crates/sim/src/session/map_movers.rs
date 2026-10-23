@@ -50,6 +50,10 @@ fn bot_door_command(value: &str) -> Option<(&str, &str)> {
 pub(super) struct MapMovers {
     /// When each bot last asked for each door, by mover index.
     asked: BTreeMap<(OwnerId, usize), u64>,
+    /// Refusals of a bot's door command already printed, by door and
+    /// reason: the engine refusing it (a command only a tool may run, a
+    /// cool-down) is told once, not every retry.
+    refused: BTreeSet<(usize, String)>,
     movers: Vec<MapMover>,
     states: Vec<MoverState>,
     /// The transform each mover's colliders were last put at.
@@ -95,6 +99,7 @@ impl Session {
         let count = movers.len();
         self.map_movers = MapMovers {
             asked: BTreeMap::new(),
+            refused: BTreeSet::new(),
             movers,
             states: vec![MoverState::default(); count],
             placed: vec![None; count],
@@ -149,7 +154,9 @@ impl Session {
             self.map_movers.asked.insert((bot, index), tick);
             let sequence = self.peers[&bot].last_sequence.saturating_add(1);
             // The rules may refuse (a door they keep locked): that is theirs.
-            let _ = self.command(
+            // The engine refusing the command is not, and says so once.
+            let full = format!("{package}:{command}");
+            let sent = self.command(
                 bot,
                 sequence,
                 Command::Package(PackageCommand {
@@ -158,6 +165,17 @@ impl Session {
                     args: Vec::new(),
                 }),
             );
+            if let Err(error) = sent
+                && self
+                    .map_movers
+                    .refused
+                    .insert((index, format!("{error:#}")))
+            {
+                bri_console::warn(format!(
+                    "bot {bot} could not send {full} at door {}: {error:#}",
+                    self.map_movers.movers[index].def.id
+                ));
+            }
         }
     }
     /// Every mover's state, in map order, for replication.
@@ -195,6 +213,14 @@ impl Session {
     /// Movers whose collision lies within `reach` of the body of player
     /// `owner` (touching it, for a reach of a hair), nearest first.
     pub fn movers_near_player(&self, owner: OwnerId, reach: f32) -> Vec<String> {
+        self.mover_gaps(owner, reach)
+            .into_iter()
+            .map(|(_, id)| id)
+            .collect()
+    }
+    /// The same movers with their gaps (a negative one: the body is in it),
+    /// nearest first.
+    pub(super) fn mover_gaps(&self, owner: OwnerId, reach: f32) -> Vec<(f32, String)> {
         let Some(peer) = self.peers.get(&owner) else {
             return Vec::new();
         };
@@ -228,7 +254,12 @@ impl Session {
             }
         }
         found.sort_by(|a, b| a.0.total_cmp(&b.0).then_with(|| a.1.cmp(&b.1)));
-        found.into_iter().map(|(_, id)| id).collect()
+        found
+    }
+    /// The package's own facts of mover `id`.
+    pub(super) fn map_mover_params(&self, id: &str) -> Option<&BTreeMap<String, String>> {
+        let index = self.mover_index(id)?;
+        Some(&self.map_movers.movers[index].def.params)
     }
     /// Start mover `id` toward key `key` over `seconds`. False when it
     /// cannot go there now (see [`MoverState::go_to`]).
