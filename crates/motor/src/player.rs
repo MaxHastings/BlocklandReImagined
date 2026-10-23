@@ -33,10 +33,64 @@ const JUMP_WINDOW_TICKS: u8 = 8;
 /// Time is counted in 1/3000 s: a 120 Hz step is 25 and a 32 ms Torque tick
 /// 96, so the motor runs v20's ticks exactly inside the server's steps.
 const STEP_PARTS: u8 = 25;
-/// How far above its feet [`Player::room_for`] tests a new body, clear of
-/// the floor the motor rests a hair inside.
-const ROOM_LIFT: f32 = 0.05;
+/// Supporting-floor contact allowed at the feet by clearance queries.
+/// This is a penetration tolerance, not extra height above the body.
+const FLOOR_CONTACT_TOLERANCE: f32 = 0.05;
 const TICK_PARTS: u8 = 96;
+
+/// A floor may meet the motor's feet within its existing floor-contact slack.
+/// Test the real body, rather than lifting its top into a low ceiling. Every
+/// manifold is inspected: a floor contact must not hide a wall/ceiling contact
+/// in the same map collider.
+fn penetrates_above_floor(
+    collider: &Collider,
+    body_pose: &Pose,
+    body: &dyn Shape,
+    feet: Vec3,
+    floor_cos: f32,
+) -> bool {
+    use rapier3d::parry::query::{DefaultQueryDispatcher, PersistentQueryDispatcher};
+    let mut manifolds: Vec<rapier3d::parry::query::ContactManifold<(), ()>> = Vec::new();
+    if DefaultQueryDispatcher
+        .contact_manifolds(
+            &collider.position().inv_mul(body_pose),
+            collider.shape(),
+            body,
+            0.0,
+            &mut manifolds,
+            &mut None,
+        )
+        .is_err()
+    {
+        return true;
+    }
+    let mut saw_contact = false;
+    for manifold in manifolds {
+        let surface = *collider.position() * manifold.subshape_pos1().copied().unwrap_or_default();
+        let player = *body_pose * manifold.subshape_pos2().copied().unwrap_or_default();
+        let normal = surface.rotation * manifold.local_n1;
+        for point in manifold.points {
+            saw_contact = true;
+            // Composite-cylinder contacts can report a zero-depth edge while
+            // the intersection query still finds penetration. Keep those
+            // conservative unless they are the shallow supporting floor.
+            if point.dist > 0.0 {
+                continue;
+            }
+            let at = player * point.local_p2;
+            if normal.y >= floor_cos
+                && point.dist >= -FLOOR_CONTACT_TOLERANCE
+                && at.y <= feet.y + FLOOR_CONTACT_TOLERANCE
+            {
+                continue;
+            }
+            return true;
+        }
+    }
+    // Unsupported or wholly embedded configurations must not become free.
+    !saw_contact
+}
+
 /// The collision group of a dead player's body. Player bodies move
 /// through it (no player is blocked by a corpse, nor a corpse by another),
 /// while weapons, vehicles and grabs still find it.
@@ -1642,8 +1696,8 @@ impl Player {
         {
             return true;
         }
-        // The motor keeps feet a hair into the floor; test just above it.
-        let feet = Vec3::from(self.state.feet) + Vec3::Y * ROOM_LIFT;
+        // Preserve headroom while allowing the motor's shallow floor contact.
+        let feet = Vec3::from(self.state.feet);
         let fixed = |_: ColliderHandle, c: &Collider| {
             c.parent()
                 .is_none_or(|b| physics.bodies.get(b).is_some_and(|b| b.is_fixed()))
@@ -1657,8 +1711,15 @@ impl Player {
                     .predicate(&fixed),
             )
             .intersect_shape(tuning.pose(feet, crouched), tuning.shape(crouched).as_ref())
-            .next()
-            .is_none()
+            .all(|(_, c)| {
+                !penetrates_above_floor(
+                    c,
+                    &tuning.pose(feet, crouched),
+                    tuning.shape(crouched).as_ref(),
+                    feet,
+                    tuning.slope_degrees.to_radians().cos(),
+                )
+            })
     }
     /// Authoritative contact box, including current crouch dimensions. This is
     /// the same pose/shape used by the player motor, not a client pickup radius.
@@ -1761,7 +1822,7 @@ impl Player {
             }
             self.state.crouched = true;
         } else {
-            let feet = Vec3::from(self.state.feet) + Vec3::Y * ROOM_LIFT;
+            let feet = Vec3::from(self.state.feet);
             let shape = self.base.shape(true);
             let blocked = physics
                 .query_pipeline_with_filter(
@@ -1771,8 +1832,15 @@ impl Player {
                         .groups(moves_against(self.state.pass_group)),
                 )
                 .intersect_shape(self.base.pose(feet, true), shape.as_ref())
-                .next()
-                .is_some();
+                .any(|(_, c)| {
+                    penetrates_above_floor(
+                        c,
+                        &self.base.pose(feet, true),
+                        shape.as_ref(),
+                        feet,
+                        self.base.slope_degrees.to_radians().cos(),
+                    )
+                });
             if blocked {
                 return false;
             }
@@ -2066,8 +2134,8 @@ impl Player {
     /// [`PlayerTuning::unstick`]: counts the time the body spends inside
     /// solid geometry and, past the limit, returns the nearest free spot
     /// to move it to. Only what never gets out of the way counts (players
-    /// do), and the body is tested a hair above its feet, clear of the floor
-    /// the motor rests a hair inside.
+    /// do). A shallow supporting-floor contact is allowed without lifting
+    /// the body into a ceiling.
     fn unstick(
         &mut self,
         physics: &PhysicsWorld,
@@ -2078,17 +2146,21 @@ impl Player {
         let solid = |_: ColliderHandle, c: &Collider| c.user_data >> 64 != 1;
         let query = physics.query_pipeline_with_filter(filter.predicate(&solid));
         let (pose_at, shape) = (
-            |at: Vec3| {
-                self.tuning
-                    .pose(at + Vec3::Y * ROOM_LIFT, self.state.crouched)
-            },
+            |at: Vec3| self.tuning.pose(at, self.state.crouched),
             self.tuning.shape(self.state.crouched),
         );
         let free = |at: Vec3| {
             query
                 .intersect_shape(pose_at(at), shape.as_ref())
-                .next()
-                .is_none()
+                .all(|(_, c)| {
+                    !penetrates_above_floor(
+                        c,
+                        &pose_at(at),
+                        shape.as_ref(),
+                        at,
+                        self.tuning.slope_degrees.to_radians().cos(),
+                    )
+                })
         };
         let feet = Vec3::from(self.state.feet);
         if free(feet) {
@@ -2137,6 +2209,7 @@ impl Player {
             ),
             None => "left it where it is (nothing near is free)".to_owned(),
         };
+        let what = format!("{what} (owner {})", self.state.owner);
         bri_console::fallback::report(bri_console::fallback::kind::OTHER, "", &what, &instead);
         found
     }
@@ -2151,11 +2224,18 @@ impl Player {
         physics
             .query_pipeline_with_filter(filter.predicate(&solid))
             .intersect_shape(
-                self.tuning
-                    .pose(feet + Vec3::Y * ROOM_LIFT, self.state.crouched),
+                self.tuning.pose(feet, self.state.crouched),
                 self.tuning.shape(self.state.crouched).as_ref(),
             )
-            .next()
+            .find(|(_, c)| {
+                penetrates_above_floor(
+                    c,
+                    &self.tuning.pose(feet, self.state.crouched),
+                    self.tuning.shape(self.state.crouched).as_ref(),
+                    feet,
+                    self.tuning.slope_degrees.to_radians().cos(),
+                )
+            })
             .map(|(handle, c)| {
                 let aabb = c.compute_aabb();
                 Blocker {
@@ -2178,15 +2258,19 @@ impl Player {
     ) -> Option<Vec3> {
         let solid = |_: ColliderHandle, c: &Collider| c.user_data >> 64 != 1;
         let query = physics.query_pipeline_with_filter(filter.predicate(&solid));
+        let shape = self.tuning.shape(self.state.crouched);
         let free = |at: Vec3| {
             query
-                .intersect_shape(
-                    self.tuning
-                        .pose(at + Vec3::Y * ROOM_LIFT, self.state.crouched),
-                    self.tuning.shape(self.state.crouched).as_ref(),
-                )
-                .next()
-                .is_none()
+                .intersect_shape(self.tuning.pose(at, self.state.crouched), shape.as_ref())
+                .all(|(_, c)| {
+                    !penetrates_above_floor(
+                        c,
+                        &self.tuning.pose(at, self.state.crouched),
+                        shape.as_ref(),
+                        at,
+                        self.tuning.slope_degrees.to_radians().cos(),
+                    )
+                })
         };
         let lifts = (unstick.reach / unstick.step).floor() as u32;
         let vertical = unstick.vertical_reach.unwrap_or(unstick.reach);
@@ -2199,7 +2283,7 @@ impl Player {
         }
         // The vote: thin slices around the body at its middle.
         let radius = self.tuning.width * 0.5;
-        let slice = SharedShape::cuboid(radius * 0.5, ROOM_LIFT, radius * 0.5);
+        let slice = SharedShape::cuboid(radius * 0.5, FLOOR_CONTACT_TOLERANCE, radius * 0.5);
         let middle = Vec3::Y * (self.tuning.height(self.state.crouched) * 0.5);
         let mut moved = Vec3::ZERO;
         let mut votes = 0;
@@ -2334,8 +2418,15 @@ impl Player {
             let standing = t.shape(false);
             if query
                 .intersect_shape(t.pose(feet, false), standing.as_ref())
-                .next()
-                .is_none()
+                .all(|(_, c)| {
+                    !penetrates_above_floor(
+                        c,
+                        &t.pose(feet, false),
+                        standing.as_ref(),
+                        feet,
+                        t.slope_degrees.to_radians().cos(),
+                    )
+                })
             {
                 self.state.crouched = false;
             }
