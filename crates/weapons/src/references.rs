@@ -131,12 +131,19 @@ impl Pack {
                 if kind == Kind::Effect
                     && let Some(info) = self.sound_only_explosion(name)
                 {
-                    out.push(Reference {
-                        add_on,
-                        kind: Kind::Sound,
-                        name: &info.sound,
-                        used_by: format!("explosion {name}"),
-                    });
+                    if !info.sound.is_empty() {
+                        out.push(Reference {
+                            add_on,
+                            kind: Kind::Sound,
+                            name: &info.sound,
+                            used_by: format!("explosion {name}"),
+                        });
+                    }
+                    continue;
+                }
+                // A blast defined as sound and shake alone (the Fizzer's
+                // pop) draws nothing by design; its sound is listed below.
+                if kind == Kind::Explosion && self.sound_only_explosion(name).is_some() {
                     continue;
                 }
                 if !name.trim().is_empty() {
@@ -169,12 +176,16 @@ impl Pack {
         }
         out
     }
-    /// The explosion `name` names when it plays only a sound: no shape
-    /// and no sizes to draw.
+    /// The explosion `name` names when it plays only a sound or a camera
+    /// shake: no shape and no sizes to draw.
     fn sound_only_explosion(&self, name: &str) -> Option<&crate::ExplosionInfo> {
         self.explosions
             .get(&crate::effect_symbol(name).to_ascii_lowercase())
-            .filter(|e| e.shape.is_empty() && e.sizes.is_empty() && !e.sound.is_empty())
+            .filter(|e| {
+                e.shape.is_empty()
+                    && e.sizes.is_empty()
+                    && (!e.sound.is_empty() || e.shake.is_some())
+            })
     }
     /// Whether a `$DamageType::<name>` reference names a type the pack
     /// has, rather than falling back to `Default` ([`Pack::damage_type`]).

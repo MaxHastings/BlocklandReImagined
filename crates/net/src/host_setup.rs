@@ -450,7 +450,8 @@ fn playable_with(
                 || catalog.is_some_and(|c| c.archetypes().any(|(id, _)| id == body));
             if !found {
                 bri_console::warn(format!(
-                    "Bot {} left out: its body {body} is in none of this game's Add-Ons",
+                    "Bot {} left out: its body {body} belongs to an Add-On this game does not run \
+                     (a game mode or map leaves it out) or is not installed",
                     kind.id
                 ));
             }

@@ -49,9 +49,16 @@ fn held_turn() {
 // carries them, layered by their own priority.
 fn anim_thread() { 2 }
 
+// A player's saved value, or `none` before the rules have set it: a player
+// who has never grabbed or been grabbed has no "holding" or "holder" yet.
+fn saved(who, key, none) {
+    let value = get_player(who, key);
+    if value == () { none } else { value }
+}
+
 // Player::isHoldingPlayer: whom `who` carries, or -1.
 fn holding(who) {
-    let held = get_player(who, "holding");
+    let held = saved(who, "holding", -1);
     if held < 0 {
         return -1;
     }
@@ -64,7 +71,7 @@ fn holding(who) {
 
 // Player::isBeingHeld.
 fn being_held(who) {
-    let holder = get_player(who, "holder");
+    let holder = saved(who, "holder", -1);
     holder >= 0 && player(holder) != ()
 }
 
@@ -77,7 +84,7 @@ fn front_clear(p) {
 
 // Player::removeFromGrasp: let `held` go. True when they may be thrown.
 fn remove_from_grasp(held) {
-    let h = get_player(held, "holder");
+    let h = saved(held, "holder", -1);
     if h < 0 {
         return false;
     }
@@ -125,10 +132,10 @@ fn remove_from_grasp(held) {
 
 // Player::clearAllHolding.
 fn clear_all_holding(who) {
-    if get_player(who, "holder") >= 0 {
+    if saved(who, "holder", -1) >= 0 {
         remove_from_grasp(who);
     } else {
-        let held = get_player(who, "holding");
+        let held = saved(who, "holding", -1);
         if held >= 0 {
             remove_from_grasp(held);
         }
@@ -164,7 +171,7 @@ fn can_grab(me, t) {
 
 // Player::attemptGrab.
 fn attempt_grab(who) {
-    if tick() - get_player(who, "timeout_at") < grab_timeout() {
+    if tick() - saved(who, "timeout_at", -grab_timeout()) < grab_timeout() {
         return false;
     }
     let me = player(who);
@@ -213,7 +220,7 @@ fn throw_player(who, amount) {
 // Player::chargeThrow: the charge so far, one notch per ChargeRate, as
 // %chargeThrowAmount stands after each scheduled call.
 fn charge(who) {
-    let at = get_player(who, "charge_at");
+    let at = saved(who, "charge_at", -1);
     if at < 0 {
         return 0;
     }
@@ -223,7 +230,7 @@ fn charge(who) {
 
 // The bar chargeThrow prints.
 fn charge_bar(who) {
-    let at = get_player(who, "charge_at");
+    let at = saved(who, "charge_at", -1);
     let shown = (tick() - at) / charge_rate() + 1;
     let shown = if shown > max_charge() { max_charge() } else { shown };
     let bars = "";
@@ -295,12 +302,12 @@ fn allow_equip(who) {
 fn on_tick() {
     for p in players() {
         // chargeThrow's bar, every ChargeRate.
-        if get_player(p.id, "charge_at") >= 0 && holding(p.id) >= 0 {
+        if saved(p.id, "charge_at", -1) >= 0 && holding(p.id) >= 0 {
             charge_bar(p.id);
         }
         // Whoever no longer carries the player they held (taken off by
         // something else) lets go.
-        let held = get_player(p.id, "holding");
+        let held = saved(p.id, "holding", -1);
         if held >= 0 && holding(p.id) < 0 {
             remove_from_grasp(held);
         }
