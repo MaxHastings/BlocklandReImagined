@@ -31,10 +31,15 @@ checks do not replace your playtest.
   If it has already impacted or expired, the row skips it rather than creating
   a replacement. Explain reports the missing projectile.
 - **Windows black-world report:** one Radeon RX550 reporter sees a black 3D
-  world while the interface works. The cause remains unconfirmed. Resource and
-  rendering corrections are being verified separately; local success does not
+  world while the interface works. The cause remains unconfirmed. v0.3.5's
+  verified resource and rendering corrections do not
   establish a fix on that device. Include the version, backend, latest session
   log and a world screenshot when reporting similar symptoms.
+- **Forced FXC on software graphics:** a separate offscreen check reproduces a
+  black Bedroom world on Microsoft's software renderer when explicitly forced
+  to use FXC. The same device draws correctly with the bundled default Auto
+  compiler or explicit DXC. Leave compiler selection at its default unless
+  collecting diagnostics. This does not establish the RX550 report's cause.
 - **Vehicles:** handling is rebuilt, not copied from v20's engine. Tell us
   where driving feels off.
 - **Bots** find paths over bricks and map shapes, but moving obstacles and

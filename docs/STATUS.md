@@ -11,20 +11,19 @@ Use the [latest published release](https://github.com/MaxHastings/BlocklandReIma
 for downloads, its exact source tag and release notes. Repository source
 can be ahead of that build; source checks alone are not a new publication.
 
-Published release: [v0.3.4 Alpha](https://github.com/MaxHastings/BlocklandReImagined/releases/tag/v0.3.4),
-published October 21, 2026 at 4:22 PM America/Chicago, from
-`c7df4052bfb2ccfede568f44d4d2f5f854dadfac`. Windows x86-64,
+Published release: [v0.3.5 Alpha](https://github.com/MaxHastings/BlocklandReImagined/releases/tag/v0.3.5),
+published October 23, 2026 at 12:42 PM America/Chicago, from
+`5a16c9317c2920bb6eb16211c57143a2c46b4073`. Windows x86-64,
 Apple silicon macOS and Linux x86-64 archives are available. The
-[v0.3.4 notes](releases/v0.3.4.md) describe that release; earlier notes remain
+[v0.3.5 notes](releases/v0.3.5.md) describe that release; earlier notes remain
 historical. Published tags and assets stay immutable.
 
-The next authorized release target is **v0.3.5**, currently an unpublished
-candidate. The [release regroup](progress/2026-10-23-v035-release-regroup.md)
-records its deliverables: rendering/resource/loading corrections, verified
-integration of useful ready work, the full gate and required CI, actual archive
-verification and a matching private AA2 playtest. Open PR count is not an
-acceptance criterion; Maxwell delegates selection to the integrator. The
-[candidate notes](releases/v0.3.5.md) do not establish publication.
+The [publication receipt](progress/2026-10-23-v035-public-release.md) records
+the full gate, Windows CI, platform build, actual archive/startup checks and
+published asset digests. Maxwell narrowed this chat to the public release and
+assigned further AA2 work and private preview delivery to another working
+thread. Main is available for its separately verified integration; the release
+tag remains fixed. Open PR count is not an acceptance criterion.
 
 An independent [actual v0.3.4 package audit](progress/2026-10-23-v034-release-package-resource-audit.md)
 confirmed doubled animation-resource paths and omitted menu background photos.
