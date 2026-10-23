@@ -3533,6 +3533,38 @@ impl Session {
         }
         false
     }
+    /// Finishing a taken Use notifies every declaring package, regardless of
+    /// their return values: one callback cannot consume another's cleanup.
+    pub(super) fn package_use_released(
+        &mut self,
+        owner: OwnerId,
+        target: bri_package_runtime::rhai::Map,
+    ) {
+        let Some(host) = self.packages.as_ref() else {
+            return;
+        };
+        let hooks: Vec<String> = host
+            .catalog
+            .behaviours()
+            .filter(|(_, b)| b.on_use_release)
+            .map(|(id, _)| id.clone())
+            .collect();
+        let args = vec![Dynamic::from_int(owner as i64), Dynamic::from_map(target)];
+        // Release finishes an already taken action. A callback's return value
+        // cannot consume it and strand another package's cleanup.
+        for package in hooks {
+            let _ = self.run_package(
+                &package,
+                "on_use_release",
+                args.clone(),
+                Budget::Command,
+                Some(owner),
+                None,
+                None,
+            );
+            self.charge_work(&package);
+        }
+    }
     /// `on_observer(player, button)` of every package that declares it, in
     /// load order, until one takes the key (returns `true`).
     pub(super) fn package_observer(&mut self, owner: OwnerId, button: super::ObserverButton) {

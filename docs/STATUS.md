@@ -1,6 +1,6 @@
 # Status
 
-Current release and engineering decisions. Reviewed 2026-10-17. Players should
+Current release and engineering decisions. Reviewed 2026-10-23. Players should
 start with the [tester guide](TESTER-GUIDE.md), [features](FEATURES.md) and
 [known issues](KNOWN-ISSUES.md). Dated development receipts are in
 [progress/](progress/README.md); older history is in [progress.md](progress.md).
@@ -11,50 +11,46 @@ Use the [latest published release](https://github.com/MaxHastings/BlocklandReIma
 for downloads, its exact source tag and release notes. Repository source
 can be ahead of that build; source checks alone are not a new publication.
 
-Verified v0.3.2 release: [v0.3.2 Alpha](https://github.com/MaxHastings/BlocklandReImagined/releases/tag/v0.3.2),
-published October 16, 2026 at 10:17 PM America/Chicago (October 17, 03:17 UTC),
-from `e4d9bb05df3c26c95a410cb9872990d99b37b54d`. Windows x86-64,
-Apple silicon macOS and Linux x86-64 archives are available. The combined gate,
-required CI, platform packages, manifests and archive hashes were verified.
-Published tags and assets remain immutable. Interactive acceptance and the
-full [alpha contract](alpha-contract.md) remain open.
+Published release: [v0.3.4 Alpha](https://github.com/MaxHastings/BlocklandReImagined/releases/tag/v0.3.4),
+published October 21, 2026 at 4:22 PM America/Chicago, from
+`c7df4052bfb2ccfede568f44d4d2f5f854dadfac`. Windows x86-64,
+Apple silicon macOS and Linux x86-64 archives are available. The
+[v0.3.4 notes](releases/v0.3.4.md) describe that release; earlier notes remain
+historical. Published tags and assets stay immutable.
 
-The [v0.3.2 release notes](releases/v0.3.2.md). That release corrects
-Add-On map selection and previews, pixel-wheel scaling, Q tool selection memory,
-dropped-item support at the throw apex, and loading-screen typing names. It also
-includes completed generic engine foundations; these do not establish finished
-Halo or America's Army gameplay. AvP and private Halo/AA/GMod source assets are
-excluded from public packages. Earlier release-readiness checklists are historical
-plans, not instructions to republish or replace an existing release.
+The next authorized release target is **v0.3.5**, currently an unpublished
+candidate. The [release regroup](progress/2026-10-23-v035-release-regroup.md)
+records its deliverables: rendering/resource/loading corrections, verified
+integration of useful ready work, the full gate and required CI, actual archive
+verification and a matching private AA2 playtest. Open PR count is not an
+acceptance criterion; Maxwell delegates selection to the integrator. The
+[candidate notes](releases/v0.3.5.md) do not establish publication.
 
-Unpublished branches and local previews are development work. Describe their
-exact source and limits in progress receipts; do not count them as public
-features until integration and release verification finish. A passing isolated
-API test, imported mesh or diagnostic render does not close gameplay or fidelity
-acceptance. A meaningful shared capability needs an ordinary gameplay consumer
-before further dependent expansion.
+An independent [actual v0.3.4 package audit](progress/2026-10-23-v034-release-package-resource-audit.md)
+confirmed doubled animation-resource paths and omitted menu background photos.
+The [rendering portability audit](audits/rendering-portability-2026-10-23.md)
+tracks corrections and final-pixel checks. One RX550 Windows reporter sees a
+black gameplay world while the interface works; the cause is unconfirmed.
+It remains documented without blocking the next release indefinitely.
 
-The [v0.3.3 source changes](releases/v0.3.3.md) include optional weapon-image-state gating of
-aim presentation and camera-following repeated water. AA's private consumer
-checks exercise the aim gate; native-map and offscreen checks exercise water
-beyond its former fixed patch. These source changes do not update the published
-v0.3.2 downloads or complete the private AA/Halo playtests. Their evidence and
-remaining limits are in the [aim handoff](progress/2026-10-17-v033-aa-priority-handoff.md),
-[water correction](progress/2026-10-17-v033-repeating-water-fix.md) and
-[native-map follow-up](progress/2026-10-17-v033-native-water-integration.md).
+Recent main also contains generic imported-map submission, player headroom,
+cosmetic casing contact, narrow-passage yielding, map emitters, breakable props,
+volumes and package lifetime improvements used by private AA2 consumers.
+The [imported-map performance evidence](progress/2026-10-23-static-world-visibility.md)
+records the compared rendering paths. Its bounded frame measurements do not
+establish 100 FPS gameplay or completed mission fidelity.
 
-The Rule Workshop, bot objective planning and alpha formats remain experimental.
+The Rule Workshop, bot planning and alpha formats remain experimental.
 Bots compose supported declared mechanics, not arbitrary scripts. Shark/Zombie
-ports remain partial. Lighting and recovered map metadata have the limits in
-[known issues](KNOWN-ISSUES.md). The Windows firefight crash, original
-death/disconnect and hitch reports, intermittent hosted position pullback and
-reported slope feel are not closed by scoped diagnostic checks. GSF Paradise's
-missing source texture and unsupported map Items remain explicit import gaps.
+ports remain partial. Private AA/Halo/GMod source assets stay excluded from
+public releases. Separate private playtests retain their own mission plans,
+source evidence and outstanding gameplay/visual acceptance. Pipeline and
+Interdiction are not complete merely because shared mechanisms land on main.
 
-Maxwell performs all interactive playtests. A separately authorized alpha
-publication can proceed after its required checks without closing the broader
-roadmap. Current published behavior, known limits and historical evidence must
-remain distinct.
+Maxwell performs all interactive playtests. Headless checks, offscreen pictures
+and independently verified packages are distinct evidence. A separately
+authorized release can publish after its own requirements pass while the full
+[alpha contract](alpha-contract.md) and AA roadmap remain open.
 
 ## What this is
 

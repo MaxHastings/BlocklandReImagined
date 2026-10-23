@@ -141,15 +141,7 @@ impl Session {
         let Some(held) = self.peers.get_mut(&owner).and_then(|p| p.use_held.take()) else {
             return;
         };
-        self.package_take(
-            owner,
-            |b| b.on_use_release,
-            "on_use_release",
-            vec![
-                Dynamic::from_int(owner as i64),
-                Dynamic::from_map(held.map()),
-            ],
-        );
+        self.package_use_released(owner, held.map());
     }
 }
 

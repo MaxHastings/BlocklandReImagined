@@ -30,6 +30,11 @@ checks do not replace your playtest.
 - **Delayed projectile events:** commands apply to the original live projectile.
   If it has already impacted or expired, the row skips it rather than creating
   a replacement. Explain reports the missing projectile.
+- **Windows black-world report:** one Radeon RX550 reporter sees a black 3D
+  world while the interface works. The cause remains unconfirmed. Resource and
+  rendering corrections are being verified separately; local success does not
+  establish a fix on that device. Include the version, backend, latest session
+  log and a world screenshot when reporting similar symptoms.
 - **Vehicles:** handling is rebuilt, not copied from v20's engine. Tell us
   where driving feels off.
 - **Bots** find paths over bricks and map shapes, but moving obstacles and
